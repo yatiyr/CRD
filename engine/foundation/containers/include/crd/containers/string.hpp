@@ -140,21 +140,21 @@ public:
 
     // ---- Access ---------------------------------------------------
 
-    const char* c_str() const noexcept { return data(); }
+    [[nodiscard]] const char* c_str() const noexcept { return data(); }
 
     char* data() noexcept { return sso_state() ? m_small.buf : m_heap.data; }
 
-    const char* data() const noexcept { return sso_state() ? m_small.buf : m_heap.data; }
+    [[nodiscard]] const char* data() const noexcept { return sso_state() ? m_small.buf : m_heap.data; }
 
-    usize size() const noexcept
+    [[nodiscard]] usize size() const noexcept
     {
         return sso_state() ? (kSsoCapacity - static_cast<usize>(m_small.size_or_flag)) : heap_size_internal();
     }
 
-    usize capacity() const noexcept { return sso_state() ? kSsoCapacity : heap_capacity_internal(); }
+    [[nodiscard]] usize capacity() const noexcept { return sso_state() ? kSsoCapacity : heap_capacity_internal(); }
 
-    bool empty() const noexcept { return size() == 0; }
-    bool is_small() const noexcept { return sso_state(); }
+    [[nodiscard]] bool empty() const noexcept { return size() == 0; }
+    [[nodiscard]] bool is_small() const noexcept { return sso_state(); }
 
     // ---- Modifiers ------------------------------------------------
 
@@ -350,7 +350,7 @@ public:
         return std::strong_ordering::equal;
     }
 
-    memory::IAllocator* allocator() const noexcept { return m_alloc; }
+    [[nodiscard]] memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
 private:
     // SSO buffer holds 23 visible chars (one byte is the size/flag). The
@@ -358,35 +358,39 @@ private:
     static constexpr usize kSsoCapacity = 23;
     static constexpr u8 kHeapFlag = 0xFFU;
 
+    // Named outside the union: a type declared inside an anonymous union is a compiler extension.
+    struct SmallRep
+    {
+        char buf[kSsoCapacity];
+        u8 size_or_flag; // 0..23 = remaining SSO capacity; 0xFF = heap sentinel
+    };
+
+    struct HeapRep
+    {
+        char* data;
+        usize size;         // not counting the trailing '\0'
+        usize cap_and_flag; // top byte = 0xFF when heap mode, lower
+                            // bits = capacity (incl. NUL slot)
+    };
+
     union
     {
-        struct
-        {
-            char buf[kSsoCapacity];
-            u8 size_or_flag; // 0..23 = remaining SSO capacity; 0xFF = heap sentinel
-        } m_small;
-
-        struct
-        {
-            char* data;
-            usize size;         // not counting the trailing '\0'
-            usize cap_and_flag; // top byte = 0xFF when heap mode, lower
-                                // bits = capacity (incl. NUL slot)
-        } m_heap;
+        SmallRep m_small;
+        HeapRep  m_heap;
     };
 
     memory::IAllocator* m_alloc = nullptr;
 
     // ---- Discriminant helpers --------------------------------------
-    bool sso_state() const noexcept { return m_small.size_or_flag != kHeapFlag; }
+    [[nodiscard]] bool sso_state() const noexcept { return m_small.size_or_flag != kHeapFlag; }
 
     // Internal heap-mode field accessors. Capacity uses the low 56 bits,
     // top byte is reserved for the sentinel (0xFF).
     static constexpr usize kCapMask = (~static_cast<usize>(0)) >> 8;
 
-    usize heap_size_internal() const noexcept { return m_heap.size; }
+    [[nodiscard]] usize heap_size_internal() const noexcept { return m_heap.size; }
 
-    usize heap_capacity_internal() const noexcept { return m_heap.cap_and_flag & kCapMask; }
+    [[nodiscard]] usize heap_capacity_internal() const noexcept { return m_heap.cap_and_flag & kCapMask; }
 
     void set_heap_size(usize n) noexcept { m_heap.size = n; }
 
@@ -514,7 +518,7 @@ private:
 
     // 1.5x growth, minimum step that exceeds SSO so we never shrink to
     // SSO accidentally during grow paths.
-    usize next_capacity(usize target) const noexcept
+    [[nodiscard]] usize next_capacity(usize target) const noexcept
     {
         const usize current = capacity();
         const usize grown = current + (current >> 1);

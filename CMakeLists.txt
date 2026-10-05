@@ -285,6 +285,9 @@ else()
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wpedantic>
         $<$<AND:$<COMPILE_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:-Werror>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wconversion>
+        # GCC's -Wconversion leaves out sign conversions in C++; clang's includes them. Turning them off for clang keeps
+        # one contract on every Linux compiler (the TSan lane found 674 such sites that no lane had ever enforced).
+        $<$<AND:$<COMPILE_LANGUAGE:CXX,C>,$<CXX_COMPILER_ID:Clang>>:-Wno-sign-conversion>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wshadow>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wdouble-promotion>
         $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>

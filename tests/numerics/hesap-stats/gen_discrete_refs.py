@@ -23,7 +23,7 @@ def row(name, dist, ks, ps, skip_var=False, skip_skew=False, skip_kurt=False, sk
 
 def fmtd(a):
     return ", ".join("HUGE_VAL" if np.isinf(x) and x > 0 else ("-HUGE_VAL" if np.isinf(x) else
-                     ("NAN" if np.isnan(x) else f"{x:.17g}")) for x in np.atleast_1d(a))
+                     ("static_cast<double>(NAN)" if np.isnan(x) else f"{x:.17g}")) for x in np.atleast_1d(a))
 
 
 def fmti(a):

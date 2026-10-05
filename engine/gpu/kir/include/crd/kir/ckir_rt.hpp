@@ -584,18 +584,18 @@ struct PathTraceNeeConfig
 
     constexpr double pi    = 3.14159265358979323846;
     constexpr double inv_pi = 1.0 / pi;
-    const double p0x = cfg.light_p0[0];
-    const double p0y = cfg.light_p0[1];
-    const double p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0];
-    const double euy = cfg.light_eu[1];
-    const double euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0];
-    const double evy = cfg.light_ev[1];
-    const double evz = cfg.light_ev[2];
-    const double nlx = cfg.light_nl[0];
-    const double nly = cfg.light_nl[1];
-    const double nlz = cfg.light_nl[2];
+    const double p0x = static_cast<double>(cfg.light_p0[0]);
+    const double p0y = static_cast<double>(cfg.light_p0[1]);
+    const double p0z = static_cast<double>(cfg.light_p0[2]);
+    const double eux = static_cast<double>(cfg.light_eu[0]);
+    const double euy = static_cast<double>(cfg.light_eu[1]);
+    const double euz = static_cast<double>(cfg.light_eu[2]);
+    const double evx = static_cast<double>(cfg.light_ev[0]);
+    const double evy = static_cast<double>(cfg.light_ev[1]);
+    const double evz = static_cast<double>(cfg.light_ev[2]);
+    const double nlx = static_cast<double>(cfg.light_nl[0]);
+    const double nly = static_cast<double>(cfg.light_nl[1]);
+    const double nlz = static_cast<double>(cfg.light_nl[2]);
     const double crx = euy * evz - euz * evy;
     const double cry = euz * evx - eux * evz;
     const double crz = eux * evy - euy * evx;
@@ -832,18 +832,18 @@ struct RestirDiConfig
     const auto     clamp0 = [&](int x) { return mx(x, cf(0.0)); };
 
     constexpr double inv_pi = 1.0 / 3.14159265358979323846;
-    const double p0x = cfg.light_p0[0];
-    const double p0y = cfg.light_p0[1];
-    const double p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0];
-    const double euy = cfg.light_eu[1];
-    const double euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0];
-    const double evy = cfg.light_ev[1];
-    const double evz = cfg.light_ev[2];
-    const double nlx = cfg.light_nl[0];
-    const double nly = cfg.light_nl[1];
-    const double nlz = cfg.light_nl[2];
+    const double p0x = static_cast<double>(cfg.light_p0[0]);
+    const double p0y = static_cast<double>(cfg.light_p0[1]);
+    const double p0z = static_cast<double>(cfg.light_p0[2]);
+    const double eux = static_cast<double>(cfg.light_eu[0]);
+    const double euy = static_cast<double>(cfg.light_eu[1]);
+    const double euz = static_cast<double>(cfg.light_eu[2]);
+    const double evx = static_cast<double>(cfg.light_ev[0]);
+    const double evy = static_cast<double>(cfg.light_ev[1]);
+    const double evz = static_cast<double>(cfg.light_ev[2]);
+    const double nlx = static_cast<double>(cfg.light_nl[0]);
+    const double nly = static_cast<double>(cfg.light_nl[1]);
+    const double nlz = static_cast<double>(cfg.light_nl[2]);
     const double crx = euy * evz - euz * evy;
     const double cry = euz * evx - eux * evz;
     const double crz = eux * evy - euy * evx;
@@ -1508,15 +1508,15 @@ struct RestirMath
 {
     namespace k = crd::kir;
     constexpr double inv_pi = 1.0 / 3.14159265358979323846;
-    const double p0x = cfg.light_p0[0];
-    const double p0y = cfg.light_p0[1];
-    const double p0z = cfg.light_p0[2];
-    const double eux = cfg.light_eu[0];
-    const double euy = cfg.light_eu[1];
-    const double euz = cfg.light_eu[2];
-    const double evx = cfg.light_ev[0];
-    const double evy = cfg.light_ev[1];
-    const double evz = cfg.light_ev[2];
+    const double p0x = static_cast<double>(cfg.light_p0[0]);
+    const double p0y = static_cast<double>(cfg.light_p0[1]);
+    const double p0z = static_cast<double>(cfg.light_p0[2]);
+    const double eux = static_cast<double>(cfg.light_eu[0]);
+    const double euy = static_cast<double>(cfg.light_eu[1]);
+    const double euz = static_cast<double>(cfg.light_eu[2]);
+    const double evx = static_cast<double>(cfg.light_ev[0]);
+    const double evy = static_cast<double>(cfg.light_ev[1]);
+    const double evz = static_cast<double>(cfg.light_ev[2]);
     const double crx = euy * evz - euz * evy;
     const double cry = euz * evx - eux * evz;
     const double crz = eux * evy - euy * evx;
@@ -1524,7 +1524,8 @@ struct RestirMath
     const double clum = inv_pi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
                                 + 0.7152 * static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1])
                                 + 0.0722 * static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]));
-    detail::RestirMath m{g, clum, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
+    detail::RestirMath m{g, clum, static_cast<double>(cfg.light_nl[0]), static_cast<double>(cfg.light_nl[1]),
+                         static_cast<double>(cfg.light_nl[2])};
 
     const int pos   = g.buffer_decl(k::DType::F32, 0, 1, false);
     const int nrm   = g.buffer_decl(k::DType::F32, 0, 2, false);
@@ -1617,7 +1618,8 @@ struct RestirMath
     const double clum = inv_pi * (0.2126 * static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0])
                                 + 0.7152 * static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1])
                                 + 0.0722 * static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]));
-    detail::RestirMath m{g, clum, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
+    detail::RestirMath m{g, clum, static_cast<double>(cfg.light_nl[0]), static_cast<double>(cfg.light_nl[1]),
+                         static_cast<double>(cfg.light_nl[2])};
 
     const int pos  = g.buffer_decl(k::DType::F32, 0, 1, false);
     const int nrm  = g.buffer_decl(k::DType::F32, 0, 2, false);
@@ -1729,7 +1731,8 @@ struct RestirMath
     const double a0Le0 = static_cast<double>(cfg.albedo[0]) * static_cast<double>(cfg.light_le[0]) * inv_pi;
     const double a1Le1 = static_cast<double>(cfg.albedo[1]) * static_cast<double>(cfg.light_le[1]) * inv_pi;
     const double a2Le2 = static_cast<double>(cfg.albedo[2]) * static_cast<double>(cfg.light_le[2]) * inv_pi;
-    detail::RestirMath m{g, 0.0, cfg.light_nl[0], cfg.light_nl[1], cfg.light_nl[2]};
+    detail::RestirMath m{g, 0.0, static_cast<double>(cfg.light_nl[0]), static_cast<double>(cfg.light_nl[1]),
+                         static_cast<double>(cfg.light_nl[2])};
 
     const int as   = g.accel_struct_decl(0, 0);
     const int pos  = g.buffer_decl(k::DType::F32, 0, 1, false);
@@ -1763,7 +1766,7 @@ struct RestirMath
     const int wiy = m.mul(dcy, invc);
     const int wiz = m.mul(dcz, invc);
     const int cs  = m.clamp0(m.dot3(n_x, n_y, n_z, wix, wiy, wiz));
-    const int cl  = m.clamp0(m.neg(m.dot3(m.cf(cfg.light_nl[0]), m.cf(cfg.light_nl[1]), m.cf(cfg.light_nl[2]), wix, wiy, wiz)));
+    const int cl  = m.clamp0(m.neg(m.dot3(m.cf(m.nlx), m.cf(m.nly), m.cf(m.nlz), wix, wiy, wiz)));
     const int Gc  = m.dvv(m.mul(cs, cl), dc2);
     const int sox = m.add(p_x, m.mul(m.cf(1.0e-3), n_x));
     const int soy = m.add(p_y, m.mul(m.cf(1.0e-3), n_y));
@@ -1950,7 +1953,7 @@ struct GiMath : RestirMath
     const int pLo1 = lp(rprev, rb, 7U);
     const int pLo2 = lp(rprev, rb, 8U);
     const int pW = lp(rprev, rb, 9U);
-    const int pM = m.mn(lp(rprev, rb, 10U), m.cf(cfg.temporal_m_cap));
+    const int pM = m.mn(lp(rprev, rb, 10U), m.cf(static_cast<double>(cfg.temporal_m_cap)));
     // prev sample's cosθ_v at this xv:
     const int pdx = m.sub(pxs0, p_x);
     const int pdy = m.sub(pxs1, p_y);

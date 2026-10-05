@@ -270,10 +270,10 @@ TEST_CASE("B19-a showcase: 3D Gaussian splatting forward render on Vulkan", "[.]
     counts.resize(uz(n_tiles), 0.0F);
     for (int i = 0; i < ng; ++i) // append each depth-sorted splat to every tile its bbox covers (host — B19-a3 on GPU)
     {
-        const double mnx   = sorted[uz(i) * 12U + 0U];
-        const double mny   = sorted[uz(i) * 12U + 1U];
-        const double srad  = sorted[uz(i) * 12U + 6U];
-        const double valid = sorted[uz(i) * 12U + 11U];
+        const double mnx   = static_cast<double>(sorted[uz(i) * 12U + 0U]);
+        const double mny   = static_cast<double>(sorted[uz(i) * 12U + 1U]);
+        const double srad  = static_cast<double>(sorted[uz(i) * 12U + 6U]);
+        const double valid = static_cast<double>(sorted[uz(i) * 12U + 11U]);
         if (valid < 0.5)
         {
             continue;
@@ -1011,11 +1011,11 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     surfd.resize(uz(ns) * 13U, 0.0); camd.resize(20U, 0.0);
     for (int i = 0; i < ns * 13; ++i)
     {
-        surfd[uz(i)] = surf[uz(i)];
+        surfd[uz(i)] = static_cast<double>(surf[uz(i)]);
     }
     for (int i = 0; i < 20; ++i)
     {
-        camd[uz(i)] = cam[uz(i)];
+        camd[uz(i)] = static_cast<double>(cam[uz(i)]);
     }
     kir::KGraph       pg2(&alloc);
     const kir::KEntry pe2 = kir::gsplat::build_gsplat2d_project_kernel(pg2, pcfg);
@@ -1065,7 +1065,7 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
         for (int k = 0; k < 19; ++k)
         {
             sorted[uz(i) * 19U + uz(k)]  = prep[uz(ord[uz(i)]) * 19U + uz(k)];
-            sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)];
+            sortedd[uz(i) * 19U + uz(k)] = static_cast<double>(sorted[uz(i) * 19U + uz(k)]);
         }
     }
 
@@ -1092,7 +1092,7 @@ TEST_CASE("B19-c: 2DGS surfel project + ray-surfel render on Vulkan == CPU oracl
     pard.resize(5U, 0.0);
     for (int i = 0; i < 5; ++i)
     {
-        pard[uz(i)] = par[uz(i)];
+        pard[uz(i)] = static_cast<double>(par[uz(i)]);
     }
     crd::containers::Array<double> img_ref(&alloc);
     img_ref.resize(uz(imw * imh) * 8U, 0.0);
@@ -1194,12 +1194,12 @@ TEST_CASE("B19-c2: TSDF fusion on Vulkan == CPU oracle (signed ramp on a voxel g
     camd.resize(20U, 0.0);
     for (int i = 0; i < 20; ++i)
     {
-        camd[uz(i)] = cam[uz(i)];
+        camd[uz(i)] = static_cast<double>(cam[uz(i)]);
     }
     gpd.resize(5U, 0.0);
     for (int i = 0; i < 5; ++i)
     {
-        gpd[uz(i)] = gp[uz(i)];
+        gpd[uz(i)] = static_cast<double>(gp[uz(i)]);
     }
     tsr.resize(uz(nvox), 0.0); wsr.resize(uz(nvox), 0.0);
     kir::KGraph       tg2(&alloc);
@@ -1291,7 +1291,7 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
     fieldd.resize(uz(nvox), 0.0);
     for (int i = 0; i < nvox; ++i)
     {
-        fieldd[uz(i)] = field[uz(i)];
+        fieldd[uz(i)] = static_cast<double>(field[uz(i)]);
     }
     crd::containers::Array<double> trid(&alloc); trid.resize(256U * 16U, 0.0);
     for (int i = 0; i < 256 * 16; ++i)
@@ -1308,7 +1308,7 @@ TEST_CASE("B19-c2b: marching cubes on Vulkan == CPU oracle (sphere mesh)", "[gpu
     crd::containers::Array<double> gpmd(&alloc); gpmd.resize(4U, 0.0);
     for (int i = 0; i < 4; ++i)
     {
-        gpmd[uz(i)] = gpm[uz(i)];
+        gpmd[uz(i)] = static_cast<double>(gpm[uz(i)]);
     }
     crd::containers::Array<double> countd(&alloc); countd.resize(uz(ncells), 0.0);
     kir::KGraph cgo(&alloc);
@@ -1514,7 +1514,7 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
         for (int k = 0; k < 19; ++k)
         {
             sorted[uz(i) * 19U + uz(k)] = prep[uz(ord[uz(i)]) * 19U + uz(k)];
-            sortedd[uz(i) * 19U + uz(k)] = sorted[uz(i) * 19U + uz(k)];
+            sortedd[uz(i) * 19U + uz(k)] = static_cast<double>(sorted[uz(i) * 19U + uz(k)]);
         }
     }
 
@@ -1533,12 +1533,12 @@ TEST_CASE("B19-e: relightable 2DGS render on Vulkan == CPU oracle", "[gpu-contex
     camd.resize(20U, 0.0);
     for (int i = 0; i < 20; ++i)
     {
-        camd[uz(i)] = cam[uz(i)];
+        camd[uz(i)] = static_cast<double>(cam[uz(i)]);
     }
     pard.resize(13U, 0.0);
     for (int i = 0; i < 13; ++i)
     {
-        pard[uz(i)] = par[uz(i)];
+        pard[uz(i)] = static_cast<double>(par[uz(i)]);
     }
     kir::KGraph rg2(&alloc);
     const kir::KEntry re2 = kir::gsplat::build_gsplat2d_relight_render_kernel(rg2, rcfg);
@@ -1631,7 +1631,7 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     crd::containers::Array<double> prepd(&alloc); prepd.resize(uz(ns) * 19U, 0.0);
     for (int i = 0; i < ns * 19; ++i)
     {
-        prepd[uz(i)] = prep[uz(i)];
+        prepd[uz(i)] = static_cast<double>(prep[uz(i)]);
     }
 
     kir::gsplat::Gsplat2dResortConfig rrc;
@@ -1652,7 +1652,7 @@ TEST_CASE("B19 StopThePop: per-pixel resort render on Vulkan == CPU oracle", "[g
     camd.resize(20U, 0.0);
     for (int i = 0; i < 20; ++i)
     {
-        camd[uz(i)] = cam[uz(i)];
+        camd[uz(i)] = static_cast<double>(cam[uz(i)]);
     }
     pard.resize(5U, 0.0); pard[0] = static_cast<double>(ns); pard[4] = 1.0 / 255.0;
     kir::KGraph rg2(&alloc);
@@ -1765,11 +1765,11 @@ TEST_CASE("B19-d: quantise/dequantise codec on Vulkan == CPU oracle", "[gpu-cont
     gsd.resize(uz(n) * natt, 0.0); rngd.resize(uz(natt) * 2U, 0.0);
     for (int i = 0; i < n * natt; ++i)
     {
-        gsd[uz(i)] = gs[uz(i)];
+        gsd[uz(i)] = static_cast<double>(gs[uz(i)]);
     }
     for (int i = 0; i < natt * 2; ++i)
     {
-        rngd[uz(i)] = rng[uz(i)];
+        rngd[uz(i)] = static_cast<double>(rng[uz(i)]);
     }
     crd::containers::Array<double> cref(&alloc); crd::containers::Array<double> rref(&alloc);
     cref.resize(uz(n) * natt, 0.0); rref.resize(uz(n) * natt, 0.0);
@@ -1848,12 +1848,12 @@ TEST_CASE("B19-f: differentiable forward + backward on Vulkan == CPU oracle", "[
     pd.resize(5U, 0.0);
     for (int i = 0; i < 5; ++i)
     {
-        pd[uz(i)] = params[uz(i)];
+        pd[uz(i)] = static_cast<double>(params[uz(i)]);
     }
     td.resize(uz(np), 0.0);
     for (int i = 0; i < np; ++i)
     {
-        td[uz(i)] = target[uz(i)];
+        td[uz(i)] = static_cast<double>(target[uz(i)]);
     }
     crd::containers::Array<double> imgref(&alloc); crd::containers::Array<double> gref(&alloc);
     imgref.resize(uz(np), 0.0); gref.resize(5U, 0.0);

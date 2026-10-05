@@ -175,7 +175,7 @@ TEST_CASE("eylem v1b-e interpolator at alpha=0.5 emits midpoint", "[eylem][v1b-e
     // substep — exactly what we need.
     fix.m_world.step_fixed(0.5 * static_cast<crd::f64>(cfg.fixed_dt.value), static_cast<crd::f64>(cfg.fixed_dt.value),
                            /*max_substeps=*/0U);
-    REQUIRE(std::fabs(fix.m_world.fixed_step_alpha(cfg.fixed_dt.value) - 0.5) < 1e-6);
+    REQUIRE(std::fabs(fix.m_world.fixed_step_alpha(static_cast<crd::f64>(cfg.fixed_dt.value)) - 0.5) < 1e-6);
 
     interp.run(fix.m_world);
 
@@ -291,7 +291,7 @@ TEST_CASE("eylem v1b-e multi-substep flow: prev = pose_after_substep_1, curr = p
     fix.m_world.step_fixed(frame_dt, static_cast<crd::f64>(cfg.fixed_dt.value), /*max_substeps=*/4U);
 
     // Accumulator should be 0.5 · fixed_dt → alpha = 0.5.
-    REQUIRE(std::fabs(fix.m_world.fixed_step_alpha(cfg.fixed_dt.value) - 0.5) < 1e-6);
+    REQUIRE(std::fabs(fix.m_world.fixed_step_alpha(static_cast<crd::f64>(cfg.fixed_dt.value)) - 0.5) < 1e-6);
 
     // Pool: prev = pose_1, curr = pose_2.
     const RigidBody curr = fix.m_pool.read(body_id);

@@ -376,7 +376,7 @@ TEST_CASE("rsvd_op: f32 low-rank spectrum", "[hesap][rrange][real]")
     REQUIRE(r.s.size() == 3);
     for (crd::usize i = 0; i < 3; ++i)
     {
-        CHECK_THAT(r.s.data()[i], WithinAbs(truth.s.data()[i], 1e-3F));
+        CHECK_THAT(r.s.data()[i], WithinAbs(static_cast<double>(truth.s.data()[i]), 1e-3));
     }
     // Vector lift, f32: ‖A − U·diag(S)·Vᵀ‖_F on the exact rank-3 input.
     float recon2 = 0.0F;

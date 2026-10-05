@@ -87,10 +87,10 @@ inline void build_wboit_transparent_vs(kir::KGraph& g, kir::KEntry& ve, const Wb
     // Per-quad data via select-on-quad chains (the last quad is the chain tail).
     const auto sel = [&](const auto& pick) {
         const crd::u32 n   = scene.count;
-        int            acc = f(pick(n - 1U));
+        int            acc = f(static_cast<double>(pick(n - 1U)));
         for (crd::u32 q = n - 1U; q-- > 0U;)
         {
-            acc = g.select(eqq(static_cast<int>(q)), f(pick(q)), acc);
+            acc = g.select(eqq(static_cast<int>(q)), f(static_cast<double>(pick(q))), acc);
         }
         return acc;
     };

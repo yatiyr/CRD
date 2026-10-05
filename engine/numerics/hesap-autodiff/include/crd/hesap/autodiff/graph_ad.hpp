@@ -329,7 +329,10 @@ struct GExpr
 // Constants print with %.17g (round-trips f64 exactly). Returns the number of chars the source needs (caller checks
 // it is < cap; on overflow the buffer is truncated but the returned length still reflects the full size).
 // append a printf-formatted chunk into buf at offset p (clamped), returning the new offset (variadic function, not a
-// macro — tidy-clean).
+// macro — tidy-clean). Marked printf-like where the compiler supports it, so every call's arguments are checked.
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((format(printf, 4, 5)))
+#endif
 inline int ga_append(char* buf, int cap, int p, const char* fmt, ...) noexcept
 {
     va_list ap;

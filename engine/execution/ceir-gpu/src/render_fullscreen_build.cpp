@@ -60,10 +60,10 @@ bool build_fullscreen_ceir(Context& ctx, const FullscreenBuildDesc& desc, contai
         ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
                              render::type_color_attachment(ctx, timg->result(0U)->type()));
     ctx.set_attr(col, "load", ctx.attr_string(desc.load ? containers::StringView("load") : containers::StringView("clear")));
-    ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
-    ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
-    ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
-    ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
+    ctx.set_attr(col, "clear_r", ctx.attr_float(static_cast<crd::f64>(desc.clear.r)));
+    ctx.set_attr(col, "clear_g", ctx.attr_float(static_cast<crd::f64>(desc.clear.g)));
+    ctx.set_attr(col, "clear_b", ctx.attr_float(static_cast<crd::f64>(desc.clear.b)));
+    ctx.set_attr(col, "clear_a", ctx.attr_float(static_cast<crd::f64>(desc.clear.a)));
     // ⛔⛔ CEIR-17z (WBOIT regression): a composite with a NON-Opaque blend (the WBOIT resolve's reveal_composite) must BAKE
     // that blend onto its colour attachment. record_fullscreen_raster set it; build_fullscreen_ceir dropped it, so the CEIR
     // plan silently composited Opaque. Mirror the MRT emitter (build_scene_ceir uses blend_str the same way). Bounded blast
@@ -236,10 +236,10 @@ bool build_mesh_indirect_ceir(Context& ctx, const MeshIndirectBuildDesc& desc, c
         ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
                              render::type_color_attachment(ctx, timg->result(0U)->type()));
     ctx.set_attr(col, "load", ctx.attr_string(containers::StringView("clear")));
-    ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
-    ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
-    ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
-    ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
+    ctx.set_attr(col, "clear_r", ctx.attr_float(static_cast<crd::f64>(desc.clear.r)));
+    ctx.set_attr(col, "clear_g", ctx.attr_float(static_cast<crd::f64>(desc.clear.g)));
+    ctx.set_attr(col, "clear_b", ctx.attr_float(static_cast<crd::f64>(desc.clear.b)));
+    ctx.set_attr(col, "clear_a", ctx.attr_float(static_cast<crd::f64>(desc.clear.a)));
     bb->append(col);
 
     // ── the SCOPE (1x1 placeholder + extent_from_target: the dispatch renders the full resolved colour target). ──
@@ -305,10 +305,10 @@ bool build_amplify_ceir(Context& ctx, const AmplifyBuildDesc& desc, containers::
         ctx.create_operation(k_col, containers::ConstSpan<Value*>(imgv, 1U), 1U,
                              render::type_color_attachment(ctx, timg->result(0U)->type()));
     ctx.set_attr(col, "load", ctx.attr_string(containers::StringView("clear")));
-    ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
-    ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
-    ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
-    ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
+    ctx.set_attr(col, "clear_r", ctx.attr_float(static_cast<crd::f64>(desc.clear.r)));
+    ctx.set_attr(col, "clear_g", ctx.attr_float(static_cast<crd::f64>(desc.clear.g)));
+    ctx.set_attr(col, "clear_b", ctx.attr_float(static_cast<crd::f64>(desc.clear.b)));
+    ctx.set_attr(col, "clear_a", ctx.attr_float(static_cast<crd::f64>(desc.clear.a)));
     bb->append(col);
 
     // ── the SCOPE (1x1 placeholder + extent_from_target). ──
@@ -446,10 +446,10 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
             }
             else
             {
-                ctx.set_attr(col, "clear_r", ctx.attr_float(desc.clear.r));
-                ctx.set_attr(col, "clear_g", ctx.attr_float(desc.clear.g));
-                ctx.set_attr(col, "clear_b", ctx.attr_float(desc.clear.b));
-                ctx.set_attr(col, "clear_a", ctx.attr_float(desc.clear.a));
+                ctx.set_attr(col, "clear_r", ctx.attr_float(static_cast<crd::f64>(desc.clear.r)));
+                ctx.set_attr(col, "clear_g", ctx.attr_float(static_cast<crd::f64>(desc.clear.g)));
+                ctx.set_attr(col, "clear_b", ctx.attr_float(static_cast<crd::f64>(desc.clear.b)));
+                ctx.set_attr(col, "clear_a", ctx.attr_float(static_cast<crd::f64>(desc.clear.a)));
             }
             // ⛔ CEIR-16d-live-4b: the COLOUR ATTACHMENT INDEX (0=color, 1..3=color1..3). fs_target reads it to resolve the
             // right per-attachment target slot — without it EVERY MRT attachment resolved to the "color" slot (both wrote
@@ -478,7 +478,7 @@ bool build_scene_ceir(Context& ctx, const SceneBuildDesc& desc, containers::Arra
                                  render::type_depth_attachment(ctx, dimg->result(0U)->type()));
         ctx.set_attr(dep, "load",
                      ctx.attr_string(desc.load_depth ? containers::StringView("load") : containers::StringView("clear")));
-        ctx.set_attr(dep, "clear_depth", ctx.attr_float(desc.clear_depth));
+        ctx.set_attr(dep, "clear_depth", ctx.attr_float(static_cast<crd::f64>(desc.clear_depth)));
         ctx.set_attr(dep, "compare", ctx.attr_string(depth_compare_str(desc.depth_compare)));
         bb->append(dep);
         atts[natt++] = dep->result(0U);

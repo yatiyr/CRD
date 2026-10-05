@@ -2058,8 +2058,8 @@ TEST_CASE("reorder_complex_schur: moves the chosen eigenvalue ifst -> ilst (c64,
         Matrix<Complex<float>> t = sch.t.clone();
         Matrix<Complex<float>> z = sch.z.clone();
         REQUIRE(reorder_complex_schur<Complex<float>>(t, z, 1, 6));
-        CHECK_THAT(t.at(6, 6).re, WithinAbs(moved.re, 1e-3F));
-        CHECK_THAT(t.at(6, 6).im, WithinAbs(moved.im, 1e-3F));
+        CHECK_THAT(t.at(6, 6).re, WithinAbs(static_cast<double>(moved.re), 1e-3));
+        CHECK_THAT(t.at(6, 6).im, WithinAbs(static_cast<double>(moved.im), 1e-3));
         check_reorder_invariants<float>(n, t, z, h, 1e-3);
     }
 }

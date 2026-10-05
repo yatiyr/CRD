@@ -83,9 +83,6 @@ public:
         const R delta = (m_hi - m_lo) / R(2);
         const R sigma = theta / delta;
 
-        const auto xsp  = crd::containers::Span<T>{m_x.data(), m_n};
-        const auto ressp = crd::containers::Span<T>{m_res.data(), m_n};
-        const auto dxsp = crd::containers::Span<T>{m_dx.data(), m_n};
         const auto tmpsp = crd::containers::Span<T>{m_tmp.data(), m_n};
 
         // x_1 = (1/theta)·r   (x_0 = 0 ⇒ residual r_0 = r)
@@ -166,7 +163,8 @@ private:
     // quotient). Non-uniform seed avoids the constant-nullspace collapse on Laplacian-like A.
     [[nodiscard]] R estimate_lambda_max(crd::memory::IAllocator* alloc) const
     {
-        crd::containers::Array<T> v(alloc), av(alloc);
+        crd::containers::Array<T> v(alloc);
+        crd::containers::Array<T> av(alloc);
         v.resize(m_n);
         av.resize(m_n);
         for (crd::u32 i = 0; i < m_n; ++i)
@@ -182,10 +180,10 @@ private:
             crd::hesap::dense::scal<T>(T(R(1) / n0), vsp);
         }
 
-        R              lam     = R(0);
-        const crd::u32 kIters  = 20;
-        const R        smlnum  = std::numeric_limits<R>::min();
-        for (crd::u32 k = 0; k < kIters; ++k)
+        R              lam    = R(0);
+        const crd::u32 iters  = 20;
+        const R        smlnum = std::numeric_limits<R>::min();
+        for (crd::u32 k = 0; k < iters; ++k)
         {
             (void)m_op.apply(crd::containers::ConstSpan<T>{v.data(), m_n}, avsp); // av = A·v
             // Rayleigh quotient vᴴ·A·v (v normalized ⇒ denominator 1); sequential ⇒ deterministic.

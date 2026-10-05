@@ -252,7 +252,10 @@ struct AudioDevice::Impl
 {
 };
 AudioDevice::AudioDevice() : m_impl(nullptr) {}
-AudioDevice::~AudioDevice() = default;
+AudioDevice::~AudioDevice()
+{
+    delete m_impl; // owned exactly as on Windows, so the member is used on every platform
+}
 bool AudioDevice::start(AudioRenderFn, void*) { return false; } // the Linux backend rides the platform sweep
 void AudioDevice::stop() {}
 crd::u32 AudioDevice::sample_rate() const noexcept { return 0; }

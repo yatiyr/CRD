@@ -70,7 +70,9 @@ void fiber_fault_job(void* /*data*/) noexcept
 }
 
 char              g_output_dir[1024] = {0};  // argv[1], captured at startup for the marker path
+#if defined(_WIN32)
 std::atomic<bool> g_marker_written{false};   // write the marker once (concurrent modes fire the hook twice)
+#endif
 
 // The hook records only (never terminates). It drops a machine-readable marker so the parent can tell an honest
 // write failure ("handler ran, saw DumpFailed") from "the handler never ran": the marker holds the decimal

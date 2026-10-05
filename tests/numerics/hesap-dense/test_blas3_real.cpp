@@ -83,7 +83,7 @@ TEST_CASE("gemm vs naive triple-loop at N=64 (AVX2 boundary)", "[hesap][blas3][r
     {
         for (crd::usize j = 0; j < n; ++j)
         {
-            REQUIRE_THAT(c(i, j), WithinAbs(c_naive(i, j), 1e-3));
+            REQUIRE_THAT(c(i, j), WithinAbs(static_cast<double>(c_naive(i, j)), 1e-3));
         }
     }
 }

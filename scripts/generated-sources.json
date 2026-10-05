@@ -1449,19 +1449,19 @@
       "path": "tests/numerics/hesap-stats/continuous_refs.inc",
       "generator": "gen_continuous_refs.py",
       "status": "generator-absent",
-      "sha256": "14d07921d22469055a8cc96ea861263e197d968afdb98683279614153af60be4"
+      "sha256": "9da9c3af7603f31df6ebde369295be9ec853e8094e98b8416ddd851162c6625e"
     },
     {
       "path": "tests/numerics/hesap-stats/discrete_refs.inc",
       "generator": "gen_discrete_refs.py",
       "status": "generator-absent",
-      "sha256": "dd32588dd3088b35970462f087267efcaa498a4287cd9ec91b85be34a1ec5b42"
+      "sha256": "3d4ebd4b6e8067a219290db919105ce2de3602460676d70921f65eb50a38ba63"
     },
     {
       "path": "tests/numerics/hesap-stats/heavy_refs.inc",
       "generator": "gen_heavy_refs.py",
       "status": "generator-absent",
-      "sha256": "6c48faa574e5588842552b885e1d247897b39b96ee4f5d4d7d9489dd2cec2d9b"
+      "sha256": "c33a4536009dcfc4cbc3bb05f145e1aeacd71df4305e52abc059790f0c86198a"
     },
     {
       "path": "tests/numerics/hesap-stats/multivariate_refs.inc",
