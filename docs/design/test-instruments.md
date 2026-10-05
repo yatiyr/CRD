@@ -169,8 +169,18 @@ compare-exchange that validates it (`fiber_pool.cpp` `release_to`:296 against `a
 `CounterPool::acquire`:66 and :75 against its release), a plain read racing a plain write, benign in practice by the
 code's own argument and a data race by the language. Five of the 22 jobs tests fail on those reports (16 in the
 suite, 68 in the probe, no other site). The immediate repair now belongs to [DIAG.1a](../ROADMAP.md#slice-diag.1a);
-atomic links are a candidate requiring a memory-order/reclamation proof. No TSan preset is qualified yet. A clean
-suite reports no detected race on its instrumented executions; it cannot prove absence of races or ordering bugs.
+atomic links are a candidate requiring a memory-order/reclamation proof. A clean suite reports no detected race on
+its instrumented executions; it cannot prove absence of races or ordering bugs.
+
+**The hosted lane (DIAG.1b, 2026-10-05).** `linux-clang-tsan` runs in the complete tier, four tests at a time, with
+`halt_on_error=1` and a committed suppression file
+([tsan-suppressions.txt](../../tests/support/diag/tsan-suppressions.txt)). The file may name only third-party
+libraries that are not built with `-fsanitize=thread`: today Mesa lavapipe and the Khronos validation layer, whose
+internal ordering TSan cannot see. A report in Cerid code is fixed, never suppressed. The first full run found and
+fixed two engine races (the diagnostic snapshots' fiber and counter fields; the frame-history seqlock payload), a
+32-bit fiber tag that could be 0, a test that skipped the pool's sanitizer switch protocol, and specimens that assumed
+ASan; see the [inventory and triage](../sessions/2026-10-05-clang-werror-and-tsan-inventory.md). The WSL2
+address-space note above did not reproduce with clang 18 on the 2026-10 reference host.
 
 ## Not in scope
 

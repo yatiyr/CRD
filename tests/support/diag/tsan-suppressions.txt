@@ -10,3 +10,6 @@ race:libvulkan_lvp.so
 
 # Khronos validation layer: its queue-retire thread and DestroyFence order fence state through shared_ptr counts.
 race:libVkLayer_khronos_validation.so
+# The same layer takes two of its object-tracker locks in opposite orders (RegisterPoisonPairs at descriptor-set
+# allocation against MakePoisonous at destruction); both locks and both paths are inside the layer (pinned 1.4.341).
+deadlock:libVkLayer_khronos_validation.so

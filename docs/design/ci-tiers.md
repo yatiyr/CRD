@@ -17,17 +17,18 @@ evidence for the exact revision every lane built.
 |---|---|---|
 | preflight | every run | none; the `preflight` and `repository` jobs (workflow syntax, mapping, hygiene, documentation, tooling fixtures, generated artifacts) |
 | change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping` |
-| complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution and the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) |
-| diagnostic | never hosted | `win-tidy-local`, `linux-clang-fuzz`, `linux-clang-tsan` ([test instruments](test-instruments.md)) |
+| complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution, the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) and the clang ThreadSanitizer preset `linux-clang-tsan` ([test instruments](test-instruments.md)) |
+| diagnostic | never hosted | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)) |
 
 The change tier is the lane set the repository ran on every push before this contract, so a source change keeps
 every obligation it had; only a documentation-only push stops after preflight, by design. The complete tier adds the
 five presets that had never run hosted and, since REPO.DEV.8, the two public-check presets. The first complete run is
 their first hosted exercise and may surface real defects: that is the tier's purpose, not a regression of the push
-signal. The diagnostic presets stay local: clang++ on Linux is a diagnostic compiler only, because the tree does not
-build under its `-Werror` set (the [REPO.DEV.11 audit](../sessions/2026-09-14-infrastructure-audit.md) counted 40
-unique sites in 13 files: 25 `-Wsign-conversion`, 13 `-Wdouble-promotion`, 2 `-Wnested-anon-types`); a qualified
-clang++ lane is a matrix decision for the maintainer, not a gap in the contract.
+signal. The diagnostic presets stay local. clang++ on Linux became a hosted compiler with the `linux-clang-tsan` lane
+(user decision 2026-10-05): the tree builds under its `-Werror` set once clang's `-Wconversion` drops sign conversions,
+which GCC's never included ([inventory and triage](../sessions/2026-10-05-clang-werror-and-tsan-inventory.md)). The
+lane runs the whole suite under ThreadSanitizer, four tests at a time, with
+[third-party suppressions](../../tests/support/diag/tsan-suppressions.txt) for uninstrumented libraries only.
 
 [check-ci-tiers.py](../../scripts/check-ci-tiers.py) is the `crd-ci-tiers` CTest, a preflight step, a repository
 step and a tooling test. It fails when a visible preset has no owner or an entry names no preset, when an owning job

@@ -143,6 +143,30 @@ The touched files also had strict tidy findings that predated this work, all now
 - `for_each_counter` takes `const Fn&`;
 - the specimen feature macros carry the repository's `NOLINT(cppcoreguidelines-macro-usage)` reason.
 
+## Full rerun and the hosted lane
+
+The full suite was rerun with the suppressions in the preset environment, on the reference host at `-j 6`. Its
+`wsl.exe` session died at test 6,382 without a VM restart. The remaining 485 tests ran in a detached session, plus the
+fiber-tag case once its fix was in.
+
+- **First 6,382 tests:** two failures.
+  - `job samples carry the fiber_id` was a real defect. The perf jobs adapter tagged samples with the fiber pointer
+    truncated to 32 bits, and 0 means "no fiber". TSan's allocator placed the first fiber of a tier at
+    `0x72a800000000`, which truncates to 0. The tag now folds the high half in and is never 0.
+    - New test "a fiber at a 4 GiB-aligned address still tags its job sample" drives the installed observer with that
+      handle. It fails with the old truncation (`tagged == 1` is `0 == 1`) and passes with the fold, on Windows.
+  - RET-5 hit a lock-order inversion inside the validation layer: two of its own object-tracker locks, taken by
+    `RegisterPoisonPairs` during `ImGui_ImplVulkan_Init` and by `MakePoisonous` during shutdown. The suppression file
+    gained `deadlock:libVkLayer_khronos_validation.so`, and RET-5 passes.
+- **The remaining 485 tests:** all pass, with no TSan report, in 2,330 s.
+- **Cost:** the per-test durations sum to about 2.3 hours serially on the i9; 30 tests over 60 s are 78% of it. The
+  test preset therefore runs four tests at a time.
+
+`linux-clang-tsan` moves from the diagnostic tier to the complete tier, in the existing preset-driven `linux-gcc` job
+(`.github/ci-tiers.json`). Its lane has no register entries, so any failure fails it. `docs/design/ci-tiers.md` and
+`docs/design/test-instruments.md` record the lane and the suppression rule.
+
 ## Next
 
-Rerun the full suite with the suppressions. Add the hosted complete-tier lane when that run is green.
+The first hosted complete-tier run is the lane's qualification. Read its TSan lane and fix what the hosted runner
+shows that the reference host did not.
