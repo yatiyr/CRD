@@ -84,18 +84,20 @@ hardware fault run (5, h2) belong to the user.
   stale handle as a call argument, which carries the handle only as hex in its text. That form is not safe to exercise
   in-process: the probe of `vkCmdFillBuffer` on a destroyed buffer segfaulted the test process. So it is not the
   specimen, and the Cerid-side handle table is not built, because no proven route needs it.
-  - **Vulkan specimen:** record a fill on a Cerid-named buffer, destroy the `VkBuffer` but keep its memory, then submit
-    through `vk_submit` and wait idle before freeing anything. The layer did not skip the submit, so the fill landed in
-    live memory.
-    - The `vkQueueSubmit` invalidated-command-buffer error correlates to the buffer's retired identity.
+  - **Vulkan specimen:** record a fill on a Cerid-named buffer into a secondary command buffer, destroy the
+    `VkBuffer`, then reference the secondary from a primary with `vkCmdExecuteCommands`. Nothing is submitted. An
+    earlier version submitted the invalidated buffer and segfaulted lavapipe, which dereferences the destroyed buffer
+    object (see the 7c census).
+    - The record-time invalid-command-buffer error correlates to the buffer's retired identity.
     - The control without the destroy is clean.
     - Teeth: the identity minted but not used as the debug name fails the correlation.
   - **DX12 specimen:** a Cerid-named placed buffer, in a heap the test owns, is the destination of a copy held behind a
-    queue-side wait on a CPU-signalled gate fence. It is final-released while provably in flight, then the gate opens.
+    queue-side wait on a CPU-signalled gate fence. It is final-released while provably in flight, then the device is
+    removed (the engine's failure response), so the held copy is discarded and never executed.
     - Error 921 `OBJECT_DELETED_WHILE_STILL_IN_USE` correlates to the retired identity.
     - The control, released after completion, is clean.
     - Same teeth.
-  - **Results:** each passed three runs. The full DX12 suite passes (201 cases), as does Vulkan `[validation]`.
+  - **Results:** each passed three runs. The full DX12 suite passes (201 cases), as does Vulkan `[validation]` on the RTX and on lavapipe.
 - **(4) DX12 pass label: emission landed, proof gated on (h1).** `detail::Dx12PassEventScope` (in
   `dx12_identity_naming`) brackets every frame-graph pass in `Dx12FrameGraph::execute` with a balanced core
   `BeginEvent`/`EndEvent`, without PIX. The marker uses metadata 0, the legacy unicode encoding, and carries

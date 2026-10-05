@@ -81,6 +81,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <thread> // DIAG.7c(c): the host thread that opens the timeline gate
 #include <cstdio>
 #include <cmath>   // std::lround for the god-ray tone quantisation
 #include <cstdlib> // std::abs(int) for the readback tolerance
@@ -278,6 +279,98 @@ TEST_CASE("DIAG.7c(b): an absent validation layer is reported per mode, never fa
 // injected VK_ERROR_DEVICE_LOST at the seam (Vulkan has no RemoveDevice): the compute context latches invalid, the
 // device's first failure keeps its result and operation through a later failure, a lost device is not called again, and
 // the record outlives the device as the last-known failure without leaking into a device that reuses the handle.
+// DIAG.7c(c): a SLOW completion is reported and waited out, never abandoned. The first seam abandoned a wait at its 30 s
+// bound; on lavapipe a long sort then kept writing into buffers the test had already freed (SIGSEGV in four hosted
+// lanes). Vulkan cannot stop queued work, so the seam now reports a wait that outlasts its threshold and keeps waiting.
+// Deterministic: the submission waits on a timeline-semaphore gate a host thread opens after 50 ms, against a 1 ms
+// report threshold. The wait must return SUCCESS with the work complete, one slow wait counted, and no failure.
+TEST_CASE("DIAG.7c(c): a slow completion is reported and waited out, never abandoned",
+          "[gpu-context][vulkan][gpu][device-loss]")
+{
+    namespace d = gpu::detail;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr || !ctx->valid())
+    {
+        SKIP("no Vulkan device");
+    }
+    auto* const vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->timeline_semaphore())
+    {
+        SKIP("the device offers no timeline semaphores to gate the submission");
+    }
+    const VkDevice device = vk->vk_device();
+
+    VkSemaphoreTypeCreateInfo tci{};
+    tci.sType         = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+    tci.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+    VkSemaphoreCreateInfo sci{};
+    sci.sType       = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    sci.pNext       = &tci;
+    VkSemaphore gate = VK_NULL_HANDLE;
+    REQUIRE(vkCreateSemaphore(device, &sci, nullptr, &gate) == VK_SUCCESS);
+    VkFenceCreateInfo fci{};
+    fci.sType     = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    VkFence fence = VK_NULL_HANDLE;
+    REQUIRE(vkCreateFence(device, &fci, nullptr, &fence) == VK_SUCCESS);
+    VkCommandPoolCreateInfo pci{};
+    pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pci.queueFamilyIndex = vk->compute_family();
+    VkCommandPool pool   = VK_NULL_HANDLE;
+    REQUIRE(vkCreateCommandPool(device, &pci, nullptr, &pool) == VK_SUCCESS);
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool        = pool;
+    cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cb      = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateCommandBuffers(device, &cbai, &cb) == VK_SUCCESS);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    REQUIRE(vkBeginCommandBuffer(cb, &bi) == VK_SUCCESS); // empty: the gate, not the work, holds the submission
+    REQUIRE(vkEndCommandBuffer(cb) == VK_SUCCESS);
+
+    const crd::u64                wait_value = 1U;
+    const VkPipelineStageFlags    wait_stage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkTimelineSemaphoreSubmitInfo tsi{};
+    tsi.sType                     = VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO;
+    tsi.waitSemaphoreValueCount   = 1U;
+    tsi.pWaitSemaphoreValues      = &wait_value;
+    VkSubmitInfo si{};
+    si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.pNext              = &tsi;
+    si.waitSemaphoreCount = 1U;
+    si.pWaitSemaphores    = &gate;
+    si.pWaitDstStageMask  = &wait_stage;
+    si.commandBufferCount = 1U;
+    si.pCommandBuffers    = &cb;
+    REQUIRE(d::vk_submit(device, vk->compute_queue(), si, fence, "gated submit") == VK_SUCCESS);
+
+    std::thread opener([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        VkSemaphoreSignalInfo ssi{};
+        ssi.sType     = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+        ssi.semaphore = gate;
+        ssi.value     = 1U;
+        (void)vkSignalSemaphore(device, &ssi);
+    });
+    const VkResult waited = d::vk_wait_complete(device, fence, 1'000'000ULL, "gated wait");
+    opener.join();
+
+    CHECK(waited == VK_SUCCESS);
+    CHECK(vkGetFenceStatus(device, fence) == VK_SUCCESS); // the work completed before the wait returned
+    const d::VkDeviceFailure rec = d::vk_device_failure(device);
+    CHECK(rec.slow_waits == 1U);                          // reported...
+    CHECK(rec.origin == d::VkFailureOrigin::None);        // ...but not a failure
+    CHECK(rec.failures == 0U);
+
+    vkDestroyCommandPool(device, pool, nullptr);
+    vkDestroyFence(device, fence, nullptr);
+    vkDestroySemaphore(device, gate, nullptr);
+}
+
 TEST_CASE("DIAG.7c(c): a failed Vulkan completion keeps its first failure and latches the context",
           "[gpu-context][vulkan][gpu][device-loss]")
 {
@@ -6511,6 +6604,12 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on Vulkan =
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
+    // 2026-10-05: this case segfaulted intermittently on hosted lavapipe (several llvmpipe worker threads at once) but
+    // passed 143 of 143 runs on the reference host with the same Mesa. Record the device context BEFORE the dispatch,
+    // flushed, so a fatal signal still leaves it in the CTest log (the llvmpipe string carries the vector width).
+    std::fprintf(stderr, "[B4-vis-2] device=\"%s\" subgroup=%u shared=%u\n", vk->adapter_name(), compute.subgroup_size(),
+                 compute.shared_memory_bytes());
+    (void)std::fflush(stderr);
 
     crd::memory::TlsfAllocator       alloc(16U << 20U);
     const crd::kir_test::DaisScene   scene = crd::kir_test::make_dais_scene();

@@ -706,12 +706,13 @@ void VulkanComputeContext::submit_and_wait()
     si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     si.commandBufferCount = 1;
     si.pCommandBuffers    = &impl.cmd;
-    // DIAG.7c(c): bounded and observed. A failed submission or wait (device loss, timeout) latches the context
-    // invalid; the device's first failure is kept by the completion seam, and no result of this submission is read.
+    // DIAG.7c(c): observed. A failed submission or a lost device latches the context invalid; the device's first
+    // failure is kept by the completion seam, and no result of this submission is read. A SLOW completion is reported
+    // but waited out: the caller frees buffers this submission still uses, and Vulkan cannot stop queued work.
     VkResult result = detail::vk_submit(impl.device, impl.queue, si, impl.fence, "compute submit");
     if (result == VK_SUCCESS)
     {
-        result = detail::vk_wait(impl.device, impl.fence, detail::kVkDefaultWaitNs, "compute fence wait");
+        result = detail::vk_wait_complete(impl.device, impl.fence, detail::kVkDefaultWaitNs, "compute fence wait");
     }
     if (result != VK_SUCCESS)
     {

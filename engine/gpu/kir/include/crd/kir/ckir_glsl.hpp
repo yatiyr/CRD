@@ -2774,10 +2774,11 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
             break;
         }
     }
-    if (entry.n_task_payload > 0U) // B4: FIXED 4-field payload (task + mesh layouts always match)
-    {
-        s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n");
-    }
+    // B4: FIXED 4-field payload (task + mesh layouts always match). A task ALWAYS declares it, as the HLSL AS always
+    // passes one to DispatchMesh: a mesh that declares the task pairing (`mesh_payload_in`) without reading a field
+    // still requires the task to pass a payload to OpEmitMeshTasksEXT (VUID-RuntimeSpirv-MeshEXT-10883). Declaring it
+    // only when the task WROTE a field broke that pairing; NVIDIA's path did not flag it, lavapipe's did.
+    s.append("struct TaskPayload { uint v0; uint v1; uint v2; uint v3; };\ntaskPayloadSharedEXT TaskPayload mesh_payload;\n");
 
     s.append("void main() {\n");
     const auto task_leaf = [&](const KGraph& gg, int li, crd::containers::String& ss) -> bool
@@ -2828,6 +2829,12 @@ inline bool emit_task_glsl(const KGraph& g, const KEntry& entry, crd::memory::IA
     for (crd::u32 pf = 0; pf < entry.n_task_payload; ++pf) // write each active payload field
     {
         s.append("  mesh_payload.v"); app_uint(s, pf); s.append(" = t"); app_uint(s, static_cast<crd::u32>(entry.task_payload[pf])); s.append(";\n");
+    }
+    // Zero the fields the task does not set: an unwritten payload is not passed to OpEmitMeshTasksEXT (measured on
+    // lavapipe: declaring it alone still failed VUID-RuntimeSpirv-MeshEXT-10883), and the mesh reads defined values.
+    for (crd::u32 pf = entry.n_task_payload; pf < 4U; ++pf)
+    {
+        s.append("  mesh_payload.v"); app_uint(s, pf); s.append(" = 0u;\n");
     }
     s.append("  EmitMeshTasksEXT(t"); app_uint(s, static_cast<crd::u32>(entry.task_emit)); s.append(", 1u, 1u);\n}\n");
     return true;

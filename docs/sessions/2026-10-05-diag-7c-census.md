@@ -190,3 +190,66 @@ Device consumers of the compute path (hosted lanes have no Vulkan device, so thi
 **Tooling note:** a `cmake --build <dir> --target rebuild_cache` run outside the MSVC environment emptied
 `CMAKE_MAKE_PROGRAM` in `build/win-debug`. It was repaired with `scripts/configure-preset.bat win-debug
 -UCMAKE_MAKE_PROGRAM`. Reconfigure only through the preset script.
+
+## The first lavapipe run (2026-10-05): what a second Vulkan device found
+
+Runs `4bd6a5de` and `f7689b5b` are the first with lavapipe on the hosted Linux lanes (Mesa 25.2.8, the same as the
+WSL reference host). Every Windows lane passed; every Linux lane failed. Triage by cause:
+
+1. **A regression in this row's (c) seam (fixed).** The radix sort (34.1 s), the B19-a3 depth sort (36.6 s) and B19-a4
+   tile binning (34.7 s) segfaulted just past the 30 s wait bound. On the ASan lane the sort passed at 27.7 s, while
+   B15-a ran 47.7 s and failed its oracle.
+   - **Cause:** `submit_and_wait` abandoned the wait at the bound. The test then read results and freed buffers while
+     lavapipe was still executing into them. DX12 forces `RemoveDevice` on a timeout, so its memory is safe; Vulkan has
+     no way to stop queued work.
+   - **Fix:** `vk_wait_complete` reports a wait that outlasts its threshold (`slow_waits`, not a failure) and keeps
+     waiting until completion or loss. The compute context uses it; the bounded `vk_wait` stays for callers with
+     nothing in flight.
+   - **Test:** a submission held by a timeline-semaphore gate that a host thread opens after 50 ms, against a 1 ms
+     threshold. It returns `VK_SUCCESS` with the fence signalled, one slow wait and no failure.
+   - **Timeline semaphores:** the device now enables them (Vulkan 1.2 core, required by 1.3, chained as their own
+     struct) and reports `timeline_semaphore()`.
+   - **Teeth:** abandoning at the threshold fails the result, origin and failure-count checks.
+2. **A latent shader-interface bug (fixed).** `REN-38-F6+` failed on every lane with
+   `VUID-RuntimeSpirv-MeshEXT-10883`: a mesh shader that declares the task pairing (`payload = true`) was paired with a
+   task shader that passed no payload to `OpEmitMeshTasksEXT`.
+   - The GLSL task emitter declared `taskPayloadSharedEXT` only when the task wrote a payload field. The HLSL emitter
+     always passes `s_payload` to `DispatchMesh`, which is why DX12 never failed.
+   - A GLSL task shader now always declares the fixed four-field payload.
+   - The NVIDIA path never reported the violation; lavapipe's validation did. On the RTX, `[ren38]` (43 cases) and the
+     mesh and task cases stay green.
+3. **GPU-assisted validation must never execute what it reports (fixed).** `DIAG.7a(g-3)` segfaulted on lavapipe in
+   0.9 s. Reproduced on the WSL reference host (same Mesa 25.2.8), with these findings:
+   - The fault is in llvmpipe's JIT-compiled shader code, on a driver worker thread. It persists with the layer's
+     `gpuav_safe_mode` and even with shader instrumentation off: the specimen's own out-of-bounds store at index
+     1,000,000 executes, and on a CPU device that write lands outside the buffer in process memory.
+   - **Engine fix:** a context that requests GPU-assisted validation now runs it only in the layer's safe mode, set
+     through `VK_EXT_layer_settings`. `VulkanValidationLayer::gpu_assisted_guarded` records this, and without layer
+     settings the mode reports `ExtensionAbsent` instead of running unguarded.
+   - **Specimen fix:** the specimen is now memory-safe by construction, in raw Vulkan. Its 16-byte buffer, which is the
+     descriptor's range, sits at offset 0 of an 8 MiB allocation the test owns. The index is out of bounds for the
+     descriptor (what GPU-AV checks) while the physical store stays inside owned memory.
+   - It passes on the RTX (three runs, correlated to the Program identity) and on lavapipe.
+4. **Lifetime specimens must not execute against destroyed objects (fixed in this batch, before CI saw them).**
+   - **Vulkan:** the first version submitted a command buffer whose bound buffer had been destroyed. It segfaulted on
+     lavapipe, which dereferences the driver's buffer object when it executes; keeping the memory alive was not enough.
+     The destroyed buffer is now recorded in a secondary that a primary references with `vkCmdExecuteCommands`. The
+     layer reports it at record time with the buffer's retired identity, and nothing is ever submitted.
+   - **DX12:** after the in-flight release raises 921, the hazard leg removes the device (the engine's own failure
+     response) instead of opening the gate. The held copy is discarded, never executed, so a software adapter cannot
+     touch the released resource.
+   - Both pass: the Vulkan one on the RTX and on lavapipe, the DX12 one three times plus the full DX12 suite.
+5. **Not reproduced, instrumented:** `B4-vis-2` (deferred attribute shading) segfaulted intermittently on hosted
+   lavapipe: `linux-gcc-release` on `f7689b5b`, `linux-gcc-debug` on `1ab3b1ef`. Several llvmpipe worker threads faulted
+   at once, which puts the fault in the shader's execution.
+   - **Ruled out:** the kernel bounds-guards its pixel index and its empty-key fetch, and the 32x32 grid has no tail.
+   - **Not reproduced:** 143 of 143 passes on the reference host with the same Mesa. That covers Debug and Release, and
+     `LP_NUM_THREADS` 32, 4 and 2. The whole Release Vulkan suite passes (295 cases, 1 skipped).
+   - **Remaining difference:** the hosted CPU model. GitHub's Linux runners vary, and an AVX-512 host would give
+     llvmpipe 512-bit vectors and a different subgroup width.
+   - **Instrumented:** the case now writes its device string (which includes the vector width), subgroup width and
+     shared-memory size to stderr before the dispatch, flushed, so the next hosted failure carries its own diagnosis.
+     It is recorded, not masked.
+
+Reference-host results on lavapipe after the fixes (Debug unless noted): the mesh gate, the radix sort, `[ren38]` (42 passed, 1 skipped),
+`[validation]` (8 cases), `DIAG.7a(f)` and every `DIAG.7c` case pass.

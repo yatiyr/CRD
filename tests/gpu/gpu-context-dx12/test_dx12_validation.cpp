@@ -2741,11 +2741,12 @@ TEST_CASE("DIAG.7b(g): GPU-based validation reports an uninitialized descriptor 
 
 // DIAG.7a lifetime class on DX12 (user decision 2026-10-05: built, not waived). A Cerid-named placed buffer is the
 // destination of a submitted copy and is FINAL-RELEASED while that copy is still pending: the D3D12 lifetime hazard
-// OBJECT_DELETED_WHILE_STILL_IN_USE. Deterministic and physically safe by construction: the queue first waits on a gate
-// fence only the CPU signals, so the copy is provably in flight at the release, and the buffer is PLACED in a heap the
-// test owns, so the memory the copy writes stays allocated after the resource object is gone. The identity is retired
-// first (the production order), so a correlated error proves retired provenance. The control releases only after the
-// wait and stays clean.
+// OBJECT_DELETED_WHILE_STILL_IN_USE. Deterministic and safe by construction: the queue first waits on a gate fence only
+// the CPU signals, so the copy is provably in flight at the release (the buffer is PLACED in a heap the test owns, so
+// its memory outlives the resource object either way). The identity is retired
+// first (the production order), so a correlated error proves retired provenance. The held copy is never executed: the
+// hazard leg removes the device (the engine's failure response) instead of opening the gate. The control releases only
+// after the wait and stays clean.
 namespace
 {
 struct Dx12LifetimeLeg
@@ -2817,14 +2818,21 @@ struct Dx12LifetimeLeg
     {
         g::detail::dx12_detach_identity(leg.id); // the production retire-then-release order
         dst.Reset();                              // the hazard: the copy is provably still pending
+        // The gate is NEVER opened: the engine's own failure response removes the device, so the queued copy is
+        // discarded instead of executed against the released resource (a software adapter such as WARP would execute
+        // it with the resource object already gone).
+        ComPtr<ID3D12Device5> control;
+        REQUIRE(SUCCEEDED(device.As(&control)));
+        control->RemoveDevice();
+        CHECK(FAILED(device->GetDeviceRemovedReason()));
     }
-    REQUIRE(SUCCEEDED(gate->Signal(1U))); // open the gate; the copy writes into the still-allocated heap
-    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    REQUIRE(event != nullptr);
-    CHECK(SUCCEEDED(g::detail::dx12_wait(device.Get(), fence.Get(), value, event, 10000U)));
-    CloseHandle(event);
-    if (!release_in_flight)
+    else
     {
+        REQUIRE(SUCCEEDED(gate->Signal(1U))); // open the gate; the copy runs against the live resource
+        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        REQUIRE(event != nullptr);
+        CHECK(SUCCEEDED(g::detail::dx12_wait(device.Get(), fence.Get(), value, event, 10000U)));
+        CloseHandle(event);
         g::detail::dx12_detach_identity(leg.id);
         dst.Reset(); // after completion: legal
     }

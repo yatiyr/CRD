@@ -102,11 +102,24 @@ private:
     return layer;
 }
 
+// DIAG.7c(c): does the device offer timeline semaphores (Vulkan 1.2 core, required by 1.3)? A host-signalled timeline
+// value is how a submission is held open deliberately -- the counterpart of D3D12's queue-side fence wait.
+[[nodiscard]] bool query_timeline_semaphore(VkPhysicalDevice physical) noexcept
+{
+    VkPhysicalDeviceTimelineSemaphoreFeatures timeline{};
+    timeline.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+    VkPhysicalDeviceFeatures2 f2{};
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &timeline;
+    vkGetPhysicalDeviceFeatures2(physical, &f2);
+    return timeline.timelineSemaphore == VK_TRUE;
+}
+
 // DIAG.7a(f) + 7c(b): the creation-time activation report. Core and Sync are known once the instance exists;
 // GPU-assisted is provisional (FeatureAbsent) until the device features are queried. Every requested mode is LayerAbsent
 // when the layer is not installed.
 [[nodiscard]] ValidationActivation initial_activation(const GpuContextConfig& config, bool layer_ok,
-                                                      bool has_valfeat) noexcept
+                                                      bool has_valfeat, bool gpu_assisted_guarded) noexcept
 {
     ValidationActivation va{};
     va.requested[0] = config.enable_validation;
@@ -132,8 +145,9 @@ private:
     }
     else if (config.enable_gpu_assisted_validation)
     {
-        va.reason[2] =
-            has_valfeat ? ValidationUnsupportedReason::FeatureAbsent : ValidationUnsupportedReason::ExtensionAbsent;
+        // provisional until the device features are checked; without layer settings it cannot run guarded
+        va.reason[2] = gpu_assisted_guarded ? ValidationUnsupportedReason::FeatureAbsent
+                                            : ValidationUnsupportedReason::ExtensionAbsent;
     }
     return va;
 }
@@ -183,6 +197,7 @@ public:
     [[nodiscard]] bool multi_draw_indirect() const noexcept override { return m_multi_draw_indirect; } // REN-39-A2
     [[nodiscard]] bool     partially_bound() const noexcept override { return m_partially_bound; } // REN-38: bindless heap
     [[nodiscard]] bool     draw_indirect_count() const noexcept override { return m_draw_indirect_count; }
+    [[nodiscard]] bool     timeline_semaphore() const noexcept override { return m_timeline_semaphore; } // DIAG.7c(c)
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -451,10 +466,11 @@ private:
         // surface + VK_EXT_headless_surface (a swapchain WITHOUT a window — the fully-testable present path) are all
         // enabled whenever the loader offers them. A headless context can therefore still drive the present machinery
         // through a headless surface; a windowed one presents to a real window. Purely additive.
-        const char*   inst_exts[6]; // DIAG.7a(f): +VK_EXT_validation_features
+        const char*   inst_exts[7]; // DIAG.7a(f): +VK_EXT_validation_features; 7c: +VK_EXT_layer_settings
         std::uint32_t n_inst_exts = 0;
         bool          surface_ok  = false;
         bool          has_valfeat = false; // DIAG.7a(f): VK_EXT_validation_features present (needed outside the enum block)
+        bool          has_settings = false; // DIAG.7c: VK_EXT_layer_settings (how GPU-assisted runs guarded)
         {
             std::uint32_t nie = 0;
             vkEnumerateInstanceExtensionProperties(nullptr, &nie, nullptr);
@@ -522,6 +538,10 @@ private:
                     {
                         has_valfeat = true;
                     }
+                    if (std::strcmp(lavail[li].extensionName, "VK_EXT_layer_settings") == 0)
+                    {
+                        has_settings = true;
+                    }
                 }
             }
             // DIAG.7c(b): the features extension belongs to the layer; without the layer there is nothing to chain.
@@ -534,6 +554,14 @@ private:
             if (want_valfeat && has_valfeat)
             {
                 inst_exts[n_inst_exts++] = "VK_EXT_validation_features";
+            }
+            // DIAG.7c: GPU-assisted runs GUARDED or not at all -- the layer's safe mode skips the invalid access it
+            // reports instead of executing it (a CPU device such as lavapipe otherwise segfaults on the out-of-bounds
+            // store the specimen makes; a GPU writes somewhere undefined). Safe mode is set through layer settings.
+            m_validation_layer.gpu_assisted_guarded = config.enable_gpu_assisted_validation && has_valfeat && has_settings;
+            if (m_validation_layer.gpu_assisted_guarded)
+            {
+                inst_exts[n_inst_exts++] = "VK_EXT_layer_settings";
             }
         }
         if (n_inst_exts > 0U)
@@ -549,7 +577,7 @@ private:
         {
             vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
         }
-        if (config.enable_gpu_assisted_validation && has_valfeat)
+        if (m_validation_layer.gpu_assisted_guarded) // never unguarded
         {
             vf_enables[n_vf++] = VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT;
         }
@@ -562,13 +590,25 @@ private:
             vfeat.pNext                         = ici.pNext;
             ici.pNext                           = &vfeat;
         }
+        const VkBool32           safe_mode = VK_TRUE;
+        const VkLayerSettingEXT  safe{"VK_LAYER_KHRONOS_validation", "gpuav_safe_mode", VK_LAYER_SETTING_TYPE_BOOL32_EXT, 1U,
+                                     &safe_mode};
+        VkLayerSettingsCreateInfoEXT settings{};
+        settings.sType = VK_STRUCTURE_TYPE_LAYER_SETTINGS_CREATE_INFO_EXT;
+        if (m_validation_layer.gpu_assisted_guarded)
+        {
+            settings.settingCount = 1U;
+            settings.pSettings    = &safe;
+            settings.pNext        = ici.pNext;
+            ici.pNext             = &settings;
+        }
         m_surface_ext = surface_ok;
         if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS)
         {
             return;
         }
         // DIAG.7a(f) + 7c(b): the creation-time activation report (GPU-assisted is resolved against device features below).
-        m_validation_activation = initial_activation(config, layer_ok, has_valfeat);
+        m_validation_activation = initial_activation(config, layer_ok, has_valfeat, m_validation_layer.gpu_assisted_guarded);
 
         std::uint32_t    npd = 16;
         VkPhysicalDevice pds[16];
@@ -1252,6 +1292,15 @@ private:
             sync2.pNext = chain;
             chain = &sync2;
         }
+        VkPhysicalDeviceTimelineSemaphoreFeatures timeline{}; // DIAG.7c(c): chained whenever the device offers it
+        timeline.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+        timeline.timelineSemaphore = VK_TRUE;
+        m_timeline_semaphore       = query_timeline_semaphore(m_physical);
+        if (m_timeline_semaphore)
+        {
+            timeline.pNext = chain;
+            chain          = &timeline;
+        }
         if (m_shader_object)
         {
             sho.pNext = chain;
@@ -1474,6 +1523,7 @@ private:
     // The command is CORE since 1.2 but calling it needs this bit ENABLED, so it is queried and reported
     // rather than assumed (a hardcoded "supported" is how a step-down becomes invisible).
     bool             m_draw_indirect_count   = false;
+    bool             m_timeline_semaphore    = false; // DIAG.7c(c): VkPhysicalDeviceTimelineSemaphoreFeatures enabled
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

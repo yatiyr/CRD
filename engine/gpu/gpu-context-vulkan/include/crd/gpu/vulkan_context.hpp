@@ -40,6 +40,7 @@ struct VulkanValidationLayer
     bool     present                = false; // the layer is installed and was enabled
     crd::u32 spec_version           = 0;     // VkLayerProperties::specVersion (the Vulkan header it targets)
     crd::u32 implementation_version = 0;     // VkLayerProperties::implementationVersion
+    bool     gpu_assisted_guarded   = false; // GPU-assisted requested and run in the layer's safe mode (DIAG.7c)
 };
 
 // Concrete-Vulkan view of an IGpuContext. `backend() == GpuBackend::Vulkan` guarantees a safe downcast.
@@ -148,6 +149,9 @@ public:
     // DIAG.7c(b): the Khronos validation layer as this context found it (pinned evidence for every validation report).
     // Appended at END with a default (vtable-stable, D135).
     [[nodiscard]] virtual VulkanValidationLayer validation_layer() const noexcept { return {}; }
+    // DIAG.7c(c): VkPhysicalDeviceTimelineSemaphoreFeatures::timelineSemaphore enabled (Vulkan 1.2 core). Appended at
+    // END with a default (vtable-stable, D135).
+    [[nodiscard]] virtual bool timeline_semaphore() const noexcept { return false; }
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

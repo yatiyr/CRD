@@ -458,14 +458,82 @@ TEST_CASE("DIAG.7a(g-2): sync validation flags a WAW on a named buffer (correlat
     }
 }
 
-// DIAG.7a(g-3): GPU-ASSISTED (GPU-AV) correlated-hazard specimen -- the descriptor/buffer-OOB route. A compute kernel writes
-// a storage buffer OUT OF BOUNDS via a data-driven index; GPU-AV instruments the shader and reports the access at fence wait
-// (a submit is required -- a different risk class from g-1/g-2). GPU-AV neutralizes the access itself, so with GPU-AV ON the
-// submit is safe. The OFF-side is UB (fault/TDR risk) and is DELIBERATELY NOT exercised as a dispatch; the mode-off proof is
-// the ENGINE teeth (neutralize the GPU_ASSISTED enable -> the message vanishes while the report is unchanged), run manually.
-// Correlation: the message resolves to a valid Cerid identity via pObjects (objects-first). On this VVL it is the Program
-// route (kind=1); which Program-named object carried it (pipeline/shader/layouts share the id) is not observed. We assert a
-// VALID, alive identity and print the kind.
+// DIAG.7a(g-3): GPU-ASSISTED (GPU-AV) correlated-hazard specimen -- the descriptor/buffer-OOB route. A compute kernel
+// writes a storage buffer OUT OF BOUNDS via a data-driven index; GPU-AV instruments the shader and reports the access
+// at the fence wait. MEMORY-SAFE BY CONSTRUCTION (2026-10-05): the first version trusted GPU-AV to neutralize the
+// access, but on lavapipe the store executed and segfaulted the process (even with the layer's safe mode, even with
+// instrumentation off). Now the 16-byte buffer the descriptor names is bound at offset 0 of an 8 MiB allocation the test
+// owns, so the out-of-bounds index (byte 4,000,000) is out of bounds for the DESCRIPTOR -- what GPU-AV checks -- while
+// the physical store, if any device executes it, lands inside that allocation. Raw Vulkan, because the compute context
+// gives every buffer an allocation of exactly its size. The pipeline (Program) and the buffer (Resource) are Cerid-named
+// through the production adapter; a GPU-AV record must resolve to one of those LIVE identities.
+namespace
+{
+struct GpuavRig
+{
+    VkDevice              device   = VK_NULL_HANDLE;
+    VkShaderModule        module   = VK_NULL_HANDLE;
+    VkDescriptorSetLayout dsl      = VK_NULL_HANDLE;
+    VkPipelineLayout      layout   = VK_NULL_HANDLE;
+    VkPipeline            pipeline = VK_NULL_HANDLE;
+    VkDescriptorPool      dpool    = VK_NULL_HANDLE;
+    VkBuffer              out      = VK_NULL_HANDLE;
+    VkBuffer              idx      = VK_NULL_HANDLE;
+    VkDeviceMemory        out_mem  = VK_NULL_HANDLE;
+    VkDeviceMemory        idx_mem  = VK_NULL_HANDLE;
+    VkCommandPool         cpool    = VK_NULL_HANDLE;
+    VkFence               fence    = VK_NULL_HANDLE;
+
+    ~GpuavRig()
+    {
+        if (device == VK_NULL_HANDLE)
+        {
+            return;
+        }
+        (void)vkDeviceWaitIdle(device);
+        vkDestroyFence(device, fence, nullptr);
+        vkDestroyCommandPool(device, cpool, nullptr);
+        vkDestroyDescriptorPool(device, dpool, nullptr);
+        vkDestroyPipeline(device, pipeline, nullptr);
+        vkDestroyPipelineLayout(device, layout, nullptr);
+        vkDestroyDescriptorSetLayout(device, dsl, nullptr);
+        vkDestroyShaderModule(device, module, nullptr);
+        vkDestroyBuffer(device, out, nullptr);
+        vkDestroyBuffer(device, idx, nullptr);
+        vkFreeMemory(device, out_mem, nullptr);
+        vkFreeMemory(device, idx_mem, nullptr);
+    }
+};
+
+[[nodiscard]] VkBuffer make_storage_buffer(VkDevice device, VkDeviceSize size)
+{
+    VkBufferCreateInfo bci{};
+    bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size        = size;
+    bci.usage       = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    REQUIRE(vkCreateBuffer(device, &bci, nullptr, &buffer) == VK_SUCCESS);
+    return buffer;
+}
+
+[[nodiscard]] VkDeviceMemory bind_memory(gpu::VulkanGpuContext& vk, VkBuffer buffer, VkDeviceSize at_least,
+                                         VkMemoryPropertyFlags props)
+{
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(vk.vk_device(), buffer, &req);
+    VkMemoryAllocateInfo mai{};
+    mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize  = req.size > at_least ? req.size : at_least;
+    mai.memoryTypeIndex = find_memory_type(vk.vk_physical_device(), req.memoryTypeBits, props);
+    REQUIRE(mai.memoryTypeIndex != UINT32_MAX);
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateMemory(vk.vk_device(), &mai, nullptr, &memory) == VK_SUCCESS);
+    REQUIRE(vkBindBufferMemory(vk.vk_device(), buffer, memory, 0) == VK_SUCCESS);
+    return memory;
+}
+} // namespace
+
 TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access correlated to a Cerid identity",
           "[gpu-context][vulkan][gpu][validation][identity][hazard][gpuav]")
 {
@@ -487,9 +555,7 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
         WARN("GPU-assisted validation not active on this device; skipping"); // env capability, not a masked failure
         return;
     }
-
-    crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
-    REQUIRE(compute.valid());
+    CHECK(vk->validation_layer().gpu_assisted_guarded); // GPU-AV never runs unguarded
 
     // A tiny kernel that writes OUT OF BOUNDS via a data-driven index (so the compiler cannot fold the access away).
     static const char* const kSrc =
@@ -500,52 +566,141 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
         "void main() { outb.data[idxb.idx[0]] = 0xABCDu; }\n";
     const auto spv = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::StringView(kSrc), "gpuav_oob",
                                                 crd::memory::default_allocator());
-    if (!spv.ok)
-    {
-        WARN("GLSL->SPIR-V failed: " << spv.error_message.c_str());
-    }
     REQUIRE(spv.ok);
-    auto pipe = compute.create_pipeline_from_spirv(
-        crd::containers::ConstSpan<crd::u8>(spv.spirv.data(), spv.spirv.size()), 2, 0U);
-    REQUIRE(pipe != nullptr);
 
-    auto out = compute.create_buffer(16U, gpu::compute_usage::storage, gpu::ComputeMemory::GpuOnly);  // 4 uints
-    auto idx = compute.create_buffer(4U, gpu::compute_usage::storage, gpu::ComputeMemory::CpuToGpu);  // 1 uint (host-visible)
-    REQUIRE(out != nullptr);
-    REQUIRE(idx != nullptr);
-    auto* p = static_cast<crd::u32*>(idx->map());
-    REQUIRE(p != nullptr);
-    *p = 1000000U; // an index far outside the 4-uint OutBuf -> out-of-bounds store
-    idx->unmap();
+    constexpr VkDeviceSize out_bytes   = 16U;          // the descriptor range: 4 uints
+    constexpr VkDeviceSize out_alloc   = 8U << 20U;    // the memory behind it: 8 MiB
+    constexpr crd::u32     oob_index   = 1000000U;     // byte 4,000,000: past the descriptor, inside the allocation
+    static_assert(static_cast<VkDeviceSize>(oob_index) * 4U + 4U <= out_alloc);
 
-    gpu::ValidationCapture capture(*vk);
-    auto&                   rec = compute.begin();
-    crd::gpu::ComputeBuffer* binds[2] = {out.get(), idx.get()};
-    rec.dispatch(*pipe, crd::containers::ConstSpan<crd::gpu::ComputeBuffer*>(binds, 2), nullptr, 0U, 1U, 1U, 1U);
-    compute.submit_and_wait(); // GPU-AV reads back its error buffer here (fence wait), not at record
-
-    for (const auto& r : capture.messages())
+    GpuavRig r{};
+    r.device = vk->vk_device();
+    VkShaderModuleCreateInfo smci{};
+    smci.sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    smci.codeSize = spv.spirv.size();
+    smci.pCode    = reinterpret_cast<const crd::u32*>(spv.spirv.data());
+    REQUIRE(vkCreateShaderModule(r.device, &smci, nullptr, &r.module) == VK_SUCCESS);
+    VkDescriptorSetLayoutBinding binds[2]{};
+    for (crd::u32 b = 0; b < 2U; ++b)
     {
-        UNSCOPED_INFO("gpuav msg ident.valid=" << r.identity.valid()
-                      << " kind=" << (r.identity.valid() ? static_cast<int>(r.identity.kind) : -1)
-                      << " sev=" << static_cast<int>(r.severity) << " text=" << r.message_text.c_str());
+        binds[b].binding         = b;
+        binds[b].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        binds[b].descriptorCount = 1U;
+        binds[b].stageFlags      = VK_SHADER_STAGE_COMPUTE_BIT;
+    }
+    VkDescriptorSetLayoutCreateInfo dslci{};
+    dslci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    dslci.bindingCount = 2U;
+    dslci.pBindings    = binds;
+    REQUIRE(vkCreateDescriptorSetLayout(r.device, &dslci, nullptr, &r.dsl) == VK_SUCCESS);
+    VkPipelineLayoutCreateInfo plci{};
+    plci.sType          = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    plci.setLayoutCount = 1U;
+    plci.pSetLayouts    = &r.dsl;
+    REQUIRE(vkCreatePipelineLayout(r.device, &plci, nullptr, &r.layout) == VK_SUCCESS);
+    VkComputePipelineCreateInfo cpci{};
+    cpci.sType        = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    cpci.stage.sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpci.stage.stage  = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpci.stage.module = r.module;
+    cpci.stage.pName  = "main";
+    cpci.layout       = r.layout;
+    REQUIRE(vkCreateComputePipelines(r.device, VK_NULL_HANDLE, 1U, &cpci, nullptr, &r.pipeline) == VK_SUCCESS);
+    const gpu::ObjectIdentity program = gpu::detail::vk_attach_identity(
+        r.device, VK_OBJECT_TYPE_PIPELINE, reinterpret_cast<crd::u64>(r.pipeline), gpu::ObjectKind::Program, "vk-gpuav-pipe");
+
+    r.out     = make_storage_buffer(r.device, out_bytes);
+    r.out_mem = bind_memory(*vk, r.out, out_alloc, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    const gpu::ObjectIdentity resource = gpu::detail::vk_attach_identity(
+        r.device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(r.out), gpu::ObjectKind::Resource, "vk-gpuav-out");
+    r.idx     = make_storage_buffer(r.device, 4U);
+    r.idx_mem = bind_memory(*vk, r.idx, 4U, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    void* mapped = nullptr;
+    REQUIRE(vkMapMemory(r.device, r.idx_mem, 0, VK_WHOLE_SIZE, 0, &mapped) == VK_SUCCESS);
+    *static_cast<crd::u32*>(mapped) = oob_index;
+    vkUnmapMemory(r.device, r.idx_mem);
+
+    VkDescriptorPoolSize psize{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2U};
+    VkDescriptorPoolCreateInfo dpci{};
+    dpci.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    dpci.maxSets       = 1U;
+    dpci.poolSizeCount = 1U;
+    dpci.pPoolSizes    = &psize;
+    REQUIRE(vkCreateDescriptorPool(r.device, &dpci, nullptr, &r.dpool) == VK_SUCCESS);
+    VkDescriptorSetAllocateInfo dsai{};
+    dsai.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dsai.descriptorPool     = r.dpool;
+    dsai.descriptorSetCount = 1U;
+    dsai.pSetLayouts        = &r.dsl;
+    VkDescriptorSet set     = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateDescriptorSets(r.device, &dsai, &set) == VK_SUCCESS);
+    const VkDescriptorBufferInfo infos[2] = {{r.out, 0, out_bytes}, {r.idx, 0, 4U}};
+    VkWriteDescriptorSet writes[2]{};
+    for (crd::u32 b = 0; b < 2U; ++b)
+    {
+        writes[b].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[b].dstSet          = set;
+        writes[b].dstBinding      = b;
+        writes[b].descriptorCount = 1U;
+        writes[b].descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[b].pBufferInfo     = &infos[b];
+    }
+    vkUpdateDescriptorSets(r.device, 2U, writes, 0U, nullptr);
+
+    VkCommandPoolCreateInfo cpi{};
+    cpi.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    cpi.queueFamilyIndex = vk->compute_family();
+    REQUIRE(vkCreateCommandPool(r.device, &cpi, nullptr, &r.cpool) == VK_SUCCESS);
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool        = r.cpool;
+    cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1U;
+    VkCommandBuffer cb      = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateCommandBuffers(r.device, &cbai, &cb) == VK_SUCCESS);
+    VkFenceCreateInfo fci{};
+    fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    REQUIRE(vkCreateFence(r.device, &fci, nullptr, &r.fence) == VK_SUCCESS);
+
+    gpu::ValidationCapture   capture(*vk);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    REQUIRE(vkBeginCommandBuffer(cb, &bi) == VK_SUCCESS);
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r.pipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, r.layout, 0U, 1U, &set, 0U, nullptr);
+    vkCmdDispatch(cb, 1U, 1U, 1U);
+    REQUIRE(vkEndCommandBuffer(cb) == VK_SUCCESS);
+    VkSubmitInfo si{};
+    si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    si.commandBufferCount = 1U;
+    si.pCommandBuffers    = &cb;
+    REQUIRE(gpu::detail::vk_submit(r.device, vk->compute_queue(), si, r.fence, "gpuav submit") == VK_SUCCESS);
+    // GPU-AV reads back its error buffer at the fence wait, not at record
+    REQUIRE(gpu::detail::vk_wait_complete(r.device, r.fence, gpu::detail::kVkDefaultWaitNs, "gpuav wait") == VK_SUCCESS);
+
+    for (const auto& m : capture.messages())
+    {
+        UNSCOPED_INFO("gpuav msg ident.valid=" << m.identity.valid()
+                      << " kind=" << (m.identity.valid() ? static_cast<int>(m.identity.kind) : -1)
+                      << " sev=" << static_cast<int>(m.severity) << " text=" << m.message_text.c_str());
     }
     CHECK(capture.dropped_count() == 0U);            // GPU-AV can emit several records; correlate over a complete set
     REQUIRE(capture.error_or_warning_count() >= 1U); // GPU-AV fired on the OOB access
 
-    // Correlation: at least one GPU-AV record resolves to a live Cerid identity (Program pipeline/shader, or Resource).
-    const gpu::ValidationMessage* hit = nullptr;
-    for (const auto& r : capture.messages())
+    const gpu::ValidationMessage* hit = nullptr;     // a GPU-AV record resolves to THIS pipeline or THIS buffer
+    for (const auto& m : capture.messages())
     {
-        if (r.identity.valid())
+        if (m.identity == program || m.identity == resource)
         {
-            hit = &r;
+            hit = &m;
             break;
         }
     }
-    REQUIRE(hit != nullptr);                          // the GPU-AV diagnostic is correlated to a Cerid object
-    UNSCOPED_INFO("correlated route kind=" << static_cast<int>(hit->identity.kind)); // 0=Resource 1=Program 2=Pass
+    REQUIRE(hit != nullptr);
+    UNSCOPED_INFO("correlated route kind=" << static_cast<int>(hit->identity.kind)); // 0=Resource 1=Program
     CHECK(gpu::identity_registry().alive(hit->identity));
+    gpu::detail::vk_detach_identity(program);
+    gpu::detail::vk_detach_identity(resource);
 }
 
 // DIAG.7a(g-4): the PASS route. A hazard recorded INSIDE a PassLabelScope carries no named object; the capture now resolves
@@ -675,14 +830,14 @@ TEST_CASE("DIAG.7a(g-4): a hazard inside a PassLabelScope correlates to the Pass
     (void)gpu::identity_registry().retire(pass_id);
 }
 
-// DIAG.7a lifetime class (user decision 2026-10-05: built, not waived). A Cerid-named buffer is recorded into a command
-// buffer and then DESTROYED before the submit: the classic lifetime hazard, which the layer reports at vkQueueSubmit as
-// a command buffer invalidated by a destroyed bound object. Measured first: the record's object list carries the
-// destroyed VkBuffer WITH its Cerid debug name (the layer keeps names of destroyed handles), so the production capture
-// resolves it to the now-RETIRED identity -- no Cerid-side handle table is needed on this route. Physically safe by
-// construction: only the VkBuffer is destroyed, its memory stays allocated until the queue is idle, and the submit goes
-// through the bounded completion seam, so even an unskipped submit writes into live memory. The control leg runs the
-// same flow without the destroy and stays clean.
+// DIAG.7a lifetime class (user decision 2026-10-05: built, not waived). A Cerid-named buffer is recorded into a SECONDARY
+// command buffer and then DESTROYED; a primary then references that secondary with vkCmdExecuteCommands, which the layer
+// reports at RECORD time as a command buffer invalidated by a destroyed bound object. Measured: the record's object list
+// carries the destroyed VkBuffer WITH its Cerid debug name (the layer keeps names of destroyed handles), so the
+// production capture resolves it to the now-RETIRED identity -- no Cerid-side handle table is needed. Never submitted:
+// a first version submitted the invalidated buffer and lavapipe, a CPU device, segfaulted dereferencing the destroyed
+// buffer object (keeping only its memory alive was not enough). The control leg runs the same flow without the destroy
+// and stays clean.
 namespace
 {
 struct LifetimeLeg
@@ -694,7 +849,7 @@ struct LifetimeLeg
     crd::u32            dropped          = 0;
 };
 
-[[nodiscard]] LifetimeLeg run_lifetime_leg(gpu::VulkanGpuContext& vk, bool destroy_before_submit)
+[[nodiscard]] LifetimeLeg run_lifetime_leg(gpu::VulkanGpuContext& vk, bool destroy_before_use)
 {
     LifetimeLeg            leg{};
     const VkDevice         device = vk.vk_device();
@@ -728,30 +883,37 @@ struct LifetimeLeg
     VkCommandBufferAllocateInfo cbai{};
     cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     cbai.commandPool        = pool;
-    cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.level              = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
     cbai.commandBufferCount = 1;
-    VkCommandBuffer cb      = VK_NULL_HANDLE;
-    REQUIRE(vkAllocateCommandBuffers(device, &cbai, &cb) == VK_SUCCESS);
-    VkCommandBufferBeginInfo bi{};
-    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    REQUIRE(vkBeginCommandBuffer(cb, &bi) == VK_SUCCESS);
-    vkCmdFillBuffer(cb, buffer, 0, 16, 0U);
-    REQUIRE(vkEndCommandBuffer(cb) == VK_SUCCESS);
+    VkCommandBuffer secondary = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateCommandBuffers(device, &cbai, &secondary) == VK_SUCCESS);
+    cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    VkCommandBuffer primary = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateCommandBuffers(device, &cbai, &primary) == VK_SUCCESS);
+    VkCommandBufferInheritanceInfo inherit{};
+    inherit.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+    VkCommandBufferBeginInfo sbi{};
+    sbi.sType            = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    sbi.pInheritanceInfo = &inherit;
+    REQUIRE(vkBeginCommandBuffer(secondary, &sbi) == VK_SUCCESS);
+    vkCmdFillBuffer(secondary, buffer, 0, 16, 0U);
+    REQUIRE(vkEndCommandBuffer(secondary) == VK_SUCCESS);
 
     {
         gpu::ValidationCapture capture(vk);
-        if (destroy_before_submit)
+        if (destroy_before_use)
         {
             gpu::detail::vk_detach_identity(leg.id); // the production retire-then-destroy order
-            vkDestroyBuffer(device, buffer, nullptr); // the hazard; the memory stays allocated
+            vkDestroyBuffer(device, buffer, nullptr); // the hazard
             buffer = VK_NULL_HANDLE;
         }
-        VkSubmitInfo si{};
-        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-        si.commandBufferCount = 1;
-        si.pCommandBuffers    = &cb;
-        (void)gpu::detail::vk_submit(device, vk.compute_queue(), si, VK_NULL_HANDLE, "lifetime submit");
-        (void)vkDeviceWaitIdle(device); // nothing is freed while the submission could still run
+        // Referencing the (now invalid) secondary is reported at RECORD time; the primary is never submitted, so no
+        // device -- a CPU one included -- ever executes a command that names the destroyed buffer.
+        VkCommandBufferBeginInfo pbi{};
+        pbi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        REQUIRE(vkBeginCommandBuffer(primary, &pbi) == VK_SUCCESS);
+        vkCmdExecuteCommands(primary, 1U, &secondary);
+        (void)vkEndCommandBuffer(primary);
 
         for (const auto& rec : capture.messages())
         {

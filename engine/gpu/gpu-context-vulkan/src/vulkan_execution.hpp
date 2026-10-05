@@ -31,6 +31,7 @@ struct VkDeviceFailure
     const char*     operation    = nullptr; // the static label of the call that failed first
     crd::u64        sequence     = 0;       // 1-based order of first failures across the process
     crd::u64        failures     = 0;       // every failed call on this device, the first included
+    crd::u64        slow_waits   = 0;       // completions that outlasted their report threshold (not failures)
     [[nodiscard]] bool lost() const noexcept
     {
         return first_result == static_cast<crd::i32>(VK_ERROR_DEVICE_LOST);
@@ -40,8 +41,16 @@ struct VkDeviceFailure
 // Submit `submit` to `queue`, signalling `fence` (may be VK_NULL_HANDLE). `operation` must be a string literal.
 [[nodiscard]] VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, VkFence fence,
                                  const char* operation) noexcept;
-// Wait for `fence` at most `timeout_ns`. VK_TIMEOUT is returned and recorded as TimedOut.
+// Wait for `fence` at most `timeout_ns`. VK_TIMEOUT is returned and recorded as TimedOut. Only for a caller that may
+// safely ABANDON the wait: nothing it will free can still be referenced by queued work.
 [[nodiscard]] VkResult vk_wait(VkDevice device, VkFence fence, crd::u64 timeout_ns, const char* operation) noexcept;
+
+// Wait for `fence` until the work COMPLETES or the device is lost; past `report_after_ns` the wait is counted as slow
+// (VkDeviceFailure::slow_waits) and continues. Vulkan has no way to stop queued work (DX12 forces RemoveDevice), so a
+// caller that frees memory after the wait must never abandon it: an abandoned wait let a software device keep writing
+// into freed buffers. Returns VK_SUCCESS or the failure that ended the wait.
+[[nodiscard]] VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_ns,
+                                        const char* operation) noexcept;
 
 // The first failure recorded for the live `device` (origin None when it never failed).
 [[nodiscard]] VkDeviceFailure vk_device_failure(VkDevice device) noexcept;

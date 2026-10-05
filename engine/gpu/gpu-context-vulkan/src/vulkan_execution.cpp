@@ -141,6 +141,30 @@ VkResult vk_wait(VkDevice device, VkFence fence, crd::u64 timeout_ns, const char
     return result;
 }
 
+VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_ns, const char* operation) noexcept
+{
+    VkResult result = VK_SUCCESS;
+    if (answer_without_driver(device, operation, result))
+    {
+        return result;
+    }
+    result = vkWaitForFences(device, 1U, &fence, VK_TRUE, report_after_ns);
+    if (result == VK_TIMEOUT)
+    {
+        {
+            FailureStore&         s = store();
+            const std::lock_guard lock(s.mutex);
+            ++slot(s, device, true)->slow_waits;
+        }
+        result = vkWaitForFences(device, 1U, &fence, VK_TRUE, UINT64_MAX); // completion or loss, never abandonment
+    }
+    if (result != VK_SUCCESS)
+    {
+        record(device, result, classify(result), operation);
+    }
+    return result;
+}
+
 VkDeviceFailure vk_device_failure(VkDevice device) noexcept
 {
     FailureStore&          s = store();
