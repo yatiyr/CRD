@@ -4,10 +4,10 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: REPO.DEV -->
-**Current work:** [REPO.DEV](docs/ROADMAP.md#slice-repo.dev), the first Open row: the infrastructure close, gated on
-qualification of the first complete-tier hosted run and its repairs.
+**Current work:** [REPO.DEV](docs/ROADMAP.md#slice-repo.dev), first Open row; complete tier green
+([audit](docs/sessions/2026-10-06-needs-ci-audit.md)); gates: cache-cold run, selector comparison.
 Next programme: [DIAG](docs/ROADMAP.md#slice-diag.0) immediately after REPO.DEV;
-[implementation contract](docs/design/runtime-diagnostics.md). Planning did not start implementation or a loop.
+[implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction
