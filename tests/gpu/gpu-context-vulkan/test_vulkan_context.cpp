@@ -448,6 +448,60 @@ TEST_CASE("DIAG.7c(c): a failed Vulkan completion keeps its first failure and la
     CHECK(d::vk_device_failure(device_b).origin == d::VkFailureOrigin::None);
 }
 
+// DIAG.7c(c): the raster, ray-tracing and DGC paths submit and wait through the same seam as compute. The idle waits
+// (vkQueueWaitIdle / vkDeviceWaitIdle) cannot be bounded, but they classify failures and skip a device known to be lost.
+// A loss injected into the raster context's one-shot submit is recorded against that operation, the call returns
+// without hanging, and later waits on the device are answered without the driver.
+TEST_CASE("DIAG.7c(c): the raster one-shot path and the idle waits go through the completion seam",
+          "[gpu-context][vulkan][gpu][device-loss]")
+{
+    namespace d = gpu::detail;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr || !ctx->valid())
+    {
+        SKIP("no Vulkan device");
+    }
+    auto* const vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->graphics_capable())
+    {
+        SKIP("the device has no graphics queue");
+    }
+    const VkDevice device = vk->vk_device();
+    CHECK(d::vk_queue_wait_idle(device, vk->graphics_queue(), "test queue idle") == VK_SUCCESS);
+    CHECK(d::vk_device_wait_idle(device, "test device idle") == VK_SUCCESS);
+    CHECK(d::vk_device_failure(device).origin == d::VkFailureOrigin::None);
+
+    {
+        auto raster = gpu::create_vulkan_raster_context(*vk);
+        REQUIRE(raster != nullptr);
+        REQUIRE(raster->valid());
+        auto target = raster->create_color_target(8U, 8U);
+        REQUIRE(target != nullptr);
+        raster->clear(*target, gpu::ClearColor{0.25F, 0.5F, 0.75F, 1.0F}); // healthy: nothing recorded
+        CHECK(d::vk_device_failure(device).origin == d::VkFailureOrigin::None);
+
+        d::vk_inject_next_result(VK_ERROR_DEVICE_LOST);
+        raster->clear(*target, gpu::ClearColor{1.0F, 0.0F, 0.0F, 1.0F}); // returns: no wait on what never queued
+        const d::VkDeviceFailure lost = d::vk_device_failure(device);
+        CHECK(lost.origin == d::VkFailureOrigin::Simulated);
+        CHECK(lost.lost());
+        REQUIRE(lost.operation != nullptr);
+        CHECK(std::strcmp(lost.operation, "raster one-shot submit") == 0);
+        CHECK(lost.failures == 1U);
+
+        // Every later wait on the lost device is answered without the driver; the first failure stays.
+        CHECK(d::vk_queue_wait_idle(device, vk->graphics_queue(), "later queue idle") == VK_ERROR_DEVICE_LOST);
+        CHECK(d::vk_device_wait_idle(device, "later device idle") == VK_ERROR_DEVICE_LOST);
+        const d::VkDeviceFailure again = d::vk_device_failure(device);
+        CHECK(std::strcmp(again.operation, "raster one-shot submit") == 0);
+        CHECK(again.failures == 3U);
+    } // teardown on the lost device returns at once: any seam wait in it is answered without the driver
+    CHECK(d::vk_device_failure(device).failures >= 3U);
+}
+
 // D-007 C6: cooperative-VECTOR device enable (VK_NV_cooperative_vector) — the PER-INVOCATION matrix×vector inference primitive
 // for neural shading (each pixel/thread runs a small MLP inline), the device half of the B10 moat. This gate proves the device
 // comes up with the extension + feature ENABLED (a legal feature request under validation), reports the queried capabilities, and

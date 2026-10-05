@@ -52,6 +52,11 @@ struct VkDeviceFailure
 [[nodiscard]] VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_ns,
                                         const char* operation) noexcept;
 
+// vkQueueWaitIdle / vkDeviceWaitIdle through the seam. Vulkan cannot bound an idle wait, so these complete or fail;
+// a failure is classified and kept like any other, and a device known to be lost is not called again.
+[[nodiscard]] VkResult vk_queue_wait_idle(VkDevice device, VkQueue queue, const char* operation) noexcept;
+[[nodiscard]] VkResult vk_device_wait_idle(VkDevice device, const char* operation) noexcept;
+
 // The first failure recorded for the live `device` (origin None when it never failed).
 [[nodiscard]] VkDeviceFailure vk_device_failure(VkDevice device) noexcept;
 // The most recent first failure on any device, kept after that device is destroyed (the last-known state).
@@ -59,7 +64,7 @@ struct VkDeviceFailure
 // Called before vkDestroyDevice: the handle value may be reused by a later device, which must not inherit this record.
 void vk_forget_device(VkDevice device) noexcept;
 
-// Test seam: the next vk_submit or vk_wait on any device returns `result` without calling the driver, and records it
-// as Simulated. VK_SUCCESS clears a pending injection.
+// Test seam: the next seam call (submit, wait or idle wait) on any device returns `result` without calling the driver,
+// and records it as Simulated. VK_SUCCESS clears a pending injection.
 void vk_inject_next_result(VkResult result) noexcept;
 } // namespace crd::gpu::detail

@@ -3,6 +3,7 @@
 
 #include <crd/gpu/vulkan_ray_tracing_context.hpp>
 
+#include "vulkan_execution.hpp"       // DIAG.7c(c): the completion seam
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per acceleration-structure scene
 
 #include <crd/containers/array.hpp>
@@ -156,8 +157,12 @@ struct VulkanRayTracingContext::Impl
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1;
         si.pCommandBuffers    = &cmd;
-        vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(queue);
+        // Through the completion seam (DIAG.7c): failures are classified per device, and a lost device is not called
+        // again. A failed submit queued nothing, so there is nothing to wait for.
+        if (detail::vk_submit(device, queue, si, VK_NULL_HANDLE, "RT one-shot submit") == VK_SUCCESS)
+        {
+            (void)detail::vk_queue_wait_idle(device, queue, "RT one-shot wait");
+        }
         vkFreeCommandBuffers(device, cmd_pool, 1, &cmd);
     }
 
@@ -336,7 +341,7 @@ VulkanRayTracingContext::~VulkanRayTracingContext()
     {
         return;
     }
-    vkDeviceWaitIdle(impl.device);
+    (void)detail::vk_device_wait_idle(impl.device, "RT context teardown");
     if (impl.destroy_as != nullptr)
     {
         for (crd::usize i = 0; i < impl.owned_as.size(); ++i)

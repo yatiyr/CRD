@@ -11,6 +11,7 @@
 #include <crd/gpu/frame_graph.hpp>          // REN-1: the frame-graph interface this TU implements
 #include <crd/gpu/vulkan_gpu_allocator.hpp> // RET-4 pt 2: the ADR-0085 S6 suballocation core, absorbed
 
+#include "vulkan_execution.hpp"       // DIAG.7c(c): every submission and wait goes through the completion seam
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per logical GPU object
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-vk): mint(ObjectKind::Pass) for frame-graph pass identities
 
@@ -565,7 +566,7 @@ public:
     {
         if (m_device != VK_NULL_HANDLE)
         {
-            vkDeviceWaitIdle(m_device);
+            (void)detail::vk_device_wait_idle(m_device, "present surface teardown");
         }
         destroy_backbuffer_views();
         if (m_swapchain != VK_NULL_HANDLE)
@@ -637,7 +638,7 @@ public:
         m_fence       = m_fence_ring[m_slot];
         if (m_slot_pending[m_slot])
         {
-            (void)vkWaitForFences(m_device, 1, &m_fence, VK_TRUE, UINT64_MAX);
+            (void)detail::vk_wait_complete(m_device, m_fence, detail::kVkDefaultWaitNs, "present slot reclaim");
             (void)vkResetFences(m_device, 1, &m_fence);
             m_slot_pending[m_slot] = false;
         }
@@ -752,7 +753,7 @@ public:
         si.pCommandBuffers      = &m_cmd;
         si.signalSemaphoreCount = 1;
         si.pSignalSemaphores    = &m_sem_present[idx]; // ⛔ per IMAGE — see the ctor note
-        if (vkQueueSubmit(m_queue, 1, &si, m_fence) != VK_SUCCESS)
+        if (detail::vk_submit(m_device, m_queue, si, m_fence, "present submit") != VK_SUCCESS)
         {
             return false;
         }
@@ -784,7 +785,7 @@ public:
         {
             return false;
         }
-        vkDeviceWaitIdle(m_device);
+        (void)detail::vk_device_wait_idle(m_device, "present surface resize");
         m_valid = create_swapchain(width, height);
         return m_valid;
     }
@@ -798,7 +799,7 @@ public:
         {
             if (m_slot_pending[i])
             {
-                (void)vkWaitForFences(m_device, 1U, &m_fence_ring[i], VK_TRUE, ~0ULL);
+                (void)detail::vk_wait_complete(m_device, m_fence_ring[i], detail::kVkDefaultWaitNs, "present drain");
                 // ⛔ pending stays TRUE: present()'s top-of-slot reclaim also resets the fence before reuse,
                 // and a signalled fence makes that wait free. Clearing it here would skip that reset path.
             }
@@ -1482,7 +1483,7 @@ public:
         {
             if (b.submitted)
             {
-                (void)vkWaitForFences(m_device, 1U, &b.fence, VK_TRUE, ~0ULL);
+                (void)detail::vk_wait_complete(m_device, b.fence, detail::kVkDefaultWaitNs, "upload batch teardown");
                 vkFreeCommandBuffers(m_device, m_pool, 1U, &b.cmd);
             }
             if (b.fence != VK_NULL_HANDLE)
@@ -8017,7 +8018,7 @@ private:
             {
                 continue;
             }
-            (void)vkWaitForFences(m_device, 1U, &b.fence, VK_TRUE, ~0ULL);
+            (void)detail::vk_wait_complete(m_device, b.fence, detail::kVkDefaultWaitNs, "upload batch drain");
             vkResetFences(m_device, 1U, &b.fence);
             vkFreeCommandBuffers(m_device, m_pool, 1U, &b.cmd);
             b.cmd       = VK_NULL_HANDLE;
@@ -8038,7 +8039,7 @@ private:
         UploadBatch& b = m_upload[m_upload_slot];
         if (b.submitted) // reclaim: the transfer 2 batches ago has long completed — wait is normally instant
         {
-            (void)vkWaitForFences(m_device, 1U, &b.fence, VK_TRUE, ~0ULL);
+            (void)detail::vk_wait_complete(m_device, b.fence, detail::kVkDefaultWaitNs, "upload batch reclaim");
             vkResetFences(m_device, 1U, &b.fence);
             vkFreeCommandBuffers(m_device, m_pool, 1U, &b.cmd);
             b.cmd       = VK_NULL_HANDLE;
@@ -8116,8 +8117,9 @@ private:
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1U;
         si.pCommandBuffers    = &b.cmd;
-        vkQueueSubmit(m_queue, 1U, &si, b.fence); // ⛔ NO WAIT — that is the entire point
-        b.submitted   = true;
+        // ⛔ NO WAIT — that is the entire point. Pending only when the submit succeeded: a fence that was never
+        // submitted stays unsignalled, and a later reclaim wait on it would never return.
+        b.submitted   = detail::vk_submit(m_device, m_queue, si, b.fence, "upload batch submit") == VK_SUCCESS;
         m_upload_slot = (m_upload_slot + 1U) % kUploadBatches;
     }
 
@@ -8133,7 +8135,10 @@ private:
             const crd::u32 want = (b.cap * 2U > b.used + aligned) ? b.cap * 2U : (b.used + aligned) * 2U;
             end_upload_batch();
             UploadBatch& old = b; // same slot storage — end advanced m_upload_slot, the object is unchanged
-            (void)vkWaitForFences(m_device, 1U, &old.fence, VK_TRUE, ~0ULL);
+            if (old.submitted)
+            {
+                (void)detail::vk_wait_complete(m_device, old.fence, detail::kVkDefaultWaitNs, "upload batch grow");
+            }
             vkResetFences(m_device, 1U, &old.fence);
             vkFreeCommandBuffers(m_device, m_pool, 1U, &old.cmd);
             old.cmd       = VK_NULL_HANDLE;
@@ -8339,8 +8344,11 @@ private:
         si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         si.commandBufferCount = 1U;
         si.pCommandBuffers    = &cmd;
-        vkQueueSubmit(m_queue, 1U, &si, VK_NULL_HANDLE);
-        vkQueueWaitIdle(m_queue); // synchronous: host-coherent readback is valid after the wait
+        // Synchronous: host-coherent readback is valid after the wait. A failed submit queued nothing to wait for.
+        if (detail::vk_submit(m_device, m_queue, si, VK_NULL_HANDLE, "raster one-shot submit") == VK_SUCCESS)
+        {
+            (void)detail::vk_queue_wait_idle(m_device, m_queue, "raster one-shot wait");
+        }
         vkFreeCommandBuffers(m_device, m_pool, 1U, &cmd);
     }
 
@@ -8906,7 +8914,8 @@ public:
         // hung EVERY frame-graph teardown, whether or not the asset ever asked for the async queue.
         if (m_async_submitted)
         {
-            vkWaitForFences(m_device, 1U, &m_async_fence, VK_TRUE, ~0ULL);
+            (void)detail::vk_wait_complete(m_device, m_async_fence, detail::kVkDefaultWaitNs,
+                                           "frame graph async teardown");
         }
         if (m_async_done != VK_NULL_HANDLE)
         {
@@ -10692,6 +10701,7 @@ void VulkanFrameGraph::execute()
     m_submit_count     = 0U;
     m_present_count    = 0U;
     m_async_pass_count = 0U;
+    bool async_signalled = false; // this frame's async-compute submission succeeded, so its semaphore will signal
     vkResetDescriptorPool(m_device, m_frame_desc_pool, 0);
     vkResetCommandBuffer(m_cmd, 0);
     VkCommandBufferBeginInfo bi{};
@@ -10737,8 +10747,9 @@ void VulkanFrameGraph::execute()
         asi.signalSemaphoreCount = 1U;
         asi.pSignalSemaphores    = &m_async_done;
         vkResetFences(m_device, 1U, &m_async_fence);
-        vkQueueSubmit(m_rc->frame_ctx().compute_queue(), 1U, &asi, m_async_fence);
-        m_async_submitted = true;
+        async_signalled   = detail::vk_submit(m_device, m_rc->frame_ctx().compute_queue(), asi, m_async_fence,
+                                              "frame graph async submit") == VK_SUCCESS;
+        m_async_submitted = async_signalled; // the fence was just reset: it signals only if this submit succeeded
     }
 
     m_rc->frame_rec_begin(m_cmd, m_frame_desc_pool);
@@ -11048,15 +11059,15 @@ void VulkanFrameGraph::execute()
     si.pCommandBuffers    = &m_cmd;
     // REN-38-A14: wait for the async-compute submission before ANY graphics work touches what it wrote.
     const VkPipelineStageFlags async_wait = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    if (m_async_pass_count > 0U)
+    if (m_async_pass_count > 0U && async_signalled) // never wait on a semaphore no submission will signal
     {
         si.waitSemaphoreCount = 1U;
         si.pWaitSemaphores    = &m_async_done;
         si.pWaitDstStageMask  = &async_wait;
     }
     vkResetFences(m_device, 1U, &m_fence);
-    vkQueueSubmit(m_queue, 1U, &si, m_fence);
-    m_submit_count = 1U;
+    const bool submitted = detail::vk_submit(m_device, m_queue, si, m_fence, "frame graph submit") == VK_SUCCESS;
+    m_submit_count       = submitted ? 1U : 0U;
 
     // ⛔ REN-8: THE STALL. Waiting here blocks the CPU on the GPU every single frame — measured at ~4.9 ms of a
     // ~12.5 ms sandbox frame, against only ~1.5 ms of actual pass work. The wait exists so `read_pixel` is valid
@@ -11069,8 +11080,8 @@ void VulkanFrameGraph::execute()
     // ⛔ Deferring is only SAFE because every destructive operation is behind `wait_pending()`: reset() frees
     // transients, the dtor tears down the pool, and execute() re-records the one command buffer. A deferred wait
     // that skipped any of those would be a use-after-free on in-flight GPU work, not a speedup.
-    fs.pending       = true;
-    m_pending_submit = true;
+    fs.pending       = submitted; // a fence that was never submitted stays unsignalled: never wait on it
+    m_pending_submit = submitted;
     m_last_slot      = static_cast<crd::i32>(m_slot);
     if (m_readback)
     {
@@ -11139,7 +11150,7 @@ void VulkanFrameGraph::wait_pending_submit() noexcept
     {
         return;
     }
-    vkWaitForFences(m_device, 1U, &fs.fence, VK_TRUE, ~0ULL);
+    (void)detail::vk_wait_complete(m_device, fs.fence, detail::kVkDefaultWaitNs, "frame graph wait");
     fs.pending       = false;
     m_pending_submit = false;
     drain_retired(fs);
@@ -11153,7 +11164,7 @@ void VulkanFrameGraph::wait_all_slots() noexcept
         FrameSlot& fs = m_slots_if[s];
         if (fs.pending)
         {
-            vkWaitForFences(m_device, 1U, &fs.fence, VK_TRUE, ~0ULL);
+            (void)detail::vk_wait_complete(m_device, fs.fence, detail::kVkDefaultWaitNs, "frame graph drain");
             fs.pending = false;
         }
         drain_retired(fs);

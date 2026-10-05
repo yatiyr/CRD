@@ -165,6 +165,36 @@ VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_
     return result;
 }
 
+VkResult vk_queue_wait_idle(VkDevice device, VkQueue queue, const char* operation) noexcept
+{
+    VkResult result = VK_SUCCESS;
+    if (answer_without_driver(device, operation, result))
+    {
+        return result;
+    }
+    result = vkQueueWaitIdle(queue);
+    if (result != VK_SUCCESS)
+    {
+        record(device, result, classify(result), operation);
+    }
+    return result;
+}
+
+VkResult vk_device_wait_idle(VkDevice device, const char* operation) noexcept
+{
+    VkResult result = VK_SUCCESS;
+    if (answer_without_driver(device, operation, result))
+    {
+        return result;
+    }
+    result = vkDeviceWaitIdle(device);
+    if (result != VK_SUCCESS)
+    {
+        record(device, result, classify(result), operation);
+    }
+    return result;
+}
+
 VkDeviceFailure vk_device_failure(VkDevice device) noexcept
 {
     FailureStore&          s = store();

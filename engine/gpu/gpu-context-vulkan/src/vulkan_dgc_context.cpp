@@ -6,6 +6,8 @@
 
 #include <crd/gpu/vulkan_dgc_context.hpp>
 
+#include "vulkan_execution.hpp" // DIAG.7c(c): the completion seam
+
 #include <cstring>
 
 namespace crd::gpu
@@ -440,9 +442,10 @@ bool VulkanDgcContext::dispatch_generated(const ExecuteDesc& desc, crd::containe
             si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
             si.commandBufferCount = 1;
             si.pCommandBuffers    = &cmd;
-            if (vkQueueSubmit(impl.queue, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS)
+            // Through the completion seam: a failed submit or wait leaves `ran` false, so nothing is read back.
+            if (detail::vk_submit(dev, impl.queue, si, VK_NULL_HANDLE, "DGC execute submit") == VK_SUCCESS &&
+                detail::vk_queue_wait_idle(dev, impl.queue, "DGC execute wait") == VK_SUCCESS)
             {
-                vkQueueWaitIdle(impl.queue);
                 ran = true;
             }
             vkFreeCommandBuffers(dev, impl.cmd_pool, 1, &cmd);

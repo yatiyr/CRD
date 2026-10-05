@@ -272,6 +272,18 @@ WSL reference host). Every Windows lane passed; every Linux lane failed. Triage 
    writes it under a user profile that does not exist on the runner. They now use `crd::platform::fs::temp_directory()`
    (the hidden tool uses `std::filesystem::temp_directory_path()`). On the reference host the cook, variant and D-007 D4
    cases pass from the repository directory and write only under `/tmp`.
+7. **The remaining Vulkan paths moved onto the seam (DIAG.7c(c)).**
+   - **Covered:** the raster context's present ring, upload batches, one-shot submissions and frame graph, the ray
+     tracing one-shot and teardown, and the DGC execute. Every submission uses `vk_submit`; every wait that frees
+     memory uses `vk_wait_complete`.
+   - **Idle waits:** `vk_queue_wait_idle` and `vk_device_wait_idle` classify the idle waits Vulkan cannot bound.
+     `vkQueuePresentKHR` stays direct, because `VK_ERROR_OUT_OF_DATE_KHR` and `VK_SUBOPTIMAL_KHR` are normal flow
+     there.
+   - **Latent hang removed:** several call sites marked a fence pending, or a semaphore as signalled, even when the
+     submit had failed. A later unbounded wait would then never return. They now depend on the submit's result.
+   - **Proof:** a new test injects a loss into the raster one-shot submit. The failure is recorded against
+     `raster one-shot submit`, the call returns, and later idle waits are answered without the driver.
+   - **Results:** the three device-loss tests pass, and the full Vulkan context suite passes on the RTX (297 cases).
 
 Reference-host results on lavapipe after the fixes (Debug unless noted): the mesh gate, the radix sort, `[ren38]` (42 passed, 1 skipped),
 `[validation]` (8 cases), `DIAG.7a(f)` and every `DIAG.7c` case pass.

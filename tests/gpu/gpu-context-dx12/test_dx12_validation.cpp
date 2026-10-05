@@ -22,7 +22,7 @@
 #include <filesystem>
 #include <cstring>
 #include <cstdio>
-#include <string>
+#include <cwchar> // swprintf_s: the child command line
 #include <thread>
 
 #include "dx12_device_scope.hpp"
@@ -2840,13 +2840,15 @@ constexpr DWORD kLifetimeChildTimedOut    = 98U;
     {
         return kLifetimeChildSpawnFailed;
     }
-    std::wstring command = L"\"";
-    command += self;
-    command += L"\" \"[.dx12-lifetime-hazard-child]\"";
+    wchar_t command[MAX_PATH + 64] = {}; // CreateProcessW needs a writable command line
+    if (swprintf_s(command, L"\"%ls\" \"[.dx12-lifetime-hazard-child]\"", self) < 0)
+    {
+        return kLifetimeChildSpawnFailed;
+    }
     STARTUPINFOW        startup{};
     PROCESS_INFORMATION process{};
     startup.cb = sizeof(startup);
-    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0U, nullptr, nullptr, &startup, &process) == 0)
+    if (CreateProcessW(nullptr, command, nullptr, nullptr, FALSE, 0U, nullptr, nullptr, &startup, &process) == 0)
     {
         return kLifetimeChildSpawnFailed;
     }

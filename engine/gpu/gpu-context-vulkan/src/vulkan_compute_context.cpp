@@ -387,7 +387,7 @@ VulkanComputeContext::~VulkanComputeContext()
     {
         return;
     }
-    vkDeviceWaitIdle(impl.device);
+    (void)detail::vk_device_wait_idle(impl.device, "compute context teardown");
     if (impl.pipeline_cache != VK_NULL_HANDLE)
     {
         vkDestroyPipelineCache(impl.device, impl.pipeline_cache, nullptr);
