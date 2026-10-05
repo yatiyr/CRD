@@ -235,10 +235,22 @@ WSL reference host). Every Windows lane passed; every Linux lane failed. Triage 
      lavapipe, which dereferences the driver's buffer object when it executes; keeping the memory alive was not enough.
      The destroyed buffer is now recorded in a secondary that a primary references with `vkCmdExecuteCommands`. The
      layer reports it at record time with the buffer's retired identity, and nothing is ever submitted.
-   - **DX12:** after the in-flight release raises 921, the hazard leg removes the device (the engine's own failure
-     response) instead of opening the gate. The held copy is discarded, never executed, so a software adapter cannot
-     touch the released resource.
-   - Both pass: the Vulkan one on the RTX and on lavapipe, the DX12 one three times plus the full DX12 suite.
+   - **DX12, first attempt:** after the in-flight release raises 921, the hazard leg removed the device instead of
+     opening the gate. That was wrong. On hosted WARP, removal unblocked the queue during teardown. The error arrived
+     late (`correlated_error` false on `aabbc97a`), or the process faulted (`a45059fc`, both clang-cl lanes).
+   - **DX12, measured on local WARP:**
+     - Opening the gate and accepting WARP's own device removal (`DXGI_ERROR_DRIVER_INTERNAL_ERROR`) still faulted in
+       one run of five. Processing a list that references a released resource is not memory-safe on a software
+       adapter.
+     - With the debug layer's default synchronized queue validation, a resource released *before* submission is
+       reported at `ExecuteCommandLists`, correlated, while the queue is still parked on a gate that never opens.
+   - **DX12, final design:** the hazard leg runs in a bounded child process, the test executable re-entered on a
+     hidden case. It releases the buffer, parks the queue, submits, confirms the correlated and retired error, reports
+     through its exit code and leaves with `_Exit` without tearing down, so the copy never executes. The control leg
+     stays in-process.
+   - **DX12, evidence:** ten of ten runs on local WARP, five on the RTX, the full DX12 suite (201 cases), and teeth
+     (without the release the child reports exit 10 and the test fails).
+   - The Vulkan one passes on the RTX and on lavapipe.
 5. **The kernel emitters hoisted guarded memory reads (fixed).** `B4-vis-2` (deferred attribute shading) segfaulted
    intermittently on hosted lavapipe: `linux-gcc-release` on `f7689b5b`, `linux-gcc-debug` on `1ab3b1ef`. The ASan lane
    on `1ab3b1ef` placed it: a page-aligned read in JIT-compiled shader code, on a driver worker thread.

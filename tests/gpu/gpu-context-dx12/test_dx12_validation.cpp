@@ -17,9 +17,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <cstring>
 #include <cstdio>
+#include <string>
 #include <thread>
 
 #include "dx12_device_scope.hpp"
@@ -2740,37 +2743,45 @@ TEST_CASE("DIAG.7b(g): GPU-based validation reports an uninitialized descriptor 
 }
 
 // DIAG.7a lifetime class on DX12 (user decision 2026-10-05: built, not waived). A Cerid-named placed buffer is the
-// destination of a submitted copy and is FINAL-RELEASED while that copy is still pending: the D3D12 lifetime hazard
-// OBJECT_DELETED_WHILE_STILL_IN_USE. Deterministic and safe by construction: the queue first waits on a gate fence only
-// the CPU signals, so the copy is provably in flight at the release (the buffer is PLACED in a heap the test owns, so
-// its memory outlives the resource object either way). The identity is retired
-// first (the production order), so a correlated error proves retired provenance. The held copy is never executed: the
-// hazard leg removes the device (the engine's failure response) instead of opening the gate. The control releases only
-// after the wait and stays clean.
+// destination of a recorded copy and is FINAL-RELEASED before that copy is submitted to a queue parked on a gate fence
+// nobody signals: the D3D12 lifetime hazard OBJECT_DELETED_WHILE_STILL_IN_USE (921). With the debug layer's default
+// synchronized queue validation, the error is reported at ExecuteCommandLists, before anything can execute (measured
+// on WARP). The identity is retired first (the production order), so a correlated error proves retired provenance.
+//
+// The hazard never executes. On a software adapter, letting the queue process a list that references a released
+// resource is not memory-safe: WARP faulted in about one run in five, and removing the device first only moved the
+// fault into teardown (hosted clang-cl lanes, 2026-10-05). So the hazard leg runs in a bounded child process (this
+// executable re-entered on a hidden case), which reports through its exit code and leaves with _Exit, never tearing the
+// parked queue down. The control leg releases only after the copy completes and runs in-process.
 namespace
 {
-struct Dx12LifetimeLeg
+struct Dx12LifetimeRig
 {
-    g::ObjectIdentity id{};
-    bool              correlated_error = false;
-    bool              retired          = false;
-    crd::u64          new_errors       = 0;
+    g::detail::Dx12DeviceScope        scope;
+    ComPtr<ID3D12Device>              device;
+    ComPtr<ID3D12Heap>                heap;
+    ComPtr<ID3D12Resource>            dst;
+    ComPtr<ID3D12Resource>            src;
+    ComPtr<ID3D12CommandQueue>        queue;
+    ComPtr<ID3D12CommandAllocator>    commands;
+    ComPtr<ID3D12GraphicsCommandList> list;
+    ComPtr<ID3D12Fence>               fence;
+    ComPtr<ID3D12Fence>               gate;
+    g::ObjectIdentity                 id{};
 };
 
-[[nodiscard]] Dx12LifetimeLeg run_dx12_lifetime_leg(g::Dx12ValidationCapture& capture, bool release_in_flight)
+// A placed destination buffer (its memory belongs to a heap the test owns), an upload source, a queue, and a list that
+// copies src -> dst. The destination carries a Cerid identity.
+void make_dx12_lifetime_rig(Dx12LifetimeRig& rig)
 {
-    Dx12LifetimeLeg            leg{};
-    g::detail::Dx12DeviceScope scope;
-    scope.request_validation(true, false, false);
-    ComPtr<ID3D12Device> device;
-    REQUIRE(SUCCEEDED(scope.create(device)));
+    rig.scope.request_validation(true, false, false);
+    REQUIRE(SUCCEEDED(rig.scope.create(rig.device)));
 
     D3D12_HEAP_DESC heap_desc{};
     heap_desc.SizeInBytes     = 65536U;
     heap_desc.Properties.Type = D3D12_HEAP_TYPE_DEFAULT;
     heap_desc.Flags           = D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
-    ComPtr<ID3D12Heap> heap;
-    REQUIRE(SUCCEEDED(device->CreateHeap(&heap_desc, IID_PPV_ARGS(&heap))));
+    REQUIRE(SUCCEEDED(rig.device->CreateHeap(&heap_desc, IID_PPV_ARGS(&rig.heap))));
 
     D3D12_RESOURCE_DESC buf{};
     buf.Dimension        = D3D12_RESOURCE_DIMENSION_BUFFER;
@@ -2780,64 +2791,30 @@ struct Dx12LifetimeLeg
     buf.MipLevels        = 1U;
     buf.SampleDesc.Count = 1U;
     buf.Layout           = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-    ComPtr<ID3D12Resource> dst;
-    REQUIRE(SUCCEEDED(device->CreatePlacedResource(heap.Get(), 0U, &buf, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                   IID_PPV_ARGS(&dst))));
+    REQUIRE(SUCCEEDED(rig.device->CreatePlacedResource(rig.heap.Get(), 0U, &buf, D3D12_RESOURCE_STATE_COMMON, nullptr,
+                                                       IID_PPV_ARGS(&rig.dst))));
     D3D12_HEAP_PROPERTIES upload{};
     upload.Type = D3D12_HEAP_TYPE_UPLOAD;
-    ComPtr<ID3D12Resource> src;
-    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &buf,
-                                                      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-                                                      IID_PPV_ARGS(&src))));
-    leg.id = g::detail::dx12_attach_identity(dst.Get(), g::ObjectKind::Resource, "dx12-lifetime-buffer");
-    REQUIRE(leg.id.valid());
+    REQUIRE(SUCCEEDED(rig.device->CreateCommittedResource(&upload, D3D12_HEAP_FLAG_NONE, &buf,
+                                                          D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                                          IID_PPV_ARGS(&rig.src))));
+    rig.id = g::detail::dx12_attach_identity(rig.dst.Get(), g::ObjectKind::Resource, "dx12-lifetime-buffer");
+    REQUIRE(rig.id.valid());
 
     D3D12_COMMAND_QUEUE_DESC queue_desc{};
     queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-    ComPtr<ID3D12CommandQueue>        queue;
-    ComPtr<ID3D12CommandAllocator>    commands;
-    ComPtr<ID3D12GraphicsCommandList> list;
-    ComPtr<ID3D12Fence>               fence;
-    ComPtr<ID3D12Fence>               gate;
-    REQUIRE(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
-    REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commands))));
-    REQUIRE(SUCCEEDED(device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, commands.Get(), nullptr,
-                                                IID_PPV_ARGS(&list))));
-    REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
-    REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&gate))));
-    list->CopyBufferRegion(dst.Get(), 0U, src.Get(), 0U, 256U);
+    REQUIRE(SUCCEEDED(rig.device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&rig.queue))));
+    REQUIRE(SUCCEEDED(rig.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&rig.commands))));
+    REQUIRE(SUCCEEDED(rig.device->CreateCommandList(0U, D3D12_COMMAND_LIST_TYPE_DIRECT, rig.commands.Get(), nullptr,
+                                                    IID_PPV_ARGS(&rig.list))));
+    REQUIRE(SUCCEEDED(rig.device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&rig.fence))));
+    REQUIRE(SUCCEEDED(rig.device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&rig.gate))));
+    rig.list->CopyBufferRegion(rig.dst.Get(), 0U, rig.src.Get(), 0U, 256U);
+}
 
-    const crd::u32 before  = capture.report().messages;
-    const crd::u64 errors0 = capture.report().errors;
-    REQUIRE(SUCCEEDED(queue->Wait(gate.Get(), 1U))); // hold the copy until the CPU opens the gate
-    UINT64 value     = 0U;
-    bool   submitted = false;
-    REQUIRE(SUCCEEDED(
-        g::detail::dx12_submit(device.Get(), queue.Get(), list.Get(), fence.Get(), value, submitted)));
-    if (release_in_flight)
-    {
-        g::detail::dx12_detach_identity(leg.id); // the production retire-then-release order
-        dst.Reset();                              // the hazard: the copy is provably still pending
-        // The gate is NEVER opened: the engine's own failure response removes the device, so the queued copy is
-        // discarded instead of executed against the released resource (a software adapter such as WARP would execute
-        // it with the resource object already gone).
-        ComPtr<ID3D12Device5> control;
-        REQUIRE(SUCCEEDED(device.As(&control)));
-        control->RemoveDevice();
-        CHECK(FAILED(device->GetDeviceRemovedReason()));
-    }
-    else
-    {
-        REQUIRE(SUCCEEDED(gate->Signal(1U))); // open the gate; the copy runs against the live resource
-        HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        REQUIRE(event != nullptr);
-        CHECK(SUCCEEDED(g::detail::dx12_wait(device.Get(), fence.Get(), value, event, 10000U)));
-        CloseHandle(event);
-        g::detail::dx12_detach_identity(leg.id);
-        dst.Reset(); // after completion: legal
-    }
-
-    for (crd::u32 i = before; i < capture.report().messages; ++i)
+void print_dx12_messages(const g::Dx12ValidationCapture& capture, crd::u32 from)
+{
+    for (crd::u32 i = from; i < capture.report().messages; ++i)
     {
         g::Dx12ValidationMessage m;
         if (capture.message(i, m))
@@ -2846,26 +2823,121 @@ struct Dx12LifetimeLeg
                           << " ident.valid=" << m.identity.valid() << " text=" << m.text);
         }
     }
-    leg.correlated_error = dx12_new_error_correlates(capture, before, leg.id);
-    leg.retired          = !g::identity_registry().alive(leg.id);
-    leg.new_errors       = capture.report().errors - errors0;
-    return leg;
+}
+
+constexpr DWORD kLifetimeChildCorrelated  = 0U;
+constexpr DWORD kLifetimeChildNoError     = 10U;
+constexpr DWORD kLifetimeChildNotRetired  = 11U;
+constexpr DWORD kLifetimeChildSpawnFailed = 97U;
+constexpr DWORD kLifetimeChildTimedOut    = 98U;
+
+// Re-enter this test executable on the hidden hazard case and return its exit code (bounded: 60 s).
+[[nodiscard]] DWORD run_dx12_lifetime_hazard_child()
+{
+    wchar_t     self[MAX_PATH] = {};
+    const DWORD length         = GetModuleFileNameW(nullptr, self, MAX_PATH);
+    if (length == 0U || length >= MAX_PATH)
+    {
+        return kLifetimeChildSpawnFailed;
+    }
+    std::wstring command = L"\"";
+    command += self;
+    command += L"\" \"[.dx12-lifetime-hazard-child]\"";
+    STARTUPINFOW        startup{};
+    PROCESS_INFORMATION process{};
+    startup.cb = sizeof(startup);
+    if (CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, 0U, nullptr, nullptr, &startup, &process) == 0)
+    {
+        return kLifetimeChildSpawnFailed;
+    }
+    DWORD code = kLifetimeChildTimedOut;
+    if (WaitForSingleObject(process.hProcess, 60000U) == WAIT_OBJECT_0)
+    {
+        (void)GetExitCodeProcess(process.hProcess, &code);
+    }
+    else
+    {
+        (void)TerminateProcess(process.hProcess, kLifetimeChildTimedOut);
+    }
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return code;
 }
 } // namespace
+
+TEST_CASE("DIAG.7a lifetime hazard child (spawned by the lifetime test, never run alone)",
+          "[.dx12-lifetime-hazard-child]")
+{
+    crd::memory::TlsfAllocator allocator(16U << 20U, nullptr, "DX12 lifetime hazard child");
+    g::Dx12ValidationCapture   capture(&allocator, 4096U);
+    REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
+    Dx12LifetimeRig rig;
+    make_dx12_lifetime_rig(rig);
+
+    const crd::u32 before = capture.report().messages;
+    g::detail::dx12_detach_identity(rig.id); // the production retire-then-release order
+    rig.dst.Reset();                         // the hazard: released while the recorded copy still references it
+    REQUIRE(SUCCEEDED(rig.queue->Wait(rig.gate.Get(), 1U))); // never signalled: the copy can never execute
+    UINT64 value     = 0U;
+    bool   submitted = false;
+    REQUIRE(SUCCEEDED(g::detail::dx12_submit(rig.device.Get(), rig.queue.Get(), rig.list.Get(), rig.fence.Get(), value,
+                                             submitted)));
+    bool correlated = false;
+    for (int waited_ms = 0; waited_ms <= 2000 && !correlated; waited_ms += 10)
+    {
+        correlated = dx12_new_error_correlates(capture, before, rig.id);
+        if (!correlated)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    const bool retired = !g::identity_registry().alive(rig.id);
+    std::printf("[dx12-lifetime-child] correlated=%d retired=%d messages=%u\n", static_cast<int>(correlated),
+                static_cast<int>(retired), capture.report().messages - before);
+    (void)std::fflush(stdout);
+    DWORD code = kLifetimeChildCorrelated;
+    if (!correlated)
+    {
+        code = kLifetimeChildNoError;
+    }
+    else if (!retired)
+    {
+        code = kLifetimeChildNotRetired;
+    }
+    // Leave without tearing down: the parked queue still holds the copy that references the released resource.
+    std::_Exit(static_cast<int>(code));
+}
 
 TEST_CASE("DIAG.7a lifetime: a Cerid buffer released while its copy is pending correlates to its retired identity",
           "[dx12][validation][identity][hazard][lifetime]")
 {
+    // Hazard: in a bounded child process (see above).
+    const DWORD child = run_dx12_lifetime_hazard_child();
+    INFO("hazard child exit code " << child << " (0 correlated, 10 no error, 11 not retired, 97 spawn, 98 timeout)");
+    CHECK(child == kLifetimeChildCorrelated);
+
+    // Control: release only after the copy completes; no error may name the buffer.
     crd::memory::TlsfAllocator allocator(16U << 20U, nullptr, "DX12 lifetime-class test");
     g::Dx12ValidationCapture   capture(&allocator, 4096U);
     REQUIRE(capture.report().readiness == g::Dx12ValidationReadiness::Ready);
-
-    const Dx12LifetimeLeg hazard = run_dx12_lifetime_leg(capture, true);
+    Dx12LifetimeRig rig;
+    make_dx12_lifetime_rig(rig);
+    const crd::u32 before  = capture.report().messages;
+    const crd::u64 errors0 = capture.report().errors;
+    REQUIRE(SUCCEEDED(rig.queue->Wait(rig.gate.Get(), 1U)));
+    UINT64 value     = 0U;
+    bool   submitted = false;
+    REQUIRE(SUCCEEDED(g::detail::dx12_submit(rig.device.Get(), rig.queue.Get(), rig.list.Get(), rig.fence.Get(), value,
+                                             submitted)));
+    REQUIRE(SUCCEEDED(rig.gate->Signal(1U))); // open the gate; the copy runs against the live resource
+    HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    REQUIRE(event != nullptr);
+    CHECK(SUCCEEDED(g::detail::dx12_wait(rig.device.Get(), rig.fence.Get(), value, event, 10000U)));
+    CloseHandle(event);
+    g::detail::dx12_detach_identity(rig.id);
+    rig.dst.Reset(); // after completion: legal
+    print_dx12_messages(capture, before);
     CHECK(capture.report().dropped == 0U);
-    CHECK(hazard.correlated_error); // an ERROR names the released buffer's identity...
-    CHECK(hazard.retired);          // ...which is retired: the provenance of a dead object
-
-    const Dx12LifetimeLeg control = run_dx12_lifetime_leg(capture, false);
-    CHECK(control.new_errors == 0U); // releasing after completion is clean
-    CHECK_FALSE(control.correlated_error);
+    CHECK(capture.report().errors - errors0 == 0U); // releasing after completion is clean
+    CHECK_FALSE(dx12_new_error_correlates(capture, before, rig.id));
 }
