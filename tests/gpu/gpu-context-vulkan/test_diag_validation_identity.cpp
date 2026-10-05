@@ -8,6 +8,7 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_validation_capture.hpp>
 
+#include "vulkan_execution.hpp"      // DIAG.7a lifetime: the submit goes through the bounded completion seam
 #include "vulkan_identity_naming.hpp" // DIAG.7a(g): detail::vk_attach_identity/vk_detach_identity (the real naming path)
 #include <crd/gpu/vulkan_compute_context.hpp> // DIAG.7a(g-3): dispatch a kernel that OOBs a storage buffer
 #include <crd/gpu/vulkan_shader_compile.hpp>  // DIAG.7a(g-3): compile_glsl_to_spirv
@@ -672,4 +673,138 @@ TEST_CASE("DIAG.7a(g-4): a hazard inside a PassLabelScope correlates to the Pass
     (void)gpu::identity_registry().retire(inner_id);
 
     (void)gpu::identity_registry().retire(pass_id);
+}
+
+// DIAG.7a lifetime class (user decision 2026-10-05: built, not waived). A Cerid-named buffer is recorded into a command
+// buffer and then DESTROYED before the submit: the classic lifetime hazard, which the layer reports at vkQueueSubmit as
+// a command buffer invalidated by a destroyed bound object. Measured first: the record's object list carries the
+// destroyed VkBuffer WITH its Cerid debug name (the layer keeps names of destroyed handles), so the production capture
+// resolves it to the now-RETIRED identity -- no Cerid-side handle table is needed on this route. Physically safe by
+// construction: only the VkBuffer is destroyed, its memory stays allocated until the queue is idle, and the submit goes
+// through the bounded completion seam, so even an unskipped submit writes into live memory. The control leg runs the
+// same flow without the destroy and stays clean.
+namespace
+{
+struct LifetimeLeg
+{
+    gpu::ObjectIdentity id{};
+    bool                correlated_error = false; // an Error record carries `id`
+    bool                retired          = false; // identity_registry().alive(id) == false at correlation time
+    crd::u32            errors_or_warnings = 0;
+    crd::u32            dropped          = 0;
+};
+
+[[nodiscard]] LifetimeLeg run_lifetime_leg(gpu::VulkanGpuContext& vk, bool destroy_before_submit)
+{
+    LifetimeLeg            leg{};
+    const VkDevice         device = vk.vk_device();
+    VkBufferCreateInfo     bci{};
+    bci.sType       = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bci.size        = 16;
+    bci.usage       = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    REQUIRE(vkCreateBuffer(device, &bci, nullptr, &buffer) == VK_SUCCESS);
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device, buffer, &req);
+    VkMemoryAllocateInfo mai{};
+    mai.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    mai.allocationSize  = req.size;
+    mai.memoryTypeIndex = find_memory_type(vk.vk_physical_device(), req.memoryTypeBits,
+                                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    REQUIRE(mai.memoryTypeIndex != UINT32_MAX);
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateMemory(device, &mai, nullptr, &memory) == VK_SUCCESS);
+    REQUIRE(vkBindBufferMemory(device, buffer, memory, 0) == VK_SUCCESS);
+    leg.id = gpu::detail::vk_attach_identity(device, VK_OBJECT_TYPE_BUFFER, reinterpret_cast<crd::u64>(buffer),
+                                             gpu::ObjectKind::Resource, "vk-lifetime-buffer");
+    REQUIRE(leg.id.valid());
+
+    VkCommandPoolCreateInfo pci{};
+    pci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pci.queueFamilyIndex = vk.compute_family();
+    VkCommandPool pool   = VK_NULL_HANDLE;
+    REQUIRE(vkCreateCommandPool(device, &pci, nullptr, &pool) == VK_SUCCESS);
+    VkCommandBufferAllocateInfo cbai{};
+    cbai.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cbai.commandPool        = pool;
+    cbai.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer cb      = VK_NULL_HANDLE;
+    REQUIRE(vkAllocateCommandBuffers(device, &cbai, &cb) == VK_SUCCESS);
+    VkCommandBufferBeginInfo bi{};
+    bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    REQUIRE(vkBeginCommandBuffer(cb, &bi) == VK_SUCCESS);
+    vkCmdFillBuffer(cb, buffer, 0, 16, 0U);
+    REQUIRE(vkEndCommandBuffer(cb) == VK_SUCCESS);
+
+    {
+        gpu::ValidationCapture capture(vk);
+        if (destroy_before_submit)
+        {
+            gpu::detail::vk_detach_identity(leg.id); // the production retire-then-destroy order
+            vkDestroyBuffer(device, buffer, nullptr); // the hazard; the memory stays allocated
+            buffer = VK_NULL_HANDLE;
+        }
+        VkSubmitInfo si{};
+        si.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        si.commandBufferCount = 1;
+        si.pCommandBuffers    = &cb;
+        (void)gpu::detail::vk_submit(device, vk.compute_queue(), si, VK_NULL_HANDLE, "lifetime submit");
+        (void)vkDeviceWaitIdle(device); // nothing is freed while the submission could still run
+
+        for (const auto& rec : capture.messages())
+        {
+            UNSCOPED_INFO("msg id=" << rec.message_id_number << " sev=" << static_cast<int>(rec.severity)
+                          << " ident.valid=" << rec.identity.valid() << " text=" << rec.message_text.c_str());
+            if (rec.identity == leg.id && rec.severity == gpu::ValidationSeverity::Error)
+            {
+                leg.correlated_error = true;
+            }
+        }
+        leg.retired            = !gpu::identity_registry().alive(leg.id);
+        leg.errors_or_warnings = capture.error_or_warning_count();
+        leg.dropped            = capture.dropped_count();
+    }
+
+    vkDestroyCommandPool(device, pool, nullptr);
+    if (buffer != VK_NULL_HANDLE)
+    {
+        gpu::detail::vk_detach_identity(leg.id);
+        vkDestroyBuffer(device, buffer, nullptr);
+    }
+    vkFreeMemory(device, memory, nullptr);
+    return leg;
+}
+} // namespace
+
+TEST_CASE("DIAG.7a lifetime: a destroyed Cerid buffer in a submitted command buffer correlates to its retired identity",
+          "[gpu-context][vulkan][gpu][validation][identity][hazard][lifetime]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true; // Core
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr || !ctx->valid())
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    if (!vk->validation_activation().is_active(gpu::ValidationMode::Core))
+    {
+        WARN("the validation layer is not present here; skipping");
+        return;
+    }
+
+    const LifetimeLeg hazard = run_lifetime_leg(*vk, true);
+    CHECK(hazard.dropped == 0U);
+    CHECK(hazard.correlated_error); // an ERROR names the destroyed buffer's identity...
+    CHECK(hazard.retired);          // ...and that identity is retired: the provenance of a dead object
+
+    const LifetimeLeg control = run_lifetime_leg(*vk, false);
+    CHECK(control.dropped == 0U);
+    CHECK(control.errors_or_warnings == 0U); // the same flow without the destroy is clean
+    CHECK_FALSE(control.correlated_error);
 }

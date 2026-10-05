@@ -17,7 +17,8 @@
 
 #include <string_view>
 
-struct ID3D12Object; // forward-declared: <d3d12.h> stays in the .cpp, not in this header
+struct ID3D12Object;              // forward-declared: <d3d12.h> stays in the .cpp, not in this header
+struct ID3D12GraphicsCommandList; // the same, for the pass-event scope
 
 namespace crd::gpu::detail
 {
@@ -38,5 +39,24 @@ void dx12_name_object(ID3D12Object* object, const ObjectIdentity& id, std::strin
 // Retire an identity when its native object is destroyed. The generation bump means a later message about the freed
 // object parses to alive()==false -- the "recently retired provenance" primitive lifecycle coverage (e) builds on.
 void dx12_detach_identity(const ObjectIdentity& id) noexcept;
+
+// DIAG.7a(d2c-dx12): a balanced-by-construction command-list event around a frame-graph pass, WITHOUT PIX. The core
+// ID3D12GraphicsCommandList::BeginEvent with metadata 0 (the legacy unicode encoding: a NUL-terminated UTF-16 string)
+// is what PIX, RenderDoc and DRED breadcrumb contexts record. The marker reuses format_debug_name, so a capture shows
+// "[crd:pass:N] <name>" -- the DX12 mirror of the Vulkan PassLabelScope. RAII: EndEvent fires iff BeginEvent ran, so an
+// early exit inside the pass can never unbalance the list. A null list or an unformattable identity -> no-op.
+class Dx12PassEventScope
+{
+public:
+    Dx12PassEventScope(ID3D12GraphicsCommandList* list, const ObjectIdentity& id, const char* name) noexcept;
+    ~Dx12PassEventScope() noexcept;
+    Dx12PassEventScope(const Dx12PassEventScope&)            = delete;
+    Dx12PassEventScope& operator=(const Dx12PassEventScope&) = delete;
+    Dx12PassEventScope(Dx12PassEventScope&&)                 = delete;
+    Dx12PassEventScope& operator=(Dx12PassEventScope&&)      = delete;
+
+private:
+    ID3D12GraphicsCommandList* m_list = nullptr; // set only if BeginEvent ran -> the dtor is balanced
+};
 
 } // namespace crd::gpu::detail

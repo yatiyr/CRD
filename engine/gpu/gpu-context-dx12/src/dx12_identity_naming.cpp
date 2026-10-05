@@ -45,4 +45,37 @@ void dx12_detach_identity(const ObjectIdentity& id) noexcept
     (void)identity_registry().retire(id);
 }
 
+Dx12PassEventScope::Dx12PassEventScope(ID3D12GraphicsCommandList* list, const ObjectIdentity& id,
+                                       const char* name) noexcept
+{
+    if (list == nullptr)
+    {
+        return;
+    }
+    const std::string_view nm = (name != nullptr) ? std::string_view(name) : std::string_view("pass");
+    char                   narrow[kDebugNamePrefixChars + 96];
+    const crd::usize       n = format_debug_name(id, nm, narrow, sizeof(narrow)); // 0 if invalid/too small
+    if (n == 0U) // do NOT Begin -> the dtor stays a no-op (balanced)
+    {
+        return;
+    }
+    wchar_t wide[kDebugNamePrefixChars + 96];
+    for (crd::usize i = 0; i < n; ++i)
+    {
+        wide[i] = static_cast<wchar_t>(static_cast<unsigned char>(narrow[i]));
+    }
+    wide[n] = L'\0';
+    constexpr UINT unicode_event = 0U; // the legacy WINPIX_EVENT_UNICODE_VERSION metadata
+    list->BeginEvent(unicode_event, wide, static_cast<UINT>((n + 1U) * sizeof(wchar_t)));
+    m_list = list; // Begin ran -> arm End
+}
+
+Dx12PassEventScope::~Dx12PassEventScope() noexcept
+{
+    if (m_list != nullptr)
+    {
+        m_list->EndEvent();
+    }
+}
+
 } // namespace crd::gpu::detail

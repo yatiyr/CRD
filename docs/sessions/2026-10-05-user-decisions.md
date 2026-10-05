@@ -76,3 +76,35 @@ hardware fault run (5, h2) belong to the user.
 
   The first hosted run is the qualification: tests that skipped for want of a device now execute, and any that cannot
   hold on a software device are fixed or made to say why.
+
+- **(4) DIAG.7a lifetime class: proven on both APIs, with a measured correction to the premise.** The 7a caveat
+  assumed a destroyed object loses its debug name, so a dead-handle error could not correlate. Measured on VVL 1.4.341,
+  that is false. The layer keeps the names of destroyed handles: a use-after-destroy error lists the destroyed
+  `VkBuffer` with its full Cerid name. The one nameless record seen was the parameter-validation message for passing a
+  stale handle as a call argument, which carries the handle only as hex in its text. That form is not safe to exercise
+  in-process: the probe of `vkCmdFillBuffer` on a destroyed buffer segfaulted the test process. So it is not the
+  specimen, and the Cerid-side handle table is not built, because no proven route needs it.
+  - **Vulkan specimen:** record a fill on a Cerid-named buffer, destroy the `VkBuffer` but keep its memory, then submit
+    through `vk_submit` and wait idle before freeing anything. The layer did not skip the submit, so the fill landed in
+    live memory.
+    - The `vkQueueSubmit` invalidated-command-buffer error correlates to the buffer's retired identity.
+    - The control without the destroy is clean.
+    - Teeth: the identity minted but not used as the debug name fails the correlation.
+  - **DX12 specimen:** a Cerid-named placed buffer, in a heap the test owns, is the destination of a copy held behind a
+    queue-side wait on a CPU-signalled gate fence. It is final-released while provably in flight, then the gate opens.
+    - Error 921 `OBJECT_DELETED_WHILE_STILL_IN_USE` correlates to the retired identity.
+    - The control, released after completion, is clean.
+    - Same teeth.
+  - **Results:** each passed three runs. The full DX12 suite passes (201 cases), as does Vulkan `[validation]`.
+- **(4) DX12 pass label: emission landed, proof gated on (h1).** `detail::Dx12PassEventScope` (in
+  `dx12_identity_naming`) brackets every frame-graph pass in `Dx12FrameGraph::execute` with a balanced core
+  `BeginEvent`/`EndEvent`, without PIX. The marker uses metadata 0, the legacy unicode encoding, and carries
+  `format_debug_name(pass identity)`, the same token as Vulkan's `PassLabelScope`.
+  - **Measured: no local oracle.** With the debug layer on and no capture tool attached, recording an event produces no
+    record: no `BEGIN_EVENT` (1014), and even a deliberately unbalanced `BeginEvent` raises no
+    `BEGIN_END_EVENT_MISMATCH` (955) at `Close`. The only in-engine observer is a DRED breadcrumb context, which is
+    populated only on a real fault (a forced `RemoveDevice` leaves the list empty, DIAG.7b(e)).
+  - **Gated:** the pass-to-fault correlation proof is therefore gated on the WARP real-fault work (5, h1). It is not
+    claimed here.
+  - **Checks:** the wiring keeps the whole DX12 suite green (201 cases, twice) and `[frame-graph]` (34 cases). The
+    strict gate is clean on the three files.

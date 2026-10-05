@@ -10000,6 +10000,9 @@ void Dx12FrameGraph::execute()
         }
         if (p.fn != nullptr)
         {
+            // DIAG.7a(d2c-dx12): a core BeginEvent/EndEvent marker (no PIX) carrying the pass identity -- what DRED
+            // breadcrumb contexts and capture tools record around this pass's commands.
+            const detail::Dx12PassEventScope event(ts_list, p.identity, p.name);
             p.fn(*this, p.user);
         }
         if (stamp)
