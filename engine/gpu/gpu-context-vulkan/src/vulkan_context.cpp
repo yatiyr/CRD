@@ -115,6 +115,59 @@ private:
     return timeline.timelineSemaphore == VK_TRUE;
 }
 
+// Device creation: put `feature` (timeline semaphores enabled) at the head of `chain` when the device offers them.
+// Returns the new chain head; `enabled` reports the decision.
+[[nodiscard]] void* chain_timeline_semaphore(VkPhysicalDevice                           physical,
+                                             VkPhysicalDeviceTimelineSemaphoreFeatures& feature, void* chain,
+                                             bool& enabled) noexcept
+{
+    enabled = query_timeline_semaphore(physical);
+    if (!enabled)
+    {
+        return chain;
+    }
+    feature                   = VkPhysicalDeviceTimelineSemaphoreFeatures{};
+    feature.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
+    feature.timelineSemaphore = VK_TRUE;
+    feature.pNext             = chain;
+    return &feature;
+}
+
+// DIAG.7c(d): does the device advertise VK_EXT_device_fault with VkPhysicalDeviceFaultFeaturesEXT::deviceFault? Device
+// creation then puts `feature` (deviceFault enabled; the vendor binary is not requested) at the head of `chain`.
+// Returns the new chain head; `enabled` reports the decision.
+[[nodiscard]] void* chain_device_fault(VkPhysicalDevice physical, const VkExtensionProperties* exts,
+                                       std::uint32_t count, VkPhysicalDeviceFaultFeaturesEXT& feature, void* chain,
+                                       bool& enabled) noexcept
+{
+    enabled = false;
+    bool advertised = false;
+    for (std::uint32_t i = 0; i < count && !advertised; ++i)
+    {
+        advertised = std::strcmp(exts[i].extensionName, VK_EXT_DEVICE_FAULT_EXTENSION_NAME) == 0;
+    }
+    if (!advertised)
+    {
+        return chain;
+    }
+    VkPhysicalDeviceFaultFeaturesEXT supported{};
+    supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+    VkPhysicalDeviceFeatures2 f2{};
+    f2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+    f2.pNext = &supported;
+    vkGetPhysicalDeviceFeatures2(physical, &f2);
+    enabled = supported.deviceFault == VK_TRUE;
+    if (!enabled)
+    {
+        return chain;
+    }
+    feature             = VkPhysicalDeviceFaultFeaturesEXT{};
+    feature.sType       = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
+    feature.deviceFault = VK_TRUE;
+    feature.pNext       = chain;
+    return &feature;
+}
+
 // DIAG.7a(f) + 7c(b): the creation-time activation report. Core and Sync are known once the instance exists;
 // GPU-assisted is provisional (FeatureAbsent) until the device features are queried. Every requested mode is LayerAbsent
 // when the layer is not installed.
@@ -198,6 +251,7 @@ public:
     [[nodiscard]] bool     partially_bound() const noexcept override { return m_partially_bound; } // REN-38: bindless heap
     [[nodiscard]] bool     draw_indirect_count() const noexcept override { return m_draw_indirect_count; }
     [[nodiscard]] bool     timeline_semaphore() const noexcept override { return m_timeline_semaphore; } // DIAG.7c(c)
+    [[nodiscard]] bool     device_fault() const noexcept override { return m_device_fault; }             // DIAG.7c(d)
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -1293,14 +1347,9 @@ private:
             chain = &sync2;
         }
         VkPhysicalDeviceTimelineSemaphoreFeatures timeline{}; // DIAG.7c(c): chained whenever the device offers it
-        timeline.sType             = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
-        timeline.timelineSemaphore = VK_TRUE;
-        m_timeline_semaphore       = query_timeline_semaphore(m_physical);
-        if (m_timeline_semaphore)
-        {
-            timeline.pNext = chain;
-            chain          = &timeline;
-        }
+        chain = chain_timeline_semaphore(m_physical, timeline, chain, m_timeline_semaphore);
+        VkPhysicalDeviceFaultFeaturesEXT fault{}; // DIAG.7c(d): chained whenever the device offers it
+        chain = chain_device_fault(m_physical, exts.get(), ne, fault, chain, m_device_fault);
         if (m_shader_object)
         {
             sho.pNext = chain;
@@ -1407,6 +1456,10 @@ private:
         {
             devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME;
         }
+        if (m_device_fault) // DIAG.7c(d)
+        {
+            devexts[ndevext++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
+        }
         // RET-2: swapchain enablement follows AVAILABILITY (given the instance enabled VK_KHR_surface) — a headless
         // context presents to a headless surface, a windowed one to a window; one extension, both paths.
         if (m_surface_ext && has_swapchain)
@@ -1479,12 +1532,27 @@ private:
         {
             return;
         }
+        register_device_fault();
         vkGetDeviceQueue(m_device, m_compute_family, 0, &m_compute_queue);
         if (m_graphics_family != UINT32_MAX)
         {
             vkGetDeviceQueue(m_device, m_graphics_family, 0, &m_graphics_queue);
         }
         m_valid = true;
+    }
+
+    // DIAG.7c(d): with VK_EXT_device_fault enabled, hand its query to the seam, which reads it once this device is
+    // lost.
+    void register_device_fault() noexcept
+    {
+        if (!m_device_fault)
+        {
+            return;
+        }
+        const auto fault_info =
+            reinterpret_cast<PFN_vkGetDeviceFaultInfoEXT>(vkGetDeviceProcAddr(m_device, "vkGetDeviceFaultInfoEXT"));
+        m_device_fault = fault_info != nullptr;
+        detail::vk_register_device_fault(m_device, fault_info);
     }
 
     VkInstance       m_instance        = VK_NULL_HANDLE;
@@ -1524,6 +1592,7 @@ private:
     // rather than assumed (a hardcoded "supported" is how a step-down becomes invisible).
     bool             m_draw_indirect_count   = false;
     bool             m_timeline_semaphore    = false; // DIAG.7c(c): VkPhysicalDeviceTimelineSemaphoreFeatures enabled
+    bool             m_device_fault          = false; // DIAG.7c(d): VK_EXT_device_fault enabled and its query resolved
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

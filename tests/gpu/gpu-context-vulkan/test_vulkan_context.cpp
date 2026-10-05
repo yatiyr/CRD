@@ -502,6 +502,81 @@ TEST_CASE("DIAG.7c(c): the raster one-shot path and the idle waits go through th
     CHECK(d::vk_device_failure(device).failures >= 3U);
 }
 
+// DIAG.7c(d): VK_EXT_device_fault is enabled when the device advertises it, and a recorded loss is read back once with
+// vkGetDeviceFaultInfoEXT into a fixed report that outlives the device. The loss here is injected at the seam (a real
+// loss stays a hardware gate), so the driver reports on a live device; the gate is the record path and the capability
+// report. A device without the extension reports it unavailable and is never queried.
+TEST_CASE("DIAG.7c(d): a recorded Vulkan loss reads VK_EXT_device_fault back into a kept report",
+          "[gpu-context][vulkan][gpu][device-loss]")
+{
+    namespace d = gpu::detail;
+    gpu::GpuContextConfig cfg;
+    cfg.backend  = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    auto ctx     = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr || !ctx->valid())
+    {
+        SKIP("no Vulkan device");
+    }
+    auto* const    vk           = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    const VkDevice device       = vk->vk_device();
+    const bool     device_fault = vk->device_fault();
+    std::printf("[DIAG.7c(d)] adapter=%s VK_EXT_device_fault=%s\n", vk->adapter_name(),
+                device_fault ? "enabled" : "absent");
+
+    const d::VkDeviceFaultReport before = d::vk_device_fault_report(device);
+    CHECK(before.available == device_fault);
+    CHECK_FALSE(before.queried); // a healthy device is never queried
+
+    {
+        gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
+        REQUIRE(compute.valid());
+        d::vk_inject_next_result(VK_ERROR_DEVICE_LOST);
+        (void)compute.begin();
+        compute.submit_and_wait();
+        CHECK_FALSE(compute.valid());
+    }
+    REQUIRE(d::vk_device_failure(device).lost());
+    const d::VkDeviceFaultReport report = d::vk_device_fault_report(device);
+    CHECK(report.available == device_fault);
+    CHECK(report.queried == device_fault); // read back exactly when the extension is there
+    if (device_fault)
+    {
+        INFO("vkGetDeviceFaultInfoEXT result " << report.query_result);
+        std::printf("[DIAG.7c(d)] query=%d addresses=%u vendors=%u binary=%llu description=\"%s\"\n",
+                    static_cast<int>(report.query_result), report.address_count, report.vendor_count,
+                    static_cast<unsigned long long>(report.vendor_binary_size), report.description);
+        // On a device that is not really lost the driver may refuse (the RTX 4070 Ti SUPER returns VK_ERROR_UNKNOWN):
+        // the result is recorded either way, and infos are kept only from a successful query.
+        const bool answered = report.query_result == static_cast<crd::i32>(VK_SUCCESS) ||
+                              report.query_result == static_cast<crd::i32>(VK_INCOMPLETE);
+        CHECK(report.addresses_kept <= d::kVkFaultInfosKept);
+        CHECK(report.vendors_kept <= d::kVkFaultInfosKept);
+        CHECK(report.addresses_kept <= report.address_count);
+        CHECK(report.vendors_kept <= report.vendor_count);
+        if (!answered)
+        {
+            CHECK(report.addresses_kept == 0U);
+            CHECK(report.vendors_kept == 0U);
+            CHECK(report.description[0] == '\0');
+        }
+    }
+
+    // A later failure on the lost device does not query again; the report stays as it was.
+    VkSubmitInfo empty{};
+    empty.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    CHECK(d::vk_submit(device, vk->compute_queue(), empty, VK_NULL_HANDLE, "later submit") == VK_ERROR_DEVICE_LOST);
+    const d::VkDeviceFaultReport again = d::vk_device_fault_report(device);
+    CHECK(again.queried == report.queried);
+    CHECK(again.query_result == report.query_result);
+
+    ctx.reset(); // the device is destroyed: its report survives as the last-known one
+    const d::VkDeviceFaultReport last = d::vk_last_device_fault_report();
+    CHECK(last.available == device_fault);
+    CHECK(last.queried == device_fault);
+    CHECK(last.query_result == report.query_result);
+}
+
 // D-007 C6: cooperative-VECTOR device enable (VK_NV_cooperative_vector) — the PER-INVOCATION matrix×vector inference primitive
 // for neural shading (each pixel/thread runs a small MLP inline), the device half of the B10 moat. This gate proves the device
 // comes up with the extension + feature ENABLED (a legal feature request under validation), reports the queried capabilities, and

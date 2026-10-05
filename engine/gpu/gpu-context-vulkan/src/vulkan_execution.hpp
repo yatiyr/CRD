@@ -38,6 +38,32 @@ struct VkDeviceFailure
     }
 };
 
+// DIAG.7c(d): what VK_EXT_device_fault reported for a lost device, read once when the loss is first recorded. Fixed
+// size (no allocation on the failure path); counts are what the driver reported, `*_kept` what fits here.
+inline constexpr crd::u32 kVkFaultInfosKept = 8U;
+
+struct VkDeviceFaultReport
+{
+    bool                        available          = false; // the device enabled VK_EXT_device_fault
+    bool                        queried            = false; // vkGetDeviceFaultInfoEXT ran for this loss
+    crd::i32                    query_result       = 0;     // its VkResult (VK_INCOMPLETE: infos were truncated)
+    crd::u32                    address_count      = 0;
+    crd::u32                    vendor_count       = 0;
+    crd::u32                    addresses_kept     = 0;
+    crd::u32                    vendors_kept       = 0;
+    crd::u64                    vendor_binary_size = 0;
+    char                        description[VK_MAX_DESCRIPTION_SIZE] = {};
+    VkDeviceFaultAddressInfoEXT addresses[kVkFaultInfosKept]          = {};
+    VkDeviceFaultVendorInfoEXT  vendors[kVkFaultInfosKept]            = {};
+};
+
+// Called once a device is created with VK_EXT_device_fault enabled: the seam queries `fn` when that device is lost.
+void vk_register_device_fault(VkDevice device, PFN_vkGetDeviceFaultInfoEXT fn) noexcept;
+// The fault report of the live `device` (available false when it never registered the extension).
+[[nodiscard]] VkDeviceFaultReport vk_device_fault_report(VkDevice device) noexcept;
+// The report that belongs to vk_last_device_failure(), kept after that device is destroyed.
+[[nodiscard]] VkDeviceFaultReport vk_last_device_fault_report() noexcept;
+
 // Submit `submit` to `queue`, signalling `fence` (may be VK_NULL_HANDLE). `operation` must be a string literal.
 [[nodiscard]] VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, VkFence fence,
                                  const char* operation) noexcept;

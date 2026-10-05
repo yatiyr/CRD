@@ -152,6 +152,9 @@ public:
     // DIAG.7c(c): VkPhysicalDeviceTimelineSemaphoreFeatures::timelineSemaphore enabled (Vulkan 1.2 core). Appended at
     // END with a default (vtable-stable, D135).
     [[nodiscard]] virtual bool timeline_semaphore() const noexcept { return false; }
+    // DIAG.7c(d): VK_EXT_device_fault enabled (VkPhysicalDeviceFaultFeaturesEXT::deviceFault). When true, a recorded
+    // device loss is read back with vkGetDeviceFaultInfoEXT. Appended at END with a default (vtable-stable, D135).
+    [[nodiscard]] virtual bool device_fault() const noexcept { return false; }
 };
 
 // Create a headless Vulkan compute context per `config` (config.backend must be Vulkan). Returns nullptr on failure

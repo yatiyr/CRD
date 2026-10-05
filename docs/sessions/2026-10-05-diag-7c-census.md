@@ -284,6 +284,19 @@ WSL reference host). Every Windows lane passed; every Linux lane failed. Triage 
    - **Proof:** a new test injects a loss into the raster one-shot submit. The failure is recorded against
      `raster one-shot submit`, the call returns, and later idle waits are answered without the driver.
    - **Results:** the three device-loss tests pass, and the full Vulkan context suite passes on the RTX (297 cases).
+8. **(d) `VK_EXT_device_fault` collection landed.**
+   - **Enabling:** the context enables the extension when it is advertised with `deviceFault`. The RTX 4070 Ti SUPER
+     has it; lavapipe does not. It then registers `vkGetDeviceFaultInfoEXT` with the seam.
+   - **Collection:** the first time a device is recorded lost, really or by injection, the seam queries it once,
+     outside its lock. It stores a fixed report: the description, up to eight address and eight vendor infos, the
+     reported counts, the vendor-binary size (not collected) and the query's own result. The report outlives the
+     device as last-known state, and a later failure on the same device does not query again.
+   - **Measured:** on an injected loss the RTX driver answers `VK_ERROR_UNKNOWN`, because the device is not really
+     lost. The result is recorded and no infos are kept. A real loss stays the hardware gate (h).
+   - **Size limit:** the device-creation function sat at the strict gate's 800-statement limit. The timeline-semaphore
+     and device-fault feature chaining moved into helpers that return the new `pNext` head.
+   - **Results:** the RTX passes the four device-loss tests and the full Vulkan context suite (298 cases). Lavapipe,
+     where the extension is absent, passes the device-loss tests and the full suite (297 passed, 1 skipped).
 
 Reference-host results on lavapipe after the fixes (Debug unless noted): the mesh gate, the radix sort, `[ren38]` (42 passed, 1 skipped),
 `[validation]` (8 cases), `DIAG.7a(f)` and every `DIAG.7c` case pass.
