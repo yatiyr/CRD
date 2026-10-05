@@ -150,6 +150,15 @@ void GrowablePoolAllocator::grow()
 
 // ---- IAllocator ----------------------------------------------------------
 
+void* GrowablePoolAllocator::try_allocate(usize size, usize alignment)
+{
+    if (size == 0U || size > m_slot_size || !is_pow2(alignment) || alignment > m_slot_alignment)
+    {
+        return nullptr; // the request does not fit a slot: refuse, never assert
+    }
+    return allocate(size, alignment);
+}
+
 void* GrowablePoolAllocator::allocate(usize size, usize alignment)
 {
     CRD_ASSERT(size <= m_slot_size);

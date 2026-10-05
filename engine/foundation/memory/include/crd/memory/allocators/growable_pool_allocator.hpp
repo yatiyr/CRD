@@ -54,6 +54,8 @@ public:
 
     // ---- IAllocator ---------------------------------------------------
     void* allocate(usize size, usize alignment = kDefaultAlignment) override;
+    // DIAG.3a: a size or alignment no slot can hold returns nullptr instead of asserting; otherwise allocate().
+    [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override;
     void deallocate(void* p) noexcept override;
     [[nodiscard]] bool owns(const void* p) const noexcept override;
     [[nodiscard]] usize allocation_size(const void* p) const noexcept override;

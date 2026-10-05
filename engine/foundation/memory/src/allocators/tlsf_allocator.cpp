@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/checked_math.hpp>
 
 #include <bit>
 #include <cstring>
@@ -483,8 +484,13 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     }
     CRD_ASSERT(is_pow2(alignment));
 
-    // Round up size to a multiple of kAlignSize and clamp to min user size.
-    usize adjusted = align_up(size, kAlignSize);
+    // Round up size to a multiple of kAlignSize and clamp to min user size. DIAG.3a: checked, so a near-SIZE_MAX
+    // request fails instead of wrapping to a tiny block (the unchecked round-up returned 16 bytes for SIZE_MAX).
+    usize adjusted = 0;
+    if (!checked_align_up(size, kAlignSize, &adjusted) || adjusted > m_pool_capacity)
+    {
+        return nullptr; // no block in this pool can ever hold it
+    }
     if (adjusted < kBlockMinUserSize)
     {
         adjusted = kBlockMinUserSize;
@@ -498,7 +504,12 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     usize requested = adjusted;
     if (alignment > kAlignSize)
     {
-        requested = adjusted + alignment + gap_minimum;
+        usize with_alignment = 0;
+        if (!checked_add(adjusted, alignment, &with_alignment) ||
+            !checked_add(with_alignment, gap_minimum, &requested) || requested > m_pool_capacity)
+        {
+            return nullptr; // the alignment shift alone exceeds the pool
+        }
     }
 
     u32 fl = 0;

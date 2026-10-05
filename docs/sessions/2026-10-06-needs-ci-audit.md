@@ -61,6 +61,13 @@ Each row below was checked against the list in the
 | REPO.DEV.11 | the first complete-tier run, and the selector comparison | the run, yes; the comparison needs a complete run of a change-tier revision (the first change-tier push is `215813f0`) | Needs CI |
 | REPO.DEV (parent) | every child | DEV.6 to 11 remain | Open |
 
+## DIAG.0 was left Open
+
+DIAG.0's own text said "Local proof complete (flip to Needs CI on the maintainer push)", but the row was still Open.
+Its one hosted clause is shown in 37311671924. On `linux-gcc-asan` and `win-asan`, "diag harness: the sanitizer
+specimen is caught, or reported absent" passes; on an ASan build that case asserts SanitizerCaught. The five negative
+controls pass on every lane. The row is now Needs CI and waits only on its prerequisite REPO.DEV.
+
 ## Rows that never belonged in Needs CI
 
 Needs CI requires that all available local work is finished. Two rows say otherwise in their own text:

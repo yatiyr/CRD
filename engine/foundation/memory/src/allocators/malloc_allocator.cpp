@@ -1,6 +1,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
 #include <cstdlib>
@@ -24,8 +25,13 @@ void* platform_aligned_alloc(usize size, usize alignment) noexcept
 #if CRD_OS_WINDOWS
     return ::_aligned_malloc(size, alignment);
 #else
-    // C11 aligned_alloc requires size % alignment == 0
-    const usize rounded = align_up(size, alignment);
+    // C11 aligned_alloc requires size % alignment == 0. Checked: a huge size must not round up past SIZE_MAX into a
+    // small request (DIAG.3a; the Linux lanes returned a valid pointer for SIZE_MAX).
+    usize rounded = 0;
+    if (!checked_align_up(size, alignment, &rounded))
+    {
+        return nullptr;
+    }
     return std::aligned_alloc(alignment, rounded);
 #endif
 }

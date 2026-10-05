@@ -2,6 +2,7 @@
 #include <crd/log/log.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
 #include <cstring> // std::memcpy (reallocate)
@@ -32,12 +33,18 @@ GrowableLinearAllocator::~GrowableLinearAllocator()
 
 bool GrowableLinearAllocator::grow(usize need)
 {
-    usize cap = m_chunk_bytes;
-    if (need + m_header_size > cap) // an oversized alloc gets its own right-sized chunk
+    usize cap      = m_chunk_bytes;
+    usize with_hdr = 0;
+    if (!checked_add(need, m_header_size, &with_hdr))
     {
-        cap = need + m_header_size;
+        return false; // no chunk can hold it (DIAG.3a: never a wrapped, small chunk)
     }
-    void* const base = m_parent->allocate(cap, kDefaultAlignment);
+    if (with_hdr > cap) // an oversized alloc gets its own right-sized chunk
+    {
+        cap = with_hdr;
+    }
+    // try_allocate: a parent whose allocate is fatal on exhaustion still yields nullptr here.
+    void* const base = m_parent->try_allocate(cap, kDefaultAlignment);
     if (base == nullptr)
     {
         CRD_LOG_ERROR(g_log_memory, "{} out of memory (requested chunk {} bytes)", m_name, cap);
@@ -72,10 +79,12 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
         {
             auto* const cbase   = static_cast<u8*>(c->base);
             const usize current = reinterpret_cast<usize>(cbase) + c->off; // ptr-to-int for the align computation
-            const usize aligned = align_up(current, alignment);
-            const usize padding = aligned - current;
-            const usize new_off = c->off + padding + size;
-            if (new_off <= c->cap)
+            usize       aligned = 0;
+            usize       new_off = 0;
+            // Checked: a huge size or alignment refuses instead of wrapping back inside the chunk (DIAG.3a).
+            const bool fits = checked_align_up(current, alignment, &aligned) &&
+                              checked_add(c->off + (aligned - current), size, &new_off) && new_off <= c->cap;
+            if (fits)
             {
                 c->off = new_off;
                 m_stats.on_allocate(size);
@@ -88,7 +97,8 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
                 continue;
             }
         }
-        if (!grow(size + alignment))
+        usize need = 0;
+        if (!checked_add(size, alignment, &need) || !grow(need))
         {
             return nullptr;
         }

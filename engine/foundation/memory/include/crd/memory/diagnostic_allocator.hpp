@@ -134,6 +134,9 @@ public:
 
     // ---- IAllocator -----------------------------------------------------
     void* allocate(usize size, usize alignment = kDefaultAlignment) override;
+    // DIAG.3a: the non-fatal path. The backing allocator is asked via try_allocate, and a size or alignment whose
+    // redzoned block cannot be sized returns nullptr instead of wrapping.
+    [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override;
     void  deallocate(void* p) noexcept override;
     [[nodiscard]] bool owns(const void* p) const noexcept override;
     [[nodiscard]] usize allocation_size(const void* p) const noexcept override;
@@ -180,6 +183,9 @@ private:
     struct QuarantineEntry;
 
     void*  raw_from_user(void* user) const noexcept;   // user ptr -> backing block start
+    // allocate/allocate_tagged (fatal backing) and try_allocate (non-fatal backing) share this body.
+    void*  allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal);
+    void*  backing_allocate(usize size, usize alignment, bool non_fatal);
     void   raise(const Violation& v) const noexcept;
     StackId intern_current_stack(crd::u32 skip) noexcept;
     Record* find_record(const void* user) const noexcept;

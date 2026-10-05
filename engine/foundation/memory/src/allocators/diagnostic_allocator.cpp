@@ -1,6 +1,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/alignment.hpp>
+#include <crd/memory/checked_math.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 #include <crd/memory/log_channel.hpp>
 
@@ -353,9 +354,28 @@ void* DiagnosticAllocator::allocate(usize size, usize alignment)
     return allocate_tagged(size, alignment, AllocationTag{});
 }
 
+void* DiagnosticAllocator::try_allocate(usize size, usize alignment)
+{
+    return allocate_from(size, alignment, AllocationTag{}, true);
+}
+
 void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const AllocationTag& tag)
 {
+    return allocate_from(size, alignment, tag, false);
+}
+
+void* DiagnosticAllocator::backing_allocate(usize size, usize alignment, bool non_fatal)
+{
+    return non_fatal ? m_backing->try_allocate(size, alignment) : m_backing->allocate(size, alignment);
+}
+
+void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal)
+{
     if (size == 0U)
+    {
+        return nullptr;
+    }
+    if (non_fatal && !is_pow2(alignment))
     {
         return nullptr;
     }
@@ -364,7 +384,7 @@ void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const Al
 
     if (!m_ok) // metadata arena unavailable: degrade to a clean passthrough, never corrupt anything
     {
-        return m_backing->allocate(size, alignment);
+        return backing_allocate(size, alignment, non_fatal);
     }
 
     // Sampling decision (guards the expensive stack capture only; redzones/records are always on).
@@ -378,10 +398,21 @@ void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const Al
     }
 
     const crd::u32 rz = m_cfg.redzone_bytes;
-    const crd::u32 front = rz == 0U ? 0U : static_cast<crd::u32>(align_up(rz, alignment));
-    const usize    total = static_cast<usize>(front) + size + rz;
+    // Checked sizing (DIAG.3a): a huge alignment must not truncate the front redzone to 0, and a huge size must not
+    // wrap the redzoned total into a small block. Either refuses before the backing allocator is asked.
+    usize front_bytes = 0U;
+    usize total = 0U;
+    if (rz != 0U && (!checked_align_up(rz, alignment, &front_bytes) || front_bytes > UINT32_MAX))
+    {
+        return nullptr;
+    }
+    const crd::u32 front = static_cast<crd::u32>(front_bytes);
+    if (!checked_add(front_bytes, size, &total) || !checked_add(total, rz, &total))
+    {
+        return nullptr;
+    }
 
-    void* const raw = m_backing->allocate(total, alignment);
+    void* const raw = backing_allocate(total, alignment, non_fatal);
     if (raw == nullptr)
     {
         return nullptr; // backing OOM -- surfaced to the caller unchanged
@@ -409,7 +440,7 @@ void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const Al
         // Undo the redzoned block (we cannot track its raw start) and hand back a plain passthrough
         // whose user pointer == the backing block, so deallocate() frees it correctly via owns().
         m_backing->deallocate(raw);
-        return m_backing->allocate(size, alignment);
+        return backing_allocate(size, alignment, non_fatal);
     }
 
     rec->raw = raw;

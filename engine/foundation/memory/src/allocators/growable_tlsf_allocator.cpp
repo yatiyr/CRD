@@ -1,6 +1,7 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/memory/checked_math.hpp>
 
 #include <cstring>
 #include <new>
@@ -109,9 +110,15 @@ void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
     // (≈ size / kSlIndexCount = size/32) before searching, so the chunk's free
     // block must be at least size·33/32. Add that round-up, the alignment
     // allowance, the empty-pool sentinel overhead, and a small fixed header slack.
+    // Each term is bounded first, so the sum cannot wrap into a small chunk (DIAG.3a).
+    if (size > kMaxChunkBytes || alignment > kMaxChunkBytes)
+    {
+        return nullptr; // no chunk can ever hold it
+    }
     const usize search_round = (size >> 5) + 1; // ~size/32: the SL sub-class round-up
-    const usize need = size + search_round + alignment + TlsfAllocator::min_pool_size() + (usize{4} << 10);
-    if (need > kMaxChunkBytes)
+    usize       need         = 0;
+    if (!checked_add(size + search_round, alignment, &need) ||
+        !checked_add(need, TlsfAllocator::min_pool_size() + (usize{4} << 10), &need) || need > kMaxChunkBytes)
     {
         return nullptr;
     }

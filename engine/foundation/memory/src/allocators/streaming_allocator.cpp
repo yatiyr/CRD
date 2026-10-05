@@ -44,7 +44,11 @@ void* StreamingAllocator::try_allocate_resident(CategoryId category, usize size,
             Budget&   b   = m_budgets[category];
             const u64 cur = b.used.load(std::memory_order_relaxed);
             const u64 lim = b.limit.load(std::memory_order_relaxed);
-            if (cur + size <= lim)
+            if (static_cast<u64>(size) > lim)
+            {
+                return nullptr; // larger than the whole budget: evicting cannot help (DIAG.3a)
+            }
+            if (cur <= lim - static_cast<u64>(size)) // never `cur + size`, which wraps for a huge size
             {
                 void* p = m_resident_heap.try_allocate(size, alignment);
                 if (p != nullptr)

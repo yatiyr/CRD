@@ -67,6 +67,15 @@ void PoolAllocator::build_free_list() noexcept
     m_in_use = 0;
 }
 
+void* PoolAllocator::try_allocate(usize size, usize alignment)
+{
+    if (size == 0U || size > m_slot_size || !is_pow2(alignment) || alignment > m_slot_alignment)
+    {
+        return nullptr; // the request does not fit a slot: refuse, never assert
+    }
+    return allocate(size, alignment);
+}
+
 void* PoolAllocator::allocate(usize size, usize alignment)
 {
     CRD_ASSERT(size > 0);
