@@ -79,3 +79,11 @@ The gap needs one hosted run that cannot restore an archive cache. There are two
 - a standing cold-acquisition step that configures with an empty CPM source cache in the complete tier.
 
 Either one also closes DEV.7 to DEV.10, whose own hosted clauses are already shown.
+
+**User decision (2026-10-06):** "go with option 2", the standing step.
+- **Landed:** the complete-tier `win-debug-scalar` and `linux-gcc-debug-scalar` now skip every archive cache, and
+  `scripts/check-cold-acquisition.py` checks before and after the configure.
+- **Verified locally:** a real cold configure on the WSL reference host acquired all seven selected packages; the
+  checker passed, and its `--before` mode rejected the warm cache afterwards. The tooling suite (56 tests) and the
+  pins, CI-tier and repository guards pass.
+- **Remaining:** the next complete-tier hosted run is the proof.

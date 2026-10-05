@@ -203,6 +203,43 @@ TEST_CASE("sample ring: an uncontended save reports zero abandoned threads", "[p
     CHECK(crd::perf::capture_contended_thread_count() == before);
 }
 
+// (c3) The save's copy priority, deterministically: while a save holds priority on a ring, every other copier refuses
+// as if the ring were busy, even though no copy is in flight, and the save's own copy succeeds. Without it, consumers
+// copying back to back starved a save for its whole budget (the hosted ThreadSanitizer lane, 2026-10-06).
+TEST_CASE("sample ring: a save waiting for a ring takes priority over other copiers",
+          "[perf][diag][sample-ring][readers]")
+{
+    PerfFixture   fx;
+    const crd::u8 idx = crd::perf::current_thread_index();
+    for (int i = 0; i < 16; ++i)
+    {
+        CRD_PERF_SCOPE("cap.priority");
+    }
+    crd::perf::Sample mine[32];
+    const auto other_copy = [&](bool& contended) {
+        crd::u32 copied = 0U;
+        std::thread other([&] {
+            crd::perf::Sample theirs[32];
+            copied = crd::perf::copy_thread_samples(idx, theirs, 32U, &contended);
+        });
+        other.join();
+        return copied;
+    };
+
+    crd::perf::sample_copy_priority_begin(idx);
+    bool contended = false;
+    CHECK(other_copy(contended) == 0U);
+    CHECK(contended); // stepped aside for the waiting save, though no copy was in flight
+    bool own_contended = true;
+    CHECK(crd::perf::copy_thread_samples(idx, mine, 32U, &own_contended) == 16U);
+    CHECK_FALSE(own_contended); // the save itself is not refused
+    crd::perf::sample_copy_priority_end(idx);
+
+    contended = true;
+    CHECK(other_copy(contended) == 16U);
+    CHECK_FALSE(contended); // released: ordinary copiers proceed again
+}
+
 TEST_CASE("sample ring: a save's copy retry outlasts a competing consumer (no silently dropped thread)",
           "[perf][diag][sample-ring][readers]")
 {

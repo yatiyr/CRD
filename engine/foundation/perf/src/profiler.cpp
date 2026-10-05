@@ -101,6 +101,7 @@ struct alignas(64) ThreadRing
     std::atomic<bool> active{false};      // true after register_thread publishes samples/head/tail (release/acquire)
     std::atomic<bool> reader_busy{false}; // (c3) exactly one consumer (copier or clearer) in the ring at a time
     std::atomic<crd::u64> contended{0};   // (c3) copy attempts that found the ring busy (exact; == contended returns)
+    std::atomic<crd::u32> priority_waiters{0}; // (c3) saves waiting for this ring; other copiers step aside
 };
 
 #if defined(_MSC_VER)
@@ -277,6 +278,8 @@ thread_local crd::u8 t_thread_index = kInvalidThread;
 // Thread-local: cached pointer to the calling thread's ring. nullptr if the
 // thread has not been registered or after shutdown.
 thread_local ThreadRing* t_ring = nullptr;
+// (c3) The ring this thread holds copy priority on (a save in its retry loop); kInvalidThread when none.
+thread_local crd::u8 t_copy_priority_ring = kInvalidThread;
 
 // DIAG.6a(e): the generation of the ProfilerState this thread's t_thread_index/t_ring cache belongs to. Compared
 // against g_state->generation in register_thread so a cache left over from a previous init()/shutdown() cycle (on a
@@ -1017,7 +1020,10 @@ void frame_mark() noexcept
     // (c3) Enforced single consumer: exchange-acquire the ring, or report contention. A busy ring returns 0 AND sets
     // *out_contended (distinguishable from a genuinely empty ring, which returns 0 with out_contended false) and bumps
     // `contended` -- exactly once per refused attempt, so the counter equals the number of contended returns.
-    if (ring.reader_busy.exchange(true, std::memory_order_acquire))
+    // A save waiting for this ring has priority: every other copier refuses exactly as if the ring were busy.
+    const bool yield_to_save =
+        detail::t_copy_priority_ring != thread_index && ring.priority_waiters.load(std::memory_order_acquire) != 0U;
+    if (yield_to_save || ring.reader_busy.exchange(true, std::memory_order_acquire))
     {
         ring.contended.fetch_add(1U, std::memory_order_relaxed);
         if (out_contended != nullptr)
@@ -1113,7 +1119,10 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
     {
         return 0U;
     }
-    if (ring.reader_busy.exchange(true, std::memory_order_acquire))
+    // A save waiting for this ring has priority: every other copier refuses exactly as if the ring were busy.
+    const bool yield_to_save =
+        detail::t_copy_priority_ring != thread_index && ring.priority_waiters.load(std::memory_order_acquire) != 0U;
+    if (yield_to_save || ring.reader_busy.exchange(true, std::memory_order_acquire))
     {
         ring.contended.fetch_add(1U, std::memory_order_relaxed);
         if (out_contended != nullptr)
@@ -1148,6 +1157,30 @@ void enable_thread_correlation(crd::u8 thread_index) noexcept
 
 // (c3) Number of copy_thread_samples attempts that found thread `thread_index`'s ring held by another consumer. Exact:
 // equals the count of contended (out_contended == true) returns. Monotonic within an init()/shutdown() lifetime.
+void sample_copy_priority_begin(crd::u8 thread_index) noexcept
+{
+    detail::StateGuard           state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
+    if (g_state == nullptr || thread_index >= kMaxThreads)
+    {
+        return;
+    }
+    g_state->rings[thread_index].priority_waiters.fetch_add(1U, std::memory_order_acq_rel);
+    detail::t_copy_priority_ring = thread_index;
+}
+
+void sample_copy_priority_end(crd::u8 thread_index) noexcept
+{
+    detail::StateGuard           state_guard;
+    detail::ProfilerState* const g_state = state_guard.s;
+    if (g_state == nullptr || thread_index >= kMaxThreads || detail::t_copy_priority_ring != thread_index)
+    {
+        return;
+    }
+    detail::t_copy_priority_ring = detail::kInvalidThread;
+    g_state->rings[thread_index].priority_waiters.fetch_sub(1U, std::memory_order_acq_rel);
+}
+
 [[nodiscard]] crd::u64 sample_copy_contended_count(crd::u8 thread_index) noexcept
 {
     detail::StateGuard state_guard;
@@ -1803,6 +1836,8 @@ void                    set_current_fiber_id(crd::u32) noexcept {}
     return 0U;
 }
 [[nodiscard]] crd::u64 sample_copy_contended_count(crd::u8) noexcept { return 0U; }
+void                    sample_copy_priority_begin(crd::u8) noexcept {}
+void                    sample_copy_priority_end(crd::u8) noexcept {}
 [[nodiscard]] crd::u32 per_thread_ring_capacity() noexcept { return 0U; } // "0 when the profiler is inactive"
 void enable_thread_correlation(crd::u8) noexcept {} // DIAG.6b(b)
 [[nodiscard]] bool thread_has_correlation(crd::u8) noexcept { return false; }

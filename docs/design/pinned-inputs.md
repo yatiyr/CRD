@@ -61,6 +61,24 @@ three SPIRV-Reflect files; [install-vulkan-validation.py](../../scripts/install-
 [install-warp.py](../../scripts/install-warp.py) read their pins from the registry. Every hosted lane installs
 Python 3.12 before calling them.
 
+### Cold acquisition on every complete run
+
+The archive caches hide acquisition. Every lane restores a CPM cache through the restore-key fallback, so before
+2026-10-06 no hosted run had downloaded the packages cold ([audit](../sessions/2026-10-06-needs-ci-audit.md)). Two
+complete-tier lanes therefore never restore an archive cache: `win-debug-scalar` and `linux-gcc-debug-scalar`, named
+in the workflow's `CRD_COLD_PRESETS`.
+
+On those lanes:
+- [check-cold-acquisition.py](../../scripts/check-cold-acquisition.py) `--before` fails unless the CPM source cache
+  is empty;
+- the configure downloads every package and verifies each `URL_HASH`;
+- `--after` reads the configure's own `CPM_PACKAGES` and fails unless every one is pinned and now in the cache. It
+  names the pins the configuration did not select (the opt-in `eigen` and `OpenBLAS` bench).
+
+The Windows cold lane also installs the Vulkan SDK and the pinned WARP through their verifying helpers. The Linux lanes
+download the Vulkan headers and the validation layer fresh on every run. A real cold configure on the WSL reference
+host acquired all seven selected packages and passed both checks.
+
 ## Patches on a build-owned copy
 
 A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patch_replace(<from> <to>)` steps.

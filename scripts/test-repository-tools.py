@@ -60,6 +60,9 @@ provenance_spec.loader.exec_module(provenance)
 license_spec = importlib.util.spec_from_file_location('gen_license_manifest', ROOT / 'scripts/gen_license_manifest.py')
 license_manifest = importlib.util.module_from_spec(license_spec)
 license_spec.loader.exec_module(license_manifest)
+cold_spec = importlib.util.spec_from_file_location('check_cold_acquisition', ROOT / 'scripts/check-cold-acquisition.py')
+cold_acquisition = importlib.util.module_from_spec(cold_spec)
+cold_spec.loader.exec_module(cold_acquisition)
 allman_spec = importlib.util.spec_from_file_location('check_allman_braces', ROOT / 'scripts/check-allman-braces.py')
 allman = importlib.util.module_from_spec(allman_spec)
 allman_spec.loader.exec_module(allman)
@@ -632,6 +635,35 @@ class CiEvidence(unittest.TestCase):
 
 class PinnedInputs(unittest.TestCase):
     """The pin registry, its guard, the acquisition helpers and the build-owned patch (docs/design/pinned-inputs.md)."""
+
+    def test_cold_acquisition_checker_needs_an_empty_cache_and_every_added_pin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            cache, build = root / 'cpm', root / 'build'
+            self.assertTrue(cold_acquisition.cache_is_empty(cache))  # absent counts as cold
+            cache.mkdir()
+            self.assertTrue(cold_acquisition.cache_is_empty(cache))
+            (cache / 'catch2' / 'origin').mkdir(parents=True)
+            (cache / 'catch2' / 'origin' / 'CMakeLists.txt').write_text('x', encoding='utf-8')
+            self.assertFalse(cold_acquisition.cache_is_empty(cache))  # a restored cache is not cold
+
+            build.mkdir()
+            pins = ROOT / 'cmake/pins.json'
+            ok, lines = cold_acquisition.check_after(cache, build, pins)
+            self.assertFalse(ok)  # no CMakeCache.txt: nothing was acquired
+            (build / 'CMakeCache.txt').write_text('CPM_PACKAGES:INTERNAL=Catch2;glfw\n', encoding='utf-8')
+            ok, lines = cold_acquisition.check_after(cache, build, pins)
+            self.assertFalse(ok)  # glfw was added but is not in the cache
+            self.assertTrue(any(line.startswith('glfw: not present') for line in lines), lines)
+            (cache / 'glfw' / 'origin').mkdir(parents=True)
+            (cache / 'glfw' / 'origin' / 'CMakeLists.txt').write_text('x', encoding='utf-8')
+            ok, lines = cold_acquisition.check_after(cache, build, pins)
+            self.assertTrue(ok, lines)
+            self.assertTrue(any(line.startswith('not selected by this configuration:') and 'eigen' in line
+                                for line in lines), lines)
+            (build / 'CMakeCache.txt').write_text('CPM_PACKAGES:INTERNAL=Catch2;unpinned\n', encoding='utf-8')
+            ok, lines = cold_acquisition.check_after(cache, build, pins)
+            self.assertFalse(ok)  # an added package outside the registry fails
 
     @classmethod
     def setUpClass(cls):

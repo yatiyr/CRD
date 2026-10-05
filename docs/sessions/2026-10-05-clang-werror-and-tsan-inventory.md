@@ -166,7 +166,36 @@ fiber-tag case once its fix was in.
 (`.github/ci-tiers.json`). Its lane has no register entries, so any failure fails it. `docs/design/ci-tiers.md` and
 `docs/design/test-instruments.md` record the lane and the suppression rule.
 
+## First hosted run (2026-10-06)
+
+The lane's first hosted run, job `111916300986` in run 37329657766 at `2dea4e6a`, passed every test except two. Both
+are now fixed, so the lane's qualification falls to the next complete-tier run.
+
+1. **`work_stealing_deque: concurrent push pop steal stress`: an engine data race.**
+   - **The race:** `steal()` read a buffer slot as a plain value (`work_stealing_deque.hpp:204`) while `push()`
+     wrote one (`:125`). In a Chase-Lev deque a thief reads the slot before its CAS on `top` and can overlap the owner
+     rewriting that slot after a wrap-around. The stale thief loses its CAS and discards the value, but the plain
+     accesses are still a data race.
+   - **Why only hosted:** the reference host never produced the interleaving; the hosted runner (GCC 14 library
+     headers, four cores) did.
+   - **Fix (the C11 formulation of Lê et al. 2013):** each slot is an array of `std::atomic<u64>` words with the
+     item's alignment. `push` copies the item in with relaxed word stores, and `pop`/`steal` copy it out with relaxed
+     word loads. A torn read can only happen when the thief's CAS fails and the value is discarded. `JobDecl` keeps
+     its 64-byte slot, and relaxed word moves are plain moves on x86-64 and ARM64.
+2. **`sample ring: a save's copy retry outlasts a competing consumer`: a starvation defect (DIAG.6a(c3)).**
+   - **The defect:** under ThreadSanitizer two consumers copying back to back held the ring's single-consumer flag
+     for almost the whole time. The save, retrying politely with `yield()`, lost every attempt within its 50 ms
+     budget. Three threads were abandoned and batches came out torn. The flag has no fairness, so the test's
+     guarantee held only by luck on fast machines.
+   - **Fix:** a save whose first copy was refused registers as a priority waiter on that ring
+     (`sample_copy_priority_begin`/`_end`). Every other copier then refuses exactly as if the ring were busy, so the
+     save waits at most for the copy already in flight. An uncontended save costs nothing extra.
+   - **Teeth:** a new deterministic test checks the step-aside: another thread's copy is refused while the save holds
+     priority, the save's own copy succeeds, and after release the other copier proceeds. With the step-aside
+     disabled, the other copier gets 16 samples and the test fails.
+3. **Strict tidy in the touched files, findings that predated this work:** an `else` after `return` in `pop()`, and
+   `BeginToken::_pad` renamed to `pad` (no users).
+
 ## Next
 
-The first hosted complete-tier run is the lane's qualification. Read its TSan lane and fix what the hosted runner
-shows that the reference host did not.
+The next complete-tier hosted run qualifies the lane.

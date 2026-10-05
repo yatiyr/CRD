@@ -159,7 +159,7 @@ struct BeginToken
     crd::u32 begin_fiber   = 0U;
     crd::u8  begin_thread  = 0xFFU;
     crd::u8  depth         = 0U;
-    crd::u16 _pad          = 0U;
+    crd::u16 pad           = 0U;
 };
 static_assert(sizeof(BeginToken) == 16, "BeginToken is 16 bytes; lives on the stack");
 
@@ -235,6 +235,13 @@ struct ThreadSamplesView
 // (c3) Count of copy_thread_samples attempts refused because another consumer held thread `thread_index`'s ring.
 // Exactly equals the number of contended (out_contended == true) returns; monotonic within an init/shutdown lifetime.
 [[nodiscard]] crd::u64 sample_copy_contended_count(crd::u8 thread_index) noexcept;
+
+// (c3) Copy priority for a save. A save whose copy found thread `thread_index`'s ring busy calls begin while it retries
+// and end when it is done. In between, every other copier steps aside: it refuses exactly as if the ring were busy, so
+// consumers that copy back to back cannot starve a save for its whole retry budget (a hosted ThreadSanitizer run did).
+// The save waits at most for the copy already in flight. No-ops when CRD_PERF_ENABLED=0.
+void sample_copy_priority_begin(crd::u8 thread_index) noexcept;
+void sample_copy_priority_end(crd::u8 thread_index) noexcept;
 
 // (c3) Slot capacity of each per-thread sample ring -- the maximum a copy_thread_samples can return, and the size a
 // cross-thread reader must size its buffer to in order to hold a full ring. Reflects InitConfig::per_thread_ring_slots

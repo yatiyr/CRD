@@ -344,6 +344,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
         bool           contended   = false;
         const crd::u64 deadline_ns =
             static_cast<crd::u64>(crd::time::MonotonicClock::now().ns_since_epoch()) + kCaptureCopyBudgetNs;
+        bool priority = false; // taken after the first refusal, so an uncontended save costs nothing extra
         for (;;)
         {
             // DIAG.6b(b): with correlation, copy samples AND their slot-parallel records in ONE hold so they can't
@@ -357,6 +358,12 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
             {
                 break; // copied cleanly (possibly 0 if the ring was genuinely empty)
             }
+            if (!priority)
+            {
+                // Other copiers now step aside, so this save waits at most for the copy already in flight.
+                sample_copy_priority_begin(static_cast<crd::u8>(t.thread_index));
+                priority = true;
+            }
             if (static_cast<crd::u64>(crd::time::MonotonicClock::now().ns_since_epoch()) >= deadline_ns)
             {
                 break; // budget exhausted while still contended: give up truthfully below
@@ -364,6 +371,10 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
             // Be the polite consumer: the save holds the long (50 ms) budget, so yield between attempts to let a
             // waiting clear_samples (or another copier) win the flag instead of starving it for the whole budget.
             std::this_thread::yield();
+        }
+        if (priority)
+        {
+            sample_copy_priority_end(static_cast<crd::u8>(t.thread_index));
         }
         if (contended)
         {

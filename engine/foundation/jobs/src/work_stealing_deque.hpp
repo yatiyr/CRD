@@ -6,6 +6,7 @@
 #include "sanitizer_fibers.hpp" // CRD_JOBS_TSAN: the fence model under ThreadSanitizer
 
 #include <atomic>
+#include <cstring>
 #include <memory>
 #include <optional>
 #include <type_traits>
@@ -72,8 +73,42 @@ private:
     alignas(64) std::atomic<crd::i64> m_bottom{0};
     alignas(64) std::atomic<crd::i64> m_top{0};
 
-    crd::u32             m_mask{0U};   // capacity - 1; capacity is always a power of two
-    std::unique_ptr<T[]> m_buf;        // circular buffer; m_buf[i & m_mask]
+    // A buffer slot as relaxed atomic words (Lê et al. 2013, the C11 formulation). A thief reads a slot before its
+    // CAS on top and can overlap the owner rewriting that slot after a wrap-around; it then loses the CAS and
+    // discards what it read. That overlap is defined only for atomic accesses, so an item moves word by word with
+    // relaxed loads and stores, which are plain moves on x86-64 and ARM64. A plain copy of T was a data race (the
+    // hosted linux-clang-tsan lane, 2026-10-06). The slot keeps T's alignment, so the layout is unchanged.
+    static_assert(std::is_trivially_copyable_v<T>, "WorkStealingDeque copies items as machine words");
+    static constexpr std::size_t kSlotWords = (sizeof(T) + sizeof(crd::u64) - 1U) / sizeof(crd::u64);
+    struct alignas(alignof(T) > alignof(crd::u64) ? alignof(T) : alignof(crd::u64)) Slot
+    {
+        std::atomic<crd::u64> words[kSlotWords]; // NOLINT(modernize-avoid-c-arrays)
+    };
+
+    static void store_slot(Slot& slot, const T& item) noexcept
+    {
+        crd::u64 words[kSlotWords] = {}; // NOLINT(modernize-avoid-c-arrays)
+        std::memcpy(words, &item, sizeof(T));
+        for (std::size_t i = 0; i < kSlotWords; ++i)
+        {
+            slot.words[i].store(words[i], std::memory_order_relaxed);
+        }
+    }
+
+    [[nodiscard]] static T load_slot(const Slot& slot) noexcept
+    {
+        crd::u64 words[kSlotWords] = {}; // NOLINT(modernize-avoid-c-arrays)
+        for (std::size_t i = 0; i < kSlotWords; ++i)
+        {
+            words[i] = slot.words[i].load(std::memory_order_relaxed);
+        }
+        T item;
+        std::memcpy(&item, words, sizeof(T));
+        return item;
+    }
+
+    crd::u32                m_mask{0U}; // capacity - 1; capacity is always a power of two
+    std::unique_ptr<Slot[]> m_buf;      // circular buffer; m_buf[i & m_mask]
 
     [[nodiscard]] std::size_t buf_index(crd::i64 i) const noexcept
     {
@@ -91,7 +126,7 @@ private:
 template<typename T>
 WorkStealingDeque<T>::WorkStealingDeque(crd::u32 capacity)
     : m_mask{capacity - 1U}
-    , m_buf{std::make_unique<T[]>(capacity)}
+    , m_buf{std::make_unique<Slot[]>(capacity)}
 {
     CRD_ASSERT_MSG(capacity >= 2U,
                    "WorkStealingDeque: capacity must be >= 2");
@@ -105,7 +140,7 @@ WorkStealingDeque<T>::WorkStealingDeque(crd::u32 capacity)
 // Memory ordering (Lê et al. 2013, §4):
 //   - m_top loaded acquire : see the most recent steal increments for the
 //     size check so we never push into an index that a thief might still hold.
-//   - m_buf write is a plain store; it happens-before the bottom store.
+//   - the slot write (relaxed word stores) happens-before the bottom store.
 //   - m_bottom stored release: makes the buf write visible to any subsequent
 //     acquire load of m_bottom in steal().
 // ---------------------------------------------------------------------------
@@ -122,7 +157,7 @@ bool WorkStealingDeque<T>::push(const T& item) noexcept
         return false;
     }
 
-    m_buf[buf_index(b)] = item;
+    store_slot(m_buf[buf_index(b)], item);
     m_bottom.store(b + 1, std::memory_order_release);
     return true;
 }
@@ -148,7 +183,7 @@ std::optional<T> WorkStealingDeque<T>::pop() noexcept
 
     if (t <= b)
     {
-        T item = m_buf[buf_index(b)];
+        T item = load_slot(m_buf[buf_index(b)]);
         if (t < b)
         {
             return item; // > 1 element — no race possible
@@ -165,11 +200,8 @@ std::optional<T> WorkStealingDeque<T>::pop() noexcept
         m_bottom.store(b + 1, std::memory_order_relaxed);
         return item;
     }
-    else
-    {
-        m_bottom.store(b + 1, std::memory_order_relaxed);
-        return std::nullopt; // deque was empty
-    }
+    m_bottom.store(b + 1, std::memory_order_relaxed);
+    return std::nullopt; // deque was empty
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +233,7 @@ std::optional<T> WorkStealingDeque<T>::steal() noexcept
 
     if (t < b)
     {
-        T item = m_buf[buf_index(t)];
+        T item = load_slot(m_buf[buf_index(t)]);
         if (!m_top.compare_exchange_strong(t, t + 1,
                 std::memory_order_seq_cst,
                 std::memory_order_relaxed))
