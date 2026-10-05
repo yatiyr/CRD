@@ -3,11 +3,13 @@
 //                  recorded so fiber migration is visible.
 
 #include <crd/jobs/jobs.hpp>
+#include <crd/jobs/observer.hpp>
 #include <crd/perf/perf.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cstdint>
 
 #if CRD_PERF_ENABLED
 
@@ -143,6 +145,52 @@ TEST_CASE("job samples carry the fiber_id for cross-thread reconstruction",
         }
     }
     CHECK(with_fiber == k_jobs); // every job sample tagged with a fiber id
+}
+
+TEST_CASE("a fiber at a 4 GiB-aligned address still tags its job sample", "[perf][jobs][adapter][fiber]")
+{
+    // ThreadSanitizer's allocator placed the first fiber of a tier at 0x72a800000000. Truncating that pointer to 32
+    // bits gave fiber_id 0, which means "no fiber", so its job sample read as untagged (DIAG.1b, 2026-10-05). The
+    // adapter folds the pointer instead and never yields 0. Driven through the installed observer with that handle.
+    crd::perf::init({});
+    crd::perf::install_jobs_adapter();
+    const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
+    REQUIRE(obs != nullptr);
+    REQUIRE(obs->on_job_begin != nullptr);
+    REQUIRE(obs->on_job_end != nullptr);
+
+    // A fake handle: the adapter only hashes and tags it, never dereferences it.
+    // NOLINTNEXTLINE(performance-no-int-to-ptr,cppcoreguidelines-pro-type-reinterpret-cast)
+    auto* const aligned = reinterpret_cast<crd::jobs::FiberHandle>(std::uintptr_t{0x72a800000000U});
+    obs->on_job_begin(aligned, 0U, 0U, 0U);
+    obs->on_job_end(aligned, 0U);
+
+    crd::u32 tagged   = 0U;
+    crd::u32 untagged = 0U;
+    for (crd::u32 t = 0U; t < crd::perf::thread_count(); ++t)
+    {
+        const auto view = crd::perf::thread_samples(static_cast<crd::u8>(t));
+        for (crd::u32 i = 0U; i < view.size; ++i)
+        {
+            if (view.data[i].category != static_cast<crd::u8>(crd::perf::Category::Job))
+            {
+                continue;
+            }
+            if (view.data[i].fiber_id != 0U)
+            {
+                ++tagged;
+            }
+            else
+            {
+                ++untagged;
+            }
+        }
+    }
+    CHECK(tagged == 1U);
+    CHECK(untagged == 0U);
+
+    crd::perf::uninstall_jobs_adapter();
+    crd::perf::shutdown();
 }
 
 TEST_CASE("nested CRD_PERF_SCOPE inside a job becomes a child region",

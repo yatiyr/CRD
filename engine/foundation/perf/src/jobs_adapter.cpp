@@ -140,6 +140,16 @@ void park_token(crd::jobs::FiberHandle h, BeginToken t) noexcept
     return false;
 }
 
+// The Sample fiber tag of a fiber handle: the pointer folded to 32 bits, never 0 (0 means "no fiber"). A plain
+// truncation dropped the high half, so a fiber at a 4 GiB-aligned address -- the first fiber of a tier under
+// ThreadSanitizer's allocator, e.g. 0x72a800000000 -- was tagged 0 and its samples read as untagged (2026-10-05).
+[[nodiscard]] crd::u32 fiber_tag(crd::jobs::FiberHandle h) noexcept
+{
+    const auto     v   = static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(h));
+    const crd::u32 tag = static_cast<crd::u32>(v ^ (v >> 32U));
+    return tag != 0U ? tag : 1U;
+}
+
 // ---- Observer callbacks --------------------------------------------------
 
 void cb_on_job_begin(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/,
@@ -149,7 +159,7 @@ void cb_on_job_begin(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/,
     // profiler yet (jobs spawns worker threads independently). Register
     // lazily; idempotent.
     register_thread("job-worker");
-    set_current_fiber_id(static_cast<crd::u32>(reinterpret_cast<std::uintptr_t>(fiber)));
+    set_current_fiber_id(fiber_tag(fiber));
 
     BeginToken tok = push_region(g_job_name, Category::Job);
     park_token(fiber, tok);
@@ -182,7 +192,7 @@ void cb_on_fiber_yield(crd::jobs::FiberHandle /*fiber*/, crd::u8 /*thread_index*
 void cb_on_fiber_resume(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) noexcept
 {
     register_thread("job-worker"); // lazy register on resume thread too
-    set_current_fiber_id(static_cast<crd::u32>(reinterpret_cast<std::uintptr_t>(fiber)));
+    set_current_fiber_id(fiber_tag(fiber));
     g_stats.fibers_resumed.fetch_add(1, std::memory_order_relaxed);
 }
 

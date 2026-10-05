@@ -96,7 +96,53 @@ be red. The reports group as follows.
 
 The Vulkan raster and frame-graph failures are those reports ending each test through `halt_on_error`.
 
+## Triage (pushed as `a45059fc`)
+
+Each group was reproduced on the reference host, fixed or classified, and rerun under TSan.
+
+1. **Engine race: `Fiber::job_counter` and the counter ids (fixed).** The watchdog's `wait_graph_snapshot` and
+   `monitored_snapshot` read `Fiber::job_counter`, a plain pointer, while a worker writes it in `run_job_in_fiber`.
+   - Through that pointer they read `Counter::task_id` and `parent_task_id`, which `acquire()` rewrites when the pool
+     recycles a counter. The comments called this a deliberate "racy dump", but a race on a non-atomic object is
+     undefined behaviour.
+   - `job_counter`, `task_id` and `parent_task_id` are now relaxed atomics, following the pattern `waiting_on` and
+     `progress_epoch` already used. Every access says so, and the 64-byte `Counter` layout is unchanged.
+   - The wait-graph, hang and livelock watchdog cases and `job samples carry the fiber_id` pass under TSan with no
+     report.
+2. **Engine race: the frame-history seqlock (fixed).** `copy_frame_record` `memcpy`'d a ring slot while
+   `frame_mark` could be writing it. The seqlock discards such a copy, but the overlapping plain accesses are still a
+   data race.
+   - The record now moves member by member through relaxed `std::atomic_ref`. `frame_mark` builds it locally and
+     publishes it between the odd and even sequence marks; the reader loads it back.
+   - Same-thread `frame_record()` readers keep plain access. The ring-tearing test passes with no report.
+3. **`counter_wait` segfaults (test defect, fixed).** Tests 10 and 12 in `test_counter.cpp` dispatch a fiber by hand
+   with raw `fiber_switch`. `counter_wait` switches TSan back to the context the worker pool records at dispatch, which
+   these tests never set, so `__tsan_switch_to_fiber(nullptr)` crashed in `__tsan::ProcWire` (gdb).
+   - The tests now mirror the pool's choreography through `hand_enter` and `hand_return`: a TSan fiber per stack, the
+     recorded return context, and annotated switches. The engine invariant is unchanged.
+   - The whole jobs suite passes under TSan (173 cases). Its single report is the deliberate data-race specimen,
+     which the suite expects TSan to catch.
+4. **Specimen harness (fixed).**
+   - **ASan-class specimens:** heap overflow, use after free, use after return and leak tagged themselves `tsan`
+     under TSan and exited clean, so the harness waited for a catch that cannot come. They now declare
+     `CRD_DIAG_SPECIMEN_ASAN_CLASS`, and without AddressSanitizer their route is `none` (InstrumentAbsent).
+   - **Crash and crash-capture specimens:** TSan handled their `SIGSEGV` itself, reported it and exited with 66
+     before the expected death or the engine's handler. Each now sets a scoped `__tsan_default_options()
+     { return "handle_segv=0"; }`, the twin of the existing ASan one.
+   - All 10 harness cases, all 14 Linux crash-capture cases and the crash-record case pass under TSan.
+5. **Uninstrumented third-party libraries (suppressed).**
+   - The validation-layer reports pair `vvl::Queue::ThreadFunc` unlocking a fence state's `rwlock` with the main
+     thread freeing that state in the layer's `DestroyFence`. The layer orders the two through `shared_ptr` counts in
+     code TSan does not instrument, so the edge is invisible.
+   - The lavapipe reports pair the driver's own `pthread_mutex_destroy` and `pthread_mutex_lock` in the same way.
+   - `tests/support/diag/tsan-suppressions.txt` suppresses exactly those two modules, with the reason. The
+     `linux-clang-tsan` test preset passes it through `TSAN_OPTIONS`. Cerid code is never suppressed.
+
+The touched files also had strict tidy findings that predated this work, all now cleared:
+- `_pad1` renamed to `pad1`;
+- `for_each_counter` takes `const Fn&`;
+- the specimen feature macros carry the repository's `NOLINT(cppcoreguidelines-macro-usage)` reason.
+
 ## Next
 
-Triage in the order of the table, engine candidates first. Add suppressions only for third-party frames proven
-uninstrumented. Then rerun, and add the hosted complete-tier lane when the run is green.
+Rerun the full suite with the suppressions. Add the hosted complete-tier lane when that run is green.
