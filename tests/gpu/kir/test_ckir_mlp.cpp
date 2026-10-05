@@ -18,6 +18,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <fstream>
 
 namespace kir = crd::kir;
@@ -366,7 +367,7 @@ TEST_CASE("emit fused MLP FP32 as CUDA", "[.emit-cuda-mlp-fp32]")
     const kir::KEntry e = kir::build_mlp_fwd_fp32(g, cfg);
     kir::GlslKernel   k(&alloc);
     REQUIRE(kir::emit_compute_kernel_cuda(g, e, &alloc, k));
-    std::ofstream f("C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/1487a581-3392-44fb-bc9e-ebeaffd19da5/scratchpad/ckir_mlp_fp32_gen.cu", std::ios::binary);
+    std::ofstream f(std::filesystem::temp_directory_path() / "ckir_mlp_fp32_gen.cu", std::ios::binary); // a throwaway nvcc input
     REQUIRE(f.is_open());
     f << k.source.c_str();
     f.close();

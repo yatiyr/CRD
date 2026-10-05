@@ -239,17 +239,27 @@ WSL reference host). Every Windows lane passed; every Linux lane failed. Triage 
      response) instead of opening the gate. The held copy is discarded, never executed, so a software adapter cannot
      touch the released resource.
    - Both pass: the Vulkan one on the RTX and on lavapipe, the DX12 one three times plus the full DX12 suite.
-5. **Not reproduced, instrumented:** `B4-vis-2` (deferred attribute shading) segfaulted intermittently on hosted
-   lavapipe: `linux-gcc-release` on `f7689b5b`, `linux-gcc-debug` on `1ab3b1ef`. Several llvmpipe worker threads faulted
-   at once, which puts the fault in the shader's execution.
-   - **Ruled out:** the kernel bounds-guards its pixel index and its empty-key fetch, and the 32x32 grid has no tail.
-   - **Not reproduced:** 143 of 143 passes on the reference host with the same Mesa. That covers Debug and Release, and
-     `LP_NUM_THREADS` 32, 4 and 2. The whole Release Vulkan suite passes (295 cases, 1 skipped).
-   - **Remaining difference:** the hosted CPU model. GitHub's Linux runners vary, and an AVX-512 host would give
-     llvmpipe 512-bit vectors and a different subgroup width.
-   - **Instrumented:** the case now writes its device string (which includes the vector width), subgroup width and
-     shared-memory size to stderr before the dispatch, flushed, so the next hosted failure carries its own diagnosis.
-     It is recorded, not masked.
+5. **The kernel emitters hoisted guarded memory reads (fixed).** `B4-vis-2` (deferred attribute shading) segfaulted
+   intermittently on hosted lavapipe: `linux-gcc-release` on `f7689b5b`, `linux-gcc-debug` on `1ab3b1ef`. The ASan lane
+   on `1ab3b1ef` placed it: a page-aligned read in JIT-compiled shader code, on a driver worker thread.
+   - **Cause:** the kernel guards the pixel index and the empty-key fetch, but every compute emitter's hoist pre-pass
+     lifted the guarded temps above both `if`s. An empty key (`0xFFFFFFFF`) unpacks to triangle 4095, so the shader read
+     element 12,285 of a three-element index buffer, then positions at whatever that returned. NVIDIA and WARP tolerate
+     the stray read. On lavapipe it faults only when the address reaches an unmapped page, which depends on the heap
+     layout; 143 local passes had never hit it.
+   - **Fix:** `KernelEmissionOrder::must_defer` now keeps every computed-address read (`BufferLoad`, `SharedLoad`,
+     `StorageLoad`, `TexelFetch`) and its consumers in order, so all five dialects emit them inside their guard. It
+     previously deferred only loads of written buffers.
+   - **Teeth:** the DAIS emit case asserts that no dialect reads the index buffer before the first `if (`. It fails in
+     all five dialects with the old header.
+   - The earlier hypothesis (an AVX-512 runner) is withdrawn, and the stderr device line added for it is removed.
+6. **Cook tests wrote to a fixed host path (fixed).** Reference-host runs from the repository directory left an
+   untracked `C<U+F03A>/Users/...` tree of `.crdr` and `.kgph` files at the root. The cause was not the Windows temp
+   variables: seven cook-test paths in `test_vulkan_context.cpp`, and one hidden-tool path in `test_ckir_mlp.cpp`, were
+   fixed to an old agent session's Windows scratch folder. Linux treats such a path as relative, and hosted Windows
+   writes it under a user profile that does not exist on the runner. They now use `crd::platform::fs::temp_directory()`
+   (the hidden tool uses `std::filesystem::temp_directory_path()`). On the reference host the cook, variant and D-007 D4
+   cases pass from the repository directory and write only under `/tmp`.
 
 Reference-host results on lavapipe after the fixes (Debug unless noted): the mesh gate, the radix sort, `[ren38]` (42 passed, 1 skipped),
 `[validation]` (8 cases), `DIAG.7a(f)` and every `DIAG.7c` case pass.

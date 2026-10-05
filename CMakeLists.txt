@@ -670,13 +670,12 @@ if("cgltf" IN_LIST CRD_SELECTED_PACKAGES)
 endif()
 
 if("mikktspace" IN_LIST CRD_SELECTED_PACKAGES)
-    # MikkTSpace: tangent-space generation (two C files, MIT license).
-    # Phase 2.7: used by the glTF mesh cook handler to generate tangents when glTF
-    # meshes omit TANGENT data. Compiled as a STATIC C99 library.
+    # MikkTSpace: tangent-space generation (two C files, MIT license). Test oracle only: the engine generates its own
+    # tangents, and the asset-io tests compare them against this reference.
     crd_add_pinned_package(MikkTSpace DOWNLOAD_ONLY YES)
     add_library(mikktspace INTERFACE)
     target_include_directories(mikktspace SYSTEM INTERFACE "${MikkTSpace_SOURCE_DIR}")
-    # mikktspace.c is included directly inside mesh.cpp (within an extern "C" block)
+    # mikktspace.c is included directly inside tests/assets/asset-io/test_condition.cpp (within an extern "C" block)
     # so it compiles as C++ without triggering C-compiler detection in CMake.
 endif()
 

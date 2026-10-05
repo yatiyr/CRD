@@ -19,7 +19,7 @@ extern "C"
 {
 // NOLINTBEGIN(misc-include-cleaner)
 #include <mikktspace.h>
-#include "mikktspace.c" // NOLINT — the oracle implementation compiled as C++ within this TU (the cooker's mesh.cpp pattern)
+#include "mikktspace.c" // NOLINT — the unmodified oracle compiled as C++ within this TU (UBSan finding: TP-5)
 // NOLINTEND(misc-include-cleaner)
 }
 

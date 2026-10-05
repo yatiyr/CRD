@@ -31,10 +31,8 @@ if(MSVC)
     target_compile_definitions(crd-asset-io-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-# test_condition.cpp compiles mikktspace.c (the oracle) inside its TU; that third-party code does benign `x << 32` hash
-# mixing that trips UBSan's shift check on gcc-asan configs (same exemption as the cooker's mesh.cpp).
-set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/test_condition.cpp" PROPERTIES
-    COMPILE_OPTIONS "$<$<AND:$<COMPILE_LANG_AND_ID:CXX,GNU>,$<CONFIG:Asan>>:-fno-sanitize=shift-exponent>")
+# test_condition.cpp compiles the unmodified mikktspace.c oracle inside its TU. Its edge-sort PRNG shifts by 32, which
+# UBSan reports on linux-gcc-asan; that is registered third-party defect TP-5 (docs/third-party-defects.md), not exempted.
 
 crd_enable_default_pch(crd-asset-io-tests)
 

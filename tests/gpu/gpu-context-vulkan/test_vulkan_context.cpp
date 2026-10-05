@@ -6604,12 +6604,6 @@ TEST_CASE("B4-vis-2: CKIR deferred attribute shade (DAIS) DISPATCHES on Vulkan =
     auto*                          vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::gpu::VulkanComputeContext compute(*vk, crd::memory::default_allocator());
     REQUIRE(compute.valid());
-    // 2026-10-05: this case segfaulted intermittently on hosted lavapipe (several llvmpipe worker threads at once) but
-    // passed 143 of 143 runs on the reference host with the same Mesa. Record the device context BEFORE the dispatch,
-    // flushed, so a fatal signal still leaves it in the CTest log (the llvmpipe string carries the vector width).
-    std::fprintf(stderr, "[B4-vis-2] device=\"%s\" subgroup=%u shared=%u\n", vk->adapter_name(), compute.subgroup_size(),
-                 compute.shared_memory_bytes());
-    (void)std::fflush(stderr);
 
     crd::memory::TlsfAllocator       alloc(16U << 20U);
     const crd::kir_test::DaisScene   scene = crd::kir_test::make_dais_scene();
@@ -14602,6 +14596,18 @@ TEST_CASE("B-cmp: ONESWEEP radix sort -- lookback, the crush structure", "[.sort
     CHECK(ix == sx);
 }
 
+// The cook tests write bundles and caches under the OS temp directory. These paths were once fixed to one Windows
+// host's agent scratch folder, which hosted Linux created as a relative `C:/...` tree in the working directory.
+namespace
+{
+crd::containers::String cook_scratch(const char* leaf)
+{
+    const crd::platform::fs::Path     path = crd::platform::fs::temp_directory() / crd::containers::StringView(leaf);
+    const crd::containers::StringView text = path.generic();
+    return crd::containers::String(text.data(), text.size());
+}
+} // namespace
+
 // D-007 D2 (ADR-0104): the OFFLINE SHADER COOK. Cook a CKIR compute kernel into a `.crdr` bundle (serialized IR + IR-reflection +
 // per-backend blobs), then prove (1) the cooked SPIR-V is BYTE-IDENTICAL to the runtime compile, (2) the bundle round-trips through
 // the CRDR container, (3) the COOKED bytecode (not a fresh compile) RUNS correctly on the GPU, and (4) the content-hash cache
@@ -14719,10 +14725,10 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
     }
 
     // (4) CONTENT-HASH CACHE: first cook writes, second cook re-uses the exact bytes.
-    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-cache";
-    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
+    const crd::containers::String cache_dir = cook_scratch("crd-cook-cache");
+    (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir.c_str()));
     sc::CookOptions copts = opts;
-    copts.cache_dir       = cache_dir;
+    copts.cache_dir       = cache_dir.c_str();
     sc::CookResult c1 = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), copts, &alloc);
     REQUIRE(c1.ok);
     sc::CookResult c2 = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), copts, &alloc);
@@ -14733,9 +14739,9 @@ TEST_CASE("D-007 D2: offline cook -- CKIR kernel to .crdr bundle; cooked SPIR-V 
 
     // Emit the serialized IR as a `.kgph` so the standalone `shader_cook` CLI can cook it (drives the D2 CLI smoke).
     crd::containers::Array<crd::u8> kgph = kir::serialize_graph(g, e, &alloc);
-    (void)crd::platform::fs::write_file_binary(crd::platform::fs::Path(
-        "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/reverse.kgph"),
-        crd::containers::as_const_span(kgph));
+    const crd::containers::String kgph_path = cook_scratch("crd-reverse.kgph");
+    (void)crd::platform::fs::write_file_binary(crd::platform::fs::Path(kgph_path.c_str()),
+                                               crd::containers::as_const_span(kgph));
 }
 
 // D-007 D3: a variant builder — bit0 scales the output (×1 or ×2); higher bits are DEAD (ignored), so keys differing only in
@@ -14783,7 +14789,8 @@ TEST_CASE("D-007 D3: variant matrix -- content-hash dedup + on-demand cook + GPU
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
-    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/variant-cache";
+    const crd::containers::String cache_text = cook_scratch("crd-variant-cache");
+    const char*                   cache_dir  = cache_text.c_str();
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
 
     // 4 requested variants; bit0 = scale(1|2), higher bits DEAD ⇒ {0,2} identical, {1,3} identical ⇒ 2 unique cooks.
@@ -14869,7 +14876,8 @@ TEST_CASE("D-007 D4: zero-compile runtime load from .crdr + persistent VkPipelin
     opts.backends     = static_cast<crd::u32>(sc::CookBackend::SpirV);
     sc::CookResult ck = sc::cook_compute_shader(g, e, crd::containers::StringView("reverse"), opts, &alloc);
     REQUIRE(ck.ok);
-    const char* path = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/d4_reverse.crdr";
+    const crd::containers::String path_text = cook_scratch("crd-d4_reverse.crdr");
+    const char*                   path      = path_text.c_str();
     REQUIRE(crd::platform::fs::write_file_binary(crd::platform::fs::Path(path), crd::containers::as_const_span(ck.crdr)));
 
     // LOAD it back FRESH (a shipped bundle) — parse → cooked SPIR-V + IR-reflection → pipeline, NO compiler.
@@ -15060,7 +15068,8 @@ TEST_CASE("D-007 D3: ubergraph variant style -- pin ShaderOptions + specialize, 
     REQUIRE(compute.valid());
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
-    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/uber-cache";
+    const crd::containers::String cache_text = cook_scratch("crd-uber-cache");
+    const char*                   cache_dir  = cache_text.c_str();
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
 
     // The übergraph flows through the SAME cook_variant_matrix as the per-key builder — the only difference is the builder body.
@@ -15172,7 +15181,8 @@ TEST_CASE("D-007 D3: a REAL OpenPBR material through the variant matrix -- fragm
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     crd::memory::TlsfAllocator alloc(32U << 20U);
 
-    const char* cache_dir = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/material-cache";
+    const crd::containers::String cache_text = cook_scratch("crd-material-cache");
+    const char*                   cache_dir  = cache_text.c_str();
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path(cache_dir));
 
     // The SAME cook_variant_matrix as compute kernels — the builder just returns a FRAGMENT (material) entry, and the now
@@ -15773,8 +15783,10 @@ TEST_CASE("D-007 D10: parallel cook on crd-jobs is byte-identical to the serial 
 
     // 8 keys (bit0 = scale) → 2 unique. Cook serially, then in parallel, into two cache dirs; compare the produced files.
     const crd::u32 keys[8] = {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U};
-    const char*    scdir   = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-serial";
-    const char*    pcdir   = "C:/Users/abici/AppData/Local/Temp/claude/D--Dev-cerid/b0138d6a-548b-428b-87b2-fe30c9f36f7c/scratchpad/cook-parallel";
+    const crd::containers::String scdir_text = cook_scratch("crd-cook-serial");
+    const crd::containers::String pcdir_text = cook_scratch("crd-cook-parallel");
+    const char*                   scdir      = scdir_text.c_str();
+    const char*                   pcdir      = pcdir_text.c_str();
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path(scdir));
     (void)crd::platform::fs::create_directories(crd::platform::fs::Path(pcdir));
 

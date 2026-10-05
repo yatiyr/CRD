@@ -1265,7 +1265,8 @@ inline bool emit_compute_kernel_glsl(const KGraph& g, const KEntry& entry, crd::
     // bit-matches the CPU oracle's op-by-op rounding — the same lever the elementwise emitter uses). LEAVES (loads/consts/
     // builtins/loop-var) + cast/select/compare/bitops stay INLINE, so a shared/buffer load RE-READS at each use (correct
     // across barriers). Temps CSE by node id; every kernel authors FRESH load nodes after a barrier, so a load-derived temp
-    // is never referenced across a barrier (and sibling loops never share an arithmetic node ⇒ no cross-scope temp).
+    // is never referenced across a barrier (and sibling loops never share an arithmetic node ⇒ no cross-scope temp). A
+    // load-derived temp is never hoisted above its `if` (KernelEmissionOrder): the guard keeps the address in range.
     bool                            ok = true;
     crd::containers::Array<crd::u8> temped(scratch);
     temped.resize(static_cast<crd::usize>(n), 0);

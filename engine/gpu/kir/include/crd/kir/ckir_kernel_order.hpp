@@ -7,17 +7,19 @@
 namespace crd::kir::emit_detail
 {
 
-// Shared by compute dialects: hoisting must not move a consumer before its explicit snapshot, statement result,
-// or resource producer. This analysis does not freeze live loads; Materialize retains that separate IR meaning.
+// Shared by compute dialects. Their hoist pre-pass lifts temps out of an `if` body to the enclosing scope, so a node it
+// returns true for must instead be emitted in order: a consumer of an explicit snapshot or statement result, and any
+// node that reads memory through a computed address. A memory read evaluated above the guard that keeps its address in
+// range reads out of bounds (a visibility pass reading triangle 4095 of a one-triangle buffer crashed lavapipe).
+// This analysis does not freeze live loads; Materialize retains that separate IR meaning.
 class KernelEmissionOrder
 {
 public:
     KernelEmissionOrder(const KGraph& graph, crd::memory::IAllocator* scratch)
-        : m_graph(graph), m_materialized(scratch), m_written(scratch), m_deferred(scratch)
+        : m_graph(graph), m_materialized(scratch), m_deferred(scratch)
     {
         const auto count = static_cast<crd::usize>(graph.size());
         m_materialized.resize(count, 0U);
-        m_written.resize(count, 0U);
         m_deferred.resize(count, -1);
         for (int index = 0; index < graph.stmt_count(); ++index)
         {
@@ -31,13 +33,6 @@ public:
                 statement.result >= 0)
             {
                 m_materialized[static_cast<crd::usize>(statement.result)] = 1U;
-            }
-            if ((statement.kind == KStmtKind::BufferStore || statement.kind == KStmtKind::SharedStore ||
-                 statement.kind == KStmtKind::BufferAtomicAdd || statement.kind == KStmtKind::BufferAtomicMin ||
-                 statement.kind == KStmtKind::BufferAtomicAddFetch || statement.kind == KStmtKind::BufferAtomicExchange ||
-                 statement.kind == KStmtKind::SharedAtomicAdd) && statement.target >= 0)
-            {
-                m_written[static_cast<crd::usize>(statement.target)] = 1U;
             }
         }
     }
@@ -54,11 +49,8 @@ public:
             return m_deferred[index] != 0;
         }
         const KNode& value = m_graph.node(node);
-        bool deferred = m_materialized[index] != 0U;
-        if (!deferred && (value.op == KOp::BufferLoad || value.op == KOp::SharedLoad) && value.a >= 0)
-        {
-            deferred = m_written[static_cast<crd::usize>(value.a)] != 0U;
-        }
+        bool deferred = m_materialized[index] != 0U || value.op == KOp::BufferLoad || value.op == KOp::SharedLoad ||
+                        value.op == KOp::StorageLoad || value.op == KOp::TexelFetch;
         if (!deferred)
         {
             deferred = must_defer(value.a);
@@ -86,7 +78,6 @@ public:
 private:
     const KGraph& m_graph;
     crd::containers::Array<crd::u8> m_materialized;
-    crd::containers::Array<crd::u8> m_written;
     crd::containers::Array<crd::i8> m_deferred;
 };
 

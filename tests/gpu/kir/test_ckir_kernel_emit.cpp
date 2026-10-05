@@ -59,6 +59,26 @@ namespace
 {
 bool has(const kir::GlslKernel& k, const char* needle) { return std::strstr(k.source.c_str(), needle) != nullptr; }
 
+// True when `buffer` is read (`name[i]` or HLSL `name.Load(`) before the kernel's first `if (`. Declarations spell the
+// name as `name[]`, `name :`, `name [[` or a parameter, so only an indexed read matches.
+bool read_before_first_guard(const kir::GlslKernel& k, const char* buffer)
+{
+    const char*       src   = k.source.c_str();
+    const char*       guard = std::strstr(src, "if (");
+    const std::size_t len   = std::strlen(buffer);
+    const char*       at    = std::strstr(src, buffer);
+    while (at != nullptr && (guard == nullptr || at < guard))
+    {
+        const char* next = at + len;
+        if ((next[0] == '[' && next[1] != ']') || std::strncmp(next, ".Load(", 6U) == 0)
+        {
+            return true;
+        }
+        at = std::strstr(next, buffer);
+    }
+    return false;
+}
+
 // The shared-memory REVERSE kernel (F32): shared[lid]=in[lid]; barrier; out[lid]=shared[ls-1-lid]. Same graph the Vulkan +
 // DX12 dispatch tests run bit-exact; here it drives the three off-host emitters structurally.
 kir::KEntry build_reverse(kir::KGraph& g, int ls)
@@ -410,6 +430,13 @@ TEST_CASE("B4-vis-2: deferred attribute-shade (DAIS) kernel lowers on all five b
     CHECK(has(cu, "buf4["));   // CUDA
     CHECK(has(ms, "buf4"));    // MSL
     CHECK(has(wg, "buf4["));   // WGSL
+    // The index buffer is read only under the covered-pixel guard: an empty key unpacks to triangle 4095, so a hoisted
+    // read indexes 12285 elements past a one-triangle buffer (lavapipe crashed reading the unmapped page).
+    CHECK_FALSE(read_before_first_guard(gl, "buf2"));
+    CHECK_FALSE(read_before_first_guard(hl, "buf2"));
+    CHECK_FALSE(read_before_first_guard(cu, "buf2"));
+    CHECK_FALSE(read_before_first_guard(ms, "buf2"));
+    CHECK_FALSE(read_before_first_guard(wg, "buf2"));
 }
 
 // B4-vis-3: the HZB downsample (max-depth pyramid) + cluster-cull (AABB-vs-HZB occlusion) kernels must lower on ALL FIVE
