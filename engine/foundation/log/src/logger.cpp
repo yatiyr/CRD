@@ -290,7 +290,14 @@ void shutdown() noexcept
 
     if (st.config.async)
     {
-        st.running.store(false, std::memory_order_release);
+        // The worker evaluates `running` in its wait predicate while holding queue_mutex. Storing it without that
+        // mutex lets the store and the notify land between the predicate check and the block: the wakeup is lost,
+        // the worker sleeps forever and join() below never returns (init() followed at once by shutdown() hung
+        // about half of the runs under TSan). Publishing under the mutex closes that window.
+        {
+            std::lock_guard<std::mutex> lock(st.queue_mutex);
+            st.running.store(false, std::memory_order_release);
+        }
         st.queue_cv.notify_all();
         if (st.worker.joinable())
         {
@@ -483,15 +490,6 @@ void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, 
         return;
     }
 
-    // Async path. If the worker is not running (a log racing shutdown, after running=false but before
-    // initialized=false), pushing would enqueue a record no one will ever drain -- a later flush() would hang.
-    // Count it as a drop instead. (DIAG.5c(d) lifecycle.)
-    if (!st.running.load(std::memory_order_acquire))
-    {
-        st.dropped.fetch_add(1, std::memory_order_relaxed);
-        return;
-    }
-
     QueuedRecord q;
     q.level = level;
     q.channel = &ch;
@@ -510,6 +508,16 @@ void dispatch_impl(LogLevel level, const Channel& ch, std::source_location loc, 
                 return;
             }
             st.drain_cv.wait(lock, [&] { return st.queue.size() < st.config.async_queue_capacity; });
+        }
+        // A log racing shutdown (running already false, initialized not yet): pushing would enqueue a record no one
+        // will ever drain, and shutdown()'s own flush() would then wait forever. Count it as a drop instead
+        // (DIAG.5c(d) lifecycle). Checked here, under queue_mutex, because shutdown() clears `running` under the
+        // same mutex; a check before taking the lock (or before the overflow wait) could pass and then push after
+        // the worker has already exited.
+        if (!st.running.load(std::memory_order_acquire))
+        {
+            st.dropped.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
         (void)st.queue.try_push(std::move(q));
     }

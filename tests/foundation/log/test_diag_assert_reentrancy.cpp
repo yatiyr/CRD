@@ -13,7 +13,10 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
+#include <thread>
 
 using namespace crd;
 using namespace crd::log;
@@ -35,6 +38,34 @@ auto elapsed_ms(clock::time_point start) -> long long
 [[maybe_unused]] int ignore_platform_handler(const char*) noexcept
 {
     return 0;
+}
+
+// Runs `body` on a helper thread and waits at most `bound`. A shutdown hang leaves the helper blocked forever in
+// shutdown(), and nothing can unblock it, so on expiry this writes one stderr line and ends the process with exit code
+// 3: the regression fails in seconds rather than at the 3600 s CTest timeout. The body must not use Catch2
+// assertions, which are not thread-safe; it returns its evidence and the caller checks it after the join.
+template <typename Body> void run_bounded(const char* what, std::chrono::seconds bound, const Body& body)
+{
+    std::atomic<bool> done{false};
+    std::thread runner(
+        [&]
+        {
+            body();
+            done.store(true, std::memory_order_release);
+        });
+    const auto deadline = clock::now() + bound;
+    while (!done.load(std::memory_order_acquire))
+    {
+        if (clock::now() > deadline)
+        {
+            std::fprintf(stderr, "[test] %s: still blocked after %lld s (logger shutdown hang)\n", what,
+                         static_cast<long long>(bound.count()));
+            std::fflush(stderr);
+            std::_Exit(3);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    runner.join();
 }
 
 #if CRD_ENABLE_ASSERTS
@@ -173,4 +204,85 @@ TEST_CASE("after shutdown the bridge is uninstalled and a late log does not hang
     CRD_LOG_INFO(g_log_reentry_test, "after shutdown");
     flush();
     CHECK(elapsed_ms(start) < 2000);
+}
+
+// shutdown() used to clear `running` and notify outside queue_mutex. A worker that had just evaluated its wait
+// predicate (queue empty, still running) then slept through the only notify, and join() waited forever. The window is
+// widest right after init(), when the worker is just reaching its first wait, so cycle init/shutdown many times.
+TEST_CASE("async init followed at once by shutdown never loses the stop wakeup", "[log][diag][reentrancy]")
+{
+    crd::set_assert_handler(nullptr);
+    if (is_initialized())
+    {
+        shutdown();
+    }
+    clear_sinks();
+
+    constexpr int k_cycles = 500;
+    int completed = 0;
+    bool stayed_up = true;
+    run_bounded("init/shutdown cycles", std::chrono::seconds(60),
+                [&]
+                {
+                    LoggerConfig cfg;
+                    cfg.async = true;
+                    for (int i = 0; i < k_cycles; ++i)
+                    {
+                        init(cfg);
+                        if (!is_initialized())
+                        {
+                            stayed_up = false;
+                        }
+                        shutdown();
+                        ++completed;
+                    }
+                });
+
+    CHECK(stayed_up);
+    CHECK(completed == k_cycles);
+    CHECK_FALSE(is_initialized());
+    CHECK(crd::get_assert_handler() == nullptr);
+}
+
+// A log racing shutdown must be dropped, not queued after the worker has exited: a stranded record keeps the queue
+// non-empty, and shutdown()'s own flush() then waits for a drain that cannot happen. Each cycle starts a producer
+// after init() and joins it before the next init(), so the only concurrency is the shutdown race under test.
+TEST_CASE("a log racing async shutdown is dropped and never stranded in the queue", "[log][diag][reentrancy]")
+{
+    crd::set_assert_handler(nullptr);
+    if (is_initialized())
+    {
+        shutdown();
+    }
+    clear_sinks();
+
+    constexpr int k_cycles = 200;
+    int completed = 0;
+    run_bounded("logging across shutdown", std::chrono::seconds(60),
+                [&]
+                {
+                    LoggerConfig cfg;
+                    cfg.async = true;
+                    for (int i = 0; i < k_cycles; ++i)
+                    {
+                        init(cfg);
+                        std::atomic<bool> stop{false};
+                        std::thread producer(
+                            [&]
+                            {
+                                while (!stop.load(std::memory_order_acquire))
+                                {
+                                    CRD_LOG_INFO(g_log_reentry_test, "racing shutdown");
+                                }
+                            });
+                        std::this_thread::sleep_for(std::chrono::microseconds(50));
+                        shutdown();
+                        stop.store(true, std::memory_order_release);
+                        producer.join();
+                        ++completed;
+                    }
+                });
+
+    CHECK(completed == k_cycles);
+    CHECK_FALSE(is_initialized());
 }
