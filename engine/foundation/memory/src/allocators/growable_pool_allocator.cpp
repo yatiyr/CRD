@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/checked_math.hpp>
 
 #include <cstring>
@@ -11,6 +12,26 @@ namespace crd::memory
 namespace
 {
 constexpr usize kInitialPagesCapacity = 4;
+
+// DIAG.3b AddressSanitizer model, as in PoolAllocator: a free slot is poisoned whole, header included, and its link
+// is read just in time; a live slot is unpoisoned whole (the logical allocation is the slot); a page is unpoisoned
+// before it goes back to the parent. No-ops without ASan.
+constexpr usize kPoolHeaderBytes = sizeof(void*); // GrowablePoolAllocator::FreeNode is one pointer
+
+// The link stored in a free slot. The header is unpoisoned only for the read and poisoned again afterwards; a slot
+// that was not poisoned (a corrupt link into a live slot) stays as it was.
+[[nodiscard]] void* read_free_link(const void* slot) noexcept
+{
+    const bool was_poisoned = asan_is_poisoned(slot);
+    asan_unpoison(slot, kPoolHeaderBytes);
+    void* next = nullptr;
+    std::memcpy(&next, slot, sizeof(next));
+    if (was_poisoned)
+    {
+        asan_poison(slot, kPoolHeaderBytes);
+    }
+    return next;
+}
 
 inline usize aligned_slot_stride(usize slot_size, usize slot_alignment) noexcept
 {
@@ -101,6 +122,7 @@ void GrowablePoolAllocator::free_all_pages() noexcept
     {
         if (m_pages[i] != nullptr)
         {
+            asan_unpoison(m_pages[i], m_page_bytes); // exactly the page, never the parent's surrounding range
             m_parent->deallocate(m_pages[i]);
         }
     }
@@ -159,6 +181,7 @@ bool GrowablePoolAllocator::grow()
     // Push every slot onto the free list. Walk back-to-front so the head ends
     // up pointing at the lowest-address slot — gives slightly more
     // cache-friendly allocation order on the first sweep through a fresh page.
+    static_assert(sizeof(FreeNode) == kPoolHeaderBytes, "read_free_link reads exactly one FreeNode link");
     const usize stride = aligned_slot_stride(m_slot_size, m_slot_alignment);
     for (usize i = m_slots_per_page; i > 0; --i)
     {
@@ -166,6 +189,7 @@ bool GrowablePoolAllocator::grow()
         FreeNode* node = reinterpret_cast<FreeNode*>(slot_bytes);
         node->next = m_free_head;
         m_free_head = node;
+        asan_poison(slot_bytes, stride); // free: header and payload both fault
     }
     return true;
 }
@@ -225,9 +249,10 @@ void* GrowablePoolAllocator::allocate(usize size, usize alignment)
     }
 
     FreeNode* node = m_free_head;
-    m_free_head = node->next;
+    m_free_head = static_cast<FreeNode*>(read_free_link(node));
     ++m_in_use;
     m_stats.on_allocate(static_cast<u64>(m_slot_size));
+    asan_unpoison(node, aligned_slot_stride(m_slot_size, m_slot_alignment)); // the whole slot is live
     return node;
 }
 
@@ -245,11 +270,15 @@ void GrowablePoolAllocator::deallocate(void* p) noexcept
         return;
     }
 
+    // A live slot is addressable; a double free finds it poisoned. Writing the link anyway keeps the corruption visible
+    // to the structural checks (validate_structure()) instead of turning it into an allocator-internal ASan report.
+    asan_unpoison(p, kPoolHeaderBytes);
     FreeNode* node = static_cast<FreeNode*>(p);
     node->next = m_free_head;
     m_free_head = node;
     --m_in_use;
     m_stats.on_deallocate(static_cast<u64>(m_slot_size));
+    asan_poison(p, aligned_slot_stride(m_slot_size, m_slot_alignment)); // the freed slot faults, header included
 }
 
 bool GrowablePoolAllocator::owns(const void* p) const noexcept

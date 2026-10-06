@@ -51,6 +51,12 @@ target_link_libraries(crd-diag-observer-swap-specimen PRIVATE crd-jobs)
 crd_diag_specimen(crd-diag-alloc-fatal-specimen SOURCES specimens/alloc_fatal_specimen.cpp)
 target_link_libraries(crd-diag-alloc-fatal-specimen PRIVATE crd-core crd-memory)
 
+# The DIAG.3b allocator-poison negative control: a stale or out-of-range read of a logical allocation (use after an
+# arena reset or rewind, a freed pool slot, a one-byte over/underrun) must be reported by AddressSanitizer as
+# use-after-poison. crd-memory-tests runs it once per mode; without ASan it reports InstrumentAbsent.
+crd_diag_specimen(crd-diag-allocator-poison-specimen SOURCES specimens/allocator_poison_specimen.cpp)
+target_link_libraries(crd-diag-allocator-poison-specimen PRIVATE crd-core crd-memory)
+
 # The no-blocking-context negative control: an unenrolled thread waiting on a single-thread pool must
 # trip the deadlock fatal. Links crd-jobs and the platform thread library (it spawns a std::thread).
 crd_diag_specimen(crd-diag-unenrolled-wait-specimen SOURCES specimens/unenrolled_wait_specimen.cpp)

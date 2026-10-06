@@ -189,6 +189,18 @@ Acceptance: one-byte under/overrun, freed-slot access, rewind use, unused contai
 objects are intentionally detected where declared. Test large/odd-sized slots, metadata manipulation and non-ASan
 builds. Immediate same-address reuse remains a documented raw-pointer limit, addressed by DIAG.3e.
 
+Settled policies (2026-10-07, [session](../sessions/2026-10-07-diag-3b-pool-and-arena-poisoning.md)):
+- **Pools.** A free slot is poisoned whole, its free-list header included; the allocator and `validate_structure()`
+  read a link just in time. A live slot is the logical allocation (`allocation_size()` reports the slot), so pool
+  over- and underruns are declared at the slot boundary into a free neighbour. An overrun into a live neighbour is a
+  raw-pointer limit (DIAG.3e). A double free still reaches the structural walker rather than an in-allocator report.
+- **Arenas.** Linear, stack and growable linear arenas unpoison exactly each slice; alignment padding, the unhanded
+  tail and everything after a reset or rewind stay poisoned. Every allocator returns exactly its own range unpoisoned
+  to its parent or caller, never more.
+- **Granularity.** Detection is byte-exact for 8-byte aligned slices. A partly addressable granule is reported after
+  the next granule's shadow: `use-after-poison` before poisoned padding, `unknown-crash` before a live neighbour.
+  The negative control requires `use-after-poison`, so its modes keep a poisoned granule after the faulting byte.
+
 <a id="diag-3c"></a>
 ## DIAG.3c — provenance, guards and sampled field diagnostics
 

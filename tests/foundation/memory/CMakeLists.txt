@@ -18,6 +18,12 @@ add_dependencies(crd-memory-tests crd-diag-alloc-fatal-specimen)
 target_compile_definitions(crd-memory-tests PRIVATE
     CRD_DIAG_ALLOC_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-alloc-fatal-specimen>")
 
+# DIAG.3b allocator-poison control: each mode reads a logical allocation the allocator has poisoned. Under ASan the
+# test demands the use-after-poison exit code; elsewhere InstrumentAbsent.
+add_dependencies(crd-memory-tests crd-diag-allocator-poison-specimen)
+target_compile_definitions(crd-memory-tests PRIVATE
+    CRD_DIAG_ALLOCATOR_POISON_SPECIMEN="$<TARGET_FILE:crd-diag-allocator-poison-specimen>")
+
 crd_enable_default_pch(crd-memory-tests)
 
 crd_discover_tests(crd-memory-tests)

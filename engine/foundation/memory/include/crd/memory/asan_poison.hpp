@@ -9,6 +9,14 @@
 // nothing unless the build defines AddressSanitizer, so production layout/performance is
 // unchanged (diagnostic metadata as side storage, not fatter allocations).
 //
+// Shadow granularity: ASan tracks addressability per 8-byte granule, recording only how many leading bytes of a
+// granule are addressable. Poisoning therefore rounds inward (a granule's live prefix stays addressable) and
+// unpoisoning rounds outward (a granule's whole prefix becomes addressable). Neither can raise a false report, but a
+// boundary is byte-exact only when the live range starts on a granule (8-byte aligned) and the poisoned bytes run to
+// the end of their granule. Allocators that hand out 8-aligned slices get exact one-byte over/underrun detection.
+// ASan names a fault in a partially addressable granule after the next granule's shadow: a slice followed by poisoned
+// padding reports use-after-poison, one packed against a live neighbour still faults but reports unknown-crash.
+//
 // Do NOT use these on an offset/GPU allocator whose "address" is an unmapped device range --
 // that is a logical-range check, not CPU memory. These are CPU-memory only.
 //
@@ -17,14 +25,14 @@
 #include <crd/core/types.hpp>
 
 #if defined(__SANITIZE_ADDRESS__)
-#define CRD_MEM_ASAN 1
+#define CRD_MEM_ASAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #elif defined(__has_feature)
 #if __has_feature(address_sanitizer)
-#define CRD_MEM_ASAN 1
+#define CRD_MEM_ASAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 #endif
 #ifndef CRD_MEM_ASAN
-#define CRD_MEM_ASAN 0
+#define CRD_MEM_ASAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
 #if CRD_MEM_ASAN
@@ -59,6 +67,18 @@ inline void asan_unpoison(const void* p, usize n) noexcept
 #else
     (void)p;
     (void)n;
+#endif
+}
+
+// True when the byte at `p` is poisoned. Always false without ASan, so a caller can assert the poisoned state only
+// where the instrument exists. Querying the shadow is not an access: it never reports.
+[[nodiscard]] inline bool asan_is_poisoned(const void* p) noexcept
+{
+#if CRD_MEM_ASAN
+    return __asan_address_is_poisoned(p) != 0;
+#else
+    (void)p;
+    return false;
 #endif
 }
 

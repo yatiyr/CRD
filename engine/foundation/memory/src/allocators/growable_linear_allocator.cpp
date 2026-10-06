@@ -2,6 +2,7 @@
 #include <crd/log/log.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/checked_math.hpp>
 #include <crd/memory/log_channel.hpp>
 
@@ -10,6 +11,10 @@
 
 namespace crd::memory
 {
+// DIAG.3b AddressSanitizer model, as in LinearAllocator: each chunk's header stays addressable, everything past it is
+// poisoned until a logical allocation unpoisons exactly its bytes (alignment padding stays poisoned), reset()
+// poisons every chunk again so a pointer from before the reset faults, and a chunk is unpoisoned before it goes back
+// to the parent. No-ops without ASan.
 GrowableLinearAllocator::GrowableLinearAllocator(usize chunk_bytes, IAllocator* parent, const char* name)
     : m_parent(parent != nullptr ? parent : default_allocator()), m_chunk_bytes(chunk_bytes)
 {
@@ -25,6 +30,7 @@ GrowableLinearAllocator::~GrowableLinearAllocator()
     while (c != nullptr)
     {
         Chunk* const next = c->next;
+        asan_unpoison(c->base, c->cap); // exactly the chunk, never the parent's surrounding range
         m_parent->deallocate(c->base);
         c = next;
     }
@@ -55,6 +61,7 @@ bool GrowableLinearAllocator::grow(usize need)
     c->cap         = cap;
     c->off         = m_header_size;
     c->next        = nullptr;
+    asan_poison(static_cast<u8*>(base) + m_header_size, cap - m_header_size); // nothing handed out yet
     if (m_last != nullptr)
     {
         m_last->next = c;
@@ -88,7 +95,9 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
             {
                 c->off = new_off;
                 m_stats.on_allocate(size);
-                return cbase + (new_off - size); // pointer arithmetic — no int-to-ptr cast
+                u8* const result = cbase + (new_off - size); // pointer arithmetic — no int-to-ptr cast
+                asan_unpoison(result, size); // this logical allocation is now live (padding stays poisoned)
+                return result;
             }
             // current chunk is full — reuse the next existing chunk (rewound by a prior reset()), else grow.
             if (c->next != nullptr)
@@ -145,6 +154,7 @@ void GrowableLinearAllocator::reset() noexcept
     {
         freed += c->off - m_header_size;
         c->off = m_header_size;
+        asan_poison(static_cast<u8*>(c->base) + m_header_size, c->cap - m_header_size); // use-after-reset faults
     }
     if (freed > 0U)
     {
