@@ -251,7 +251,9 @@ jobs:
 
       - name: Cold acquisition (every pinned package acquired)
         if: contains(env.CRD_COLD_PRESETS, format(' {0} ', matrix.preset))
-        run: python scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
+        run: >-
+          python scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
+          --fetch-unselected "${{ runner.temp }}/cold-unselected"
 
       # MSVC precompiled headers are non-cacheable (/Fp), so the cached lane compiles every unit standalone; the
       # module embeds debug information (/Z7) for the launcher. Measured: docs/bench (build performance board).
@@ -653,7 +655,9 @@ jobs:
 
       - name: Cold acquisition (every pinned package acquired)
         if: contains(env.CRD_COLD_PRESETS, format(' {0} ', matrix.preset))
-        run: python3 scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
+        run: >-
+          python3 scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
+          --fetch-unselected "${{ runner.temp }}/cold-unselected"
 
       # GCC's precompiled header is consumed through -include and stays cacheable, so only the launcher changes.
       - name: Configure with the compiler cache

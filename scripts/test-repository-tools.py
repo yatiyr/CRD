@@ -665,6 +665,41 @@ class PinnedInputs(unittest.TestCase):
             ok, lines = cold_acquisition.check_after(cache, build, pins)
             self.assertFalse(ok)  # an added package outside the registry fails
 
+    def test_cold_acquisition_fetches_and_verifies_every_unselected_pin(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            archive = root / 'bench-1.0.tar.gz'
+            archive.write_bytes(b'pinned bytes')
+            digest = hashlib.sha256(b'pinned bytes').hexdigest()
+            cache, build, fetched = root / 'cpm', root / 'build', root / 'fetched'
+            (cache / 'used' / 'origin').mkdir(parents=True)
+            (cache / 'used' / 'origin' / 'CMakeLists.txt').write_text('x', encoding='utf-8')
+            build.mkdir()
+            (build / 'CMakeCache.txt').write_text('CPM_PACKAGES:INTERNAL=used\n', encoding='utf-8')
+            registry = {'packages': {'used': {'url': 'unused', 'sha256': '0' * 64},
+                                     'bench': {'url': archive.as_uri(), 'file': 'bench-1.0.tar.gz',
+                                               'sha256': digest, 'gated': 'CRD_BUILD_BENCH'}}}
+            pins_file = root / 'pins.json'
+            pins_file.write_text(json.dumps(registry), encoding='utf-8')
+
+            ok, lines = cold_acquisition.check_after(cache, build, pins_file, fetched)
+            self.assertTrue(ok, lines)
+            self.assertTrue((fetched / 'bench-1.0.tar.gz').is_file())
+            self.assertFalse((fetched / 'bench-1.0.tar.gz.partial').exists())
+            self.assertTrue(any(line.startswith('bench: archive downloaded cold and verified') and
+                                'CRD_BUILD_BENCH' in line for line in lines), lines)
+
+            registry['packages']['bench']['sha256'] = 'f' * 64  # a drifted archive fails and leaves no file
+            pins_file.write_text(json.dumps(registry), encoding='utf-8')
+            ok, lines = cold_acquisition.check_after(cache, build, pins_file, fetched)
+            self.assertFalse(ok, lines)
+            self.assertFalse((fetched / 'bench-1.0.tar.gz').exists())
+            self.assertFalse((fetched / 'bench-1.0.tar.gz.partial').exists())
+            self.assertTrue(any(line.startswith('bench: archive NOT acquired') for line in lines), lines)
+
+            ok, lines = cold_acquisition.check_after(cache, build, pins_file)  # without the option: named only
+            self.assertTrue(ok, lines)
+
     @classmethod
     def setUpClass(cls):
         cls.pins = pins_registry.load()

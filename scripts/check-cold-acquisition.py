@@ -8,13 +8,20 @@ SHA-256 (`URL_HASH` in crd_add_pinned_package) before extracting it, and a misma
 `--before CACHE` fails unless the CPM source cache is absent or empty, so a restored cache can never read as a cold
 acquisition. `--after CACHE --build DIR` reads the packages that configure added (`CPM_PACKAGES` in CMakeCache.txt). It
 fails unless every one is pinned in cmake/pins.json and now present in the cache, and it names the pins this
-configuration did not select. The verdict is appended to $GITHUB_STEP_SUMMARY when that is set.
+configuration did not select. With `--fetch-unselected DIR` it also downloads each unselected pin's archive into DIR
+through the verifying helper (scripts/pins.py: a .partial file, SHA-256 checked before the final name exists) and fails
+on any mismatch or download error. Those pins are gated options no hosted configuration builds (the Eigen/OpenBLAS
+reference bench); this proves their pinned archives are still acquirable and intact without building them. The verdict
+is appended to $GITHUB_STEP_SUMMARY when that is set.
 """
 from pathlib import Path
 import argparse
 import json
 import os
 import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import pins as pin_helpers  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PINS = ROOT / 'cmake/pins.json'
@@ -37,9 +44,30 @@ def added_packages(build):
     return None
 
 
-def check_after(cache, build, pins):
+def fetch_unselected(names, packages, directory, download=None):
+    """Download and verify each named pin's archive into `directory`; return (ok, lines). Never reuses a copy."""
+    download = download or pin_helpers.download
+    ok = True
+    lines = []
+    for name in names:
+        pin = packages[name]
+        target = Path(directory) / (pin.get('file') or pin['url'].rsplit('/', 1)[-1])
+        target.unlink(missing_ok=True)  # cold: an earlier copy proves nothing
+        try:
+            download(pin['url'], target, pin['sha256'], name)
+        except Exception as error:  # noqa: BLE001 -- any failure to acquire the pinned bytes is the verdict
+            ok = False
+            lines.append(f'{name}: archive NOT acquired: {error}')
+            continue
+        gate = pin.get('gated', 'an option')
+        lines.append(f'{name}: archive downloaded cold and verified against its pinned SHA-256 (not built: {gate})')
+    return ok, lines
+
+
+def check_after(cache, build, pins, fetch_dir=None, download=None):
     """Return (ok, lines) for the post-configure verdict."""
-    pinned = set(json.loads(Path(pins).read_text(encoding='utf-8'))['packages'])
+    packages = json.loads(Path(pins).read_text(encoding='utf-8'))['packages']
+    pinned = set(packages)
     added = added_packages(build)
     if not added:
         return False, [f'no CPM_PACKAGES recorded in {build / "CMakeCache.txt"}; the configure acquired nothing']
@@ -59,6 +87,10 @@ def check_after(cache, build, pins):
     unselected = sorted(pinned - set(added))
     if unselected:
         lines.append('not selected by this configuration: ' + ', '.join(unselected))
+        if fetch_dir is not None:
+            fetched, fetch_lines = fetch_unselected(unselected, packages, fetch_dir, download)
+            ok = ok and fetched
+            lines.extend(fetch_lines)
     return ok, lines
 
 
@@ -78,6 +110,8 @@ def main(argv=None):
     mode.add_argument('--before', type=Path, metavar='CACHE', help='the CPM source cache must be absent or empty')
     mode.add_argument('--after', type=Path, metavar='CACHE', help='the CPM source cache after the configure')
     parser.add_argument('--build', type=Path, help='the configured build directory (with --after)')
+    parser.add_argument('--fetch-unselected', type=Path, metavar='DIR',
+                        help='with --after: download and verify the archive of every unselected pin into DIR')
     parser.add_argument('--pins', type=Path, default=DEFAULT_PINS)
     args = parser.parse_args(argv)
     if args.before is not None:
@@ -86,7 +120,7 @@ def main(argv=None):
         return 0 if ok else 1
     if args.build is None:
         parser.error('--after needs --build')
-    ok, lines = check_after(args.after, args.build, args.pins)
+    ok, lines = check_after(args.after, args.build, args.pins, args.fetch_unselected)
     report('Cold acquisition of the pinned packages', ok, lines)
     return 0 if ok else 1
 

@@ -16,7 +16,7 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 
 | Section | Entries | Fields |
 |---|---|---|
-| `packages` | the ten CPM sources (Catch2, glfw, tomlplusplus, zstd, stb, cgltf, MikkTSpace, imgui, and the gated Eigen and OpenBLAS) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
+| `packages` | the nine CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, and the gated Eigen and OpenBLAS) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
 | `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), LLVM | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
 | `actions` | the seven workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
@@ -73,7 +73,10 @@ On those lanes:
   is empty;
 - the configure downloads every package and verifies each `URL_HASH`;
 - `--after` reads the configure's own `CPM_PACKAGES` and fails unless every one is pinned and now in the cache. It
-  names the pins the configuration did not select (the opt-in `eigen` and `OpenBLAS` bench).
+  names the pins the configuration did not select (the opt-in `eigen` and `OpenBLAS` bench). With
+  `--fetch-unselected DIR` (both cold lanes pass it) it then downloads each of those archives through `pins.download`
+  and fails on a SHA-256 mismatch or a download error. No hosted preset builds them, but their pinned bytes are proven
+  acquirable on every complete run.
 
 The Windows cold lane also installs the Vulkan SDK and the pinned WARP through their verifying helpers. The Linux lanes
 download the Vulkan headers and the validation layer fresh on every run. A real cold configure on the WSL reference

@@ -113,3 +113,28 @@ Either one also closes DEV.7 to DEV.10, whose own hosted clauses are already sho
   - **Checked:** both scripts pass, as do all 8 win-debug guard ctests.
   - **Cause of the miss:** the local checks ran the memory exe, not ctest's guards. That step is now part of every
     handover.
+
+**v20 finished, and v21 ran twice.**
+- v20 (change tier) failed only the `crd-no-malloc-allocator` guard on every lane (fixed in the previous batch). Its
+  other failures on `win-asan` (four DX12 ray-tracing gates) and `linux-gcc-asan` (the mikktspace oracle) are the
+  lanes' registered TP-1 and TP-5 entries.
+- v21 `ba70bacf` (complete tier) failed the same guard everywhere, because it predates the allowlist fix.
+- **v21 `3ae81c59`, run [37395083192](https://github.com/yatiyr/CRD/actions/runs/37395083192) (complete tier):**
+  23 of 24 test jobs green. The one failure is `linux-clang-tsan`, a fiber shadow-stack underflow in the TSan switch
+  annotations. It is fixed and recorded in the
+  [TSan inventory](2026-10-05-clang-werror-and-tsan-inventory.md#second-complete-run-2026-10-06).
+
+Rows, against this run:
+- **REPO.DEV.6 stays Needs CI.**
+  - Shown: both cold lanes started empty, acquired and verified the seven selected packages and passed their lanes.
+    The Windows cold lane also installed the Vulkan SDK and WARP cold through their verifying helpers.
+  - Not shown: the two gated bench pins (Eigen, OpenBLAS), which the checker named but no hosted preset acquires.
+    Both cold lanes now also download and verify those archives (`--fetch-unselected`). Both verify on the reference
+    host, so the next complete-tier run closes the row.
+  - Corrected: the row's package count, from ten to nine.
+- **REPO.DEV.7 to DEV.10** were green on their lanes again and still wait only on DEV.6.
+- **REPO.DEV.11:** the selector comparison still needs a complete-tier run of a change-tier revision. Both v21 runs
+  resolved to the complete tier because they changed build-system paths. v20 is a change-tier revision but ran only
+  the change tier.
+- **DIAG.1b** stays Needs CI: the lane did not qualify on this run (the crash above). The DIAG rows after REPO.DEV
+  cannot be Done before it.

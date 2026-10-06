@@ -196,6 +196,29 @@ are now fixed, so the lane's qualification falls to the next complete-tier run.
 3. **Strict tidy in the touched files, findings that predated this work:** an `else` after `return` in `pop()`, and
    `BeginToken::_pad` renamed to `pad` (no users).
 
+## Second complete run (2026-10-06)
+
+Run [37395083192](https://github.com/yatiyr/CRD/actions/runs/37395083192) at `3ae81c59`: 23 of 24 test jobs green, and
+`linux-clang-tsan` ran 6,843 tests with one failure. `counter_wait: two sequential waits on renewed counter` died with a
+bare SIGSEGV and no sanitizer report. Both earlier fixes held.
+
+- **Reproduced:** 7 of 300 runs of that test crashed on the WSL reference host.
+- **Diagnosis (gdb):** the fault is in `__tsan_func_entry` on the fiber's first instruction (`wait_job_entry_12`,
+  entered from `crd_fiber_start`). The fiber's TSan state had `shadow_stack_pos` 8 bytes below its shadow-stack
+  mapping, so its shadow call stack had been popped below empty before the fiber ever ran.
+- **Cause, in the engine:** `sanitizer_switch_begin` (`engine/foundation/jobs/src/sanitizer_fibers.hpp`) was an
+  ordinary out-of-line function, so TSan instruments its entry and exit. It enters on the switching context, calls
+  `__tsan_switch_to_fiber`, and then pops its exit frame from the target fiber's shadow stack. For a fiber that has
+  never run, that pop underflows by one slot, and the fiber's first entry writes 8 bytes below the mapping. Usually
+  that silently overwrites a neighbouring mapping. It crashes only when the page below is unmapped. The pool's own
+  dispatch (`run_job_in_fiber`) had the same out-of-bounds write on every fiber's first dispatch. Later switches
+  balance out, because each push lands on the context that the matching pop later sees.
+- **Fix:** `sanitizer_switch_begin`, `sanitizer_switch_end` and `sanitizer_fiber_entered` are forced inline
+  (`CRD_FORCEINLINE`). The TSan context switch then happens inside the caller's own frame, immediately before
+  `fiber_switch()`, as the fiber API requires, and no instrumented return crosses the switch.
+- **Checked:** 0 of 1,000 runs crash after the fix (before: 7 of 300), and the whole jobs suite passes under TSan (173
+  test cases). On Windows the jobs suite passes on win-debug, win-shipping, win-clang-cl-shipping and win-asan.
+
 ## Next
 
 The next complete-tier hosted run qualifies the lane.

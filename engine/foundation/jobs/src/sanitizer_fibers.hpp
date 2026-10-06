@@ -17,6 +17,16 @@
 // acquire/release, which the switch composes with, so a race TSan reports through this model is a real one.
 //
 // Nothing here changes an uninstrumented build: every helper is empty unless the compiler defines the sanitizer.
+//
+// The switch helpers are forced inline. TSan pushes a shadow-stack frame on every instrumented function entry and
+// pops one on exit, on whichever TSan context is current at that moment. An out-of-line sanitizer_switch_begin()
+// enters on the switching context, calls __tsan_switch_to_fiber, and then pops its exit frame from the TARGET
+// fiber's shadow stack. On a fiber that has never run, that stack is empty: the pop underflows it by one slot, and
+// the fiber's first function entry writes 8 bytes below the shadow stack's mapping. That corrupts a neighbouring
+// mapping, or segfaults in __tsan_func_entry when the page below is unmapped (about 2% of runs; hosted
+// linux-clang-tsan run 37395083192, reproduced 7/300 on the WSL reference host). Inlined into the caller, the switch
+// happens inside the caller's own frame immediately before fiber_switch(), which is what the fiber API requires.
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
 // The audit switch: -DCRD_JOBS_SANITIZER_FIBERS=0 reproduces the unannotated model under a sanitizer so the
@@ -66,8 +76,9 @@ struct SanitizerSwitch
     crd::usize  return_size   = 0U;
 };
 
-// Immediately before fiber_switch(): the target stack's bounds and TSan context.
-inline void sanitizer_switch_begin(SanitizerSwitch& state, const void* target_bottom, crd::usize target_size,
+// Immediately before fiber_switch(), in the same frame (forced inline; see above): the target stack's bounds and
+// TSan context.
+CRD_FORCEINLINE void sanitizer_switch_begin(SanitizerSwitch& state, const void* target_bottom, crd::usize target_size,
                                    void* target_tsan_fiber) noexcept
 {
 #if CRD_JOBS_ASAN
@@ -86,7 +97,7 @@ inline void sanitizer_switch_begin(SanitizerSwitch& state, const void* target_bo
 
 // Immediately after fiber_switch() returned, back on the stack that called sanitizer_switch_begin(): restores the
 // fake stack and records the bounds of the stack that switched here (the one this stack will return to next).
-inline void sanitizer_switch_end(SanitizerSwitch& state) noexcept
+CRD_FORCEINLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 {
 #if CRD_JOBS_ASAN
     __sanitizer_finish_switch_fiber(state.fake_stack, &state.return_bottom, &state.return_size);
@@ -96,7 +107,7 @@ inline void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 }
 
 // The first instruction of a fresh fiber stack: no fake stack to restore, but the dispatching stack's bounds.
-inline void sanitizer_fiber_entered(SanitizerSwitch& state) noexcept
+CRD_FORCEINLINE void sanitizer_fiber_entered(SanitizerSwitch& state) noexcept
 {
 #if CRD_JOBS_ASAN
     __sanitizer_finish_switch_fiber(nullptr, &state.return_bottom, &state.return_size);
