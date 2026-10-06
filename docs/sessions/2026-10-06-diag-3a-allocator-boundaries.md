@@ -110,7 +110,76 @@ With the fixes restored and the lane rebuilt, the memory suite passes 146 test c
 WSL clang TSan, gcc debug and gcc ASan. win-shipping and win-clang-cl-shipping, where asserts are compiled out, pass
 145. A full win-debug `all` build is clean, and strict tidy and `clang-format --dry-run --Werror` are clean.
 
+## Part 4: wrong-allocator free, parent/child destruction, external buffers and partial construction
+
+Seven more cases at the end of `test_allocator_boundaries.cpp`, plus seven modes in `crd-diag-alloc-fatal-specimen`.
+
+**Wrong-allocator free.** Two instances of every `IAllocator` give every ordered pair, including two allocators of the
+same type. Each receiver frees a block from each source. The receiver must not write into the block, must keep its
+own blocks, must never hand the block out again, and its structural walkers must stay clean. The source then frees the
+block normally. `deallocate(nullptr)` is a no-op with no assert on all 12. What each receiver does:
+- pool, growable pool, TLSF, growable TLSF, virtual memory, the thread-safe wrapper and the streaming category view
+  refuse the pointer in every build, after one assert where asserts are compiled in;
+- linear, stack and growable linear ignore it, because their `deallocate` is a no-op for every pointer;
+- the diagnostic decorator reports an `UnknownPointer` violation;
+- `MallocAllocator` is left out: `owns()` is true for every pointer, so it cannot tell, and the C runtime would get the
+  foreign block. Wrap it in the diagnostic decorator to diagnose such frees.
+
+Defects found and fixed:
+- `PoolAllocator` and `GrowablePoolAllocator` asserted `owns(p)` and then linked the pointer into the free list. In a
+  release build, the next `allocate` returned the other allocator's memory. Both now refuse. The growable pool's
+  `owns()` scanned every page and accepted interior pointers. Its page table is now kept sorted, so `owns()` is a
+  binary search, and it checks the slot boundary as the fixed pool does. Its `slot stride * slots_per_page` is now
+  checked.
+- `TlsfAllocator::deallocate` asserted and then read a header in front of the foreign pointer and coalesced it. It now
+  refuses anything that cannot be a payload (outside the first payload and the end sentinel, or not 16-byte aligned)
+  and an immediate double free (the header is already free). An interior pointer that happens to land on a valid
+  header, and a stale free after the block was reused, are still not detectable here. They need the decorator or the
+  generations of DIAG.3e.
+
+**Parent/child destruction.** Every child is built on a diagnostic decorator over a TLSF heap. After the child is
+destroyed, the decorator must hold no live block, must have seen no unknown or double free, and must find no
+redzone damage, and the heap's walker must be clean. The children: linear, stack, pool, TLSF, ring, offset (two node
+arrays), growable linear across six chunks plus an oversized one, growable pool across six pages (the page table grows
+from 4 to 8 entries), growable TLSF across several chunks, a TLSF, linear and stack chain torn down innermost first,
+a diagnostic decorator whose metadata comes from the parent, and a growable pool that is move-constructed and then
+move-assigned over a pool with its own page. No defect was found. Mutations show the case bites: a ring that does not
+free its buffer leaves one live block, and a move that keeps the source's parent frees the pages twice.
+
+**External buffers.** Linear, stack, pool and TLSF arenas over a caller's buffer with 64 guard bytes on each side are
+filled to exhaustion. Every block lies inside the buffer, the guards are untouched, and after the arena is destroyed
+the buffer is still its owner's single live block and can be written in full. Under AddressSanitizer that write also
+proves that linear and stack unpoisoned what they had poisoned. No defect was found.
+
+**Partial construction.** Two kinds:
+- An arena whose parent refuses its backing memory. An exhausted arena returns nullptr from `allocate`, and the linear,
+  stack, pool, ring and offset constructors then built themselves on null: they handed out offsets from address 0, or
+  wrote the free list through null. TLSF asserted and then did the same in release. Each owning constructor now calls
+  `CRD_FATAL("<arena>: parent refused ...")`, the out-of-memory policy of the interface, in every build. The specimen
+  proves all six in a bounded child, including the offset allocator whose node array is granted and whose free-node
+  array is refused. `GrowablePoolAllocator` asked its parent with `allocate`, so a refusing parent left it writing
+  through null. It now uses `try_allocate`: `try_allocate` returns nullptr and the pool stays usable (a freed slot is
+  reused, and it grows again once the parent grants), and `allocate` reaches its own out-of-memory fatal (the seventh
+  specimen mode).
+- Objects constructed into allocator memory. `construct` placed the object at nullptr when the allocator refused, and
+  `allocate_array` computed `sizeof(T) * count` unchecked, so a huge count allocated too little. Both now return
+  nullptr. A constructor that throws now returns the storage, and in `construct_array` the objects already built are
+  destroyed in reverse order first. The `try`/`catch` is compiled only where exceptions are enabled.
+
+Teeth: with the engine sources put back to their pre-batch versions, the pool adopts a malloc block (the block's bytes
+change, the walker fails and the next `allocate` returns it); the TLSF double free crashes; the growable pool trips its
+null-page assert; `construct` on a refused allocation crashes; and the specimen's linear and stack modes exit 0 (the
+arena was built on null and returned) while the pool mode dies with an access violation. A second mutation run took out
+only the growable pool's refusal: it then adopted the foreign block too. After restoring and rebuilding win-debug, the
+memory suite passes again.
+
+Evidence: the memory suite passes 153 test cases on win-debug and win-asan, and on WSL clang TSan, gcc debug and gcc
+ASan. win-shipping and win-clang-cl-shipping pass 152, without the debug-only case. A full win-debug `all` build is
+clean, because `construct.hpp` is widely included. The consumers' suites also pass on win-debug: scene (the archetype
+chunks sit on the growable pool), stress, CEIR, hesap-opt and scene-render. Strict tidy is clean on every changed source. `clang-format
+--dry-run --Werror` is clean on the new code: the touched files report only the violations they already had.
+
 ## Still open in DIAG.3a
 
-- Wrong-allocator free across the `IAllocator` family, parent/child arena destruction, external buffers and partial
-  construction.
+- Nothing local. The row waits for a hosted run that shows the memory suite green on every lane, including the
+  complete tier's `linux-clang-tsan`.

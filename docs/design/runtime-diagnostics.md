@@ -163,6 +163,20 @@ Acceptance: checked size/stride/add/multiply/alignment/page arithmetic, failure 
 wrong-allocator/free ownership, null and near-address-width boundaries. Cover parent/child arena destruction, external
 buffers and partial construction. Preserve production layout/performance where diagnostic metadata can be side storage.
 
+Settled policies (2026-10-06, [session](../sessions/2026-10-06-diag-3a-allocator-boundaries.md)):
+- **Wrong-allocator free.** Pool, growable pool, TLSF, growable TLSF and virtual memory, and the wrappers that route to
+  them, refuse in every build a pointer they did not hand out, after an assert where asserts are compiled in. Arenas
+  (linear, stack, growable linear) ignore every free. The diagnostic decorator reports `UnknownPointer`.
+  `MallocAllocator` cannot tell, because `owns()` is true for every pointer; wrap it in the decorator to diagnose.
+  TLSF also refuses a misaligned pointer and an immediate double free. Interior pointers that land on a valid header,
+  and stale frees after reuse, need the decorator or DIAG.3e generations.
+- **Partial construction.** An owning arena whose parent refuses its backing memory is out of memory: `CRD_FATAL`
+  naming the arena, in every build. A growable pool whose parent refuses a page returns nullptr from `try_allocate`
+  and stays usable; its `allocate` is fatal. `construct`/`construct_array` return nullptr for a refused allocation or
+  an overflowing count, and undo a throwing constructor (built objects destroyed in reverse, storage returned).
+- **Parent/child and external buffers.** A child is destroyed before its parent and returns exactly the blocks it took.
+  An arena never frees an external buffer, stays inside it, and returns it unpoisoned.
+
 <a id="diag-3b"></a>
 ## DIAG.3b — allocator-aware sanitizer boundaries
 

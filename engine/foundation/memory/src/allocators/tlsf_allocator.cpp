@@ -172,8 +172,12 @@ TlsfAllocator::TlsfAllocator(usize capacity, IAllocator* parent, const char* nam
     CRD_ASSERT(capacity <= max_pool_size());
     // NOLINTNEXTLINE(readability-suspicious-call-argument) — (size, alignment) is correct.
     void* buffer = m_parent->allocate(capacity, kAlignSize);
-    // ...and a failed backing allocation used to be dereferenced blind by init_pool.
-    CRD_ASSERT(buffer != nullptr);
+    // ...and a failed backing allocation used to be dereferenced blind by init_pool. A parent that refuses (an
+    // exhausted arena) is out of memory for this heap: fatal in every build (DIAG.3a).
+    if (buffer == nullptr)
+    {
+        CRD_FATAL("TlsfAllocator: parent refused the backing buffer");
+    }
     init_pool(buffer, capacity);
 }
 
@@ -600,12 +604,26 @@ void TlsfAllocator::deallocate(void* p) noexcept
     {
         return;
     }
-    CRD_ASSERT(owns(p));
+    // DIAG.3a: refuse, in every build, a pointer that cannot be one of this heap's payloads (another allocator's
+    // block, or a misaligned interior pointer) and a block that is already free (an immediate double free). Reading
+    // a foreign header and coalescing it would corrupt this heap's free lists, the other allocator's memory, or both.
+    // Every payload is kAlignSize-aligned and lies between the first block's payload and the end sentinel.
+    const u8* const pb = static_cast<const u8*>(p);
+    const u8* const first_payload = static_cast<const u8*>(m_pool) + kBlockHeaderOverhead;
+    const u8* const end_sentinel = static_cast<const u8*>(m_pool) + m_pool_capacity - 2U * kBlockHeaderOverhead;
+    if (pb < first_payload || pb >= end_sentinel || (reinterpret_cast<usize>(pb) & (kAlignSize - 1U)) != 0U)
+    {
+        CRD_ASSERT_MSG(false, "TlsfAllocator: deallocate of a pointer this heap does not own");
+        return;
+    }
 
-    // v1: alignment is always <= kAlignSize, so user pointer is exactly
-    // block + kBlockHeaderOverhead.
+    // Every payload is exactly block + kBlockHeaderOverhead (an over-aligned request splits off a leading gap block).
     BlockHeader* block = block_from_payload(p);
-    CRD_ASSERT(!block_is_free(block));
+    if (block_is_free(block))
+    {
+        CRD_ASSERT_MSG(false, "TlsfAllocator: double free");
+        return;
+    }
 
     m_stats.on_deallocate(static_cast<u64>(block_size(block)));
 

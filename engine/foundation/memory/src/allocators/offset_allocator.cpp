@@ -94,6 +94,12 @@ OffsetAllocator::OffsetAllocator(u32 capacity, u32 max_allocations, IAllocator* 
 
     m_nodes      = static_cast<Node*>(m_alloc->allocate(sizeof(Node) * m_max_allocs, alignof(Node)));
     m_free_nodes = static_cast<u32*>(m_alloc->allocate(sizeof(u32) * m_max_allocs, alignof(u32)));
+    if (m_nodes == nullptr || m_free_nodes == nullptr)
+    {
+        // DIAG.3a: a parent that refuses either side array (an exhausted arena) must not leave reset() writing
+        // through null. This is out of memory for the allocator, as in the other arenas.
+        CRD_FATAL("OffsetAllocator: parent refused the node arrays");
+    }
     for (u32 i = 0; i < m_max_allocs; ++i)
     {
         m_nodes[i] = Node{};

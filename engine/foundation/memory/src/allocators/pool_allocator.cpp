@@ -25,6 +25,11 @@ PoolAllocator::PoolAllocator(usize slot_size, usize slot_count, usize slot_align
         CRD_FATAL("PoolAllocator: slot_size padded * slot_count overflows usize");
     }
     m_buffer = static_cast<u8*>(m_parent->allocate(total, slot_alignment));
+    if (m_buffer == nullptr)
+    {
+        // DIAG.3a: a parent that refuses (an exhausted arena) must not leave a pool that links slots through null.
+        CRD_FATAL("PoolAllocator: parent refused the backing buffer");
+    }
     build_free_list();
 }
 
@@ -104,7 +109,13 @@ void PoolAllocator::deallocate(void* p) noexcept
     {
         return;
     }
-    CRD_ASSERT(owns(p));
+    // DIAG.3a: a pointer this pool did not hand out (another allocator's block, or an interior pointer) is refused in
+    // every build. Linking it into the free list would let the next allocate return foreign memory.
+    if (!owns(p))
+    {
+        CRD_ASSERT_MSG(false, "PoolAllocator: deallocate of a pointer this pool does not own");
+        return;
+    }
 
     FreeNode* node = static_cast<FreeNode*>(p);
     node->next = m_free_head;

@@ -156,3 +156,10 @@ but the order rule allows Done only when every earlier row is Done, and DIAG.3a 
 left. They close as soon as those two are finished, which is the next work in order. The first unfinished row is now
 DIAG.3a.
 
+## CI read before the DIAG.3a part 4 batch (2026-10-06)
+
+`6ef7cb05` (the docs-only push closing the rows above) resolved to the preflight tier: run 37496382317 passed preflight
+and both repository checks, and skipped the build and test lanes. It is no new hosted evidence for any row, so nothing
+was flipped. DIAG.3a then finished its local work ([part 4](2026-10-06-diag-3a-allocator-boundaries.md)) and moved to
+Needs CI; a complete-tier run of its revision closes it. The first unfinished row is now DIAG.3b.
+

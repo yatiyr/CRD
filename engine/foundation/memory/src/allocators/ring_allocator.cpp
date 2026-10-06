@@ -25,6 +25,11 @@ RingAllocator::RingAllocator(usize capacity, IAllocator* parent, usize max_in_fl
     // Cache-line aligned so a wrap-to-offset-0 claim is well-aligned and the buffer
     // edges don't false-share with neighbours.
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kCachelineSize));
+    if (m_buffer == nullptr)
+    {
+        // DIAG.3a: a parent that refuses (an exhausted arena) must not leave a ring that claims offsets from null.
+        CRD_FATAL("RingAllocator: parent refused the backing buffer");
+    }
 
     for (usize i = 0; i < max_in_flight_epochs; ++i)
     {

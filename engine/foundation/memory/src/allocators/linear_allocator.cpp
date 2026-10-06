@@ -13,6 +13,11 @@ LinearAllocator::LinearAllocator(usize capacity, IAllocator* parent, const char*
     CRD_ASSERT(capacity > 0);
     m_name = name;
     m_buffer = static_cast<u8*>(m_parent->allocate(capacity, kDefaultAlignment));
+    if (m_buffer == nullptr)
+    {
+        // DIAG.3a: a parent that refuses (an exhausted arena) must not leave an arena that hands out offsets from null.
+        CRD_FATAL("LinearAllocator: parent refused the backing buffer");
+    }
     asan_poison(m_buffer, m_capacity); // nothing handed out yet
 }
 

@@ -1,6 +1,8 @@
 // DIAG.3a -- the same boundary contract across every IAllocator: a size or alignment that cannot be satisfied returns
 // nullptr from try_allocate (the non-fatal path) instead of wrapping into a small allocation, the allocator stays
-// usable afterwards, earlier allocations keep their bytes, and a foreign pointer is never owned.
+// usable afterwards, earlier allocations keep their bytes, and a foreign pointer is never owned. The ownership cases
+// at the end cover a block freed into the wrong allocator, child arenas torn down on their parent, arenas over
+// external buffers, and construction that fails part way.
 // Contract: docs/design/runtime-diagnostics.md#diag-3a.
 
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
@@ -17,6 +19,7 @@
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/allocators/virtual_memory_allocator.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 
 #include <crd/core/assert.hpp>
@@ -28,6 +31,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <exception>
+#include <utility>
 
 namespace
 {
@@ -461,4 +466,564 @@ TEST_CASE("allocator boundaries: RingAllocator refuses impossible claims and rec
     ring.retire(0U);
     CHECK(ring.in_use_bytes() == 0U);
     CHECK(ring.try_claim(1024U, 16U) != nullptr); // the space is reusable
+}
+
+// ---- DIAG.3a part 4: wrong-allocator free, parent/child destruction, external buffers, partial construction ----
+
+namespace
+{
+// How a receiver answers a free of a pointer it never handed out.
+enum class ForeignFree : crd::u8
+{
+    Ignored,   // an arena: deallocate is a no-op for every pointer, so a foreign one changes nothing
+    Refused,   // refused in every build, after one assert where asserts are compiled in
+    Reported,  // the diagnostic decorator: an UnknownPointer violation, no assert
+    Undetected // MallocAllocator: owns() is true for any pointer, so it cannot tell (use the decorator)
+};
+
+struct Member
+{
+    mem::IAllocator* allocator;
+    const char* name;
+    ForeignFree foreign;
+};
+
+void ignore_violation(const mem::Violation& /*v*/, void* /*user*/) {}
+
+constexpr crd::usize kFamilyMembers = 12U;
+
+mem::StreamingAllocator::Config family_streaming_config()
+{
+    mem::StreamingAllocator::Config cfg;
+    cfg.reserve_bytes = crd::usize{256} << 20;
+    cfg.resident_chunk_bytes = crd::usize{1} << 20;
+    cfg.staging_bytes = crd::usize{1} << 20;
+    return cfg;
+}
+
+mem::VirtualMemoryAllocator::Config family_vm_config()
+{
+    mem::VirtualMemoryAllocator::Config cfg;
+    cfg.reserve_bytes = crd::usize{64} << 20;
+    return cfg;
+}
+
+// One instance of every IAllocator. Two families give every ordered pair of distinct allocators, including two
+// allocators of the same type, which is the most likely wrong-allocator free in practice.
+struct Family
+{
+    mem::MallocAllocator malloc{"fam-malloc"};
+    mem::LinearAllocator linear{64U * 1024U, nullptr, "fam-linear"};
+    mem::StackAllocator stack{64U * 1024U, nullptr, "fam-stack"};
+    mem::PoolAllocator pool{kBlock, 64U, 64U, nullptr, "fam-pool"};
+    mem::GrowableLinearAllocator glinear{64U * 1024U, nullptr, "fam-glinear"};
+    mem::GrowablePoolAllocator gpool{kBlock, 64U, 16U, nullptr, "fam-gpool"};
+    mem::TlsfAllocator tlsf{256U * 1024U, nullptr, "fam-tlsf"};
+    mem::GrowableTlsfAllocator gtlsf{256U * 1024U, nullptr, "fam-gtlsf"};
+    mem::VirtualMemoryAllocator vm{family_vm_config(), "fam-vm"};
+    mem::TlsfAllocator ts_inner{256U * 1024U, nullptr, "fam-ts-inner"};
+    mem::ThreadSafeAllocator ts{&ts_inner, "fam-ts"};
+    mem::StreamingAllocator streaming{family_streaming_config()};
+    mem::StreamingCategoryAllocator category{&streaming, 0U};
+    mem::TlsfAllocator diag_backing{256U * 1024U, nullptr, "fam-diag-backing"};
+    mem::DiagnosticAllocator diag{&diag_backing, mem::DiagnosticConfig{}};
+
+    Member members[kFamilyMembers] = {
+        {&malloc, "MallocAllocator", ForeignFree::Undetected},
+        {&linear, "LinearAllocator", ForeignFree::Ignored},
+        {&stack, "StackAllocator", ForeignFree::Ignored},
+        {&pool, "PoolAllocator", ForeignFree::Refused},
+        {&glinear, "GrowableLinearAllocator", ForeignFree::Ignored},
+        {&gpool, "GrowablePoolAllocator", ForeignFree::Refused},
+        {&tlsf, "TlsfAllocator", ForeignFree::Refused},
+        {&gtlsf, "GrowableTlsfAllocator", ForeignFree::Refused},
+        {&vm, "VirtualMemoryAllocator", ForeignFree::Refused},
+        {&ts, "ThreadSafeAllocator", ForeignFree::Refused},
+        {&category, "StreamingCategoryAllocator", ForeignFree::Refused},
+        {&diag, "DiagnosticAllocator", ForeignFree::Reported},
+    };
+
+    Family() { diag.set_violation_handler(&ignore_violation, nullptr); }
+
+    // The structural walkers of the heaps that have one.
+    [[nodiscard]] bool structures_valid() const
+    {
+        return pool.validate_structure() && tlsf.validate_structure() && ts_inner.validate_structure() &&
+               diag_backing.validate_structure();
+    }
+};
+} // namespace
+
+TEST_CASE("allocator ownership: a block freed into the wrong allocator is refused or ignored and never adopted",
+          "[memory][contract][diag]")
+{
+    Family sources;
+    Family receivers;
+    for (const Member& dst : receivers.members)
+    {
+        INFO("receiver: " << dst.name);
+        {
+            AssertCapture capture;
+            dst.allocator->deallocate(nullptr); // the null boundary: a no-op everywhere
+            CHECK(g_asserts_seen == 0);
+        }
+        if (dst.foreign == ForeignFree::Undetected)
+        {
+            continue; // MallocAllocator would hand the foreign block to the C runtime; it cannot tell
+        }
+        for (const Member& src : sources.members)
+        {
+            INFO("source: " << src.name);
+            void* const block = src.allocator->try_allocate(kBlock, 16U);
+            REQUIRE(block != nullptr);
+            fill(block, 0xC3U);
+            void* const own = dst.allocator->try_allocate(kBlock, 16U);
+            REQUIRE(own != nullptr);
+            fill(own, 0x3CU);
+            const crd::u64 violations_before = receivers.diag.violation_count();
+            {
+                AssertCapture capture;
+                dst.allocator->deallocate(block);
+                CHECK(g_asserts_seen == (dst.foreign == ForeignFree::Refused ? kAssertsPerRefusal : 0));
+            }
+            CHECK(receivers.diag.violation_count() ==
+                  violations_before + (dst.foreign == ForeignFree::Reported ? 1U : 0U));
+            CHECK(holds(block, 0xC3U)); // the receiver wrote nothing into the foreign block
+            CHECK(holds(own, 0x3CU));
+            CHECK(receivers.structures_valid());
+
+            void* next[4] = {};
+            for (void*& n : next)
+            {
+                n = dst.allocator->try_allocate(kBlock, 16U);
+                REQUIRE(n != nullptr);
+                CHECK(n != block); // the foreign block was never adopted into the receiver's free list
+            }
+            for (void* n : next)
+            {
+                dst.allocator->deallocate(n);
+            }
+            dst.allocator->deallocate(own);
+            src.allocator->deallocate(block); // and its own allocator still frees it normally
+        }
+    }
+    CHECK(sources.structures_valid());
+    CHECK(receivers.structures_valid());
+    CHECK(sources.diag.violation_count() == 0U);
+}
+
+TEST_CASE("allocator ownership: an interior pointer or an immediate double free is refused where the heap can tell",
+          "[memory][contract][diag]")
+{
+    SECTION("tlsf")
+    {
+        mem::TlsfAllocator a(256U * 1024U, nullptr, "own-tlsf");
+        void* const p = a.allocate(kBlock, 16U);
+        void* const q = a.allocate(kBlock, 16U);
+        fill(q, 0x71U);
+        a.deallocate(p);
+        {
+            AssertCapture capture;
+            a.deallocate(p);                               // an immediate double free
+            a.deallocate(static_cast<crd::u8*>(q) + 8);    // misaligned, so never a payload
+            a.deallocate(static_cast<crd::u8*>(q) - 4096); // below the first payload
+            CHECK(g_asserts_seen == 3 * kAssertsPerRefusal);
+        }
+        CHECK(a.validate_structure());
+        CHECK(holds(q, 0x71U));
+        a.deallocate(q);
+        CHECK(a.validate_structure());
+    }
+    SECTION("pool")
+    {
+        mem::PoolAllocator a(kBlock, 16U, 64U, nullptr, "own-pool");
+        void* const p = a.allocate(kBlock, 16U);
+        {
+            AssertCapture capture;
+            a.deallocate(static_cast<crd::u8*>(p) + 8); // inside a slot, not on its boundary
+            CHECK(g_asserts_seen == kAssertsPerRefusal);
+        }
+        CHECK(a.validate_structure());
+        CHECK(a.slots_in_use() == 1U);
+        a.deallocate(p);
+    }
+    SECTION("growable pool")
+    {
+        mem::GrowablePoolAllocator a(kBlock, 64U, 4U, nullptr, "own-gpool");
+        void* blocks[12] = {};
+        for (void*& b : blocks)
+        {
+            b = a.allocate(kBlock, 16U); // three pages, so the ownership search has more than one to choose from
+        }
+        {
+            AssertCapture capture;
+            a.deallocate(static_cast<crd::u8*>(blocks[5]) + 8);
+            CHECK(g_asserts_seen == kAssertsPerRefusal);
+        }
+        CHECK(a.slots_in_use() == 12U);
+        for (void* b : blocks)
+        {
+            CHECK(a.owns(b));
+            a.deallocate(b);
+        }
+        CHECK(a.slots_in_use() == 0U);
+    }
+}
+
+namespace
+{
+// The parent every child below is built on: the diagnostic decorator over a TLSF heap. After a child is destroyed it
+// must have returned every block it took (live_count() == 0), and freed nothing it did not take (no violation).
+struct Parent
+{
+    static mem::DiagnosticConfig config()
+    {
+        mem::DiagnosticConfig cfg;
+        cfg.capture_stacks = false;
+        return cfg;
+    }
+
+    mem::TlsfAllocator heap{crd::usize{8} << 20, nullptr, "child-parent-heap"};
+    mem::DiagnosticAllocator diag{&heap, config()};
+
+    Parent() { diag.set_violation_handler(&ignore_violation, nullptr); }
+
+    void check_clean() const
+    {
+        CHECK(diag.live_count() == 0U);
+        CHECK(diag.violation_count() == 0U);
+        CHECK(diag.check_all_redzones() == 0U); // no child wrote outside the blocks it was given
+        CHECK(heap.validate_structure());
+    }
+};
+} // namespace
+
+TEST_CASE("allocator ownership: destroying a child arena returns exactly what it took from its parent",
+          "[memory][contract][diag]")
+{
+    Parent parent;
+    SECTION("linear, stack, pool, tlsf, ring and offset")
+    {
+        {
+            mem::LinearAllocator linear(16U * 1024U, &parent.diag, "child-linear");
+            mem::StackAllocator stack(16U * 1024U, &parent.diag, "child-stack");
+            mem::PoolAllocator pool(kBlock, 32U, 16U, &parent.diag, "child-pool");
+            mem::TlsfAllocator tlsf(64U * 1024U, &parent.diag, "child-tlsf");
+            mem::RingAllocator ring(4096U, &parent.diag, 4U, "child-ring");
+            mem::OffsetAllocator offset(crd::u32{1} << 20, 64U, &parent.diag, "child-offset");
+            CHECK(parent.diag.live_count() == 7U); // one block each, two node arrays for the offset allocator
+            fill(linear.allocate(kBlock, 16U), 0x01U);
+            fill(stack.allocate(kBlock, 16U), 0x02U);
+            fill(pool.allocate(kBlock, 16U), 0x03U);
+            fill(tlsf.allocate(kBlock, 16U), 0x04U);
+            fill(ring.try_claim(kBlock, 16U), 0x05U);
+            CHECK(offset.allocate(4096U).valid());
+        }
+        parent.check_clean();
+    }
+    SECTION("growable arenas across several chunks and pages")
+    {
+        {
+            mem::GrowableLinearAllocator glinear(4096U, &parent.diag, "child-glinear");
+            for (int i = 0; i < 6; ++i)
+            {
+                fill(glinear.allocate(3000U, 16U), 0x11U); // a new chunk almost every time
+            }
+            void* const big = glinear.allocate(20000U, 16U); // an oversized request gets its own chunk
+            REQUIRE(big != nullptr);
+
+            mem::GrowablePoolAllocator gpool(kBlock, 64U, 4U, &parent.diag, "child-gpool");
+            void* slots[24] = {};
+            for (void*& s : slots)
+            {
+                s = gpool.allocate(kBlock, 16U); // six pages: the page table grows from 4 to 8 entries
+                fill(s, 0x22U);
+            }
+            CHECK(gpool.page_count() == 6U);
+            gpool.deallocate(slots[3]);
+
+            mem::GrowableTlsfAllocator gtlsf(64U * 1024U, &parent.diag, "child-gtlsf");
+            void* blocks[4] = {};
+            for (void*& b : blocks)
+            {
+                b = gtlsf.allocate(40U * 1024U, 16U); // one chunk each
+                REQUIRE(b != nullptr);
+            }
+            CHECK(gtlsf.num_chunks() >= 3U);
+            gtlsf.deallocate(blocks[1]);
+        }
+        parent.check_clean();
+    }
+    SECTION("a nested chain torn down innermost first")
+    {
+        {
+            mem::TlsfAllocator outer(256U * 1024U, &parent.diag, "chain-tlsf");
+            mem::LinearAllocator middle(64U * 1024U, &outer, "chain-linear");
+            mem::StackAllocator inner(4096U, &middle, "chain-stack");
+            fill(inner.allocate(kBlock, 16U), 0x33U);
+            CHECK(parent.diag.live_count() == 1U); // only the outer arena reaches the parent
+        }
+        parent.check_clean();
+    }
+    SECTION("a diagnostic decorator whose metadata comes from the parent")
+    {
+        {
+            mem::TlsfAllocator backing(64U * 1024U, &parent.diag, "child-diag-backing");
+            mem::DiagnosticAllocator child(&backing, Parent::config(), &parent.diag, "child-diag");
+            fill(child.allocate(kBlock, 16U), 0x44U);
+        }
+        parent.check_clean();
+    }
+    SECTION("a moved growable pool frees its pages once")
+    {
+        {
+            mem::GrowablePoolAllocator a(kBlock, 64U, 4U, &parent.diag, "move-gpool-a");
+            for (int i = 0; i < 10; ++i)
+            {
+                fill(a.allocate(kBlock, 16U), 0x55U);
+            }
+            mem::GrowablePoolAllocator b(std::move(a)); // a keeps no pages
+            mem::GrowablePoolAllocator c(kBlock, 64U, 4U, &parent.diag, "move-gpool-c");
+            fill(c.allocate(kBlock, 16U), 0x66U);
+            c = std::move(b); // c returns its own page and table, then takes b's
+            CHECK(c.slots_in_use() == 10U);
+        }
+        parent.check_clean();
+    }
+}
+
+TEST_CASE("allocator ownership: an arena over an external buffer stays inside it and never frees it",
+          "[memory][contract][diag]")
+{
+    constexpr crd::usize arena_bytes = 16U * 1024U;
+    constexpr crd::usize guard_bytes = 64U;
+    constexpr crd::u8 guard_byte = 0xEEU;
+    Parent parent;
+    auto* const raw = static_cast<crd::u8*>(parent.diag.allocate(arena_bytes + 2U * guard_bytes, 64U));
+    REQUIRE(raw != nullptr);
+    std::memset(raw, guard_byte, arena_bytes + 2U * guard_bytes);
+    crd::u8* const buffer = raw + guard_bytes;
+
+    // Fill the arena to exhaustion through `a`; every block must lie inside the buffer.
+    const auto use_up = [buffer](mem::IAllocator& a, crd::usize block)
+    {
+        crd::usize n = 0U;
+        for (void* p = a.try_allocate(block, 16U); p != nullptr; p = a.try_allocate(block, 16U))
+        {
+            const auto* const b = static_cast<const crd::u8*>(p);
+            REQUIRE(b >= buffer);
+            REQUIRE(b + block <= buffer + arena_bytes);
+            std::memset(p, 0x5AU, block);
+            ++n;
+        }
+        CHECK(n > 0U);
+    };
+
+    SECTION("linear")
+    {
+        mem::LinearAllocator a(buffer, arena_bytes, "ext-linear");
+        use_up(a, 256U);
+    }
+    SECTION("stack")
+    {
+        mem::StackAllocator a(buffer, arena_bytes, "ext-stack");
+        use_up(a, 256U);
+    }
+    SECTION("pool")
+    {
+        mem::PoolAllocator a(buffer, kBlock, arena_bytes / kBlock, 16U, "ext-pool");
+        use_up(a, kBlock);
+    }
+    SECTION("tlsf")
+    {
+        mem::TlsfAllocator a(buffer, arena_bytes, "ext-tlsf");
+        use_up(a, 256U);
+    }
+
+    // The arena is gone. The buffer is still its owner's block, untouched outside the arena, and fully usable again
+    // (under AddressSanitizer this also proves the arena unpoisoned what it had poisoned).
+    for (crd::usize i = 0; i < guard_bytes; ++i)
+    {
+        CHECK(raw[i] == guard_byte);
+        CHECK(raw[guard_bytes + arena_bytes + i] == guard_byte);
+    }
+    CHECK(parent.diag.live_count() == 1U);
+    std::memset(buffer, 0, arena_bytes);
+    parent.diag.deallocate(raw);
+    parent.check_clean();
+}
+
+namespace
+{
+int g_live_widgets = 0;
+int g_widget_countdown = -1; // the construction that throws; -1 never throws
+int g_last_destroyed_id = -1;
+int g_next_widget_id = 0;
+
+struct ConstructionFailed : std::exception
+{
+};
+
+// Counts live instances, and throws from its constructor when the countdown reaches zero.
+struct Widget
+{
+    Widget() : id(g_next_widget_id++)
+    {
+        if (g_widget_countdown == 0)
+        {
+            g_widget_countdown = -1;
+            throw ConstructionFailed{};
+        }
+        if (g_widget_countdown > 0)
+        {
+            --g_widget_countdown;
+        }
+        ++g_live_widgets;
+    }
+    Widget(const Widget&) = delete;
+    Widget& operator=(const Widget&) = delete;
+    ~Widget()
+    {
+        CHECK(id == g_last_destroyed_id - 1); // destroyed in reverse order of construction
+        g_last_destroyed_id = id;
+        --g_live_widgets;
+    }
+
+    int id;
+    int payload[4] = {};
+};
+
+void reset_widgets(int countdown, int count)
+{
+    g_live_widgets = 0;
+    g_widget_countdown = countdown;
+    g_next_widget_id = 0;
+    g_last_destroyed_id = count; // so the last-built widget (id count - 1) is the first one expected
+}
+} // namespace
+
+TEST_CASE("allocator ownership: partial construction leaks neither objects nor memory", "[memory][contract][diag]")
+{
+    Parent parent;
+    SECTION("a refused allocation constructs nothing")
+    {
+        mem::LinearAllocator tiny(64U, &parent.diag, "partial-tiny");
+        void* const used = tiny.allocate(64U, 16U);
+        REQUIRE(used != nullptr);
+        reset_widgets(-1, 0);
+        CHECK(mem::construct<Widget>(tiny) == nullptr); // never a placement new on nullptr
+        CHECK(mem::construct_array<Widget>(tiny, 4U) == nullptr);
+        CHECK(g_next_widget_id == 0);
+    }
+    SECTION("an array whose byte size overflows is refused before the allocator is asked")
+    {
+        CHECK(mem::allocate_array<crd::u64>(parent.diag, SIZE_MAX / 4U) == nullptr);
+        CHECK(mem::construct_array<Widget>(parent.diag, SIZE_MAX / 2U) == nullptr);
+        CHECK(parent.diag.sampling_report().total_count == 0U);
+    }
+    SECTION("a constructor that throws midway through an array")
+    {
+        reset_widgets(5, 5); // widgets 0..4 are built, the sixth throws
+        CHECK_THROWS_AS(mem::construct_array<Widget>(parent.diag, 8U), ConstructionFailed);
+        CHECK(g_live_widgets == 0);      // the five that were built were destroyed
+        CHECK(g_last_destroyed_id == 0); // in reverse order, down to the first
+    }
+    SECTION("a constructor that throws for a single object")
+    {
+        reset_widgets(0, 0);
+        CHECK_THROWS_AS(mem::construct<Widget>(parent.diag), ConstructionFailed);
+        CHECK(g_live_widgets == 0);
+    }
+    SECTION("a complete array is destroyed in reverse and returned")
+    {
+        reset_widgets(-1, 3);
+        Widget* const w = mem::construct_array<Widget>(parent.diag, 3U);
+        REQUIRE(w != nullptr);
+        CHECK(g_live_widgets == 3);
+        mem::destroy_array(parent.diag, w, 3U);
+        CHECK(g_live_widgets == 0);
+    }
+    parent.check_clean(); // every path returned its storage
+}
+
+namespace
+{
+// Grants `allowance` requests from the parent and then refuses, as an exhausted arena does.
+class RefusingParent final : public mem::IAllocator
+{
+public:
+    RefusingParent(mem::IAllocator& parent, int allowance) : m_parent(parent), m_allowance(allowance)
+    {
+        m_name = "refusing-parent";
+    }
+
+    void* allocate(crd::usize size, crd::usize alignment) override { return try_allocate(size, alignment); }
+    [[nodiscard]] void* try_allocate(crd::usize size, crd::usize alignment) override
+    {
+        if (m_allowance <= 0)
+        {
+            return nullptr;
+        }
+        --m_allowance;
+        return m_parent.try_allocate(size, alignment);
+    }
+    void deallocate(void* p) noexcept override { m_parent.deallocate(p); }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return m_parent.owns(p); }
+
+    void allow(int allowance) { m_allowance = allowance; }
+
+private:
+    mem::IAllocator& m_parent;
+    int m_allowance;
+};
+} // namespace
+
+TEST_CASE("allocator ownership: a growable pool whose parent refuses a page stays usable", "[memory][contract][diag]")
+{
+    Parent parent;
+    {
+        RefusingParent refusing(parent.diag, 2); // the page table and one page
+        mem::GrowablePoolAllocator a(kBlock, 64U, 4U, &refusing, "refused-gpool");
+        void* slots[4] = {};
+        for (void*& s : slots)
+        {
+            s = a.try_allocate(kBlock, 16U);
+            REQUIRE(s != nullptr);
+            fill(s, 0x77U);
+        }
+        CHECK(a.try_allocate(kBlock, 16U) == nullptr); // the second page is refused: nullptr, not a write to null
+        CHECK(a.page_count() == 1U);
+        CHECK(holds(slots[0], 0x77U));
+        a.deallocate(slots[2]);
+        CHECK(a.try_allocate(kBlock, 16U) == slots[2]); // a freed slot is reusable without a new page
+
+        refusing.allow(1);
+        void* const grown = a.try_allocate(kBlock, 16U); // the parent grants again: the pool grows
+        CHECK(grown != nullptr);
+        CHECK(a.page_count() == 2U);
+    }
+    parent.check_clean();
+}
+
+TEST_CASE("allocator ownership: an arena whose parent refuses its backing memory reaches its out-of-memory fatal",
+          "[memory][contract][diag][harness]")
+{
+    namespace cd = crd::diag;
+    namespace cont = crd::containers;
+    const char* const modes[] = {"linear-parent-refuses", "stack-parent-refuses", "pool-parent-refuses",
+                                 "tlsf-parent-refuses",   "ring-parent-refuses",  "offset-parent-refuses",
+                                 "gpool-parent-refuses"};
+    for (const char* mode : modes)
+    {
+        cd::Expectation e;
+        e.want = cd::Expectation::Want::CleanExit; // exit_code is the oracle here, not the verdict
+        cont::Array<cont::String> args;
+        args.push_back(cont::String{mode});
+        const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
+        INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
+                     << " reason=" << o.reason.c_str());
+        // 42 = the arena's own fatal fired; 97 = another assert fired first; 0 = the arena was built on null and
+        // returned; 96 = unknown mode. A crash on the null buffer is none of these.
+        CHECK(o.exit_code == 42);
+    }
 }

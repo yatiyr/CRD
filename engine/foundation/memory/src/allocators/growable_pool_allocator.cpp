@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
+#include <crd/memory/checked_math.hpp>
 
 #include <cstring>
 #include <utility>
@@ -34,7 +35,11 @@ GrowablePoolAllocator::GrowablePoolAllocator(usize slot_size, usize slot_alignme
     CRD_ASSERT(slot_alignment >= alignof(FreeNode));
     CRD_ASSERT(slots_per_page > 0);
 
-    m_page_bytes = aligned_slot_stride(slot_size, slot_alignment) * slots_per_page;
+    // Checked (DIAG.3a): a stride times a slot count that wraps would build pages too small for their slots.
+    if (!checked_mul(aligned_slot_stride(slot_size, slot_alignment), slots_per_page, &m_page_bytes))
+    {
+        CRD_FATAL("GrowablePoolAllocator: slot stride * slots_per_page overflows usize");
+    }
 }
 
 GrowablePoolAllocator::GrowablePoolAllocator(GrowablePoolAllocator&& other) noexcept
@@ -112,14 +117,19 @@ void GrowablePoolAllocator::free_all_pages() noexcept
 
 // ---- grow() — allocate a new page and link its slots into the free list ----
 
-void GrowablePoolAllocator::grow()
+bool GrowablePoolAllocator::grow()
 {
-    // Ensure space in the pages array.
+    // Ensure space in the pages array. try_allocate: a parent that refuses (an exhausted arena, or the non-fatal path
+    // of a fatal-on-OOM parent) leaves the pool as it was instead of writing through null (DIAG.3a).
     if (m_pages_size == m_pages_capacity)
     {
         const usize new_cap = (m_pages_capacity == 0) ? kInitialPagesCapacity : m_pages_capacity * 2U;
 
-        void** new_buf = static_cast<void**>(m_parent->allocate(new_cap * sizeof(void*), alignof(void*)));
+        void** new_buf = static_cast<void**>(m_parent->try_allocate(new_cap * sizeof(void*), alignof(void*)));
+        if (new_buf == nullptr)
+        {
+            return false;
+        }
         if (m_pages != nullptr)
         {
             // NOLINTNEXTLINE(bugprone-bitwise-pointer-cast) — copying a void*[] is intended.
@@ -131,9 +141,20 @@ void GrowablePoolAllocator::grow()
     }
 
     // Allocate a new page from the parent at slot_alignment so every slot lands aligned.
-    void* page = m_parent->allocate(m_page_bytes, m_slot_alignment);
-    CRD_ASSERT(page != nullptr);
-    m_pages[m_pages_size++] = page;
+    void* page = m_parent->try_allocate(m_page_bytes, m_slot_alignment);
+    if (page == nullptr)
+    {
+        return false;
+    }
+    // Insert in address order, so page_of() can binary-search.
+    usize at = m_pages_size;
+    while (at > 0 && reinterpret_cast<usize>(m_pages[at - 1]) > reinterpret_cast<usize>(page))
+    {
+        m_pages[at] = m_pages[at - 1];
+        --at;
+    }
+    m_pages[at] = page;
+    ++m_pages_size;
 
     // Push every slot onto the free list. Walk back-to-front so the head ends
     // up pointing at the lowest-address slot — gives slightly more
@@ -146,6 +167,32 @@ void GrowablePoolAllocator::grow()
         node->next = m_free_head;
         m_free_head = node;
     }
+    return true;
+}
+
+const u8* GrowablePoolAllocator::page_of(const void* p) const noexcept
+{
+    const usize addr = reinterpret_cast<usize>(p);
+    usize lo = 0;
+    usize hi = m_pages_size;
+    while (lo < hi) // find the first page whose base is above p
+    {
+        const usize mid = lo + ((hi - lo) / 2U);
+        if (reinterpret_cast<usize>(m_pages[mid]) <= addr)
+        {
+            lo = mid + 1U;
+        }
+        else
+        {
+            hi = mid;
+        }
+    }
+    if (lo == 0)
+    {
+        return nullptr; // below every page
+    }
+    const u8* const base = static_cast<const u8*>(m_pages[lo - 1U]);
+    return (addr - reinterpret_cast<usize>(base)) < m_page_bytes ? base : nullptr;
 }
 
 // ---- IAllocator ----------------------------------------------------------
@@ -155,6 +202,10 @@ void* GrowablePoolAllocator::try_allocate(usize size, usize alignment)
     if (size == 0U || size > m_slot_size || !is_pow2(alignment) || alignment > m_slot_alignment)
     {
         return nullptr; // the request does not fit a slot: refuse, never assert
+    }
+    if (m_free_head == nullptr && !grow())
+    {
+        return nullptr; // the parent refused a page: non-fatal here
     }
     return allocate(size, alignment);
 }
@@ -167,11 +218,11 @@ void* GrowablePoolAllocator::allocate(usize size, usize alignment)
     (void)size;
     (void)alignment;
 
-    if (m_free_head == nullptr)
+    if (m_free_head == nullptr && !grow())
     {
-        grow();
+        CRD_FATAL("GrowablePoolAllocator: out of memory (the parent refused a page)");
+        return nullptr;
     }
-    CRD_ASSERT(m_free_head != nullptr);
 
     FreeNode* node = m_free_head;
     m_free_head = node->next;
@@ -186,7 +237,13 @@ void GrowablePoolAllocator::deallocate(void* p) noexcept
     {
         return;
     }
-    CRD_ASSERT(owns(p));
+    // DIAG.3a: a pointer that is not one of this pool's slots (another allocator's block, or an interior pointer) is
+    // refused in every build. Linking it into the free list would let the next allocate return foreign memory.
+    if (!owns(p))
+    {
+        CRD_ASSERT_MSG(false, "GrowablePoolAllocator: deallocate of a pointer this pool does not own");
+        return;
+    }
 
     FreeNode* node = static_cast<FreeNode*>(p);
     node->next = m_free_head;
@@ -201,16 +258,14 @@ bool GrowablePoolAllocator::owns(const void* p) const noexcept
     {
         return false;
     }
-    const u8* pb = static_cast<const u8*>(p);
-    for (usize i = 0; i < m_pages_size; ++i)
+    const u8* const page = page_of(p);
+    if (page == nullptr)
     {
-        const u8* base = static_cast<const u8*>(m_pages[i]);
-        if (pb >= base && pb < base + m_page_bytes)
-        {
-            return true;
-        }
+        return false;
     }
-    return false;
+    // Must lie exactly on a slot boundary: an interior pointer was never handed out.
+    const usize stride = aligned_slot_stride(m_slot_size, m_slot_alignment);
+    return ((reinterpret_cast<usize>(p) - reinterpret_cast<usize>(page)) % stride) == 0;
 }
 
 usize GrowablePoolAllocator::allocation_size(const void* p) const noexcept

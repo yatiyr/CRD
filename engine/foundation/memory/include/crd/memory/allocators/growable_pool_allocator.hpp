@@ -14,11 +14,13 @@ namespace crd::memory
 //
 // Properties:
 //   - allocate(size, alignment) requires size ≤ slot_size AND
-//     alignment ≤ slot_alignment. Otherwise CRD_FATAL.
-//   - deallocate(p) is O(1). p must be a slot returned by allocate().
-//   - owns(p) is O(pages) — pages are typically few (the page count grows
-//     logarithmically with allocations). The dispatch hot-path doesn't
-//     need owns().
+//     alignment ≤ slot_alignment. Otherwise CRD_FATAL. A page the parent
+//     refuses is out of memory: allocate() is fatal, try_allocate() returns
+//     nullptr and the pool stays usable (DIAG.3a).
+//   - deallocate(p) is O(log pages). p must be a slot returned by allocate();
+//     any other pointer (another allocator's block, an interior pointer) is
+//     refused in every build, after an assert where asserts are on (DIAG.3a).
+//   - owns(p) is O(log pages): the page table is kept sorted by address.
 //   - allocation_size(p) returns slot_size when p is owned.
 //   - Move-constructible / move-assignable (transfers pages + free list).
 //   - Not copy-able. Not thread-safe (per project IAllocator convention).
@@ -74,8 +76,11 @@ private:
         FreeNode* next;
     };
 
-    void grow();
+    // Adds one page. False when the parent refuses; then nothing changed except, possibly, a larger page table.
+    [[nodiscard]] bool grow();
     void free_all_pages() noexcept;
+    // The page holding p, or null. Binary search over the address-sorted page table.
+    [[nodiscard]] const u8* page_of(const void* p) const noexcept;
 
     IAllocator* m_parent;
     usize m_slot_size;
@@ -86,6 +91,7 @@ private:
     // Pages are tracked in a manually-grown void*[] (we cannot use
     // crd::containers::Array — that would invert the crd-memory →
     // crd-containers dependency). Pages grow doubling from kInitialPagesCapacity.
+    // Kept sorted by address, so ownership is a binary search.
     void** m_pages;
     usize m_pages_size;
     usize m_pages_capacity;
