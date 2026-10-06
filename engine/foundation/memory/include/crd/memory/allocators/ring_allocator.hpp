@@ -3,6 +3,7 @@
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>
+#include <crd/memory/asan_poison.hpp>
 
 #include <atomic>
 
@@ -41,6 +42,10 @@ class IAllocator;
 // retires. Data VISIBILITY between producer writes and the consumer read is
 // guaranteed by the EXTERNAL fence (timeline semaphore / job completion) the
 // caller waits on — the ring's atomics guard space accounting, not the payload.
+//
+// ASAN (DIAG.3b): under AddressSanitizer the unclaimed and retired space is poisoned, so a read of a retired claim
+// or past a claim into unclaimed space is a use-after-poison report. Detection is per 8-byte granule (byte-exact for
+// claims whose offset and size are multiples of 8); see poison_inward in the implementation.
 //
 // PORTABLE: pure std::atomic, no OS primitives — Windows / POSIX / WASM alike.
 // (WASM needs 64-bit atomics: Cerid's wasm32-wasi target with the atomics proposal
@@ -119,6 +124,11 @@ private:
     alignas(kCachelineSize) std::atomic<u64> m_tail{0}; // monotonic bytes reclaimed
     std::atomic<u64> m_latest_fence{0};                 // the currently-open epoch
     Mark m_marks[kMaxInFlightEpochs];                   // boundary ledger, indexed by fence & m_epoch_mask
+#if CRD_MEM_ASAN
+    // Under ASan, retirers are serialised so the retired span is poisoned before the tail publishes it and no
+    // retirer can poison bytes a producer has already reclaimed (DIAG.3b). Producers never take it.
+    std::atomic_flag m_retire_lock;
+#endif
 };
 } // namespace crd::memory
 

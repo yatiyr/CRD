@@ -5,6 +5,7 @@
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -251,7 +252,9 @@ TEST_CASE("tlsf: the walker catches seeded metadata corruption", "[memory][contr
     // Layout after init: [start sentinel @0 (16B)] [first free block @16] ...  The free block's
     // size_and_flags lives at offset 16 + 8 = 24. Inflate the size far past the region (keep the low
     // free bit) so the physical walk would step outside the pool -- exactly a corrupted size field.
+    // Under ASan the allocator keeps its headers poisoned (DIAG.3b), so the forged overflow opens the word first.
     auto* const size_and_flags = reinterpret_cast<crd::u64*>(buffer + 24);
+    mem::asan_unpoison(size_and_flags, sizeof(crd::u64));
     *size_and_flags = static_cast<crd::u64>(sizeof(buffer) + 0x1000U) | 1U; // size huge, kFreeBit set
 
     CHECK_FALSE(heap.validate_structure());

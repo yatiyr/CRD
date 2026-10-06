@@ -10,6 +10,45 @@ namespace
 // Sentinel for an unused mark slot. A real fence is always < this, so retire()
 // never matches an empty slot and begin_epoch() treats it as free-to-reuse.
 constexpr u64 kEmptyFence = ~u64{0};
+
+#if CRD_MEM_ASAN
+// ASan tracks addressability per 8-byte granule. Claims and retirements happen on different threads, so neither may
+// write the shadow of a granule the other owns: a claim opens the whole granules it overlaps (outward) and a retirement
+// closes only the granules wholly inside the retired span (inward). Two claims sharing a granule both open it, which
+// is the same write. The boundary is byte-exact for claims whose offset and size are multiples of 8.
+constexpr usize kShadowGranule = 8;
+
+// Poison the granules wholly inside ring offsets [begin, end) (end <= capacity).
+void poison_inward(u8* buffer, usize begin, usize end) noexcept
+{
+    const usize lo = align_up(begin, kShadowGranule);
+    const usize hi = end & ~(kShadowGranule - 1U);
+    if (lo < hi)
+    {
+        asan_poison(buffer + lo, hi - lo);
+    }
+}
+
+// Spin lock for the ASan-only retire serialisation. Retirement is consumer-side and rare; producers never wait on it.
+class RetireGuard
+{
+public:
+    explicit RetireGuard(std::atomic_flag& flag) noexcept : m_flag(flag)
+    {
+        while (m_flag.test_and_set(std::memory_order_acquire))
+        {
+            // spin: another retirer is poisoning its span
+        }
+    }
+    ~RetireGuard() { m_flag.clear(std::memory_order_release); }
+
+    RetireGuard(const RetireGuard&) = delete;
+    RetireGuard& operator=(const RetireGuard&) = delete;
+
+private:
+    std::atomic_flag& m_flag;
+};
+#endif
 } // namespace
 
 RingAllocator::RingAllocator(usize capacity, IAllocator* parent, usize max_in_flight_epochs, const char* name)
@@ -36,10 +75,14 @@ RingAllocator::RingAllocator(usize capacity, IAllocator* parent, usize max_in_fl
         m_marks[i].fence.store(kEmptyFence, std::memory_order_relaxed);
         m_marks[i].end_head.store(0, std::memory_order_relaxed);
     }
+
+    // Nothing is claimed yet: the whole staging buffer is poisoned until a claim opens its bytes (DIAG.3b).
+    asan_poison(m_buffer, m_capacity);
 }
 
 RingAllocator::~RingAllocator()
 {
+    asan_unpoison(m_buffer, m_capacity); // returned to the parent addressable, exactly its own range
     m_parent->deallocate(m_buffer);
 }
 
@@ -80,6 +123,12 @@ void* RingAllocator::try_claim(usize size, usize alignment) noexcept
         }
         if (m_head.compare_exchange_weak(head, new_head, std::memory_order_acq_rel, std::memory_order_relaxed))
         {
+#if CRD_MEM_ASAN
+            // Open the claim's granules (outward). Alignment padding and wrap waste stay poisoned.
+            const usize lo = payload & ~(kShadowGranule - 1U);
+            const usize hi = align_up(payload + size, kShadowGranule);
+            asan_unpoison(m_buffer + lo, (hi < m_capacity ? hi : m_capacity) - lo);
+#endif
             return m_buffer + payload;
         }
         // CAS failed: `head` reloaded with the current value — recompute and retry.
@@ -130,6 +179,32 @@ void RingAllocator::retire(u64 completed_fence) noexcept
             }
         }
     }
+
+#if CRD_MEM_ASAN
+    // Poison the retired span before the tail publishes it: a producer reclaims a byte only after it observes the new
+    // tail, so it can never unpoison before this poison lands. The lock keeps a slower retirer from poisoning a span
+    // a faster one has already published (and a producer reclaimed).
+    const RetireGuard guard(m_retire_lock);
+    const u64 from = m_tail.load(std::memory_order_acquire);
+    if (from < target)
+    {
+        const usize begin = static_cast<usize>(from % m_capacity);
+        const usize span = static_cast<usize>(target - from); // <= m_capacity: claims never outrun the tail by more
+        if (span >= m_capacity)
+        {
+            poison_inward(m_buffer, 0, m_capacity);
+        }
+        else if (begin + span <= m_capacity)
+        {
+            poison_inward(m_buffer, begin, begin + span);
+        }
+        else
+        {
+            poison_inward(m_buffer, begin, m_capacity);
+            poison_inward(m_buffer, 0, begin + span - m_capacity);
+        }
+    }
+#endif
 
     // Advance the tail monotonically (never retreat); safe against concurrent retire.
     u64 t = m_tail.load(std::memory_order_relaxed);

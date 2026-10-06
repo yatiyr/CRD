@@ -1,5 +1,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/checked_math.hpp>
 
 #include <bit>
@@ -49,46 +50,123 @@ constexpr usize kFreeBit = usize{1};
 constexpr usize kPrevFreeBit = usize{2};
 constexpr usize kSizeMask = ~(kFreeBit | kPrevFreeBit);
 
+// ---- Metadata words -------------------------------------------------------
+// Under AddressSanitizer every byte of the pool that is not a live payload is poisoned (DIAG.3b): each block's
+// header and each free block's payload, its free-list links included. The allocator reaches a header word only
+// through these two accessors, which open exactly that word, touch it and close it again. A word that was addressable
+// (a live payload under a header being written, or an interior pointer passed to deallocate) is left addressable, so
+// the allocator never poisons memory it does not own. Without ASan they are plain loads and stores.
+template <typename T> inline T meta_load(const T* word) noexcept
+{
+#if CRD_MEM_ASAN
+    const bool closed = asan_is_poisoned(word);
+    asan_unpoison(word, sizeof(T));
+    const T value = *word;
+    if (closed)
+    {
+        asan_poison(word, sizeof(T));
+    }
+    return value;
+#else
+    return *word;
+#endif
+}
+
+template <typename T> inline void meta_store(T* word, T value) noexcept
+{
+#if CRD_MEM_ASAN
+    const bool closed = asan_is_poisoned(word);
+    asan_unpoison(word, sizeof(T));
+    *word = value;
+    if (closed)
+    {
+        asan_poison(word, sizeof(T));
+    }
+#else
+    *word = value;
+#endif
+}
+
 // ---- Block accessors ------------------------------------------------------
+
+inline usize block_flags_word(const BlockHeader* b) noexcept
+{
+    return meta_load(&b->size_and_flags);
+}
+
+inline void block_set_flags_word(BlockHeader* b, usize word) noexcept
+{
+    meta_store(&b->size_and_flags, word);
+}
 
 inline usize block_size(const BlockHeader* b) noexcept
 {
-    return b->size_and_flags & kSizeMask;
+    return block_flags_word(b) & kSizeMask;
 }
 
 inline bool block_is_free(const BlockHeader* b) noexcept
 {
-    return (b->size_and_flags & kFreeBit) != 0;
+    return (block_flags_word(b) & kFreeBit) != 0;
 }
 
 inline bool block_prev_is_free(const BlockHeader* b) noexcept
 {
-    return (b->size_and_flags & kPrevFreeBit) != 0;
+    return (block_flags_word(b) & kPrevFreeBit) != 0;
 }
 
 inline void block_set_size(BlockHeader* b, usize size) noexcept
 {
-    b->size_and_flags = (b->size_and_flags & ~kSizeMask) | (size & kSizeMask);
+    block_set_flags_word(b, (block_flags_word(b) & ~kSizeMask) | (size & kSizeMask));
 }
 
 inline void block_set_free(BlockHeader* b) noexcept
 {
-    b->size_and_flags |= kFreeBit;
+    block_set_flags_word(b, block_flags_word(b) | kFreeBit);
 }
 
 inline void block_set_used(BlockHeader* b) noexcept
 {
-    b->size_and_flags &= ~kFreeBit;
+    block_set_flags_word(b, block_flags_word(b) & ~kFreeBit);
 }
 
 inline void block_set_prev_free(BlockHeader* b) noexcept
 {
-    b->size_and_flags |= kPrevFreeBit;
+    block_set_flags_word(b, block_flags_word(b) | kPrevFreeBit);
 }
 
 inline void block_set_prev_used(BlockHeader* b) noexcept
 {
-    b->size_and_flags &= ~kPrevFreeBit;
+    block_set_flags_word(b, block_flags_word(b) & ~kPrevFreeBit);
+}
+
+inline BlockHeader* block_prev(const BlockHeader* b) noexcept
+{
+    return meta_load(&b->prev_phys_block);
+}
+
+inline void block_set_prev(BlockHeader* b, BlockHeader* prev) noexcept
+{
+    meta_store(&b->prev_phys_block, prev);
+}
+
+inline BlockHeader* block_next_free(const BlockHeader* b) noexcept
+{
+    return meta_load(&b->next_free);
+}
+
+inline void block_set_next_free(BlockHeader* b, BlockHeader* next) noexcept
+{
+    meta_store(&b->next_free, next);
+}
+
+inline BlockHeader* block_prev_free(const BlockHeader* b) noexcept
+{
+    return meta_load(&b->prev_free);
+}
+
+inline void block_set_prev_free_link(BlockHeader* b, BlockHeader* prev) noexcept
+{
+    meta_store(&b->prev_free, prev);
 }
 
 inline u8* block_payload(BlockHeader* b) noexcept
@@ -106,9 +184,25 @@ inline BlockHeader* block_next(BlockHeader* b) noexcept
     return reinterpret_cast<BlockHeader*>(reinterpret_cast<u8*>(b) + kBlockHeaderOverhead + block_size(b));
 }
 
-inline BlockHeader* block_prev(BlockHeader* b) noexcept
+// Set a block's whole shadow from its state: the header is always poisoned, the payload is addressable exactly while
+// the block is live (the logical allocation is the block, as allocation_size() reports). Called on every block an
+// operation leaves behind, so splits, merges and in-place resizes need no per-step bookkeeping. No-op without ASan.
+inline void block_apply_shadow(BlockHeader* b) noexcept
 {
-    return b->prev_phys_block;
+#if CRD_MEM_ASAN
+    const usize size = block_size(b);
+    asan_poison(b, kBlockHeaderOverhead);
+    if (block_is_free(b))
+    {
+        asan_poison(block_payload(b), size);
+    }
+    else
+    {
+        asan_unpoison(block_payload(b), size);
+    }
+#else
+    (void)b;
+#endif
 }
 
 // ---- TLSF mapping (size → fl, sl) ----------------------------------------
@@ -193,11 +287,16 @@ TlsfAllocator::TlsfAllocator(void* buffer, usize capacity, const char* name) noe
 
 TlsfAllocator::~TlsfAllocator()
 {
-    if (m_parent != nullptr && m_pool != nullptr)
+    if (m_pool == nullptr)
     {
-        // m_pool points kBlockHeaderOverhead bytes into the original buffer,
-        // because the start sentinel sits before it. Walk back to free.
-        u8* original = static_cast<u8*>(m_pool) - kBlockHeaderOverhead;
+        return;
+    }
+    // m_pool points kBlockHeaderOverhead bytes into the original buffer, because the start sentinel sits before it.
+    // The buffer goes back to its parent or its caller addressable, exactly its own range (DIAG.3b).
+    u8* original = static_cast<u8*>(m_pool) - kBlockHeaderOverhead;
+    asan_unpoison(original, m_pool_capacity);
+    if (m_parent != nullptr)
+    {
         m_parent->deallocate(original);
     }
 }
@@ -255,6 +354,9 @@ void TlsfAllocator::init_pool(void* buffer, usize capacity) noexcept
     m_free_lists[fl][sl] = free_block;
     m_fl_bitmap |= (u32{1} << fl);
     m_sl_bitmap[fl] |= (u32{1} << sl);
+
+    // Nothing is live yet: the sentinels, the free block's header and its payload are all poisoned (DIAG.3b).
+    asan_poison(base, capacity);
 }
 
 void TlsfAllocator::destroy_pool() noexcept
@@ -269,26 +371,26 @@ namespace
 {
 void list_insert(BlockHeader* block, BlockHeader*& head) noexcept
 {
-    block->prev_free = nullptr;
-    block->next_free = head;
+    block_set_prev_free_link(block, nullptr);
+    block_set_next_free(block, head);
     if (head != nullptr)
     {
-        head->prev_free = block;
+        block_set_prev_free_link(head, block);
     }
     head = block;
 }
 
 void list_remove(BlockHeader* block, BlockHeader*& head) noexcept
 {
-    BlockHeader* prev = block->prev_free;
-    BlockHeader* next = block->next_free;
+    BlockHeader* prev = block_prev_free(block);
+    BlockHeader* next = block_next_free(block);
     if (next != nullptr)
     {
-        next->prev_free = prev;
+        block_set_prev_free_link(next, prev);
     }
     if (prev != nullptr)
     {
-        prev->next_free = next;
+        block_set_next_free(prev, next);
     }
     if (head == block)
     {
@@ -376,13 +478,13 @@ inline BlockHeader* trim_free_leading(BlockHeader* block, usize gap, u32& fl_bit
 
     BlockHeader* new_block = reinterpret_cast<BlockHeader*>(reinterpret_cast<u8*>(block) + gap);
 
-    new_block->prev_phys_block = block;
-    new_block->size_and_flags = (original_size - gap) | kPrevFreeBit;
+    block_set_prev(new_block, block);
+    block_set_flags_word(new_block, (original_size - gap) | kPrevFreeBit);
 
     block_set_size(block, gap - kBlockHeaderOverhead);
 
     BlockHeader* after_new = block_next(new_block);
-    after_new->prev_phys_block = new_block;
+    block_set_prev(after_new, new_block);
     block_set_prev_used(after_new);
 
     u32 lfl = 0;
@@ -395,7 +497,7 @@ inline BlockHeader* trim_free_leading(BlockHeader* block, usize gap, u32& fl_bit
     CRD_ASSERT(!block_is_free(new_block));
     CRD_ASSERT(block_prev_is_free(new_block));
     CRD_ASSERT(block_size(new_block) == original_size - gap);
-    CRD_ASSERT(after_new->prev_phys_block == new_block);
+    CRD_ASSERT(block_prev(after_new) == new_block);
     CRD_ASSERT(!block_prev_is_free(after_new));
 
     return new_block;
@@ -415,14 +517,14 @@ BlockHeader* block_split(BlockHeader* block, usize size) noexcept
     CRD_ASSERT(remaining >= kBlockMinSize);
 
     BlockHeader* remainder = reinterpret_cast<BlockHeader*>(reinterpret_cast<u8*>(block) + kBlockHeaderOverhead + size);
-    remainder->prev_phys_block = block;
-    remainder->size_and_flags = remaining; // free flag set by caller as needed
+    block_set_prev(remainder, block);
+    block_set_flags_word(remainder, remaining); // free flag set by caller as needed
 
     block_set_size(block, size);
 
     // Next physical block's prev_phys_block must point to the remainder now.
     BlockHeader* next = block_next(remainder);
-    next->prev_phys_block = remainder;
+    block_set_prev(next, remainder);
     return remainder;
 }
 
@@ -443,7 +545,7 @@ BlockHeader* block_merge_next(BlockHeader* block, u32& fl_bitmap, u32* sl_bitmap
 
     // The block beyond `next`'s prev_phys_block must now point to `block`.
     BlockHeader* after = block_next(block);
-    after->prev_phys_block = block;
+    block_set_prev(after, block);
     return block;
 }
 
@@ -463,7 +565,7 @@ BlockHeader* block_merge_prev(BlockHeader* block, u32& fl_bitmap, u32* sl_bitmap
     block_set_size(prev, merged_size);
 
     BlockHeader* after = block_next(prev);
-    after->prev_phys_block = prev;
+    block_set_prev(after, prev);
     return prev;
 }
 } // namespace
@@ -569,7 +671,7 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     if (block_size(block) >= adjusted + kBlockHeaderOverhead + kBlockMinSize)
     {
         BlockHeader* remainder = block_split(block, adjusted);
-        remainder->size_and_flags |= kFreeBit;
+        block_set_free(remainder);
 
         u32 rfl = 0;
         u32 rsl = 0;
@@ -595,6 +697,9 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     CRD_ASSERT(!block_is_free(block));
 
     m_stats.on_allocate(static_cast<u64>(block_size(block)));
+    // Only the handed-out block becomes addressable; a leading or trailing remainder was carved from poisoned free
+    // space and its header was written through the accessors, so it stays poisoned.
+    block_apply_shadow(block);
     return block_payload(block);
 }
 
@@ -651,6 +756,9 @@ void TlsfAllocator::deallocate(void* p) noexcept
     // Mark the next block's prev_free.
     BlockHeader* after = block_next(block);
     block_set_prev_free(after);
+
+    // The merged free block is poisoned whole: the freed payload and any header a coalesce absorbed.
+    block_apply_shadow(block);
 }
 
 bool TlsfAllocator::owns(const void* p) const noexcept
@@ -696,7 +804,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
         if (current_cap >= needed + kBlockHeaderOverhead + kBlockMinSize)
         {
             BlockHeader* remainder = block_split(block, needed);
-            remainder->size_and_flags |= kFreeBit;
+            block_set_free(remainder);
 
             // Coalesce with the block after if free.
             BlockHeader* after_remainder = block_next(remainder);
@@ -712,6 +820,9 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
 
             BlockHeader* after = block_next(remainder);
             block_set_prev_free(after);
+            // The live block shrinks to `needed`; the split-off tail (and a free neighbour it absorbed) is poisoned.
+            block_apply_shadow(block);
+            block_apply_shadow(remainder);
         }
         return p;
     }
@@ -728,7 +839,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
             if (block_size(merged) >= needed + kBlockHeaderOverhead + kBlockMinSize)
             {
                 BlockHeader* remainder = block_split(merged, needed);
-                remainder->size_and_flags |= kFreeBit;
+                block_set_free(remainder);
 
                 u32 rfl = 0;
                 u32 rsl = 0;
@@ -737,12 +848,15 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
 
                 BlockHeader* after = block_next(remainder);
                 block_set_prev_free(after);
+                block_apply_shadow(remainder);
             }
             else
             {
                 BlockHeader* after = block_next(merged);
                 block_set_prev_used(after);
             }
+            // The live block grew over its free neighbour: its whole new extent becomes addressable.
+            block_apply_shadow(merged);
             return p;
         }
     }
@@ -785,7 +899,7 @@ bool TlsfAllocator::validate_structure() const noexcept
 
     // ---- Pass 1: physical block chain -------------------------------------
     const BlockHeader* const start_sentinel = reinterpret_cast<const BlockHeader*>(region_lo);
-    if (start_sentinel->prev_phys_block != nullptr || block_size(start_sentinel) != 0 || block_is_free(start_sentinel))
+    if (block_prev(start_sentinel) != nullptr || block_size(start_sentinel) != 0 || block_is_free(start_sentinel))
     {
         return false; // start sentinel must be a zero-size, in-use anchor
     }
@@ -804,7 +918,7 @@ bool TlsfAllocator::validate_structure() const noexcept
         {
             return false;
         }
-        if (b->prev_phys_block != prev) // physical back-link must match the block we walked from
+        if (block_prev(b) != prev) // physical back-link must match the block we walked from
         {
             return false;
         }
@@ -864,14 +978,14 @@ bool TlsfAllocator::validate_structure() const noexcept
 
             const BlockHeader* back = nullptr;
             usize              chain = 0;
-            for (const BlockHeader* node = head; node != nullptr; node = node->next_free)
+            for (const BlockHeader* node = head; node != nullptr; node = block_next_free(node))
             {
                 if (++chain > max_blocks) // cycle in the free list
                 {
                     return false;
                 }
                 const u8* const np = reinterpret_cast<const u8*>(node);
-                if (np <= region_lo || np >= region_hi || !block_is_free(node) || node->prev_free != back)
+                if (np <= region_lo || np >= region_hi || !block_is_free(node) || block_prev_free(node) != back)
                 {
                     return false;
                 }

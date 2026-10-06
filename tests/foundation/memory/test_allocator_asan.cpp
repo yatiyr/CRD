@@ -1,6 +1,7 @@
 // DIAG.3b -- allocator-aware AddressSanitizer boundaries. Two halves:
 //  - In-process positives: correct use of every poisoning allocator (pool, growable pool, linear, stack, growable
-//    linear, nested arenas, odd and large slots, small and over-aligned objects) stays clean under ASan and keeps its
+//    linear, nested arenas, TLSF, growable TLSF, ring; odd and large slots, small and over-aligned objects, in-place
+//    resizes) stays clean under ASan and keeps its
 //    data; where the build has ASan, the shadow state is asserted directly (asan_is_poisoned only queries the shadow,
 //    it never touches the memory). Without ASan the helpers are no-ops and report nothing poisoned.
 //  - The negative control: crd-diag-allocator-poison-specimen performs one intentional stale or out-of-range read per
@@ -13,9 +14,12 @@
 #include <crd/diag/specimen_runner.hpp>
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
+#include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/asan_poison.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -278,6 +282,173 @@ TEST_CASE("allocator asan: arenas expose live slices, keep padding poisoned and 
     }
 }
 
+TEST_CASE("allocator asan: TLSF poisons every header and free block and exposes live blocks whole",
+          "[memory][diag][asan]")
+{
+    SECTION("headers, freed blocks and coalescing")
+    {
+        mem::TlsfAllocator heap(64U * 1024U, nullptr, "asan-tlsf");
+        CHECK(heap.validate_structure()); // the walk opens each header word just in time
+        auto* const a = static_cast<crd::u8*>(heap.allocate(13U, 16U));
+        auto* const b = static_cast<crd::u8*>(heap.allocate(48U, 16U));
+        auto* const c = static_cast<crd::u8*>(heap.allocate(1U, 16U));
+        REQUIRE(a != nullptr);
+        REQUIRE(b != nullptr);
+        REQUIRE(c != nullptr);
+        CHECK(heap.allocation_size(a) == 16U); // a 13-byte request gets a 16-byte block: the logical allocation
+        CHECK(live_exactly(a, 16U));           // ... ending at the next block's header
+        CHECK(live_exactly(b, 48U));
+        CHECK(poisoned(b - 1)); // b's own header
+        CHECK(poisoned(b - 16));
+        std::memset(a, 0x61, 16U);
+        std::memset(b, 0x62, 48U);
+        std::memset(c, 0x63, heap.allocation_size(c));
+
+        heap.deallocate(b);
+        CHECK(poisoned(b)); // the free-list links ...
+        CHECK(poisoned(b + 47));
+        CHECK(heap.validate_structure()); // ... still walk
+        CHECK(poisoned(b));               // and stay poisoned afterwards
+        CHECK(holds(a, 16U, 0x61));       // live neighbours keep their bytes
+        heap.deallocate(a);               // coalesces with b: a's payload and b's absorbed header are poisoned
+        CHECK(poisoned(a));
+        CHECK(poisoned(b - 16));
+        CHECK(heap.validate_structure());
+
+        auto* const d = static_cast<crd::u8*>(heap.allocate(64U, 16U)); // reuse of the merged block is clean
+        REQUIRE(d != nullptr);
+        CHECK(all_live(d, 64U));
+        std::memset(d, 0x64, 64U);
+        heap.deallocate(c);
+        heap.deallocate(d);
+        CHECK(heap.validate_structure());
+    }
+    SECTION("over-aligned, large and odd blocks")
+    {
+        mem::TlsfAllocator heap(512U * 1024U, nullptr, "asan-tlsf-shapes");
+        auto* const small = static_cast<crd::u8*>(heap.allocate(24U, 16U));
+        auto* const aligned = static_cast<crd::u8*>(heap.allocate(100U, 256U));
+        auto* const large = static_cast<crd::u8*>(heap.allocate(64U * 1024U, 64U));
+        auto* const odd = static_cast<crd::u8*>(heap.allocate(4099U, 16U));
+        REQUIRE(small != nullptr);
+        REQUIRE(aligned != nullptr);
+        REQUIRE(large != nullptr);
+        REQUIRE(odd != nullptr);
+        CHECK(mem::is_aligned(aligned, 256U));
+        CHECK(mem::is_aligned(large, 64U));
+        CHECK(live_exactly(aligned, heap.allocation_size(aligned)));
+        CHECK(poisoned(aligned - 1)); // its header
+        CHECK(live_exactly(large, heap.allocation_size(large)));
+        CHECK(live_exactly(odd, heap.allocation_size(odd)));
+        std::memset(small, 0x71, 24U);
+        std::memset(aligned, 0x72, heap.allocation_size(aligned));
+        std::memset(large, 0x73, heap.allocation_size(large));
+        std::memset(odd, 0x74, heap.allocation_size(odd));
+        heap.deallocate(large);
+        CHECK(poisoned(large + 32U * 1024U));
+        CHECK(holds(small, 24U, 0x71));
+        CHECK(holds(aligned, 100U, 0x72));
+        CHECK(holds(odd, 4099U, 0x74));
+        CHECK(heap.validate_structure());
+        heap.deallocate(small);
+        heap.deallocate(aligned);
+        heap.deallocate(odd);
+        CHECK(heap.validate_structure());
+    }
+    SECTION("in-place shrink poisons the split-off tail, in-place grow exposes the extension")
+    {
+        mem::TlsfAllocator heap(64U * 1024U, nullptr, "asan-tlsf-realloc");
+        auto* const p = static_cast<crd::u8*>(heap.allocate(256U, 16U));
+        REQUIRE(p != nullptr);
+        std::memset(p, 0x75, 256U);
+        auto* const shrunk = static_cast<crd::u8*>(heap.reallocate(p, 256U, 32U, 16U));
+        REQUIRE(shrunk == p);
+        CHECK(live_exactly(shrunk, 32U)); // byte 32 is the split-off block's header
+        CHECK(poisoned(shrunk + 100));
+        auto* const grown = static_cast<crd::u8*>(heap.reallocate(shrunk, 32U, 512U, 16U));
+        REQUIRE(grown == p); // the free tail after it lets it grow in place
+        CHECK(all_live(grown, 512U));
+        CHECK(holds(grown, 32U, 0x75));
+        std::memset(grown, 0x76, 512U);
+        CHECK(heap.validate_structure());
+        heap.deallocate(grown);
+        CHECK(heap.validate_structure());
+    }
+    SECTION("a caller buffer and a growable heap are returned addressable, exactly their range")
+    {
+        alignas(16) static crd::u8 buffer[8192];
+        {
+            mem::TlsfAllocator heap(buffer, sizeof(buffer), "asan-tlsf-caller");
+            CHECK(poisoned(buffer)); // the start sentinel
+            auto* const p = static_cast<crd::u8*>(heap.allocate(64U, 16U));
+            REQUIRE(p != nullptr);
+            std::memset(p, 0x77, 64U);
+        }
+        CHECK(all_live(buffer, sizeof(buffer)));
+        std::memset(buffer, 0, sizeof(buffer));
+
+        mem::GrowableTlsfAllocator grow(4096U, nullptr, "asan-gtlsf");
+        auto* const first = static_cast<crd::u8*>(grow.allocate(3000U, 16U));
+        auto* const second = static_cast<crd::u8*>(grow.allocate(6000U, 16U)); // more than the first chunk has left
+        REQUIRE(first != nullptr);
+        REQUIRE(second != nullptr);
+        CHECK(grow.num_chunks() >= 2U);
+        CHECK(all_live(second, 6000U));
+        std::memset(first, 0x78, 3000U);
+        std::memset(second, 0x79, 6000U);
+        grow.deallocate(second);
+        CHECK(poisoned(second + 1024));
+        CHECK(holds(first, 3000U, 0x78));
+    }
+}
+
+TEST_CASE("allocator asan: a ring poisons unclaimed and retired space", "[memory][diag][asan]")
+{
+    mem::RingAllocator ring(1024U, nullptr, 4U, "asan-ring");
+    auto* const a = static_cast<crd::u8*>(ring.try_claim(64U, 16U));
+    REQUIRE(a != nullptr);
+    CHECK(live_exactly(a, 64U)); // the space past the head is unclaimed
+    std::memset(a, 0x81, 64U);
+    auto* const b = static_cast<crd::u8*>(ring.try_claim(64U, 64U)); // 64-aligned: lands right after a
+    REQUIRE(b != nullptr);
+    CHECK(b - a == 64);
+    auto* const pad = static_cast<crd::u8*>(ring.try_claim(32U, 16U));
+    REQUIRE(pad != nullptr);
+    std::memset(pad, 0x85, 32U);
+    auto* const e = static_cast<crd::u8*>(ring.try_claim(64U, 64U)); // 32 bytes of alignment padding before it
+    REQUIRE(e != nullptr);
+    CHECK(e - pad == 64);
+    CHECK(poisoned(e - 1));
+    CHECK(live_exactly(e, 64U));
+    std::memset(b, 0x82, 64U);
+    std::memset(e, 0x86, 64U);
+
+    ring.begin_epoch(1U);
+    auto* const c = static_cast<crd::u8*>(ring.try_claim(600U, 16U)); // epoch 1, offsets 256..856
+    REQUIRE(c != nullptr);
+    std::memset(c, 0x83, 600U);
+    ring.retire(0U); // a, b, pad and e retire; c is still in flight
+    CHECK(poisoned(a));
+    CHECK(poisoned(b + 63));
+    CHECK(poisoned(e));
+    CHECK(all_live(c, 600U));
+
+    ring.begin_epoch(2U);
+    auto* const d = static_cast<crd::u8*>(ring.try_claim(200U, 16U)); // wraps to offset 0 over retired space
+    REQUIRE(d == a);
+    CHECK(live_exactly(d, 200U));
+    CHECK(poisoned(c + 600)); // the wasted tail before the wrap was never claimed
+    std::memset(d, 0x84, 200U);
+    CHECK(holds(c, 600U, 0x83));
+    ring.begin_epoch(3U);
+    ring.retire(2U); // the retired span wraps: the tail end of the buffer and its start
+    CHECK(poisoned(c));
+    CHECK(poisoned(c + 599));
+    CHECK(poisoned(d));
+    CHECK(poisoned(d + 199));
+    CHECK(ring.in_use_bytes() == 0U);
+}
+
 TEST_CASE("allocator asan: every poisoned access is a use-after-poison report, or reported absent",
           "[memory][diag][asan][harness]")
 {
@@ -287,6 +458,8 @@ TEST_CASE("allocator asan: every poisoned access is a use-after-poison report, o
         "linear-reset",         "linear-rewind",  "linear-overrun",   "linear-small-overrun", "linear-underrun",
         "linear-nested-parent", "stack-pop",      "glinear-reset",    "pool-freed-slot",      "pool-overrun",
         "pool-underrun",        "pool-odd-freed", "pool-odd-overrun", "gpool-freed-slot",     "gpool-overrun",
+        "tlsf-freed",           "tlsf-overrun",   "tlsf-underrun",    "tlsf-aligned",         "tlsf-large",
+        "tlsf-shrink",          "gtlsf-freed",    "ring-retired",     "ring-overrun",         "ring-underrun",
     };
     for (const char* mode : modes)
     {

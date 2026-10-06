@@ -18,14 +18,27 @@
 //   pool-odd-overrun      two adjacent 4099-byte slots, the upper one freed: read one byte past the lower slot
 //   gpool-freed-slot      GrowablePoolAllocator: read the first byte of a freed slot
 //   gpool-overrun         GrowablePoolAllocator: two adjacent slots, the upper one freed: read one byte past the lower
+//   tlsf-freed            TlsfAllocator: read the first byte (a free-list link) of a freed block
+//   tlsf-overrun          read one byte past a live 48-byte block (the next block's header)
+//   tlsf-underrun         read the byte before a live block (its own header)
+//   tlsf-aligned          a 256-aligned block: read into the free leading remainder split off before it
+//   tlsf-large            free a 64 KiB block and read its middle
+//   tlsf-shrink           reallocate a 256-byte block down to 32 in place, then read byte 32 (the split-off tail)
+//   gtlsf-freed           GrowableTlsfAllocator: read a freed block in its second chunk
+//   ring-retired          RingAllocator: retire a claim's epoch, then read the claim
+//   ring-overrun          read one byte past a 64-byte claim (unclaimed space)
+//   ring-underrun         a 64-aligned claim after an 8-byte one: read the byte before it (alignment padding)
 //
 // Under ASan a death callback checks the report is "use-after-poison" (the allocator's own poison, not some other
-// fault) and exits 42; any other report exits 43, two pool slots that are not neighbours 95, an unknown mode 96.
+// fault) and exits 42; any other report exits 43, an allocator layout the mode did not get (two pool slots that are
+// not neighbours, a shrink that moved, a growable heap that did not grow) 95, an unknown mode 96.
 // Without ASan the allocators still run every step but the bad read is skipped: the specimen tags itself
 // SANITIZER=none and exits 0 (InstrumentAbsent). Immediate
 // same-address reuse and an overrun into a LIVE neighbour are raw-pointer limits ASan cannot see; DIAG.3e covers them
 // with generations. A pool's logical allocation is its whole slot (allocation_size() reports the slot), so its
-// overruns are declared at the slot boundary, into a free neighbour.
+// overruns are declared at the slot boundary, into a free neighbour. A TLSF block is its logical allocation the same
+// way; every block header is poisoned, so its over- and underruns are caught whether the neighbour is live or free.
+// The ring tracks claims per 8-byte granule, so its modes use 8-aligned offsets and sizes.
 
 #define CRD_DIAG_SPECIMEN_ASAN_CLASS // only AddressSanitizer catches this class (see specimen_common.hpp)
 
@@ -33,9 +46,12 @@
 
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
+#include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
+#include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #if CRD_DIAG_HAS_ASAN
 #include <sanitizer/asan_interface.h>
@@ -173,6 +189,127 @@ void fill(void* p, crd::usize n)
     return run_linear_mode(mode);
 }
 
+[[nodiscard]] bool run_ring_mode(const char* mode)
+{
+    if (std::strcmp(mode, "ring-retired") == 0)
+    {
+        mem::RingAllocator ring(4096U, nullptr, 4U, "poison-ring");
+        void* const p = ring.try_claim(64U, 16U);
+        fill(p, 64U);
+        ring.begin_epoch(1U);
+        ring.retire(0U); // epoch 0, which holds the claim, is done
+        touch(p, 0U);
+        return true;
+    }
+    if (std::strcmp(mode, "ring-overrun") == 0)
+    {
+        mem::RingAllocator ring(4096U, nullptr, 4U, "poison-ring");
+        void* const p = ring.try_claim(64U, 16U);
+        fill(p, 64U);
+        touch(p, 64U);
+        return true;
+    }
+    if (std::strcmp(mode, "ring-underrun") == 0)
+    {
+        mem::RingAllocator ring(4096U, nullptr, 4U, "poison-ring");
+        fill(ring.try_claim(8U, 16U), 8U); // offset 0; the next 64-aligned claim leaves 56 bytes of padding
+        auto* const q = static_cast<crd::u8*>(ring.try_claim(64U, 64U));
+        fill(q, 64U);
+        touch(q - 1, 0U);
+        return true;
+    }
+    return run_arena_mode(mode);
+}
+
+[[nodiscard]] bool run_tlsf_mode(const char* mode)
+{
+    constexpr crd::usize bytes = 64U * 1024U;
+    if (std::strcmp(mode, "tlsf-freed") == 0)
+    {
+        mem::TlsfAllocator a(bytes, nullptr, "poison-tlsf");
+        void* const p = a.allocate(64U, 16U);
+        fill(a.allocate(64U, 16U), 64U); // a live neighbour, so the freed block does not merge into the tail
+        fill(p, 64U);
+        a.deallocate(p);
+        touch(p, 0U);
+        return true;
+    }
+    if (std::strcmp(mode, "tlsf-overrun") == 0)
+    {
+        mem::TlsfAllocator a(bytes, nullptr, "poison-tlsf");
+        void* const p = a.allocate(48U, 16U);
+        fill(a.allocate(48U, 16U), 48U); // the block after is live: its header still faults
+        fill(p, 48U);
+        touch(p, 48U);
+        return true;
+    }
+    if (std::strcmp(mode, "tlsf-underrun") == 0)
+    {
+        mem::TlsfAllocator a(bytes, nullptr, "poison-tlsf");
+        fill(a.allocate(48U, 16U), 48U);
+        auto* const q = static_cast<crd::u8*>(a.allocate(48U, 16U));
+        fill(q, 48U);
+        touch(q - 1, 0U);
+        return true;
+    }
+    if (std::strcmp(mode, "tlsf-aligned") == 0)
+    {
+        // A 256-aligned pool makes the layout exact: after a 16-byte block the next natural payload sits at +64, so
+        // the 256-aligned block lands at +256 and a 176-byte free remainder is split off in front of its header.
+        alignas(256) static crd::u8 pool[bytes];
+        mem::TlsfAllocator a(pool, sizeof(pool), "poison-tlsf-aligned");
+        fill(a.allocate(16U, 16U), 16U);
+        auto* const q = static_cast<crd::u8*>(a.allocate(64U, 256U));
+        if (q != pool + 256)
+        {
+            std::_Exit(95);
+        }
+        fill(q, 64U);
+        touch(q - 17, 0U); // below q's header: the last byte of the free leading remainder
+        return true;
+    }
+    if (std::strcmp(mode, "tlsf-large") == 0)
+    {
+        mem::TlsfAllocator a(4U * bytes, nullptr, "poison-tlsf");
+        void* const p = a.allocate(bytes, 16U);
+        fill(a.allocate(64U, 16U), 64U);
+        fill(p, bytes);
+        a.deallocate(p);
+        touch(p, bytes / 2U);
+        return true;
+    }
+    if (std::strcmp(mode, "tlsf-shrink") == 0)
+    {
+        mem::TlsfAllocator a(bytes, nullptr, "poison-tlsf");
+        void* const p = a.allocate(256U, 16U);
+        fill(a.allocate(64U, 16U), 64U);
+        fill(p, 256U);
+        void* const q = a.reallocate(p, 256U, 32U, 16U);
+        if (q != p)
+        {
+            std::_Exit(95); // the shrink did not stay in place
+        }
+        touch(q, 32U);
+        return true;
+    }
+    if (std::strcmp(mode, "gtlsf-freed") == 0)
+    {
+        mem::GrowableTlsfAllocator a(4096U, nullptr, "poison-gtlsf");
+        fill(a.allocate(3000U, 16U), 3000U);    // the first chunk is sized for this request (8 KiB)
+        void* const p = a.allocate(6000U, 16U); // more than the first chunk has left
+        fill(a.allocate(64U, 16U), 64U);
+        if (a.num_chunks() < 2U)
+        {
+            std::_Exit(95);
+        }
+        fill(p, 6000U);
+        a.deallocate(p);
+        touch(p, 1024U);
+        return true;
+    }
+    return run_ring_mode(mode);
+}
+
 // Two adjacent slots of one pool: frees the upper (or the lower) one and returns the other. Exits 95 when the pool
 // did not hand out neighbours, which the test rejects like any exit other than 42.
 template <typename Pool>
@@ -247,7 +384,7 @@ crd::u8* keep_one_of_two_neighbours(Pool& pool, crd::usize size, crd::usize alig
         touch(keep_one_of_two_neighbours(a, 48U, 16U, 48U, true), 48U);
         return true;
     }
-    return run_arena_mode(mode);
+    return run_tlsf_mode(mode);
 }
 } // namespace
 

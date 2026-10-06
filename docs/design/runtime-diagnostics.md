@@ -197,6 +197,17 @@ Settled policies (2026-10-07, [session](../sessions/2026-10-07-diag-3b-pool-and-
 - **Arenas.** Linear, stack and growable linear arenas unpoison exactly each slice; alignment padding, the unhanded
   tail and everything after a reset or rewind stay poisoned. Every allocator returns exactly its own range unpoisoned
   to its parent or caller, never more.
+- **TLSF** (and growable TLSF, which destroys each chunk's heap before freeing its pool;
+  [session](../sessions/2026-10-07-diag-3b-tlsf-and-ring-poisoning.md)). Every block header and every free payload,
+  its free-list links included, is poisoned at rest; the allocator and `validate_structure()` reach a header word
+  through accessors that open exactly that word and restore its previous state, and each operation re-derives the
+  shadow of the blocks it leaves behind (split, merge, leading alignment remainder, in-place shrink and grow). A live
+  block is the logical allocation, so one-byte over- and underruns land in a poisoned header whether the neighbour is
+  live or free. A test that forges header corruption opens the word first.
+- **Ring.** Unclaimed space, alignment padding, wrap waste and retired epochs are poisoned. A claim opens the
+  granules it overlaps after its CAS wins; retirement poisons only granules wholly inside the retired span, before the
+  tail publishes it, with retirers serialised in ASan builds only. Claims and retirements never write the same
+  shadow byte, so the boundary is per granule: byte-exact for claims whose offset and size are multiples of 8.
 - **Granularity.** Detection is byte-exact for 8-byte aligned slices. A partly addressable granule is reported after
   the next granule's shadow: `use-after-poison` before poisoned padding, `unknown-crash` before a live neighbour.
   The negative control requires `use-after-poison`, so its modes keep a poisoned granule after the faulting byte.
