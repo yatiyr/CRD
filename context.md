@@ -3,11 +3,10 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: REPO.DEV -->
-**Current work:** [REPO.DEV](docs/ROADMAP.md#slice-repo.dev), first Open row; complete tier green
-([audit](docs/sessions/2026-10-06-needs-ci-audit.md)); gates: cache-cold run, selector comparison.
-Next programme: [DIAG](docs/ROADMAP.md#slice-diag.0) immediately after REPO.DEV;
-[implementation contract](docs/design/runtime-diagnostics.md).
+<!-- current-slice: DIAG.3a -->
+**Current work:** [DIAG.3a](docs/ROADMAP.md#slice-diag.3a), first unfinished row; REPO.DEV and DIAG.0-2b Done
+([audit](docs/sessions/2026-10-06-needs-ci-audit.md)); then DIAG.3b, after which DIAG.3c-6b can close.
+[Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction
@@ -31,4 +30,4 @@ local whole-tree builds/tests; read CI, repair, repeat. Every lane failed on `66
 records the causes and repairs. On 2026-10-05 the user accepted all open recommendations
 ([decisions](docs/sessions/2026-10-05-user-decisions.md)): lavapipe CI, 7a lifetime/pass, TSan lane, WARP fault. Pending gates remain in ROADMAP; the
 [audit](docs/sessions/2026-09-14-infrastructure-audit.md) maps child evidence and retained qualification.
-ADR-0107 and RAH-0 reviews remain gates. Existing hardware; user alone commits/pushes; no invented approval or test.
+ADR-0107 and RAH-0 reviews remain gates. Existing hardware; serial agent pushes per user (no AI notes); no invented approval or test.

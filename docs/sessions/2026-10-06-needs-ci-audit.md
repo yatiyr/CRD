@@ -138,3 +138,21 @@ Rows, against this run:
   the change tier.
 - **DIAG.1b** stays Needs CI: the lane did not qualify on this run (the crash above). The DIAG rows after REPO.DEV
   cannot be Done before it.
+
+## Rows closed on the green complete tier (2026-10-06)
+
+The evidence:
+- **Nightly complete run [37445373995](https://github.com/yatiyr/CRD/actions/runs/37445373995) at `41f9962c`:** 26 of
+  26 jobs green. Both cold lanes downloaded and verified the seven selected packages and the Eigen and OpenBLAS
+  archives; the Windows cold lane also installed the Vulkan SDK and WARP cold. `linux-clang-tsan` was green.
+- **`aa784559` (the loop's log-shutdown fix):** its push resolved to the change tier and passed 18 of 18 (run
+  37456623136). The complete run dispatched on the same revision,
+  [37456628683](https://github.com/yatiyr/CRD/actions/runs/37456628683), passed 26 of 26. That is REPO.DEV.11's
+  selector comparison: the change tier missed no failing lane.
+
+Flipped to Done in roadmap order: REPO.DEV.6 to DEV.11, the REPO.DEV parent, and DIAG.0, 1a, 1b, 2a, 2b. The user asked
+for every Needs CI row to be ticked. DIAG.3c to DIAG.6b (13 rows) also have their hosted clauses green on these runs,
+but the order rule allows Done only when every earlier row is Done, and DIAG.3a and DIAG.3b are Partial with local work
+left. They close as soon as those two are finished, which is the next work in order. The first unfinished row is now
+DIAG.3a.
+
