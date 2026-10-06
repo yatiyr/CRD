@@ -106,3 +106,10 @@ Either one also closes DEV.7 to DEV.10, whose own hosted clauses are already sho
 - **Fix:** `fixture_process_running` now treats both errors as "not running".
 - **Checked:** `scripts/test-dev-workflow.py` passes 3 of 3 runs on the WSL reference host and passes on Windows.
 - **Rows:** no Needs CI row flips on this read. The run is incomplete and is not a complete-tier run.
+- Later in v20, `linux-gcc-debug` failed one of 6,838 tests: the `crd-no-malloc-allocator` guard. The new DIAG.3a
+  boundary test constructs `MallocAllocator` to test it, and the guard only allows named allocator-test files.
+  - **Fix:** add `tests/foundation/memory/test_allocator_boundaries.cpp` to both guard scripts' allowlists, next to
+    `test_memory.cpp`.
+  - **Checked:** both scripts pass, as do all 8 win-debug guard ctests.
+  - **Cause of the miss:** the local checks ran the memory exe, not ctest's guards. That step is now part of every
+    handover.

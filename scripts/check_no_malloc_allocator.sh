@@ -11,7 +11,7 @@ ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 hits=$(grep -rn "MallocAllocator" "$ROOT/engine" "$ROOT/tests" "$ROOT/runtime" \
         --include='*.cpp' --include='*.hpp' --include='*.h' 2>/dev/null \
       | grep -vE "/engine/foundation/memory/" \
-      | grep -vE "/tests/foundation/memory/test_memory\.cpp|/tests/foundation/stress/test_allocators_stress\.cpp|/tests/foundation/stress/test_allocators_v5_stress\.cpp" \
+      | grep -vE "/tests/foundation/memory/test_memory\.cpp|/tests/foundation/memory/test_allocator_boundaries\.cpp|/tests/foundation/stress/test_allocators_stress\.cpp|/tests/foundation/stress/test_allocators_v5_stress\.cpp" \
       | grep -v "crd-lint-allow-malloc-allocator" \
       | awk -F: '{ code=$0; sub(/^([A-Za-z]:)?[^:]*:[0-9]+:/,"",code); t=code; sub(/^[ \t]+/,"",t); if (t ~ /^\/\// || t ~ /^\*/) next; print }' \
       || true)

@@ -201,10 +201,9 @@ void OffsetAllocator::remove_node_from_bin(u32 node_index) noexcept
 
 OffsetAllocator::Allocation OffsetAllocator::allocate(u32 size, u32 alignment) noexcept
 {
-    CRD_ASSERT(is_pow2(alignment));
-    if (size == 0)
+    if (size == 0 || !is_pow2(alignment))
     {
-        return {};
+        return {}; // nothing to allocate, or an alignment no offset can honour
     }
     // Over-allocate by (alignment - 1) so we can return an aligned offset inside the
     // region; free() works off the metadata node (the un-aligned region), so the
@@ -244,6 +243,13 @@ OffsetAllocator::Allocation OffsetAllocator::allocate(u32 size, u32 alignment) n
     const u32 bin_index  = (top_bin << kMantissaBits) | leaf_bin;
     const u32 node_index = m_bin_indices[bin_index];
     Node&     node       = m_nodes[node_index];
+
+    // A split needs a fresh node for the remainder. With the node pool empty, refuse before anything changes
+    // (DIAG.3a): insert_node_into_bin would otherwise only assert, then index m_free_nodes[kUnused] in a release build.
+    if (node.data_size > padded && m_free_offset == kUnused)
+    {
+        return {}; // node pool exhausted (raise max_allocations)
+    }
 
     const u32 total_size = node.data_size;
     node.data_size       = padded;
@@ -291,9 +297,20 @@ void OffsetAllocator::free(Allocation allocation) noexcept
     {
         return;
     }
-    const u32 node_index = allocation.metadata;
-    Node&     node       = m_nodes[node_index];
-    CRD_ASSERT_MSG(node.used, "OffsetAllocator: free of an unused / double-freed allocation");
+    // Only a handle this allocator issued and has not freed may touch the bins (DIAG.3a): its node index is in
+    // range, the node is live, and the offset lies inside the node's region. Anything else is refused in every build
+    // (asserting where asserts are on), never followed into m_nodes. A stale handle whose node was reissued with the
+    // same offset is indistinguishable here; generations are DIAG.3e.
+    const u32  node_index = allocation.metadata;
+    const bool issued     = node_index < m_max_allocs && m_nodes[node_index].used &&
+                        allocation.offset >= m_nodes[node_index].data_offset &&
+                        allocation.offset - m_nodes[node_index].data_offset < m_nodes[node_index].data_size;
+    if (!issued)
+    {
+        CRD_ASSERT_MSG(issued, "OffsetAllocator: free of a foreign, unused or double-freed allocation");
+        return;
+    }
+    Node& node = m_nodes[node_index];
 
     u32 offset = node.data_offset;
     u32 size   = node.data_size;

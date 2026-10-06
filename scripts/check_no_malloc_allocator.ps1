@@ -10,7 +10,8 @@
 #
 # Allowed:
 #   - engine/foundation/memory/**        (defines MallocAllocator + default_allocator)
-#   - tests/foundation/memory/test_memory.cpp, tests/foundation/stress/test_allocators_stress.cpp,
+#   - tests/foundation/memory/test_memory.cpp, tests/foundation/memory/test_allocator_boundaries.cpp,
+#     tests/foundation/stress/test_allocators_stress.cpp,
 #     tests/foundation/stress/test_allocators_v5_stress.cpp  (test the allocators themselves)
 #   - a 'crd-lint-allow-malloc-allocator' marker on the same line (justified exception)
 #   - comment lines (doc mentions of the type name)
@@ -40,6 +41,7 @@ $scopes = @(
 $allowedPathFragments = @(
     '\engine\foundation\memory\',
     '\tests\foundation\memory\test_memory.cpp',
+    '\tests\foundation\memory\test_allocator_boundaries.cpp',
     '\tests\foundation\stress\test_allocators_stress.cpp',
     '\tests\foundation\stress\test_allocators_v5_stress.cpp'
 )

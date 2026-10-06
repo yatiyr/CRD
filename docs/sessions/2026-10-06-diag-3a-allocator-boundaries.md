@@ -80,7 +80,37 @@ After the fixes were restored and the lane rebuilt, win-debug passes all 11 cont
 win-clang-cl-shipping pass 143, without the debug-only case. A full win-debug `all` build is clean, and strict tidy and
 `clang-format --dry-run --Werror` are clean on every changed source.
 
+## Part 3: the ring and offset allocators
+
+Neither is an `IAllocator`, so each gets its own case in the same file.
+
+`OffsetAllocator` (the GPU sub-allocation kernel, 32-bit offsets):
+- **Node pool.** The header promises an invalid allocation when the node pool is exhausted. Instead, the remainder
+  split called `insert_node_into_bin`, which only asserts when no node is left. With asserts compiled out, it reads
+  `m_free_nodes[0xFFFFFFFF]`. `allocate` now refuses before changing anything when a split would need a node and none
+  is left.
+- **Foreign handles.** `free` indexed `m_nodes[metadata]` with no range check. Its double-free check was a debug
+  assert that then carried on and corrupted the bins. `free` now refuses, in every build, any handle whose node index
+  is out of range, whose node is not live, or whose offset lies outside that node's region. Where asserts are on, it
+  asserts first. A stale handle whose node was reissued at the same offset still looks valid; telling those apart
+  needs generations, which is DIAG.3e.
+- **Bad arguments.** A non-power-of-two alignment now returns an invalid allocation instead of asserting.
+
+`RingAllocator`: `try_claim` with a non-power-of-two alignment, or one above the buffer's cache-line alignment, now
+returns nullptr instead of asserting. Exhaustion and recovery were already correct: the ring stays full until its
+epoch retires, then reuses the space. The test now covers both.
+
+The tests count asserts through a scoped assert handler that lets execution continue, so each refusal path runs
+in-process. They expect one assert per refusal where asserts are compiled in, and none where they are not.
+
+Teeth, with both sources put back to their pre-batch versions: three of the cases break on an assert (the alignment of
+3, the node pool, and the ring alignment). The foreign-handle case dies with an access violation at `m_nodes[9999]`.
+
+With the fixes restored and the lane rebuilt, the memory suite passes 146 test cases on win-debug and win-asan, and on
+WSL clang TSan, gcc debug and gcc ASan. win-shipping and win-clang-cl-shipping, where asserts are compiled out, pass
+145. A full win-debug `all` build is clean, and strict tidy and `clang-format --dry-run --Werror` are clean.
+
 ## Still open in DIAG.3a
 
-- Wrong-allocator free, parent/child arena destruction, external buffers and partial construction.
-- `RingAllocator` and `OffsetAllocator`: neither is an `IAllocator`, so each needs its own boundary checks.
+- Wrong-allocator free across the `IAllocator` family, parent/child arena destruction, external buffers and partial
+  construction.

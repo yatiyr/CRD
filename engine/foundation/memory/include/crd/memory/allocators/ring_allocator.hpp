@@ -71,7 +71,8 @@ public:
     // buffer, or nullptr if the live span (head - tail) won't fit it (caller waits
     // for retire / uses a bigger ring). A span that would straddle the buffer end
     // wraps to offset 0, wasting the tail bytes (standard upload-ring trick).
-    // `alignment` must be a power of two <= kCachelineSize (the buffer's alignment).
+    // `alignment` must be a power of two <= kCachelineSize (the buffer's alignment); any other alignment returns
+    // nullptr.
     [[nodiscard]] void* try_claim(usize size, usize alignment = kDefaultAlignment) noexcept;
 
     // Close the current epoch and open `fence` (must strictly increase). Records

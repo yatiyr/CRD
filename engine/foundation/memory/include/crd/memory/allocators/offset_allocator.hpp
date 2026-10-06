@@ -56,10 +56,13 @@ public:
     OffsetAllocator& operator=(const OffsetAllocator&) = delete;
 
     // Allocate `size` bytes at >= `alignment` (power of two). Returns an invalid
-    // Allocation when no free region fits or the node pool is exhausted. O(1).
+    // Allocation when no free region fits, the node pool is exhausted, the size is
+    // zero or the alignment is not a power of two. O(1).
     [[nodiscard]] Allocation allocate(u32 size, u32 alignment = 1) noexcept;
 
-    // Free a prior allocation (coalesces with free neighbours). O(1).
+    // Free a prior allocation (coalesces with free neighbours). O(1). A handle this
+    // allocator did not issue, or already freed, is refused without touching any
+    // state (asserting where asserts are enabled).
     void free(Allocation allocation) noexcept;
 
     // Drop everything back to one free region spanning [0, capacity). O(bins).

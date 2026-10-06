@@ -44,8 +44,10 @@ void* RingAllocator::try_claim(usize size, usize alignment) noexcept
     {
         return nullptr; // zero / larger-than-the-whole-ring never fits
     }
-    CRD_ASSERT(is_pow2(alignment));
-    CRD_ASSERT_MSG(alignment <= kCachelineSize, "RingAllocator: alignment exceeds the buffer alignment");
+    if (!is_pow2(alignment) || alignment > kCachelineSize)
+    {
+        return nullptr; // the buffer is only cache-line aligned: such a claim can never be honoured (DIAG.3a)
+    }
 
     u64 head = m_head.load(std::memory_order_relaxed);
     for (;;)

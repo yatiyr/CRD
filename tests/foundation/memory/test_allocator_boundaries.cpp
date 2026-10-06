@@ -8,7 +8,9 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/malloc_allocator.hpp>
+#include <crd/memory/allocators/offset_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
+#include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
 #include <crd/memory/allocators/streaming_allocator.hpp>
 #include <crd/memory/allocators/streaming_category_allocator.hpp>
@@ -17,6 +19,7 @@
 #include <crd/memory/allocators/virtual_memory_allocator.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 
+#include <crd/core/assert.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/diag/specimen_runner.hpp>
@@ -324,4 +327,138 @@ TEST_CASE("allocator boundaries: an unsatisfiable reallocate reaches the out-of-
         // test exists to catch); 96 = unknown mode.
         CHECK(o.exit_code == 42);
     }
+}
+
+namespace
+{
+int g_asserts_seen = 0;
+
+void count_assert(const char* /*expr*/, const char* /*file*/, int /*line*/, const char* /*msg*/) noexcept
+{
+    ++g_asserts_seen;
+}
+
+int continue_after_assert(const char* /*formatted*/) noexcept
+{
+    return 0; // continue: the code under test must then refuse on its own
+}
+
+// Counts asserts instead of breaking, so a refusal path can be run in-process; restores the previous handlers.
+class AssertCapture
+{
+public:
+    AssertCapture() : m_handler(crd::get_assert_handler()), m_platform(crd::get_assert_platform_handler())
+    {
+        g_asserts_seen = 0;
+        crd::set_assert_handler(&count_assert);
+        crd::set_assert_platform_handler(&continue_after_assert);
+    }
+    ~AssertCapture()
+    {
+        crd::set_assert_handler(m_handler);
+        crd::set_assert_platform_handler(m_platform);
+    }
+    AssertCapture(const AssertCapture&)            = delete;
+    AssertCapture& operator=(const AssertCapture&) = delete;
+
+private:
+    crd::AssertHandler         m_handler;
+    crd::AssertPlatformHandler m_platform;
+};
+
+// One per refused call where asserts are compiled in; none where they are not. Either way the refusal must hold.
+constexpr int kAssertsPerRefusal = CRD_ENABLE_ASSERTS ? 1 : 0;
+} // namespace
+
+TEST_CASE("allocator boundaries: OffsetAllocator refuses impossible requests and handles it did not issue",
+          "[memory][contract][diag]")
+{
+    constexpr crd::u32 capacity = crd::u32{1} << 20;
+    using Offset                = mem::OffsetAllocator;
+
+    SECTION("sizes and alignments that cannot be honoured return an invalid allocation")
+    {
+        Offset a(capacity, 64U, nullptr, "bound-offset");
+        CHECK_FALSE(a.allocate(0U).valid());
+        CHECK_FALSE(a.allocate(UINT32_MAX).valid());
+        CHECK_FALSE(a.allocate(capacity + 1U).valid());
+        CHECK_FALSE(a.allocate(64U, crd::u32{1} << 31).valid()); // the padding alone exceeds the span
+        CHECK_FALSE(a.allocate(64U, 3U).valid());                 // not a power of two
+        CHECK(a.free_storage() == capacity);                     // nothing was taken by a refusal
+        const Offset::Allocation whole = a.allocate(capacity);   // the boundary itself still fits
+        CHECK(whole.valid());
+        a.free(whole);
+        CHECK(a.free_storage() == capacity);
+    }
+    SECTION("an exhausted node pool refuses instead of overrunning the side arrays")
+    {
+        // Four nodes: three live allocations each split the free region, using the fourth node for the last
+        // remainder. A fourth split has no node left.
+        Offset                   a(capacity, 4U, nullptr, "bound-offset-nodes");
+        const Offset::Allocation x = a.allocate(64U);
+        const Offset::Allocation y = a.allocate(64U);
+        const Offset::Allocation z = a.allocate(64U);
+        REQUIRE(x.valid());
+        REQUIRE(y.valid());
+        REQUIRE(z.valid());
+        const crd::u32 free_before = a.free_storage();
+        CHECK_FALSE(a.allocate(64U).valid());
+        CHECK(a.free_storage() == free_before); // the refusal changed nothing
+
+        a.free(x); // a freed node makes room again; an exact-fit request needs no split at all
+        const Offset::Allocation again = a.allocate(64U);
+        CHECK(again.valid());
+        a.free(again);
+        a.free(y);
+        a.free(z);
+        CHECK(a.free_storage() == capacity); // every region coalesced back: the bins are intact
+    }
+    SECTION("a foreign, stale or double-freed handle is refused without touching the bins")
+    {
+        Offset                   a(capacity, 64U, nullptr, "bound-offset-free");
+        const Offset::Allocation x = a.allocate(64U);
+        const Offset::Allocation y = a.allocate(64U);
+        REQUIRE(x.valid());
+        REQUIRE(y.valid());
+        a.free(x);
+        const crd::u32 free_before = a.free_storage();
+        {
+            AssertCapture capture;
+            a.free(Offset::Allocation{0U, 9999U});            // a node index this allocator never had
+            a.free(x);                                         // a double free
+            a.free(Offset::Allocation{y.offset + 4096U, y.metadata}); // a live node, but not this offset
+            CHECK(g_asserts_seen == 3 * kAssertsPerRefusal);
+        }
+        CHECK(a.free_storage() == free_before);
+        a.free(y);
+        CHECK(a.free_storage() == capacity);
+    }
+}
+
+TEST_CASE("allocator boundaries: RingAllocator refuses impossible claims and recovers after retire",
+          "[memory][contract][diag]")
+{
+    constexpr crd::usize capacity = 4096U;
+    mem::RingAllocator   ring(capacity, nullptr, 4U, "bound-ring");
+    CHECK(ring.try_claim(0U) == nullptr);
+    CHECK(ring.try_claim(capacity + 1U) == nullptr);
+    CHECK(ring.try_claim(SIZE_MAX) == nullptr);
+    CHECK(ring.try_claim(64U, 2U * mem::kCachelineSize) == nullptr); // above the buffer's own alignment
+    CHECK(ring.try_claim(64U, 3U) == nullptr);                       // not a power of two
+    CHECK(ring.in_use_bytes() == 0U);                                // no refusal consumed space
+
+    void* claims[4] = {};
+    for (void*& c : claims)
+    {
+        c = ring.try_claim(1024U, 16U);
+        REQUIRE(c != nullptr);
+        fill(c, 0x7EU);
+    }
+    CHECK(ring.try_claim(1024U, 16U) == nullptr); // full until the epoch retires
+    CHECK(holds(claims[0], 0x7EU));
+
+    ring.begin_epoch(1U); // closes epoch 0, which holds every claim above
+    ring.retire(0U);
+    CHECK(ring.in_use_bytes() == 0U);
+    CHECK(ring.try_claim(1024U, 16U) != nullptr); // the space is reusable
 }
