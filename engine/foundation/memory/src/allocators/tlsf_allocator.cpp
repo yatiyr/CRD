@@ -663,7 +663,14 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
     // size is enough, merge + split.
     BlockHeader* block = block_from_payload(p);
     const usize current_cap = block_size(block);
-    const usize needed = align_up(new_size, kAlignSize);
+    usize needed = 0;
+    if (!checked_align_up(new_size, kAlignSize, &needed))
+    {
+        // The unchecked round-up wrapped to 0 and "shrank" the live block in place (DIAG.3a). No pool can hold
+        // the request, so it is out of memory: fatal, like every other TLSF allocation failure.
+        CRD_FATAL("TlsfAllocator: reallocate size overflows");
+        return nullptr;
+    }
 
     if (needed <= current_cap)
     {

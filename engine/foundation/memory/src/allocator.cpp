@@ -13,7 +13,9 @@ CRD_DEFINE_LOG_CHANNEL(g_log_memory, "Memory", ::crd::log::LogLevel::Info)
 
 // ---- Default reallocate -------------------------------------------------
 // Allocate-copy-deallocate fallback. Specialised allocators (TLSF later)
-// can override for in-place growth.
+// can override for in-place growth. Like C realloc, a failed allocation
+// (an allocator whose allocate returns nullptr on exhaustion) returns nullptr
+// and leaves `p` allocated and unchanged (DIAG.3a).
 void* IAllocator::reallocate(void* p, usize old_size, usize new_size, usize alignment)
 {
     if (new_size == 0)
@@ -27,6 +29,10 @@ void* IAllocator::reallocate(void* p, usize old_size, usize new_size, usize alig
     }
 
     void* new_ptr = allocate(new_size, alignment);
+    if (new_ptr == nullptr)
+    {
+        return nullptr; // `p` keeps its bytes; the caller still owns it
+    }
     const usize copy_bytes = (old_size < new_size) ? old_size : new_size;
     if (copy_bytes > 0)
     {
@@ -42,6 +48,12 @@ void* IAllocator::reallocate(void* p, usize old_size, usize new_size, usize alig
 // stack / pool). Allocators whose allocate is fatal-on-OOM override this.
 void* IAllocator::try_allocate(usize size, usize alignment)
 {
+    // The non-fatal contract first: a zero size or a non-power-of-two alignment is refused here, before an
+    // allocate() whose precondition asserts would reject it (DIAG.3a).
+    if (size == 0U || !is_pow2(alignment))
+    {
+        return nullptr;
+    }
     return allocate(size, alignment);
 }
 

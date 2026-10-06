@@ -65,7 +65,9 @@ def fixture_process_running(pid):
         return process_alive(pid)
     try:
         return not Path(f'/proc/{pid}/stat').read_text().split(') ', 1)[1].startswith('Z ')
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # Gone: either /proc/<pid> no longer exists, or the process was reaped between open() and read(), which
+        # the kernel reports as ESRCH (hosted Linux run 37389502998). Both mean it is not running.
         return False
 
 

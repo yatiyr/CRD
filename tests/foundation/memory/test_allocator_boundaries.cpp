@@ -17,6 +17,10 @@
 #include <crd/memory/allocators/virtual_memory_allocator.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/diag/specimen_runner.hpp>
+
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdint>
@@ -68,6 +72,8 @@ enum class Ownership : crd::u8
 void check_boundaries(mem::IAllocator& a, const char* name, Ownership ownership = Ownership::Exact)
 {
     INFO("allocator: " << name);
+    CHECK(a.try_allocate(0U, 16U) == nullptr); // zero size: nullptr, never a block and never an assert
+
     void* first = a.try_allocate(kBlock, 16U);
     REQUIRE(first != nullptr);
     CHECK(aligned(first, 16U));
@@ -174,5 +180,148 @@ TEST_CASE("allocator boundaries: every IAllocator refuses unsatisfiable requests
         mem::DiagnosticConfig       cfg;
         mem::DiagnosticAllocator    a(&backing, cfg);
         check_boundaries(a, "DiagnosticAllocator");
+    }
+}
+
+namespace
+{
+constexpr crd::usize kMaxBlocks = 512U;
+
+// Allocates `block`-byte blocks with try_allocate until it refuses. The refusal must come within kMaxBlocks, the
+// allocator must survive it, and the first block must keep its bytes. Returns how many blocks succeeded; `blocks`
+// receives them.
+crd::usize exhaust(mem::IAllocator& a, crd::usize block, void* (&blocks)[kMaxBlocks])
+{
+    crd::usize n = 0U;
+    while (n < kMaxBlocks)
+    {
+        void* p = a.try_allocate(block, 16U);
+        if (p == nullptr)
+        {
+            break;
+        }
+        blocks[n] = p;
+        ++n;
+    }
+    REQUIRE(n > 0U);
+    REQUIRE(n < kMaxBlocks); // exhaustion was reached and refused, not an endless supply
+    return n;
+}
+} // namespace
+
+TEST_CASE("allocator boundaries: exhaustion refuses with nullptr and keeps every earlier allocation",
+          "[memory][contract][diag]")
+{
+    void* blocks[kMaxBlocks] = {};
+    SECTION("linear")
+    {
+        mem::LinearAllocator a(64U * 1024U, nullptr, "exhaust-linear");
+        const crd::usize     n = exhaust(a, 4096U, blocks);
+        fill(blocks[0], 0x11U);
+        CHECK(a.try_allocate(4096U, 16U) == nullptr); // stays exhausted
+        CHECK(holds(blocks[0], 0x11U));
+        CHECK(a.owns(blocks[n - 1U]));
+    }
+    SECTION("stack")
+    {
+        mem::StackAllocator a(64U * 1024U, nullptr, "exhaust-stack");
+        const crd::usize    n = exhaust(a, 4096U, blocks);
+        fill(blocks[0], 0x22U);
+        CHECK(a.try_allocate(4096U, 16U) == nullptr);
+        CHECK(holds(blocks[0], 0x22U));
+        CHECK(a.owns(blocks[n - 1U]));
+    }
+    SECTION("pool: a freed slot is reusable after exhaustion")
+    {
+        mem::PoolAllocator a(kBlock, 16U, 64U, nullptr, "exhaust-pool");
+        const crd::usize   n = exhaust(a, kBlock, blocks);
+        CHECK(n == 16U);
+        fill(blocks[0], 0x33U);
+        a.deallocate(blocks[n - 1U]);
+        void* again = a.try_allocate(kBlock, 16U);
+        CHECK(again != nullptr);
+        CHECK(holds(blocks[0], 0x33U));
+    }
+    SECTION("tlsf: a freed block is reusable after exhaustion")
+    {
+        mem::TlsfAllocator a(256U * 1024U, nullptr, "exhaust-tlsf");
+        const crd::usize   n = exhaust(a, 4096U, blocks);
+        fill(blocks[0], 0x44U);
+        a.deallocate(blocks[n - 1U]);
+        void* again = a.try_allocate(4096U, 16U);
+        CHECK(again != nullptr);
+        CHECK(holds(blocks[0], 0x44U));
+    }
+    SECTION("virtual memory")
+    {
+        mem::VirtualMemoryAllocator::Config cfg;
+        cfg.reserve_bytes = crd::usize{64} << 20;
+        mem::VirtualMemoryAllocator a(cfg, "exhaust-vm");
+        const crd::usize            n = exhaust(a, crd::usize{1} << 20, blocks);
+        fill(blocks[0], 0x55U);
+        CHECK(a.try_allocate(crd::usize{1} << 20, 16U) == nullptr);
+        CHECK(holds(blocks[0], 0x55U));
+        CHECK(a.owns(blocks[n - 1U]));
+    }
+}
+
+TEST_CASE("allocator boundaries: a failed reallocate keeps the previous allocation", "[memory][contract][diag]")
+{
+    // The allocators whose allocate returns nullptr on failure. Like C realloc, reallocate must then return nullptr
+    // and leave the old block allocated and unchanged. (The fatal-on-exhaustion allocators are covered by the
+    // fatal-path specimen below; PoolAllocator's reallocate past its slot size is a precondition violation.)
+    const auto check_realloc_failure = [](mem::IAllocator& a, const char* name)
+    {
+        INFO("allocator: " << name);
+        void* p = a.allocate(kBlock, 16U);
+        REQUIRE(p != nullptr);
+        fill(p, 0x6CU);
+        for (const crd::usize size : kHugeSizes)
+        {
+            INFO("size " << size);
+            CHECK(a.reallocate(p, kBlock, size, 16U) == nullptr);
+            CHECK(holds(p, 0x6CU)); // the old block is untouched
+        }
+        void* q = a.reallocate(p, kBlock, 2U * kBlock, 16U); // and a satisfiable reallocate still moves the bytes
+        REQUIRE(q != nullptr);
+        CHECK(holds(q, 0x6CU));
+        a.deallocate(q);
+    };
+    SECTION("linear")
+    {
+        mem::LinearAllocator a(64U * 1024U, nullptr, "realloc-linear");
+        check_realloc_failure(a, "LinearAllocator");
+    }
+    SECTION("stack")
+    {
+        mem::StackAllocator a(64U * 1024U, nullptr, "realloc-stack");
+        check_realloc_failure(a, "StackAllocator");
+    }
+    SECTION("growable linear")
+    {
+        mem::GrowableLinearAllocator a(64U * 1024U, nullptr, "realloc-glinear");
+        check_realloc_failure(a, "GrowableLinearAllocator");
+    }
+}
+
+TEST_CASE("allocator boundaries: an unsatisfiable reallocate reaches the out-of-memory fatal and never a wrapped size",
+          "[memory][contract][diag][harness]")
+{
+    namespace cd   = crd::diag;
+    namespace cont = crd::containers;
+    const char* const modes[] = {"tlsf-realloc-overflow", "tlsf-realloc-huge", "gtlsf-realloc-huge"};
+    for (const char* mode : modes)
+    {
+        cd::Expectation e;
+        e.want = cd::Expectation::Want::CleanExit; // exit_code is the oracle here, not the verdict
+        cont::Array<cont::String> args;
+        args.push_back(cont::String{mode});
+        const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
+        INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
+                     << " reason=" << o.reason.c_str());
+        CHECK(cont::StringView{o.identity} == cont::StringView{"crd-diag-alloc-fatal-specimen"});
+        // 42 = the expected fatal fired; 97 = a different assert fired first; 0 = reallocate returned (the wrap this
+        // test exists to catch); 96 = unknown mode.
+        CHECK(o.exit_code == 42);
     }
 }

@@ -51,10 +51,36 @@ The first Windows run failed on 8 of the 12 allocators, and Linux found a ninth:
   libc's null return, which is the contract under test, and leaves every error check on. After the fix, clang TSan,
   gcc debug and gcc ASan each pass all 141 memory test cases.
 
+## Part 2: zero size, exhaustion, reallocate failure and the fatal paths
+
+Three more cases in the same test file, plus a zero-size check in the shared sweep:
+- **Zero size.** `try_allocate(0)` must return nullptr on all 12. The default `IAllocator::try_allocate` called
+  `allocate`, whose linear-style precondition asserts `size > 0`. It now refuses a zero size and a non-power-of-two
+  alignment first.
+- **Exhaustion.** Linear, stack, pool, TLSF and virtual memory are filled with `try_allocate` until they refuse. The
+  refusal must come, the first block keeps its bytes, and for pool and TLSF a freed block is reusable afterwards.
+- **Reallocate failure.** For the allocators whose `allocate` returns nullptr (linear, stack, growable linear),
+  `reallocate` to an impossible size must return nullptr and leave the old block untouched, like C `realloc`. The
+  default `IAllocator::reallocate` copied into the null result and then freed the old block. It now returns nullptr
+  first.
+- **Fatal paths.** TLSF `reallocate(p, 64, SIZE_MAX)` rounded the size up to 0 and took the shrink-in-place branch,
+  splitting the live block. It now uses `checked_align_up` and reaches `CRD_FATAL`. A fatal cannot run in-process, so
+  the new `crd-diag-alloc-fatal-specimen` runs it as a bounded child through the DIAG.0 harness, as the observer-swap
+  control does. Its assert handler turns the expected fatal into exit 42. Three modes cover the TLSF overflow, a TLSF
+  request too large for the pool, and a growable-TLSF request too large for any chunk. The memory module now lists
+  `support/diag` among its test directories, as core, perf and jobs do.
+
+Teeth, with `allocator.cpp` and `tlsf_allocator.cpp` put back to their pre-batch versions:
+- the zero-size check asserts in `LinearAllocator::allocate`;
+- the linear reallocate case dies with an access violation (the copy into nullptr);
+- `tlsf-realloc-overflow` exits 0 because `reallocate` returned, so the fatal case fails.
+
+After the fixes were restored and the lane rebuilt, win-debug passes all 11 contract cases and the whole memory suite
+(144 test cases). So do win-asan, and on WSL clang TSan, gcc debug and gcc ASan (144 each). win-shipping and
+win-clang-cl-shipping pass 143, without the debug-only case. A full win-debug `all` build is clean, and strict tidy and
+`clang-format --dry-run --Werror` are clean on every changed source.
+
 ## Still open in DIAG.3a
 
-- Zero-size: `IAllocator` says `try_allocate(0)` returns nullptr, but linear-style `allocate` asserts `size > 0`, so the
-  default `try_allocate` cannot be swept yet.
-- Per-allocator exhaustion and reallocation failure that keeps the previous allocation.
 - Wrong-allocator free, parent/child arena destruction, external buffers and partial construction.
 - `RingAllocator` and `OffsetAllocator`: neither is an `IAllocator`, so each needs its own boundary checks.

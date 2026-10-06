@@ -94,3 +94,15 @@ Either one also closes DEV.7 to DEV.10, whose own hosted clauses are already sho
   checker passed, and its `--before` mode rejected the warm cache afterwards. The tooling suite (56 tests) and the
   pins, CI-tier and repository guards pass.
 - **Remaining:** the next complete-tier hosted run is the proof.
+
+## CI reads after the audit
+
+**v20, run 37389502998 at `a3f8c19b`.** The user approved cancelling the superseded queued and running runs (v14
+`2dea4e6a`, and v16 to v19). Before the cancel, v16 had 12 jobs green and none failed.
+- In v20, the Linux repository job failed in "Affected workflow selection contracts":
+  `test_supervisor_parent_death_does_not_leave_a_running_tool` raised `ProcessLookupError`.
+- **Cause: the fixture.** The supervised tool was reaped between `open()` and `read()` of `/proc/<pid>/stat`, and the
+  kernel reports that as `ESRCH`, not `ENOENT`. The supervisor behaved correctly: the tool was already gone.
+- **Fix:** `fixture_process_running` now treats both errors as "not running".
+- **Checked:** `scripts/test-dev-workflow.py` passes 3 of 3 runs on the WSL reference host and passes on Windows.
+- **Rows:** no Needs CI row flips on this read. The run is incomplete and is not a complete-tier run.

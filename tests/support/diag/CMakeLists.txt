@@ -45,6 +45,12 @@ crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)
 crd_diag_specimen(crd-diag-observer-swap-specimen SOURCES specimens/observer_swap_specimen.cpp)
 target_link_libraries(crd-diag-observer-swap-specimen PRIVATE crd-jobs)
 
+# The DIAG.3a allocator fatal-path control: a reallocate no pool can satisfy must reach the allocator's
+# out-of-memory fatal (never a wrapped size). The specimen's assert platform handler turns the expected fatal
+# into exit 42; crd-memory-tests runs it once per mode as a bounded child.
+crd_diag_specimen(crd-diag-alloc-fatal-specimen SOURCES specimens/alloc_fatal_specimen.cpp)
+target_link_libraries(crd-diag-alloc-fatal-specimen PRIVATE crd-core crd-memory)
+
 # The no-blocking-context negative control: an unenrolled thread waiting on a single-thread pool must
 # trip the deadlock fatal. Links crd-jobs and the platform thread library (it spawns a std::thread).
 crd_diag_specimen(crd-diag-unenrolled-wait-specimen SOURCES specimens/unenrolled_wait_specimen.cpp)

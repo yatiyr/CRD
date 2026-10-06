@@ -322,7 +322,7 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
 crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time TESTS foundation/perf support/diag support/fuzz)
-crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory TEST_DEPENDS jobs)
+crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory support/diag TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math
     TESTS geometry/geometry-primitives)
