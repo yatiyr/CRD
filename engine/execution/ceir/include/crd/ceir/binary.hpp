@@ -13,6 +13,9 @@
 // itself (serialize∘deserialize∘serialize == serialize) and agrees with the text form (print∘deserialize∘serialize
 // == print). TypeId is an opaque u32 here (there is no type intern table until CEIR-3, which will add a type chunk
 // and bump the version).
+//
+// Identity chunks ride `serialize` only, never the content hash: 'STID' (CEIR-8d stable ids) and 'ORIG' (DIAG.8a
+// authored origins, provenance.hpp; written only when some op recorded one, so an origin-free blob is unchanged).
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/ir.hpp>

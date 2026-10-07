@@ -24,6 +24,11 @@ struct ParseResult
     bool        ok           = false;
     usize       error_offset = 0;  // byte offset into `text` where parsing failed (valid only when !ok)
     const char* error        = "";  // a static diagnostic string (valid only when !ok)
+    // DIAG.8a: the failing text position as a 1-based line:col (0 when ok, and always 0 for a binary deserialize, which
+    // reports only `error_offset`), plus the file id the caller passed to `parse` (0 = none).
+    u32 error_line    = 0;
+    u32 error_col     = 0;
+    u32 error_file_id = 0;
 
     [[nodiscard]] explicit operator bool() const noexcept { return ok; }
 };
@@ -33,4 +38,10 @@ struct ParseResult
 // attribute, e.g. `func.func`) are re-registered into the module's SymbolTable, so the parsed module resolves the
 // same as the original (a duplicate symbol name is a parse error).
 [[nodiscard]] ParseResult parse(Context& ctx, containers::StringView text);
+
+// DIAG.8a: parse `text` as the contents of source file `file_id` (a `Context::register_file` id; 0 = unnamed). Every op
+// records its authored position as a CarrierOp origin in the Context's provenance side table (provenance.hpp) — debug
+// metadata outside the content hash, so reformatting the text changes no hash. A failure reports its position in
+// `error_line:error_col`. `parse(ctx, text)` is this with file id 0.
+[[nodiscard]] ParseResult parse(Context& ctx, containers::StringView text, u32 file_id);
 } // namespace crd::ceir

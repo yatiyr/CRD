@@ -16,6 +16,7 @@
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/ir.hpp>
+#include <crd/ceir/provenance.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -94,7 +95,29 @@ struct Seq
     containers::Array<crd::u32> yield_slots; // the terminator's operand slots (this region's yielded values)
     containers::Array<Latch>    latches;     // §20 cells to latch at this seq's block-eval end (in block order)
     containers::Array<crd::u32> arg_slots;   // this block's arg slots (4b: a continuation binds the antecedent token here)
-    explicit Seq(memory::IAllocator* a) : instrs(a), yield_slots(a), latches(a), arg_slots(a) {}
+    // DIAG.8a: per instr (parallel to `instrs`), its index into CompiledPlan::sites. Never read by the dispatch loop —
+    // only by a diagnostic query (`instr_provenance`), so the §153 hot path is unchanged.
+    containers::Array<crd::u32> sites;
+    explicit Seq(memory::IAllocator* a) : instrs(a), yield_slots(a), latches(a), arg_slots(a), sites(a) {}
+};
+
+// DIAG.8a: the authored provenance of one compiled instr, resolved at compile from the source op (provenance.hpp) and
+// owned by the plan, so it outlives the Module. `origins_off/cnt` index CompiledPlan::site_origins.
+struct InstrSite
+{
+    StableId      op{};
+    crd::u32      origins_off = 0U;
+    crd::u32      origins_cnt = 0U;
+    ProvenanceGap gap         = ProvenanceGap::NoSourceLocation;
+};
+
+// DIAG.8a: one compiled instr's address in a plan (`seq` = kNoInstr ⇒ none).
+inline constexpr crd::u32 kNoInstr = 0xFFFFFFFFU;
+struct InstrRef
+{
+    crd::u32 seq   = kNoInstr;
+    crd::u32 instr = 0U;
+    [[nodiscard]] bool valid() const noexcept { return seq != kNoInstr; }
 };
 
 // A compiled FUNCTION (4a): its body's entry seq + its frame size + the param slots to bind at a call. Slots are
@@ -115,11 +138,13 @@ struct CompiledPlan
     containers::Array<crd::u32>   child_pool;   // child SEQ indices for control-flow instrs
     containers::Array<crd::u32>   cell_depths;  // §20: the ring depth per dense cell index (num_cells entries) — PLAN-GLOBAL
     containers::Array<CompiledFn> funcs;        // 4a: the compiled function table (Op::Call + the 4c map/combine fns index this)
+    containers::Array<InstrSite>  sites;        // DIAG.8a: one per compiled instr (Seq::sites indexes this)
+    containers::Array<Origin>     site_origins; // DIAG.8a: the sites' authored origins (CarrierOp already resolved)
     crd::u32                      num_cells = 0U; // the §20 state-cell count (cells are per-OP global, NOT per-frame)
     crd::u32                      num_maps  = 0U; // 4c: the data-parallel op count (a dense map-output index per ParallelFor/MapReduce)
     crd::u32                      entry_fn  = 0U; // the @entry function's index into `funcs`
     explicit CompiledPlan(memory::IAllocator* a)
-        : seqs(a), operand_pool(a), result_pool(a), child_pool(a), cell_depths(a), funcs(a)
+        : seqs(a), operand_pool(a), result_pool(a), child_pool(a), cell_depths(a), funcs(a), sites(a), site_origins(a)
     {
     }
 };
@@ -171,9 +196,10 @@ struct PlanStats
 
 struct CompileResult
 {
-    CompiledPlan plan;
-    CompileError error = CompileError::Ok;
-    PlanStats    stats;                        // CEIR-11c: the plan-compile cost/shape counters
+    CompiledPlan     plan;
+    CompileError     error = CompileError::Ok;
+    PlanStats        stats;        // CEIR-11c: the plan-compile cost/shape counters
+    const Operation* op = nullptr; // DIAG.8a: the offending op of a failed compile (nullptr: ok, or no op to blame)
     explicit CompileResult(memory::IAllocator* a) : plan(a) {}
     [[nodiscard]] bool ok() const noexcept { return error == CompileError::Ok; }
 };
@@ -200,6 +226,7 @@ struct RunResult
     containers::Array<containers::Array<crd::i64>> map_outputs; // 4c §118 parity: the per-index map per dense map index —
                                        // compared to the reference's `map_output(op)` (default-empty agrees with find-fail)
     RunError                    error = RunError::None;
+    InstrRef                    fault; // DIAG.8a: the instr that raised `error` (the innermost; invalid when ok)
     explicit RunResult(memory::IAllocator* a) : values(a), cells(a), map_outputs(a) {}
     [[nodiscard]] bool ok() const noexcept { return error == RunError::None; }
 };
@@ -213,4 +240,9 @@ struct RunResult
 // null-default) fire around each dispatched instr for a perf-linking consumer — zero-cost when unset.
 [[nodiscard]] RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc,
                             RunHooks hooks = {});
+
+// DIAG.8a: the authored provenance of instr `at` — a view into the plan's own tables (no Module needed). An invalid or
+// out-of-range `at` yields ProvenanceGap::NoOperation. Render it with `render_provenance` and the Context that owns the
+// source map (file ids are that Context's).
+[[nodiscard]] Provenance instr_provenance(const CompiledPlan& plan, InstrRef at) noexcept;
 } // namespace crd::ceir::plan

@@ -139,7 +139,7 @@ namespace crd::ceir
 // CSE `region`: per block, keep a `seen` list of candidates; a later candidate structurally equal to an earlier `seen` op is a
 // duplicate — RAUW its results to the survivor's and collect it into `dead`. Recurse into nested regions FIRST (each block
 // scopes its own `seen` — cross-block CSE is name-forward). Collect-then-erase: `dead` is drained by the caller after the walk.
-inline void cse_region(const Context& ctx, Region* region, containers::Array<Operation*>& dead)
+inline void cse_region(Context& ctx, Region* region, containers::Array<Operation*>& dead)
 {
     for (Block* b = region->first_block(); b != nullptr; b = b->next_in_region())
     {
@@ -165,6 +165,9 @@ inline void cse_region(const Context& ctx, Region* region, containers::Array<Ope
             }
             if (match != nullptr)
             {
+                // DIAG.8a: the survivor now stands for both authored ops (many-to-many provenance).
+                const Operation* const merged[2] = {match, op};
+                ctx.derive_origins(match, containers::ConstSpan<const Operation*>(merged, 2U));
                 for (u32 i = 0; i < op->num_results(); ++i)
                 {
                     op->result(i)->replace_all_uses_with(match->result(i));
@@ -185,6 +188,7 @@ inline void cse_region(const Context& ctx, Region* region, containers::Array<Ope
 {
     bool                          any = false;
     containers::Array<Operation*> dead(ctx.allocator());
+    ctx.assign_stable_ids(m); // DIAG.8a: an eliminated op keeps a real identity in its survivor's provenance
     for (;;)
     {
         dead.clear();

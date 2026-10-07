@@ -25,6 +25,9 @@ constexpr u32 kChunkSrcm = make_fourcc('S', 'R', 'C', 'M'); // source-file map (
 constexpr u32 kChunkAttr = make_fourcc('A', 'T', 'T', 'R'); // attribute-value pool (of_type refs the TYPE pool)
 constexpr u32 kChunkBody = make_fourcc('B', 'O', 'D', 'Y'); // the region graph
 constexpr u32 kChunkStid = make_fourcc('S', 'T', 'I', 'D'); // CEIR-8d stable ids (per-op, body pre-order; skippable)
+constexpr u32 kChunkOrig = make_fourcc('O', 'R', 'I', 'G'); // DIAG.8a authored origins (sparse, pre-order; skippable)
+// One ORIG origin record: space u8 + node u64 + SRCM ref u32 + line u32 + col u32.
+constexpr u64 kOrigRecordBytes = 1U + 8U + 4U + 4U + 4U;
 
 // ── writer helpers (little-endian, field-by-field — every hole is removed by construction) ──
 void put_u8(ByteArray& b, u8 v) { b.push_back(v); }
@@ -139,11 +142,24 @@ public:
         }
         assign_ids(module.body());   // pass 0
         encode_region(module.body()); // pass 1 → fills the pools + m_body
+        // DIAG.8a: provenance rides with identity, never with content. Built BEFORE the pools are emitted because an
+        // origin may name a source file no live op uses (interned into SRCM/STRP here, after every BODY file).
+        ByteArray  orig(m_alloc);
+        const bool with_orig = with_stid && build_orig(module, orig);
 
         ByteArray out(m_alloc);
         put_u32(out, kBinaryMagic);
         put_u32(out, kBinaryVersion);
-        put_u32(out, with_stid ? 6U : 5U); // chunk_count: STRP, TYPE, SRCM, ATTR, BODY [, STID]
+        u32 chunk_count = 5U; // STRP, TYPE, SRCM, ATTR, BODY [, STID [, ORIG]]
+        if (with_stid)
+        {
+            ++chunk_count;
+        }
+        if (with_orig)
+        {
+            ++chunk_count;
+        }
+        put_u32(out, chunk_count);
         emit_strp(out);   // STRP first — TYPE/SRCM/ATTR all reference it by index
         emit_type(out);   // TYPE before ATTR (of_type attr values reference the type pool)
         emit_srcm(out);
@@ -153,7 +169,54 @@ public:
         {
             emit_stid(out, module);
         }
+        if (with_orig) // DIAG.8a: additive + skippable, present only when some op recorded origins
+        {
+            emit_chunk(out, kChunkOrig, orig);
+        }
         return out;
+    }
+
+    // The ORIG chunk: u32 entry count, then per op that recorded origins (ascending body pre-order index): u32 op
+    // index, u32 origin count, and that many {u8 space, u64 node, u32 SRCM ref (1-based; 0 = no file), u32 line,
+    // u32 col}.
+    // Returns false (no chunk) when no op recorded an origin, so an origin-free module's blob is unchanged.
+    [[nodiscard]] bool build_orig(const Module& module, ByteArray& p)
+    {
+        containers::Array<Operation*> ops(m_alloc);
+        gather_ops(module.body(), ops);
+        u32 entries = 0U;
+        for (usize i = 0; i < ops.size(); ++i)
+        {
+            if (m_ctx.origins(ops[i]).size() != 0U)
+            {
+                ++entries;
+            }
+        }
+        if (entries == 0U)
+        {
+            return false;
+        }
+        put_u32(p, entries);
+        for (usize i = 0; i < ops.size(); ++i)
+        {
+            const containers::ConstSpan<Origin> list = m_ctx.origins(ops[i]);
+            if (list.size() == 0U)
+            {
+                continue;
+            }
+            put_u32(p, static_cast<u32>(i));
+            put_u32(p, static_cast<u32>(list.size()));
+            for (usize k = 0; k < list.size(); ++k)
+            {
+                const Origin& o = list[k];
+                put_u8(p, static_cast<u8>(o.space));
+                put_u64(p, o.node.value);
+                put_u32(p, o.loc.file_id != 0U ? intern_srcm(o.loc.file_id) + 1U : 0U);
+                put_u32(p, o.loc.line);
+                put_u32(p, o.loc.col);
+            }
+        }
+        return true;
     }
 
     // The STID chunk: a u32 op count + one u64 stable id per op, in the SAME body pre-order the decoder rebuilds ops in
@@ -545,6 +608,10 @@ public:
         {
             decode_stid();
         }
+        if (m_ok) // DIAG.8a: authored origins zip onto the same pre-ordered ops
+        {
+            decode_orig();
+        }
         if (!m_ok)
         {
             return err_result();
@@ -655,6 +722,12 @@ private:
                 m_stid = payload;
                 m_stid_off = c.pos;
                 m_has_stid = true;
+            }
+            else if (fourcc == kChunkOrig) // DIAG.8a
+            {
+                m_orig     = payload;
+                m_orig_off = c.pos;
+                m_has_orig = true;
             }
             // else: unknown chunk — skipped by length (forward compatibility)
             c.pos += size;
@@ -1531,6 +1604,88 @@ private:
         m_ctx.set_stable_id_watermark(m_module, watermark);
     }
 
+    // DIAG.8a: decode the ORIG chunk (layout at Serializer::build_orig). Every count is bounded by the chunk bytes
+    // before anything is allocated; op indices must be strictly ascending (one entry per op) and in range; a space
+    // byte must be known and a file ref must name a decoded SRCM entry.
+    void decode_orig() noexcept
+    {
+        if (!m_has_orig)
+        {
+            return;
+        }
+        Cursor    c{m_orig};
+        const u32 entries = c.u32v();
+        if (!c.ok)
+        {
+            fail(m_orig_off + c.pos, "truncated ORIG chunk");
+            return;
+        }
+        if (static_cast<u64>(entries) > m_ops.size())
+        {
+            fail(m_orig_off + c.pos, "ORIG entry count exceeds the BODY op count");
+            return;
+        }
+        containers::Array<Origin> list(m_ctx.allocator());
+        u64                       prev = 0U;
+        for (u32 e = 0; e < entries; ++e)
+        {
+            const u32 index = c.u32v();
+            const u32 count = c.u32v();
+            if (!c.ok)
+            {
+                fail(m_orig_off + c.pos, "truncated ORIG entry");
+                return;
+            }
+            if (static_cast<u64>(index) >= m_ops.size())
+            {
+                fail(m_orig_off + c.pos, "ORIG op index out of range");
+                return;
+            }
+            if (e != 0U && static_cast<u64>(index) <= prev)
+            {
+                fail(m_orig_off + c.pos, "ORIG op indices are not strictly ascending");
+                return;
+            }
+            prev = index;
+            if (count == 0U || !c.have(static_cast<u64>(count) * kOrigRecordBytes))
+            {
+                fail(m_orig_off + c.pos, "ORIG origins overrun the chunk");
+                return;
+            }
+            list.clear();
+            for (u32 k = 0; k < count; ++k)
+            {
+                const u8  space = c.u8v();
+                const u64 node  = c.u64v();
+                const u32 ref   = c.u32v();
+                const u32 line  = c.u32v();
+                const u32 col   = c.u32v();
+                if (space >= kOriginSpaceCount)
+                {
+                    fail(m_orig_off + c.pos, "ORIG origin space is unknown");
+                    return;
+                }
+                u32 file_id = 0U;
+                if (ref != 0U)
+                {
+                    if (ref - 1U >= m_files.size())
+                    {
+                        fail(m_orig_off + c.pos, "ORIG file ref out of range");
+                        return;
+                    }
+                    file_id = m_files[ref - 1U];
+                }
+                list.push_back(Origin{SourceLoc{file_id, line, col}, StableId{node}, static_cast<OriginSpace>(space)});
+            }
+            m_ctx.set_origins(m_ops[index], containers::ConstSpan<Origin>(list.data(), list.size()));
+        }
+        if (!c.ok || c.pos != m_orig.size())
+        {
+            fail(m_orig_off + c.pos, "malformed ORIG chunk");
+            return;
+        }
+    }
+
     struct Fixup
     {
         Operation* op  = nullptr;
@@ -1550,15 +1705,18 @@ private:
     containers::ConstSpan<u8> m_attr;
     containers::ConstSpan<u8> m_body;
     containers::ConstSpan<u8> m_stid; // CEIR-8d stable ids (optional chunk)
+    containers::ConstSpan<u8> m_orig; // DIAG.8a authored origins (optional chunk)
     u64                       m_strp_off = 0;
     u64                       m_type_off = 0;
     u64                       m_srcm_off = 0;
     u64                       m_attr_off = 0;
     u64                       m_body_off = 0;
     u64                       m_stid_off = 0;
+    u64                       m_orig_off = 0;
     bool                      m_has_strp = false;
     bool                      m_has_body = false;
     bool                      m_has_stid = false;
+    bool                      m_has_orig = false;
 
     containers::Array<containers::StringView> m_strings;       // STRP → views into the blob
     containers::Array<TypeId>                 m_types_decoded; // TYPE pool idx → decoded TypeId

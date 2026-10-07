@@ -87,9 +87,9 @@ struct Fixup
 class Parser
 {
 public:
-    Parser(Context& ctx, containers::StringView text)
+    Parser(Context& ctx, containers::StringView text, u32 file_id)
         : m_ctx(ctx), m_begin(text.data()), m_cur(text.data()), m_end(text.data() + text.size()),
-          m_values(ctx.allocator()), m_fixups(ctx.allocator())
+          m_values(ctx.allocator()), m_fixups(ctx.allocator()), m_file_id(file_id)
     {
     }
 
@@ -107,12 +107,43 @@ public:
         resolve_fixups();
         if (!m_ok)
         {
-            return ParseResult{nullptr, false, m_err_off, m_err};
+            ParseResult r{nullptr, false, m_err_off, m_err};
+            const SourceLoc at = position_of(m_err_off);
+            r.error_line       = at.line;
+            r.error_col        = at.col;
+            r.error_file_id    = m_file_id;
+            return r;
         }
         return ParseResult{m, true, 0U, ""};
     }
 
 private:
+    // DIAG.8a: the 1-based line:col of byte `off`. Op starts arrive in increasing order, so the scan resumes from the
+    // last position (linear over the whole parse); an earlier offset (the error report) rescans from the start.
+    [[nodiscard]] SourceLoc position_of(usize off) noexcept
+    {
+        const usize end = off < static_cast<usize>(m_end - m_begin) ? off : static_cast<usize>(m_end - m_begin);
+        if (end < m_pos_off)
+        {
+            m_pos_off  = 0U;
+            m_pos_line = 1U;
+            m_pos_col  = 1U;
+        }
+        for (; m_pos_off < end; ++m_pos_off)
+        {
+            if (m_begin[m_pos_off] == '\n')
+            {
+                ++m_pos_line;
+                m_pos_col = 1U;
+            }
+            else
+            {
+                ++m_pos_col;
+            }
+        }
+        return SourceLoc{m_file_id, m_pos_line, m_pos_col};
+    }
+
     // ── cursor primitives ──
     [[nodiscard]] usize offset() const noexcept { return static_cast<usize>(m_cur - m_begin); }
     void                skip_ws() noexcept
@@ -1032,6 +1063,8 @@ private:
     void parse_op(Block* b) noexcept
     {
         const usize op_off = offset();
+        skip_ws();
+        const SourceLoc op_at = position_of(offset()); // DIAG.8a: the op's authored position (its first token)
 
         // results: "%id[, %id]* ="  (bare — result types come from the trailing ": !tN")
         containers::Array<u32> result_ids(m_ctx.allocator());
@@ -1115,6 +1148,8 @@ private:
             kind, containers::ConstSpan<Value*>(operand_vals.data(), operand_vals.size()), num_results, result_type,
             num_regions);
         b->append(op);
+        const Origin authored{op_at, StableId{}, OriginSpace::CarrierOp};
+        m_ctx.set_origins(op, containers::ConstSpan<Origin>(&authored, 1U));
 
         for (u32 i = 0; i < num_results; ++i)
         {
@@ -1576,12 +1611,21 @@ private:
     bool                            m_ok      = true;
     usize                           m_err_off = 0;
     const char*                     m_err     = "";
+    u32                             m_file_id  = 0; // DIAG.8a: stamped into every recorded origin
+    usize                           m_pos_off  = 0; // DIAG.8a: position_of's resume point
+    u32                             m_pos_line = 1;
+    u32                             m_pos_col  = 1;
 };
 } // namespace
 
 ParseResult parse(Context& ctx, containers::StringView text)
 {
-    Parser p(ctx, text);
+    return parse(ctx, text, 0U);
+}
+
+ParseResult parse(Context& ctx, containers::StringView text, u32 file_id)
+{
+    Parser p(ctx, text, file_id);
     return p.run();
 }
 } // namespace crd::ceir

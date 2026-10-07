@@ -483,6 +483,18 @@ Acceptance: intentionally invalid text/node input, runtime host error and GPU va
 responsible source/node or explicit closest-known origin. Repeat after serialization, optimized lowering and failed
 reload. Future CHIR source syntax and actual JIT integration extend this same schema under LANG, not a false current claim.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md)):
+- Provenance is a Context side table plus the skippable binary `ORIG` chunk (`crd/ceir/provenance.hpp`), never op
+  content: it is outside `stable_hash`, CSE equality and the printed text, so reformatting a source changes no content
+  or interface hash. `Operation::loc` stays content (builder-declared) and is the fallback when no origin is recorded.
+- An origin is `{SourceLoc, node, space}`; spaces are the carrying op, another CEIR op by stable id, and a CHIR node.
+  A pass that replaces ops records the union of their origins (CSE survivor, folds), naming each replaced op by the
+  stable id it had before erasure; drivers assign stable ids first. A no-op removal leaves no origin.
+- Unknown attribution is a typed gap: NoOperation (nothing to blame) or NoSourceLocation (the op's id is the
+  closest-known origin). `ORIG` is written only when some op has an origin, so origin-free blobs are unchanged.
+- The compiled plan owns per-instr sites resolved at compile (outliving the Module), read only on diagnostic queries;
+  `CompileResult::op` and `RunResult::fault` name the innermost offender; the parser reports `line:col` and the file.
+
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop
 

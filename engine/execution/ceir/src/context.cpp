@@ -29,8 +29,8 @@ namespace
 Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
     : m_arena(arena_chunk_bytes, alloc), m_op_names(alloc), // GrowableLinearAllocator is (chunk_bytes, parent)
       m_type_class_names(alloc), m_attr_class_names(alloc), m_location_class_names(alloc), m_attr_values(alloc),
-      m_files(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_type_classes(&m_arena), m_attr_classes(&m_arena),
-      m_location_classes(&m_arena), m_interface_names(alloc), m_capability_names(alloc)
+      m_files(alloc), m_origins(alloc), m_dialects(&m_arena), m_op_infos(&m_arena), m_type_classes(&m_arena),
+      m_attr_classes(&m_arena), m_location_classes(&m_arena), m_interface_names(alloc), m_capability_names(alloc)
 {
 }
 
@@ -4306,6 +4306,231 @@ containers::StringView Context::file_path(u32 file_id) const noexcept
         return {};
     }
     return m_files[file_id - 1U];
+}
+
+// ── DIAG.8a provenance side table ──
+void Context::set_origins(const Operation* op, containers::ConstSpan<Origin> origins)
+{
+    if (op == nullptr)
+    {
+        return;
+    }
+    OriginList list;
+    if (origins.size() != 0U)
+    {
+        auto* const arr = static_cast<Origin*>(m_arena.allocate(origins.size() * sizeof(Origin), alignof(Origin)));
+        for (usize i = 0; i < origins.size(); ++i)
+        {
+            arr[i] = origins[i];
+        }
+        list.data  = arr;
+        list.count = static_cast<u32>(origins.size());
+    }
+    if (OriginList* const existing = m_origins.find(op))
+    {
+        *existing = list;
+        return;
+    }
+    if (list.count != 0U)
+    {
+        m_origins.insert(op, list);
+    }
+}
+
+containers::ConstSpan<Origin> Context::origins(const Operation* op) const noexcept
+{
+    if (op == nullptr)
+    {
+        return {};
+    }
+    const OriginList* const list = m_origins.find(op);
+    if (list == nullptr || list->count == 0U)
+    {
+        return {};
+    }
+    return containers::ConstSpan<Origin>(list->data, list->count);
+}
+
+namespace
+{
+void append_unique(containers::Array<Origin>& out, const Origin& o)
+{
+    for (usize i = 0; i < out.size(); ++i)
+    {
+        if (origin_equal(out[i], o))
+        {
+            return;
+        }
+    }
+    out.push_back(o);
+}
+} // namespace
+
+void Context::derive_origins(const Operation* derived, containers::ConstSpan<const Operation*> from)
+{
+    if (derived == nullptr)
+    {
+        return;
+    }
+    containers::Array<Origin> merged(allocator());
+    for (usize f = 0; f < from.size(); ++f)
+    {
+        const Operation* const src = from[f];
+        if (src == nullptr)
+        {
+            continue;
+        }
+        const containers::ConstSpan<Origin> own = origins(src);
+        if (own.size() == 0U)
+        {
+            // No recorded list: the source's own builder-declared location and identity (either may be unknown).
+            if (src->loc().line != 0U || src->stable_id().valid())
+            {
+                append_unique(merged, Origin{src->loc(), src->stable_id(), OriginSpace::CeirOp});
+            }
+            continue;
+        }
+        for (usize i = 0; i < own.size(); ++i)
+        {
+            Origin o = own[i];
+            if (o.space == OriginSpace::CarrierOp) // the source itself: name it now, before it is erased
+            {
+                o.space = OriginSpace::CeirOp;
+                o.node  = src->stable_id();
+            }
+            append_unique(merged, o);
+        }
+    }
+    set_origins(derived, containers::ConstSpan<Origin>(merged.data(), merged.size()));
+}
+
+containers::StringView provenance_gap_name(ProvenanceGap g) noexcept
+{
+    switch (g)
+    {
+    case ProvenanceGap::None: return containers::StringView("none");
+    case ProvenanceGap::NoOperation: return containers::StringView("no-operation");
+    case ProvenanceGap::NoSourceLocation: return containers::StringView("no-source-location");
+    }
+    return containers::StringView("no-operation"); // unreachable (total switch)
+}
+
+Provenance resolve_provenance(const Context& ctx, const Operation* op, containers::Array<Origin>& storage)
+{
+    storage.clear();
+    Provenance p;
+    if (op == nullptr)
+    {
+        p.gap = ProvenanceGap::NoOperation;
+        return p;
+    }
+    p.op                                    = op->stable_id();
+    const containers::ConstSpan<Origin> own = ctx.origins(op);
+    for (usize i = 0; i < own.size(); ++i)
+    {
+        Origin o = own[i];
+        if (o.space == OriginSpace::CarrierOp)
+        {
+            o.space = OriginSpace::CeirOp;
+            o.node  = op->stable_id();
+        }
+        storage.push_back(o);
+    }
+    if (own.size() == 0U && op->loc().line != 0U) // the builder-declared location (CEIR-1a content)
+    {
+        storage.push_back(Origin{op->loc(), op->stable_id(), OriginSpace::CeirOp});
+    }
+    p.origins = containers::ConstSpan<Origin>(storage.data(), storage.size());
+    p.gap     = p.primary() != nullptr ? ProvenanceGap::None : ProvenanceGap::NoSourceLocation;
+    return p;
+}
+
+namespace
+{
+void append_u64(containers::String& s, u64 n)
+{
+    char  buf[20];
+    usize k = 0;
+    do
+    {
+        buf[k++] = static_cast<char>('0' + (n % 10U));
+        n /= 10U;
+    } while (n != 0U);
+    while (k > 0U)
+    {
+        s.push_back(buf[--k]);
+    }
+}
+void append_origin(const Context& ctx, containers::String& s, const Origin& o)
+{
+    if (o.loc.line != 0U)
+    {
+        const containers::StringView file = ctx.file_path(o.loc.file_id);
+        if (file.empty())
+        {
+            s.append("<unknown>");
+        }
+        else
+        {
+            s.append(file.data(), file.size());
+        }
+        s.push_back(':');
+        append_u64(s, o.loc.line);
+        s.push_back(':');
+        append_u64(s, o.loc.col);
+    }
+    else
+    {
+        s.append("<no-source-location>");
+    }
+    s.append(o.space == OriginSpace::ChirNode ? " chir#" : " op#");
+    if (o.node.valid())
+    {
+        append_u64(s, o.node.value);
+    }
+    else
+    {
+        s.append("unassigned");
+    }
+}
+} // namespace
+
+containers::String render_provenance(const Context& ctx, const Provenance& p, memory::IAllocator* out)
+{
+    containers::String s(out);
+    const Origin* const primary = p.primary();
+    if (primary == nullptr)
+    {
+        const containers::StringView gap = provenance_gap_name(p.gap);
+        s.append(gap.data(), gap.size());
+        if (p.gap != ProvenanceGap::NoOperation)
+        {
+            s.append(" op#");
+            if (p.op.valid())
+            {
+                append_u64(s, p.op.value);
+            }
+            else
+            {
+                s.append("unassigned");
+            }
+        }
+        return s;
+    }
+    append_origin(ctx, s, *primary);
+    if (p.origins.size() > 1U)
+    {
+        s.append(" from ");
+        for (usize i = 0; i < p.origins.size(); ++i)
+        {
+            if (i != 0U)
+            {
+                s.append(", ");
+            }
+            append_origin(ctx, s, p.origins[i]);
+        }
+    }
+    return s;
 }
 
 Region* Context::create_region(RegionKind kind)

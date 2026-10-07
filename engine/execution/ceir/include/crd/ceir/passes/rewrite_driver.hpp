@@ -69,6 +69,7 @@ inline void greedy_collect(Region* region, containers::Array<Operation*>& ops)
 {
     bool                          any = false;
     containers::Array<Operation*> ops(ctx.allocator());
+    ctx.assign_stable_ids(m); // DIAG.8a: a folded-away op keeps a real identity in its replacement's provenance
     greedy_collect(m.body(), ops);
     const usize cap   = ops.size() + 1U; // monotone => rounds <= initial live ops; exceeding it => non-monotone => FATAL
     usize       round = 0;

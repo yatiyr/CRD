@@ -53,6 +53,7 @@ add_executable(crd-ceir-tests
     test_pass_manager.cpp # CEIR-8g: AnalysisManager + PassManager (ADR-0117) - cached analyses + never-stale invalidation via preserved sets
     test_rewrite.cpp     # CEIR-8g: rewrite/conversion skeleton (ADR-0117) - try_apply per-op + ConversionTarget legality (unlisted=Illegal)
     test_rewrite_driver.cpp # CEIR-26b: the greedy rewrite DRIVER (rewrite_driver.hpp) - collect-per-round fixpoint, is_erased skip, reshape-fold+DCE compose, non-monotone cap->FATAL
+    test_provenance.cpp  # DIAG.8a: authored-source provenance - text positions through CSE, ORIG serialization, plan compile/run errors, layout-independent hashes
     test_cse.cpp         # CEIR-26c: Common-Subexpression Elimination (cse.hpp) - eligibility (Pure/registered/leaf/results/det), structural equality, three-collapse, cascade, negatives
 
     test_diagnostic.cpp  # CEIR-8g: DiagnosticEngine (ADR-0117) - stable codes/severity/SourceLoc/notes/fixits, one surface, text copied

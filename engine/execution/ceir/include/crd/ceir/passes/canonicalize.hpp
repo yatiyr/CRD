@@ -72,6 +72,8 @@ inline void rewrite_reshape_of_reshape(Context& ctx, Operation& op)
     Value* const     x      = inner->operand(0);            // the value BEFORE both reshapes
     Operation* const folded = tensor::build_reshape(ctx, x, op.result(0)->type()); // one hop, result type = the outer's
     op.parent_block()->insert_before(folded, &op); // ⛔ LINK before the RAUW — a floating op is invisible to plan + re-collect
+    const Operation* const replaced[2] = {&op, inner}; // DIAG.8a: the fold stands for both authored reshapes
+    ctx.derive_origins(folded, containers::ConstSpan<const Operation*>(replaced, 2U));
     op.result(0)->replace_all_uses_with(folded->result(0)); // leave the two dead reshapes for DCE
 }
 

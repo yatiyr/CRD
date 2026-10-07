@@ -267,6 +267,8 @@ inline void rule_apply(Context& ctx, const rewrite::RewriteRule& rule, Operation
         Operation* const built = ctx.create_operation(rule.root_kind, containers::ConstSpan<Value*>(ins, 1U), 1U,
                                                        op.result(rule.result_idx)->type(), 0U);
         op.parent_block()->insert_before(built, &op);
+        const Operation* const replaced[2] = {&op, op.operand(rule.operand_idx)->defining_op()}; // DIAG.8a provenance
+        ctx.derive_origins(built, containers::ConstSpan<const Operation*>(replaced, 2U));
         op.result(rule.result_idx)->replace_all_uses_with(built->result(0));
     }
 }
@@ -281,6 +283,7 @@ inline void rule_apply(Context& ctx, const rewrite::RewriteRule& rule, Operation
 {
     bool                          any = false;
     containers::Array<Operation*> ops(ctx.allocator());
+    ctx.assign_stable_ids(m); // DIAG.8a: a replaced op keeps a real identity in the built op's provenance
     greedy_collect(m.body(), ops);
     const usize cap   = ops.size() + 1U;
     usize       round = 0;

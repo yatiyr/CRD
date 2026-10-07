@@ -139,9 +139,38 @@ struct CC
     OpId alaunch, aawait, ajoin, arace, acancel, ascope; // async.*
     OpId tspawn, tmain, tworker, tgroup, tfiber, tcont;  // task.*
     OpId pfor, mreduce;         // 4c: task.parallel_for / task.map_reduce
-    bool         isolated = false; // 4c: this CC compiles a map/combine body → a slot MISS is a capture, not an internal bug
-    CompileError err      = CompileError::Ok;
+    // 4c: this CC compiles a map/combine body → a slot MISS is a capture, not an internal bug
+    bool             isolated = false;
+    CompileError     err      = CompileError::Ok;
+    const Operation* err_op   = nullptr; // DIAG.8a: the op `err` blames (the innermost; latched by fail_at)
 };
+// DIAG.8a: latch `op` as the offender of the error already in `cc.err` (first wins — a nested compile latches the inner
+// op before its callers unwind) and return compile_seq's failure sentinel.
+crd::u32 fail_at(CC& cc, const Operation* op)
+{
+    if (cc.err_op == nullptr)
+    {
+        cc.err_op = op;
+    }
+    return 0U;
+}
+// DIAG.8a: resolve `op`'s authored provenance into plan-owned storage and return its site index (Seq::sites value).
+crd::u32 record_site(CC& cc, const Operation* op)
+{
+    containers::Array<Origin> storage(cc.alloc);
+    const Provenance          p = resolve_provenance(cc.ctx, op, storage);
+    InstrSite                 site;
+    site.op          = p.op;
+    site.origins_off = static_cast<crd::u32>(cc.plan.site_origins.size());
+    site.origins_cnt = static_cast<crd::u32>(p.origins.size());
+    site.gap         = p.gap;
+    for (usize i = 0; i < p.origins.size(); ++i)
+    {
+        cc.plan.site_origins.push_back(p.origins[i]);
+    }
+    cc.plan.sites.push_back(site);
+    return static_cast<crd::u32>(cc.plan.sites.size() - 1U);
+}
 crd::u32 slot_of(CC& cc, const Value* v)
 {
     const crd::u32* const s = cc.slot.find(v);
@@ -237,8 +266,9 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
     Seq seq(cc.alloc);
     // §20 DEFERRED latches: a state cell's `next` is a FEEDBACK edge (defined LATER in this block), so its slot cannot be
     // resolved when the state op is compiled — we record {cell, next VALUE} and resolve the slot after the block compiles.
-    containers::Array<crd::u32>    pend_cell(cc.alloc);
-    containers::Array<const Value*> pend_next(cc.alloc);
+    containers::Array<crd::u32>         pend_cell(cc.alloc);
+    containers::Array<const Value*>     pend_next(cc.alloc);
+    containers::Array<const Operation*> pend_op(cc.alloc); // DIAG.8a: the state op a latch failure blames
     for (crd::u32 a = 0; a < b->num_args(); ++a) // block-arg slots (child blocks; the entry's are the param slots)
     {
         if (cc.slot.find(b->arg(a)) == nullptr)
@@ -257,7 +287,7 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             }
             if (cc.err != CompileError::Ok)
             {
-                return 0U;
+                return fail_at(cc, op);
             }
             continue;
         }
@@ -283,7 +313,7 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp)
         {
             cc.err = CompileError::UnsupportedOp; // core.foreach etc. — no compiled semantics
-            return 0U;
+            return fail_at(cc, op);
         }
 
         Instr instr{};
@@ -300,12 +330,12 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
                 if (rb == nullptr)
                 {
                     cc.err = CompileError::UnsupportedOp;
-                    return 0U;
+                    return fail_at(cc, op);
                 }
                 const crd::u32 child = compile_seq(cc, rb); // may push NESTED children to child_pool
                 if (cc.err != CompileError::Ok)
                 {
-                    return 0U;
+                    return fail_at(cc, op);
                 }
                 child_idx.push_back(child);
             }
@@ -326,7 +356,7 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         }
         if (cc.err != CompileError::Ok)
         {
-            return 0U;
+            return fail_at(cc, op);
         }
         instr.operands_cnt = n_ops;
         // results → fresh slots.
@@ -344,13 +374,13 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             if (!vid.valid())
             {
                 cc.err = CompileError::BadConst;
-                return 0U;
+                return fail_at(cc, op);
             }
             const AttrValue v = cc.ctx.attr_value(vid);
             if (v.kind != AttrKind::Int)
             {
                 cc.err = CompileError::BadConst;
-                return 0U;
+                return fail_at(cc, op);
             }
             instr.imm = v.i;
         }
@@ -369,14 +399,14 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             if (!pid.valid())
             {
                 cc.err = CompileError::BadPredicate;
-                return 0U;
+                return fail_at(cc, op);
             }
             const AttrValue pv = cc.ctx.attr_value(pid);
             CmpPred         pred{};
             if (pv.kind != AttrKind::String || !parse_pred(pv.s, pred))
             {
                 cc.err = CompileError::BadPredicate;
-                return 0U;
+                return fail_at(cc, op);
             }
             instr.imm = static_cast<crd::i64>(pred);
         }
@@ -439,12 +469,12 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             if (p0.err != exec::ExecError::None)
             {
                 cc.err = preflight_error(p0.err);
-                return 0U;
+                return fail_at(cc, p0.op != nullptr ? p0.op : op);
             }
             const crd::u32 map_fn = compile_fn_body(cc, op->region(0)->first_block(), /*isolated=*/true);
             if (cc.err != CompileError::Ok)
             {
-                return 0U;
+                return fail_at(cc, op);
             }
             crd::u32 comb_fn = 0U;
             if (mr)
@@ -453,12 +483,12 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
                 if (p1.err != exec::ExecError::None)
                 {
                     cc.err = preflight_error(p1.err);
-                    return 0U;
+                    return fail_at(cc, p1.op != nullptr ? p1.op : op);
                 }
                 comb_fn = compile_fn_body(cc, op->region(1)->first_block(), /*isolated=*/true);
                 if (cc.err != CompileError::Ok)
                 {
-                    return 0U;
+                    return fail_at(cc, op);
                 }
             }
             // ⛔ child_pool here holds compiled-FUNCTION indices (the map fn, then the combine fn), NOT seq indices — the
@@ -479,19 +509,19 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             if (callee == nullptr)
             {
                 cc.err = CompileError::UnresolvedCall;
-                return 0U;
+                return fail_at(cc, op);
             }
             Block* const ceb = func::func_body_block(callee);
             if (ceb == nullptr)
             {
                 cc.err = CompileError::UnresolvedCall;
-                return 0U;
+                return fail_at(cc, op);
             }
             // structural arity (both counts are static) → a COMPILE reject, not the reference's runtime BadArity (§4).
             if (op->num_operands() != ceb->num_args())
             {
                 cc.err = CompileError::CallArity;
-                return 0U;
+                return fail_at(cc, op);
             }
             const crd::u32* const existing = cc.fn_index.find(callee);
             crd::u32              cidx      = 0U;
@@ -528,8 +558,10 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
             // resolve its slot AFTER the block compiles (read-all-then-latch: the latch fires at block END → `next` slotted).
             pend_cell.push_back(cell);
             pend_next.push_back(op->operand(op->num_operands() - 1U));
+            pend_op.push_back(op);
         }
         seq.instrs.push_back(instr);
+        seq.sites.push_back(record_site(cc, op)); // DIAG.8a: parallel to instrs
     }
     // resolve the deferred §20 latches — every op in the block is now slotted, so each `next` feedback edge is defined.
     for (crd::u32 i = 0; i < static_cast<crd::u32>(pend_cell.size()); ++i)
@@ -537,7 +569,7 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         seq.latches.push_back(Latch{pend_cell[i], slot_of(cc, pend_next[i])});
         if (cc.err != CompileError::Ok)
         {
-            return 0U;
+            return fail_at(cc, pend_op[i]);
         }
     }
     cc.plan.seqs.push_back(std::move(seq));
@@ -565,7 +597,8 @@ crd::u32 compile_fn_body(CC& parent, Block* body, bool isolated) // NOLINT(misc-
     const crd::u32 eseq = compile_seq(cc, body);
     if (cc.err != CompileError::Ok)
     {
-        parent.err = cc.err;
+        parent.err    = cc.err;
+        parent.err_op = cc.err_op;
         return 0U;
     }
     CompiledFn& fn = parent.plan.funcs[fn_idx]; // index FRESH — the placeholder may have moved during compile_seq
@@ -597,7 +630,18 @@ struct RS
     memory::IAllocator*          alloc;
     crd::u64                     fuel;  // a hang-guard (a runaway loop → FuelExhausted)
     RunHooks                     hooks; // CEIR-11c: null-default profiling seam (one predicted branch per instr when unset)
+    InstrRef                     fault{}; // DIAG.8a: the instr that raised the run's error (first = innermost)
 };
+// DIAG.8a: an error ORIGINATES at instr `k` of seq `seq_idx`: latch that address (first wins — outer frames only
+// propagate) and return `e`. Error paths only; the dispatch loop never reads `fault`.
+RunError raise(RS& rs, crd::u32 seq_idx, crd::u32 k, RunError e) noexcept
+{
+    if (!rs.fault.valid())
+    {
+        rs.fault = InstrRef{seq_idx, k};
+    }
+    return e;
+}
 // store one token = a copy of `child`'s yielded slot values → a new handle (the reference's store_yields, independently).
 crd::u32 store_token(RS& rs, const Seq& child, crd::u32 base)
 {
@@ -683,7 +727,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
     {
         if (rs.fuel == 0U)
         {
-            return RunError::FuelExhausted;
+            return raise(rs, seq_idx, k, RunError::FuelExhausted);
         }
         --rs.fuel;
         const Instr&   in    = seq.instrs[k];
@@ -737,7 +781,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
             if (st <= 0)
             {
-                return RunError::BadForStep;
+                return raise(rs, seq_idx, k, RunError::BadForStep);
             }
             const crd::u32 body = kids[in.children_off];
             const crd::i64 ivslot = in.imm; // the body's induction slot (−1 if no arg)
@@ -745,7 +789,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             {
                 if (rs.fuel == 0U)
                 {
-                    return RunError::FuelExhausted;
+                    return raise(rs, seq_idx, k, RunError::FuelExhausted);
                 }
                 --rs.fuel;
                 if (ivslot >= 0)
@@ -767,7 +811,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             {
                 if (rs.fuel == 0U)
                 {
-                    return RunError::FuelExhausted;
+                    return raise(rs, seq_idx, k, RunError::FuelExhausted);
                 }
                 --rs.fuel;
                 if (const RunError e = run_seq(rs, cond, base); e != RunError::None)
@@ -777,7 +821,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 const Seq& cs = rs.plan.seqs[cond];
                 if (cs.yield_slots.size() != 1U)
                 {
-                    return RunError::CondArity;
+                    return raise(rs, seq_idx, k, RunError::CondArity);
                 }
                 if (rs.stack[base + cs.yield_slots[0]] == 0)
                 {
@@ -795,7 +839,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 sel = rs.stack[base + ops[in.operands_off]];
             if (sel < 0 || sel >= static_cast<crd::i64>(in.children_cnt))
             {
-                return RunError::SelectorOutOfRange;
+                return raise(rs, seq_idx, k, RunError::SelectorOutOfRange);
             }
             if (const RunError e = run_seq(rs, kids[in.children_off + static_cast<crd::u32>(sel)], base);
                 e != RunError::None)
@@ -863,7 +907,8 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 tok = rs.stack[base + ops[in.operands_off]];
             if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
             { // ⛔ truncate to u32 EXACTLY like the reference `valid_yield_handle(static_cast<u32>(tok))` (a 2^32+ handle
-                return RunError::BadToken; //  wraps identically in both tiers — no divergence even on unreachable inputs).
+                // wraps identically in both tiers — no divergence even on unreachable inputs).
+                return raise(rs, seq_idx, k, RunError::BadToken);
             }
             const containers::Array<crd::i64>& ys = rs.tokens[static_cast<crd::u32>(tok)];
             for (crd::u32 j = 0; j < in.results_cnt && j < static_cast<crd::u32>(ys.size()); ++j)
@@ -877,7 +922,8 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 tok = rs.stack[base + ops[in.operands_off]];
             if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
             { // ⛔ truncate to u32 EXACTLY like the reference `valid_yield_handle(static_cast<u32>(tok))` (a 2^32+ handle
-                return RunError::BadToken; //  wraps identically in both tiers — no divergence even on unreachable inputs).
+                // wraps identically in both tiers — no divergence even on unreachable inputs).
+                return raise(rs, seq_idx, k, RunError::BadToken);
             }
             const crd::u32 body = kids[in.children_off];
             const Seq&     bs   = rs.plan.seqs[body];
@@ -893,7 +939,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             }
             if (bs.arg_slots.size() != ante.size()) // dynamic → runtime (BadArity)
             {
-                return RunError::ContinuationArity;
+                return raise(rs, seq_idx, k, RunError::ContinuationArity);
             }
             for (crd::u32 i = 0; i < static_cast<crd::u32>(bs.arg_slots.size()); ++i)
             {
@@ -914,7 +960,8 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 const crd::i64 tok = rs.stack[base + ops[in.operands_off + i]];
                 if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
                 {
-                    return RunError::BadToken; // ⛔ u32-truncate like the reference (identical wrap in both tiers)
+                    // ⛔ u32-truncate like the reference (identical wrap in both tiers)
+                    return raise(rs, seq_idx, k, RunError::BadToken);
                 }
                 const containers::Array<crd::i64>& ys = rs.tokens[static_cast<crd::u32>(tok)]; // store not grown in-loop
                 for (crd::u32 w = 0; w < static_cast<crd::u32>(ys.size()); ++w)
@@ -943,7 +990,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
             if (st <= 0)
             {
-                return RunError::BadForStep;
+                return raise(rs, seq_idx, k, RunError::BadForStep);
             }
             const crd::u32 map_fn = kids[in.children_off];
             const crd::u32 mapidx = static_cast<crd::u32>(in.imm);
@@ -974,7 +1021,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::i64 st = rs.stack[base + ops[in.operands_off + 2U]];
             if (st <= 0)
             {
-                return RunError::BadForStep;
+                return raise(rs, seq_idx, k, RunError::BadForStep);
             }
             const crd::u32 map_fn  = kids[in.children_off];      // ⛔ FN indices, not seq indices
             const crd::u32 comb_fn = kids[in.children_off + 1U];
@@ -1042,6 +1089,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
 CompileResult compile(Context& ctx, const Module& module, containers::StringView entry, memory::IAllocator* alloc)
 {
     CompileResult res(alloc);
+    ctx.assign_stable_ids(module); // DIAG.8a: every instr site names its op by a real stable id
     const SymbolTable* const syms = module.symbols();
     if (syms == nullptr)
     {
@@ -1057,6 +1105,7 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
     if (func::func_body_block(se->op) == nullptr)
     {
         res.error = CompileError::NoModuleBody;
+        res.op    = se->op;
         return res;
     }
 
@@ -1077,6 +1126,7 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
         if (fb == nullptr) // bodyless callee (entry checked above)
         {
             res.error = CompileError::UnresolvedCall;
+            res.op    = fn_op;
             return res;
         }
 
@@ -1094,6 +1144,7 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
         if (cc.err != CompileError::Ok)
         {
             res.error = cc.err;
+            res.op    = cc.err_op;
             return res;
         }
         const crd::u32* const idx = fn_index.find(fn_op); // stable — assigned before this function was dequeued
@@ -1142,6 +1193,7 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
     }
     RS rs{plan, stack, cells, tokens, map_outputs, alloc, crd::u64{1} << 24U, hooks}; // reference's step budget + the 11c seam
     r.error = run_seq(rs, entry.entry_seq, 0U);
+    r.fault = rs.fault;
     // §118 inspection parity: the current value per cell (ring[pos] if read; 0 if never read — matches "never evaluated").
     for (crd::u32 i = 0; i < plan.num_cells; ++i)
     {
@@ -1162,5 +1214,27 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
         r.values.push_back(stack[es.yield_slots[i]]);
     }
     return r;
+}
+
+Provenance instr_provenance(const CompiledPlan& plan, InstrRef at) noexcept
+{
+    Provenance p; // NoOperation unless `at` names a compiled instr
+    if (!at.valid() || at.seq >= static_cast<crd::u32>(plan.seqs.size()))
+    {
+        return p;
+    }
+    const Seq& seq = plan.seqs[at.seq];
+    if (at.instr >= static_cast<crd::u32>(seq.sites.size()))
+    {
+        return p;
+    }
+    const InstrSite& site = plan.sites[seq.sites[at.instr]];
+    p.op                  = site.op;
+    p.gap                 = site.gap;
+    if (site.origins_cnt != 0U)
+    {
+        p.origins = containers::ConstSpan<Origin>(plan.site_origins.data() + site.origins_off, site.origins_cnt);
+    }
+    return p;
 }
 } // namespace crd::ceir::plan

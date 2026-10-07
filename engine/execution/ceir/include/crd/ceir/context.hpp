@@ -18,6 +18,7 @@
 #include <crd/ceir/hazard.hpp>
 #include <crd/ceir/id.hpp>
 #include <crd/ceir/ir.hpp>
+#include <crd/ceir/provenance.hpp>
 #include <crd/ceir/type.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
@@ -645,6 +646,16 @@ public:
     [[nodiscard]] u32                    register_file(containers::StringView path);
     [[nodiscard]] containers::StringView file_path(u32 file_id) const noexcept;
 
+    // ── DIAG.8a authored-source provenance (provenance.hpp) ── a SIDE TABLE keyed by op, outside the content hash,
+    // CSE equality and the printed text. `set_origins` replaces `op`'s list (arena copy; empty clears it). `origins`
+    // reads it back (empty = none recorded). `derive_origins` records that `derived` replaces every op in `from` (a
+    // fold or a CSE survivor; `derived` may appear in `from`): the result is the de-duplicated union of each source's
+    // origins, with CarrierOp entries resolved to that source's stable id, or `{loc(), stable_id()}` for a source with
+    // no list. The caller assigns stable ids first (the passes do) so a replaced op keeps a real identity after erase.
+    void set_origins(const Operation* op, containers::ConstSpan<Origin> origins);
+    [[nodiscard]] containers::ConstSpan<Origin> origins(const Operation* op) const noexcept;
+    void derive_origins(const Operation* derived, containers::ConstSpan<const Operation*> from);
+
     // ── Dialect registry + traits/interfaces (CEIR-1d, §6/§7/§101) ── OPEN-WORLD: register dialects/ops/interfaces
     // without editing any central enum; the core dispatches through these, NEVER a switch on op.kind.
     [[nodiscard]] Dialect*       register_dialect(containers::StringView name);
@@ -949,6 +960,12 @@ private:
     struct Conformance { u32 concrete = 0; u32 trait = 0; };   // a registered (concrete satisfies trait) fact
     containers::Array<Conformance>             m_conformances; // live trait-conformance relation (CEIR-3b; not serialized)
     containers::Array<containers::StringView>  m_files;        // source map (file_id = index+1; each path arena-interned)
+    struct OriginList
+    {
+        const Origin* data  = nullptr; // arena-owned
+        u32           count = 0U;
+    };
+    containers::HashMap<const Operation*, OriginList> m_origins; // DIAG.8a provenance side table (not content)
     containers::HashMap<containers::StringView, Dialect*, detail::StringViewHash> m_dialects; // name → dialect
     containers::HashMap<u64, OpInfo*>          m_op_infos;         // OpId.value → its ODS-lite descriptor
     containers::HashMap<u64, TypeClassInfo*>   m_type_classes;     // CEIR-8a: TypeClassId.value → its type-class descriptor
