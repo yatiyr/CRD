@@ -41,6 +41,101 @@ void copy_name(char (&out)[kDx12DredNameBytes], const char* name) noexcept
     out[i] = '\0';
 }
 
+// (h1) Bounded narrowing copy of a possibly-null UTF-16 context string; non-ASCII code units become '?'.
+void copy_wide(char (&out)[kDx12DredNameBytes], const wchar_t* text) noexcept
+{
+    u32 i = 0;
+    if (text != nullptr)
+    {
+        for (; i + 1U < kDx12DredNameBytes && text[i] != L'\0'; ++i)
+        {
+            const wchar_t unit = text[i];
+            out[i] = (unit > 0 && unit < 0x80) ? static_cast<char>(unit) : '?';
+        }
+    }
+    out[i] = '\0';
+}
+
+void fill_context(Dx12DredContext& out, const D3D12_DRED_BREADCRUMB_CONTEXT& context) noexcept;
+
+// (h1) The innermost Cerid pass open at op `stop`: walk the history keeping the BeginEvent ops still open, then take
+// the innermost whose context string carries a Pass identity (a tool's own marker nested inside a pass does not hide
+// the pass). A BeginEvent AT `stop` also counts as open: DRED's last breadcrumb value is read either as the count of
+// completed ops or as the index of the last completed one, and counting that marker resolves the pass of a stopped
+// draw, dispatch or copy under both readings. Nesting deeper than the tracked depth leaves the inner events unknown,
+// so it reports none rather than an outer pass.
+bool in_flight_pass(const D3D12_AUTO_BREADCRUMB_NODE1& node, u32 stop, Dx12DredContext& out) noexcept
+{
+    constexpr u32 max_depth = 16U;
+    u32 open[max_depth] = {};
+    u32 depth = 0;
+    for (u32 i = 0; i <= stop; ++i)
+    {
+        const D3D12_AUTO_BREADCRUMB_OP op = node.pCommandHistory[i];
+        if (op == D3D12_AUTO_BREADCRUMB_OP_BEGINEVENT)
+        {
+            if (depth < max_depth)
+            {
+                open[depth] = i;
+            }
+            ++depth;
+        }
+        else if (op == D3D12_AUTO_BREADCRUMB_OP_ENDEVENT && i < stop && depth > 0U)
+        {
+            --depth;
+        }
+    }
+    if (depth > max_depth)
+    {
+        return false;
+    }
+    for (u32 level = depth; level > 0U; --level)
+    {
+        for (u32 c = 0; c < node.BreadcrumbContextsCount; ++c)
+        {
+            if (node.pBreadcrumbContexts[c].BreadcrumbIndex != open[level - 1U])
+            {
+                continue;
+            }
+            Dx12DredContext candidate{};
+            fill_context(candidate, node.pBreadcrumbContexts[c]);
+            if (candidate.identity.valid() && candidate.identity.kind == ObjectKind::Pass)
+            {
+                out = candidate;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// (h1) History, contexts and the in-flight pass of one node.
+void fill_history(const D3D12_AUTO_BREADCRUMB_NODE1& node, Dx12DredBreadcrumbNode& out) noexcept
+{
+    if (node.pCommandHistory != nullptr)
+    {
+        for (; out.ops_stored < node.BreadcrumbCount && out.ops_stored < kDx12DredMaxOps; ++out.ops_stored)
+        {
+            out.ops[out.ops_stored] = static_cast<u8>(node.pCommandHistory[out.ops_stored]);
+        }
+    }
+    if (node.pBreadcrumbContexts != nullptr)
+    {
+        out.context_count = node.BreadcrumbContextsCount;
+        for (; out.contexts_stored < out.context_count && out.contexts_stored < kDx12DredMaxContexts;
+             ++out.contexts_stored)
+        {
+            fill_context(out.contexts[out.contexts_stored], node.pBreadcrumbContexts[out.contexts_stored]);
+        }
+    }
+    if (!out.has_last_completed || out.last_completed >= out.op_count || node.pCommandHistory == nullptr ||
+        node.pBreadcrumbContexts == nullptr)
+    {
+        return; // the list finished, DRED did not record how far it got, or no marker carried a string
+    }
+    out.has_in_flight_pass = in_flight_pass(node, out.last_completed, out.in_flight_pass);
+}
+
 Dx12DredDeviceState map_state(D3D12_DRED_DEVICE_STATE state) noexcept
 {
     switch (state)
@@ -62,6 +157,13 @@ ObjectIdentity identity_in(const char* name) noexcept
         (void)parse(std::string_view{name}, id);
     }
     return id;
+}
+
+void fill_context(Dx12DredContext& out, const D3D12_DRED_BREADCRUMB_CONTEXT& context) noexcept
+{
+    out.op_index = context.BreadcrumbIndex;
+    copy_wide(out.text, context.pContextString);
+    out.identity = identity_in(out.text);
 }
 
 void read_allocations(const D3D12_DRED_ALLOCATION_NODE1* node, u32& count, Dx12DredReport& report) noexcept
@@ -100,6 +202,7 @@ void dx12_dred_fill_breadcrumbs(const D3D12_AUTO_BREADCRUMB_NODE1* head, Dx12Dre
             out.last_completed     = *node->pLastBreadcrumbValue;
             out.has_last_completed = true;
         }
+        fill_history(*node, out);
     }
 }
 

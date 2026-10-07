@@ -37,6 +37,17 @@ enum class Dx12DredDeviceState : u8
 inline constexpr u32 kDx12DredNameBytes  = 96U;
 inline constexpr u32 kDx12DredMaxNodes   = 8U;
 inline constexpr u32 kDx12DredMaxAllocs  = 8U;
+inline constexpr u32 kDx12DredMaxOps = 64U;     // (h1) leading breadcrumb ops kept per command list
+inline constexpr u32 kDx12DredMaxContexts = 4U; // (h1) breadcrumb context strings kept per command list
+
+// (h1) One breadcrumb context: the string a BeginEvent/SetMarker attached to the op at `op_index` (narrowed: every
+// non-ASCII code unit becomes '?', which never occurs in a Cerid token).
+struct Dx12DredContext
+{
+    u32 op_index = 0;
+    char text[kDx12DredNameBytes] = {};
+    ObjectIdentity identity{}; // the Cerid identity in the string (a pass marker carries its Pass identity)
+};
 
 struct Dx12DredBreadcrumbNode
 {
@@ -47,6 +58,21 @@ struct Dx12DredBreadcrumbNode
     u32  op_count                          = 0;  // breadcrumb operations recorded for the list
     u32  last_completed                    = 0;  // ops the GPU completed (the value DRED's last breadcrumb holds)
     bool has_last_completed                = false;
+
+    // (h1) The op history (D3D12_AUTO_BREADCRUMB_OP values) and the context strings, both bounded.
+    u32 ops_stored = 0;
+    u8 ops[kDx12DredMaxOps] = {};
+    u32 context_count = 0; // contexts DRED recorded for the list (may exceed what is stored)
+    u32 contexts_stored = 0;
+    Dx12DredContext contexts[kDx12DredMaxContexts];
+
+    // (h1) The pass the GPU was inside when it stopped: of the BeginEvent markers still open at op `last_completed`
+    // (a marker at that op counts as open), the innermost whose context string carries a Cerid Pass identity. Set only
+    // when the list stopped part-way (last_completed < op_count); `in_flight_pass.identity` is that Pass. Whether
+    // DRED's value counts completed ops or indexes the last one is unsettled until a real fault (DIAG.7b(h2)) shows
+    // it; for a stopped draw, dispatch or copy both readings resolve the same pass.
+    bool has_in_flight_pass = false;
+    Dx12DredContext in_flight_pass{};
 };
 
 struct Dx12DredAllocation
@@ -78,7 +104,8 @@ struct Dx12DredReport
 
 // The parsing halves of the read, exposed so the mapping from DRED's output lists to the report (names, identities,
 // bounds) is testable with constructed lists: a forced RemoveDevice yields empty lists, and real data needs a real
-// device fault. Both append to `report` (node/allocation counts keep counting past the stored capacity).
+// device fault. Both append to `report` (node/allocation counts keep counting past the stored capacity). The in-flight
+// pass is resolved from the native lists, so it is exact even when the history or contexts exceed what is stored.
 void dx12_dred_fill_breadcrumbs(const D3D12_AUTO_BREADCRUMB_NODE1* head, Dx12DredReport& report) noexcept;
 void dx12_dred_fill_page_fault(const D3D12_DRED_PAGE_FAULT_OUTPUT1& output, Dx12DredReport& report) noexcept;
 
@@ -107,8 +134,9 @@ struct Dx12RemovalRecord
 // DIAG.7b(f): the removal bundle. Every recorded removal is also written, when crash capture is installed, as a live
 // dump of kind DeviceRemoved (gpu_*.dmp) whose evidence stream holds this header followed by the Dx12RemovalRecord. The
 // reader refuses a stream whose magic, version or size does not match this build, rather than misreading it.
+// Version 2 (DIAG.7b(h1)): breadcrumb nodes carry their op history, context strings and in-flight pass.
 inline constexpr u32 kDx12RemovalBundleMagic   = 0x52445243U; // 'CRDR'
-inline constexpr u32 kDx12RemovalBundleVersion = 1U;
+inline constexpr u32 kDx12RemovalBundleVersion = 2U;
 
 struct Dx12RemovalBundleHeader
 {

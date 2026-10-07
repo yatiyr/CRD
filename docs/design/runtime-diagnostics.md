@@ -425,6 +425,16 @@ Acceptance: controlled device-removal/fault handling and safe isolated invalid w
 separate simulated error-path coverage from an actual adapter/device-loss reproduction. Never intentionally hang the
 desktop GPU outside a contained qualified test. Software-provider evidence is labelled as such; real hardware gates stay visible.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7b-h1-warp-fault-and-pass-resolution.md)):
+- **No real fault on WARP.** WARP discards stores to an unmapped GPU address (released, far past a live buffer, wild)
+  and has no watchdog for a shader that never ends; a forced removal leaves DRED's breadcrumb list empty, as on
+  hardware. The real fault is therefore the hardware gate (h2): one contained page fault in a child process, started
+  by the user behind `CRD_DX12_HARDWARE_FAULT_OPT_IN=1`, never in CI. The WARP run of the same child stays as
+  CI-capable, labelled software evidence of the whole path.
+- **In-flight pass.** Each breadcrumb node keeps its op history and context strings (bounded), and names the pass the
+  GPU was inside when it stopped: of the `BeginEvent` markers open at the stopping op, the innermost whose context
+  carries a Cerid Pass identity. This is the DX12 pass-to-fault route of DIAG.7a; the removal bundle is version 2.
+
 <a id="diag-7c"></a>
 ## DIAG.7c — Vulkan synchronization and device faults
 
