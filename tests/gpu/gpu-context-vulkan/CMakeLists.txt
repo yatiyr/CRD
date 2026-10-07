@@ -5,6 +5,7 @@
 add_executable(crd-gpu-context-vulkan-tests
     test_vulkan_context.cpp
     test_diag_validation_identity.cpp # DIAG.7a(d1): Cerid identity resolved from a message's named objects / prose
+    test_vulkan_loss_bundle.cpp # DIAG.7c(g): a recorded device loss written as a readable bundle
     test_vulkan_frame_graph.cpp # REN-1 (D-007 row 98): the frame graph — one submission + transient aliasing
     test_ckir_glsl_compile.cpp
     test_vulkan_rt.cpp

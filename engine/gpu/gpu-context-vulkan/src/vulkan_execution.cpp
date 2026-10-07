@@ -1,7 +1,11 @@
 #include "vulkan_execution.hpp"
 
+#include <crd/core/crash.hpp> // DIAG.7c(g): a recorded loss is written as a DeviceRemoved live dump
+
+#include <cstddef>
 #include <cstring>
 #include <mutex>
+#include <type_traits>
 
 namespace crd::gpu::detail
 {
@@ -16,13 +20,17 @@ struct FailureStore
     std::mutex                  mutex;
     VkDevice                    devices[kMaxDevices]   = {};
     VkDeviceFailure             records[kMaxDevices]   = {};
-    VkDeviceFaultReport         faults[kMaxDevices]    = {}; // DIAG.7c(d)
-    PFN_vkGetDeviceFaultInfoEXT fault_fns[kMaxDevices] = {}; // set when the device enabled VK_EXT_device_fault
+    VkDeviceFaultReport         faults[kMaxDevices]     = {}; // DIAG.7c(d)
+    PFN_vkGetDeviceFaultInfoEXT fault_fns[kMaxDevices]  = {}; // set when the device enabled VK_EXT_device_fault
+    bool                        fault_done[kMaxDevices] = {}; // (g) the fault query of a lost device has finished
+    VkLossAdapter               adapters[kMaxDevices]   = {}; // (g) registered at device creation
+    bool                        bundled[kMaxDevices]    = {}; // (g) the loss bundle of this device has been written
     crd::usize                  next                   = 0;
     crd::u64                    sequence               = 0;
     VkResult                    injected               = VK_SUCCESS;
     VkDeviceFailure             last{};       // the most recent first failure, kept after its device is forgotten
     VkDeviceFaultReport         last_fault{}; // the fault report that belongs to `last`
+    VkLossRecord                last_loss{};  // (g) the most recently written loss
 };
 
 FailureStore& store() noexcept
@@ -51,6 +59,9 @@ crd::usize slot_index(FailureStore& s, VkDevice device, bool create) noexcept
     s.records[i]       = VkDeviceFailure{};
     s.faults[i]        = VkDeviceFaultReport{};
     s.fault_fns[i]     = nullptr;
+    s.fault_done[i]    = false;
+    s.adapters[i]      = VkLossAdapter{};
+    s.bundled[i]       = false;
     return i;
 }
 
@@ -87,6 +98,11 @@ void record_locked(FailureStore& s, VkDevice device, VkResult result, VkFailureO
         r->first_result = static_cast<crd::i32>(result);
         r->operation    = operation;
         r->sequence     = ++s.sequence;
+    }
+    if (result == VK_ERROR_DEVICE_LOST && r->loss_origin == VkFailureOrigin::None)
+    {
+        r->loss_origin    = origin; // (g) the first loss, even when an earlier failure was not one
+        r->loss_operation = operation;
     }
     if (r->sequence == s.sequence)
     {
@@ -156,11 +172,95 @@ void collect_device_fault(VkDevice device) noexcept
     {
         return; // forgotten meanwhile
     }
-    s.faults[i] = report;
+    s.faults[i]     = report;
+    s.fault_done[i] = true;
     if (s.records[i].sequence == s.last.sequence)
     {
         s.last_fault = report;
     }
+}
+
+static_assert(std::is_trivially_copyable_v<VkLossRecord>, "the loss bundle stores the record's bytes");
+
+// The bundle bytes: header then record, contiguous (the header is 16 bytes, so the 8-aligned record follows directly).
+struct LossBundle
+{
+    VkLossBundleHeader header{};
+    VkLossRecord       record{};
+};
+static_assert(offsetof(LossBundle, record) == sizeof(VkLossBundleHeader));
+
+void copy_label(char (&out)[kVkOperationBytes], const char* label) noexcept
+{
+    if (label == nullptr)
+    {
+        return;
+    }
+    crd::usize n = 0;
+    while (n + 1U < kVkOperationBytes && label[n] != '\0')
+    {
+        out[n] = label[n];
+        ++n;
+    }
+    out[n] = '\0';
+}
+
+// The loss record of slot `i`. Caller holds the mutex.
+VkLossRecord loss_record_locked(const FailureStore& s, crd::usize i) noexcept
+{
+    const VkDeviceFailure& r = s.records[i];
+    VkLossRecord           out{};
+    out.origin        = r.origin;
+    out.loss_origin   = r.loss_origin;
+    out.first_result  = r.first_result;
+    out.sequence      = r.sequence;
+    out.failures      = r.failures;
+    out.slow_waits    = r.slow_waits;
+    out.adapter       = s.adapters[i];
+    out.fault         = s.faults[i];
+    out.bundle_result = static_cast<crd::u32>(crd::crash::WriteResult::NotInstalled);
+    copy_label(out.operation, r.operation);
+    copy_label(out.loss_operation, r.loss_operation);
+    return out;
+}
+
+// DIAG.7c(g): once per lost device, after its fault report is in, write the loss as a DeviceRemoved live dump. The dump
+// is written outside the lock (it suspends the other threads and walks their stacks); its result is kept on the stored
+// last-known loss. A device whose fault query is still running on another thread is written by that thread.
+void write_loss_bundle(VkDevice device) noexcept
+{
+    FailureStore& s = store();
+    LossBundle    bundle{};
+    {
+        const std::lock_guard lock(s.mutex);
+        const crd::usize      i = slot_index(s, device, false);
+        if (i == kMaxDevices || !s.records[i].lost() || s.bundled[i])
+        {
+            return;
+        }
+        if (s.fault_fns[i] != nullptr && !s.fault_done[i])
+        {
+            return;
+        }
+        s.bundled[i]  = true;
+        bundle.record = loss_record_locked(s, i);
+    }
+    bundle.header.record_bytes = static_cast<crd::u32>(sizeof(VkLossRecord));
+    crd::crash::DumpNote note{};
+    note.kind                             = crd::crash::DumpKind::DeviceRemoved;
+    note.evidence                         = &bundle;
+    note.evidence_bytes                   = static_cast<std::uint32_t>(sizeof(bundle));
+    const crd::crash::WriteResult written = crd::crash::capture_dump(note, nullptr);
+    bundle.record.bundle_result           = static_cast<crd::u32>(written);
+    const std::lock_guard lock(s.mutex);
+    s.last_loss = bundle.record;
+}
+
+// After a failed seam call: read the device's fault report if it is now lost, then write its loss bundle.
+void after_failure(VkDevice device) noexcept
+{
+    collect_device_fault(device);
+    write_loss_bundle(device);
 }
 
 void record(VkDevice device, VkResult result, VkFailureOrigin origin, const char* operation) noexcept
@@ -207,7 +307,7 @@ VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, V
     }
     if (result != VK_SUCCESS)
     {
-        collect_device_fault(device);
+        after_failure(device);
     }
     return result;
 }
@@ -225,7 +325,7 @@ VkResult vk_wait(VkDevice device, VkFence fence, crd::u64 timeout_ns, const char
     }
     if (result != VK_SUCCESS)
     {
-        collect_device_fault(device);
+        after_failure(device);
     }
     return result;
 }
@@ -252,7 +352,7 @@ VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_
     }
     if (result != VK_SUCCESS)
     {
-        collect_device_fault(device);
+        after_failure(device);
     }
     return result;
 }
@@ -270,7 +370,7 @@ VkResult vk_queue_wait_idle(VkDevice device, VkQueue queue, const char* operatio
     }
     if (result != VK_SUCCESS)
     {
-        collect_device_fault(device);
+        after_failure(device);
     }
     return result;
 }
@@ -288,7 +388,7 @@ VkResult vk_device_wait_idle(VkDevice device, const char* operation) noexcept
     }
     if (result != VK_SUCCESS)
     {
-        collect_device_fault(device);
+        after_failure(device);
     }
     return result;
 }
@@ -318,8 +418,11 @@ void vk_forget_device(VkDevice device) noexcept
         {
             s.devices[i]   = VK_NULL_HANDLE;
             s.records[i]   = VkDeviceFailure{};
-            s.faults[i]    = VkDeviceFaultReport{};
-            s.fault_fns[i] = nullptr;
+            s.faults[i]     = VkDeviceFaultReport{};
+            s.fault_fns[i]  = nullptr;
+            s.fault_done[i] = false;
+            s.adapters[i]   = VkLossAdapter{};
+            s.bundled[i]    = false;
         }
     }
 }
@@ -332,6 +435,20 @@ void vk_register_device_fault(VkDevice device, PFN_vkGetDeviceFaultInfoEXT fn) n
     s.fault_fns[i]          = fn;
     s.faults[i]             = VkDeviceFaultReport{};
     s.faults[i].available   = fn != nullptr;
+}
+
+void vk_register_device_adapter(VkDevice device, const VkPhysicalDeviceProperties& properties) noexcept
+{
+    VkLossAdapter adapter{};
+    adapter.vendor_id      = properties.vendorID;
+    adapter.device_id      = properties.deviceID;
+    adapter.driver_version = properties.driverVersion;
+    adapter.api_version    = properties.apiVersion;
+    std::memcpy(adapter.name, properties.deviceName, sizeof(adapter.name));
+    adapter.name[sizeof(adapter.name) - 1U] = '\0';
+    FailureStore&         s = store();
+    const std::lock_guard lock(s.mutex);
+    s.adapters[slot_index(s, device, true)] = adapter;
 }
 
 VkDeviceFaultReport vk_device_fault_report(VkDevice device) noexcept
@@ -347,6 +464,40 @@ VkDeviceFaultReport vk_last_device_fault_report() noexcept
     FailureStore&         s = store();
     const std::lock_guard lock(s.mutex);
     return s.last_fault;
+}
+
+VkLossRecord vk_last_loss() noexcept
+{
+    FailureStore&         s = store();
+    const std::lock_guard lock(s.mutex);
+    return s.last_loss;
+}
+
+VkBundleRead vk_read_loss_bundle(const wchar_t* dump_path, VkLossRecord& out) noexcept
+{
+    // One bounded read: a stream of exactly this build's bundle size is read whole; any other size is measured (a
+    // longer one is truncated into `bundle`, then refused below).
+    LossBundle        bundle{};
+    const std::size_t size =
+        crd::crash::read_dump_stream(dump_path, crd::crash::kEvidenceStreamType, &bundle, sizeof(bundle));
+    if (size == 0U)
+    {
+        return VkBundleRead::NoStream;
+    }
+    if (size < sizeof(VkLossBundleHeader) || bundle.header.magic != kVkLossBundleMagic)
+    {
+        return VkBundleRead::BadMagic;
+    }
+    if (bundle.header.version != kVkLossBundleVersion)
+    {
+        return VkBundleRead::BadVersion;
+    }
+    if (size != sizeof(bundle) || bundle.header.record_bytes != sizeof(VkLossRecord))
+    {
+        return VkBundleRead::BadSize;
+    }
+    out = bundle.record;
+    return VkBundleRead::Ok;
 }
 
 void vk_inject_next_result(VkResult result) noexcept

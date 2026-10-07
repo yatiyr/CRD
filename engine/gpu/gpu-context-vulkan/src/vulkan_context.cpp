@@ -1549,7 +1549,7 @@ private:
         {
             return;
         }
-        register_device_fault();
+        register_device_diagnostics();
         vkGetDeviceQueue(m_device, m_compute_family, 0, &m_compute_queue);
         if (m_graphics_family != UINT32_MAX)
         {
@@ -1558,10 +1558,13 @@ private:
         m_valid = true;
     }
 
-    // DIAG.7c(d): with VK_EXT_device_fault enabled, hand its query to the seam, which reads it once this device is
-    // lost.
-    void register_device_fault() noexcept
+    // DIAG.7c(g): register the adapter, so a loss bundle names the adapter and driver. DIAG.7c(d): with
+    // VK_EXT_device_fault enabled, hand its query to the seam, which reads it once this device is lost.
+    void register_device_diagnostics() noexcept
     {
+        VkPhysicalDeviceProperties adapter{};
+        vkGetPhysicalDeviceProperties(m_physical, &adapter);
+        detail::vk_register_device_adapter(m_device, adapter);
         if (!m_device_fault)
         {
             return;

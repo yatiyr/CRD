@@ -458,6 +458,19 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7c-descriptor-limit-a
   or submit. On VVL 1.4.341 the Core image-layout mismatch, although it names `vkQueueSubmit`, also arrives at the
   wait. Gates assert "nothing at record, correlated by the wait"; they never assert the submit-time count.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7c-g-loss-bundle.md)):
+- **Loss bundle.** The first time a device is recorded lost, after its `VK_EXT_device_fault` report is read, the
+  completion seam writes a `VkLossRecord` (first failure, loss origin and operation, failure counts, adapter, fault
+  report; no pointers) as a `DeviceRemoved` live dump (`gpu_*.dmp`) whose evidence stream starts with its own magic
+  (`CRVL`) and version. It is written once per device and never for a failure that is not a loss. A simulated loss is
+  labelled `Simulated`. The reader refuses foreign, other-version and other-size evidence, including DX12's.
+- **A loss after another failure is still a loss.** `VkDeviceFailure::lost()` follows the first
+  `VK_ERROR_DEVICE_LOST`, not only a loss that was the first failure: a bounded wait that times out before the device
+  is reported lost no longer hides the loss from the fault query, the bundle or the lost-device short cut.
+- **Linux.** Live dumps are a Windows facility (DIAG.5a); on Linux the loss is recorded and kept in process and the
+  write reports `Unsupported`. A Linux on-disk loss bundle would need a non-fatal Linux evidence writer, which DIAG.5b
+  does not provide.
+
 <a id="diag-8a"></a>
 ## DIAG.8a — authored source and lowering provenance
 
