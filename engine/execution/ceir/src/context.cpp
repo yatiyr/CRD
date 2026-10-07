@@ -4515,6 +4515,12 @@ containers::String render_provenance(const Context& ctx, const Provenance& p, me
                 s.append("unassigned");
             }
         }
+        // Origins without a position (a graph-authored CHIR node) still name the closest-known authored identity.
+        for (usize i = 0; i < p.origins.size(); ++i)
+        {
+            s.append(i == 0U ? " from " : ", ");
+            append_origin(ctx, s, p.origins[i]);
+        }
         return s;
     }
     append_origin(ctx, s, *primary);

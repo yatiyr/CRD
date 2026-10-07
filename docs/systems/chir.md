@@ -13,6 +13,10 @@ Text and CR-D007 graph documents are two projections of one source model.
 attributes, regions and source locations; presentation layout is separate. The text parser/printer and graph-schema
 reader/writer round-trip the committed event-handler example. Both projections lower to the same CEIR module.
 Source-derived identity preserves compatible state across reorder/body edits and supports migration/rejection checks.
+Since DIAG.8a every lowered CEIR op records which CHIR node it came from (node id plus text line:col under the file
+passed to `lower_chir`) in CEIR's provenance side table. A compile or interpreter error on the lowered program
+therefore names the authored CHIR line, also after CSE and a binary round-trip; graph-authored nodes name their CHIR id
+with an explicit no-source-location gap ([session](../sessions/2026-10-07-diag-8a-chir-lowering-provenance.md)).
 
 The [32 close](../sessions/2026-09-06-ceir-32z-band-close.md) proves the five-construct prototype: event handler,
 query, parallel update, await and state. Its node kinds also include program and state declarations/updates.

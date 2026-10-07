@@ -8,6 +8,7 @@
 #include <crd/ceir/gen/async_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/gen/task_ops.hpp>
+#include <crd/ceir/provenance.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -21,6 +22,8 @@ using crd::ceir::Context;
 using crd::ceir::Module;
 using crd::ceir::Operation;
 using crd::ceir::OpId;
+using crd::ceir::Origin;
+using crd::ceir::OriginSpace;
 using crd::ceir::TypeId;
 using crd::ceir::Value;
 using crd::ceir::Visibility;
@@ -51,8 +54,8 @@ struct CeirOps
 class Lowering
 {
 public:
-    Lowering(const SourceModel& m, Context& ctx, const CeirOps& o)
-        : m_m(m), m_ctx(ctx), m_o(o), m_pins(ctx.allocator()), m_state_pins(ctx.allocator())
+    Lowering(const SourceModel& m, Context& ctx, const CeirOps& o, crd::u32 file_id)
+        : m_m(m), m_ctx(ctx), m_o(o), m_file(file_id), m_pins(ctx.allocator()), m_state_pins(ctx.allocator())
     {
     }
 
@@ -89,6 +92,37 @@ public:
     }
 
 private:
+    // ── DIAG.8a provenance: every op this lowering creates names the CHIR node(s) it came from, in the Context's
+    // side table (never `set_loc`, which is content). A node's position is re-stamped onto the lowering's file id
+    // (0 = file unknown); a node without a text position (graph-authored) still names its CHIR id, the closest-known
+    // origin.
+    [[nodiscard]] Origin origin_of(crd::u32 node) const noexcept
+    {
+        const ChirNode& n   = m_m.node(node);
+        SourceLoc       loc = n.loc;
+        if (loc.line == 0U)
+        {
+            loc = SourceLoc{};
+        }
+        else
+        {
+            loc.file_id = m_file;
+        }
+        return Origin{loc, n.id, OriginSpace::ChirNode};
+    }
+    // Attribute `op` to `node`, and also to `also` when one CEIR op stands for two CHIR nodes (a StateUpdate folded
+    // into its StateDecl's cell): the many-to-many case.
+    void attribute(const Operation* op, crd::u32 node, crd::u32 also = kInvalidNode)
+    {
+        Origin         list[2] = {origin_of(node), Origin{}};
+        const crd::u32 count   = (also != kInvalidNode) ? 2U : 1U;
+        if (also != kInvalidNode)
+        {
+            list[1] = origin_of(also);
+        }
+        m_ctx.set_origins(op, ConstSpan<Origin>(list, count));
+    }
+
     // ── the CHIR out-pin -> CEIR Value table + the edge resolver ──
     struct PinVal
     {
@@ -234,11 +268,12 @@ private:
     }
 
     // arith.const %v : t -> a Value (there is no core.const; arith.const is the corpus idiom). The bounds use !index to
-    // match the induction var; state/async placeholders use i64.
-    Value* konst(Block* b, crd::i64 v, TypeId t)
+    // match the induction var; state/async placeholders use i64. Attributed to `node` (and `also`, see attribute).
+    Value* konst(Block* b, crd::i64 v, TypeId t, crd::u32 node, crd::u32 also = kInvalidNode)
     {
         Operation* const op = m_ctx.create_operation(m_o.cst, {}, 1U, t);
         m_ctx.set_attr(op, "value", m_ctx.attr_int(v));
+        attribute(op, node, also);
         b->append(op);
         return op->result(0U);
     }
@@ -301,11 +336,12 @@ private:
     // -> no-CEIR-value mismatch: chir.md; self-containment seeding is the 32e/exec refinement).
     void lower_parallel_for(Block* fb, crd::u32 pf)
     {
-        Value* const lo   = konst(fb, 0, m_ctx.type_index());
-        Value* const hi   = konst(fb, 1, m_ctx.type_index());
-        Value* const step = konst(fb, 1, m_ctx.type_index());
+        Value* const lo   = konst(fb, 0, m_ctx.type_index(), pf);
+        Value* const hi   = konst(fb, 1, m_ctx.type_index(), pf);
+        Value* const step = konst(fb, 1, m_ctx.type_index(), pf);
         Value* const pf_in[3] = {lo, hi, step};
         Operation* const pfo  = m_ctx.create_operation(m_o.parallel_for, ConstSpan<Value*>(pf_in, 3U), 0U, {}, 1U);
+        attribute(pfo, pf);
         Block* const     pb   = m_ctx.create_block(1U, m_ctx.type_index()); // ^(%iv : index)
         pfo->region(0)->append(pb);
         const crd::u32 first_in = nth_in_pin(pf, 0U);
@@ -314,8 +350,10 @@ private:
         {
             view = pb->arg(0U);
         }
-        Value* const yv[1] = {view};
-        pb->append(m_ctx.create_operation(m_o.yield, ConstSpan<Value*>(yv, 1U), 0U));
+        Value* const     yv[1] = {view};
+        Operation* const y     = m_ctx.create_operation(m_o.yield, ConstSpan<Value*>(yv, 1U), 0U);
+        attribute(y, pf);
+        pb->append(y);
         fb->append(pfo);
     }
 
@@ -324,13 +362,17 @@ private:
     void lower_await(Block* fb, crd::u32 aw)
     {
         Operation* const lz = m_ctx.create_operation(m_o.launch, {}, 1U, m_ctx.type_i64(), 1U);
-        Block* const     lb = m_ctx.create_block(0U);
+        attribute(lz, aw);
+        Block* const lb = m_ctx.create_block(0U);
         lz->region(0)->append(lb);
-        Value* const ly[1] = {konst(lb, 0, m_ctx.type_i64())};
-        lb->append(m_ctx.create_operation(m_o.yield, ConstSpan<Value*>(ly, 1U), 0U));
+        Value* const     ly[1] = {konst(lb, 0, m_ctx.type_i64(), aw)};
+        Operation* const y     = m_ctx.create_operation(m_o.yield, ConstSpan<Value*>(ly, 1U), 0U);
+        attribute(y, aw);
+        lb->append(y);
         fb->append(lz);
         Value* const tok[1] = {lz->result(0U)};
         Operation* const aop = m_ctx.create_operation(m_o.await, ConstSpan<Value*>(tok, 1U), 1U, m_ctx.type_i64());
+        attribute(aop, aw);
         fb->append(aop);
         // record the result at the Await's first Out pin (if any).
         const ChirNode& an = m_m.node(aw);
@@ -353,7 +395,7 @@ private:
     // all, %next = %init (the cell simply holds). Carries the decl's source NAME in `chir_decl` (the 32d D3 seam this consumes).
     void lower_state_decl(Block* fb, crd::u32 st)
     {
-        Value* const   init = konst(fb, 0, m_ctx.type_i64());
+        Value* const   init = konst(fb, 0, m_ctx.type_i64(), st);
         Value*         next = init;
         const crd::u32 su   = writing_update(st);
         if (su != kInvalidNode)
@@ -362,11 +404,12 @@ private:
             next               = (upd != kInvalidNode) ? in_value(su, upd) : nullptr;
             if (next == nullptr)
             {
-                next = konst(fb, 1, m_ctx.type_i64());
+                next = konst(fb, 1, m_ctx.type_i64(), st, su);
             }
         }
         Value* const     st_in[2] = {init, next};
         Operation* const cell     = m_ctx.create_operation(m_o.state, ConstSpan<Value*>(st_in, 2U), 1U, m_ctx.type_i64());
+        attribute(cell, st, su); // DIAG.8a many-to-many: the cell IS the declaration plus its folded `update state`
         m_ctx.set_attr(cell, "chir_decl", m_ctx.attr_string(m_m.str(m_m.node(st).name)));
         m_ctx.pin_stable_id(cell, StableId{pinned_id_for(st)}); // ⛔ ADR-0128 D3 — the reload-stable source-derived cell id
         fb->append(cell);
@@ -400,6 +443,7 @@ private:
                 m_ctx.set_attr(fn, "domain", m_ctx.attr_string(m_m.str(h.attrs[ai].val)));
             }
         }
+        attribute(fn, handler);
         mbody->append(fn);
         Block* const fb = crd::ceir::func::func_body_block(fn);
         // ⛔ ADR-0128 D3 duplicate-pin guard: the program-scope state cells are emitted ONCE (in the FIRST handler's func).
@@ -431,19 +475,22 @@ private:
             case NodeKind::EventHandler: break; // nested handlers are not a v1 construct
             }
         }
-        fb->append(crd::ceir::func::create_return(m_ctx, {}));
+        Operation* const ret = crd::ceir::func::create_return(m_ctx, {});
+        attribute(ret, handler);
+        fb->append(ret);
     }
 
     const SourceModel& m_m;
     Context&           m_ctx;
     const CeirOps&     m_o;
+    crd::u32           m_file; // DIAG.8a: the ctx file id every positioned node is stamped with (0 = file unknown)
     Array<PinVal>      m_pins;
     Array<StatePin>    m_state_pins;   // ADR-0128 D3: program-scope StateDecl -> reserved-band reload id
     bool               m_decls_emitted = false; // the program-scope decls are pinned+emitted once (dup-pin guard)
 };
 } // namespace
 
-Module* lower_chir(const SourceModel& m, Context& ctx)
+Module* lower_chir(const SourceModel& m, Context& ctx, StringView file)
 {
     // register the dialects this lowering targets (idempotent — a re-register returns the existing dialect).
     (void)crd::ceir::func::register_dialect(ctx);
@@ -451,8 +498,9 @@ Module* lower_chir(const SourceModel& m, Context& ctx)
     (void)crd::ceir::arith::register_arith_ops(ctx);
     (void)crd::ceir::task::register_task_ops(ctx);
     (void)crd::ceir::async::register_async_ops(ctx);
-    const CeirOps o(ctx);
-    return Lowering(m, ctx, o).run();
+    const CeirOps  o(ctx);
+    const crd::u32 file_id = file.empty() ? 0U : ctx.register_file(file);
+    return Lowering(m, ctx, o, file_id).run();
 }
 
 } // namespace crd::chir

@@ -87,6 +87,8 @@ struct Provenance
                                             containers::Array<Origin>& storage);
 
 // Render `p` for a human or agent: "<file>:<line>:<col> op#<id>", then " from <origin>, <origin>" when more than one
-// origin exists, or "<gap name> op#<id>" when no position is known. A zero file id renders "<unknown>".
+// origin exists, or "<gap name> op#<id>" when no position is known, followed by " from <origin>, ..." for every
+// position-less origin it has (e.g. a graph-authored "chir#<id>", the closest-known origin). A zero file id renders
+// "<unknown>".
 [[nodiscard]] containers::String render_provenance(const Context& ctx, const Provenance& p, memory::IAllocator* out);
 } // namespace crd::ceir

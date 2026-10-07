@@ -42,6 +42,15 @@ inline constexpr crd::u64 kChirStateIdReserve = crd::u64(1) << 24;
 
 // Lower `m` one-way into a CEIR module owned by `ctx` (registers func/core/arith/task/async on `ctx`, idempotent).
 // Returns the module, or nullptr if `m` has no Program root (a graceful empty lowering).
-[[nodiscard]] crd::ceir::Module* lower_chir(const SourceModel& m, crd::ceir::Context& ctx);
+//
+// DIAG.8a provenance: every created op records, in `ctx`'s provenance side table (never op content, so the printed
+// module, `stable_hash` and the text/graph parity are unchanged), an `OriginSpace::ChirNode` origin naming the CHIR
+// node's StableId and its text line:col. A `core.state` cell (and its `next` fallback const) names BOTH its StateDecl
+// and the StateUpdate folded into it. `file` is the authored source the model was parsed from: it is registered in
+// `ctx` and stamped on every positioned node (the model's own `file_id` numbering belongs to the parse caller, not to
+// `ctx`, so it is never copied). Empty `file` = file unknown (id 0, line:col kept). A node with no text position (a
+// graph-authored node) records its CHIR id with no position: the closest-known origin. A Query lowers to func params
+// and creates no op, so it has nothing to attribute.
+[[nodiscard]] crd::ceir::Module* lower_chir(const SourceModel& m, crd::ceir::Context& ctx, StringView file = {});
 
 } // namespace crd::chir
