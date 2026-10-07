@@ -3,6 +3,7 @@ add_executable(crd-ceir-host-tests
     test_plan_perf.cpp     # CEIR-11c: the crd-perf bridge adapter -- per-op dispatch counts + shape stats + self-time
     test_host_provenance.cpp # DIAG.8a: a parallel/launch/fold body error names its authored op (reference + plan agree)
     test_host_inspect.cpp  # DIAG.8b: pause with pending pooled jobs, resume/cancel, detached bodies never pause
+    test_host_replay.cpp   # DIAG.9a: host run records -- the submitting thread's trace, the schedule, replay
 )
 
 target_link_libraries(crd-ceir-host-tests PRIVATE
@@ -10,6 +11,7 @@ target_link_libraries(crd-ceir-host-tests PRIVATE
     crd-memory
     crd-ceir
     crd-ceir-host
+    crd-ceir-cook       # DIAG.9a: cook the authored program and read its run record
     crd-jobs            # the test binary owns the jobs pool lifecycle (init/shutdown via a Catch listener)
     crd-perf            # CEIR-11c: read back the published counters (perf-ON builds)
     Catch2::Catch2WithMain

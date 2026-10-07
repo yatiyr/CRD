@@ -45,6 +45,7 @@ inline constexpr crd::u32 kReplayInputCount = kReplayInputs;
 inline constexpr crd::u32 kReplayProgramInput   = 0U;
 inline constexpr crd::u32 kReplayBuildInput     = 1U;
 inline constexpr crd::u32 kReplayArgumentsInput = 2U;
+inline constexpr crd::u32 kReplayScheduleInput  = 7U;
 
 using Need = ReplayNeed;
 
@@ -77,9 +78,10 @@ struct ProgramNeeds
 [[nodiscard]] bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator* alloc,
                                  const std::atomic<bool>* cancel, ProgramNeeds& out);
 
-// A run record's input states from `needs`: the program, its build and its entry arguments are recorded; any other
-// input the program needs (or may need, through an opaque op) is missing, because nothing captures it at the plan
-// executor's boundary; the rest are not needed. `missing` (when not null) gains the missing inputs' names,
-// comma-separated, in record order.
-void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInputCount], containers::String* missing);
+// A run record's input states from `needs`: the program, its build and its entry arguments are recorded, and so is
+// the schedule when the host executor ran it (the record holds its settings); any other input the program needs (or
+// may need, through an opaque op) is missing, because nothing captures it at the executor's boundary; the rest are
+// not needed. `missing` (when not null) gains the missing inputs' names, comma-separated, in record order.
+void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, ReplayInput (&inputs)[kReplayInputCount],
+                   containers::String* missing);
 } // namespace crd::ceir::cook::detail

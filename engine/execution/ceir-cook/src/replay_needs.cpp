@@ -189,8 +189,10 @@ bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator*
     return true;
 }
 
-void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInputCount], containers::String* missing)
+void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, ReplayInput (&inputs)[kReplayInputCount],
+                   containers::String* missing)
 {
+    const bool host = executor == ReplayExecutorKind::Host;
     for (crd::u32 i = 0U; i < kReplayInputCount; ++i)
     {
         ReplayInput& in = inputs[i];
@@ -199,13 +201,14 @@ void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInput
         {
             in.state = ReplayInputState::NotNeeded;
         }
-        else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput)
+        else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput ||
+                 (host && i == kReplayScheduleInput))
         {
             in.state = ReplayInputState::Recorded;
         }
         else
         {
-            // Nothing captures this input at the plan executor's boundary: stored missing, never assumed.
+            // Nothing captures this input at the executor's boundary: stored missing, never assumed.
             in.state = ReplayInputState::Missing;
             if (missing != nullptr)
             {
@@ -219,3 +222,19 @@ void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInput
     }
 }
 } // namespace crd::ceir::cook::detail
+
+namespace crd::ceir::cook
+{
+bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExecutorKind executor,
+                            memory::IAllocator* alloc, const std::atomic<bool>* cancel,
+                            ReplayInput (&inputs)[kReplayInputs], containers::String* missing)
+{
+    detail::ProgramNeeds needs;
+    if (!detail::analyze_needs(ctx, module, alloc, cancel, needs))
+    {
+        return false;
+    }
+    detail::record_inputs(needs, executor, inputs, missing);
+    return true;
+}
+} // namespace crd::ceir::cook

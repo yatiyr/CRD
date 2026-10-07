@@ -20,6 +20,7 @@ target_link_libraries(crd-ceir-host
         crd-containers
         crd-memory
         crd-jobs      # crd::jobs::Priority is in host_provider.hpp (the bridge header), so the edge is public
+        crd-ceir-cook # DIAG.9a: host_replay.hpp names the run record and its recorder (cook stays jobs-free)
     PRIVATE
         crd-perf      # CEIR-11c: the plan-perf bridge adapter owns the crd-perf calls (core cannot link crd-perf: I5 + jobs-free)
         crd-time      # MonotonicClock for the parent-pause self-time (always available; the profile fills even perf-OFF)

@@ -310,7 +310,7 @@ crd_module(engine/foundation/units engine/units DEPENDS containers core memory T
 # D-007 CEIR-1: Cerid Execution IR — host-only execution/orchestration IR (ADR-0109); the CEIR master spine
 crd_module(engine/execution/ceir engine/ceir DEPENDS containers core log memory units TESTS execution/ceir support/fuzz)
 # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
-crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir containers core jobs memory perf time
+crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir ceir-cook containers core jobs memory perf time
     TESTS execution/ceir-host)
 # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
 crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core memory perf render-asset-core

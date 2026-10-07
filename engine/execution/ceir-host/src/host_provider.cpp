@@ -523,13 +523,13 @@ containers::ConstSpan<crd::i64> HostProvider::map_output(const Operation* pf_op)
 exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
                                        containers::ConstSpan<crd::i64> args)
 {
-    return run(ctx, m, entry, args, nullptr);
+    return run(ctx, m, entry, args, nullptr, nullptr);
 }
 
 exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
                                        containers::ConstSpan<crd::i64> args, inspect::Session& session)
 {
-    return run(ctx, m, entry, args, &session);
+    return run(ctx, m, entry, args, &session, nullptr);
 }
 
 crd::u32 HostProvider::pooled_unjoined() const noexcept
@@ -550,8 +550,15 @@ crd::u32 HostProvider::unjoined_of(void* self) noexcept
     return static_cast<const HostProvider*>(self)->pooled_unjoined();
 }
 
+exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
+                                       containers::ConstSpan<crd::i64> args, const HostObserver& observer)
+{
+    return run(ctx, m, entry, args, nullptr, &observer);
+}
+
 exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::StringView entry,
-                                   containers::ConstSpan<crd::i64> args, inspect::Session* session)
+                                   containers::ConstSpan<crd::i64> args, inspect::Session* session,
+                                   const HostObserver* observer)
 {
     exec::ExecResult r(ctx.allocator());
     // 1. parallel-purity pre-flight on the SUBMIT thread (a parallel body must be state-free + yield exactly 1) — the
@@ -589,6 +596,11 @@ exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::St
     // interpreter gets its safe points and this provider's cancel flag stays the one every sub observes.
     m_session = session;
     exec::ExecResult res(ctx.allocator());
+    if (observer != nullptr && observer->attach != nullptr)
+    {
+        // DIAG.9a: the submitting interpreter only (step hooks are not copied to the sub-interpreters)
+        observer->attach(proto, observer->user);
+    }
     if (session == nullptr)
     {
         res = proto.invoke(m, entry, args);
@@ -600,6 +612,10 @@ exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::St
     }
     drain_pooled(); // ⛔ wait + free every pooled token BEFORE returning (leak containment — a worker must not outlive execute)
     m_session = nullptr;
+    if (observer != nullptr && observer->detach != nullptr)
+    {
+        observer->detach(proto, observer->user); // every pooled launch joined; the interpreter is still alive
+    }
     return res;
 }
 

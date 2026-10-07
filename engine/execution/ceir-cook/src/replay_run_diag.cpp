@@ -274,7 +274,7 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     record.entry.append(parsed.entry);
     record.args = std::move(parsed.args);
     cont::String missing(alloc);
-    detail::record_inputs(needs, record.inputs, &missing);
+    detail::record_inputs(needs, ReplayExecutorKind::Plan, record.inputs, &missing);
     record.max_events   = parsed.max_events;
     record.events_total = trace.events_total;
     record.events       = std::move(trace.events);
@@ -421,7 +421,14 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         return DiagStatus::Failed;
     }
 
-    // Compatibility, before anything runs: the build, then the inputs the program needs.
+    // Compatibility, before anything runs: the executor, the build, then the inputs the program needs.
+    if (record.executor != ReplayExecutorKind::Plan)
+    {
+        out.reason.append("incompatible replay: the record was made by the ");
+        out.reason.append(replay_executor_name(record.executor));
+        out.reason.append(" executor; replay.run replays plan records only");
+        return DiagStatus::Unavailable;
+    }
     cont::String differing(alloc);
     const bool   same = same_build(record.build, current_build(alloc), differing);
     if (!same && !parsed.any_build)
@@ -432,18 +439,7 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         return DiagStatus::Unavailable;
     }
     cont::String missing(alloc);
-    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
-    {
-        if (record.inputs[i].state == ReplayInputState::Missing)
-        {
-            if (!missing.empty())
-            {
-                missing.push_back(',');
-            }
-            missing.append(replay_input_name(i));
-        }
-    }
-    if (!missing.empty())
+    if (!record_missing_inputs(record, missing))
     {
         out.reason.append("incompatible replay: the record is missing inputs its program needs (");
         out.reason.append(cont::StringView{missing.data(), missing.size()});

@@ -834,11 +834,40 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspect-host-recor
   process. crd-sandbox's `--inspect-record <file>` records the run its frame loop holds and steps through the panel
   (`InspectPanel::start` passes `HostRecording` to the host) and writes it when the run ends; "Run again" starts
   without recording.
-- Still open in DIAG.9a: capture at the interpreter-based `HostProvider` (state cells across invokes, pooled and
-  parallel work: schedule replay); a host input seam with the ops that read random
-  streams, clocks and time steps, input events and external completions; a run spanning a reload (a host that
-  reloads between invokes); backend-specific numeric replay of GPU dispatches with a declared tolerance; network and
-  physical effects stubbed only in explicit test replay.
+- What stayed open after this batch is listed at the end of the next settled block.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-provider-records.md)):
+- Measured first: the host provider builds a fresh submitting interpreter for every `execute` (no state cell
+  survives one), and no production host keeps a reference interpreter across invokes. Its only schedule choices a
+  program can observe are its settings: the job split, which results never depend on (bodies are state-free by
+  pre-flight, outputs are index-ordered, folds run in index order, the lowest failing index wins), and the per-body
+  step budget, which decides whether a body exhausts its fuel. `async.race` answers its first operand.
+- A record names its executor (schema 3: `ReplayExecutorKind`, `plan` or `host`). A host record also holds the job
+  split and per-body step budget and the interpreter's run error (`exec::ExecError`); the decoder refuses a host
+  record without a valid schedule or with a plan error, and a plan record with either host field (`malformed`).
+  Schema 1 and 2 records are refused `unsupported-schema`. A record replays only on its own executor: `replay.run`
+  refuses a host record `unavailable` before anything runs; the host replay refuses a plan record.
+- `cook::InterpreterRecorder` is the host trace: the submitting interpreter's pre hook appends an event (op stable id,
+  call depth) and its post hook, which runs only after a successful dispatch, reads up to four results right after
+  the op ran (the plan trace reads them at the frame's next safe point, so the two traces are never compared). It
+  keeps the state cells' current values in stable id order when it detaches. `HostProvider::execute(..., observer)`
+  (`HostObserver`) attaches it to the submitting interpreter before the entry runs and detaches it after every pooled
+  launch was joined. Step hooks are not copied to sub-interpreters, so parallel ranges, fold steps and pooled launch
+  bodies leave no events; what they produce is read at the op that joins them (the await, the reduction).
+- `crd/ceir/host/host_replay.hpp` (crd-ceir-host, now linking crd-ceir-cook; cook stays jobs-free):
+  `record_host_run` runs a cooked program once on a fresh provider with a `HostSchedule` and makes the record (the
+  schedule input `recorded`, the program, build and arguments recorded, any other needed input `missing`);
+  `replay_host_record` refuses a plan record, another build (unless `any_build`), a missing input or a blob that is
+  not its recorded content before anything runs, then replays the record's own blob in a fresh Context with the
+  recorded job split and step budget and reports the first divergence at its authored position (found by stable id
+  in the module, `replay_site_in_module`). Another program or another job split is an explicit option.
+- Still open in DIAG.9a: a diagnostic command and ceridc consumer for host records (today their replay is a library
+  call, so a cross-process reproduction of a host record is not shown); recording a host run under an inspection
+  session (the session installs its own step hooks); state cells across invokes and a run spanning a reload, which
+  need a host that keeps one interpreter across invokes (a multi-invoke record with reload steps and the migrated
+  cells as its host-state input); a host input seam with the ops that read random streams, clocks and time steps,
+  input events and external completions; backend-specific numeric replay of GPU dispatches with a declared
+  tolerance; network and physical effects stubbed only in explicit test replay.
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

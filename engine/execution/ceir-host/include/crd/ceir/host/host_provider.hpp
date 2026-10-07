@@ -33,6 +33,18 @@ namespace crd::ceir::host
 
 struct PooledToken; // CEIR-11a stage 3: a jobs-backed launch's {own scratch, result, counter, job ctx} — defined in the .cpp
 
+// DIAG.9a: an observer of one execution's SUBMITTING interpreter (e.g. a run recorder). `attach` runs on the submitting
+// thread after the interpreter is built and before the entry runs, so it may install step hooks; `detach` runs after
+// the entry returned and every pooled launch was joined, while the interpreter is still alive. Step hooks are not
+// copied to the provider's sub-interpreters, so the bodies they run (parallel ranges, fold steps, pooled launch
+// bodies) are never observed. Either callback may be null.
+struct HostObserver
+{
+    void (*attach)(exec::Interpreter& in, void* user) = nullptr;
+    void (*detach)(exec::Interpreter& in, void* user) = nullptr;
+    void* user                                        = nullptr;
+};
+
 class HostProvider final : public IExecutionProvider
 {
 public:
@@ -52,6 +64,14 @@ public:
     // stop reports the pooled launches not yet joined; they keep running through a `Task` pause.
     [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
                                            containers::ConstSpan<crd::i64> args, inspect::Session& session);
+    // DIAG.9a: the same execution with `observer` attached to the submitting interpreter (no inspection session: a
+    // session installs its own step hooks).
+    [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
+                                           containers::ConstSpan<crd::i64> args, const HostObserver& observer);
+
+    // DIAG.9a: the schedule settings a run record stores (the constructor's, after its zero-job clamp).
+    [[nodiscard]] crd::u32 num_jobs() const noexcept { return m_num_jobs; }
+    [[nodiscard]] crd::u64 sub_fuel() const noexcept { return m_sub_fuel; }
 
     // Inspection: the map output of a `task.parallel_for` op (its per-index yields). Instance-keyed (builder-form; pointers
     // don't survive a round-trip). Empty if `pf_op` was not executed by this provider.
@@ -98,7 +118,8 @@ public:
 
 private:
     [[nodiscard]] exec::ExecResult run(Context& ctx, const Module& m, containers::StringView entry,
-                                       containers::ConstSpan<crd::i64> args, inspect::Session* session);
+                                       containers::ConstSpan<crd::i64> args, inspect::Session* session,
+                                       const HostObserver* observer);
     [[nodiscard]] static crd::u32 unjoined_of(void* self) noexcept; // the session's HostLink::pending probe
 
     memory::IAllocator* m_alloc;

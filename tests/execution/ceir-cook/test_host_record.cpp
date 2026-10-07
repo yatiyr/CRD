@@ -9,7 +9,7 @@
 // replay.run command reproduces it from the file; after a hot reload the record still names, and holds, the generation
 // that ran, and replaying its inputs against the edited program names the edited constant; a start without recording
 // forgets the record; a running, cancelled or unrecorded execution gives no record; a record file is never
-// overwritten; a schema 1 record and a generation without an asset are refused; and an observer's Cancel ends a
+// overwritten; a schema 1 or 2 record and a generation without an asset are refused; and an observer's Cancel ends a
 // session's run. Expected lines and columns come from scanning the text, never from the parser. ASCII test names.
 
 #include <crd/ceir/cook/inspect_host.hpp>
@@ -35,6 +35,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 
 namespace
 {
@@ -540,7 +541,7 @@ TEST_CASE("diag 9a: the inspect host gives no record of a running, cancelled or 
         CHECK(host.record(rec) == HostRecord::Cancelled);
         CHECK(ck::host_record_name(HostRecord::Cancelled) == "cancelled");
     }
-    SECTION("a schema 1 record and a generation without an asset are refused")
+    SECTION("a schema 1 or 2 record and a generation without an asset are refused")
     {
         REQUIRE(host.start({one, 1U}, HostRecording{true, 0U}) == insp::Refusal::None);
         const u64        gen = host.generation();
@@ -552,9 +553,12 @@ TEST_CASE("diag 9a: the inspect host gives no record of a running, cancelled or 
 
         Array<u8>    bytes(&alloc);
         ReplayRecord back(&alloc);
-        rec.schema = 1U;
-        ck::encode_record(rec, bytes);
-        CHECK(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::UnsupportedSchema);
+        for (const u32 old : {1U, 2U})
+        {
+            rec.schema = old;
+            ck::encode_record(rec, bytes);
+            CHECK(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::UnsupportedSchema);
+        }
         rec.schema = ck::kReplayRecordSchema;
         rec.asset  = 0U;
         ck::encode_record(rec, bytes);

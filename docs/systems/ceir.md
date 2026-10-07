@@ -83,7 +83,12 @@ the session's safe-point observer (`inspect::Session::run` with an observer), so
 leave it identical to an unobserved run's, and `InspectHost::record` gives the record with the host's asset id and the
 ReloadSet generation that ran (schema 2), still that generation's program after a reload. A cancelled run gives no
 record. `ceridc inspect --record <file>` and crd-sandbox's `--inspect-record <file>` write one; `write_record_file`
-never overwrites.
+never overwrites. A record names its executor (schema 3). crd-ceir-host's `record_host_run` / `replay_host_record`
+(`crd/ceir/host/host_replay.hpp`) record and replay a run on the crd-jobs host provider: the trace is the
+submitting interpreter's (`InterpreterRecorder`, attached through `HostProvider::execute(..., HostObserver)`), the
+record holds the provider's job split and per-body step budget as its schedule input, and a replay runs the
+record's own blob with that schedule; bodies run on sub-interpreters leave no events. `replay.run` refuses a host
+record and the host replay a plan record.
 
 ## Maturity and further work
 

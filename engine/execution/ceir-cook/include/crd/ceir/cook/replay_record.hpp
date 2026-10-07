@@ -26,12 +26,22 @@
 // (path), the first differing result value (value), a different event count (length), outcome, results or cells.
 // A replay against another program (an edited checkout) is a separate, explicit request; it uses the same inputs.
 //
-// Guarantee: this is event replay of the compiled-plan executor, whose semantics are integer and sequential. Schedule
-// replay (pooled or parallel work) and backend-specific numeric replay are different guarantees; a program needing
-// them records those inputs as missing. Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
+// A record names the executor that ran it. A plan record is the compiled-plan executor's (above). A host record is
+// the crd-jobs host provider's (crd-ceir-host): its trace is the submitting interpreter's, one event per dispatched
+// op with up to four of its results read right after it ran (InterpreterRecorder), so the two traces are never
+// compared with each other. Bodies the provider runs on its own sub-interpreters (parallel ranges, fold steps, pooled
+// launch bodies) are not traced; what they produce is seen where the submitting thread reads it (the await, join,
+// parallel or reduction op's results). A host record also holds the provider's schedule settings (its job split and
+// per-body step budget); the provider's other schedule choices are fixed by the build (a race answers its first
+// operand, the lowest failing index wins, folds run in index order).
+//
+// Guarantee: a plan record is event replay of the integer, sequential compiled-plan executor; a program needing
+// schedule choices records the schedule as missing there. A host record is schedule replay of the host provider.
+// Backend-specific numeric replay is a different guarantee. Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
 
 #include <crd/ceir/cook/hot_reload.hpp> // Registrar
 #include <crd/ceir/cook/program_cook.hpp> // ReadError
+#include <crd/ceir/exec.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -49,8 +59,8 @@ class Context;
 
 namespace crd::ceir::cook
 {
-inline constexpr crd::u32 kReplayRecordSchema = 2U; // the record file layout (2: the asset and its generation)
-inline constexpr crd::u32 kReplayExecutor     = 1U; // the compiled-plan semantics a trace is valid for
+inline constexpr crd::u32 kReplayRecordSchema = 3U; // the record file layout (3: the executor and its schedule)
+inline constexpr crd::u32 kReplayExecutor     = 1U; // the executor semantics a trace is valid for
 
 inline constexpr crd::u32 kReplayDefaultMaxEvents = 4096U;
 inline constexpr crd::u32 kReplayMaxEvents        = 65536U;
@@ -60,6 +70,18 @@ inline constexpr crd::u32 kReplayMaxStringBytes   = 256U;
 inline constexpr crd::u32 kReplayMaxValues        = 65536U; // results, and state cells, in an outcome
 inline constexpr crd::u64 kReplayMaxProgramBytes  = 16ULL * 1024ULL * 1024ULL;
 inline constexpr crd::u32 kReplayInputs           = 9U;
+inline constexpr crd::u32 kReplayMaxHostJobs      = 256U; // a host record's job split
+
+// Which executor ran a recorded run. A record replays only on its own executor.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ReplayExecutorKind : crd::u8
+{
+    Plan = 0, // the compiled-plan executor (crd-ceir-cook replays it)
+    Host = 1, // the crd-jobs host provider's interpreter (crd-ceir-host replays it)
+};
+
+// "plan", "host".
+[[nodiscard]] containers::StringView replay_executor_name(ReplayExecutorKind k) noexcept;
 
 // The build and configuration a record was made by. Every field must match for a replay unless the request
 // explicitly allows another build.
@@ -138,6 +160,7 @@ struct ReplayTrace
     plan::RunError                    error        = plan::RunError::None;
     plan::InstrRef                    fault;
     crd::u64                          fault_op = 0U; // the faulting instr's op stable id (0 when none)
+    exec::ExecError                   host_error = exec::ExecError::None; // a host trace's run error
     containers::Array<crd::i64>       results;
     containers::Array<crd::i64>       cells;
 };
@@ -152,6 +175,9 @@ struct ReplayRecord
 
     crd::u32                       schema = kReplayRecordSchema;
     ReplayBuild                    build;
+    ReplayExecutorKind             executor = ReplayExecutorKind::Plan;
+    crd::u32                       host_jobs     = 0U; // Host: the provider's job split (1..kReplayMaxHostJobs)
+    crd::u64                       host_sub_fuel = 0U; // Host: the provider's step budget per body (at least 1)
     containers::String             program_path; // the authored path the program was cooked under
     crd::u64                       content_hash = 0U; // the cooked program's content hash
     crd::u64                       asset        = 0U; // the host's asset id of the program (0: no reloading host)
@@ -163,8 +189,9 @@ struct ReplayRecord
     crd::u32                       max_events   = kReplayDefaultMaxEvents;
     crd::u64                       events_total = 0U;
     containers::Array<ReplayEvent> events; // the first min(events_total, max_events) events
-    plan::RunError                 error    = plan::RunError::None;
-    crd::u64                       fault_op = 0U;
+    plan::RunError                 error      = plan::RunError::None;     // Plan: the run error (None for Host)
+    exec::ExecError                host_error = exec::ExecError::None;    // Host: the run error (None for Plan)
+    crd::u64                       fault_op   = 0U;
     containers::Array<crd::i64>    results;
     containers::Array<crd::i64>    cells;
 };
@@ -178,7 +205,8 @@ enum class RecordError : crd::u8
     UnsupportedSchema, // a record layout this build does not read
     Truncated,         // fewer bytes than the header or a field says
     BadChecksum,       // the payload does not match its checksum
-    Malformed,         // a field is out of its bounds or range, or bytes follow the last field
+    Malformed,         // a field is out of its bounds or range, a field of the other executor is set, or bytes follow
+                       // the last field
 };
 
 // "ok", "not-a-record", "unsupported-schema", "truncated", "bad-checksum", "malformed".
@@ -249,6 +277,42 @@ private:
     containers::Array<crd::u64> m_pending; // per call depth: the kept event whose results are read next
 };
 
+// The trace of one run on a reference interpreter (the host provider's submitting interpreter), for a host record.
+// `attach` installs its step hooks on the interpreter: the pre hook appends an event (the op's stable id and the call
+// depth), the post hook, which runs only after a successful dispatch, reads up to kReplayEventValues of the op's
+// results. `detach` removes the hooks and keeps the interpreter's state cells (their current values, in stable id
+// order), so call it while the interpreter is still alive. Hooks are not copied to the provider's sub-interpreters,
+// so the bodies they run leave no events.
+//
+// Threads: attach, the run, detach and `finish` on the thread that runs the interpreter.
+class InterpreterRecorder
+{
+public:
+    // Clear `out` and keep at most `max_events` events (capped at kReplayMaxEvents).
+    InterpreterRecorder(ReplayTrace& out, crd::u32 max_events);
+
+    void attach(exec::Interpreter& in) noexcept;
+    void detach(exec::Interpreter& in);
+
+    // Record the run's outcome: its error, the op it blamed and its results.
+    void finish(const exec::ExecResult& result);
+
+private:
+    static void on_pre(const Operation& op, void* user);
+    static void on_post(const Operation& op, void* user);
+
+    struct Open
+    {
+        const Operation* op    = nullptr;
+        crd::u64         event = 0U; // the kept event (kReplayMaxEvents or more: not kept)
+    };
+
+    ReplayTrace*            m_out;
+    crd::u32                m_max;
+    exec::Interpreter*      m_in = nullptr;
+    containers::Array<Open> m_open; // dispatched ops whose post hook has not run yet, innermost last
+};
+
 // Run `program` on `args`, keeping at most `max_events` events. `cancel` stops the run at its next safe point
 // (RunError::Cancelled).
 void run_traced(const ReplayProgram& program, containers::ConstSpan<crd::i64> args, crd::u32 max_events,
@@ -267,6 +331,23 @@ struct ReplaySite
 // The authored position of the op with stable id `op` in `program` (its first compiled instr), or an empty site.
 [[nodiscard]] ReplaySite replay_site_of_op(const Context& ctx, const ReplayProgram& program, crd::u64 op) noexcept;
 
+// The authored position of the op with stable id `op` in `module` (no compiled plan needed: a host record's blame),
+// or an empty site. `scratch` backs a temporary origin list.
+[[nodiscard]] ReplaySite replay_site_in_module(const Context& ctx, const Module& module, crd::u64 op,
+                                               memory::IAllocator* scratch);
+
+// The input states a record of `module` holds when `executor` runs it: the program, build and entry arguments are
+// recorded, and so is the schedule on the host executor (its settings are in the record); any other input the
+// program needs, or may need through an opaque op, is missing, never assumed; the rest are not needed. `missing`
+// (when not null) gains the missing inputs' names, comma-separated, in record order. Returns false, with `inputs`
+// incomplete, when `cancel` was raised during the walk.
+[[nodiscard]] bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExecutorKind executor,
+                                          memory::IAllocator* alloc, const std::atomic<bool>* cancel,
+                                          ReplayInput (&inputs)[kReplayInputs], containers::String* missing);
+
+// The names of `record`'s missing inputs, comma-separated in record order, appended to `out`. True when none is.
+[[nodiscard]] bool record_missing_inputs(const ReplayRecord& record, containers::String& out);
+
 // NOLINTNEXTLINE(performance-enum-size)
 enum class DivergenceKind : crd::u8
 {
@@ -274,7 +355,7 @@ enum class DivergenceKind : crd::u8
     Path,    // event `index` names another op or depth
     Value,   // event `index`'s result `value_index` (or its count of read results) differs
     Length,  // the runs dispatched a different number of instrs
-    Outcome, // the run error or the op it blamed differs
+    Outcome, // the run error (the executor's own) or the op it blamed differs
     Results, // result `index` (or the result count) differs
     Cells,   // state cell `index` (or the cell count) differs
 };
@@ -292,7 +373,7 @@ struct Divergence
     crd::i64       recorded    = 0;  // the recorded value, count (when `count`) or run error
     crd::i64       observed    = 0;
     bool           count       = false; // `recorded` and `observed` are counts (events, read results, values)
-    plan::InstrRef site;             // the replay's instr to blame (invalid when none)
+    plan::InstrRef site;             // the replay's instr to blame (invalid when none, and for a host trace)
 };
 
 // The first divergence of `trace` from `record` (kind None: the replay reproduced the record). Only the kept events

@@ -9,6 +9,7 @@
 #include <crd/core/platform.hpp>
 
 #include <initializer_list>
+#include <utility>
 
 namespace crd::ceir::cook
 {
@@ -231,15 +232,24 @@ private:
         }
     }
     crd::u8 asserts = 0U;
-    if (!r.u8(asserts) || !r.u32(out.build.executor))
+    crd::u8 kind    = 0U;
+    if (!r.u8(asserts) || !r.u32(out.build.executor) || !r.u8(kind) || !r.u32(out.host_jobs) ||
+        !r.u64(out.host_sub_fuel))
     {
         return RecordError::Truncated;
     }
-    if (asserts > 1U)
+    if (asserts > 1U || kind > static_cast<crd::u8>(ReplayExecutorKind::Host))
     {
         return RecordError::Malformed;
     }
     out.build.asserts = asserts != 0U;
+    out.executor      = static_cast<ReplayExecutorKind>(kind);
+    const bool host   = out.executor == ReplayExecutorKind::Host;
+    if (host ? (out.host_jobs == 0U || out.host_jobs > kReplayMaxHostJobs || out.host_sub_fuel == 0U)
+             : (out.host_jobs != 0U || out.host_sub_fuel != 0U))
+    {
+        return RecordError::Malformed; // a schedule belongs to the host executor, and it needs one
+    }
 
     if (const RecordError e = read_str(r, out.program_path); e != RecordError::Ok)
     {
@@ -328,16 +338,23 @@ private:
         out.events.push_back(ev);
     }
 
-    crd::u8 error = 0U;
-    if (!r.u8(error) || !r.u64(out.fault_op))
+    crd::u8 error      = 0U;
+    crd::u8 host_error = 0U;
+    if (!r.u8(error) || !r.u8(host_error) || !r.u64(out.fault_op))
     {
         return RecordError::Truncated;
     }
-    if (error > static_cast<crd::u8>(plan::RunError::Cancelled))
+    if (error > static_cast<crd::u8>(plan::RunError::Cancelled) ||
+        host_error > static_cast<crd::u8>(exec::ExecError::Cancelled))
     {
         return RecordError::Malformed;
     }
-    out.error = static_cast<plan::RunError>(error);
+    out.error      = static_cast<plan::RunError>(error);
+    out.host_error = static_cast<exec::ExecError>(host_error);
+    if ((host && out.error != plan::RunError::None) || (!host && out.host_error != exec::ExecError::None))
+    {
+        return RecordError::Malformed; // each executor reports its own error
+    }
     if (const RecordError e = read_values(r, kReplayMaxValues, out.results); e != RecordError::Ok)
     {
         return e;
@@ -509,6 +526,16 @@ cont::StringView replay_input_name(crd::u32 index) noexcept
     return index < kReplayInputs ? kInputNames[index] : cont::StringView{"?"};
 }
 
+cont::StringView replay_executor_name(ReplayExecutorKind k) noexcept
+{
+    switch (k) // no default (-Werror=switch)
+    {
+    case ReplayExecutorKind::Plan: return cont::StringView{"plan"};
+    case ReplayExecutorKind::Host: return cont::StringView{"host"};
+    }
+    return cont::StringView{"?"};
+}
+
 cont::StringView record_error_name(RecordError e) noexcept
 {
     switch (e) // no default: every error is named
@@ -577,6 +604,9 @@ void encode_record(const ReplayRecord& record, cont::Array<crd::u8>& out)
     put_str(payload, record.build.config);
     put_u8(payload, record.build.asserts ? 1U : 0U);
     put_u32(payload, record.build.executor);
+    put_u8(payload, static_cast<crd::u8>(record.executor));
+    put_u32(payload, record.host_jobs);
+    put_u64(payload, record.host_sub_fuel);
     put_str(payload, record.program_path);
     put_u64(payload, record.content_hash);
     put_u64(payload, record.asset);
@@ -603,6 +633,7 @@ void encode_record(const ReplayRecord& record, cont::Array<crd::u8>& out)
         }
     }
     put_u8(payload, static_cast<crd::u8>(record.error));
+    put_u8(payload, static_cast<crd::u8>(record.host_error));
     put_u64(payload, record.fault_op);
     put_values(payload, record.results);
     put_values(payload, record.cells);
@@ -714,6 +745,7 @@ ReplayRecorder::ReplayRecorder(ReplayTrace& out, crd::u32 max_events)
     out.error        = plan::RunError::None;
     out.fault        = plan::InstrRef{};
     out.fault_op     = 0U;
+    out.host_error   = exec::ExecError::None;
     out.events.reserve(m_max);
     out.sites.reserve(m_max);
     m_pending.reserve(16U);
@@ -781,6 +813,151 @@ ReplaySite replay_site_of_op(const Context& ctx, const ReplayProgram& program, c
     return ReplaySite{};
 }
 
+InterpreterRecorder::InterpreterRecorder(ReplayTrace& out, crd::u32 max_events)
+    : m_out(&out), m_max(max_events < kReplayMaxEvents ? max_events : kReplayMaxEvents), m_open(out.events.allocator())
+{
+    out.events.clear();
+    out.sites.clear();
+    out.results.clear();
+    out.cells.clear();
+    out.events_total = 0U;
+    out.error        = plan::RunError::None;
+    out.fault        = plan::InstrRef{};
+    out.fault_op     = 0U;
+    out.host_error   = exec::ExecError::None;
+    out.events.reserve(m_max);
+    m_open.reserve(16U);
+}
+
+void InterpreterRecorder::attach(exec::Interpreter& in) noexcept
+{
+    m_in = &in;
+    in.set_step_hooks(&InterpreterRecorder::on_pre, &InterpreterRecorder::on_post, this);
+}
+
+void InterpreterRecorder::detach(exec::Interpreter& in)
+{
+    in.set_step_hooks(nullptr, nullptr, nullptr);
+    m_in = nullptr;
+    m_open.clear();
+
+    // The cells' current values (the value the next read returns), in stable id order.
+    memory::IAllocator* const        alloc = m_out->cells.allocator();
+    cont::Array<exec::StateSnapshot> cells(alloc);
+    in.snapshot_state_by_id(cells, alloc);
+    for (crd::usize i = 1U; i < cells.size(); ++i)
+    {
+        for (crd::usize k = i; k > 0U && cells[k - 1U].id > cells[k].id; --k)
+        {
+            exec::StateSnapshot t = std::move(cells[k - 1U]);
+            cells[k - 1U]         = std::move(cells[k]);
+            cells[k]              = std::move(t);
+        }
+    }
+    m_out->cells.clear();
+    for (const exec::StateSnapshot& c : cells)
+    {
+        m_out->cells.push_back(c.pos < c.ring.size() ? c.ring[c.pos] : 0);
+    }
+}
+
+void InterpreterRecorder::on_pre(const Operation& op, void* user)
+{
+    auto&          self  = *static_cast<InterpreterRecorder*>(user);
+    ReplayTrace&   out   = *self.m_out;
+    const crd::u64 index = out.events_total++;
+    Open           open;
+    open.op    = &op;
+    open.event = kNoPending;
+    if (index < self.m_max)
+    {
+        ReplayEvent ev;
+        ev.op    = op.stable_id().value;
+        ev.depth = self.m_in != nullptr ? self.m_in->call_depth() : 0U;
+        out.events.push_back(ev);
+        open.event = index;
+    }
+    self.m_open.push_back(open);
+}
+
+void InterpreterRecorder::on_post(const Operation& op, void* user)
+{
+    auto& self = *static_cast<InterpreterRecorder*>(user);
+    // Pre and post hooks nest, and a failed dispatch ends the run, so the innermost open op is this one.
+    if (self.m_open.empty())
+    {
+        return;
+    }
+    const Open open = self.m_open.back();
+    self.m_open.pop_back();
+    if (open.event == kNoPending || open.op != &op || self.m_in == nullptr)
+    {
+        return;
+    }
+    ReplayEvent&   ev = self.m_out->events[static_cast<crd::usize>(open.event)];
+    const crd::u32 n  = op.num_results() < kReplayEventValues ? op.num_results() : kReplayEventValues;
+    for (crd::u32 k = 0U; k < n; ++k)
+    {
+        crd::i64 v = 0;
+        if (!self.m_in->value_of(op.result(k), v))
+        {
+            break;
+        }
+        ev.value[k] = v;
+        ev.values   = k + 1U;
+    }
+}
+
+void InterpreterRecorder::finish(const exec::ExecResult& result)
+{
+    ReplayTrace& out = *m_out;
+    out.host_error   = result.error;
+    out.fault_op     = result.op != nullptr ? result.op->stable_id().value : 0U;
+    out.results.clear();
+    for (const crd::i64 v : result.values)
+    {
+        out.results.push_back(v);
+    }
+}
+
+ReplaySite replay_site_in_module(const Context& ctx, const Module& module, crd::u64 op, memory::IAllocator* scratch)
+{
+    ReplaySite site;
+    const Operation* const found = op != 0U ? ctx.find_by_stable_id(module, StableId{op}) : nullptr;
+    if (found == nullptr)
+    {
+        return site;
+    }
+    cont::Array<Origin> storage(scratch);
+    const Provenance    p = resolve_provenance(ctx, found, storage);
+    site.op               = op;
+    if (const Origin* const o = p.primary(); o != nullptr)
+    {
+        site.file = ctx.file_path(o->loc.file_id);
+        site.line = o->loc.line;
+        site.col  = o->loc.col;
+    }
+    return site;
+}
+
+bool record_missing_inputs(const ReplayRecord& record, cont::String& out)
+{
+    bool none = true;
+    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
+    {
+        if (record.inputs[i].state == ReplayInputState::Missing)
+        {
+            if (!out.empty())
+            {
+                out.push_back(',');
+            }
+            out.append(replay_input_name(i));
+            none = false;
+        }
+    }
+    return none;
+}
+
 Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace) noexcept
 {
     Divergence       d;
@@ -791,7 +968,7 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
         const ReplayEvent& b = trace.events[i];
         d.recorded_op        = a.op;
         d.observed_op        = b.op;
-        d.site               = trace.sites[i];
+        d.site               = i < trace.sites.size() ? trace.sites[i] : plan::InstrRef{};
         if (a.op != b.op || a.depth != b.depth)
         {
             diverge(d, DivergenceKind::Path, i, static_cast<crd::i64>(a.depth), static_cast<crd::i64>(b.depth));
@@ -825,10 +1002,12 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
         }
         return d;
     }
-    if (record.error != trace.error || record.fault_op != trace.fault_op)
+    if (record.error != trace.error || record.host_error != trace.host_error || record.fault_op != trace.fault_op)
     {
-        diverge(d, DivergenceKind::Outcome, 0U, static_cast<crd::i64>(record.error),
-                static_cast<crd::i64>(trace.error));
+        const bool host = record.executor == ReplayExecutorKind::Host;
+        diverge(d, DivergenceKind::Outcome, 0U,
+                host ? static_cast<crd::i64>(record.host_error) : static_cast<crd::i64>(record.error),
+                host ? static_cast<crd::i64>(trace.host_error) : static_cast<crd::i64>(trace.error));
         d.recorded_op = record.fault_op;
         d.observed_op = trace.fault_op;
         d.site        = trace.fault;

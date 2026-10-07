@@ -533,6 +533,16 @@ TEST_CASE("diag 9a: an incompatible record is refused before anything runs", "[c
         CHECK(view(field(view(any.json), "build", &alloc)) == "\"differs\"");
         CHECK(view(field(view(any.json), "build_differs", &alloc)) == "\"config\"");
     }
+    SECTION("a host provider's record is unavailable here, naming its executor")
+    {
+        ReplayRecord rec  = decode_file(original, &alloc);
+        rec.executor      = crd::ceir::cook::ReplayExecutorKind::Host;
+        rec.host_jobs     = 8U;
+        rec.host_sub_fuel = 1024U;
+        rec.error         = crd::ceir::plan::RunError::None; // a host record carries the host's error, not the plan's
+        encode_file(rec, tampered, &alloc);
+        refused(replay(h, tampered), DiagStatus::Unavailable, "made by the host executor");
+    }
     SECTION("a record missing an input its program needs is unavailable, naming the input")
     {
         ReplayRecord rec = decode_file(original, &alloc);

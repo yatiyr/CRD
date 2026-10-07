@@ -206,7 +206,7 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
         m_rec_blob     = std::move(cr.blob);
         detail::ProgramNeeds needs;
         (void)detail::analyze_needs(*g->ctx, *g->program.module, m_alloc, nullptr, needs); // no cancel: always whole
-        detail::record_inputs(needs, m_rec_inputs, nullptr);
+        detail::record_inputs(needs, ReplayExecutorKind::Plan, m_rec_inputs, nullptr);
     }
     m_done.store(false, std::memory_order_release);
     m_thread = std::thread(
