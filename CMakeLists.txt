@@ -425,8 +425,8 @@ crd_module(engine/gpu/gpu-context engine/gpu-context DEPENDS containers core ren
 # ADR-0099 v17-i-a: headless Vulkan compute context
 crd_module(engine/gpu/gpu-context-vulkan engine/gpu-context-vulkan
     DEPENDS containers core gpu-context kir memory platform TESTS gpu/gpu-context-vulkan
-    TEST_DEPENDS asset_cooker ceir ceir-gpu draw frame-cook imgui perf perf-gpu-bridge scene-render shader-cook vertex-cook
-    TEST_PACKAGES imgui)
+    TEST_DEPENDS asset-io asset_cooker ceir ceir-gpu draw frame-cook imgui perf perf-gpu-bridge scene-render shader-cook
+    vertex-cook TEST_PACKAGES imgui)
 # ADR-0100 v17-i: second IComputeContext backend (D3D12); Windows-only
 crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS containers core gpu-context kir memory
     TESTS gpu/gpu-context-dx12 TEST_DEPENDS ceir ceir-gpu frame-cook perf perf-gpu-bridge shader-cook vertex-cook)
@@ -434,9 +434,10 @@ crd_module(engine/gpu/gpu-context-dx12 engine/gpu-context-dx12 DEPENDS container
 crd_module(engine/gpu/gpu-context-cuda engine/gpu-context-cuda DEPENDS containers core gpu-context memory
     TESTS gpu/gpu-context-cuda execution/ceir-gpu-cuda TEST_DEPENDS ceir ceir-gpu kir)
 # DIAG.6b(i): the frame-graph -> crd-perf GPU-timing bridge. The one module that names BOTH perf and gpu-context,
-# keeping their mutual independence intact (a leaf; nothing depends back on it).
-crd_module(engine/gpu/perf-gpu-bridge engine/perf-gpu-bridge DEPENDS core gpu-context perf time
-    TESTS gpu/perf-gpu-bridge)
+# keeping their mutual independence intact (no engine module depends back on it). It also owns the gpu.resources
+# diagnostic command, which hosts such as ceridc bind into their command service.
+crd_module(engine/gpu/perf-gpu-bridge engine/perf-gpu-bridge DEPENDS containers core gpu-context perf time
+    TESTS gpu/perf-gpu-bridge TEST_DEPENDS asset-io)
 crd_module(engine/foundation/jobs engine/jobs DEPENDS containers core TESTS foundation/jobs support/diag)
 # depends on crd-jobs above + crd-hesap (declared earlier)
 crd_module(engine/numerics/hesap-sched engine/hesap-sched DEPENDS containers core hesap jobs memory
@@ -569,8 +570,8 @@ crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
-    DEPENDS asset-io asset_cooker audio ceir ceir-cook containers core memory perf platform resources scene time timeline
-    TESTS tools/ceridc)
+    DEPENDS asset-io asset_cooker audio ceir ceir-cook containers core memory perf perf-gpu-bridge platform resources
+    scene time timeline TESTS tools/ceridc)
 # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
     DEPENDS containers core kir memory platform resources shader-cook)

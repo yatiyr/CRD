@@ -30,6 +30,7 @@ target_link_libraries(crd-ceridc
     PRIVATE
         crd-ceir      # DIAG.8b: the inspect verb runs an authored CEIR program under an inspect session
         crd-ceir-cook # DIAG.8b: the InspectHost (ReloadSet generation, compiled entry, executing thread)
+        crd-perf-gpu-bridge # the gpu.resources diagnostic command (ceridc registers no GPU context)
 )
 
 target_compile_features(crd-ceridc PUBLIC cxx_std_20)

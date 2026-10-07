@@ -683,6 +683,19 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-program-provenance
   item cannot state every origin (more than one, or one naming another op), one `origin` item per origin follows it:
   a many-to-many origin is never lost to a clipped string.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-gpu-resource-summaries.md)):
+- `gpu.resources` (`read`, no path) is registered by crd-perf-gpu-bridge, not crd-gpu-context: crd-gpu-context may
+  not link crd-perf, and the bridge is the one module that names both. The host owns a `GpuResourcesCommand` and
+  registers the contexts and frame graphs it wants summarized (bounded at eight of each); ceridc binds it with none.
+- It answers only evidence that exists: the process-wide identity registry's live resource, program and pass counts
+  (one index space for every backend); per registered context its backend, adapter, validity and each validation
+  mode's state (`active` or the reason it is off); per registered frame graph its last build's transient bytes after
+  and before aliasing, budget refusal, and its last execute's barrier, submit, pass, async-pass and present counts and
+  timing support. Heap usage is an `unavailable` item per context because no backend queries device heap usage or
+  budget; a host that registered no context or frame graph gets one `unavailable` item saying so.
+- Frame-graph counters are not synchronized with the graph's build and execute: the host registers a graph only when
+  it calls the service from the thread that drives the graph. Context reads are immutable and the registry locks.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 

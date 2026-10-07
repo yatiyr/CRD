@@ -13,6 +13,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/perf/diag_commands.hpp>
+#include <crd/perf/gpu/gpu_resources_diag.hpp>
 
 namespace crd::ceridc
 {
@@ -26,9 +27,12 @@ void register_host_dialects(crd::ceir::Context& ctx, void* /*user*/)
 
 bool bind_diag_commands(crd::perf::DiagCommandService& service)
 {
-    // One configuration for the process, alive for as long as any service it is registered with.
+    // One configuration per command for the process, alive for as long as any service it is registered with. ceridc
+    // opens no GPU context, so gpu.resources answers the process's identity counts and says no context is registered.
     static crd::ceir::cook::ProgramProvenanceCommand provenance{&register_host_dialects, nullptr};
-    return crd::ceir::cook::register_program_provenance(service, provenance);
+    static crd::perf::gpu::GpuResourcesCommand       gpu_resources;
+    return crd::ceir::cook::register_program_provenance(service, provenance) &&
+           crd::perf::gpu::register_gpu_resources(service, gpu_resources);
 }
 
 crd::containers::String verb_diag(crd::perf::DiagCommandService& service, const crd::perf::DiagRequest& request,

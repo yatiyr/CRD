@@ -7,6 +7,7 @@ add_executable(crd-gpu-context-vulkan-tests
     test_diag_validation_identity.cpp # DIAG.7a(d1): Cerid identity resolved from a message's named objects / prose
     test_vulkan_loss_bundle.cpp # DIAG.7c(g): a recorded device loss written as a readable bundle
     test_vulkan_frame_graph.cpp # REN-1 (D-007 row 98): the frame graph — one submission + transient aliasing
+    test_vulkan_gpu_resources_diag.cpp # the gpu.resources diagnostic command over a real context and frame graph
     test_ckir_glsl_compile.cpp
     test_vulkan_rt.cpp
     test_vulkan_hair_showcase.cpp
@@ -25,6 +26,7 @@ target_link_libraries(crd-gpu-context-vulkan-tests PRIVATE
     crd-gpu-context-vulkan
     crd-perf                 # DIAG.6b(k): the profiler substrate for the real end-to-end bridge test
     crd-perf-gpu-bridge      # DIAG.6b(k): FrameGraphGpuBackend over a real VulkanFrameGraph (pulls crd-time transitively)
+    crd-asset-io             # the JSON reader that parses the gpu.resources diagnostic responses
     crd-shader-cook          # D-007 D2: the offline cook (CKIR graph -> .crdr bundle) under test
     crd-jobs                 # D-007 D10: the fiber scheduler for the parallel-cook test (jobs::init/shutdown)
     crd-cooker               # GEO-1: the wave1 (.stl/.obj/.ply) asset cook handler (the import→cook→draw gate)

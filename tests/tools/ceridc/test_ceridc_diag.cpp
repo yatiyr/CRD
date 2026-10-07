@@ -4,7 +4,8 @@
 // and refusals; the MCP tool's arguments cannot raise the grant the process started with; and malformed numeric
 // arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
 // parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
-// (bind_diag_commands), so the comparison covers program.provenance over the committed authored CEIR program too.
+// (bind_diag_commands), so the comparison covers program.provenance over the committed authored CEIR program and
+// gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable) too.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -202,6 +203,9 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         {"program.provenance", kParityProgram, 4U, 0U, 1U, -1},
         {"program.provenance", kParityProgram, 4U, 0U, 1U, 13},
         {"program.provenance", "no_such.ceir", 0U, 0U, 1U, -1}, // the command's own failure, after the checks
+        {"gpu.resources", nullptr, 2U, 0U, 1U, -1},
+        {"gpu.resources", nullptr, 2U, 0U, 1U, 16},
+        {"gpu.resources", "x.bin", 0U, 0U, 1U, -1}, // takes no path
     };
     crd::containers::Array<crd::u64> next(&g_alloc);
     for (const Step& s : steps)
@@ -226,8 +230,8 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         CHECK(view(through_mcp.text) == view(direct.json));
         CHECK(through_mcp.is_error == (direct.status != crd::perf::DiagStatus::Ok));
     }
-    // The commands, bundle and program snapshots, capabilities and the missing program; refusals ran nothing.
-    CHECK(native.handler_runs() == 5U);
+    // The commands, bundle, program and GPU snapshots, capabilities and the missing program; refusals ran nothing.
+    CHECK(native.handler_runs() == 6U);
     CHECK(verb.handler_runs() == native.handler_runs());
     CHECK(mcp.handler_runs() == native.handler_runs());
     CHECK(mcp.file_bytes_read() == native.file_bytes_read());
@@ -304,7 +308,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         crd::u32    page_items;
     };
     for (const Cli& c : {Cli{"bundle.inspect", kBinaryBundle, 2U}, Cli{"diag.commands", nullptr, 0U},
-                         Cli{"program.provenance", kBinaryProgram, 4U}})
+                         Cli{"program.provenance", kBinaryProgram, 4U}, Cli{"gpu.resources", nullptr, 0U}})
     {
         INFO(c.command);
         DiagCommandService native(read, rooted(), &g_alloc);
