@@ -127,6 +127,10 @@ public:
     // unset (a single null check in the hot loop). ⛔ NOT copied by the prototype ctor (per-session, like set_user/cancel).
     using StepHook = void (*)(const Operation& op, void* user);
     void set_step_hooks(StepHook pre, StepHook post, void* user) noexcept { m_pre_hook = pre; m_post_hook = post; m_hook_user = user; }
+    // DIAG.8b: a `pre` hook is a SAFE POINT: it may block (a debugger pause) and read values with `value_of`. A
+    // cancel flag set while it held the op stops the run with `Cancelled` before that op dispatches. `call_depth` is
+    // the number of func.call frames above the invoked entry (0 in the entry), for step over / step out.
+    [[nodiscard]] crd::u32 call_depth() const noexcept { return m_depth; }
 
     // Run `@entry(args)` against `m` (calls resolve via `m.symbols()`).
     [[nodiscard]] ExecResult invoke(const Module& m, containers::StringView entry, containers::ConstSpan<crd::i64> args);
@@ -215,6 +219,7 @@ private:
     StepHook                                      m_pre_hook  = nullptr; // §112 pre-op hook (CEIR-11a); not proto-copied
     StepHook                                      m_post_hook = nullptr; // §112 post-op hook (successful dispatch only)
     void*                                         m_hook_user = nullptr; // opaque user for the step hooks
+    crd::u32                                      m_depth     = 0U;      // DIAG.8b: func.call frames above the entry
 };
 
 // Install the built-in reference semantics (open-world — a caller may install more or override).

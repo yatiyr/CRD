@@ -24,6 +24,8 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
+#include <atomic> // DIAG.8b: the cooperative cancel flag a RunControl observes (the exec.hpp primitive)
+
 namespace crd::ceir::plan
 {
 // The dense compiled op-id. Dispatch is a switch over THIS — a compile-time jump table, NOT a dynamic map lookup (§153).
@@ -136,6 +138,7 @@ struct CompiledPlan
     containers::Array<Seq>        seqs;         // seq tree (ALL functions' seqs; each CompiledFn names its entry)
     containers::Array<crd::u32>   operand_pool; // slot indices for instrs' operand spans
     containers::Array<crd::u32>   result_pool;  // slot indices for instrs' result spans
+    containers::Array<TypeId>     result_types; // DIAG.8b: each result_pool entry's IR type (inspection only)
     containers::Array<crd::u32>   child_pool;   // child SEQ indices for control-flow instrs
     containers::Array<crd::u32>   cell_depths;  // §20: the ring depth per dense cell index (num_cells entries) — PLAN-GLOBAL
     containers::Array<CompiledFn> funcs;        // 4a: the compiled function table (Op::Call + the 4c map/combine fns index this)
@@ -145,7 +148,8 @@ struct CompiledPlan
     crd::u32                      num_maps  = 0U; // 4c: the data-parallel op count (a dense map-output index per ParallelFor/MapReduce)
     crd::u32                      entry_fn  = 0U; // the @entry function's index into `funcs`
     explicit CompiledPlan(memory::IAllocator* a)
-        : seqs(a), operand_pool(a), result_pool(a), child_pool(a), cell_depths(a), funcs(a), sites(a), site_origins(a)
+        : seqs(a), operand_pool(a), result_pool(a), result_types(a), child_pool(a), cell_depths(a), funcs(a), sites(a),
+          site_origins(a)
     {
     }
 };
@@ -181,6 +185,7 @@ enum class RunError : crd::u8
     FuelExhausted,      // the step budget ran out (runaway loop)
     BadToken,           // 4b: await/join/continuation of a value that is not a live token handle (reference: BadToken)
     ContinuationArity,  // 4b: a continuation body's arg count != the antecedent token's yield count (reference: BadArity)
+    Cancelled,          // DIAG.8b: a RunControl's cancel flag or safe point stopped the run (reference: Cancelled)
 };
 [[nodiscard]] containers::StringView run_error_name(RunError e) noexcept;
 
@@ -242,8 +247,63 @@ struct RunResult
 // RUN a compiled plan: bind `args` to the param slots, execute the entry seq over a flat i64 slot array, return the
 // entry seq's yield-slot values (or a typed RunError). ⛔ §153: the loop touches only dense arrays. `hooks` (CEIR-11c,
 // null-default) fire around each dispatched instr for a perf-linking consumer — zero-cost when unset.
+// DIAG.8b: a SAFE POINT is the executor's position just before an instr dispatches, offered to a RunControl. `depth`
+// is the call-frame depth (0 = the entry function; a call or an isolated map/combine body adds one). `frame` is the
+// run's own state, opaque, valid only inside the callback and readable only through `read_value`.
+struct SafePoint
+{
+    InstrRef    at;
+    crd::u32    depth = 0U;
+    const void* frame = nullptr;
+};
+
+// NOLINTNEXTLINE(performance-enum-size)
+enum class SafePointAction : crd::u8
+{
+    Continue = 0,
+    Cancel, // stop the run with RunError::Cancelled, blamed on the instr at the safe point (it does not run)
+};
+
+// DIAG.8b: the debug seam of a production run, separate from the observation-only RunHooks. Null by default: `run`
+// without a control does no extra work beyond one predicted branch per instr. With a control, every instr is a safe
+// point: `cancel` (a monotonic flag, like the interpreter's) is checked first, then `safe_point` is called on the
+// executing thread, which may block there (a debugger pause) and may answer value reads through `read_value`.
+struct RunControl
+{
+    SafePointAction (*safe_point)(const CompiledPlan& plan, const SafePoint& at, void* user) = nullptr;
+    void*                    user   = nullptr;
+    const std::atomic<bool>* cancel = nullptr;
+};
+
 [[nodiscard]] RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc,
-                            RunHooks hooks = {});
+                            RunHooks hooks = {}, const RunControl* control = nullptr);
+
+// DIAG.8b: whether a value can be read at a safe point. A value is read only from the frame the safe point is in
+// (the innermost call frame), never by address.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ValueState : crd::u8
+{
+    Available = 0,  // defined earlier on the path to the safe point, in its frame: `bits` holds the value
+    NotYetComputed, // its instr is on the path but has not run yet (the instr at the safe point itself included)
+    OutOfScope,     // its instr is not on the path to the safe point in this frame (another region, function or frame)
+    OptimizedAway,  // no compiled instr defines it: a pass replaced it, and `survivor` is the op that now stands for it
+    NoSuchValue,    // no instr defines it and no instr names it as an origin, or `result` is past the op's results
+};
+[[nodiscard]] containers::StringView value_state_name(ValueState s) noexcept;
+
+struct ValueRead
+{
+    ValueState state = ValueState::NoSuchValue;
+    crd::i64   bits  = 0;
+    TypeId     type{};     // the IR type of a defined result (valid unless OptimizedAway / NoSuchValue)
+    StableId   survivor{}; // OptimizedAway: the compiled op that replaced it
+    InstrRef   def;        // the defining instr, when one exists
+};
+
+// DIAG.8b: read result `result` of the op with stable id `op` at safe point `at`. Valid only inside the safe-point
+// callback that received `at`, on the executing thread.
+[[nodiscard]] ValueRead read_value(const CompiledPlan& plan, const SafePoint& at, StableId op,
+                                   crd::u32 result) noexcept;
 
 // DIAG.8a: the authored provenance of instr `at` — a view into the plan's own tables (no Module needed). An invalid or
 // out-of-range `at` yields ProvenanceGap::NoOperation. Render it with `render_provenance` and the Context that owns the

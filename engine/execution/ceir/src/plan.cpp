@@ -41,6 +41,19 @@ containers::StringView run_error_name(RunError e) noexcept
     case RunError::FuelExhausted: return containers::StringView("fuel-exhausted");
     case RunError::BadToken: return containers::StringView("bad-token");
     case RunError::ContinuationArity: return containers::StringView("continuation-arity");
+    case RunError::Cancelled: return containers::StringView("cancelled");
+    }
+    return containers::StringView("?");
+}
+containers::StringView value_state_name(ValueState s) noexcept
+{
+    switch (s) // ⛔ no default (-Werror=switch)
+    {
+    case ValueState::Available: return containers::StringView("available");
+    case ValueState::NotYetComputed: return containers::StringView("not-yet-computed");
+    case ValueState::OutOfScope: return containers::StringView("out-of-scope");
+    case ValueState::OptimizedAway: return containers::StringView("optimized-away");
+    case ValueState::NoSuchValue: return containers::StringView("no-such-value");
     }
     return containers::StringView("?");
 }
@@ -364,6 +377,7 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         for (crd::u32 i = 0; i < op->num_results(); ++i)
         {
             cc.plan.result_pool.push_back(fresh(cc, op->result(i)));
+            cc.plan.result_types.push_back(op->result(i)->type()); // DIAG.8b: kept parallel to result_pool
         }
         instr.results_cnt = op->num_results();
         // dense op-id + the compiled immediate.
@@ -617,6 +631,15 @@ struct Ring
     bool                        init = false; // filled on the first cell_read
     explicit Ring(memory::IAllocator* a) : ring(a) {}
 };
+// DIAG.8b: one active sequence on the path to the current instr. `k` is the instr about to run (or running, for a
+// control-flow instr whose child is deeper on the path); `base` identifies the call frame; `depth` counts frames.
+struct PathEntry
+{
+    crd::u32 seq   = 0U;
+    crd::u32 k     = 0U;
+    crd::u32 base  = 0U;
+    crd::u32 depth = 0U;
+};
 struct RS
 {
     const CompiledPlan&          plan;
@@ -631,6 +654,10 @@ struct RS
     crd::u64                     fuel;  // a hang-guard (a runaway loop → FuelExhausted)
     RunHooks                     hooks; // CEIR-11c: null-default profiling seam (one predicted branch per instr when unset)
     InstrRef                     fault{}; // DIAG.8a: the instr that raised the run's error (first = innermost)
+    // DIAG.8b: the debug seam (null: none) and, only while it is set, the PATH to the current instr: one entry per
+    // active run_seq, outermost first, so a safe point can tell which values are live in its frame.
+    const RunControl*             control = nullptr;
+    containers::Array<PathEntry>* path    = nullptr;
 };
 // DIAG.8a: an error ORIGINATES at instr `k` of seq `seq_idx`: latch that address (first wins — outer frames only
 // propagate) and return `e`. Error paths only; the dispatch loop never reads `fault`.
@@ -717,12 +744,73 @@ RunError run_forward(RS& rs, crd::u32 child_seq, const crd::u32* results, crd::u
     }
     return RunError::None;
 }
+// DIAG.8b: keeps rs.path in step with the run_seq recursion while a RunControl is attached (a no-op otherwise).
+class PathScope
+{
+public:
+    PathScope(const RS& rs, crd::u32 seq_idx, crd::u32 base) : m_path(rs.path)
+    {
+        if (m_path == nullptr)
+        {
+            return;
+        }
+        crd::u32 depth = 0U;
+        if (!m_path->empty())
+        {
+            const PathEntry& outer = m_path->back();
+            depth                  = (outer.base == base) ? outer.depth : outer.depth + 1U;
+        }
+        m_path->push_back(PathEntry{seq_idx, 0U, base, depth});
+    }
+    PathScope(const PathScope&)            = delete;
+    PathScope& operator=(const PathScope&) = delete;
+    PathScope(PathScope&&)                 = delete;
+    PathScope& operator=(PathScope&&)      = delete;
+    ~PathScope()
+    {
+        if (m_path != nullptr)
+        {
+            m_path->pop_back();
+        }
+    }
+
+private:
+    containers::Array<PathEntry>* m_path;
+};
+
+// DIAG.8b: the safe point before instr `k` (reached only with a RunControl). Cancel is checked before the callback and
+// again after it, so a cancel issued while the callback blocked stops the run before the instr executes.
+RunError safe_point(RS& rs, crd::u32 seq_idx, crd::u32 k)
+{
+    const RunControl& c = *rs.control;
+    if (c.cancel != nullptr && c.cancel->load(std::memory_order_relaxed))
+    {
+        return raise(rs, seq_idx, k, RunError::Cancelled);
+    }
+    PathEntry& here = rs.path->back();
+    here.k          = k;
+    if (c.safe_point != nullptr)
+    {
+        const SafePoint at{InstrRef{seq_idx, k}, here.depth, &rs};
+        if (c.safe_point(rs.plan, at, c.user) == SafePointAction::Cancel)
+        {
+            return raise(rs, seq_idx, k, RunError::Cancelled);
+        }
+    }
+    if (c.cancel != nullptr && c.cancel->load(std::memory_order_relaxed))
+    {
+        return raise(rs, seq_idx, k, RunError::Cancelled);
+    }
+    return RunError::None;
+}
+
 RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recursion)
 {
     const Seq&            seq  = rs.plan.seqs[seq_idx];
     const crd::u32* const ops  = rs.plan.operand_pool.data();
     const crd::u32* const rez  = rs.plan.result_pool.data();
     const crd::u32* const kids = rs.plan.child_pool.data();
+    const PathScope       on_path(rs, seq_idx, base);
     for (crd::u32 k = 0; k < static_cast<crd::u32>(seq.instrs.size()); ++k)
     {
         if (rs.fuel == 0U)
@@ -730,6 +818,13 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             return raise(rs, seq_idx, k, RunError::FuelExhausted);
         }
         --rs.fuel;
+        if (rs.control != nullptr) // DIAG.8b: one predicted branch when no debugger is attached
+        {
+            if (const RunError e = safe_point(rs, seq_idx, k); e != RunError::None)
+            {
+                return e;
+            }
+        }
         const Instr&   in    = seq.instrs[k];
         const crd::u32 rslot = base + ((in.results_cnt > 0U) ? rez[in.results_off] : 0U);
         // CEIR-11c profiling seam: `pre` fires for EVERY dispatched instr (⛔ terminators/latches are NOT instrs — they
@@ -1161,7 +1256,8 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
     return res;
 }
 
-RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc, RunHooks hooks)
+RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc, RunHooks hooks,
+              const RunControl* control)
 {
     RunResult r(alloc);
     if (plan.entry_fn >= static_cast<crd::u32>(plan.funcs.size())) // an empty/failed compile — no entry
@@ -1188,6 +1284,12 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
         map_outputs.push_back(containers::Array<crd::i64>(alloc));
     }
     RS rs{plan, stack, cells, tokens, map_outputs, alloc, crd::u64{1} << 24U, hooks}; // reference's step budget + the 11c seam
+    containers::Array<PathEntry> path(alloc); // DIAG.8b: maintained only while a RunControl is attached
+    if (control != nullptr)
+    {
+        rs.control = control;
+        rs.path    = &path;
+    }
     r.error = run_seq(rs, entry.entry_seq, 0U);
     r.fault = rs.fault;
     // §118 inspection parity: the current value per cell (ring[pos] if read; 0 if never read — matches "never evaluated").
@@ -1210,6 +1312,84 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
         r.values.push_back(stack[es.yield_slots[i]]);
     }
     return r;
+}
+
+ValueRead read_value(const CompiledPlan& plan, const SafePoint& at, StableId op, crd::u32 result) noexcept
+{
+    ValueRead out;
+    if (!op.valid())
+    {
+        return out; // NoSuchValue: an unassigned id names nothing
+    }
+    // The defining instr: the compiled instr whose own op is `op`.
+    for (crd::u32 s = 0; s < static_cast<crd::u32>(plan.seqs.size()) && !out.def.valid(); ++s)
+    {
+        const Seq& seq = plan.seqs[s];
+        for (crd::u32 k = 0; k < static_cast<crd::u32>(seq.sites.size()); ++k)
+        {
+            if (plan.sites[seq.sites[k]].op == op)
+            {
+                out.def = InstrRef{s, k};
+                break;
+            }
+        }
+    }
+    if (!out.def.valid())
+    {
+        // Not compiled: a pass may have replaced it, and then the survivor names it as a CeirOp origin.
+        for (crd::u32 i = 0; i < static_cast<crd::u32>(plan.sites.size()); ++i)
+        {
+            const InstrSite& site = plan.sites[i];
+            for (crd::u32 o = 0; o < site.origins_cnt; ++o)
+            {
+                const Origin& origin = plan.site_origins[site.origins_off + o];
+                if (origin.space == OriginSpace::CeirOp && origin.node == op && site.op != op)
+                {
+                    out.state    = ValueState::OptimizedAway;
+                    out.survivor = site.op;
+                    return out;
+                }
+            }
+        }
+        return out; // NoSuchValue
+    }
+    const Instr& def = plan.seqs[out.def.seq].instrs[out.def.instr];
+    if (result >= def.results_cnt)
+    {
+        return out; // NoSuchValue: the op has no such result
+    }
+    out.type           = plan.result_types[def.results_off + result];
+    const RS* const rs = static_cast<const RS*>(at.frame);
+    if (rs == nullptr || rs->path == nullptr || rs->path->empty())
+    {
+        out.state = ValueState::OutOfScope;
+        return out;
+    }
+    const containers::Array<PathEntry>& path  = *rs->path;
+    const crd::u32                      frame = path.back().base; // the safe point's own frame
+    for (crd::usize i = path.size(); i > 0U; --i)
+    {
+        const PathEntry& e = path[i - 1U];
+        if (e.base != frame)
+        {
+            break; // left the safe point's frame: an outer frame's values are not read from here
+        }
+        if (e.seq == out.def.seq)
+        {
+            if (out.def.instr < e.k)
+            {
+                out.state = ValueState::Available;
+                out.bits  = rs->stack[e.base + plan.result_pool[def.results_off + result]];
+            }
+            else
+            {
+                out.state = ValueState::NotYetComputed;
+            }
+            return out;
+        }
+    }
+    out.state = ValueState::OutOfScope;
+    return out;
 }
 
 Provenance instr_provenance(const CompiledPlan& plan, InstrRef at) noexcept

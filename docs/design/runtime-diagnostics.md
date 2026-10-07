@@ -558,6 +558,29 @@ Acceptance: inspect/step an authored program in headless and sandbox consumers, 
 reject stale-generation requests, and report unavailable values. No worker may block the only thread needed to answer
 the diagnostic command. Existing language/runtime capabilities bound what is implemented now.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-safe-point-inspection.md)):
+- The two executors offer safe points and nothing else: the compiled plan through `plan::RunControl` (a null-default
+  parameter of `plan::run`, separate from the observation-only `RunHooks`; a safe point before every instr) and the
+  reference interpreter through its §112 `pre` step hook. `crd/ceir/inspect.hpp`'s `Session` decides whether the
+  executing thread stops there. A pause blocks the executing thread at the safe point (mutex and condition variable;
+  no signal, trap instruction or thread-context change, so a native debugger can attach and break independently).
+- Every inspection is a request the paused executing thread answers from its own state (`plan::read_value`,
+  `Interpreter::value_of`); a controller never dereferences executor memory and every controller wait has a timeout.
+  A safe point on the declared controller thread is refused (`SameThread`) rather than blocking the only thread that
+  can answer.
+- A value reads only from the safe point's own call frame and is `Available`, `NotYetComputed`, `OutOfScope`,
+  `OptimizedAway` (no instr defines it; the survivor that carries it as a `CeirOp` origin is named), `NoSuchValue` or
+  `Redacted` (the host's `RedactFn`, the value's retained owner, withholds the bits but not the type). A snapshot carries
+  the IR type, its canonical text and a quantity's dimension; the plan keeps each result's type for this.
+- Cancel and the fuel budget are preserved: a cancel at a pause ends the run with `Cancelled` blamed on the held instr
+  or op before it runs (`RunError::Cancelled` is new); pausing consumes no fuel.
+- Scopes are typed: `Task` pauses one execution, `WholeHost` runs the host's freeze/thaw around the pause (refused
+  without them) and `NonPausable` never waits (hits are counted).
+- A session is bound to one generation (the host's number, e.g. a ReloadSet handle's) and refuses requests naming
+  another before any work. Breakpoints are authored `file:line` positions resolved through DIAG.8a provenance on every
+  bind, never stable ids (pre-order ids shift when an op is inserted) or compiled positions, so a hot reload rebinds
+  each line to what the new generation authored there.
+
 <a id="diag-8c"></a>
 ## DIAG.8c — typed human and agent diagnostics commands
 

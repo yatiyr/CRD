@@ -27,4 +27,7 @@ void print(Context& ctx, const Module& module, containers::String& out);
 
 // Print `module` to a fresh String allocated from `alloc`.
 [[nodiscard]] containers::String print(Context& ctx, const Module& module, memory::IAllocator* alloc);
+
+// DIAG.8b: append one type's canonical text (the `!`-sigil grammar `print` emits, units included) to `out`.
+void print_type(const Context& ctx, TypeId type, containers::String& out);
 } // namespace crd::ceir

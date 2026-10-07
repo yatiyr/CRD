@@ -40,6 +40,10 @@ plan-cache API's existence does not imply every host uses it. Consumer integrati
 Source reload in scene-render still needs the RAH-7 atomic/granular registry work. Audio's CEIR-31 acyclic proof does
 not complete real-time feedback execution. CHIR-0 is not a full application language.
 
+Runtime inspection ([DIAG.8b](../design/runtime-diagnostics.md#diag-8b)): `crd/ceir/inspect.hpp` pauses the compiled
+plan (`plan::RunControl`) or the reference interpreter (its step hook) at authored `file:line` breakpoints, steps,
+cancels and answers typed value snapshots from the paused thread, bound to one program generation.
+
 ## Maturity and further work
 
 The [manifest](../capabilities/gpu-platform-capabilities.toml) and

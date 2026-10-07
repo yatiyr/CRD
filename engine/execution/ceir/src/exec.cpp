@@ -317,6 +317,10 @@ ExecError Interpreter::eval_op(const Operation& op)
     if (m_pre_hook != nullptr) // §112: fires before EVERY dispatched op
     {
         m_pre_hook(op, m_hook_user);
+        if (cancelled()) // DIAG.8b: a cancel issued while the hook held a safe point stops before the op runs
+        {
+            return fail(ExecError::Cancelled, &op);
+        }
     }
     const ExecError e = (*fn)(*this, op);
     if (e == ExecError::None && m_post_hook != nullptr) // post: successful dispatch only
@@ -427,7 +431,9 @@ ExecError Interpreter::call(const Operation& call_op, containers::Array<crd::i64
     {
         set_value(eb->arg(i), argv[i]);
     }
+    ++m_depth; // DIAG.8b: the call-frame depth a safe point reports (step over / step out)
     const ExecError e = run_region(*callee->region(0), &out_results);
+    --m_depth;
     m_env             = saved; // restore the caller's frame
     return e;
 }

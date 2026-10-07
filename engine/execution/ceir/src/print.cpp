@@ -53,7 +53,7 @@ constexpr u32 kMaxAttrsInline = 64U; // an op with more attrs than this is patho
 class Printer
 {
 public:
-    Printer(Context& ctx, containers::String& out) : m_ctx(ctx), m_out(out), m_ids(ctx.allocator()) {}
+    Printer(const Context& ctx, containers::String& out) : m_ctx(ctx), m_out(out), m_ids(ctx.allocator()) {}
 
     void run(const Module& module)
     {
@@ -62,6 +62,7 @@ public:
         emit_region(module.body(), 0U);
         m_out.push_back('\n');
     }
+    void run_type(TypeId id) { emit_type(id); } // DIAG.8b: one type, for a value snapshot
 
 private:
     // ── pass 1: deterministic SSA value numbering (a fixed pre-order walk) ──
@@ -726,7 +727,7 @@ private:
         }
     }
 
-    Context&                              m_ctx;
+    const Context&                        m_ctx;
     containers::String&                   m_out;
     containers::HashMap<Value*, u32>      m_ids;
     u32                                   m_next = 0U;
@@ -744,5 +745,11 @@ containers::String print(Context& ctx, const Module& module, memory::IAllocator*
     containers::String out(alloc);
     print(ctx, module, out);
     return out;
+}
+
+void print_type(const Context& ctx, TypeId type, containers::String& out)
+{
+    Printer p(ctx, out);
+    p.run_type(type);
 }
 } // namespace crd::ceir
