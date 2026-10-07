@@ -537,3 +537,71 @@ TEST_CASE("diag 8a: a corrupt ORIG chunk is rejected, never applied", "[ceir][di
         CHECK(StringView(r.error) == StringView("ORIG entry count exceeds the BODY op count"));
     }
 }
+
+TEST_CASE("diag 8a: an entry refusal names the requested entry; a found entry is blamed at its authored line",
+          "[ceir][diag]")
+{
+    memory::GrowableTlsfAllocator root;
+    Context                       bctx(&root);
+    register_dialects(bctx);
+    const String     text = print(bctx, *build_main(bctx), &root);
+    const StringView src(text.data(), text.size());
+    const TextPos    at_fn = find_op(src, "sym_name = \"main\"", 0U);
+    REQUIRE(at_fn.line != 0U);
+    Context ctx(&root);
+    register_dialects(ctx);
+    const ParseResult pr = parse(ctx, src, ctx.register_file(kFile));
+    REQUIRE(pr.ok);
+
+    // The requested name lives in the caller's buffer, which is overwritten before the results are read: each result
+    // must hold its own copy.
+    String requested(&root);
+    requested.append("mian");
+    const StringView          ask(requested.data(), requested.size());
+    const plan::CompileResult cr = plan::compile(ctx, *pr.module, ask, &root);
+    exec::Interpreter         in(ctx);
+    exec::install_builtin_semantics(in);
+    const i64              args[1] = {1};
+    const exec::ExecResult er      = in.invoke(*pr.module, ask, ConstSpan<i64>(args, 1U));
+    for (usize i = 0; i < requested.size(); ++i)
+    {
+        requested.data()[i] = 'x';
+    }
+
+    CHECK(cr.error == plan::CompileError::NoEntry);
+    CHECK(cr.op == nullptr);
+    CHECK(StringView(cr.entry.data(), cr.entry.size()) == StringView("mian"));
+    CHECK(er.error == exec::ExecError::NoEntry);
+    CHECK(er.op == nullptr);
+    CHECK(StringView(er.entry.data(), er.entry.size()) == StringView("mian"));
+
+    SECTION("a module with no symbols names the request too")
+    {
+        Module* const             empty = ctx.create_module();
+        const plan::CompileResult ce    = plan::compile(ctx, *empty, "absent", &root);
+        CHECK(ce.error == plan::CompileError::NoEntry);
+        CHECK(StringView(ce.entry.data(), ce.entry.size()) == StringView("absent"));
+        exec::Interpreter ie(ctx);
+        exec::install_builtin_semantics(ie);
+        const exec::ExecResult ee = ie.invoke(*empty, "absent", {});
+        CHECK(ee.error == exec::ExecError::NoEntry);
+        CHECK(StringView(ee.entry.data(), ee.entry.size()) == StringView("absent"));
+    }
+
+    SECTION("control: a found entry names no request; a bad arity is blamed at the entry's authored line")
+    {
+        const plan::CompileResult ok = plan::compile(ctx, *pr.module, "main", &root);
+        REQUIRE(ok.ok());
+        CHECK(ok.entry.empty());
+        exec::Interpreter ia(ctx);
+        exec::install_builtin_semantics(ia);
+        const exec::ExecResult ea = ia.invoke(*pr.module, "main", {});
+        CHECK(ea.error == exec::ExecError::BadArity);
+        CHECK(ea.entry.empty());
+        REQUIRE(ea.op != nullptr);
+        Array<Origin>    storage(&root);
+        const Provenance p = resolve_provenance(ctx, ea.op, storage);
+        REQUIRE(p.primary() != nullptr);
+        check_origin(ctx, *p.primary(), at_fn);
+    }
+}

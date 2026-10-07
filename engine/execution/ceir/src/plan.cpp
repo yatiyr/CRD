@@ -1091,15 +1091,11 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
     CompileResult res(alloc);
     ctx.assign_stable_ids(module); // DIAG.8a: every instr site names its op by a real stable id
     const SymbolTable* const syms = module.symbols();
-    if (syms == nullptr)
-    {
-        res.error = CompileError::NoEntry;
-        return res;
-    }
-    const SymbolEntry* const se = syms->lookup(entry);
+    const SymbolEntry* const se   = (syms != nullptr) ? syms->lookup(entry) : nullptr;
     if (se == nullptr || se->op == nullptr)
     {
         res.error = CompileError::NoEntry;
+        res.entry.append(entry.data(), entry.size()); // DIAG.8a: no op to blame; name what was requested
         return res;
     }
     if (func::func_body_block(se->op) == nullptr)

@@ -439,15 +439,11 @@ ExecResult Interpreter::invoke(const Module& m, containers::StringView entry, co
     m_module  = &m; // the sequential parallel_for/map_reduce EvalFns invoke_region on a sub with THIS module
     m_err     = ExecError::None;
     m_err_op  = nullptr;
-    if (m_symbols == nullptr)
-    {
-        r.error = ExecError::NoEntry;
-        return r;
-    }
-    const SymbolEntry* const e = m_symbols->lookup(entry);
+    const SymbolEntry* const e = (m_symbols != nullptr) ? m_symbols->lookup(entry) : nullptr;
     if (e == nullptr || e->op == nullptr)
     {
         r.error = ExecError::NoEntry;
+        r.entry.append(entry.data(), entry.size()); // DIAG.8a: no op to blame; name what was requested
         return r;
     }
     Operation* const fn = e->op;

@@ -212,7 +212,7 @@ void check_at(const Context& ctx, const Provenance& p, TextPos at)
 struct Loaded
 {
     Module* module = nullptr;
-    TextPos for_a, for_b, for_launch, for_combine, pfor_owner;
+    TextPos for_a, for_b, for_launch, for_combine, pfor_owner, fn_pfor;
 };
 Loaded author_optimize_reload(Context& loaded, memory::IAllocator* alloc)
 {
@@ -226,11 +226,13 @@ Loaded author_optimize_reload(Context& loaded, memory::IAllocator* alloc)
     out.for_launch  = find_op(src, "core.for", 2U);
     out.for_combine = find_op(src, "core.for", 3U);
     out.pfor_owner  = find_op(src, "task.parallel_for", 1U);
+    out.fn_pfor     = find_op(src, "sym_name = \"pfor_fault\"", 0U);
     REQUIRE(out.for_a.line != 0U);
     REQUIRE(out.for_b.line > out.for_a.line);
     REQUIRE(out.for_launch.line > out.for_b.line);
     REQUIRE(out.for_combine.line > out.for_launch.line);
     REQUIRE(out.pfor_owner.line > out.for_combine.line);
+    REQUIRE(out.fn_pfor.line != 0U);
 
     Context ctx(alloc);
     register_dialects(ctx);
@@ -364,4 +366,35 @@ TEST_CASE("diag 8a: an error raised by the parallel op itself still names that o
     REQUIRE(rp.op != nullptr);
     CHECK(rp.op == er.op);
     check_at(loaded, resolve_provenance(loaded, rp.op, storage), l.pfor_owner);
+}
+
+TEST_CASE("diag 8a: the provider names a refused entry and blames a bad arity at the entry's line",
+          "[ceir][host][diag]")
+{
+    memory::GrowableTlsfAllocator root;
+    Context                       loaded(&root);
+    const Loaded                  l = author_optimize_reload(loaded, &root);
+    Array<Origin>                 storage(&root);
+    memory::GrowableTlsfAllocator palloc;
+    host::HostProvider            prov(&palloc, 4U);
+
+    // The request is overwritten before the result is read: the result holds its own copy.
+    String requested(&root);
+    requested.append("pfor_falut");
+    const exec::ExecResult rp = prov.execute(loaded, *l.module, StringView(requested.data(), requested.size()), {});
+    for (usize i = 0; i < requested.size(); ++i)
+    {
+        requested.data()[i] = 'x';
+    }
+    CHECK(rp.error == exec::ExecError::NoEntry);
+    CHECK(rp.op == nullptr);
+    CHECK(StringView(rp.entry.data(), rp.entry.size()) == StringView("pfor_falut"));
+
+    // Control: the entry exists, so nothing is named as requested and the arity refusal names the authored function.
+    const i64              extra[1] = {1};
+    const exec::ExecResult ra       = prov.execute(loaded, *l.module, "pfor_fault", ConstSpan<i64>(extra, 1U));
+    CHECK(ra.error == exec::ExecError::BadArity);
+    CHECK(ra.entry.empty());
+    REQUIRE(ra.op != nullptr);
+    check_at(loaded, resolve_provenance(loaded, ra.op, storage), l.fn_pfor);
 }

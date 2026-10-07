@@ -24,6 +24,53 @@ containers::StringView reload_decision_name(ReloadDecision d) noexcept
     return containers::StringView("?");
 }
 
+containers::StringView generation_state_name(GenerationState s) noexcept
+{
+    switch (s) // ⛔ no default (-Werror=switch)
+    {
+    case GenerationState::Current: return containers::StringView("current");
+    case GenerationState::Retiring: return containers::StringView("retiring");
+    case GenerationState::Gone: return containers::StringView("gone");
+    }
+    return containers::StringView("?");
+}
+
+namespace
+{
+void append_decimal(containers::String& s, crd::u64 n)
+{
+    char       buf[20];
+    crd::usize k = 0U;
+    do
+    {
+        buf[k++] = static_cast<char>('0' + (n % 10U));
+        n /= 10U;
+    } while (n != 0U);
+    while (k > 0U)
+    {
+        s.push_back(buf[--k]);
+    }
+}
+} // namespace
+
+containers::String render_generation_site(const GenerationSite& s, memory::IAllocator* out)
+{
+    containers::String r(out);
+    r.append("asset#");
+    append_decimal(r, s.asset.value);
+    r.append(" gen#");
+    append_decimal(r, s.generation.value);
+    r.push_back(' ');
+    const containers::StringView st = generation_state_name(s.state);
+    r.append(st.data(), st.size());
+    if (!s.where.empty())
+    {
+        r.push_back(' ');
+        r.append(s.where.data(), s.where.size());
+    }
+    return r;
+}
+
 containers::StringView add_error_name(AddError e) noexcept
 {
     switch (e) // ⛔ no default (-Werror=switch)
@@ -356,6 +403,7 @@ AddResult ReloadSet::add_impl(AssetId id, containers::ConstSpan<crd::u8> blob)
     e.interface_hash = cand->program.interface_hash;
     e.contract_hash  = contract_hash(*cand->ctx, *cand->program.module, m_alloc);
     e.current_handle = e.slot.install(&cand->program, id);
+    cand->number     = e.current_handle.generation; // DIAG.8a: a fault located later names this generation
     m_entries.push_back(e); // Entry copied; slot/handle copied; the heap Generation is stable, so the raw ptr survives
     rebuild_graph();
     return AddResult{AddError::Ok, LoadError::Ok};
@@ -423,6 +471,7 @@ ReloadResult ReloadSet::reload_impl(AssetId id, containers::ConstSpan<crd::u8> b
         e->contract_hash  = nk;
         e->interface_hash = ni;
         e->current_handle = e->slot.install(&cand->program, id); // bumps the generation → old handles go stale
+        cand->number      = e->current_handle.generation;          // DIAG.8a: carried into retirement
         rebuild_graph();
         r.installed = true;
     }
@@ -549,6 +598,54 @@ Generation* ReloadSet::generation(AssetId id) const
 {
     const Entry* const e = find(id);
     return e != nullptr ? e->current : nullptr;
+}
+
+const Generation* ReloadSet::held(const ProgramHandle& h, GenerationState& out_state) const noexcept
+{
+    out_state            = GenerationState::Gone;
+    const Entry* const e = find(h.id);
+    if (e == nullptr || h.generation.value == 0U)
+    {
+        return nullptr;
+    }
+    // Matched by generation number, never by pointer: a freed generation's memory can back a later one.
+    if (e->current != nullptr && e->current->number == h.generation)
+    {
+        out_state = GenerationState::Current;
+        return e->current;
+    }
+    if (e->zombie != nullptr && e->zombie->number == h.generation)
+    {
+        out_state = GenerationState::Retiring;
+        return e->zombie;
+    }
+    return nullptr;
+}
+
+GenerationSite ReloadSet::locate(const ProgramHandle& h, const Provenance& p, memory::IAllocator* out) const
+{
+    GenerationSite site(out);
+    site.asset                = h.id;
+    site.generation           = h.generation;
+    const Generation* const g = held(h, site.state);
+    if (g != nullptr)
+    {
+        site.content_hash = g->program.content_hash;
+        site.where        = render_provenance(*g->ctx, p, out);
+    }
+    return site;
+}
+
+GenerationSite ReloadSet::locate(const ProgramHandle& h, const Operation* op, memory::IAllocator* out) const
+{
+    GenerationState         state = GenerationState::Gone;
+    const Generation* const g     = held(h, state);
+    if (g == nullptr)
+    {
+        return locate(h, Provenance{}, out);
+    }
+    containers::Array<Origin> storage(out);
+    return locate(h, resolve_provenance(*g->ctx, op, storage), out);
 }
 
 bool ReloadSet::affected(AssetId id, containers::Array<AssetId>& out) const

@@ -512,6 +512,15 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   innermost `RunResult::fault`. The owning op is blamed only when the body names no op. Parallel indices keep
   first-in-index-order, so the reported op does not depend on the job split. A pooled body's error is reported at its
   await, naming the body op.
+- Entries and generations (2026-10-07, [session](../sessions/2026-10-07-diag-8a-entries-generations-and-chir-reload.md)):
+  an entry refusal has no op to blame, so a lookup-failed `NoEntry` (no symbol table, or no such symbol) carries an
+  owned copy of the requested name (`ExecResult::entry`, `CompileResult::entry`); a found entry with the wrong arity
+  is blamed on the entry function's authored line. A fault in a hot-reloaded program is located in the generation that
+  ran it, never in whatever is installed now: `ReloadSet::locate(handle, ...)` matches the handle's generation number
+  (Current, Retiring = the held zombie, Gone = no longer held) and renders the site in that generation's own Context
+  with its content hash; a Gone generation is named by asset and number only. A CHIR-lowered program cooked with
+  `cook_program` keeps its `ChirNode` origins through failed reloads, and a NoChange reload refreshes them with the
+  same space and CHIR ids.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop

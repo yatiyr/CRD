@@ -1,13 +1,15 @@
 add_executable(crd-chir-tests
-    test_source_model.cpp    # CEIR-32b/32c: the source model + the graph-schema + the CHIR text projections
-    test_chir_lower.cpp      # CEIR-32d: the CHIR->CEIR lowering + the text/graph parity gate
-    test_chir_provenance.cpp # DIAG.8a: lowered ops and compiled instrs navigate to their CHIR node and line
+    test_source_model.cpp           # CEIR-32b/32c: the source model + the graph-schema + the CHIR text projections
+    test_chir_lower.cpp             # CEIR-32d: the CHIR->CEIR lowering + the text/graph parity gate
+    test_chir_provenance.cpp        # DIAG.8a: lowered ops and compiled instrs navigate to their CHIR node and line
+    test_chir_reload_provenance.cpp # DIAG.8a: a CHIR-lowered generation keeps its node origins through reloads
 )
 
 target_link_libraries(crd-chir-tests PRIVATE
     crd-core
     crd-chir
-    crd-ceir  # CEIR-32d: the lowering target — print/parse/find_structure_error over the lowered module
+    crd-ceir      # CEIR-32d: the lowering target — print/parse/find_structure_error over the lowered module
+    crd-ceir-cook # DIAG.8a: cook a lowered program and run it through the hot-reload supervisor
     Catch2::Catch2WithMain
 )
 

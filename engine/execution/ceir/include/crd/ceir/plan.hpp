@@ -19,6 +19,7 @@
 #include <crd/ceir/provenance.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -194,13 +195,16 @@ struct PlanStats
     crd::u32 num_maps   = 0U; // data-parallel ops
 };
 
+// DIAG.8a: a NoEntry compile has no op to blame, so `entry` keeps an owned copy of the requested entry name (set only
+// for that refusal; empty otherwise) — the same contract as `exec::ExecResult::entry`.
 struct CompileResult
 {
-    CompiledPlan     plan;
-    CompileError     error = CompileError::Ok;
-    PlanStats        stats;        // CEIR-11c: the plan-compile cost/shape counters
-    const Operation* op = nullptr; // DIAG.8a: the offending op of a failed compile (nullptr: ok, or no op to blame)
-    explicit CompileResult(memory::IAllocator* a) : plan(a) {}
+    CompiledPlan       plan;
+    CompileError       error = CompileError::Ok;
+    PlanStats          stats;        // CEIR-11c: the plan-compile cost/shape counters
+    const Operation*   op = nullptr; // DIAG.8a: the offending op of a failed compile (nullptr: ok, or no op to blame)
+    containers::String entry;        // DIAG.8a: the requested entry of a NoEntry refusal (else empty)
+    explicit CompileResult(memory::IAllocator* a) : plan(a), entry(a) {}
     [[nodiscard]] bool ok() const noexcept { return error == CompileError::Ok; }
 };
 

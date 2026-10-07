@@ -13,9 +13,11 @@
 #include <crd/ceir/cook/program_cook.hpp>    // cook_program_text / CookError (the source-in entry — CEIR-10a stage 4)
 #include <crd/ceir/cook/runtime_program.hpp> // RuntimeProgram / ProgramSlot / ProgramHandle / LoadError
 #include <crd/ceir/exec.hpp>                  // exec::Interpreter / exec::StateSnapshot (crd-ceir-cook already links crd-ceir)
+#include <crd/ceir/provenance.hpp>            // Provenance (DIAG.8a: locate a fault in the generation that ran it)
 #include <crd/containers/array.hpp>
 #include <crd/containers/incremental_dag.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -48,9 +50,38 @@ struct Migration
 // `RuntimeProgram*`; array growth would move the program and dangle every installed pointer + minted handle.
 struct Generation
 {
-    Context*       ctx = nullptr;
-    RuntimeProgram program;
+    Context*                     ctx = nullptr;
+    RuntimeProgram               program;
+    crd::renderasset::Generation number{}; // DIAG.8a: the slot generation its install minted (0 = never installed)
 };
+
+// DIAG.8a: which generation a located fault ran in, as seen by the set that loaded it.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class GenerationState : crd::u8
+{
+    Current,  // the handle's generation is the one installed now
+    Retiring, // it was replaced and is still held (the one-deep zombie, until the next install or `drain()`)
+    Gone,     // the set no longer holds it (drained, removed, never installed, or another asset): its Context, and with
+              // it the file names, is gone, so only the asset and the generation number can be named
+};
+[[nodiscard]] containers::StringView generation_state_name(GenerationState s) noexcept;
+
+// DIAG.8a: a fault located in the generation that ran it. A hot reload replaces a program while plans and interpreters
+// built from the previous generation may still run, so "which line" is not enough: the asset, the generation and that
+// generation's content hash say which version of the source the line belongs to. `where` is `render_provenance` in
+// that generation's own Context ("<file>:<line>:<col> op#<id>", or its typed gap); it is empty when the state is Gone.
+struct GenerationSite
+{
+    AssetId                      asset{};
+    crd::renderasset::Generation generation{};
+    GenerationState              state        = GenerationState::Gone;
+    crd::u64                     content_hash = 0U; // that generation's content hash (0 when Gone)
+    containers::String           where;
+    explicit GenerationSite(memory::IAllocator* a) : where(a) {}
+};
+
+// "asset#<id> gen#<n> <state> <where>" (no trailing part when `where` is empty), for a human or an agent.
+[[nodiscard]] containers::String render_generation_site(const GenerationSite& s, memory::IAllocator* out);
 
 // The reload DECISION — the reloaded program's stored hashes vs the freshly-loaded candidate's.
 // NOLINTNEXTLINE(performance-enum-size)
@@ -148,6 +179,13 @@ public:
     [[nodiscard]] bool                  is_current(AssetId id, const ProgramHandle& h) const; // false if absent/stale
     [[nodiscard]] const RuntimeProgram* program(AssetId id) const;                      // nullptr if absent
     [[nodiscard]] Generation*           generation(AssetId id) const;                   // the CURRENT gen (stage-3 migration)
+
+    // DIAG.8a: locate a fault of the program `h` was minted for, in the generation `h` names (current or retiring),
+    // never in whatever is installed now. The Provenance form takes a compiled plan's `instr_provenance` (a plan
+    // compiled from that generation's Context); the op form resolves an interpreter's error op in that generation's
+    // Context. A handle whose generation the set no longer holds is reported Gone with no `where`.
+    [[nodiscard]] GenerationSite locate(const ProgramHandle& h, const Provenance& p, memory::IAllocator* out) const;
+    [[nodiscard]] GenerationSite locate(const ProgramHandle& h, const Operation* op, memory::IAllocator* out) const;
     // The transitive DEPENDENTS of `id` (the "recompiles-affected" set) via the 8h dag. false ⇒ a cycle.
     [[nodiscard]] bool affected(AssetId id, containers::Array<AssetId>& out) const;
 
@@ -168,6 +206,8 @@ private:
 
     [[nodiscard]] Entry*       find(AssetId id) noexcept;
     [[nodiscard]] const Entry* find(AssetId id) const noexcept;
+    // The held generation `h` was minted for (current or zombie, matched by generation number), else nullptr.
+    [[nodiscard]] const Generation* held(const ProgramHandle& h, GenerationState& out_state) const noexcept;
     [[nodiscard]] Generation*  alloc_generation();
     [[nodiscard]] Generation*  load_generation(containers::ConstSpan<crd::u8> blob, LoadError& out_err);
     void                       destroy_generation(Generation* g) noexcept;

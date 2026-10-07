@@ -9,6 +9,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/hot_reload.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
+#include <crd/ceir/exec.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
@@ -383,5 +384,137 @@ TEST_CASE("diag 8a: a reformat-only reload keeps the generation and moves its au
         Generation* const next = set.generation(id);
         REQUIRE(next != installed);
         check_fault_at(fault_site(*next->ctx, *next->program.module, &root), kFileB, at_edit);
+    }
+}
+
+namespace
+{
+bool has(const String& s, StringView n)
+{
+    const StringView hay(s.data(), s.size());
+    for (usize i = 0; i + n.size() <= hay.size(); ++i)
+    {
+        if (StringView(hay.data() + i, n.size()) == n)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// "<file>:<line>:<col>" for the expected text position.
+String file_line_col(const char* file, TextPos at, crd::memory::IAllocator* alloc)
+{
+    String s(alloc);
+    s.append(file);
+    const u32 parts[2] = {at.line, at.col};
+    for (const u32 v : parts)
+    {
+        s.push_back(':');
+        char  buf[10];
+        usize k = 0U;
+        u32   n = v;
+        do
+        {
+            buf[k++] = static_cast<char>('0' + (n % 10U));
+            n /= 10U;
+        } while (n != 0U);
+        while (k > 0U)
+        {
+            s.push_back(buf[--k]);
+        }
+    }
+    return s;
+}
+} // namespace
+
+TEST_CASE("diag 8a: a fault is located in the generation that ran it, through a hot swap and a drain",
+          "[ceir][reload][diag]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    ReloadSet                          set(&root, &registrar, nullptr);
+    const AssetId                      id{4500U};
+    const String                       text_a = source_main(root, 3, nullptr);
+    const String                       text_b = reformat(sv(source_main(root, 4, nullptr)), &root);
+    const TextPos                      at_a   = find_op(sv(text_a), "core.for");
+    const TextPos                      at_b   = find_op(sv(text_b), "core.for");
+    REQUIRE(at_a.line != at_b.line);
+    const String where_a = file_line_col(kFileA, at_a, &root);
+    const String where_b = file_line_col(kFileB, at_b, &root);
+
+    REQUIRE(set.add_source(id, sv(text_a), StringView(kFileA)).ok());
+    const ProgramHandle h1      = set.handle(id);
+    Generation* const   g1      = set.generation(id);
+    const u64           hash_a  = g1->program.content_hash;
+    CHECK(h1.generation.value == 1U);
+    // A plan built from generation 1; it keeps running after generation 2 is installed.
+    const plan::CompileResult p1 = plan::compile(*g1->ctx, *g1->program.module, "main", &root);
+    REQUIRE(p1.ok());
+    const i64             zero[1] = {0};
+    const plan::RunResult r1      = plan::run(p1.plan, ConstSpan<i64>(zero, 1U), &root);
+    REQUIRE(r1.fault.valid());
+    const Provenance f1 = plan::instr_provenance(p1.plan, r1.fault);
+
+    const GenerationSite s1 = set.locate(h1, f1, &root);
+    CHECK(s1.asset == id);
+    CHECK(s1.generation.value == 1U);
+    CHECK(s1.state == GenerationState::Current);
+    CHECK(s1.content_hash == hash_a);
+    CHECK(has(s1.where, sv(where_a)));
+
+    // A body edit in another file hot-swaps to generation 2.
+    const ReloadResult rr = set.reload_source(id, sv(text_b), StringView(kFileB));
+    REQUIRE(rr.installed);
+    const ProgramHandle h2 = set.handle(id);
+    Generation* const   g2 = set.generation(id);
+    CHECK(h2.generation.value == 2U);
+    CHECK(g2->program.content_hash != hash_a);
+
+    SECTION("the old plan's fault names generation 1 and file A; the new generation's names 2 and file B")
+    {
+        const GenerationSite old_site = set.locate(h1, f1, &root);
+        CHECK(old_site.generation.value == 1U);
+        CHECK(old_site.state == GenerationState::Retiring);
+        CHECK(old_site.content_hash == hash_a);
+        CHECK(has(old_site.where, sv(where_a)));
+        CHECK_FALSE(has(old_site.where, StringView(kFileB)));
+        const String r = render_generation_site(old_site, &root);
+        CHECK(has(r, StringView("asset#4500 gen#1 retiring ")));
+
+        // The interpreter on generation 2: its error op is located in generation 2.
+        exec::Interpreter in(*g2->ctx);
+        exec::install_builtin_semantics(in);
+        const exec::ExecResult er = in.invoke(*g2->program.module, "main", ConstSpan<i64>(zero, 1U));
+        CHECK(er.error == exec::ExecError::BadForStep);
+        const GenerationSite new_site = set.locate(h2, er.op, &root);
+        CHECK(new_site.generation.value == 2U);
+        CHECK(new_site.state == GenerationState::Current);
+        CHECK(new_site.content_hash == g2->program.content_hash);
+        CHECK(has(new_site.where, sv(where_b)));
+        CHECK(has(render_generation_site(new_site, &root), StringView("asset#4500 gen#2 current ")));
+
+        // A failed reload changes neither: the installed generation keeps its number and its file.
+        u32          broken = 0U;
+        const String bad    = break_line(sv(text_b), "core.for", &root, broken);
+        CHECK(set.reload_source(id, sv(bad), StringView(kFileC)).cook_error == CookError::ParseFailed);
+        const GenerationSite kept = set.locate(h2, er.op, &root);
+        CHECK(kept.generation.value == 2U);
+        CHECK(kept.state == GenerationState::Current);
+        CHECK(has(kept.where, sv(where_b)));
+    }
+
+    SECTION("after a drain the old generation is gone: named by number only, with no file")
+    {
+        set.drain();
+        const GenerationSite gone = set.locate(h1, f1, &root);
+        CHECK(gone.asset == id);
+        CHECK(gone.generation.value == 1U);
+        CHECK(gone.state == GenerationState::Gone);
+        CHECK(gone.content_hash == 0U);
+        CHECK(gone.where.empty());
+        const String r = render_generation_site(gone, &root);
+        CHECK(StringView(r.data(), r.size()) == StringView("asset#4500 gen#1 gone"));
+        // A handle of another asset, or one never minted, is not attributed to this program.
+        CHECK(set.locate(ProgramHandle{}, f1, &root).state == GenerationState::Gone);
     }
 }

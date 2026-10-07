@@ -15,6 +15,7 @@
 #include <crd/ceir/ir.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 
@@ -54,12 +55,16 @@ enum class ExecError : u8
 [[nodiscard]] containers::StringView exec_error_name(ExecError e) noexcept;
 
 // The result of an execution: the entry function's `func.return` values, or the FIRST error + the offending op.
+// DIAG.8a: an entry refusal has no op to blame, so it names what was asked for instead: `entry` is an owned copy of the
+// requested entry name, set only when `error == NoEntry` because the module has no symbol table or no such symbol
+// (the caller's view may be gone by the time the result is read). Every other result leaves it empty.
 struct ExecResult
 {
     containers::Array<crd::i64> values;
     ExecError                   error = ExecError::None;
     const Operation*            op    = nullptr; // the op the error points at (nullptr when ok / NoEntry)
-    explicit ExecResult(memory::IAllocator* a) : values(a) {}
+    containers::String          entry;           // DIAG.8a: the requested entry of a lookup-failed NoEntry (else empty)
+    explicit ExecResult(memory::IAllocator* a) : values(a), entry(a) {}
     [[nodiscard]] bool ok() const noexcept { return error == ExecError::None; }
 };
 
