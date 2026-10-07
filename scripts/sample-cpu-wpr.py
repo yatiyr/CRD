@@ -32,8 +32,12 @@
 # PROCESSING flag placed BEFORE the action; `-a profile -detail` buckets samples by function name when symbol decoding
 # is enabled. Execution of the full pipeline is pending a privileged run.
 #
+# --from-etl <trace> re-analyses an already recorded trace (no elevation needed: only recording needs the kernel
+# sampler). Use it to qualify a capture made earlier in an elevated shell, or to re-check one after a script change.
+#
 # Usage:
 #   python scripts/sample-cpu-wpr.py [--specimen <exe>] [--symbols <dir>] [--out <dir>] [--stacks] [--linux]
+#   python scripts/sample-cpu-wpr.py --from-etl <trace.etl> [--stacks] [--symbols <dir>] [--out <dir>]
 import argparse
 import os
 import re
@@ -52,7 +56,8 @@ def _has_stack_frames(body):
     # A decoded call stack shows module!symbol frames. Their absence means the trace carried no walked stacks
     # (stackwalk not enabled / all samples stackless) -- a DIFFERENT failure from "stacks present but our symbol
     # is not among them". re.search over the whole body is enough to tell the two apart.
-    return re.search(r"\w+!\w+", body) is not None
+    # xperf's text and butterfly reports write a frame as module!symbol or as "module ! symbol".
+    return re.search(r"\w+\s*!\s*\w+", body) is not None
 
 
 def _is_admin_windows():
@@ -105,37 +110,46 @@ def run_windows(specimen, symbols_dir, out_dir, stacks=False):
             return 3
         started = False  # -stop consumed the session
 
-        # -symbols is a processing flag BEFORE the action. Actions checked against `xperf -help processing`:
-        #   flat profile  -> `-a profile -detail` (per-function sample buckets)
-        #   call stacks   -> `-a stack`           (walked stacks per sample; the WPR CPU profile enables the
-        #                                           `Profile` stackwalk that populates them)
-        action = ["-a", "stack"] if stacks else ["-a", "profile", "-detail"]
-        exp = subprocess.run(
-            [xperf, "-i", etl, "-o", txt, "-symbols"] + action,
-            capture_output=True, text=True, env=env,
-        )
-        if exp.returncode != 0 or not os.path.isfile(txt):
-            msg = (exp.stderr or exp.stdout or "").strip().replace("\n", " ")
-            print(f"HOTSPOT_NOT_VISIBLE: xperf export failed (rc={exp.returncode}): {msg}")
-            return 4
-
-        with open(txt, "r", errors="ignore") as fh:
-            body = fh.read()
-        kind = "sampled call stacks" if stacks else "sampled profile"
-        if HOTSPOT_SYMBOL in body:
-            print(f"HOTSPOT_VISIBLE: {HOTSPOT_SYMBOL} found in the {kind} ({txt})")
-            return 0
-        if stacks and not _has_stack_frames(body):
-            # A profile was captured but no walked stacks decoded -- distinct from "stacks present, symbol absent".
-            print(f"MISSING_STACKS: the trace carried no decoded call stacks ({txt}); enable the `Profile` "
-                  f"stackwalk / check _NT_SYMBOL_PATH={symbols_dir}")
-            return 5
-        print(f"HOTSPOT_NOT_VISIBLE: {HOTSPOT_SYMBOL} not in the {kind} "
-              f"(symbolication? check _NT_SYMBOL_PATH={symbols_dir})")
-        return 4
+        return analyze_trace(xperf, etl, txt, env, specimen, symbols_dir, stacks)
     finally:
         if started:
             subprocess.run([wpr, "-cancel"], capture_output=True, text=True)  # never orphan a kernel session
+
+
+def analyze_trace(xperf, etl, txt, env, specimen, symbols_dir, stacks):
+    # Export a recorded trace with xperf and read the verdict. Needs no elevation.
+    # -symbols is a processing flag BEFORE the action. Actions checked against `xperf -help processing`:
+    #   flat profile  -> `-a profile -detail` (per-function sample buckets)
+    #   call stacks   -> `-a stack`           (walked stacks per sample; the WPR CPU profile enables the
+    #                                           `Profile` stackwalk that populates them)
+    # `-a stack` refuses to run without an activity (`error: stack: no option specified`, exit 5, an empty
+    # output file -- the first elevated run on 2026-10-07 ended there). `-butterfly` is the stack activity;
+    # `-process` keeps the report to the specimen.
+    process = os.path.splitext(os.path.basename(specimen))[0]
+    action = ["-a", "stack", "-butterfly", "-process", process] if stacks else ["-a", "profile", "-detail"]
+    exp = subprocess.run(
+        [xperf, "-i", etl, "-o", txt, "-symbols"] + action,
+        capture_output=True, text=True, env=env,
+    )
+    if exp.returncode != 0 or not os.path.isfile(txt):
+        msg = (exp.stderr or exp.stdout or "").strip().replace("\n", " ")
+        print(f"HOTSPOT_NOT_VISIBLE: xperf export failed (rc={exp.returncode}): {msg}")
+        return 4
+
+    with open(txt, "r", errors="ignore") as fh:
+        body = fh.read()
+    kind = "sampled call stacks" if stacks else "sampled profile"
+    if HOTSPOT_SYMBOL in body:
+        print(f"HOTSPOT_VISIBLE: {HOTSPOT_SYMBOL} found in the {kind} ({txt})")
+        return 0
+    if stacks and not _has_stack_frames(body):
+        # A profile was captured but no walked stacks decoded -- distinct from "stacks present, symbol absent".
+        print(f"MISSING_STACKS: the trace carried no decoded call stacks ({txt}); enable the `Profile` "
+              f"stackwalk / check _NT_SYMBOL_PATH={symbols_dir}")
+        return 5
+    print(f"HOTSPOT_NOT_VISIBLE: {HOTSPOT_SYMBOL} not in the {kind} "
+          f"(symbolication? check _NT_SYMBOL_PATH={symbols_dir})")
+    return 4
 
 
 def run_linux(specimen, out_dir):
@@ -169,6 +183,8 @@ def main(argv):
     ap.add_argument("--symbols", default=default_syms)
     ap.add_argument("--out", default=os.environ.get("TEMP", "."))
     ap.add_argument("--linux", action="store_true")
+    ap.add_argument("--from-etl", metavar="TRACE",
+                    help="analyse an already recorded trace instead of recording one (no elevation needed)")
     ap.add_argument("--stacks", action="store_true",
                     help="qualify optimized/fiber CALL STACKS (clause 2), not just a flat profile (clause 3)")
     args = ap.parse_args(argv)
@@ -178,6 +194,18 @@ def main(argv):
     if sys.platform != "win32":
         print("USAGE: unsupported platform; use --linux on Linux")
         return 64
+    if args.from_etl:
+        xperf = _which("xperf")
+        if xperf is None:
+            print("TOOL_MISSING: xperf not on PATH (install the Windows Performance Toolkit)")
+            return 2
+        if not os.path.isfile(args.from_etl):
+            print(f"USAGE: no such trace: {args.from_etl}")
+            return 64
+        env = dict(os.environ)
+        env["_NT_SYMBOL_PATH"] = args.symbols  # local symbols only, never a network symbol server
+        txt = os.path.join(args.out, "crd_hotspot_stacks.txt" if args.stacks else "crd_hotspot_profile.txt")
+        return analyze_trace(xperf, args.from_etl, txt, env, args.specimen, args.symbols, args.stacks)
     if not _is_admin_windows():
         # Not fatal by itself (wpr's own privilege check is authoritative) but a useful early signal.
         print("note: not running as administrator; wpr -start may be denied", file=sys.stderr)

@@ -84,6 +84,71 @@ class VerdictTests(unittest.TestCase):
         # --stacks: a profile was captured but carried no walked stacks (no module!symbol frames) -> MISSING_STACKS.
         self.assertEqual(self._run_full("Total = 12345 samples, no stacks\n", stacks=True), 5)
 
+    def _export_args(self, stacks):
+        # The xperf argument list the export actually uses.
+        seen = []
+
+        def fake_run(args, **kw):
+            if args[0] == "xperf.exe":
+                seen.append(list(args))
+            return FakeProc(0)
+
+        m = mock.mock_open(read_data="crd_diag_unscoped_hotspot_burn\n")
+        with mock.patch.object(mod.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(mod.os.path, "isfile", return_value=True), \
+             mock.patch("builtins.open", m):
+            self.assertEqual(mod.analyze_trace("xperf.exe", "t.etl", "o.txt", {}, r"d\crd-spec.exe", "syms", stacks), 0)
+        self.assertEqual(len(seen), 1)
+        return seen[0]
+
+    def test_stacks_export_names_an_activity(self):
+        # `xperf -a stack` with no activity fails with "stack: no option specified" (exit 5) and writes an empty
+        # file: the first elevated run (2026-10-07) ended there. The stacks export must ask for -butterfly.
+        args = self._export_args(stacks=True)
+        action = args[args.index("-a"):]
+        self.assertEqual(action, ["-a", "stack", "-butterfly", "-process", "crd-spec"])
+        self.assertLess(args.index("-symbols"), args.index("-a"))  # a processing flag, before the action
+
+    def test_flat_export_is_a_detailed_profile(self):
+        args = self._export_args(stacks=False)
+        self.assertEqual(args[args.index("-a"):], ["-a", "profile", "-detail"])
+
+    def test_export_failure_is_never_a_visible_hotspot(self):
+        def fake_run(args, **kw):
+            return FakeProc(returncode=5, stderr="error: stack: no option specified")
+
+        with mock.patch.object(mod.subprocess, "run", side_effect=fake_run), \
+             mock.patch.object(mod.os.path, "isfile", return_value=True):
+            self.assertEqual(mod.analyze_trace("xperf.exe", "t.etl", "o.txt", {}, "spec.exe", "syms", True), 4)
+
+    def test_butterfly_frames_count_as_stacks(self):
+        # The butterfly report writes frames as "module ! symbol"; stacks without our symbol are NOT_VISIBLE (4),
+        # not MISSING_STACKS (5).
+        self.assertEqual(self._run_full("crd-spec.exe ! main 4093 22.50%\n", stacks=True), 4)
+
+    def test_from_etl_analyses_without_recording(self):
+        calls = []
+
+        def fake_run(args, **kw):
+            calls.append(args[0])
+            return FakeProc(0)
+
+        m = mock.mock_open(read_data="crd-spec.exe ! crd_diag_unscoped_hotspot_burn 4093\n")
+        with mock.patch.object(mod, "_which", side_effect=lambda name: name + ".exe"), \
+             mock.patch.object(mod.sys, "platform", "win32"), \
+             mock.patch.object(mod.os, "makedirs"), \
+             mock.patch.object(mod.os.path, "isfile", return_value=True), \
+             mock.patch.object(mod.subprocess, "run", side_effect=fake_run), \
+             mock.patch("builtins.open", m):
+            self.assertEqual(mod.main(["--from-etl", "trace.etl", "--stacks", "--out", "out"]), 0)
+        self.assertEqual(calls, ["xperf.exe"])  # no wpr: a recorded trace needs no elevation
+
+    def test_from_etl_rejects_a_missing_trace(self):
+        with mock.patch.object(mod, "_which", return_value="xperf.exe"), \
+             mock.patch.object(mod.sys, "platform", "win32"), \
+             mock.patch.object(mod.os, "makedirs"):
+            self.assertEqual(mod.main(["--from-etl", "Z:\\no\\such.etl"]), 64)
+
     def test_linux_tool_missing(self):
         with mock.patch.object(mod, "_which", return_value=None):
             self.assertEqual(mod.run_linux("spec", "out"), 2)
