@@ -1,9 +1,11 @@
 add_executable(crd-perf-ui-tests
+    test_diag_panel.cpp
     test_panel_helpers.cpp
     test_profiler_sources.cpp
 )
 
 target_link_libraries(crd-perf-ui-tests PRIVATE
+    crd-containers
     crd-core
     crd-memory
     crd-perf

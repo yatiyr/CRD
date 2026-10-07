@@ -1,4 +1,5 @@
-# crd-perf-ui -- ImGui frontend for crd-perf (Detour D-003 v0g).
+# crd-perf-ui -- ImGui frontend for crd-perf (Detour D-003 v0g): the profiler panel and the diagnostic command
+# panel, the GUI consumer of crd-perf's typed command service.
 #
 # Separate target so the substrate (`crd-perf`) stays ImGui-free; the
 # frontend is swappable. Depends on `crd-perf` (data model) +
@@ -20,6 +21,7 @@ target_include_directories(crd-perf-ui SYSTEM PRIVATE
 
 target_link_libraries(crd-perf-ui
     PUBLIC
+        crd-containers
         crd-core
         crd-perf
         crd-memory

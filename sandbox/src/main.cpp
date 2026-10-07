@@ -13,11 +13,23 @@
 //   --inspect [id]                — run the authored CEIR program `id` (default ceir/inspect_demo) under inspection
 //   --inspect-break N / --inspect-watch N (repeatable), --inspect-step a,b (continue|into|over|out|cancel per stop),
 //   --inspect-arg N (the entry's argument, default 3), --app-assets <dir> (the application's own tree at app://).
+// DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
+//   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
+//                                   page of its answer
+//   --diag-grant <list>           — the authority the sandbox grants its service (default read; e.g. read,execute)
+//   --diag-root <dir>             — the file root for path arguments (default: none, so path commands are refused)
+//   --diag-path <rel>, --diag-param name=value (repeatable) — the started command's path and named arguments.
 
 #include "inspect_panel.hpp" // DIAG.8b: the authored-program inspect panel
 
 #include <crd/anim/anim_resources.hpp>
 #include <crd/app/app.hpp>
+#include <crd/ceir/cook/inspect_diag.hpp> // DIAG.8c: the commands the diagnostic panel's service serves
+#include <crd/ceir/cook/program_diag.hpp>
+#include <crd/ceir/cook/replay_diag.hpp>
+#include <crd/ceir/func.hpp>
+#include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/core_ops.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -38,7 +50,10 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/perf/diag_commands.hpp>
+#include <crd/perf/gpu/gpu_resources_diag.hpp>
 #include <crd/perf/perf.hpp>
+#include <crd/perf/ui/diag_panel.hpp>
 #include <crd/perf/ui/ui.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
@@ -234,6 +249,70 @@ void report_inspect([[maybe_unused]] const crd::sandbox::InspectPanel& panel, cr
     }
 }
 
+// ⭐⭐ DIAG.8c: the diagnostic command panel's service. The sandbox is its host: it grants the authority (start-up
+// flags only, never the window), registers the program commands with the dialects it registers, and summarizes its
+// real GPU context. ⛔ No frame graph is registered: the panel calls the service from its own worker thread, and a
+// frame graph's counters may only be read from the thread that drives the graph.
+void register_sandbox_dialects(crd::ceir::Context& ctx, void* /*user*/)
+{
+    (void)crd::ceir::arith::register_arith_ops(ctx);
+    (void)crd::ceir::core::register_core_ops(ctx);
+    (void)crd::ceir::func::register_dialect(ctx);
+}
+
+struct SandboxDiagCommands
+{
+    crd::ceir::cook::ProgramProvenanceCommand provenance{&register_sandbox_dialects, nullptr};
+    crd::ceir::cook::ProgramInspectCommand    inspect{&register_sandbox_dialects, nullptr};
+    crd::ceir::cook::ReplayPrepareCommand     replay{&register_sandbox_dialects, nullptr};
+    crd::perf::gpu::GpuResourcesCommand       gpu_resources;
+};
+
+// The GPU context joins gpu.resources once the device is up (GpuResourcesCommand::add_context).
+[[nodiscard]] bool bind_sandbox_diag_commands(crd::perf::DiagCommandService& service, SandboxDiagCommands& commands)
+{
+    return crd::ceir::cook::register_program_provenance(service, commands.provenance) &&
+           crd::ceir::cook::register_program_inspect(service, commands.inspect) &&
+           crd::ceir::cook::register_replay_prepare(service, commands.replay) &&
+           crd::perf::gpu::register_gpu_resources(service, commands.gpu_resources);
+}
+
+[[nodiscard]] bool serves_diag_command(const crd::perf::DiagCommandService& service, const char* name)
+{
+    for (crd::u32 i = 0U; i < service.command_count(); ++i)
+    {
+        if (service.command_at(i)->name == std::string_view(name))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+// ⭐⭐ DIAG.8c: one answer of the diagnostic panel, logged as the panel shows it: the typed result fields, the summary
+// and one line per item, so a smoke run's log is the GUI consumer's report.
+void report_diag(const crd::perf::ui::DiagCommandPanel& panel)
+{
+    [[maybe_unused]] const crd::perf::DiagResult& r = panel.result();
+    CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag: {} {} ({}) snapshot {} cursor {} next {} items {} of {}{}",
+                 panel.sent_command(), crd::perf::status_name(r.status),
+                 std::string_view(r.reason.c_str(), r.reason.size()), r.generation, r.cursor, r.next_cursor, r.items,
+                 r.total, r.complete ? ", complete" : "");
+    if (!panel.document_ok())
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag:   {}", std::string_view(r.json.c_str(), r.json.size()));
+        return;
+    }
+    if (!panel.document().summary.empty())
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag:   summary {}", panel.document().summary);
+    }
+    for ([[maybe_unused]] const crd::containers::StringView item : panel.document().items)
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag:   {}", item);
+    }
+}
+
 // ⭐⭐ DIAG.8b: the panel's window. Every button is a command for the generation the panel shows; none waits.
 void draw_inspect_window(crd::sandbox::InspectPanel& panel, crd::i64 arg)
 {
@@ -399,6 +478,14 @@ int main(int argc, char** argv)
     crd::u32                  inspect_watch_count                = 0U;
     crd::u32                  inspect_script_count               = 0U;
     bool                      inspect_args_ok                    = true;
+    // ⭐⭐ DIAG.8c: the diagnostic command panel (see the CLI contract above). The grant is fixed here, at start-up.
+    bool                    diag_enabled = false;
+    const char*             diag_command = nullptr;
+    const char*             diag_grant   = "read";
+    const char*             diag_root    = nullptr;
+    const char*             diag_path    = nullptr;
+    crd::containers::String diag_params;
+    bool                    diag_args_ok = true; // every --diag-param is name=value
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0)
@@ -609,6 +696,33 @@ int main(int argc, char** argv)
         {
             app_assets = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--diag") == 0)
+        {
+            diag_enabled = true;
+            if (i + 1 < argc && argv[i + 1][0] != '-')
+            {
+                diag_command = argv[++i];
+            }
+        }
+        else if (std::strcmp(argv[i], "--diag-grant") == 0 && i + 1 < argc)
+        {
+            diag_grant = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--diag-root") == 0 && i + 1 < argc)
+        {
+            diag_root = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--diag-path") == 0 && i + 1 < argc)
+        {
+            diag_path = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--diag-param") == 0 && i + 1 < argc)
+        {
+            ++i;
+            diag_args_ok = diag_args_ok && std::strchr(argv[i], '=') != nullptr;
+            diag_params.append(argv[i]);
+            diag_params.push_back('\n');
+        }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
             smoke_test = true;
@@ -637,6 +751,54 @@ int main(int argc, char** argv)
                       kInspectMaxLines);
         crd::log::shutdown();
         return 1;
+    }
+    if (!diag_args_ok)
+    {
+        CRD_LOG_ERROR(g_log_sandbox, "--diag-param takes name=value");
+        crd::log::shutdown();
+        return 1;
+    }
+    // ⭐⭐ DIAG.8c: the sandbox's diagnostic service, built before the window and the device so that a refused flag
+    // exits before anything needs undoing. Its grant is fixed here. A started command must be one it serves (the
+    // `--lod` rule: asked for and unavailable refuses to run); its answer, whatever its status, is the report.
+    std::unique_ptr<SandboxDiagCommands>           diag_commands;
+    std::unique_ptr<crd::perf::DiagCommandService> diag_service;
+    if (diag_enabled)
+    {
+        crd::perf::DiagAuthoritySet diag_authority = 0U;
+        if (!crd::perf::parse_authority_list(diag_grant, diag_authority))
+        {
+            CRD_LOG_ERROR(g_log_sandbox,
+                          "--diag-grant takes 'none' or a comma-separated list of read, record, inject, remote-enable, "
+                          "upload, process-memory and execute");
+            crd::log::shutdown();
+            return 1;
+        }
+        crd::perf::DiagServiceConfig diag_config;
+        if (diag_root != nullptr)
+        {
+            diag_config.root = crd::containers::StringView{diag_root};
+        }
+        diag_commands = std::make_unique<SandboxDiagCommands>();
+        diag_service  = std::make_unique<crd::perf::DiagCommandService>(diag_authority, diag_config);
+        if (!bind_sandbox_diag_commands(*diag_service, *diag_commands))
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "--diag: the sandbox's diagnostic commands could not be registered");
+            crd::log::shutdown();
+            return 1;
+        }
+        using Panel     = crd::perf::ui::DiagCommandPanel;
+        const bool fits = (diag_path == nullptr || std::strlen(diag_path) < Panel::kPathCapacity) &&
+                          diag_params.size() < Panel::kArgsCapacity;
+        if (diag_command != nullptr && (!serves_diag_command(*diag_service, diag_command) || !fits))
+        {
+            CRD_LOG_ERROR(g_log_sandbox,
+                          "--diag: '{}' is not a command this sandbox serves, or its path or "
+                          "arguments are longer than the panel's fields",
+                          diag_command);
+            crd::log::shutdown();
+            return 1;
+        }
     }
 
     crd::app::ApplicationDesc app_desc;
@@ -696,6 +858,10 @@ int main(int argc, char** argv)
         return 1;
     }
     CRD_LOG_INFO(g_log_sandbox, "backend: {}", want_dx12 ? "DX12" : "Vulkan");
+    if (diag_commands != nullptr)
+    {
+        (void)diag_commands->gpu_resources.add_context(*gpu_context); // the first of eight: it always fits
+    }
     const auto fb    = app.window().framebuffer_size();
     crd::u32   win_w = fb.width > 0 ? static_cast<crd::u32>(fb.width) : 1280U;
     crd::u32   win_h = fb.height > 0 ? static_cast<crd::u32>(fb.height) : 720U;
@@ -1223,6 +1389,27 @@ int main(int argc, char** argv)
     crd::perf::ui::ProfilerPanel profiler_panel;
 
     crd::jobs::init(app_desc.jobs_config);
+    // ⭐⭐ DIAG.8c: the panel comes up with jobs and perf, after the device, so it dies before the device on every
+    // return path (a request it is running reads the GPU context). The started command was checked with the flags.
+    std::unique_ptr<crd::perf::ui::DiagCommandPanel> diag_panel;
+    bool                                             diag_follow = false; // page the started command to its end
+    if (diag_service != nullptr)
+    {
+        diag_panel = std::make_unique<crd::perf::ui::DiagCommandPanel>(*diag_service);
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag: panel over {} commands, grant {}", diag_panel->command_count(),
+                     diag_grant);
+        if (diag_command != nullptr)
+        {
+            diag_follow = diag_panel->select(diag_command) &&
+                          diag_panel->set_path(diag_path != nullptr ? diag_path : "") &&
+                          diag_panel->set_args(std::string_view(diag_params.c_str(), diag_params.size())) &&
+                          diag_panel->submit() == crd::perf::ui::DiagPanelSubmit::Started;
+            if (!diag_follow)
+            {
+                CRD_LOG_ERROR(g_log_sandbox, "--diag: '{}' was not sent ({})", diag_command, diag_panel->form_error());
+            }
+        }
+    }
     CRD_LOG_INFO(g_log_sandbox, "Sandbox on gpu-context (headless={} smoke_test={} duration={}s)", headless, smoke_test,
                  smoke_duration_s);
 
@@ -1403,6 +1590,11 @@ int main(int argc, char** argv)
         if (inspect_panel != nullptr)
         {
             report_inspect(*inspect_panel, inspect_panel->tick()); // a poll: the frame never waits on the program
+        }
+        if (diag_panel != nullptr && diag_panel->tick() == crd::perf::ui::DiagPanelTick::Completed) // a poll as well
+        {
+            report_diag(*diag_panel);
+            diag_follow = diag_follow && diag_panel->next_page() == crd::perf::ui::DiagPanelSubmit::Started;
         }
 
         const auto     cur   = app.window().framebuffer_size();
@@ -1775,6 +1967,10 @@ int main(int argc, char** argv)
             {
                 draw_inspect_window(*inspect_panel, inspect_arg);
             }
+            if (diag_panel != nullptr)
+            {
+                diag_panel->draw();
+            }
             profiler_panel.draw();
         }
         ImGui::Render();
@@ -1838,6 +2034,11 @@ int main(int argc, char** argv)
                                  crd::sandbox::panel_state_name(inspect_panel->state()), inspect_panel->stops(),
                                  inspect_panel->ticks());
                 }
+                if (diag_panel != nullptr)
+                {
+                    CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag: {} answers, {} at the end of the smoke",
+                                 diag_panel->completed(), crd::perf::ui::diag_panel_state_name(diag_panel->state()));
+                }
                 app.close();
             }
         }
@@ -1856,6 +2057,11 @@ int main(int argc, char** argv)
     // ⛔ DIAG.8b: the inspect panel dies before the scene renderer whose program seam it holds; its host cancels a
     // program still running or paused and joins the executing thread.
     inspect_panel.reset();
+    // ⛔ DIAG.8c: the diagnostic panel cancels and joins a running request before its service, the service before the
+    // commands it holds, and all of them before jobs, perf and the GPU context the commands read.
+    diag_panel.reset();
+    diag_service.reset();
+    diag_commands.reset();
     crd::jobs::shutdown();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();

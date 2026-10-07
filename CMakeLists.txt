@@ -414,7 +414,7 @@ crd_module(engine/ui/imgui engine/imgui
     DEPENDS config gpu-context gpu-context-dx12 gpu-context-vulkan log platform units PACKAGES glfw imgui
     TESTS ui/imgui)
 # D-003 v0g -- ImGui frontend for crd-perf; needs crd-imgui above
-crd_module(engine/ui/perf-ui engine/perf-ui DEPENDS core imgui memory perf PACKAGES imgui TESTS ui/perf-ui)
+crd_module(engine/ui/perf-ui engine/perf-ui DEPENDS containers core imgui memory perf PACKAGES imgui TESTS ui/perf-ui)
 # REN-40-C1: the LOD chain builder (resources x mesh-processing seam)
 crd_module(engine/geometry/lod engine/lod DEPENDS containers core geometry-mesh-processing math memory resources toml
     TESTS geometry/lod TEST_DEPENDS scene-render)
@@ -592,8 +592,8 @@ if(CRD_BUILD_SANDBOX)
     # asset_cooker is a build-time dependency: the demo pack is cooked by $<TARGET_FILE:asset_cooker>.
     crd_module(sandbox
         DEPENDS anim app asset_cooker ceir ceir-cook draw geometry-spatial gpu-context gpu-context-dx12
-            gpu-context-vulkan imgui jobs kir log memory perf perf-ui render-asset-core resources scene scene-render
-            timeline
+            gpu-context-vulkan imgui jobs kir log memory perf perf-gpu-bridge perf-ui render-asset-core resources scene
+            scene-render timeline
         PACKAGES glfw imgui)
 endif()
 

@@ -739,6 +739,31 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-replay-preparation
   missing with its precise reason, and the summary says `replay: unavailable` and lists them. The summary also gives
   the weakest determinism class the registered ops claim and how many make no claim.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-gui-consumer.md)):
+- The GUI consumer is crd-perf-ui's `DiagCommandPanel` (`crd/perf/ui/diag_panel.hpp`), beside the profiler panel: a
+  form over the service's own request (a command from the listing, a path, `name=value` argument lines, page bounds)
+  and a view of its own response document. It sends `DiagCommandService::execute` the request and keeps the returned
+  `DiagResult` unchanged; it adds no command, check or authority, and the grant is the host's, fixed when it built the
+  service. The panel's only checks are its own form: no command selected, a field longer than the panel's buffer
+  (larger than the service's bounds, so an oversized path or argument still reaches the service's refusal), and an
+  argument line without `=`. Everything else is the service's refusal, shown with its reason.
+- The frame never waits. A request runs on the panel's own worker thread, because a command may hold the service for
+  a bounded run (`program.inspect`); the frame's `tick` polls for the answer, and the command listing is copied when
+  the panel is built (and on a refresh while idle), so a frame never takes the service's lock. One request runs at a
+  time (`Busy`). `cancel` raises the flag the running request was given, which the service and the handler poll, so
+  the GUI can end a running request (the synchronous MCP stdio loop still cannot). Destroying the panel cancels and
+  joins it.
+- Paging: a submit takes a new snapshot; the next page sends the snapshot's own request with the last page's next
+  cursor, whatever the form holds now; any cursor can be sent, so an old snapshot's cursor shows the service's
+  `stale-cursor` refusal. Items are shown one per row by splitting the document's `items` array structurally (strings
+  skipped with their escapes), never re-serialized.
+- Because the worker calls the service, a host must not register state that only one thread may read with a service
+  it gives the panel: crd-sandbox registers its GPU context with `gpu.resources` (immutable reads) but no frame graph.
+  crd-sandbox builds the service from start-up flags only (`--diag-grant`, default `read`; `--diag-root`), serves the
+  ceridc set (the built-ins, `program.provenance`, `program.inspect`, `replay.prepare`, `gpu.resources`), draws the
+  panel next to the profiler, and `--diag <command>` (with `--diag-path`, `--diag-param`) sends one request at start
+  and logs every page; an unknown command refuses to run.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 

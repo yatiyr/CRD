@@ -32,7 +32,8 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-ceir-cook            # DIAG.8b: InspectHost (the authored program's generations, plan and executing thread)
     crd-render-asset-core    # DIAG.8b: the program's canonical asset id
     crd-perf       # D-003 v0h: profiler substrate
-    crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel)
+    crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel); DIAG.8c: the diagnostic command panel
+    crd-perf-gpu-bridge      # DIAG.8c: gpu.resources over the sandbox's GPU context
     glfw                     # RET-5: glfwGetWin32Window — the native HWND for create_present_surface
     # ⛔ crd-rhi / crd-rhi-vulkan / crd-renderer / crd-shader* — RETIRED (ADR-0105; deleted at RET-8).
 )
