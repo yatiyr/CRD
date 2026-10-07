@@ -206,7 +206,7 @@ TEST_CASE("chir 32d: the TEXT and GRAPH projections lower to the BYTE-IDENTICAL 
     // GRAPH projection -> CHIR model -> CEIR module MB (a SEPARATE Context — same ctx would clash on the func symbol).
     const Array<char>        graph = slurp(kGraphPath, &root);
     crd::chir::SourceModel   from_graph(&root);
-    REQUIRE(crd::chir::read_schema(sv(graph), from_graph));
+    REQUIRE(crd::chir::read_schema(sv(graph), from_graph).ok);
     crd::ceir::Context       ctx_b(&root);
     crd::ceir::Module* const mb = crd::chir::lower_chir(from_graph, ctx_b);
     REQUIRE(mb != nullptr);
@@ -489,7 +489,7 @@ TEST_CASE("chir 32e: the TEXT and GRAPH projections pin the SAME state-cell ids 
     REQUIRE(crd::chir::parse_chir(sv(text), 1U, from_text).ok);
     const Array<char>      graph = slurp(kGraphPath, &root);
     crd::chir::SourceModel from_graph(&root);
-    REQUIRE(crd::chir::read_schema(sv(graph), from_graph));
+    REQUIRE(crd::chir::read_schema(sv(graph), from_graph).ok);
 
     crd::ceir::Context       ca(&root);
     crd::ceir::Context       cb(&root);

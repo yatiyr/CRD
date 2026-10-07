@@ -17,6 +17,9 @@ Since DIAG.8a every lowered CEIR op records which CHIR node it came from (node i
 passed to `lower_chir`) in CEIR's provenance side table. A compile or interpreter error on the lowered program
 therefore names the authored CHIR line, also after CSE and a binary round-trip; graph-authored nodes name their CHIR id
 with an explicit no-source-location gap ([session](../sessions/2026-10-07-diag-8a-chir-lowering-provenance.md)).
+A malformed graph document is refused with the offending record's line and column and the CHIR node it
+names (`SchemaReadResult`), whose stable id also locates the node in the text projection
+([session](../sessions/2026-10-07-diag-8a-chir-graph-schema-sites.md)).
 
 The [32 close](../sessions/2026-09-06-ceir-32z-band-close.md) proves the five-construct prototype: event handler,
 query, parallel update, await and state. Its node kinds also include program and state declarations/updates.

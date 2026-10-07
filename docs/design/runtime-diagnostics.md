@@ -537,6 +537,14 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   (an explicit gap), and a refused `execute_lowered` names the refused op (`fault()`). A refused `.ckir` names its
   positional record (`CkirReadResult::pool`/`index`; CKIR refs are positional, so the index is the node identity) and
   its line and column: the offending token, or the record's `[[...]]` header for a post-parse bounds check.
+- CHIR graph documents (2026-10-07, [session](../sessions/2026-10-07-diag-8a-chir-graph-schema-sites.md)):
+  `read_schema` returns `SchemaReadResult` in the `ChirParseResult` mold. A refusal names the offending record's
+  1-based line and token column and the CHIR node the record declares or names, with its stable id, which both
+  projections derive identically, so it also locates the node in the CHIR text. A layout row that resolves to no
+  node names its unresolved id (`orphan`). The document is line-oriented: fields sit on their record's line, a
+  missing field is reported where it was expected, and a trailing token is refused. A second writer into an in-pin
+  is blamed on the later edge (the consumer node), and the whole-graph checks report in document order through
+  read-order side lists, because the model stores edges canonically and layout last-write-wins.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop

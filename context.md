@@ -4,8 +4,9 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: DIAG.7a -->
-**Current work:** [DIAG.7a](docs/ROADMAP.md#slice-diag.7a), first unfinished row (waits on the DX12 hardware fault
-run). DIAG.3a-6c have their local work done and are Needs CI ([audit](docs/sessions/2026-10-06-needs-ci-audit.md)).
+**Current work:** [DIAG.7a](docs/ROADMAP.md#slice-diag.7a), first unfinished row; its local work is done and
+it waits for its first hosted run. DIAG.3a-6c have their local work done and are Needs CI
+([audit](docs/sessions/2026-10-06-needs-ci-audit.md)).
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 

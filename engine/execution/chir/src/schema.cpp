@@ -73,35 +73,73 @@ void put_dec(Array<char>& o, crd::u64 v)
 }
 void put_name(Array<char>& o, StringView s) { s.size() == 0U ? put(o, StringView("-")) : put(o, s); }
 
-// ── tokenizer (parse.cpp style): whitespace-separated tokens ──
+// ── tokenizer (parse.cpp style): whitespace-separated tokens, with the line:col of each ──
+// The document is line-oriented: `next` finds a record keyword on any later line, `field` reads the record's next field
+// and refuses to leave the record's line. Both leave the 1-based position of what they found (or, for a missing field,
+// the column just past the record's last token) in `tok_line`/`tok_col`.
 struct Tok
 {
-    StringView   text;
-    const char*  p;
-    const char*  end;
-    explicit Tok(StringView t) : text(t), p(t.data()), end(t.data() + t.size()) {}
-    static bool  is_ws(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }
-    bool         next(StringView& out) noexcept
+    const char* p;
+    const char* end;
+    const char* line_start;
+    const char* last_end;
+    crd::u32    line     = 1U;
+    crd::u32    tok_line = 1U;
+    crd::u32    tok_col  = 1U;
+    explicit Tok(StringView t) : p(t.data()), end(t.data() + t.size()), line_start(t.data()), last_end(t.data()) {}
+    static bool is_blank(char c) noexcept { return c == ' ' || c == '\t' || c == '\r'; }
+    void        mark(const char* at) noexcept
     {
-        while (p < end && is_ws(*p))
+        tok_line = line;
+        tok_col  = static_cast<crd::u32>(at - line_start) + 1U;
+    }
+    bool take(StringView& out) noexcept
+    {
+        mark(p);
+        const char* s = p;
+        while (p < end && !is_blank(*p) && *p != '\n')
         {
+            ++p;
+        }
+        last_end = p;
+        out      = StringView(s, static_cast<crd::usize>(p - s));
+        return true;
+    }
+    bool next(StringView& out) noexcept
+    {
+        while (p < end && (is_blank(*p) || *p == '\n'))
+        {
+            if (*p == '\n')
+            {
+                ++line;
+                line_start = p + 1;
+            }
             ++p;
         }
         if (p >= end)
         {
+            mark(p);
             return false;
         }
-        const char* s = p;
-        while (p < end && !is_ws(*p))
+        return take(out);
+    }
+    bool field(StringView& out) noexcept
+    {
+        while (p < end && is_blank(*p))
         {
             ++p;
         }
-        out = StringView(s, static_cast<crd::usize>(p - s));
-        return true;
+        if (p >= end || *p == '\n')
+        {
+            mark(last_end); // where the missing field was expected: just past the record's last token
+            return false;
+        }
+        return take(out);
     }
 };
 
-bool parse_u64_dec(StringView s, crd::u64& out) noexcept
+// A decimal field that must fit u32 (a node/pin index, a file id, a line, a column, a group).
+bool parse_u32_dec(StringView s, crd::u32& out) noexcept
 {
     if (s.size() == 0U)
     {
@@ -115,15 +153,19 @@ bool parse_u64_dec(StringView s, crd::u64& out) noexcept
         {
             return false;
         }
-        const crd::u32 dig = static_cast<crd::u32>(c - '0');
-        v                  = v * 10U + dig;
+        v = v * 10U + static_cast<crd::u64>(c - '0');
+        if (v > 0xFFFFFFFFULL)
+        {
+            return false;
+        }
     }
-    out = v;
+    out = static_cast<crd::u32>(v);
     return true;
 }
-bool parse_u64_hex(StringView s, crd::u64& out) noexcept
+// A lowercase hex field of at most `digits` digits (16 for a stable id, 8 for an f32 bit pattern).
+bool parse_hex(StringView s, crd::u32 digits, crd::u64& out) noexcept
 {
-    if (s.size() == 0U)
+    if (s.size() == 0U || s.size() > digits)
     {
         return false;
     }
@@ -148,6 +190,38 @@ bool parse_u64_hex(StringView s, crd::u64& out) noexcept
     }
     out = v;
     return true;
+}
+
+// Where an edge and a layout row were read: add_edge re-sorts edges canonically and set_layout is last-write-wins, so
+// the whole-graph checks resolve their offending record through these read-order lists.
+struct EdgeAt
+{
+    crd::u32 line = 0;
+    crd::u32 col  = 0;
+    Edge     edge;
+};
+struct LayoutAt
+{
+    crd::u32 line = 0;
+    crd::u32 col  = 0;
+    StableId id;
+};
+
+SchemaReadResult refused(crd::u32 line, crd::u32 col, const char* msg, crd::u32 node, StableId id) noexcept
+{
+    SchemaReadResult r;
+    r.err_line = line;
+    r.err_col  = col;
+    r.node     = node;
+    r.id       = id;
+    r.msg      = StringView(msg);
+    return r;
+}
+// A refusal at the tokenizer's last position, naming an existing node of `m` (or none).
+SchemaReadResult refused_at(const Tok& tk, const char* msg, const SourceModel& m, crd::u32 node) noexcept
+{
+    const StableId id = node < m.node_count() ? m.node(node).id : StableId{};
+    return refused(tk.tok_line, tk.tok_col, msg, node < m.node_count() ? node : kInvalidNode, id);
 }
 StringView unname(StringView s) noexcept { return s == StringView("-") ? StringView("") : s; }
 } // namespace
@@ -240,175 +314,189 @@ void print_schema(const SourceModel& m, Array<char>& out)
     }
 }
 
-bool read_schema(StringView text, SourceModel& out)
+SchemaReadResult read_schema(StringView text, SourceModel& out)
 {
     if (out.node_count() != 0U) // must be empty (graceful reject — never a partial/merged model)
     {
-        return false;
+        return refused(0U, 0U, "the model to read into is not empty", kInvalidNode, StableId{});
     }
     Tok        tk(text);
     StringView t;
     // header
     if (!tk.next(t) || t != StringView("chirgraph"))
     {
-        return false;
+        return refused_at(tk, "the document does not start with the chirgraph header", out, kInvalidNode);
     }
-    if (!tk.next(t) || t != StringView("1"))
+    if (!tk.field(t) || t != StringView("1"))
     {
-        return false;
+        return refused_at(tk, "the chirgraph header names no supported version (1)", out, kInvalidNode);
     }
 
-    crd::u32 expected_node = 0; // node lines must be dense + in index order (0,1,2,...)
+    Array<EdgeAt>   edges_at(out.allocator());
+    Array<LayoutAt> layouts_at(out.allocator());
+    crd::u32        expected_node = 0;            // node lines must be dense + in index order (0,1,2,...)
+    crd::u32        record_line   = tk.tok_line;  // the line of the record read last (the header first)
+    crd::u32        record_node   = kInvalidNode; // the node that record named, for a refused trailing token
     while (tk.next(t))
     {
+        if (tk.tok_line == record_line)
+        {
+            return refused_at(tk, "a token follows the last field of its record", out, record_node);
+        }
+        record_line            = tk.tok_line;
+        record_node            = kInvalidNode;
+        const crd::u32 rec_col = tk.tok_col;
+        StringView     f;
         if (t == StringView("node"))
         {
-            StringView idx_s;
-            StringView id_s;
-            StringView kind_s;
-            StringView name_s;
-            StringView par_s;
-            StringView file_s;
-            StringView line_s;
-            StringView col_s;
-            if (!tk.next(idx_s) || !tk.next(id_s) || !tk.next(kind_s) || !tk.next(name_s) || !tk.next(par_s) ||
-                !tk.next(file_s) || !tk.next(line_s) || !tk.next(col_s))
+            crd::u32 idx = 0;
+            if (!tk.field(f) || !parse_u32_dec(f, idx) || idx != expected_node)
             {
-                return false;
+                return refused_at(tk, "a node record's index is not the next node index", out, kInvalidNode);
             }
-            crd::u64 idx = 0;
+            // Past the index, a refusal names the node this record declares (not yet in the model).
             crd::u64 idv = 0;
-            crd::u64 fil = 0;
-            crd::u64 lin = 0;
-            crd::u64 col = 0;
-            if (!parse_u64_dec(idx_s, idx) || idx != expected_node)
+            if (!tk.field(f) || !parse_hex(f, 16U, idv))
             {
-                return false;
+                return refused(tk.tok_line, tk.tok_col, "a node record has no stable id (16 hex digits)", idx,
+                               StableId{});
             }
-            if (!parse_u64_hex(id_s, idv))
+            const StableId id{idv};
+            NodeKind       kind{};
+            if (!tk.field(f) || !node_kind_from_name(f, kind))
             {
-                return false;
+                return refused(tk.tok_line, tk.tok_col, "a node record names no known node kind", idx, id);
             }
-            NodeKind kind{};
-            if (!node_kind_from_name(kind_s, kind))
+            StringView name_s;
+            if (!tk.field(name_s))
             {
-                return false;
-            }
-            if (!parse_u64_dec(file_s, fil) || !parse_u64_dec(line_s, lin) || !parse_u64_dec(col_s, col))
-            {
-                return false;
+                return refused(tk.tok_line, tk.tok_col, "a node record has no name", idx, id);
             }
             crd::u32 parent = kInvalidNode;
-            if (par_s != StringView("-1"))
+            if (!tk.field(f))
             {
-                crd::u64 pv = 0;
-                if (!parse_u64_dec(par_s, pv) || pv >= expected_node) // parent must precede (dense order)
-                {
-                    return false;
-                }
-                parent = static_cast<crd::u32>(pv);
+                return refused(tk.tok_line, tk.tok_col, "a node record has no parent", idx, id);
             }
-            const SourceLoc loc{static_cast<crd::u32>(fil), static_cast<crd::u32>(lin), static_cast<crd::u32>(col)};
-            const crd::u32  ni = out.add_node(kind, unname(name_s), parent, loc);
-            out.set_node_id(ni, StableId{idv});
+            if (f != StringView("-1") && (!parse_u32_dec(f, parent) || parent >= expected_node))
+            {
+                return refused(tk.tok_line, tk.tok_col, "a node's parent is not an earlier node", idx, id);
+            }
+            crd::u32 loc[3] = {0U, 0U, 0U}; // file, line, col
+            for (crd::u32& v : loc)
+            {
+                if (!tk.field(f) || !parse_u32_dec(f, v))
+                {
+                    return refused(tk.tok_line, tk.tok_col, "a node record has no decimal file, line or column", idx,
+                                   id);
+                }
+            }
+            const crd::u32 ni = out.add_node(kind, unname(name_s), parent, SourceLoc{loc[0], loc[1], loc[2]});
+            out.set_node_id(ni, id);
+            record_node = ni;
             ++expected_node;
         }
         else if (t == StringView("pin"))
         {
-            StringView node_s;
-            StringView dir_s;
-            StringView name_s;
-            StringView type_s;
-            if (!tk.next(node_s) || !tk.next(dir_s) || !tk.next(name_s) || !tk.next(type_s))
+            crd::u32 nv = 0;
+            if (!tk.field(f) || !parse_u32_dec(f, nv) || nv >= out.node_count())
             {
-                return false;
+                return refused_at(tk, "a pin record names no existing node", out, kInvalidNode);
             }
-            crd::u64 nv = 0;
-            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count())
-            {
-                return false;
-            }
+            record_node = nv;
             PinDir dir{};
-            if (dir_s == StringView("in"))
+            if (!tk.field(f))
+            {
+                return refused_at(tk, "a pin record has no direction", out, nv);
+            }
+            if (f == StringView("in"))
             {
                 dir = PinDir::In;
             }
-            else if (dir_s == StringView("out"))
+            else if (f == StringView("out"))
             {
                 dir = PinDir::Out;
             }
             else
             {
-                return false;
+                return refused_at(tk, "a pin direction is neither in nor out", out, nv);
             }
-            out.add_pin(static_cast<crd::u32>(nv), dir, unname(name_s), unname(type_s));
+            StringView name_s;
+            StringView type_s;
+            if (!tk.field(name_s) || !tk.field(type_s))
+            {
+                return refused_at(tk, "a pin record has no name or type", out, nv);
+            }
+            out.add_pin(nv, dir, unname(name_s), unname(type_s));
         }
         else if (t == StringView("attr"))
         {
-            StringView node_s;
+            crd::u32 nv = 0;
+            if (!tk.field(f) || !parse_u32_dec(f, nv) || nv >= out.node_count())
+            {
+                return refused_at(tk, "an attr record names no existing node", out, kInvalidNode);
+            }
+            record_node = nv;
             StringView key_s;
             StringView val_s;
-            if (!tk.next(node_s) || !tk.next(key_s) || !tk.next(val_s))
+            if (!tk.field(key_s) || !tk.field(val_s))
             {
-                return false;
+                return refused_at(tk, "an attr record has no key or value", out, nv);
             }
-            crd::u64 nv = 0;
-            if (!parse_u64_dec(node_s, nv) || nv >= out.node_count())
-            {
-                return false;
-            }
-            out.add_attr(static_cast<crd::u32>(nv), unname(key_s), unname(val_s));
+            out.add_attr(nv, unname(key_s), unname(val_s));
         }
         else if (t == StringView("edge"))
         {
-            StringView fn_s;
-            StringView fp_s;
-            StringView tn_s;
-            StringView tp_s;
-            if (!tk.next(fn_s) || !tk.next(fp_s) || !tk.next(tn_s) || !tk.next(tp_s))
+            crd::u32 v[4] = {0U, 0U, 0U, 0U}; // from node, from pin, to node, to pin
+            for (crd::u32 k = 0; k < 4U; ++k)
             {
-                return false;
+                if (!tk.field(f) || !parse_u32_dec(f, v[k]))
+                {
+                    return refused_at(tk, "an edge record has no decimal node or pin", out, kInvalidNode);
+                }
+                if ((k == 0U || k == 2U) && v[k] >= out.node_count())
+                {
+                    return refused_at(tk, "an edge endpoint names no existing node", out, kInvalidNode);
+                }
             }
-            crd::u64 fn = 0;
-            crd::u64 fp = 0;
-            crd::u64 tn = 0;
-            crd::u64 tp = 0;
-            if (!parse_u64_dec(fn_s, fn) || !parse_u64_dec(fp_s, fp) || !parse_u64_dec(tn_s, tn) ||
-                !parse_u64_dec(tp_s, tp))
+            const Edge e{v[0], v[1], v[2], v[3]};
+            record_node = e.to_node;
+            // Single writer: an in-pin has exactly one source. The later edge into an in-pin that is already fed is the
+            // offending record (the pin-direction check cannot see it; the 32c parity anchor relies on it).
+            for (const EdgeAt& prior : edges_at)
             {
-                return false;
+                if (prior.edge.to_node == e.to_node && prior.edge.to_pin == e.to_pin)
+                {
+                    return refused(record_line, rec_col, "a second edge feeds the same in-pin", e.to_node,
+                                   out.node(e.to_node).id);
+                }
             }
-            if (fn >= out.node_count() || tn >= out.node_count())
-            {
-                return false;
-            }
-            out.add_edge(static_cast<crd::u32>(fn), static_cast<crd::u32>(fp), static_cast<crd::u32>(tn),
-                         static_cast<crd::u32>(tp));
+            out.add_edge(e.from_node, e.from_pin, e.to_node, e.to_pin);
+            edges_at.push_back(EdgeAt{record_line, rec_col, e});
         }
         else if (t == StringView("layout"))
         {
-            StringView id_s;
-            StringView x_s;
-            StringView y_s;
-            StringView g_s;
-            if (!tk.next(id_s) || !tk.next(x_s) || !tk.next(y_s) || !tk.next(g_s))
-            {
-                return false;
-            }
             crd::u64 idv = 0;
             crd::u64 xb  = 0;
             crd::u64 yb  = 0;
-            crd::u64 g   = 0;
-            if (!parse_u64_hex(id_s, idv) || !parse_u64_hex(x_s, xb) || !parse_u64_hex(y_s, yb) || !parse_u64_dec(g_s, g))
+            crd::u32 g   = 0;
+            if (!tk.field(f) || !parse_hex(f, 16U, idv))
             {
-                return false;
+                return refused_at(tk, "a layout record has no stable id (16 hex digits)", out, kInvalidNode);
             }
-            out.set_layout(StableId{idv}, bits_f32(static_cast<crd::u32>(xb)), bits_f32(static_cast<crd::u32>(yb)),
-                           static_cast<crd::u32>(g));
+            if (!tk.field(f) || !parse_hex(f, 8U, xb) || !tk.field(f) || !parse_hex(f, 8U, yb))
+            {
+                return refused_at(tk, "a layout record has no x or y bit pattern (8 hex digits)", out, kInvalidNode);
+            }
+            if (!tk.field(f) || !parse_u32_dec(f, g))
+            {
+                return refused_at(tk, "a layout record has no decimal group", out, kInvalidNode);
+            }
+            out.set_layout(StableId{idv}, bits_f32(static_cast<crd::u32>(xb)), bits_f32(static_cast<crd::u32>(yb)), g);
+            layouts_at.push_back(LayoutAt{record_line, rec_col, StableId{idv}});
         }
         else
         {
-            return false; // an unknown record type
+            return refused_at(tk, "an unknown record type", out, kInvalidNode);
         }
     }
 
@@ -416,37 +504,34 @@ bool read_schema(StringView text, SourceModel& out)
     // Node/pin/attr endpoints were range-checked as they were read; the remaining invariants need the WHOLE graph:
     //   (1) every layout row resolves to a real node id (no orphaned side-table row after a node was removed/renamed);
     //   (2) every edge connects a real OUT pin to a real IN pin (the classic graph-authoring error: wiring In->In).
+    // Each is reported at its first offending record in document order.
     const crd::u32 nc       = out.node_count();
     const auto     node_idx = std::views::iota(crd::u32{0}, nc);
-    for (const Layout& l : out.layout())
+    for (const LayoutAt& l : layouts_at)
     {
-        // an orphaned layout row (no node carries this id) => reject.
         if (!std::ranges::any_of(node_idx, [&](crd::u32 i) { return out.node(i).id == l.id; }))
         {
-            return false;
+            SchemaReadResult r = refused(l.line, l.col, "a layout row names no node", kInvalidNode, l.id);
+            r.orphan           = true;
+            return r;
         }
     }
-    // every edge must connect a real OUT pin to a real IN pin (endpoints were range-checked as node indices as read).
-    const bool edges_ok = std::ranges::all_of(out.edges(), [&](const Edge& e) {
-        return e.from_pin < out.node(e.from_node).pins.size() && e.to_pin < out.node(e.to_node).pins.size() &&
-               out.node(e.from_node).pins[e.from_pin].dir == PinDir::Out && // from-pin must be an OUTPUT
-               out.node(e.to_node).pins[e.to_pin].dir == PinDir::In;        // to-pin must be an INPUT
-    });
-    if (!edges_ok)
+    for (const EdgeAt& a : edges_at)
     {
-        return false;
+        const ChirNode& from = out.node(a.edge.from_node);
+        const ChirNode& to   = out.node(a.edge.to_node);
+        if (a.edge.from_pin >= from.pins.size() || from.pins[a.edge.from_pin].dir != PinDir::Out)
+        {
+            return refused(a.line, a.col, "an edge's source is not an out pin of its node", a.edge.from_node, from.id);
+        }
+        if (a.edge.to_pin >= to.pins.size() || to.pins[a.edge.to_pin].dir != PinDir::In)
+        {
+            return refused(a.line, a.col, "an edge's target is not an in pin of its node", a.edge.to_node, to.id);
+        }
     }
-
-    // single-writer: an in-pin has EXACTLY one source. Canonical edge order (SourceModel::add_edge sorts by the consumer
-    // key) puts any duplicate (to_node, to_pin) ADJACENT, so one adjacent-scan rejects a graph wiring two sources into
-    // one in-pin (an authoring error the pin-direction check cannot see; the 32c parity anchor relies on single-writer).
-    if (std::ranges::adjacent_find(out.edges(), [](const Edge& a, const Edge& b) {
-            return a.to_node == b.to_node && a.to_pin == b.to_pin;
-        }) != out.edges().end())
-    {
-        return false;
-    }
-    return true;
+    SchemaReadResult ok;
+    ok.ok = true;
+    return ok;
 }
 
 } // namespace crd::chir

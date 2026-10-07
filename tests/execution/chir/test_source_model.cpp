@@ -27,6 +27,24 @@ using crd::chir::kInvalidNode;
 using crd::containers::Array;
 using crd::containers::StringView;
 
+// The 1-based line of the first occurrence of `needle` in `text`, found by scanning the text (never by the reader).
+crd::u32 line_of(StringView text, StringView needle)
+{
+    crd::u32 line = 1U;
+    for (crd::usize i = 0; i + needle.size() <= text.size(); ++i)
+    {
+        if (StringView(text.data() + i, needle.size()) == needle)
+        {
+            return line;
+        }
+        if (text[i] == '\n')
+        {
+            ++line;
+        }
+    }
+    return 0U;
+}
+
 // The §143 event handler as a CHIR source model (ADR-0128 D1 — the five constructs + Program/StateDecl scaffolding).
 // ⛔ the KEPT anti-drift printer-oracle: regenerate the committed asset from THIS if it changes (the bootstrap case).
 // `parallel update` (state-free) precedes `update state` (sequential) — ADR-0128 D2. Edges wire the dataflow.
@@ -105,14 +123,14 @@ TEST_CASE("chir 32b: the committed event_handler.chirgraph is anti-drift, roundt
 
     // ROUNDTRIP fixed-point (pure serialization, no re-derive): print(read(file)) == file.
     SourceModel loaded(&root);
-    REQUIRE(crd::chir::read_schema(sv(t_file), loaded));
+    REQUIRE(crd::chir::read_schema(sv(t_file), loaded).ok);
     Array<char> t_reprint(&root);
     crd::chir::print_schema(loaded, t_reprint);
     CHECK(sv(t_reprint) == sv(t_file));
 
     // ID ANTI-DRIFT: the committed ids are a pure function of structure — a re-derive reproduces the file's ids exactly.
     SourceModel rederived(&root);
-    REQUIRE(crd::chir::read_schema(sv(t_file), rederived));
+    REQUIRE(crd::chir::read_schema(sv(t_file), rederived).ok);
     Array<char> before(&root);
     crd::chir::print_schema(rederived, before);
     rederived.derive_ids();
@@ -267,7 +285,7 @@ TEST_CASE("chir 32b: read_schema GRACEFULLY REJECTS a malformed graph (edge In->
                      "pin 2 in entities EntitySet\n"
                      "edge 1 0 2 0\n";
     SourceModel good(&root);
-    CHECK(crd::chir::read_schema(StringView(ok), good));
+    CHECK(crd::chir::read_schema(StringView(ok), good).ok);
 
     // NEGATIVE 1 — edge wires an INPUT pin as its source (node 1 pin 0 is now `in`): the classic graph-authoring error
     // the tokenizer cannot see. read_schema must reject (ADR-0128 D5 graceful-reject convention).
@@ -278,15 +296,25 @@ TEST_CASE("chir 32b: read_schema GRACEFULLY REJECTS a malformed graph (edge In->
                           "pin 1 in entities EntitySet\n" // from-pin is an INPUT -> illegal edge source
                           "pin 2 in entities EntitySet\n"
                           "edge 1 0 2 0\n";
-    SourceModel bad1(&root);
-    CHECK_FALSE(crd::chir::read_schema(StringView(in_to_in), bad1));
+    SourceModel                       bad1(&root);
+    const crd::chir::SchemaReadResult r1 = crd::chir::read_schema(StringView(in_to_in), bad1);
+    CHECK_FALSE(r1.ok);
+    CHECK(r1.err_line == line_of(StringView(in_to_in), StringView("edge 1 0 2 0"))); // DIAG.8a: the edge record
+    CHECK(r1.err_col == 1U);
+    CHECK(r1.node == 1U); // the endpoint whose pin is wrong: the source node
+    CHECK(r1.id.value == 1U);
 
     // NEGATIVE 2 — a layout row whose id resolves to no node (an orphaned side-table row after a node was removed).
     const char* orphan_layout = "chirgraph 1\n"
                                "node 0 0000000000000000 program p -1 0 0 0\n"
                                "layout ffffffffffffffff 00000000 00000000 0\n";
-    SourceModel bad2(&root);
-    CHECK_FALSE(crd::chir::read_schema(StringView(orphan_layout), bad2));
+    SourceModel                       bad2(&root);
+    const crd::chir::SchemaReadResult r2 = crd::chir::read_schema(StringView(orphan_layout), bad2);
+    CHECK_FALSE(r2.ok);
+    CHECK(r2.err_line == line_of(StringView(orphan_layout), StringView("layout ffff")));
+    CHECK(r2.node == kInvalidNode);
+    CHECK(r2.orphan);
+    CHECK(r2.id.value == 0xFFFFFFFFFFFFFFFFULL); // the id the row could not resolve
 
     // NEGATIVE 3 — TWO edges into ONE in-pin (a single-writer violation the pin-direction check cannot see; the 32c
     // parity anchor requires each in-pin to have exactly one source). Both wire an OUT pin -> node 2's in-pin 0.
@@ -300,8 +328,12 @@ TEST_CASE("chir 32b: read_schema GRACEFULLY REJECTS a malformed graph (edge In->
                                "pin 3 in z C\n"
                                "edge 1 0 3 0\n"
                                "edge 2 0 3 0\n"; // second source into the same (to_node=3, to_pin=0) -> reject
-    SourceModel bad3(&root);
-    CHECK_FALSE(crd::chir::read_schema(StringView(double_writer), bad3));
+    SourceModel                       bad3(&root);
+    const crd::chir::SchemaReadResult r3 = crd::chir::read_schema(StringView(double_writer), bad3);
+    CHECK_FALSE(r3.ok);
+    CHECK(r3.err_line == line_of(StringView(double_writer), StringView("edge 2 0 3 0"))); // the SECOND writer
+    CHECK(r3.node == 3U); // the consumer whose in-pin is fed twice
+    CHECK(r3.id.value == 3U);
 }
 
 // ============================ CEIR-32c — the CHIR TEXT projection (print_chir + parse_chir) ============================
@@ -352,7 +384,7 @@ TEST_CASE("chir 32c: the TEXT + GRAPH projections AGREE on semantics (ADR-0128 D
     // CROSS-PROJECTION TOOTH: the two COMMITTED assets lower from the SAME semantics — the literal 32d precondition.
     const Array<char> g_file = slurp(kAssetPath, &root);
     SourceModel       from_graph(&root);
-    REQUIRE(crd::chir::read_schema(sv(g_file), from_graph));
+    REQUIRE(crd::chir::read_schema(sv(g_file), from_graph).ok);
     CHECK(from_text.semantic_hash() == from_graph.semantic_hash());
 }
 

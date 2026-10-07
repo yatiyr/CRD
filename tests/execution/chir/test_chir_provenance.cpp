@@ -437,7 +437,7 @@ TEST_CASE("diag 8a: graph-authored CHIR names its node ids with an explicit gap 
     REQUIRE(crd::chir::parse_chir(sv(text), kModelFile, from_text).ok);
     const Array<char>      graph = slurp(kGraphPath, &root);
     crd::chir::SourceModel from_graph(&root);
-    REQUIRE(crd::chir::read_schema(sv(graph), from_graph));
+    REQUIRE(crd::chir::read_schema(sv(graph), from_graph).ok);
 
     Context       ct(&root);
     Module* const mt = crd::chir::lower_chir(from_text, ct, kFile);
@@ -519,4 +519,269 @@ TEST_CASE("diag 8a: a lowering without a file name keeps line and column with an
     CHECK(p.origins[0].loc.line == want.pfor.at.line);
     CHECK(p.origins[0].loc.col == want.pfor.at.col);
     CHECK(contains(sv(crd::ceir::render_provenance(ctx, p, &root)), StringView("<unknown>:")));
+}
+
+namespace
+{
+// The 1-based line and column at which `needle` first starts in `text` (an independent scan, never the reader).
+TextPos pos_of(StringView text, const char* needle)
+{
+    const StringView n(needle);
+    u32              line       = 1U;
+    usize            line_start = 0U;
+    for (usize i = 0; i + n.size() <= text.size(); ++i)
+    {
+        if (StringView(text.data() + i, n.size()) == n)
+        {
+            return TextPos{line, static_cast<u32>(i - line_start + 1U)};
+        }
+        if (text[i] == '\n')
+        {
+            ++line;
+            line_start = i + 1U;
+        }
+    }
+    return TextPos{};
+}
+
+// `src` with its first `from` replaced by `to`, as a new document.
+Array<char> edited(StringView src, const char* from, const char* to, crd::memory::IAllocator* a)
+{
+    const StringView f(from);
+    const StringView t(to);
+    Array<char>      out(a);
+    usize            at = src.size();
+    for (usize i = 0; i + f.size() <= src.size(); ++i)
+    {
+        if (StringView(src.data() + i, f.size()) == f)
+        {
+            at = i;
+            break;
+        }
+    }
+    REQUIRE(at < src.size());
+    for (usize i = 0; i < at; ++i)
+    {
+        out.push_back(src[i]);
+    }
+    for (usize i = 0; i < t.size(); ++i)
+    {
+        out.push_back(t[i]);
+    }
+    for (usize i = at + f.size(); i < src.size(); ++i)
+    {
+        out.push_back(src[i]);
+    }
+    return out;
+}
+
+// `src` followed by `tail`, as a new document.
+Array<char> appended(StringView src, const char* tail, crd::memory::IAllocator* a)
+{
+    Array<char>      out(a);
+    const StringView t(tail);
+    for (usize i = 0; i < src.size(); ++i)
+    {
+        out.push_back(src[i]);
+    }
+    for (usize i = 0; i < t.size(); ++i)
+    {
+        out.push_back(t[i]);
+    }
+    return out;
+}
+
+// The 16-hex-digit stable id printed right after the first `prefix` in `text`.
+u64 hex_after(StringView text, const char* prefix)
+{
+    const StringView p(prefix);
+    for (usize i = 0; i + p.size() + 16U <= text.size(); ++i)
+    {
+        if (StringView(text.data() + i, p.size()) == p)
+        {
+            u64 v = 0U;
+            for (usize k = 0; k < 16U; ++k)
+            {
+                const char c = text[i + p.size() + k];
+                v            = (v << 4U) | static_cast<u64>(c <= '9' ? c - '0' : c - 'a' + 10);
+            }
+            return v;
+        }
+    }
+    FAIL_CHECK("prefix not in the document");
+    return 0U;
+}
+
+crd::chir::SchemaReadResult read_doc(const Array<char>& doc, crd::memory::IAllocator* a)
+{
+    crd::chir::SourceModel m(a);
+    return crd::chir::read_schema(sv(doc), m);
+}
+
+// The authored text line of the CHIR node whose stable id is `id` (0 when no node carries it).
+u32 text_line_of(const crd::chir::SourceModel& m, u64 id)
+{
+    for (u32 i = 0; i < m.node_count(); ++i)
+    {
+        if (m.node(i).id.value == id)
+        {
+            return m.node(i).loc.line;
+        }
+    }
+    return 0U;
+}
+} // namespace
+
+// A malformed graph document must name the record (1-based line, column of the offending token) and the CHIR node it
+// declares or names. Each document is the committed .chirgraph with one authored mistake. Expected lines, columns and
+// ids come from scanning the document text. A refused node's stable id leads back to the authored .chir line, because
+// both projections derive the same ids.
+TEST_CASE("diag 8a: a malformed CHIR graph document is refused at its record and node", "[chir][diag]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const Array<char>                  graph = slurp(kGraphPath, &root);
+    const StringView                   g     = sv(graph);
+    const Array<char>                  text  = slurp(kTextPath, &root);
+    crd::chir::SourceModel             from_text(&root);
+    REQUIRE(crd::chir::parse_chir(sv(text), kModelFile, from_text).ok);
+    const u64 update_id = hex_after(g, "node 4 ");
+    const u64 commit_id = hex_after(g, "node 6 ");
+
+    SECTION("control: the committed document reads clean and names nothing")
+    {
+        const crd::chir::SchemaReadResult r = read_doc(graph, &root);
+        CHECK(r.ok);
+        CHECK(r.err_line == 0U);
+        CHECK(r.err_col == 0U);
+        CHECK(r.node == crd::chir::kInvalidNode);
+        CHECK_FALSE(r.orphan);
+        CHECK(r.msg.size() == 0U);
+    }
+    SECTION("an unknown node kind names its record and the node, which leads to the authored text line")
+    {
+        const Array<char> doc = edited(g, "parallel_for update", "parallel_four update", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "node 4 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "parallel_four").col);
+        CHECK(r.node == 4U);
+        CHECK(r.id.value == update_id);
+        CHECK(r.msg.size() != 0U);
+        CHECK(text_line_of(from_text, r.id.value) == find_node(sv(text), "parallel_for update").line);
+    }
+    SECTION("a node record cut short is refused on its own line, where the field was expected")
+    {
+        const Array<char> doc = edited(g, "await task 2 0 0 0", "await task 2 0 0", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "node 5 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "await task 2 0 0").col + StringView("await task 2 0 0").size());
+        CHECK(r.node == 5U);
+        CHECK(r.id.value == hex_after(g, "node 5 "));
+    }
+    SECTION("a token after a record's last field names that record's node")
+    {
+        const Array<char> doc = edited(g, "attr 2 domain event", "attr 2 domain event extra", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "attr 2 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "extra").col);
+        CHECK(r.node == 2U);
+        CHECK(r.id.value == hex_after(g, "node 2 "));
+    }
+    SECTION("an out-of-order node index names no node")
+    {
+        const Array<char> doc = edited(g, "node 3 ", "node 7 ", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "node 7 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "node 7 ").col + 5U);
+        CHECK(r.node == crd::chir::kInvalidNode);
+    }
+    SECTION("a parent that is not an earlier node names the declared node")
+    {
+        const Array<char> doc = edited(g, "query q 2 0 0 0", "query q 5 0 0 0", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "query q 5").line);
+        CHECK(r.err_col == pos_of(sv(doc), "query q 5").col + 8U);
+        CHECK(r.node == 3U);
+        CHECK(r.id.value == hex_after(g, "node 3 "));
+    }
+    SECTION("a pin of a node that does not exist names the bad index and no node")
+    {
+        const Array<char> doc = edited(g, "pin 6 in updated", "pin 9 in updated", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "pin 9 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "pin 9 ").col + 4U);
+        CHECK(r.node == crd::chir::kInvalidNode);
+    }
+    SECTION("a pin direction that is neither in nor out names the pin's node")
+    {
+        const Array<char> doc = edited(g, "pin 3 out entities", "pin 3 sideways entities", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "pin 3 ").line);
+        CHECK(r.err_col == pos_of(sv(doc), "sideways").col);
+        CHECK(r.node == 3U);
+    }
+    SECTION("an unknown record type names its keyword")
+    {
+        const Array<char> doc = appended(g, "wire 1 2\n", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "wire 1 2").line);
+        CHECK(r.err_col == 1U);
+        CHECK(r.node == crd::chir::kInvalidNode);
+    }
+    SECTION("an edge from an in-pin names the source node, which leads to the authored text line")
+    {
+        const Array<char> doc = edited(g, "edge 1 0 6 0", "edge 6 0 6 0", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "edge 6 0 6 0").line);
+        CHECK(r.err_col == 1U);
+        CHECK(r.node == 6U);
+        CHECK(r.id.value == commit_id);
+        CHECK(text_line_of(from_text, r.id.value) == find_node(sv(text), "state_update commit").line);
+    }
+    SECTION("a second edge into a fed in-pin is blamed on the later record, naming the consumer")
+    {
+        // The later record sits after the layout rows; the earlier writer, `edge 3 0 4 0`, is on another line.
+        const Array<char> doc = appended(g, "edge 1 0 4 0\n", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "edge 1 0 4 0").line);
+        CHECK(r.err_line != pos_of(sv(doc), "edge 3 0 4 0").line);
+        CHECK(r.err_col == 1U);
+        CHECK(r.node == 4U);
+        CHECK(r.id.value == update_id);
+    }
+    SECTION("an orphaned layout row names its line and the id it could not resolve")
+    {
+        const Array<char> doc = edited(g, "layout acfa753f33dc7b8a", "layout acfa753f33dc7b8b", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == pos_of(sv(doc), "layout acfa753f33dc7b8b").line);
+        CHECK(r.err_col == 1U);
+        CHECK(r.node == crd::chir::kInvalidNode);
+        CHECK(r.orphan);
+        CHECK(r.id.value == 0xacfa753f33dc7b8bULL);
+    }
+    SECTION("a wrong header version and a non-empty model are refused")
+    {
+        const Array<char> doc = edited(g, "chirgraph 1", "chirgraph 2", &root);
+        const auto        r   = read_doc(doc, &root);
+        CHECK_FALSE(r.ok);
+        CHECK(r.err_line == 1U);
+        CHECK(r.err_col == pos_of(sv(doc), "2").col);
+
+        crd::chir::SourceModel used(&root);
+        REQUIRE(crd::chir::read_schema(g, used).ok);
+        const crd::chir::SchemaReadResult again = crd::chir::read_schema(g, used);
+        CHECK_FALSE(again.ok);
+        CHECK(again.err_line == 0U);
+        CHECK(again.node == crd::chir::kInvalidNode);
+    }
 }
