@@ -1,0 +1,359 @@
+// test_ceridc_diag.cpp — the diag verb binds the host's typed diagnostic command service to the existing CLI and MCP
+// transports. A native call, the in-process verb, the in-process MCP tool and the real ceridc binary (from the
+// command line and over MCP stdio) return the same response bytes for the same service state, including pagination
+// and refusals; the MCP tool's arguments cannot raise the grant the process started with; and malformed numeric
+// arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
+// parsed with the JSON reader and the tool text compared byte for byte.
+
+#include <crd/assetio/json.hpp>
+#include <crd/ceridc/verbs.hpp>
+#include <crd/containers/array.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/perf/bundle.hpp>
+#include <crd/perf/bundle_manifest.hpp>
+#include <crd/perf/diag_commands.hpp>
+#include <crd/perf/diagnostics.hpp>
+#include <crd/platform/filesystem.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+namespace fs   = crd::platform::fs;
+namespace json = crd::assetio::json;
+
+namespace
+{
+
+// NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
+crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "ceridc-diag-tests"};
+// NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
+
+using crd::containers::String;
+using crd::containers::StringView;
+using crd::perf::DiagAuthority;
+using crd::perf::DiagCommandService;
+using crd::perf::DiagRequest;
+using crd::perf::DiagServiceConfig;
+
+// Each case owns its files: CTest may run the cases in parallel in one working directory.
+constexpr const char* kParityBundle = "ceridc_diag_bundle_parity.cdb";
+constexpr const char* kBinaryBundle = "ceridc_diag_bundle_binary.cdb";
+
+[[nodiscard]] bool has(const String& s, const char* needle)
+{
+    return std::strstr(s.c_str(), needle) != nullptr;
+}
+
+[[nodiscard]] StringView view(const String& s)
+{
+    return StringView{s.data(), s.size()};
+}
+
+// The services under comparison: the cwd is the file root, as for the binary below.
+[[nodiscard]] DiagServiceConfig rooted()
+{
+    DiagServiceConfig config;
+    config.root = ".";
+    return config;
+}
+
+void write_bundle(const char* name)
+{
+    crd::perf::BundleManifest man;
+    man.schema_version = crd::perf::kDiagnosticSchemaVersion;
+    man.absent_tags.push_back(static_cast<crd::u32>(crd::perf::BundleSectionTag::SymbolIndex));
+    const crd::containers::Array<crd::u8> manifest = crd::perf::serialize_manifest(man, &g_alloc);
+    const crd::u8                         crash[8] = {8, 7, 6, 5, 4, 3, 2, 1};
+    crd::perf::BundleWriter               writer(&g_alloc);
+    REQUIRE(writer.add_section(crd::perf::BundleSectionTag::Manifest, {manifest.data(), manifest.size()}) ==
+            crd::perf::BundleWriter::AddStatus::Ok);
+    REQUIRE(writer.add_section(crd::perf::BundleSectionTag::CrashRecord, {crash, sizeof(crash)}) ==
+            crd::perf::BundleWriter::AddStatus::Ok);
+    REQUIRE(writer.add_absent(crd::perf::BundleSectionTag::SymbolIndex) ==
+            crd::perf::BundleWriter::AddStatus::StoredAbsent);
+    const crd::containers::Array<crd::u8> bytes = writer.finish(0U);
+    REQUIRE(fs::write_file_binary(fs::Path(StringView(name)), {bytes.data(), bytes.size()}));
+}
+
+// One tools/call of the diag tool with `arguments` (a JSON object text), through the real protocol handler.
+[[nodiscard]] String call(DiagCommandService* service, const char* arguments, crd::i64 id = 7)
+{
+    char request[1024];
+    (void)std::snprintf(request, sizeof(request),
+                        R"({"jsonrpc":"2.0","id":%lld,"method":"tools/call","params":{"name":"diag","arguments":%s}})",
+                        static_cast<long long>(id), arguments);
+    return crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(request), std::strlen(request)}, &g_alloc,
+                                   service);
+}
+
+struct ToolReply
+{
+    bool   parsed   = false;
+    bool   is_error = false;
+    bool   protocol_error = false;
+    String text{&g_alloc};
+};
+
+// The tool's text (decoded) and isError flag from one JSON-RPC reply line.
+[[nodiscard]] ToolReply reply_of(StringView line)
+{
+    ToolReply     out;
+    json::JsonDoc doc(&g_alloc);
+    if (!json::parse({reinterpret_cast<const crd::u8*>(line.data()), line.size()}, doc))
+    {
+        return out;
+    }
+    out.parsed = true;
+    if (json::find(doc, doc.root, "error") != json::kInvalid)
+    {
+        out.protocol_error = true;
+        return out;
+    }
+    const crd::u32 result  = json::find(doc, doc.root, "result");
+    const crd::u32 content = json::find(doc, result, "content");
+    const crd::u32 text    = json::find(doc, json::at(doc, content, 0U), "text");
+    if (text == json::kInvalid || doc.nodes[text].type != json::JsonType::String)
+    {
+        out.parsed = false;
+        return out;
+    }
+    out.text.append(StringView{doc.strings.data() + doc.nodes[text].str_off, doc.nodes[text].str_len});
+    out.is_error = json::as_bool(doc, json::find(doc, result, "isError"), false);
+    return out;
+}
+
+// The MCP `arguments` object for a request (only the fields that differ from the defaults).
+[[nodiscard]] String arguments_of(const DiagRequest& r)
+{
+    String a(&g_alloc);
+    char   buf[512];
+    (void)std::snprintf(buf, sizeof(buf), R"({"command":"%.*s")", static_cast<int>(r.command.size()), r.command.data());
+    a.append(buf);
+    if (!r.path.empty())
+    {
+        (void)std::snprintf(buf, sizeof(buf), R"(,"path":"%.*s")", static_cast<int>(r.path.size()), r.path.data());
+        a.append(buf);
+    }
+    (void)std::snprintf(buf, sizeof(buf), R"(,"cursor":%llu,"page_items":%u,"page_bytes":%u,"schema":%u})",
+                        static_cast<unsigned long long>(r.cursor), r.page_items, r.page_bytes, r.schema_version);
+    a.append(buf);
+    return a;
+}
+
+} // namespace
+
+TEST_CASE("diag: a native caller, the verb and the MCP tool return the same bounded result", "[ceridc][diag]")
+{
+    write_bundle(kParityBundle);
+    const crd::perf::DiagAuthoritySet read = crd::perf::authority_bit(DiagAuthority::Read);
+    DiagCommandService                native(read, rooted(), &g_alloc);
+    DiagCommandService                verb(read, rooted(), &g_alloc);
+    DiagCommandService                mcp(read, rooted(), &g_alloc);
+
+    // A script of requests: pages walked by cursor, refusals of every class, and a stale cursor after a new snapshot.
+    struct Step
+    {
+        const char* command;
+        const char* path;
+        crd::u32    page_items;
+        crd::u32    page_bytes;
+        crd::u32    schema;
+        int         cursor_from; // -1: 0; otherwise the next_cursor of that earlier step
+    };
+    const Step steps[] = {
+        {"diag.commands", nullptr, 3U, 0U, 1U, -1},
+        {"diag.commands", nullptr, 3U, 0U, 1U, 0},
+        {"diag.commands", nullptr, 3U, 0U, 1U, 1},
+        {"bundle.inspect", kParityBundle, 2U, 0U, 1U, -1},
+        {"bundle.inspect", kParityBundle, 2U, 0U, 1U, 3},
+        {"diag.commands", nullptr, 3U, 0U, 1U, 1}, // stale: bundle.inspect replaced the snapshot
+        {"diag.capabilities", nullptr, 0U, 0U, 1U, -1},
+        {"capture.start", nullptr, 0U, 0U, 1U, -1},   // unauthorized
+        {"diag.commands", nullptr, 1000U, 0U, 1U, -1}, // oversized
+        {"diag.commands", nullptr, 0U, 10U, 1U, -1},   // page bytes below the minimum
+        {"bundle.inspect", "../x.cdb", 0U, 0U, 1U, -1}, // unsafe path
+        {"diag.commands", nullptr, 0U, 0U, 2U, -1},    // schema
+        {"no.such", nullptr, 0U, 0U, 1U, -1},
+    };
+    crd::containers::Array<crd::u64> next(&g_alloc);
+    for (const Step& s : steps)
+    {
+        DiagRequest r;
+        r.command        = s.command;
+        r.path           = s.path != nullptr ? StringView{s.path} : StringView{};
+        r.page_items     = s.page_items;
+        r.page_bytes     = s.page_bytes;
+        r.schema_version = s.schema;
+        r.cursor         = s.cursor_from < 0 ? 0U : next[static_cast<crd::usize>(s.cursor_from)];
+        INFO(s.command);
+
+        const crd::perf::DiagResult direct = native.execute(r);
+        next.push_back(direct.next_cursor);
+        const String    through_verb = crd::ceridc::verb_diag(verb, r, &g_alloc);
+        const String    args         = arguments_of(r);
+        const ToolReply through_mcp  = reply_of(view(call(&mcp, args.c_str())));
+        INFO(direct.json.c_str());
+        REQUIRE(through_mcp.parsed);
+        CHECK(view(through_verb) == view(direct.json));
+        CHECK(view(through_mcp.text) == view(direct.json));
+        CHECK(through_mcp.is_error == (direct.status != crd::perf::DiagStatus::Ok));
+    }
+    CHECK(native.handler_runs() == 3U); // the commands and bundle snapshots, and capabilities; refusals ran nothing
+    CHECK(verb.handler_runs() == native.handler_runs());
+    CHECK(mcp.handler_runs() == native.handler_runs());
+    CHECK(mcp.file_bytes_read() == native.file_bytes_read());
+    CHECK(native.file_bytes_read() > 0U);
+    (void)fs::remove_file(fs::Path(StringView(kParityBundle)));
+}
+
+TEST_CASE("diag: the MCP tool cannot raise the host's grant and rejects malformed counts", "[ceridc][diag]")
+{
+    DiagCommandService svc(crd::perf::authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &g_alloc);
+
+    // Authority smuggled into the arguments is ignored: the process's grant decides, before any work.
+    const ToolReply smuggled = reply_of(view(
+        call(&svc, R"({"command":"capture.start","grant":"read,record","authority":"record","granted":63})")));
+    REQUIRE(smuggled.parsed);
+    CHECK(smuggled.is_error);
+    CHECK(has(smuggled.text, "\"status\":\"unauthorized\""));
+    CHECK(has(smuggled.text, "\"grant\":\"read\""));
+    CHECK(svc.handler_runs() == 0U);
+    CHECK_FALSE(svc.capture_open());
+
+    // A count beyond u32 reaches the service as the largest u32 and is refused there as oversized.
+    const ToolReply huge = reply_of(view(call(&svc, R"({"command":"diag.commands","page_items":1e12})")));
+    REQUIRE(huge.parsed);
+    CHECK(has(huge.text, "\"status\":\"oversized\""));
+    CHECK(svc.handler_runs() == 0U);
+
+    // Negative, fractional, non-numeric and missing values are protocol faults; nothing reaches the service.
+    for (const char* bad : {R"({"command":"diag.commands","cursor":-1})", R"({"command":"diag.commands","cursor":1.5})",
+                            R"({"command":"diag.commands","page_items":"3"})", R"({"path":"x"})",
+                            R"({"command":"bundle.inspect","path":7})"})
+    {
+        INFO(bad);
+        const ToolReply r = reply_of(view(call(&svc, bad)));
+        REQUIRE(r.parsed);
+        CHECK(r.protocol_error);
+    }
+    CHECK(svc.handler_runs() == 0U);
+
+    // The tool is listed only when a service is bound, and its schema has no authority field.
+    const char*  list  = R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})";
+    const String bound = crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)},
+                                                 &g_alloc, &svc);
+    CHECK(has(bound, "\"name\":\"diag\""));
+    CHECK(has(bound, "\"page_bytes\":{\"type\":\"number\"}"));
+    CHECK_FALSE(has(bound, "grant"));
+    CHECK_FALSE(has(bound, "authority"));
+    const String unbound =
+        crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)}, &g_alloc);
+    CHECK(has(unbound, "\"name\":\"import\""));
+    CHECK_FALSE(has(unbound, "\"name\":\"diag\""));
+    CHECK(reply_of(view(call(nullptr, R"({"command":"diag.commands"})"))).protocol_error);
+}
+
+TEST_CASE("diag: the real ceridc binary answers the same bytes from the command line and over MCP stdio",
+          "[ceridc][diag]")
+{
+    write_bundle(kBinaryBundle);
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+
+    const crd::perf::DiagAuthoritySet read = crd::perf::authority_bit(DiagAuthority::Read);
+    char                              cmd[1024];
+
+    // Command line, default grant: the same bytes as a fresh native service with the same root.
+    {
+        DiagCommandService native(read, rooted(), &g_alloc);
+        DiagRequest        r;
+        r.command    = "bundle.inspect";
+        r.path       = kBinaryBundle;
+        r.page_items = 2U;
+        const crd::perf::DiagResult expected = native.execute(r);
+        REQUIRE(expected.status == crd::perf::DiagStatus::Ok);
+        (void)std::snprintf(cmd, sizeof(cmd),
+                            "\"%s\" diag --command bundle.inspect --path %s --page-items 2 --root . > "
+                            "ceridc_diag_out.json",
+                            exe, kBinaryBundle);
+        REQUIRE(std::system(cmd) == 0);
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
+        while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+        {
+            out.resize(out.size() - 1U);
+        }
+        CHECK(view(out) == view(expected.json));
+    }
+
+    // The grant is the binary's start-up flag: record is refused without it and reaches the command with it.
+    {
+        (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command capture.start > ceridc_diag_out.json", exe);
+        CHECK(std::system(cmd) != 0); // ok:false
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
+        CHECK(has(out, "\"status\":\"unauthorized\""));
+
+        DiagCommandService native(crd::perf::authority_bit(DiagAuthority::Record), DiagServiceConfig{}, &g_alloc);
+        DiagRequest        r;
+        r.command                            = "capture.start";
+        const crd::perf::DiagResult expected = native.execute(r);
+        (void)std::snprintf(cmd, sizeof(cmd),
+                            "\"%s\" diag --command capture.start --grant record > ceridc_diag_out.json", exe);
+        (void)std::system(cmd);
+        out.clear();
+        REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
+        CHECK(has(out, "\"grant\":\"record\""));
+        CHECK_FALSE(has(out, "unauthorized"));
+        CHECK(has(out, (String("\"status\":\"", &g_alloc) += crd::perf::status_name(expected.status)).c_str()));
+
+        (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command diag.commands --grant root > ceridc_diag_out.json",
+                            exe);
+        CHECK(std::system(cmd) != 0);
+        out.clear();
+        REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
+        CHECK(has(out, "\"ok\":false"));
+    }
+
+    // MCP over stdio: the tool's text is the native document, and smuggled authority is still refused.
+    {
+        DiagCommandService native(read, rooted(), &g_alloc);
+        DiagRequest        r;
+        r.command                            = "bundle.inspect";
+        r.path                               = kBinaryBundle;
+        r.page_items                         = 2U;
+        const crd::perf::DiagResult expected = native.execute(r);
+        String                      script(&g_alloc);
+        script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+        script.append(R"({"command":"bundle.inspect","path":"ceridc_diag_bundle_binary.cdb","page_items":2}}})");
+        script.push_back('\n');
+        script.append(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diag","arguments":)");
+        script.append(R"({"command":"capture.stop","path":"x.cprof","grant":"record"}}})");
+        script.push_back('\n');
+        REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_in.jsonl")), view(script)));
+        (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-root . < ceridc_diag_in.jsonl > ceridc_diag_out.jsonl",
+                            exe);
+        REQUIRE(std::system(cmd) == 0);
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.jsonl")), out));
+        const StringView all = view(out);
+        const crd::usize eol = all.find('\n');
+        REQUIRE(eol != StringView::npos);
+        const ToolReply first = reply_of(all.substr(0U, eol));
+        REQUIRE(first.parsed);
+        CHECK_FALSE(first.is_error);
+        CHECK(view(first.text) == view(expected.json));
+        const ToolReply second = reply_of(all.substr(eol + 1U));
+        REQUIRE(second.parsed);
+        CHECK(second.is_error);
+        CHECK(has(second.text, "\"status\":\"unauthorized\""));
+        CHECK_FALSE(fs::exists(fs::Path(StringView("x.cprof"))));
+        (void)fs::remove_file(fs::Path(StringView("ceridc_diag_in.jsonl")));
+        (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.jsonl")));
+    }
+    (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.json")));
+    (void)fs::remove_file(fs::Path(StringView(kBinaryBundle)));
+}

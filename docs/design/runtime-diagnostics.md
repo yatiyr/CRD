@@ -650,6 +650,24 @@ Acceptance: a native caller and existing CLI/agent transport obtain the same bou
 oversized requests fail before expensive work. Prove process-local operation without a network/MCP dependency.
 Future CR-D007/MCP transports bind these services and preserve their authorization checks.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-command-service-and-transports.md)):
+- One service, crd-perf's `DiagCommandService` (`crd/perf/diag_commands.hpp`), is what every consumer calls; a
+  transport only moves a request in and the response document out. It needs no network, MCP or transport code.
+- Authority is a set of distinct classes (`read`, `record`, `inject`, `remote-enable`, `upload`, `process-memory`;
+  none implies another) granted by the host when it builds the service. It never travels in a request, so neither a
+  request nor an authored asset can raise it. Each command declares exactly one class.
+- Refusals come before any work and in a fixed order: schema version, unknown command, authority, request bounds
+  (`oversized`), arguments (`bad-argument`; `unavailable` when the host granted no file root), stale cursor,
+  cancellation. A refusal leaves the retained snapshot alone. Input files are bounded on their size before a byte is
+  read; path arguments are relative plain names under the host's root.
+- Pagination is deterministic: a cursor-0 request takes one snapshot under a new generation; later pages are cut from
+  it by `generation * 2^20 + offset`, so the same cursor and bounds give the same bytes, and any new snapshot makes
+  older cursors `stale-cursor`. Pages are bounded by items and serialized bytes; items and string values are clipped
+  and say so. Evidence that cannot exist in this process or build answers `unavailable` with the reason.
+- Upper modules register their own commands (`register_command`) and get the same checks, so foundation never
+  includes their headers. `ceridc diag` and the MCP `diag` tool bind a service built from the process's start-up
+  flags (default `read`); the tool's arguments are the request fields only.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 

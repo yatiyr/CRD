@@ -26,6 +26,7 @@ target_link_libraries(crd-ceridc
         crd-timeline
         crd-audio
         crd-cooker
+        crd-perf      # the diag verb and MCP tool bind the host's typed diagnostic command service
     PRIVATE
         crd-ceir      # DIAG.8b: the inspect verb runs an authored CEIR program under an inspect session
         crd-ceir-cook # DIAG.8b: the InspectHost (ReloadSet generation, compiled entry, executing thread)

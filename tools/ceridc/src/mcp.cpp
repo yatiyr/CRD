@@ -5,7 +5,9 @@
 #include <crd/assetio/json.hpp>
 #include <crd/assetio/json_write.hpp>
 #include <crd/ceridc/verbs.hpp>
+#include <crd/perf/diag_commands.hpp>
 
+#include <cmath>
 #include <cstring>
 
 namespace crd::ceridc
@@ -45,6 +47,13 @@ namespace
         {"render", "Render a .otio timeline to an EXR frame sequence", "otio:string!,dir:string!,max_frames:number"},
         {"export", "Convert a TIML artifact to .otio interchange", "timl:string!,out:string!"},
     };
+
+    // Listed only when the host bound a diagnostic command service. The host's grant is not an argument.
+    constexpr ToolSpec kDiagTool = {
+        "diag",
+        "Run one typed, bounded diagnostic command (diag.commands lists them); pages are cut from one retained "
+        "snapshot by cursor",
+        "command:string!,path:string,cursor:number,page_items:number,page_bytes:number,schema:number"};
 
     void write_input_schema(JsonWriter& w, const char* args)
     {
@@ -113,13 +122,87 @@ namespace
         return json::as_bool(doc, json::find(doc, args, key), false);
     }
 
+    // A whole JSON number in [0, max], or false. An absent argument keeps `out` (the request's default).
+    [[nodiscard]] bool arg_count(const json::JsonDoc& doc, crd::u32 args, const char* key, crd::f64 max,
+                                 crd::f64& out)
+    {
+        const crd::u32 node = json::find(doc, args, key);
+        if (node == json::kInvalid)
+        {
+            return true;
+        }
+        if (doc.nodes[node].type != json::JsonType::Number)
+        {
+            return false;
+        }
+        const crd::f64 v = doc.nodes[node].number;
+        if (!(v >= 0.0) || v != std::floor(v) || v > max)
+        {
+            return false;
+        }
+        out = v;
+        return true;
+    }
+
+    // The diag tool: the request's own fields only, then the host's service. A count above a u32 bound reaches the
+    // service as the largest u32, so the service refuses it as oversized rather than the transport guessing.
+    [[nodiscard]] crd::containers::String call_diag(const json::JsonDoc& doc, crd::u32 args,
+                                                    crd::perf::DiagCommandService& service,
+                                                    crd::memory::IAllocator*       alloc)
+    {
+        const crd::u32 command = json::find(doc, args, "command");
+        if (command == json::kInvalid || doc.nodes[command].type != json::JsonType::String)
+        {
+            return crd::containers::String("", alloc);
+        }
+        const auto view_of = [&doc](crd::u32 node) {
+            return crd::containers::StringView{doc.strings.data() + doc.nodes[node].str_off, doc.nodes[node].str_len};
+        };
+        crd::perf::DiagRequest request;
+        request.command = view_of(command);
+        const crd::u32 path = json::find(doc, args, "path");
+        if (path != json::kInvalid)
+        {
+            if (doc.nodes[path].type != json::JsonType::String)
+            {
+                return crd::containers::String("", alloc);
+            }
+            request.path = view_of(path);
+        }
+        constexpr crd::f64 max_exact = 9007199254740991.0; // 2^53 - 1: a cursor is exact below it
+        crd::f64           cursor    = 0.0;
+        crd::f64           items     = 0.0;
+        crd::f64           bytes     = 0.0;
+        crd::f64           schema    = static_cast<crd::f64>(crd::perf::kDiagCommandSchemaVersion);
+        if (!arg_count(doc, args, "cursor", max_exact, cursor) ||
+            !arg_count(doc, args, "page_items", max_exact, items) ||
+            !arg_count(doc, args, "page_bytes", max_exact, bytes) || !arg_count(doc, args, "schema", max_exact, schema))
+        {
+            return crd::containers::String("", alloc);
+        }
+        constexpr crd::f64 u32_max = 4294967295.0;
+        request.cursor             = static_cast<crd::u64>(cursor);
+        request.page_items         = static_cast<crd::u32>(items < u32_max ? items : u32_max);
+        request.page_bytes         = static_cast<crd::u32>(bytes < u32_max ? bytes : u32_max);
+        request.schema_version     = static_cast<crd::u32>(schema < u32_max ? schema : u32_max);
+        return verb_diag(service, request, alloc);
+    }
+
     // dispatch one tools/call — returns the verb's JSON report (ok:false reports become isError content)
     [[nodiscard]] crd::containers::String call_tool(const json::JsonDoc& doc, crd::u32 params,
-                                                    crd::memory::IAllocator* alloc)
+                                                    crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag)
     {
         char name[64] = {};
         (void)json::str_value(doc, json::find(doc, params, "name"), name, sizeof(name));
         const crd::u32 args = json::find(doc, params, "arguments");
+        if (std::strcmp(name, "diag") == 0)
+        {
+            if (diag == nullptr || args == json::kInvalid || doc.nodes[args].type != json::JsonType::Object)
+            {
+                return crd::containers::String("", alloc);
+            }
+            return call_diag(doc, args, *diag, alloc);
+        }
 
         char a[512];
         char b[512];
@@ -198,6 +281,12 @@ namespace
 
 crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, crd::memory::IAllocator* alloc)
 {
+    return mcp_handle(request, alloc, nullptr);
+}
+
+crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, crd::memory::IAllocator* alloc,
+                                   crd::perf::DiagCommandService* diag)
+{
     json::JsonDoc doc(alloc);
     JsonWriter    w(alloc);
     if (!json::parse(request, doc) || doc.root == json::kInvalid)
@@ -274,6 +363,15 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
             write_input_schema(w, t.args);
             w.end_object();
         }
+        if (diag != nullptr)
+        {
+            w.begin_object();
+            w.kv("name", kDiagTool.name);
+            w.kv("description", kDiagTool.description);
+            w.key("inputSchema");
+            write_input_schema(w, kDiagTool.args);
+            w.end_object();
+        }
         w.end_array();
         w.end_object();
         w.end_object();
@@ -282,7 +380,7 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
     if (std::strcmp(method, "tools/call") == 0)
     {
         const crd::u32                params = json::find(doc, doc.root, "params");
-        const crd::containers::String report = call_tool(doc, params, alloc);
+        const crd::containers::String report = call_tool(doc, params, alloc, diag);
         if (report.empty()) // unknown tool / missing required args = a PROTOCOL fault
         {
             w.begin_object();

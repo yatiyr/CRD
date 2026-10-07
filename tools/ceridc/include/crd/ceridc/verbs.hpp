@@ -7,12 +7,18 @@
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
 // transports (the Blender-MCP lesson: the surface is the product, the socket is plumbing).
 //
-// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect (DIAG.8b; CLI-only).
+// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect (CLI-only) · diag.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+
+namespace crd::perf
+{
+class DiagCommandService;
+struct DiagRequest;
+} // namespace crd::perf
 
 namespace crd::ceridc
 {
@@ -66,11 +72,39 @@ namespace crd::ceridc
                                                    crd::containers::ConstSpan<const char*> actions,
                                                    crd::u32 max_stops, crd::memory::IAllocator* alloc);
 
+// One request through the host's typed diagnostic command service (crd/perf/diag_commands.hpp). The report is the
+// service's response document unchanged, so a native caller, this verb and the MCP `diag` tool return the same bytes
+// for the same service state. The service, its grant and its file root belong to the host; a request cannot name them.
+[[nodiscard]] crd::containers::String verb_diag(crd::perf::DiagCommandService& service,
+                                                const crd::perf::DiagRequest& request,
+                                                crd::memory::IAllocator*      alloc);
+
+// What a process grants the diagnostic commands it serves: decided when the process starts (command-line flags),
+// never by a request. `grant` is a comma-separated authority list (nullptr = "read"); `root` is the directory path
+// arguments resolve under (nullptr = none, so path commands answer unavailable).
+struct DiagHostOptions
+{
+    const char* grant = nullptr;
+    const char* root  = nullptr;
+};
+
+// The command-line form: build a service for `host`, run `request` once, return its report (an `ok:false` report
+// when the grant does not parse).
+[[nodiscard]] crd::containers::String verb_diag_host(const DiagHostOptions& host, const crd::perf::DiagRequest& request,
+                                                     crd::memory::IAllocator* alloc);
+
 // ── MCP ────────────────────────────────────────────────────────────────────────────────────────────────────────
 // One JSON-RPC 2.0 request line → the response line ("" for notifications). Handles initialize · ping ·
 // tools/list · tools/call (each tool = one verb above; errors surface as isError content, protocol faults as
 // JSON-RPC errors). The stdio loop in main.cpp is read-line → mcp_handle → write-line.
 [[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
                                                  crd::memory::IAllocator* alloc);
+
+// The same, with the host's diagnostic command service bound: tools/list adds the `diag` tool and tools/call runs it
+// through verb_diag. The tool's arguments are the request's fields only (command, path, cursor, page_items,
+// page_bytes, schema); anything else in `arguments` is ignored, so a call cannot raise the host's grant. With `diag`
+// null this is exactly the two-argument form.
+[[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
+                                                 crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag);
 
 } // namespace crd::ceridc

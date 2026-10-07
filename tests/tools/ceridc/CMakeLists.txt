@@ -1,6 +1,7 @@
 add_executable(crd-ceridc-tests
     test_ceridc.cpp # GEO-11: THE AGENT GATE — the full scenario through MCP alone + the stdio transport smoke
     test_ceridc_inspect.cpp # DIAG.8b: the headless inspection consumer — `ceridc inspect` on the committed authored program
+    test_ceridc_diag.cpp # the diag verb: native, CLI verb, MCP tool and the real binary return the same bounded result
 )
 
 target_link_libraries(crd-ceridc-tests PRIVATE
@@ -12,6 +13,7 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-resources
     crd-ceridc
     crd-cooker
+    crd-perf
     Catch2::Catch2WithMain
 )
 

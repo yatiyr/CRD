@@ -6,6 +6,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/perf/diag_commands.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -75,10 +76,13 @@ void print_usage()
         "  ceridc export --timl <f> --out <f.otio>\n"
         "  ceridc inspect --program <f.ceir> [--entry <name>] [--arg <i64>]... [--break <line>]...\n"
         "                 [--watch <line>]... [--step continue|into|over|out|cancel]... [--max-stops <n>]\n"
-        "  ceridc mcp    (JSON-RPC 2.0 over stdio — one message per line)\n");
+        "  ceridc diag --command <name> [--path <rel>] [--cursor <n>] [--page-items <n>] [--page-bytes <n>]\n"
+        "              [--schema <n>] [--grant <list>] [--root <dir>]   (grant defaults to read)\n"
+        "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>]\n"
+        "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read)\n");
 }
 
-int run_mcp_loop()
+int run_mcp_loop(crd::perf::DiagCommandService& diag)
 {
     // newline-delimited JSON-RPC: read a line, handle, answer (a growing buffer — requests can be long)
     constexpr crd::usize k_cap = 1U << 20U;
@@ -91,7 +95,7 @@ int run_mcp_loop()
             continue;
         }
         const crd::containers::String response = crd::ceridc::mcp_handle(
-            {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc);
+            {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc, &diag);
         if (!response.empty())
         {
             std::printf("%s\n", response.c_str());
@@ -116,7 +120,38 @@ int main(int argc, char* argv[])
     const char* verb = argv[1];
     if (std::strcmp(verb, "mcp") == 0)
     {
-        return run_mcp_loop();
+        // The diag tool's authority is this process's start-up decision; no request can change it.
+        crd::perf::DiagAuthoritySet grant = 0U;
+        if (!crd::perf::parse_authority_list(flag_of(argc, argv, "--diag-grant", "read"), grant))
+        {
+            std::fprintf(stderr, "ceridc mcp: --diag-grant must be 'none' or a comma-separated authority list\n");
+            return 2;
+        }
+        crd::perf::DiagServiceConfig config;
+        const char*                  root = flag_of(argc, argv, "--diag-root", nullptr);
+        if (root != nullptr)
+        {
+            config.root = root;
+        }
+        crd::perf::DiagCommandService diag(grant, config, &g_alloc);
+        return run_mcp_loop(diag);
+    }
+    if (std::strcmp(verb, "diag") == 0)
+    {
+        crd::perf::DiagRequest request;
+        const char*            command = flag_of(argc, argv, "--command", nullptr);
+        const char*            path    = flag_of(argc, argv, "--path", nullptr);
+        request.command                = command != nullptr ? command : "";
+        request.path                   = path != nullptr ? path : "";
+        request.cursor                 = std::strtoull(flag_of(argc, argv, "--cursor", "0"), nullptr, 10);
+        request.page_items = static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--page-items", "0"), nullptr, 10));
+        request.page_bytes = static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--page-bytes", "0"), nullptr, 10));
+        request.schema_version =
+            static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--schema", "1"), nullptr, 10));
+        crd::ceridc::DiagHostOptions host;
+        host.grant = flag_of(argc, argv, "--grant", nullptr);
+        host.root  = flag_of(argc, argv, "--root", nullptr);
+        return emit(crd::ceridc::verb_diag_host(host, request, &g_alloc));
     }
     if (std::strcmp(verb, "import") == 0 && argc >= 3)
     {

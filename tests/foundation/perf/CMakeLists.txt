@@ -41,6 +41,7 @@ add_executable(crd-perf-tests
     test_diag_gpu_calibration.cpp
     test_diag_gpu_bridge.cpp
     test_diag_gpu_resolve.cpp
+    test_diag_commands.cpp # typed bounded diagnostic commands through a native caller (no transport linked)
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -71,7 +72,8 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_HEAP_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-heap-overflow-specimen>"
     CRD_DIAG_USE_AFTER_FREE_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-free-specimen>"
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
-    CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>")
+    CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
+    CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}")
 
 crd_discover_tests(crd-perf-tests)
 
