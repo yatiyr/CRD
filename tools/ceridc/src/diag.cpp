@@ -10,6 +10,7 @@
 #include <crd/assetio/json_write.hpp>
 #include <crd/ceir/cook/inspect_diag.hpp>
 #include <crd/ceir/cook/program_diag.hpp>
+#include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
@@ -32,9 +33,11 @@ bool bind_diag_commands(crd::perf::DiagCommandService& service)
     // opens no GPU context, so gpu.resources answers the process's identity counts and says no context is registered.
     static crd::ceir::cook::ProgramProvenanceCommand provenance{&register_host_dialects, nullptr};
     static crd::ceir::cook::ProgramInspectCommand    inspect{&register_host_dialects, nullptr};
+    static crd::ceir::cook::ReplayPrepareCommand     replay{&register_host_dialects, nullptr};
     static crd::perf::gpu::GpuResourcesCommand       gpu_resources;
     return crd::ceir::cook::register_program_provenance(service, provenance) &&
            crd::ceir::cook::register_program_inspect(service, inspect) &&
+           crd::ceir::cook::register_replay_prepare(service, replay) &&
            crd::perf::gpu::register_gpu_resources(service, gpu_resources);
 }
 

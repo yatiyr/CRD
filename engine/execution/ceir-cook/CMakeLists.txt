@@ -23,7 +23,7 @@ target_link_libraries(crd-ceir-cook
                               # need its include dirs. (7a used it impl-only; the runtime handle model surfaces it.)
     PRIVATE
         crd-resources         # the CRDR container writer/reader — the 'CEIR' chunk (still NOT in any public header)
-        crd-perf              # program.provenance registers into crd-perf's diagnostic command service
+        crd-perf              # the program diagnostic commands register into crd-perf's command service
         crd-warnings
 )
 

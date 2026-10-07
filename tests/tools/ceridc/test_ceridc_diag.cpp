@@ -4,10 +4,10 @@
 // and refusals; the MCP tool's arguments cannot raise the grant the process started with; and malformed numeric
 // arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
 // parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
-// (bind_diag_commands), so the comparison covers program.provenance over the committed authored CEIR program and
-// gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable) too, and
-// program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant and
-// reaches the agent transport only through this tool.
+// (bind_diag_commands), so the comparison covers program.provenance and replay.prepare over the committed authored
+// CEIR program, gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable)
+// and program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant
+// and reaches the agent transport only through this tool.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -247,6 +247,8 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         {"gpu.resources", nullptr, 2U, 0U, 1U, -1},
         {"gpu.resources", nullptr, 2U, 0U, 1U, 16},
         {"gpu.resources", "x.bin", 0U, 0U, 1U, -1}, // takes no path
+        {"replay.prepare", kParityProgram, 4U, 0U, 1U, -1},
+        {"replay.prepare", kParityProgram, 4U, 0U, 1U, 19},
     };
     crd::containers::Array<crd::u64> next(&g_alloc);
     for (const Step& s : steps)
@@ -271,8 +273,9 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         CHECK(view(through_mcp.text) == view(direct.json));
         CHECK(through_mcp.is_error == (direct.status != crd::perf::DiagStatus::Ok));
     }
-    // The commands, bundle, program and GPU snapshots, capabilities and the missing program; refusals ran nothing.
-    CHECK(native.handler_runs() == 6U);
+    // The commands, bundle, program, GPU and replay snapshots, capabilities and the missing program; refusals ran
+    // nothing.
+    CHECK(native.handler_runs() == 7U);
     CHECK(verb.handler_runs() == native.handler_runs());
     CHECK(mcp.handler_runs() == native.handler_runs());
     CHECK(mcp.file_bytes_read() == native.file_bytes_read());
@@ -443,7 +446,8 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         crd::u32    page_items;
     };
     for (const Cli& c : {Cli{"bundle.inspect", kBinaryBundle, 2U}, Cli{"diag.commands", nullptr, 0U},
-                         Cli{"program.provenance", kBinaryProgram, 4U}, Cli{"gpu.resources", nullptr, 0U}})
+                         Cli{"program.provenance", kBinaryProgram, 4U}, Cli{"gpu.resources", nullptr, 0U},
+                         Cli{"replay.prepare", kBinaryProgram, 4U}})
     {
         INFO(c.command);
         DiagCommandService native(read, rooted(), &g_alloc);
@@ -518,6 +522,9 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         r.page_items                         = 4U;
         const crd::perf::DiagResult program  = native.execute(r);
         REQUIRE(program.status == crd::perf::DiagStatus::Ok);
+        r.command                            = "replay.prepare";
+        const crd::perf::DiagResult replay   = native.execute(r);
+        REQUIRE(replay.status == crd::perf::DiagStatus::Ok);
         String script(&g_alloc);
         script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
         script.append(R"({"command":"bundle.inspect","path":"ceridc_diag_bundle_binary.cdb","page_items":2}}})");
@@ -527,6 +534,9 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         script.push_back('\n');
         script.append(R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"diag","arguments":)");
         script.append(R"({"command":"program.provenance","path":"ceridc_diag_program_binary.ceir","page_items":4}}})");
+        script.push_back('\n');
+        script.append(R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"diag","arguments":)");
+        script.append(R"({"command":"replay.prepare","path":"ceridc_diag_program_binary.ceir","page_items":4}}})");
         script.push_back('\n');
         REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_in.jsonl")), view(script)));
         (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-root . < ceridc_diag_in.jsonl > ceridc_diag_out.jsonl",
@@ -548,10 +558,16 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         CHECK(second.is_error);
         CHECK(has(second.text, "\"status\":\"unauthorized\""));
         CHECK_FALSE(fs::exists(fs::Path(StringView("x.cprof"))));
-        const ToolReply third = reply_of(all.substr(eol2 + 1U));
+        const crd::usize eol3 = all.find('\n', eol2 + 1U);
+        REQUIRE(eol3 != StringView::npos);
+        const ToolReply third = reply_of(all.substr(eol2 + 1U, eol3 - eol2 - 1U));
         REQUIRE(third.parsed);
         CHECK_FALSE(third.is_error);
         CHECK(view(third.text) == view(program.json));
+        const ToolReply fourth = reply_of(all.substr(eol3 + 1U));
+        REQUIRE(fourth.parsed);
+        CHECK_FALSE(fourth.is_error);
+        CHECK(view(fourth.text) == view(replay.json));
         (void)fs::remove_file(fs::Path(StringView("ceridc_diag_in.jsonl")));
         (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.jsonl")));
     }

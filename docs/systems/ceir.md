@@ -61,7 +61,12 @@ and its native binding, plus one item per origin for ops merged from several; `c
 serve it. `program.inspect` (`crd/ceir/cook/inspect_diag.hpp`) needs the separate `execute` grant: it runs an authored
 text program to a script given as named arguments (breakpoints, watched lines, steps, a stop bound) through the same
 scripted inspection as `ceridc inspect` (`crd/ceir/cook/inspect_script.hpp`) and answers each breakpoint, stop and
-watched value as an item; it is how an agent transport inspects a program.
+watched value as an item; it is how an agent transport inspects a program. `replay.prepare`
+(`crd/ceir/cook/replay_diag.hpp`, `read`) answers what a replay of a run of an authored program would need: one item
+per input (program identity, build, entry arguments, random streams, clock, host state, external results, schedule
+choices, a device tolerance), whether the program's effective effects need it (a call charged with its callee's;
+`unknown` when an opaque op exists), the first op that needs it at its authored position, and why it is missing.
+Nothing records a run's inputs yet, so it reports the replay unavailable and names the missing inputs.
 
 ## Maturity and further work
 

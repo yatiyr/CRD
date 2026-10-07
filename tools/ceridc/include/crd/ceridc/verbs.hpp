@@ -80,10 +80,10 @@ namespace crd::ceridc
                                                 const crd::perf::DiagRequest& request,
                                                 crd::memory::IAllocator*      alloc);
 
-// Register the commands ceridc serves beyond crd-perf's built-ins with `service`: program.provenance and
-// program.inspect (crd-ceir-cook) over the CEIR dialects the inspect verb runs, and gpu.resources. Every ceridc
-// service binds through this, so the CLI verb, the MCP tool and a test's native service list and answer the same
-// commands. False when the service refuses a registration.
+// Register the commands ceridc serves beyond crd-perf's built-ins with `service`: program.provenance,
+// program.inspect and replay.prepare (crd-ceir-cook) over the CEIR dialects the inspect verb runs, and gpu.resources.
+// Every ceridc service binds through this, so the CLI verb, the MCP tool and a test's native service list and answer
+// the same commands. False when the service refuses a registration.
 [[nodiscard]] bool bind_diag_commands(crd::perf::DiagCommandService& service);
 
 // What a process grants the diagnostic commands it serves: decided when the process starts (command-line flags),

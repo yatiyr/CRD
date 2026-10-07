@@ -1,17 +1,14 @@
 #include <crd/ceir/cook/program_diag.hpp>
 
-#include "bounded_file.hpp"
+#include "program_load.hpp"
 
-#include <crd/ceir/binary.hpp>            // kBinaryMagic / deserialize / stable_hash
+#include <crd/ceir/binary.hpp> // stable_hash
 #include <crd/ceir/context.hpp>
-#include <crd/ceir/cook/program_cook.hpp> // read_program
 #include <crd/ceir/ir.hpp>
-#include <crd/ceir/parse.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/diag_commands.hpp>
-#include <crd/resources/crdr.hpp> // kFourCC_CRDR
 
 namespace crd::ceir::cook
 {
@@ -26,31 +23,6 @@ using crd::perf::DiagStatus;
 
 // The walk checks the caller's cancel flag once per this many ops.
 constexpr crd::u32 kCancelStride = 256U;
-
-[[nodiscard]] crd::u32 le32(const cont::Array<crd::u8>& b) noexcept
-{
-    return static_cast<crd::u32>(b[0]) | (static_cast<crd::u32>(b[1]) << 8U) | (static_cast<crd::u32>(b[2]) << 16U) |
-           (static_cast<crd::u32>(b[3]) << 24U);
-}
-
-// NOLINTNEXTLINE(performance-enum-size)
-enum class Form : crd::u8
-{
-    Text,
-    Binary,
-    Cooked,
-};
-
-[[nodiscard]] cont::StringView form_name(Form f) noexcept
-{
-    switch (f) // no default: every form is named
-    {
-    case Form::Text: return cont::StringView{"text"};
-    case Form::Binary: return cont::StringView{"binary"};
-    case Form::Cooked: return cont::StringView{"cooked"};
-    }
-    return cont::StringView{"?"};
-}
 
 [[nodiscard]] cont::StringView space_name(OriginSpace s) noexcept
 {
@@ -153,82 +125,16 @@ DiagStatus run_program_provenance(void* context, const DiagCall& call, DiagSnaps
     crd::memory::IAllocator* const alloc   = out.allocator();
     command->runs.fetch_add(1U, std::memory_order_relaxed);
 
-    cont::Array<crd::u8> bytes(alloc);
-    const DiagStatus     read =
-        detail::read_bounded_file(call.file, command->max_program_bytes, bytes, out.reason, command->bytes_read);
-    if (read != DiagStatus::Ok)
+    cont::Array<crd::u8>  bytes(alloc);
+    Context               ctx(alloc);
+    detail::LoadedProgram loaded;
+    const DiagStatus load = detail::load_program(call, command->max_program_bytes, command->registrar, command->user,
+                                                 ctx, bytes, loaded, out.reason, command->bytes_read);
+    if (load != DiagStatus::Ok)
     {
-        return read;
+        return load;
     }
-    if (call.cancelled())
-    {
-        out.reason.append("cancelled after the program was read");
-        return DiagStatus::Cancelled;
-    }
-
-    Context ctx(alloc);
-    if (command->registrar != nullptr)
-    {
-        command->registrar(ctx, command->user);
-    }
-
-    const crd::u32 magic         = bytes.size() >= 4U ? le32(bytes) : 0U;
-    Form           form          = Form::Text;
-    Module*        module        = nullptr;
-    crd::u64       recorded_hash = 0U;
-    if (magic == crd::resources::kFourCC_CRDR)
-    {
-        form                 = Form::Cooked;
-        const ReadResult res = read_program(ctx, {bytes.data(), bytes.size()}, alloc);
-        if (!res.ok())
-        {
-            out.reason.append("the cooked program did not load: ");
-            out.reason.append(read_error_name(res.error));
-            return DiagStatus::Failed;
-        }
-        module        = res.module;
-        recorded_hash = res.content_hash;
-    }
-    else if (magic == kBinaryMagic)
-    {
-        form                  = Form::Binary;
-        const ParseResult res = deserialize(ctx, {bytes.data(), bytes.size()});
-        if (!res.ok)
-        {
-            out.reason.append("the binary program did not load at byte ");
-            detail::append_decimal(out.reason, res.error_offset);
-            out.reason.append(": ");
-            out.reason.append(cont::StringView{res.error});
-            return DiagStatus::Failed;
-        }
-        module = res.module;
-    }
-    else
-    {
-        // Parsed under the request's own relative path, so the host's root never reaches the answer.
-        const crd::u32         file = ctx.register_file(call.request->path);
-        const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        const ParseResult      res = parse(ctx, text, file);
-        if (!res.ok)
-        {
-            out.reason.append("the program text did not parse at ");
-            out.reason.append(call.request->path);
-            out.reason.push_back(':');
-            detail::append_decimal(out.reason, res.error_line);
-            out.reason.push_back(':');
-            detail::append_decimal(out.reason, res.error_col);
-            out.reason.append(": ");
-            out.reason.append(cont::StringView{res.error});
-            return DiagStatus::Failed;
-        }
-        module = res.module;
-    }
-    if (module == nullptr || module->body() == nullptr)
-    {
-        out.reason.append("the program has no body");
-        return DiagStatus::Failed;
-    }
-    ctx.assign_stable_ids(*module);
+    const Module* const module = loaded.module;
 
     // Pre-order over every region, iteratively: the authored nesting is the order a reader expects, and a deep nest
     // costs heap, not stack.
@@ -277,10 +183,10 @@ DiagStatus run_program_provenance(void* context, const DiagCall& call, DiagSnaps
     }
 
     out.summary.str("path", call.request->path)
-        .str("form", form_name(form))
+        .str("form", detail::program_form_name(loaded.form))
         .u64("bytes", bytes.size())
         .u64("content_hash", stable_hash(ctx, *module, alloc))
-        .u64("recorded_hash", recorded_hash)
+        .u64("recorded_hash", loaded.recorded_hash)
         .u64("ops", tally.ops)
         .u64("positioned", tally.positioned)
         .u64("unpositioned", tally.ops - tally.positioned)

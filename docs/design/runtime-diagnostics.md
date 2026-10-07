@@ -721,6 +721,24 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-program-inspect-un
   `ceridc inspect` stays the command line's convenience report over the same engine (any readable path, one
   document) and is not an MCP tool.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-replay-preparation.md)):
+- Replay preparation is `replay.prepare` (`read`, a path), registered by crd-ceir-cook beside `program.provenance` and
+  loading a program exactly as it does (one private loader now serves both). It prepares and never runs: for one
+  authored program it answers what a replay of a run would need and which inputs exist. It is not a recorder, a recipe
+  format or a bundle section; those belong to DIAG.9a/9b, and bundles carry no program or input sections to read.
+- One item per input in a fixed order, tagged with the DIAG.9a guarantee it serves: `program` and `build` (identity),
+  `entry-arguments`, `random` (RandomRead), `clock` (TimeRead), `host-state` (the host and world `*Read` families),
+  `external-results` (FileIO, NetworkIO, DeviceIO, ExternalCall, AgentAction) (event), `schedule` (Synchronization,
+  Nondeterministic) and `device-tolerance` (GPUCommand: a declared tolerance or oracle, never a bit-identity claim).
+- Needs come from each op's effective effects: a `func.call` resolves through the module's symbol table to its
+  callee's, with a cycle guard per op, so an effect inside a callee is charged to every call that reaches it and the
+  item blames the first op in pre-order at its authored file:line:col. Empty is not unknown: an unregistered op, or one
+  whose effects include ExternalCall, is opaque; it needs external results, and makes every other effect-derived input
+  `unknown` (reported missing) rather than not needed.
+- Only the program's content hash exists (and a cooked file's recorded one); every other needed or unknown input is
+  missing with its precise reason, and the summary says `replay: unavailable` and lists them. The summary also gives
+  the weakest determinism class the registered ops claim and how many make no claim.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 
