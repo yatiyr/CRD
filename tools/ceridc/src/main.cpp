@@ -134,6 +134,11 @@ int main(int argc, char* argv[])
             config.root = root;
         }
         crd::perf::DiagCommandService diag(grant, config, &g_alloc);
+        if (!crd::ceridc::bind_diag_commands(diag))
+        {
+            std::fprintf(stderr, "ceridc mcp: the diagnostic commands could not be registered\n");
+            return 2;
+        }
         return run_mcp_loop(diag);
     }
     if (std::strcmp(verb, "diag") == 0)

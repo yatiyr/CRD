@@ -3,7 +3,8 @@
 // command line and over MCP stdio) return the same response bytes for the same service state, including pagination
 // and refusals; the MCP tool's arguments cannot raise the grant the process started with; and malformed numeric
 // arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
-// parsed with the JSON reader and the tool text compared byte for byte.
+// parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
+// (bind_diag_commands), so the comparison covers program.provenance over the committed authored CEIR program too.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -39,8 +40,11 @@ using crd::perf::DiagRequest;
 using crd::perf::DiagServiceConfig;
 
 // Each case owns its files: CTest may run the cases in parallel in one working directory.
-constexpr const char* kParityBundle = "ceridc_diag_bundle_parity.cdb";
-constexpr const char* kBinaryBundle = "ceridc_diag_bundle_binary.cdb";
+constexpr const char* kParityBundle  = "ceridc_diag_bundle_parity.cdb";
+constexpr const char* kBinaryBundle  = "ceridc_diag_bundle_binary.cdb";
+constexpr const char* kParityProgram = "ceridc_diag_program_parity.ceir";
+constexpr const char* kBinaryProgram = "ceridc_diag_program_binary.ceir";
+constexpr const char* kDemoProgram   = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
 
 [[nodiscard]] bool has(const String& s, const char* needle)
 {
@@ -76,6 +80,20 @@ void write_bundle(const char* name)
             crd::perf::BundleWriter::AddStatus::StoredAbsent);
     const crd::containers::Array<crd::u8> bytes = writer.finish(0U);
     REQUIRE(fs::write_file_binary(fs::Path(StringView(name)), {bytes.data(), bytes.size()}));
+}
+
+// A copy of the committed authored program in the working directory (the services' file root).
+void write_program(const char* name)
+{
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView(kDemoProgram)), text));
+    REQUIRE(fs::write_file_text(fs::Path(StringView(name)), StringView{text.data(), text.size()}));
+}
+
+// A service as every ceridc process builds one: crd-perf's built-ins plus ceridc's own commands.
+void bind(DiagCommandService& service)
+{
+    REQUIRE(crd::ceridc::bind_diag_commands(service));
 }
 
 // One tools/call of the diag tool with `arguments` (a JSON object text), through the real protocol handler.
@@ -148,10 +166,14 @@ struct ToolReply
 TEST_CASE("diag: a native caller, the verb and the MCP tool return the same bounded result", "[ceridc][diag]")
 {
     write_bundle(kParityBundle);
+    write_program(kParityProgram);
     const crd::perf::DiagAuthoritySet read = crd::perf::authority_bit(DiagAuthority::Read);
     DiagCommandService                native(read, rooted(), &g_alloc);
     DiagCommandService                verb(read, rooted(), &g_alloc);
     DiagCommandService                mcp(read, rooted(), &g_alloc);
+    bind(native);
+    bind(verb);
+    bind(mcp);
 
     // A script of requests: pages walked by cursor, refusals of every class, and a stale cursor after a new snapshot.
     struct Step
@@ -177,6 +199,9 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         {"bundle.inspect", "../x.cdb", 0U, 0U, 1U, -1}, // unsafe path
         {"diag.commands", nullptr, 0U, 0U, 2U, -1},    // schema
         {"no.such", nullptr, 0U, 0U, 1U, -1},
+        {"program.provenance", kParityProgram, 4U, 0U, 1U, -1},
+        {"program.provenance", kParityProgram, 4U, 0U, 1U, 13},
+        {"program.provenance", "no_such.ceir", 0U, 0U, 1U, -1}, // the command's own failure, after the checks
     };
     crd::containers::Array<crd::u64> next(&g_alloc);
     for (const Step& s : steps)
@@ -201,17 +226,20 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
         CHECK(view(through_mcp.text) == view(direct.json));
         CHECK(through_mcp.is_error == (direct.status != crd::perf::DiagStatus::Ok));
     }
-    CHECK(native.handler_runs() == 3U); // the commands and bundle snapshots, and capabilities; refusals ran nothing
+    // The commands, bundle and program snapshots, capabilities and the missing program; refusals ran nothing.
+    CHECK(native.handler_runs() == 5U);
     CHECK(verb.handler_runs() == native.handler_runs());
     CHECK(mcp.handler_runs() == native.handler_runs());
     CHECK(mcp.file_bytes_read() == native.file_bytes_read());
     CHECK(native.file_bytes_read() > 0U);
     (void)fs::remove_file(fs::Path(StringView(kParityBundle)));
+    (void)fs::remove_file(fs::Path(StringView(kParityProgram)));
 }
 
 TEST_CASE("diag: the MCP tool cannot raise the host's grant and rejects malformed counts", "[ceridc][diag]")
 {
     DiagCommandService svc(crd::perf::authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &g_alloc);
+    bind(svc);
 
     // Authority smuggled into the arguments is ignored: the process's grant decides, before any work.
     const ToolReply smuggled = reply_of(view(
@@ -260,25 +288,44 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
           "[ceridc][diag]")
 {
     write_bundle(kBinaryBundle);
+    write_program(kBinaryProgram);
     const char* exe = std::getenv("CRD_CERIDC_EXE");
     REQUIRE(exe != nullptr); // wired by CMake
 
     const crd::perf::DiagAuthoritySet read = crd::perf::authority_bit(DiagAuthority::Read);
     char                              cmd[1024];
 
-    // Command line, default grant: the same bytes as a fresh native service with the same root.
+    // Command line, default grant: the same bytes as a fresh native service with the same root and commands (the
+    // listing shows the binary binds the same commands; the program answer comes from its registered command).
+    struct Cli
     {
+        const char* command;
+        const char* path;
+        crd::u32    page_items;
+    };
+    for (const Cli& c : {Cli{"bundle.inspect", kBinaryBundle, 2U}, Cli{"diag.commands", nullptr, 0U},
+                         Cli{"program.provenance", kBinaryProgram, 4U}})
+    {
+        INFO(c.command);
         DiagCommandService native(read, rooted(), &g_alloc);
-        DiagRequest        r;
-        r.command    = "bundle.inspect";
-        r.path       = kBinaryBundle;
-        r.page_items = 2U;
+        bind(native);
+        DiagRequest r;
+        r.command                            = c.command;
+        r.path                               = c.path != nullptr ? StringView{c.path} : StringView{};
+        r.page_items                         = c.page_items;
         const crd::perf::DiagResult expected = native.execute(r);
         REQUIRE(expected.status == crd::perf::DiagStatus::Ok);
-        (void)std::snprintf(cmd, sizeof(cmd),
-                            "\"%s\" diag --command bundle.inspect --path %s --page-items 2 --root . > "
-                            "ceridc_diag_out.json",
-                            exe, kBinaryBundle);
+        if (c.path != nullptr)
+        {
+            (void)std::snprintf(cmd, sizeof(cmd),
+                                "\"%s\" diag --command %s --path %s --page-items %u --root . > ceridc_diag_out.json",
+                                exe, c.command, c.path, c.page_items);
+        }
+        else
+        {
+            (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command %s --root . > ceridc_diag_out.json", exe,
+                                c.command);
+        }
         REQUIRE(std::system(cmd) == 0);
         String out(&g_alloc);
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
@@ -321,17 +368,26 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
     // MCP over stdio: the tool's text is the native document, and smuggled authority is still refused.
     {
         DiagCommandService native(read, rooted(), &g_alloc);
-        DiagRequest        r;
+        bind(native);
+        DiagRequest r;
         r.command                            = "bundle.inspect";
         r.path                               = kBinaryBundle;
         r.page_items                         = 2U;
         const crd::perf::DiagResult expected = native.execute(r);
-        String                      script(&g_alloc);
+        r.command                            = "program.provenance";
+        r.path                               = kBinaryProgram;
+        r.page_items                         = 4U;
+        const crd::perf::DiagResult program  = native.execute(r);
+        REQUIRE(program.status == crd::perf::DiagStatus::Ok);
+        String script(&g_alloc);
         script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
         script.append(R"({"command":"bundle.inspect","path":"ceridc_diag_bundle_binary.cdb","page_items":2}}})");
         script.push_back('\n');
         script.append(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diag","arguments":)");
         script.append(R"({"command":"capture.stop","path":"x.cprof","grant":"record"}}})");
+        script.push_back('\n');
+        script.append(R"({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"diag","arguments":)");
+        script.append(R"({"command":"program.provenance","path":"ceridc_diag_program_binary.ceir","page_items":4}}})");
         script.push_back('\n');
         REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_in.jsonl")), view(script)));
         (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-root . < ceridc_diag_in.jsonl > ceridc_diag_out.jsonl",
@@ -346,14 +402,21 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         REQUIRE(first.parsed);
         CHECK_FALSE(first.is_error);
         CHECK(view(first.text) == view(expected.json));
-        const ToolReply second = reply_of(all.substr(eol + 1U));
+        const crd::usize eol2 = all.find('\n', eol + 1U);
+        REQUIRE(eol2 != StringView::npos);
+        const ToolReply second = reply_of(all.substr(eol + 1U, eol2 - eol - 1U));
         REQUIRE(second.parsed);
         CHECK(second.is_error);
         CHECK(has(second.text, "\"status\":\"unauthorized\""));
         CHECK_FALSE(fs::exists(fs::Path(StringView("x.cprof"))));
+        const ToolReply third = reply_of(all.substr(eol2 + 1U));
+        REQUIRE(third.parsed);
+        CHECK_FALSE(third.is_error);
+        CHECK(view(third.text) == view(program.json));
         (void)fs::remove_file(fs::Path(StringView("ceridc_diag_in.jsonl")));
         (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.jsonl")));
     }
     (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.json")));
     (void)fs::remove_file(fs::Path(StringView(kBinaryBundle)));
+    (void)fs::remove_file(fs::Path(StringView(kBinaryProgram)));
 }

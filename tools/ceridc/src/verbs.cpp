@@ -2,6 +2,8 @@
 
 #include <crd/ceridc/verbs.hpp>
 
+#include "host_dialects.hpp"
+
 #include <crd/assetio/gltf.hpp>
 #include <crd/assetio/json_write.hpp>
 #include <crd/assetio/obj.hpp>
@@ -883,14 +885,6 @@ namespace
             return insp::Resume::StepOut;
         }
         return insp::Resume::Continue;
-    }
-
-    // The dialects the CEIR host executors run (the compiled plan's scalar host subset).
-    void register_host_dialects(crd::ceir::Context& ctx, void* /*user*/)
-    {
-        (void)crd::ceir::arith::register_arith_ops(ctx);
-        (void)crd::ceir::core::register_core_ops(ctx);
-        (void)crd::ceir::func::register_dialect(ctx);
     }
 
     void write_position(JsonWriter& w, const crd::ceir::Origin* o)

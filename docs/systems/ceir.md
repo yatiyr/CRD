@@ -54,6 +54,12 @@ every stop, the watched lines' typed values and the scripted steps; CLI-only unt
 is its sandbox consumer: the program loads app-first (`SceneRenderer::resolve_program_text`, `app://ceir/<name>` over
 `engine://ceir/<name>`) and the frame loop polls it each frame without waiting, with a window to step, pause and cancel.
 
+Diagnostic commands ([DIAG.8c](../design/runtime-diagnostics.md#diag-8c)): crd-ceir-cook registers
+`program.provenance` (`crd/ceir/cook/program_diag.hpp`) into crd-perf's typed command service. Given a CEIR text,
+binary or cooked program under the host's root, it answers every op with its authored file:line:col, its CHIR origin
+and its native binding, plus one item per origin for ops merged from several; `ceridc diag` and the MCP `diag` tool
+serve it.
+
 ## Maturity and further work
 
 The [manifest](../capabilities/gpu-platform-capabilities.toml) and

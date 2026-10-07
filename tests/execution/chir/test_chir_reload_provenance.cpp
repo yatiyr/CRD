@@ -4,6 +4,7 @@
 // installed generation's compile refusal still names the authored `parallel_for update` node: its CHIR id, its
 // line:col in the authored file, and the generation that holds it. A reformat-only reload of the same CHIR program
 // from another file is NoChange: the handle stays current and the positions move to the new text, CHIR ids unchanged.
+// DIAG.8c: the program.provenance diagnostic command, given only the cooked blob, names the same CHIR nodes.
 // Expected positions come from scanning the CHIR text, never from the parser. ASCII test names (ctest by-name).
 
 #include <crd/chir/lower.hpp>
@@ -12,6 +13,7 @@
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/hot_reload.hpp>
+#include <crd/ceir/cook/program_diag.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
@@ -27,9 +29,11 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/perf/diag_commands.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cstdio>
 #include <fstream>
 #include <initializer_list>
 #include <utility>
@@ -60,6 +64,7 @@ using crd::containers::StringView;
 constexpr const char* kTextPath = CRD_REPO_DIR "/assets/chir/event_handler.chir";
 constexpr const char* kFile     = "assets/chir/event_handler.chir";
 constexpr const char* kMoved    = "assets/chir/event_handler_moved.chir";
+constexpr const char* kCooked   = "diag8c_chir_event_handler.crdr"; // the diag 8c case's scratch blob
 
 Array<char> slurp(const char* path, crd::memory::IAllocator* a)
 {
@@ -335,4 +340,87 @@ TEST_CASE("diag 8a: a reformat-only CHIR reload moves the CHIR node positions an
     CHECK_FALSE(r.installed);
     CHECK(set.is_current(asset, h));
     check_refusal(set, asset, 1U, pfor_id, kMoved, at_moved, &root);
+}
+
+TEST_CASE("diag 8c: program.provenance names the CHIR nodes a cooked CHIR program was lowered from", "[chir][diag]")
+{
+    // The cooked blob is all the command sees: the lowering Context is gone, so every CHIR id and position in the
+    // answer came through the blob's origin chunk.
+    crd::memory::GrowableTlsfAllocator root;
+    const Array<char>                  text = slurp(kTextPath, &root);
+    crd::chir::SourceModel             model(&root);
+    REQUIRE(crd::chir::parse_chir(sv(text), 0U, model).ok);
+    {
+        const Array<u8> blob = lower_and_cook(sv(text), kFile, 5300U, &root);
+        std::ofstream   out(kCooked, std::ios::binary | std::ios::trunc);
+        REQUIRE(out.good());
+        out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
+        REQUIRE(out.good());
+    }
+
+    crd::ceir::cook::ProgramProvenanceCommand cmd;
+    cmd.registrar = &registrar;
+    crd::perf::DiagServiceConfig config;
+    config.root = StringView(".");
+    crd::perf::DiagCommandService svc(crd::perf::authority_bit(crd::perf::DiagAuthority::Read), config, &root);
+    REQUIRE(crd::ceir::cook::register_program_provenance(svc, cmd));
+    crd::perf::DiagRequest request;
+    request.command    = crd::ceir::cook::kProgramProvenanceCommand;
+    request.path       = StringView(kCooked);
+    request.page_items = crd::perf::kDiagMaxPageItems;
+    request.page_bytes = crd::perf::kDiagMaxPageBytes;
+    const crd::perf::DiagResult r = svc.execute(request);
+    INFO(r.json.c_str());
+    REQUIRE(r.status == crd::perf::DiagStatus::Ok);
+    REQUIRE(r.complete);
+    CHECK(contains(r.json, StringView(R"("form":"cooked")")));
+    CHECK(contains(r.json, StringView(R"("unregistered":0)")));
+
+    // Each authored node: its CHIR id (from the parsed source model) at the position scanned from the text. The first
+    // three are the first CHIR origin of the ops lowered from them. The commit is the second origin of the state cell
+    // it updates (the cell's first is its declaration), so it is named by an origin item of that op.
+    struct Node
+    {
+        const char* name;
+        const char* needle;
+        bool        first;
+    };
+    for (const Node& n : {Node{"on_tick", "event_handler on_tick", true}, Node{"update", "parallel_for update", true},
+                          Node{"task", "await task", true}, Node{"commit", "state_update commit", false}})
+    {
+        const u64     id = chir_id(model, n.name);
+        const TextPos at = find_node(sv(text), n.needle);
+        REQUIRE(id != 0U);
+        REQUIRE(at.line != 0U);
+        const auto node = static_cast<unsigned long long>(id);
+        char       want[160];
+        if (n.first)
+        {
+            (void)std::snprintf(want, sizeof(want), R"("chir":%llu,"chir_file":"%s","chir_line":%u,"chir_col":%u)",
+                                node, kFile, at.line, at.col);
+        }
+        else
+        {
+            (void)std::snprintf(want, sizeof(want), R"("space":"chir-node","node":%llu,"file":"%s","line":%u,"col":%u)",
+                                node, kFile, at.line, at.col);
+        }
+        INFO(n.needle);
+        CHECK(contains(r.json, StringView(want)));
+    }
+    CHECK_FALSE(contains(r.json, StringView(R"("origin_items":0)")));
+
+    // The summary's CHIR count is the number of items that name a CHIR node.
+    usize named = 0U;
+    for (usize i = 0; i + 7U <= r.json.size(); ++i)
+    {
+        if (StringView(r.json.data() + i, 7U) == StringView("\"chir\":"))
+        {
+            named += r.json.data()[i + 7U] != '0' ? 1U : 0U;
+        }
+    }
+    CHECK(named > 0U);
+    char summary[48];
+    (void)std::snprintf(summary, sizeof(summary), "\"chir_origins\":%llu,", static_cast<unsigned long long>(named));
+    CHECK(contains(r.json, StringView(summary)));
+    (void)std::remove(kCooked);
 }

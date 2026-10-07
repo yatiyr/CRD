@@ -668,6 +668,21 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-command-service-an
   includes their headers. `ceridc diag` and the MCP `diag` tool bind a service built from the process's start-up
   flags (default `read`); the tool's arguments are the request fields only.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-program-provenance-command.md)):
+- `program.provenance` (`read`, takes a path) is registered by crd-ceir-cook, not crd-ceir: the core's link edges stay
+  the host-only substrate (I5), and the cook bridge already loads every program form. A host owns its configuration
+  (dialect registrar, byte limit) and registers it into any service; ceridc binds it into both its CLI and MCP
+  services through one function, so the transports list and answer the same commands.
+- The file's size is bounded before it is read; the form is chosen by its leading bytes (cooked CRDR, CEIR binary,
+  else text parsed under the request's relative path, so the host root never appears); each request loads into a
+  fresh Context with the host's dialects registered first, so an unregistered op reports `unregistered`, never
+  non-intrinsic. A load failure is refused `failed` naming the text's file:line:col, the binary's byte offset or the
+  cooked read error.
+- One `op` item per op in pre-order (stable id, name, depth, closest-known position, gap, origin count, first CHIR
+  origin, native binding, then the rendered provenance last, so clipping never removes a position). When the op
+  item cannot state every origin (more than one, or one naming another op), one `origin` item per origin follows it:
+  a many-to-many origin is never lost to a clipped string.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 
