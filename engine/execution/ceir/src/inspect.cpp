@@ -337,6 +337,11 @@ Refusal Session::bind(const Module& m, const Context& ctx, u64 generation, conta
 void Session::begin_run(Executor e)
 {
     const std::lock_guard<std::mutex> lk(m_mu);
+    attach_locked(e);
+}
+
+void Session::attach_locked(Executor e)
+{
     m_state = State::Running;
     m_cancel.store(false, std::memory_order_relaxed);
     m_pause_req.store(false, std::memory_order_relaxed);
@@ -462,6 +467,40 @@ void Session::on_detached(const Operation& op, void* user)
     s.m_detached.fetch_add(1U, std::memory_order_relaxed);
     s.m_refused.fetch_add(1U, std::memory_order_relaxed);
     s.m_last_refusal.store(static_cast<u8>(Refusal::DetachedBody), std::memory_order_relaxed);
+}
+
+Refusal Session::begin_device(u64 generation)
+{
+    const std::lock_guard<std::mutex> lk(m_mu);
+    if (const Refusal r = check(generation); r != Refusal::None)
+    {
+        return r;
+    }
+    if (m_state == State::Running || m_state == State::Paused)
+    {
+        return Refusal::Busy;
+    }
+    attach_locked(Executor::Device); // under the same lock as the checks, so two recordings cannot both attach
+    return Refusal::None;
+}
+
+// A device point never pauses and never touches the stepping or pause-request state: a recorded dispatch runs later on
+// the device, so the session's scope does not apply. `m_bp_ops` is read-only while the recording is attached (bind is
+// refused Busy). A recording has no host link, so the session's own flag is the only cancel.
+bool Session::device_point(const Operation& op)
+{
+    if (m_bp_ops.find(&op) != nullptr)
+    {
+        m_device.fetch_add(1U, std::memory_order_relaxed);
+        m_refused.fetch_add(1U, std::memory_order_relaxed);
+        m_last_refusal.store(static_cast<u8>(Refusal::NonPausable), std::memory_order_relaxed);
+    }
+    return m_cancel.load(std::memory_order_relaxed);
+}
+
+void Session::end_device()
+{
+    end_run();
 }
 
 StopReason Session::decide(u32 breakpoint, u32 depth)
@@ -690,6 +729,10 @@ Refusal Session::request_pause(u64 generation)
     if (m_state != State::Running && m_state != State::Paused)
     {
         return Refusal::NotRunning;
+    }
+    if (m_exec == Executor::Device) // device work never pauses, whatever the session's scope
+    {
+        return Refusal::NonPausable;
     }
     m_pause_req.store(true, std::memory_order_release);
     return Refusal::None;

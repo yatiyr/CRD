@@ -593,6 +593,21 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-pending-jobs-and-d
   session holds one stop at a time. A bound breakpoint there is counted and refused `DetachedBody`, never missed
   silently; a launch the provider runs in-frame (it captures an outer value) pauses like any other op.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-gpu-dispatch-non-pausable.md)):
+- GPU work is classified non-pausable at the seam that records it, not by the session's declared scope: a recorded
+  dispatch runs later on the device, where no safe point exists. crd-ceir-gpu's `execute_lowered` takes an optional
+  `DeviceInspect` (session, generation, refusal out); it attaches the recording through `Session::begin_device`
+  before any work (`NotBound`, `StaleGeneration` or `Busy` returns `InspectRefused` with nothing recorded) and calls
+  `Session::device_point` before recording each dispatch. A breakpoint bound to the dispatch op (module-form bind) is
+  counted (`device_hits`) and refused `NonPausable`; it never waits, even under a `Task` session.
+- While a recording is attached, `request_pause` is refused `NonPausable`; a cancel stops the recording before the
+  next dispatch (`ExecuteError::Cancelled`, blamed on that dispatch's op through `DispatchSites`); work already
+  recorded is the caller's to submit or discard.
+- A recording is exclusive: it is refused `Busy` while another execution or recording is attached, on any thread. A
+  host op that records device work in the middle of an interpreter execution is therefore not supported yet. Only
+  `execute_lowered` is classified; `execute_rt_lowered`, `execute_work_lowered` and the render executor take no
+  session.
+
 <a id="diag-8c"></a>
 ## DIAG.8c — typed human and agent diagnostics commands
 

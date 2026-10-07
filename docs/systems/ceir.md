@@ -45,6 +45,8 @@ plan (`plan::RunControl`) or the reference interpreter (its step hook) at author
 cancels and answers typed value snapshots from the paused thread, bound to one program generation. The crd-jobs
 `HostProvider` runs under a session too: pooled launches keep running through a pause and are reported as pending,
 one cancel stops the pool work, and bodies on its own sub-interpreters count breakpoint hits instead of pausing.
+GPU dispatches recorded by `execute_lowered` under a session never pause, whatever its scope: a breakpoint there is
+counted, a pause request is refused and a cancel stops the recording before the next dispatch.
 
 ## Maturity and further work
 

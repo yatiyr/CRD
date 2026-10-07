@@ -2,6 +2,7 @@
 
 #include <crd/ceir/gpu/execute.hpp>
 
+#include <crd/ceir/inspect.hpp>    // DIAG.8b: a recording under a debugger session (device points)
 #include <crd/ceir/provenance.hpp> // DIAG.8a: native_binding (the dispatch op's name for its debug label)
 #include <crd/containers/array.hpp>
 #include <crd/gpu/command_model.hpp>     // crd::gpu::kMaxBindings — the binding structural cap
@@ -138,6 +139,27 @@ crd::usize dispatch_label(const Context& ctx, const Operation* op, char* out, cr
     }
     return len;
 }
+
+// DIAG.8b: ends the device recording execute_lowered attached, on every return path.
+class DeviceDetach
+{
+public:
+    explicit DeviceDetach(inspect::Session* session) noexcept : m_session(session) {}
+    DeviceDetach(const DeviceDetach&)            = delete;
+    DeviceDetach& operator=(const DeviceDetach&) = delete;
+    DeviceDetach(DeviceDetach&&)                 = delete;
+    DeviceDetach& operator=(DeviceDetach&&)      = delete;
+    ~DeviceDetach()
+    {
+        if (m_session != nullptr)
+        {
+            m_session->end_device();
+        }
+    }
+
+private:
+    inspect::Session* m_session;
+};
 } // namespace
 
 DispatchSites::DispatchSites(memory::IAllocator* allocator) : m_sites(allocator) {}
@@ -203,6 +225,8 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::TraceDispatchFailed: return containers::StringView("TraceDispatchFailed");
     case ExecuteError::UnresolvedQueue: return containers::StringView("UnresolvedQueue");
     case ExecuteError::WorkDispatchFailed: return containers::StringView("WorkDispatchFailed");
+    case ExecuteError::InspectRefused: return containers::StringView("InspectRefused");
+    case ExecuteError::Cancelled: return containers::StringView("Cancelled");
     }
     return containers::StringView("None");
 }
@@ -250,7 +274,8 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
 
 ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                              crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
-                             containers::ConstSpan<ResolvedBinding> bindings, DispatchSites* sites)
+                             containers::ConstSpan<ResolvedBinding> bindings, DispatchSites* sites,
+                             DeviceInspect* inspect)
 {
     // DIAG.8a: every refusal below is blamed on the refused command's op when a site table is attached.
     const auto refuse = [sites](ExecuteError e, const LoweredCommand& cmd) noexcept
@@ -261,6 +286,17 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         }
         return e;
     };
+    // DIAG.8b: attach the recording to the session before any work; it is detached on every return below.
+    inspect::Session* const session = (inspect != nullptr) ? inspect->session : nullptr;
+    if (session != nullptr)
+    {
+        inspect->refusal = session->begin_device(inspect->generation);
+        if (inspect->refusal != inspect::Refusal::None)
+        {
+            return ExecuteError::InspectRefused;
+        }
+    }
+    const DeviceDetach detach{session};
     containers::Array<crd::gpu::ComputeBuffer*> bufs(ctx.allocator());
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
@@ -289,6 +325,11 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         if (cmd.kind == LoweredKind::DispatchIndirect)
         {
             return refuse(ExecuteError::UnsupportedCommand, cmd);
+        }
+        // DIAG.8b: a device point, never a pause; a cancel stops before this dispatch is recorded.
+        if (session != nullptr && cmd.op != nullptr && session->device_point(*cmd.op))
+        {
+            return refuse(ExecuteError::Cancelled, cmd);
         }
         crd::gpu::ComputePipeline* pipe = nullptr;
         const ExecuteError         err  = check_dispatch(ctx, cmd, resolver, user, bindings, &pipe, &bufs);

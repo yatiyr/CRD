@@ -105,7 +105,8 @@ inline bool contains(const String& s, StringView n)
 // The authored program after a text parse under kFile, CSE, serialization and a load into `loaded`, lowered.
 struct Loaded
 {
-    Block*           block = nullptr;
+    Module*          module = nullptr; // set by author_and_load (DIAG.8b binds a session to it)
+    Block*           block  = nullptr;
     const Value*     buffers[4]{}; // the four resource.declare results, in program order
     const Operation* first  = nullptr;
     const Operation* second = nullptr;
@@ -169,6 +170,7 @@ inline void author_and_load(Context& loaded, Array<LoweredCommand>& commands, Lo
     register_dialects(loaded);
     const ParseResult lr = deserialize(loaded, ConstSpan<u8>(blob.data(), blob.size()));
     REQUIRE(lr.ok);
+    out.module = lr.module;
     collect_and_lower(loaded, *lr.module->body()->first_block(), commands, out);
 }
 

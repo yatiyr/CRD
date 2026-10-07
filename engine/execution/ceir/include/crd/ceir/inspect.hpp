@@ -30,6 +30,14 @@
 // work the host has started and not yet joined (`StopRecord::pending_jobs`), which keeps running through a `Task`
 // pause.
 //
+// ⛔ DEVICE WORK. A host seam that RECORDS GPU work (crd-ceir-gpu's `execute_lowered`) attaches the recording with
+// `begin_device`. Device work is NON-PAUSABLE whatever the session's scope: a recorded dispatch runs later on the
+// device, where no safe point exists, so each one is a `device_point` that never waits. A breakpoint bound to the
+// dispatch op is counted (`device_hits`) and refused `NonPausable`; a pause request while a recording is attached is
+// refused `NonPausable`; a cancel is honoured (the seam stops before recording the next dispatch). A recording is
+// exclusive: it is refused `Busy` while another execution (or recording) is attached, including one on its own
+// thread, so a host op that records device work in the middle of an interpreter execution is not supported yet.
+//
 // ⛔ NATIVE DEBUGGERS. A pause is an ordinary blocking wait (mutex + condition variable): no signal, trap
 // instruction or thread-context change is used, so a native debugger may attach, break and resume the process at any
 // time without changing the session's state. A controller wait on an executor a native debugger holds ends in
@@ -236,6 +244,15 @@ public:
     // Any thread, while an execution is attached: install the detached-body hook on a host sub-interpreter. It never
     // blocks and writes only counters, so it may run on many pool workers at once.
     void attach_detached(exec::Interpreter& sub);
+    // Attach a device recording of generation `generation` (see DEVICE WORK above). Refused before any work:
+    // `NotBound`, `StaleGeneration`, or `Busy` while another execution or recording is attached. Breakpoints reach
+    // the recorded dispatch ops through the module form of `bind` (a compiled plan holds no dispatch).
+    [[nodiscard]] Refusal begin_device(u64 generation);
+    // The recording thread, before it records the dispatch `op`: never waits. A breakpoint bound to `op` is counted
+    // and refused `NonPausable`. Returns true when a cancel was raised: the seam records nothing more.
+    [[nodiscard]] bool device_point(const Operation& op);
+    // End the recording `begin_device` attached.
+    void end_device();
 
     // ── controller: any thread other than the executing one ──
     [[nodiscard]] Refusal request_pause(u64 generation);
@@ -246,6 +263,7 @@ public:
 
     [[nodiscard]] u32     refused_pauses() const noexcept { return m_refused.load(std::memory_order_relaxed); }
     [[nodiscard]] u32     detached_hits() const noexcept { return m_detached.load(std::memory_order_relaxed); }
+    [[nodiscard]] u32     device_hits() const noexcept { return m_device.load(std::memory_order_relaxed); }
     [[nodiscard]] Refusal last_refusal() const noexcept
     {
         return static_cast<Refusal>(m_last_refusal.load(std::memory_order_relaxed));
@@ -266,6 +284,7 @@ private:
         None = 0,
         Plan,
         Interpreter,
+        Device, // a device recording (begin_device): never pauses
     };
     struct LineBreakpoint
     {
@@ -284,6 +303,7 @@ private:
     [[nodiscard]] bool       cancel_raised() const noexcept;       // m_mu held
     void                     serve_read();                         // executing thread, m_mu held
     void                     begin_run(Executor e);
+    void                     attach_locked(Executor e); // m_mu held
     void                     end_run();
 
     memory::IAllocator* m_alloc;
@@ -330,5 +350,6 @@ private:
     std::atomic<u32>        m_refused{0U};
     std::atomic<u8>         m_last_refusal{0U};
     std::atomic<u32>        m_detached{0U};
+    std::atomic<u32>        m_device{0U};
 };
 } // namespace crd::ceir::inspect

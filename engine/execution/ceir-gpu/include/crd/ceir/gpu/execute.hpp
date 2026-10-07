@@ -15,6 +15,13 @@
 #include <crd/gpu/object_identity.hpp> // DIAG.8a: the Pass identity a dispatch's debug label carries
 #include <crd/memory/allocator.hpp>
 
+namespace crd::ceir::inspect
+{
+class Session; // crd/ceir/inspect.hpp (DIAG.8b), included by execute.cpp only
+// NOLINTNEXTLINE(performance-enum-size)
+enum class Refusal : u8;
+} // namespace crd::ceir::inspect
+
 namespace crd::ceir::gpu
 {
 // The caller-supplied kernel resolver: a lowered dispatch's source `op` (carrying the 13c `kernel` symbol) → a COMPILED
@@ -54,6 +61,9 @@ enum class ExecuteError : crd::u8
     // CEIR-20b (ceir.work execution — the execute_work_lowered surface) — append at end.
     UnresolvedQueue,    // a DispatchIndirect's %queue resolve_queue hook is null / returned kQueueResolveFailed
     WorkDispatchFailed, // a WorkDispatchFn hook returned false (the work dispatch failed on the device)
+    // DIAG.8b (an execute_lowered recording under an inspect::Session) — append at end.
+    InspectRefused, // the session refused to attach the recording (DeviceInspect::refusal says why); nothing recorded
+    Cancelled,      // the session was cancelled; the dispatch about to be recorded (and every later one) was not
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 
@@ -116,16 +126,32 @@ private:
     const Operation*                m_fault = nullptr;
 };
 
+// ── DIAG.8b: a recording under a debugger session. GPU work is NON-PAUSABLE at this seam, whatever the session's
+// declared scope: a recorded dispatch runs later on the device, where no safe point exists. With a `DeviceInspect`,
+// execute_lowered attaches the recording to `session` for `generation` before any work (a refusal returns
+// `InspectRefused` with `refusal` set and records nothing), reports every dispatch it is about to record as a device
+// point (a breakpoint bound to the dispatch op is counted in `Session::device_hits` and refused `NonPausable`, never
+// waited on), and stops before recording a dispatch once the session is cancelled (`Cancelled`, blamed on that
+// dispatch's op through `sites`). The session's bind must be the module form over the lowered module. Only this seam
+// is classified: execute_rt_lowered, execute_work_lowered and the render executor take no session.
+struct DeviceInspect
+{
+    inspect::Session* session    = nullptr;
+    u64               generation = 0U;
+    inspect::Refusal  refusal{}; // out: why the session refused to attach (Refusal::None otherwise)
+};
+
 // Validate, then RECORD each command into `rec` (an already-`begin()`-ed recorder — the caller owns begin()/submit_and_wait()
 // + buffer upload/readback, the `ckir_kernel_dispatch.hpp` division). Returns the first `ExecuteError` (or None on success).
 // ⛔ device-driving. ⭐ 13z-3 part 2: a `Barrier` is REPLAYED as `rec.barrier(root_buffer, from, to)` per the HazardKind→
 // ComputeAccess map (nullptr resource ⇒ all bound buffers); a `Transfer`/dynamic-grid → `UnsupportedCommand`.
 // DIAG.8a: with `sites`, every recorded dispatch is labelled and recorded (see DispatchSites), and a refusal records
 // the refused command's op as `sites->fault()`; a successful call clears the fault.
+// DIAG.8b: with `inspect`, the recording runs under a debugger session (see DeviceInspect).
 [[nodiscard]] ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                            crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
                                            containers::ConstSpan<ResolvedBinding> bindings,
-                                           DispatchSites* sites = nullptr);
+                                           DispatchSites* sites = nullptr, DeviceInspect* inspect = nullptr);
 
 // ── CEIR-19c: the ceir.rt EXECUTION seam (§134) ──────────────────────────────────────────────────────────────────────
 // A SECOND executor beside execute_lowered, consuming the SAME 13d-lowered list (the render_materialize precedent: ONE

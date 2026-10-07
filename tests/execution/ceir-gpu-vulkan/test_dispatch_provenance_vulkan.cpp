@@ -8,13 +8,16 @@
 // Control: the program with its in-limit grid is clean when recorded and run, and every dispatch was labelled. Measured
 // first: with this VVL (1.4.341), synchronization validation does not report a missing barrier between two compute
 // dispatches over storage descriptors (shader accesses are only tracked with the syncval_shader_accesses_heuristic
-// setting), so a dropped barrier cannot serve as the error. Soft-skips without a Vulkan device. ASCII test names.
+// setting), so a dropped barrier cannot serve as the error. DIAG.8b (the last case): the same program recorded under a
+// debugger session is non-pausable at the seam and still computes. Soft-skips without a Vulkan device. ASCII test
+// names.
 
 #include "../../gpu/gpu-shared/ceir_execute_1wg.hpp"
 #include "../ceir-gpu/dispatch_provenance_fixture.hpp"
 
 #include <crd/ceir/cook/hot_reload.hpp>
 #include <crd/ceir/gpu/execute.hpp>
+#include <crd/ceir/inspect.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -280,6 +283,142 @@ TEST_CASE("diag 8a: a validation error at a CEIR dispatch names the authored dis
         CHECK(gpu::identity_registry().live_count(gpu::ObjectKind::Pass) == live_before);
 
         // The layer retires submissions on its own queue thread; idle the device before the context and fence go.
+        REQUIRE(vkDeviceWaitIdle(vk->vk_device()) == VK_SUCCESS);
+    }
+}
+
+// DIAG.8b — the same authored two-dispatch program recorded on a real Vulkan device under a debugger session. The
+// session's scope is Task and a breakpoint is bound to the second dispatch's authored line, yet GPU work is
+// non-pausable at the execute_lowered seam: the hit is counted and refused NonPausable, the recording never stops, and
+// the submitted work is validation-clean and computes the authored result (out = a + 2b: the first dispatch writes
+// c = a + b, the second out = c + b). This thread is declared the controller, so a seam that tried to pause here would
+// be refused SameThread instead of hanging, and the refusal kind tells the two apart.
+TEST_CASE("diag 8b: a GPU dispatch recorded under a task session is non-pausable and still computes",
+          "[ceir][ceir-gpu][vulkan][gpu][diag][validation]")
+{
+    namespace gpu  = crd::gpu;
+    namespace insp = crd::ceir::inspect;
+    using gpu::compute_usage::storage;
+    using gpu::compute_usage::transfer_dst;
+    using gpu::compute_usage::transfer_src;
+    gpu::GpuContextConfig cfg{};
+    cfg.backend           = gpu::GpuBackend::Vulkan;
+    cfg.headless          = true;
+    cfg.enable_validation = true;
+    auto ctx              = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr)
+    {
+        WARN("no Vulkan device available; skipping");
+        return;
+    }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    REQUIRE(vk->valid());
+
+    crd::memory::TlsfAllocator alloc(32U << 20U);
+    {
+        gpu::VulkanComputeContext compute(*vk, &alloc);
+        REQUIRE(compute.valid());
+
+        constexpr int          n = 64;
+        crd::kir::KGraph       g(&alloc);
+        const crd::kir::KEntry e = crd::ceir_gpu_test::build_add_kernel(g, n);
+        crd::kir::GlslKernel   kern(&alloc);
+        REQUIRE(crd::kir::emit_compute_kernel_glsl(g, e, &alloc, kern));
+        const auto cres = gpu::compile_glsl_to_spirv(gpu::ShaderStage::Compute, crd::containers::to_view(kern.source),
+                                                     "diag_two_pass_inspect", &alloc);
+        REQUIRE(cres.ok);
+        auto pipe = compute.create_pipeline_from_spirv(ConstSpan<u8>(cres.spirv.data(), cres.spirv.size()), 3, 0U);
+        REQUIRE(pipe != nullptr);
+
+        constexpr u64                       bytes = static_cast<u64>(n) * 4U;
+        std::unique_ptr<gpu::ComputeBuffer> dev[4];
+        for (auto& b : dev)
+        {
+            b = compute.create_buffer(bytes, storage | transfer_dst | transfer_src, gpu::ComputeMemory::GpuOnly);
+            REQUIRE(b != nullptr);
+        }
+        std::unique_ptr<gpu::ComputeBuffer> up[2];
+        for (int b = 0; b < 2; ++b)
+        {
+            up[b] = compute.create_buffer(bytes, transfer_src, gpu::ComputeMemory::CpuToGpu);
+            REQUIRE(up[b] != nullptr);
+            auto* p = static_cast<float*>(up[b]->map());
+            REQUIRE(p != nullptr);
+            for (int i = 0; i < n; ++i)
+            {
+                p[i] = (b == 0) ? static_cast<float>(i) : 1.5F; // a = i, b = 1.5
+            }
+            up[b]->unmap();
+        }
+        auto rb = compute.create_buffer(bytes, transfer_dst, gpu::ComputeMemory::GpuToCpu);
+        REQUIRE(rb != nullptr);
+
+        crd::memory::GrowableTlsfAllocator croot;
+        Context                            loaded(&croot);
+        Array<LoweredCommand>              commands(&croot);
+        Loaded                             l;
+        author_and_load(loaded, commands, l, &croot);
+        REQUIRE(commands.size() == 3U);
+        ResolvedBinding binds[4];
+        for (usize i = 0; i < 4U; ++i)
+        {
+            binds[i] = ResolvedBinding{l.buffers[i], dev[i].get()};
+        }
+
+        constexpr u64 generation = 3U;
+        insp::Session s(&croot, insp::PauseScope::Task);
+        s.connect_controller();
+        u32 bp = 0U;
+        REQUIRE(s.add_line_breakpoint(StringView(kFile), l.second_at.line, bp) == insp::Refusal::None);
+        Array<insp::BindReport> rep(&croot);
+        REQUIRE(s.bind(*l.module, loaded, generation, rep) == insp::Refusal::None);
+        REQUIRE(rep.size() == 1U);
+        REQUIRE(rep[0].status == insp::BindStatus::Bound);
+        CHECK(rep[0].first_op == l.second->stable_id());
+
+        gpu::ValidationCapture capture(*vk);
+        DispatchSites          sites(&croot);
+        DeviceInspect          di{&s, generation, insp::Refusal::Busy};
+        gpu::ComputeRecorder&  rec = compute.begin();
+        for (int b = 0; b < 2; ++b)
+        {
+            rec.copy(*up[b], *dev[b], 0U, 0U, bytes);
+            rec.barrier(*dev[b], gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::ShaderRead);
+        }
+        const ExecuteError err =
+            execute_lowered(loaded, ConstSpan<LoweredCommand>(commands.data(), commands.size()), rec,
+                            &crd::ceir_gpu_test::resolve_single_pipeline, pipe.get(),
+                            ConstSpan<ResolvedBinding>(binds, 4U), &sites, &di);
+        rec.barrier(*dev[3], gpu::ComputeAccess::ShaderWrite, gpu::ComputeAccess::TransferSrc);
+        rec.copy(*dev[3], *rb, 0U, 0U, bytes);
+        compute.submit_and_wait();
+        log_messages(capture);
+
+        REQUIRE(err == ExecuteError::None);
+        CHECK(di.refusal == insp::Refusal::None);
+        CHECK(s.device_hits() == 1U); // the bound dispatch was a hit ...
+        CHECK(s.refused_pauses() == 1U);
+        CHECK(s.last_refusal() == insp::Refusal::NonPausable); // ... refused by the seam, not SameThread
+        insp::StopRecord stop;
+        CHECK(s.wait_for_stop(generation, 0U, stop) == insp::Refusal::Finished); // and nothing ever stopped
+        CHECK(capture.error_count() == 0U);
+        REQUIRE(sites.sites().size() == 2U);
+        CHECK(sites.sites()[1].op == l.second);
+        CHECK(sites.sites()[1].labelled);
+
+        const auto* r = static_cast<const float*>(rb->map());
+        REQUIRE(r != nullptr);
+        int wrong = 0;
+        for (int i = 0; i < n; ++i)
+        {
+            if (r[i] != static_cast<float>(i) + 3.0F)
+            {
+                ++wrong;
+            }
+        }
+        rb->unmap();
+        CHECK(wrong == 0);
+
         REQUIRE(vkDeviceWaitIdle(vk->vk_device()) == VK_SUCCESS);
     }
 }
