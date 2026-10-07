@@ -141,6 +141,10 @@ public:
     [[nodiscard]] crd::i64  cell_read(const Operation& state_op);       // §20: init-fill on first eval; return ring oldest
     [[nodiscard]] bool      spend_fuel() noexcept;                      // decrement the step budget; false ⇒ exhausted
     ExecError               fail(ExecError e, const Operation* op) noexcept; // record the offending op (first wins), return e
+    // DIAG.8a: the op the current run's error was recorded on (null when ok, or when the failure named no op). A caller
+    // that ran a body on a SEPARATE sub-interpreter reads it before the sub dies and blames that innermost op, falling
+    // back to its own op only when this is null; the op lives in the shared Module, so the pointer outlives the sub.
+    [[nodiscard]] const Operation* failed_op() const noexcept { return m_err_op; }
 
     // Inspection (§118 deterministic debugging): a state cell's current value. Builder-form ONLY — cells are keyed by op
     // POINTER, which does not survive a text/binary round-trip. false ⇒ the op has never been evaluated.

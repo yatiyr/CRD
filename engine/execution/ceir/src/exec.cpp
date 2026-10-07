@@ -938,9 +938,9 @@ ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<cr
         const crd::i64              iva[1] = {iv};
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(0), containers::ConstSpan<crd::i64>(iva, 1U), yield);
-        if (e != ExecError::None)
+        if (e != ExecError::None) // DIAG.8a: blame the body's innermost op (the plan's fault), else the parallel op
         {
-            return in.fail(e, &op);
+            return in.fail(e, sub.failed_op() != nullptr ? sub.failed_op() : &op);
         }
         out[i] = (yield.size() >= 1U) ? yield[0] : 0; // pre-flight guarantees yield == 1
     }
@@ -981,9 +981,9 @@ ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
         const crd::i64              ba[2] = {acc, out[i]}; // (acc, elem) in index order
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(1), containers::ConstSpan<crd::i64>(ba, 2U), yield);
-        if (e != ExecError::None) // a fold-step error → the map_reduce op
+        if (e != ExecError::None) // a fold-step error → the combine's innermost op, else the map_reduce op (DIAG.8a)
         {
-            return in.fail(e, &op);
+            return in.fail(e, sub.failed_op() != nullptr ? sub.failed_op() : &op);
         }
         acc = (yield.size() >= 1U) ? yield[0] : 0;
     }

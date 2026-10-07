@@ -505,6 +505,13 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   (no file = id 0, line:col kept). A `core.state` cell names its StateDecl and the folded StateUpdate. A Query creates no
   op. A graph-authored node has no position and keeps its CHIR id; `render_provenance` lists such position-less
   origins after the gap, so the closest-known authored node is always named.
+- Host provider (2026-10-07, [session](../sessions/2026-10-07-diag-8a-host-provider-provenance.md)): an error raised
+  inside a body that runs on a separate sub-interpreter (a `task.parallel_for` or `map_reduce` map index, a `map_reduce`
+  fold step, a pooled `async.launch`/`task.*` launch body) is blamed on the body op that raised it
+  (`Interpreter::failed_op()`), in both the crd-jobs provider and the sequential reference, matching the plan's
+  innermost `RunResult::fault`. The owning op is blamed only when the body names no op. Parallel indices keep
+  first-in-index-order, so the reported op does not depend on the job split. A pooled body's error is reported at its
+  await, naming the body op.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop

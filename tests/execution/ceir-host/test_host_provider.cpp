@@ -361,7 +361,8 @@ TEST_CASE("ceir host: a runaway parallel body is FuelExhausted, not a hang", "[c
     host::HostProvider          prov(&palloc, /*num_jobs*/ 4U, /*sub_fuel*/ 1000U); // small per-index budget
     const exec::ExecResult      r = prov.execute(ctx, *m, "main", {});
     CHECK(r.error == exec::ExecError::FuelExhausted);
-    CHECK(r.op == pf); // the error points at the parallel_for (first-in-index-order)
+    CHECK(r.op == spin); // DIAG.8a: the error names the body op that ran out of fuel, not the parallel_for
+    CHECK(r.op != pf);
 }
 
 TEST_CASE("ceir host: num_jobs > count clamps; advertises; a captured body is UndefinedValue", "[ceir][host]")

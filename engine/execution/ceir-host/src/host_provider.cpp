@@ -26,6 +26,7 @@ struct PooledToken
     crd::u64                     sub_fuel = 0U;
     crd::jobs::Counter*          counter  = nullptr;
     ExecError                    err      = ExecError::None;
+    const Operation*             err_op   = nullptr;      // DIAG.8a: the body op the error was recorded on (or null)
     bool                         waited   = false;        // resolve waits the counter exactly once
     PooledToken() : result(&scratch) {}
 };
@@ -43,7 +44,8 @@ void run_launch(void* data)
     const ExecError e = sub.invoke_region(*t->module, *t->body, containers::ConstSpan<crd::i64>(), y);
     if (e != ExecError::None)
     {
-        t->err = e;
+        t->err    = e;
+        t->err_op = sub.failed_op(); // read before the sub dies; the op itself lives in the shared Module
     }
     else
     {
@@ -163,6 +165,7 @@ struct RangeJob
     crd::u64                 sub_fuel;
     crd::i64*                out;  // pre-sized [count]; each index writes its DISJOINT slot
     ExecError*               errs; // pre-sized [count], all None; each failing index writes its own slot (no atomics)
+    const Operation**        err_ops; // DIAG.8a: pre-sized [count], all null; the body op each failing index blamed
 };
 
 // Run op's MAP region (op.region(0)) in PARALLEL over [operand0, operand1) stepping operand2 — each index via a FRESH
@@ -193,9 +196,11 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
         return ExecError::None;
     }
     containers::Array<ExecError> errs(pc->self->map_allocator());
+    containers::Array<const Operation*> err_ops(pc->self->map_allocator());
     for (crd::u32 i = 0; i < count; ++i)
     {
         errs.push_back(ExecError::None);
+        err_ops.push_back(nullptr);
     }
 
     // §32: the dispatch priority = the op region's RealtimeClass tag (audio/frame-critical → High, …).
@@ -203,7 +208,8 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
     (void)in.ctx().op_region_exec(op, re);
     const crd::jobs::Priority prio = priority_for(re.realtime);
 
-    RangeJob rj{pc->proto, pc->module, op.region(0), pc->cancel, lo, step, pc->sub_fuel, out.data(), errs.data()};
+    RangeJob rj{pc->proto, pc->module, op.region(0), pc->cancel, lo, step, pc->sub_fuel, out.data(), errs.data(),
+                err_ops.data()};
     crd::jobs::Counter* const counter = crd::jobs::parallel_for(
         count, pc->num_jobs,
         [rjp = &rj](crd::u32 begin, crd::u32 end) {
@@ -219,7 +225,8 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
                                                        yield);
                 if (e != ExecError::None)
                 {
-                    rjp->errs[idx] = e;
+                    rjp->errs[idx]    = e;
+                    rjp->err_ops[idx] = sub.failed_op(); // the innermost body op (DIAG.8a), read before the sub dies
                 }
                 else if (yield.size() >= 1U)
                 {
@@ -234,12 +241,14 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
         crd::jobs::StackSize::Small, prio);
     crd::jobs::wait(counter);
 
-    // first-in-index-order error (deterministic first-offender; disjoint per-index slots, no atomics).
+    // first-in-index-order error (deterministic first-offender; disjoint per-index slots, no atomics). DIAG.8a: blame
+    // that index's innermost body op, as the sequential reference and the compiled plan do; the parallel op only when
+    // the body named none.
     for (crd::u32 idx = 0; idx < count; ++idx)
     {
         if (errs[idx] != ExecError::None)
         {
-            return in.fail(errs[idx], &op);
+            return in.fail(errs[idx], err_ops[idx] != nullptr ? err_ops[idx] : &op);
         }
     }
     return ExecError::None;
@@ -294,9 +303,9 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
         crd::i64                    ba[2] = {acc, out[i]}; // (acc, elem) — the combine reads its two block-args in INDEX order
         containers::Array<crd::i64> yield(&fold_scratch);
         const ExecError e = fold.invoke_region(*pc->module, *combine, containers::ConstSpan<crd::i64>(ba, 2U), yield);
-        if (e != ExecError::None) // a fold-step error is attributed to the map_reduce op
+        if (e != ExecError::None) // a fold-step error → the combine's innermost op, else the map_reduce op (DIAG.8a)
         {
-            return in.fail(e, &op);
+            return in.fail(e, fold.failed_op() != nullptr ? fold.failed_op() : &op);
         }
         if (yield.size() < 1U) // (pre-flight makes this unreachable)
         {
@@ -312,12 +321,15 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
 // ── CEIR-11a stage 3: the jobs-backed launch/await ON-POOL EvalFns (override the sequential via last-install-wins) ──
 // Resolve a token's yields: pooled ⇒ wait its counter (once) + read its result; sequential ⇒ the yield-store. ⛔ Routes by
 // FULL i64 (kPoolBase) so a pooled handle never truncates into a sequential one. None ⇒ `out` valid; else the typed error.
-ExecError resolve_yields(exec::Interpreter& in, HostProvider* self, crd::i64 tok, containers::ConstSpan<crd::i64>& out)
+// DIAG.8a: a pooled body's error sets `body_op` to the body op that raised it (null otherwise); the caller blames it.
+ExecError resolve_yields(exec::Interpreter& in, HostProvider* self, crd::i64 tok, containers::ConstSpan<crd::i64>& out,
+                         const Operation*& body_op)
 {
+    body_op = nullptr;
     if (self != nullptr && self->is_pooled(tok))
     {
         ExecError e = ExecError::None;
-        if (!self->resolve_pooled(tok, out, e)) // forged / out-of-range pooled handle
+        if (!self->resolve_pooled(tok, out, e, body_op)) // forged / out-of-range pooled handle
         {
             return ExecError::BadToken;
         }
@@ -371,9 +383,11 @@ ExecError eval_await_pooled(exec::Interpreter& in, const Operation& op)
     }
     auto* const                     pc = static_cast<ParallelCtx*>(in.user());
     containers::ConstSpan<crd::i64> ys;
-    if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
+    const Operation*                body_op = nullptr;
+    if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys, body_op);
+        e != ExecError::None)
     {
-        return in.fail(e, &op);
+        return in.fail(e, body_op != nullptr ? body_op : &op); // DIAG.8a: the launch body's op, as the reference blames
     }
     for (crd::u32 j = 0; j < op.num_results() && j < static_cast<crd::u32>(ys.size()); ++j)
     {
@@ -394,9 +408,11 @@ ExecError eval_join_pooled(exec::Interpreter& in, const Operation& op)
             return in.fail(ExecError::UndefinedValue, &op);
         }
         containers::ConstSpan<crd::i64> ys;
-        if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys); e != ExecError::None)
+        const Operation*                body_op = nullptr;
+        if (const ExecError e = resolve_yields(in, pc != nullptr ? pc->self : nullptr, tok, ys, body_op);
+            e != ExecError::None)
         {
-            return in.fail(e, &op);
+            return in.fail(e, body_op != nullptr ? body_op : &op);
         }
         for (crd::usize k = 0; k < ys.size(); ++k)
         {
@@ -569,7 +585,8 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
     return handle;
 }
 
-bool HostProvider::resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err) noexcept
+bool HostProvider::resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err,
+                                  const Operation*& out_op) noexcept
 {
     if (!pooled_index_valid(tok)) // forged / out-of-range pooled handle
     {
@@ -582,6 +599,7 @@ bool HostProvider::resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>&
         t->waited = true;
     }
     out_err = t->err;
+    out_op  = t->err_op;
     out     = containers::ConstSpan<crd::i64>(t->result.data(), t->result.size());
     return true;
 }

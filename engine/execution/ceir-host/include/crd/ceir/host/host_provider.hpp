@@ -69,8 +69,10 @@ public:
                                        const std::atomic<bool>* cancel, crd::u64 sub_fuel, crd::jobs::Priority prio,
                                        crd::i32 pin_thread);
     // Resolve a token's yields: pooled ⇒ wait the counter (once) + return its result (or its typed error); returns false
-    // ⇒ a bad/forged handle. `out` is valid only when the return is true AND `*out_err == None`.
-    [[nodiscard]] bool resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err) noexcept;
+    // ⇒ a bad/forged handle. `out` is valid only when the return is true AND `*out_err == None`. DIAG.8a: `out_op`
+    // is the launch body's op that raised the error (null when ok or when the body named none), for the await to blame.
+    [[nodiscard]] bool resolve_pooled(crd::i64 tok, containers::ConstSpan<crd::i64>& out, exec::ExecError& out_err,
+                                      const Operation*& out_op) noexcept;
     [[nodiscard]] bool is_pooled(crd::i64 tok) const noexcept { return tok >= kPoolBase; }
     [[nodiscard]] bool pooled_index_valid(crd::i64 tok) const noexcept // a pooled handle in range (race/cancel: no wait)
     {
