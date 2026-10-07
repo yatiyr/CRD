@@ -4539,6 +4539,70 @@ containers::String render_provenance(const Context& ctx, const Provenance& p, me
     return s;
 }
 
+containers::StringView native_kind_name(NativeKind k) noexcept
+{
+    switch (k)
+    {
+    case NativeKind::NoOperation: return containers::StringView("no-operation");
+    case NativeKind::Unregistered: return containers::StringView("unregistered");
+    case NativeKind::NotIntrinsic: return containers::StringView("not-intrinsic");
+    case NativeKind::Intrinsic: return containers::StringView("intrinsic");
+    }
+    return containers::StringView("no-operation"); // unreachable (total switch)
+}
+
+NativeBinding native_binding(const Context& ctx, const Operation* op) noexcept
+{
+    NativeBinding b;
+    if (op == nullptr)
+    {
+        return b;
+    }
+    b.op_name                = ctx.op_name(op->kind());
+    const OpInfo* const info = ctx.op_info(op->kind());
+    if (info == nullptr)
+    {
+        b.kind = NativeKind::Unregistered;
+        return b;
+    }
+    if (!info->intrinsic)
+    {
+        b.kind = NativeKind::NotIntrinsic;
+        return b;
+    }
+    b.kind     = NativeKind::Intrinsic;
+    b.provider = info->native_provider;
+    return b;
+}
+
+containers::String render_op_site(const Context& ctx, const Operation* op, memory::IAllocator* out)
+{
+    if (op == nullptr)
+    {
+        containers::String s(out);
+        const containers::StringView gap = provenance_gap_name(ProvenanceGap::NoOperation);
+        s.append(gap.data(), gap.size());
+        return s;
+    }
+    const NativeBinding b = native_binding(ctx, op);
+    containers::String  s(out);
+    s.append(b.op_name.data(), b.op_name.size());
+    if (b.kind == NativeKind::Intrinsic)
+    {
+        s.append(" native ");
+        s.append(b.provider.data(), b.provider.size());
+    }
+    else if (b.kind == NativeKind::Unregistered)
+    {
+        s.append(" native unregistered");
+    }
+    s.append(" at ");
+    containers::Array<Origin> storage(out);
+    const containers::String  where = render_provenance(ctx, resolve_provenance(ctx, op, storage), out);
+    s.append(where.data(), where.size());
+    return s;
+}
+
 Region* Context::create_region(RegionKind kind)
 {
     Region* const r = memory::construct<Region>(m_arena);

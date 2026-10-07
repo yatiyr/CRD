@@ -1226,6 +1226,14 @@ struct SceneEvalMap
     }
 };
 
+// DIAG.8a: an unwired or unresolvable resolve is blamed on the resolve op itself, so the refusal names its authored
+// op (and, through native_binding, the intrinsic's native provider).
+ExecuteError refuse_resolve(SceneResolvedHandles& out, const Operation* op) noexcept
+{
+    out.fault = op;
+    return ExecuteError::UnresolvedSceneHandle;
+}
+
 // The pre-order walk: for each scene.resolve_* op, look up its RESOLVED upstream operand handle(s), call the matching
 // callback, bind the op-result. A null callback the chain needs ⇒ UnresolvedSceneHandle; a 0 return (an unresolvable
 // handle) likewise. The op order is SSA (defs precede uses), so a linear walk resolves the chain in one pass.
@@ -1245,12 +1253,12 @@ ExecuteError eval_scene_region(const Context& ctx, const Region* r, const Render
             {
                 if (res.resolve_material == nullptr)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 const SceneResolveHandle mh = res.resolve_material(res.resolve_material_user, map.lookup(op->operand(0U)));
                 if (mh == 0U)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 map.bind(op->result(0U), mh);
                 out.material = mh;
@@ -1259,13 +1267,13 @@ ExecuteError eval_scene_region(const Context& ctx, const Region* r, const Render
             {
                 if (res.resolve_technique == nullptr)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 const SceneResolveHandle th = res.resolve_technique(res.resolve_technique_user, map.lookup(op->operand(0U)),
                                                                     str_attr(ctx, op, containers::StringView("phase")));
                 if (th == 0U)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 map.bind(op->result(0U), th);
                 out.technique = th;
@@ -1274,13 +1282,13 @@ ExecuteError eval_scene_region(const Context& ctx, const Region* r, const Render
             {
                 if (res.resolve_program == nullptr)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 const SceneResolveHandle pg = res.resolve_program(res.resolve_program_user, map.lookup(op->operand(0U)),
                                                                   map.lookup(op->operand(1U)));
                 if (pg == 0U)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 map.bind(op->result(0U), pg);
                 out.program = pg;
@@ -1289,12 +1297,12 @@ ExecuteError eval_scene_region(const Context& ctx, const Region* r, const Render
             {
                 if (res.resolve_geometry == nullptr)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 const SceneResolveHandle gh = res.resolve_geometry(res.resolve_geometry_user, map.lookup(op->operand(0U)));
                 if (gh == 0U)
                 {
-                    return ExecuteError::UnresolvedSceneHandle;
+                    return refuse_resolve(out, op);
                 }
                 map.bind(op->result(0U), gh);
                 out.geometry = gh;
@@ -1319,8 +1327,10 @@ ExecuteError evaluate_scene_resolve(Context& ctx, const Module& m, const RenderR
     out = SceneResolvedHandles{};
     // ⛔ VERIFIER-FIRST: a mis-typed chain refuses BEFORE any callback runs (never a garbage handle) — the same contract
     // execute_render_lowered assumes (find_render_misuse passed).
-    if (crd::ceir::scene::find_scene_misuse(ctx, m).kind != crd::ceir::scene::SceneMisuseKind::None)
+    const crd::ceir::scene::SceneMisuse misuse = crd::ceir::scene::find_scene_misuse(ctx, m);
+    if (misuse.kind != crd::ceir::scene::SceneMisuseKind::None)
     {
+        out.fault = misuse.op; // DIAG.8a: the verifier's offender, never dropped
         return ExecuteError::SceneChainMisuse;
     }
     SceneEvalMap map;

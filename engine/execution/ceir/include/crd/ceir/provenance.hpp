@@ -91,4 +91,32 @@ struct Provenance
 // position-less origin it has (e.g. a graph-authored "chir#<id>", the closest-known origin). A zero file id renders
 // "<unknown>".
 [[nodiscard]] containers::String render_provenance(const Context& ctx, const Provenance& p, memory::IAllocator* out);
+
+// What a Context knows about an op kind's ADR-0110 native binding. EMPTY != UNKNOWN: a kind that is not registered in
+// the Context (its dialect was never registered there, e.g. after a load into a bare Context) is `Unregistered`, which
+// says the binding cannot be known there; it is never reported as a non-intrinsic op.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class NativeKind : u8
+{
+    NoOperation = 0, // there is no op (a null op)
+    Unregistered,    // the op's kind is not registered in this Context
+    NotIntrinsic,    // a registered op that declares no `[op.native]` binding
+    Intrinsic,       // a registered intrinsic: `provider` names its declared native provider
+};
+[[nodiscard]] containers::StringView native_kind_name(NativeKind k) noexcept;
+
+// An op's native binding, so a failure at an intrinsic names the native provider that implements it. Views borrow the
+// Context (the interned op name) and the dialect registration (the provider name).
+struct NativeBinding
+{
+    NativeKind             kind = NativeKind::NoOperation;
+    containers::StringView op_name;  // "dialect.op" ("" for a null op)
+    containers::StringView provider; // the declared native provider; non-empty exactly when kind == Intrinsic
+};
+[[nodiscard]] NativeBinding native_binding(const Context& ctx, const Operation* op) noexcept;
+
+// Render the op a failure is blamed on, for a human or agent: "<op name> " then " native <provider>" for an intrinsic
+// (or " native unregistered" when the Context cannot know), then " at " and `render_provenance` of the op. A null op
+// renders the NoOperation gap name alone.
+[[nodiscard]] containers::String render_op_site(const Context& ctx, const Operation* op, memory::IAllocator* out);
 } // namespace crd::ceir

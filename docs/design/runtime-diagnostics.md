@@ -521,6 +521,12 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   with its content hash; a Gone generation is named by asset and number only. A CHIR-lowered program cooked with
   `cook_program` keeps its `ChirNode` origins through failed reloads, and a NoChange reload refreshes them with the
   same space and CHIR ids.
+- Intrinsic sites (2026-10-07, [session](../sessions/2026-10-07-diag-8a-intrinsic-provider-sites.md)): an error at an
+  ADR-0110 intrinsic names its native provider through `native_binding(ctx, op)`, which reads the registration's
+  `[op.native]` binding; a kind the Context does not register is `Unregistered` (unknown there), never non-intrinsic.
+  `render_op_site` is the one rendering every reporter uses (`<op> native <provider> at <provenance>`), so no result
+  struct carries a provider copy. A host-evaluated intrinsic's refusal is blamed on its own op: the scene resolver
+  sets `SceneResolvedHandles::fault` for an unwired or 0-returning callback and for the op `find_scene_misuse` names.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop

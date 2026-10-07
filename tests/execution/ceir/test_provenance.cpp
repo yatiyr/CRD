@@ -4,7 +4,9 @@
 // the responsible authored line; the CSE survivor carries BOTH authored origins (many-to-many) through every stage.
 // The expected positions come from scanning the text itself, never from the parser. Controls: reformatting the text
 // moves every origin but leaves the content and interface hashes unchanged; a builder op without a location reports an
-// explicit gap; a corrupt ORIG chunk is rejected; an origin-free module's blob carries no ORIG chunk. ASCII test names.
+// explicit gap; a corrupt ORIG chunk is rejected; an origin-free module's blob carries no ORIG chunk. A refusal at an
+// ADR-0110 intrinsic also names the native provider its registration declares (unknown when the dialect is not
+// registered in the loading Context). ASCII test names.
 
 #include <crd/ceir/binary.hpp>
 #include <crd/ceir/ceir.hpp>
@@ -21,6 +23,7 @@
 #include <crd/ceir/print.hpp>
 #include <crd/ceir/program_asset.hpp>
 #include <crd/ceir/provenance.hpp>
+#include <crd/ceir/scene.hpp>
 #include <crd/ceir/tensor.hpp>
 #include <crd/ceir/type.hpp>
 
@@ -603,5 +606,183 @@ TEST_CASE("diag 8a: an entry refusal names the requested entry; a found entry is
         const Provenance p = resolve_provenance(ctx, ea.op, storage);
         REQUIRE(p.primary() != nullptr);
         check_origin(ctx, *p.primary(), at_fn);
+    }
+}
+
+namespace
+{
+void register_scene_dialects(Context& ctx)
+{
+    register_dialects(ctx);
+    (void)scene::register_dialect(ctx);
+}
+
+Block* add_entry(Context& ctx, Module& m, const char* name, u32 num_params, TypeId param_type)
+{
+    Operation* const fn = func::create_func(ctx, m, name, Visibility::Public, num_params, param_type);
+    m.body()->first_block()->append(fn);
+    return func::func_body_block(fn);
+}
+
+// @main(%d: scene.draw) { %m = scene.resolve_material(%d); %t = scene.resolve_technique(%m) {phase = "opaque"};
+//                         %g = scene.resolve_geometry(%d); return }      (host intrinsics, ADR-0110 [op.native])
+// @plain() -> i32 { %c = 1; core.foreach(%c) {}; return %c }               (a registered, non-intrinsic op)
+// @vendor() { vendor.blob; return }                                        (a kind no dialect registers)
+Module* build_intrinsics(Context& ctx)
+{
+    Module* const m = ctx.create_module();
+    m->body()->append(ctx.create_block(0U));
+    {
+        Block* const     b    = add_entry(ctx, *m, "main", 1U, scene::type_draw(ctx));
+        Value* const     draw = b->arg(0U);
+        Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
+        b->append(mat);
+        b->append(scene::build_resolve_technique(ctx, mat->result(0U), ctx.attr_string(StringView("opaque")),
+                                                 scene::type_technique(ctx)));
+        b->append(scene::build_resolve_geometry(ctx, draw, scene::type_geometry(ctx)));
+        b->append(func::create_return(ctx, {}));
+    }
+    {
+        Block* const     b     = add_entry(ctx, *m, "plain", 0U, {});
+        Operation* const c     = konst(ctx, b, 1);
+        Value*           in[1] = {c->result(0U)};
+        Operation* const each =
+            ctx.create_operation(ctx.intern_op("core", "foreach"), ConstSpan<Value*>(in, 1U), 0U, {}, 1U);
+        each->region(0)->append(ctx.create_block(1U, ctx.type_i32()));
+        b->append(each);
+        Value* rv[1] = {c->result(0U)};
+        b->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+    }
+    {
+        Block* const b = add_entry(ctx, *m, "vendor", 0U, {});
+        b->append(ctx.create_operation(ctx.intern_op("vendor", "blob"), {}, 0U));
+        b->append(func::create_return(ctx, {}));
+    }
+    return m;
+}
+
+exec::ExecResult run_entry(Context& ctx, const Module& m, const char* entry, ConstSpan<i64> args)
+{
+    exec::Interpreter in(ctx);
+    exec::install_builtin_semantics(in);
+    return in.invoke(m, entry, args);
+}
+
+StringView view(const String& s)
+{
+    return StringView(s.data(), s.size());
+}
+} // namespace
+
+TEST_CASE("diag 8a: an error at an intrinsic names its authored op and its native provider", "[ceir][diag]")
+{
+    memory::GrowableTlsfAllocator root;
+    Context                       bctx(&root);
+    register_scene_dialects(bctx);
+    const String     text = print(bctx, *build_intrinsics(bctx), &root);
+    const StringView src(text.data(), text.size());
+    const TextPos    at_mat     = find_op(src, "scene.resolve_material", 0U);
+    const TextPos    at_foreach = find_op(src, "core.foreach", 0U);
+    const TextPos    at_vendor  = find_op(src, "vendor.blob", 0U);
+    REQUIRE(at_mat.line != 0U);
+    REQUIRE(at_foreach.line > at_mat.line);
+    REQUIRE(at_vendor.line > at_foreach.line);
+
+    // Authored text under a file, the production CSE, then a binary round trip into a fresh Context.
+    Context ctx(&root);
+    register_scene_dialects(ctx);
+    const ParseResult pr = parse(ctx, src, ctx.register_file(kFile));
+    REQUIRE(pr.ok);
+    DiagnosticEngine diag(ctx, &root);
+    AnalysisManager  am(&root);
+    PassManager      pm(&root);
+    pm.add_pass(cse_pass());
+    pm.run(ctx, *pr.module, am, diag);
+    REQUIRE_FALSE(diag.has_errors());
+    const Array<u8> blob = serialize(ctx, *pr.module, &root);
+    Context         loaded(&root);
+    register_scene_dialects(loaded);
+    const ParseResult lr = deserialize(loaded, ConstSpan<u8>(blob.data(), blob.size()));
+    REQUIRE(lr.ok);
+    const i64 draw_args[1] = {7};
+
+    // The reference interpreter has no semantics for a host intrinsic: the refusal is blamed on the authored op, and
+    // the op's binding names the provider it declared.
+    const exec::ExecResult er = run_entry(loaded, *lr.module, "main", ConstSpan<i64>(draw_args, 1U));
+    CHECK(er.error == exec::ExecError::NoSemantics);
+    REQUIRE(er.op != nullptr);
+    Array<Origin>    storage(&root);
+    const Provenance pe = resolve_provenance(loaded, er.op, storage);
+    REQUIRE(pe.primary() != nullptr);
+    check_origin(loaded, *pe.primary(), at_mat);
+    const NativeBinding nb = native_binding(loaded, er.op);
+    CHECK(nb.kind == NativeKind::Intrinsic);
+    CHECK(nb.op_name == StringView("scene.resolve_material"));
+    CHECK(nb.provider == StringView("host"));
+    const String site = render_op_site(loaded, er.op, &root);
+    CHECK(contains(site, StringView("scene.resolve_material native host at programs/diag/provenance_main.ceir:")));
+
+    // The plan compiler refuses the same op, with the same binding.
+    const plan::CompileResult cr = plan::compile(loaded, *lr.module, "main", &root);
+    CHECK(cr.error == plan::CompileError::UnsupportedOp);
+    CHECK(cr.op == er.op);
+    CHECK(view(render_op_site(loaded, cr.op, &root)) == view(site));
+
+    SECTION("control: a non-intrinsic op names no provider")
+    {
+        const exec::ExecResult ep = run_entry(loaded, *lr.module, "plain", {});
+        CHECK(ep.error == exec::ExecError::NoSemantics);
+        REQUIRE(ep.op != nullptr);
+        const NativeBinding pb = native_binding(loaded, ep.op);
+        CHECK(pb.kind == NativeKind::NotIntrinsic);
+        CHECK(pb.op_name == StringView("core.foreach"));
+        CHECK(pb.provider.empty());
+        const String ps = render_op_site(loaded, ep.op, &root);
+        CHECK(contains(ps, StringView("core.foreach at programs/diag/provenance_main.ceir:")));
+        CHECK_FALSE(contains(ps, StringView(" native ")));
+        const Provenance pp = resolve_provenance(loaded, ep.op, storage);
+        REQUIRE(pp.primary() != nullptr);
+        check_origin(loaded, *pp.primary(), at_foreach);
+    }
+
+    SECTION("control: a kind no dialect registers is unknown, never non-intrinsic")
+    {
+        const exec::ExecResult ev = run_entry(loaded, *lr.module, "vendor", {});
+        CHECK(ev.error == exec::ExecError::NoSemantics);
+        REQUIRE(ev.op != nullptr);
+        const NativeBinding vb = native_binding(loaded, ev.op);
+        CHECK(vb.kind == NativeKind::Unregistered);
+        CHECK(vb.op_name == StringView("vendor.blob"));
+        CHECK(vb.provider.empty());
+        CHECK(contains(render_op_site(loaded, ev.op, &root), StringView("vendor.blob native unregistered at ")));
+        const Provenance pv = resolve_provenance(loaded, ev.op, storage);
+        REQUIRE(pv.primary() != nullptr);
+        check_origin(loaded, *pv.primary(), at_vendor);
+    }
+
+    SECTION("control: the same blob in a Context without the scene dialect cannot know the provider")
+    {
+        Context bare(&root);
+        register_dialects(bare);
+        const ParseResult br = deserialize(bare, ConstSpan<u8>(blob.data(), blob.size()));
+        REQUIRE(br.ok);
+        const exec::ExecResult eb = run_entry(bare, *br.module, "main", ConstSpan<i64>(draw_args, 1U));
+        CHECK(eb.error == exec::ExecError::NoSemantics);
+        REQUIRE(eb.op != nullptr);
+        const NativeBinding bb = native_binding(bare, eb.op);
+        CHECK(bb.kind == NativeKind::Unregistered);
+        CHECK(bb.op_name == StringView("scene.resolve_material"));
+        CHECK(bb.provider.empty());
+        const Provenance pb = resolve_provenance(bare, eb.op, storage);
+        REQUIRE(pb.primary() != nullptr);
+        check_origin(bare, *pb.primary(), at_mat);
+    }
+
+    SECTION("no op renders the gap alone")
+    {
+        CHECK(native_binding(loaded, nullptr).kind == NativeKind::NoOperation);
+        CHECK(view(render_op_site(loaded, nullptr, &root)) == StringView("no-operation"));
+        CHECK(native_kind_name(NativeKind::Intrinsic) == StringView("intrinsic"));
+        CHECK(native_kind_name(NativeKind::Unregistered) == StringView("unregistered"));
     }
 }

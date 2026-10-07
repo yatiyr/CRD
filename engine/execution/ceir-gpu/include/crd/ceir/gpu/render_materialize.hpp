@@ -147,6 +147,9 @@ struct SceneResolvedHandles
     SceneResolveHandle technique = 0;
     SceneResolveHandle program   = 0;
     SceneResolveHandle geometry  = 0;
+    // DIAG.8a: the op a refusal is blamed on: the resolve op whose callback is unwired or returned 0
+    // (UnresolvedSceneHandle), or the misused op find_scene_misuse named (SceneChainMisuse). nullptr on success.
+    const Operation*   fault     = nullptr;
 };
 
 // Decode verified attachment attributes without resolving a device object. These are also the resource-planning
@@ -193,6 +196,7 @@ struct SceneResolvedHandles
 // UnresolvedSceneHandle. The evaluator owns the phase-attr read (the .valid() scar, ONE place) + the value→handle map;
 // the callbacks are pure host lookups. (17b is the SEAM + evaluator + sentinel tests; the REAL REN-37 ladder + the
 // draw-handle table are 17c — this proves the CHAIN THREADS, not yet "== the C++ path's handles".)
+// DIAG.8a: every refusal sets `out.fault` to the op it is blamed on (render it with crd::ceir::render_op_site).
 [[nodiscard]] ExecuteError evaluate_scene_resolve(Context& ctx, const Module& m, const RenderResolvers& resolvers,
                                                   const Value* draw_seed, SceneResolveHandle draw_handle,
                                                   SceneResolvedHandles& out);
