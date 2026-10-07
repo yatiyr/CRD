@@ -4,6 +4,7 @@
 # BUILD, not the tree: their content returns through the RET-6 draw port onto gpu-context.
 add_executable(crd-sandbox
     src/main.cpp
+    src/inspect_panel.cpp # DIAG.8b: an authored CEIR program under runtime inspection (`--inspect`)
 )
 
 # CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
@@ -27,6 +28,9 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-jobs
     crd-log
     crd-memory
+    crd-ceir                 # DIAG.8b: the inspect session the panel drives
+    crd-ceir-cook            # DIAG.8b: InspectHost (the authored program's generations, plan and executing thread)
+    crd-render-asset-core    # DIAG.8b: the program's canonical asset id
     crd-perf       # D-003 v0h: profiler substrate
     crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel)
     glfw                     # RET-5: glfwGetWin32Window — the native HWND for create_present_surface

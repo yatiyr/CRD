@@ -9,6 +9,12 @@
 // CLI contract (the full-sweep smoke depends on it — preserved exactly):
 //   --headless                    — exit after 1 frame; minimal boot smoke
 //   --smoke-test [duration_secs]  — run the loop N seconds (default 3.0), FAIL (exit 2) if nothing presented.
+// DIAG.8b (the sandbox consumer of runtime inspection; see inspect_panel.hpp):
+//   --inspect [id]                — run the authored CEIR program `id` (default ceir/inspect_demo) under inspection
+//   --inspect-break N / --inspect-watch N (repeatable), --inspect-step a,b (continue|into|over|out|cancel per stop),
+//   --inspect-arg N (the entry's argument, default 3), --app-assets <dir> (the application's own tree at app://).
+
+#include "inspect_panel.hpp" // DIAG.8b: the authored-program inspect panel
 
 #include <crd/anim/anim_resources.hpp>
 #include <crd/app/app.hpp>
@@ -30,6 +36,7 @@
 #include <crd/log/log.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/ui.hpp>
@@ -63,6 +70,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string_view>
 
 CRD_DEFINE_LOG_CHANNEL(g_log_sandbox, "Sandbox", crd::log::LogLevel::Trace)
 
@@ -187,6 +195,133 @@ struct SceneExtractor final : crd::scene::IAabbExtractor
     }
 };
 
+// ⭐⭐ DIAG.8b: the inspect panel's events, one log line each, so a smoke run's log is the consumer's report: every
+// stop (authored line, column, depth, generation), each watched line's typed value as the paused program reported it,
+// the scripted action, and the outcome.
+void report_inspect([[maybe_unused]] const crd::sandbox::InspectPanel& panel, crd::sandbox::TickEvent e)
+{
+    namespace insp = crd::ceir::inspect;
+    if (e == crd::sandbox::TickEvent::Stopped)
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: stop #{} {} at {}:{}:{} depth {} generation {}", panel.stops(),
+                     insp::stop_reason_name(panel.stop().reason), panel.file(), panel.stop_line(), panel.stop_col(),
+                     panel.stop().depth, panel.stop().generation);
+        for ([[maybe_unused]] const crd::sandbox::PanelValue& v : panel.values())
+        {
+            CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect:   line {}: {} {}{} = {}", v.line,
+                         v.refusal == insp::Refusal::None ? insp::value_status_name(v.value.status)
+                                                          : insp::refusal_name(v.refusal),
+                         std::string_view(v.value.type_text.c_str(), v.value.type_text.size()),
+                         v.value.has_unit ? " (unit)" : "",
+                         v.value.status == insp::ValueStatus::Available ? v.value.bits : 0);
+        }
+        if (panel.scripted())
+        {
+            CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect:   action {}",
+                         crd::sandbox::panel_action_name(panel.last_scripted()));
+        }
+    }
+    else if (e == crd::sandbox::TickEvent::Ended && panel.results().size() == 1U)
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: {} with {} after {} stops, {} frames",
+                     crd::sandbox::panel_state_name(panel.state()), panel.results()[0], panel.stops(), panel.ticks());
+    }
+    else if (e == crd::sandbox::TickEvent::Ended)
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: {} ({} results) after {} stops, {} frames",
+                     crd::sandbox::panel_state_name(panel.state()), panel.results().size(), panel.stops(),
+                     panel.ticks());
+    }
+}
+
+// ⭐⭐ DIAG.8b: the panel's window. Every button is a command for the generation the panel shows; none waits.
+void draw_inspect_window(crd::sandbox::InspectPanel& panel, crd::i64 arg)
+{
+    namespace insp = crd::ceir::inspect;
+    using crd::sandbox::PanelAction;
+    using crd::sandbox::PanelState;
+    const crd::u64 gen = panel.generation();
+    ImGui::Begin("CEIR inspect (DIAG.8b)");
+    const std::string_view file = panel.file();
+    ImGui::Text("program %.*s (%s), generation %llu", static_cast<int>(file.size()), file.data(),
+                panel.source() == crd::scenerender::ProgramSource::App ? "app" : "engine",
+                static_cast<unsigned long long>(gen));
+    const std::string_view state = crd::sandbox::panel_state_name(panel.state());
+    ImGui::Text("state %.*s, %u stops, %llu frames", static_cast<int>(state.size()), state.data(), panel.stops(),
+                static_cast<unsigned long long>(panel.ticks()));
+    if (panel.state() == PanelState::Paused)
+    {
+        const std::string_view why = insp::stop_reason_name(panel.stop().reason);
+        ImGui::Text("stopped (%.*s) at line %u col %u, depth %u", static_cast<int>(why.size()), why.data(),
+                    panel.stop_line(), panel.stop_col(), panel.stop().depth);
+        for (const crd::sandbox::PanelValue& v : panel.values())
+        {
+            if (v.refusal == insp::Refusal::None && v.value.status == insp::ValueStatus::Available)
+            {
+                ImGui::Text("  line %u: %s = %lld%s", v.line, v.value.type_text.c_str(),
+                            static_cast<long long>(v.value.bits), v.value.has_unit ? " (unit)" : "");
+            }
+            else
+            {
+                const std::string_view st = (v.refusal == insp::Refusal::None)
+                                                ? insp::value_status_name(v.value.status)
+                                                : insp::refusal_name(v.refusal);
+                ImGui::Text("  line %u: %.*s", v.line, static_cast<int>(st.size()), st.data());
+            }
+        }
+        if (ImGui::Button("Continue"))
+        {
+            (void)panel.command(gen, PanelAction::Continue);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step into"))
+        {
+            (void)panel.command(gen, PanelAction::StepInto);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step over"))
+        {
+            (void)panel.command(gen, PanelAction::StepOver);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Step out"))
+        {
+            (void)panel.command(gen, PanelAction::StepOut);
+        }
+    }
+    if (panel.state() == PanelState::Running && ImGui::Button("Pause"))
+    {
+        (void)panel.request_pause(gen);
+    }
+    if (panel.state() == PanelState::Running || panel.state() == PanelState::Paused)
+    {
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            (void)panel.command(gen, PanelAction::Cancel);
+        }
+    }
+    else
+    {
+        if (panel.state() == PanelState::Finished && panel.results().size() == 1U)
+        {
+            ImGui::Text("result %lld", static_cast<long long>(panel.results()[0]));
+        }
+        if (ImGui::Button("Run again"))
+        {
+            (void)panel.start(crd::containers::ConstSpan<crd::i64>(&arg, 1U));
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Reload"))
+        {
+            (void)panel.load(panel.file(), "main"); // a saved edit installs as a new generation; breakpoints rebind
+        }
+    }
+    const std::string_view refusal = insp::refusal_name(panel.last_refusal());
+    ImGui::Text("last command: %.*s", static_cast<int>(refusal.size()), refusal.data());
+    ImGui::End();
+}
+
 } // namespace
 
 // C4996-safe env read (the engine's `mf_getenv` pattern): a FIXED, documented dev knob, not a security
@@ -252,6 +387,18 @@ int main(int argc, char** argv)
     // TOTAL (rounded to the enclosing square grid); `--foxes N` sets the SKINNED ring.
     crd::u32    grid_side  = 100U; // 100×100 = the historical 10k
     crd::u32    fox_count  = 24U;
+    // ⭐⭐ DIAG.8b: the inspect panel (see the CLI contract above); lines and actions are validated before any run.
+    static constexpr crd::u32 kInspectMaxLines                   = 16U;
+    const char*               inspect_rel                        = nullptr;
+    const char*               app_assets                         = nullptr;
+    crd::i64                  inspect_arg                        = 3;
+    crd::u32                  inspect_breaks[kInspectMaxLines]   = {};
+    crd::u32                  inspect_watches[kInspectMaxLines]  = {};
+    crd::sandbox::PanelAction inspect_script[kInspectMaxLines]   = {};
+    crd::u32                  inspect_break_count                = 0U;
+    crd::u32                  inspect_watch_count                = 0U;
+    crd::u32                  inspect_script_count               = 0U;
+    bool                      inspect_args_ok                    = true;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0)
@@ -407,6 +554,61 @@ int main(int argc, char** argv)
                 present_mode = crd::gpu::PresentMode::Fifo;
             }
         }
+        else if (std::strcmp(argv[i], "--inspect") == 0)
+        {
+            inspect_rel = "ceir/inspect_demo";
+            if (i + 1 < argc && std::strncmp(argv[i + 1], "--", 2) != 0)
+            {
+                inspect_rel = argv[++i];
+            }
+        }
+        else if ((std::strcmp(argv[i], "--inspect-break") == 0 || std::strcmp(argv[i], "--inspect-watch") == 0)
+                 && i + 1 < argc)
+        {
+            const bool      is_break = std::strcmp(argv[i], "--inspect-break") == 0;
+            const long      v        = std::strtol(argv[++i], nullptr, 10);
+            crd::u32&       count    = is_break ? inspect_break_count : inspect_watch_count;
+            crd::u32* const lines    = is_break ? inspect_breaks : inspect_watches;
+            if (v <= 0 || count == kInspectMaxLines)
+            {
+                inspect_args_ok = false; // authored lines are 1-based, and at most kInspectMaxLines of each
+            }
+            else
+            {
+                lines[count++] = static_cast<crd::u32>(v);
+            }
+        }
+        else if (std::strcmp(argv[i], "--inspect-step") == 0 && i + 1 < argc)
+        {
+            const std::string_view list(argv[++i]);
+            std::size_t            at = 0U;
+            for (;;)
+            {
+                const std::size_t         comma = list.find(',', at);
+                const std::size_t         len   = (comma == std::string_view::npos) ? list.size() - at : comma - at;
+                crd::sandbox::PanelAction a     = crd::sandbox::PanelAction::Continue;
+                if (inspect_script_count == kInspectMaxLines
+                    || !crd::sandbox::parse_panel_action(list.substr(at, len), a))
+                {
+                    inspect_args_ok = false;
+                    break;
+                }
+                inspect_script[inspect_script_count++] = a;
+                if (comma == std::string_view::npos)
+                {
+                    break;
+                }
+                at = comma + 1U;
+            }
+        }
+        else if (std::strcmp(argv[i], "--inspect-arg") == 0 && i + 1 < argc)
+        {
+            inspect_arg = static_cast<crd::i64>(std::strtoll(argv[++i], nullptr, 10));
+        }
+        else if (std::strcmp(argv[i], "--app-assets") == 0 && i + 1 < argc)
+        {
+            app_assets = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
             smoke_test = true;
@@ -427,6 +629,15 @@ int main(int argc, char** argv)
     cfg.async = false;
     crd::log::init(cfg);
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
+    if (!inspect_args_ok)
+    {
+        CRD_LOG_ERROR(g_log_sandbox,
+                      "--inspect-break/--inspect-watch take 1-based lines (at most {} each); --inspect-step takes "
+                      "continue|into|over|out|cancel, comma-separated",
+                      kInspectMaxLines);
+        crd::log::shutdown();
+        return 1;
+    }
 
     crd::app::ApplicationDesc app_desc;
     app_desc.window.title = crd::containers::String("Cerid Sandbox — 10k instances on gpu-context (GEO-7)");
@@ -875,6 +1086,59 @@ int main(int argc, char** argv)
         const bool root_ok = scene_renderer.set_asset_root(aroot);
         CRD_LOG_INFO(g_log_sandbox, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
     }
+    if (app_assets != nullptr)
+    {
+        [[maybe_unused]] const bool app_ok = scene_renderer.set_app_asset_root(app_assets);
+        CRD_LOG_INFO(g_log_sandbox, "app asset root '{}' -> {}", app_assets, app_ok ? "installed" : "REJECTED");
+    }
+    // ⭐⭐ DIAG.8b: the authored program under inspection. It loads app-first through the renderer's program seam (an
+    // `app://ceir/...` file shadows the shipped one) and runs on the panel's own executing thread; this frame loop is
+    // the controller and only polls it. ⛔ Asked for and unavailable REFUSES TO RUN (the `--lod` rule): an inspect
+    // run that silently inspected nothing would be a false report.
+    crd::memory::GrowableTlsfAllocator          inspect_alloc;
+    std::unique_ptr<crd::sandbox::InspectPanel> inspect_panel;
+    if (inspect_rel != nullptr)
+    {
+        inspect_panel = std::make_unique<crd::sandbox::InspectPanel>(&inspect_alloc, scene_renderer);
+        const crd::sandbox::PanelLoad il = inspect_panel->load(inspect_rel, "main");
+        if (!il.ok())
+        {
+            CRD_LOG_ERROR(g_log_sandbox,
+                          "--inspect: '{}' did not load ({}); set CRD_ASSETS_DIR to the repo's assets/ or mount an "
+                          "application tree with --app-assets",
+                          inspect_rel,
+                          il.source == crd::scenerender::ProgramSource::NotFound
+                              ? std::string_view("not found under app:// or engine://")
+                              : crd::ceir::cook::host_load_name(il.host.status));
+            crd::log::shutdown();
+            return 1;
+        }
+        for (crd::u32 b = 0; b < inspect_break_count; ++b)
+        {
+            (void)inspect_panel->add_breakpoint(inspect_breaks[b]); // nothing runs yet: never Busy
+        }
+        for (crd::u32 w = 0; w < inspect_watch_count; ++w)
+        {
+            inspect_panel->watch(inspect_watches[w]);
+        }
+        inspect_panel->set_script(
+            crd::containers::ConstSpan<crd::sandbox::PanelAction>(inspect_script, inspect_script_count));
+        if (inspect_panel->start(crd::containers::ConstSpan<crd::i64>(&inspect_arg, 1U))
+            != crd::ceir::inspect::Refusal::None)
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "--inspect: '{}' did not start", inspect_rel);
+            crd::log::shutdown();
+            return 1;
+        }
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: {} from {}, generation {}", inspect_panel->file(),
+                     il.source == crd::scenerender::ProgramSource::App ? "app://" : "engine://",
+                     inspect_panel->generation());
+        for ([[maybe_unused]] const crd::ceir::inspect::BindReport& b : inspect_panel->binds())
+        {
+            CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect:   breakpoint {} line {}: {} ({} sites)", b.breakpoint,
+                         inspect_breaks[b.breakpoint], crd::ceir::inspect::bind_status_name(b.status), b.sites);
+        }
+    }
     // ⛔⛔ REN-40-C2: the policy installs BEFORE the first sync, because a chain is built the first time a mesh
     // becomes a group and `build_lod_chain` REFUSES a second build on the same resource. And it REFUSES TO RUN
     // when asked for and unavailable, for the `--gpu-cull` reason: an arm that silently measures the no-LOD path
@@ -1135,6 +1399,10 @@ int main(int argc, char** argv)
         if (!app.tick())
         {
             break;
+        }
+        if (inspect_panel != nullptr)
+        {
+            report_inspect(*inspect_panel, inspect_panel->tick()); // a poll: the frame never waits on the program
         }
 
         const auto     cur   = app.window().framebuffer_size();
@@ -1503,6 +1771,10 @@ int main(int argc, char** argv)
                         last_sync.structural_rebuild ? " [rebuild]" : "");
             ImGui::TextUnformatted("import -> cook (GEO-6) -> mount -> instantiate -> chunk-grain cull+draw");
             ImGui::End();
+            if (inspect_panel != nullptr)
+            {
+                draw_inspect_window(*inspect_panel, inspect_arg);
+            }
             profiler_panel.draw();
         }
         ImGui::Render();
@@ -1560,6 +1832,12 @@ int main(int argc, char** argv)
                      "imgui {:.3f} | present {:.3f} | loop total {:.3f} ms",
                      phase_frames, phase_sum.sync / pf, phase_sum.render / pf, phase_sum.overlay / pf,
                      phase_sum.imgui / pf, phase_sum.present / pf, phase_sum.total / pf);
+                if (inspect_panel != nullptr)
+                {
+                    CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: {} after {} stops; {} frames ticked the panel",
+                                 crd::sandbox::panel_state_name(inspect_panel->state()), inspect_panel->stops(),
+                                 inspect_panel->ticks());
+                }
                 app.close();
             }
         }
@@ -1575,6 +1853,9 @@ int main(int argc, char** argv)
     //     sets, and those sets reference the draw system's buffers — destroying a buffer a live set references
     //     is a validation error (VUID-vkDestroyBuffer-buffer-00922) and a real hazard one driver over.
     // jobs/perf mirror their bring-up.
+    // ⛔ DIAG.8b: the inspect panel dies before the scene renderer whose program seam it holds; its host cancels a
+    // program still running or paused and joins the executing thread.
+    inspect_panel.reset();
     crd::jobs::shutdown();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();

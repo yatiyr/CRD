@@ -175,6 +175,10 @@ AssetType infer_type(StringView first_segment) noexcept
     {
         return AssetType::Program;
     }
+    if (first_segment == "ceir") // DIAG.8b: authored CEIR programs a consumer runs (the sandbox's inspect panel)
+    {
+        return AssetType::Program;
+    }
     return AssetType::Unknown;
 }
 
@@ -211,6 +215,10 @@ StringView asset_extension(StringView folder) noexcept
     if (folder == "ckir") // CEIR-18p: authored CKIR programs — their own engine path (later: "chir")
     {
         return ".ckir";
+    }
+    if (folder == "ceir") // DIAG.8b: authored CEIR programs — `engine://ceir/<name>` is `ceir/<name>.ceir`
+    {
+        return ".ceir";
     }
     return {};
 }

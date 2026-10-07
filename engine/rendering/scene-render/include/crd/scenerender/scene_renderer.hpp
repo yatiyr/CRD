@@ -26,6 +26,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 #include <crd/gpu/frame_graph.hpp> // REN-37.8: contribute() records into a caller-owned graph
@@ -499,6 +500,15 @@ struct RenderStats
     crd::u32 timed_passes     = 0;
 };
 
+// DIAG.8b: which mount an authored program's text came from (`SceneRenderer::resolve_program_text`).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ProgramSource : crd::u8
+{
+    NotFound = 0, // neither `app://<rel>` nor `engine://<rel>` resolved (an unregistered folder, or no such file)
+    App,          // the application's own file under `set_app_asset_root` shadowed the engine default
+    Engine,       // the shipped default under the asset root
+};
+
 class SceneRenderer
 {
 public:
@@ -795,6 +805,12 @@ public:
     // then resolve through the SAME public resolver/registry as engine defaults — no privileged engine-only path.
     // ⛔ `app://` and `engine://` are structurally distinct namespaces: an app asset can never SHADOW an engine one.
     [[nodiscard]] bool set_app_asset_root(const char* dir);
+    // ⭐⭐ DIAG.8b: read an authored PROGRAM's text through the app-first convention every program load uses: `rel` is
+    // the canonical folder/name with no scheme and no extension (e.g. "ceir/inspect_demo"); an application's file at
+    // `app://<rel>` wins, else the shipped default at `engine://<rel>`. The SAME seam the renderer's own `.ckir` loads
+    // go through, so a consumer that runs an authored program (the sandbox's inspect panel) reaches an app's
+    // replacement without an engine edit. `out` holds the text on success. Never a bare engine-mount read.
+    [[nodiscard]] ProgramSource resolve_program_text(const char* rel, crd::containers::String& out);
     // The scene TLAS for `raytrace.*` passes. The graph NAMES an acceleration structure; whoever owns the
     // geometry's device form installs it here (B4: the asset format stays free of engine types).
     void set_scene_accel(crd::gpu::IAccelerationStructure* accel) noexcept;

@@ -159,6 +159,7 @@ crd_tests(rendering/draw draw)
 crd_tests(physics/eylem-viz eylem-viz)
 crd_tests(geometry/geometry-viz geometry-viz)
 crd_tests(applications/sandbox sandbox)
+crd_tests(applications/sandbox-inspect sandbox-inspect) # DIAG.8b: the sandbox's inspect panel, without a window
 
 if(CRD_BUILD_BENCHMARKS)
     crd_tests(bench)

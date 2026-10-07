@@ -624,6 +624,20 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-inspect-host-and-h
   (past the bound it cancels and says `truncated`) and every wait, and exits nonzero unless the run finished or the
   script cancelled it. It is CLI-only: the agent transports gain typed inspection authority in DIAG.8c.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-sandbox-consumer.md)):
+- The sandbox consumer is `crd-sandbox --inspect [id]` through a sandbox-internal panel (`sandbox/src/inspect_panel`)
+  over the same `InspectHost`. The program is an asset loaded app-first through the renderer's program seam
+  (`SceneRenderer::resolve_program_text`: an `app://<id>` file shadows the shipped `engine://<id>`; `ceir` is a
+  registered program folder, `ceir/<name>.ceir`), never a bare file read, so an application replaces it without an
+  engine edit. Its asset id and breakpoint file name are the canonical folder/name, not the winning mount, so a
+  reload that changes which mount wins keeps the asset and rebinds every `file:line`.
+- The frame loop is the controller and never waits on the program: each frame polls for a stop with a zero timeout,
+  takes the watched values once per new stop (the paused executing thread answers each bounded snapshot) and draws
+  from that cache, so frames keep presenting while the program runs or is held. A stop is new only when its sequence
+  differs from the one already taken: a cancel accepted at a stop leaves the session on it until the executing thread
+  leaves, and must not be read as another stop. Commands carry the generation the panel showed; a load while the
+  program runs or is held is `Busy`. Scope stays `Task`.
+
 <a id="diag-8c"></a>
 ## DIAG.8c — typed human and agent diagnostics commands
 

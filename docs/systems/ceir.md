@@ -50,7 +50,9 @@ counted, a pause request is refused and a cancel stops the recording before the 
 crd-ceir-cook's `InspectHost` (`crd/ceir/cook/inspect_host.hpp`) is the composition a consumer uses: it cooks the
 authored text into a ReloadSet generation, compiles one entry, binds the session and runs the plan on its own executing
 thread, so the consumer's thread stays the controller. `ceridc inspect` is its headless consumer (a JSON report of
-every stop, the watched lines' typed values and the scripted steps; CLI-only until DIAG.8c).
+every stop, the watched lines' typed values and the scripted steps; CLI-only until DIAG.8c). `crd-sandbox --inspect`
+is its sandbox consumer: the program loads app-first (`SceneRenderer::resolve_program_text`, `app://ceir/<name>` over
+`engine://ceir/<name>`) and the frame loop polls it each frame without waiting, with a window to step, pause and cancel.
 
 ## Maturity and further work
 

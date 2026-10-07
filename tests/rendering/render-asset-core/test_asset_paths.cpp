@@ -92,6 +92,11 @@ TEST_CASE("raf9 every shipped folder maps to its extension")
     CHECK(rel_is("engine://lighting/scene_forward", "lighting/scene_forward.crdl", &alloc));
     CHECK(rel_is("engine://technique/forward_csm", "technique/forward_csm.crdt", &alloc));
     CHECK(rel_is("engine://lod/scene_default", "lod/scene_default.crdlod", &alloc));
+    // the authored programs: CKIR kernels and (DIAG.8b) CEIR programs a consumer runs; an app id has the same shape.
+    CHECK(rel_is("engine://ckir/taa_resolve", "ckir/taa_resolve.ckir", &alloc));
+    CHECK(rel_is("engine://ceir/inspect_demo", "ceir/inspect_demo.ceir", &alloc));
+    CHECK(rel_is("app://ceir/inspect_demo", "ceir/inspect_demo.ceir", &alloc));
+    CHECK(infer_type("ceir") == AssetType::Program);
     // a nested name keeps its subfolders and takes the FIRST-segment folder's extension.
     CHECK(rel_is("engine://vertex/scene_rt_raygen", "vertex/scene_rt_raygen.crdv", &alloc));
 }

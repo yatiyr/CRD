@@ -1730,15 +1730,30 @@ struct SceneRenderer::Impl
     // `engine://<rel>`. Never a bare engine-mount read: that path (`asset_text`) cannot reach an app's own mount.
     [[nodiscard]] bool resolve_program_text(const char* rel, crd::containers::String& out)
     {
+        return program_source(rel, out) != ProgramSource::NotFound;
+    }
+    // DIAG.8b: the same read, reporting which mount won (the public `SceneRenderer::resolve_program_text`).
+    [[nodiscard]] ProgramSource program_source(const char* rel, crd::containers::String& out)
+    {
         const crd::containers::StringView rsv(rel);
         crd::containers::String           id(alloc);
         const auto                        try_scheme = [&](crd::containers::StringView scheme) -> bool {
             id.clear();
             id.append(scheme.data(), scheme.size());
             id.append(rsv.data(), rsv.size());
+            out.clear();
             return resolve_asset_text(crd::containers::StringView(id.c_str(), id.size()), out) && out.size() > 0U;
         };
-        return try_scheme(crd::containers::StringView("app://")) || try_scheme(crd::containers::StringView("engine://"));
+        if (try_scheme(crd::containers::StringView("app://")))
+        {
+            return ProgramSource::App;
+        }
+        if (try_scheme(crd::containers::StringView("engine://")))
+        {
+            return ProgramSource::Engine;
+        }
+        out.clear();
+        return ProgramSource::NotFound;
     }
     // ⭐⭐ RAF-10: the scene-material id for this cook (empty override ⇒ the shipped engine default), by the same
     // `cfg.textured` axis the single read site selects on.
@@ -4085,6 +4100,16 @@ bool SceneRenderer::set_app_asset_root(const char* dir)
     // namespaces (an app CANNOT shadow an engine asset — the ids hash differently by scheme).
     m_impl->resolver.set_mount(crd::renderasset::AssetScheme::App, crd::containers::StringView(dir));
     return true;
+}
+
+ProgramSource SceneRenderer::resolve_program_text(const char* rel, crd::containers::String& out)
+{
+    if (m_impl == nullptr || rel == nullptr)
+    {
+        out.clear();
+        return ProgramSource::NotFound;
+    }
+    return m_impl->program_source(rel, out);
 }
 
 const crd::gpu::IFrameGraph* SceneRenderer::debug_frame_graph() const noexcept

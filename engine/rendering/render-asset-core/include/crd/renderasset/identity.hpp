@@ -73,8 +73,9 @@ enum class AssetType : u8
 
 // The on-disk file extension for a canonical FOLDER (the first path segment): "frame"->".frame.toml",
 // "vertex"->".crdv", "material"->".crdm", "post"->".crdp", "lighting"->".crdl", "technique"->".crdt",
-// "lod"->".crdlod". Empty view for an unknown folder. ⛔ Keyed on the folder STRING, not `AssetType`: the folder is
-// authoritative, `infer_type` has no `post` case, and it maps "light" (not "lighting"). Extend as families are added.
+// "lod"->".crdlod", and the authored programs "ckir"->".ckir" and "ceir"->".ceir". Empty view for an unknown folder.
+// ⛔ Keyed on the folder STRING, not `AssetType`: the folder is authoritative, `infer_type` has no `post` case, and it
+// maps "light" (not "lighting"). Extend as families are added.
 [[nodiscard]] StringView asset_extension(StringView folder) noexcept;
 
 // Stable, deterministic 64-bit identity. `value == 0` is the reserved invalid id.

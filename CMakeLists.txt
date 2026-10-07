@@ -547,8 +547,9 @@ crd_module(engine/rendering/draw engine/draw
 # GEO-7 (D-007 row 72): scene <-> ECS <-> renderer integration on gpu-context (chunk-grain extract/cull/submit)
 crd_module(engine/rendering/scene-render engine/scene-render
     DEPENDS anim containers core frame-cook geometry-primitives gpu-context kir light-cook lod log material-cook math
-        memory render-asset-core resources scene vertex-cook TESTS rendering/scene-render
-    TEST_DEPENDS gpu-context-dx12 gpu-context-vulkan meshgen)
+        memory render-asset-core resources scene vertex-cook
+    TESTS rendering/scene-render applications/sandbox-inspect
+    TEST_DEPENDS ceir ceir-cook gpu-context-dx12 gpu-context-vulkan meshgen)
 crd_module(engine/rendering/draw-imgui engine/draw-imgui DEPENDS core draw imgui PACKAGES imgui)
 crd_module(engine/physics/eylem-viz engine/eylem-viz DEPENDS core draw eylem eylem-rigid3d math scene
     TESTS physics/eylem-viz)
@@ -589,8 +590,9 @@ crd_module(runtime
 if(CRD_BUILD_SANDBOX)
     # asset_cooker is a build-time dependency: the demo pack is cooked by $<TARGET_FILE:asset_cooker>.
     crd_module(sandbox
-        DEPENDS anim app asset_cooker draw geometry-spatial gpu-context gpu-context-dx12 gpu-context-vulkan imgui jobs kir
-            log memory perf perf-ui resources scene scene-render timeline
+        DEPENDS anim app asset_cooker ceir ceir-cook draw geometry-spatial gpu-context gpu-context-dx12
+            gpu-context-vulkan imgui jobs kir log memory perf perf-ui render-asset-core resources scene scene-render
+            timeline
         PACKAGES glfw imgui)
 endif()
 
