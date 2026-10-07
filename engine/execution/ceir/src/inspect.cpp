@@ -191,6 +191,25 @@ ValueStatus scope_at(const Operation* def, const Operation* at) noexcept
 }
 } // namespace
 
+StableId op_at_line(const plan::CompiledPlan& plan, const Context& ctx, containers::StringView file, u32 line) noexcept
+{
+    const u32 fid = find_file(ctx, file);
+    if (fid == 0U)
+    {
+        return StableId{};
+    }
+    for (usize s = 0; s < plan.sites.size(); ++s)
+    {
+        const plan::InstrSite&              site = plan.sites[s];
+        const containers::ConstSpan<Origin> origins(plan.site_origins.data() + site.origins_off, site.origins_cnt);
+        if (carries_line(origins, fid, line))
+        {
+            return site.op;
+        }
+    }
+    return StableId{};
+}
+
 Session::Session(memory::IAllocator* alloc, PauseScope scope, HostPause host)
     : m_alloc(alloc), m_scope(scope), m_host(host), m_breakpoints(alloc), m_bp_sites(alloc), m_bp_ops(alloc),
       m_reply(alloc)

@@ -47,6 +47,10 @@ cancels and answers typed value snapshots from the paused thread, bound to one p
 one cancel stops the pool work, and bodies on its own sub-interpreters count breakpoint hits instead of pausing.
 GPU dispatches recorded by `execute_lowered` under a session never pause, whatever its scope: a breakpoint there is
 counted, a pause request is refused and a cancel stops the recording before the next dispatch.
+crd-ceir-cook's `InspectHost` (`crd/ceir/cook/inspect_host.hpp`) is the composition a consumer uses: it cooks the
+authored text into a ReloadSet generation, compiles one entry, binds the session and runs the plan on its own executing
+thread, so the consumer's thread stays the controller. `ceridc inspect` is its headless consumer (a JSON report of
+every stop, the watched lines' typed values and the scripted steps; CLI-only until DIAG.8c).
 
 ## Maturity and further work
 

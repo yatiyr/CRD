@@ -608,6 +608,22 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-gpu-dispatch-non-p
   `execute_lowered` is classified; `execute_rt_lowered`, `execute_work_lowered` and the render executor take no
   session.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-inspect-host-and-headless-consumer.md)):
+- Consumers compose one host, crd-ceir-cook's `InspectHost`: it cooks the authored text under its file name into a
+  ReloadSet generation, compiles one entry, binds the session to the generation the set minted and runs the plan on
+  an executing thread it owns. The consumer's thread is the controller (declared at construction) and talks to the
+  execution only through the session's bounded requests, so neither waits on the other. Every install and every start
+  rebinds, so a request naming a replaced generation is refused `StaleGeneration`; a load or start while an
+  execution is attached is refused `Busy`; a rejected or failed reload keeps the last good generation; the destructor
+  cancels and joins a paused execution. The session and the executing thread allocate from the host's own allocators.
+- A consumer names a value by its authored line (`inspect::op_at_line`, the breakpoint resolution), never by a stable
+  id it guessed. The authored demo program is a committed asset (`assets/ceir/inspect_demo.ceir`, bootstrapped by
+  print and kept by an anti-drift check against its builder).
+- The headless consumer is `ceridc inspect`: it validates the whole request first, then reports every stop (authored
+  line, column, depth, op), each watched line's typed value and the scripted action, bounds the stops it reports
+  (past the bound it cancels and says `truncated`) and every wait, and exits nonzero unless the run finished or the
+  script cancelled it. It is CLI-only: the agent transports gain typed inspection authority in DIAG.8c.
+
 <a id="diag-8c"></a>
 ## DIAG.8c — typed human and agent diagnostics commands
 

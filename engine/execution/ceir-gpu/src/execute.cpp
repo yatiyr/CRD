@@ -288,6 +288,10 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
     };
     // DIAG.8b: attach the recording to the session before any work; it is detached on every return below.
     inspect::Session* const session = (inspect != nullptr) ? inspect->session : nullptr;
+    if (inspect != nullptr)
+    {
+        inspect->refusal = inspect::Refusal::None; // the out field's contract: None unless the session refuses below
+    }
     if (session != nullptr)
     {
         inspect->refusal = session->begin_device(inspect->generation);

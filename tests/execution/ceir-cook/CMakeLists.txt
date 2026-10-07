@@ -6,6 +6,7 @@ add_executable(crd-ceir-cook-tests
     test_band10_gate.cpp     # CEIR-10z: BAND-10 GATE (§172 matrix) - lifecycle (10a) + plan cache (10b) composed LIVE across the 3 edit classes (body-edit HotSwap keeps caller HIT, signature-reject keeps last-good, dep-edit recompiles affected(B)) with hit-count deltas
     test_reload_provenance.cpp # DIAG.8a: cook/reload provenance - file+positions in the blob, failed cook sites, installed positions kept/refreshed
     test_reload_inspect.cpp # DIAG.8b: runtime inspection across a hot reload - generation-bound sessions, line breakpoint rebinding, stale-generation refusals
+    test_inspect_host.cpp   # DIAG.8b: the inspect host the headless and sandbox consumers share - the committed authored demo stopped, stepped, snapshotted, cancelled and reloaded
     test_large_graph.cpp     # CEIR-35d Q6: large-graph SCALABILITY correctness - cook + load + execute a synthetic ~8k-op arith graph to the exact sum (no O(N^2)/buffer/recursion blowup); time-scaling is the Q7 board
 )
 
@@ -17,6 +18,9 @@ target_link_libraries(crd-ceir-cook-tests PRIVATE
     crd-resources      # the test FORGES CRDR containers directly (missing-CDEP / wrong-type) — the ceir-host precedent
     Catch2::Catch2WithMain
 )
+
+# DIAG.8b: the inspect-host gate reads the committed authored program assets/ceir/inspect_demo.ceir.
+target_compile_definitions(crd-ceir-cook-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-cook-tests)
 crd_discover_tests(crd-ceir-cook-tests)

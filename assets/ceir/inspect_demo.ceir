@@ -1,0 +1,24 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "scale"} {
+      ^bb0(%0 : !i32):
+        %1 = arith.muli(%0, %0) : !i32
+        func.return(%1)
+    }
+    func.func() {sym_name = "main"} {
+      ^bb0(%2 : !i32):
+        %3 = arith.const() {value = 0} : !i32
+        %4 = arith.const() {value = 1} : !i32
+        %5 = arith.const() {value = 2} : !i32
+        %6 = arith.const() {value = 7} : !qty<!i32,L1>
+        %7 = arith.addi(%4, %5) : !i32
+        %8 = arith.addi(%7, %7) : !i32
+        %9 = func.call(%8) {callee = @scale} : !i32
+        core.for(%3, %2, %4) {
+          ^bb0(%10 : !i32):
+            %11 = arith.addi(%10, %8) : !i32
+            core.yield()
+        }
+        func.return(%9)
+    }
+}

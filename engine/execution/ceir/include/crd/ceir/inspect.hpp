@@ -161,6 +161,12 @@ using RedactFn = RedactionClass (*)(StableId op, TypeId type, void* user);
 
 inline constexpr u32 kNoBreakpoint = 0xFFFFFFFFU;
 
+// The first compiled op of `plan` whose authored origins carry `file:line` (resolved the way a line breakpoint is: the
+// file through `ctx`, the Context the plan was compiled from). Invalid when the file is unknown or no site carries the
+// line. A consumer names a value to snapshot by its authored line through this, never by a stable id it guessed.
+[[nodiscard]] StableId op_at_line(const plan::CompiledPlan& plan, const Context& ctx, containers::StringView file,
+                                  u32 line) noexcept;
+
 // One breakpoint's binding in the bound generation.
 struct BindReport
 {
@@ -323,10 +329,12 @@ private:
     bool                                        m_bound  = false;
     u64                                         m_generation = 0U;
 
+    // The attached executor's kind: written by the executing thread and read by `request_pause`, both under m_mu.
+    Executor m_exec = Executor::None;
+
     // The executing thread's own state (written and read only by it).
     Resume                    m_step       = Resume::Continue;
     u32                       m_step_depth = 0U;
-    Executor                  m_exec       = Executor::None;
     const plan::CompiledPlan* m_cur_plan   = nullptr;
     const plan::SafePoint*    m_cur_sp     = nullptr;
     exec::Interpreter*        m_cur_in     = nullptr;

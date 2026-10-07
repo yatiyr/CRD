@@ -3,6 +3,7 @@
 // one line out — the transport shell over mcp_handle).
 
 #include <crd/ceridc/verbs.hpp>
+#include <crd/containers/array.hpp>
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
@@ -41,6 +42,19 @@ crd::memory::GrowableTlsfAllocator g_alloc;
     return false;
 }
 
+// Every value of a repeatable flag (`--break 7 --break 9`), in order.
+void flags_of(int argc, char** argv, const char* name, crd::containers::Array<const char*>& out)
+{
+    for (int i = 2; i < argc - 1; ++i)
+    {
+        if (std::strcmp(argv[i], name) == 0)
+        {
+            out.push_back(argv[i + 1]);
+            ++i;
+        }
+    }
+}
+
 [[nodiscard]] int emit(const crd::containers::String& report)
 {
     std::printf("%s\n", report.c_str());
@@ -59,6 +73,8 @@ void print_usage()
         "                  [--transition <frames>] --out-timl <f> --out-otio <f>\n"
         "  ceridc render --otio <f> --dir <d> [--max-frames <n>]\n"
         "  ceridc export --timl <f> --out <f.otio>\n"
+        "  ceridc inspect --program <f.ceir> [--entry <name>] [--arg <i64>]... [--break <line>]...\n"
+        "                 [--watch <line>]... [--step continue|into|over|out|cancel]... [--max-stops <n>]\n"
         "  ceridc mcp    (JSON-RPC 2.0 over stdio — one message per line)\n");
 }
 
@@ -143,6 +159,37 @@ int main(int argc, char* argv[])
     {
         return emit(crd::ceridc::verb_export_timeline(flag_of(argc, argv, "--timl", nullptr),
                                                       flag_of(argc, argv, "--out", nullptr), &g_alloc));
+    }
+    if (std::strcmp(verb, "inspect") == 0)
+    {
+        crd::containers::Array<const char*> raw(&g_alloc);
+        crd::containers::Array<crd::i64>    args(&g_alloc);
+        crd::containers::Array<crd::u32>    breaks(&g_alloc);
+        crd::containers::Array<crd::u32>    watches(&g_alloc);
+        crd::containers::Array<const char*> steps(&g_alloc);
+        flags_of(argc, argv, "--arg", raw);
+        for (const char* a : raw)
+        {
+            args.push_back(std::atoll(a));
+        }
+        raw.clear();
+        flags_of(argc, argv, "--break", raw);
+        for (const char* b : raw)
+        {
+            breaks.push_back(static_cast<crd::u32>(std::strtoul(b, nullptr, 10)));
+        }
+        raw.clear();
+        flags_of(argc, argv, "--watch", raw);
+        for (const char* v : raw)
+        {
+            watches.push_back(static_cast<crd::u32>(std::strtoul(v, nullptr, 10)));
+        }
+        flags_of(argc, argv, "--step", steps);
+        return emit(crd::ceridc::verb_inspect(
+            flag_of(argc, argv, "--program", nullptr), flag_of(argc, argv, "--entry", nullptr),
+            crd::containers::as_const_span(args), crd::containers::as_const_span(breaks),
+            crd::containers::as_const_span(watches), crd::containers::as_const_span(steps),
+            static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--max-stops", "0"), nullptr, 10)), &g_alloc));
     }
     print_usage();
     return 1;

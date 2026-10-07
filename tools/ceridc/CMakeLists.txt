@@ -26,6 +26,9 @@ target_link_libraries(crd-ceridc
         crd-timeline
         crd-audio
         crd-cooker
+    PRIVATE
+        crd-ceir      # DIAG.8b: the inspect verb runs an authored CEIR program under an inspect session
+        crd-ceir-cook # DIAG.8b: the InspectHost (ReloadSet generation, compiled entry, executing thread)
 )
 
 target_compile_features(crd-ceridc PUBLIC cxx_std_20)

@@ -7,7 +7,7 @@
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
 // transports (the Blender-MCP lesson: the surface is the product, the socket is plumbing).
 //
-// Verbs: import · cook · query · instantiate · sequence · render · export_timeline.
+// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect (DIAG.8b; CLI-only).
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
@@ -50,6 +50,21 @@ namespace crd::ceridc
 // Convert a TIML artifact back to `.otio` (the interchange edge, resource → NLE).
 [[nodiscard]] crd::containers::String verb_export_timeline(const char* timl_path, const char* out_otio,
                                                            crd::memory::IAllocator* alloc);
+
+// DIAG.8b: run the authored CEIR text program at `program_path` (cooked under that name) from `entry` (default "main")
+// with `args`, under a runtime inspection session on its own executing thread. At every stop (a `breaks` line, or a
+// step) the report records the stop's authored line, column and call depth and each `watches` line's typed value
+// (status, type text, unit flag, value when available), then applies the next of `actions` ("continue", "into",
+// "over", "out", "cancel"; "continue" once they run out). At most `max_stops` stops are reported (0 = 64); past that
+// the run is cancelled and the report says `truncated`. `ok` is true when the run finished or was cancelled by the
+// script. CLI-only: typed authority over runtime inspection for agent transports is DIAG.8c's, so it is not a tool
+// in `tools/list` yet.
+[[nodiscard]] crd::containers::String verb_inspect(const char* program_path, const char* entry,
+                                                   crd::containers::ConstSpan<crd::i64> args,
+                                                   crd::containers::ConstSpan<crd::u32> breaks,
+                                                   crd::containers::ConstSpan<crd::u32> watches,
+                                                   crd::containers::ConstSpan<const char*> actions,
+                                                   crd::u32 max_stops, crd::memory::IAllocator* alloc);
 
 // ── MCP ────────────────────────────────────────────────────────────────────────────────────────────────────────
 // One JSON-RPC 2.0 request line → the response line ("" for notifications). Handles initialize · ping ·

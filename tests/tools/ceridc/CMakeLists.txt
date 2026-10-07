@@ -1,5 +1,6 @@
 add_executable(crd-ceridc-tests
     test_ceridc.cpp # GEO-11: THE AGENT GATE — the full scenario through MCP alone + the stdio transport smoke
+    test_ceridc_inspect.cpp # DIAG.8b: the headless inspection consumer — `ceridc inspect` on the committed authored program
 )
 
 target_link_libraries(crd-ceridc-tests PRIVATE
@@ -17,6 +18,9 @@ target_link_libraries(crd-ceridc-tests PRIVATE
 if(MSVC)
     target_compile_definitions(crd-ceridc-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv/system (the stdio smoke)
 endif()
+
+# DIAG.8b: the inspect gate runs the committed authored program assets/ceir/inspect_demo.ceir.
+target_compile_definitions(crd-ceridc-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceridc-tests)
 

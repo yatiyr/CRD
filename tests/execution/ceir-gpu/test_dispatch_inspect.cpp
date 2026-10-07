@@ -333,5 +333,10 @@ TEST_CASE("diag 8b: a recording for another generation or an unbound session is 
         HookRec rec;
         CHECK(rig.record(rec, nullptr, nullptr) == ExecuteError::None);
         CHECK(rec.dispatches == 2);
+        // A DeviceInspect without a session reports no refusal, whatever its out field held before.
+        DeviceInspect none{nullptr, kGen, insp::Refusal::Busy};
+        CHECK(rig.record(rec, nullptr, &none) == ExecuteError::None);
+        CHECK(none.refusal == insp::Refusal::None);
+        CHECK(rec.dispatches == 4);
     }
 }
