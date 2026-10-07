@@ -494,6 +494,11 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   closest-known origin). `ORIG` is written only when some op has an origin, so origin-free blobs are unchanged.
 - The compiled plan owns per-instr sites resolved at compile (outliving the Module), read only on diagnostic queries;
   `CompileResult::op` and `RunResult::fault` name the innermost offender; the parser reports `line:col` and the file.
+- Cook and reload (2026-10-07, [session](../sessions/2026-10-07-diag-8a-cook-and-reload-provenance.md)): a text
+  cook takes the authored file and its blob carries the positions; a failed cook reports a POD `CookSite` (line, column,
+  offender id, gap) that outlives the transient cook Context and rides `AddResult`/`ReloadResult`. The installed
+  generation keeps its own positions through failed reloads; a `NoChange` reload whose candidate has origins refreshes
+  them op-for-op (handles stay current), an origin-free candidate does not, and plans compiled earlier keep theirs.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop

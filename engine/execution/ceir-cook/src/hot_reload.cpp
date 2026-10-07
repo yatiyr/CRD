@@ -4,6 +4,7 @@
 #include <crd/ceir/func.hpp>          // func_kind
 #include <crd/ceir/ir.hpp>            // Operation / Module / Block
 #include <crd/ceir/program_asset.hpp> // interface_hash / contract_hash / collect_dependencies / DependencyRecord
+#include <crd/ceir/provenance.hpp>    // Origin (DIAG.8a: a NoChange reload refreshes authored positions)
 #include <crd/ceir/symbol_table.hpp>  // Visibility / SymbolEntry / SymbolTable
 
 #include <new>     // placement new
@@ -51,6 +52,65 @@ struct GuardScope
     GuardScope(GuardScope&&)                 = delete;
     GuardScope& operator=(GuardScope&&)      = delete;
 };
+
+// Every op of `r` in pre-order (an op, then its regions' ops) into `out`. Equal content hashes imply equal structure,
+// so two such lists zip op-for-op.
+void collect_ops(const Region* r, containers::Array<const Operation*>& out)
+{
+    if (r == nullptr)
+    {
+        return;
+    }
+    for (const Block* b = r->first_block(); b != nullptr; b = b->next_in_region())
+    {
+        for (const Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
+        {
+            out.push_back(op);
+            for (u32 i = 0; i < op->num_regions(); ++i)
+            {
+                collect_ops(op->region(i), out);
+            }
+        }
+    }
+}
+
+// DIAG.8a: a NoChange reload keeps the installed generation (its handles stay current) but the authored text may have
+// moved (a reformat changes no content hash). Copy the candidate's origins onto the installed ops, re-registering each
+// file path in the installed Context, so the installed program navigates to the text that was just loaded. A candidate
+// with no origins at all (an origin-free blob) carries no position information and leaves the installed ones as they
+// are. Each refresh arena-copies the lists into the installed Context, which lives until the generation retires.
+void refresh_origins(Generation& installed, const Generation& cand, memory::IAllocator* scratch)
+{
+    containers::Array<const Operation*> dst(scratch);
+    containers::Array<const Operation*> src(scratch);
+    collect_ops(installed.program.module->body(), dst);
+    collect_ops(cand.program.module->body(), src);
+    bool any = false;
+    for (crd::usize i = 0; i < src.size() && !any; ++i)
+    {
+        any = cand.ctx->origins(src[i]).size() != 0U;
+    }
+    if (!any || dst.size() != src.size())
+    {
+        return;
+    }
+    containers::Array<Origin> list(scratch);
+    for (crd::usize i = 0; i < src.size(); ++i)
+    {
+        const containers::ConstSpan<Origin> from = cand.ctx->origins(src[i]);
+        list.clear();
+        for (crd::usize k = 0; k < from.size(); ++k)
+        {
+            Origin o = from[k];
+            if (o.loc.file_id != 0U)
+            {
+                o.loc.file_id = installed.ctx->register_file(cand.ctx->file_path(o.loc.file_id));
+            }
+            list.push_back(o);
+        }
+        installed.ctx->set_origins(dst[i], containers::ConstSpan<Origin>(list.data(), list.size()));
+    }
+}
 
 // Every PUBLICLY-exported func symbol of a generation's module → `out` (StringViews into that generation's Context arena;
 // valid only while the Context is live). Top-level func ops only (funcs are module-body children).
@@ -368,21 +428,26 @@ ReloadResult ReloadSet::reload_impl(AssetId id, containers::ConstSpan<crd::u8> b
     }
     else
     {
+        if (dec == ReloadDecision::NoChange)
+        {
+            refresh_origins(*e->current, *cand, m_alloc);
+        }
         destroy_generation(cand); // reject / no-change: the candidate was never installed → destroy it (the leak path)
         r.installed = false;
     }
     return r;
 }
 
-bool ReloadSet::cook_source(AssetId id, containers::StringView source, containers::Array<crd::u8>& out_blob,
-                            CookError& out_cook)
+bool ReloadSet::cook_source(AssetId id, containers::StringView source, containers::StringView file,
+                            containers::Array<crd::u8>& out_blob, CookError& out_cook, CookSite& out_site)
 {
     // transient cook Context — construct / register / cook / destroy (never cached); the cooked bytes are self-contained.
     void* const    cm   = m_alloc->allocate(sizeof(Context), alignof(Context));
     Context* const cctx = new (cm) Context(m_alloc);
     m_reg(*cctx, m_user); // register dialects so the cook-time verifiers are not vacuous (§121 text ≡ builder)
-    CookResult cr = cook_program_text(*cctx, source, id.value, m_alloc, m_alloc);
+    CookResult cr = cook_program_text(*cctx, source, file, id.value, m_alloc, m_alloc);
     out_cook       = cr.error;
+    out_site       = cr.site; // DIAG.8a: plain values, copied out before the cook Context dies
     const bool cok = cr.ok();
     if (cok) // move out BEFORE the cook Context dies (bytes are m_alloc-owned)
     {
@@ -393,7 +458,7 @@ bool ReloadSet::cook_source(AssetId id, containers::StringView source, container
     return cok;
 }
 
-AddResult ReloadSet::add_source(AssetId id, containers::StringView source)
+AddResult ReloadSet::add_source(AssetId id, containers::StringView source, containers::StringView file)
 {
     if (m_reloading)
     {
@@ -402,14 +467,15 @@ AddResult ReloadSet::add_source(AssetId id, containers::StringView source)
     const GuardScope           gs(m_reloading);
     containers::Array<crd::u8> blob(m_alloc);
     CookError                  ce = CookError::Ok;
-    if (!cook_source(id, source, blob, ce))
+    CookSite                   site{};
+    if (!cook_source(id, source, file, blob, ce, site))
     {
-        return AddResult{AddError::CookFailed, LoadError::Ok, ce};
+        return AddResult{AddError::CookFailed, LoadError::Ok, ce, site};
     }
     return add_impl(id, containers::ConstSpan<crd::u8>(blob.data(), blob.size()));
 }
 
-ReloadResult ReloadSet::reload_source(AssetId id, containers::StringView source)
+ReloadResult ReloadSet::reload_source(AssetId id, containers::StringView source, containers::StringView file)
 {
     if (m_reloading)
     {
@@ -418,9 +484,10 @@ ReloadResult ReloadSet::reload_source(AssetId id, containers::StringView source)
     const GuardScope           gs(m_reloading);
     containers::Array<crd::u8> blob(m_alloc);
     CookError                  ce = CookError::Ok;
-    if (!cook_source(id, source, blob, ce))
+    CookSite                   site{};
+    if (!cook_source(id, source, file, blob, ce, site))
     {
-        return ReloadResult{.load_ok = false, .cook_error = ce};
+        return ReloadResult{.load_ok = false, .cook_error = ce, .cook_site = site};
     }
     return reload_impl(id, containers::ConstSpan<crd::u8>(blob.data(), blob.size()));
 }

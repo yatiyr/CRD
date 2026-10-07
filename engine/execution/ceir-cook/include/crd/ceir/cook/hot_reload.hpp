@@ -82,6 +82,7 @@ struct AddResult
     AddError  error      = AddError::Ok;
     LoadError load_error = LoadError::Ok;  // valid iff error == LoadFailed
     CookError cook_error = CookError::Ok;  // valid iff error == CookFailed
+    CookSite  cook_site{};                 // DIAG.8a: valid iff error == CookFailed (the caller's file; see add_source)
     [[nodiscard]] bool ok() const noexcept { return error == AddError::Ok; }
 };
 
@@ -93,6 +94,7 @@ struct ReloadResult
     bool           reentrant  = false;         // ⛔ true ⇒ rejected as a re-entrant call (nothing happened)
     LoadError      load_error = LoadError::Ok; // valid iff a load was attempted and failed
     CookError      cook_error = CookError::Ok; // valid iff a source reload did not cook (reload_source)
+    CookSite       cook_site{};                // DIAG.8a: where that failed cook points (valid iff cook_error != Ok)
 };
 
 // A set of hot-reloadable CEIR programs under one reload authority. ⛔ NOT thread-safe (single-thread reload authority).
@@ -120,8 +122,12 @@ public:
     // DISTINCT typed outcome (`CookFailed` / `cook_error`) that installs + destroys NOTHING → last-good keeps running (the
     // most common real hot-reload event). The mtime/filesystem SIGNAL that supplies `source` is production I/O
     // (named-forward) — this is the seam it invokes; ⛔ CEIR owns the swap, never the ResourceManager (two-swap-authority).
-    AddResult    add_source(AssetId id, containers::StringView source);
-    ReloadResult reload_source(AssetId id, containers::StringView source);
+    // DIAG.8a: `file` names the authored source (empty = unnamed). The cooked blob carries each op's position in it, so
+    // the installed generation's Context resolves every op to `file:line:col` and keeps doing so while later reloads
+    // fail. A failed cook's `cook_site` is copied out of the transient Context before it dies: its line, column and
+    // offender id are plain values and its file is `file` (`cook_site.file_id` is 0 when `file` is empty).
+    AddResult    add_source(AssetId id, containers::StringView source, containers::StringView file = {});
+    ReloadResult reload_source(AssetId id, containers::StringView source, containers::StringView file = {});
 
     // Remove a program (the cold-reload half — the honest path for a contract change). Rebuilds the graph.
     void remove(AssetId id);
@@ -174,8 +180,9 @@ private:
     [[nodiscard]] ReloadResult reload_impl(AssetId id, containers::ConstSpan<crd::u8> blob);
     // Cook `source` in a transient Context; on success delegates to `deleg` (add_impl / reload_impl via a tiny thunk). On a
     // cook failure sets `out_cook`. Returns whether the cook succeeded.
-    [[nodiscard]] bool         cook_source(AssetId id, containers::StringView source, containers::Array<crd::u8>& out_blob,
-                                           CookError& out_cook);
+    [[nodiscard]] bool         cook_source(AssetId id, containers::StringView source, containers::StringView file,
+                                           containers::Array<crd::u8>& out_blob, CookError& out_cook,
+                                           CookSite& out_site);
 
     memory::IAllocator*        m_alloc;
     Registrar                  m_reg;

@@ -279,7 +279,11 @@ containers::StringView read_error_name(ReadError e) noexcept
     return containers::StringView("unknown");
 }
 
-CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, memory::IAllocator* alloc,
+namespace
+{
+// The checked cook (every early return is a typed failure with `op` set where one is known); `cook_program` adds the
+// DIAG.8a authored site on top so each return point does not have to.
+CookResult cook_checked(Context& ctx, const Module& module, crd::u64 asset_id, memory::IAllocator* alloc,
                         memory::IAllocator* scratch, KernelResolveFn resolve, void* user)
 {
     CookResult r(alloc);
@@ -387,17 +391,64 @@ CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, m
     return r;
 }
 
-CookResult cook_program_text(Context& ctx, containers::StringView source, crd::u64 asset_id, memory::IAllocator* alloc,
-                            memory::IAllocator* scratch, KernelResolveFn resolve, void* user)
+// Resolve a verifier failure's offender to its closest-known authored origin while `ctx` is alive.
+void fill_site(const Context& ctx, CookResult& r, memory::IAllocator* scratch)
 {
-    const ParseResult pr = parse(ctx, source);
+    if (r.ok() || r.op == nullptr)
+    {
+        return;
+    }
+    containers::Array<Origin> storage(scratch);
+    const Provenance          p = resolve_provenance(ctx, r.op, storage);
+    r.site.op                   = p.op;
+    r.site.gap                  = p.gap;
+    if (const Origin* const o = p.primary())
+    {
+        r.site.file_id = o->loc.file_id;
+        r.site.line    = o->loc.line;
+        r.site.col     = o->loc.col;
+    }
+}
+
+CookResult cook_text_in_file(Context& ctx, containers::StringView source, crd::u32 file_id, crd::u64 asset_id,
+                             memory::IAllocator* alloc, memory::IAllocator* scratch, KernelResolveFn resolve,
+                             void* user)
+{
+    const ParseResult pr = parse(ctx, source, file_id);
     if (!pr.ok || pr.module == nullptr)
     {
         CookResult r(alloc);
-        r.error = CookError::ParseFailed;
+        r.error        = CookError::ParseFailed;
+        r.site.file_id = pr.error_file_id;
+        r.site.line    = pr.error_line;
+        r.site.col     = pr.error_col;
+        r.site.gap     = pr.error_line != 0U ? ProvenanceGap::None : ProvenanceGap::NoSourceLocation;
         return r;
     }
     return cook_program(ctx, *pr.module, asset_id, alloc, scratch, resolve, user); // the SAME cook — no privileged path (§121)
+}
+} // namespace
+
+CookResult cook_program(Context& ctx, const Module& module, crd::u64 asset_id, memory::IAllocator* alloc,
+                        memory::IAllocator* scratch, KernelResolveFn resolve, void* user)
+{
+    CookResult r = cook_checked(ctx, module, asset_id, alloc, scratch, resolve, user);
+    fill_site(ctx, r, scratch);
+    return r;
+}
+
+CookResult cook_program_text(Context& ctx, containers::StringView source, crd::u64 asset_id, memory::IAllocator* alloc,
+                             memory::IAllocator* scratch, KernelResolveFn resolve, void* user)
+{
+    return cook_text_in_file(ctx, source, 0U, asset_id, alloc, scratch, resolve, user);
+}
+
+CookResult cook_program_text(Context& ctx, containers::StringView source, containers::StringView file,
+                             crd::u64 asset_id, memory::IAllocator* alloc, memory::IAllocator* scratch,
+                             KernelResolveFn resolve, void* user)
+{
+    const crd::u32 file_id = file.empty() ? 0U : ctx.register_file(file);
+    return cook_text_in_file(ctx, source, file_id, asset_id, alloc, scratch, resolve, user);
 }
 
 ReadResult read_program(Context& ctx, containers::ConstSpan<crd::u8> blob, memory::IAllocator* alloc)

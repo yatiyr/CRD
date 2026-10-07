@@ -9,6 +9,7 @@
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/program_asset.hpp> // DependencyRecord
+#include <crd/ceir/provenance.hpp>    // ProvenanceGap (DIAG.8a cook-failure site)
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
@@ -44,8 +45,22 @@ enum class CookError : crd::u8
 // no std::function). In production this is backed by the ADR-0104 cook cache; a test supplies a table-backed mock.
 using KernelResolveFn = bool (*)(containers::StringView name, void* user, crd::u64& out_interface);
 
+// DIAG.8a: where a failed cook points, as plain values that outlive the cook's Context (a reload cooks in a transient
+// Context and destroys it before returning). A parse failure carries the text position the parser stopped at; a
+// verifier failure carries the offending op's closest-known authored origin (`resolve_provenance`). `gap` says what is
+// unknown: None (a position is known), NoSourceLocation (an op without any recorded position) or NoOperation (no op).
+struct CookSite
+{
+    crd::u32      file_id = 0U; // the position's file in the COOK's Context (`Context::file_path`); 0 = unnamed
+    crd::u32      line    = 0U; // 1-based; 0 = no position
+    crd::u32      col     = 0U; // 1-based; 0 = no position
+    StableId      op{};         // the offender's stable id (invalid for a parse failure or an op without one)
+    ProvenanceGap gap = ProvenanceGap::NoOperation;
+};
+
 // The result of a cook: on success `blob` is the self-describing CRDR bytes + the two hashes; on failure `error` names
-// why and `op` points at the offender (nullptr when ok / NoModuleBody).
+// why, `op` points at the offender (nullptr when ok / NoModuleBody / ParseFailed) and `site` says where it was
+// authored.
 struct CookResult
 {
     containers::Array<crd::u8> blob;
@@ -53,6 +68,7 @@ struct CookResult
     crd::u64                   interface_hash = 0U; // §107 — invalidates dependents ONLY on an interface change
     CookError                  error          = CookError::Ok;
     const Operation*           op             = nullptr;
+    CookSite                   site{};              // DIAG.8a: meaningful only when !ok()
     explicit CookResult(memory::IAllocator* a) : blob(a) {}
     [[nodiscard]] bool ok() const noexcept { return error == CookError::Ok; }
 };
@@ -71,6 +87,13 @@ struct CookResult
 // program built in C++ produce byte-identical content + interface hashes (the no-privileged-path property, §121).
 [[nodiscard]] CookResult cook_program_text(Context& ctx, containers::StringView source, crd::u64 asset_id,
                                            memory::IAllocator* alloc, memory::IAllocator* scratch,
+                                           KernelResolveFn resolve = nullptr, void* user = nullptr);
+
+// DIAG.8a: cook `source` as the contents of the authored file `file` (registered in `ctx`; an empty path = unnamed).
+// Every parsed op records its line:col as provenance (outside the content hash: the cooked blob's 'ORIG' chunk), so a
+// program loaded from the blob still navigates to `file`. A failure's `site` names the file, line and column.
+[[nodiscard]] CookResult cook_program_text(Context& ctx, containers::StringView source, containers::StringView file,
+                                           crd::u64 asset_id, memory::IAllocator* alloc, memory::IAllocator* scratch,
                                            KernelResolveFn resolve = nullptr, void* user = nullptr);
 
 // Why a read FAILED.
