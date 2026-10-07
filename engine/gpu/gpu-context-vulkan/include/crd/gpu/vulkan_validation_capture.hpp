@@ -45,6 +45,12 @@ struct ValidationMessage
     // DIAG.7a(d1): the stable Cerid identity, resolved from the named objects the message references (each object's
     // debug-utils name), falling back to the message prose. Default-invalid == "no crd token found".
     ObjectIdentity          identity{};
+    // DIAG.7c(e): the layer's message-ID name (pMessageIdName, e.g. a VUID), empty when the layer gave none.
+    crd::containers::String message_id_name{};
+    // DIAG.7c(e): the layer reported that GPU-assisted validation could not instrument some work (for example a
+    // layout that uses the descriptor-set slot the instrumentation needs). Counted in
+    // ValidationReport::instrumentation_failures.
+    bool                    instrumentation_refused = false;
 };
 
 class ValidationCapture
@@ -70,9 +76,14 @@ public:
     // "dropped validation messages are not a clean run" -- before this the count was tracked but unreachable.
     [[nodiscard]] crd::u32 dropped_count() const noexcept;
 
+    // Messages in which the layer said GPU-assisted validation could not instrument some work (DIAG.7c(e)): that work
+    // runs unchecked, so a run that saw one is not clean even if nothing else was reported.
+    [[nodiscard]] crd::u32 uninstrumented_count() const noexcept;
+
     // This capture projected onto the common backend-agnostic ValidationReport (severity counts + dropped). A gate
-    // can then call report().clean() identically for either backend. (truncated/instrumentation_failures are 0 here:
-    // Vulkan records store full text and the layer-absent case is surfaced via validation_layer_spec_version().)
+    // can then call report().clean() identically for either backend. instrumentation_failures is
+    // uninstrumented_count(); truncated is 0 (Vulkan records store full text; the layer-absent case is surfaced via
+    // validation_layer_spec_version()).
     [[nodiscard]] ValidationReport report() const noexcept;
 
     // Captured message records (capped at 256 to bound memory; overflow drops with a count-only signal).

@@ -447,6 +447,17 @@ Acceptance: controlled missing-barrier/stale-resource cases, asynchronous report
 descriptor-limit fallback and device-loss capture on declared Windows/Linux tuples. External RenderDoc/vendor tools
 may supplement evidence, never replace the public reporting path or constitute unsupported platform qualification.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7c-descriptor-limit-and-stale-layout.md)):
+- **Descriptor-limit fallback.** GPU-assisted instrumentation binds its own set at the device's last slot
+  (`maxBoundDescriptorSets - 1`), and the layer does not lower the limit it reports. The context therefore reports the
+  slot (`VulkanValidationLayer::instrumentation_set_slot`, `instruments(n)`). The capture classifies the layer's GPU-AV
+  setup warning (`WARNING-GPU-Assisted-Validation`, pinned to the SDK's layer) as an instrumentation refusal, carried
+  by the common `ValidationReport::instrumentation_failures`. A run that saw one is not clean, because the refused
+  work ran unchecked.
+- **Asynchronous reports.** GPU-AV results arrive only once completion is observed (the fence wait), never at record
+  or submit. On VVL 1.4.341 the Core image-layout mismatch, although it names `vkQueueSubmit`, also arrives at the
+  wait. Gates assert "nothing at record, correlated by the wait"; they never assert the submit-time count.
+
 <a id="diag-8a"></a>
 ## DIAG.8a — authored source and lowering provenance
 

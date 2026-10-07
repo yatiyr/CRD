@@ -205,6 +205,32 @@ private:
     return va;
 }
 
+// DIAG.7a(f) + 7c(e): GPU-assisted is ACTIVE only if the device advertises the stores/atomics features its shader
+// instrumentation needs; otherwise the layer cannot instrument and the mode stays FeatureAbsent. Once active, the
+// instrumentation binds its own descriptor set at the device's last slot, which the layer does not subtract from the
+// limit it reports, so the slot is recorded for consumers (VulkanValidationLayer::instruments).
+void resolve_gpu_assisted(VkPhysicalDevice physical, const VkPhysicalDeviceFeatures& available,
+                          ValidationActivation& va, VulkanValidationLayer& layer) noexcept
+{
+    constexpr auto gpu_assisted = static_cast<crd::usize>(ValidationMode::GpuAssisted);
+    if (!va.requested[gpu_assisted] || va.reason[gpu_assisted] != ValidationUnsupportedReason::FeatureAbsent)
+    {
+        return;
+    }
+    if (available.fragmentStoresAndAtomics != VK_TRUE || available.vertexPipelineStoresAndAtomics != VK_TRUE)
+    {
+        return;
+    }
+    va.active[gpu_assisted] = true;
+    va.reason[gpu_assisted] = ValidationUnsupportedReason::None;
+    VkPhysicalDeviceProperties props{};
+    vkGetPhysicalDeviceProperties(physical, &props);
+    if (props.limits.maxBoundDescriptorSets > 0U)
+    {
+        layer.instrumentation_set_slot = props.limits.maxBoundDescriptorSets - 1U;
+    }
+}
+
 class VulkanGpuContextImpl final : public VulkanGpuContext
 {
 public:
@@ -930,16 +956,7 @@ private:
         VkPhysicalDeviceFeatures avail_feats{};
         vkGetPhysicalDeviceFeatures(m_physical, &avail_feats);
         m_int64 = avail_feats.shaderInt64 == VK_TRUE;
-        // DIAG.7a(f): GPU-assisted is ACTIVE only if the device advertises the stores/atomics features its shader
-        // instrumentation needs; otherwise the layer cannot instrument -> stays FeatureAbsent.
-        if (m_validation_activation.requested[2] && m_validation_activation.reason[2] == ValidationUnsupportedReason::FeatureAbsent)
-        {
-            if (avail_feats.fragmentStoresAndAtomics == VK_TRUE && avail_feats.vertexPipelineStoresAndAtomics == VK_TRUE)
-            {
-                m_validation_activation.active[2] = true;
-                m_validation_activation.reason[2] = ValidationUnsupportedReason::None;
-            }
-        }
+        resolve_gpu_assisted(m_physical, avail_feats, m_validation_activation, m_validation_layer);
         VkPhysicalDeviceFeatures enabled_feats{};
         enabled_feats.shaderInt64 = avail_feats.shaderInt64;
         // DIAG.7a(f): when GPU-assisted validation is ACTIVE, enable the stores/atomics features its shader

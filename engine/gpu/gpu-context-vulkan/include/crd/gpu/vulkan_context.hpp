@@ -34,6 +34,8 @@ public:
 // DIAG.7c(b): what a context learned about `VK_LAYER_KHRONOS_validation`. The instance layers are enumerated BEFORE the
 // layer is requested, so an absent layer is a reported capability (every requested mode LayerAbsent, the context still
 // valid) instead of a failed vkCreateInstance. The versions pin the layer a validation report came from.
+inline constexpr crd::u32 kNoInstrumentationSetSlot = 0xFFFFFFFFU;
+
 struct VulkanValidationLayer
 {
     bool     queried                = false; // a validation mode was requested, so the layers were enumerated
@@ -41,6 +43,17 @@ struct VulkanValidationLayer
     crd::u32 spec_version           = 0;     // VkLayerProperties::specVersion (the Vulkan header it targets)
     crd::u32 implementation_version = 0;     // VkLayerProperties::implementationVersion
     bool     gpu_assisted_guarded   = false; // GPU-assisted requested and run in the layer's safe mode (DIAG.7c)
+    // DIAG.7c(e): the descriptor-set slot GPU-assisted instrumentation binds its own set at: the device's last slot,
+    // maxBoundDescriptorSets - 1. The layer does NOT lower the limit it reports, so this is the only place a consumer
+    // learns that a layout using that slot runs uninstrumented. kNoInstrumentationSetSlot when GPU-assisted is
+    // inactive.
+    crd::u32 instrumentation_set_slot = kNoInstrumentationSetSlot;
+
+    // Would GPU-assisted validation instrument a pipeline or shader object whose layout has `set_layout_count` sets?
+    [[nodiscard]] bool instruments(crd::u32 set_layout_count) const noexcept
+    {
+        return instrumentation_set_slot != kNoInstrumentationSetSlot && set_layout_count <= instrumentation_set_slot;
+    }
 };
 
 // Concrete-Vulkan view of an IGpuContext. `backend() == GpuBackend::Vulkan` guarantees a safe downcast.

@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstring>
 #include <mutex>
+#include <string_view>
 
 namespace crd::gpu
 {
@@ -30,6 +31,17 @@ constexpr crd::usize kMaxRecordedMessages = 256;
     return ValidationSeverity::Info;
 }
 
+// DIAG.7c(e): the message-ID name the layer gives its GPU-assisted setup warnings, among them "this layout uses the
+// descriptor-set slot the instrumentation needs, so pipelines (or shader objects) created with it are not
+// instrumented".
+// Pinned to the SDK's layer (1.4.341); the DIAG.7c(e) device test fails if a layer update renames it.
+constexpr std::string_view kGpuAssistedSetupWarning = "WARNING-GPU-Assisted-Validation";
+
+[[nodiscard]] bool is_instrumentation_refusal(const char* message_id_name) noexcept
+{
+    return message_id_name != nullptr && std::string_view{message_id_name} == kGpuAssistedSetupWarning;
+}
+
 } // namespace
 
 struct ValidationCapture::Impl
@@ -41,6 +53,7 @@ struct ValidationCapture::Impl
     std::atomic<crd::u32> errors{0};
     std::atomic<crd::u32> warnings{0};
     std::atomic<crd::u32> infos{0};
+    std::atomic<crd::u32> uninstrumented{0}; // DIAG.7c(e)
 
     mutable std::mutex                        records_mu;
     crd::containers::Array<ValidationMessage> records{};
@@ -76,7 +89,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
         }
     }
 
-    const auto sev = to_severity(severity);
+    const auto sev     = to_severity(severity);
+    const bool refused = is_instrumentation_refusal(callback_data->pMessageIdName);
     if (!whitelisted)
     {
         switch (sev)
@@ -84,6 +98,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
         case ValidationSeverity::Error: impl->errors.fetch_add(1, std::memory_order_relaxed); break;
         case ValidationSeverity::Warning: impl->warnings.fetch_add(1, std::memory_order_relaxed); break;
         case ValidationSeverity::Info: impl->infos.fetch_add(1, std::memory_order_relaxed); break;
+        }
+        if (refused)
+        {
+            impl->uninstrumented.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
@@ -96,6 +114,11 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
             rec.message_id_number = msg_id;
             rec.message_text =
                 crd::containers::String(callback_data->pMessage != nullptr ? callback_data->pMessage : "(null)");
+            if (callback_data->pMessageIdName != nullptr)
+            {
+                rec.message_id_name = crd::containers::String(callback_data->pMessageIdName);
+            }
+            rec.instrumentation_refused = refused;
             // DIAG.7a(d1): resolve the Cerid identity from the named objects this message references (each carries its
             // debug-utils name); first valid token wins. If no named object yields one, fall back to the message prose.
             // Multi-object correlation (which of several named objects is "the" subject) is (e)/(g), not (d1).
@@ -210,6 +233,11 @@ crd::u32 ValidationCapture::info_count() const noexcept
     return m_impl ? m_impl->infos.load(std::memory_order_relaxed) : 0U;
 }
 
+crd::u32 ValidationCapture::uninstrumented_count() const noexcept
+{
+    return m_impl ? m_impl->uninstrumented.load(std::memory_order_relaxed) : 0U;
+}
+
 crd::u32 ValidationCapture::dropped_count() const noexcept
 {
     if (m_impl == nullptr)
@@ -230,11 +258,12 @@ ValidationReport ValidationCapture::report() const noexcept
     r.info    = m_impl->infos.load(std::memory_order_relaxed);
     r.warning = m_impl->warnings.load(std::memory_order_relaxed);
     r.error   = m_impl->errors.load(std::memory_order_relaxed);
+    r.instrumentation_failures = m_impl->uninstrumented.load(std::memory_order_relaxed); // DIAG.7c(e)
     {
         std::lock_guard<std::mutex> lk(m_impl->records_mu);
         r.dropped = m_impl->records_dropped;
     }
-    return r; // truncated / instrumentation_failures stay 0 for Vulkan (full-text records; layer-absent via spec_version)
+    return r; // truncated stays 0 for Vulkan (full-text records; layer-absent via spec_version)
 }
 
 crd::containers::ConstSpan<ValidationMessage> ValidationCapture::messages() const noexcept
@@ -266,6 +295,7 @@ void ValidationCapture::reset() noexcept
     m_impl->errors.store(0, std::memory_order_relaxed);
     m_impl->warnings.store(0, std::memory_order_relaxed);
     m_impl->infos.store(0, std::memory_order_relaxed);
+    m_impl->uninstrumented.store(0, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_impl->records_mu);
     m_impl->records.clear();
     m_impl->records_dropped = 0;
