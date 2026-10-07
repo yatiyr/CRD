@@ -47,4 +47,17 @@ struct LoadedProgram
                                             void* user, Context& ctx, containers::Array<crd::u8>& bytes,
                                             LoadedProgram& out, containers::String& reason,
                                             std::atomic<crd::u64>& bytes_read);
+
+// The same load for a file the request named some other way (a path argument already checked safe and joined to the
+// root): `file` is opened, `path` is the relative name text is parsed under, and `cancel` is polled after the read.
+[[nodiscard]] perf::DiagStatus load_program_file(containers::StringView file, containers::StringView path,
+                                                 const std::atomic<bool>* cancel, crd::u64 max_bytes,
+                                                 Registrar registrar, void* user, Context& ctx,
+                                                 containers::Array<crd::u8>& bytes, LoadedProgram& out,
+                                                 containers::String& reason, std::atomic<crd::u64>& bytes_read);
+
+// The load of bytes already read (by the bounded read): the form is chosen by their leading bytes.
+[[nodiscard]] perf::DiagStatus load_program_bytes(const containers::Array<crd::u8>& bytes, containers::StringView path,
+                                                  const std::atomic<bool>* cancel, Registrar registrar, void* user,
+                                                  Context& ctx, LoadedProgram& out, containers::String& reason);
 } // namespace crd::ceir::cook::detail

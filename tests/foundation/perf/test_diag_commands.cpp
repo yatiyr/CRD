@@ -51,6 +51,23 @@ constexpr const char* kScratch = CRD_DIAG_COMMANDS_SCRATCH;
     return r;
 }
 
+// A path command that keeps the root the service handed it.
+struct RootCommand
+{
+    crd::u64     runs = 0U;
+    cont::String root;
+};
+
+DiagStatus run_root(void* context, const crd::perf::DiagCall& call, crd::perf::DiagSnapshot& out)
+{
+    (void)out;
+    auto* cmd = static_cast<RootCommand*>(context);
+    ++cmd->runs;
+    cmd->root.clear();
+    cmd->root.append(call.root);
+    return DiagStatus::Ok;
+}
+
 // A Read command producing `count` items whose text is fixed by their index, counting its own runs.
 struct ItemsCommand
 {
@@ -517,6 +534,64 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
     }
     CHECK(added == crd::perf::kDiagMaxCommands - 7U);
     CHECK(full.command_count() == crd::perf::kDiagMaxCommands);
+}
+
+TEST_CASE("diag commands: a command declaring a second class needs both grants", "[perf][diag][commands]")
+{
+    crd::memory::TlsfAllocator alloc{8U << 20U, nullptr, "diag-commands-also"};
+    using crd::perf::authority_bit;
+    const crd::perf::DiagCommandSpec both{"test.both", "test", "both", DiagAuthority::Execute, false,
+                                          DiagAuthority::Record};
+
+    // Either class alone (with Read, for the listing) is refused, naming the missing class; the command never runs.
+    NeverCommand cmd;
+    for (const DiagAuthority alone : {DiagAuthority::Execute, DiagAuthority::Record})
+    {
+        DiagCommandService svc{authority_bit(alone) | authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &alloc};
+        REQUIRE(svc.register_command(both, &run_never, &cmd));
+        const DiagResult r = svc.execute(request("test.both"));
+        CHECK(r.status == DiagStatus::Unauthorized);
+        CHECK(contains(r.json, alone == DiagAuthority::Execute ? "the command needs record authority"
+                                                               : "the command needs execute authority"));
+        const DiagResult listing = svc.execute(request("diag.commands"));
+        CHECK(contains(listing.json, "{\"name\":\"test.both\",\"owner\":\"test\",\"authority\":\"execute\","
+                                     "\"also\":\"record\",\"granted\":false,"));
+    }
+    CHECK(cmd.runs == 0U);
+
+    DiagCommandService svc{authority_bit(DiagAuthority::Execute) | authority_bit(DiagAuthority::Record) |
+                               authority_bit(DiagAuthority::Read),
+                           DiagServiceConfig{}, &alloc};
+    REQUIRE(svc.register_command(both, &run_never, &cmd));
+    CHECK(svc.execute(request("test.both")).status == DiagStatus::Ok);
+    CHECK(cmd.runs == 1U);
+    CHECK(contains(svc.execute(request("diag.commands")).json,
+                   "\"authority\":\"execute\",\"also\":\"record\",\"granted\":true,"));
+
+    // A second class equal to the first, or not a single known class, is a malformed declaration.
+    CHECK_FALSE(svc.register_command({"test.same", "test", "x", DiagAuthority::Read, false, DiagAuthority::Read},
+                                     &run_never, &cmd));
+    CHECK_FALSE(svc.register_command(
+        {"test.pair", "test", "x", DiagAuthority::Read, false, static_cast<DiagAuthority>(6U)}, &run_never, &cmd));
+
+    // A handler sees the host's root, and the service's path rule is the public one.
+    DiagServiceConfig rooted;
+    rooted.root = cont::StringView{"some/root"};
+    DiagCommandService paths{authority_bit(DiagAuthority::Read), rooted, &alloc};
+    RootCommand        root_cmd;
+    REQUIRE(paths.register_command({"test.root", "test", "root", DiagAuthority::Read, true}, &run_root, &root_cmd));
+    DiagRequest r = request("test.root");
+    r.path        = cont::StringView{"a/b.txt"};
+    CHECK(paths.execute(r).status == DiagStatus::Ok);
+    CHECK(cont::StringView{root_cmd.root.data(), root_cmd.root.size()} == "some/root");
+    CHECK(crd::perf::diag_path_is_safe("a/b-c_d.e"));
+    for (const char* unsafe : {"", "../x", "a/../b", "a//b", "./a", "C:/x", "a\b", "/abs", "a/b/"})
+    {
+        CHECK_FALSE(crd::perf::diag_path_is_safe(unsafe));
+        r.path = cont::StringView{unsafe};
+        CHECK(paths.execute(r).status == DiagStatus::BadArgument);
+    }
+    CHECK(root_cmd.runs == 1U);
 }
 
 TEST_CASE("diag commands: named arguments are bounded and checked in the arguments step", "[perf][diag][commands]")

@@ -7,7 +7,8 @@
 // (bind_diag_commands), so the comparison covers program.provenance and replay.prepare over the committed authored
 // CEIR program, gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable)
 // and program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant
-// and reaches the agent transport only through this tool.
+// and reaches the agent transport only through this tool. DIAG.9a: replay.record (Execute and Record) writes a run
+// record from one ceridc process, and replay.run in another process reproduces it after the program file is edited.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -50,6 +51,12 @@ constexpr const char* kBinaryProgram = "ceridc_diag_program_binary.ceir";
 constexpr const char* kInspectProgram = "ceridc_diag_program_inspect.ceir";
 constexpr const char* kInspectBinary  = "ceridc_diag_program_inspect_binary.ceir";
 constexpr const char* kDemoProgram   = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
+// DIAG.9a: the committed replay demo, its working copy, the run record and the binary's answer.
+constexpr const char* kReplayDemo    = CRD_REPO_DIR "/assets/ceir/replay_demo.ceir";
+constexpr const char* kReplayProgram = "ceridc_diag_replay.ceir";
+constexpr const char* kReplayRecord  = "ceridc_diag_replay.crpl";
+constexpr const char* kReplayOut     = "ceridc_diag_replay_out.json";
+constexpr const char* kBiasLine      = "%9 = arith.const() {value = 1} : !i32";
 
 [[nodiscard]] bool has(const String& s, const char* needle)
 {
@@ -654,4 +661,129 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
     (void)fs::remove_file(fs::Path(StringView("ceridc_diag_inspect_out.jsonl")));
     (void)fs::remove_file(fs::Path(StringView("ceridc_diag_inspect_out.json")));
     (void)fs::remove_file(fs::Path(StringView(kInspectBinary)));
+}
+
+TEST_CASE("diag: a run record made by one ceridc process reproduces in another after the program is edited",
+          "[ceridc][diag]")
+{
+    // DIAG.9a: the record is written by one process, the program file is edited, and a second process replays the
+    // record from the artifact it holds; a third replays the same inputs against the edited file and names the edited
+    // constant. Each answer equals this process's native call on a fresh service.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    (void)fs::remove_file(fs::Path(StringView(kReplayRecord)));
+
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView(kReplayDemo)), text));
+    const StringView pristine{text.data(), text.size()};
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kReplayProgram)), pristine));
+    const crd::usize bias_at = pristine.find(StringView{kBiasLine});
+    REQUIRE(bias_at != StringView::npos);
+    crd::u32 bias_line = 1U;
+    for (crd::usize i = 0U; i < bias_at; ++i)
+    {
+        bias_line += pristine[i] == '\n' ? 1U : 0U;
+    }
+
+    const auto read_out = [&]()
+    {
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kReplayOut)), out));
+        while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+        {
+            out.resize(out.size() - 1U);
+        }
+        return out;
+    };
+    const crd::perf::DiagAuthoritySet execute = crd::perf::authority_bit(DiagAuthority::Execute);
+    const auto                        native  = [&](const char* program)
+    {
+        DiagCommandService svc(execute, rooted(), &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg against[] = {{"program", program != nullptr ? program : ""}};
+        DiagRequest              r;
+        r.command = "replay.run";
+        r.path    = kReplayRecord;
+        r.args    = {against, program != nullptr ? 1U : 0U};
+        return svc.execute(r);
+    };
+
+    // Process 1 records main(1), which selects a switch region that does not exist.
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=1 "
+                        "--grant execute,record --root . > %s",
+                        exe, kReplayProgram, kReplayRecord, kReplayOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String recorded = read_out();
+    INFO(recorded.c_str());
+    CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
+    CHECK(has(recorded, "\"replay\":\"replayable\""));
+
+    // The program file is edited after the run.
+    String edit(&g_alloc);
+    edit.append(pristine.substr(0U, bias_at));
+    edit.append("%9 = arith.const() {value = -1} : !i32");
+    edit.append(pristine.substr(bias_at + StringView{kBiasLine}.size()));
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kReplayProgram)), StringView{edit.data(), edit.size()}));
+
+    // Process 2 replays the record from its own artifact: the failure reproduces.
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
+                        exe, kReplayRecord, kReplayOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String same = read_out();
+    INFO(same.c_str());
+    CHECK(has(same, "\"result\":\"reproduced\""));
+    CHECK(has(same, "\"run\":\"replayed\",\"error\":\"selector-out-of-range\""));
+    const crd::perf::DiagResult same_native = native(nullptr);
+    CHECK(view(same) == view(same_native.json));
+
+    // Process 3 replays the same inputs against the edited file: the edited constant is the first divergence.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kReplayRecord, kReplayProgram, kReplayOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String diff = read_out();
+    INFO(diff.c_str());
+    CHECK(has(diff, "\"result\":\"diverged\""));
+    char at_line[64];
+    (void)std::snprintf(at_line, sizeof(at_line), R"("file":"%s","line":%u,)", kReplayProgram, bias_line);
+    CHECK(has(diff, "\"divergence\":\"value\",\"index\":"));
+    CHECK(has(diff, at_line));
+    const crd::perf::DiagResult diff_native = native(kReplayProgram);
+    CHECK(view(diff) == view(diff_native.json));
+
+    // Over MCP stdio, under the process's execute grant, the tool text is the native document.
+    DiagRequest r;
+    r.command = "replay.run";
+    r.path    = kReplayRecord;
+    String line(&g_alloc);
+    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    line.append(arguments_of(r).c_str());
+    line.append("}}\n");
+    REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_replay_in.jsonl")), view(line)));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" mcp --diag-grant execute --diag-root . < ceridc_diag_replay_in.jsonl > %s", exe,
+                        kReplayOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String     mcp = read_out();
+    const StringView all = view(mcp);
+    const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
+    REQUIRE(got.parsed);
+    CHECK_FALSE(got.is_error);
+    CHECK(view(got.text) == view(same_native.json));
+
+    // Without Record the binary refuses to write a record, before reading the program.
+    (void)fs::remove_file(fs::Path(StringView(kReplayRecord)));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=1 "
+                        "--grant execute --root . > %s",
+                        exe, kReplayProgram, kReplayRecord, kReplayOut);
+    CHECK(std::system(cmd) != 0);
+    CHECK(has(read_out(), "the command needs record authority"));
+    CHECK_FALSE(fs::exists(fs::Path(StringView(kReplayRecord))));
+
+    (void)fs::remove_file(fs::Path(StringView("ceridc_diag_replay_in.jsonl")));
+    (void)fs::remove_file(fs::Path(StringView(kReplayOut)));
+    (void)fs::remove_file(fs::Path(StringView(kReplayProgram)));
 }

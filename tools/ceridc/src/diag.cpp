@@ -34,10 +34,13 @@ bool bind_diag_commands(crd::perf::DiagCommandService& service)
     static crd::ceir::cook::ProgramProvenanceCommand provenance{&register_host_dialects, nullptr};
     static crd::ceir::cook::ProgramInspectCommand    inspect{&register_host_dialects, nullptr};
     static crd::ceir::cook::ReplayPrepareCommand     replay{&register_host_dialects, nullptr};
+    static crd::ceir::cook::ReplayCommands           replay_runs{&register_host_dialects, nullptr};
     static crd::perf::gpu::GpuResourcesCommand       gpu_resources;
     return crd::ceir::cook::register_program_provenance(service, provenance) &&
            crd::ceir::cook::register_program_inspect(service, inspect) &&
            crd::ceir::cook::register_replay_prepare(service, replay) &&
+           crd::ceir::cook::register_replay_record(service, replay_runs) &&
+           crd::ceir::cook::register_replay_run(service, replay_runs) &&
            crd::perf::gpu::register_gpu_resources(service, gpu_resources);
 }
 

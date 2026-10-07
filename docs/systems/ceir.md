@@ -66,7 +66,18 @@ watched value as an item; it is how an agent transport inspects a program. `repl
 per input (program identity, build, entry arguments, random streams, clock, host state, external results, schedule
 choices, a device tolerance), whether the program's effective effects need it (a call charged with its callee's;
 `unknown` when an opaque op exists), the first op that needs it at its authored position, and why it is missing.
-Nothing records a run's inputs yet, so it reports the replay unavailable and names the missing inputs.
+A program file holds no run, so it reports the replay unavailable and names the missing inputs; given a run record
+it answers the build and arguments the record holds.
+
+Run records ([DIAG.9a](../design/runtime-diagnostics.md#diag-9a)): `replay.record` (`execute` and `record`) runs an
+authored program's entry once through the compiled-plan executor and writes an immutable record
+(`crd/ceir/cook/replay_record.hpp`): the cooked program blob and its content hash, the build, the arguments, each
+input's need and state (missing when nothing captures it), a bounded trace of every dispatched instr with its results,
+and the outcome. `replay.run` (`execute`) replays a record from its own blob in any later process, never from the
+checkout, and reports the first divergent event, value, count, outcome, result or cell at its authored position, or
+that the run reproduced; with `program=` it replays the same inputs against an edited file. A record from another
+build, with a missing input, a bad checksum or a blob that is not its recorded content is refused before anything
+runs. The committed `assets/ceir/replay_demo.ceir` fails on a seeded argument for the tests to reproduce.
 
 ## Maturity and further work
 

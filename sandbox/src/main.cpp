@@ -265,6 +265,7 @@ struct SandboxDiagCommands
     crd::ceir::cook::ProgramProvenanceCommand provenance{&register_sandbox_dialects, nullptr};
     crd::ceir::cook::ProgramInspectCommand    inspect{&register_sandbox_dialects, nullptr};
     crd::ceir::cook::ReplayPrepareCommand     replay{&register_sandbox_dialects, nullptr};
+    crd::ceir::cook::ReplayCommands           replay_runs{&register_sandbox_dialects, nullptr};
     crd::perf::gpu::GpuResourcesCommand       gpu_resources;
 };
 
@@ -274,6 +275,8 @@ struct SandboxDiagCommands
     return crd::ceir::cook::register_program_provenance(service, commands.provenance) &&
            crd::ceir::cook::register_program_inspect(service, commands.inspect) &&
            crd::ceir::cook::register_replay_prepare(service, commands.replay) &&
+           crd::ceir::cook::register_replay_record(service, commands.replay_runs) &&
+           crd::ceir::cook::register_replay_run(service, commands.replay_runs) &&
            crd::perf::gpu::register_gpu_resources(service, commands.gpu_resources);
 }
 

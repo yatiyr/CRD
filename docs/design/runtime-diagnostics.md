@@ -655,7 +655,8 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-command-service-an
   transport only moves a request in and the response document out. It needs no network, MCP or transport code.
 - Authority is a set of distinct classes (`read`, `record`, `inject`, `remote-enable`, `upload`, `process-memory`;
   none implies another) granted by the host when it builds the service. It never travels in a request, so neither a
-  request nor an authored asset can raise it. Each command declares exactly one class.
+  request nor an authored asset can raise it. Each command declares one class (DIAG.9a adds an optional second class,
+  `also`, that must be granted as well).
 - Refusals come before any work and in a fixed order: schema version, unknown command, authority, request bounds
   (`oversized`), arguments (`bad-argument`; `unavailable` when the host granted no file root), stale cursor,
   cancellation. A refusal leaves the retained snapshot alone. Input files are bounded on their size before a byte is
@@ -775,6 +776,41 @@ do not assume the current checkout reproduces an older captured generation.
 Acceptance: reproduce a seeded authored-runtime failure after process restart and asset edits, detect first divergent
 state/event, and reject incompatible replay explicitly. GPU nondeterminism uses a declared tolerance/oracle; no claim
 of bit identity across all hardware. Network/physical effects are stubbed only in explicit test replay, never silently rerun.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-run-records-and-replay.md)):
+- A run record (`crd/ceir/cook/replay_record.hpp`, crd-ceir-cook) is an immutable, versioned (`kReplayRecordSchema`),
+  checksummed file holding the build that made it (version, platform, compiler, arch, debug or release, asserts, and
+  `kReplayExecutor`, the compiled-plan semantics version), the program as its cooked CRDR blob with its content hash
+  and the authored path it was cooked under, the entry and its arguments, every replay input's need and state, a
+  bounded trace and the outcome (run error, the faulting op's stable id, results, state cells). Encoding is
+  deterministic: one run gives the same bytes. Decoding bounds every count and size before use and executes nothing.
+- The trace is taken at the compiled-plan executor's safe points (`plan::RunControl`): one event per dispatched instr
+  (op stable id, call depth), with up to four results read at the next safe point of the same frame through
+  `plan::read_value`. An instr whose results are not readable there (the last instr of a loop body before its back
+  edge, the last before a return) carries no values, and that is recorded and compared as is. `max_events` (default
+  4096, at most 65536) bounds the kept events; `events_total` counts all, so loss is stated.
+- Input states come from the same effect analysis as `replay.prepare` (one private walk now serves both): the
+  program, build and entry arguments are recorded; an effect-derived input the program needs (or may need, through an
+  opaque op) is stored `missing`, never assumed. The plan executor has no random, clock, host-state or external-I/O
+  op today, so nothing captures those inputs yet.
+- Replay loads the record's own blob into a fresh Context (never the checkout's file), recompiles the recorded entry,
+  runs the recorded arguments with the recorded bound and reports the first divergence in a fixed order: path (op or
+  depth of an event), value (a result, or the number of results read), length (event count), outcome (error or
+  faulting op), results, cells. Replaying the same inputs against another program (an edited checkout) is a separate,
+  explicit request that reports whether the program matches the recorded content.
+- Incompatible replay is refused before anything runs: not a record, another schema, a short file or bad checksum, a
+  blob whose recomputed content hash is not the recorded one (`failed`); a record from another build (`unavailable`,
+  naming the differing fields, unless the request says `build=any`) or one missing an input its program needs
+  (`unavailable`, naming the inputs).
+- Commands: `replay.record` (`execute` and `record`: the service's `also` class; a program path; `out`, `entry`,
+  `args`, `max_events`) creates the record exclusively under the root, refusing an existing file before it reads or
+  runs anything; `replay.run` (`execute`; a record path; `program`, `build`) answers the divergence and both outcomes
+  at their authored positions; `replay.prepare` now also reads a record, answering its build and arguments as
+  available. ceridc's CLI and MCP services and crd-sandbox bind them.
+- Guarantees: this is event replay of the integer, sequential compiled-plan executor. Schedule replay (pooled and
+  parallel work), backend-specific numeric replay with a declared tolerance, recorded random, clock, host-state and
+  external-completion streams, asset generations of a hot-reloading host and capture at the interactive hosts'
+  boundaries (InspectHost, crd-sandbox frame loop, HostProvider) are not covered by this batch.
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

@@ -7,9 +7,10 @@
 // the request in and the bytes out. The service needs no network, no MCP and no transport at all.
 //
 // Authority is granted by the host when it constructs the service and never travels in a request, so neither a request
-// payload nor an authored asset can raise it. Each command declares the one authority it needs. Read and Record are
-// the only classes a built-in command uses; Inject, RemoteEnable, Upload, ProcessMemory and Execute are distinct bits
-// no other grant implies, so a host that grants Read and Record still refuses a command declaring any of them.
+// payload nor an authored asset can raise it. Each command declares the authority it needs, and optionally a second
+// class it also needs (both must be granted). Read and Record are the only classes a built-in command uses; Inject,
+// RemoteEnable, Upload, ProcessMemory and Execute are distinct bits no other grant implies, so a host that grants Read
+// and Record still refuses a command declaring any of them.
 //
 // Every refusal happens before the command's work, in a fixed order: schema version, unknown command, authority,
 // request bounds (Oversized), arguments (BadArgument, or Unavailable when the host granted no file root), stale
@@ -209,11 +210,18 @@ private:
     crd::u32                  m_dropped = 0U;
 };
 
+// Whether `path` is a safe request path: relative, '/'-separated, every component a plain [A-Za-z0-9._-] name (no
+// empty, "." or ".." component, no drive, no backslash), so joined to the host's root it can never leave it. The
+// service applies it to every request path; a command applies it to a path it takes as an argument.
+[[nodiscard]] bool diag_path_is_safe(cont::StringView path) noexcept;
+
 // The arguments a handler sees after every check passed.
 struct DiagCall
 {
     const DiagRequest*       request = nullptr;
     cont::StringView         file;    // the request path joined to the host's root (empty when the command takes none)
+    cont::StringView         root;    // the host's file root (empty when the host granted none); a command joins a
+                                      // path argument to it only after diag_path_is_safe accepted the argument
     const std::atomic<bool>* cancel  = nullptr;
     DiagAuthoritySet         granted = 0U;
 
@@ -240,6 +248,9 @@ struct DiagCommandSpec
     cont::StringView summary; // one line for listings
     DiagAuthority    authority  = DiagAuthority::Read;
     bool             takes_path = false;
+    // A second class the command also needs (None: only `authority`). A command that does two distinct things, such
+    // as running a program and writing an evidence file, needs both grants; neither implies the other.
+    DiagAuthority also = DiagAuthority::None;
 };
 
 struct DiagServiceConfig

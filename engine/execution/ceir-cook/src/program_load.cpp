@@ -38,12 +38,27 @@ DiagStatus load_program(const perf::DiagCall& call, crd::u64 max_bytes, Registra
                         cont::Array<crd::u8>& bytes, LoadedProgram& out, cont::String& reason,
                         std::atomic<crd::u64>& bytes_read)
 {
-    const DiagStatus read = read_bounded_file(call.file, max_bytes, bytes, reason, bytes_read);
+    return load_program_file(call.file, call.request->path, call.cancel, max_bytes, registrar, user, ctx, bytes, out,
+                             reason, bytes_read);
+}
+
+DiagStatus load_program_file(cont::StringView file, cont::StringView path, const std::atomic<bool>* cancel,
+                             crd::u64 max_bytes, Registrar registrar, void* user, Context& ctx,
+                             cont::Array<crd::u8>& bytes, LoadedProgram& out, cont::String& reason,
+                             std::atomic<crd::u64>& bytes_read)
+{
+    const DiagStatus read = read_bounded_file(file, max_bytes, bytes, reason, bytes_read);
     if (read != DiagStatus::Ok)
     {
         return read;
     }
-    if (call.cancelled())
+    return load_program_bytes(bytes, path, cancel, registrar, user, ctx, out, reason);
+}
+
+DiagStatus load_program_bytes(const cont::Array<crd::u8>& bytes, cont::StringView path, const std::atomic<bool>* cancel,
+                              Registrar registrar, void* user, Context& ctx, LoadedProgram& out, cont::String& reason)
+{
+    if (cancel != nullptr && cancel->load(std::memory_order_acquire))
     {
         reason.append("cancelled after the program was read");
         return DiagStatus::Cancelled;
@@ -87,13 +102,13 @@ DiagStatus load_program(const perf::DiagCall& call, crd::u64 max_bytes, Registra
     {
         // Parsed under the request's own relative path, so the host's root never reaches the answer.
         out.form = ProgramForm::Text;
-        const crd::u32         file = ctx.register_file(call.request->path);
+        const crd::u32         file_id = ctx.register_file(path);
         const cont::StringView text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
-        const ParseResult      res = parse(ctx, text, file);
+        const ParseResult      res     = parse(ctx, text, file_id);
         if (!res.ok)
         {
             reason.append("the program text did not parse at ");
-            reason.append(call.request->path);
+            reason.append(path);
             reason.push_back(':');
             append_decimal(reason, res.error_line);
             reason.push_back(':');

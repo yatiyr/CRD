@@ -1,0 +1,29 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "step"} {
+      ^bb0(%0 : !i32, %1 : !i32):
+        %2 = arith.muli(%0, %1) : !i32
+        func.return(%2)
+    }
+    func.func() {sym_name = "main"} {
+      ^bb0(%3 : !i32):
+        %4 = arith.const() {value = 0} : !i32
+        %5 = arith.const() {value = 1} : !i32
+        %6 = arith.const() {value = 3} : !i32
+        core.for(%4, %6, %5) {
+          ^bb0(%7 : !i32):
+            %8 = func.call(%7, %3) {callee = @step} : !i32
+            core.yield()
+        }
+        %9 = arith.const() {value = 1} : !i32
+        %10 = arith.addi(%3, %9) : !i32
+        core.switch(%10) {
+          ^bb0:
+            core.yield()
+        } {
+          ^bb0:
+            core.yield()
+        }
+        func.return(%10)
+    }
+}

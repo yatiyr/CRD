@@ -1,6 +1,7 @@
 #include <crd/ceir/cook/inspect_diag.hpp>
 
 #include "bounded_file.hpp"
+#include "diag_args.hpp"
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/program_cook.hpp> // cook_error_name
@@ -9,8 +10,6 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/diag_commands.hpp>
-
-#include <algorithm>
 
 namespace crd::ceir::cook
 {
@@ -25,68 +24,9 @@ using crd::perf::DiagFields;
 using crd::perf::DiagSnapshot;
 using crd::perf::DiagStatus;
 
-// Call `item` on every comma-separated item of `list` (none for an empty list); false as soon as one is refused.
-template <class Fn>
-[[nodiscard]] bool for_each_item(cont::StringView list, const Fn& item)
-{
-    if (list.empty())
-    {
-        return true;
-    }
-    crd::usize start = 0U;
-    while (start <= list.size())
-    {
-        crd::usize end = list.find(',', start);
-        if (end == cont::StringView::npos)
-        {
-            end = list.size();
-        }
-        if (!item(list.substr(start, end - start)))
-        {
-            return false;
-        }
-        start = end + 1U;
-    }
-    return true;
-}
-
-[[nodiscard]] bool parse_u64(cont::StringView text, crd::u64 max, crd::u64& out) noexcept
-{
-    if (text.empty() || text.size() > 20U)
-    {
-        return false;
-    }
-    crd::u64 v = 0U;
-    for (const char c : text)
-    {
-        if (c < '0' || c > '9')
-        {
-            return false;
-        }
-        const auto digit = static_cast<crd::u64>(c - '0');
-        if (v > (max - digit) / 10U)
-        {
-            return false;
-        }
-        v = v * 10U + digit;
-    }
-    out = v;
-    return true;
-}
-
-[[nodiscard]] bool parse_i64(cont::StringView text, crd::i64& out) noexcept
-{
-    const bool             negative = !text.empty() && text[0] == '-';
-    const cont::StringView digits   = negative ? text.substr(1U) : text;
-    constexpr crd::u64 max_positive = 9223372036854775807ULL;
-    crd::u64           magnitude    = 0U;
-    if (!parse_u64(digits, negative ? max_positive + 1U : max_positive, magnitude))
-    {
-        return false;
-    }
-    out = negative ? static_cast<crd::i64>(0U - magnitude) : static_cast<crd::i64>(magnitude);
-    return true;
-}
+using detail::for_each_item;
+using detail::parse_i64;
+using detail::parse_u64;
 
 [[nodiscard]] bool parse_line(cont::StringView text, crd::u32& out) noexcept
 {
@@ -101,16 +41,7 @@ template <class Fn>
 
 [[nodiscard]] bool valid_entry(cont::StringView name) noexcept
 {
-    if (name.empty() || name.size() > kInspectMaxEntryBytes)
-    {
-        return false;
-    }
-    return std::ranges::all_of(name,
-                               [](char c)
-                               {
-                                   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-                                          c == '_' || c == '.';
-                               });
+    return detail::valid_entry_name(name, kInspectMaxEntryBytes);
 }
 
 // The parsed script (the argument check parses with no Parsed: it validates and keeps nothing).

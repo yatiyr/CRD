@@ -1,8 +1,8 @@
 // DIAG.8c -- the replay-preparation diagnostic command. `replay.prepare` is registered into crd-perf's command service
 // and answers, for an authored program file under the host's root, one item per replay input: whether the program
 // needs it (from each op's effective effects, a call charged with its callee's), whether it exists, and the precise
-// reason it is missing. Nothing in this build records a run's inputs, so the answer is always "unavailable" and names
-// the missing inputs; the program's content hash is the one input that exists.
+// reason it is missing. A program file holds no run, so its answer is always "unavailable" and names the missing
+// inputs; the program's content hash is the one input that exists (a run record's answer is test_replay_record.cpp's).
 //
 // The committed authored program assets/ceir/inspect_demo.ceir needs only its identity and its entry arguments, in
 // all three forms. A specimen program whose host registers ops with RandomRead, TimeRead, SceneRead, FileIO,
@@ -355,8 +355,11 @@ TEST_CASE("diag 8c: replay.prepare says the committed program needs only its ide
         CHECK(has(view(items[0]), view(no_blame("the program's content hash is computed from the file", &root))));
         CHECK(has(view(items[1]), view(state_fields("build", "identity", "yes", "missing", 0U, &root))));
         CHECK(has(view(items[2]), view(state_fields("entry-arguments", "event", "yes", "missing", 0U, &root))));
-        CHECK(has(view(items[2]), view(no_blame("nothing records the entry arguments and initial state a run was "
-                                                "given",
+        CHECK(has(view(items[1]), view(no_blame("a program file names no build; replay.record writes the build a "
+                                                "run used into a run record",
+                                                &root))));
+        CHECK(has(view(items[2]), view(no_blame("a program file holds no run's entry arguments; replay.record writes "
+                                                "them into a run record",
                                                 &root))));
         const char* const derived[6][2] = {
             {"random", "event"},           {"clock", "event"},    {"host-state", "event"},

@@ -10,6 +10,7 @@ add_executable(crd-ceir-cook-tests
     test_program_diag.cpp   # DIAG.8c: the program.provenance diagnostic command - text, binary and cooked forms at their authored positions; refusals before work
     test_inspect_diag.cpp   # DIAG.8c: the program.inspect diagnostic command - Execute authority, scripted stops and values as items, argument refusals, stop bound, caller cancel
     test_replay_diag.cpp    # DIAG.8c: the replay.prepare diagnostic command - each replay input's need from effective effects (through calls), unknown for opaque ops, missing with its reason
+    test_replay_record.cpp  # DIAG.9a: run records - replay.record writes the artifact, build, arguments, input states and a bounded trace; replay.run reproduces after an asset edit, names the first divergence and refuses incompatible records
     test_large_graph.cpp     # CEIR-35d Q6: large-graph SCALABILITY correctness - cook + load + execute a synthetic ~8k-op arith graph to the exact sum (no O(N^2)/buffer/recursion blowup); time-scaling is the Q7 board
 )
 
@@ -23,7 +24,7 @@ target_link_libraries(crd-ceir-cook-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
-# DIAG.8b: the inspect-host gate reads the committed authored program assets/ceir/inspect_demo.ceir.
+# DIAG.8b/9a: the inspect-host and replay gates read the committed authored programs under assets/ceir.
 target_compile_definitions(crd-ceir-cook-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
 crd_enable_default_pch(crd-ceir-cook-tests)

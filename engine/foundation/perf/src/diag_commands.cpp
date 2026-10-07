@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <initializer_list>
 
 namespace crd::perf
 {
@@ -227,6 +228,11 @@ constexpr DiagAuthority kAuthorityOrder[kDiagAuthorityCount] = {
 };
 
 } // namespace
+
+bool diag_path_is_safe(cont::StringView path) noexcept
+{
+    return safe_relative_path(path);
+}
 
 // ---- names ----------------------------------------------------------------------------------------------------------
 
@@ -513,7 +519,9 @@ bool DiagCommandService::register_command(const DiagCommandSpec& spec, DiagHandl
                                           DiagArgsCheck check)
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
-    if (handler == nullptr || !valid_command_name(spec.name) || !single_known_authority(spec.authority) ||
+    const bool also_ok = spec.also == DiagAuthority::None ||
+                         (single_known_authority(spec.also) && spec.also != spec.authority);
+    if (handler == nullptr || !valid_command_name(spec.name) || !single_known_authority(spec.authority) || !also_ok ||
         m_commands.size() >= kDiagMaxCommands || find(spec.name) != kNone)
     {
         return false;
@@ -755,14 +763,17 @@ DiagResult DiagCommandService::execute(const DiagRequest& request, const std::at
     }
     const Entry& entry = m_commands[index];
 
-    if (!grants(m_grant, entry.spec.authority))
+    for (const DiagAuthority needed : {entry.spec.authority, entry.spec.also})
     {
-        reason.append("the command needs ");
-        reason.append(authority_name(entry.spec.authority));
-        reason.append(" authority; the host granted ");
-        append_authority_list(reason, m_grant);
-        refuse(result, request, DiagStatus::Unauthorized, reason);
-        return result;
+        if (needed != DiagAuthority::None && !grants(m_grant, needed))
+        {
+            reason.append("the command needs ");
+            reason.append(authority_name(needed));
+            reason.append(" authority; the host granted ");
+            append_authority_list(reason, m_grant);
+            refuse(result, request, DiagStatus::Unauthorized, reason);
+            return result;
+        }
     }
 
     if (request.page_items > kDiagMaxPageItems)
@@ -901,6 +912,7 @@ DiagResult DiagCommandService::execute(const DiagRequest& request, const std::at
     DiagCall call;
     call.request = &request;
     call.file    = cont::StringView{file.data(), file.size()};
+    call.root    = cont::StringView{m_root.data(), m_root.size()};
     call.cancel  = cancel;
     call.granted = m_grant;
 
@@ -933,13 +945,16 @@ DiagStatus DiagCommandService::run_commands(void* self, const DiagCall& call, Di
     DiagFields   item(out.allocator());
     for (const Entry& e : svc->m_commands)
     {
-        const bool ok = grants(call.granted, e.spec.authority);
+        const bool ok = grants(call.granted, e.spec.authority) &&
+                        (e.spec.also == DiagAuthority::None || grants(call.granted, e.spec.also));
         granted += ok ? 1U : 0U;
         item.clear();
-        item.str("name", e.spec.name)
-            .str("owner", e.spec.owner)
-            .str("authority", authority_name(e.spec.authority))
-            .boolean("granted", ok)
+        item.str("name", e.spec.name).str("owner", e.spec.owner).str("authority", authority_name(e.spec.authority));
+        if (e.spec.also != DiagAuthority::None)
+        {
+            item.str("also", authority_name(e.spec.also));
+        }
+        item.boolean("granted", ok)
             .boolean("takes_path", e.spec.takes_path)
             .boolean("takes_args", e.check != nullptr)
             .str("summary", e.spec.summary);
