@@ -274,30 +274,7 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     record.entry.append(parsed.entry);
     record.args = std::move(parsed.args);
     cont::String missing(alloc);
-    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
-    {
-        ReplayInput& in = record.inputs[i];
-        in.need         = needs.inputs[i].need;
-        if (in.need == ReplayNeed::No)
-        {
-            in.state = ReplayInputState::NotNeeded;
-        }
-        else if (i == detail::kReplayProgramInput || i == detail::kReplayBuildInput ||
-                 i == detail::kReplayArgumentsInput)
-        {
-            in.state = ReplayInputState::Recorded;
-        }
-        else
-        {
-            // Nothing captures this input at the plan executor's boundary: stored missing, never assumed.
-            in.state = ReplayInputState::Missing;
-            if (!missing.empty())
-            {
-                missing.push_back(',');
-            }
-            missing.append(replay_input_name(i));
-        }
-    }
+    detail::record_inputs(needs, record.inputs, &missing);
     record.max_events   = parsed.max_events;
     record.events_total = trace.events_total;
     record.events       = std::move(trace.events);
@@ -581,6 +558,8 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         .str("program",
              parsed.program.empty() ? cont::StringView{record.program_path.data(), record.program_path.size()}
                                     : parsed.program)
+        .u64("asset", record.asset)
+        .u64("generation", record.generation)
         .u64("recorded_hash", record.content_hash)
         .u64("replayed_hash", replayed->content_hash)
         .boolean("program_matches", replayed->content_hash == record.content_hash)

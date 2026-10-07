@@ -103,8 +103,10 @@ public:
     // script the panel waits for a command at each stop.
     void set_script(containers::ConstSpan<PanelAction> actions);
 
-    // Start the installed generation with `args` (NotBound before a successful load, Busy while running).
-    [[nodiscard]] ceir::inspect::Refusal start(containers::ConstSpan<crd::i64> args);
+    // Start the installed generation with `args` (NotBound before a successful load, Busy while running). DIAG.9a:
+    // `recording` records the run on the host; `host().record` gives the run record once it has ended.
+    [[nodiscard]] ceir::inspect::Refusal start(containers::ConstSpan<crd::i64> args,
+                                               ceir::cook::HostRecording recording = {});
 
     // Once per frame. Never waits on the running program (see the header).
     TickEvent tick();

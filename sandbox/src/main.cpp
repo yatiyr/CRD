@@ -13,6 +13,8 @@
 //   --inspect [id]                — run the authored CEIR program `id` (default ceir/inspect_demo) under inspection
 //   --inspect-break N / --inspect-watch N (repeatable), --inspect-step a,b (continue|into|over|out|cancel per stop),
 //   --inspect-arg N (the entry's argument, default 3), --app-assets <dir> (the application's own tree at app://).
+//   --inspect-record <file>       — DIAG.9a: write the inspected run as a new run record when it ends (never
+//                                   overwrites; a cancelled run writes none); `replay.run` reproduces it.
 // DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
 //   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
 //                                   page of its answer
@@ -27,6 +29,7 @@
 #include <crd/ceir/cook/inspect_diag.hpp> // DIAG.8c: the commands the diagnostic panel's service serves
 #include <crd/ceir/cook/program_diag.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
+#include <crd/ceir/cook/replay_record.hpp> // DIAG.9a: the inspected run's record
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
@@ -247,6 +250,25 @@ void report_inspect([[maybe_unused]] const crd::sandbox::InspectPanel& panel, cr
                      crd::sandbox::panel_state_name(panel.state()), panel.results().size(), panel.stops(),
                      panel.ticks());
     }
+}
+
+// ⭐⭐ DIAG.9a: the inspected run as a run record, written once when the recorded run ends.
+void write_inspect_record(crd::sandbox::InspectPanel& panel, const char* path)
+{
+    crd::memory::GrowableTlsfAllocator record_alloc;
+    crd::ceir::cook::ReplayRecord      rec(&record_alloc);
+    const crd::ceir::cook::HostRecord  hr = panel.host().record(rec);
+    if (hr != crd::ceir::cook::HostRecord::Ok)
+    {
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.9a record: none written to {} ({})", path,
+                     crd::ceir::cook::host_record_name(hr));
+        return;
+    }
+    [[maybe_unused]] const crd::ceir::cook::RecordWrite w =
+        crd::ceir::cook::write_record_file(crd::containers::StringView(path), rec);
+    CRD_LOG_INFO(g_log_sandbox, "DIAG.9a record: {} {} (asset {} generation {}, {} events, {})", path,
+                 crd::ceir::cook::record_write_name(w), rec.asset, rec.generation, rec.events_total,
+                 crd::ceir::plan::run_error_name(rec.error));
 }
 
 // ⭐⭐ DIAG.8c: the diagnostic command panel's service. The sandbox is its host: it grants the authority (start-up
@@ -473,6 +495,7 @@ int main(int argc, char** argv)
     static constexpr crd::u32 kInspectMaxLines                   = 16U;
     const char*               inspect_rel                        = nullptr;
     const char*               app_assets                         = nullptr;
+    const char*               inspect_record                     = nullptr; // DIAG.9a
     crd::i64                  inspect_arg                        = 3;
     crd::u32                  inspect_breaks[kInspectMaxLines]   = {};
     crd::u32                  inspect_watches[kInspectMaxLines]  = {};
@@ -690,6 +713,10 @@ int main(int argc, char** argv)
                 }
                 at = comma + 1U;
             }
+        }
+        else if (std::strcmp(argv[i], "--inspect-record") == 0 && i + 1 < argc)
+        {
+            inspect_record = argv[++i];
         }
         else if (std::strcmp(argv[i], "--inspect-arg") == 0 && i + 1 < argc)
         {
@@ -1292,7 +1319,16 @@ int main(int argc, char** argv)
         }
         inspect_panel->set_script(
             crd::containers::ConstSpan<crd::sandbox::PanelAction>(inspect_script, inspect_script_count));
-        if (inspect_panel->start(crd::containers::ConstSpan<crd::i64>(&inspect_arg, 1U))
+        if (inspect_record != nullptr
+            && crd::platform::fs::exists(crd::platform::fs::Path(crd::containers::StringView(inspect_record))))
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "--inspect-record: '{}' exists; a run record is never overwritten",
+                          inspect_record);
+            crd::log::shutdown();
+            return 1;
+        }
+        if (inspect_panel->start(crd::containers::ConstSpan<crd::i64>(&inspect_arg, 1U),
+                                 crd::ceir::cook::HostRecording{inspect_record != nullptr, 0U})
             != crd::ceir::inspect::Refusal::None)
         {
             CRD_LOG_ERROR(g_log_sandbox, "--inspect: '{}' did not start", inspect_rel);
@@ -1592,7 +1628,13 @@ int main(int argc, char** argv)
         }
         if (inspect_panel != nullptr)
         {
-            report_inspect(*inspect_panel, inspect_panel->tick()); // a poll: the frame never waits on the program
+            const crd::sandbox::TickEvent ie = inspect_panel->tick(); // a poll: the frame never waits on the program
+            report_inspect(*inspect_panel, ie);
+            if (ie == crd::sandbox::TickEvent::Ended && inspect_record != nullptr)
+            {
+                write_inspect_record(*inspect_panel, inspect_record);
+                inspect_record = nullptr; // the first run only: "Run again" starts without recording
+            }
         }
         if (diag_panel != nullptr && diag_panel->tick() == crd::perf::ui::DiagPanelTick::Completed) // a poll as well
         {

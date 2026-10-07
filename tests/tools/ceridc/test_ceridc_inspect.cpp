@@ -6,6 +6,8 @@
 // cancels and marks the report truncated, a breakpoint on a line with no code, a source that does not cook (its line),
 // requests rejected before anything runs, and the verb's absence from the MCP tool list (an agent reaches the same
 // scripted run as the program.inspect diagnostic command, under the host's Execute grant: test_ceridc_diag.cpp).
+// DIAG.9a: `--record` writes the inspected run as a run record (refusing an existing file before it runs, writing
+// nothing for a cancelled run), and another ceridc process reproduces it through `replay.run` without a session.
 // Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
 #include <crd/ceridc/verbs.hpp>
@@ -25,6 +27,13 @@ namespace
 {
 
 constexpr const char* kProgram = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
+
+// DIAG.9a: the committed replay demo, the records the inspected runs write, and a binary's answer.
+constexpr const char* kReplayDemo = CRD_REPO_DIR "/assets/ceir/replay_demo.ceir";
+constexpr const char* kVerbRecord = "ceridc_inspect_verb.crpl";
+constexpr const char* kCliRecord  = "ceridc_inspect_cli.crpl";
+constexpr const char* kCancelled  = "ceridc_inspect_cancelled.crpl";
+constexpr const char* kOut        = "ceridc_inspect_replay_out.json";
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "ceridc-inspect-tests"};
@@ -267,4 +276,76 @@ TEST_CASE("diag 8b: the real ceridc binary inspects from the command line", "[ce
     const String tools = crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)}, &g_alloc);
     CHECK(has(tools, "import")); // the list answered
     CHECK_FALSE(has(tools, "inspect"));
+}
+
+TEST_CASE("diag 9a: ceridc inspect --record writes the inspected run as a record that replay.run reproduces",
+          "[ceridc][inspect][diag]")
+{
+    for (const char* f : {kVerbRecord, kCliRecord, kCancelled, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kReplayDemo)), text));
+    const u32 call = line_of(text, "func.call", 0U);
+    REQUIRE(call != 0U);
+    const crd::i64 args[1]  = {1};
+    const u32      breaks[] = {call};
+    const char*    steps[]  = {"into", "out"};
+
+    // In process: stopped, stepped into the callee and out, and recorded; main(1) faults at the switch.
+    const String report =
+        crd::ceridc::verb_inspect(kReplayDemo, "main", ConstSpan<crd::i64>(args, 1U), ConstSpan<u32>(breaks, 1U), {},
+                                  ConstSpan<const char*>(steps, 2U), 0U, &g_alloc, kVerbRecord);
+    INFO(report.c_str());
+    CHECK(has(report, "\"action\":\"into\""));
+    CHECK(has(report, "\"outcome\":\"error\",\"error\":\"selector-out-of-range\""));
+    CHECK(has(report, "\"record\":{\"path\":\"ceridc_inspect_verb.crpl\",\"written\":true,\"status\":\"ok\","
+                      "\"asset\":1,\"generation\":1,"));
+
+    // An existing record is refused before anything runs.
+    const String again = crd::ceridc::verb_inspect(kReplayDemo, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {}, 0U,
+                                                   &g_alloc, kVerbRecord);
+    CHECK(has(again, "\"ok\":false"));
+    CHECK(has(again, "refusing to overwrite an existing --record file"));
+    CHECK_FALSE(has(again, "\"stops\""));
+
+    // A cancelled run is not a record: a replay would not stop where it stopped.
+    const char*  cancel[] = {"cancel"};
+    const String cut =
+        crd::ceridc::verb_inspect(kReplayDemo, "main", ConstSpan<crd::i64>(args, 1U), ConstSpan<u32>(breaks, 1U), {},
+                                  ConstSpan<const char*>(cancel, 1U), 0U, &g_alloc, kCancelled);
+    CHECK(has(cut, "\"outcome\":\"cancelled\""));
+    CHECK(
+        has(cut, "\"record\":{\"path\":\"ceridc_inspect_cancelled.crpl\",\"written\":false,\"status\":\"cancelled\"}"));
+    CHECK_FALSE(fs::exists(fs::Path(crd::containers::StringView(kCancelled))));
+
+    // The real binary records from its command line, and another process replays both records without a session.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr);
+    char cmd[2048];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" inspect --program %s --arg 1 --break %u --step into --step out --record %s > %s", exe,
+                        kReplayDemo, call, kCliRecord, kOut);
+    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    String cli(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
+    INFO(cli.c_str());
+    CHECK(has(cli, "\"written\":true,\"status\":\"ok\""));
+    for (const char* rec : {kVerbRecord, kCliRecord})
+    {
+        (void)std::snprintf(cmd, sizeof(cmd),
+                            "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
+        REQUIRE(std::system(cmd) == 0);
+        String replayed(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
+        INFO(replayed.c_str());
+        CHECK(has(replayed, "\"result\":\"reproduced\""));
+        CHECK(has(replayed, "\"asset\":1,\"generation\":1,"));
+        CHECK(has(replayed, "\"run\":\"replayed\",\"error\":\"selector-out-of-range\""));
+    }
+    for (const char* f : {kVerbRecord, kCliRecord, kCancelled, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
 }

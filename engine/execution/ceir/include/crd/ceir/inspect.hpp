@@ -239,6 +239,12 @@ public:
     // Run the bound plan (a different plan runs with no breakpoints but still honours pause, step and cancel).
     [[nodiscard]] plan::RunResult run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args,
                                       memory::IAllocator* alloc);
+    // The same, with an OBSERVER of every safe point (e.g. a DIAG.9a replay recorder). Its `safe_point` is called on
+    // the executing thread at every safe point of the run, before the session decides whether to stop there, so it
+    // sees the instr a stop holds as well as every instr that runs through; a `Cancel` it returns cancels the run.
+    // Its `cancel` flag is not read: the session's own flag is the run's. Null observes nothing.
+    [[nodiscard]] plan::RunResult run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args,
+                                      memory::IAllocator* alloc, const plan::RunControl* observer);
     // Invoke through the reference interpreter. The session installs its step hook and cancel flag for the call and
     // removes both afterwards (an interpreter's own hooks and flag are replaced for that call).
     [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
@@ -337,6 +343,7 @@ private:
     u32                       m_step_depth = 0U;
     const plan::CompiledPlan* m_cur_plan   = nullptr;
     const plan::SafePoint*    m_cur_sp     = nullptr;
+    const plan::RunControl*   m_observer   = nullptr; // the plan run's safe-point observer (null: none)
     exec::Interpreter*        m_cur_in     = nullptr;
     const Operation*          m_cur_op     = nullptr;
 

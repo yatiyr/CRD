@@ -174,9 +174,9 @@ void InspectPanel::set_script(containers::ConstSpan<PanelAction> actions)
     m_next_action = 0U;
 }
 
-ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args)
+ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args, ceir::cook::HostRecording recording)
 {
-    const insp::Refusal r = m_host.start(args);
+    const insp::Refusal r = m_host.start(args, recording);
     m_last_refusal        = r;
     if (r == insp::Refusal::None)
     {

@@ -812,6 +812,34 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-run-records-and-re
   external-completion streams, asset generations of a hot-reloading host and capture at the interactive hosts'
   boundaries (InspectHost, crd-sandbox frame loop, HostProvider) are not covered by this batch.
 
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspect-host-recording.md)):
+- Capture at the inspect host's boundary. `inspect::Session::run` takes an optional safe-point observer, called on
+  the executing thread at every safe point before the session decides whether to stop (so it sees the instr a stop
+  holds); a `Cancel` it returns ends the run. `ReplayRecorder` (`replay_record.hpp`) is the trace `run_traced` takes,
+  exposed so a host can pass it to a session as that observer; a debugger's stops, steps and value reads therefore
+  leave the trace exactly as an unobserved run's.
+- `InspectHost::start(args, HostRecording)` records an execution: on the controller, before the executing thread
+  starts, it re-cooks the installed generation's module in its own Context into the record's blob (valid only when it
+  cooks to that generation's own content hash) and classifies the inputs with the same walk as `replay.record`; the
+  executing thread traces into the host's execution allocator. `InspectHost::record` gives the record once the
+  execution has ended (`running` before; `cancelled` for a cancelled run, which a replay would not stop where it
+  stopped; `not-recorded` after a start without recording). A run never spans a reload (a load is refused while an
+  execution is attached), so one record names one generation, and after a reload it still holds the generation that
+  ran.
+- Record schema 2 adds the program's asset id and ReloadSet generation (0 and 0 when no reloading host ran it; a
+  generation without an asset is malformed); a schema 1 record is refused `unsupported-schema`. `replay.run` answers
+  both. `write_record_file` creates a record exclusively (never overwrites).
+- Consumers: `ceridc inspect --record <file>` writes the inspected run's record (an existing file is refused before
+  anything runs; a cancelled run writes nothing), which `ceridc diag --command replay.run` reproduces in another
+  process. crd-sandbox's `--inspect-record <file>` records the run its frame loop holds and steps through the panel
+  (`InspectPanel::start` passes `HostRecording` to the host) and writes it when the run ends; "Run again" starts
+  without recording.
+- Still open in DIAG.9a: capture at the interpreter-based `HostProvider` (state cells across invokes, pooled and
+  parallel work: schedule replay); a host input seam with the ops that read random
+  streams, clocks and time steps, input events and external completions; a run spanning a reload (a host that
+  reloads between invokes); backend-specific numeric replay of GPU dispatches with a declared tolerance; network and
+  physical effects stubbed only in explicit test replay.
+
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection
 

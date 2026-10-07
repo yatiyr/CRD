@@ -188,4 +188,34 @@ bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator*
     }
     return true;
 }
+
+void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInputCount], containers::String* missing)
+{
+    for (crd::u32 i = 0U; i < kReplayInputCount; ++i)
+    {
+        ReplayInput& in = inputs[i];
+        in.need         = needs.inputs[i].need;
+        if (in.need == ReplayNeed::No)
+        {
+            in.state = ReplayInputState::NotNeeded;
+        }
+        else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput)
+        {
+            in.state = ReplayInputState::Recorded;
+        }
+        else
+        {
+            // Nothing captures this input at the plan executor's boundary: stored missing, never assumed.
+            in.state = ReplayInputState::Missing;
+            if (missing != nullptr)
+            {
+                if (!missing->empty())
+                {
+                    missing->push_back(',');
+                }
+                missing->append(replay_input_name(i));
+            }
+        }
+    }
+}
 } // namespace crd::ceir::cook::detail

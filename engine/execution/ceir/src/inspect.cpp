@@ -380,9 +380,17 @@ void Session::end_run()
 
 plan::RunResult Session::run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args, memory::IAllocator* alloc)
 {
+    return run(plan, args, alloc, nullptr);
+}
+
+plan::RunResult Session::run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args, memory::IAllocator* alloc,
+                             const plan::RunControl* observer)
+{
     begin_run(Executor::Plan);
+    m_observer = (observer != nullptr && observer->safe_point != nullptr) ? observer : nullptr;
     const plan::RunControl control{&Session::on_plan, this, &m_cancel};
     plan::RunResult        r = plan::run(plan, args, alloc, plan::RunHooks{}, &control);
+    m_observer               = nullptr;
     end_run();
     return r;
 }
@@ -423,7 +431,13 @@ void Session::attach_detached(exec::Interpreter& sub)
 
 plan::SafePointAction Session::on_plan(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user)
 {
-    Session&  s    = *static_cast<Session*>(user);
+    Session& s = *static_cast<Session*>(user);
+    // The observer sees every safe point, the ones a stop holds included, before the session decides.
+    if (s.m_observer != nullptr &&
+        s.m_observer->safe_point(plan, at, s.m_observer->user) == plan::SafePointAction::Cancel)
+    {
+        return plan::SafePointAction::Cancel;
+    }
     const u32 site = plan.seqs[at.at.seq].sites[at.at.instr];
     u32       bp   = kNoBreakpoint;
     if (&plan == s.m_plan && site < static_cast<u32>(s.m_bp_sites.size()) && s.m_bp_sites[site] != 0U)

@@ -16,6 +16,11 @@
 // the first `max_events` events are kept; `events_total` counts every event, so a truncated trace says how much it
 // lost. The outcome is the run error, the op it blamed, the results and the state cells after the run.
 //
+// A record also names where its program came from: the asset id and the generation number a hot-reloading host had
+// installed when the run started (`InspectHost` records them; 0 and 0 when the program was not run by such a host).
+// A run on an InspectHost cannot span a reload (a load is refused while an execution is attached), so one record
+// always names one generation, and its blob is that generation's program even after the host has reloaded.
+//
 // Replay loads the record's own blob into a fresh Context, compiles the record's entry, runs it on the recorded
 // arguments with the same trace bound and reports the first divergence: the first event whose op or depth differs
 // (path), the first differing result value (value), a different event count (length), outcome, results or cells.
@@ -44,7 +49,7 @@ class Context;
 
 namespace crd::ceir::cook
 {
-inline constexpr crd::u32 kReplayRecordSchema = 1U; // the record file layout
+inline constexpr crd::u32 kReplayRecordSchema = 2U; // the record file layout (2: the asset and its generation)
 inline constexpr crd::u32 kReplayExecutor     = 1U; // the compiled-plan semantics a trace is valid for
 
 inline constexpr crd::u32 kReplayDefaultMaxEvents = 4096U;
@@ -149,6 +154,8 @@ struct ReplayRecord
     ReplayBuild                    build;
     containers::String             program_path; // the authored path the program was cooked under
     crd::u64                       content_hash = 0U; // the cooked program's content hash
+    crd::u64                       asset        = 0U; // the host's asset id of the program (0: no reloading host)
+    crd::u64                       generation   = 0U; // the generation that ran (0: no reloading host)
     containers::Array<crd::u8>     program;           // the cooked CRDR blob
     containers::String             entry;
     containers::Array<crd::i64>    args;
@@ -186,6 +193,19 @@ void encode_record(const ReplayRecord& record, containers::Array<crd::u8>& out);
 // Decode `bytes` into `out`. Every count and size is bounded before it is used; nothing is executed.
 [[nodiscard]] RecordError decode_record(containers::ConstSpan<crd::u8> bytes, ReplayRecord& out);
 
+// NOLINTNEXTLINE(performance-enum-size)
+enum class RecordWrite : crd::u8
+{
+    Ok = 0,
+    Exists, // a file is already at the path: refused, and left untouched
+    Failed, // the file could not be created or fully written (a partial file is removed)
+};
+// "ok", "exists", "failed".
+[[nodiscard]] containers::StringView record_write_name(RecordWrite w) noexcept;
+
+// Encode `record` into a new file at `path`. The create is exclusive: a record is never overwritten.
+[[nodiscard]] RecordWrite write_record_file(containers::StringView path, const ReplayRecord& record);
+
 // A program loaded from a cooked blob into a caller's fresh Context, with one entry compiled. The Context must outlive
 // it (the module and the plan's positions name it).
 struct ReplayProgram
@@ -202,6 +222,32 @@ struct ReplayProgram
 // Register the host's dialects into `ctx` (fresh), read `blob`, assign stable ids and compile `entry`.
 void load_replay_program(Context& ctx, containers::ConstSpan<crd::u8> blob, containers::StringView entry,
                          Registrar registrar, void* user, ReplayProgram& out);
+
+// The trace of one run, taken at its safe points. `run_traced` uses it with the plan executor directly; a host that
+// runs the plan under an `inspect::Session` passes `control()` to the session as its observer, so a debugger's stops,
+// steps and value reads leave the trace exactly as an unobserved run's.
+//
+// Threads: construct it, run, and call `finish` on the EXECUTING thread; `out`'s arrays allocate from their own
+// allocator there. Another thread may read `out` only after the run has ended and that thread is joined.
+class ReplayRecorder
+{
+public:
+    // Clear `out` and keep at most `max_events` events (capped at kReplayMaxEvents).
+    ReplayRecorder(ReplayTrace& out, crd::u32 max_events);
+
+    // The safe-point control that appends the events (`cancel` is passed through; a session ignores it).
+    [[nodiscard]] plan::RunControl control(const std::atomic<bool>* cancel = nullptr) noexcept;
+
+    // Record the run's outcome: its error, the faulting instr and op, its results and state cells.
+    void finish(const plan::CompiledPlan& plan, const plan::RunResult& result);
+
+private:
+    static plan::SafePointAction on_safe_point(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user);
+
+    ReplayTrace*                m_out;
+    crd::u32                    m_max;
+    containers::Array<crd::u64> m_pending; // per call depth: the kept event whose results are read next
+};
 
 // Run `program` on `args`, keeping at most `max_events` events. `cancel` stops the run at its next safe point
 // (RunError::Cancelled).

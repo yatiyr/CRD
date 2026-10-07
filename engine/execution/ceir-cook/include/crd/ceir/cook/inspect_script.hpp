@@ -60,6 +60,7 @@ struct InspectScript
     const std::atomic<bool>*            cancel    = nullptr; // the caller's flag (null: none)
     ScriptStopFn                        on_stop   = nullptr;
     void*                               user      = nullptr;
+    HostRecording                       record{}; // DIAG.9a: record the execution (read it with InspectHost::record)
 };
 
 // NOLINTNEXTLINE(performance-enum-size)

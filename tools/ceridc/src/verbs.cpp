@@ -17,6 +17,7 @@
 #include <crd/audio/wav.hpp>
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/inspect_script.hpp>
+#include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
@@ -863,7 +864,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
                                      crd::containers::ConstSpan<crd::u32> breaks,
                                      crd::containers::ConstSpan<crd::u32> watches,
                                      crd::containers::ConstSpan<const char*> actions, crd::u32 max_stops,
-                                     crd::memory::IAllocator* alloc)
+                                     crd::memory::IAllocator* alloc, const char* record_path)
 {
     // Validate COMPLETELY before the program runs.
     if (program_path == nullptr)
@@ -894,6 +895,10 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
         {
             return fail(alloc, "inspect", "a --watch line is 1-based");
         }
+    }
+    if (record_path != nullptr && fs::exists(fs::Path(crd::containers::StringView(record_path))))
+    {
+        return fail(alloc, "inspect", "refusing to overwrite an existing --record file");
     }
     crd::containers::String text(alloc);
     if (!fs::read_file_text(fs::Path(crd::containers::StringView(program_path)), text))
@@ -938,6 +943,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     script.watches   = watches;
     script.actions   = crd::containers::as_const_span(script_actions);
     script.max_stops = (max_stops != 0U) ? max_stops : ck::kScriptDefaultMaxStops;
+    script.record.enabled = record_path != nullptr;
     ck::InspectReport report(alloc);
     ck::run_inspect_script(host, script, report);
     if (report.outcome == ck::ScriptOutcome::NotStarted)
@@ -1011,6 +1017,28 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
         w.kv("col", report.fault_col);
         w.end_object();
         break;
+    }
+    if (record_path != nullptr)
+    {
+        // The run as a record: the generation that ran, its re-cooked program and the session-independent trace.
+        ck::ReplayRecord       rec(alloc);
+        const ck::HostRecord   hr      = host.record(rec);
+        const ck::RecordWrite  written = (hr == ck::HostRecord::Ok)
+                                             ? ck::write_record_file(crd::containers::StringView(record_path), rec)
+                                             : ck::RecordWrite::Failed;
+        w.key("record");
+        w.begin_object();
+        w.kv("path", record_path);
+        w.kv("written", written == ck::RecordWrite::Ok);
+        w.kv("status", (hr == ck::HostRecord::Ok) ? ck::record_write_name(written) : ck::host_record_name(hr));
+        if (hr == ck::HostRecord::Ok)
+        {
+            w.kv("asset", rec.asset);
+            w.kv("generation", rec.generation);
+            w.kv("content_hash", rec.content_hash);
+            w.kv("events_total", rec.events_total);
+        }
+        w.end_object();
     }
     w.kv("ok", ok);
     w.end_object();

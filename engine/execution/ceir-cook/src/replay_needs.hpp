@@ -13,6 +13,7 @@
 #include <crd/ceir/cook/replay_record.hpp> // ReplayNeed, kReplayInputs
 #include <crd/ceir/ir.hpp>
 #include <crd/ceir/semantics.hpp> // DeterminismClass
+#include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -75,4 +76,10 @@ struct ProgramNeeds
 // the walk (it is polled once every 256 ops).
 [[nodiscard]] bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator* alloc,
                                  const std::atomic<bool>* cancel, ProgramNeeds& out);
+
+// A run record's input states from `needs`: the program, its build and its entry arguments are recorded; any other
+// input the program needs (or may need, through an opaque op) is missing, because nothing captures it at the plan
+// executor's boundary; the rest are not needed. `missing` (when not null) gains the missing inputs' names,
+// comma-separated, in record order.
+void record_inputs(const ProgramNeeds& needs, ReplayInput (&inputs)[kReplayInputCount], containers::String* missing);
 } // namespace crd::ceir::cook::detail

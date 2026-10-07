@@ -66,12 +66,16 @@ namespace crd::ceridc
 // script. It runs the same scripted inspection (crd/ceir/cook/inspect_script.hpp) as the `program.inspect` diagnostic
 // command, which is how an agent transport reaches it: through the `diag` tool, under the host's Execute grant. This
 // verb is the command line's convenience form (any readable path, one report) and is not itself an MCP tool.
+// DIAG.9a: `record_path` (null: none) writes the inspected run as a new run record (crd/ceir/cook/replay_record.hpp)
+// that `replay.run` replays without a session; an existing file there is refused before anything runs, and the
+// report's `record` object says whether it was written (a cancelled run is not recorded).
 [[nodiscard]] crd::containers::String verb_inspect(const char* program_path, const char* entry,
                                                    crd::containers::ConstSpan<crd::i64> args,
                                                    crd::containers::ConstSpan<crd::u32> breaks,
                                                    crd::containers::ConstSpan<crd::u32> watches,
                                                    crd::containers::ConstSpan<const char*> actions,
-                                                   crd::u32 max_stops, crd::memory::IAllocator* alloc);
+                                                   crd::u32 max_stops, crd::memory::IAllocator* alloc,
+                                                   const char* record_path = nullptr);
 
 // One request through the host's typed diagnostic command service (crd/perf/diag_commands.hpp). The report is the
 // service's response document unchanged, so a native caller, this verb and the MCP `diag` tool return the same bytes

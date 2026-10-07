@@ -78,6 +78,12 @@ checkout, and reports the first divergent event, value, count, outcome, result o
 that the run reproduced; with `program=` it replays the same inputs against an edited file. A record from another
 build, with a missing input, a bad checksum or a blob that is not its recorded content is refused before anything
 runs. The committed `assets/ceir/replay_demo.ceir` fails on a seeded argument for the tests to reproduce.
+`InspectHost::start` can record the execution it runs under a debug session (`HostRecording`): the trace is taken by
+the session's safe-point observer (`inspect::Session::run` with an observer), so breakpoints, steps and value reads
+leave it identical to an unobserved run's, and `InspectHost::record` gives the record with the host's asset id and the
+ReloadSet generation that ran (schema 2), still that generation's program after a reload. A cancelled run gives no
+record. `ceridc inspect --record <file>` and crd-sandbox's `--inspect-record <file>` write one; `write_record_file`
+never overwrites.
 
 ## Maturity and further work
 

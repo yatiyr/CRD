@@ -8,11 +8,18 @@
 // the program sits at a breakpoint and while it runs; a breakpoint stop reports its authored line, depth and typed
 // values, including the unavailable ones; step into, step out and continue; a pause request lands in the running
 // loop and a cancel ends it; a scripted run; a load while paused is Busy; commands for a replaced generation are
-// refused; destroying the panel while paused returns. Expected lines are scanned from the text, never taken from the
-// parser or the panel. ASCII test names.
+// refused; destroying the panel while paused returns. DIAG.9a: a run the frame loop holds, steps and lets fault is
+// recorded on the panel's host and replays without a session to the same trace and fault; a run started again without
+// recording forgets the record. Expected lines are scanned from the text, never taken from the parser or the panel.
+// ASCII test names.
 
 #include "inspect_panel.hpp"
 
+#include <crd/ceir/context.hpp>
+#include <crd/ceir/cook/replay_record.hpp>
+#include <crd/ceir/func.hpp>
+#include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -181,6 +188,14 @@ const crd::sandbox::PanelValue& value_at(const InspectPanel& panel, u32 line)
     }
     FAIL("no watched value at that line");
     return panel.values()[0];
+}
+
+// DIAG.9a: the dialects a replay registers into its fresh Context (the panel's own program dialects).
+void register_replay_dialects(crd::ceir::Context& ctx, void* /*user*/)
+{
+    (void)crd::ceir::arith::register_arith_ops(ctx);
+    (void)crd::ceir::core::register_core_ops(ctx);
+    (void)crd::ceir::func::register_dialect(ctx);
 }
 
 bool contains(const String& s, StringView needle)
@@ -464,4 +479,77 @@ TEST_CASE("diag 8b: destroying the sandbox panel while its program is paused ret
         CHECK(panel.state() == PanelState::Paused);
     } // the sandbox closes its window mid-stop: the host cancels and joins the executing thread
     SUCCEED("the panel was destroyed while paused");
+}
+
+TEST_CASE("diag 9a: the sandbox frame loop records the inspected run, and the record reproduces without a session",
+          "[sandbox][inspect][diag]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String text = read_text(fs::Path(StringView(kEngineAssets)) / StringView("ceir/replay_demo.ceir"), &alloc);
+    const u32    call = line_of(sv(text), "func.call");
+    const u32    sw   = line_of(sv(text), "core.switch");
+    REQUIRE(call != 0U);
+    REQUIRE(sw != 0U);
+    crd::scenerender::SceneRenderer renderer(&alloc);
+    REQUIRE(renderer.set_asset_root(kEngineAssets));
+
+    InspectPanel panel(&alloc, renderer);
+    REQUIRE(panel.load(StringView("ceir/replay_demo"), StringView("main")).ok());
+    REQUIRE(panel.add_breakpoint(call) == insp::Refusal::None);
+    const i64 seed = 1; // main(1) selects a switch region that does not exist
+    Frames    frames;
+    REQUIRE(panel.start(ConstSpan<i64>(&seed, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+
+    // The frame loop holds, steps into the callee and out, then lets it run to its fault.
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    crd::ceir::cook::ReplayRecord rec(&alloc);
+    CHECK(panel.host().record(rec) == crd::ceir::cook::HostRecord::Running);
+    REQUIRE(frames.idle(panel, 20U));
+    REQUIRE(panel.command(panel.generation(), PanelAction::StepInto) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    CHECK(panel.stop().depth == 1U);
+    REQUIRE(panel.command(panel.generation(), PanelAction::StepOut) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    // Continue through the later call hits to the fault, one frame at a time.
+    u32       later = 0U;
+    TickEvent e     = TickEvent::Stopped;
+    while (e == TickEvent::Stopped && later < 8U)
+    {
+        REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+        const auto start = std::chrono::steady_clock::now();
+        do
+        {
+            e = panel.tick();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (e == TickEvent::None && std::chrono::steady_clock::now() - start < std::chrono::milliseconds(kWaitMs));
+        later += (e == TickEvent::Stopped) ? 1U : 0U;
+    }
+    REQUIRE(e == TickEvent::Ended);
+    CHECK(later >= 1U); // the loop's later iterations hit the breakpoint too
+    CHECK(panel.error() == crd::ceir::plan::RunError::SelectorOutOfRange);
+    CHECK(frames.worst_ms < kFrameBoundMs);
+
+    // The record names the panel's program version and replays, in a fresh Context and with no session, to the same
+    // trace and the same fault at the switch's authored line.
+    REQUIRE(panel.host().record(rec) == crd::ceir::cook::HostRecord::Ok);
+    CHECK(rec.generation == panel.generation());
+    CHECK(rec.asset != 0U);
+    CHECK(sv(rec.program_path) == panel.file());
+    crd::ceir::Context                ctx(&alloc);
+    crd::ceir::cook::ReplayProgram    program(&alloc);
+    crd::ceir::cook::load_replay_program(ctx, {rec.program.data(), rec.program.size()}, "main",
+                                         &register_replay_dialects, nullptr, program);
+    REQUIRE(program.ok());
+    crd::ceir::cook::ReplayTrace trace(&alloc);
+    crd::ceir::cook::run_traced(program, {rec.args.data(), rec.args.size()}, rec.max_events, nullptr, trace);
+    CHECK(crd::ceir::cook::first_divergence(rec, trace).kind == crd::ceir::cook::DivergenceKind::None);
+    CHECK(trace.events_total == rec.events_total);
+    CHECK(crd::ceir::cook::replay_site_of_op(ctx, program, rec.fault_op).line == sw);
+
+    // "Run again" starts without recording: the record is forgotten.
+    REQUIRE(panel.start(ConstSpan<i64>(&seed, 1U)) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    REQUIRE(panel.command(panel.generation(), PanelAction::Cancel) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    CHECK(panel.host().record(rec) == crd::ceir::cook::HostRecord::NotRecorded);
 }

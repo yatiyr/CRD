@@ -1,6 +1,9 @@
 #include <crd/ceir/cook/inspect_host.hpp>
 
-#include <crd/ceir/provenance.hpp> // Origin / Provenance (a stop's authored position)
+#include "replay_needs.hpp"
+
+#include <crd/ceir/cook/program_cook.hpp> // cook_program (the recorded generation's immutable blob)
+#include <crd/ceir/provenance.hpp>        // Origin / Provenance (a stop's authored position)
 
 #include <chrono>
 #include <utility> // std::move
@@ -27,10 +30,24 @@ containers::StringView host_load_name(HostLoad s) noexcept
     return containers::StringView("?");
 }
 
+containers::StringView host_record_name(HostRecord s) noexcept
+{
+    switch (s) // ⛔ no default (-Werror=switch)
+    {
+    case HostRecord::Ok: return containers::StringView("ok");
+    case HostRecord::NotRecorded: return containers::StringView("not-recorded");
+    case HostRecord::Running: return containers::StringView("running");
+    case HostRecord::Cancelled: return containers::StringView("cancelled");
+    case HostRecord::ArtifactFailed: return containers::StringView("artifact-failed");
+    }
+    return containers::StringView("?");
+}
+
 InspectHost::InspectHost(memory::IAllocator* alloc, Registrar reg, void* user, inspect::PauseScope scope)
     : m_alloc(alloc), m_session_alloc(kHostChunkBytes, nullptr, "ceir-inspect-session"),
       m_exec_alloc(kHostChunkBytes, nullptr, "ceir-inspect-exec"), m_session(&m_session_alloc, scope),
-      m_set(alloc, reg, user), m_compiled(alloc), m_binds(alloc), m_args(alloc), m_result(&m_exec_alloc)
+      m_set(alloc, reg, user), m_compiled(alloc), m_entry(alloc), m_file(alloc), m_binds(alloc), m_args(alloc),
+      m_result(&m_exec_alloc), m_rec_blob(alloc), m_rec_entry(alloc), m_rec_file(alloc), m_rec_trace(&m_exec_alloc)
 {
     m_session.connect_controller();
 }
@@ -122,6 +139,10 @@ HostLoadResult InspectHost::load(AssetId id, containers::StringView source, cont
     m_generation        = m_set.handle(m_asset).generation.value;
     out.generation      = m_generation;
     m_compiled          = plan::compile(*g->ctx, *g->program.module, entry, m_alloc);
+    m_entry.clear();
+    m_entry.append(entry);
+    m_file.clear();
+    m_file.append(file);
     if (!m_compiled.ok())
     {
         out.compile_error = m_compiled.error;
@@ -137,7 +158,7 @@ inspect::Refusal InspectHost::add_line_breakpoint(containers::StringView file, c
     return m_session.add_line_breakpoint(file, line, out_index);
 }
 
-inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args)
+inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRecording recording)
 {
     if (!m_loaded || !m_compiled.ok())
     {
@@ -164,15 +185,115 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args)
     {
         m_args.push_back(args[i]);
     }
+    m_rec_on = recording.enabled;
+    if (m_rec_on)
+    {
+        // The generation that runs is fixed now (a load is refused until the execution ends): its program, re-cooked
+        // in its own Context, is the record's blob, and must be that generation's content.
+        m_rec_max = kReplayDefaultMaxEvents;
+        if (recording.max_events != 0U)
+        {
+            m_rec_max = (recording.max_events < kReplayMaxEvents) ? recording.max_events : kReplayMaxEvents;
+        }
+        m_rec_generation = m_generation;
+        m_rec_hash       = g->program.content_hash;
+        m_rec_entry.clear();
+        m_rec_entry.append(m_entry);
+        m_rec_file.clear();
+        m_rec_file.append(m_file);
+        CookResult cr  = cook_program(*g->ctx, *g->program.module, m_asset.value, m_alloc, m_alloc);
+        m_rec_artifact = cr.ok() && cr.content_hash == m_rec_hash && cr.blob.size() <= kReplayMaxProgramBytes;
+        m_rec_blob     = std::move(cr.blob);
+        detail::ProgramNeeds needs;
+        (void)detail::analyze_needs(*g->ctx, *g->program.module, m_alloc, nullptr, needs); // no cancel: always whole
+        detail::record_inputs(needs, m_rec_inputs, nullptr);
+    }
     m_done.store(false, std::memory_order_release);
     m_thread = std::thread(
         [this]
         {
-            m_result = m_session.run(m_compiled.plan, containers::ConstSpan<crd::i64>(m_args.data(), m_args.size()),
-                                     &m_exec_alloc);
+            const containers::ConstSpan<crd::i64> run_args(m_args.data(), m_args.size());
+            if (m_rec_on)
+            {
+                // The recorder observes every safe point before the session decides, so the trace is the run's own.
+                ReplayRecorder         rec(m_rec_trace, m_rec_max);
+                const plan::RunControl observer = rec.control();
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer);
+                rec.finish(m_compiled.plan, m_result);
+            }
+            else
+            {
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc);
+            }
             m_done.store(true, std::memory_order_release);
         });
     return inspect::Refusal::None;
+}
+
+HostRecord InspectHost::record(ReplayRecord& out) const
+{
+    if (!m_rec_on)
+    {
+        return HostRecord::NotRecorded;
+    }
+    if (running())
+    {
+        return HostRecord::Running;
+    }
+    if (m_rec_trace.error == plan::RunError::Cancelled)
+    {
+        return HostRecord::Cancelled;
+    }
+    if (!m_rec_artifact)
+    {
+        return HostRecord::ArtifactFailed;
+    }
+    memory::IAllocator* const alloc = out.program.allocator();
+    out.schema                      = kReplayRecordSchema;
+    out.build                       = current_build(alloc);
+    out.program_path.clear();
+    out.program_path.append(m_rec_file);
+    out.content_hash = m_rec_hash;
+    out.asset        = m_asset.value;
+    out.generation   = m_rec_generation;
+    out.program.clear();
+    out.program.reserve(m_rec_blob.size());
+    for (const crd::u8 b : m_rec_blob)
+    {
+        out.program.push_back(b);
+    }
+    out.entry.clear();
+    out.entry.append(m_rec_entry);
+    out.args.clear();
+    for (const crd::i64 v : m_args)
+    {
+        out.args.push_back(v);
+    }
+    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
+    {
+        out.inputs[i] = m_rec_inputs[i];
+    }
+    out.max_events   = m_rec_max;
+    out.events_total = m_rec_trace.events_total;
+    out.events.clear();
+    out.events.reserve(m_rec_trace.events.size());
+    for (const ReplayEvent& ev : m_rec_trace.events)
+    {
+        out.events.push_back(ev);
+    }
+    out.error    = m_rec_trace.error;
+    out.fault_op = m_rec_trace.fault_op;
+    out.results.clear();
+    for (const crd::i64 v : m_rec_trace.results)
+    {
+        out.results.push_back(v);
+    }
+    out.cells.clear();
+    for (const crd::i64 v : m_rec_trace.cells)
+    {
+        out.cells.push_back(v);
+    }
+    return HostRecord::Ok;
 }
 
 bool InspectHost::wait_finished(crd::u32 timeout_ms)

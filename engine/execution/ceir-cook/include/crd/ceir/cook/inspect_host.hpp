@@ -16,14 +16,25 @@
 // session to the generation installed now, so a request naming a replaced generation is refused `StaleGeneration`.
 // A load while an execution is attached is refused `Busy`: its plan and its generation's Context are in use.
 //
+// ⛔ RECORDING (DIAG.9a). A `start` may record its execution as a run record (`replay_record.hpp`): the controller
+// re-cooks the installed generation's program into the record's immutable blob (it must cook to that generation's
+// own content hash) before the executing thread starts, and the executing thread traces the run as the session's
+// safe-point observer, so stops, steps and value reads leave the trace exactly as an unobserved run's. `record` then
+// gives the record of the last recorded execution once it has ended: its asset, the generation that ran (still that
+// generation after a later reload), the build, the arguments, each input's state, the trace and the outcome. A
+// cancelled execution gives none (a replay would not stop where it stopped). A run never spans a reload: a load is
+// refused while an execution is attached.
+//
 // ⛔ LIFETIME. The destructor cancels an execution that is still running or paused (through the session, at its next
 // safe point) and joins the executing thread, so a consumer that leaves early can neither hang nor leak the thread.
 
 #include <crd/ceir/cook/hot_reload.hpp>
+#include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -59,6 +70,26 @@ struct HostLoadResult
     [[nodiscard]] bool ok() const noexcept { return status == HostLoad::Ok; }
 };
 
+// DIAG.9a: whether the next execution is recorded, and how many trace events the record keeps (0: the default).
+struct HostRecording
+{
+    bool     enabled    = false;
+    crd::u32 max_events = kReplayDefaultMaxEvents;
+};
+
+// Why `record` gave no record.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class HostRecord : crd::u8
+{
+    Ok = 0,
+    NotRecorded,    // no execution was started with recording enabled
+    Running,        // the recorded execution has not ended yet
+    Cancelled,      // it was cancelled (by the controller, a script or its stop bound): a replay would not stop there
+    ArtifactFailed, // the generation that ran did not re-cook to its own content hash: there is no blob to replay
+};
+// "ok", "not-recorded", "running", "cancelled", "artifact-failed".
+[[nodiscard]] containers::StringView host_record_name(HostRecord s) noexcept;
+
 class InspectHost
 {
 public:
@@ -82,8 +113,13 @@ public:
 
     // Rebind the session to the installed generation and start the compiled entry with `args` on the executing
     // thread. `NotBound` before a successful load, `Busy` while an execution is attached. `binds()` then reports how
-    // every breakpoint resolved in this generation.
-    [[nodiscard]] inspect::Refusal start(containers::ConstSpan<crd::i64> args);
+    // every breakpoint resolved in this generation. `recording` records this execution (see RECORDING); a start
+    // without it forgets the previous record.
+    [[nodiscard]] inspect::Refusal start(containers::ConstSpan<crd::i64> args, HostRecording recording = {});
+
+    // The run record of the last execution started with recording, once it has ended (`out` is overwritten; its
+    // arrays and strings allocate from their own allocators). Controller thread.
+    [[nodiscard]] HostRecord record(ReplayRecord& out) const;
 
     // Wait up to `timeout_ms` for the execution to end; true once it has ended and its thread is joined (also when
     // nothing was started). The run's result is then `result()`.
@@ -116,9 +152,24 @@ private:
     bool                                   m_loaded     = false;
     crd::u64                               m_generation = 0U;
     plan::CompileResult                    m_compiled;
+    containers::String                     m_entry; // the entry the last load compiled
+    containers::String                     m_file;  // the file name the last load cooked the program under
     containers::Array<inspect::BindReport> m_binds;
     containers::Array<crd::i64>            m_args;
     plan::RunResult                        m_result;
+
+    // DIAG.9a: the recorded execution. The controller writes all but the trace at `start`; the executing thread
+    // writes the trace (from m_exec_alloc); the controller reads it only after the execution has ended.
+    bool                       m_rec_on         = false;
+    bool                       m_rec_artifact   = false; // the blob cooked to the generation's content hash
+    crd::u32                   m_rec_max        = kReplayDefaultMaxEvents;
+    crd::u64                   m_rec_generation = 0U;
+    crd::u64                   m_rec_hash       = 0U;
+    containers::Array<crd::u8> m_rec_blob;
+    containers::String         m_rec_entry;
+    containers::String         m_rec_file;
+    ReplayInput                m_rec_inputs[kReplayInputs];
+    ReplayTrace                m_rec_trace;
     std::atomic<bool>                      m_done{true};
     std::thread                            m_thread; // last: it runs while the members above are alive
 };

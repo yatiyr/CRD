@@ -1,5 +1,7 @@
 #include <crd/ceir/cook/replay_record.hpp>
 
+#include "bounded_file.hpp"
+
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/containers/hash.hpp> // fnv1a_64
@@ -243,9 +245,13 @@ private:
     {
         return e;
     }
-    if (!r.u64(out.content_hash))
+    if (!r.u64(out.content_hash) || !r.u64(out.asset) || !r.u64(out.generation))
     {
         return RecordError::Truncated;
+    }
+    if (out.generation != 0U && out.asset == 0U)
+    {
+        return RecordError::Malformed; // a generation belongs to an asset
     }
     const crd::u8* blob    = nullptr;
     crd::usize     blob_n  = 0U;
@@ -345,28 +351,20 @@ private:
 
 // ---- the traced run -------------------------------------------------------------------------------------------------
 
-struct Recorder
-{
-    explicit Recorder(memory::IAllocator* alloc) : pending(alloc) {}
-
-    crd::u32              max_events = 0U;
-    ReplayTrace*          out        = nullptr;
-    cont::Array<crd::u64> pending; // per call depth: the kept event whose results are read next (kNoPending: none)
-};
-
 [[nodiscard]] StableId op_at(const plan::CompiledPlan& plan, plan::InstrRef at) noexcept
 {
     return plan.sites[plan.seqs[at.seq].sites[at.instr]].op;
 }
 
-plan::SafePointAction on_safe_point(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user)
+// One safe point of a traced run. `pending` holds, per call depth, the kept event whose results are read next
+// (kNoPending: none).
+void trace_safe_point(ReplayTrace& out, cont::Array<crd::u64>& pending, crd::u32 max_events,
+                      const plan::CompiledPlan& plan, const plan::SafePoint& at)
 {
-    Recorder& rec = *static_cast<Recorder*>(user);
-
     // The results of the previous kept event of this frame: its instr ran since then.
-    if (at.depth < rec.pending.size() && rec.pending[at.depth] != kNoPending)
+    if (at.depth < pending.size() && pending[at.depth] != kNoPending)
     {
-        ReplayEvent& ev = rec.out->events[static_cast<crd::usize>(rec.pending[at.depth])];
+        ReplayEvent& ev = out.events[static_cast<crd::usize>(pending[at.depth])];
         for (crd::u32 k = 0U; k < kReplayEventValues; ++k)
         {
             const plan::ValueRead v = plan::read_value(plan, at, StableId{ev.op}, k);
@@ -379,23 +377,22 @@ plan::SafePointAction on_safe_point(const plan::CompiledPlan& plan, const plan::
         }
     }
     // Frames deeper than this one have returned: their last events keep no values.
-    rec.pending.resize(static_cast<crd::usize>(at.depth) + 1U, kNoPending);
+    pending.resize(static_cast<crd::usize>(at.depth) + 1U, kNoPending);
 
-    const crd::u64 index = rec.out->events_total++;
-    if (index < rec.max_events)
+    const crd::u64 index = out.events_total++;
+    if (index < max_events)
     {
         ReplayEvent ev;
         ev.op    = op_at(plan, at.at).value;
         ev.depth = at.depth;
-        rec.out->events.push_back(ev);
-        rec.out->sites.push_back(at.at);
-        rec.pending[at.depth] = index;
+        out.events.push_back(ev);
+        out.sites.push_back(at.at);
+        pending[at.depth] = index;
     }
     else
     {
-        rec.pending[at.depth] = kNoPending;
+        pending[at.depth] = kNoPending;
     }
-    return plan::SafePointAction::Continue;
 }
 
 [[nodiscard]] ReplaySite site_at(const Context& ctx, const plan::CompiledPlan& plan, plan::InstrRef at) noexcept
@@ -582,6 +579,8 @@ void encode_record(const ReplayRecord& record, cont::Array<crd::u8>& out)
     put_u32(payload, record.build.executor);
     put_str(payload, record.program_path);
     put_u64(payload, record.content_hash);
+    put_u64(payload, record.asset);
+    put_u64(payload, record.generation);
     put_bytes(payload, record.program.data(), record.program.size());
     put_str(payload, record.entry);
     put_values(payload, record.args);
@@ -656,6 +655,32 @@ RecordError decode_record(cont::ConstSpan<crd::u8> bytes, ReplayRecord& out)
     return read_payload(r, out);
 }
 
+cont::StringView record_write_name(RecordWrite w) noexcept
+{
+    switch (w) // no default (-Werror=switch)
+    {
+    case RecordWrite::Ok: return cont::StringView{"ok"};
+    case RecordWrite::Exists: return cont::StringView{"exists"};
+    case RecordWrite::Failed: return cont::StringView{"failed"};
+    }
+    return cont::StringView{"?"};
+}
+
+RecordWrite write_record_file(cont::StringView path, const ReplayRecord& record)
+{
+    if (detail::file_exists(path))
+    {
+        return RecordWrite::Exists;
+    }
+    memory::IAllocator* const alloc = record.program.allocator();
+    cont::Array<crd::u8>      bytes(alloc);
+    encode_record(record, bytes);
+    cont::String reason(alloc);
+    return detail::write_new_file(path, {bytes.data(), bytes.size()}, reason) == perf::DiagStatus::Ok
+               ? RecordWrite::Ok
+               : RecordWrite::Failed;
+}
+
 // ---- load, run and compare ------------------------------------------------------------------------------------------
 
 void load_replay_program(Context& ctx, cont::ConstSpan<crd::u8> blob, cont::StringView entry, Registrar registrar,
@@ -677,10 +702,10 @@ void load_replay_program(Context& ctx, cont::ConstSpan<crd::u8> blob, cont::Stri
     out.compiled = plan::compile(ctx, *out.module, entry, ctx.allocator());
 }
 
-void run_traced(const ReplayProgram& program, cont::ConstSpan<crd::i64> args, crd::u32 max_events,
-                const std::atomic<bool>* cancel, ReplayTrace& out)
+ReplayRecorder::ReplayRecorder(ReplayTrace& out, crd::u32 max_events)
+    : m_out(&out), m_max(max_events < kReplayMaxEvents ? max_events : kReplayMaxEvents),
+      m_pending(out.events.allocator())
 {
-    memory::IAllocator* const alloc = out.events.allocator();
     out.events.clear();
     out.sites.clear();
     out.results.clear();
@@ -689,33 +714,50 @@ void run_traced(const ReplayProgram& program, cont::ConstSpan<crd::i64> args, cr
     out.error        = plan::RunError::None;
     out.fault        = plan::InstrRef{};
     out.fault_op     = 0U;
+    out.events.reserve(m_max);
+    out.sites.reserve(m_max);
+    m_pending.reserve(16U);
+}
 
-    const crd::u32 bound = max_events < kReplayMaxEvents ? max_events : kReplayMaxEvents;
-    out.events.reserve(bound);
-    out.sites.reserve(bound);
+plan::RunControl ReplayRecorder::control(const std::atomic<bool>* cancel) noexcept
+{
+    return plan::RunControl{&ReplayRecorder::on_safe_point, this, cancel};
+}
 
-    Recorder rec(alloc);
-    rec.max_events = bound;
-    rec.out        = &out;
-    rec.pending.reserve(16U);
-    const plan::RunControl control{&on_safe_point, &rec, cancel};
-    const plan::CompiledPlan& compiled = program.compiled.plan;
-    plan::RunResult           r        = plan::run(compiled, args, alloc, plan::RunHooks{}, &control);
+plan::SafePointAction ReplayRecorder::on_safe_point(const plan::CompiledPlan& plan, const plan::SafePoint& at,
+                                                    void* user)
+{
+    auto& self = *static_cast<ReplayRecorder*>(user);
+    trace_safe_point(*self.m_out, self.m_pending, self.m_max, plan, at);
+    return plan::SafePointAction::Continue;
+}
 
-    out.error = r.error;
-    out.fault = r.fault;
-    if (r.fault.valid())
-    {
-        out.fault_op = op_at(compiled, r.fault).value;
-    }
-    for (const crd::i64 v : r.values)
+void ReplayRecorder::finish(const plan::CompiledPlan& plan, const plan::RunResult& result)
+{
+    ReplayTrace& out = *m_out;
+    out.error        = result.error;
+    out.fault        = result.fault;
+    out.fault_op     = result.fault.valid() ? op_at(plan, result.fault).value : 0U;
+    out.results.clear();
+    out.cells.clear();
+    for (const crd::i64 v : result.values)
     {
         out.results.push_back(v);
     }
-    for (const crd::i64 v : r.cells)
+    for (const crd::i64 v : result.cells)
     {
         out.cells.push_back(v);
     }
+}
+
+void run_traced(const ReplayProgram& program, cont::ConstSpan<crd::i64> args, crd::u32 max_events,
+                const std::atomic<bool>* cancel, ReplayTrace& out)
+{
+    ReplayRecorder            rec(out, max_events);
+    const plan::RunControl    control  = rec.control(cancel);
+    const plan::CompiledPlan& compiled = program.compiled.plan;
+    const plan::RunResult r = plan::run(compiled, args, out.events.allocator(), plan::RunHooks{}, &control);
+    rec.finish(compiled, r);
 }
 
 ReplaySite replay_site(const Context& ctx, const ReplayProgram& program, plan::InstrRef at) noexcept
