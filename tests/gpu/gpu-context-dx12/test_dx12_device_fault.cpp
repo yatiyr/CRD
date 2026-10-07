@@ -64,6 +64,7 @@ constexpr const char* kFaultHlsl =
 
 constexpr UINT64 kBufferBytes = 65536U;
 constexpr UINT kFaultGroups = 64U; // 64 x 64 stores of 4 bytes: 16 KiB through the released buffer's address
+constexpr DWORD kReclaimPauseMs = 500U; // after the flush: time for the released allocation to be unmapped
 
 [[nodiscard]] std::string_view env_or(const char* name, std::string_view fallback, char (&storage)[256])
 {
@@ -353,6 +354,22 @@ TEST_CASE("DIAG.7b(h) device fault child (spawned by the fault tests, never run 
     }
     g::detail::dx12_detach_identity(victim_id); // the production retire-then-release order
     victim.Reset();                             // the hazard: the recorded store now targets released memory
+
+    // Let the release take effect on the GPU before the store runs. Measured on an RTX 4070 Ti SUPER (2026-10-07): a
+    // store submitted straight after the release completed with the device live, so the released allocation's
+    // address was still mapped at that point. A flush through the same queue, waited on, followed by a pause gives the
+    // video memory manager its deferred destruction before the stale address is used.
+    {
+        ComPtr<ID3D12Fence> flush;
+        REQUIRE(SUCCEEDED(device->CreateFence(0U, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&flush))));
+        HANDLE flushed = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        REQUIRE(flushed != nullptr);
+        REQUIRE(SUCCEEDED(queue->Signal(flush.Get(), 1U)));
+        REQUIRE(SUCCEEDED(flush->SetEventOnCompletion(1U, flushed)));
+        REQUIRE(WaitForSingleObject(flushed, 20000U) == WAIT_OBJECT_0);
+        CloseHandle(flushed);
+        Sleep(kReclaimPauseMs);
+    }
 
     UINT64 value = 0U;
     bool submitted = false;

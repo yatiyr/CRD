@@ -62,4 +62,33 @@ The user agreed to one opt-in hardware run, after the explanation of what it doe
 - GPU-heavy applications closed first;
 - the serial workflow paused so no GPU test runs at the same time.
 
-The WARP leg (h1) was rebuilt and passes on win-debug. The hardware result is recorded below once the run is done.
+The WARP leg (h1) was rebuilt and passes on win-debug.
+
+**Hardware result (user run, RTX 4070 Ti SUPER, win-debug build at `8c909d9a`):** no fault. The child reported
+`adapter=hardware (default device)`, then `submit=00000000 wait=00000000 reason=00000000`, and exited 30 (completed).
+- The removal record is empty: origin 0, no DRED state, no breadcrumbs, no page fault.
+- `DIAG.7b(h2)` therefore failed its `child == kFaultRecorded` requirement.
+- The device stayed live and no TDR occurred, so no other process was affected.
+
+The hazard is the cause, not the engine. The child releases the victim buffer after recording and immediately submits
+the store, and the store completed. The likely explanation, not measured, is that the runtime and the video memory
+manager have not yet unmapped the released allocation's virtual address when the store runs; destruction is deferred.
+Measured: on this hardware and driver, a buffer released on the CPU just before submission is not a GPU page fault.
+WARP gave the same answer by discarding the stores.
+
+**Second run, stronger hazard (user run, same machine):** the child now waits for the release to take effect before
+the store runs. After `victim.Reset()` it signals a fence on the same queue, waits for it, and pauses 500 ms, so the
+store uses an address whose allocation was released and flushed. The result was the same: `submit=00000000
+wait=00000000 reason=00000000`, an empty removal record, and exit 30 (completed). No TDR and no other process affected.
+
+Measured: on an RTX 4070 Ti SUPER, neither a just-released nor a released-and-flushed buffer address faults. The
+driver keeps the freed range mapped, or redirects it, so a GPU use-after-free does not reach DRED as a page fault.
+
+**User decision (2026-10-07):** with the stronger hazard also completing, the real DX12 device fault is recorded as an
+explicitly unqualified route, the same as the Vulkan real loss (DIAG.7c(h)). No further hardware runs are planned:
+- what stands is the whole fault path on WARP (h1), the in-flight pass resolver with teeth, and DRED's breadcrumb op
+  history and contexts;
+- a real DX12 fault with a page-fault bundle on this hardware is listed as unproven, never claimed;
+- the flush-and-pause hazard is kept, because it is the stronger hazard on any adapter that does unmap released ranges;
+  the opt-in case and its oracle are unchanged.
+
