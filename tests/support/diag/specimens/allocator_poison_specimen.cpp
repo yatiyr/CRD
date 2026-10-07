@@ -28,22 +28,31 @@
 //   ring-retired          RingAllocator: retire a claim's epoch, then read the claim
 //   ring-overrun          read one byte past a 64-byte claim (unclaimed space)
 //   ring-underrun         a 64-aligned claim after an 8-byte one: read the byte before it (alignment padding)
+//   array-past-size       an Array<u64> reserves 16 and holds 3: read element 3 (unused capacity)
+//   array-pop             push 4, pop_back: read the popped element
+//   array-clear           push 4, clear: read element 0
+//   array-shrink          resize to 10, then to 2: read element 2
+//   array-odd-bytes       an Array<u8> reserves 32 and holds 13: read byte 13 (inside a partly live granule)
+//   array-arena           an Array<u64> over a LinearAllocator slice reserves 8 and holds 2: read element 2
 //
-// Under ASan a death callback checks the report is "use-after-poison" (the allocator's own poison, not some other
-// fault) and exits 42; any other report exits 43, an allocator layout the mode did not get (two pool slots that are
-// not neighbours, a shrink that moved, a growable heap that did not grow) 95, an unknown mode 96.
+// Under ASan a death callback checks the report is the kind the mode declares and exits 42: "use-after-poison" for
+// an allocator's own poison, "container-overflow" for an Array's unused capacity (array-* modes). Any other report
+// exits 43, an allocator layout the mode did not get (two pool slots that are not neighbours, a shrink that moved, a
+// growable heap that did not grow, an array that reallocated) 95, an unknown mode 96.
 // Without ASan the allocators still run every step but the bad read is skipped: the specimen tags itself
 // SANITIZER=none and exits 0 (InstrumentAbsent). Immediate
 // same-address reuse and an overrun into a LIVE neighbour are raw-pointer limits ASan cannot see; DIAG.3e covers them
 // with generations. A pool's logical allocation is its whole slot (allocation_size() reports the slot), so its
 // overruns are declared at the slot boundary, into a free neighbour. A TLSF block is its logical allocation the same
 // way; every block header is poisoned, so its over- and underruns are caught whether the neighbour is live or free.
-// The ring tracks claims per 8-byte granule, so its modes use 8-aligned offsets and sizes.
+// The ring tracks claims per 8-byte granule, so its modes use 8-aligned offsets and sizes. An Array marks only whole
+// granules of its capacity, so its modes use buffers that start on a granule.
 
 #define CRD_DIAG_SPECIMEN_ASAN_CLASS // only AddressSanitizer catches this class (see specimen_common.hpp)
 
 #include "specimen_common.hpp"
 
+#include <crd/containers/array.hpp>
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -66,6 +75,10 @@
 namespace
 {
 namespace mem = crd::memory;
+namespace cont = crd::containers;
+
+// The report kind the running mode declares; array-* modes switch it to container-overflow.
+const char* g_expected_report = "use-after-poison";
 
 #if CRD_DIAG_HAS_ASAN
 void on_asan_death()
@@ -73,8 +86,8 @@ void on_asan_death()
     const char* const kind = __asan_get_report_description();
     std::printf("CRD_DIAG_ASAN_REPORT=%s\n", kind != nullptr ? kind : "(none)");
     std::fflush(stdout);
-    const bool poisoned = kind != nullptr && std::strcmp(kind, "use-after-poison") == 0;
-    std::_Exit(poisoned ? 42 : 43);
+    const bool declared = kind != nullptr && std::strcmp(kind, g_expected_report) == 0;
+    std::_Exit(declared ? 42 : 43);
 }
 #endif
 
@@ -96,6 +109,101 @@ void touch(const void* p, crd::usize offset)
 void fill(void* p, crd::usize n)
 {
     std::memset(p, 0x5A, n);
+}
+
+// Reads one element past size() inside the capacity of `a`, which must still hold the buffer `data` it had when the
+// mode filled it (exit 95 otherwise).
+template <typename T> void touch_past_size(const cont::Array<T>& a, const T* data)
+{
+    if (a.data() != data || a.size() >= a.capacity())
+    {
+        std::_Exit(95);
+    }
+    touch(data, sizeof(T) * a.size());
+}
+
+[[nodiscard]] bool run_array_mode(const char* mode)
+{
+    if (std::strncmp(mode, "array-", 6U) != 0)
+    {
+        return false;
+    }
+    g_expected_report = "container-overflow";
+    if (std::strcmp(mode, "array-past-size") == 0)
+    {
+        cont::Array<crd::u64> a;
+        a.reserve(16U);
+        const crd::u64* const data = a.data();
+        for (crd::u64 i = 0; i < 3U; ++i)
+        {
+            a.push_back(i);
+        }
+        touch_past_size(a, data);
+        return true;
+    }
+    if (std::strcmp(mode, "array-pop") == 0)
+    {
+        cont::Array<crd::u64> a;
+        a.reserve(8U);
+        const crd::u64* const data = a.data();
+        for (crd::u64 i = 0; i < 4U; ++i)
+        {
+            a.push_back(i);
+        }
+        a.pop_back();
+        touch_past_size(a, data);
+        return true;
+    }
+    if (std::strcmp(mode, "array-clear") == 0)
+    {
+        cont::Array<crd::u64> a;
+        a.reserve(8U);
+        const crd::u64* const data = a.data();
+        for (crd::u64 i = 0; i < 4U; ++i)
+        {
+            a.push_back(i);
+        }
+        a.clear();
+        touch_past_size(a, data);
+        return true;
+    }
+    if (std::strcmp(mode, "array-shrink") == 0)
+    {
+        cont::Array<crd::u64> a;
+        a.resize(10U);
+        const crd::u64* const data = a.data();
+        a.resize(2U);
+        touch_past_size(a, data);
+        return true;
+    }
+    if (std::strcmp(mode, "array-odd-bytes") == 0)
+    {
+        cont::Array<crd::u8> a;
+        a.reserve(32U);
+        const crd::u8* const data = a.data();
+        if ((reinterpret_cast<crd::usize>(data) & 7U) != 0U)
+        {
+            std::_Exit(95);
+        }
+        for (crd::u8 i = 0; i < 13U; ++i)
+        {
+            a.push_back(i);
+        }
+        touch_past_size(a, data);
+        return true;
+    }
+    if (std::strcmp(mode, "array-arena") == 0)
+    {
+        mem::LinearAllocator arena(4096U, nullptr, "poison-array-arena");
+        cont::Array<crd::u64> a(&arena);
+        a.reserve(8U);
+        const crd::u64* const data = a.data();
+        a.push_back(1U);
+        a.push_back(2U);
+        touch_past_size(a, data);
+        return true;
+    }
+    return false;
 }
 
 [[nodiscard]] bool run_linear_mode(const char* mode)
@@ -160,7 +268,7 @@ void fill(void* p, crd::usize n)
         touch(slice, 256U);
         return true;
     }
-    return false;
+    return run_array_mode(mode);
 }
 
 [[nodiscard]] bool run_arena_mode(const char* mode)

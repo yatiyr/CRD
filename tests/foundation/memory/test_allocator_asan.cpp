@@ -1,12 +1,14 @@
 // DIAG.3b -- allocator-aware AddressSanitizer boundaries. Two halves:
 //  - In-process positives: correct use of every poisoning allocator (pool, growable pool, linear, stack, growable
 //    linear, nested arenas, TLSF, growable TLSF, ring; odd and large slots, small and over-aligned objects, in-place
-//    resizes) stays clean under ASan and keeps its
-//    data; where the build has ASan, the shadow state is asserted directly (asan_is_poisoned only queries the shadow,
-//    it never touches the memory). Without ASan the helpers are no-ops and report nothing poisoned.
+//    resizes) and of Array's container live range (every mutator, growth, copies, arena-backed and packed buffers)
+//    stays clean under ASan and keeps its data; where the build has ASan, the shadow state is asserted directly
+//    (asan_is_poisoned only queries the shadow, it never touches the memory). Without ASan the helpers are no-ops and
+//    report nothing poisoned.
 //  - The negative control: crd-diag-allocator-poison-specimen performs one intentional stale or out-of-range read per
-//    mode in a bounded child. Under ASan each must end in a use-after-poison report (exit 42); without ASan the
-//    specimen reports InstrumentAbsent. No undefined behaviour runs in this process.
+//    mode in a bounded child. Under ASan each must end in the report its mode declares, use-after-poison for an
+//    allocator's poison and container-overflow for an Array's unused capacity (exit 42); without ASan the specimen
+//    reports InstrumentAbsent. No undefined behaviour runs in this process.
 // Contract: docs/design/runtime-diagnostics.md#diag-3b.
 
 #include <crd/containers/array.hpp>
@@ -24,6 +26,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstring>
+#include <utility>
 
 namespace
 {
@@ -449,7 +452,118 @@ TEST_CASE("allocator asan: a ring poisons unclaimed and retired space", "[memory
     CHECK(ring.in_use_bytes() == 0U);
 }
 
-TEST_CASE("allocator asan: every poisoned access is a use-after-poison report, or reported absent",
+TEST_CASE("allocator asan: an Array marks its unused capacity as a container live range", "[memory][diag][asan]")
+{
+    namespace cont = crd::containers;
+    cont::Array<crd::u64> a;
+    a.reserve(16U);
+    const crd::u64* data = a.data();
+    const auto* bytes = reinterpret_cast<const crd::u8*>(data);
+    CHECK(live_exactly(data, 0U)); // reserved but empty: the whole capacity is marked
+    CHECK(poisoned(bytes + 127));  // the last capacity byte
+    a.push_back(1U);
+    a.push_back(2U);
+    a.push_back(3U);
+    CHECK(live_exactly(data, 24U));
+    a.pop_back();
+    CHECK(live_exactly(data, 16U));
+    a.resize(10U);
+    CHECK(live_exactly(data, 80U));
+    a.resize(2U, 5U);
+    CHECK(live_exactly(data, 16U));
+    a.insert(0U, 9U);
+    CHECK(live_exactly(data, 24U));
+    a.erase(0U);
+    CHECK(live_exactly(data, 16U));
+    a.swap_remove(0U);
+    CHECK(live_exactly(data, 8U));
+    a.resize_uninitialized(5U);
+    CHECK(live_exactly(data, 40U));
+    a.emplace_back(7U);
+    CHECK(a.try_push_back(8U));
+    CHECK(live_exactly(data, 56U));
+    a.clear();
+    CHECK(live_exactly(data, 0U));
+
+    // Growth relocates into a new buffer marked at the new size; copies are marked at theirs.
+    for (crd::u64 i = 0; i < 20U; ++i)
+    {
+        a.push_back(i * 3U);
+    }
+    REQUIRE(a.capacity() > a.size());
+    CHECK(live_exactly(a.data(), 160U));
+    cont::Array<crd::u64> copy;
+    copy.reserve(64U);
+    copy = a;
+    CHECK(live_exactly(copy.data(), 160U));
+    const cont::Array<crd::u64> constructed(a);
+    CHECK(all_live(constructed.data(), 160U));
+    cont::Array<crd::u64> moved(std::move(copy));
+    CHECK(live_exactly(moved.data(), 160U)); // the buffer moves with its marking
+    a.shrink_to_fit();
+    CHECK(a.capacity() == 20U);
+    CHECK(all_live(a.data(), 160U));
+    for (crd::u64 i = 0; i < 20U; ++i)
+    {
+        CHECK(a[i] == i * 3U);
+        CHECK(moved[i] == i * 3U);
+        CHECK(constructed[i] == i * 3U);
+    }
+}
+
+TEST_CASE("allocator asan: an Array hands an arena slice back whole and never marks a neighbour",
+          "[memory][diag][asan]")
+{
+    namespace cont = crd::containers;
+    SECTION("an aligned slice: the arena's tail stays poisoned, the slice returns fully addressable")
+    {
+        mem::LinearAllocator arena(1024U, nullptr, "asan-array-arena");
+        const crd::u64* data = nullptr;
+        {
+            cont::Array<crd::u64> arr(&arena);
+            arr.reserve(8U);
+            arr.push_back(1U);
+            data = arr.data();
+            CHECK(live_exactly(data, 8U));
+            CHECK(poisoned(reinterpret_cast<const crd::u8*>(data) + 64)); // the arena's unhanded tail
+        }
+        // LinearAllocator::deallocate keeps the slice; the array lifted its marking before handing it back.
+        CHECK(live_exactly(data, 64U));
+    }
+    SECTION("a packed slice sharing granules with live neighbours")
+    {
+        mem::LinearAllocator arena(1024U, nullptr, "asan-array-packed");
+        auto* const lead = static_cast<crd::u8*>(arena.allocate(3U, 1U));
+        REQUIRE(lead != nullptr);
+        REQUIRE((reinterpret_cast<crd::usize>(lead) & 7U) == 0U);
+        cont::Array<crd::u8> arr(&arena);
+        arr.reserve(20U); // bytes [3, 23): neither end on a granule
+        REQUIRE(arr.data() == lead + 3);
+        auto* const next = static_cast<crd::u8*>(arena.allocate(5U, 1U)); // bytes [23, 28)
+        REQUIRE(next == lead + 23);
+        std::memset(lead, 0x11, 3U);
+        std::memset(next, 0x22, 5U);
+        arr.push_back(1U);
+        arr.push_back(2U);
+        CHECK(poisoned(arr.data() + 5)); // byte 8, the first whole granule of the capacity
+        CHECK(all_live(lead, 3U));
+        CHECK(all_live(next, 5U));
+        for (crd::u8 i = 2U; i < 20U; ++i)
+        {
+            arr.push_back(i);
+        }
+        CHECK(arr.capacity() == 20U);
+        CHECK(all_live(arr.data(), 20U));
+        CHECK(holds(lead, 3U, 0x11));
+        CHECK(holds(next, 5U, 0x22));
+        arr.clear();
+        CHECK(all_live(lead, 3U));
+        CHECK(all_live(next, 5U));
+        CHECK(holds(next, 5U, 0x22));
+    }
+}
+
+TEST_CASE("allocator asan: every poisoned access is the declared ASan report, or reported absent",
           "[memory][diag][asan][harness]")
 {
     namespace cd = crd::diag;
@@ -460,6 +574,8 @@ TEST_CASE("allocator asan: every poisoned access is a use-after-poison report, o
         "pool-underrun",        "pool-odd-freed", "pool-odd-overrun", "gpool-freed-slot",     "gpool-overrun",
         "tlsf-freed",           "tlsf-overrun",   "tlsf-underrun",    "tlsf-aligned",         "tlsf-large",
         "tlsf-shrink",          "gtlsf-freed",    "ring-retired",     "ring-overrun",         "ring-underrun",
+        "array-past-size",      "array-pop",      "array-clear",      "array-shrink",         "array-odd-bytes",
+        "array-arena",
     };
     for (const char* mode : modes)
     {
@@ -473,8 +589,9 @@ TEST_CASE("allocator asan: every poisoned access is a use-after-poison report, o
                      << " sanitizer=" << o.sanitizer.c_str() << " reason=" << o.reason.c_str());
         if (kAsan)
         {
-            // 42 = ASan reported use-after-poison; 43 = some other report; 95 = the pool slots were not neighbours;
-            // 0 = the read returned (no boundary).
+            // 42 = ASan reported the mode's declared kind (use-after-poison, or container-overflow for an array-*
+            // mode); 43 = some other report; 95 = the allocator layout the mode needs did not occur; 0 = the read
+            // returned (no boundary).
             CHECK(o.verdict == cd::Verdict::SanitizerCaught);
             CHECK(o.exit_code == 42);
         }

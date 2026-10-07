@@ -25,6 +25,14 @@ struct SvdAnchorPull
     SvdAnchorPull() noexcept { crd::hesap::dense::register_svd_cli_anchor(); }
 };
 const SvdAnchorPull kSvdAnchorPull;
+// A buffer of n value-initialised elements. Array(n, alloc) only reserves capacity, and the tests below fill their
+// buffers through data(), which under ASan is a container-overflow past size() (DIAG.3b).
+template <typename T> crd::containers::Array<T> sized(crd::usize n, crd::memory::IAllocator* alloc)
+{
+    crd::containers::Array<T> result(alloc);
+    result.resize(n);
+    return result;
+}
 } // namespace
 
 // =======================================================================
@@ -86,12 +94,12 @@ void apply_g_left(double* r, int nn, const double* rfl, int lda, int i, double t
 double check_bidiag(int m, int n)
 {
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
-    crd::containers::Array<double> a(m * n, &alloc);
-    crd::containers::Array<double> acopy(m * n, &alloc);
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> tauq(n, &alloc);
-    crd::containers::Array<double> taup(n, &alloc);
+    crd::containers::Array<double> a = sized<double>(m * n, &alloc);
+    crd::containers::Array<double> acopy = sized<double>(m * n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> tauq = sized<double>(n, &alloc);
+    crd::containers::Array<double> taup = sized<double>(n, &alloc);
     crd::u64 s = 0xC0FFEE1234567ULL + static_cast<crd::u64>(m * 131 + n);
     auto next = [&s]() {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -108,7 +116,7 @@ double check_bidiag(int m, int n)
                                              taup.data(), &alloc);
 
     // Form Q (m x m) = H(0)...H(n-1) applied to I.
-    crd::containers::Array<double> q(m * m, &alloc);
+    crd::containers::Array<double> q = sized<double>(m * m, &alloc);
     for (int i = 0; i < m * m; ++i)
     {
         q.data()[i] = (i / m == i % m) ? 1.0 : 0.0;
@@ -118,7 +126,7 @@ double check_bidiag(int m, int n)
         apply_h_left(q.data(), m, a.data(), n, i, m, tauq.data()[i]);
     }
     // Form P (n x n) = G(0)...G(n-2) applied to I.
-    crd::containers::Array<double> p(n * n, &alloc);
+    crd::containers::Array<double> p = sized<double>(n * n, &alloc);
     for (int i = 0; i < n * n; ++i)
     {
         p.data()[i] = (i / n == i % n) ? 1.0 : 0.0;
@@ -129,7 +137,7 @@ double check_bidiag(int m, int n)
     }
 
     // B (m x n) bidiagonal.
-    crd::containers::Array<double> b(m * n, &alloc);
+    crd::containers::Array<double> b = sized<double>(m * n, &alloc);
     for (int i = 0; i < m * n; ++i)
     {
         b.data()[i] = 0.0;
@@ -144,7 +152,7 @@ double check_bidiag(int m, int n)
     }
 
     // R = Q * B * P^T, compare to acopy.
-    crd::containers::Array<double> qb(m * n, &alloc);
+    crd::containers::Array<double> qb = sized<double>(m * n, &alloc);
     for (int i = 0; i < m; ++i)
     {
         for (int j = 0; j < n; ++j)
@@ -340,11 +348,11 @@ TEST_CASE("dlasr: matches dense plane-rotation product (all side/direction)", "[
         {
             const bool forward = (dir == 0);
             const int z = (side == 0) ? m : n;
-            crd::containers::Array<double> a(m * n, &alloc);
-            crd::containers::Array<double> a2(m * n, &alloc);
-            crd::containers::Array<double> c(z, &alloc);
-            crd::containers::Array<double> s(z, &alloc);
-            crd::containers::Array<double> p(z * z, &alloc);
+            crd::containers::Array<double> a = sized<double>(m * n, &alloc);
+            crd::containers::Array<double> a2 = sized<double>(m * n, &alloc);
+            crd::containers::Array<double> c = sized<double>(z, &alloc);
+            crd::containers::Array<double> s = sized<double>(z, &alloc);
+            crd::containers::Array<double> p = sized<double>(z * z, &alloc);
             fill(a.data(), m * n);
             for (int i = 0; i < m * n; ++i)
             {
@@ -354,7 +362,7 @@ TEST_CASE("dlasr: matches dense plane-rotation product (all side/direction)", "[
             build_p(z, c.data(), s.data(), forward, p.data());
 
             // Reference result.
-            crd::containers::Array<double> ref(m * n, &alloc);
+            crd::containers::Array<double> ref = sized<double>(m * n, &alloc);
             if (side == 0)  // P * A
             {
                 for (int i = 0; i < m; ++i)
@@ -403,10 +411,10 @@ TEST_CASE("dbdsqr: bidiagonal SVD reconstruction + orthogonality + values", "[he
     for (int n : {3, 8, 16, 25})
     {
         Rng rng{0xB1D5A0ULL + static_cast<crd::u64>(n)};
-        crd::containers::Array<double> d(n, &alloc);
-        crd::containers::Array<double> e(n, &alloc);
-        crd::containers::Array<double> d0(n, &alloc);
-        crd::containers::Array<double> e0(n, &alloc);
+        crd::containers::Array<double> d = sized<double>(n, &alloc);
+        crd::containers::Array<double> e = sized<double>(n, &alloc);
+        crd::containers::Array<double> d0 = sized<double>(n, &alloc);
+        crd::containers::Array<double> e0 = sized<double>(n, &alloc);
         for (int i = 0; i < n; ++i)
         {
             d.data()[i] = 2.0 * rng.next() - 1.0 + 1.5;  // keep away from 0 for conditioning
@@ -421,14 +429,14 @@ TEST_CASE("dbdsqr: bidiagonal SVD reconstruction + orthogonality + values", "[he
         e0.data()[n - 1] = 0.0;
 
         // U = I (n x n), VT = I (n x n), RowMajor.
-        crd::containers::Array<double> u(n * n, &alloc);
-        crd::containers::Array<double> vt(n * n, &alloc);
+        crd::containers::Array<double> u = sized<double>(n * n, &alloc);
+        crd::containers::Array<double> vt = sized<double>(n * n, &alloc);
         for (int i = 0; i < n * n; ++i)
         {
             u.data()[i] = (i / n == i % n) ? 1.0 : 0.0;
             vt.data()[i] = (i / n == i % n) ? 1.0 : 0.0;
         }
-        crd::containers::Array<double> work(4 * n, &alloc);
+        crd::containers::Array<double> work = sized<double>(4 * n, &alloc);
         const int info = dbdsqr<double>(true, n, n, n, 0, d.data(), e.data(), vt.data(), n, u.data(), n, nullptr,
                                         1, work.data());
         CHECK(info == 0);
@@ -529,7 +537,7 @@ TEST_CASE("dbdsqr: bidiagonal SVD reconstruction + orthogonality + values", "[he
             }
         }
         const auto eig = crd::hesap::dense::eig_sym<double>(&alloc, btb);
-        crd::containers::Array<double> svref(n, &alloc);
+        crd::containers::Array<double> svref = sized<double>(n, &alloc);
         for (int i = 0; i < n; ++i)
         {
             const double ev = eig.values.data()[i];
@@ -724,12 +732,12 @@ TEST_CASE("dlasdq_upper: base-case bidiagonal SVD reconstruction", "[hesap][svd]
         {
             const int m = n + sqre;
             const int ne = (sqre == 1) ? n : (n - 1);
-            crd::containers::Array<double> d(n, &alloc);
-            crd::containers::Array<double> e(n, &alloc);
-            crd::containers::Array<double> d0(n, &alloc);
-            crd::containers::Array<double> e0(n, &alloc);
-            crd::containers::Array<double> u(n * n, &alloc);
-            crd::containers::Array<double> vt(m * m, &alloc);
+            crd::containers::Array<double> d = sized<double>(n, &alloc);
+            crd::containers::Array<double> e = sized<double>(n, &alloc);
+            crd::containers::Array<double> d0 = sized<double>(n, &alloc);
+            crd::containers::Array<double> e0 = sized<double>(n, &alloc);
+            crd::containers::Array<double> u = sized<double>(n * n, &alloc);
+            crd::containers::Array<double> vt = sized<double>(m * m, &alloc);
             Rng rng{0xDA5D9ULL + static_cast<crd::u64>(sqre * 97 + n)};
             for (int i = 0; i < n; ++i)
             {
@@ -801,8 +809,8 @@ TEST_CASE("make_complex_householder: reflector zeroes the tail + unitary", "[hes
     for (int trial = 0; trial < 200; ++trial)
     {
         const int n = 2 + (trial % 7);
-        crd::containers::Array<C> x(static_cast<crd::usize>(n), &alloc);
-        crd::containers::Array<C> xo(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> x = sized<C>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> xo = sized<C>(static_cast<crd::usize>(n), &alloc);
         for (int i = 0; i < n; ++i)
         {
             x.data()[i] = xo.data()[i] = C{2.0 * rng.next() - 1.0, 2.0 * rng.next() - 1.0};
@@ -841,22 +849,22 @@ TEST_CASE("bidiagonalize_complex: A = Q B P^H reconstruction + unitary", "[hesap
     {
         const int m = mn.first;
         const int n = mn.second;
-        crd::containers::Array<C> a(static_cast<crd::usize>(m * n), &alloc);
-        crd::containers::Array<C> a0(static_cast<crd::usize>(m * n), &alloc);
+        crd::containers::Array<C> a = sized<C>(static_cast<crd::usize>(m) * static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> a0 = sized<C>(static_cast<crd::usize>(m) * static_cast<crd::usize>(n), &alloc);
         Rng rng{0xC0119ULL + static_cast<crd::u64>(m * 53 + n)};
         for (int i = 0; i < m * n; ++i)
         {
             a.data()[i] = a0.data()[i] = C{2.0 * rng.next() - 1.0, 2.0 * rng.next() - 1.0};
         }
-        crd::containers::Array<double> d(static_cast<crd::usize>(n), &alloc);
-        crd::containers::Array<double> e(static_cast<crd::usize>(n), &alloc);
-        crd::containers::Array<C> tauq(static_cast<crd::usize>(n), &alloc);
-        crd::containers::Array<C> taup(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<double> d = sized<double>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<double> e = sized<double>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> tauq = sized<C>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> taup = sized<C>(static_cast<crd::usize>(n), &alloc);
         bidiagonalize_complex<C>(a.data(), static_cast<crd::usize>(m), static_cast<crd::usize>(n),
                                  static_cast<crd::usize>(n), d.data(), e.data(), tauq.data(), taup.data(),
                                  &alloc);
-        crd::containers::Array<C> q(static_cast<crd::usize>(m * n), &alloc);
-        crd::containers::Array<C> p(static_cast<crd::usize>(n * n), &alloc);
+        crd::containers::Array<C> q = sized<C>(static_cast<crd::usize>(m) * static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<C> p = sized<C>(static_cast<crd::usize>(n) * static_cast<crd::usize>(n), &alloc);
         form_q_complex<C>(a.data(), static_cast<crd::usize>(m), static_cast<crd::usize>(n),
                           static_cast<crd::usize>(n), tauq.data(), q.data());
         form_p_complex<C>(a.data(), static_cast<crd::usize>(n), static_cast<crd::usize>(n), taup.data(),
@@ -1000,8 +1008,8 @@ TEST_CASE("rsvd: exact low-rank reconstruction + orthonormality", "[hesap][svd][
         const int m = std::get<0>(mnr);
         const int n = std::get<1>(mnr);
         const int r = std::get<2>(mnr);
-        crd::containers::Array<double> x(m * r, &alloc);
-        crd::containers::Array<double> yv(n * r, &alloc);
+        crd::containers::Array<double> x = sized<double>(m * r, &alloc);
+        crd::containers::Array<double> yv = sized<double>(n * r, &alloc);
         Rng rng{0x12500ULL + static_cast<crd::u64>(m * 31 + n)};
         for (int i = 0; i < m * r; ++i)
         {
@@ -1090,7 +1098,7 @@ TEST_CASE("rsyev: low-rank symmetric eig recovery", "[hesap][svd][rsvd]")
     {
         const int n = nr.first;
         const int r = nr.second;
-        crd::containers::Array<double> xb(n * r, &alloc);
+        crd::containers::Array<double> xb = sized<double>(n * r, &alloc);
         Rng rng{0x59E50ULL + static_cast<crd::u64>(n)};
         for (int i = 0; i < n * r; ++i)
         {
@@ -1161,12 +1169,12 @@ TEST_CASE("dlasd0: full D&C bidiagonal SVD reconstruction", "[hesap][svd][dc]")
     for (int n : {6, 9, 13, 20, 33, 50})
     {
         const int m = n;  // sqre = 0 (square bidiagonal)
-        crd::containers::Array<double> d(n, &alloc);
-        crd::containers::Array<double> e(n, &alloc);
-        crd::containers::Array<double> d0(n, &alloc);
-        crd::containers::Array<double> e0(n, &alloc);
-        crd::containers::Array<double> u(n * n, &alloc);
-        crd::containers::Array<double> vt(m * m, &alloc);
+        crd::containers::Array<double> d = sized<double>(n, &alloc);
+        crd::containers::Array<double> e = sized<double>(n, &alloc);
+        crd::containers::Array<double> d0 = sized<double>(n, &alloc);
+        crd::containers::Array<double> e0 = sized<double>(n, &alloc);
+        crd::containers::Array<double> u = sized<double>(n * n, &alloc);
+        crd::containers::Array<double> vt = sized<double>(m * m, &alloc);
         Rng rng{0xD45D0ULL + static_cast<crd::u64>(n)};
         for (int i = 0; i < n; ++i)
         {
@@ -1250,10 +1258,10 @@ TEST_CASE("dlasd1: merge runs + non-negative singular values (smoke)", "[hesap][
     const int sqre = 0;
     const int n = 3;
     const int m = 3;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> u(n * n, &alloc);
-    crd::containers::Array<double> vt(m * m, &alloc);
-    crd::containers::Array<int> idxq(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> u = sized<double>(n * n, &alloc);
+    crd::containers::Array<double> vt = sized<double>(m * m, &alloc);
+    crd::containers::Array<int> idxq = sized<int>(n, &alloc);
     d.data()[0] = 2.0;
     d.data()[1] = 0.0;  // placeholder (dlasd1 zeroes it)
     d.data()[2] = 3.0;
@@ -1305,10 +1313,10 @@ TEST_CASE("dlasd4: secular roots satisfy f(sigma)=0 + interlacing", "[hesap][svd
         Rng rng{0xD45D4ULL + static_cast<crd::u64>(n)};
         for (int trial = 0; trial < 12; ++trial)
         {
-            crd::containers::Array<double> d(n, &alloc);
-            crd::containers::Array<double> z(n, &alloc);
-            crd::containers::Array<double> delta(n, &alloc);
-            crd::containers::Array<double> work(n, &alloc);
+            crd::containers::Array<double> d = sized<double>(n, &alloc);
+            crd::containers::Array<double> z = sized<double>(n, &alloc);
+            crd::containers::Array<double> delta = sized<double>(n, &alloc);
+            crd::containers::Array<double> work = sized<double>(n, &alloc);
             // Ascending poles 0 <= d0 < d1 < ... ; mix wide + tight gaps.
             double acc = rng.next() * 0.5;
             for (int j = 0; j < n; ++j)
@@ -1374,11 +1382,11 @@ TEST_CASE("orgbr_q/orgbr_p: blocked formation == scalar oracle", "[hesap][svd][o
     {
         const int m = mn.first;
         const int n = mn.second;
-        crd::containers::Array<double> a(m * n, &alloc);
-        crd::containers::Array<double> d(n, &alloc);
-        crd::containers::Array<double> e(n, &alloc);
-        crd::containers::Array<double> tauq(n, &alloc);
-        crd::containers::Array<double> taup(n, &alloc);
+        crd::containers::Array<double> a = sized<double>(m * n, &alloc);
+        crd::containers::Array<double> d = sized<double>(n, &alloc);
+        crd::containers::Array<double> e = sized<double>(n, &alloc);
+        crd::containers::Array<double> tauq = sized<double>(n, &alloc);
+        crd::containers::Array<double> taup = sized<double>(n, &alloc);
         crd::u64 s = 0xB10C4EDULL + static_cast<crd::u64>(m * 911 + n);
         auto next = [&s]() {
             s = s * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -1393,7 +1401,7 @@ TEST_CASE("orgbr_q/orgbr_p: blocked formation == scalar oracle", "[hesap][svd][o
                                                  taup.data(), &alloc);
 
         // Oracle Q (m x m), P (n x n).
-        crd::containers::Array<double> q(m * m, &alloc);
+        crd::containers::Array<double> q = sized<double>(m * m, &alloc);
         for (int i = 0; i < m * m; ++i)
         {
             q.data()[i] = (i / m == i % m) ? 1.0 : 0.0;
@@ -1402,7 +1410,7 @@ TEST_CASE("orgbr_q/orgbr_p: blocked formation == scalar oracle", "[hesap][svd][o
         {
             apply_h_left(q.data(), m, a.data(), n, i, m, tauq.data()[i]);
         }
-        crd::containers::Array<double> p(n * n, &alloc);
+        crd::containers::Array<double> p = sized<double>(n * n, &alloc);
         for (int i = 0; i < n * n; ++i)
         {
             p.data()[i] = (i / n == i % n) ? 1.0 : 0.0;
@@ -1413,8 +1421,8 @@ TEST_CASE("orgbr_q/orgbr_p: blocked formation == scalar oracle", "[hesap][svd][o
         }
 
         // Blocked.
-        crd::containers::Array<double> u(m * n, &alloc);
-        crd::containers::Array<double> vt(n * n, &alloc);
+        crd::containers::Array<double> u = sized<double>(m * n, &alloc);
+        crd::containers::Array<double> vt = sized<double>(n * n, &alloc);
         crd::hesap::dense::detail::orgbr_q<double>(a.data(), static_cast<crd::usize>(m),
                                                    static_cast<crd::usize>(n), static_cast<crd::usize>(n),
                                                    tauq.data(), u.data(), &alloc);
@@ -1526,11 +1534,11 @@ TEST_CASE("bidiagonalize: Q and P are orthonormal", "[hesap][svd][bidiag]")
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
     const int m = 12;
     const int n = 9;
-    crd::containers::Array<double> a(m * n, &alloc);
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> tauq(n, &alloc);
-    crd::containers::Array<double> taup(n, &alloc);
+    crd::containers::Array<double> a = sized<double>(m * n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> tauq = sized<double>(n, &alloc);
+    crd::containers::Array<double> taup = sized<double>(n, &alloc);
     crd::u64 s = 0x5151ABCDULL;
     auto next = [&s]() {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -1543,7 +1551,7 @@ TEST_CASE("bidiagonalize: Q and P are orthonormal", "[hesap][svd][bidiag]")
     crd::hesap::dense::bidiagonalize<double>(a.data(), static_cast<crd::usize>(m), static_cast<crd::usize>(n),
                                              static_cast<crd::usize>(n), d.data(), e.data(), tauq.data(),
                                              taup.data(), &alloc);
-    crd::containers::Array<double> q(m * m, &alloc);
+    crd::containers::Array<double> q = sized<double>(m * m, &alloc);
     for (int i = 0; i < m * m; ++i)
     {
         q.data()[i] = (i / m == i % m) ? 1.0 : 0.0;
@@ -1552,7 +1560,7 @@ TEST_CASE("bidiagonalize: Q and P are orthonormal", "[hesap][svd][bidiag]")
     {
         apply_h_left(q.data(), m, a.data(), n, i, m, tauq.data()[i]);
     }
-    crd::containers::Array<double> p(n * n, &alloc);
+    crd::containers::Array<double> p = sized<double>(n * n, &alloc);
     for (int i = 0; i < n * n; ++i)
     {
         p.data()[i] = (i / n == i % n) ? 1.0 : 0.0;

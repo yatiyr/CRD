@@ -29,6 +29,14 @@ using crd::hesap::dense::Symmetric;
 
 namespace
 {
+// A buffer of n value-initialised elements. Array(n, alloc) only reserves capacity, and the tests below fill their
+// buffers through data(), which under ASan is a container-overflow past size() (DIAG.3b).
+template <typename T> crd::containers::Array<T> sized(crd::usize n, crd::memory::IAllocator* alloc)
+{
+    crd::containers::Array<T> result(alloc);
+    result.resize(n);
+    return result;
+}
 // Build a symmetric tridiagonal Symmetric<T> from (d, e) for the oracle.
 template <typename T>
 Symmetric<T> make_tridiag(crd::memory::IAllocator* alloc, const T* d, const T* e, int n)
@@ -140,8 +148,8 @@ TEST_CASE("gershgorin_bounds bracket the spectrum", "[hesap][eig][mrrr][gershgor
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 12;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 1.0 + 0.37 * static_cast<double>(i) - 0.05 * static_cast<double>(i * i);
@@ -168,13 +176,13 @@ TEST_CASE("tridiag_eigenvalues match the Toeplitz closed form", "[hesap][eig][mr
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 24;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> ework(n, &alloc);
-    crd::containers::Array<double> e2work(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<double> exact(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> ework = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2work = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<double> exact = sized<double>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 2.0;
@@ -201,12 +209,12 @@ TEST_CASE("tridiag_eigenvalues match eig_sym on a random tridiagonal", "[hesap][
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 40;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> ework(n, &alloc);
-    crd::containers::Array<double> e2work(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> ework = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2work = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
 
     // Deterministic pseudo-random tridiagonal (LCG; no RNG dependency).
     crd::u64 s = 0x2545F4914F6CDD1DULL;
@@ -246,10 +254,10 @@ TEST_CASE("tridiag_eigenvalues handle a reducible (block) matrix", "[hesap][eig]
     double d[8] = {4.0, 1.0, 3.0, 2.0, -1.0, 5.0, 0.0, 2.0};
     double e[8] = {0.6, 0.9, 0.3, 0.0, 0.7, 0.5, 0.8, 0.0};
 
-    crd::containers::Array<double> ework(n, &alloc);
-    crd::containers::Array<double> e2work(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
+    crd::containers::Array<double> ework = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2work = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
 
     detail::tridiag_eigenvalues<double>(d, e, n, ework.data(), e2work.data(), isplit.data(), w.data(), nullptr,
                                         4.0 * std::numeric_limits<double>::epsilon());
@@ -275,13 +283,13 @@ TEST_CASE("tridiag_eigenvalues f32 Toeplitz", "[hesap][eig][mrrr][bisect]")
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 16;
-    crd::containers::Array<float> d(n, &alloc);
-    crd::containers::Array<float> e(n, &alloc);
-    crd::containers::Array<float> ework(n, &alloc);
-    crd::containers::Array<float> e2work(n, &alloc);
-    crd::containers::Array<float> w(n, &alloc);
-    crd::containers::Array<float> exact(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
+    crd::containers::Array<float> d = sized<float>(n, &alloc);
+    crd::containers::Array<float> e = sized<float>(n, &alloc);
+    crd::containers::Array<float> ework = sized<float>(n, &alloc);
+    crd::containers::Array<float> e2work = sized<float>(n, &alloc);
+    crd::containers::Array<float> w = sized<float>(n, &alloc);
+    crd::containers::Array<float> exact = sized<float>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 2.0F;
@@ -307,13 +315,13 @@ TEST_CASE("tridiag_eigenvalues are bit-identical across runs (determinism)", "[h
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 20;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> ework(n, &alloc);
-    crd::containers::Array<double> e2work(n, &alloc);
-    crd::containers::Array<double> w1(n, &alloc);
-    crd::containers::Array<double> w2(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> ework = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2work = sized<double>(n, &alloc);
+    crd::containers::Array<double> w1 = sized<double>(n, &alloc);
+    crd::containers::Array<double> w2 = sized<double>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 1.5 - 0.1 * static_cast<double>(i);
@@ -461,13 +469,13 @@ TEST_CASE("dqd_eigenvalues_unshifted matches the Toeplitz closed form", "[hesap]
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 8;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> zbuf(4 * n + 8, &alloc);
-    crd::containers::Array<double> q(n + 2, &alloc);
-    crd::containers::Array<double> qe(n + 1, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<double> exact(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> zbuf = sized<double>(4 * n + 8, &alloc);
+    crd::containers::Array<double> q = sized<double>(n + 2, &alloc);
+    crd::containers::Array<double> qe = sized<double>(n + 1, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<double> exact = sized<double>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 2.0;
@@ -493,12 +501,12 @@ TEST_CASE("dqd_eigenvalues_unshifted matches eig_sym on a random PD tridiagonal"
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 10;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> zbuf(4 * n + 8, &alloc);
-    crd::containers::Array<double> q(n + 2, &alloc);
-    crd::containers::Array<double> qe(n + 1, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> zbuf = sized<double>(4 * n + 8, &alloc);
+    crd::containers::Array<double> q = sized<double>(n + 2, &alloc);
+    crd::containers::Array<double> qe = sized<double>(n + 1, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
 
     // Diagonally-dominant (well-separated, fast unshifted convergence).
     crd::u64 s = 0x9E3779B97F4A7C15ULL;
@@ -545,7 +553,8 @@ struct DqdsScratch
     crd::containers::Array<double> q;
     crd::containers::Array<double> qe;
     DqdsScratch(int n, crd::memory::IAllocator* a)
-        : ework(n, a), e2work(n, a), isplit(n, a), z(4 * n + 8, a), q(n + 2, a), qe(n + 1, a)
+        : ework(sized<double>(n, a)), e2work(sized<double>(n, a)), isplit(sized<int>(n, a)),
+          z(sized<double>(4 * n + 8, a)), q(sized<double>(n + 2, a)), qe(sized<double>(n + 1, a))
     {
     }
 };
@@ -555,9 +564,9 @@ TEST_CASE("dqds_eigenvalues match eig_sym on a general unreduced tridiagonal", "
 {
     crd::memory::TlsfAllocator alloc(4U * 1024U * 1024U);
     const int n = 40;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
     DqdsScratch sc(n, &alloc);
 
     crd::u64 s = 0xD1B54A32D192ED03ULL;
@@ -593,9 +602,9 @@ TEST_CASE("dqds_eigenvalues high relative accuracy on a graded spectrum", "[hesa
     // the regime where dqds's high RELATIVE accuracy is the whole point.
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 20;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
     DqdsScratch sc(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
@@ -622,10 +631,10 @@ TEST_CASE("dqds_eigenvalues match the Toeplitz closed form at scale", "[hesap][e
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 64;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<double> exact(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<double> exact = sized<double>(n, &alloc);
     DqdsScratch sc(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
@@ -652,7 +661,7 @@ TEST_CASE("tridiag_eigenvalues_dqds match eig_sym on a reducible matrix", "[hesa
     const int n = 12;
     double d[12] = {4.0, 1.0, 3.0, 2.0, -1.0, 5.0, 0.0, 2.0, 3.0, 1.5, 4.5, 2.5};
     double e[12] = {0.6, 0.9, 0.3, 0.0, 0.7, 0.5, 0.8, 0.0, 0.4, 0.9, 0.6, 0.0};
-    crd::containers::Array<double> w(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
     DqdsScratch sc(n, &alloc);
 
     detail::tridiag_eigenvalues_dqds<double>(d, e, n, sc.ework.data(), sc.e2work.data(), sc.isplit.data(),
@@ -678,13 +687,13 @@ TEST_CASE("dqds_eigenvalues f32 Toeplitz", "[hesap][eig][mrrr][dqds]")
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 24;
-    crd::containers::Array<float> d(n, &alloc);
-    crd::containers::Array<float> e(n, &alloc);
-    crd::containers::Array<float> w(n, &alloc);
-    crd::containers::Array<float> exact(n, &alloc);
-    crd::containers::Array<float> z(4 * n + 8, &alloc);
-    crd::containers::Array<float> q(n + 2, &alloc);
-    crd::containers::Array<float> qe(n + 1, &alloc);
+    crd::containers::Array<float> d = sized<float>(n, &alloc);
+    crd::containers::Array<float> e = sized<float>(n, &alloc);
+    crd::containers::Array<float> w = sized<float>(n, &alloc);
+    crd::containers::Array<float> exact = sized<float>(n, &alloc);
+    crd::containers::Array<float> z = sized<float>(4 * n + 8, &alloc);
+    crd::containers::Array<float> q = sized<float>(n + 2, &alloc);
+    crd::containers::Array<float> qe = sized<float>(n + 1, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 2.0F;
@@ -708,10 +717,10 @@ TEST_CASE("dqds_eigenvalues are bit-identical across runs (determinism)", "[hesa
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 32;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w1(n, &alloc);
-    crd::containers::Array<double> w2(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w1 = sized<double>(n, &alloc);
+    crd::containers::Array<double> w2 = sized<double>(n, &alloc);
     DqdsScratch sc(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
@@ -767,11 +776,11 @@ TEST_CASE("dlaneg (twisted Sturm count on L D L^T) matches the tridiagonal Sturm
 {
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 14;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> e2(n, &alloc);
-    crd::containers::Array<double> dfac(n, &alloc);
-    crd::containers::Array<double> lldfac(n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2 = sized<double>(n, &alloc);
+    crd::containers::Array<double> dfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> lldfac = sized<double>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 1.0 + 0.5 * static_cast<double>(i);
@@ -805,20 +814,20 @@ TEST_CASE("dlarrb_refine refines RRR eigenvalues to the true values", "[hesap][e
 {
     crd::memory::TlsfAllocator alloc(2U * 1024U * 1024U);
     const int n = 16;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> dfac(n, &alloc);
-    crd::containers::Array<double> lldfac(n, &alloc);
-    crd::containers::Array<double> wtrue(n, &alloc);   // true eig of T
-    crd::containers::Array<double> wrrr(n, &alloc);    // true eig of L D L^T = wtrue - sroot
-    crd::containers::Array<double> wapx(n, &alloc);    // perturbed, to be refined
-    crd::containers::Array<double> werr(n, &alloc);
-    crd::containers::Array<double> ew(n, &alloc);
-    crd::containers::Array<double> e2w(n, &alloc);
-    crd::containers::Array<int> isp(n, &alloc);
-    crd::containers::Array<double> zb(4 * n + 8, &alloc);
-    crd::containers::Array<double> q(n + 2, &alloc);
-    crd::containers::Array<double> qe(n + 1, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> dfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> lldfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> wtrue = sized<double>(n, &alloc);   // true eig of T
+    crd::containers::Array<double> wrrr = sized<double>(n, &alloc);    // true eig of L D L^T = wtrue - sroot
+    crd::containers::Array<double> wapx = sized<double>(n, &alloc);    // perturbed, to be refined
+    crd::containers::Array<double> werr = sized<double>(n, &alloc);
+    crd::containers::Array<double> ew = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2w = sized<double>(n, &alloc);
+    crd::containers::Array<int> isp = sized<int>(n, &alloc);
+    crd::containers::Array<double> zb = sized<double>(4 * n + 8, &alloc);
+    crd::containers::Array<double> q = sized<double>(n + 2, &alloc);
+    crd::containers::Array<double> qe = sized<double>(n + 1, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = 2.0 + 0.3 * static_cast<double>(i);
@@ -868,15 +877,15 @@ TEST_CASE("dlar1v computes an eigenvector with tiny residual", "[hesap][eig][mrr
     // check the original eigenpair residual ||T z - lambda z||.
     crd::memory::TlsfAllocator alloc(1U * 1024U * 1024U);
     const int n = 16;
-    crd::containers::Array<double> dorig(n, &alloc);
-    crd::containers::Array<double> eorig(n, &alloc);
-    crd::containers::Array<double> dfac(n, &alloc);
-    crd::containers::Array<double> lfac(n, &alloc);
-    crd::containers::Array<double> ldfac(n, &alloc);
-    crd::containers::Array<double> lldfac(n, &alloc);
-    crd::containers::Array<double> z(n + 2, &alloc);
-    crd::containers::Array<double> work(4 * n + 8, &alloc);
-    crd::containers::Array<double> spec(n, &alloc);
+    crd::containers::Array<double> dorig = sized<double>(n, &alloc);
+    crd::containers::Array<double> eorig = sized<double>(n, &alloc);
+    crd::containers::Array<double> dfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> lfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> ldfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> lldfac = sized<double>(n, &alloc);
+    crd::containers::Array<double> z = sized<double>(n + 2, &alloc);
+    crd::containers::Array<double> work = sized<double>(4 * n + 8, &alloc);
+    crd::containers::Array<double> spec = sized<double>(n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         dorig.data()[i] = 2.0;
@@ -940,16 +949,16 @@ TEST_CASE("mrrr_compute_vectors: orthonormal on the glued Wilkinson W21+ (cluste
     crd::memory::TlsfAllocator alloc(8U * 1024U * 1024U);
     const int m = 10;
     const int n = 2 * m + 1;  // 21
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<double> ew(n, &alloc);
-    crd::containers::Array<double> e2w(n, &alloc);
-    crd::containers::Array<int> isp(n, &alloc);
-    crd::containers::Array<double> zb(4 * n + 8, &alloc);
-    crd::containers::Array<double> q(n + 2, &alloc);
-    crd::containers::Array<double> qe(n + 1, &alloc);
-    crd::containers::Array<double> v(n * n, &alloc);
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<double> ew = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2w = sized<double>(n, &alloc);
+    crd::containers::Array<int> isp = sized<int>(n, &alloc);
+    crd::containers::Array<double> zb = sized<double>(4 * n + 8, &alloc);
+    crd::containers::Array<double> q = sized<double>(n + 2, &alloc);
+    crd::containers::Array<double> qe = sized<double>(n + 1, &alloc);
+    crd::containers::Array<double> v = sized<double>(n * n, &alloc);
     for (int i = 0; i < n; ++i)
     {
         d.data()[i] = static_cast<double>(std::abs(i - m));
@@ -1007,13 +1016,13 @@ TEST_CASE("mrrr_single_rrr_vectors: orthonormal vectors + tiny residual (well-se
 {
     crd::memory::TlsfAllocator alloc(4U * 1024U * 1024U);
     const int n = 24;
-    crd::containers::Array<double> d(n, &alloc);
-    crd::containers::Array<double> e(n, &alloc);
-    crd::containers::Array<double> w(n, &alloc);
-    crd::containers::Array<double> ework(n, &alloc);
-    crd::containers::Array<double> e2work(n, &alloc);
-    crd::containers::Array<int> isplit(n, &alloc);
-    crd::containers::Array<double> v(n * n, &alloc);  // RowMajor, col k = eigenvector
+    crd::containers::Array<double> d = sized<double>(n, &alloc);
+    crd::containers::Array<double> e = sized<double>(n, &alloc);
+    crd::containers::Array<double> w = sized<double>(n, &alloc);
+    crd::containers::Array<double> ework = sized<double>(n, &alloc);
+    crd::containers::Array<double> e2work = sized<double>(n, &alloc);
+    crd::containers::Array<int> isplit = sized<int>(n, &alloc);
+    crd::containers::Array<double> v = sized<double>(n * n, &alloc);  // RowMajor, col k = eigenvector
     // Well-separated spectrum: graded diagonal, small coupling.
     for (int i = 0; i < n; ++i)
     {
@@ -1025,9 +1034,9 @@ TEST_CASE("mrrr_single_rrr_vectors: orthonormal vectors + tiny residual (well-se
     }
 
     {
-        crd::containers::Array<double> zb(4 * n + 8, &alloc);
-        crd::containers::Array<double> q(n + 2, &alloc);
-        crd::containers::Array<double> qe(n + 1, &alloc);
+        crd::containers::Array<double> zb = sized<double>(4 * n + 8, &alloc);
+        crd::containers::Array<double> q = sized<double>(n + 2, &alloc);
+        crd::containers::Array<double> qe = sized<double>(n + 1, &alloc);
         detail::tridiag_eigenvalues_dqds<double>(d.data(), e.data(), n, ework.data(), e2work.data(),
                                                  isplit.data(), zb.data(), q.data(), qe.data(), w.data(),
                                                  4.0 * std::numeric_limits<double>::epsilon());

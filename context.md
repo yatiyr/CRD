@@ -3,10 +3,9 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.3b -->
-**Current work:** [DIAG.3b](docs/ROADMAP.md#slice-diag.3b), first unfinished row. DIAG.3a's local work is done and
-it is Needs CI (a complete-tier run); after both, DIAG.3c-6b can close
-([audit](docs/sessions/2026-10-06-needs-ci-audit.md)).
+<!-- current-slice: DIAG.6c -->
+**Current work:** [DIAG.6c](docs/ROADMAP.md#slice-diag.6c), first unfinished row. DIAG.3a-6b have their local
+work done and are Needs CI (a complete-tier run closes them; [audit](docs/sessions/2026-10-06-needs-ci-audit.md)).
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 

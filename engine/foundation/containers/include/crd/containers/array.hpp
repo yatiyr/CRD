@@ -3,6 +3,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/construct.hpp>
 
 #include <cstring> // memcpy for trivially-copyable relocate
@@ -25,6 +26,10 @@ namespace crd::containers
 //   - Growth strategy is 1.5x (Folly/EA), starting at 8 elements.
 //   - Iterators are raw pointers (std-compatible, range-for + <algorithm>).
 //   - swap_remove(i) is O(1) — fast for unordered collections.
+//   - Under AddressSanitizer the unused capacity [size, capacity) is
+//     annotated as a container live range (DIAG.3b): reading or writing
+//     past size() reports container-overflow, even inside the capacity.
+//     Grow with push_back/resize before writing through data().
 //
 // Move semantics: move ctor/assign transfer the buffer AND the allocator.
 // Copy ctor takes an optional allocator argument; if null, copies use the
@@ -78,6 +83,7 @@ public:
         if (other.m_size > 0)
         {
             grow_to_at_least(other.m_size);
+            annotate_size(0, other.m_size);
             for (usize i = 0; i < other.m_size; ++i)
             {
                 ::new (static_cast<void*>(m_data + i)) T(other.m_data[i]);
@@ -117,6 +123,7 @@ public:
             m_alloc = other.m_alloc;
             grow_to_at_least(other.m_size);
         }
+        annotate_size(0, other.m_size);
         for (usize i = 0; i < other.m_size; ++i)
         {
             ::new (static_cast<void*>(m_data + i)) T(other.m_data[i]);
@@ -225,8 +232,7 @@ public:
         T* new_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * m_size, alignof(T)));
         relocate(new_data, m_data, m_size);
         free_buffer();
-        m_data = new_data;
-        m_capacity = m_size;
+        adopt_buffer(new_data, m_size);
     }
 
     // ---- Modifiers -------------------------------------------------
@@ -238,10 +244,12 @@ public:
         if (n < m_size)
         {
             destroy_range(m_data + n, m_data + m_size);
+            annotate_size(m_size, n);
         }
         else if (n > m_size)
         {
             reserve(n);
+            annotate_size(m_size, n);
             for (usize i = m_size; i < n; ++i)
             {
                 ::new (static_cast<void*>(m_data + i)) T();
@@ -257,10 +265,12 @@ public:
         if (n < m_size)
         {
             destroy_range(m_data + n, m_data + m_size);
+            annotate_size(m_size, n);
         }
         else if (n > m_size)
         {
             reserve(n);
+            annotate_size(m_size, n);
             for (usize i = m_size; i < n; ++i)
             {
                 ::new (static_cast<void*>(m_data + i)) T(fill);
@@ -294,6 +304,7 @@ public:
                 reserve(n);
                 // No construction: trivially-constructible slots are left as-is.
             }
+            annotate_size(m_size, n);
             m_size = n;
         }
     }
@@ -303,6 +314,7 @@ public:
     {
         check_mutable();
         destroy_range(m_data, m_data + m_size);
+        annotate_size(m_size, 0);
         m_size = 0;
     }
 
@@ -314,6 +326,7 @@ public:
         {
             grow_to_at_least(m_size + 1);
         }
+        annotate_size(m_size, m_size + 1);
         ::new (static_cast<void*>(m_data + m_size)) T(v);
         ++m_size;
     }
@@ -325,6 +338,7 @@ public:
         {
             grow_to_at_least(m_size + 1);
         }
+        annotate_size(m_size, m_size + 1);
         ::new (static_cast<void*>(m_data + m_size)) T(std::move(v));
         ++m_size;
     }
@@ -336,6 +350,7 @@ public:
         {
             grow_to_at_least(m_size + 1);
         }
+        annotate_size(m_size, m_size + 1);
         T* p = ::new (static_cast<void*>(m_data + m_size)) T(std::forward<Args>(args)...);
         ++m_size;
         return *p;
@@ -349,6 +364,7 @@ public:
         {
             return false;
         }
+        annotate_size(m_size, m_size + 1);
         ::new (static_cast<void*>(m_data + m_size)) T(v);
         ++m_size;
         return true;
@@ -361,6 +377,7 @@ public:
         {
             return false;
         }
+        annotate_size(m_size, m_size + 1);
         ::new (static_cast<void*>(m_data + m_size)) T(std::move(v));
         ++m_size;
         return true;
@@ -375,6 +392,7 @@ public:
         {
             m_data[m_size].~T();
         }
+        annotate_size(m_size + 1, m_size);
     }
 
     // Remove element at index i, shifting everything after it left by one.
@@ -392,6 +410,7 @@ public:
         {
             m_data[m_size].~T();
         }
+        annotate_size(m_size + 1, m_size);
     }
 
     // Remove element at index i by overwriting it with the back element.
@@ -410,6 +429,7 @@ public:
         {
             m_data[last].~T();
         }
+        annotate_size(m_size, last);
         --m_size;
     }
 
@@ -423,6 +443,7 @@ public:
         {
             grow_to_at_least(m_size + 1);
         }
+        annotate_size(m_size, m_size + 1);
         // Move-construct the new tail element from the old tail, then
         // shift everything else.
         if (i == m_size)
@@ -531,8 +552,7 @@ private:
         T* new_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * new_cap, alignof(T)));
         relocate(new_data, m_data, m_size);
         free_buffer();
-        m_data = new_data;
-        m_capacity = new_cap;
+        adopt_buffer(new_data, new_cap);
     }
 
     // Best-effort grow. Returns false if the allocator returned nullptr.
@@ -552,8 +572,7 @@ private:
         }
         relocate(new_data, m_data, m_size);
         free_buffer();
-        m_data = new_data;
-        m_capacity = new_cap;
+        adopt_buffer(new_data, new_cap);
         return true;
     }
 
@@ -594,10 +613,28 @@ private:
         }
     }
 
+    // Container live range (DIAG.3b): moves the annotated boundary of the unused capacity from `old_size` to
+    // `new_size` elements. Called after elements are destroyed and before a slot past size() is constructed.
+    void annotate_size(usize old_size, usize new_size) const noexcept
+    {
+        memory::asan_annotate_live_range(m_data, sizeof(T) * m_capacity, sizeof(T) * old_size, sizeof(T) * new_size);
+    }
+
+    // Takes a freshly allocated (fully addressable) buffer that already holds the m_size relocated elements, and
+    // annotates its unused capacity.
+    void adopt_buffer(T* data, usize capacity) noexcept
+    {
+        m_data = data;
+        m_capacity = capacity;
+        annotate_size(capacity, m_size);
+    }
+
+    // Hands the buffer back exactly as the allocator gave it: the capacity annotation is lifted first.
     void free_buffer() noexcept
     {
         if (m_data)
         {
+            annotate_size(m_size, m_capacity);
             m_alloc->deallocate(m_data);
             m_data = nullptr;
             m_capacity = 0;

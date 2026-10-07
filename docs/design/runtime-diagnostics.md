@@ -208,6 +208,17 @@ Settled policies (2026-10-07, [session](../sessions/2026-10-07-diag-3b-pool-and-
   granules it overlaps after its CAS wins; retirement poisons only granules wholly inside the retired span, before the
   tail publishes it, with retirers serialised in ASan builds only. Claims and retirements never write the same
   shadow byte, so the boundary is per granule: byte-exact for claims whose offset and size are multiples of 8.
+- **Containers** ([session](../sessions/2026-10-07-diag-3b-container-live-ranges.md)). `Array` marks its unused
+  capacity `[size, capacity)` with `__sanitizer_annotate_contiguous_container` (through
+  `asan_annotate_live_range`), so an access past `size()` inside the capacity reports `container-overflow`, not
+  `use-after-poison`. Every mutator moves the boundary: a slot opens before it is constructed and closes after it is
+  destroyed, a new buffer is marked once the elements are relocated, and the marking is lifted before the buffer goes
+  back to its allocator, so an arena slice or pool slot returns exactly as it was handed out. Only whole granules
+  inside the buffer are marked (an older runtime refuses an unaligned start, and a granule shared with a neighbour
+  cannot be split), so a packed buffer never marks a neighbour; detection is byte-exact when the buffer starts on a
+  granule and its byte size is a multiple of 8. Writing through `data()` past `size()` is reported: grow with
+  `push_back`, `resize` or `resize_uninitialized` first. `String` (an inline buffer, then a heap buffer with its NUL
+  slot) and `FixedArray` (inline storage copied with its owner) are not annotated.
 - **Granularity.** Detection is byte-exact for 8-byte aligned slices. A partly addressable granule is reported after
   the next granule's shadow: `use-after-poison` before poisoned padding, `unknown-crash` before a live neighbour.
   The negative control requires `use-after-poison`, so its modes keep a poisoned granule after the faulting byte.

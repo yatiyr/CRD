@@ -106,7 +106,8 @@ template <typename R>
 // D[NL]=0 the placeholder), U/VT the block-diagonal sub-problem vectors,
 // IDXQ the per-half sort. On exit: K = #non-deflated; D[0:K) deflated poles
 // ascending in DSIGMA; Z the rank-one weights; U2/VT2 the permuted vectors;
-// IDXC/COLTYP(=CTOT) the column-type permutation dlasd3 consumes. Faithful
+// IDXC/COLTYP(=CTOT) the column-type permutation dlasd3 consumes (COLTYP holds
+// max(N, 4) entries: N column types, then the four CTOT counts). Faithful
 // port of dlasd2.f. Reuses detail::drot for the equal-pole Givens (applied to
 // BOTH U columns and VT rows). 1-based accessor lambdas mirror the Fortran.
 // =======================================================================
@@ -690,11 +691,11 @@ inline int dlasdq_upper(int n, int sqre, R* d, R* e, R* u_cm, int ldu, R* vt_cm,
     crd::containers::Array<R> cs(alloc);
     crd::containers::Array<R> sn(alloc);
     crd::containers::Array<R> work(alloc);
-    u_rm.resize(static_cast<crd::usize>(n * n));
-    vt_rm.resize(static_cast<crd::usize>(vt_rows * ncvt));
+    u_rm.resize(static_cast<crd::usize>(n) * static_cast<crd::usize>(n));
+    vt_rm.resize(static_cast<crd::usize>(vt_rows) * static_cast<crd::usize>(ncvt));
     cs.resize(static_cast<crd::usize>(np1));
     sn.resize(static_cast<crd::usize>(np1));
-    work.resize(static_cast<crd::usize>(4 * n + 4));
+    work.resize((4U * static_cast<crd::usize>(n)) + 4U);
     for (int i = 0; i < n * n; ++i)
     {
         u_rm[i] = zero;
@@ -826,16 +827,16 @@ inline int dlasd1(int nl, int nr, int sqre, R* d, R& alpha, R& beta, R* u, int l
     crd::containers::Array<R> qb(alloc);
     z.resize(static_cast<crd::usize>(m));
     dsigma.resize(static_cast<crd::usize>(n));
-    u2.resize(static_cast<crd::usize>(ldu2 * n));
-    vt2.resize(static_cast<crd::usize>(ldvt2 * m));
-    qb.resize(static_cast<crd::usize>(n * n));  // >= K x K
+    u2.resize(static_cast<crd::usize>(ldu2) * static_cast<crd::usize>(n));
+    vt2.resize(static_cast<crd::usize>(ldvt2) * static_cast<crd::usize>(m));
+    qb.resize(static_cast<crd::usize>(n) * static_cast<crd::usize>(n)); // >= K x K
     crd::containers::Array<int> idx(alloc);
     crd::containers::Array<int> idxc(alloc);
     crd::containers::Array<int> coltyp(alloc);
     crd::containers::Array<int> idxp(alloc);
     idx.resize(static_cast<crd::usize>(n));
     idxc.resize(static_cast<crd::usize>(n));
-    coltyp.resize(static_cast<crd::usize>(n));
+    coltyp.resize(static_cast<crd::usize>(std::max(n, 4))); // per-column types, then CTOT(1..4) on exit
     idxp.resize(static_cast<crd::usize>(n));
 
     // Scale.
