@@ -439,6 +439,138 @@ TEST_CASE("REPO.DEV.11: the .ckir text form keeps a -0.0 constant and rejects an
     }
 }
 
+// DIAG.8a: a refused .ckir names the authored record and its line. CKIR operand refs are positional, so (pool, index) IS
+// the record's identity: node #2 is the third `[[node]]` of the file. A refusal inside a record points at the offending
+// token; a post-parse bounds refusal points at the record's `[[...]]` header. Expected lines come from scanning the text,
+// never from the reader. Controls: a refusal that names no record says so, and an accepted read carries no position.
+namespace
+{
+// The 1-based line of the `nth` (0-based) line that starts with `prefix`, or 0.
+crd::u32 nth_line_starting(const char* text, const char* prefix, int nth)
+{
+    const crd::usize plen = std::strlen(prefix);
+    crd::u32         line = 1U;
+    int              seen = 0;
+    for (const char* p = text; *p != '\0'; ++line)
+    {
+        if (std::strncmp(p, prefix, plen) == 0)
+        {
+            if (seen == nth)
+            {
+                return line;
+            }
+            ++seen;
+        }
+        const char* nl = std::strchr(p, '\n');
+        if (nl == nullptr)
+        {
+            break;
+        }
+        p = nl + 1;
+    }
+    return 0U;
+}
+
+// Three nodes; node #2 reads `second_ref`, and node #1's op is `op1`. One stmt and one stage output follow.
+void ckir_three_nodes(char* out, crd::usize cap, const char* op1, const char* second_ref, const char* stmt_value,
+                      const char* out_node)
+{
+    (void)std::snprintf(out, cap,
+                        "schema = 1\n"
+                        "[[entry]]\n"
+                        "stage = \"Fragment\"\n"
+                        "n_out = 1\n"
+                        "[[node]]\n"
+                        "id = \"n0\"\n"
+                        "op = \"Const\"\n"
+                        "[[node]]\n"
+                        "id = \"n1\"\n"
+                        "op = \"%s\"\n"
+                        "[[node]]\n"
+                        "id = \"n2\"\n"
+                        "op = \"Add\"\n"
+                        "in = [\"n0\", \"%s\"]\n"
+                        "[[stmt]]\n"
+                        "kind = \"Materialize\"\n"
+                        "value = \"%s\"\n"
+                        "[[out]]\n"
+                        "location = 0\n"
+                        "node = \"%s\"\n",
+                        op1, second_ref, stmt_value, out_node);
+}
+} // namespace
+
+TEST_CASE("diag 8a: a refused .ckir names the positional record and its authored line", "[kir][asset][diag]")
+{
+    crd::memory::TlsfAllocator a(1U << 20U);
+    const auto                 read = [&](const char* s) {
+        kir::KGraph g(&a);
+        kir::KEntry e;
+        return kir::ckir_read(crd::containers::StringView(s), g, e);
+    };
+    char text[1024];
+
+    // The control: the same program with every ref in range is accepted, and an accepted read has no position.
+    ckir_three_nodes(text, sizeof(text), "Const", "n1", "n2", "n2");
+    const kir::CkirReadResult good = read(text);
+    INFO("control refusal: " << good.error << " line " << good.line);
+    REQUIRE(good.ok);
+    CHECK(good.pool == kir::CkirPool::None);
+    CHECK(good.index == -1);
+    CHECK(good.line == 0U);
+
+    SECTION("a node operand past the node array names node #2 at its header")
+    {
+        ckir_three_nodes(text, sizeof(text), "Const", "n9", "n2", "n2");
+        const kir::CkirReadResult r = read(text);
+        REQUIRE_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "node operand ref out of range") == 0);
+        CHECK(r.pool == kir::CkirPool::Node);
+        CHECK(r.index == 2);
+        CHECK(r.line == nth_line_starting(text, "[[node]]", 2));
+        CHECK(r.col == 1U);
+        CHECK(std::strncmp(text + r.error_offset, "[[node]]", 8U) == 0);
+    }
+    SECTION("an unknown op names node #1 at the offending line")
+    {
+        ckir_three_nodes(text, sizeof(text), "NotAnOp", "n1", "n2", "n2");
+        const kir::CkirReadResult r = read(text);
+        REQUIRE_FALSE(r.ok);
+        CHECK(r.pool == kir::CkirPool::Node);
+        CHECK(r.index == 1);
+        CHECK(r.line == nth_line_starting(text, "op = \"NotAnOp\"", 0));
+        CHECK(r.col > 1U);
+    }
+    SECTION("a stmt value past the node array names stmt #0")
+    {
+        ckir_three_nodes(text, sizeof(text), "Const", "n1", "n5", "n2");
+        const kir::CkirReadResult r = read(text);
+        REQUIRE_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "stmt operand ref out of range") == 0);
+        CHECK(r.pool == kir::CkirPool::Stmt);
+        CHECK(r.index == 0);
+        CHECK(r.line == nth_line_starting(text, "[[stmt]]", 0));
+    }
+    SECTION("a stage output past the node array names out #0")
+    {
+        ckir_three_nodes(text, sizeof(text), "Const", "n1", "n2", "n7");
+        const kir::CkirReadResult r = read(text);
+        REQUIRE_FALSE(r.ok);
+        CHECK(r.pool == kir::CkirPool::Out);
+        CHECK(r.index == 0);
+        CHECK(r.line == nth_line_starting(text, "[[out]]", 0));
+        CHECK(std::strcmp(kir::ckir_pool_name(r.pool), "out") == 0);
+    }
+    SECTION("a refusal that names no record says so")
+    {
+        const kir::CkirReadResult r = read("schema = 1\n[[entry]]\nstage = \"Compute\"\n");
+        REQUIRE_FALSE(r.ok);
+        CHECK(std::strcmp(r.error, "not a CKIR program (no nodes)") == 0);
+        CHECK(r.pool == kir::CkirPool::None);
+        CHECK(r.index == -1);
+    }
+}
+
 // ── CEIR-35b: systematic MUTATION-robustness fuzz for ckir_read (the .ckir text loader). ──────────────────────────────
 // Extends the hand-picked malformed corpus above into exhaustive coverage: mutate a valid .ckir seed thousands of ways
 // and prove ckir_read NEVER crashes/throws (ASan-clean under the asan configs) and ALWAYS returns a WELL-FORMED result.

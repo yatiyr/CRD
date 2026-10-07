@@ -9,6 +9,7 @@ add_executable(crd-ceir-gpu-tests
     test_grad.cpp        # CEIR-25a-1: the reverse-mode VJP core - vjp_gemm emits 2 tensor.transpose + 2 linalg.gemm (dA=dC*Bt, dB=At*dC == nn_reverse::matmul_vjp via synth_gemm->eval_cpu), verify-clean; the VjpRegistry (op-kind U kernel-symbol) MissingVjp typed reject (device-free)
     test_sharding.cpp    # CEIR-30a-2: propagate_sharding -> the Value->Sharding map over dist.shard + tensor ops (Replicated/Sharded/Partial/Conflict lattice; elementwise meet, reduce-over-split->Partial, all_reduce completes, unknown-op->Conflict per sec-70); device-free
     test_host_exec.cpp   # CEIR-30b-1: execute_tensor_pipeline_host -> the CPU MIRROR of execute_tensor_pipeline (synth_*->eval_cpu, f32-faithful): a fused MLP + a reduce(sum) BIT-EXACT vs the CPU oracle, an unsupported (fft) stage -> UnresolvedKernel with no partial write (device-free, the HOST provider class)
+    test_dispatch_provenance.cpp # DIAG.8a: each dispatch label finds its authored op; a refusal names its dispatch (device-free)
     test_scene_provenance.cpp # DIAG.8a: a scene.resolve_* refusal (0 return, unwired callback, mistyped chain) names its authored intrinsic op and native provider after a text parse and a binary round trip (device-free)
     test_two_class.cpp   # CEIR-30b-2a: plan_transfers + stage_class_from_partition -> the PURE placement->transfer pass (ProviderClass per stage -> the host<->device transfers the def-use edges imply; Host-born externals + planned Output readback; aliases->landlord; the adapter from PlanStage.provider); device-free
 )

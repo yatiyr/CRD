@@ -2,8 +2,10 @@
 
 #include <crd/ceir/gpu/execute.hpp>
 
+#include <crd/ceir/provenance.hpp> // DIAG.8a: native_binding (the dispatch op's name for its debug label)
 #include <crd/containers/array.hpp>
-#include <crd/gpu/command_model.hpp> // crd::gpu::kMaxBindings — the binding structural cap
+#include <crd/gpu/command_model.hpp>     // crd::gpu::kMaxBindings — the binding structural cap
+#include <crd/gpu/identity_registry.hpp> // DIAG.8a: mint/retire the per-dispatch Pass identity
 
 namespace crd::ceir::gpu
 {
@@ -107,7 +109,79 @@ void emit_barrier(crd::gpu::ComputeRecorder& rec, const LoweredCommand& cmd, con
         }
     }
 }
+
+// DIAG.8a: append `text` to out[0, cap) at `len`, truncating so a NUL always fits.
+void append_label(char* out, crd::usize cap, crd::usize& len, containers::StringView text) noexcept
+{
+    for (crd::usize i = 0; i < text.size() && len + 1U < cap; ++i)
+    {
+        out[len++] = text[i];
+    }
+    out[len] = '\0';
+}
+
+// DIAG.8a: the dispatch's debug-label text, "<op name> @<kernel>" (the kernel symbol is the link to its CKIR kernel;
+// omitted when the op carries none). Truncated to fit `out`.
+crd::usize dispatch_label(const Context& ctx, const Operation* op, char* out, crd::usize cap) noexcept
+{
+    crd::usize len = 0U;
+    out[0]         = '\0';
+    append_label(out, cap, len, native_binding(ctx, op).op_name);
+    if (op != nullptr)
+    {
+        const AttrValue kv = ctx.attr_value(op->attr(containers::StringView("kernel")));
+        if (kv.kind == AttrKind::SymbolRef)
+        {
+            append_label(out, cap, len, containers::StringView(" @"));
+            append_label(out, cap, len, kv.s);
+        }
+    }
+    return len;
+}
 } // namespace
+
+DispatchSites::DispatchSites(memory::IAllocator* allocator) : m_sites(allocator) {}
+
+DispatchSites::~DispatchSites()
+{
+    clear();
+}
+
+DispatchSite& DispatchSites::add(const Operation* op, crd::u32 command)
+{
+    DispatchSite site;
+    site.label   = crd::gpu::identity_registry().mint(crd::gpu::ObjectKind::Pass);
+    site.op      = op;
+    site.command = command;
+    m_sites.push_back(site);
+    return m_sites[m_sites.size() - 1U];
+}
+
+const DispatchSite* DispatchSites::find(const crd::gpu::ObjectIdentity& label) const noexcept
+{
+    if (!label.valid())
+    {
+        return nullptr;
+    }
+    for (crd::usize i = 0; i < m_sites.size(); ++i)
+    {
+        if (m_sites[i].label == label)
+        {
+            return &m_sites[i];
+        }
+    }
+    return nullptr;
+}
+
+void DispatchSites::clear() noexcept
+{
+    for (crd::usize i = 0; i < m_sites.size(); ++i)
+    {
+        (void)crd::gpu::identity_registry().retire(m_sites[i].label);
+    }
+    m_sites.clear();
+    m_fault = nullptr;
+}
 
 containers::StringView execute_error_name(ExecuteError e) noexcept
 {
@@ -176,8 +250,17 @@ ExecuteError validate_lowered(const Context& ctx, containers::ConstSpan<LoweredC
 
 ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                              crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
-                             containers::ConstSpan<ResolvedBinding> bindings)
+                             containers::ConstSpan<ResolvedBinding> bindings, DispatchSites* sites)
 {
+    // DIAG.8a: every refusal below is blamed on the refused command's op when a site table is attached.
+    const auto refuse = [sites](ExecuteError e, const LoweredCommand& cmd) noexcept
+    {
+        if (sites != nullptr)
+        {
+            sites->set_fault(cmd.op);
+        }
+        return e;
+    };
     containers::Array<crd::gpu::ComputeBuffer*> bufs(ctx.allocator());
     for (crd::u32 i = 0; i < static_cast<crd::u32>(commands.size()); ++i)
     {
@@ -189,32 +272,49 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
         }
         if (cmd.kind == LoweredKind::Transfer)
         {
-            return ExecuteError::UnsupportedCommand;
+            return refuse(ExecuteError::UnsupportedCommand, cmd);
         }
         // CEIR-14b: render kinds target the 14z RASTER executor — reject them TYPED (the Transfer mirror).
         if (cmd.kind == LoweredKind::BeginRender || cmd.kind == LoweredKind::Draw || cmd.kind == LoweredKind::EndRender)
         {
-            return ExecuteError::UnsupportedCommand;
+            return refuse(ExecuteError::UnsupportedCommand, cmd);
         }
         // CEIR-19c: ceir.rt kinds (RayQuery/AccelBuild) target the RT executor (execute_rt_lowered) — reject them TYPED here.
         if (cmd.kind == LoweredKind::RayQuery || cmd.kind == LoweredKind::AccelBuild)
         {
-            return ExecuteError::UnsupportedCommand;
+            return refuse(ExecuteError::UnsupportedCommand, cmd);
         }
         // CEIR-20b: ceir.work's DispatchIndirect targets execute_work_lowered (the queue resolver), NOT this
         // IComputeContext — reject it TYPED (the RayQuery/Transfer named-forward mirror).
         if (cmd.kind == LoweredKind::DispatchIndirect)
         {
-            return ExecuteError::UnsupportedCommand;
+            return refuse(ExecuteError::UnsupportedCommand, cmd);
         }
         crd::gpu::ComputePipeline* pipe = nullptr;
         const ExecuteError         err  = check_dispatch(ctx, cmd, resolver, user, bindings, &pipe, &bufs);
         if (err != ExecuteError::None)
         {
-            return err;
+            return refuse(err, cmd);
+        }
+        bool labelled = false;
+        if (sites != nullptr) // DIAG.8a: label the dispatch with a fresh Pass identity naming its op and kernel
+        {
+            DispatchSite& site = sites->add(cmd.op, i);
+            char          text[128];
+            const crd::usize n = dispatch_label(ctx, cmd.op, static_cast<char*>(text), sizeof(text));
+            labelled           = rec.begin_label(site.label, containers::StringView(static_cast<const char*>(text), n));
+            site.labelled      = labelled;
         }
         rec.dispatch(*pipe, containers::ConstSpan<crd::gpu::ComputeBuffer*>(bufs.data(), bufs.size()), nullptr, 0U,
                      cmd.groups_x, cmd.groups_y, cmd.groups_z);
+        if (labelled)
+        {
+            rec.end_label();
+        }
+    }
+    if (sites != nullptr)
+    {
+        sites->set_fault(nullptr);
     }
     return ExecuteError::None;
 }

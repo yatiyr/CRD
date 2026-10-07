@@ -64,6 +64,38 @@ struct ValidationCapture::Impl
 namespace
 {
 
+// The first Cerid identity among the active debug labels: command-buffer labels, then queue labels (a submit-time or
+// GPU-assisted message carries the active pass there). VVL delivers each stack most-recent FIRST (index 0 =
+// innermost, confirmed by the DIAG.7a(g-4) nested specimen), so a forward walk makes the innermost label win. Null
+// arrays (no label active) resolve to the default-invalid identity.
+[[nodiscard]] ObjectIdentity innermost_label(const VkDebugUtilsMessengerCallbackDataEXT* callback_data) noexcept
+{
+    ObjectIdentity id{};
+    if (callback_data->pCmdBufLabels != nullptr)
+    {
+        for (crd::u32 i = 0; i < callback_data->cmdBufLabelCount; ++i)
+        {
+            if (callback_data->pCmdBufLabels[i].pLabelName != nullptr &&
+                parse(std::string_view{callback_data->pCmdBufLabels[i].pLabelName}, id))
+            {
+                return id;
+            }
+        }
+    }
+    if (callback_data->pQueueLabels != nullptr)
+    {
+        for (crd::u32 i = 0; i < callback_data->queueLabelCount; ++i)
+        {
+            if (callback_data->pQueueLabels[i].pLabelName != nullptr &&
+                parse(std::string_view{callback_data->pQueueLabels[i].pLabelName}, id))
+            {
+                return id;
+            }
+        }
+    }
+    return id;
+}
+
 VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagBitsEXT severity,
                                                 VkDebugUtilsMessageTypeFlagsEXT /*type*/,
                                                 const VkDebugUtilsMessengerCallbackDataEXT* callback_data,
@@ -133,32 +165,12 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
             }
             // DIAG.7a(g-4): a hazard recorded INSIDE a PassLabelScope carries no named object, but the active
             // command-buffer debug label is format_debug_name(pass_id). Objects win (above); among labels the INNERMOST
-            // (index 0 on this VVL) wins; prose is still the final fallback. Guarded on null so the (d1) no-label
-            // path is a no-op (an empty array must not resolve).
-            if (!rec.identity.valid() && callback_data->pCmdBufLabels != nullptr)
+            // (index 0 on this VVL) wins; prose is still the final fallback. DIAG.8a: the label identity is resolved
+            // for every message and kept in `label` even when an object won, so the recording site is not lost.
+            rec.label = innermost_label(callback_data);
+            if (!rec.identity.valid())
             {
-                // VVL delivers the label stack most-recent-FIRST (index 0 = innermost), confirmed by the (g-4) nested
-                // specimen -- so a forward walk makes the innermost active pass win over its enclosure.
-                for (crd::u32 i = 0; i < callback_data->cmdBufLabelCount; ++i)
-                {
-                    if (callback_data->pCmdBufLabels[i].pLabelName != nullptr &&
-                        parse(std::string_view{callback_data->pCmdBufLabels[i].pLabelName}, rec.identity))
-                    {
-                        break;
-                    }
-                }
-            }
-            // Queue labels carry a submit-time / GPU-AV message's active pass; same innermost-first order, after cmd labels.
-            if (!rec.identity.valid() && callback_data->pQueueLabels != nullptr)
-            {
-                for (crd::u32 i = 0; i < callback_data->queueLabelCount; ++i)
-                {
-                    if (callback_data->pQueueLabels[i].pLabelName != nullptr &&
-                        parse(std::string_view{callback_data->pQueueLabels[i].pLabelName}, rec.identity))
-                    {
-                        break;
-                    }
-                }
+                rec.identity = rec.label;
             }
             if (!rec.identity.valid() && callback_data->pMessage != nullptr)
             {

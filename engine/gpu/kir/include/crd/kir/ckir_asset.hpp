@@ -722,13 +722,78 @@ struct Tok
 }
 
 // ── READ — outcome mirrors crd::ceir::ParseResult (reported, never thrown). ──────────────────────────────────────────
+// DIAG.8a: the record pool a refusal is blamed on. CKIR operand refs are POSITIONAL, so a pool plus an index IS the
+// authored record's identity (node #i is the i-th `[[node]]` of the file).
+enum class CkirPool : crd::u8
+{
+    None = 0,    // the refusal names no record (empty input, a missing stage, a top-level key)
+    Node,        // a `[[node]]`
+    Stmt,        // a `[[stmt]]`
+    StructField, // a `[[sfield]]`
+    Ext,         // a value of the `[[ext]]` operand pool
+    StructBegin, // a value of the `[[sbegin]]` struct registry
+    Entry,       // the `[[entry]]` (index 0)
+    Out,         // a `[[out]]` stage output
+};
+[[nodiscard]] constexpr const char* ckir_pool_name(CkirPool p) noexcept
+{
+    switch (p)
+    {
+    case CkirPool::None: return "none";
+    case CkirPool::Node: return "node";
+    case CkirPool::Stmt: return "stmt";
+    case CkirPool::StructField: return "sfield";
+    case CkirPool::Ext: return "ext";
+    case CkirPool::StructBegin: return "sbegin";
+    case CkirPool::Entry: return "entry";
+    case CkirPool::Out: return "out";
+    }
+    return "none";
+}
+
 struct CkirReadResult
 {
     bool        ok           = false;
     crd::usize  error_offset = 0;
     const char* error        = "";
+    // DIAG.8a: where the refusal points. `line`/`col` are the 1-based position of `error_offset` (0 when ok). A
+    // refusal inside a record, or a structural refusal of a record, names that record (`pool`, positional `index`) and
+    // points `error_offset` at it: the offending token, or the record's `[[...]]` header for a post-parse bounds check.
+    crd::u32    line  = 0;
+    crd::u32    col   = 0;
+    CkirPool    pool  = CkirPool::None;
+    crd::i32    index = -1;
     [[nodiscard]] explicit operator bool() const noexcept { return ok; }
 };
+
+namespace asset_detail
+{
+// A refusal at byte `offset` of `text`, blamed on record `index` of `pool`, with its 1-based line and column.
+[[nodiscard]] inline CkirReadResult refuse(crd::containers::StringView text, crd::usize offset, const char* why,
+                                           CkirPool pool = CkirPool::None, crd::i32 index = -1) noexcept
+{
+    CkirReadResult r;
+    r.error_offset = offset;
+    r.error        = why;
+    r.pool         = pool;
+    r.index        = pool == CkirPool::None ? -1 : index;
+    r.line         = 1U;
+    r.col          = 1U;
+    for (crd::usize i = 0; i < offset && i < text.size(); ++i)
+    {
+        if (text[i] == '\n')
+        {
+            ++r.line;
+            r.col = 1U;
+        }
+        else
+        {
+            ++r.col;
+        }
+    }
+    return r;
+}
+} // namespace asset_detail
 
 [[nodiscard]] inline CkirReadResult ckir_read(crd::containers::StringView text, KGraph& g, KEntry& e)
 {
@@ -747,6 +812,18 @@ struct CkirReadResult
 
     // read a `[[out]]` into en.out[n_out_seen].
     int n_out_seen = 0;
+
+    // DIAG.8a: the `[[...]]` header offset of every record (parallel to its pool), and the record being read, so a
+    // refusal names the authored record and its line.
+    crd::containers::Array<crd::usize> node_at(al);
+    crd::containers::Array<crd::usize> stmt_at(al);
+    crd::containers::Array<crd::usize> sfield_at(al);
+    crd::containers::Array<crd::usize> ext_at(al);
+    crd::containers::Array<crd::usize> sbegin_at(al);
+    crd::usize                         entry_at = 0;
+    crd::usize                         out_at[kMaxStageOutputs]{};
+    CkirPool                           cur_pool  = CkirPool::None;
+    crd::i32                           cur_index = -1;
 
     // read a KType's 7 fields from `key = value` lines until the next section/EOF.
     const auto read_type_block = [&](KType& ty) {
@@ -816,13 +893,18 @@ struct CkirReadResult
     {
         if (t.at('['))
         {
+            const crd::usize sect_at = t.pos; // DIAG.8a: the record's `[[` (at() skipped the blanks before it)
             crd::usize hb = 0; crd::usize he = 0;
+            cur_pool  = CkirPool::None;
+            cur_index = -1;
             if (!t.header(hb, he))
             {
                 break;
             }
             if (t.word_is(hb, he, "node"))
             {
+                cur_pool  = CkirPool::Node;
+                cur_index = static_cast<crd::i32>(nodes.size());
                 // value-init: KNode.op has NO default member initializer (ckir.hpp:846), so a bare `[[node]]` (e.g. a
                 // truncated file) would otherwise leave `op` INDETERMINATE and ckir_write's `kKOpNames[op]` (ckir_asset.hpp:358)
                 // would index OOB -> crash (the CEIR-35b mutation-fuzz finding). `{}` + the `op_seen` require REJECT a node
@@ -999,19 +1081,25 @@ struct CkirReadResult
                 if (t.ok)
                 {
                     nodes.push_back(n);
+                    node_at.push_back(sect_at);
                 }
             }
             else if (t.word_is(hb, he, "sfield"))
             {
+                cur_pool  = CkirPool::StructField;
+                cur_index = static_cast<crd::i32>(sfields.size());
                 KType ty;
                 read_type_block(ty);
                 if (t.ok)
                 {
                     sfields.push_back(ty);
+                    sfield_at.push_back(sect_at);
                 }
             }
             else if (t.word_is(hb, he, "stmt"))
             {
+                cur_pool  = CkirPool::Stmt;
+                cur_index = static_cast<crd::i32>(stmts.size());
                 KStmt st;
                 bool  kind_seen = false; // CEIR-35b: the stmt writer emits `kind` unconditionally (kKStmtNames[kind]); require it
                 while (t.ok && !t.eof() && !t.at('['))
@@ -1083,10 +1171,14 @@ struct CkirReadResult
                 if (t.ok)
                 {
                     stmts.push_back(st);
+                    stmt_at.push_back(sect_at);
                 }
             }
             else if (t.word_is(hb, he, "entry"))
             {
+                cur_pool  = CkirPool::Entry;
+                cur_index = 0;
+                entry_at  = sect_at;
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
@@ -1223,6 +1315,8 @@ struct CkirReadResult
             }
             else if (t.word_is(hb, he, "out"))
             {
+                cur_pool  = CkirPool::Out;
+                cur_index = n_out_seen;
                 KStageOutput o;
                 while (t.ok && !t.eof() && !t.at('['))
                 {
@@ -1252,11 +1346,14 @@ struct CkirReadResult
                 }
                 if (t.ok && n_out_seen < kMaxStageOutputs)
                 {
+                    out_at[n_out_seen]   = sect_at;
                     en.out[n_out_seen++] = o;
                 }
             }
             else if (t.word_is(hb, he, "ext")) // CEIR-19c: the global ext-operand pool (a SECTION, not a bare key — see the writer note)
             {
+                cur_pool  = CkirPool::Ext;
+                cur_index = static_cast<crd::i32>(ext.size());
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
@@ -1267,7 +1364,10 @@ struct CkirReadResult
                     t.lit('=');
                     if (t.word_is(b, en2, "values"))
                     {
-                        read_int_array([&](crd::i64 v) { ext.push_back(static_cast<crd::i32>(v)); });
+                        read_int_array([&](crd::i64 v) {
+                            ext.push_back(static_cast<crd::i32>(v));
+                            ext_at.push_back(sect_at);
+                        });
                     }
                     else
                     {
@@ -1278,6 +1378,8 @@ struct CkirReadResult
             }
             else if (t.word_is(hb, he, "sbegin")) // CEIR-19c: the struct-begin pool (a SECTION, same collision fix as [[ext]])
             {
+                cur_pool  = CkirPool::StructBegin;
+                cur_index = static_cast<crd::i32>(sbegin.size());
                 while (t.ok && !t.eof() && !t.at('['))
                 {
                     crd::usize b = 0; crd::usize en2 = 0;
@@ -1288,7 +1390,10 @@ struct CkirReadResult
                     t.lit('=');
                     if (t.word_is(b, en2, "values"))
                     {
-                        read_int_array([&](crd::i64 v) { sbegin.push_back(static_cast<crd::u32>(v)); });
+                        read_int_array([&](crd::i64 v) {
+                            sbegin.push_back(static_cast<crd::u32>(v));
+                            sbegin_at.push_back(sect_at);
+                        });
                     }
                     else
                     {
@@ -1305,6 +1410,8 @@ struct CkirReadResult
         else
         {
             // a top-level `key = value` (only `schema` today — ext/sbegin are now [[ext]]/[[sbegin]] SECTIONS, see the writer note).
+            cur_pool  = CkirPool::None;
+            cur_index = -1;
             crd::usize b = 0; crd::usize en2 = 0;
             if (!t.word(b, en2))
             {
@@ -1325,16 +1432,16 @@ struct CkirReadResult
 
     if (!t.ok)
     {
-        return CkirReadResult{false, t.err, t.msg};
+        return td::refuse(text, t.err, t.msg, cur_pool, cur_index);
     }
     // ⛔ a real CKIR program has value nodes; empty / non-`.ckir` input (0 nodes) is REPORTED, never a silent empty graph.
     if (nodes.size() == 0)
     {
-        return CkirReadResult{false, 0, "not a CKIR program (no nodes)"};
+        return td::refuse(text, 0, "not a CKIR program (no nodes)");
     }
     if (!stage_seen)
     {
-        return CkirReadResult{false, 0, "not a CKIR program (no [[entry]] stage)"};
+        return td::refuse(text, 0, "not a CKIR program (no [[entry]] stage)");
     }
 
     // ── CEIR-35b: post-parse STRUCTURAL BOUNDS validation (the mutation-fuzz finding). Every node/stmt/ext/struct index was
@@ -1361,15 +1468,18 @@ struct CkirReadResult
             const KNode& n = nodes[i];
             if (!nref_ok(n.a) || !nref_ok(n.b) || !nref_ok(n.c) || !nref_ok(n.d))
             {
-                return CkirReadResult{false, 0, "node operand ref out of range"};
+                return td::refuse(text, node_at[i], "node operand ref out of range", CkirPool::Node,
+                                  static_cast<crd::i32>(i));
             }
             if (!extwin_ok(n.ext, n.n_ext))
             {
-                return CkirReadResult{false, 0, "node ext-operand window out of range"};
+                return td::refuse(text, node_at[i], "node ext-operand window out of range", CkirPool::Node,
+                                  static_cast<crd::i32>(i));
             }
             if (!sid_ok(n.type.struct_id))
             {
-                return CkirReadResult{false, 0, "node struct id out of range"};
+                return td::refuse(text, node_at[i], "node struct id out of range", CkirPool::Node,
+                                  static_cast<crd::i32>(i));
             }
         }
         // ext-pool entries are themselves node refs (the variadic operands of aggregate nodes AND of RT/atomic stmts).
@@ -1377,7 +1487,8 @@ struct CkirReadResult
         {
             if (!nref_ok(ext[i]))
             {
-                return CkirReadResult{false, 0, "ext-pool operand ref out of range"};
+                return td::refuse(text, ext_at[i], "ext-pool operand ref out of range", CkirPool::Ext,
+                                  static_cast<crd::i32>(i));
             }
         }
         // a struct field's type may itself reference a struct; sbegin[] values are offsets into the sfields pool.
@@ -1385,14 +1496,16 @@ struct CkirReadResult
         {
             if (!sid_ok(sfields[i].struct_id))
             {
-                return CkirReadResult{false, 0, "sfield struct id out of range"};
+                return td::refuse(text, sfield_at[i], "sfield struct id out of range", CkirPool::StructField,
+                                  static_cast<crd::i32>(i));
             }
         }
         for (crd::usize i = 0; i < sbegin.size(); ++i)
         {
             if (static_cast<crd::i64>(sbegin[i]) > n_sflds)
             {
-                return CkirReadResult{false, 0, "struct field offset out of range"};
+                return td::refuse(text, sbegin_at[i], "struct field offset out of range", CkirPool::StructBegin,
+                                  static_cast<crd::i32>(i));
             }
         }
         for (crd::usize i = 0; i < stmts.size(); ++i)
@@ -1400,15 +1513,18 @@ struct CkirReadResult
             const KStmt& st = stmts[i];
             if (!nref_ok(st.target) || !nref_ok(st.index) || !nref_ok(st.value) || !nref_ok(st.result))
             {
-                return CkirReadResult{false, 0, "stmt operand ref out of range"};
+                return td::refuse(text, stmt_at[i], "stmt operand ref out of range", CkirPool::Stmt,
+                                  static_cast<crd::i32>(i));
             }
             if (!bodywin_ok(st.body_begin, st.body_count))
             {
-                return CkirReadResult{false, 0, "stmt body range out of range"};
+                return td::refuse(text, stmt_at[i], "stmt body range out of range", CkirPool::Stmt,
+                                  static_cast<crd::i32>(i));
             }
             if (!extwin_ok(st.ext, st.n_ext))
             {
-                return CkirReadResult{false, 0, "stmt ext-operand window out of range"};
+                return td::refuse(text, stmt_at[i], "stmt ext-operand window out of range", CkirPool::Stmt,
+                                  static_cast<crd::i32>(i));
             }
         }
         // the entry: every node ref, the kernel-body stmt range, and the stage-output refs.
@@ -1416,26 +1532,26 @@ struct CkirReadResult
             || !nref_ok(en.storage_write_index) || !nref_ok(en.storage_write_value) || !nref_ok(en.mesh_prim)
             || !nref_ok(en.task_emit) || !nref_ok(en.tess_inner) || !nref_ok(en.tess_outer))
         {
-            return CkirReadResult{false, 0, "entry node ref out of range"};
+            return td::refuse(text, entry_at, "entry node ref out of range", CkirPool::Entry, 0);
         }
         for (int k = 0; k < KEntry::kMaxTaskPayload; ++k)
         {
             if (!nref_ok(en.task_payload[k]))
             {
-                return CkirReadResult{false, 0, "entry task_payload ref out of range"};
+                return td::refuse(text, entry_at, "entry task_payload ref out of range", CkirPool::Entry, 0);
             }
         }
         if (!bodywin_ok(en.kernel_body_begin, en.kernel_body_count))
         {
-            return CkirReadResult{false, 0, "entry kernel body range out of range"};
+            return td::refuse(text, entry_at, "entry kernel body range out of range", CkirPool::Entry, 0);
         }
         if (en.n_out < 0 || en.n_out > kMaxStageOutputs)
         {
-            return CkirReadResult{false, 0, "entry n_out out of range"};
+            return td::refuse(text, entry_at, "entry n_out out of range", CkirPool::Entry, 0);
         }
         if (n_out_seen != en.n_out) // REPO.DEV.9 fuzz finding
         {
-            return CkirReadResult{false, 0, "entry n_out does not match the [[out]] blocks"};
+            return td::refuse(text, entry_at, "entry n_out does not match the [[out]] blocks", CkirPool::Entry, 0);
         }
         // A stage output must NAME a node: -1 is a gap for operands, not for an output (`[[out]]` without `node =` left
         // it -1, the writer emitted "n-1" and rejected its own output; REPO.DEV.11 fuzz finding). Same rule as verify's
@@ -1444,7 +1560,7 @@ struct CkirReadResult
         {
             if (en.out[k].node < 0 || !nref_ok(en.out[k].node))
             {
-                return CkirReadResult{false, 0, "stage output names no node"};
+                return td::refuse(text, out_at[k], "stage output names no node", CkirPool::Out, k);
             }
         }
     }

@@ -51,6 +51,11 @@ struct ValidationMessage
     // layout that uses the descriptor-set slot the instrumentation needs). Counted in
     // ValidationReport::instrumentation_failures.
     bool                    instrumentation_refused = false;
+    // DIAG.8a: the innermost Cerid identity among the debug labels active when the message was raised (command-buffer
+    // labels, then queue labels), resolved on its own even when a named object supplies `identity`. A label names the
+    // recording site (a frame-graph pass, a CEIR dispatch) that a message about a named buffer or pipeline would
+    // otherwise lose. Default-invalid == no labelled Cerid site was active.
+    ObjectIdentity          label{};
 };
 
 class ValidationCapture

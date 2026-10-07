@@ -7,10 +7,13 @@
 // this binds + runs it (compile ≠ run, §158). This is a BRIDGE header: it names gpu-context types; crd-ceir core never does.
 
 #include <crd/ceir/gpu/lower.hpp> // LoweredCommand / LoweredKind
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/gpu/compute.hpp> // IComputeContext / ComputePipeline / ComputeBuffer / ComputeRecorder (ADR-0100)
+#include <crd/gpu/object_identity.hpp> // DIAG.8a: the Pass identity a dispatch's debug label carries
+#include <crd/memory/allocator.hpp>
 
 namespace crd::ceir::gpu
 {
@@ -63,13 +66,66 @@ enum class ExecuteError : crd::u8
                                             KernelResolveFn resolver, void* user,
                                             containers::ConstSpan<ResolvedBinding> bindings);
 
+// ── DIAG.8a: dispatch sites. A GPU diagnostic about recorded work leads back to the CEIR dispatch that recorded it.
+// With a `DispatchSites` table, execute_lowered mints one Pass identity per dispatch from the process-wide identity
+// registry and wraps the recorded dispatch in the recorder's debug label "[<id>] <op name> @<kernel>". A validation
+// message raised inside that label carries the identity (the Vulkan capture's `ValidationMessage::label`), and
+// `find(label)` returns the dispatch op, whose authored origin `render_op_site` / `resolve_provenance` name. The
+// `kernel` symbol in the label is the dispatch's link to its CKIR kernel.
+
+// One recorded dispatch. `op` is borrowed from the Context that was lowered; keep it alive while the site is used.
+struct DispatchSite
+{
+    crd::gpu::ObjectIdentity label{};          // the Pass identity minted for this dispatch
+    const Operation*         op       = nullptr; // the compute.dispatch op
+    crd::u32                 command  = 0U;      // its index in the lowered command list
+    bool                     labelled = false;   // the recorder opened the label (false: no debug labels there)
+};
+
+// The dispatch sites of one or more execute_lowered calls, plus the op the last refused call was blamed on. Owns the
+// identities it minted and retires them on clear() or destruction, so a recycled slot never aliases a stale site.
+class DispatchSites
+{
+public:
+    explicit DispatchSites(memory::IAllocator* allocator);
+    ~DispatchSites();
+    DispatchSites(const DispatchSites&)            = delete;
+    DispatchSites& operator=(const DispatchSites&) = delete;
+    DispatchSites(DispatchSites&&)                 = delete;
+    DispatchSites& operator=(DispatchSites&&)      = delete;
+
+    // Mint a fresh label identity for `op` (the command at index `command`) and append its site.
+    DispatchSite& add(const Operation* op, crd::u32 command);
+    // Record the op a refused execute_lowered is blamed on (null: the failing command names no op).
+    void set_fault(const Operation* op) noexcept { m_fault = op; }
+
+    // The site whose label is `label`, or nullptr (an invalid identity, or one this table did not mint).
+    [[nodiscard]] const DispatchSite* find(const crd::gpu::ObjectIdentity& label) const noexcept;
+    [[nodiscard]] containers::ConstSpan<DispatchSite> sites() const noexcept
+    {
+        return containers::ConstSpan<DispatchSite>(m_sites.data(), m_sites.size());
+    }
+    // The op the last refused execute_lowered was blamed on; nullptr after a successful call or clear().
+    [[nodiscard]] const Operation* fault() const noexcept { return m_fault; }
+
+    // Retire every minted identity and forget all sites and the fault.
+    void clear() noexcept;
+
+private:
+    containers::Array<DispatchSite> m_sites;
+    const Operation*                m_fault = nullptr;
+};
+
 // Validate, then RECORD each command into `rec` (an already-`begin()`-ed recorder — the caller owns begin()/submit_and_wait()
 // + buffer upload/readback, the `ckir_kernel_dispatch.hpp` division). Returns the first `ExecuteError` (or None on success).
 // ⛔ device-driving. ⭐ 13z-3 part 2: a `Barrier` is REPLAYED as `rec.barrier(root_buffer, from, to)` per the HazardKind→
 // ComputeAccess map (nullptr resource ⇒ all bound buffers); a `Transfer`/dynamic-grid → `UnsupportedCommand`.
+// DIAG.8a: with `sites`, every recorded dispatch is labelled and recorded (see DispatchSites), and a refusal records
+// the refused command's op as `sites->fault()`; a successful call clears the fault.
 [[nodiscard]] ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
                                            crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
-                                           containers::ConstSpan<ResolvedBinding> bindings);
+                                           containers::ConstSpan<ResolvedBinding> bindings,
+                                           DispatchSites* sites = nullptr);
 
 // ── CEIR-19c: the ceir.rt EXECUTION seam (§134) ──────────────────────────────────────────────────────────────────────
 // A SECOND executor beside execute_lowered, consuming the SAME 13d-lowered list (the render_materialize precedent: ONE

@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 
 namespace crd::gpu
 {
@@ -176,6 +177,9 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
     VkQueryPool      ts_pool       = VK_NULL_HANDLE; // 2 timestamps bracketing the recorded work (GPU-only timing)
     double           ts_period     = 1.0;            // ns per timestamp tick
     double           last_gpu_ms   = 0.0;
+    // DIAG.8a: the debug-label PFNs (VK_EXT_debug_utils), loaded once at construction; null -> labels are not recorded.
+    PFN_vkCmdBeginDebugUtilsLabelEXT begin_label_fn = nullptr;
+    PFN_vkCmdEndDebugUtilsLabelEXT   end_label_fn   = nullptr;
 
     [[nodiscard]] crd::u32 find_mem_type(crd::u32 type_bits, VkMemoryPropertyFlags props) const noexcept
     {
@@ -294,6 +298,35 @@ struct VulkanComputeContext::Impl final : public ComputeRecorder
         auto& ab = static_cast<BufferImpl&>(args);
         vkCmdDispatchIndirect(cmd, ab.buffer(), static_cast<VkDeviceSize>(args_offset));
     }
+
+    // DIAG.8a: "[<id>] <name>" as a command-buffer debug label, the same text a frame-graph pass label carries, so the
+    // validation capture resolves a message raised inside it to `id`. Refused (false, nothing recorded) without
+    // debug-utils, for an invalid identity or a name too long for the label buffer.
+    [[nodiscard]] bool begin_label(const ObjectIdentity& id, crd::containers::StringView name) override
+    {
+        if (begin_label_fn == nullptr || end_label_fn == nullptr || cmd == VK_NULL_HANDLE)
+        {
+            return false;
+        }
+        char             buf[kDebugNamePrefixChars + 128];
+        const crd::usize n = format_debug_name(id, std::string_view(name.data(), name.size()), buf, sizeof(buf));
+        if (n == 0U)
+        {
+            return false;
+        }
+        VkDebugUtilsLabelEXT label{};
+        label.sType      = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT;
+        label.pLabelName = static_cast<const char*>(buf);
+        begin_label_fn(cmd, &label);
+        return true;
+    }
+    void end_label() override
+    {
+        if (end_label_fn != nullptr && cmd != VK_NULL_HANDLE)
+        {
+            end_label_fn(cmd);
+        }
+    }
 };
 
 VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::IAllocator* /*alloc*/)
@@ -321,6 +354,10 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     {
         return;
     }
+    impl.begin_label_fn = reinterpret_cast<PFN_vkCmdBeginDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(impl.device, "vkCmdBeginDebugUtilsLabelEXT"));
+    impl.end_label_fn = reinterpret_cast<PFN_vkCmdEndDebugUtilsLabelEXT>(
+        vkGetDeviceProcAddr(impl.device, "vkCmdEndDebugUtilsLabelEXT"));
 
     VkCommandPoolCreateInfo cpci{};
     cpci.sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;

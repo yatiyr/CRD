@@ -10,6 +10,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/object_identity.hpp> // DIAG.8a: the identity a recorded debug label carries
 
 #include <memory>
 
@@ -108,6 +109,15 @@ public:
     // round-trip (`vkCmdDispatchIndirect`). Appended at END (vtable stability); default no-op ⇒ backends opt in.
     virtual void dispatch_indirect(ComputePipeline& /*pipeline*/, crd::containers::ConstSpan<ComputeBuffer*> /*bindings*/,
                                    const void* /*push*/, crd::u32 /*push_size*/, ComputeBuffer& /*args*/, crd::u64 /*args_offset*/) {}
+    // DIAG.8a: open a debug label "[<id>] <name>" around the work recorded until the matching end_label(), so a
+    // validation message raised inside it can be traced back to whatever recorded it (a CEIR dispatch op). Returns
+    // true when the label was opened; call end_label() exactly once for each true return. Appended at END (vtable
+    // stability); the default records no label and returns false (a backend without debug labels).
+    [[nodiscard]] virtual bool begin_label(const ObjectIdentity& /*id*/, crd::containers::StringView /*name*/)
+    {
+        return false;
+    }
+    virtual void end_label() {}
 };
 
 // The one GPU compute dispatch surface (ADR-0100). Kernel-source-agnostic: pipelines are requested BY NAME and the

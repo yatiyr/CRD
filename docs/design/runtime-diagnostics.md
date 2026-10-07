@@ -527,6 +527,16 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8a-ceir-provenance.md
   `render_op_site` is the one rendering every reporter uses (`<op> native <provider> at <provenance>`), so no result
   struct carries a provider copy. A host-evaluated intrinsic's refusal is blamed on its own op: the scene resolver
   sets `SceneResolvedHandles::fault` for an unwired or 0-returning callback and for the op `find_scene_misuse` names.
+- GPU dispatch and CKIR record sites (2026-10-07, [session](../sessions/2026-10-07-diag-8a-gpu-dispatch-and-ckir-sites.md)):
+  with a `DispatchSites` table, `execute_lowered` mints one `ObjectKind::Pass` identity per recorded dispatch and
+  wraps it in the recorder's debug label `[<id>] <op name> @<kernel>` (`ComputeRecorder::begin_label`/`end_label`,
+  default no label; Vulkan records a debug-utils label). The Vulkan capture keeps the innermost label identity in
+  `ValidationMessage::label` even when a named object supplies `identity`, so a validation error at a dispatch maps
+  through `DispatchSites::find` to the dispatch op and its authored origin; the `@<kernel>` symbol is the link to the
+  CKIR kernel. The table retires its identities; a dispatch the backend could not label is recorded `labelled = false`
+  (an explicit gap), and a refused `execute_lowered` names the refused op (`fault()`). A refused `.ckir` names its
+  positional record (`CkirReadResult::pool`/`index`; CKIR refs are positional, so the index is the node identity) and
+  its line and column: the offending token, or the record's `[[...]]` header for a post-parse bounds check.
 
 <a id="diag-8b"></a>
 ## DIAG.8b — runtime inspect, stepping and safe stop
