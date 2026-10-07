@@ -581,6 +581,18 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-safe-point-inspect
   bind, never stable ids (pre-order ids shift when an op is inserted) or compiled positions, so a hot reload rebinds
   each line to what the new generation authored there.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-pending-jobs-and-detached-bodies.md)):
+- A host executor attaches through `inspect::HostLink` (`HostProvider::execute(..., session)` for crd-jobs). Its
+  cooperative cancel flag becomes the execution's only flag: `Session::cancel` raises it, so work on pool workers
+  stops too, and a pause re-reads it every 2 ms, so the host's own cancel ends a paused execution.
+- Work the host started keeps running through a `Task` pause, and each stop reports how much of it is not yet joined
+  (`StopRecord::pending_jobs`; for crd-jobs, pooled launches not yet awaited). The submitting thread cannot stop inside
+  a parallel range or a fold (it is waiting on the pool there), so a pause request lands at its next safe point.
+- Bodies a host runs on its own sub-interpreters (pooled launch bodies, parallel ranges, map_reduce fold steps) are
+  detached: they never pause, because a held pool worker could be the one the submitting thread waits on and a
+  session holds one stop at a time. A bound breakpoint there is counted and refused `DetachedBody`, never missed
+  silently; a launch the provider runs in-frame (it captures an outer value) pauses like any other op.
+
 <a id="diag-8c"></a>
 ## DIAG.8c — typed human and agent diagnostics commands
 

@@ -21,6 +21,15 @@
 // through DIAG.8a provenance on every bind, so a hot-reloaded generation REBINDS them (stable ids are pre-order and
 // shift when an op is inserted, so they are not a breakpoint key).
 //
+// ⛔ HOST WORK. A host executor that also runs bodies on its OWN sub-interpreters (the crd-jobs HostProvider's
+// parallel ranges, map_reduce fold steps and pooled launch bodies) links them through `HostLink`. Those bodies are
+// DETACHED: they never pause (a pool worker held at a safe point could be the thread the submitting thread waits on,
+// and the session holds one stop at a time), so a breakpoint hit there is counted and refused `DetachedBody` (a typed
+// gap, never a silent miss). The host's cooperative cancel flag becomes the execution's only flag: the session's
+// cancel raises it, so every detached body stops too, and a host cancel ends a paused execution. Each stop reports the
+// work the host has started and not yet joined (`StopRecord::pending_jobs`), which keeps running through a `Task`
+// pause.
+//
 // ⛔ NATIVE DEBUGGERS. A pause is an ordinary blocking wait (mutex + condition variable): no signal, trap
 // instruction or thread-context change is used, so a native debugger may attach, break and resume the process at any
 // time without changing the session's state. A controller wait on an executor a native debugger holds ends in
@@ -89,6 +98,7 @@ enum class Refusal : u8
     NonPausable,     // the session's scope never pauses
     NoHostPause,     // WholeHost scope without the host's freeze/thaw hooks
     SameThread,      // the safe point is on the controller's own thread: pausing would block the only answering thread
+    DetachedBody,    // the safe point is in a body the host runs on its own sub-interpreter: it never pauses (counted)
     Timeout,         // the wait elapsed (the executor kept running, or something else holds it)
     Finished,        // the execution ended without stopping
 };
@@ -130,6 +140,14 @@ struct HostPause
     void* user                 = nullptr;
 };
 
+// A host executor's link for one execution (see HOST WORK above). Called and read on the executing thread only.
+struct HostLink
+{
+    std::atomic<bool>* cancel = nullptr;      // the host's cooperative cancel flag, shared with its detached bodies
+    u32 (*pending)(void* user) = nullptr;     // host work started and not yet joined, reported on each stop
+    void* user                 = nullptr;
+};
+
 // The host's redaction policy: the retained owner of a value decides whether its bits may be shown.
 using RedactFn = RedactionClass (*)(StableId op, TypeId type, void* user);
 
@@ -153,7 +171,8 @@ struct StopRecord
     StableId       op{};            // the op about to run
     u32            depth      = 0U; // call-frame depth (0 = the entry function)
     u32            breakpoint = kNoBreakpoint;
-    plan::InstrRef at;              // the compiled instr (plan executions only)
+    u32            pending_jobs = 0U; // host work started and not yet joined (e.g. pooled launches not yet awaited)
+    plan::InstrRef at;                // the compiled instr (plan executions only)
 };
 
 struct ValueRef
@@ -210,6 +229,13 @@ public:
     // removes both afterwards (an interpreter's own hooks and flag are replaced for that call).
     [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
                                           containers::ConstSpan<i64> args);
+    // The same for a host executor's submitting interpreter: `in` observes the host's cancel flag instead of the
+    // session's own, the session's cancel raises it, and each stop reports `host.pending`.
+    [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
+                                          containers::ConstSpan<i64> args, const HostLink& host);
+    // Any thread, while an execution is attached: install the detached-body hook on a host sub-interpreter. It never
+    // blocks and writes only counters, so it may run on many pool workers at once.
+    void attach_detached(exec::Interpreter& sub);
 
     // ── controller: any thread other than the executing one ──
     [[nodiscard]] Refusal request_pause(u64 generation);
@@ -219,6 +245,7 @@ public:
     [[nodiscard]] Refusal cancel(u64 generation);
 
     [[nodiscard]] u32     refused_pauses() const noexcept { return m_refused.load(std::memory_order_relaxed); }
+    [[nodiscard]] u32     detached_hits() const noexcept { return m_detached.load(std::memory_order_relaxed); }
     [[nodiscard]] Refusal last_refusal() const noexcept
     {
         return static_cast<Refusal>(m_last_refusal.load(std::memory_order_relaxed));
@@ -249,10 +276,12 @@ private:
 
     static plan::SafePointAction on_plan(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user);
     static void                  on_step(const Operation& op, void* user);
+    static void                  on_detached(const Operation& op, void* user);
 
     [[nodiscard]] Refusal    check(u64 generation) const noexcept; // m_mu held
     [[nodiscard]] StopReason decide(u32 breakpoint, u32 depth);    // executing thread
     [[nodiscard]] bool       hold(StopRecord rec);                 // executing thread; true = cancel
+    [[nodiscard]] bool       cancel_raised() const noexcept;       // m_mu held
     void                     serve_read();                         // executing thread, m_mu held
     void                     begin_run(Executor e);
     void                     end_run();
@@ -295,9 +324,11 @@ private:
     bool                    m_req_done    = false;
     ValueRef                m_req;
     ValueSnapshot           m_reply;
+    HostLink                m_link; // the attached host execution's link (empty for a plain run or invoke)
     std::atomic<bool>       m_cancel{false};
     std::atomic<bool>       m_pause_req{false};
     std::atomic<u32>        m_refused{0U};
     std::atomic<u8>         m_last_refusal{0U};
+    std::atomic<u32>        m_detached{0U};
 };
 } // namespace crd::ceir::inspect

@@ -27,6 +27,7 @@ struct PooledToken
     crd::jobs::Counter*          counter  = nullptr;
     ExecError                    err      = ExecError::None;
     const Operation*             err_op   = nullptr;      // DIAG.8a: the body op the error was recorded on (or null)
+    inspect::Session*            session  = nullptr;      // DIAG.8b: the attached session (the body is detached)
     bool                         waited   = false;        // resolve waits the counter exactly once
     PooledToken() : result(&scratch) {}
 };
@@ -40,6 +41,10 @@ void run_launch(void* data)
     auto* const t = static_cast<PooledToken*>(data);
     exec::Interpreter sub(*t->proto, &t->scratch, t->sub_fuel);
     sub.set_cancel_flag(t->cancel);
+    if (t->session != nullptr)
+    {
+        t->session->attach_detached(sub); // never pauses a pool worker; a breakpoint hit is counted
+    }
     containers::Array<crd::i64> y(&t->scratch);
     const ExecError e = sub.invoke_region(*t->module, *t->body, containers::ConstSpan<crd::i64>(), y);
     if (e != ExecError::None)
@@ -151,6 +156,7 @@ struct ParallelCtx
     const std::atomic<bool>* cancel; // §30 cooperative cancel flag, threaded into every sub-interpreter
     crd::u32                 num_jobs;
     crd::u64                 sub_fuel;
+    inspect::Session*        session; // DIAG.8b: the attached session (null without one); every sub is detached
 };
 
 // The POD job context captured (by pointer) into the trivially-copyable parallel_for lambda.
@@ -166,6 +172,7 @@ struct RangeJob
     crd::i64*                out;  // pre-sized [count]; each index writes its DISJOINT slot
     ExecError*               errs; // pre-sized [count], all None; each failing index writes its own slot (no atomics)
     const Operation**        err_ops; // DIAG.8a: pre-sized [count], all null; the body op each failing index blamed
+    inspect::Session*        session; // DIAG.8b: the attached session (null without one); each range sub is detached
 };
 
 // Run op's MAP region (op.region(0)) in PARALLEL over [operand0, operand1) stepping operand2 — each index via a FRESH
@@ -208,8 +215,8 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
     (void)in.ctx().op_region_exec(op, re);
     const crd::jobs::Priority prio = priority_for(re.realtime);
 
-    RangeJob rj{pc->proto, pc->module, op.region(0), pc->cancel, lo, step, pc->sub_fuel, out.data(), errs.data(),
-                err_ops.data()};
+    RangeJob rj{pc->proto,  pc->module,  op.region(0),   pc->cancel, lo, step, pc->sub_fuel,
+                out.data(), errs.data(), err_ops.data(), pc->session};
     crd::jobs::Counter* const counter = crd::jobs::parallel_for(
         count, pc->num_jobs,
         [rjp = &rj](crd::u32 begin, crd::u32 end) {
@@ -218,6 +225,10 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
                 crd::memory::GrowableTlsfAllocator item_scratch; // this index's OWN scratch — never the shared Context arena
                 exec::Interpreter           sub(*rjp->proto, &item_scratch, rjp->sub_fuel);
                 sub.set_cancel_flag(rjp->cancel); // §30 cooperative cancel — ranges observe it in the step loop
+                if (rjp->session != nullptr)
+                {
+                    rjp->session->attach_detached(sub);
+                }
                 const crd::i64              iv     = rjp->lo + static_cast<crd::i64>(idx) * rjp->step;
                 crd::i64                    iva[1] = {iv};
                 containers::Array<crd::i64> yield(&item_scratch);
@@ -298,6 +309,10 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
     crd::memory::GrowableTlsfAllocator  fold_scratch; // the fold's OWN scratch — never the shared Context arena or `in`'s frame
     exec::Interpreter             fold(*pc->proto, &fold_scratch, pc->sub_fuel);
     fold.set_cancel_flag(pc->cancel); // §30: request_cancel also stops a long reduce
+    if (pc->session != nullptr)
+    {
+        pc->session->attach_detached(fold); // a sub-interpreter: the session's stop state belongs to the top run
+    }
     for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i)
     {
         crd::i64                    ba[2] = {acc, out[i]}; // (acc, elem) — the combine reads its two block-args in INDEX order
@@ -508,6 +523,36 @@ containers::ConstSpan<crd::i64> HostProvider::map_output(const Operation* pf_op)
 exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
                                        containers::ConstSpan<crd::i64> args)
 {
+    return run(ctx, m, entry, args, nullptr);
+}
+
+exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
+                                       containers::ConstSpan<crd::i64> args, inspect::Session& session)
+{
+    return run(ctx, m, entry, args, &session);
+}
+
+crd::u32 HostProvider::pooled_unjoined() const noexcept
+{
+    crd::u32 n = 0U;
+    for (crd::usize i = 0; i < m_pooled.size(); ++i)
+    {
+        if (!m_pooled[i]->waited)
+        {
+            ++n;
+        }
+    }
+    return n;
+}
+
+crd::u32 HostProvider::unjoined_of(void* self) noexcept
+{
+    return static_cast<const HostProvider*>(self)->pooled_unjoined();
+}
+
+exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::StringView entry,
+                                   containers::ConstSpan<crd::i64> args, inspect::Session* session)
+{
     exec::ExecResult r(ctx.allocator());
     // 1. parallel-purity pre-flight on the SUBMIT thread (a parallel body must be state-free + yield exactly 1) — the
     // SHARED core analysis (CEIR-11a: the provider + the sequential reference agree on legality by construction).
@@ -538,11 +583,23 @@ exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers
     proto.install(ctx.intern_op("task", "main_thread"), &eval_main_thread_pooled); // pin_thread=0
     proto.install(ctx.intern_op("task", "fiber_wait"), &eval_await_pooled);  // the host-level await
     proto.set_cancel_flag(&m_cancel); // §30 cooperative cancel — the top run + every clone observes it
-    ParallelCtx pc{this, &m, &proto, &m_cancel, m_num_jobs, m_sub_fuel};
+    ParallelCtx pc{this, &m, &proto, &m_cancel, m_num_jobs, m_sub_fuel, session};
     proto.set_user(&pc);
-    // 3. run the entry (the task/async EvalFns drive crd::jobs from inside).
-    exec::ExecResult res = proto.invoke(m, entry, args);
+    // 3. run the entry (the task/async EvalFns drive crd::jobs from inside). DIAG.8b: under a session the submitting
+    // interpreter gets its safe points and this provider's cancel flag stays the one every sub observes.
+    m_session = session;
+    exec::ExecResult res(ctx.allocator());
+    if (session == nullptr)
+    {
+        res = proto.invoke(m, entry, args);
+    }
+    else
+    {
+        const inspect::HostLink link{&m_cancel, &HostProvider::unjoined_of, this};
+        res = session->invoke(proto, m, entry, args, link);
+    }
     drain_pooled(); // ⛔ wait + free every pooled token BEFORE returning (leak containment — a worker must not outlive execute)
+    m_session = nullptr;
     return res;
 }
 
@@ -573,6 +630,7 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
     t->body   = body;
     t->cancel = cancel;
     t->sub_fuel = sub_fuel;
+    t->session  = m_session;
     const crd::i64 handle = kPoolBase + static_cast<crd::i64>(m_pooled.size());
     m_pooled.push_back(t);
     ++m_pooled_total; // the cumulative witness (survives the drain)

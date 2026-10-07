@@ -42,7 +42,9 @@ not complete real-time feedback execution. CHIR-0 is not a full application lang
 
 Runtime inspection ([DIAG.8b](../design/runtime-diagnostics.md#diag-8b)): `crd/ceir/inspect.hpp` pauses the compiled
 plan (`plan::RunControl`) or the reference interpreter (its step hook) at authored `file:line` breakpoints, steps,
-cancels and answers typed value snapshots from the paused thread, bound to one program generation.
+cancels and answers typed value snapshots from the paused thread, bound to one program generation. The crd-jobs
+`HostProvider` runs under a session too: pooled launches keep running through a pause and are reported as pending,
+one cancel stops the pool work, and bodies on its own sub-interpreters count breakpoint hits instead of pausing.
 
 ## Maturity and further work
 

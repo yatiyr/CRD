@@ -56,6 +56,7 @@ containers::StringView refusal_name(Refusal r) noexcept
     case Refusal::NonPausable: return containers::StringView("non-pausable");
     case Refusal::NoHostPause: return containers::StringView("no-host-pause");
     case Refusal::SameThread: return containers::StringView("same-thread");
+    case Refusal::DetachedBody: return containers::StringView("detached-body");
     case Refusal::Timeout: return containers::StringView("timeout");
     case Refusal::Finished: return containers::StringView("finished");
     }
@@ -89,6 +90,9 @@ containers::StringView value_status_name(ValueStatus s) noexcept
 
 namespace
 {
+// How often a pause linked to a host re-reads the host's cancel flag (the host raises it without the session's lock).
+constexpr std::chrono::milliseconds kHostCancelPoll{2};
+
 // The file id `ctx` registered for `path` (0 when it has none). Never registers.
 u32 find_file(const Context& ctx, containers::StringView path) noexcept
 {
@@ -362,16 +366,35 @@ plan::RunResult Session::run(const plan::CompiledPlan& plan, containers::ConstSp
 exec::ExecResult Session::invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
                                  containers::ConstSpan<i64> args)
 {
+    return invoke(in, m, entry, args, HostLink{});
+}
+
+exec::ExecResult Session::invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
+                                 containers::ConstSpan<i64> args, const HostLink& host)
+{
     begin_run(Executor::Interpreter);
+    {
+        const std::lock_guard<std::mutex> lk(m_mu);
+        m_link = host;
+    }
     m_cur_in = &in;
     in.set_step_hooks(&Session::on_step, nullptr, this);
-    in.set_cancel_flag(&m_cancel);
+    in.set_cancel_flag(host.cancel != nullptr ? host.cancel : &m_cancel);
     exec::ExecResult r = in.invoke(m, entry, args);
     in.set_step_hooks(nullptr, nullptr, nullptr);
     in.set_cancel_flag(nullptr);
     m_cur_in = nullptr;
+    {
+        const std::lock_guard<std::mutex> lk(m_mu);
+        m_link = HostLink{};
+    }
     end_run();
     return r;
+}
+
+void Session::attach_detached(exec::Interpreter& sub)
+{
+    sub.set_step_hooks(&Session::on_detached, nullptr, this);
 }
 
 plan::SafePointAction Session::on_plan(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user)
@@ -426,6 +449,21 @@ void Session::on_step(const Operation& op, void* user)
     s.m_cur_op = nullptr;
 }
 
+// A detached body never pauses and never touches the stepping or pause-request state (it may run on many pool
+// workers at once): a bound breakpoint is counted as a refused pause. `m_bp_ops` is read-only while an execution is
+// attached (bind is refused Busy), so the concurrent lookups are reads of a table the executing thread does not write.
+void Session::on_detached(const Operation& op, void* user)
+{
+    Session& s = *static_cast<Session*>(user);
+    if (s.m_bp_ops.find(&op) == nullptr)
+    {
+        return;
+    }
+    s.m_detached.fetch_add(1U, std::memory_order_relaxed);
+    s.m_refused.fetch_add(1U, std::memory_order_relaxed);
+    s.m_last_refusal.store(static_cast<u8>(Refusal::DetachedBody), std::memory_order_relaxed);
+}
+
 StopReason Session::decide(u32 breakpoint, u32 depth)
 {
     StopReason why = StopReason::None;
@@ -470,9 +508,19 @@ StopReason Session::decide(u32 breakpoint, u32 depth)
     return why;
 }
 
+bool Session::cancel_raised() const noexcept
+{
+    return m_cancel.load(std::memory_order_relaxed) ||
+           (m_link.cancel != nullptr && m_link.cancel->load(std::memory_order_relaxed));
+}
+
 bool Session::hold(StopRecord rec)
 {
     std::unique_lock<std::mutex> lk(m_mu);
+    if (m_link.pending != nullptr)
+    {
+        rec.pending_jobs = m_link.pending(m_link.user); // the host's own state, read on its executing thread
+    }
     rec.generation = m_generation;
     rec.sequence   = ++m_stops;
     m_stop         = rec;
@@ -485,9 +533,21 @@ bool Session::hold(StopRecord rec)
     }
     m_cv.notify_all();
     bool cancel = false;
+    const auto woken = [this] { return m_cmd_pending || m_req_pending || cancel_raised(); };
     for (;;)
     {
-        m_cv.wait(lk, [this] { return m_cmd_pending || m_req_pending || m_cancel.load(std::memory_order_relaxed); });
+        if (m_link.cancel == nullptr)
+        {
+            m_cv.wait(lk, woken);
+        }
+        else
+        {
+            bool ready = false;
+            while (!ready) // the host raises its flag without the session's lock, so it is re-read on each poll
+            {
+                ready = m_cv.wait_for(lk, kHostCancelPoll, woken);
+            }
+        }
         if (m_req_pending)
         {
             serve_read();
@@ -496,7 +556,7 @@ bool Session::hold(StopRecord rec)
             m_cv.notify_all();
             continue;
         }
-        if (m_cancel.load(std::memory_order_relaxed))
+        if (cancel_raised())
         {
             cancel = true;
             break;
@@ -725,6 +785,10 @@ Refusal Session::cancel(u64 generation)
             return Refusal::NotRunning;
         }
         m_cancel.store(true, std::memory_order_relaxed);
+        if (m_link.cancel != nullptr) // a host execution: its detached bodies observe only the host's flag
+        {
+            m_link.cancel->store(true, std::memory_order_relaxed);
+        }
     }
     m_cv.notify_all();
     return Refusal::None;

@@ -11,6 +11,7 @@
 // value — the provider PRE-FLIGHTS this (else a typed ParallelBodyStateful / ParallelYieldArity error).
 
 #include <crd/ceir/exec.hpp>       // exec::ExecResult
+#include <crd/ceir/inspect.hpp>    // inspect::Session (DIAG.8b: an execution under a debugger session)
 #include <crd/ceir/provider.hpp>   // crd::ceir::IExecutionProvider
 #include <crd/ceir/semantics.hpp>  // RealtimeClass (§32 execution classes)
 #include <crd/containers/array.hpp>
@@ -43,6 +44,14 @@ public:
     [[nodiscard]] bool                   advertises(const Context& ctx, OpId k) const override;
     [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
                                            containers::ConstSpan<crd::i64> args) override;
+    // DIAG.8b: the same execution under an inspection session (bound to `m` with `Session::bind`). The submitting
+    // thread's interpreter gets the session's safe points; every body this provider runs on its own sub-interpreter
+    // (a parallel range on a pool worker, a map_reduce fold step, a pooled launch body) is DETACHED: it never pauses,
+    // and a breakpoint hit there is counted and refused `DetachedBody`. This provider's cancel flag is the execution's
+    // only flag, so `Session::cancel` also stops the pool work and `request_cancel` also ends a paused execution. Each
+    // stop reports the pooled launches not yet joined; they keep running through a `Task` pause.
+    [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
+                                           containers::ConstSpan<crd::i64> args, inspect::Session& session);
 
     // Inspection: the map output of a `task.parallel_for` op (its per-index yields). Instance-keyed (builder-form; pointers
     // don't survive a round-trip). Empty if `pf_op` was not executed by this provider.
@@ -82,9 +91,16 @@ public:
     // fallback). ⛔ Cumulative, NOT the live table size: `drain_pooled` frees the table at execute() exit, so a live count
     // would read 0 afterward and a never-pools impl would pass every parity test.
     [[nodiscard]] crd::usize pooled_count() const noexcept { return m_pooled_total; }
+    // DIAG.8b: pooled launches of the running execution not yet joined by an await/join (they may still be running).
+    // Executing thread only (the table is that thread's state); 0 after execute() returns (the drain joins them all).
+    [[nodiscard]] crd::u32 pooled_unjoined() const noexcept;
     void drain_pooled() noexcept; // wait every outstanding counter + free every entry (execute() calls it at exit)
 
 private:
+    [[nodiscard]] exec::ExecResult run(Context& ctx, const Module& m, containers::StringView entry,
+                                       containers::ConstSpan<crd::i64> args, inspect::Session* session);
+    [[nodiscard]] static crd::u32 unjoined_of(void* self) noexcept; // the session's HostLink::pending probe
+
     memory::IAllocator* m_alloc;
     crd::u32            m_num_jobs;
     crd::u64            m_sub_fuel;
@@ -94,5 +110,6 @@ private:
     containers::Array<PooledToken*> m_pooled; // stage 3: heap-owned pooled tokens (⛔ heap so the growable table never
                                               // moves an entry the JobDecl captured by pointer — the push-back-UAF scar)
     crd::usize m_pooled_total = 0U;           // cumulative pooled-this-execution (the witness; NOT reset by drain)
+    inspect::Session* m_session = nullptr;    // DIAG.8b: the attached session while execute() runs (else null)
 };
 } // namespace crd::ceir::host
