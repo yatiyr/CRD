@@ -1,8 +1,9 @@
 // The typed, bounded diagnostic command service, driven by a native caller with no transport at all: this executable
 // links neither ceridc nor an MCP or network library, so every case here is the process-local proof. Covers the fixed
 // refusal order and that a refusal does no work (no handler run, no file byte read, the retained snapshot kept),
-// deterministic pagination and stale cursors, the byte bounds, authority classes that no grant implies, the bundle
-// importer route, the capture window and the job wait graph.
+// deterministic pagination and stale cursors, the byte bounds, authority classes that no grant implies, named
+// arguments bounded and checked in the arguments step, the bundle importer route, the capture window and the job wait
+// graph.
 
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -91,6 +92,46 @@ DiagStatus run_never(void* context, const crd::perf::DiagCall& call, crd::perf::
     (void)call;
     (void)out;
     ++static_cast<NeverCommand*>(context)->runs;
+    return DiagStatus::Ok;
+}
+
+// A command taking named arguments: its check accepts the names "line" and "mode" (with a "mode" value of "a" or "b")
+// and counts its own runs; its handler answers one item per argument it was given.
+struct ArgsCommand
+{
+    crd::u64 checks = 0U;
+    crd::u64 runs   = 0U;
+};
+
+DiagStatus check_args(void* context, cont::ConstSpan<crd::perf::DiagArg> args, cont::String& reason)
+{
+    ++static_cast<ArgsCommand*>(context)->checks;
+    for (const crd::perf::DiagArg& a : args)
+    {
+        if (a.name == "mode" && a.value != "a" && a.value != "b")
+        {
+            reason.append("mode must be a or b");
+            return DiagStatus::BadArgument;
+        }
+        if (a.name != "mode" && a.name != "line")
+        {
+            reason.append("unknown argument");
+            return DiagStatus::BadArgument;
+        }
+    }
+    return DiagStatus::Ok;
+}
+
+DiagStatus run_args(void* context, const crd::perf::DiagCall& call, crd::perf::DiagSnapshot& out)
+{
+    ++static_cast<ArgsCommand*>(context)->runs;
+    crd::perf::DiagFields item(out.allocator());
+    for (const crd::perf::DiagArg& a : call.request->args)
+    {
+        item.clear();
+        item.str("name", a.name).str("value", a.value);
+        (void)out.add_item(item);
+    }
     return DiagStatus::Ok;
 }
 
@@ -401,6 +442,10 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
     CHECK_FALSE(crd::perf::parse_authority_list("none,read", parsed));
     CHECK(parsed == 7U);
 
+    CHECK(crd::perf::parse_authority_list("execute", parsed));
+    CHECK(parsed == crd::perf::authority_bit(DiagAuthority::Execute));
+    parsed = 7U;
+
     // Every class but Inject is granted; an Inject command is still refused, and never runs.
     const crd::perf::DiagAuthoritySet all_but_inject =
         crd::perf::kDiagAllAuthorities & ~crd::perf::authority_bit(DiagAuthority::Inject);
@@ -414,7 +459,7 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
     CHECK(inject.runs == 0U);
     CHECK(svc.handler_runs() == 0U);
 
-    // Read and Record do not imply Upload, RemoteEnable or ProcessMemory either.
+    // Read and Record do not imply Upload, RemoteEnable, ProcessMemory or Execute either.
     const crd::perf::DiagAuthoritySet read_record =
         crd::perf::authority_bit(DiagAuthority::Read) | crd::perf::authority_bit(DiagAuthority::Record);
     DiagCommandService narrow{read_record, DiagServiceConfig{}, &alloc};
@@ -424,9 +469,12 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
                                     &upload));
     REQUIRE(narrow.register_command({"test.memory", "test", "memory", DiagAuthority::ProcessMemory, false},
                                     &run_never, &upload));
+    REQUIRE(narrow.register_command({"test.execute", "test", "execute", DiagAuthority::Execute, false}, &run_never,
+                                    &upload));
     CHECK(narrow.execute(request("test.upload")).status == DiagStatus::Unauthorized);
     CHECK(narrow.execute(request("test.remote")).status == DiagStatus::Unauthorized);
     CHECK(narrow.execute(request("test.memory")).status == DiagStatus::Unauthorized);
+    CHECK(narrow.execute(request("test.execute")).status == DiagStatus::Unauthorized);
     CHECK(upload.runs == 0U);
 
     // With the class granted, the same command runs.
@@ -455,7 +503,7 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
                                  "\"granted\":true,"));
     CHECK(contains(listing.json, "{\"name\":\"test.inject\",\"owner\":\"test\",\"authority\":\"inject\","
                                  "\"granted\":false,"));
-    CHECK(contains(listing.json, "\"grant\":\"read,record,remote-enable,upload,process-memory\""));
+    CHECK(contains(listing.json, "\"grant\":\"read,record,remote-enable,upload,process-memory,execute\""));
 
     // The table is bounded.
     DiagCommandService full{0U, DiagServiceConfig{}, &alloc};
@@ -469,6 +517,115 @@ TEST_CASE("diag commands: authority classes are distinct and registered commands
     }
     CHECK(added == crd::perf::kDiagMaxCommands - 7U);
     CHECK(full.command_count() == crd::perf::kDiagMaxCommands);
+}
+
+TEST_CASE("diag commands: named arguments are bounded and checked in the arguments step", "[perf][diag][commands]")
+{
+    crd::memory::TlsfAllocator alloc{8U << 20U, nullptr, "diag-commands-arguments"};
+    DiagCommandService         svc{crd::perf::authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &alloc};
+    ArgsCommand                args;
+    ItemsCommand               items;
+    NeverCommand               record;
+    REQUIRE(svc.register_command({"test.args", "test", "named arguments", DiagAuthority::Read, false}, &run_args,
+                                 &args, &check_args));
+    REQUIRE(svc.register_command({"test.items", "test", "fixed items", DiagAuthority::Read, false}, &run_items,
+                                 &items));
+    REQUIRE(svc.register_command({"test.record", "test", "record", DiagAuthority::Record, false}, &run_never,
+                                 &record, &check_args));
+
+    // A retained snapshot whose cursor the argument refusals below must not reach.
+    const crd::perf::DiagArg good[] = {{"line", "16"}, {"mode", "b"}};
+    DiagRequest              first  = request("test.args");
+    first.args                      = {good, 2U};
+    first.page_items                = 1U;
+    const DiagResult held           = svc.execute(first);
+    REQUIRE(held.status == DiagStatus::Ok);
+    CHECK(held.total == 2U);
+    CHECK(contains(held.json, "{\"name\":\"line\",\"value\":\"16\"}"));
+    REQUIRE(args.checks == 1U);
+    REQUIRE(args.runs == 1U);
+
+    cont::String long_name(&alloc);
+    long_name.resize(crd::perf::kDiagMaxArgNameBytes + 1U, 'n');
+    cont::String long_value(&alloc);
+    long_value.resize(crd::perf::kDiagMaxArgValueBytes + 1U, 'v');
+    crd::perf::DiagArg many[crd::perf::kDiagMaxArgs + 1U];
+    for (crd::u32 i = 0U; i <= crd::perf::kDiagMaxArgs; ++i)
+    {
+        many[i] = crd::perf::DiagArg{"line", "1"};
+    }
+
+    struct Case
+    {
+        const char*                         name;
+        DiagRequest                         req;
+        cont::ConstSpan<crd::perf::DiagArg> list;
+        DiagStatus                          expected;
+        bool                                checked; // the command's own check ran
+    };
+    const crd::perf::DiagArg on_items[]   = {{"line", "1"}};
+    const crd::perf::DiagArg bad_name[]   = {{"Line", "1"}};
+    const crd::perf::DiagArg empty_name[] = {{"", "1"}};
+    const crd::perf::DiagArg twice[]      = {{"line", "1"}, {"line", "2"}};
+    const crd::perf::DiagArg refused[]    = {{"mode", "c"}};
+    const crd::perf::DiagArg unknown[]    = {{"depth", "1"}};
+    const crd::perf::DiagArg too_long_n[] = {{cont::StringView{long_name.data(), long_name.size()}, "1"}};
+    const crd::perf::DiagArg too_long_v[] = {{"line", cont::StringView{long_value.data(), long_value.size()}}};
+    Case                     cases[]      = {
+        {"arguments on a command without a check", request("test.items"), {on_items, 1U}, DiagStatus::BadArgument,
+         false},
+        {"too many", request("test.args"), {many, crd::perf::kDiagMaxArgs + 1U}, DiagStatus::Oversized, false},
+        {"name over its bound", request("test.args"), {too_long_n, 1U}, DiagStatus::Oversized, false},
+        {"value over its bound", request("test.args"), {too_long_v, 1U}, DiagStatus::Oversized, false},
+        {"name charset", request("test.args"), {bad_name, 1U}, DiagStatus::BadArgument, false},
+        {"empty name", request("test.args"), {empty_name, 1U}, DiagStatus::BadArgument, false},
+        {"a name twice", request("test.args"), {twice, 2U}, DiagStatus::BadArgument, false},
+        {"the command's check refuses a value", request("test.args"), {refused, 1U}, DiagStatus::BadArgument, true},
+        {"the command's check refuses a name", request("test.args"), {unknown, 1U}, DiagStatus::BadArgument, true},
+        {"authority beats arguments", request("test.record"), {too_long_v, 1U}, DiagStatus::Unauthorized, false},
+        {"arguments beat the cursor", request("test.args"), {refused, 1U}, DiagStatus::BadArgument, true},
+        {"arguments beat the cancel flag", request("test.args"), {refused, 1U}, DiagStatus::BadArgument, true},
+    };
+    cases[10].req.cursor = ((held.generation + 1U) << crd::perf::kDiagCursorOffsetBits) | 1U;
+    std::atomic<bool> cancel{true};
+
+    for (crd::usize i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        Case& c = cases[i];
+        INFO(c.name);
+        c.req.args             = c.list;
+        const crd::u64   before = args.checks;
+        const DiagResult r      = svc.execute(c.req, i == 11U ? &cancel : nullptr);
+        CHECK(r.status == c.expected);
+        CHECK(r.items == 0U);
+        CHECK_FALSE(r.reason.empty());
+        CHECK(args.checks == before + (c.checked ? 1U : 0U));
+        CHECK(args.runs == 1U);
+        CHECK(items.runs == 0U);
+        CHECK(record.runs == 0U);
+    }
+    DiagRequest refused_mode = request("test.args");
+    refused_mode.args        = {refused, 1U};
+    CHECK(contains(svc.execute(refused_mode).json, "mode must be a or b"));
+
+    // The refusals left the retained snapshot: its next page still comes from the first run.
+    DiagRequest next = request("test.args");
+    next.cursor      = held.next_cursor;
+    next.page_items  = 1U;
+    const DiagResult second = svc.execute(next);
+    CHECK(second.status == DiagStatus::Ok);
+    CHECK(contains(second.json, "{\"name\":\"mode\",\"value\":\"b\"}"));
+    CHECK(args.runs == 1U);
+
+    // A command with a check runs it on a request without arguments too, and the listing says which take arguments.
+    const crd::u64 checks_before = args.checks;
+    CHECK(svc.execute(request("test.args")).status == DiagStatus::Ok);
+    CHECK(args.checks == checks_before + 1U);
+    const DiagResult listing = svc.execute(request("diag.commands"));
+    CHECK(contains(listing.json, "\"name\":\"test.args\",\"owner\":\"test\",\"authority\":\"read\","
+                                 "\"granted\":true,\"takes_path\":false,\"takes_args\":true,"));
+    CHECK(contains(listing.json, "\"name\":\"test.items\",\"owner\":\"test\",\"authority\":\"read\","
+                                 "\"granted\":true,\"takes_path\":false,\"takes_args\":false,"));
 }
 
 TEST_CASE("diag commands: capabilities report the doctor, the grant and the authority classes",
@@ -489,6 +646,7 @@ TEST_CASE("diag commands: capabilities report the doctor, the grant and the auth
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"read\",\"granted\":true}"));
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"record\",\"granted\":false}"));
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"process-memory\",\"granted\":false}"));
+    CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"execute\",\"granted\":false}"));
     CHECK(contains(caps.json, "{\"kind\":\"mode\",\"name\":"));
     CHECK(contains(caps.json, "{\"kind\":\"dependency\",\"name\":\"sanitizer_runtime\""));
 }

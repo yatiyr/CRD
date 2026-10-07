@@ -53,7 +53,7 @@ namespace
         "diag",
         "Run one typed, bounded diagnostic command (diag.commands lists them); pages are cut from one retained "
         "snapshot by cursor",
-        "command:string!,path:string,cursor:number,page_items:number,page_bytes:number,schema:number"};
+        "command:string!,path:string,cursor:number,page_items:number,page_bytes:number,schema:number,args:object"};
 
     void write_input_schema(JsonWriter& w, const char* args)
     {
@@ -180,7 +180,28 @@ namespace
         {
             return crd::containers::String("", alloc);
         }
+        // The command's named arguments: an object whose members are all strings. The service bounds and checks them.
+        crd::containers::Array<crd::perf::DiagArg> named(alloc);
+        const crd::u32                             args_node = json::find(doc, args, "args");
+        if (args_node != json::kInvalid)
+        {
+            if (doc.nodes[args_node].type != json::JsonType::Object)
+            {
+                return crd::containers::String("", alloc);
+            }
+            for (crd::u32 m = doc.nodes[args_node].child; m != json::kInvalid; m = doc.nodes[m].next)
+            {
+                if (doc.nodes[m].type != json::JsonType::String)
+                {
+                    return crd::containers::String("", alloc);
+                }
+                const crd::containers::StringView name{doc.strings.data() + doc.nodes[m].key_off,
+                                                       doc.nodes[m].key_len};
+                named.push_back(crd::perf::DiagArg{name, view_of(m)});
+            }
+        }
         constexpr crd::f64 u32_max = 4294967295.0;
+        request.args               = crd::containers::as_const_span(named);
         request.cursor             = static_cast<crd::u64>(cursor);
         request.page_items         = static_cast<crd::u32>(items < u32_max ? items : u32_max);
         request.page_bytes         = static_cast<crd::u32>(bytes < u32_max ? bytes : u32_max);

@@ -76,8 +76,9 @@ void print_usage()
         "  ceridc export --timl <f> --out <f.otio>\n"
         "  ceridc inspect --program <f.ceir> [--entry <name>] [--arg <i64>]... [--break <line>]...\n"
         "                 [--watch <line>]... [--step continue|into|over|out|cancel]... [--max-stops <n>]\n"
-        "  ceridc diag --command <name> [--path <rel>] [--cursor <n>] [--page-items <n>] [--page-bytes <n>]\n"
-        "              [--schema <n>] [--grant <list>] [--root <dir>]   (grant defaults to read)\n"
+        "  ceridc diag --command <name> [--path <rel>] [--param <name>=<value>]... [--cursor <n>]\n"
+        "              [--page-items <n>] [--page-bytes <n>] [--schema <n>] [--grant <list>] [--root <dir>]\n"
+        "              (grant defaults to read; program.inspect needs execute)\n"
         "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>]\n"
         "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read)\n");
 }
@@ -153,6 +154,24 @@ int main(int argc, char* argv[])
         request.page_bytes = static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--page-bytes", "0"), nullptr, 10));
         request.schema_version =
             static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--schema", "1"), nullptr, 10));
+        // Each --param is one named argument, split at its first '='; one without '=' is a name with an empty value.
+        crd::containers::Array<const char*>        params(&g_alloc);
+        crd::containers::Array<crd::perf::DiagArg> named(&g_alloc);
+        flags_of(argc, argv, "--param", params);
+        for (const char* p : params)
+        {
+            const crd::containers::StringView text(p);
+            const crd::usize                  eq = text.find('=');
+            if (eq == crd::containers::StringView::npos)
+            {
+                named.push_back(crd::perf::DiagArg{text, crd::containers::StringView{}});
+            }
+            else
+            {
+                named.push_back(crd::perf::DiagArg{text.substr(0U, eq), text.substr(eq + 1U)});
+            }
+        }
+        request.args = crd::containers::as_const_span(named);
         crd::ceridc::DiagHostOptions host;
         host.grant = flag_of(argc, argv, "--grant", nullptr);
         host.root  = flag_of(argc, argv, "--root", nullptr);

@@ -16,6 +16,8 @@
 #include <crd/audio/midi.hpp>
 #include <crd/audio/wav.hpp>
 #include <crd/ceir/cook/inspect_host.hpp>
+#include <crd/ceir/cook/inspect_script.hpp>
+#include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
@@ -822,104 +824,33 @@ crd::containers::String verb_export_timeline(const char* timl_path, const char* 
 namespace
 {
     namespace insp = crd::ceir::inspect;
+    namespace ck   = crd::ceir::cook;
 
-    constexpr crd::u32 kInspectWaitMs   = 20000U; // a stop or the end must come well within this; else the run is cut
-    constexpr crd::u32 kInspectMaxStops = 64U;    // the default bound on reported stops (the report stays bounded)
-
-    // NOLINTNEXTLINE(performance-enum-size)
-    enum class InspectAction : crd::u8
-    {
-        Continue = 0,
-        Into,
-        Over,
-        Out,
-        Cancel,
-    };
-
-    [[nodiscard]] bool parse_action(const char* s, InspectAction& out)
-    {
-        struct Named
-        {
-            const char*   name;
-            InspectAction action;
-        };
-        static constexpr Named kNames[] = {{"continue", InspectAction::Continue}, {"into", InspectAction::Into},
-                                           {"over", InspectAction::Over},         {"out", InspectAction::Out},
-                                           {"cancel", InspectAction::Cancel}};
-        for (const Named& n : kNames)
-        {
-            if (s != nullptr && std::strcmp(s, n.name) == 0)
-            {
-                out = n.action;
-                return true;
-            }
-        }
-        return false;
-    }
-
-    [[nodiscard]] const char* action_name(InspectAction a)
-    {
-        switch (a) // ⛔ no default (-Werror=switch)
-        {
-        case InspectAction::Continue: return "continue";
-        case InspectAction::Into: return "into";
-        case InspectAction::Over: return "over";
-        case InspectAction::Out: return "out";
-        case InspectAction::Cancel: return "cancel";
-        }
-        return "?";
-    }
-
-    [[nodiscard]] insp::Resume resume_of(InspectAction a)
-    {
-        if (a == InspectAction::Into)
-        {
-            return insp::Resume::StepInto;
-        }
-        if (a == InspectAction::Over)
-        {
-            return insp::Resume::StepOver;
-        }
-        if (a == InspectAction::Out)
-        {
-            return insp::Resume::StepOut;
-        }
-        return insp::Resume::Continue;
-    }
-
-    void write_position(JsonWriter& w, const crd::ceir::Origin* o)
-    {
-        w.kv("line", (o != nullptr) ? o->loc.line : 0U);
-        w.kv("col", (o != nullptr) ? o->loc.col : 0U);
-    }
-
-    // One stop's values: each watched line's first compiled result, read by the paused executing thread.
-    void write_values(JsonWriter& w, crd::ceir::cook::InspectHost& host, crd::u64 gen,
-                      crd::containers::StringView file, crd::containers::ConstSpan<crd::u32> watches,
-                      insp::ValueSnapshot& value)
+    // One stop's values in the report: each watched line's first compiled result as the paused thread answered it.
+    void write_values(JsonWriter& w, const ck::InspectReport& report, const ck::ScriptStop& stop, crd::usize watches)
     {
         w.key("values");
         w.begin_array();
-        for (crd::usize i = 0; i < watches.size(); ++i)
+        for (crd::usize i = 0; i < watches; ++i)
         {
-            const insp::ValueRef ref{host.op_at_line(file, watches[i]), 0U};
+            const ck::ScriptValue& v = report.values[stop.first_value + i];
             w.begin_object();
-            w.kv("line", watches[i]);
-            if (host.session().snapshot(gen, ref, value, kInspectWaitMs) != insp::Refusal::None)
+            w.kv("line", v.line);
+            if (!v.answered)
             {
                 w.kv("status", "unanswered");
                 w.end_object();
                 continue;
             }
-            w.kv("status", insp::value_status_name(value.status));
-            if (value.status != insp::ValueStatus::NoSuchValue)
+            w.kv("status", insp::value_status_name(v.status));
+            if (v.status != insp::ValueStatus::NoSuchValue)
             {
-                w.kv("type", crd::containers::StringView(value.type_text.data(), value.type_text.size()));
-                w.kv("unit", value.has_unit);
+                w.kv("type", report.type_text(v));
+                w.kv("unit", v.has_unit);
             }
-            if (value.status == insp::ValueStatus::Available)
+            if (v.status == insp::ValueStatus::Available)
             {
-                w.kv("value", value.bits);
+                w.kv("value", v.bits);
             }
             w.end_object();
         }
@@ -939,16 +870,16 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     {
         return fail(alloc, "inspect", "missing --program");
     }
-    const char* const                     entry_name = (entry != nullptr) ? entry : "main";
-    crd::containers::Array<InspectAction> script(alloc);
+    const char* const                        entry_name = (entry != nullptr) ? entry : "main";
+    crd::containers::Array<ck::ScriptAction> script_actions(alloc);
     for (crd::usize i = 0; i < actions.size(); ++i)
     {
-        InspectAction a = InspectAction::Continue;
-        if (!parse_action(actions[i], a))
+        ck::ScriptAction a = ck::ScriptAction::Continue;
+        if (actions[i] == nullptr || !ck::parse_script_action(crd::containers::StringView(actions[i]), a))
         {
             return fail(alloc, "inspect", "unknown --step action (continue, into, over, out, cancel)");
         }
-        script.push_back(a);
+        script_actions.push_back(a);
     }
     for (crd::usize i = 0; i < breaks.size(); ++i)
     {
@@ -964,7 +895,6 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
             return fail(alloc, "inspect", "a --watch line is 1-based");
         }
     }
-    const crd::u32          stop_bound = (max_stops != 0U) ? max_stops : kInspectMaxStops;
     crd::containers::String text(alloc);
     if (!fs::read_file_text(fs::Path(crd::containers::StringView(program_path)), text))
     {
@@ -972,11 +902,11 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     }
 
     // The program is cooked under the path it was named by, so breakpoints and stops are positions in that file.
-    const crd::containers::StringView     file(program_path);
-    crd::ceir::cook::InspectHost          host(alloc, &register_host_dialects, nullptr);
-    const crd::ceir::cook::HostLoadResult lr =
-        host.load(crd::ceir::cook::AssetId{1U}, crd::containers::StringView(text.c_str(), text.size()), file,
-                  crd::containers::StringView(entry_name));
+    const crd::containers::StringView file(program_path);
+    const crd::containers::StringView source(text.c_str(), text.size());
+    const crd::containers::StringView entry_view(entry_name);
+    ck::InspectHost                   host(alloc, &register_host_dialects, nullptr);
+    const ck::HostLoadResult          lr = host.load(ck::AssetId{1U}, source, file, entry_view);
     JsonWriter w(alloc);
     w.begin_object();
     w.kv("verb", "inspect");
@@ -985,131 +915,102 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     if (!lr.ok())
     {
         w.kv("ok", false);
-        w.kv("reason", crd::ceir::cook::host_load_name(lr.status));
-        if (lr.status == crd::ceir::cook::HostLoad::CookFailed)
+        w.kv("reason", ck::host_load_name(lr.status));
+        if (lr.status == ck::HostLoad::CookFailed)
         {
-            w.kv("cook_error", crd::ceir::cook::cook_error_name(lr.cook_error));
+            w.kv("cook_error", ck::cook_error_name(lr.cook_error));
             w.kv("line", lr.cook_site.line);
             w.kv("col", lr.cook_site.col);
         }
-        if (lr.status == crd::ceir::cook::HostLoad::CompileFailed)
+        if (lr.status == ck::HostLoad::CompileFailed)
         {
             w.kv("compile_error", crd::ceir::plan::compile_error_name(lr.compile_error));
         }
         w.end_object();
         return crd::containers::String(w.str());
     }
-    const crd::u64 gen = lr.generation;
-    for (crd::usize i = 0; i < breaks.size(); ++i)
-    {
-        crd::u32 index = 0U;
-        (void)host.add_line_breakpoint(file, breaks[i], index); // not Busy: nothing runs yet
-    }
-    if (host.start(args) != insp::Refusal::None)
+
+    // The same scripted run as the program.inspect diagnostic command; only the report's shape is this verb's.
+    ck::InspectScript script;
+    script.file      = file;
+    script.args      = args;
+    script.breaks    = breaks;
+    script.watches   = watches;
+    script.actions   = crd::containers::as_const_span(script_actions);
+    script.max_stops = (max_stops != 0U) ? max_stops : ck::kScriptDefaultMaxStops;
+    ck::InspectReport report(alloc);
+    ck::run_inspect_script(host, script, report);
+    if (report.outcome == ck::ScriptOutcome::NotStarted)
     {
         w.kv("ok", false);
         w.kv("reason", "the program did not start");
         w.end_object();
         return crd::containers::String(w.str());
     }
-    w.kv("generation", gen);
+
+    w.kv("generation", report.generation);
     w.key("breakpoints");
     w.begin_array();
-    for (crd::usize i = 0; i < host.binds().size(); ++i)
+    for (const ck::ScriptBind& b : report.binds)
     {
         w.begin_object();
-        w.kv("line", breaks[i]);
-        w.kv("status", insp::bind_status_name(host.binds()[i].status));
-        w.kv("sites", host.binds()[i].sites);
+        w.kv("line", b.line);
+        w.kv("status", insp::bind_status_name(b.status));
+        w.kv("sites", b.sites);
         w.end_object();
     }
     w.end_array();
-
-    // This thread is the controller: it waits for each stop, has the paused executing thread read the watched values,
-    // then applies the next action. Every wait is bounded.
     w.key("stops");
     w.begin_array();
-    crd::usize          next      = 0U;
-    crd::u32            stops     = 0U;
-    bool                cancelled = false;
-    bool                truncated = false;
-    insp::Refusal       ended     = insp::Refusal::None;
-    insp::ValueSnapshot value(alloc);
-    for (;;)
+    for (const ck::ScriptStop& s : report.stops)
     {
-        insp::StopRecord    stop;
-        const insp::Refusal r = host.session().wait_for_stop(gen, kInspectWaitMs, stop);
-        if (r != insp::Refusal::None)
-        {
-            ended = r;
-            break;
-        }
-        if (stops == stop_bound)
-        {
-            (void)host.session().cancel(gen);
-            truncated = true;
-            break;
-        }
-        ++stops;
         w.begin_object();
-        w.kv("sequence", stop.sequence);
-        w.kv("reason", insp::stop_reason_name(stop.reason));
-        write_position(w, host.stop_origin(stop));
-        w.kv("depth", stop.depth);
-        w.kv("op", stop.op.value);
-        write_values(w, host, gen, file, watches, value);
-        const InspectAction action = (next < script.size()) ? script[next++] : InspectAction::Continue;
-        w.kv("action", action_name(action));
+        w.kv("sequence", s.sequence);
+        w.kv("reason", insp::stop_reason_name(s.reason));
+        w.kv("line", s.line);
+        w.kv("col", s.col);
+        w.kv("depth", s.depth);
+        w.kv("op", s.op);
+        write_values(w, report, s, watches.size());
+        w.kv("action", ck::script_action_name(s.action));
         w.end_object();
-        if (action == InspectAction::Cancel)
-        {
-            (void)host.session().cancel(gen);
-            cancelled = true;
-            break;
-        }
-        if (const insp::Refusal rr = host.session().resume(gen, resume_of(action)); rr != insp::Refusal::None)
-        {
-            (void)host.session().cancel(gen);
-            ended = rr;
-            break;
-        }
     }
     w.end_array();
-    const bool joined = host.wait_finished(kInspectWaitMs); // otherwise the host's destructor cancels and joins
-    w.kv("truncated", truncated);
+    w.kv("truncated", report.truncated);
 
-    const crd::ceir::plan::RunResult& result = host.result();
-    bool                              ok     = false;
-    if (!joined || (ended != insp::Refusal::None && ended != insp::Refusal::Finished))
+    bool ok = false;
+    switch (report.outcome) // no default: every outcome is reported
     {
+    case ck::ScriptOutcome::NotStarted:
+    case ck::ScriptOutcome::Unfinished:
         w.kv("outcome", "unfinished");
-        w.kv("refusal", insp::refusal_name(ended != insp::Refusal::None ? ended : insp::Refusal::Timeout));
-    }
-    else if (result.ok())
-    {
+        w.kv("refusal", insp::refusal_name(report.refusal));
+        break;
+    case ck::ScriptOutcome::Finished:
         ok = true;
         w.kv("outcome", "finished");
         w.key("results");
         w.begin_array();
-        for (crd::usize i = 0; i < result.values.size(); ++i)
+        for (crd::usize i = 0; i < report.results.size(); ++i)
         {
-            w.value_i64(result.values[i]);
+            w.value_i64(report.results[i]);
         }
         w.end_array();
-    }
-    else if (result.error == crd::ceir::plan::RunError::Cancelled && (cancelled || truncated))
-    {
+        break;
+    case ck::ScriptOutcome::Cancelled:
         ok = true;
         w.kv("outcome", "cancelled");
-    }
-    else
-    {
+        break;
+    case ck::ScriptOutcome::CallerCancelled:
+    case ck::ScriptOutcome::Error:
         w.kv("outcome", "error");
-        w.kv("error", crd::ceir::plan::run_error_name(result.error));
+        w.kv("error", crd::ceir::plan::run_error_name(report.error));
         w.key("fault");
         w.begin_object();
-        write_position(w, crd::ceir::plan::instr_provenance(host.compiled_plan(), result.fault).primary());
+        w.kv("line", report.fault_line);
+        w.kv("col", report.fault_col);
         w.end_object();
+        break;
     }
     w.kv("ok", ok);
     w.end_object();

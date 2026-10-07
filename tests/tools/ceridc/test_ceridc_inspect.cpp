@@ -4,8 +4,9 @@
 // scope, with its type text and unit flag), and the scripted action (step into and out, continue, cancel). Covered in
 // process and through the real binary: the stepped run's report and result, a scripted cancel, the stop bound that
 // cancels and marks the report truncated, a breakpoint on a line with no code, a source that does not cook (its line),
-// requests rejected before anything runs, and the verb's absence from the MCP tool list (DIAG.8c owns that
-// authority). Expected lines come from scanning the committed text; the expected JSON fragments are built here.
+// requests rejected before anything runs, and the verb's absence from the MCP tool list (an agent reaches the same
+// scripted run as the program.inspect diagnostic command, under the host's Execute grant: test_ceridc_diag.cpp).
+// Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
@@ -261,7 +262,7 @@ TEST_CASE("diag 8b: the real ceridc binary inspects from the command line", "[ce
     CHECK(has(out, "\"outcome\":\"finished\",\"results\":[36]"));
     (void)fs::remove_file(fs::Path(crd::containers::StringView("ceridc_inspect_out.json")));
 
-    // The MCP transport does not offer the verb: typed authority over inspection is DIAG.8c's.
+    // The MCP transport does not offer the verb: its agent form is the diag tool's program.inspect under Execute.
     const char*  list = R"({"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}})";
     const String tools = crd::ceridc::mcp_handle({reinterpret_cast<const crd::u8*>(list), std::strlen(list)}, &g_alloc);
     CHECK(has(tools, "import")); // the list answered

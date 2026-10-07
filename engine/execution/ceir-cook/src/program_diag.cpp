@@ -1,5 +1,7 @@
 #include <crd/ceir/cook/program_diag.hpp>
 
+#include "bounded_file.hpp"
+
 #include <crd/ceir/binary.hpp>            // kBinaryMagic / deserialize / stable_hash
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/program_cook.hpp> // read_program
@@ -10,8 +12,6 @@
 #include <crd/containers/string.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/resources/crdr.hpp> // kFourCC_CRDR
-
-#include <cstdio>
 
 namespace crd::ceir::cook
 {
@@ -26,62 +26,6 @@ using crd::perf::DiagStatus;
 
 // The walk checks the caller's cancel flag once per this many ops.
 constexpr crd::u32 kCancelStride = 256U;
-
-[[nodiscard]] std::FILE* open_binary(const char* path) noexcept
-{
-    std::FILE* fp = nullptr;
-#if defined(_MSC_VER)
-    if (fopen_s(&fp, path, "rb") != 0)
-    {
-        return nullptr;
-    }
-#else
-    fp = std::fopen(path, "rb");
-#endif
-    return fp;
-}
-
-// The file's size without reading it, or -1.
-[[nodiscard]] crd::i64 size_of(std::FILE* fp) noexcept
-{
-#if defined(_MSC_VER)
-    if (_fseeki64(fp, 0, SEEK_END) != 0)
-    {
-        return -1;
-    }
-    const crd::i64 size = _ftelli64(fp);
-    if (_fseeki64(fp, 0, SEEK_SET) != 0)
-    {
-        return -1;
-    }
-#else
-    if (fseeko(fp, 0, SEEK_END) != 0)
-    {
-        return -1;
-    }
-    const auto size = static_cast<crd::i64>(ftello(fp));
-    if (fseeko(fp, 0, SEEK_SET) != 0)
-    {
-        return -1;
-    }
-#endif
-    return size;
-}
-
-void append_u64(cont::String& out, crd::u64 v)
-{
-    char       buf[20];
-    crd::usize n = 0U;
-    do
-    {
-        buf[n++] = static_cast<char>('0' + (v % 10U));
-        v /= 10U;
-    } while (v != 0U);
-    while (n > 0U)
-    {
-        out.push_back(buf[--n]);
-    }
-}
 
 [[nodiscard]] crd::u32 le32(const cont::Array<crd::u8>& b) noexcept
 {
@@ -209,40 +153,12 @@ DiagStatus run_program_provenance(void* context, const DiagCall& call, DiagSnaps
     crd::memory::IAllocator* const alloc   = out.allocator();
     command->runs.fetch_add(1U, std::memory_order_relaxed);
 
-    const cont::String path(call.file.data(), call.file.size(), alloc);
-    std::FILE* const   fp = open_binary(path.c_str());
-    if (fp == nullptr)
-    {
-        out.reason.append("cannot open the program");
-        return DiagStatus::Failed;
-    }
-    const crd::i64 size = size_of(fp);
-    if (size < 0)
-    {
-        (void)std::fclose(fp);
-        out.reason.append("cannot size the program");
-        return DiagStatus::Failed;
-    }
-    // The bound is checked on the file's size, before a byte is read.
-    if (static_cast<crd::u64>(size) > command->max_program_bytes)
-    {
-        (void)std::fclose(fp);
-        out.reason.append("the program is ");
-        append_u64(out.reason, static_cast<crd::u64>(size));
-        out.reason.append(" bytes; the host's limit is ");
-        append_u64(out.reason, command->max_program_bytes);
-        return DiagStatus::Oversized;
-    }
-
     cont::Array<crd::u8> bytes(alloc);
-    bytes.resize(static_cast<crd::usize>(size));
-    const crd::usize read = size > 0 ? std::fread(bytes.data(), 1U, bytes.size(), fp) : 0U;
-    (void)std::fclose(fp);
-    command->bytes_read.fetch_add(read, std::memory_order_relaxed);
-    if (read != bytes.size())
+    const DiagStatus     read =
+        detail::read_bounded_file(call.file, command->max_program_bytes, bytes, out.reason, command->bytes_read);
+    if (read != DiagStatus::Ok)
     {
-        out.reason.append("short read of the program");
-        return DiagStatus::Failed;
+        return read;
     }
     if (call.cancelled())
     {
@@ -280,7 +196,7 @@ DiagStatus run_program_provenance(void* context, const DiagCall& call, DiagSnaps
         if (!res.ok)
         {
             out.reason.append("the binary program did not load at byte ");
-            append_u64(out.reason, res.error_offset);
+            detail::append_decimal(out.reason, res.error_offset);
             out.reason.append(": ");
             out.reason.append(cont::StringView{res.error});
             return DiagStatus::Failed;
@@ -298,9 +214,9 @@ DiagStatus run_program_provenance(void* context, const DiagCall& call, DiagSnaps
             out.reason.append("the program text did not parse at ");
             out.reason.append(call.request->path);
             out.reason.push_back(':');
-            append_u64(out.reason, res.error_line);
+            detail::append_decimal(out.reason, res.error_line);
             out.reason.push_back(':');
-            append_u64(out.reason, res.error_col);
+            detail::append_decimal(out.reason, res.error_col);
             out.reason.append(": ");
             out.reason.append(cont::StringView{res.error});
             return DiagStatus::Failed;

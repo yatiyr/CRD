@@ -8,12 +8,17 @@
 //
 // Authority is granted by the host when it constructs the service and never travels in a request, so neither a request
 // payload nor an authored asset can raise it. Each command declares the one authority it needs. Read and Record are
-// the only classes a built-in command uses; Inject, RemoteEnable, Upload and ProcessMemory are distinct bits no other
-// grant implies, so a host that grants Read and Record still refuses a command declaring any of them.
+// the only classes a built-in command uses; Inject, RemoteEnable, Upload, ProcessMemory and Execute are distinct bits
+// no other grant implies, so a host that grants Read and Record still refuses a command declaring any of them.
 //
 // Every refusal happens before the command's work, in a fixed order: schema version, unknown command, authority,
 // request bounds (Oversized), arguments (BadArgument, or Unavailable when the host granted no file root), stale
 // cursor, cancellation. Only then does the handler take its snapshot. A refusal leaves the retained snapshot alone.
+//
+// A command registered with an argument check takes named arguments (DiagArg). The service bounds their count and
+// sizes, refuses a malformed or repeated name, then runs the command's check, all before the cursor; a command
+// registered without one refuses any argument. Later pages are cut from the retained snapshot: like the path, the
+// arguments only shape a new snapshot.
 //
 // Pagination is deterministic. A request with cursor 0 runs the handler once and retains its snapshot under a new
 // generation; every later page names that generation in its cursor and is cut from the retained snapshot, so the same
@@ -25,6 +30,7 @@
 // so foundation never includes their headers. Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/containers/array.hpp>
+#include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -49,12 +55,13 @@ enum class DiagAuthority : crd::u8
     RemoteEnable  = 1U << 3U, // enabling diagnostics for a remote party (no built-in command)
     Upload        = 1U << 4U, // sending evidence off the machine (no built-in command)
     ProcessMemory = 1U << 5U, // reading arbitrary process memory (no built-in command)
+    Execute       = 1U << 6U, // running an authored program under a debug session and reading its values
 };
 
 using DiagAuthoritySet = crd::u32;
 
-inline constexpr DiagAuthoritySet kDiagAllAuthorities = 0x3FU;
-inline constexpr crd::u32         kDiagAuthorityCount = 6U;
+inline constexpr DiagAuthoritySet kDiagAllAuthorities = 0x7FU;
+inline constexpr crd::u32         kDiagAuthorityCount = 7U;
 
 [[nodiscard]] constexpr DiagAuthoritySet authority_bit(DiagAuthority a) noexcept
 {
@@ -66,7 +73,7 @@ inline constexpr crd::u32         kDiagAuthorityCount = 6U;
     return a != DiagAuthority::None && (set & authority_bit(a)) == authority_bit(a);
 }
 
-// "read", "record", "inject", "remote-enable", "upload", "process-memory" ("none" for None).
+// "read", "record", "inject", "remote-enable", "upload", "process-memory", "execute" ("none" for None).
 [[nodiscard]] cont::StringView authority_name(DiagAuthority a) noexcept;
 
 // Parse a host's comma-separated grant ("read,record"; "none" is the empty set). Returns false, leaving `out`
@@ -105,20 +112,31 @@ inline constexpr crd::u32 kDiagMaxFieldBytes    = 160U;  // a string value longe
 inline constexpr crd::u32 kDiagMaxPathBytes     = 256U;
 inline constexpr crd::u32 kDiagMaxCommandBytes  = 64U;
 inline constexpr crd::u32 kDiagMaxCommands      = 32U;
+inline constexpr crd::u32 kDiagMaxArgs          = 8U;   // named arguments in one request
+inline constexpr crd::u32 kDiagMaxArgNameBytes  = 32U;  // a name is [a-z0-9_], 1 to this many bytes
+inline constexpr crd::u32 kDiagMaxArgValueBytes = 512U; // a value is any bytes up to this many; its command parses it
 
 // A cursor is generation * 2^20 + offset, so it stays exact as a JSON number (below 2^53).
 inline constexpr crd::u32 kDiagCursorOffsetBits = 20U;
 inline constexpr crd::u32 kDiagMaxSnapshotItems = 1U << kDiagCursorOffsetBits;
 inline constexpr crd::u64 kDiagMaxGeneration    = (1ULL << 33U) - 1U;
 
+// One named argument. Only a command registered with an argument check takes any.
+struct DiagArg
+{
+    cont::StringView name;
+    cont::StringView value;
+};
+
 struct DiagRequest
 {
-    crd::u32         schema_version = kDiagCommandSchemaVersion;
-    cont::StringView command;
-    cont::StringView path;            // relative to the host's file root; only commands that declare a path take one
-    crd::u64         cursor     = 0U; // 0 starts a new snapshot; otherwise a previous page's next_cursor
-    crd::u32         page_items = 0U; // 0 = kDiagDefaultPageItems
-    crd::u32         page_bytes = 0U; // 0 = kDiagDefaultPageBytes; bounds the serialized items of one page
+    crd::u32                 schema_version = kDiagCommandSchemaVersion;
+    cont::StringView         command;
+    cont::StringView         path;        // relative to the host's file root; only commands declaring a path take one
+    crd::u64                 cursor = 0U; // 0 starts a new snapshot; otherwise a previous page's next_cursor
+    crd::u32                 page_items = 0U; // 0 = kDiagDefaultPageItems
+    crd::u32                 page_bytes = 0U; // 0 = kDiagDefaultPageBytes; bounds the serialized items of one page
+    cont::ConstSpan<DiagArg> args;            // named arguments, each name at most once
 };
 
 // One page of one command's answer. `json` is the whole response document and is what every transport returns.
@@ -209,6 +227,11 @@ struct DiagCall
 // not call back into the same service.
 using DiagHandler = DiagStatus (*)(void* context, const DiagCall& call, DiagSnapshot& out);
 
+// A command's argument check, run in the service's arguments step once the names passed the service's own checks. It
+// returns Ok, or BadArgument (or Unavailable) with `reason` set. It runs under the service's lock before the cursor and
+// cancel checks, on every request, so it only parses: it opens no file and does no work.
+using DiagArgsCheck = DiagStatus (*)(void* context, cont::ConstSpan<DiagArg> args, cont::String& reason);
+
 // A command's declaration. The name, owner and summary must have static storage.
 struct DiagCommandSpec
 {
@@ -228,7 +251,7 @@ struct DiagServiceConfig
 };
 
 // The command service. Built-in commands, in listing order:
-//   diag.commands      Read    every registered command with its owner, authority and path argument
+//   diag.commands      Read    every registered command with its owner, authority, path and arguments
 //   diag.capabilities  Read    the doctor's modes and dependencies, the command schema and the grant
 //   jobs.waits         Read    parked fibers and their wait edges, and each worker's responsiveness
 //   memory.allocators  Read    every allocator registered with the profiler and its live statistics
@@ -249,8 +272,11 @@ public:
     DiagCommandService& operator=(DiagCommandService&&)      = delete;
 
     // Register a command from an upper module. Returns false for a duplicate or malformed name, a None authority, a
-    // null handler or a full table.
+    // null handler or a full table. A command registered with `check` takes named arguments (the listing says so);
+    // one registered without it refuses any argument.
     [[nodiscard]] bool register_command(const DiagCommandSpec& spec, DiagHandler handler, void* context);
+    [[nodiscard]] bool register_command(const DiagCommandSpec& spec, DiagHandler handler, void* context,
+                                        DiagArgsCheck check);
 
     [[nodiscard]] DiagResult execute(const DiagRequest& request, const std::atomic<bool>* cancel = nullptr);
 
@@ -271,6 +297,7 @@ private:
         DiagCommandSpec spec;
         DiagHandler     handler = nullptr;
         void*           context = nullptr;
+        DiagArgsCheck   check   = nullptr; // non-null: the command takes named arguments
     };
 
     static DiagStatus run_commands(void* self, const DiagCall& call, DiagSnapshot& out);
@@ -283,7 +310,8 @@ private:
 
     static constexpr crd::u32 kNone = 0xFFFFFFFFU;
 
-    [[nodiscard]] crd::u32 find(cont::StringView name) const noexcept;
+    [[nodiscard]] crd::u32   find(cont::StringView name) const noexcept;
+    [[nodiscard]] DiagStatus check_args(const Entry& entry, const DiagRequest& request, cont::String& reason) const;
     void refuse(DiagResult& result, const DiagRequest& request, DiagStatus status, cont::StringView reason) const;
     void page(DiagResult& result, const DiagRequest& request, crd::u64 offset) const;
 

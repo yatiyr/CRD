@@ -7,7 +7,7 @@
 // write). The CLI (main.cpp) and the MCP loop are thin shells over these functions — one implementation, two
 // transports (the Blender-MCP lesson: the surface is the product, the socket is plumbing).
 //
-// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect (CLI-only) · diag.
+// Verbs: import · cook · query · instantiate · sequence · render · export_timeline · inspect · diag.
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
@@ -63,8 +63,9 @@ namespace crd::ceridc
 // (status, type text, unit flag, value when available), then applies the next of `actions` ("continue", "into",
 // "over", "out", "cancel"; "continue" once they run out). At most `max_stops` stops are reported (0 = 64); past that
 // the run is cancelled and the report says `truncated`. `ok` is true when the run finished or was cancelled by the
-// script. CLI-only: typed authority over runtime inspection for agent transports is DIAG.8c's, so it is not a tool
-// in `tools/list` yet.
+// script. It runs the same scripted inspection (crd/ceir/cook/inspect_script.hpp) as the `program.inspect` diagnostic
+// command, which is how an agent transport reaches it: through the `diag` tool, under the host's Execute grant. This
+// verb is the command line's convenience form (any readable path, one report) and is not itself an MCP tool.
 [[nodiscard]] crd::containers::String verb_inspect(const char* program_path, const char* entry,
                                                    crd::containers::ConstSpan<crd::i64> args,
                                                    crd::containers::ConstSpan<crd::u32> breaks,
@@ -79,9 +80,10 @@ namespace crd::ceridc
                                                 const crd::perf::DiagRequest& request,
                                                 crd::memory::IAllocator*      alloc);
 
-// Register the commands ceridc serves beyond crd-perf's built-ins with `service`: program.provenance (crd-ceir-cook),
-// over the CEIR dialects the inspect verb runs. Every ceridc service binds through this, so the CLI verb, the MCP tool
-// and a test's native service list and answer the same commands. False when the service refuses a registration.
+// Register the commands ceridc serves beyond crd-perf's built-ins with `service`: program.provenance and
+// program.inspect (crd-ceir-cook) over the CEIR dialects the inspect verb runs, and gpu.resources. Every ceridc
+// service binds through this, so the CLI verb, the MCP tool and a test's native service list and answer the same
+// commands. False when the service refuses a registration.
 [[nodiscard]] bool bind_diag_commands(crd::perf::DiagCommandService& service);
 
 // What a process grants the diagnostic commands it serves: decided when the process starts (command-line flags),
@@ -107,8 +109,9 @@ struct DiagHostOptions
 
 // The same, with the host's diagnostic command service bound: tools/list adds the `diag` tool and tools/call runs it
 // through verb_diag. The tool's arguments are the request's fields only (command, path, cursor, page_items,
-// page_bytes, schema); anything else in `arguments` is ignored, so a call cannot raise the host's grant. With `diag`
-// null this is exactly the two-argument form.
+// page_bytes, schema, and `args`: an object of the command's named arguments, each a string); anything else in
+// `arguments` is ignored, so a call cannot raise the host's grant. With `diag` null this is exactly the two-argument
+// form.
 [[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
                                                  crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag);
 

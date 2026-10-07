@@ -696,6 +696,31 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-gpu-resource-summa
 - Frame-graph counters are not synchronized with the graph's build and execute: the host registers a graph only when
   it calls the service from the thread that drives the graph. Context reads are immutable and the registry locks.
 
+Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-program-inspect-under-execute.md)):
+- Running an authored program under a debug session is its own authority class, `execute`: it is not a snapshot of
+  evidence that already exists (`read`), and no other class implies it. (The row's "inspect" authority is `read`;
+  the class that may run code under a session is `execute`.)
+- A request may carry named arguments (`DiagArg`: a `[a-z0-9_]` name and a byte-string value). Only a command
+  registered with an argument check takes them. The service bounds their count, name and value sizes in the bounds
+  step (`oversized`) and, in the arguments step, refuses a malformed or repeated name, any argument to a command
+  without a check, and whatever the command's check refuses (`bad-argument`), all before the cursor and cancel
+  checks. The check only parses; the command's handler parses the same values again to keep them. Like the path, the
+  arguments only shape a new snapshot; later pages are cut from the retained one.
+- `program.inspect` (`execute`, a path and named arguments) is registered by crd-ceir-cook beside `program.provenance`.
+  The program is a CEIR text cooked under the request's relative path; the arguments are the script (entry, i64
+  arguments, breakpoint lines, watched lines, steps, a stop bound up to the host's limit). One engine
+  (`crd/ceir/cook/inspect_script.hpp`) runs the script on an `InspectHost` for both this command and `ceridc inspect`;
+  the command answers a `breakpoint` item per breakpoint, a `stop` item per stop (sequence, reason, authored
+  file:line:col, depth, op, action) followed by one `value` item per watched line, and a `result` item per result, so
+  a stop with many watches never clips a value. The run happens inside the request on the calling thread as the
+  controller, with every wait bounded by the host's `wait_ms`; the caller's cancel flag is polled while the program
+  runs and at every stop, and a cancel that arrives before the executing thread attached is repeated until the session
+  takes it. A caller cancel answers `cancelled`; a run that does not end within the bound answers `failed`.
+- The agent transport reaches it only through the `diag` tool (`args`: an object of strings), under the grant the
+  process started with (`ceridc mcp --diag-grant read,execute`); `ceridc diag --param name=value` is the CLI form.
+  `ceridc inspect` stays the command line's convenience report over the same engine (any readable path, one
+  document) and is not an MCP tool.
+
 <a id="diag-9a"></a>
 ## DIAG.9a — reproducible inputs and determinism envelopes
 

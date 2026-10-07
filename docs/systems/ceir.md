@@ -50,7 +50,7 @@ counted, a pause request is refused and a cancel stops the recording before the 
 crd-ceir-cook's `InspectHost` (`crd/ceir/cook/inspect_host.hpp`) is the composition a consumer uses: it cooks the
 authored text into a ReloadSet generation, compiles one entry, binds the session and runs the plan on its own executing
 thread, so the consumer's thread stays the controller. `ceridc inspect` is its headless consumer (a JSON report of
-every stop, the watched lines' typed values and the scripted steps; CLI-only until DIAG.8c). `crd-sandbox --inspect`
+every stop, the watched lines' typed values and the scripted steps). `crd-sandbox --inspect`
 is its sandbox consumer: the program loads app-first (`SceneRenderer::resolve_program_text`, `app://ceir/<name>` over
 `engine://ceir/<name>`) and the frame loop polls it each frame without waiting, with a window to step, pause and cancel.
 
@@ -58,7 +58,10 @@ Diagnostic commands ([DIAG.8c](../design/runtime-diagnostics.md#diag-8c)): crd-c
 `program.provenance` (`crd/ceir/cook/program_diag.hpp`) into crd-perf's typed command service. Given a CEIR text,
 binary or cooked program under the host's root, it answers every op with its authored file:line:col, its CHIR origin
 and its native binding, plus one item per origin for ops merged from several; `ceridc diag` and the MCP `diag` tool
-serve it.
+serve it. `program.inspect` (`crd/ceir/cook/inspect_diag.hpp`) needs the separate `execute` grant: it runs an authored
+text program to a script given as named arguments (breakpoints, watched lines, steps, a stop bound) through the same
+scripted inspection as `ceridc inspect` (`crd/ceir/cook/inspect_script.hpp`) and answers each breakpoint, stop and
+watched value as an item; it is how an agent transport inspects a program.
 
 ## Maturity and further work
 

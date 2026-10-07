@@ -1,0 +1,24 @@
+#pragma once
+
+// crd-ceir-cook (private) -- the bounded program-file read the diagnostic commands share: the file's size is checked
+// against the host's limit before a byte is read, and the bytes read are counted for the host's evidence.
+
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/containers/string_view.hpp>
+#include <crd/core/types.hpp>
+#include <crd/perf/diag_commands.hpp>
+
+#include <atomic>
+
+namespace crd::ceir::cook::detail
+{
+// Read the file at `path` into `out`. Returns Ok, Oversized (the file is larger than `max_bytes`; nothing is read) or
+// Failed (cannot open, size or fully read it), with `reason` set for every status but Ok. `bytes_read` gains every
+// byte read.
+[[nodiscard]] perf::DiagStatus read_bounded_file(containers::StringView path, crd::u64 max_bytes,
+                                                 containers::Array<crd::u8>& out, containers::String& reason,
+                                                 std::atomic<crd::u64>& bytes_read);
+
+void append_decimal(containers::String& out, crd::u64 v);
+} // namespace crd::ceir::cook::detail

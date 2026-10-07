@@ -79,6 +79,19 @@ constexpr crd::u64 kCursorOffsetMask = (1ULL << kDiagCursorOffsetBits) - 1ULL;
                                });
 }
 
+[[nodiscard]] bool valid_arg_name(cont::StringView name) noexcept
+{
+    if (name.empty() || name.size() > kDiagMaxArgNameBytes)
+    {
+        return false;
+    }
+    return std::ranges::all_of(name,
+                               [](char c)
+                               {
+                                   return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+                               });
+}
+
 [[nodiscard]] bool single_known_authority(DiagAuthority a) noexcept
 {
     const DiagAuthoritySet bits = authority_bit(a);
@@ -209,8 +222,8 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
 }
 
 constexpr DiagAuthority kAuthorityOrder[kDiagAuthorityCount] = {
-    DiagAuthority::Read,   DiagAuthority::Record, DiagAuthority::Inject,
-    DiagAuthority::RemoteEnable, DiagAuthority::Upload, DiagAuthority::ProcessMemory,
+    DiagAuthority::Read,   DiagAuthority::Record,        DiagAuthority::Inject,  DiagAuthority::RemoteEnable,
+    DiagAuthority::Upload, DiagAuthority::ProcessMemory, DiagAuthority::Execute,
 };
 
 } // namespace
@@ -235,6 +248,8 @@ cont::StringView authority_name(DiagAuthority a) noexcept
             return "upload";
         case DiagAuthority::ProcessMemory:
             return "process-memory";
+        case DiagAuthority::Execute:
+            return "execute";
     }
     return "unknown";
 }
@@ -491,6 +506,12 @@ DiagCommandService::DiagCommandService(DiagAuthoritySet grant, const DiagService
 
 bool DiagCommandService::register_command(const DiagCommandSpec& spec, DiagHandler handler, void* context)
 {
+    return register_command(spec, handler, context, nullptr);
+}
+
+bool DiagCommandService::register_command(const DiagCommandSpec& spec, DiagHandler handler, void* context,
+                                          DiagArgsCheck check)
+{
     const std::lock_guard<std::mutex> lock(m_mutex);
     if (handler == nullptr || !valid_command_name(spec.name) || !single_known_authority(spec.authority) ||
         m_commands.size() >= kDiagMaxCommands || find(spec.name) != kNone)
@@ -501,6 +522,7 @@ bool DiagCommandService::register_command(const DiagCommandSpec& spec, DiagHandl
     e.spec    = spec;
     e.handler = handler;
     e.context = context;
+    e.check   = check;
     m_commands.push_back(e);
     return true;
 }
@@ -539,6 +561,46 @@ bool DiagCommandService::capture_open() const noexcept
 {
     const std::lock_guard<std::mutex> lock(m_mutex);
     return m_capture_open;
+}
+
+DiagStatus DiagCommandService::check_args(const Entry& entry, const DiagRequest& request, cont::String& reason) const
+{
+    if (request.args.empty())
+    {
+        return entry.check != nullptr ? entry.check(entry.context, request.args, reason) : DiagStatus::Ok;
+    }
+    if (entry.check == nullptr)
+    {
+        reason.append("the command takes no arguments");
+        return DiagStatus::BadArgument;
+    }
+    for (crd::usize i = 0U; i < request.args.size(); ++i)
+    {
+        const cont::StringView name = request.args[i].name;
+        if (!valid_arg_name(name))
+        {
+            reason.append("an argument name must be 1 to ");
+            append_u64(reason, kDiagMaxArgNameBytes);
+            reason.append(" bytes of [a-z0-9_]");
+            return DiagStatus::BadArgument;
+        }
+        for (crd::usize k = 0U; k < i; ++k)
+        {
+            if (request.args[k].name == name)
+            {
+                reason.append("the argument '");
+                reason.append(name);
+                reason.append("' is given more than once");
+                return DiagStatus::BadArgument;
+            }
+        }
+    }
+    const DiagStatus status = entry.check(entry.context, request.args, reason);
+    if (status != DiagStatus::Ok && reason.empty())
+    {
+        reason.append("the command refused its arguments");
+    }
+    return status;
 }
 
 crd::u32 DiagCommandService::find(cont::StringView name) const noexcept
@@ -725,6 +787,26 @@ DiagResult DiagCommandService::execute(const DiagRequest& request, const std::at
         refuse(result, request, DiagStatus::Oversized, reason);
         return result;
     }
+    if (request.args.size() > kDiagMaxArgs)
+    {
+        reason.append("more than ");
+        append_u64(reason, kDiagMaxArgs);
+        reason.append(" arguments");
+        refuse(result, request, DiagStatus::Oversized, reason);
+        return result;
+    }
+    for (const DiagArg& a : request.args)
+    {
+        if (a.name.size() > kDiagMaxArgNameBytes || a.value.size() > kDiagMaxArgValueBytes)
+        {
+            reason.append("an argument name is longer than ");
+            append_u64(reason, kDiagMaxArgNameBytes);
+            reason.append(" bytes or its value longer than ");
+            append_u64(reason, kDiagMaxArgValueBytes);
+            refuse(result, request, DiagStatus::Oversized, reason);
+            return result;
+        }
+    }
 
     if (request.page_bytes != 0U && request.page_bytes < kDiagMinPageBytes)
     {
@@ -756,6 +838,11 @@ DiagResult DiagCommandService::execute(const DiagRequest& request, const std::at
             refuse(result, request, DiagStatus::Unavailable, "the host granted no file root");
             return result;
         }
+    }
+    if (const DiagStatus args = check_args(entry, request, reason); args != DiagStatus::Ok)
+    {
+        refuse(result, request, args, reason);
+        return result;
     }
 
     crd::u64 offset = 0U;
@@ -854,6 +941,7 @@ DiagStatus DiagCommandService::run_commands(void* self, const DiagCall& call, Di
             .str("authority", authority_name(e.spec.authority))
             .boolean("granted", ok)
             .boolean("takes_path", e.spec.takes_path)
+            .boolean("takes_args", e.check != nullptr)
             .str("summary", e.spec.summary);
         (void)out.add_item(item);
     }

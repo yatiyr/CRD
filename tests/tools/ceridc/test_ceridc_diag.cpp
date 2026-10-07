@@ -5,7 +5,9 @@
 // arguments are protocol faults, while out-of-range counts reach the service and are refused there. MCP replies are
 // parsed with the JSON reader and the tool text compared byte for byte. Every service here binds ceridc's own commands
 // (bind_diag_commands), so the comparison covers program.provenance over the committed authored CEIR program and
-// gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable) too.
+// gpu.resources (no GPU context in ceridc, so its context and frame-graph evidence answer unavailable) too, and
+// program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant and
+// reaches the agent transport only through this tool.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
@@ -45,6 +47,8 @@ constexpr const char* kParityBundle  = "ceridc_diag_bundle_parity.cdb";
 constexpr const char* kBinaryBundle  = "ceridc_diag_bundle_binary.cdb";
 constexpr const char* kParityProgram = "ceridc_diag_program_parity.ceir";
 constexpr const char* kBinaryProgram = "ceridc_diag_program_binary.ceir";
+constexpr const char* kInspectProgram = "ceridc_diag_program_inspect.ceir";
+constexpr const char* kInspectBinary  = "ceridc_diag_program_inspect_binary.ceir";
 constexpr const char* kDemoProgram   = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
 
 [[nodiscard]] bool has(const String& s, const char* needle)
@@ -89,6 +93,30 @@ void write_program(const char* name)
     String text(&g_alloc);
     REQUIRE(fs::read_file_text(fs::Path(StringView(kDemoProgram)), text));
     REQUIRE(fs::write_file_text(fs::Path(StringView(name)), StringView{text.data(), text.size()}));
+}
+
+// The 1-based line of the n-th line of the committed program holding `needle` (the independent oracle).
+[[nodiscard]] crd::u32 line_of(const char* needle, crd::u32 nth)
+{
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView(kDemoProgram)), text));
+    crd::u32    line = 1U;
+    crd::u32    seen = 0U;
+    const char* p    = text.c_str();
+    for (; *p != '\0'; ++p)
+    {
+        if (*p == '\n')
+        {
+            ++line;
+            continue;
+        }
+        if (std::strncmp(p, needle, std::strlen(needle)) == 0 && seen++ == nth)
+        {
+            return line;
+        }
+    }
+    FAIL("needle not in the program");
+    return 0U;
 }
 
 // A service as every ceridc process builds one: crd-perf's built-ins plus ceridc's own commands.
@@ -156,9 +184,22 @@ struct ToolReply
         (void)std::snprintf(buf, sizeof(buf), R"(,"path":"%.*s")", static_cast<int>(r.path.size()), r.path.data());
         a.append(buf);
     }
-    (void)std::snprintf(buf, sizeof(buf), R"(,"cursor":%llu,"page_items":%u,"page_bytes":%u,"schema":%u})",
+    (void)std::snprintf(buf, sizeof(buf), R"(,"cursor":%llu,"page_items":%u,"page_bytes":%u,"schema":%u)",
                         static_cast<unsigned long long>(r.cursor), r.page_items, r.page_bytes, r.schema_version);
     a.append(buf);
+    if (!r.args.empty())
+    {
+        a.append(R"(,"args":{)");
+        for (crd::usize i = 0U; i < r.args.size(); ++i)
+        {
+            (void)std::snprintf(buf, sizeof(buf), R"(%s"%.*s":"%.*s")", i == 0U ? "" : ",",
+                                static_cast<int>(r.args[i].name.size()), r.args[i].name.data(),
+                                static_cast<int>(r.args[i].value.size()), r.args[i].value.data());
+            a.append(buf);
+        }
+        a.push_back('}');
+    }
+    a.push_back('}');
     return a;
 }
 
@@ -238,6 +279,100 @@ TEST_CASE("diag: a native caller, the verb and the MCP tool return the same boun
     CHECK(native.file_bytes_read() > 0U);
     (void)fs::remove_file(fs::Path(StringView(kParityBundle)));
     (void)fs::remove_file(fs::Path(StringView(kParityProgram)));
+}
+
+TEST_CASE("diag: program.inspect answers the same bytes natively, through the verb and the MCP tool",
+          "[ceridc][diag]")
+{
+    write_program(kInspectProgram);
+    char call_line[16];
+    char a_line[16];
+    char watches[32];
+    (void)std::snprintf(call_line, sizeof(call_line), "%u", line_of("func.call", 0U));
+    (void)std::snprintf(a_line, sizeof(a_line), "%u", line_of("arith.addi", 0U));
+    (void)std::snprintf(watches, sizeof(watches), "%s,%s", a_line, call_line);
+    const crd::perf::DiagArg script[] = {
+        {"args", "3"}, {"breaks", call_line}, {"watches", watches}, {"steps", "into,out"}};
+    const crd::perf::DiagArg bad_step[] = {{"steps", "jump"}};
+    const crd::perf::DiagArg on_list[]  = {{"breaks", call_line}};
+
+    const crd::perf::DiagAuthoritySet read    = crd::perf::authority_bit(DiagAuthority::Read);
+    const crd::perf::DiagAuthoritySet execute = read | crd::perf::authority_bit(DiagAuthority::Execute);
+    for (const crd::perf::DiagAuthoritySet grant : {execute, read})
+    {
+        INFO(grant);
+        DiagCommandService native(grant, rooted(), &g_alloc);
+        DiagCommandService verb(grant, rooted(), &g_alloc);
+        DiagCommandService mcp(grant, rooted(), &g_alloc);
+        bind(native);
+        bind(verb);
+        bind(mcp);
+
+        struct Step
+        {
+            crd::containers::ConstSpan<crd::perf::DiagArg> args;
+            const char*                                    command;
+            int                                            cursor_from; // -1: 0; else that step's next_cursor
+        };
+        const Step steps[] = {
+            {{script, 4U}, "program.inspect", -1},
+            {{script, 4U}, "program.inspect", 0},
+            {{bad_step, 1U}, "program.inspect", -1},
+            {{on_list, 1U}, "diag.commands", -1}, // a command without arguments refuses them
+        };
+        crd::containers::Array<crd::u64> next(&g_alloc);
+        for (const Step& s : steps)
+        {
+            DiagRequest r;
+            r.command    = s.command;
+            r.path       = s.command[0] == 'p' ? StringView{kInspectProgram} : StringView{};
+            r.args       = s.args;
+            r.page_items = 6U;
+            r.cursor     = s.cursor_from < 0 ? 0U : next[static_cast<crd::usize>(s.cursor_from)];
+            const crd::perf::DiagResult direct = native.execute(r);
+            next.push_back(direct.next_cursor);
+            INFO(direct.json.c_str());
+            const String    through_verb = crd::ceridc::verb_diag(verb, r, &g_alloc);
+            const ToolReply through_mcp  = reply_of(view(call(&mcp, arguments_of(r).c_str())));
+            REQUIRE(through_mcp.parsed);
+            CHECK(view(through_verb) == view(direct.json));
+            CHECK(view(through_mcp.text) == view(direct.json));
+            CHECK(through_mcp.is_error == (direct.status != crd::perf::DiagStatus::Ok));
+        }
+        if (grant == execute)
+        {
+            // A breakpoint item, three stops with two value items each and the result: 11 items over two pages.
+            CHECK(next[0] != 0U);
+            CHECK(next[1] == 0U);
+            CHECK(native.handler_runs() == 1U); // the second page is cut from the first run's snapshot
+        }
+        else
+        {
+            DiagRequest bare;
+            bare.command                        = "program.inspect";
+            bare.path                           = kInspectProgram;
+            const crd::perf::DiagResult refused = native.execute(bare);
+            CHECK(refused.status == crd::perf::DiagStatus::Unauthorized);
+            CHECK(has(refused.json, "the command needs execute authority; the host granted read"));
+            CHECK(native.handler_runs() == 0U);
+        }
+        CHECK(verb.handler_runs() == native.handler_runs());
+        CHECK(mcp.handler_runs() == native.handler_runs());
+    }
+
+    // The named arguments are an object of strings; anything else is a protocol fault that reaches nothing.
+    DiagCommandService svc(execute, rooted(), &g_alloc);
+    bind(svc);
+    for (const char* bad : {R"({"command":"program.inspect","path":"x.ceir","args":["3"]})",
+                            R"({"command":"program.inspect","path":"x.ceir","args":{"args":3}})"})
+    {
+        INFO(bad);
+        const ToolReply r = reply_of(view(call(&svc, bad)));
+        REQUIRE(r.parsed);
+        CHECK(r.protocol_error);
+    }
+    CHECK(svc.handler_runs() == 0U);
+    (void)fs::remove_file(fs::Path(StringView(kInspectProgram)));
 }
 
 TEST_CASE("diag: the MCP tool cannot raise the host's grant and rejects malformed counts", "[ceridc][diag]")
@@ -423,4 +558,84 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
     (void)fs::remove_file(fs::Path(StringView("ceridc_diag_out.json")));
     (void)fs::remove_file(fs::Path(StringView(kBinaryBundle)));
     (void)fs::remove_file(fs::Path(StringView(kBinaryProgram)));
+}
+
+TEST_CASE("diag: the real ceridc binary runs program.inspect only under its execute grant", "[ceridc][diag]")
+{
+    write_program(kInspectBinary);
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    const crd::u32 call_line = line_of("func.call", 0U);
+    const crd::u32 a_line    = line_of("arith.addi", 0U);
+    char           breaks[16];
+    char           watches[32];
+    (void)std::snprintf(breaks, sizeof(breaks), "%u", call_line);
+    (void)std::snprintf(watches, sizeof(watches), "%u,%u", a_line, call_line);
+
+    const crd::perf::DiagAuthoritySet execute =
+        crd::perf::authority_bit(DiagAuthority::Read) | crd::perf::authority_bit(DiagAuthority::Execute);
+    DiagCommandService native(execute, rooted(), &g_alloc);
+    bind(native);
+    const crd::perf::DiagArg script[] = {
+        {"args", "3"}, {"breaks", breaks}, {"watches", watches}, {"steps", "into,out"}};
+    DiagRequest r;
+    r.command                            = "program.inspect";
+    r.path                               = kInspectBinary;
+    r.args                               = {script, 4U};
+    r.page_items                         = crd::perf::kDiagMaxPageItems;
+    const crd::perf::DiagResult expected = native.execute(r);
+    INFO(expected.json.c_str());
+    REQUIRE(expected.status == crd::perf::DiagStatus::Ok);
+    CHECK(has(expected.json, "\"outcome\":\"finished\""));
+    CHECK(has(expected.json, "{\"kind\":\"result\",\"index\":0,\"value\":36}"));
+
+    // Command line: --param carries each named argument; the grant is the process's flag.
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command program.inspect --path %s --param args=3 --param breaks=%s "
+                        "--param watches=%s --param steps=into,out --page-items %u --grant read,execute --root . "
+                        "> ceridc_diag_inspect_out.json",
+                        exe, kInspectBinary, breaks, watches, crd::perf::kDiagMaxPageItems);
+    REQUIRE(std::system(cmd) == 0);
+    String out(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.json")), out));
+    while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+    {
+        out.resize(out.size() - 1U);
+    }
+    CHECK(view(out) == view(expected.json));
+
+    // The default grant (read) refuses it before the program is read.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command program.inspect --path %s --param args=3 --root . "
+                        "> ceridc_diag_inspect_out.json",
+                        exe, kInspectBinary);
+    CHECK(std::system(cmd) != 0);
+    out.clear();
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.json")), out));
+    CHECK(has(out, "\"status\":\"unauthorized\""));
+
+    // MCP stdio under an execute grant: the tool text is the native document.
+    String line(&g_alloc);
+    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    line.append(arguments_of(r).c_str());
+    line.append("}}\n");
+    REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_diag_inspect_in.jsonl")), view(line)));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" mcp --diag-grant read,execute --diag-root . < ceridc_diag_inspect_in.jsonl "
+                        "> ceridc_diag_inspect_out.jsonl",
+                        exe);
+    REQUIRE(std::system(cmd) == 0);
+    out.clear();
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.jsonl")), out));
+    const StringView all = view(out);
+    const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
+    REQUIRE(got.parsed);
+    CHECK_FALSE(got.is_error);
+    CHECK(view(got.text) == view(expected.json));
+
+    (void)fs::remove_file(fs::Path(StringView("ceridc_diag_inspect_in.jsonl")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_diag_inspect_out.jsonl")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_diag_inspect_out.json")));
+    (void)fs::remove_file(fs::Path(StringView(kInspectBinary)));
 }

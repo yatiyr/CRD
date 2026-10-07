@@ -8,6 +8,7 @@ add_executable(crd-ceir-cook-tests
     test_reload_inspect.cpp # DIAG.8b: runtime inspection across a hot reload - generation-bound sessions, line breakpoint rebinding, stale-generation refusals
     test_inspect_host.cpp   # DIAG.8b: the inspect host the headless and sandbox consumers share - the committed authored demo stopped, stepped, snapshotted, cancelled and reloaded
     test_program_diag.cpp   # DIAG.8c: the program.provenance diagnostic command - text, binary and cooked forms at their authored positions; refusals before work
+    test_inspect_diag.cpp   # DIAG.8c: the program.inspect diagnostic command - Execute authority, scripted stops and values as items, argument refusals, stop bound, caller cancel
     test_large_graph.cpp     # CEIR-35d Q6: large-graph SCALABILITY correctness - cook + load + execute a synthetic ~8k-op arith graph to the exact sum (no O(N^2)/buffer/recursion blowup); time-scaling is the Q7 board
 )
 
@@ -17,7 +18,7 @@ target_link_libraries(crd-ceir-cook-tests PRIVATE
     crd-ceir
     crd-ceir-cook
     crd-resources      # the test FORGES CRDR containers directly (missing-CDEP / wrong-type) — the ceir-host precedent
-    crd-perf           # DIAG.8c: the diagnostic command service program.provenance registers into
+    crd-perf           # DIAG.8c: the diagnostic command service program.provenance and program.inspect register into
     Catch2::Catch2WithMain
 )
 
