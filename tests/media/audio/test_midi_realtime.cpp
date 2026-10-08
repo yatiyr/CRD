@@ -127,7 +127,8 @@ TEST_CASE("the SPSC command ring: cross-thread order and completeness", "[audio]
     static audio::AudioCommandRing<1024> ring; // static: outlives both sides deterministically
     constexpr u32                        k_count = 100000;
 
-    std::atomic<bool> done{false};
+    // Set when the consumer stops early, so the producer never waits on a ring nobody drains.
+    std::atomic<bool> abandon{false};
     std::thread producer([&] {
         for (u32 i = 0; i < k_count; ++i)
         {
@@ -137,29 +138,42 @@ TEST_CASE("the SPSC command ring: cross-thread order and completeness", "[audio]
             cmd.gain  = static_cast<f32>(i); // the sequence rides the payload — order is checkable
             while (!ring.try_push(cmd))
             {
+                if (abandon.load(std::memory_order_acquire))
+                {
+                    return;
+                }
                 std::this_thread::yield();
             }
         }
-        done.store(true, std::memory_order_release);
     });
 
-    u32                 received = 0;
-    f32                 expect   = 0.0F;
+    // Every pop is checked: a popped command is never discarded. The first out-of-order payload stops the drain; the
+    // assertions run on this thread only after the producer has joined.
+    u32                 received   = 0;
+    f32                 expect     = 0.0F;
+    bool                in_order   = true;
+    f32                 out_of_seq = 0.0F;
     audio::AudioCommand cmd;
     while (received < k_count)
     {
-        if (ring.try_pop(cmd))
-        {
-            REQUIRE(cmd.gain == expect); // strict FIFO — any reorder/loss fails here
-            expect += 1.0F;
-            ++received;
-        }
-        else if (done.load(std::memory_order_acquire) && !ring.try_pop(cmd))
+        if (!ring.try_pop(cmd))
         {
             std::this_thread::yield();
+            continue;
         }
+        if (cmd.gain != expect) // strict FIFO — any reorder/loss fails here
+        {
+            in_order   = false;
+            out_of_seq = cmd.gain;
+            break;
+        }
+        expect += 1.0F;
+        ++received;
     }
+    abandon.store(true, std::memory_order_release);
     producer.join();
+    INFO("received " << received << " in order; the next payload was " << out_of_seq);
+    CHECK(in_order);
     CHECK(received == k_count);
 }
 

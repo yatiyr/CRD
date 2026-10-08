@@ -17,6 +17,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <thread>
 
@@ -45,9 +46,15 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
         CRD_PERF_SCOPE("readers.fill");
     }
 
+    // Each worker makes at least `iters` copies, then keeps copying until some copy has been refused or the deadline
+    // passes. A fixed count alone is not enough: a worker's 1000 copies can fit inside one scheduler quantum, so on a
+    // loaded or narrow host the workers can run one after another and never overlap (observed: 0 of 8000 refused).
+    // Running on until a refusal is seen lets the scheduler preempt a worker mid-copy, which is exactly a collision.
     constexpr crd::u32    n_threads = 8U;
-    constexpr crd::u32    iters   = 1000U;
+    constexpr crd::u32    iters     = 1000U;
+    const auto            deadline  = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     std::atomic<bool>     go{false};
+    std::atomic<crd::u64> attempts{0U};      // every copy made, refused or not
     std::atomic<crd::u64> refused{0U};       // copies that came back contended
     std::atomic<crd::u64> succeeded{0U};     // copies that returned the live batch
     std::atomic<crd::u64> bad_success{0U};   // a non-contended copy that did NOT return exactly fill_count (must stay 0)
@@ -65,10 +72,16 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
                 {
                     // spin to a common start so the copies actually overlap
                 }
-                for (crd::u32 i = 0U; i < iters; ++i)
+                const auto keep_copying = [&](crd::u32 i)
+                {
+                    return i < iters || (refused.load(std::memory_order_relaxed) == 0U &&
+                                         std::chrono::steady_clock::now() < deadline);
+                };
+                for (crd::u32 i = 0U; keep_copying(i); ++i)
                 {
                     bool           contended = false;
                     const crd::u32 n = crd::perf::copy_thread_samples(idx, buf, fill_count, &contended);
+                    attempts.fetch_add(1U, std::memory_order_relaxed);
                     if (contended)
                     {
                         refused.fetch_add(1U, std::memory_order_relaxed);
@@ -96,14 +109,16 @@ TEST_CASE("sample ring: reader contention is exact and actually occurs under loa
 
     // (1) Exactness: every refused return bumped the per-ring counter exactly once, and nothing else did.
     CHECK(refused.load() == crd::perf::sample_copy_contended_count(idx));
-    // Full accounting: every attempt either refused or succeeded.
-    CHECK(refused.load() + succeeded.load() == static_cast<crd::u64>(n_threads) * iters);
+    // Full accounting: every attempt either refused or succeeded, and every worker made at least its fixed share.
+    CHECK(refused.load() + succeeded.load() == attempts.load());
+    CHECK(attempts.load() >= static_cast<crd::u64>(n_threads) * iters);
     // A refused copy always returns 0; a successful copy always returns the whole fixed batch (tail/head are fixed --
     // no producer runs while the workers copy). If either ever fails, the refusal did not fully protect the copy.
     CHECK(bad_contended.load() == 0U);
     CHECK(bad_success.load() == 0U);
-    // (2) Test power: with 8 threads x 1000 copies of a 1024-element window, at least one collision is effectively
-    // certain (more so under ASan). A zero here is a TEST-POWER failure -- raise the load, never drop this REQUIRE.
+    // (2) Test power: 8 workers copying a 1024-element window until one is refused (or 10 s pass) collide well
+    // before the deadline (more so under ASan). A zero here is a TEST-POWER failure -- raise the load, never drop this
+    // REQUIRE.
     INFO("refused=" << refused.load() << " succeeded=" << succeeded.load()
                     << " counter=" << crd::perf::sample_copy_contended_count(idx));
     REQUIRE(crd::perf::sample_copy_contended_count(idx) >= 1U);

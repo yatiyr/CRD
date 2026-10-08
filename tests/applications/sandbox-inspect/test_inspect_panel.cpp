@@ -191,6 +191,22 @@ struct Frames
     }
 };
 
+// A pause request as soon as the run's thread has attached to the session: until then the session refuses it
+// NotRunning. Yields rather than sleeps, so the request lands well inside a fuel-bound run.
+insp::Refusal pause_when_running(InspectPanel& panel)
+{
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitMs);
+    for (;;)
+    {
+        const insp::Refusal r = panel.request_pause(panel.generation());
+        if (r != insp::Refusal::NotRunning || std::chrono::steady_clock::now() > until)
+        {
+            return r;
+        }
+        std::this_thread::yield();
+    }
+}
+
 const crd::sandbox::PanelValue& value_at(const InspectPanel& panel, u32 line)
 {
     for (usize i = 0; i < panel.values().size(); ++i)
@@ -405,15 +421,31 @@ TEST_CASE("diag 8b: the sandbox frame loop keeps ticking while its program runs,
     InspectPanel panel(&alloc, renderer);
     REQUIRE(panel.load(StringView(kRel), StringView("main")).ok());
     panel.watch(ln.call);
-    const i64 n = 2147483647; // a loop no frame budget can wait out
+    // A loop longer than the run's step budget, so the budget ends it, not the bound. An inspected run keeps its budget
+    // (pausing spends none), so it lasts as long as 2^24 steps take: about 100 ms in an optimized build. The frame loop
+    // is therefore checked across one whole run, not for a fixed number of frames a fast build can outlast.
+    const i64 n = 2147483647;
     Frames    frames;
     REQUIRE(panel.start(ConstSpan<i64>(&n, 1U)) == insp::Refusal::None);
-    REQUIRE(frames.idle(panel, 20U));
-    CHECK(panel.state() == PanelState::Running);
+    const u64 started = panel.ticks();
+    REQUIRE(frames.until(panel, TickEvent::Ended)); // every frame before the end polled and returned None
+    CHECK(panel.ticks() - started >= 2U);           // at least one frame ticked while the program ran
+    CHECK(panel.state() == PanelState::Failed);
+    CHECK(panel.error() == crd::ceir::plan::RunError::FuelExhausted);
     CHECK(frames.worst_ms < kFrameBoundMs);
 
-    REQUIRE(panel.request_pause(panel.generation()) == insp::Refusal::None);
+    // The same run again, paused while it runs and cancelled at the pause. A pause lands at the next safe point, which
+    // may still be before the loop: such a pause is continued and requested again until one lands in the loop. Each
+    // round runs at least the held instr and the loop is a few instrs in, so this ends within a few rounds.
+    REQUIRE(panel.start(ConstSpan<i64>(&n, 1U)) == insp::Refusal::None);
+    REQUIRE(pause_when_running(panel) == insp::Refusal::None);
     REQUIRE(frames.until(panel, TickEvent::Stopped));
+    for (u32 round = 0U; panel.stop_line() < ln.loop && round < 64U; ++round)
+    {
+        REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+        REQUIRE(pause_when_running(panel) == insp::Refusal::None);
+        REQUIRE(frames.until(panel, TickEvent::Stopped));
+    }
     CHECK(panel.stop().reason == insp::StopReason::PauseRequest);
     CHECK(panel.stop().depth == 0U);
     CHECK(panel.stop_line() >= ln.loop); // inside the loop, the only place left to run

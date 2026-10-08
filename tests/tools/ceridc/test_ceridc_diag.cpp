@@ -566,9 +566,10 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         const crd::perf::DiagResult expected = native.execute(r);
         (void)std::snprintf(cmd, sizeof(cmd),
                             "\"%s\" diag --command capture.start --grant record > ceridc_diag_out.json", exe);
-        (void)std::system(cmd);
+        const int granted = std::system(cmd);
         out.clear();
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
+        CHECK((granted == 0) == has(out, "\"ok\":true")); // the exit code follows the report's ok
         CHECK(has(out, "\"grant\":\"record\""));
         CHECK_FALSE(has(out, "unauthorized"));
         CHECK(has(out, (String("\"status\":\"", &g_alloc) += crd::perf::status_name(expected.status)).c_str()));
