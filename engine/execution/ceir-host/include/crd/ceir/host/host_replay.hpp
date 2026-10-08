@@ -1,6 +1,6 @@
 #pragma once
 
-// crd-ceir-host -- run records of the host provider (DIAG.9a). A host record is a crd-ceir-cook run record whose
+// crd-ceir-host -- run records of the host provider. A host record is a crd-ceir-cook run record whose
 // executor is `ReplayExecutorKind::Host`: one run of a cooked program on a fresh `HostProvider`, traced on its
 // submitting interpreter (`cook::InterpreterRecorder`, attached through the provider's `HostObserver`), with the
 // provider's schedule settings (job split, per-body step budget) stored as the record's schedule input. Bodies the
@@ -14,22 +14,27 @@
 // and one whose blob is not the content it was recorded with. Running the same inputs against another program, or on
 // another job split, is an explicit option.
 //
-// ⛔ The caller owns the crd::jobs pool lifecycle, as for HostProvider. Contract: docs/design/runtime-diagnostics.md
-// (DIAG.9a).
+// A run may be recorded while an inspection session stops, steps and reads values in it (`HostProgram`, then
+// `record_host_run` with the session): the recorder's step hooks run inside the session's, so the record is the one
+// an unobserved run makes. A run the session cancels is not recorded.
+//
+// ⛔ The caller owns the crd::jobs pool lifecycle, as for HostProvider. Contract: docs/design/runtime-diagnostics.md.
 
 #include <crd/ceir/cook/hot_reload.hpp> // Registrar
+#include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/ir.hpp>
+#include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
-namespace crd::ceir
+namespace crd::ceir::inspect
 {
-class Context;
-} // namespace crd::ceir
+class Session;
+} // namespace crd::ceir::inspect
 
 namespace crd::ceir::host
 {
@@ -41,10 +46,11 @@ struct HostSchedule
 };
 
 // Run `entry(args)` of `module` (in `ctx`, stable ids assigned) on a fresh HostProvider with `schedule`, keeping at
-// most `max_events` events of its submitting interpreter in `out`.
+// most `max_events` events of its submitting interpreter in `out`. Under `session` (bound to `module`, may be null)
+// the execution stops, steps and answers value reads as the session's controller asks; the trace is the same.
 void run_host_traced(Context& ctx, const Module& module, containers::StringView entry,
                      containers::ConstSpan<crd::i64> args, const HostSchedule& schedule, crd::u32 max_events,
-                     cook::ReplayTrace& out);
+                     cook::ReplayTrace& out, inspect::Session* session = nullptr);
 
 // An authored position, owned (the Context it was read from is gone when a call returns).
 using HostSite = cook::OwnedReplaySite;
@@ -59,9 +65,11 @@ enum class HostReplayStatus : crd::u8
     OtherBuild,      // made by another build (`any_build` replays it anyway)
     MissingInputs,   // the record lacks an input its program needs
     ContentMismatch, // the record's blob is not the content it was recorded with
+    Cancelled,       // the run was cancelled (an inspection session's cancel): a replay would not stop there
 };
 
-// "ok", "bad-schedule", "not-loaded", "wrong-executor", "other-build", "missing-inputs", "content-mismatch".
+// "ok", "bad-schedule", "not-loaded", "wrong-executor", "other-build", "missing-inputs", "content-mismatch",
+// "cancelled".
 [[nodiscard]] containers::StringView host_replay_status_name(HostReplayStatus s) noexcept;
 
 // Run the cooked program `blob` (authored at `path`) once on `entry(args)` with `schedule` and make its host record
@@ -73,6 +81,50 @@ enum class HostReplayStatus : crd::u8
                                                const HostSchedule& schedule, crd::u32 max_events,
                                                cook::Registrar registrar, void* user, cook::ReplayRecord& out,
                                                containers::String* missing, HostSite* fault = nullptr);
+
+// A cooked program loaded for recording: its own Context with the host's dialects, the program read and stable ids
+// assigned, and a copy of the artifact the record will hold. A host that inspects the recorded run binds its session
+// to `module()` in `context()` (the module form of `inspect::Session::bind`) before recording, so breakpoints resolve
+// against the ops that run.
+class HostProgram
+{
+public:
+    // Read the cooked program `blob` authored at `path`; `registrar` installs its dialects. `status()` says whether it
+    // loaded: `BadSchedule` for a blob or path past a record's bounds, `NotLoaded` for one that did not read.
+    HostProgram(memory::IAllocator* alloc, containers::ConstSpan<crd::u8> blob, containers::StringView path,
+                cook::Registrar registrar, void* user);
+    HostProgram(const HostProgram&)            = delete;
+    HostProgram& operator=(const HostProgram&) = delete;
+    HostProgram(HostProgram&&)                 = delete;
+    HostProgram& operator=(HostProgram&&)      = delete;
+    ~HostProgram()                             = default;
+
+    [[nodiscard]] HostReplayStatus status() const noexcept { return m_status; }
+    [[nodiscard]] Context&         context() noexcept { return m_ctx; }
+    [[nodiscard]] const Module*    module() const noexcept { return m_module; } // null unless status() is Ok
+    [[nodiscard]] crd::u64         content_hash() const noexcept { return m_hash; }
+    [[nodiscard]] containers::ConstSpan<crd::u8> blob() const noexcept { return {m_blob.data(), m_blob.size()}; }
+    [[nodiscard]] containers::StringView         path() const noexcept { return {m_path.data(), m_path.size()}; }
+
+private:
+    Context                    m_ctx;
+    Module*                    m_module = nullptr;
+    crd::u64                   m_hash   = 0U;
+    containers::Array<crd::u8> m_blob;
+    containers::String         m_path;
+    HostReplayStatus           m_status = HostReplayStatus::NotLoaded;
+};
+
+// Record one run of a loaded `program` on `entry(args)` with `schedule`, as the blob form above does, optionally under
+// an inspection `session` bound to `program.module()` (null: no session). The session's stops, steps and value reads
+// leave the record exactly as an unobserved run's: the recorder's step hooks run inside the session's, before it
+// decides whether to stop. A run the session cancelled is refused `Cancelled` and `out` is left as it was. The program
+// may be recorded more than once; each run is on a fresh provider.
+[[nodiscard]] HostReplayStatus record_host_run(HostProgram& program, containers::StringView entry,
+                                               containers::ConstSpan<crd::i64> args, const HostSchedule& schedule,
+                                               crd::u32 max_events, inspect::Session* session,
+                                               cook::ReplayRecord& out, containers::String* missing,
+                                               HostSite* fault = nullptr);
 
 struct HostReplayOptions
 {

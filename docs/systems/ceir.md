@@ -93,7 +93,10 @@ record. The replay commands reach the host provider through a host executor crd-
 `replay.record executor=host` (with `jobs` and `sub_fuel`) writes a host record and `replay.run` replays one (`jobs=`
 on another split). ceridc binds it and its `diag` and `mcp` verbs own the jobs pool, so a host record made by one
 `ceridc` process reproduces in another (`assets/ceir/host_replay_demo.ceir`); a host with none bound refuses host
-records before reading anything.
+records before reading anything. A host run can be recorded under an inspection session: `HostProgram` loads the
+program so the session binds to the module that runs, and `record_host_run(program, ..., session, ...)` hands the
+recorder's step hooks to the session (`inspect::StepObserver`), so stops, steps and value reads leave the record equal
+to an unobserved run's; a cancelled run is not recorded.
 
 ## Maturity and further work
 

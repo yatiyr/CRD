@@ -5,6 +5,7 @@
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/exec.hpp>
 #include <crd/ceir/host/host_provider.hpp>
+#include <crd/ceir/inspect.hpp>
 #include <crd/containers/array.hpp>
 
 #include <utility>
@@ -88,18 +89,45 @@ cont::StringView host_replay_status_name(HostReplayStatus s) noexcept
     case HostReplayStatus::OtherBuild: return cont::StringView{"other-build"};
     case HostReplayStatus::MissingInputs: return cont::StringView{"missing-inputs"};
     case HostReplayStatus::ContentMismatch: return cont::StringView{"content-mismatch"};
+    case HostReplayStatus::Cancelled: return cont::StringView{"cancelled"};
     }
     return cont::StringView{"?"};
 }
 
 void run_host_traced(Context& ctx, const Module& module, cont::StringView entry, cont::ConstSpan<crd::i64> args,
-                     const HostSchedule& schedule, crd::u32 max_events, cook::ReplayTrace& out)
+                     const HostSchedule& schedule, crd::u32 max_events, cook::ReplayTrace& out,
+                     inspect::Session* session)
 {
     cook::InterpreterRecorder rec(out, max_events);
     HostProvider              provider(out.events.allocator(), schedule.num_jobs, schedule.sub_fuel);
     const HostObserver        observer{&attach_recorder, &detach_recorder, &rec};
-    const exec::ExecResult    r = provider.execute(ctx, module, entry, args, observer);
+    const exec::ExecResult    r = session != nullptr ? provider.execute(ctx, module, entry, args, *session, observer)
+                                                     : provider.execute(ctx, module, entry, args, observer);
     rec.finish(r);
+}
+
+HostProgram::HostProgram(memory::IAllocator* alloc, cont::ConstSpan<crd::u8> blob, cont::StringView path,
+                         cook::Registrar registrar, void* user)
+    : m_ctx(alloc), m_blob(alloc), m_path(alloc)
+{
+    if (path.size() > cook::kReplayMaxStringBytes || blob.size() > cook::kReplayMaxProgramBytes)
+    {
+        m_status = HostReplayStatus::BadSchedule;
+        return;
+    }
+    m_module = load(m_ctx, blob, registrar, user, m_hash);
+    if (m_module == nullptr)
+    {
+        m_status = HostReplayStatus::NotLoaded;
+        return;
+    }
+    m_blob.reserve(blob.size());
+    for (const crd::u8 b : blob)
+    {
+        m_blob.push_back(b);
+    }
+    m_path.append(path);
+    m_status = HostReplayStatus::Ok;
 }
 
 HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView path, cont::StringView entry,
@@ -113,14 +141,40 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     {
         return HostReplayStatus::BadSchedule;
     }
-    memory::IAllocator* const alloc = out.program.allocator();
-    Context                   ctx(alloc);
-    crd::u64                  content_hash = 0U;
-    Module* const             module       = load(ctx, blob, registrar, user, content_hash);
-    if (module == nullptr)
+    HostProgram program(out.program.allocator(), blob, path, registrar, user);
+    if (program.status() != HostReplayStatus::Ok)
     {
-        return HostReplayStatus::NotLoaded;
+        return program.status();
     }
+    return record_host_run(program, entry, args, schedule, max_events, nullptr, out, missing, fault);
+}
+
+HostReplayStatus record_host_run(HostProgram& program, cont::StringView entry, cont::ConstSpan<crd::i64> args,
+                                 const HostSchedule& schedule, crd::u32 max_events, inspect::Session* session,
+                                 cook::ReplayRecord& out, cont::String* missing, HostSite* fault)
+{
+    if (program.status() != HostReplayStatus::Ok)
+    {
+        return program.status();
+    }
+    if (!valid_schedule(schedule) || max_events == 0U || args.size() > cook::kReplayMaxArgs ||
+        entry.size() > cook::kReplayMaxStringBytes)
+    {
+        return HostReplayStatus::BadSchedule;
+    }
+    memory::IAllocator* const alloc  = out.program.allocator();
+    Context&                  ctx    = program.context();
+    const Module&             module = *program.module();
+
+    // Run first: a cancelled run leaves `out` as it was.
+    cook::ReplayTrace trace(alloc);
+    run_host_traced(ctx, module, entry, args, schedule, max_events, trace, session);
+    if (trace.host_error == exec::ExecError::Cancelled)
+    {
+        return HostReplayStatus::Cancelled;
+    }
+
+    const cont::ConstSpan<crd::u8> blob = program.blob();
 
     out.schema        = cook::kReplayRecordSchema;
     out.build         = cook::current_build(alloc);
@@ -128,8 +182,8 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     out.host_jobs     = schedule.num_jobs;
     out.host_sub_fuel = schedule.sub_fuel;
     out.program_path.clear();
-    out.program_path.append(path);
-    out.content_hash = content_hash;
+    out.program_path.append(program.path());
+    out.content_hash = program.content_hash();
     out.asset        = 0U;
     out.generation   = 0U;
     out.program.clear();
@@ -145,11 +199,9 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     {
         out.args.push_back(a);
     }
-    (void)cook::classify_replay_inputs(ctx, *module, cook::ReplayExecutorKind::Host, alloc, nullptr, out.inputs,
+    (void)cook::classify_replay_inputs(ctx, module, cook::ReplayExecutorKind::Host, alloc, nullptr, out.inputs,
                                        missing); // no cancel: always whole
 
-    cook::ReplayTrace trace(alloc);
-    run_host_traced(ctx, *module, entry, args, schedule, max_events, trace);
     out.max_events   = max_events < cook::kReplayMaxEvents ? max_events : cook::kReplayMaxEvents;
     out.events_total = trace.events_total;
     out.events       = std::move(trace.events);
@@ -160,7 +212,7 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     out.cells        = std::move(trace.cells);
     if (fault != nullptr)
     {
-        site_of(ctx, *module, out.fault_op, *fault);
+        site_of(ctx, module, out.fault_op, *fault);
     }
     return HostReplayStatus::Ok;
 }

@@ -556,6 +556,13 @@ exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers
     return run(ctx, m, entry, args, nullptr, &observer);
 }
 
+exec::ExecResult HostProvider::execute(Context& ctx, const Module& m, containers::StringView entry,
+                                       containers::ConstSpan<crd::i64> args, inspect::Session& session,
+                                       const HostObserver& observer)
+{
+    return run(ctx, m, entry, args, &session, &observer);
+}
+
 exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::StringView entry,
                                    containers::ConstSpan<crd::i64> args, inspect::Session* session,
                                    const HostObserver* observer)
@@ -607,8 +614,10 @@ exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::St
     }
     else
     {
-        const inspect::HostLink link{&m_cancel, &HostProvider::unjoined_of, this};
-        res = session->invoke(proto, m, entry, args, link);
+        // The session installs its own step hooks, so the ones an observer attached ride inside them.
+        const inspect::HostLink     link{&m_cancel, &HostProvider::unjoined_of, this};
+        const inspect::StepObserver hooks{proto.pre_hook(), proto.post_hook(), proto.hook_user()};
+        res = session->invoke(proto, m, entry, args, link, hooks);
     }
     drain_pooled(); // ⛔ wait + free every pooled token BEFORE returning (leak containment — a worker must not outlive execute)
     m_session = nullptr;

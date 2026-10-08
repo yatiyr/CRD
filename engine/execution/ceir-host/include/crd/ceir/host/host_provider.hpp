@@ -64,10 +64,15 @@ public:
     // stop reports the pooled launches not yet joined; they keep running through a `Task` pause.
     [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
                                            containers::ConstSpan<crd::i64> args, inspect::Session& session);
-    // DIAG.9a: the same execution with `observer` attached to the submitting interpreter (no inspection session: a
-    // session installs its own step hooks).
+    // The same execution with `observer` attached to the submitting interpreter.
     [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
                                            containers::ConstSpan<crd::i64> args, const HostObserver& observer);
+    // Both. The session installs its own step hooks on the submitting interpreter, so the hooks `observer`
+    // attached are handed to the session (`inspect::StepObserver`) and run inside its own: the observer sees every
+    // op, the ones a stop holds included, whatever the controller does while the execution is paused.
+    [[nodiscard]] exec::ExecResult execute(Context& ctx, const Module& m, containers::StringView entry,
+                                           containers::ConstSpan<crd::i64> args, inspect::Session& session,
+                                           const HostObserver& observer);
 
     // DIAG.9a: the schedule settings a run record stores (the constructor's, after its zero-job clamp).
     [[nodiscard]] crd::u32 num_jobs() const noexcept { return m_num_jobs; }

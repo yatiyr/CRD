@@ -5,6 +5,7 @@ add_executable(crd-ceir-host-tests
     test_host_inspect.cpp  # DIAG.8b: pause with pending pooled jobs, resume/cancel, detached bodies never pause
     test_host_replay.cpp   # DIAG.9a: host run records -- the submitting thread's trace, the schedule, replay
     test_host_replay_diag.cpp # DIAG.9a: host records through replay.record / replay.run (the host executor)
+    test_host_session_record.cpp # DIAG.9a: host records made under an inspection session equal unobserved ones
 )
 
 target_link_libraries(crd-ceir-host-tests PRIVATE

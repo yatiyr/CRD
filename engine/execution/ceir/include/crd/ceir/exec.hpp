@@ -127,6 +127,11 @@ public:
     // unset (a single null check in the hot loop). ⛔ NOT copied by the prototype ctor (per-session, like set_user/cancel).
     using StepHook = void (*)(const Operation& op, void* user);
     void set_step_hooks(StepHook pre, StepHook post, void* user) noexcept { m_pre_hook = pre; m_post_hook = post; m_hook_user = user; }
+    // The installed hooks (null when none), so a host that hands the interpreter to an inspection session can pass
+    // an observer's hooks on to the session instead of losing them when the session installs its own.
+    [[nodiscard]] StepHook pre_hook() const noexcept { return m_pre_hook; }
+    [[nodiscard]] StepHook post_hook() const noexcept { return m_post_hook; }
+    [[nodiscard]] void*    hook_user() const noexcept { return m_hook_user; }
     // DIAG.8b: a `pre` hook is a SAFE POINT: it may block (a debugger pause) and read values with `value_of`. A
     // cancel flag set while it held the op stops the run with `Cancelled` before that op dispatches. `call_depth` is
     // the number of func.call frames above the invoked entry (0 in the entry), for step over / step out.

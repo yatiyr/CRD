@@ -156,6 +156,17 @@ struct HostLink
     void* user                 = nullptr;
 };
 
+// An observer of an interpreter execution under a session (e.g. a run recorder): the step hooks it would install on
+// the interpreter itself, which the session's own hooks would otherwise replace. `pre` runs at every safe point before
+// the session decides whether to stop there (so it also sees the op a stop holds); `post` after every successful
+// dispatch. Both run on the executing thread; either may be null.
+struct StepObserver
+{
+    exec::Interpreter::StepHook pre  = nullptr;
+    exec::Interpreter::StepHook post = nullptr;
+    void*                       user = nullptr;
+};
+
 // The host's redaction policy: the retained owner of a value decides whether its bits may be shown.
 using RedactFn = RedactionClass (*)(StableId op, TypeId type, void* user);
 
@@ -253,6 +264,11 @@ public:
     // session's own, the session's cancel raises it, and each stop reports `host.pending`.
     [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
                                           containers::ConstSpan<i64> args, const HostLink& host);
+    // The same with an OBSERVER of the execution (see StepObserver): its hooks run inside the session's, so a stop,
+    // a step or a value read leaves what it observes unchanged. The session removes every hook afterwards.
+    [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
+                                          containers::ConstSpan<i64> args, const HostLink& host,
+                                          const StepObserver& observer);
     // Any thread, while an execution is attached: install the detached-body hook on a host sub-interpreter. It never
     // blocks and writes only counters, so it may run on many pool workers at once.
     void attach_detached(exec::Interpreter& sub);
@@ -307,6 +323,7 @@ private:
 
     static plan::SafePointAction on_plan(const plan::CompiledPlan& plan, const plan::SafePoint& at, void* user);
     static void                  on_step(const Operation& op, void* user);
+    static void                  on_post(const Operation& op, void* user);
     static void                  on_detached(const Operation& op, void* user);
 
     [[nodiscard]] Refusal    check(u64 generation) const noexcept; // m_mu held
@@ -344,6 +361,7 @@ private:
     const plan::CompiledPlan* m_cur_plan   = nullptr;
     const plan::SafePoint*    m_cur_sp     = nullptr;
     const plan::RunControl*   m_observer   = nullptr; // the plan run's safe-point observer (null: none)
+    StepObserver              m_step_observer;          // the interpreter execution's observer (null hooks: none)
     exec::Interpreter*        m_cur_in     = nullptr;
     const Operation*          m_cur_op     = nullptr;
 

@@ -890,12 +890,33 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-record-comman
   and a loop stepped by the argument) fails `bad-for-step` on `main(0)`; its record made by one `ceridc` process is
   byte-equal to the native record, reproduces in a second process after the launched constant is edited, and a third
   names the await reading it (recorded 25, observed 36).
-- Still open in DIAG.9a: recording a host run under an inspection session (the session installs its own step hooks);
-  state cells across invokes and a run spanning a reload, which need a host that keeps one interpreter across invokes
-  (a multi-invoke record with reload steps and the migrated cells as its host-state input); a host input seam with
-  the ops that read random streams, clocks and time steps, input events and external completions; backend-specific
-  numeric replay of GPU dispatches with a declared tolerance; network and physical effects stubbed only in explicit
-  test replay; host records from crd-sandbox's panel (it would need the request run on an enrolled thread).
+- What stayed open after this batch is listed at the end of the next settled block.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspected-host-records.md)):
+- A host run recorded while an inspection session drives it. A session installs its own step hooks on the
+  interpreter it runs, which replaced a recorder's. `inspect::Session::invoke` takes a `StepObserver` (a pre and a
+  post hook and their user): the session's pre hook calls the observer's at every safe point before it decides whether
+  to stop there (so it sees the op a stop holds, as the plan form's observer does), and its post hook forwards the
+  observer's. `exec::Interpreter` exposes its installed hooks (`pre_hook`, `post_hook`, `hook_user`), so
+  `HostProvider::execute(..., session, observer)` hands the hooks the `HostObserver` attached to the session; detached
+  bodies are unchanged (no hooks of either kind).
+- `host::HostProgram` loads a cooked program into its own Context (dialects registered, stable ids assigned, the
+  artifact copied), so a host binds its session to the module that runs (the module form of `Session::bind`).
+  `record_host_run(program, entry, args, schedule, max_events, session, ...)` runs it once on a fresh provider under
+  the session (or none) and makes the record; the blob form is a wrapper over it, so both make the same bytes. The run
+  comes first: a run the session cancelled is refused `cancelled` (`HostReplayStatus::Cancelled`, the host executor's
+  `failed`) and leaves the record and the missing-input list untouched.
+- A controller's stops, steps, step into a called function and out, and value reads leave the record byte-equal to an
+  unobserved run's; the stepped frame's events carry its depth and values; a breakpoint in a pooled body is counted
+  and refused `DetachedBody`, never paused, and leaves no event.
+- No interactive consumer inspects host runs yet (ceridc inspect, `program.inspect` and the sandbox panel drive the
+  compiled plan through `InspectHost`), so this is a library capability with its tests.
+- Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
+  interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
+  a host input seam with the ops that read random streams, clocks and time steps, input events and external
+  completions; backend-specific numeric replay of GPU dispatches with a declared tolerance; network and physical
+  effects stubbed only in explicit test replay; host records from crd-sandbox's panel (it would need the request run
+  on an enrolled thread).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

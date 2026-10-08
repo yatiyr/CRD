@@ -43,6 +43,9 @@ namespace cont = crd::containers;
     case HostReplayStatus::ContentMismatch:
         reason.append("the record's program does not match the content hash it was recorded with");
         return cook::HostExecutorStatus::Failed;
+    case HostReplayStatus::Cancelled:
+        reason.append("the run was cancelled; a cancelled run is not recorded");
+        return cook::HostExecutorStatus::Failed;
     }
     return cook::HostExecutorStatus::Failed;
 }

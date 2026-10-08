@@ -404,24 +404,41 @@ exec::ExecResult Session::invoke(exec::Interpreter& in, const Module& m, contain
 exec::ExecResult Session::invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
                                  containers::ConstSpan<i64> args, const HostLink& host)
 {
+    return invoke(in, m, entry, args, host, StepObserver{});
+}
+
+exec::ExecResult Session::invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,
+                                 containers::ConstSpan<i64> args, const HostLink& host, const StepObserver& observer)
+{
     begin_run(Executor::Interpreter);
     {
         const std::lock_guard<std::mutex> lk(m_mu);
         m_link = host;
     }
-    m_cur_in = &in;
-    in.set_step_hooks(&Session::on_step, nullptr, this);
+    m_cur_in        = &in;
+    m_step_observer = observer;
+    in.set_step_hooks(&Session::on_step, observer.post != nullptr ? &Session::on_post : nullptr, this);
     in.set_cancel_flag(host.cancel != nullptr ? host.cancel : &m_cancel);
     exec::ExecResult r = in.invoke(m, entry, args);
     in.set_step_hooks(nullptr, nullptr, nullptr);
     in.set_cancel_flag(nullptr);
-    m_cur_in = nullptr;
+    m_step_observer = StepObserver{};
+    m_cur_in        = nullptr;
     {
         const std::lock_guard<std::mutex> lk(m_mu);
         m_link = HostLink{};
     }
     end_run();
     return r;
+}
+
+void Session::on_post(const Operation& op, void* user)
+{
+    const Session& s = *static_cast<const Session*>(user);
+    if (s.m_step_observer.post != nullptr)
+    {
+        s.m_step_observer.post(op, s.m_step_observer.user);
+    }
 }
 
 void Session::attach_detached(exec::Interpreter& sub)
@@ -465,8 +482,13 @@ plan::SafePointAction Session::on_plan(const plan::CompiledPlan& plan, const pla
 
 void Session::on_step(const Operation& op, void* user)
 {
-    Session&  s  = *static_cast<Session*>(user);
-    u32       bp = kNoBreakpoint;
+    Session& s = *static_cast<Session*>(user);
+    // The observer sees every safe point, the ones a stop holds included, before the session decides.
+    if (s.m_step_observer.pre != nullptr)
+    {
+        s.m_step_observer.pre(op, s.m_step_observer.user);
+    }
+    u32 bp = kNoBreakpoint;
     if (const u32* const found = s.m_bp_ops.find(&op); found != nullptr)
     {
         bp = *found;
