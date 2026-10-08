@@ -10,6 +10,9 @@
 // nothing for a cancelled run), and another ceridc process reproduces it through `replay.run` without a session.
 // `--seed` gives the run a seeded host random source: the held run reads its draws, a malformed seed is refused
 // before anything runs, and the record replays in another process without the seed after the program was edited.
+// `--clock`, `--sim-time` and `--sim-step` give the run a host clock: the held run reads the given step, malformed
+// values are refused before anything runs, and records of a step failure and of a live-wall run replay in other
+// processes with no clock, the first after the program was edited, and name the edited read.
 // Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
 #include <crd/ceir/input.hpp>
@@ -43,6 +46,13 @@ constexpr const char* kRandomDemo    = CRD_REPO_DIR "/assets/ceir/random_demo.ce
 constexpr const char* kSeedProgram   = "ceridc_inspect_random.ceir";
 constexpr const char* kSeedRecord    = "ceridc_inspect_seed_verb.crpl";
 constexpr const char* kCliSeedRecord = "ceridc_inspect_seed_cli.crpl";
+
+// DIAG.9a: the committed clock demo, its scratch copy (edited after recording), and the clocked runs' records.
+constexpr const char* kClockDemo      = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir";
+constexpr const char* kClockProgram   = "ceridc_inspect_clock.ceir";
+constexpr const char* kClockRecord    = "ceridc_inspect_clock_verb.crpl";
+constexpr const char* kCliClockRecord = "ceridc_inspect_clock_cli.crpl";
+constexpr const char* kCliWallRecord  = "ceridc_inspect_wall_cli.crpl";
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "ceridc-inspect-tests"};
@@ -484,6 +494,137 @@ TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its re
     (void)std::snprintf(expect, sizeof(expect), "\"line\":%u,", draw);
     CHECK(has(diverged, expect));
     for (const char* f : {kSeedProgram, kSeedRecord, kCliSeedRecord, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+}
+
+TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its records replay with no clock",
+          "[ceridc][inspect][diag]")
+{
+    for (const char* f : {kClockProgram, kClockRecord, kCliClockRecord, kCliWallRecord, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kClockDemo)), text));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kClockProgram)),
+                                crd::containers::StringView(text.c_str(), text.size())));
+    const u32 step = line_of(text, R"(input.time_step() {domain = "sim"})", 0U);
+    const u32 sw   = line_of(text, "core.switch", 0U);
+    REQUIRE(step != 0U);
+    REQUIRE(sw != 0U);
+
+    // In process: a step over the program's budget (50 ms against 33.3 ms), held at the switch, which then fails.
+    const crd::i64                       args[1]    = {7};
+    const u32                            breaks[1]  = {sw};
+    const u32                            watches[1] = {step};
+    const crd::ceridc::InspectClockFlags hitch{nullptr, "4000000000", "50000000"};
+    const String report =
+        crd::ceridc::verb_inspect(kClockProgram, "main", ConstSpan<crd::i64>(args, 1U), ConstSpan<u32>(breaks, 1U),
+                                  ConstSpan<u32>(watches, 1U), {}, 0U, &g_alloc, kClockRecord, nullptr, &hitch);
+    INFO(report.c_str());
+    CHECK(has(report, R"("wall_clock":"none","sim_time":"set","sim_time_ns":4000000000,"sim_step":"set",)"
+                      R"("sim_step_ns":50000000,)"));
+    CHECK(has(report, fragment(R"("values":[{"line":%u,"status":"available","type":"!i64","unit":false,)"
+                               R"("value":50000000}])",
+                               step)));
+    CHECK(has(report, "\"outcome\":\"error\",\"error\":\"selector-out-of-range\""));
+    CHECK(has(report, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(report, "\"input_reads\":1}"));
+
+    // No clock: the first read, the step, fails.
+    const String none =
+        crd::ceridc::verb_inspect(kClockProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {}, 0U, &g_alloc);
+    CHECK(has(none, R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,"sim_step":"none","sim_step_ns":0,)"));
+    CHECK(has(none, "\"outcome\":\"error\",\"error\":\"input-unavailable\""));
+
+    // A malformed clock flag is refused before anything runs.
+    struct Bad
+    {
+        crd::ceridc::InspectClockFlags flags;
+        const char*                    reason;
+    };
+    const Bad bad[] = {
+        {{"frame", nullptr, nullptr}, "a --clock is wall"},
+        {{"", nullptr, nullptr}, "a --clock is wall"},
+        {{nullptr, "x", nullptr}, "a --sim-time is a decimal i64 count of nanoseconds"},
+        {{nullptr, "9223372036854775808", nullptr}, "a --sim-time is a decimal i64 count of nanoseconds"},
+        {{nullptr, nullptr, "1.5"}, "a --sim-step is a decimal i64 count of nanoseconds"},
+        {{nullptr, nullptr, ""}, "a --sim-step is a decimal i64 count of nanoseconds"},
+    };
+    for (const Bad& b : bad)
+    {
+        INFO(b.reason);
+        const String refused = crd::ceridc::verb_inspect(kClockProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {},
+                                                         {}, 0U, &g_alloc, nullptr, nullptr, &b.flags);
+        CHECK(has(refused, b.reason));
+        CHECK_FALSE(has(refused, "\"stops\""));
+    }
+
+    // The real binary records the step failure, and a run within budget that reads the live wall.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr);
+    char cmd[2048];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" inspect --program %s --arg 7 --sim-time 4000000000 --sim-step 50000000 --record %s "
+                        "> %s",
+                        exe, kClockProgram, kCliClockRecord, kOut);
+    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    String cli(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
+    INFO(cli.c_str());
+    CHECK(has(cli, "\"sim_step\":\"set\",\"sim_step_ns\":50000000,"));
+    CHECK(has(cli, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(cli, "\"input_reads\":1}"));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" inspect --program %s --arg 7 --clock wall --sim-time 4000000000 --sim-step 16666667 "
+                        "--record %s > %s",
+                        exe, kClockProgram, kCliWallRecord, kOut);
+    REQUIRE(std::system(cmd) == 0); // the run finishes
+    String wall(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), wall));
+    INFO(wall.c_str());
+    CHECK(has(wall, R"("wall_clock":"live","sim_time":"set","sim_time_ns":4000000000,"sim_step":"set",)"));
+    CHECK(has(wall, "\"outcome\":\"finished\""));
+    CHECK(has(wall, "\"input_reads\":3}"));
+
+    // The program file is edited: its step read now asks for the frame domain.
+    String            edited(&g_alloc);
+    const char* const from = std::strstr(text.c_str(), R"(input.time_step() {domain = "sim"})");
+    REQUIRE(from != nullptr);
+    const char* const to = R"(input.time_step() {domain = "frame"})";
+    edited.append(text.c_str(), static_cast<crd::usize>(from - text.c_str()));
+    edited.append(to);
+    edited.append(from + std::strlen(R"(input.time_step() {domain = "sim"})"));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kClockProgram)),
+                                crd::containers::StringView(edited.c_str(), edited.size())));
+
+    // Other processes, with no clock: each record reproduces from its own program and reads alone (the in-process
+    // record too), and against the edited file the step failure is named at the edited read.
+    for (const char* rec : {kClockRecord, kCliClockRecord, kCliWallRecord})
+    {
+        INFO(rec);
+        (void)std::snprintf(cmd, sizeof(cmd),
+                            "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
+        REQUIRE(std::system(cmd) == 0);
+        String replayed(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
+        INFO(replayed.c_str());
+        CHECK(has(replayed, "\"result\":\"reproduced\""));
+    }
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kCliClockRecord, kClockProgram, kOut);
+    REQUIRE(std::system(cmd) == 0);
+    String diverged(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
+    INFO(diverged.c_str());
+    CHECK(has(diverged, "\"result\":\"diverged\""));
+    CHECK(has(diverged, "\"divergence\":\"input\""));
+    CHECK(has(diverged, "\"recorded_input\":\"time_step\""));
+    CHECK(has(diverged, fragment("\"line\":%u,", step)));
+    for (const char* f : {kClockProgram, kClockRecord, kCliClockRecord, kCliWallRecord, kOut})
     {
         (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
     }

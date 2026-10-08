@@ -19,9 +19,6 @@ namespace insp = crd::ceir::inspect;
 // hanging if something else (a native debugger) holds that thread.
 constexpr crd::u32 kSnapshotMs = 2000U;
 
-// The seeded source's own allocator grows from a small first chunk: it holds one counter per random stream.
-constexpr crd::usize kSeedChunkBytes = crd::usize{64} << 10U;
-
 // The dialects the compiled plan runs (its scalar host subset), installed into every generation's Context.
 void register_program_dialects(ceir::Context& ctx, void* /*user*/)
 {
@@ -103,9 +100,9 @@ bool parse_panel_action(containers::StringView s, PanelAction& out) noexcept
 }
 
 InspectPanel::InspectPanel(memory::IAllocator* alloc, scenerender::SceneRenderer& programs)
-    : m_alloc(alloc), m_programs(&programs), m_seed_alloc(kSeedChunkBytes, nullptr, "sandbox-inspect-inputs"),
-      m_seeded(0U, &m_seed_alloc), m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc), m_watches(alloc),
-      m_values(alloc), m_script(alloc)
+    : m_alloc(alloc), m_programs(&programs), m_run_inputs("sandbox-inspect-inputs"),
+      m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc), m_watches(alloc), m_values(alloc),
+      m_script(alloc)
 {
 }
 
@@ -184,11 +181,20 @@ ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args,
 {
     if (m_host.running())
     {
-        m_last_refusal = insp::Refusal::Busy; // the running execution still reads the seeded streams
+        m_last_refusal = insp::Refusal::Busy; // the running execution still reads the host inputs
         return m_last_refusal;
     }
-    m_seeded.reset(m_inputs.seed); // every run reads its streams from their first draw
-    const insp::Refusal r = m_host.start(args, recording, m_inputs.seeded ? m_seeded.source() : nullptr);
+    // Every run reads its streams from their first draw, and the clock as it is now.
+    m_run_inputs.set(m_inputs.seeded, m_inputs.seed, m_inputs.clock);
+    if (m_inputs.frame_clock)
+    {
+        ceir::input::HostClock& clock = m_run_inputs.clock();
+        clock.set_reading(ceir::cook::kSimDomain, m_frame_time_ns);
+        clock.set_step(ceir::cook::kSimDomain, m_frame_step_ns);
+        clock.set_reading(ceir::cook::kFrameDomain, m_frame_index);
+        clock.set_step(ceir::cook::kFrameDomain, 1);
+    }
+    const insp::Refusal r = m_host.start(args, recording, m_run_inputs.source());
     m_last_refusal        = r;
     if (r == insp::Refusal::None)
     {

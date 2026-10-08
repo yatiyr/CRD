@@ -7,7 +7,9 @@
 // refused with its line and column. The stop bound truncates; a scripted cancel ends the run; the caller's cancel flag
 // ends it at a stop and while it runs. DIAG.9a: `seed=` gives the run a seeded host random source, whose draws the
 // held run reads (assets/ceir/random_demo.ceir); without it a draw fails where it is authored. Expected lines come from
-// scanning the committed text, never from the parser. ASCII test names (ctest by-name).
+// scanning the committed text, never from the parser. `clock=`, `sim_time=` and `sim_step=` give the run a host clock
+// (assets/ceir/clock_demo.ceir): the held run reads the step it was given, a live wall lets it finish, and a domain the
+// request leaves unset fails its read where it is authored. ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_diag.hpp>
 
@@ -56,6 +58,8 @@ constexpr const char* kAssets      = CRD_REPO_DIR "/assets";
 constexpr const char* kAsset       = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
 constexpr const char* kRandomFile  = "ceir/random_demo.ceir"; // DIAG.9a
 constexpr const char* kRandomAsset = CRD_REPO_DIR "/assets/ceir/random_demo.ceir";
+constexpr const char* kClockFile   = "ceir/clock_demo.ceir"; // DIAG.9a
+constexpr const char* kClockAsset  = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir";
 
 // This case's own scratch file in the working directory (the file root ".").
 constexpr const char* kBrokenFile = "diag8c_inspect_broken.ceir";
@@ -316,7 +320,8 @@ TEST_CASE("diag 8c: program.inspect runs an authored program to its script under
     CHECK(r.complete);
     CHECK(has(view(r.json), R"("path":"ceir/inspect_demo.ceir","entry":"main",)"));
     CHECK(has(view(r.json), R"("breakpoints":1,"stops":3,"max_stops":64,"random_source":"none","seed":0,)"
-                            R"("truncated":false,"outcome":"finished",)"));
+                            R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,"sim_step":"none",)"
+                            R"("sim_step_ns":0,"truncated":false,"outcome":"finished",)"));
     CHECK(has(view(r.json), R"("error":"none","fault_line":0,"fault_col":0,"results":1})"));
     CHECK_FALSE(has(view(r.json), StringView{CRD_REPO_DIR})); // the host's root never reaches the answer
 
@@ -441,6 +446,10 @@ TEST_CASE("diag 8c: program.inspect refuses before any work and names where a so
             {"seed not a number", {"seed", "x"}, DiagStatus::BadArgument},
             {"negative seed", {"seed", "-1"}, DiagStatus::BadArgument},
             {"seed overflow", {"seed", "18446744073709551616"}, DiagStatus::BadArgument},
+            {"clock not wall", {"clock", "frame"}, DiagStatus::BadArgument},
+            {"sim time not a number", {"sim_time", "x"}, DiagStatus::BadArgument},
+            {"fractional sim step", {"sim_step", "1.5"}, DiagStatus::BadArgument},
+            {"sim time overflow", {"sim_time", "9223372036854775808"}, DiagStatus::BadArgument},
             {"value over its bound", {"args", view(long_value)}, DiagStatus::Oversized},
         };
         for (const Bad& b : bad)
@@ -535,8 +544,9 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         const DiagResult r      = svc.execute(inspect_request(kFile, {args, 3U}));
         INFO(r.json.c_str());
         REQUIRE(r.status == DiagStatus::Ok);
-        CHECK(has(view(r.json), R"("stops":2,"max_stops":2,"random_source":"none","seed":0,"truncated":true,)"
-                                R"("outcome":"cancelled",)"));
+        CHECK(has(view(r.json), R"("stops":2,"max_stops":2,"random_source":"none","seed":0,"wall_clock":"none",)"
+                                R"("sim_time":"none","sim_time_ns":0,"sim_step":"none","sim_step_ns":0,)"
+                                R"("truncated":true,"outcome":"cancelled",)"));
         CHECK(count(view(r.json), view(fragment(R"("reason":"breakpoint","file":"ceir/inspect_demo.ceir","line":%u,)",
                                                 {ln.x.line}, &root))) == 2U);
         CHECK_FALSE(has(view(r.json), R"("kind":"result")"));
@@ -552,8 +562,9 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         const DiagResult r      = svc.execute(inspect_request(kFile, {args, 3U}));
         INFO(r.json.c_str());
         REQUIRE(r.status == DiagStatus::Ok);
-        CHECK(has(view(r.json), R"("stops":2,"max_stops":64,"random_source":"none","seed":0,"truncated":false,)"
-                                R"("outcome":"cancelled",)"));
+        CHECK(has(view(r.json), R"("stops":2,"max_stops":64,"random_source":"none","seed":0,"wall_clock":"none",)"
+                                R"("sim_time":"none","sim_time_ns":0,"sim_step":"none","sim_step_ns":0,)"
+                                R"("truncated":false,"outcome":"cancelled",)"));
         CHECK(has(view(r.json), R"("sequence":2,)"));
         CHECK(has(view(r.json), R"("action":"cancel"})"));
     }
@@ -674,5 +685,103 @@ TEST_CASE("diag 9a: program.inspect reads the draws of the seed it is given", "[
         CHECK(has(view(r.json), R"("random_source":"none","seed":0,)"));
         CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
         CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {draw.line, draw.col}, &root))));
+    }
+}
+
+TEST_CASE("diag 9a clock: program.inspect reads the host clock it is given", "[ceir][cook][diag][input][clock]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const String                       text = slurp(kClockAsset, &root);
+    const Site                         step = site_of(view(text), R"(input.time_step() {domain = "sim"})", 0U);
+    const Site                         wall = site_of(view(text), R"(input.clock() {domain = "wall"})", 0U);
+    const Site                         simr = site_of(view(text), R"(input.clock() {domain = "sim"})", 0U);
+    const Site                         sum  = site_of(view(text), "%6 = arith.addi", 0U);
+    const Site                         sw   = site_of(view(text), "core.switch", 0U);
+    REQUIRE(step.line != 0U);
+    REQUIRE(wall.line != 0U);
+    REQUIRE(simr.line != 0U);
+    REQUIRE(sum.line != 0U);
+    REQUIRE(sw.line != 0U);
+    constexpr u64 hitch_ns    = 50000000U; // over the program's 33,333,333 ns budget: the switch has no case for it
+    constexpr u64 steady_ns   = 16666667U;
+    constexpr u64 sim_time_ns = 4000000000U;
+
+    ProgramInspectCommand cmd;
+    cmd.registrar = &registrar;
+    DiagCommandService svc(kExecute, rooted(kAssets), &root);
+    REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
+
+    SECTION("a step over budget: the held switch reads the given step, and the run fails there")
+    {
+        const String     breaks  = join({sw.line}, &root);
+        const String     watches = join({step.line}, &root);
+        const String     hitch   = join({hitch_ns}, &root);
+        const DiagArg    args[]  = {
+            {"args", "7"}, {"breaks", view(breaks)}, {"watches", view(watches)}, {"sim_step", view(hitch)}};
+        const DiagResult r = svc.execute(inspect_request(kClockFile, {args, 4U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), view(fragment(R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,)"
+                                              R"("sim_step":"set","sim_step_ns":%u,)",
+                                              {hitch_ns}, &root))));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"selector-out-of-range",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {sw.line, sw.col}, &root))));
+        const Array<String> items = items_of(r, &root);
+        REQUIRE(items.size() == 3U); // the breakpoint, its one stop and the watched step
+        CHECK(view(items[2]) == view(fragment(R"({"kind":"value","stop":1,"line":%u,"status":"available",)"
+                                              R"("type":"!i64","unit":false,"value":%u})",
+                                              {step.line, hitch_ns}, &root)));
+    }
+    SECTION("a step within budget, a sim reading and the live wall: the run finishes on their sum")
+    {
+        const String     breaks   = join({sum.line}, &root);
+        const String     watches  = join({simr.line}, &root);
+        const String     steady   = join({steady_ns}, &root);
+        const String     sim_time = join({sim_time_ns}, &root);
+        const DiagArg    args[]   = {{"args", "7"},     {"breaks", view(breaks)},     {"watches", view(watches)},
+                                     {"clock", "wall"}, {"sim_time", view(sim_time)}, {"sim_step", view(steady)}};
+        const DiagResult r        = svc.execute(inspect_request(kClockFile, {args, 6U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), view(fragment(R"("wall_clock":"live","sim_time":"set","sim_time_ns":%u,)"
+                                              R"("sim_step":"set","sim_step_ns":%u,)",
+                                              {sim_time_ns, steady_ns}, &root))));
+        CHECK(has(view(r.json), R"("outcome":"finished","error":"none",)"));
+        const Array<String> items = items_of(r, &root);
+        REQUIRE(items.size() == 4U); // the breakpoint, its stop, the watched sim reading and the result
+        CHECK(view(items[2]) == view(fragment(R"({"kind":"value","stop":1,"line":%u,"status":"available",)"
+                                              R"("type":"!i64","unit":false,"value":%u})",
+                                              {simr.line, sim_time_ns}, &root)));
+        // The result is the wall reading (nanoseconds since the run's clock was made) plus the sim reading plus 7.
+        const StringView result = view(items[3]);
+        const StringView key    = R"("value":)";
+        const usize      at     = result.find(key);
+        REQUIRE(at != StringView::npos);
+        u64 total = 0U;
+        for (usize i = at + key.size(); i < result.size() && result[i] >= '0' && result[i] <= '9'; ++i)
+        {
+            total = total * 10U + static_cast<u64>(result[i] - '0');
+        }
+        CHECK(total >= sim_time_ns + 7U);
+    }
+    SECTION("no wall: the step passes and the wall read fails where it is authored")
+    {
+        const String     steady = join({steady_ns}, &root);
+        const DiagArg    args[] = {{"args", "7"}, {"sim_step", view(steady)}};
+        const DiagResult r      = svc.execute(inspect_request(kClockFile, {args, 2U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {wall.line, wall.col}, &root))));
+    }
+    SECTION("no clock at all: the first read, the step, fails where it is authored")
+    {
+        const DiagArg    args[] = {{"args", "7"}};
+        const DiagResult r      = svc.execute(inspect_request(kClockFile, {args, 1U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,"sim_step":"none",)"));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {step.line, step.col}, &root))));
     }
 }

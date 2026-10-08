@@ -17,6 +17,11 @@
 //                                   overwrites; a cancelled run writes none); `replay.run` reproduces it.
 //   --inspect-seed <u64>          — DIAG.9a: every inspected run (and "Run again") reads input.random draws of this
 //                                   seed, from the first; without it the host has no random source and a draw fails.
+//   --inspect-clock wall, --inspect-sim-time <ns>, --inspect-sim-step <ns> — DIAG.9a: the time domains every inspected
+//                                   run reads (input.clock / input.time_step), as replay.record's clock arguments.
+//   --inspect-frame-clock         — DIAG.9a: the sim and frame domains read this frame loop's clock (its time and last
+//                                   frame step, its frame index) as it is at each run's start; not with
+//                                   --inspect-sim-time or --inspect-sim-step.
 // DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
 //   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
 //                                   page of its answer
@@ -735,7 +740,34 @@ int main(int argc, char** argv)
             {
                 inspect_args_ok = false;
             }
-            inspect_inputs = crd::sandbox::PanelInputs{true, static_cast<crd::u64>(v)};
+            inspect_inputs.seeded = true;
+            inspect_inputs.seed   = static_cast<crd::u64>(v);
+        }
+        else if ((std::strcmp(argv[i], "--inspect-clock") == 0 || std::strcmp(argv[i], "--inspect-sim-time") == 0
+                  || std::strcmp(argv[i], "--inspect-sim-step") == 0)
+                 && i + 1 < argc)
+        {
+            // The shared clock arguments, checked whole: a typo must not silently become another time.
+            const char* name = "sim_step";
+            if (std::strcmp(argv[i], "--inspect-clock") == 0)
+            {
+                name = "clock";
+            }
+            else if (std::strcmp(argv[i], "--inspect-sim-time") == 0)
+            {
+                name = "sim_time";
+            }
+            crd::containers::StringView requirement;
+            if (crd::ceir::cook::parse_clock_argument(crd::containers::StringView(name),
+                                                      crd::containers::StringView(argv[++i]), &inspect_inputs.clock,
+                                                      requirement) != crd::ceir::cook::ClockArgument::Ok)
+            {
+                inspect_args_ok = false;
+            }
+        }
+        else if (std::strcmp(argv[i], "--inspect-frame-clock") == 0)
+        {
+            inspect_inputs.frame_clock = true;
         }
         else if (std::strcmp(argv[i], "--inspect-arg") == 0 && i + 1 < argc)
         {
@@ -792,11 +824,17 @@ int main(int argc, char** argv)
     cfg.async = false;
     crd::log::init(cfg);
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
+    if (inspect_inputs.frame_clock && (inspect_inputs.clock.has_sim_time || inspect_inputs.clock.has_sim_step))
+    {
+        inspect_args_ok = false; // the frame clock is the sim domain: two sources for one domain is a mistake
+    }
     if (!inspect_args_ok)
     {
         CRD_LOG_ERROR(g_log_sandbox,
                       "--inspect-break/--inspect-watch take 1-based lines (at most {} each); --inspect-step takes "
-                      "continue|into|over|out|cancel, comma-separated; --inspect-seed takes a decimal u64",
+                      "continue|into|over|out|cancel, comma-separated; --inspect-seed takes a decimal u64; "
+                      "--inspect-clock takes wall; --inspect-sim-time/--inspect-sim-step take i64 nanoseconds and "
+                      "not with --inspect-frame-clock",
                       kInspectMaxLines);
         crd::log::shutdown();
         return 1;
@@ -1347,6 +1385,9 @@ int main(int argc, char** argv)
             return 1;
         }
         inspect_panel->set_inputs(inspect_inputs);
+        // The first run starts before the first frame: its frame clock is time 0, frame 0, with the fixed step when
+        // --fixed-dt gives one (else 0).
+        inspect_panel->set_frame_clock(0, static_cast<crd::i64>(fixed_dt_ms * 1.0e6), 0);
         if (inspect_panel->start(crd::containers::ConstSpan<crd::i64>(&inspect_arg, 1U),
                                  crd::ceir::cook::HostRecording{inspect_record != nullptr, 0U})
             != crd::ceir::inspect::Refusal::None)
@@ -1640,6 +1681,7 @@ int main(int argc, char** argv)
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
     const auto smoke_start_time    = std::chrono::steady_clock::now();
+    crd::f64   inspect_last_tsec   = 0.0; // DIAG.9a: the frame clock's previous time, for its step
     while (app.is_running())
     {
         if (!app.tick())
@@ -1689,6 +1731,16 @@ int main(int argc, char** argv)
             fixed_dt_ms > 0.0
                 ? static_cast<crd::f64>(frames_with_present) * (fixed_dt_ms / 1000.0)
                 : std::chrono::duration<crd::f64>(std::chrono::steady_clock::now() - smoke_start_time).count();
+
+        // ⭐⭐ DIAG.9a: the frame loop's clock (frame-counter driven under --fixed-dt), which an
+        // --inspect-frame-clock run reads as it is at that run's start ("Run again" in the window below).
+        if (inspect_panel != nullptr)
+        {
+            inspect_panel->set_frame_clock(static_cast<crd::i64>(tsec * 1.0e9),
+                                           static_cast<crd::i64>((tsec - inspect_last_tsec) * 1.0e9),
+                                           static_cast<crd::i64>(frames_with_present));
+            inspect_last_tsec = tsec;
+        }
 
         // GEO-8: advance the animated ring's playheads (declared writes — palettes re-sample each sync)
         {

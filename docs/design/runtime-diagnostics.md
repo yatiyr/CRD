@@ -1011,13 +1011,41 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-clock-inputs.md)):
   `assets/ceir/clock_demo.ceir` fails when the sim step is over 33,333,333 ns and otherwise returns the wall reading
   plus the sim reading plus its argument: a failure recorded by one `ceridc` process reproduces in another with no
   clock, and a live-wall result replays to the recorded value.
+- What stayed open after this batch is listed at the end of the next settled block (the clock at the interactive
+  hosts it named is settled there).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-interactive-host-clock.md)):
+- A clock at the interactive hosts. One parser serves every one-shot host's clock arguments,
+  `cook::parse_clock_argument` (`replay_diag.hpp`): `clock` (only `wall`), `sim_time` and `sim_step` (decimal i64
+  nanoseconds) give `NotClock`, `Ok` (set in a `HostClockSpec`) or `Refused` with what the value must be.
+  `replay.record` now uses it too, so its refusals are unchanged.
+- One input bundle serves the interactive hosts, `cook::RunInputs`: a `SeededInputs` on its own allocator (the inspect
+  host's threading rule), a `HostClock` and an `InputRouter` sending Random to the seeded source (or none) and Clock
+  and TimeStep to the clock. `set(seeded, seed, spec)` starts the next run over: every stream from draw 0, the clock
+  from no reading (a live wall's epoch is that call). `clock()` lets a host set more domains between runs. The host
+  keeps it alive until the run has ended, so it is declared before the host. A host with no seed and no clock reads
+  through it exactly as through no source: every read fails `input-unavailable` and a record keeps the failed read.
+- Consumers: `program.inspect clock= sim_time= sim_step=` (checked in the service's argument step; the summary
+  answers `wall_clock`, `sim_time`, `sim_time_ns`, `sim_step` and `sim_step_ns` after `seed`, the fields
+  `replay.record` answers, so three existing summary assertions were updated); `ceridc inspect --clock wall
+  --sim-time <ns> --sim-step <ns>` (`InspectClockFlags`; refused before anything runs; the report names the same five
+  fields); crd-sandbox's `--inspect-clock`, `--inspect-sim-time` and `--inspect-sim-step` (`PanelInputs::clock`,
+  applied at every `start`, "Run again" included).
+- The sandbox frame loop's clock. `--inspect-frame-clock` (`PanelInputs::frame_clock`) gives a run the frame loop's
+  clock as it is at the run's start: the sim domain reads the loop's time and its last frame step in nanoseconds (the
+  frame counter's under `--fixed-dt`, so deterministic there), the frame domain reads the frame index with a step of
+  one frame. The loop hands the panel its clock every frame (`set_frame_clock`), and the panel copies it into the
+  run's clock only in `start`, on the controller thread before the run's thread exists. The clock never changes while
+  a run reads it, so a run held across frames keeps reading its start's frame clock; a run that read a live frame
+  clock would need a per-domain reader that is safe to call from the executing thread, which nothing needs yet. The
+  first run starts before the first frame (time 0, frame 0, the fixed step or 0). It replaces the spec's sim domain;
+  the sandbox refuses it together with `--inspect-sim-time` or `--inspect-sim-step`.
 - Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
   interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
-  input events and external I/O completions, which need their ops specified before the seam can carry them; a clock at
-  the interactive hosts (`ceridc inspect`, `program.inspect` and the sandbox panel take a random source only; the
-  sandbox frame loop's real frame step is the natural live source); backend-specific numeric replay of GPU dispatches
-  with a declared tolerance; network and physical effects stubbed only in explicit test replay; host records from
-  crd-sandbox's panel (it would need the request run on an enrolled thread).
+  input events and external I/O completions, which need their ops specified before the seam can carry them;
+  backend-specific numeric replay of GPU dispatches with a declared tolerance; network and physical effects stubbed
+  only in explicit test replay; host records from crd-sandbox's panel (it would need the request run on an enrolled
+  thread).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

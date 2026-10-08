@@ -60,8 +60,6 @@ void join(cont::StringView root, cont::StringView relative, cont::String& out)
 
 // ---- replay.record --------------------------------------------------------------------------------------------------
 
-constexpr crd::u32 kSimDomain = 1U; // time::builtin_domain_index("sim")
-
 struct RecordArgs
 {
     explicit RecordArgs(crd::memory::IAllocator* alloc) : args(alloc) {}
@@ -96,9 +94,10 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
 // Parse every argument; `out` null validates only.
 [[nodiscard]] DiagStatus parse_record_args(cont::ConstSpan<DiagArg> args, RecordArgs* out, cont::String& reason)
 {
-    bool have_out      = false;
-    bool host          = false;
-    bool have_schedule = false;
+    bool             have_out      = false;
+    bool             host          = false;
+    bool             have_schedule = false;
+    cont::StringView requirement;
     for (const DiagArg& a : args)
     {
         if (a.name == "entry")
@@ -196,33 +195,13 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
                 out->seed      = v;
             }
         }
-        else if (a.name == "clock")
+        else if (const ClockArgument c =
+                     parse_clock_argument(a.name, a.value, out != nullptr ? &out->clock : nullptr, requirement);
+                 c != ClockArgument::NotClock)
         {
-            if (a.value != "wall")
+            if (c == ClockArgument::Refused)
             {
-                return bad(reason, a.name, "must be 'wall'");
-            }
-            if (out != nullptr)
-            {
-                out->clock.live_wall = true;
-            }
-        }
-        else if (a.name == "sim_time" || a.name == "sim_step")
-        {
-            crd::i64 v = 0;
-            if (!detail::parse_i64(a.value, v))
-            {
-                return bad(reason, a.name, "must be an i64 count of nanoseconds");
-            }
-            if (out != nullptr && a.name == "sim_time")
-            {
-                out->clock.has_sim_time = true;
-                out->clock.sim_time     = v;
-            }
-            else if (out != nullptr)
-            {
-                out->clock.has_sim_step = true;
-                out->clock.sim_step     = v;
+                return bad(reason, a.name, requirement);
             }
         }
         else if (a.name == "sub_fuel")
@@ -386,13 +365,9 @@ struct FaultSite
         .u64("fault_col", fault.col)
         .u64("results", record.results.size())
         .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
-        .u64("seed", parsed.seed)
-        .str("wall_clock", parsed.clock.live_wall ? cont::StringView{"live"} : cont::StringView{"none"})
-        .str("sim_time", parsed.clock.has_sim_time ? cont::StringView{"set"} : cont::StringView{"none"})
-        .i64("sim_time_ns", parsed.clock.sim_time)
-        .str("sim_step", parsed.clock.has_sim_step ? cont::StringView{"set"} : cont::StringView{"none"})
-        .i64("sim_step_ns", parsed.clock.sim_step)
-        .u64("input_reads", record.input_reads_total)
+        .u64("seed", parsed.seed);
+    detail::clock_fields(out.summary, parsed.clock);
+    out.summary.u64("input_reads", record.input_reads_total)
         .str("missing_inputs", missing)
         .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
     return DiagStatus::Ok;
@@ -940,6 +915,61 @@ void apply_clock(const HostClockSpec& spec, input::HostClock& clock) noexcept
     {
         clock.set_step(kSimDomain, spec.sim_step);
     }
+}
+
+ClockArgument parse_clock_argument(cont::StringView name, cont::StringView value, HostClockSpec* spec,
+                                   cont::StringView& requirement) noexcept
+{
+    if (name == "clock")
+    {
+        if (value != "wall")
+        {
+            requirement = cont::StringView{"must be 'wall'"};
+            return ClockArgument::Refused;
+        }
+        if (spec != nullptr)
+        {
+            spec->live_wall = true;
+        }
+        return ClockArgument::Ok;
+    }
+    if (name != "sim_time" && name != "sim_step")
+    {
+        return ClockArgument::NotClock;
+    }
+    crd::i64 v = 0;
+    if (!detail::parse_i64(value, v))
+    {
+        requirement = cont::StringView{"must be an i64 count of nanoseconds"};
+        return ClockArgument::Refused;
+    }
+    if (spec != nullptr && name == "sim_time")
+    {
+        spec->has_sim_time = true;
+        spec->sim_time     = v;
+    }
+    else if (spec != nullptr)
+    {
+        spec->has_sim_step = true;
+        spec->sim_step     = v;
+    }
+    return ClockArgument::Ok;
+}
+
+// A seeded source holds one counter per random stream, so its own allocator grows from a small first chunk.
+constexpr crd::usize kRunInputsChunkBytes = crd::usize{64} << 10U;
+
+RunInputs::RunInputs(const char* name) : m_alloc(kRunInputsChunkBytes, nullptr, name), m_seeded(0U, &m_alloc)
+{
+    m_router.route(input::InputKind::Clock, m_clock.source());
+    m_router.route(input::InputKind::TimeStep, m_clock.source());
+}
+
+void RunInputs::set(bool seeded, crd::u64 seed, const HostClockSpec& clock)
+{
+    m_seeded.reset(seed);
+    m_router.route(input::InputKind::Random, seeded ? m_seeded.source() : nullptr);
+    apply_clock(clock, m_clock);
 }
 
 bool register_replay_record(perf::DiagCommandService& service, ReplayCommands& commands)

@@ -12,7 +12,9 @@
 // with no clock; the clock input stored missing when a read is past the bound or outside the seam, and the replay
 // refused; malformed clock arguments refused before anything runs; the record format refusing a time read of an
 // unknown domain; and the inspect host, given a host clock, recording exactly the unobserved run's reads, and past the
-// bound storing the clock missing. ASCII test names (ctest by-name).
+// bound storing the clock missing. The clock arguments every one-shot host shares parse whole, and RunInputs (the
+// inputs program.inspect, ceridc inspect and the sandbox panel give a run) routes a seed and a clock spec and starts
+// every run over. ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -736,4 +738,100 @@ TEST_CASE("diag 9a clock: an inspected run that reads the clock more often than 
     String missing(&alloc);
     CHECK_FALSE(ck::record_missing_inputs(rec, missing));
     CHECK(view(missing) == "clock");
+}
+
+TEST_CASE("diag 9a clock: the shared clock arguments parse whole, and a one-shot host's inputs route them",
+          "[ceir][cook][diag][input][clock]")
+{
+    using ck::ClockArgument;
+    StringView requirement;
+
+    // Only the three clock names are clock arguments; each value is checked whole.
+    CHECK(ck::parse_clock_argument("seed", "1", nullptr, requirement) == ClockArgument::NotClock);
+    CHECK(ck::parse_clock_argument("Clock", "wall", nullptr, requirement) == ClockArgument::NotClock);
+    struct Bad
+    {
+        const char* name;
+        const char* value;
+    };
+    const Bad bad_values[] = {
+        {"clock", "frame"}, {"clock", ""},      {"clock", "wall "}, {"sim_time", "x"},
+        {"sim_time", ""},   {"sim_step", "1.5"}, {"sim_step", "+1"}, {"sim_time", "9223372036854775808"},
+    };
+    for (const Bad& bad : bad_values)
+    {
+        INFO(bad.name << "=" << bad.value);
+        ck::HostClockSpec spec;
+        requirement = StringView{};
+        CHECK(ck::parse_clock_argument(StringView{bad.name}, StringView{bad.value}, &spec, requirement) ==
+              ClockArgument::Refused);
+        CHECK_FALSE(requirement.empty());
+        CHECK_FALSE(spec.live_wall);
+        CHECK_FALSE(spec.has_sim_time);
+        CHECK_FALSE(spec.has_sim_step);
+    }
+    ck::HostClockSpec spec;
+    CHECK(ck::parse_clock_argument("clock", "wall", &spec, requirement) == ClockArgument::Ok);
+    CHECK(ck::parse_clock_argument("sim_time", "-9223372036854775808", &spec, requirement) == ClockArgument::Ok);
+    CHECK(ck::parse_clock_argument("sim_step", "50000000", &spec, requirement) == ClockArgument::Ok);
+    CHECK(ck::parse_clock_argument("sim_step", "7", nullptr, requirement) == ClockArgument::Ok); // validates only
+    CHECK(spec.live_wall);
+    CHECK(spec.has_sim_time);
+    CHECK(spec.sim_time == -9223372036854775807LL - 1);
+    CHECK(spec.has_sim_step);
+    CHECK(spec.sim_step == 50000000);
+
+    // A RunInputs routes a seed's streams and a spec's domains; every `set` starts the next run over.
+    using K = input::InputKind;
+    ck::RunInputs             inputs("diag9a-run-inputs");
+    const input::InputSource* src = inputs.source();
+    i64                       v   = 0;
+    inputs.set(false, 0U, ck::HostClockSpec{});
+    CHECK_FALSE(input::read_input(src, K::Random, 0U, v));
+    CHECK_FALSE(input::read_input(src, K::Clock, kSim, v));
+    CHECK_FALSE(input::read_input(src, K::TimeStep, kSim, v));
+
+    ck::HostClockSpec sim;
+    sim.has_sim_time = true;
+    sim.sim_time     = kSimTime;
+    sim.has_sim_step = true;
+    sim.sim_step     = kHitch;
+    for (u32 run = 0U; run < 2U; ++run)
+    {
+        inputs.set(true, 7U, sim);
+        REQUIRE(input::read_input(src, K::Random, 0U, v));
+        CHECK(v == input::SeededInputs::draw(7U, 0U, 0U));
+        REQUIRE(input::read_input(src, K::Random, 0U, v));
+        CHECK(v == input::SeededInputs::draw(7U, 0U, 1U));
+        REQUIRE(input::read_input(src, K::Clock, kSim, v));
+        CHECK(v == kSimTime);
+        REQUIRE(input::read_input(src, K::TimeStep, kSim, v));
+        CHECK(v == kHitch);
+        CHECK_FALSE(input::read_input(src, K::Clock, kWall, v));
+        CHECK_FALSE(input::read_input(src, K::Clock, kFrame, v));
+    }
+
+    // Another run: no seed, a live wall only; the sim domain the last run set is gone.
+    ck::HostClockSpec wall;
+    wall.live_wall = true;
+    inputs.set(false, 7U, wall);
+    CHECK_FALSE(input::read_input(src, K::Random, 0U, v));
+    REQUIRE(input::read_input(src, K::Clock, kWall, v));
+    CHECK(v >= 0);
+    CHECK_FALSE(input::read_input(src, K::Clock, kSim, v));
+    CHECK_FALSE(input::read_input(src, K::TimeStep, kSim, v));
+
+    // A host that sets more domains than a spec does (the sandbox's frame clock) sets them on its clock.
+    inputs.clock().set_reading(ck::kFrameDomain, 42);
+    inputs.clock().set_step(ck::kFrameDomain, 1);
+    REQUIRE(input::read_input(src, K::Clock, kFrame, v));
+    CHECK(v == 42);
+    REQUIRE(input::read_input(src, K::TimeStep, kFrame, v));
+    CHECK(v == 1);
+    CHECK(ck::kWallDomain == kWall);
+    CHECK(ck::kSimDomain == kSim);
+    CHECK(ck::kFrameDomain == kFrame);
+    u32 ordinal = 99U;
+    REQUIRE(crd::ceir::time::builtin_domain_index("frame", ordinal));
+    CHECK(ordinal == ck::kFrameDomain);
 }

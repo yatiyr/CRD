@@ -67,6 +67,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp> // RunInputs
 
 #include <atomic>
 
@@ -117,11 +118,64 @@ struct HostClockSpec
     crd::i64 sim_step     = 0;     // the sim domain's current step, in nanoseconds
 };
 
+// The built-in time domains a host sets by ordinal (time::builtin_domain_index; the seam channel).
+inline constexpr crd::u32 kWallDomain  = 0U;
+inline constexpr crd::u32 kSimDomain   = 1U;
+inline constexpr crd::u32 kFrameDomain = 2U;
+
 // Nanoseconds on crd-time's monotonic clock (an input::HostClock::MonotonicReader; `user` is unused).
 [[nodiscard]] crd::i64 monotonic_ns(void* user) noexcept;
 
 // Set `clock` to what `spec` says, from no reading at all: a live wall's epoch is this call.
 void apply_clock(const HostClockSpec& spec, input::HostClock& clock) noexcept;
+
+// How one clock argument parsed (see parse_clock_argument).
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ClockArgument : crd::u8
+{
+    NotClock = 0, // the name is none of the clock arguments
+    Ok,           // a clock argument with a valid value
+    Refused,      // a clock argument with a malformed value (`requirement` says what it must be)
+};
+
+// The clock arguments every one-shot host shares: `clock` (only `wall`: the live wall), `sim_time` and `sim_step`
+// (decimal i64 nanoseconds: the sim domain's reading and current step). replay.record and program.inspect take them
+// as named arguments, ceridc inspect as --clock, --sim-time and --sim-step, crd-sandbox as --inspect-clock,
+// --inspect-sim-time and --inspect-sim-step. An Ok value is set in `spec` when it is not null.
+[[nodiscard]] ClockArgument parse_clock_argument(containers::StringView name, containers::StringView value,
+                                                 HostClockSpec* spec, containers::StringView& requirement) noexcept;
+
+// The host inputs of one run on a one-shot or interactive host: input.random reads the input::SeededInputs of a seed
+// (no random source without one) and input.clock / input.time_step read a HostClock set from a HostClockSpec (a
+// domain the spec leaves unset has no value). The seeded source grows on its own allocator, because a run reads it on
+// its executing thread while the controller allocates from the caller's (the inspect host's threading rule). A run's
+// host keeps this object alive until the run has ended, so declare it before the host; change it only between runs.
+class RunInputs
+{
+public:
+    explicit RunInputs(const char* name);
+    RunInputs(const RunInputs&)            = delete;
+    RunInputs& operator=(const RunInputs&) = delete;
+    RunInputs(RunInputs&&)                 = delete;
+    RunInputs& operator=(RunInputs&&)      = delete;
+    ~RunInputs()                           = default;
+
+    // The next run's inputs: seeded (`seeded`, from draw 0 of every stream of `seed`) or no random source, and the
+    // clock `clock` describes (a live wall's epoch is this call).
+    void set(bool seeded, crd::u64 seed, const HostClockSpec& clock);
+
+    // The clock, for a host that sets more than a HostClockSpec does (the sandbox's frame domain). Between runs only.
+    [[nodiscard]] input::HostClock& clock() noexcept { return m_clock; }
+
+    // The source to install for the run; it points at this object.
+    [[nodiscard]] const input::InputSource* source() const noexcept { return m_router.source(); }
+
+private:
+    memory::GrowableTlsfAllocator m_alloc;
+    input::SeededInputs           m_seeded;
+    input::HostClock              m_clock;
+    input::InputRouter            m_router;
+};
 
 // One run of a cooked program on the host executor, to be recorded.
 struct HostRecordRequest

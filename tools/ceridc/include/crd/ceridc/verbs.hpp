@@ -71,7 +71,15 @@ namespace crd::ceridc
 // report's `record` object says whether it was written (a cancelled run is not recorded). `seed_text` (null: none) is
 // a decimal u64: the run's host random streams (input.random reads `SeededInputs` of it, and a record keeps every
 // draw); without it the host has no random source and a draw fails input-unavailable. A malformed seed is refused
-// before anything runs.
+// before anything runs. `clock` (null: none) gives the run's time domains, as replay.record's clock arguments do:
+// input.clock and input.time_step read them, a record keeps every read, and a malformed value is refused before
+// anything runs.
+struct InspectClockFlags
+{
+    const char* clock    = nullptr; // --clock: only "wall" (the wall domain reads the host's monotonic clock live)
+    const char* sim_time = nullptr; // --sim-time: a decimal i64, the sim domain's reading in nanoseconds
+    const char* sim_step = nullptr; // --sim-step: a decimal i64, the sim domain's current step in nanoseconds
+};
 [[nodiscard]] crd::containers::String verb_inspect(const char* program_path, const char* entry,
                                                    crd::containers::ConstSpan<crd::i64> args,
                                                    crd::containers::ConstSpan<crd::u32> breaks,
@@ -79,7 +87,8 @@ namespace crd::ceridc
                                                    crd::containers::ConstSpan<const char*> actions,
                                                    crd::u32 max_stops, crd::memory::IAllocator* alloc,
                                                    const char* record_path = nullptr,
-                                                   const char* seed_text   = nullptr);
+                                                   const char* seed_text   = nullptr,
+                                                   const InspectClockFlags* clock = nullptr);
 
 // One request through the host's typed diagnostic command service (crd/perf/diag_commands.hpp). The report is the
 // service's response document unchanged, so a native caller, this verb and the MCP `diag` tool return the same bytes

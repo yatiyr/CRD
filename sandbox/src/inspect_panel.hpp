@@ -19,7 +19,7 @@
 // refused `StaleGeneration` by the session before any work. A load while the program runs or is paused is `Busy`.
 
 #include <crd/ceir/cook/inspect_host.hpp>
-#include <crd/ceir/input.hpp>
+#include <crd/ceir/cook/replay_diag.hpp> // RunInputs, HostClockSpec
 #include <crd/ceir/inspect.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -27,7 +27,6 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
-#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
 
 namespace crd::sandbox
@@ -73,13 +72,20 @@ struct PanelValue
     explicit PanelValue(memory::IAllocator* a) : value(a) {}
 };
 
-// DIAG.9a: the host inputs every run of the panel reads. Seeded: input.random reads the `SeededInputs` of `seed`,
-// started over at draw 0 by every `start` (so "Run again" reads the same draws); otherwise the host has no random
-// source and a draw fails input-unavailable.
+// DIAG.9a: the host inputs every run of the panel reads, set again by every `start`. Seeded: input.random reads the
+// `SeededInputs` of `seed` from draw 0 (so "Run again" reads the same draws); otherwise the host has no random source
+// and a draw fails input-unavailable. `clock`: input.clock and input.time_step read the domains it sets (the live
+// wall, the sim reading and step), as replay.record's clock arguments do; a domain it leaves unset has no value.
+// `frame_clock`: the sim and frame domains read the frame loop's clock (`set_frame_clock`) as it was at the start:
+// sim reads the frame loop's time and its last frame step in nanoseconds, frame reads the frame index with a step of
+// one frame. It replaces `clock`'s sim domain. The clock never changes while a run reads it, so a run held across
+// frames keeps reading its start's frame clock.
 struct PanelInputs
 {
-    bool     seeded = false;
-    crd::u64 seed   = 0U;
+    bool                      seeded = false;
+    crd::u64                  seed   = 0U;
+    ceir::cook::HostClockSpec clock{};
+    bool                      frame_clock = false;
 };
 
 struct PanelLoad
@@ -116,10 +122,18 @@ public:
     // DIAG.9a: the host inputs of every later `start` (see PanelInputs).
     void                      set_inputs(PanelInputs inputs) noexcept { m_inputs = inputs; }
     [[nodiscard]] PanelInputs inputs() const noexcept { return m_inputs; }
+    // DIAG.9a: the frame loop's clock, once per frame: its time and last frame step in nanoseconds and its frame
+    // index. A `frame_clock` run reads the values given before its `start`.
+    void set_frame_clock(crd::i64 time_ns, crd::i64 step_ns, crd::i64 frame) noexcept
+    {
+        m_frame_time_ns = time_ns;
+        m_frame_step_ns = step_ns;
+        m_frame_index   = frame;
+    }
 
     // Start the installed generation with `args` (NotBound before a successful load, Busy while running). DIAG.9a:
     // `recording` records the run on the host; `host().record` gives the run record once it has ended. The run reads
-    // the host inputs `set_inputs` chose, from their first draw.
+    // the host inputs `set_inputs` chose, from their first draw, and the frame clock as it is now.
     [[nodiscard]] ceir::inspect::Refusal start(containers::ConstSpan<crd::i64> args,
                                                ceir::cook::HostRecording recording = {});
 
@@ -156,10 +170,12 @@ private:
     memory::IAllocator*                m_alloc;
     scenerender::SceneRenderer*        m_programs;
     PanelInputs                        m_inputs{};
-    // The seeded source and its own allocator, before m_host: the host's executing thread reads (and grows) it until
-    // joined, while the frame loop allocates from m_alloc.
-    memory::GrowableTlsfAllocator      m_seed_alloc;
-    ceir::input::SeededInputs          m_seeded;
+    crd::i64                           m_frame_time_ns = 0;
+    crd::i64                           m_frame_step_ns = 0;
+    crd::i64                           m_frame_index   = 0;
+    // The run's host inputs, before m_host: the host's executing thread reads (and grows) them until joined, while
+    // the frame loop allocates from m_alloc.
+    ceir::cook::RunInputs              m_run_inputs;
     ceir::cook::InspectHost            m_host;
     containers::String                 m_rel;
     scenerender::ProgramSource         m_source = scenerender::ProgramSource::NotFound;

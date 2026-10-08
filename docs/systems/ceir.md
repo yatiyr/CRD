@@ -113,6 +113,10 @@ value: nanoseconds for `wall` (the host's monotonic clock from the clock's own e
 ticks for the others. `input::HostClock` answers the domains the host set (and a live wall), `input::InputRouter`
 sends each input kind to its own source, and `replay.record` takes `clock=wall`, `sim_time=` and `sim_step=` on both
 executors, so a time-step failure (`assets/ceir/clock_demo.ceir`) reproduces in another process with no clock.
+The interactive hosts take the same clock: `program.inspect clock= sim_time= sim_step=`, `ceridc inspect --clock
+--sim-time --sim-step` and crd-sandbox's `--inspect-clock`, `--inspect-sim-time` and `--inspect-sim-step` (one shared
+parser, `parse_clock_argument`, and one input bundle, `cook::RunInputs`), and crd-sandbox's `--inspect-frame-clock`
+gives a run the frame loop's time, step and frame index as they are at its start.
 
 ## Maturity and further work
 

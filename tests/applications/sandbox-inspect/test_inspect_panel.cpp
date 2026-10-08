@@ -12,7 +12,10 @@
 // recorded on the panel's host and replays without a session to the same trace and fault; a run started again without
 // recording forgets the record. The panel's seeded host inputs reach every run from the first draw (the held run
 // reads them, "Run again" reads the same draws, and the record replays from its draws alone); without inputs a draw
-// fails. Expected lines are scanned from the text, never taken from the parser or the panel.
+// fails. The panel's clock reaches every run: the held run reads the step it was given and the record replays from its
+// reads alone; a frame-clock run reads the frame loop's time, step and frame index as they were at its start, even
+// when the loop moves on while the run is held. Expected lines are scanned from the text, never taken from the parser
+// or the panel.
 // ASCII test names.
 
 #include "inspect_panel.hpp"
@@ -653,4 +656,119 @@ TEST_CASE("diag 9a: the sandbox panel's runs read its seeded host inputs, each r
         REQUIRE(panel.results().size() == 1U);
         CHECK(panel.results()[0] == expected);
     }
+}
+
+TEST_CASE("diag 9a: the sandbox panel's runs read its clock, and a frame-clock run reads the frame loop's at its start",
+          "[sandbox][inspect][diag]")
+{
+    constexpr i64 hitch_ns    = 50000000; // over clock_demo's 33,333,333 ns budget: its switch has no case for it
+    constexpr i64 time_ns     = 2500000000;
+    constexpr i64 step_ns     = 16666667;
+    constexpr i64 frame_index = 150;
+    using crd::ceir::cook::ReplayInputRead;
+    using crd::ceir::input::InputKind;
+
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String text = read_text(fs::Path(StringView(kEngineAssets)) / StringView("ceir/clock_demo.ceir"), &alloc);
+    const u32    step = line_of(sv(text), "input.time_step() {domain = \"sim\"}");
+    const u32    sw   = line_of(sv(text), "core.switch");
+    REQUIRE(step != 0U);
+    REQUIRE(sw != 0U);
+    crd::scenerender::SceneRenderer renderer(&alloc);
+    REQUIRE(renderer.set_asset_root(kEngineAssets));
+
+    // The panel's clock: a sim step over budget. The held switch reads it, the run fails there, and the record holds
+    // that one read and replays from it alone.
+    InspectPanel panel(&alloc, renderer);
+    REQUIRE(panel.load(StringView("ceir/clock_demo"), StringView("main")).ok());
+    REQUIRE(panel.add_breakpoint(sw) == insp::Refusal::None);
+    panel.watch(step);
+    crd::sandbox::PanelInputs inputs;
+    inputs.clock.has_sim_step = true;
+    inputs.clock.sim_step     = hitch_ns;
+    panel.set_inputs(inputs);
+    const i64 args[1] = {7};
+    Frames    frames;
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    CHECK(panel.stop_line() == sw);
+    REQUIRE(value_at(panel, step).value.status == insp::ValueStatus::Available);
+    CHECK(value_at(panel, step).value.bits == hitch_ns);
+    REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    CHECK(panel.error() == crd::ceir::plan::RunError::SelectorOutOfRange);
+    crd::ceir::cook::ReplayRecord rec(&alloc);
+    REQUIRE(panel.host().record(rec) == crd::ceir::cook::HostRecord::Ok);
+    REQUIRE(rec.input_reads.size() == 1U);
+    CHECK(rec.input_reads[0] == ReplayInputRead{InputKind::TimeStep, crd::ceir::cook::kSimDomain, true, hitch_ns});
+    String missing(&alloc);
+    CHECK(crd::ceir::cook::record_missing_inputs(rec, missing));
+    {
+        crd::ceir::Context             ctx(&alloc);
+        crd::ceir::cook::ReplayProgram program(&alloc);
+        crd::ceir::cook::load_replay_program(ctx, {rec.program.data(), rec.program.size()}, "main",
+                                             &register_replay_dialects, nullptr, program);
+        REQUIRE(program.ok());
+        crd::ceir::cook::ReplayTrace trace(&alloc);
+        crd::ceir::cook::InputFeed   feed({rec.input_reads.data(), rec.input_reads.size()}, trace);
+        crd::ceir::cook::run_traced(program, {rec.args.data(), rec.args.size()}, rec.max_events, nullptr, trace,
+                                    feed.source());
+        CHECK(crd::ceir::cook::first_divergence(rec, trace).kind == crd::ceir::cook::DivergenceKind::None);
+    }
+
+    // An application program that reads the frame and sim domains (and their steps), loaded app-first.
+    const AppRoot     app("crd-diag9a-sandbox-frame-clock");
+    const StringView  frame_program = R"(module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0(%0 : !i64):
+        %1 = input.clock() {domain = "frame"} : !i64
+        %2 = input.time_step() {domain = "frame"} : !i64
+        %3 = input.clock() {domain = "sim"} : !i64
+        %4 = input.time_step() {domain = "sim"} : !i64
+        %5 = arith.addi(%1, %2) : !i64
+        %6 = arith.addi(%3, %4) : !i64
+        %7 = arith.addi(%5, %6) : !i64
+        func.return(%7)
+    }
+}
+)";
+    REQUIRE(fs::write_file_text(app.dir / StringView("ceir/frame_clock.ceir"), frame_program));
+    REQUIRE(renderer.set_app_asset_root(String(app.dir.generic(), &alloc).c_str()));
+    const u32 sim_read = line_of(frame_program, "%3 = input.clock");
+    REQUIRE(sim_read != 0U);
+
+    // The frame loop's clock as the run starts; the loop then moves on while the run is held before its sim read.
+    InspectPanel frame_panel(&alloc, renderer);
+    REQUIRE(frame_panel.load(StringView("ceir/frame_clock"), StringView("main")).ok());
+    REQUIRE(frame_panel.add_breakpoint(sim_read) == insp::Refusal::None);
+    crd::sandbox::PanelInputs frame_inputs;
+    frame_inputs.frame_clock = true;
+    frame_panel.set_inputs(frame_inputs);
+    frame_panel.set_frame_clock(time_ns, step_ns, frame_index);
+    REQUIRE(frame_panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) ==
+            insp::Refusal::None);
+    REQUIRE(frames.until(frame_panel, TickEvent::Stopped));
+    CHECK(frame_panel.stop_line() == sim_read);
+    frame_panel.set_frame_clock(time_ns + step_ns, step_ns + 1, frame_index + 1); // the next frame, while held
+    REQUIRE(frame_panel.command(frame_panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(frame_panel, TickEvent::Ended));
+    REQUIRE(frame_panel.state() == PanelState::Finished);
+    REQUIRE(frame_panel.results().size() == 1U);
+    CHECK(frame_panel.results()[0] == frame_index + 1 + time_ns + step_ns);
+    REQUIRE(frame_panel.host().record(rec) == crd::ceir::cook::HostRecord::Ok);
+    REQUIRE(rec.input_reads.size() == 4U);
+    CHECK(rec.input_reads[0] == ReplayInputRead{InputKind::Clock, crd::ceir::cook::kFrameDomain, true, frame_index});
+    CHECK(rec.input_reads[1] == ReplayInputRead{InputKind::TimeStep, crd::ceir::cook::kFrameDomain, true, 1});
+    CHECK(rec.input_reads[2] == ReplayInputRead{InputKind::Clock, crd::ceir::cook::kSimDomain, true, time_ns});
+    CHECK(rec.input_reads[3] == ReplayInputRead{InputKind::TimeStep, crd::ceir::cook::kSimDomain, true, step_ns});
+
+    // "Run again" reads the frame loop's clock as it is at this start.
+    REQUIRE(frame_panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::None);
+    REQUIRE(frames.until(frame_panel, TickEvent::Stopped));
+    REQUIRE(frame_panel.command(frame_panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(frame_panel, TickEvent::Ended));
+    REQUIRE(frame_panel.results().size() == 1U);
+    CHECK(frame_panel.results()[0] == (frame_index + 1) + 1 + (time_ns + step_ns) + (step_ns + 1));
+    CHECK(frames.worst_ms < kFrameBoundMs);
 }

@@ -1,10 +1,21 @@
 #pragma once
 
-// crd-ceir-cook (private) -- the argument parsers the program diagnostic commands share. Each parses one named
-// argument's value as the command's check and handler both see it; none allocates or touches a file.
+// crd-ceir-cook (private) -- the argument parsers and answer fields the program diagnostic commands share. Each
+// parser parses one named argument's value as the command's check and handler both see it; none allocates or touches
+// a file.
 
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
+
+namespace crd::perf
+{
+class DiagFields;
+} // namespace crd::perf
+
+namespace crd::ceir::cook
+{
+struct HostClockSpec;
+} // namespace crd::ceir::cook
 
 namespace crd::ceir::cook::detail
 {
@@ -41,4 +52,8 @@ template <class Fn>
 
 // An entry function name: 1 to `max_bytes` bytes of [A-Za-z0-9_.].
 [[nodiscard]] bool valid_entry_name(containers::StringView name, crd::u32 max_bytes) noexcept;
+
+// The clock a run was given, as every command's answer names it: `wall_clock` (live or none), `sim_time` and
+// `sim_step` (set or none) with their nanoseconds.
+void clock_fields(perf::DiagFields& fields, const HostClockSpec& spec);
 } // namespace crd::ceir::cook::detail
