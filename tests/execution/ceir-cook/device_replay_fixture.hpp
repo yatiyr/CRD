@@ -27,6 +27,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/kir/ckir.hpp>
 #include <crd/kir/ckir_asset.hpp> // ckir_write
+#include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -231,6 +232,72 @@ inline Array<u8> cook(const char* text, memory::IAllocator* alloc)
     REQUIRE(cr.ok());
     return std::move(cr.blob);
 }
+
+// The fixture as files under a diagnostic root (the replay commands' form): the program text at kFile, the kernels'
+// CKIR texts at kKernelDir/scale.ckir and kKernelDir/wave.ckir, and the initial buffers at the four files of
+// kBufferFiles (little-endian 32-bit elements). A fresh folder under the temp directory (or, `in_cwd`, the working
+// directory, for a child process given it as a relative root), removed on scope exit.
+inline constexpr const char* kKernelDir   = "kernels";
+inline constexpr const char* kBufferFiles = "buffers/a.bin,buffers/b.bin,buffers/c.bin,buffers/d.bin";
+
+struct DeviceRoot
+{
+    platform::fs::Path  dir;
+    memory::IAllocator* alloc = nullptr;
+
+    DeviceRoot(const char* tag, const Authored& a, memory::IAllocator* allocator, bool in_cwd = false)
+        : dir(in_cwd ? platform::fs::Path(tag) : platform::fs::temp_directory() / StringView{tag}), alloc(allocator)
+    {
+        (void)platform::fs::remove_all(dir);
+        REQUIRE(platform::fs::create_directories(dir / StringView{"programs/diag"}));
+        REQUIRE(platform::fs::create_directories(dir / StringView{kKernelDir}));
+        REQUIRE(platform::fs::create_directories(dir / StringView{"buffers"}));
+        text(StringView{kFile}, StringView{kProgram});
+        text(StringView{"kernels/scale.ckir"}, StringView{a.scale.data(), a.scale.size()});
+        text(StringView{"kernels/wave.ckir"}, StringView{a.wave.data(), a.wave.size()});
+        words(StringView{"buffers/a.bin"}, a.buffers[0]);
+        words(StringView{"buffers/b.bin"}, a.buffers[1]);
+        words(StringView{"buffers/c.bin"}, a.buffers[2]);
+        words(StringView{"buffers/d.bin"}, a.buffers[3]);
+    }
+    ~DeviceRoot() { (void)platform::fs::remove_all(dir); }
+    DeviceRoot(const DeviceRoot&)            = delete;
+    DeviceRoot& operator=(const DeviceRoot&) = delete;
+    DeviceRoot(DeviceRoot&&)                 = delete;
+    DeviceRoot& operator=(DeviceRoot&&)      = delete;
+
+    [[nodiscard]] StringView root() const noexcept { return dir.generic(); }
+    [[nodiscard]] platform::fs::Path at(StringView relative) const { return dir / relative; }
+
+    void text(StringView relative, StringView contents) const
+    {
+        REQUIRE(platform::fs::write_file_text(at(relative), contents));
+    }
+    void bytes(StringView relative, ConstSpan<u8> contents) const
+    {
+        REQUIRE(platform::fs::write_file_binary(at(relative), contents));
+    }
+    // `elements` as little-endian 32-bit words.
+    void words(StringView relative, ConstSpan<u32> elements) const
+    {
+        Array<u8> b(alloc);
+        for (const u32 w : elements)
+        {
+            b.push_back(static_cast<u8>(w & 0xFFU));
+            b.push_back(static_cast<u8>((w >> 8U) & 0xFFU));
+            b.push_back(static_cast<u8>((w >> 16U) & 0xFFU));
+            b.push_back(static_cast<u8>((w >> 24U) & 0xFFU));
+        }
+        bytes(relative, ConstSpan<u8>{b.data(), b.size()});
+    }
+    [[nodiscard]] Array<u8> read(StringView relative) const
+    {
+        Array<u8> out(alloc);
+        REQUIRE(platform::fs::read_file_binary(at(relative), out));
+        return out;
+    }
+    [[nodiscard]] bool has(StringView relative) const { return platform::fs::exists(at(relative)); }
+};
 
 inline void author(Authored& out, memory::IAllocator* alloc)
 {

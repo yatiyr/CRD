@@ -12,7 +12,11 @@
 // The same holds for a host record (`executor=host`): ceridc binds the host provider as the replay commands' host
 // executor, its diag and mcp verbs own the crd::jobs pool it runs on, and this binary's listener owns the pool for the
 // native and in-process calls. A record of a program that draws random values (`seed=`) holds every draw, so another
-// process reproduces the seeded failure without the seed.
+// process reproduces the seeded failure without the seed. A device record (`executor=device`) runs on the CPU reference
+// executor ceridc binds (it opens no GPU context) from the program, kernel and buffer files under the root, and holds
+// them all, so another process reproduces it after a kernel file is edited and names the edit at its dispatch.
+
+#include "../../execution/ceir-cook/device_replay_fixture.hpp"
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceir/input.hpp>
@@ -100,6 +104,10 @@ constexpr const char* kEventHost       = "ceridc_diag_event_host.crpl";
 constexpr const char* kEventOut        = "ceridc_diag_event_out.json";
 constexpr const char* kEventIn         = "ceridc_diag_event_in.jsonl";
 constexpr const char* kSecondEventLine = "%6, %7, %8, %9, %10 = input.event() {queue = 0} : !i64";
+// DIAG.9a device records: the device fixture's root folder, the binary's answer and the MCP input.
+constexpr const char* kDeviceRoot = "ceridc_diag_device";
+constexpr const char* kDeviceOut  = "ceridc_diag_device_out.json";
+constexpr const char* kDeviceIn   = "ceridc_diag_device_in.jsonl";
 
 // The host provider's crd::jobs pool for the native and in-process calls of this binary (ceridc's own diag and mcp
 // verbs own theirs).
@@ -1500,4 +1508,138 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
     (void)fs::remove_file(fs::Path(StringView(kEventNative)));
     (void)fs::remove_file(fs::Path(StringView(kEventHost)));
     (void)fs::remove_file(fs::Path(StringView(kEventProgram)));
+}
+
+TEST_CASE("diag: a device record made by one ceridc process reproduces in another after a kernel file is edited",
+          "[ceridc][diag]")
+{
+    // DIAG.9a: the two-dispatch device program of the cook fixture, its kernels' CKIR texts and its initial buffers
+    // are files under a scratch root. Process 1 records it on ceridc's device executor (the CPU reference) under a
+    // declared 4-ULP envelope, and the record is this process's native record, byte for byte. @wave's kernel file is
+    // edited (its product scaled by 1.25); process 2 replays the record from the program and kernels it holds and it
+    // reproduces; process 3 replays it against the edited kernel folder and names element 0 of the third buffer at
+    // @wave's dispatch line; an MCP stdio process answers the same. Each answer equals this process's native call.
+    namespace fx    = crd::ceir_test::device_replay;
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    fx::Authored a(&g_alloc);
+    fx::author(a, &g_alloc);
+    // The root is a folder of the working directory (the binary is given it as a relative --root, so no path with
+    // spaces reaches its command line); the answers and the MCP input are files of the working directory.
+    const fx::DeviceRoot root(kDeviceRoot, a, &g_alloc, /*in_cwd=*/true);
+    const crd::u32       wave_line = fx::locate(StringView{fx::kProgram}, StringView{fx::kWaveDispatch}).line;
+    DiagServiceConfig    config;
+    config.root = StringView{kDeviceRoot};
+
+    const auto read_out = [&]()
+    {
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kDeviceOut)), out));
+        while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+        {
+            out.resize(out.size() - 1U);
+        }
+        return out;
+    };
+    const crd::perf::DiagAuthoritySet execute = crd::perf::authority_bit(DiagAuthority::Execute);
+    const auto                        native  = [&](const char* kernel_dir)
+    {
+        DiagCommandService svc(execute, config, &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg args[] = {{"kernel_dir", kernel_dir != nullptr ? kernel_dir : ""}};
+        DiagRequest              r;
+        r.command = "replay.run";
+        r.path    = "device.crpl";
+        r.args    = {args, kernel_dir != nullptr ? 1U : 0U};
+        return svc.execute(r);
+    };
+
+    // Process 1 records the program on the CPU reference under ulp:4.
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=device.crpl --param executor=device "
+                        "--param envelope=ulp:4 --param kernel_dir=%s --param buffers=%s --grant execute,record "
+                        "--root %s > %s",
+                        exe, fx::kFile, fx::kKernelDir, fx::kBufferFiles, kDeviceRoot, kDeviceOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String recorded = read_out();
+    INFO(recorded.c_str());
+    CHECK(has(recorded, "\"executor\":\"device\""));
+    CHECK(has(recorded, "\"backend\":\"cpu-reference\""));
+    CHECK(has(recorded, "\"envelope\":\"ulp\",\"ulps\":4,"));
+    CHECK(has(recorded, "\"replay\":\"replayable\""));
+
+    // This process records the same run natively: the two records are the same bytes.
+    {
+        const crd::perf::DiagAuthoritySet grant = execute | crd::perf::authority_bit(DiagAuthority::Record);
+        DiagCommandService                svc(grant, config, &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg args[] = {{"out", "native.crpl"},
+                                           {"executor", "device"},
+                                           {"envelope", "ulp:4"},
+                                           {"kernel_dir", fx::kKernelDir},
+                                           {"buffers", fx::kBufferFiles}};
+        DiagRequest              r;
+        r.command = "replay.record";
+        r.path    = fx::kFile;
+        r.args    = {args, 5U};
+        REQUIRE(svc.execute(r).status == crd::perf::DiagStatus::Ok);
+        const bool same_bytes = root.read(StringView{"device.crpl"}) == root.read(StringView{"native.crpl"});
+        CHECK(same_bytes); // a bool: no byte dump on failure
+    }
+
+    // @wave's kernel file is edited after the run.
+    const String wave = fx::wave_kernel(&g_alloc, 1.25);
+    root.text(StringView{"kernels/wave.ckir"}, view(wave));
+
+    // Process 2 replays the record from the program and kernels it holds: it reproduces.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path device.crpl --grant execute --root %s > %s", exe,
+                        kDeviceRoot, kDeviceOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String same = read_out();
+    INFO(same.c_str());
+    CHECK(has(same, "\"result\":\"reproduced\""));
+    CHECK(has(same, "\"compared\":768,\"max_distance\":0,"));
+    CHECK(view(same) == view(native(nullptr).json));
+
+    // Process 3 replays it against the edited kernel folder: @wave's first output is outside the envelope.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path device.crpl --param kernel_dir=%s --grant execute "
+                        "--root %s > %s",
+                        exe, fx::kKernelDir, kDeviceRoot, kDeviceOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String diff = read_out();
+    INFO(diff.c_str());
+    CHECK(has(diff, "\"result\":\"diverged\""));
+    CHECK(has(diff, "\"divergence\":\"element\",\"buffer\":2,\"element\":0,\"type\":\"f32\","));
+    char at_line[160];
+    (void)std::snprintf(at_line, sizeof(at_line), R"("dispatch_file":"%s","dispatch_line":%u,)", fx::kFile, wave_line);
+    CHECK(has(diff, at_line));
+    const crd::perf::DiagResult diff_native = native(fx::kKernelDir);
+    CHECK(view(diff) == view(diff_native.json));
+
+    // Over MCP stdio, under the process's execute grant, the tool text is the native document.
+    DiagRequest              r;
+    const crd::perf::DiagArg kernels[] = {{"kernel_dir", fx::kKernelDir}};
+    r.command                          = "replay.run";
+    r.path                             = "device.crpl";
+    r.args                             = {kernels, 1U};
+    String line(&g_alloc);
+    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    line.append(arguments_of(r).c_str());
+    line.append("}}\n");
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kDeviceIn)), view(line)));
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root %s < %s > %s", exe, kDeviceRoot,
+                        kDeviceIn, kDeviceOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String     mcp = read_out();
+    const StringView all = view(mcp);
+    const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
+    REQUIRE(got.parsed);
+    CHECK_FALSE(got.is_error);
+    CHECK(view(got.text) == view(diff_native.json));
+
+    (void)fs::remove_file(fs::Path(StringView(kDeviceIn)));
+    (void)fs::remove_file(fs::Path(StringView(kDeviceOut)));
 }

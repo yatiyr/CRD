@@ -60,9 +60,27 @@
 // (crd/ceir/host/host_replay_diag.hpp) and the host binds it on its ReplayCommands. With none bound, `executor=host`
 // and a host record are refused Unavailable before anything is read or run. The process owns the crd::jobs pool: it
 // must be initialised before a request reaches the host executor.
+//
+// Device records. `replay.record executor=device` records a device program (crd/ceir/cook/device_replay.hpp: a block
+// of index constants, plain buffer declarations and constant-grid compute dispatches) on the host's device executor
+// and writes a device record. It takes `envelope` (`exact` or `ulp:N`, N at most 2^24: declared by whoever records,
+// never inferred), `kernel_dir` (a folder under the root: kernel @k's CKIR text is read from `<kernel_dir>/k.ckir`,
+// each file at most 1 MiB) and `buffers` (comma-separated files under the root, one per declared buffer in declaration
+// order: each holds that buffer's initial contents as little-endian 32-bit elements, at least one, and all of them at
+// most 2^22 elements). A device program has no entry, arguments, trace or host inputs, so `entry`, `args`,
+// `max_events`, `seed`, `clock`, `sim_time`, `sim_step` and `events` are refused with executor=device, and the three
+// device arguments are refused without it. The record holds every kernel's text and every buffer's contents, so its
+// replay reads no file. `replay.run` replays a device record on the host's device executor (record_device_run and
+// replay_device_record answer both commands): `program=` replays it against another program, `kernel_dir=` against the
+// kernel texts in that folder (an edited checkout), `build=any` an ulp record across builds (an exact record is
+// claimed only on its own build and adapter and is refused anywhere else before anything runs). With no device
+// executor bound, executor=device and a device record are refused Unavailable before anything is read or run. The
+// executor runs on the request's thread; the host binds one that may (a GPU host whose queue the request thread may
+// submit to, or the CPU reference).
 // Contract: docs/design/runtime-diagnostics.md.
 
-#include <crd/ceir/cook/hot_reload.hpp> // Registrar
+#include <crd/ceir/cook/device_replay.hpp> // DeviceExecutor
+#include <crd/ceir/cook/hot_reload.hpp>    // Registrar
 #include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/input.hpp> // HostClock
 #include <crd/containers/span.hpp>
@@ -273,7 +291,8 @@ struct ReplayCommands
     void*     user      = nullptr;
     crd::u64  max_program_bytes = 16ULL * 1024ULL * 1024ULL; // a larger program is refused Oversized, unread
     crd::u64  max_record_bytes  = 64ULL * 1024ULL * 1024ULL; // a larger record is refused Oversized, unread
-    const ReplayHostExecutor* host = nullptr; // the host executor (null: host records are refused Unavailable)
+    const ReplayHostExecutor* host   = nullptr; // the host executor (null: host records are refused Unavailable)
+    const DeviceExecutor*     device = nullptr; // the device executor (null: device records are refused Unavailable)
 
     std::atomic<crd::u64> record_runs{0U}; // replay.record handler runs
     std::atomic<crd::u64> replay_runs{0U}; // replay.run handler runs

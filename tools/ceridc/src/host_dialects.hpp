@@ -10,7 +10,8 @@ class Context;
 
 namespace crd::ceridc
 {
-// The dialects the CEIR host executors run: the compiled plan's scalar host subset (arith, core, func) and the host
-// provider's task and async ops. A Registrar: `user` is unused.
+// The dialects the CEIR host executors run: the compiled plan's scalar host subset (arith, core, func), the host
+// provider's task and async ops, the host inputs, and a device program's buffer declarations and compute dispatches
+// (resource, compute: replay.record executor=device). A Registrar: `user` is unused.
 void register_host_dialects(crd::ceir::Context& ctx, void* user);
 } // namespace crd::ceridc

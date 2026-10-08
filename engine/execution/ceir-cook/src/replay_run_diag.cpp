@@ -77,6 +77,12 @@ struct RecordArgs
     bool                  have_events = false; // events=: the run's input event queue (none without it)
     cont::Array<crd::i64> events;              // packed, in delivery order
 
+    bool             device        = false; // executor=device
+    bool             have_envelope = false;
+    DeviceEnvelope   envelope;   // envelope=: exact or ulp:N
+    cont::StringView kernel_dir; // kernel_dir=: the folder of the kernels' CKIR texts
+    cont::StringView buffers;    // buffers=: the initial contents' files, one per declaration
+
     [[nodiscard]] HostEventsSpec events_spec() const noexcept
     {
         return HostEventsSpec{have_events, cont::as_const_span(events)};
@@ -98,16 +104,107 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
     return DiagStatus::Failed;
 }
 
+constexpr cont::StringView kUlpPrefix{"ulp:"};
+
+// A device record's declared envelope: `exact` or `ulp:N` (N at most kReplayMaxUlps).
+[[nodiscard]] bool parse_envelope(cont::StringView value, DeviceEnvelope& out) noexcept
+{
+    if (value == "exact")
+    {
+        out = DeviceEnvelope{DeviceEnvelopeKind::Exact, 0U};
+        return true;
+    }
+    crd::u64 ulps = 0U;
+    if (!value.starts_with(kUlpPrefix) || !detail::parse_u64(value.substr(kUlpPrefix.size()), kReplayMaxUlps, ulps))
+    {
+        return false;
+    }
+    out = DeviceEnvelope{DeviceEnvelopeKind::Ulp, static_cast<crd::u32>(ulps)};
+    return true;
+}
+
+// `buffers`: 1 to kReplayMaxDeviceBuffers comma-separated safe paths.
+[[nodiscard]] bool valid_buffer_files(cont::StringView value) noexcept
+{
+    if (value.empty())
+    {
+        return false;
+    }
+    crd::u32 count = 0U;
+    return detail::for_each_item(value,
+                                 [&count](cont::StringView item)
+                                 {
+                                     count += 1U;
+                                     return count <= kReplayMaxDeviceBuffers && perf::diag_path_is_safe(item);
+                                 });
+}
+
 // Parse every argument; `out` null validates only.
 [[nodiscard]] DiagStatus parse_record_args(cont::ConstSpan<DiagArg> args, RecordArgs* out, cont::String& reason)
 {
-    bool             have_out      = false;
-    bool             host          = false;
-    bool             have_schedule = false;
+    bool             have_out        = false;
+    bool             host            = false;
+    bool             device          = false;
+    bool             have_schedule   = false;
+    bool             have_envelope   = false;
+    bool             have_kernel_dir = false;
+    bool             have_buffers    = false;
+    cont::StringView run_argument;    // the first argument of a run with an entry (a device program has none)
+    cont::StringView device_argument; // the first of envelope, kernel_dir and buffers
     cont::StringView requirement;
     for (const DiagArg& a : args)
     {
-        if (a.name == "entry")
+        if (a.name == "entry" || a.name == "args" || a.name == "max_events" || a.name == "seed" || a.name == "events" ||
+            a.name == "clock" || a.name == "sim_time" || a.name == "sim_step")
+        {
+            run_argument = run_argument.empty() ? a.name : run_argument;
+        }
+        if (a.name == "envelope" || a.name == "kernel_dir" || a.name == "buffers")
+        {
+            device_argument = device_argument.empty() ? a.name : device_argument;
+        }
+
+        if (a.name == "envelope")
+        {
+            DeviceEnvelope envelope;
+            if (!parse_envelope(a.value, envelope))
+            {
+                return bad(reason, a.name, "must be 'exact' or 'ulp:N' with N at most 16777216");
+            }
+            have_envelope = true;
+            if (out != nullptr)
+            {
+                out->have_envelope = true;
+                out->envelope      = envelope;
+            }
+        }
+        else if (a.name == "kernel_dir")
+        {
+            if (!perf::diag_path_is_safe(a.value))
+            {
+                return bad(reason, a.name, kPathRule);
+            }
+            have_kernel_dir = true;
+            if (out != nullptr)
+            {
+                out->kernel_dir = a.value;
+            }
+        }
+        else if (a.name == "buffers")
+        {
+            if (!valid_buffer_files(a.value))
+            {
+                return bad(reason, a.name,
+                           "must be 1 to 16 comma-separated relative paths of plain [A-Za-z0-9._-] names separated "
+                           "by '/'");
+            }
+            have_buffers = true;
+            if (out != nullptr)
+            {
+                out->buffers = a.value;
+            }
+        }
+        else if (a.name == "entry")
         {
             if (!detail::valid_entry_name(a.value, kMaxEntryBytes))
             {
@@ -166,14 +263,16 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
         }
         else if (a.name == "executor")
         {
-            if (a.value != "plan" && a.value != "host")
+            if (a.value != "plan" && a.value != "host" && a.value != "device")
             {
-                return bad(reason, a.name, "must be 'plan' or 'host'");
+                return bad(reason, a.name, "must be 'plan', 'host' or 'device'");
             }
-            host = a.value == "host";
+            host   = a.value == "host";
+            device = a.value == "device";
             if (out != nullptr)
             {
-                out->host = host;
+                out->host   = host;
+                out->device = device;
             }
         }
         else if (a.name == "jobs")
@@ -240,13 +339,36 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
             reason.append("unknown argument '");
             reason.append(a.name);
             reason.append("'; replay.record takes out, entry, args, max_events, seed, clock, sim_time, sim_step, "
-                          "events, executor, jobs and sub_fuel");
+                          "events, executor, jobs, sub_fuel, envelope, kernel_dir and buffers");
             return DiagStatus::BadArgument;
         }
     }
     if (have_schedule && !host)
     {
         reason.append("the arguments 'jobs' and 'sub_fuel' are the host executor's schedule; they need executor=host");
+        return DiagStatus::BadArgument;
+    }
+    if (!device_argument.empty() && !device)
+    {
+        reason.append("the argument '");
+        reason.append(device_argument);
+        reason.append("' describes a device program's run; 'envelope', 'kernel_dir' and 'buffers' need "
+                      "executor=device");
+        return DiagStatus::BadArgument;
+    }
+    if (device && !run_argument.empty())
+    {
+        reason.append("the argument '");
+        reason.append(run_argument);
+        reason.append("' is refused with executor=device: a device program has no entry, arguments, trace or host "
+                      "inputs");
+        return DiagStatus::BadArgument;
+    }
+    if (device && (!have_envelope || !have_kernel_dir || !have_buffers))
+    {
+        reason.append("replay.record executor=device needs 'envelope' (exact or ulp:N, declared and never inferred), "
+                      "'kernel_dir' (the folder of the kernels' .ckir texts) and 'buffers' (one initial-contents file "
+                      "per declared buffer)");
         return DiagStatus::BadArgument;
     }
     if (!have_out)
@@ -322,27 +444,28 @@ struct FaultSite
     crd::u32         col  = 0U;
 };
 
-// Encode `record`, create its file exclusively and answer one item per input and per result and the summary.
-[[nodiscard]] DiagStatus write_and_answer(ReplayCommands& cmd, const DiagCall& call, const RecordArgs& parsed,
-                                          const ReplayRecord& record, cont::StringView target,
-                                          cont::StringView missing, const FaultSite& fault, DiagSnapshot& out)
+// Encode `record` into `file_bytes` and create its file exclusively.
+[[nodiscard]] DiagStatus write_record(ReplayCommands& cmd, const ReplayRecord& record, cont::StringView target,
+                                      cont::Array<crd::u8>& file_bytes, cont::String& reason)
 {
-    crd::memory::IAllocator* const alloc = out.allocator();
-    cont::Array<crd::u8>           file_bytes(alloc);
     encode_record(record, file_bytes);
     if (file_bytes.size() > cmd.max_record_bytes)
     {
-        out.reason.append("the record is larger than the host's record limit; nothing was written");
+        reason.append("the record is larger than the host's record limit; nothing was written");
         return DiagStatus::Oversized;
     }
-    if (const DiagStatus s = detail::write_new_file(target, {file_bytes.data(), file_bytes.size()}, out.reason);
+    if (const DiagStatus s = detail::write_new_file(target, {file_bytes.data(), file_bytes.size()}, reason);
         s != DiagStatus::Ok)
     {
         return s;
     }
     cmd.records_written.fetch_add(1U, std::memory_order_relaxed);
+    return DiagStatus::Ok;
+}
 
-    DiagFields item(alloc);
+// One item per replay input: its need and state in `record`.
+void add_input_items(const ReplayRecord& record, DiagFields& item, DiagSnapshot& out)
+{
     for (crd::u32 i = 0U; i < kReplayInputs; ++i)
     {
         const detail::ReplayInputSpec& spec = detail::replay_input(i);
@@ -354,6 +477,22 @@ struct FaultSite
             .str("state", replay_input_state_name(record.inputs[i].state));
         (void)out.add_item(item);
     }
+}
+
+// Encode `record`, create its file exclusively and answer one item per input and per result and the summary.
+[[nodiscard]] DiagStatus write_and_answer(ReplayCommands& cmd, const DiagCall& call, const RecordArgs& parsed,
+                                          const ReplayRecord& record, cont::StringView target,
+                                          cont::StringView missing, const FaultSite& fault, DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    cont::Array<crd::u8>           file_bytes(alloc);
+    if (const DiagStatus s = write_record(cmd, record, target, file_bytes, out.reason); s != DiagStatus::Ok)
+    {
+        return s;
+    }
+
+    DiagFields item(alloc);
+    add_input_items(record, item, out);
     for (crd::usize i = 0U; i < record.results.size(); ++i)
     {
         item.clear();
@@ -430,6 +569,285 @@ struct FaultSite
                             out);
 }
 
+// ---- device records -------------------------------------------------------------------------------------------------
+
+// The device executor's answer as the service's status.
+[[nodiscard]] DiagStatus diag_status_of(DeviceReplayStatus s) noexcept
+{
+    switch (s) // no default (-Werror=switch)
+    {
+    case DeviceReplayStatus::Ok: return DiagStatus::Ok;
+    case DeviceReplayStatus::BadRequest: return DiagStatus::BadArgument;
+    case DeviceReplayStatus::WrongExecutor:
+    case DeviceReplayStatus::OtherBuild:
+    case DeviceReplayStatus::OtherAdapter:
+    case DeviceReplayStatus::MissingInputs: return DiagStatus::Unavailable;
+    case DeviceReplayStatus::NotLoaded:
+    case DeviceReplayStatus::Unsupported:
+    case DeviceReplayStatus::ContentMismatch:
+    case DeviceReplayStatus::DeviceFailed: return DiagStatus::Failed;
+    }
+    return DiagStatus::Failed;
+}
+
+// A device refusal's sentence: its status name and the library's detail.
+[[nodiscard]] DiagStatus refuse_device(DeviceReplayStatus s, cont::StringView detail, cont::String& reason)
+{
+    const DiagStatus status = diag_status_of(s);
+    if (status == DiagStatus::Unavailable)
+    {
+        reason.append("incompatible replay: ");
+    }
+    reason.append(device_replay_status_name(s));
+    if (!detail.empty())
+    {
+        reason.append(": ");
+        reason.append(detail);
+    }
+    return status;
+}
+
+// Read the file `relative` under the root, bounded by `max_bytes` before a byte is read; a refusal names `relative`.
+[[nodiscard]] DiagStatus read_root_file(ReplayCommands& cmd, const DiagCall& call, cont::StringView relative,
+                                        crd::u64 max_bytes, cont::Array<crd::u8>& out, cont::String& reason)
+{
+    cont::String file(out.allocator());
+    join(call.root, relative, file);
+    return detail::read_bounded_file({file.data(), file.size()}, max_bytes, out, reason, cmd.bytes_read, relative);
+}
+
+// The CKIR text of kernel @`symbol`: the file `<kernel_dir>/<symbol>.ckir` under the root (`relative` gets its path).
+[[nodiscard]] DiagStatus read_kernel(ReplayCommands& cmd, const DiagCall& call, cont::StringView kernel_dir,
+                                     cont::StringView symbol, cont::String& relative, cont::String& text,
+                                     cont::String& reason)
+{
+    relative.clear();
+    relative.append(kernel_dir);
+    relative.push_back('/');
+    relative.append(symbol);
+    relative.append(".ckir");
+    if (!perf::diag_path_is_safe(cont::StringView{relative.data(), relative.size()}))
+    {
+        reason.append("kernel @");
+        reason.append(symbol);
+        reason.append(" is not a plain [A-Za-z0-9._-] file name, so it has no file in 'kernel_dir'");
+        return DiagStatus::Failed;
+    }
+    cont::Array<crd::u8> bytes(text.allocator());
+    if (const DiagStatus s = read_root_file(cmd, call, cont::StringView{relative.data(), relative.size()},
+                                            kReplayMaxKernelBytes, bytes, reason);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
+    text.clear();
+    for (const crd::u8 b : bytes)
+    {
+        text.push_back(static_cast<char>(b));
+    }
+    return DiagStatus::Ok;
+}
+
+// The initial contents of every declared buffer: each file of `buffers` (one per declaration, in order) read as
+// little-endian 32-bit elements, at least one per file and kReplayMaxDeviceWords over all, every file bounded by what
+// is left of that budget before a byte of it is read.
+[[nodiscard]] DiagStatus read_buffers(ReplayCommands& cmd, const DiagCall& call, cont::StringView buffers,
+                                      crd::u32 declared, cont::Array<cont::Array<crd::u32>>& out, cont::String& reason)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    crd::u32                       files = 0U;
+    (void)detail::for_each_item(buffers,
+                                [&files](cont::StringView /*file*/)
+                                {
+                                    ++files;
+                                    return true;
+                                });
+    if (files != declared)
+    {
+        reason.append("the program declares ");
+        detail::append_decimal(reason, declared);
+        reason.append(" buffers and 'buffers' names ");
+        detail::append_decimal(reason, files);
+        reason.append(" files; it names one initial-contents file per declared buffer, in declaration order");
+        return DiagStatus::BadArgument;
+    }
+    crd::u64   words  = 0U;
+    DiagStatus status = DiagStatus::Ok;
+    (void)detail::for_each_item(
+        buffers,
+        [&](cont::StringView file)
+        {
+            cont::Array<crd::u8> bytes(alloc);
+            status = read_root_file(cmd, call, file, (kReplayMaxDeviceWords - words) * 4U, bytes, reason);
+            if (status != DiagStatus::Ok)
+            {
+                return false;
+            }
+            if (bytes.empty() || bytes.size() % 4U != 0U)
+            {
+                reason.append(file);
+                reason.append(" holds ");
+                detail::append_decimal(reason, bytes.size());
+                reason.append(" bytes; a buffer's initial contents are at least one 4-byte element");
+                status = DiagStatus::BadArgument;
+                return false;
+            }
+            cont::Array<crd::u32> elements(alloc);
+            elements.reserve(bytes.size() / 4U);
+            for (crd::usize i = 0U; i < bytes.size(); i += 4U)
+            {
+                elements.push_back(static_cast<crd::u32>(bytes[i]) | (static_cast<crd::u32>(bytes[i + 1U]) << 8U) |
+                                   (static_cast<crd::u32>(bytes[i + 2U]) << 16U) |
+                                   (static_cast<crd::u32>(bytes[i + 3U]) << 24U));
+            }
+            words += elements.size();
+            out.push_back(std::move(elements));
+            return true;
+        });
+    return status;
+}
+
+void add_owned_site_as(DiagFields& item, const char* file, const char* line, const char* col,
+                       const OwnedReplaySite& site)
+{
+    item.str(file, cont::StringView{site.file.data(), site.file.size()}).u64(line, site.line).u64(col, site.col);
+}
+
+// The device executor's run of the device program `blob`, recorded: its kernels' texts from `kernel_dir`, its
+// buffers' initial contents from `buffers` and the declared envelope.
+[[nodiscard]] DiagStatus record_on_device(ReplayCommands& cmd, const DiagCall& call, const RecordArgs& parsed,
+                                          const cont::Array<crd::u8>& blob, cont::StringView target, DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    DeviceProgramShape             shape(alloc);
+    cont::String                   detail_text(alloc);
+    if (const DeviceReplayStatus s =
+            describe_device_program({blob.data(), blob.size()}, cmd.registrar, cmd.user, shape, detail_text);
+        s != DeviceReplayStatus::Ok)
+    {
+        return refuse_device(s, cont::StringView{detail_text.data(), detail_text.size()}, out.reason);
+    }
+
+    // Every input file is bounded before a byte of it is read; nothing runs until all of them are.
+    cont::Array<cont::String> kernel_files(alloc);
+    cont::Array<cont::String> kernel_texts(alloc);
+    for (const cont::String& k : shape.kernels)
+    {
+        cont::String relative(alloc);
+        cont::String text(alloc);
+        if (const DiagStatus s = read_kernel(cmd, call, parsed.kernel_dir, cont::StringView{k.data(), k.size()},
+                                             relative, text, out.reason);
+            s != DiagStatus::Ok)
+        {
+            return s;
+        }
+        kernel_files.push_back(std::move(relative));
+        kernel_texts.push_back(std::move(text));
+    }
+    cont::Array<cont::Array<crd::u32>> contents(alloc);
+    if (const DiagStatus s = read_buffers(cmd, call, parsed.buffers, shape.buffers, contents, out.reason);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
+    if (call.cancelled())
+    {
+        out.reason.append("cancelled before the program ran");
+        return DiagStatus::Cancelled;
+    }
+
+    cont::Array<DeviceKernelSource> kernels(alloc);
+    for (crd::usize i = 0U; i < shape.kernels.size(); ++i)
+    {
+        kernels.push_back(DeviceKernelSource{cont::StringView{shape.kernels[i].data(), shape.kernels[i].size()},
+                                             cont::StringView{kernel_texts[i].data(), kernel_texts[i].size()}});
+    }
+    cont::Array<cont::ConstSpan<crd::u32>> buffers(alloc);
+    crd::u64                               elements = 0U;
+    for (const cont::Array<crd::u32>& c : contents)
+    {
+        buffers.push_back(cont::ConstSpan<crd::u32>{c.data(), c.size()});
+        elements += c.size();
+    }
+    DeviceRecordRequest request;
+    request.blob     = {blob.data(), blob.size()};
+    request.path     = call.request->path;
+    request.kernels  = cont::as_const_span(kernels);
+    request.buffers  = cont::as_const_span(buffers);
+    request.envelope = parsed.envelope;
+    ReplayRecord             record(alloc);
+    OwnedReplaySite          fault(alloc);
+    const DeviceReplayStatus s =
+        record_device_run(request, *cmd.device, cmd.registrar, cmd.user, record, detail_text, &fault);
+    if (s == DeviceReplayStatus::Ok || s == DeviceReplayStatus::DeviceFailed)
+    {
+        cmd.executions.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (s != DeviceReplayStatus::Ok)
+    {
+        return refuse_device(s, cont::StringView{detail_text.data(), detail_text.size()}, out.reason);
+    }
+
+    cont::Array<crd::u8> file_bytes(alloc);
+    if (const DiagStatus w = write_record(cmd, record, target, file_bytes, out.reason); w != DiagStatus::Ok)
+    {
+        return w;
+    }
+    DiagFields item(alloc);
+    add_input_items(record, item, out);
+    for (crd::usize i = 0U; i < record.device_kernels.size(); ++i)
+    {
+        const DeviceKernelRecord& k = record.device_kernels[i];
+        item.clear();
+        item.str("kind", "kernel")
+            .str("symbol", cont::StringView{k.symbol.data(), k.symbol.size()})
+            .str("file", cont::StringView{kernel_files[i].data(), kernel_files[i].size()})
+            .u64("bytes", k.ckir.size())
+            .u64("hash", k.hash);
+        (void)out.add_item(item);
+    }
+    crd::u64 written = 0U;
+    for (crd::usize i = 0U; i < record.device_buffers.size(); ++i)
+    {
+        const DeviceBufferRecord& b = record.device_buffers[i];
+        written += b.written ? 1U : 0U;
+        item.clear();
+        item.str("kind", "buffer")
+            .u64("index", i)
+            .str("element", device_element_name(b.element))
+            .u64("elements", b.initial.size())
+            .boolean("written", b.written);
+        (void)out.add_item(item);
+    }
+
+    cont::String               missing(alloc);
+    const bool                 complete = record_missing_inputs(record, missing);
+    const DeviceAdapterRecord& adapter  = record.device_adapter;
+    out.summary.str("path", call.request->path)
+        .str("executor", replay_executor_name(record.executor))
+        .str("out", parsed.out)
+        .u64("content_hash", record.content_hash)
+        .u64("record_bytes", file_bytes.size())
+        .str("backend", cont::StringView{adapter.backend.data(), adapter.backend.size()})
+        .str("adapter", cont::StringView{adapter.name.data(), adapter.name.size()})
+        .u64("vendor", adapter.vendor)
+        .u64("device", adapter.device)
+        .u64("driver", adapter.driver)
+        .u64("api", adapter.api)
+        .str("envelope", device_envelope_name(record.device_envelope.kind))
+        .u64("ulps", record.device_envelope.ulps)
+        .u64("kernels", record.device_kernels.size())
+        .u64("buffers", record.device_buffers.size())
+        .u64("elements", elements)
+        .u64("written_buffers", written)
+        .u64("error", record.device_error)
+        .u64("fault_op", record.fault_op);
+    add_owned_site_as(out.summary, "fault_file", "fault_line", "fault_col", fault);
+    out.summary.str("missing_inputs", cont::StringView{missing.data(), missing.size()})
+        .str("replay", complete ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
+    return DiagStatus::Ok;
+}
+
 DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& out)
 {
     auto* const                    cmd   = static_cast<ReplayCommands*>(context);
@@ -444,6 +862,11 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     if (parsed.host && (cmd->host == nullptr || cmd->host->record == nullptr))
     {
         out.reason.append("this host binds no host executor; replay.record executor=host is unavailable here");
+        return DiagStatus::Unavailable;
+    }
+    if (parsed.device && cmd->device == nullptr)
+    {
+        out.reason.append("this host binds no device executor; replay.record executor=device is unavailable here");
         return DiagStatus::Unavailable;
     }
 
@@ -475,6 +898,10 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     if (parsed.host)
     {
         return record_on_host(*cmd, call, parsed, blob, {target.data(), target.size()}, out);
+    }
+    if (parsed.device)
+    {
+        return record_on_device(*cmd, call, parsed, blob, {target.data(), target.size()}, out);
     }
 
     // The artifact is loaded exactly as a replay will load it, so the trace is the artifact's own.
@@ -547,6 +974,7 @@ struct RunArgs
     cont::StringView program;           // empty: the record's own program
     bool             any_build = false; // build=any
     crd::u32         jobs      = 0U;    // a host record's job split for this replay (0: the recorded one)
+    cont::StringView kernel_dir;        // a device record's kernels from this folder (empty: the record's own)
 };
 
 [[nodiscard]] DiagStatus parse_run_args(cont::ConstSpan<DiagArg> args, RunArgs* out, cont::String& reason)
@@ -587,11 +1015,22 @@ struct RunArgs
                 out->jobs = static_cast<crd::u32>(v);
             }
         }
+        else if (a.name == "kernel_dir")
+        {
+            if (!perf::diag_path_is_safe(a.value))
+            {
+                return bad(reason, a.name, kPathRule);
+            }
+            if (out != nullptr)
+            {
+                out->kernel_dir = a.value;
+            }
+        }
         else
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; replay.run takes program, build and jobs");
+            reason.append("'; replay.run takes program, build, jobs and kernel_dir");
             return DiagStatus::BadArgument;
         }
     }
@@ -743,6 +1182,145 @@ void add_divergence(DiagFields& item, const Divergence& d)
     return DiagStatus::Ok;
 }
 
+// A device record's replay on the device executor: the record's own program and kernels unless `program=` or
+// `kernel_dir=` name others.
+[[nodiscard]] DiagStatus replay_on_device(ReplayCommands& cmd, const DiagCall& call, const RunArgs& parsed,
+                                          const ReplayRecord& record, DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    cont::Array<crd::u8>           against(alloc);
+    if (!parsed.program.empty())
+    {
+        if (const DiagStatus s = cook_other_program(cmd, call, parsed.program, against, out.reason);
+            s != DiagStatus::Ok)
+        {
+            return s;
+        }
+    }
+    cont::Array<cont::String>       texts(alloc);
+    cont::Array<DeviceKernelSource> kernels(alloc);
+    if (!parsed.kernel_dir.empty())
+    {
+        for (const DeviceKernelRecord& k : record.device_kernels)
+        {
+            cont::String relative(alloc);
+            cont::String text(alloc);
+            if (const DiagStatus s = read_kernel(cmd, call, parsed.kernel_dir,
+                                                 cont::StringView{k.symbol.data(), k.symbol.size()}, relative, text,
+                                                 out.reason);
+                s != DiagStatus::Ok)
+            {
+                return s;
+            }
+            texts.push_back(std::move(text));
+        }
+        for (crd::usize i = 0U; i < texts.size(); ++i)
+        {
+            const DeviceKernelRecord& k = record.device_kernels[i];
+            kernels.push_back(DeviceKernelSource{cont::StringView{k.symbol.data(), k.symbol.size()},
+                                                 cont::StringView{texts[i].data(), texts[i].size()}});
+        }
+    }
+    if (call.cancelled())
+    {
+        out.reason.append("cancelled before the program ran");
+        return DiagStatus::Cancelled;
+    }
+
+    DeviceReplayOptions options;
+    options.against         = {against.data(), against.size()};
+    options.kernels_against = cont::as_const_span(kernels);
+    options.any_build       = parsed.any_build;
+    DeviceReplay             replayed(alloc);
+    const DeviceReplayStatus s =
+        replay_device_record(record, *cmd.device, cmd.registrar, cmd.user, options, replayed);
+    if (s == DeviceReplayStatus::Ok || s == DeviceReplayStatus::DeviceFailed)
+    {
+        cmd.executions.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (s != DeviceReplayStatus::Ok)
+    {
+        const DiagStatus status =
+            refuse_device(s, cont::StringView{replayed.reason.data(), replayed.reason.size()}, out.reason);
+        if (s == DeviceReplayStatus::OtherBuild && record.device_envelope.kind == DeviceEnvelopeKind::Ulp)
+        {
+            out.reason.append("; pass build=any to replay this ulp record here anyway");
+        }
+        return status;
+    }
+
+    const DeviceDivergence& d = replayed.divergence;
+    DiagFields              item(alloc);
+    if (d.kind == DeviceDivergenceKind::Element)
+    {
+        item.str("kind", "divergence")
+            .str("divergence", device_divergence_name(d.kind))
+            .u64("buffer", d.buffer)
+            .u64("element", d.element)
+            .str("type", device_element_name(d.type))
+            .u64("recorded", d.recorded)
+            .u64("replayed", d.replayed)
+            .u64("distance", d.distance)
+            .u64("bound", d.bound)
+            .u64("dispatch_op", replayed.dispatch.op);
+        add_owned_site_as(item, "dispatch_file", "dispatch_line", "dispatch_col", replayed.dispatch);
+        item.u64("declaration_op", replayed.declaration.op);
+        add_owned_site_as(item, "declaration_file", "declaration_line", "declaration_col", replayed.declaration);
+        (void)out.add_item(item);
+    }
+    else if (d.kind == DeviceDivergenceKind::Outcome)
+    {
+        item.str("kind", "divergence")
+            .str("divergence", device_divergence_name(d.kind))
+            .u64("recorded", d.recorded)
+            .u64("replayed", d.replayed)
+            .u64("recorded_op", d.recorded_fault)
+            .u64("replayed_op", d.replayed_fault);
+        (void)out.add_item(item);
+    }
+    // The replayed outcome differs from the recorded one only in an Outcome divergence (it is compared first).
+    const bool outcome_differs = d.kind == DeviceDivergenceKind::Outcome;
+    item.clear();
+    item.str("kind", "outcome").str("run", "recorded").u64("error", record.device_error).u64("op", record.fault_op);
+    add_owned_site(item, replayed.recorded_fault);
+    (void)out.add_item(item);
+    item.clear();
+    item.str("kind", "outcome")
+        .str("run", "replayed")
+        .u64("error", outcome_differs ? d.replayed : record.device_error)
+        .u64("op", replayed.fault.op);
+    add_owned_site(item, replayed.fault);
+    (void)out.add_item(item);
+
+    const DeviceAdapterRecord& recorded = record.device_adapter;
+    out.summary.str("path", call.request->path)
+        .str("executor", replay_executor_name(record.executor))
+        .str("recorded_backend", cont::StringView{recorded.backend.data(), recorded.backend.size()})
+        .str("recorded_adapter", cont::StringView{recorded.name.data(), recorded.name.size()})
+        .str("backend", cmd.device->adapter.backend)
+        .str("adapter", cmd.device->adapter.name)
+        .boolean("adapter_differs", replayed.adapter_differs)
+        .str("envelope", device_envelope_name(record.device_envelope.kind))
+        .u64("ulps", record.device_envelope.ulps)
+        .str("program_source", parsed.program.empty() ? cont::StringView{"record"} : cont::StringView{"argument"})
+        .str("program",
+             parsed.program.empty() ? cont::StringView{record.program_path.data(), record.program_path.size()}
+                                    : parsed.program)
+        .u64("recorded_hash", record.content_hash)
+        .u64("replayed_hash", replayed.replayed_hash)
+        .boolean("program_matches", !replayed.program_differs)
+        .str("kernels_source", parsed.kernel_dir.empty() ? cont::StringView{"record"} : cont::StringView{"argument"})
+        .str("kernel_dir", parsed.kernel_dir)
+        .boolean("kernels_match", !replayed.kernels_differ)
+        .str("build", replayed.build_differs ? cont::StringView{"differs"} : cont::StringView{"same"})
+        .u64("compared", replayed.compared)
+        .u64("max_distance", replayed.max_distance)
+        .str("result",
+             d.kind == DeviceDivergenceKind::None ? cont::StringView{"reproduced"} : cont::StringView{"diverged"})
+        .str("divergence", device_divergence_name(d.kind));
+    return DiagStatus::Ok;
+}
+
 DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out)
 {
     auto* const                    cmd   = static_cast<ReplayCommands*>(context);
@@ -771,11 +1349,12 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     }
 
     // Compatibility, before anything runs: the executor, the build, then the inputs the program needs.
-    const bool host = record.executor == ReplayExecutorKind::Host;
-    if (record.executor == ReplayExecutorKind::Device)
+    const bool host   = record.executor == ReplayExecutorKind::Host;
+    const bool device = record.executor == ReplayExecutorKind::Device;
+    if (device && cmd->device == nullptr)
     {
-        out.reason.append("incompatible replay: the record was made by the device executor and replay.run binds no "
-                          "device executor; replay it with cook::replay_device_record on a device executor");
+        out.reason.append("incompatible replay: the record was made by the device executor and this host binds no "
+                          "device executor");
         return DiagStatus::Unavailable;
     }
     if (host && (cmd->host == nullptr || cmd->host->replay == nullptr))
@@ -791,6 +1370,19 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         out.reason.append(replay_executor_name(record.executor));
         out.reason.append(" record");
         return DiagStatus::BadArgument;
+    }
+    if (!device && !parsed.kernel_dir.empty())
+    {
+        out.reason.append("the argument 'kernel_dir' replays a device record's kernels; this is a ");
+        out.reason.append(replay_executor_name(record.executor));
+        out.reason.append(" record");
+        return DiagStatus::BadArgument;
+    }
+    if (device)
+    {
+        // A device record's build, adapter and inputs are checked by replay_device_record (an exact envelope is
+        // claimed only on its own build, even with build=any), before anything runs.
+        return replay_on_device(*cmd, call, parsed, record, out);
     }
     cont::String differing(alloc);
     const bool   same = same_build(record.build, current_build(alloc), differing);

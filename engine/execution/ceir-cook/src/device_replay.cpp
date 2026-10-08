@@ -691,6 +691,57 @@ DeviceExecutor reference_device_executor(memory::IAllocator* scratch) noexcept
     return e;
 }
 
+// ---- the shape a host supplies --------------------------------------------------------------------------------------
+
+DeviceReplayStatus describe_device_program(cont::ConstSpan<crd::u8> blob, Registrar registrar, void* user,
+                                           DeviceProgramShape& out, cont::String& reason)
+{
+    reason.clear();
+    out.kernels.clear();
+    out.buffers                     = 0U;
+    memory::IAllocator* const alloc = out.kernels.allocator();
+    if (blob.size() > kReplayMaxProgramBytes)
+    {
+        reason.append("the program is past a record's bounds");
+        return DeviceReplayStatus::BadRequest;
+    }
+    Context             ctx(alloc);
+    crd::u64            content_hash = 0U;
+    const Module* const module       = load(ctx, blob, registrar, user, content_hash);
+    if (module == nullptr)
+    {
+        return DeviceReplayStatus::NotLoaded;
+    }
+    DeviceProgram program(alloc);
+    if (const DeviceReplayStatus s = describe(ctx, *module, program, reason); s != DeviceReplayStatus::Ok)
+    {
+        return s;
+    }
+    for (const Operation* const op : program.dispatches)
+    {
+        const cont::StringView symbol = kernel_symbol(ctx, op);
+        bool                   seen   = false;
+        for (const cont::String& k : out.kernels)
+        {
+            seen = seen || same(k, symbol);
+        }
+        if (seen)
+        {
+            continue;
+        }
+        if (out.kernels.size() >= kReplayMaxDeviceKernels)
+        {
+            reason.append("a device record holds at most 16 kernels");
+            return DeviceReplayStatus::BadRequest;
+        }
+        cont::String k(alloc);
+        k.append(symbol);
+        out.kernels.push_back(std::move(k));
+    }
+    out.buffers = static_cast<crd::u32>(program.buffers.size());
+    return DeviceReplayStatus::Ok;
+}
+
 // ---- record ---------------------------------------------------------------------------------------------------------
 
 DeviceReplayStatus record_device_run(const DeviceRecordRequest& request, const DeviceExecutor& executor,

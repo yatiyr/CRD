@@ -3,23 +3,28 @@
 // byte. The host's grant and file root are chosen when the service is built, never by a request. Every ceridc service
 // binds the same commands (bind_diag_commands), so the two transports list and answer the same set. The replay
 // commands carry the host provider as their host executor, so a host record is made and replayed here as well; the
-// process (main.cpp's diag and mcp verbs, or a test's listener) owns the crd::jobs pool that executor runs on.
+// process (main.cpp's diag and mcp verbs, or a test's listener) owns the crd::jobs pool that executor runs on. Device
+// records run on the CPU reference executor: ceridc opens no GPU context.
 
 #include <crd/ceridc/verbs.hpp>
 
 #include "host_dialects.hpp"
 
 #include <crd/assetio/json_write.hpp>
+#include <crd/ceir/cook/device_replay.hpp>
 #include <crd/ceir/cook/inspect_diag.hpp>
 #include <crd/ceir/cook/program_diag.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/async_ops.hpp>
+#include <crd/ceir/gen/compute_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/gen/input_ops.hpp>
+#include <crd/ceir/gen/resource_ops.hpp>
 #include <crd/ceir/gen/task_ops.hpp>
 #include <crd/ceir/host/host_replay_diag.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
 
@@ -33,7 +38,9 @@ void register_host_dialects(crd::ceir::Context& ctx, void* /*user*/)
     (void)crd::ceir::task::register_task_ops(ctx);
     (void)crd::ceir::async::register_async_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
-    (void)crd::ceir::input::register_input_ops(ctx); // DIAG.9a: host inputs, recorded by replay.record
+    (void)crd::ceir::input::register_input_ops(ctx);       // DIAG.9a: host inputs, recorded by replay.record
+    (void)crd::ceir::resource::register_resource_ops(ctx); // DIAG.9a: device programs (replay.record executor=device)
+    (void)crd::ceir::compute::register_compute_ops(ctx);
 }
 
 bool bind_diag_commands(crd::perf::DiagCommandService& service)
@@ -47,6 +54,12 @@ bool bind_diag_commands(crd::perf::DiagCommandService& service)
     static crd::perf::gpu::GpuResourcesCommand       gpu_resources;
     // Host records run on the host provider; the process's diag and mcp verbs own the crd::jobs pool it needs.
     replay_runs.host = &crd::ceir::host::host_replay_executor();
+    // Device records run on the CPU reference (crd-kir's eval_cpu_kernel, adapter "cpu-reference"): an exact record
+    // from a GPU is refused here before anything runs, an ulp record is checked against the reference within its
+    // declared envelope. The scratch serves the request thread only (the CLI and the MCP loop run one at a time).
+    static crd::memory::GrowableTlsfAllocator device_scratch{crd::usize{16} << 20U, nullptr, "ceridc device reference"};
+    static const crd::ceir::cook::DeviceExecutor kDevice = crd::ceir::cook::reference_device_executor(&device_scratch);
+    replay_runs.device = &kDevice;
     return crd::ceir::cook::register_program_provenance(service, provenance) &&
            crd::ceir::cook::register_program_inspect(service, inspect) &&
            crd::ceir::cook::register_replay_prepare(service, replay) &&

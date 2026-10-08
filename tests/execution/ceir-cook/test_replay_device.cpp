@@ -688,7 +688,7 @@ TEST_CASE("diag 9a: distances between device elements", "[ceir][cook][diag][devi
     CHECK(ck::device_divergence_name(DeviceDivergenceKind::Element) == StringView{"element"});
 }
 
-TEST_CASE("diag 9a: replay.run refuses a device record before it runs anything", "[ceir][cook][diag][device]")
+TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device executor", "[ceir][cook][diag][device]")
 {
     crd::memory::GrowableTlsfAllocator alloc;
     fx::Authored                       a(&alloc);
@@ -715,7 +715,7 @@ TEST_CASE("diag 9a: replay.run refuses a device record before it runs anything",
     const perf::DiagResult result = svc.execute(r);
     INFO(result.json.c_str());
     CHECK(result.status == perf::DiagStatus::Unavailable);
-    CHECK(has(view(result.json), "made by the device executor"));
+    CHECK(has(view(result.json), "made by the device executor and this host binds no device executor"));
     CHECK(cmd.replay_runs.load() == 1U);
 
     // replay.prepare reads the same record: its device tolerance is in the record, and nothing is missing.

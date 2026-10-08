@@ -457,13 +457,13 @@ crd_module(engine/numerics/hesap-autodiff engine/hesap-autodiff DEPENDS containe
 crd_module(engine/gpu/kir engine/kir DEPENDS containers core math memory TESTS gpu/kir support/fuzz)
 # v17-b; CKIR Vulkan backend (KirBackend over gpu-context); ADR-0098
 crd_module(engine/gpu/kir-vulkan engine/kir-vulkan DEPENDS containers core gpu-context gpu-context-vulkan kir memory
-    TESTS gpu/kir-vulkan execution/ceir-gpu-vulkan TEST_DEPENDS ceir ceir-cook ceir-gpu hesap-autodiff)
+    TESTS gpu/kir-vulkan execution/ceir-gpu-vulkan TEST_DEPENDS ceir ceir-cook ceir-gpu hesap-autodiff perf platform)
 # v17-c; CKIR CUDA backend (KirBackend over the CUDA driver + NVRTC); guarded on CUDAToolkit; ADR-0098
 crd_module(engine/gpu/kir-cuda engine/kir-cuda DEPENDS containers core kir memory TESTS gpu/kir-cuda)
 # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
 crd_module(engine/gpu/kir-dx12 engine/kir-dx12 DEPENDS containers core kir memory
     TESTS gpu/kir-dx12 execution/ceir-gpu-dx12 TEST_DEPENDS ceir ceir-cook ceir-gpu gpu-context-dx12
-    hesap-autodiff)
+    hesap-autodiff perf platform)
 # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
 crd_module(engine/gpu/kir-webgpu engine/kir-webgpu DEPENDS containers core kir memory TESTS gpu/kir-webgpu)
 # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098

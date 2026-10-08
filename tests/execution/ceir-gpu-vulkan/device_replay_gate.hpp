@@ -1,19 +1,19 @@
 #pragma once
 
 // DIAG.9a -- the shared GPU leg of the device record tests (the Vulkan test and its DX12 twin call
-// device_replay_gate; it lives beside the Vulkan test, whose target links every module it names). A GPU device
-// executor for crd-ceir-cook's device records: it lowers the program's block (lower_region), reads each dispatched
-// kernel's CKIR text, compiles it with the backend's hook, runs the list on host data with execute_lowered_host and
-// reports the compute context's own adapter. The gate records the fixture program of
-// tests/execution/ceir-cook/device_replay_fixture.hpp on the device and checks the declared envelopes against the
-// device itself and against the CPU reference executor. Soft-skips are the callers'.
+// device_replay_gate; it lives beside the Vulkan test, whose target links every module it names). The device executor
+// wraps crd-ceir-gpu's run_device_block (crd/ceir/gpu/device_run.hpp) over the backend's compile hook with the compute
+// context's own adapter, the executor a GPU host binds to the replay commands. The gate records the fixture
+// program of tests/execution/ceir-cook/device_replay_fixture.hpp on the device and checks the declared envelopes
+// against the device itself and against the CPU reference executor, through the library and through the replay
+// commands bound to that executor. Soft-skips are the callers'.
 
 #include "../ceir-cook/device_replay_fixture.hpp"
 
 #include <crd/ceir/cook/device_replay.hpp>
+#include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
-#include <crd/ceir/gpu/execute.hpp>
-#include <crd/ceir/gpu/lower.hpp>
+#include <crd/ceir/gpu/device_run.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
@@ -23,11 +23,13 @@
 #include <crd/kir/ckir_asset.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/perf/diag_commands.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 
 namespace crd::ceir_gpu_test::device_replay
@@ -44,105 +46,46 @@ using crd::containers::Span;
 using crd::containers::String;
 using crd::containers::StringView;
 
-// Compile one CKIR compute kernel with `bindings` storage bindings for the backend (nullptr: it does not build).
-using CompileFn = std::unique_ptr<crd::gpu::ComputePipeline> (*)(const crd::kir::KGraph& graph,
-                                                                 const crd::kir::KEntry& entry, int bindings,
-                                                                 void* user, crd::memory::IAllocator* alloc);
+using CompileFn = crd::ceir::gpu::KernelCompileFn;
 
-inline constexpr u32 kMaxKernels = 16U;
-
+// The GPU device executor: run_device_block's rig and the context's adapter (the executor's views point into it).
 struct GpuRig
 {
-    crd::gpu::IComputeContext* device       = nullptr;
-    CompileFn                  compile      = nullptr;
-    void*                      compile_user = nullptr;
-    crd::memory::IAllocator*   alloc        = nullptr;
-    crd::gpu::ComputeAdapter   adapter{};
-    u32                        runs = 0U;
+    crd::ceir::gpu::DeviceRunRig run;
+    crd::gpu::ComputeAdapter     adapter{};
 };
-
-// The dispatch ops and their pipelines, resolved by op identity.
-struct PipelineTable
-{
-    const crd::ceir::Operation*                ops[kMaxKernels]{};
-    std::unique_ptr<crd::gpu::ComputePipeline> pipes[kMaxKernels];
-    u32                                        n = 0U;
-};
-
-inline crd::gpu::ComputePipeline* resolve_by_op(const crd::ceir::Operation* op, void* user)
-{
-    const auto* t = static_cast<const PipelineTable*>(user);
-    for (u32 i = 0U; i < t->n; ++i)
-    {
-        if (t->ops[i] == op)
-        {
-            return t->pipes[i].get();
-        }
-    }
-    return nullptr;
-}
 
 inline bool gpu_run(crd::ceir::Context& ctx, const crd::ceir::Module& module, ConstSpan<ck::DeviceKernelSource> kernels,
                     Span<ck::DeviceBufferView> buffers, ck::DeviceRunOutcome& out, String& reason, void* user)
 {
-    namespace ceg = crd::ceir::gpu;
+    namespace ceg   = crd::ceir::gpu;
     auto* const rig = static_cast<GpuRig*>(user);
-    ++rig->runs;
-    const crd::ceir::Block* const block = module.body()->first_block();
-    Array<ceg::LoweredCommand>    cmds(rig->alloc);
-    ceg::lower_region(ctx, *block, cmds);
-
-    PipelineTable table;
-    for (const ceg::LoweredCommand& cmd : cmds)
+    Array<ceg::DeviceKernelText> texts(rig->run.alloc);
+    for (const ck::DeviceKernelSource& k : kernels)
     {
-        if (cmd.kind != ceg::LoweredKind::Dispatch || table.n >= kMaxKernels)
-        {
-            continue;
-        }
-        const crd::ceir::AttrValue kv = ctx.attr_value(cmd.op->attr(StringView{"kernel"}));
-        StringView                 text;
-        for (const ck::DeviceKernelSource& k : kernels)
-        {
-            if (k.symbol == kv.s)
-            {
-                text = k.ckir;
-            }
-        }
-        crd::kir::KGraph g(rig->alloc);
-        crd::kir::KEntry e;
-        if (!crd::kir::ckir_read(text, g, e).ok)
-        {
-            reason.append("a kernel's CKIR text does not read");
-            return false;
-        }
-        table.ops[table.n]   = cmd.op;
-        table.pipes[table.n] =
-            rig->compile(g, e, static_cast<int>(cmd.op->num_operands()) - 3, rig->compile_user, rig->alloc);
-        if (table.pipes[table.n] == nullptr)
-        {
-            reason.append("a kernel did not compile for the device");
-            return false;
-        }
-        ++table.n;
+        texts.push_back(ceg::DeviceKernelText{k.symbol, k.ckir});
     }
-
     ceg::HostBufferBinding host[ceg::kMaxHostBufferBindings];
     for (usize i = 0U; i < buffers.size() && i < ceg::kMaxHostBufferBindings; ++i)
     {
         host[i] = ceg::HostBufferBinding{buffers[i].resource, buffers[i].words.data(),
                                          static_cast<u64>(buffers[i].words.size()) * sizeof(u32), buffers[i].written};
     }
-    ceg::DispatchSites sites(rig->alloc);
-    const ceg::ExecuteError err = ceg::execute_lowered_host(
-        ctx, ConstSpan<ceg::LoweredCommand>(cmds.data(), cmds.size()), *rig->device, &resolve_by_op, &table,
-        ConstSpan<ceg::HostBufferBinding>(host, buffers.size()), &sites);
-    out.error    = static_cast<u8>(err);
-    out.fault_op = sites.fault() != nullptr ? sites.fault()->stable_id().value : 0U;
+    ceg::DeviceRunResult result;
+    if (!ceg::run_device_block(ctx, *module.body()->first_block(),
+                               ConstSpan<ceg::DeviceKernelText>(texts.data(), texts.size()),
+                               ConstSpan<ceg::HostBufferBinding>(host, buffers.size()), rig->run, result, reason))
+    {
+        return false;
+    }
+    out.error    = static_cast<u8>(result.error);
+    out.fault_op = result.fault_op;
     return true;
 }
 
 inline ck::DeviceExecutor gpu_executor(GpuRig& rig)
 {
+    rig.adapter = rig.run.device->adapter();
     ck::DeviceExecutor e;
     e.run             = &gpu_run;
     e.user            = &rig;
@@ -179,6 +122,48 @@ inline ck::DeviceExecutor counted_reference(CountedReference& c)
     return e;
 }
 
+// A diagnostic host whose replay commands bind `bound`, rooted at `root`.
+struct CommandHost
+{
+    static crd::perf::DiagServiceConfig rooted(StringView root)
+    {
+        crd::perf::DiagServiceConfig c;
+        c.root = root;
+        return c;
+    }
+
+    CommandHost(StringView root, const ck::DeviceExecutor* bound)
+        : svc(crd::perf::authority_bit(crd::perf::DiagAuthority::Execute) |
+                  crd::perf::authority_bit(crd::perf::DiagAuthority::Record),
+              rooted(root))
+    {
+        cmd.registrar = &fx::registrar;
+        cmd.device    = bound;
+        REQUIRE(ck::register_replay_record(svc, cmd));
+        REQUIRE(ck::register_replay_run(svc, cmd));
+    }
+
+    ck::ReplayCommands            cmd;
+    crd::perf::DiagCommandService svc;
+};
+
+inline crd::perf::DiagResult command(CommandHost& h, StringView name, const char* path,
+                                     std::initializer_list<crd::perf::DiagArg> args)
+{
+    crd::perf::DiagRequest r;
+    r.command    = name;
+    r.path       = StringView{path};
+    r.args       = {args.begin(), args.size()};
+    r.page_items = 64U;
+    r.page_bytes = crd::perf::kDiagMaxPageBytes;
+    return h.svc.execute(r);
+}
+
+inline bool contains(const crd::perf::DiagResult& r, StringView needle)
+{
+    return StringView{r.json.data(), r.json.size()}.find(needle) != StringView::npos;
+}
+
 inline ck::ReplayRecord record_on_device(const fx::Authored& a, const ck::DeviceExecutor& e,
                                          ck::DeviceEnvelope envelope, crd::memory::IAllocator* alloc)
 {
@@ -196,19 +181,19 @@ inline void device_replay_gate(crd::gpu::IComputeContext& device, CompileFn comp
                                const char* backend, const char* record_path, crd::memory::IAllocator* alloc)
 {
     GpuRig rig;
-    rig.device       = &device;
-    rig.compile      = compile;
-    rig.compile_user = compile_user;
-    rig.alloc        = alloc;
-    rig.adapter      = device.adapter();
+    rig.run.device       = &device;
+    rig.run.compile      = compile;
+    rig.run.compile_user = compile_user;
+    rig.run.alloc        = alloc;
+
+    const ck::DeviceExecutor gpu = gpu_executor(rig);
     REQUIRE(rig.adapter.known);
     CHECK(StringView{rig.adapter.backend} == StringView{backend});
     CHECK_FALSE(StringView{rig.adapter.name}.empty());
     CHECK(rig.adapter.vendor != 0U);
     UNSCOPED_INFO("adapter " << rig.adapter.name << " vendor " << rig.adapter.vendor << " device " << rig.adapter.device
                              << " driver " << rig.adapter.driver << " api " << rig.adapter.api);
-    const ck::DeviceExecutor gpu = gpu_executor(rig);
-    CountedReference         reference{ck::reference_device_executor(alloc), 0U};
+    CountedReference reference{ck::reference_device_executor(alloc), 0U};
 
     fx::Authored a(alloc);
     fx::author(a, alloc);
@@ -252,7 +237,7 @@ inline void device_replay_gate(crd::gpu::IComputeContext& device, CompileFn comp
     CHECK(r.max_distance == 0U);
     CHECK(r.compared == 3U * fx::kN);
     CHECK_FALSE(r.adapter_differs);
-    CHECK(rig.runs == 2U);
+    CHECK(rig.run.runs == 2U);
 
     // 3. The exact record is never replayed on another adapter: the CPU reference is refused before it runs.
     CHECK(ck::replay_device_record(back, counted_reference(reference), &fx::registrar, nullptr, {}, r) ==
@@ -304,5 +289,70 @@ inline void device_replay_gate(crd::gpu::IComputeContext& device, CompileFn comp
     CHECK(r.divergence.buffer == 2U);
     CHECK(r.divergence.element == 0U);
     CHECK(r.dispatch.line == fx::locate(text, fx::kWaveDispatch).line);
+
+    // 6. Through the replay commands bound to this executor, as a GPU host binds them, from the fixture's files:
+    //    replay.record executor=device on the device writes the library's record of step 4 (same inputs and envelope,
+    //    and the device is bit-stable, step 2), a fresh service reproduces it on the device, a service bound to the
+    //    CPU reference replays it within the declared envelope at the measured distance, and against the edited
+    //    kernel folder the device names @wave's dispatch.
+    String tag(alloc);
+    tag.append("crd_diag9a_device_cmd_");
+    tag.append(backend);
+    const fx::DeviceRoot root(tag.c_str(), a, alloc);
+    {
+        CommandHost                 h(root.root(), &gpu);
+        const crd::perf::DiagResult made = command(h, ck::kReplayRecordCommand, fx::kFile,
+                                                   {{"out", "device.crpl"},
+                                                    {"executor", "device"},
+                                                    {"envelope", "ulp:32"},
+                                                    {"kernel_dir", fx::kKernelDir},
+                                                    {"buffers", fx::kBufferFiles}});
+        INFO(made.json.c_str());
+        REQUIRE(made.status == crd::perf::DiagStatus::Ok);
+        String backend_field(alloc);
+        backend_field.append(R"("backend":")");
+        backend_field.append(backend);
+        backend_field.append(R"(")");
+        CHECK(contains(made, StringView{backend_field.data(), backend_field.size()}));
+        Array<u8> library(alloc);
+        ck::encode_record(loose, library);
+        const bool same_bytes = root.read(StringView{"device.crpl"}) == library; // a bool: no byte dump on failure
+        CHECK(same_bytes);
+    }
+    {
+        CommandHost                 h(root.root(), &gpu);
+        const crd::perf::DiagResult again = command(h, ck::kReplayRunCommand, "device.crpl", {});
+        INFO(again.json.c_str());
+        REQUIRE(again.status == crd::perf::DiagStatus::Ok);
+        CHECK(contains(again, R"("adapter_differs":false)"));
+        CHECK(contains(again, R"("compared":768,"max_distance":0,"result":"reproduced")"));
+    }
+    {
+        const ck::DeviceExecutor    cpu = counted_reference(reference);
+        CommandHost                 h(root.root(), &cpu);
+        const crd::perf::DiagResult there = command(h, ck::kReplayRunCommand, "device.crpl", {});
+        INFO(there.json.c_str());
+        REQUIRE(there.status == crd::perf::DiagStatus::Ok);
+        CHECK(contains(there, R"("adapter_differs":true)"));
+        CHECK(contains(there, R"("result":"reproduced")"));
+        char distance[64];
+        (void)std::snprintf(distance, sizeof(distance), R"("max_distance":%llu,)",
+                            static_cast<unsigned long long>(measured));
+        CHECK(contains(there, StringView{distance}));
+    }
+    root.text(StringView{"kernels/wave.ckir"}, StringView{edited.data(), edited.size()});
+    {
+        CommandHost                 h(root.root(), &gpu);
+        const crd::perf::DiagResult diff =
+            command(h, ck::kReplayRunCommand, "device.crpl", {{"kernel_dir", fx::kKernelDir}});
+        INFO(diff.json.c_str());
+        REQUIRE(diff.status == crd::perf::DiagStatus::Ok);
+        CHECK(contains(diff, R"("divergence":"element","buffer":2,"element":0,"type":"f32",)"));
+        char at_line[160];
+        (void)std::snprintf(at_line, sizeof(at_line), R"("dispatch_file":"%s","dispatch_line":%u,)", fx::kFile,
+                            fx::locate(text, fx::kWaveDispatch).line);
+        CHECK(contains(diff, StringView{at_line}));
+        CHECK(contains(diff, R"("kernels_match":false)"));
+    }
 }
 } // namespace crd::ceir_gpu_test::device_replay

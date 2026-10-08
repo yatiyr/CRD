@@ -30,6 +30,8 @@ target_link_libraries(crd-ceir-gpu-vulkan-tests PRIVATE
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-vulkan    # the Vulkan backend (transitively: gpu-context-vulkan — VulkanComputeContext, compile_glsl_to_spirv, ValidationCapture)
     crd-gpu-context-vulkan # CEIR-20c-2: VulkanDgcContext (VK_EXT_device_generated_commands) — explicit (used directly by test_vulkan_dgc)
+    crd-perf          # DIAG.9a: the device record gate drives the replay commands through the diagnostic service
+    crd-platform      # DIAG.9a: the gate writes the device fixture's files under a scratch root
     Catch2::Catch2WithMain
 )
 

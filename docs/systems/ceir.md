@@ -135,7 +135,11 @@ element by element within it. `exact` is claimed only on the recording adapter a
 anything runs); `ulp:N` replays on any adapter, including the CPU reference (`reference_device_executor`, crd-kir's
 `eval_cpu_kernel`), and names the first element outside the bound at the dispatch that writes it. crd-ceir-gpu's
 `execute_lowered_host` runs a lowered list on host data, and `IComputeContext::adapter()` names the adapter a GPU
-executor records. No host binds a device executor to `replay.run` yet, so it refuses device records.
+executor records. The replay commands reach a host's device executor (`ReplayCommands::device`):
+`replay.record executor=device` takes `envelope`, `kernel_dir` (`<dir>/<kernel>.ckir`) and one initial-contents file
+per buffer (`buffers`), and `replay.run` replays a device record (`program=` and `kernel_dir=` against an edited
+checkout). ceridc binds the CPU reference; crd-ceir-gpu's `run_device_block` is the GPU half a GPU host wraps (the
+sandbox does not bind one yet: its panel's requests would submit from another thread than the frame loop).
 
 ## Maturity and further work
 

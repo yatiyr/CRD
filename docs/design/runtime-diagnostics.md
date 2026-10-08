@@ -1147,15 +1147,48 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-device-records.md)
   3 + 2|x| ULP exp bound and D3D's relative bound, not a measurement); declared one ULP below the measured distance it
   diverges at `@wave`'s dispatch. lavapipe (llvmpipe, LLVM 20.1.2) differs by at most 4 ULP; WARP was not
   measured.
-- Still open in DIAG.9a, as work that can be done now: a device executor bound to the replay commands (`replay.record`
-  and `replay.run` for device records in a host with a GPU context, crd-sandbox first: ceridc has none; until then
-  `replay.run` refuses a device record before it loads the program); host records from crd-sandbox's panel (the host
-  provider needs an enrolled thread). Waiting on a consumer or an op: state cells across invokes and a run spanning a
-  reload wait for a host that keeps one interpreter across invokes (only tests call `migrate_state` today); external
-  I/O completions and network or physical effects stubbed only in explicit test replay wait for an op that declares
-  `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`, `AgentAction` or a physics write (none does). Until then a
-  program that needs external results keeps `external-results` missing and its record is refused before anything runs
-  (`test_replay_diag.cpp`, `test_replay_record.cpp`).
+- What stayed open after this batch is listed at the end of the next settled block (the device executor bound to the
+  replay commands is settled there, apart from crd-sandbox).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-device-record-commands.md)):
+- The replay commands reach a device executor: `ReplayCommands::device` is the host's `cook::DeviceExecutor` (null:
+  `replay.record executor=device` and a device record's `replay.run` are refused `unavailable`, the record request
+  before anything is read). The executor runs on the request's thread, so a host binds one only where that thread may
+  use it.
+- `replay.record executor=device` takes the run from files under the host's root, because an argument holds at most
+  512 bytes: `envelope` (`exact` or `ulp:N`, required, declared and never inferred), `kernel_dir` (kernel `@k`'s CKIR
+  text is `<kernel_dir>/k.ckir`, each at most 1 MiB) and `buffers` (one little-endian 32-bit file per declared buffer,
+  in declaration order, at least one element each and 2^22 over all, every file bounded by what is left of that
+  budget before a byte of it is read). The run arguments of the other executors (`entry`, `args`, `max_events`,
+  `seed`, `clock`, `sim_time`, `sim_step`, `events`) are refused with it and the three device arguments without it,
+  in the argument step. `describe_device_program` lists the kernels a device program dispatches (each once, in first
+  dispatch order) and the buffers it declares; every file is read and checked before `record_device_run` runs the
+  executor, and the record is the library's record of the same artifact, inputs and envelope, byte for byte.
+- `replay.run` replays a device record with `replay_device_record` (its build, adapter and input checks before
+  anything runs; an exact record is claimed only on its own adapter and build, even with `build=any`); `program=`
+  replays it against another program and `kernel_dir=` against the kernel texts in a folder (an edited checkout).
+  The answer names the first element outside the envelope with both bit patterns, distance, bound, the last dispatch
+  writing it and the buffer's declaration at their authored positions, both adapters and `max_distance`.
+- ceridc binds the CPU reference (`reference_device_executor`) as its device executor: it opens no GPU context, so an
+  exact GPU record is refused there and an ulp record is checked against the reference within its envelope. A record
+  made by one ceridc process reproduces in another after a kernel file is edited, and the edit is named at its
+  dispatch.
+- crd-ceir-gpu's `run_device_block` (`crd/ceir/gpu/device_run.hpp`) is the GPU half of a device executor: lower the
+  block, read and compile each dispatched kernel with the host's `KernelCompileFn`, run `execute_lowered_host`, report
+  the blamed dispatch. It names no record type, so crd-ceir-gpu still does not link the cook bridge; a GPU host wraps
+  it with its compute context's adapter. The Vulkan and DX12 gates bind that executor to the commands: on this
+  machine's RTX 4070 Ti SUPER a command-made ulp record is the library's record byte for byte, reproduces on the
+  device and replays on the CPU reference at the library's measured distance.
+- Still open in DIAG.9a, as work that can be done now: a GPU device executor bound to crd-sandbox's replay commands.
+  The panel's requests run on its own thread, and `VulkanComputeContext` submits on the compute queue, which is the
+  graphics queue the frame loop uses on a device without a dedicated compute family; the run must be marshalled onto
+  the frame-loop thread. Host records from crd-sandbox's panel (the host provider needs an enrolled thread). Waiting
+  on a consumer or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one
+  interpreter across invokes (only tests call `migrate_state` today); external I/O completions and network or
+  physical effects stubbed only in explicit test replay wait for an op that declares `FileIO`, `NetworkIO`,
+  `DeviceIO`, `ExternalCall`, `AgentAction` or a physics write (none does). Until then a program that needs external
+  results keeps `external-results` missing and its record is refused before anything runs (`test_replay_diag.cpp`,
+  `test_replay_record.cpp`).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

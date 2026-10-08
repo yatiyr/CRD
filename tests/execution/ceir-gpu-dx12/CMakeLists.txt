@@ -32,6 +32,8 @@ target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-dx12      # the D3D12 CKIR backend (emit_compute_kernel_hlsl support)
     crd-gpu-context-dx12  # Dx12ComputeContext / create_pipeline_from_hlsl (its include dir isn't re-exported by crd-kir-dx12)
+    crd-perf          # DIAG.9a: the device record gate drives the replay commands through the diagnostic service
+    crd-platform      # DIAG.9a: the gate writes the device fixture's files under a scratch root
     Catch2::Catch2WithMain
 )
 

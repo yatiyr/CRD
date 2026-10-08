@@ -144,6 +144,21 @@ enum class DeviceReplayStatus : crd::u8
 // "missing-inputs", "content-mismatch", "device-failed".
 [[nodiscard]] containers::StringView device_replay_status_name(DeviceReplayStatus s) noexcept;
 
+// What a host must supply to record the cooked program `blob`: the kernel symbols it dispatches (without '@', each
+// once, in first-dispatch order) and the number of buffers it declares. Ok, NotLoaded (the blob did not read),
+// Unsupported (not a device program; `reason` names the op) or BadRequest (past a record's bounds). `registrar`
+// installs the program's dialects into the fresh Context it is read in.
+struct DeviceProgramShape
+{
+    explicit DeviceProgramShape(memory::IAllocator* a) : kernels(a) {}
+
+    containers::Array<containers::String> kernels;
+    crd::u32                              buffers = 0U;
+};
+[[nodiscard]] DeviceReplayStatus describe_device_program(containers::ConstSpan<crd::u8> blob, Registrar registrar,
+                                                         void* user, DeviceProgramShape& out,
+                                                         containers::String& reason);
+
 struct DeviceRecordRequest
 {
     containers::ConstSpan<crd::u8>                         blob; // the cooked program

@@ -520,7 +520,7 @@ TEST_CASE("diag 9a: host requests are refused before anything is read or run", "
         refused(send(h, ck::kReplayRecordCommand, program, {{"out", tamper}, {"sub_fuel", "9"}}),
                 DiagStatus::BadArgument, "need executor=host");
         refused(send(h, ck::kReplayRecordCommand, program, {{"out", tamper}, {"executor", "gpu"}}),
-                DiagStatus::BadArgument, "must be 'plan' or 'host'");
+                DiagStatus::BadArgument, "must be 'plan', 'host' or 'device'");
         refused(send(h, ck::kReplayRecordCommand, program, {{"out", tamper}, {"executor", "host"}, {"jobs", "0"}}),
                 DiagStatus::BadArgument, "must be 1 to 256");
         refused(send(h, ck::kReplayRecordCommand, program, {{"out", tamper}, {"executor", "host"}, {"jobs", "257"}}),
