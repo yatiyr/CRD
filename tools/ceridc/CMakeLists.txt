@@ -31,11 +31,12 @@ target_link_libraries(crd-ceridc
         crd-ceir      # DIAG.8b: the inspect verb runs an authored CEIR program under an inspect session
         crd-ceir-cook # DIAG.8b: the InspectHost (ReloadSet generation, compiled entry, executing thread)
         crd-perf-gpu-bridge # the gpu.resources diagnostic command (ceridc registers no GPU context)
+        crd-ceir-host # DIAG.9a: the host provider as the replay commands' host executor
 )
 
 target_compile_features(crd-ceridc PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-ceridc)
 
 add_executable(ceridc "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
-target_link_libraries(ceridc PRIVATE crd-ceridc)
+target_link_libraries(ceridc PRIVATE crd-ceridc crd-jobs) # crd-jobs: the diag and mcp verbs own the pool
 crd_enable_default_pch(ceridc)

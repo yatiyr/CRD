@@ -1,0 +1,49 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "square"} {
+      ^bb0(%0 : !i32):
+        %1 = arith.muli(%0, %0) : !i32
+        func.return(%1)
+    }
+    func.func() {sym_name = "main"} {
+      ^bb0(%2 : !i32):
+        %3 = async.launch() : !i32 {
+          ^bb0:
+            %4 = arith.const() {value = 5} : !i32
+            %5 = func.call(%4) {callee = @square} : !i32
+            core.yield(%5)
+        }
+        %6 = async.await(%3) : !i32
+        %7 = arith.const() {value = 0} : !i32
+        %8 = arith.const() {value = 8} : !i32
+        %9 = arith.const() {value = 1} : !i32
+        %10 = arith.const() {value = 0} : !i32
+        %11 = task.map_reduce(%7, %8, %9, %10) : !i32 {
+          ^bb0(%12 : !i32):
+            %13 = arith.const() {value = 0} : !i32
+            %14 = arith.const() {value = 32} : !i32
+            %15 = arith.const() {value = 1} : !i32
+            core.for(%13, %14, %15) {
+              ^bb0(%16 : !i32):
+                core.yield()
+            }
+            %17 = arith.muli(%12, %12) : !i32
+            core.yield(%17)
+        } {
+          ^bb0(%18 : !i32, %19 : !i32):
+            %20 = arith.addi(%18, %19) : !i32
+            core.yield(%20)
+        }
+        %21 = arith.addi(%6, %11) : !i32
+        %22 = arith.addi(%21, %2) : !i32
+        %23 = arith.const() {value = 0} : !i32
+        %24 = core.state(%23, %22) : !i32
+        %25 = arith.const() {value = 0} : !i32
+        %26 = arith.const() {value = 1} : !i32
+        core.for(%25, %26, %2) {
+          ^bb0(%27 : !i32):
+            core.yield()
+        }
+        func.return(%22)
+    }
+}

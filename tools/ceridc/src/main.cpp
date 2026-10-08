@@ -5,6 +5,7 @@
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/cooker/cook_handler.hpp>
+#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 
@@ -79,7 +80,8 @@ void print_usage()
         "                 [--record <f.crpl>]  (a new run record of the inspected run; never overwrites)\n"
         "  ceridc diag --command <name> [--path <rel>] [--param <name>=<value>]... [--cursor <n>]\n"
         "              [--page-items <n>] [--page-bytes <n>] [--schema <n>] [--grant <list>] [--root <dir>]\n"
-        "              (grant defaults to read; program.inspect needs execute)\n"
+        "              (grant defaults to read; program.inspect needs execute; replay.record needs execute,record\n"
+        "              and runs on the host provider with --param executor=host)\n"
         "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>]\n"
         "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read)\n");
 }
@@ -98,6 +100,7 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag)
         }
         const crd::containers::String response = crd::ceridc::mcp_handle(
             {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc, &diag);
+        crd::jobs::frame_reset(); // every job the request ran was joined before it answered
         if (!response.empty())
         {
             std::printf("%s\n", response.c_str());
@@ -107,6 +110,21 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag)
     g_alloc.deallocate(line);
     return 0;
 }
+
+// The crd::jobs pool for the length of one diagnostic verb. The host executor of the replay commands runs programs on
+// the host provider, whose pool the process owns, on this (the main) thread; the other verbs start no workers. The
+// provider's parallel ranges take their job arrays from the calling thread's frame arena, so the MCP loop resets the
+// arenas after every request (every job of it was joined by then).
+class ScopedJobPool
+{
+public:
+    ScopedJobPool() { crd::jobs::init(crd::jobs::Config{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U}); }
+    ~ScopedJobPool() { crd::jobs::shutdown(); }
+    ScopedJobPool(const ScopedJobPool&)            = delete;
+    ScopedJobPool& operator=(const ScopedJobPool&) = delete;
+    ScopedJobPool(ScopedJobPool&&)                 = delete;
+    ScopedJobPool& operator=(ScopedJobPool&&)      = delete;
+};
 
 } // namespace
 
@@ -122,6 +140,7 @@ int main(int argc, char* argv[])
     const char* verb = argv[1];
     if (std::strcmp(verb, "mcp") == 0)
     {
+        const ScopedJobPool pool;
         // The diag tool's authority is this process's start-up decision; no request can change it.
         crd::perf::DiagAuthoritySet grant = 0U;
         if (!crd::perf::parse_authority_list(flag_of(argc, argv, "--diag-grant", "read"), grant))
@@ -145,6 +164,7 @@ int main(int argc, char* argv[])
     }
     if (std::strcmp(verb, "diag") == 0)
     {
+        const ScopedJobPool pool;
         crd::perf::DiagRequest request;
         const char*            command = flag_of(argc, argv, "--command", nullptr);
         const char*            path    = flag_of(argc, argv, "--path", nullptr);

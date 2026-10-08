@@ -328,6 +328,17 @@ struct ReplaySite
 };
 [[nodiscard]] ReplaySite replay_site(const Context& ctx, const ReplayProgram& program, plan::InstrRef at) noexcept;
 
+// An authored position that owns its file name, for an answer that outlives the Context it was read from.
+struct OwnedReplaySite
+{
+    explicit OwnedReplaySite(memory::IAllocator* a) : file(a) {}
+
+    crd::u64           op = 0U;
+    containers::String file;
+    crd::u32           line = 0U;
+    crd::u32           col  = 0U;
+};
+
 // The authored position of the op with stable id `op` in `program` (its first compiled instr), or an empty site.
 [[nodiscard]] ReplaySite replay_site_of_op(const Context& ctx, const ReplayProgram& program, crd::u64 op) noexcept;
 

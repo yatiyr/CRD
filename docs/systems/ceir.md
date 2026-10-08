@@ -87,8 +87,13 @@ never overwrites. A record names its executor (schema 3). crd-ceir-host's `recor
 (`crd/ceir/host/host_replay.hpp`) record and replay a run on the crd-jobs host provider: the trace is the
 submitting interpreter's (`InterpreterRecorder`, attached through `HostProvider::execute(..., HostObserver)`), the
 record holds the provider's job split and per-body step budget as its schedule input, and a replay runs the
-record's own blob with that schedule; bodies run on sub-interpreters leave no events. `replay.run` refuses a host
-record and the host replay a plan record.
+record's own blob with that schedule; bodies run on sub-interpreters leave no events. The host replay refuses a plan
+record. The replay commands reach the host provider through a host executor crd-ceir-host provides
+(`crd/ceir/host/host_replay_diag.hpp`, bound on `ReplayCommands::host`; crd-ceir-cook stays jobs-free):
+`replay.record executor=host` (with `jobs` and `sub_fuel`) writes a host record and `replay.run` replays one (`jobs=`
+on another split). ceridc binds it and its `diag` and `mcp` verbs own the jobs pool, so a host record made by one
+`ceridc` process reproduces in another (`assets/ceir/host_replay_demo.ceir`); a host with none bound refuses host
+records before reading anything.
 
 ## Maturity and further work
 

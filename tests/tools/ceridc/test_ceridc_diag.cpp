@@ -9,10 +9,14 @@
 // and program.inspect: the authored program run to a script given as named arguments, which needs the Execute grant
 // and reaches the agent transport only through this tool. DIAG.9a: replay.record (Execute and Record) writes a run
 // record from one ceridc process, and replay.run in another process reproduces it after the program file is edited.
+// The same holds for a host record (`executor=host`): ceridc binds the host provider as the replay commands' host
+// executor, its diag and mcp verbs own the crd::jobs pool it runs on, and this binary's listener owns the pool for the
+// native and in-process calls.
 
 #include <crd/assetio/json.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
@@ -21,6 +25,8 @@
 #include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -57,6 +63,28 @@ constexpr const char* kReplayProgram = "ceridc_diag_replay.ceir";
 constexpr const char* kReplayRecord  = "ceridc_diag_replay.crpl";
 constexpr const char* kReplayOut     = "ceridc_diag_replay_out.json";
 constexpr const char* kBiasLine      = "%9 = arith.const() {value = 1} : !i32";
+// DIAG.9a: the committed host replay demo, its working copy, the host records and the binary's answer.
+constexpr const char* kHostDemo    = CRD_REPO_DIR "/assets/ceir/host_replay_demo.ceir";
+constexpr const char* kHostProgram = "ceridc_diag_host_replay.ceir";
+constexpr const char* kHostRecord  = "ceridc_diag_host_replay.crpl";
+constexpr const char* kHostNative  = "ceridc_diag_host_replay_native.crpl";
+constexpr const char* kHostOut     = "ceridc_diag_host_replay_out.json";
+constexpr const char* kHostIn      = "ceridc_diag_host_replay_in.jsonl";
+constexpr const char* kLaunchLine  = "%4 = arith.const() {value = 5} : !i32";
+constexpr const char* kAwaitLine   = "%6 = async.await(%3) : !i32";
+
+// The host provider's crd::jobs pool for the native and in-process calls of this binary (ceridc's own diag and mcp
+// verbs own theirs).
+struct DiagJobsListener final : Catch::EventListenerBase
+{
+    using Catch::EventListenerBase::EventListenerBase;
+    void testRunStarting(Catch::TestRunInfo const& /*info*/) override
+    {
+        crd::jobs::init(crd::jobs::Config{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U});
+    }
+    void testCaseEnded(Catch::TestCaseStats const& /*stats*/) override { crd::jobs::frame_reset(); }
+    void testRunEnded(Catch::TestRunStats const& /*stats*/) override { crd::jobs::shutdown(); }
+};
 
 [[nodiscard]] bool has(const String& s, const char* needle)
 {
@@ -211,6 +239,8 @@ struct ToolReply
 }
 
 } // namespace
+
+CATCH_REGISTER_LISTENER(DiagJobsListener)
 
 TEST_CASE("diag: a native caller, the verb and the MCP tool return the same bounded result", "[ceridc][diag]")
 {
@@ -786,4 +816,158 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
     (void)fs::remove_file(fs::Path(StringView("ceridc_diag_replay_in.jsonl")));
     (void)fs::remove_file(fs::Path(StringView(kReplayOut)));
     (void)fs::remove_file(fs::Path(StringView(kReplayProgram)));
+}
+
+TEST_CASE("diag: a host record made by one ceridc process reproduces in another after the program is edited",
+          "[ceridc][diag]")
+{
+    // DIAG.9a: process 1 records main(0) of the committed host demo on the host provider (it fails bad-for-step);
+    // the program file is edited (the launched constant 5 becomes 6); process 2 replays the record from the artifact
+    // it holds and the failure reproduces; process 3 replays the same inputs against the edited file and names the
+    // await that reads the launched value (recorded 25, observed 36); an MCP stdio process replays it on another job
+    // split. Each answer equals this process's native call, and the binary's record is the native record, byte for
+    // byte.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    (void)fs::remove_file(fs::Path(StringView(kHostRecord)));
+    (void)fs::remove_file(fs::Path(StringView(kHostNative)));
+
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView(kHostDemo)), text));
+    const StringView pristine{text.data(), text.size()};
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kHostProgram)), pristine));
+    const crd::usize launch_at = pristine.find(StringView{kLaunchLine});
+    const crd::usize await_at  = pristine.find(StringView{kAwaitLine});
+    REQUIRE(launch_at != StringView::npos);
+    REQUIRE(await_at != StringView::npos);
+    crd::u32 await_line = 1U;
+    for (crd::usize i = 0U; i < await_at; ++i)
+    {
+        await_line += pristine[i] == '\n' ? 1U : 0U;
+    }
+
+    const auto read_out = [&]()
+    {
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kHostOut)), out));
+        while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+        {
+            out.resize(out.size() - 1U);
+        }
+        return out;
+    };
+    const crd::perf::DiagAuthoritySet execute = crd::perf::authority_bit(DiagAuthority::Execute);
+    const auto                        native  = [&](const char* program, const char* jobs)
+    {
+        DiagCommandService svc(execute, rooted(), &g_alloc);
+        bind(svc);
+        crd::perf::DiagArg args[2];
+        crd::u32           n = 0U;
+        if (program != nullptr)
+        {
+            args[n++] = {"program", program};
+        }
+        if (jobs != nullptr)
+        {
+            args[n++] = {"jobs", jobs};
+        }
+        DiagRequest r;
+        r.command = "replay.run";
+        r.path    = kHostRecord;
+        r.args    = {args, n};
+        return svc.execute(r);
+    };
+
+    // Process 1 records main(0) on the host provider with a job split of 3.
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=0 "
+                        "--param executor=host --param jobs=3 --grant execute,record --root . > %s",
+                        exe, kHostProgram, kHostRecord, kHostOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String recorded = read_out();
+    INFO(recorded.c_str());
+    CHECK(has(recorded, "\"executor\":\"host\",\"jobs\":3,"));
+    CHECK(has(recorded, "\"error\":\"bad-for-step\""));
+    CHECK(has(recorded, "\"replay\":\"replayable\""));
+
+    // This process records the same run natively: the two records are the same bytes.
+    {
+        const crd::perf::DiagAuthoritySet grant = execute | crd::perf::authority_bit(DiagAuthority::Record);
+        DiagCommandService                svc(grant, rooted(), &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg args[] = {{"out", kHostNative}, {"args", "0"}, {"executor", "host"}, {"jobs", "3"}};
+        DiagRequest              r;
+        r.command = "replay.record";
+        r.path    = kHostProgram;
+        r.args    = {args, 4U};
+        REQUIRE(svc.execute(r).status == crd::perf::DiagStatus::Ok);
+        crd::containers::Array<crd::u8> theirs(&g_alloc);
+        crd::containers::Array<crd::u8> mine(&g_alloc);
+        REQUIRE(fs::read_file_binary(fs::Path(StringView(kHostRecord)), theirs));
+        REQUIRE(fs::read_file_binary(fs::Path(StringView(kHostNative)), mine));
+        CHECK(theirs == mine);
+    }
+
+    // The program file is edited after the run.
+    String edit(&g_alloc);
+    edit.append(pristine.substr(0U, launch_at));
+    edit.append("%4 = arith.const() {value = 6} : !i32");
+    edit.append(pristine.substr(launch_at + StringView{kLaunchLine}.size()));
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kHostProgram)), StringView{edit.data(), edit.size()}));
+
+    // Process 2 replays the record from its own artifact: the failure reproduces.
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
+                        exe, kHostRecord, kHostOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String same = read_out();
+    INFO(same.c_str());
+    CHECK(has(same, "\"result\":\"reproduced\""));
+    CHECK(has(same, "\"run\":\"replayed\",\"error\":\"bad-for-step\""));
+    CHECK(view(same) == view(native(nullptr, nullptr).json));
+
+    // Process 3 replays the same inputs against the edited file: the await reading the launched value diverges.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kHostRecord, kHostProgram, kHostOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String diff = read_out();
+    INFO(diff.c_str());
+    CHECK(has(diff, "\"result\":\"diverged\""));
+    CHECK(has(diff, "\"divergence\":\"value\",\"index\":"));
+    CHECK(has(diff, "\"recorded\":25,\"observed\":36,"));
+    char at_line[96];
+    (void)std::snprintf(at_line, sizeof(at_line), R"("file":"%s","line":%u,)", kHostProgram, await_line);
+    CHECK(has(diff, at_line));
+    CHECK(view(diff) == view(native(kHostProgram, nullptr).json));
+
+    // Over MCP stdio, under the process's execute grant, on another job split: the tool text is the native document.
+    DiagRequest              r;
+    const crd::perf::DiagArg jobs[] = {{"jobs", "16"}};
+    r.command                       = "replay.run";
+    r.path                          = kHostRecord;
+    r.args                          = {jobs, 1U};
+    String line(&g_alloc);
+    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    line.append(arguments_of(r).c_str());
+    line.append("}}\n");
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kHostIn)), view(line)));
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kHostIn,
+                        kHostOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String     mcp = read_out();
+    const StringView all = view(mcp);
+    const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
+    REQUIRE(got.parsed);
+    CHECK_FALSE(got.is_error);
+    const crd::perf::DiagResult split = native(nullptr, "16");
+    CHECK(has(split.json, "\"recorded_jobs\":3,\"jobs\":16,"));
+    CHECK(has(split.json, "\"result\":\"reproduced\""));
+    CHECK(view(got.text) == view(split.json));
+
+    (void)fs::remove_file(fs::Path(StringView(kHostIn)));
+    (void)fs::remove_file(fs::Path(StringView(kHostOut)));
+    (void)fs::remove_file(fs::Path(StringView(kHostRecord)));
+    (void)fs::remove_file(fs::Path(StringView(kHostNative)));
+    (void)fs::remove_file(fs::Path(StringView(kHostProgram)));
 }

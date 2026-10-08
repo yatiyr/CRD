@@ -46,6 +46,9 @@ void run_host_traced(Context& ctx, const Module& module, containers::StringView 
                      containers::ConstSpan<crd::i64> args, const HostSchedule& schedule, crd::u32 max_events,
                      cook::ReplayTrace& out);
 
+// An authored position, owned (the Context it was read from is gone when a call returns).
+using HostSite = cook::OwnedReplaySite;
+
 // NOLINTNEXTLINE(performance-enum-size)
 enum class HostReplayStatus : crd::u8
 {
@@ -64,12 +67,12 @@ enum class HostReplayStatus : crd::u8
 // Run the cooked program `blob` (authored at `path`) once on `entry(args)` with `schedule` and make its host record
 // in `out`. `registrar` installs the program's dialects into the fresh Context it is loaded in. `missing` (when not
 // null) gains the inputs stored as missing. The record is made whatever the run's outcome (a failing run is recorded
-// with its error and the op it blamed).
+// with its error and the op it blamed); `fault` (when not null) gets that op's authored position.
 [[nodiscard]] HostReplayStatus record_host_run(containers::ConstSpan<crd::u8> blob, containers::StringView path,
                                                containers::StringView entry, containers::ConstSpan<crd::i64> args,
                                                const HostSchedule& schedule, crd::u32 max_events,
                                                cook::Registrar registrar, void* user, cook::ReplayRecord& out,
-                                               containers::String* missing);
+                                               containers::String* missing, HostSite* fault = nullptr);
 
 struct HostReplayOptions
 {
@@ -78,26 +81,16 @@ struct HostReplayOptions
     crd::u32                       num_jobs  = 0U; // 0: the recorded job split; else this split instead
 };
 
-// An authored position, owned (the Context it was read from is gone when the replay returns).
-struct HostSite
-{
-    explicit HostSite(memory::IAllocator* a) : file(a) {}
-
-    crd::u64           op = 0U;
-    containers::String file;
-    crd::u32           line = 0U;
-    crd::u32           col  = 0U;
-};
-
 struct HostReplay
 {
-    explicit HostReplay(memory::IAllocator* a) : reason(a), trace(a), site(a), fault(a) {}
+    explicit HostReplay(memory::IAllocator* a) : reason(a), trace(a), site(a), fault(a), recorded_fault(a) {}
 
     containers::String reason; // a refusal's detail: the differing build fields, or the missing inputs
     cook::ReplayTrace  trace;
     cook::Divergence   divergence;
     HostSite           site;  // the divergence's op in the replayed program (op 0 when none names an op)
     HostSite           fault; // the replayed run's faulting op
+    HostSite           recorded_fault; // the recorded faulting op, in the record's own program
     crd::u64           replayed_hash = 0U;
     crd::u32           num_jobs      = 0U; // the job split the replay ran with
     bool               build_differs = false;

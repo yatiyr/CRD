@@ -66,12 +66,32 @@ struct RecordArgs
     cont::Array<crd::i64> args;
     cont::StringView      out;
     crd::u32              max_events = kReplayDefaultMaxEvents;
+    bool                  host       = false; // executor=host
+    crd::u32              jobs       = 8U;
+    crd::u64              sub_fuel   = crd::u64{1} << 20U;
 };
+
+constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
+
+// The host executor's answer as the service's status.
+[[nodiscard]] DiagStatus diag_status_of(HostExecutorStatus s) noexcept
+{
+    switch (s) // no default (-Werror=switch)
+    {
+    case HostExecutorStatus::Ok: return DiagStatus::Ok;
+    case HostExecutorStatus::Unavailable: return DiagStatus::Unavailable;
+    case HostExecutorStatus::Failed: return DiagStatus::Failed;
+    case HostExecutorStatus::BadArgument: return DiagStatus::BadArgument;
+    }
+    return DiagStatus::Failed;
+}
 
 // Parse every argument; `out` null validates only.
 [[nodiscard]] DiagStatus parse_record_args(cont::ConstSpan<DiagArg> args, RecordArgs* out, cont::String& reason)
 {
-    bool have_out = false;
+    bool have_out      = false;
+    bool host          = false;
+    bool have_schedule = false;
     for (const DiagArg& a : args)
     {
         if (a.name == "entry")
@@ -131,13 +151,56 @@ struct RecordArgs
                 out->max_events = static_cast<crd::u32>(v);
             }
         }
+        else if (a.name == "executor")
+        {
+            if (a.value != "plan" && a.value != "host")
+            {
+                return bad(reason, a.name, "must be 'plan' or 'host'");
+            }
+            host = a.value == "host";
+            if (out != nullptr)
+            {
+                out->host = host;
+            }
+        }
+        else if (a.name == "jobs")
+        {
+            crd::u64 v = 0U;
+            if (!detail::parse_u64(a.value, kReplayMaxHostJobs, v) || v == 0U)
+            {
+                return bad(reason, a.name, "must be 1 to 256");
+            }
+            have_schedule = true;
+            if (out != nullptr)
+            {
+                out->jobs = static_cast<crd::u32>(v);
+            }
+        }
+        else if (a.name == "sub_fuel")
+        {
+            crd::u64 v = 0U;
+            if (!detail::parse_u64(a.value, kMaxSubFuel, v) || v == 0U)
+            {
+                return bad(reason, a.name, "must be 1 to 4294967296");
+            }
+            have_schedule = true;
+            if (out != nullptr)
+            {
+                out->sub_fuel = v;
+            }
+        }
         else
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; replay.record takes out, entry, args and max_events");
+            reason.append("'; replay.record takes out, entry, args, max_events, executor, jobs and sub_fuel");
             return DiagStatus::BadArgument;
         }
+    }
+    if (have_schedule && !host)
+    {
+        reason.append("the arguments 'jobs' and 'sub_fuel' are the host executor's schedule; they need executor=host");
+        return DiagStatus::BadArgument;
     }
     if (!have_out)
     {
@@ -204,6 +267,113 @@ DiagStatus check_replay_record(void* /*context*/, cont::ConstSpan<DiagArg> args,
     return DiagStatus::Failed;
 }
 
+// Where a recorded run failed, as the answer names it (the file views a Context or string the caller keeps alive).
+struct FaultSite
+{
+    cont::StringView file;
+    crd::u32         line = 0U;
+    crd::u32         col  = 0U;
+};
+
+// Encode `record`, create its file exclusively and answer one item per input and per result and the summary.
+[[nodiscard]] DiagStatus write_and_answer(ReplayCommands& cmd, const DiagCall& call, const RecordArgs& parsed,
+                                          const ReplayRecord& record, cont::StringView target,
+                                          cont::StringView missing, const FaultSite& fault, DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    cont::Array<crd::u8>           file_bytes(alloc);
+    encode_record(record, file_bytes);
+    if (file_bytes.size() > cmd.max_record_bytes)
+    {
+        out.reason.append("the record is larger than the host's record limit; nothing was written");
+        return DiagStatus::Oversized;
+    }
+    if (const DiagStatus s = detail::write_new_file(target, {file_bytes.data(), file_bytes.size()}, out.reason);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
+    cmd.records_written.fetch_add(1U, std::memory_order_relaxed);
+
+    DiagFields item(alloc);
+    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
+    {
+        const detail::ReplayInputSpec& spec = detail::replay_input(i);
+        item.clear();
+        item.str("kind", "input")
+            .str("input", spec.name)
+            .str("guarantee", spec.guarantee)
+            .str("needed", detail::need_name(record.inputs[i].need))
+            .str("state", replay_input_state_name(record.inputs[i].state));
+        (void)out.add_item(item);
+    }
+    for (crd::usize i = 0U; i < record.results.size(); ++i)
+    {
+        item.clear();
+        item.str("kind", "result").u64("index", i).i64("value", record.results[i]);
+        (void)out.add_item(item);
+    }
+
+    const bool host = record.executor == ReplayExecutorKind::Host;
+    out.summary.str("path", call.request->path).str("executor", replay_executor_name(record.executor));
+    if (host)
+    {
+        out.summary.u64("jobs", record.host_jobs).u64("sub_fuel", record.host_sub_fuel);
+    }
+    out.summary.str("out", parsed.out)
+        .str("entry", parsed.entry)
+        .u64("args", record.args.size())
+        .u64("content_hash", record.content_hash)
+        .u64("record_bytes", file_bytes.size())
+        .u64("max_events", record.max_events)
+        .u64("events", record.events.size())
+        .u64("events_total", record.events_total)
+        .u64("lost", record.events_total - record.events.size())
+        .str("error", host ? exec::exec_error_name(record.host_error) : plan::run_error_name(record.error))
+        .u64("fault_op", record.fault_op)
+        .str("fault_file", fault.file)
+        .u64("fault_line", fault.line)
+        .u64("fault_col", fault.col)
+        .u64("results", record.results.size())
+        .str("missing_inputs", missing)
+        .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
+    return DiagStatus::Ok;
+}
+
+// The host executor's run of the artifact `blob`, recorded.
+[[nodiscard]] DiagStatus record_on_host(ReplayCommands& cmd, const DiagCall& call, const RecordArgs& parsed,
+                                        const cont::Array<crd::u8>& blob, cont::StringView target, DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    if (call.cancelled())
+    {
+        out.reason.append("cancelled before the program ran");
+        return DiagStatus::Cancelled;
+    }
+    HostRecordRequest request;
+    request.blob       = {blob.data(), blob.size()};
+    request.path       = call.request->path;
+    request.entry      = parsed.entry;
+    request.args       = cont::as_const_span(parsed.args);
+    request.num_jobs   = parsed.jobs;
+    request.sub_fuel   = parsed.sub_fuel;
+    request.max_events = parsed.max_events;
+    request.registrar  = cmd.registrar;
+    request.user       = cmd.user;
+    ReplayRecord    record(alloc);
+    OwnedReplaySite fault(alloc);
+    cont::String    missing(alloc);
+    if (const HostExecutorStatus s = cmd.host->record(request, record, fault, missing, out.reason);
+        s != HostExecutorStatus::Ok)
+    {
+        return diag_status_of(s);
+    }
+    cmd.executions.fetch_add(1U, std::memory_order_relaxed);
+    const FaultSite site{cont::StringView{fault.file.data(), fault.file.size()}, fault.line, fault.col};
+    return write_and_answer(cmd, call, parsed, record, target, cont::StringView{missing.data(), missing.size()}, site,
+                            out);
+}
+
 DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& out)
 {
     auto* const                    cmd   = static_cast<ReplayCommands*>(context);
@@ -214,6 +384,11 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     if (const DiagStatus s = parse_record_args(call.request->args, &parsed, out.reason); s != DiagStatus::Ok)
     {
         return s;
+    }
+    if (parsed.host && (cmd->host == nullptr || cmd->host->record == nullptr))
+    {
+        out.reason.append("this host binds no host executor; replay.record executor=host is unavailable here");
+        return DiagStatus::Unavailable;
     }
 
     // An existing record is refused before anything is read or run (the create below is exclusive as well).
@@ -240,6 +415,10 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
         s != DiagStatus::Ok)
     {
         return s;
+    }
+    if (parsed.host)
+    {
+        return record_on_host(*cmd, call, parsed, blob, {target.data(), target.size()}, out);
     }
 
     // The artifact is loaded exactly as a replay will load it, so the trace is the artifact's own.
@@ -283,60 +462,10 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     record.results      = std::move(trace.results);
     record.cells        = std::move(trace.cells);
 
-    cont::Array<crd::u8> file_bytes(alloc);
-    encode_record(record, file_bytes);
-    if (file_bytes.size() > cmd->max_record_bytes)
-    {
-        out.reason.append("the record is larger than the host's record limit; nothing was written");
-        return DiagStatus::Oversized;
-    }
-    if (const DiagStatus s =
-            detail::write_new_file({target.data(), target.size()}, {file_bytes.data(), file_bytes.size()}, out.reason);
-        s != DiagStatus::Ok)
-    {
-        return s;
-    }
-    cmd->records_written.fetch_add(1U, std::memory_order_relaxed);
-
-    DiagFields item(alloc);
-    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
-    {
-        const detail::ReplayInputSpec& spec = detail::replay_input(i);
-        item.clear();
-        item.str("kind", "input")
-            .str("input", spec.name)
-            .str("guarantee", spec.guarantee)
-            .str("needed", detail::need_name(record.inputs[i].need))
-            .str("state", replay_input_state_name(record.inputs[i].state));
-        (void)out.add_item(item);
-    }
-    for (crd::usize i = 0U; i < record.results.size(); ++i)
-    {
-        item.clear();
-        item.str("kind", "result").u64("index", i).i64("value", record.results[i]);
-        (void)out.add_item(item);
-    }
-
     const ReplaySite fault = replay_site(ctx, program, trace.fault);
-    out.summary.str("path", call.request->path)
-        .str("out", parsed.out)
-        .str("entry", parsed.entry)
-        .u64("args", record.args.size())
-        .u64("content_hash", record.content_hash)
-        .u64("record_bytes", file_bytes.size())
-        .u64("max_events", record.max_events)
-        .u64("events", record.events.size())
-        .u64("events_total", record.events_total)
-        .u64("lost", record.events_total - record.events.size())
-        .str("error", plan::run_error_name(record.error))
-        .u64("fault_op", record.fault_op)
-        .str("fault_file", fault.file)
-        .u64("fault_line", fault.line)
-        .u64("fault_col", fault.col)
-        .u64("results", record.results.size())
-        .str("missing_inputs", cont::StringView{missing.data(), missing.size()})
-        .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
-    return DiagStatus::Ok;
+    return write_and_answer(*cmd, call, parsed, record, {target.data(), target.size()},
+                            cont::StringView{missing.data(), missing.size()},
+                            FaultSite{fault.file, fault.line, fault.col}, out);
 }
 
 // ---- replay.run -----------------------------------------------------------------------------------------------------
@@ -345,6 +474,7 @@ struct RunArgs
 {
     cont::StringView program;           // empty: the record's own program
     bool             any_build = false; // build=any
+    crd::u32         jobs      = 0U;    // a host record's job split for this replay (0: the recorded one)
 };
 
 [[nodiscard]] DiagStatus parse_run_args(cont::ConstSpan<DiagArg> args, RunArgs* out, cont::String& reason)
@@ -373,11 +503,23 @@ struct RunArgs
                 out->any_build = a.value == "any";
             }
         }
+        else if (a.name == "jobs")
+        {
+            crd::u64 v = 0U;
+            if (!detail::parse_u64(a.value, kReplayMaxHostJobs, v) || v == 0U)
+            {
+                return bad(reason, a.name, "must be 1 to 256");
+            }
+            if (out != nullptr)
+            {
+                out->jobs = static_cast<crd::u32>(v);
+            }
+        }
         else
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; replay.run takes program and build");
+            reason.append("'; replay.run takes program, build and jobs");
             return DiagStatus::BadArgument;
         }
     }
@@ -392,6 +534,134 @@ DiagStatus check_replay_run(void* /*context*/, cont::ConstSpan<DiagArg> args, co
 void add_site(DiagFields& item, const ReplaySite& site)
 {
     item.str("file", site.file).u64("line", site.line).u64("col", site.col);
+}
+
+void add_owned_site(DiagFields& item, const OwnedReplaySite& site)
+{
+    item.str("file", cont::StringView{site.file.data(), site.file.size()})
+        .u64("line", site.line)
+        .u64("col", site.col);
+}
+
+void add_divergence(DiagFields& item, const Divergence& d)
+{
+    item.str("kind", "divergence")
+        .str("divergence", divergence_kind_name(d.kind))
+        .u64("index", d.index)
+        .u64("value_index", d.value_index)
+        .boolean("count", d.count)
+        .i64("recorded", d.recorded)
+        .i64("observed", d.observed)
+        .u64("recorded_op", d.recorded_op)
+        .u64("observed_op", d.observed_op);
+}
+
+// The artifact of the explicit other program `path` (an edited checkout), bounded before a byte is read.
+[[nodiscard]] DiagStatus cook_other_program(ReplayCommands& cmd, const DiagCall& call, cont::StringView path,
+                                            cont::Array<crd::u8>& blob, cont::String& reason)
+{
+    crd::memory::IAllocator* const alloc = blob.allocator();
+    cont::String                   file(alloc);
+    join(call.root, path, file);
+    Context               src(alloc);
+    cont::Array<crd::u8>  bytes(alloc);
+    detail::LoadedProgram loaded;
+    if (const DiagStatus s =
+            detail::load_program_file({file.data(), file.size()}, path, call.cancel, cmd.max_program_bytes,
+                                      cmd.registrar, cmd.user, src, bytes, loaded, reason, cmd.bytes_read);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
+    return cook_artifact(src, loaded, bytes, path, blob, reason);
+}
+
+// A host record's replay on the host executor (the record's executor, build and inputs were already checked).
+[[nodiscard]] DiagStatus replay_on_host(ReplayCommands& cmd, const DiagCall& call, const RunArgs& parsed,
+                                        const ReplayRecord& record, bool same, cont::StringView differing,
+                                        DiagSnapshot& out)
+{
+    crd::memory::IAllocator* const alloc = out.allocator();
+    cont::Array<crd::u8>           against(alloc);
+    if (!parsed.program.empty())
+    {
+        if (const DiagStatus s = cook_other_program(cmd, call, parsed.program, against, out.reason);
+            s != DiagStatus::Ok)
+        {
+            return s;
+        }
+    }
+    if (call.cancelled())
+    {
+        out.reason.append("cancelled before the program ran");
+        return DiagStatus::Cancelled;
+    }
+
+    HostReplayRequest request;
+    request.record    = &record;
+    request.against   = {against.data(), against.size()};
+    request.any_build = parsed.any_build;
+    request.num_jobs  = parsed.jobs;
+    request.registrar = cmd.registrar;
+    request.user      = cmd.user;
+    HostReplayAnswer answer(alloc);
+    if (const HostExecutorStatus s = cmd.host->replay(request, answer, out.reason); s != HostExecutorStatus::Ok)
+    {
+        return diag_status_of(s);
+    }
+    cmd.executions.fetch_add(1U, std::memory_order_relaxed);
+    const Divergence& d = answer.divergence;
+
+    DiagFields item(alloc);
+    if (d.kind != DivergenceKind::None)
+    {
+        item.clear();
+        add_divergence(item, d);
+        add_owned_site(item, answer.site);
+        (void)out.add_item(item);
+    }
+    item.clear();
+    item.str("kind", "outcome")
+        .str("run", "recorded")
+        .str("error", exec::exec_error_name(record.host_error))
+        .u64("op", record.fault_op);
+    add_owned_site(item, answer.recorded_fault);
+    (void)out.add_item(item);
+    item.clear();
+    item.str("kind", "outcome")
+        .str("run", "replayed")
+        .str("error", exec::exec_error_name(answer.trace.host_error))
+        .u64("op", answer.trace.fault_op);
+    add_owned_site(item, answer.fault);
+    (void)out.add_item(item);
+
+    const crd::usize verified =
+        record.events.size() < answer.trace.events.size() ? record.events.size() : answer.trace.events.size();
+    out.summary.str("path", call.request->path)
+        .str("executor", replay_executor_name(record.executor))
+        .u64("recorded_jobs", record.host_jobs)
+        .u64("jobs", answer.num_jobs)
+        .u64("sub_fuel", record.host_sub_fuel)
+        .str("program_source", parsed.program.empty() ? cont::StringView{"record"} : cont::StringView{"argument"})
+        .str("program",
+             parsed.program.empty() ? cont::StringView{record.program_path.data(), record.program_path.size()}
+                                    : parsed.program)
+        .u64("asset", record.asset)
+        .u64("generation", record.generation)
+        .u64("recorded_hash", record.content_hash)
+        .u64("replayed_hash", answer.replayed_hash)
+        .boolean("program_matches", answer.replayed_hash == record.content_hash)
+        .str("build", same ? cont::StringView{"same"} : cont::StringView{"differs"})
+        .str("build_differs", differing)
+        .str("entry", cont::StringView{record.entry.data(), record.entry.size()})
+        .u64("args", record.args.size())
+        .u64("max_events", record.max_events)
+        .u64("recorded_events", record.events_total)
+        .u64("replayed_events", answer.trace.events_total)
+        .u64("verified_events", verified)
+        .str("result", d.kind == DivergenceKind::None ? cont::StringView{"reproduced"} : cont::StringView{"diverged"})
+        .str("divergence", divergence_kind_name(d.kind));
+    return DiagStatus::Ok;
 }
 
 DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out)
@@ -422,12 +692,20 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     }
 
     // Compatibility, before anything runs: the executor, the build, then the inputs the program needs.
-    if (record.executor != ReplayExecutorKind::Plan)
+    const bool host = record.executor == ReplayExecutorKind::Host;
+    if (host && (cmd->host == nullptr || cmd->host->replay == nullptr))
     {
         out.reason.append("incompatible replay: the record was made by the ");
         out.reason.append(replay_executor_name(record.executor));
-        out.reason.append(" executor; replay.run replays plan records only");
+        out.reason.append(" executor and this host binds no host executor");
         return DiagStatus::Unavailable;
+    }
+    if (!host && parsed.jobs != 0U)
+    {
+        out.reason.append("the argument 'jobs' is a host record's job split; this is a ");
+        out.reason.append(replay_executor_name(record.executor));
+        out.reason.append(" record");
+        return DiagStatus::BadArgument;
     }
     cont::String differing(alloc);
     const bool   same = same_build(record.build, current_build(alloc), differing);
@@ -445,6 +723,11 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         out.reason.append(cont::StringView{missing.data(), missing.size()});
         out.reason.append(")");
         return DiagStatus::Unavailable;
+    }
+    if (host)
+    {
+        return replay_on_host(*cmd, call, parsed, record, same, cont::StringView{differing.data(), differing.size()},
+                              out);
     }
 
     // The record's own artifact, never the checkout's file; its content must be the hash it was recorded with.
@@ -475,20 +758,8 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     const Context*       replayed_ctx = &rctx;
     if (!parsed.program.empty())
     {
-        cont::String file(alloc);
-        join(call.root, parsed.program, file);
-        Context               src(alloc);
-        cont::Array<crd::u8>  pbytes(alloc);
-        detail::LoadedProgram loaded;
-        if (const DiagStatus s = detail::load_program_file({file.data(), file.size()}, parsed.program, call.cancel,
-                                                           cmd->max_program_bytes, cmd->registrar, cmd->user, src,
-                                                           pbytes, loaded, out.reason, cmd->bytes_read);
-            s != DiagStatus::Ok)
-        {
-            return s;
-        }
         cont::Array<crd::u8> blob(alloc);
-        if (const DiagStatus s = cook_artifact(src, loaded, pbytes, parsed.program, blob, out.reason);
+        if (const DiagStatus s = cook_other_program(*cmd, call, parsed.program, blob, out.reason);
             s != DiagStatus::Ok)
         {
             return s;
@@ -521,15 +792,7 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     if (d.kind != DivergenceKind::None)
     {
         item.clear();
-        item.str("kind", "divergence")
-            .str("divergence", divergence_kind_name(d.kind))
-            .u64("index", d.index)
-            .u64("value_index", d.value_index)
-            .boolean("count", d.count)
-            .i64("recorded", d.recorded)
-            .i64("observed", d.observed)
-            .u64("recorded_op", d.recorded_op)
-            .u64("observed_op", d.observed_op);
+        add_divergence(item, d);
         add_site(item, replay_site(*replayed_ctx, *replayed, d.site));
         (void)out.add_item(item);
     }
@@ -550,6 +813,7 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
 
     const crd::usize verified = record.events.size() < trace.events.size() ? record.events.size() : trace.events.size();
     out.summary.str("path", call.request->path)
+        .str("executor", replay_executor_name(record.executor))
         .str("program_source", parsed.program.empty() ? cont::StringView{"record"} : cont::StringView{"argument"})
         .str("program",
              parsed.program.empty() ? cont::StringView{record.program_path.data(), record.program_path.size()}

@@ -846,7 +846,8 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-provider-reco
   split and per-body step budget and the interpreter's run error (`exec::ExecError`); the decoder refuses a host
   record without a valid schedule or with a plan error, and a plan record with either host field (`malformed`).
   Schema 1 and 2 records are refused `unsupported-schema`. A record replays only on its own executor: `replay.run`
-  refuses a host record `unavailable` before anything runs; the host replay refuses a plan record.
+  refused a host record `unavailable` before anything ran (until a host executor was bound, next block); the host
+  replay refuses a plan record.
 - `cook::InterpreterRecorder` is the host trace: the submitting interpreter's pre hook appends an event (op stable id,
   call depth) and its post hook, which runs only after a successful dispatch, reads up to four results right after
   the op ran (the plan trace reads them at the frame's next safe point, so the two traces are never compared). It
@@ -861,13 +862,40 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-provider-reco
   not its recorded content before anything runs, then replays the record's own blob in a fresh Context with the
   recorded job split and step budget and reports the first divergence at its authored position (found by stable id
   in the module, `replay_site_in_module`). Another program or another job split is an explicit option.
-- Still open in DIAG.9a: a diagnostic command and ceridc consumer for host records (today their replay is a library
-  call, so a cross-process reproduction of a host record is not shown); recording a host run under an inspection
-  session (the session installs its own step hooks); state cells across invokes and a run spanning a reload, which
-  need a host that keeps one interpreter across invokes (a multi-invoke record with reload steps and the migrated
-  cells as its host-state input); a host input seam with the ops that read random streams, clocks and time steps,
-  input events and external completions; backend-specific numeric replay of GPU dispatches with a declared
-  tolerance; network and physical effects stubbed only in explicit test replay.
+- What stayed open after this batch is listed at the end of the next settled block.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-record-commands.md)):
+- Host records through the replay commands. crd-ceir-cook stays jobs-free, so it cannot run the host provider: it
+  declares a host executor table (`cook::ReplayHostExecutor` in `replay_diag.hpp`: a record and a replay function
+  over plain request and answer types, `HostRecordRequest`, `HostReplayRequest`, `HostReplayAnswer` with owned
+  positions, `cook::OwnedReplaySite`) and `ReplayCommands::host` points at one. crd-ceir-host provides it
+  (`crd/ceir/host/host_replay_diag.hpp`, `host_replay_executor()`), backed by `record_host_run` and
+  `replay_host_record`, so a command answers exactly what the library calls do. With none bound, `executor=host` and
+  a host record are refused `unavailable` before a byte is read or anything runs.
+- `replay.record` gains `executor` (`plan` by default, or `host`), `jobs` (1 to 256, default 8) and `sub_fuel` (1 to
+  2^32, default 2^20); the schedule arguments without `executor=host` are `bad-argument` in the service's argument
+  step. The program is cooked exactly as for a plan record, then run once on a fresh host provider; the summary names
+  the executor and the schedule, and the run's error is the interpreter's (`exec_error_name`).
+- `replay.run` dispatches on the record's executor after the shared checks (decode, build unless `build=any`,
+  missing inputs); a host record then goes to the host executor, which also refuses a blob that is not its recorded
+  content. `jobs=` replays a host record on another split (`bad-argument` for a plan record). The answer has the same
+  items as a plan replay: the divergence at its authored position in the replayed program, and the recorded and
+  replayed outcomes (the recorded fault now located in the record's own program, `HostReplay::recorded_fault`).
+- The host provider takes its parallel ranges' job arrays from the calling thread's frame arena, so it must run on a
+  thread the pool enrolled (the thread that called `jobs::init`, or a worker). ceridc's `diag` and `mcp` verbs own a
+  4-thread pool for their length and the MCP loop resets the arenas after each request; ceridc registers the task and
+  async dialects with the scalar subset. crd-sandbox does not bind the host executor: its diagnostic panel calls the
+  service from its own unenrolled worker thread, so its replay commands refuse host records `unavailable`.
+- The committed `assets/ceir/host_replay_demo.ceir` (a pooled launch calling a function, a map_reduce, a state cell
+  and a loop stepped by the argument) fails `bad-for-step` on `main(0)`; its record made by one `ceridc` process is
+  byte-equal to the native record, reproduces in a second process after the launched constant is edited, and a third
+  names the await reading it (recorded 25, observed 36).
+- Still open in DIAG.9a: recording a host run under an inspection session (the session installs its own step hooks);
+  state cells across invokes and a run spanning a reload, which need a host that keeps one interpreter across invokes
+  (a multi-invoke record with reload steps and the migrated cells as its host-state input); a host input seam with
+  the ops that read random streams, clocks and time steps, input events and external completions; backend-specific
+  numeric replay of GPU dispatches with a declared tolerance; network and physical effects stubbed only in explicit
+  test replay; host records from crd-sandbox's panel (it would need the request run on an enrolled thread).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

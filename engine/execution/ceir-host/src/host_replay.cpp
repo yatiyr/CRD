@@ -104,7 +104,8 @@ void run_host_traced(Context& ctx, const Module& module, cont::StringView entry,
 
 HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView path, cont::StringView entry,
                                  cont::ConstSpan<crd::i64> args, const HostSchedule& schedule, crd::u32 max_events,
-                                 cook::Registrar registrar, void* user, cook::ReplayRecord& out, cont::String* missing)
+                                 cook::Registrar registrar, void* user, cook::ReplayRecord& out, cont::String* missing,
+                                 HostSite* fault)
 {
     if (!valid_schedule(schedule) || max_events == 0U || args.size() > cook::kReplayMaxArgs ||
         entry.size() > cook::kReplayMaxStringBytes || path.size() > cook::kReplayMaxStringBytes ||
@@ -157,6 +158,10 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     out.fault_op     = trace.fault_op;
     out.results      = std::move(trace.results);
     out.cells        = std::move(trace.cells);
+    if (fault != nullptr)
+    {
+        site_of(ctx, *module, out.fault_op, *fault);
+    }
     return HostReplayStatus::Ok;
 }
 
@@ -215,6 +220,7 @@ HostReplayStatus replay_host_record(const cook::ReplayRecord& record, cook::Regi
         ctx = &actx;
     }
 
+    site_of(rctx, *recorded, record.fault_op, out.recorded_fault);
     out.num_jobs = schedule.num_jobs;
     run_host_traced(*ctx, *module, cont::StringView{record.entry.data(), record.entry.size()},
                     cont::as_const_span(record.args), schedule, record.max_events, out.trace);

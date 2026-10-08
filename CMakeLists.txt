@@ -570,8 +570,8 @@ crd_module(tools/asset_cooker HOST EXECUTABLES asset_cooker
     TESTS assets/scene_cooker assets/cooker)
 # GEO-11 (D-007 row 76): the agent surface — CLI verbs + MCP stdio server
 crd_module(tools/ceridc HOST EXECUTABLES ceridc
-    DEPENDS asset-io asset_cooker audio ceir ceir-cook containers core memory perf perf-gpu-bridge platform resources
-    scene time timeline TESTS tools/ceridc)
+    DEPENDS asset-io asset_cooker audio ceir ceir-cook ceir-host containers core jobs memory perf perf-gpu-bridge
+    platform resources scene time timeline TESTS tools/ceridc)
 # D-007 D2: the offline shader-cook CLI (.kgph -> .crdr); ADR-0104
 crd_module(tools/shader-cook NAME shader_cook HOST EXECUTABLES shader_cook
     DEPENDS containers core kir memory platform resources shader-cook)

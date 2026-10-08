@@ -1,7 +1,9 @@
 // diag.cpp — the diag verb: one request through a host's typed diagnostic command service. The CLI and the MCP tool
 // both end here, so a transport adds nothing to the answer: the report is the service's response document, byte for
 // byte. The host's grant and file root are chosen when the service is built, never by a request. Every ceridc service
-// binds the same commands (bind_diag_commands), so the two transports list and answer the same set.
+// binds the same commands (bind_diag_commands), so the two transports list and answer the same set. The replay
+// commands carry the host provider as their host executor, so a host record is made and replayed here as well; the
+// process (main.cpp's diag and mcp verbs, or a test's listener) owns the crd::jobs pool that executor runs on.
 
 #include <crd/ceridc/verbs.hpp>
 
@@ -13,7 +15,10 @@
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/async_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/task_ops.hpp>
+#include <crd/ceir/host/host_replay_diag.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
 
@@ -24,6 +29,8 @@ void register_host_dialects(crd::ceir::Context& ctx, void* /*user*/)
 {
     (void)crd::ceir::arith::register_arith_ops(ctx);
     (void)crd::ceir::core::register_core_ops(ctx);
+    (void)crd::ceir::task::register_task_ops(ctx);
+    (void)crd::ceir::async::register_async_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
 }
 
@@ -36,6 +43,8 @@ bool bind_diag_commands(crd::perf::DiagCommandService& service)
     static crd::ceir::cook::ReplayPrepareCommand     replay{&register_host_dialects, nullptr};
     static crd::ceir::cook::ReplayCommands           replay_runs{&register_host_dialects, nullptr};
     static crd::perf::gpu::GpuResourcesCommand       gpu_resources;
+    // Host records run on the host provider; the process's diag and mcp verbs own the crd::jobs pool it needs.
+    replay_runs.host = &crd::ceir::host::host_replay_executor();
     return crd::ceir::cook::register_program_provenance(service, provenance) &&
            crd::ceir::cook::register_program_inspect(service, inspect) &&
            crd::ceir::cook::register_replay_prepare(service, replay) &&

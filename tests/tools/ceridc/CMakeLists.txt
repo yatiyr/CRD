@@ -14,6 +14,7 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-ceridc
     crd-cooker
     crd-perf
+    crd-jobs # DIAG.9a: the host provider's pool for the native and in-process replay calls (a Catch listener)
     Catch2::Catch2WithMain
 )
 
