@@ -163,3 +163,25 @@ and both repository checks, and skipped the build and test lanes. It is no new h
 was flipped. DIAG.3a then finished its local work ([part 4](2026-10-06-diag-3a-allocator-boundaries.md)) and moved to
 Needs CI; a complete-tier run of its revision closes it. The first unfinished row is now DIAG.3b.
 
+## CI read, 2026-10-09: `a1e5301f`
+
+The DIAG batches were pushed together as `5c6b359d`. Its complete run, 37776561255, failed four tests, which the next
+commit, `a1e5301f`, repaired. The two runs on `a1e5301f`:
+- **Push run 37814307870:** one unexpected failure, `crd-developer-workflow` on win-debug-sse2. In
+  `test_supervisor_budget_stops_spawned_descendant` the test's own checks passed (budget exhausted, descendant not
+  running), but removing its temporary directory hit WinError 32 on `output.log`. The same error appeared on
+  `a0e56690`'s push run. On Windows a file can stay open for a moment after its process ends (a job-terminated
+  process, or a scanner reading a new log).
+- **Complete run 37814393863:** one failure, `crd-developer-workflow` on win-vs.
+  Two cases of `test_simd_guard_preserves_decoder_failures_and_explicit_skips`, the ones where the simulated decoder
+  exits 9, ran out of their 15 s budget (exit 124) with no output. The same test passed on win-vs in the three runs
+  before, with totals of 13.7 s to 33.7 s, so the budget was too tight for that runner's variance. Nothing in the
+  guard, the test or the supervisor changed since it last passed.
+
+Fixes, both in `scripts/test-dev-workflow.py`. No oracle changes; every expected status and exit code is the same:
+- the temporary directories are removed by `cleanup_temporary`, which retries a Windows sharing violation for at most
+  10 s and then raises;
+- the SIMD-guard cases get a 60 s budget.
+
+Checked: the suite passes on Windows (54 tests) and on the WSL reference host.
+

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -59,6 +60,25 @@ def stub_clang_tidy(directory, version, files=None):
     return launcher, config
 
 
+def cleanup_temporary(temp, budget=10.0):
+    """Remove a TemporaryDirectory, retrying a Windows sharing violation for a bounded time.
+
+    On Windows a file in the tree can stay open for a moment after its process is gone: a process just ended by
+    TerminateJobObject, or a scanner reading a new log (hosted win-debug-sse2, run 37814307870: WinError 32 on the
+    budget test's output.log after the test's own checks had passed). Anything else, or a violation that outlasts
+    the budget, still fails the test.
+    """
+    deadline = time.monotonic() + budget
+    while True:
+        try:
+            temp.cleanup()
+            return
+        except PermissionError:
+            if os.name != 'nt' or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+
+
 def fixture_process_running(pid):
     if os.name == 'nt':
         from project_sync.ide import process_alive
@@ -79,7 +99,7 @@ def write_json(path, value):
 class SelectionTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(cleanup_temporary, self.temp)
         self.root = Path(self.temp.name).resolve() / 'source'
         self.build = Path(self.temp.name).resolve() / 'build'
         self.root.mkdir()
@@ -787,8 +807,11 @@ run_command([sys.executable, '-c',
                 decoder.write_text(script, encoding='utf-8', newline='\n')
                 decoder.chmod(0o755)
                 args = ['-Expect', expect, '-Ipo', ipo] if os.name == 'nt' else ['--expect', expect, '--ipo', ipo]
+                # The budget only bounds a hang; it is not the check. 15 s was too tight for the hosted
+                # windows-2025-vs2026 runner (run 37814393863: both decoder-failure cases ran out of time, while earlier
+                # runs of the same test took 13.7 s to 33.7 s in total).
                 result = run_command(command + args, self.root, environment,
-                                     Path(self.temp.name) / f'decoder-result-{index}', 15)
+                                     Path(self.temp.name) / f'decoder-result-{index}', 60)
                 output = Path(result['log']).read_text(errors='replace')
                 self.assertEqual(result['exit_code'], expected_exit, output)
                 if exit_code:
@@ -894,7 +917,7 @@ class TidyTests(unittest.TestCase):
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(cleanup_temporary, self.temp)
         self.root = Path(self.temp.name).resolve() / 'source'
         self.build = Path(self.temp.name).resolve() / 'build'
         self.root.mkdir()
