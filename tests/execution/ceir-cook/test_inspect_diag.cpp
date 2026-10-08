@@ -9,7 +9,10 @@
 // held run reads (assets/ceir/random_demo.ceir); without it a draw fails where it is authored. Expected lines come from
 // scanning the committed text, never from the parser. `clock=`, `sim_time=` and `sim_step=` give the run a host clock
 // (assets/ceir/clock_demo.ceir): the held run reads the step it was given, a live wall lets it finish, and a domain the
-// request leaves unset fails its read where it is authored. ASCII test names (ctest by-name).
+// request leaves unset fails its read where it is authored. `events=` gives the run an input event queue
+// (assets/ceir/event_demo.ceir): the held switch reads the listed resize and the run fails there, handled events
+// finish on their values, an empty list reads none events, and without it the first read fails where it is authored.
+// ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_diag.hpp>
 
@@ -60,6 +63,8 @@ constexpr const char* kRandomFile  = "ceir/random_demo.ceir"; // DIAG.9a
 constexpr const char* kRandomAsset = CRD_REPO_DIR "/assets/ceir/random_demo.ceir";
 constexpr const char* kClockFile   = "ceir/clock_demo.ceir"; // DIAG.9a
 constexpr const char* kClockAsset  = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir";
+constexpr const char* kEventFile   = "ceir/event_demo.ceir"; // DIAG.9a
+constexpr const char* kEventAsset  = CRD_REPO_DIR "/assets/ceir/event_demo.ceir";
 
 // This case's own scratch file in the working directory (the file root ".").
 constexpr const char* kBrokenFile = "diag8c_inspect_broken.ceir";
@@ -321,7 +326,8 @@ TEST_CASE("diag 8c: program.inspect runs an authored program to its script under
     CHECK(has(view(r.json), R"("path":"ceir/inspect_demo.ceir","entry":"main",)"));
     CHECK(has(view(r.json), R"("breakpoints":1,"stops":3,"max_stops":64,"random_source":"none","seed":0,)"
                             R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,"sim_step":"none",)"
-                            R"("sim_step_ns":0,"truncated":false,"outcome":"finished",)"));
+                            R"("sim_step_ns":0,"event_queue":"none","input_events":0,"truncated":false,)"
+                            R"("outcome":"finished",)"));
     CHECK(has(view(r.json), R"("error":"none","fault_line":0,"fault_col":0,"results":1})"));
     CHECK_FALSE(has(view(r.json), StringView{CRD_REPO_DIR})); // the host's root never reaches the answer
 
@@ -450,6 +456,16 @@ TEST_CASE("diag 8c: program.inspect refuses before any work and names where a so
             {"sim time not a number", {"sim_time", "x"}, DiagStatus::BadArgument},
             {"fractional sim step", {"sim_step", "1.5"}, DiagStatus::BadArgument},
             {"sim time overflow", {"sim_time", "9223372036854775808"}, DiagStatus::BadArgument},
+            {"unknown event", {"events", "key_down:65,jump:1"}, DiagStatus::BadArgument},
+            {"event code overflow", {"events", "key_down:65536"}, DiagStatus::BadArgument},
+            {"event field left over", {"events", "resize:1:2:3"}, DiagStatus::BadArgument},
+            {"event position overflow", {"events", "mouse_move:32768:0"}, DiagStatus::BadArgument},
+            {"33 events", {"events", "key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,"
+                                     "key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,"
+                                     "key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,"
+                                     "key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,"
+                                     "key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,key_down:1,"
+                                     "key_down:1,key_down:1,key_down:1"}, DiagStatus::BadArgument},
             {"value over its bound", {"args", view(long_value)}, DiagStatus::Oversized},
         };
         for (const Bad& b : bad)
@@ -546,7 +562,7 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         REQUIRE(r.status == DiagStatus::Ok);
         CHECK(has(view(r.json), R"("stops":2,"max_stops":2,"random_source":"none","seed":0,"wall_clock":"none",)"
                                 R"("sim_time":"none","sim_time_ns":0,"sim_step":"none","sim_step_ns":0,)"
-                                R"("truncated":true,"outcome":"cancelled",)"));
+                                R"("event_queue":"none","input_events":0,"truncated":true,"outcome":"cancelled",)"));
         CHECK(count(view(r.json), view(fragment(R"("reason":"breakpoint","file":"ceir/inspect_demo.ceir","line":%u,)",
                                                 {ln.x.line}, &root))) == 2U);
         CHECK_FALSE(has(view(r.json), R"("kind":"result")"));
@@ -564,7 +580,7 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         REQUIRE(r.status == DiagStatus::Ok);
         CHECK(has(view(r.json), R"("stops":2,"max_stops":64,"random_source":"none","seed":0,"wall_clock":"none",)"
                                 R"("sim_time":"none","sim_time_ns":0,"sim_step":"none","sim_step_ns":0,)"
-                                R"("truncated":false,"outcome":"cancelled",)"));
+                                R"("event_queue":"none","input_events":0,"truncated":false,"outcome":"cancelled",)"));
         CHECK(has(view(r.json), R"("sequence":2,)"));
         CHECK(has(view(r.json), R"("action":"cancel"})"));
     }
@@ -783,5 +799,72 @@ TEST_CASE("diag 9a clock: program.inspect reads the host clock it is given", "[c
         CHECK(has(view(r.json), R"("wall_clock":"none","sim_time":"none","sim_time_ns":0,"sim_step":"none",)"));
         CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
         CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {step.line, step.col}, &root))));
+    }
+}
+
+TEST_CASE("diag 9a event: program.inspect reads the input events it is given", "[ceir][cook][diag][input][event]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const String                       text   = slurp(kEventAsset, &root);
+    const Site                         first  = site_of(view(text), "%1, %2, %3, %4, %5 = input.event()", 0U);
+    const Site                         second = site_of(view(text), "%6, %7, %8, %9, %10 = input.event()", 0U);
+    const Site                         sw     = site_of(view(text), "core.switch", 0U);
+    REQUIRE(first.line != 0U);
+    REQUIRE(second.line != 0U);
+    REQUIRE(sw.line != 0U);
+
+    ProgramInspectCommand cmd;
+    cmd.registrar = &registrar;
+    DiagCommandService svc(kExecute, rooted(kAssets), &root);
+    REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
+    const String breaks  = join({sw.line}, &root);
+    const String watches = join({second.line}, &root);
+
+    SECTION("an unhandled resize: the held switch reads its type, and the run fails there")
+    {
+        const DiagArg    args[] = {{"args", "7"},
+                                   {"breaks", view(breaks)},
+                                   {"watches", view(watches)},
+                                   {"events", "key_down:65:3,resize:1280:720"}};
+        const DiagResult r      = svc.execute(inspect_request(kEventFile, {args, 4U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("sim_step_ns":0,"event_queue":"open","input_events":2,"truncated":false,)"));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"selector-out-of-range",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {sw.line, sw.col}, &root))));
+        const Array<String> items = items_of(r, &root);
+        REQUIRE(items.size() == 3U); // the breakpoint, its one stop and the watched type
+        CHECK(view(items[2]) == view(fragment(R"({"kind":"value","stop":1,"line":%u,"status":"available",)"
+                                              R"("type":"!i64","unit":false,"value":8})",
+                                              {second.line}, &root)));
+    }
+    SECTION("handled events finish on the first's code plus the second's x and y plus the argument")
+    {
+        const DiagArg    args[] = {{"args", "7"}, {"events", "key_down:65:3,mouse_move:5:9"}};
+        const DiagResult r      = svc.execute(inspect_request(kEventFile, {args, 2U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("outcome":"finished","error":"none",)"));
+        CHECK(has(view(r.json), view(fragment(R"({"kind":"result","index":0,"value":%u})", {65U + 5U + 9U + 7U},
+                                              &root))));
+    }
+    SECTION("an empty list is an open queue: both reads are none events")
+    {
+        const DiagArg    args[] = {{"args", "7"}, {"events", ""}};
+        const DiagResult r      = svc.execute(inspect_request(kEventFile, {args, 2U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("event_queue":"open","input_events":0,)"));
+        CHECK(has(view(r.json), R"({"kind":"result","index":0,"value":7})"));
+    }
+    SECTION("no events: the host has no queue and the first read fails where it is authored")
+    {
+        const DiagArg    args[] = {{"args", "7"}};
+        const DiagResult r      = svc.execute(inspect_request(kEventFile, {args, 1U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("event_queue":"none","input_events":0,)"));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {first.line, first.col}, &root))));
     }
 }

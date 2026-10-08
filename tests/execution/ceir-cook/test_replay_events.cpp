@@ -12,7 +12,9 @@
 // run read past the bound or a scene read bypasses the seam, and the replay refused; malformed events refused before
 // anything runs, and the parser's forms and bounds; the inspect host, given an event queue, recording exactly the
 // unobserved run's reads; and a network effect beside an event read keeping external results missing, so a record
-// that lacks them is refused before anything runs (never rerun). ASCII test names (ctest by-name).
+// that lacks them is refused before anything runs (never rerun). RunInputs, the input bundle of the interactive hosts,
+// gives each run the event queue its spec describes, from the first event, and lets a host queue more between runs.
+// ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -761,4 +763,52 @@ TEST_CASE("diag 9a event: external results are no seam input, and a record missi
     forget(out);
     forget(forged);
     forget(program);
+}
+
+TEST_CASE("diag 9a event: RunInputs gives each run the event queue its spec describes, from the first event",
+          "[ceir][cook][diag][input][event]")
+{
+    using K = input::InputKind;
+    ck::RunInputs             inputs("diag9a-run-inputs-events");
+    const input::InputSource* src = inputs.source();
+    i64                       v   = 0;
+
+    // No spec: the host has no event queue.
+    inputs.set(false, 0U, ck::HostClockSpec{});
+    CHECK_FALSE(input::read_input(src, K::Event, 0U, v));
+
+    // An open spec with no event: queue 0 reads none events, and only queue 0 exists.
+    inputs.set(false, 0U, ck::HostClockSpec{}, ck::HostEventsSpec{true, {}});
+    REQUIRE(input::read_input(src, K::Event, 0U, v));
+    CHECK(v == 0);
+    CHECK_FALSE(input::read_input(src, K::Event, 1U, v));
+
+    // Two events: every set starts the queue over from its first event, and a draw never moves the queue.
+    const i64 events[2] = {packed(1U, 65U, 3U, 0, 0), packed(8U, 0U, 0U, 1280, 720)};
+    for (u32 run = 0U; run < 2U; ++run)
+    {
+        inputs.set(true, 7U, ck::HostClockSpec{}, ck::HostEventsSpec{true, ConstSpan<i64>(events, 2U)});
+        REQUIRE(input::read_input(src, K::Event, 0U, v));
+        CHECK(v == events[0]);
+        REQUIRE(input::read_input(src, K::Random, 0U, v));
+        CHECK(v == input::SeededInputs::draw(7U, 0U, 0U));
+        REQUIRE(input::read_input(src, K::Event, 0U, v));
+        CHECK(v == events[1]);
+        REQUIRE(input::read_input(src, K::Event, 0U, v));
+        CHECK(v == 0);
+    }
+
+    // A later set without a spec forgets the queue; the other inputs still route.
+    inputs.set(true, 7U, ck::HostClockSpec{});
+    CHECK_FALSE(input::read_input(src, K::Event, 0U, v));
+    REQUIRE(input::read_input(src, K::Random, 0U, v));
+    CHECK(v == input::SeededInputs::draw(7U, 0U, 0U));
+
+    // A host that queues more than a spec does (the sandbox's window events) pushes between runs.
+    inputs.set(false, 0U, ck::HostClockSpec{}, ck::HostEventsSpec{true, {}});
+    REQUIRE(inputs.events().push(ck::kEventQueue, events[1]));
+    REQUIRE(input::read_input(src, K::Event, 0U, v));
+    CHECK(v == events[1]);
+    REQUIRE(input::read_input(src, K::Event, 0U, v));
+    CHECK(v == 0);
 }

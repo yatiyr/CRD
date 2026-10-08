@@ -13,6 +13,7 @@ add_executable(crd-sandbox-inspect-tests
 target_include_directories(crd-sandbox-inspect-tests PRIVATE "${CMAKE_SOURCE_DIR}/sandbox/src")
 
 target_link_libraries(crd-sandbox-inspect-tests PRIVATE
+    crd-app
     crd-core
     crd-containers
     crd-memory

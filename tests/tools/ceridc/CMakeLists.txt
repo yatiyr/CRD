@@ -16,6 +16,7 @@ target_link_libraries(crd-ceridc-tests PRIVATE
     crd-perf
     crd-jobs # DIAG.9a: the host provider's pool for the native and in-process replay calls (a Catch listener)
     crd-ceir # DIAG.9a: SeededInputs::draw, to choose a failing seed independently of the commands
+    crd-ceir-cook # DIAG.9a: decode_record, to compare an inspected record with replay.record's
     Catch2::Catch2WithMain
 )
 

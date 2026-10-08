@@ -22,6 +22,11 @@
 //   --inspect-frame-clock         — DIAG.9a: the sim and frame domains read this frame loop's clock (its time and last
 //                                   frame step, its frame index) as it is at each run's start; not with
 //                                   --inspect-sim-time or --inspect-sim-step.
+//   --inspect-events <list>       — DIAG.9a: every inspected run takes these events from input event queue 0, as
+//                                   replay.record's `events` (at most 32); without it the host has no event queue.
+//   --inspect-window-events       — DIAG.9a: queue 0 holds this window's input events that arrived since the previous
+//                                   run started (the first run starts before the first frame, so its queue is empty);
+//                                   not with --inspect-events.
 // DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
 //   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
 //                                   page of its answer
@@ -423,7 +428,12 @@ void draw_inspect_window(crd::sandbox::InspectPanel& panel, crd::i64 arg)
         }
         if (ImGui::Button("Run again"))
         {
-            (void)panel.start(crd::containers::ConstSpan<crd::i64>(&arg, 1U));
+            if (panel.start(crd::containers::ConstSpan<crd::i64>(&arg, 1U)) == insp::Refusal::None
+                && panel.inputs().window_events)
+            {
+                CRD_LOG_INFO(g_log_sandbox, "DIAG.9a inspect: the run takes {} window events ({} older dropped)",
+                             panel.run_window_events(), panel.run_window_dropped());
+            }
         }
         ImGui::SameLine();
         if (ImGui::Button("Reload"))
@@ -506,6 +516,7 @@ int main(int argc, char** argv)
     const char*               inspect_rel                        = nullptr;
     const char*               app_assets                         = nullptr;
     const char*               inspect_record                     = nullptr; // DIAG.9a
+    const char*               inspect_events                     = nullptr; // DIAG.9a: --inspect-events
     crd::i64                  inspect_arg                        = 3;
     crd::sandbox::PanelInputs inspect_inputs                     = {}; // DIAG.9a: --inspect-seed
     crd::u32                  inspect_breaks[kInspectMaxLines]   = {};
@@ -769,6 +780,21 @@ int main(int argc, char** argv)
         {
             inspect_inputs.frame_clock = true;
         }
+        else if (std::strcmp(argv[i], "--inspect-events") == 0 && i + 1 < argc)
+        {
+            // The shared events argument, checked whole here and parsed again once the panel's allocator exists.
+            inspect_events = argv[++i];
+            crd::containers::StringView requirement;
+            if (!crd::ceir::cook::parse_events_argument(crd::containers::StringView(inspect_events), nullptr,
+                                                        requirement))
+            {
+                inspect_args_ok = false;
+            }
+        }
+        else if (std::strcmp(argv[i], "--inspect-window-events") == 0)
+        {
+            inspect_inputs.window_events = true;
+        }
         else if (std::strcmp(argv[i], "--inspect-arg") == 0 && i + 1 < argc)
         {
             inspect_arg = static_cast<crd::i64>(std::strtoll(argv[++i], nullptr, 10));
@@ -828,13 +854,19 @@ int main(int argc, char** argv)
     {
         inspect_args_ok = false; // the frame clock is the sim domain: two sources for one domain is a mistake
     }
+    if (inspect_inputs.window_events && inspect_events != nullptr)
+    {
+        inspect_args_ok = false; // two sources for one event queue is a mistake as well
+    }
     if (!inspect_args_ok)
     {
         CRD_LOG_ERROR(g_log_sandbox,
                       "--inspect-break/--inspect-watch take 1-based lines (at most {} each); --inspect-step takes "
                       "continue|into|over|out|cancel, comma-separated; --inspect-seed takes a decimal u64; "
                       "--inspect-clock takes wall; --inspect-sim-time/--inspect-sim-step take i64 nanoseconds and "
-                      "not with --inspect-frame-clock",
+                      "not with --inspect-frame-clock; --inspect-events takes at most 32 comma-separated events "
+                      "(key_down|key_up|key_repeat|mouse_down|mouse_up:<code>[:<mods>], "
+                      "mouse_move|scroll|resize:<x>:<y>) and not with --inspect-window-events",
                       kInspectMaxLines);
         crd::log::shutdown();
         return 1;
@@ -1350,6 +1382,7 @@ int main(int argc, char** argv)
     // run that silently inspected nothing would be a false report.
     crd::memory::GrowableTlsfAllocator          inspect_alloc;
     std::unique_ptr<crd::sandbox::InspectPanel> inspect_panel;
+    crd::app::Layer*                            inspect_layer = nullptr; // DIAG.9a: --inspect-window-events
     if (inspect_rel != nullptr)
     {
         inspect_panel = std::make_unique<crd::sandbox::InspectPanel>(&inspect_alloc, scene_renderer);
@@ -1384,7 +1417,23 @@ int main(int argc, char** argv)
             crd::log::shutdown();
             return 1;
         }
-        inspect_panel->set_inputs(inspect_inputs);
+        crd::containers::Array<crd::i64> inspect_event_list(&inspect_alloc);
+        if (inspect_events != nullptr)
+        {
+            crd::containers::StringView requirement;
+            (void)crd::ceir::cook::parse_events_argument(crd::containers::StringView(inspect_events),
+                                                         &inspect_event_list, requirement); // checked above
+            inspect_inputs.events =
+                crd::ceir::cook::HostEventsSpec{true, crd::containers::as_const_span(inspect_event_list)};
+        }
+        inspect_panel->set_inputs(inspect_inputs); // copies the events
+        if (inspect_inputs.window_events)
+        {
+            // The window's input events reach the panel through the application's layer stack (never handled there).
+            auto layer    = std::make_unique<crd::sandbox::InspectEventLayer>(*inspect_panel);
+            inspect_layer = layer.get();
+            app.push_overlay(std::move(layer));
+        }
         // The first run starts before the first frame: its frame clock is time 0, frame 0, with the fixed step when
         // --fixed-dt gives one (else 0).
         inspect_panel->set_frame_clock(0, static_cast<crd::i64>(fixed_dt_ms * 1.0e6), 0);
@@ -1399,6 +1448,15 @@ int main(int argc, char** argv)
         CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect: {} from {}, generation {}", inspect_panel->file(),
                      il.source == crd::scenerender::ProgramSource::App ? "app://" : "engine://",
                      inspect_panel->generation());
+        if (inspect_inputs.window_events)
+        {
+            CRD_LOG_INFO(g_log_sandbox, "DIAG.9a inspect: the run takes {} window events ({} older dropped)",
+                         inspect_panel->run_window_events(), inspect_panel->run_window_dropped());
+        }
+        else if (inspect_events != nullptr)
+        {
+            CRD_LOG_INFO(g_log_sandbox, "DIAG.9a inspect: the run takes {} listed events", inspect_event_list.size());
+        }
         for ([[maybe_unused]] const crd::ceir::inspect::BindReport& b : inspect_panel->binds())
         {
             CRD_LOG_INFO(g_log_sandbox, "DIAG.8b inspect:   breakpoint {} line {}: {} ({} sites)", b.breakpoint,
@@ -2173,6 +2231,10 @@ int main(int argc, char** argv)
     // jobs/perf mirror their bring-up.
     // ⛔ DIAG.8b: the inspect panel dies before the scene renderer whose program seam it holds; its host cancels a
     // program still running or paused and joins the executing thread.
+    if (inspect_layer != nullptr)
+    {
+        app.detach_layer(inspect_layer); // DIAG.9a: it hands events to the panel, so it goes first
+    }
     inspect_panel.reset();
     // ⛔ DIAG.8c: the diagnostic panel cancels and joins a running request before its service, the service before the
     // commands it holds, and all of them before jobs, perf and the GPU context the commands read.

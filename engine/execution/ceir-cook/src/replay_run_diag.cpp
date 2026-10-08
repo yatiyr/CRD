@@ -1099,20 +1099,24 @@ bool parse_events_argument(cont::StringView value, cont::Array<crd::i64>* out, c
     return ok;
 }
 
-// A seeded source holds one counter per random stream, so its own allocator grows from a small first chunk.
+// A seeded source holds one counter per random stream and the event queues at most 4,096 events, so their own
+// allocator grows from a small first chunk.
 constexpr crd::usize kRunInputsChunkBytes = crd::usize{64} << 10U;
 
-RunInputs::RunInputs(const char* name) : m_alloc(kRunInputsChunkBytes, nullptr, name), m_seeded(0U, &m_alloc)
+RunInputs::RunInputs(const char* name)
+    : m_alloc(kRunInputsChunkBytes, nullptr, name), m_seeded(0U, &m_alloc), m_events(&m_alloc)
 {
     m_router.route(input::InputKind::Clock, m_clock.source());
     m_router.route(input::InputKind::TimeStep, m_clock.source());
+    m_router.route(input::InputKind::Event, m_events.source());
 }
 
-void RunInputs::set(bool seeded, crd::u64 seed, const HostClockSpec& clock)
+void RunInputs::set(bool seeded, crd::u64 seed, const HostClockSpec& clock, const HostEventsSpec& events)
 {
     m_seeded.reset(seed);
     m_router.route(input::InputKind::Random, seeded ? m_seeded.source() : nullptr);
     apply_clock(clock, m_clock);
+    apply_events(events, m_events);
 }
 
 bool register_replay_record(perf::DiagCommandService& service, ReplayCommands& commands)

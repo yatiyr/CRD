@@ -123,6 +123,10 @@ An input event (`input.event {queue}`) is one raw packed i64 per read (type, key
 reads are recorded under `host-state` (missing when an op reads host state outside the seam), and `replay.record
 events=` queues them on both executors, so an unhandled event (`assets/ceir/event_demo.ceir`) reproduces in another
 process with no queue.
+The interactive hosts take the same events: `program.inspect events=`, `ceridc inspect --events` and crd-sandbox's
+`--inspect-events` (through `cook::RunInputs`, whose every `set` starts the queue over), and crd-sandbox's
+`--inspect-window-events` gives each run the window's own input events that arrived before its start
+(`sandbox::InspectEventLayer` stages them; `sandbox::window_event` quantizes them).
 
 ## Maturity and further work
 

@@ -17,7 +17,14 @@
 //
 // ⛔ GENERATIONS. Commands carry the generation the caller saw (`generation()`); a command for a replaced generation is
 // refused `StaleGeneration` by the session before any work. A load while the program runs or is paused is `Busy`.
+//
+// ⛔ WINDOW EVENTS (DIAG.9a). The frame loop hands the panel the window's input events (`InspectEventLayer`, pushed
+// on the application, rebuilds each `platform::InputEvent` the application dispatched); the panel stages them on the
+// frame-loop thread and only `start` copies them into the run's event queue, before the run's thread exists. A run
+// never reads a queue the frame loop is still writing: events that arrive while it runs feed the NEXT run.
 
+#include <crd/app/event.hpp>
+#include <crd/app/layer.hpp>
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/replay_diag.hpp> // RunInputs, HostClockSpec
 #include <crd/ceir/inspect.hpp>
@@ -27,6 +34,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/platform/input.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
 
 namespace crd::sandbox
@@ -79,14 +87,29 @@ struct PanelValue
 // `frame_clock`: the sim and frame domains read the frame loop's clock (`set_frame_clock`) as it was at the start:
 // sim reads the frame loop's time and its last frame step in nanoseconds, frame reads the frame index with a step of
 // one frame. It replaces `clock`'s sim domain. The clock never changes while a run reads it, so a run held across
-// frames keeps reading its start's frame clock.
+// frames keeps reading its start's frame clock. `events`: input.event {queue = 0} takes these events in order, as
+// replay.record's `events` does (`set_inputs` copies them; an open spec with none is an empty queue); without them
+// the host has no event queue and a read fails input-unavailable. `window_events`: queue 0 holds, in order, the window
+// events the frame loop pushed (`push_window_event`) since the previous successful start, at most the newest
+// `kMaxWindowEvents`; it replaces `events`.
 struct PanelInputs
 {
-    bool                      seeded = false;
-    crd::u64                  seed   = 0U;
-    ceir::cook::HostClockSpec clock{};
-    bool                      frame_clock = false;
+    bool                       seeded = false;
+    crd::u64                   seed   = 0U;
+    ceir::cook::HostClockSpec  clock{};
+    bool                       frame_clock = false;
+    ceir::cook::HostEventsSpec events{};
+    bool                       window_events = false;
 };
+
+// DIAG.9a: the most window events one run reads (the event queue's own bound); older ones are dropped and counted.
+inline constexpr crd::u32 kMaxWindowEvents = ceir::input::HostEvents::kMaxEvents;
+
+// DIAG.9a: a window input event as input.event reads it, packed (ceir::input::pack_event): the type in the platform's
+// order, the key or mouse button as its platform enum value, the modifiers as shift 1, ctrl 2, alt 4 and super 8, and
+// x and y saturated to 16 signed bits: the pointer position rounded to whole pixels, the scroll offset in hundredths of
+// a step (rounded), the new size in pixels; 0 where a type has none. A None event packs to 0.
+[[nodiscard]] crd::i64 window_event(const platform::InputEvent& e) noexcept;
 
 struct PanelLoad
 {
@@ -119,9 +142,18 @@ public:
     // Actions applied, in order, at each new stop; once they are used up every later stop continues. Without a
     // script the panel waits for a command at each stop.
     void set_script(containers::ConstSpan<PanelAction> actions);
-    // DIAG.9a: the host inputs of every later `start` (see PanelInputs).
-    void                      set_inputs(PanelInputs inputs) noexcept { m_inputs = inputs; }
+    // DIAG.9a: the host inputs of every later `start` (see PanelInputs). The events are copied.
+    void                      set_inputs(const PanelInputs& inputs);
     [[nodiscard]] PanelInputs inputs() const noexcept { return m_inputs; }
+    // DIAG.9a: one event the window delivered, in arrival order (frame-loop thread). Staged only for a
+    // `window_events` panel, and never a None event; past kMaxWindowEvents the oldest staged event is dropped.
+    void push_window_event(const platform::InputEvent& e);
+    // The window events staged for the next start, and how many older ones were dropped since the last start.
+    [[nodiscard]] crd::u32 window_events_staged() const noexcept { return static_cast<crd::u32>(m_window.size()); }
+    [[nodiscard]] crd::u64 window_events_dropped() const noexcept { return m_window_dropped; }
+    // What the latest successful start gave its run: the window events it queued, and how many it lost to the bound.
+    [[nodiscard]] crd::u32 run_window_events() const noexcept { return m_run_window_events; }
+    [[nodiscard]] crd::u64 run_window_dropped() const noexcept { return m_run_window_dropped; }
     // DIAG.9a: the frame loop's clock, once per frame: its time and last frame step in nanoseconds and its frame
     // index. A `frame_clock` run reads the values given before its `start`.
     void set_frame_clock(crd::i64 time_ns, crd::i64 step_ns, crd::i64 frame) noexcept
@@ -133,7 +165,8 @@ public:
 
     // Start the installed generation with `args` (NotBound before a successful load, Busy while running). DIAG.9a:
     // `recording` records the run on the host; `host().record` gives the run record once it has ended. The run reads
-    // the host inputs `set_inputs` chose, from their first draw, and the frame clock as it is now.
+    // the host inputs `set_inputs` chose, from their first draw, the frame clock as it is now and, for a
+    // `window_events` panel, the window events staged so far (taken only when the start succeeds).
     [[nodiscard]] ceir::inspect::Refusal start(containers::ConstSpan<crd::i64> args,
                                                ceir::cook::HostRecording recording = {});
 
@@ -170,6 +203,12 @@ private:
     memory::IAllocator*                m_alloc;
     scenerender::SceneRenderer*        m_programs;
     PanelInputs                        m_inputs{};
+    containers::Array<crd::i64>        m_fixed_events;        // PanelInputs::events, copied
+    containers::Array<crd::i64>        m_window;              // staged window events, a ring once full
+    crd::u32                           m_window_head    = 0U; // the oldest staged event once the ring is full
+    crd::u64                           m_window_dropped = 0U;
+    crd::u32                           m_run_window_events  = 0U;
+    crd::u64                           m_run_window_dropped = 0U;
     crd::i64                           m_frame_time_ns = 0;
     crd::i64                           m_frame_step_ns = 0;
     crd::i64                           m_frame_index   = 0;
@@ -191,5 +230,19 @@ private:
     crd::u32                           m_stops        = 0U;
     crd::u64                           m_ticks        = 0U;
     ceir::inspect::Refusal             m_last_refusal = ceir::inspect::Refusal::None;
+};
+
+// DIAG.9a: the application layer that hands the panel every window input event the application dispatches, rebuilt
+// as the `platform::InputEvent` it came from (key, mouse button, pointer, scroll and resize events). It never marks an
+// event handled, so every other consumer still sees it. Push it on the application (frame-loop thread); it must not
+// outlive the panel.
+class InspectEventLayer final : public app::Layer
+{
+public:
+    explicit InspectEventLayer(InspectPanel& panel) : app::Layer("ceir-inspect-events"), m_panel(&panel) {}
+    void on_event(app::Event& event) override;
+
+private:
+    InspectPanel* m_panel;
 };
 } // namespace crd::sandbox

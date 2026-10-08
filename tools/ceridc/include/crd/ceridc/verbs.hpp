@@ -73,7 +73,10 @@ namespace crd::ceridc
 // draw); without it the host has no random source and a draw fails input-unavailable. A malformed seed is refused
 // before anything runs. `clock` (null: none) gives the run's time domains, as replay.record's clock arguments do:
 // input.clock and input.time_step read them, a record keeps every read, and a malformed value is refused before
-// anything runs.
+// anything runs. `events_text` (null: none) gives the run's input event queue 0, as replay.record's `events` does
+// (ceir::cook::parse_events_argument: at most 32 comma-separated events; empty is an open queue with no event):
+// input.event takes them in order, a record keeps every read, and a malformed list is refused before anything runs.
+// Without it the host has no event queue and input.event fails input-unavailable.
 struct InspectClockFlags
 {
     const char* clock    = nullptr; // --clock: only "wall" (the wall domain reads the host's monotonic clock live)
@@ -88,7 +91,8 @@ struct InspectClockFlags
                                                    crd::u32 max_stops, crd::memory::IAllocator* alloc,
                                                    const char* record_path = nullptr,
                                                    const char* seed_text   = nullptr,
-                                                   const InspectClockFlags* clock = nullptr);
+                                                   const InspectClockFlags* clock       = nullptr,
+                                                   const char*              events_text = nullptr);
 
 // One request through the host's typed diagnostic command service (crd/perf/diag_commands.hpp). The report is the
 // service's response document unchanged, so a native caller, this verb and the MCP `diag` tool return the same bytes

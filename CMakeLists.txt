@@ -550,7 +550,7 @@ crd_module(engine/rendering/scene-render engine/scene-render
     DEPENDS anim containers core frame-cook geometry-primitives gpu-context kir light-cook lod log material-cook math
         memory render-asset-core resources scene vertex-cook
     TESTS rendering/scene-render applications/sandbox-inspect
-    TEST_DEPENDS ceir ceir-cook gpu-context-dx12 gpu-context-vulkan meshgen)
+    TEST_DEPENDS app ceir ceir-cook gpu-context-dx12 gpu-context-vulkan meshgen)
 crd_module(engine/rendering/draw-imgui engine/draw-imgui DEPENDS core draw imgui PACKAGES imgui)
 crd_module(engine/physics/eylem-viz engine/eylem-viz DEPENDS core draw eylem eylem-rigid3d math scene
     TESTS physics/eylem-viz)

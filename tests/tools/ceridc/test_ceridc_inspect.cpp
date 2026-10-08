@@ -12,9 +12,14 @@
 // before anything runs, and the record replays in another process without the seed after the program was edited.
 // `--clock`, `--sim-time` and `--sim-step` give the run a host clock: the held run reads the given step, malformed
 // values are refused before anything runs, and records of a step failure and of a live-wall run replay in other
-// processes with no clock, the first after the program was edited, and name the edited read.
+// processes with no clock, the first after the program was edited, and name the edited read. `--events` gives the run
+// an input event queue: the held switch reads the listed resize, handled events finish, an empty list reads none
+// events, no list fails the first read, a malformed list is refused before anything runs, the binary's inspected
+// record holds the same reads, trace and outcome as replay.record's unobserved one, and every record replays in
+// another process with no queue after the program was edited, naming the edited read.
 // Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
+#include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
@@ -53,6 +58,13 @@ constexpr const char* kClockProgram   = "ceridc_inspect_clock.ceir";
 constexpr const char* kClockRecord    = "ceridc_inspect_clock_verb.crpl";
 constexpr const char* kCliClockRecord = "ceridc_inspect_clock_cli.crpl";
 constexpr const char* kCliWallRecord  = "ceridc_inspect_wall_cli.crpl";
+
+// DIAG.9a: the committed event demo, its scratch copy (edited after recording), and the evented runs' records.
+constexpr const char* kEventDemo        = CRD_REPO_DIR "/assets/ceir/event_demo.ceir";
+constexpr const char* kEventProgram     = "ceridc_inspect_event.ceir";
+constexpr const char* kEventRecord      = "ceridc_inspect_event_verb.crpl";
+constexpr const char* kCliEventRecord   = "ceridc_inspect_event_cli.crpl";
+constexpr const char* kPlainEventRecord = "ceridc_inspect_event_plain.crpl";
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "ceridc-inspect-tests"};
@@ -625,6 +637,158 @@ TEST_CASE("diag 9a: ceridc inspect reads the host clock it is given and its reco
     CHECK(has(diverged, "\"recorded_input\":\"time_step\""));
     CHECK(has(diverged, fragment("\"line\":%u,", step)));
     for (const char* f : {kClockProgram, kClockRecord, kCliClockRecord, kCliWallRecord, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+}
+
+TEST_CASE("diag 9a event: ceridc inspect reads the input events it is given and its records replay with no queue",
+          "[ceridc][inspect][diag]")
+{
+    for (const char* f : {kEventProgram, kEventRecord, kCliEventRecord, kPlainEventRecord, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kEventDemo)), text));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kEventProgram)),
+                                crd::containers::StringView(text.c_str(), text.size())));
+    const char* const second_read = "%6, %7, %8, %9, %10 = input.event() {queue = 0} : !i64";
+    const u32         first       = line_of(text, "%1, %2, %3, %4, %5 = input.event()", 0U);
+    const u32         second      = line_of(text, second_read, 0U);
+    const u32         sw          = line_of(text, "core.switch", 0U);
+    REQUIRE(first != 0U);
+    REQUIRE(second != 0U);
+    REQUIRE(sw != 0U);
+
+    // In process: a key and an unhandled resize, held at the switch, which then fails.
+    const crd::i64 args[1]    = {7};
+    const u32      breaks[1]  = {sw};
+    const u32      watches[1] = {second};
+    const String   report     = crd::ceridc::verb_inspect(
+        kEventProgram, "main", ConstSpan<crd::i64>(args, 1U), ConstSpan<u32>(breaks, 1U), ConstSpan<u32>(watches, 1U),
+        {}, 0U, &g_alloc, kEventRecord, nullptr, nullptr, "key_down:65:3,resize:1280:720");
+    INFO(report.c_str());
+    CHECK(has(report, R"("sim_step_ns":0,"event_queue":"open","input_events":2,)"));
+    CHECK(has(report, fragment(R"("values":[{"line":%u,"status":"available","type":"!i64","unit":false,)"
+                               R"("value":8}])",
+                               second)));
+    CHECK(has(report, "\"outcome\":\"error\",\"error\":\"selector-out-of-range\""));
+    CHECK(has(report, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(report, "\"input_reads\":2}"));
+
+    // Handled events finish on their values; an empty list reads none events; no list has no queue.
+    const String handled = crd::ceridc::verb_inspect(kEventProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {},
+                                                     0U, &g_alloc, nullptr, nullptr, nullptr,
+                                                     "key_down:65:3,mouse_move:5:9");
+    CHECK(has(handled, "\"outcome\":\"finished\",\"results\":[86]"));
+    const String empty = crd::ceridc::verb_inspect(kEventProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {}, 0U,
+                                                   &g_alloc, nullptr, nullptr, nullptr, "");
+    CHECK(has(empty, "\"event_queue\":\"open\",\"input_events\":0,"));
+    CHECK(has(empty, "\"outcome\":\"finished\",\"results\":[7]"));
+    const String none =
+        crd::ceridc::verb_inspect(kEventProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {}, 0U, &g_alloc);
+    CHECK(has(none, "\"event_queue\":\"none\",\"input_events\":0,"));
+    CHECK(has(none, "\"outcome\":\"error\",\"error\":\"input-unavailable\""));
+    CHECK(has(none, fragment("\"fault\":{\"line\":%u,", first)));
+
+    // A malformed list is refused before anything runs.
+    for (const char* bad : {"jump:1", "key_down:65536", "resize:1:2:3", "mouse_move:1", ","})
+    {
+        INFO(bad);
+        const String refused = crd::ceridc::verb_inspect(kEventProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {},
+                                                         {}, 0U, &g_alloc, nullptr, nullptr, nullptr, bad);
+        CHECK(has(refused, "--events takes at most 32 comma-separated events"));
+        CHECK_FALSE(has(refused, "\"stops\""));
+    }
+
+    // The real binary records the inspected run, and replay.record records the same run unobserved: the same reads,
+    // trace and outcome.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr);
+    char cmd[2048];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" inspect --program %s --arg 7 --break %u --events key_down:65:3,resize:1280:720 "
+                        "--record %s > %s",
+                        exe, kEventProgram, sw, kCliEventRecord, kOut);
+    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    String cli(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
+    INFO(cli.c_str());
+    CHECK(has(cli, "\"event_queue\":\"open\",\"input_events\":2,"));
+    CHECK(has(cli, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(cli, "\"input_reads\":2}"));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=7 "
+                        "--param events=key_down:65:3,resize:1280:720 --grant execute,record --root . > %s",
+                        exe, kEventProgram, kPlainEventRecord, kOut);
+    REQUIRE(std::system(cmd) == 0);
+    {
+        const auto decode = [](const char* path, crd::ceir::cook::ReplayRecord& rec)
+        {
+            String bytes(&g_alloc);
+            REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(path)), bytes));
+            REQUIRE(crd::ceir::cook::decode_record({reinterpret_cast<const crd::u8*>(bytes.c_str()), bytes.size()},
+                                                   rec) == crd::ceir::cook::RecordError::Ok);
+        };
+        crd::ceir::cook::ReplayRecord inspected(&g_alloc);
+        crd::ceir::cook::ReplayRecord plain(&g_alloc);
+        decode(kCliEventRecord, inspected);
+        decode(kPlainEventRecord, plain);
+        REQUIRE(inspected.input_reads.size() == 2U);
+        REQUIRE(plain.input_reads.size() == 2U);
+        CHECK(inspected.input_reads[0] == plain.input_reads[0]);
+        CHECK(inspected.input_reads[1] == plain.input_reads[1]);
+        CHECK(inspected.input_reads_total == plain.input_reads_total);
+        CHECK(inspected.events_total == plain.events_total);
+        REQUIRE(inspected.events.size() == plain.events.size());
+        for (crd::usize i = 0; i < plain.events.size(); ++i)
+        {
+            CHECK(inspected.events[i] == plain.events[i]);
+        }
+        CHECK(inspected.error == plain.error);
+        CHECK(inspected.fault_op == plain.fault_op);
+        for (u32 i = 0U; i < crd::ceir::cook::kReplayInputs; ++i)
+        {
+            CHECK(inspected.inputs[i].state == plain.inputs[i].state);
+        }
+    }
+
+    // The program file is edited: its second read now takes from queue 1.
+    String            edited(&g_alloc);
+    const char* const from = std::strstr(text.c_str(), second_read);
+    REQUIRE(from != nullptr);
+    edited.append(text.c_str(), static_cast<crd::usize>(from - text.c_str()));
+    edited.append("%6, %7, %8, %9, %10 = input.event() {queue = 1} : !i64");
+    edited.append(from + std::strlen(second_read));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kEventProgram)),
+                                crd::containers::StringView(edited.c_str(), edited.size())));
+
+    // Other processes, with no event queue: each record reproduces from its own program and reads alone, and against
+    // the edited file the second read is named.
+    for (const char* rec : {kEventRecord, kCliEventRecord, kPlainEventRecord})
+    {
+        INFO(rec);
+        (void)std::snprintf(cmd, sizeof(cmd),
+                            "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s", exe, rec, kOut);
+        REQUIRE(std::system(cmd) == 0);
+        String replayed(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
+        INFO(replayed.c_str());
+        CHECK(has(replayed, "\"result\":\"reproduced\""));
+    }
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kCliEventRecord, kEventProgram, kOut);
+    REQUIRE(std::system(cmd) == 0);
+    String diverged(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
+    INFO(diverged.c_str());
+    CHECK(has(diverged, "\"result\":\"diverged\""));
+    CHECK(has(diverged, "\"divergence\":\"input\",\"index\":1,"));
+    CHECK(has(diverged, "\"recorded_input\":\"event\",\"observed_input\":\"event\""));
+    CHECK(has(diverged, fragment("\"line\":%u,", second)));
+    for (const char* f : {kEventProgram, kEventRecord, kCliEventRecord, kPlainEventRecord, kOut})
     {
         (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
     }

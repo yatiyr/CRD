@@ -21,6 +21,9 @@
 //   max_stops  stops to record before the run is cancelled and the answer says truncated (1 to the host's limit)
 //   seed       a u64: the run's host random streams (input.random reads `SeededInputs` of it); without it the host
 //              has no random source and a draw fails input-unavailable (DIAG.9a)
+//   clock, sim_time, sim_step  the run's time domains, as replay.record takes them (parse_clock_argument)
+//   events     the run's input event queue 0, as replay.record takes it (parse_events_argument); without it the host
+//              has no event queue and input.event fails input-unavailable
 // They are checked before the file is opened; a malformed argument is refused bad-argument with nothing read.
 //
 // The run happens inside the request, on the calling thread as the controller, so the service is held for its length;

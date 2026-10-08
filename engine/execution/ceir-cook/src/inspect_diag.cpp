@@ -5,7 +5,7 @@
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/program_cook.hpp> // cook_error_name
-#include <crd/ceir/cook/replay_diag.hpp>  // RunInputs (seed=, clock=, sim_time=, sim_step=)
+#include <crd/ceir/cook/replay_diag.hpp>  // RunInputs (seed=, clock=, sim_time=, sim_step=, events=)
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
@@ -48,7 +48,10 @@ using detail::parse_u64;
 // The parsed script (the argument check parses with no Parsed: it validates and keeps nothing).
 struct Parsed
 {
-    explicit Parsed(crd::memory::IAllocator* alloc) : args(alloc), breaks(alloc), watches(alloc), steps(alloc) {}
+    explicit Parsed(crd::memory::IAllocator* alloc)
+        : args(alloc), breaks(alloc), watches(alloc), steps(alloc), events(alloc)
+    {
+    }
 
     cont::StringView          entry{"main"};
     cont::Array<crd::i64>     args;
@@ -59,6 +62,13 @@ struct Parsed
     bool                      have_seed = false; // seed=: the run's host random streams (none without it)
     crd::u64                  seed      = 0U;
     HostClockSpec             clock;             // clock=, sim_time=, sim_step=: the run's time domains
+    bool                      have_events = false; // events=: the run's input event queue (none without it)
+    cont::Array<crd::i64>     events;              // packed, in delivery order
+
+    [[nodiscard]] HostEventsSpec events_spec() const noexcept
+    {
+        return HostEventsSpec{have_events, cont::as_const_span(events)};
+    }
 };
 
 [[nodiscard]] DiagStatus bad(cont::String& reason, cont::StringView name, cont::StringView what)
@@ -191,12 +201,23 @@ struct Parsed
                 return bad(reason, a.name, requirement);
             }
         }
+        else if (a.name == "events")
+        {
+            if (!parse_events_argument(a.value, out != nullptr ? &out->events : nullptr, requirement))
+            {
+                return bad(reason, a.name, requirement);
+            }
+            if (out != nullptr)
+            {
+                out->have_events = true;
+            }
+        }
         else
         {
             reason.append("unknown argument '");
             reason.append(a.name);
             reason.append("'; program.inspect takes entry, args, breaks, watches, steps, max_stops, seed, clock, "
-                          "sim_time and sim_step");
+                          "sim_time, sim_step and events");
             return DiagStatus::BadArgument;
         }
     }
@@ -303,6 +324,7 @@ void write_answer(const InspectHost& host, const InspectReport& report, const Pa
         .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
         .u64("seed", parsed.seed);
     detail::clock_fields(out.summary, parsed.clock);
+    detail::event_fields(out.summary, parsed.events_spec());
     out.summary.boolean("truncated", report.truncated)
         .str("outcome", script_outcome_name(report.outcome))
         .str("error", plan::run_error_name(report.error))
@@ -337,12 +359,12 @@ DiagStatus run_program_inspect(void* context, const DiagCall& call, DiagSnapshot
         return DiagStatus::Cancelled;
     }
 
-    // The host's random streams (seeded, or none) and its clock. Declared before the host: a run the script leaves
-    // attached still reads through them until the host's destructor has cancelled and joined it. The seeded streams
-    // grow on their own allocator: the executing thread grows them while this thread, the controller, allocates the
-    // answer from `alloc`.
+    // The host's random streams (seeded, or none), its clock and its event queue. Declared before the host: a run the
+    // script leaves attached still reads through them until the host's destructor has cancelled and joined it. The
+    // seeded streams grow on their own allocator: the executing thread grows them while this thread, the controller,
+    // allocates the answer from `alloc`.
     RunInputs inputs("program-inspect-inputs");
-    inputs.set(parsed.have_seed, parsed.seed, parsed.clock);
+    inputs.set(parsed.have_seed, parsed.seed, parsed.clock, parsed.events_spec());
 
     // Cooked under the request's own relative path: breakpoints and stops are positions in that name.
     const cont::StringView path = call.request->path;

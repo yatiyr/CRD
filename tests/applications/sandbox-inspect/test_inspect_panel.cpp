@@ -14,12 +14,18 @@
 // reads them, "Run again" reads the same draws, and the record replays from its draws alone); without inputs a draw
 // fails. The panel's clock reaches every run: the held run reads the step it was given and the record replays from its
 // reads alone; a frame-clock run reads the frame loop's time, step and frame index as they were at its start, even
-// when the loop moves on while the run is held. Expected lines are scanned from the text, never taken from the parser
-// or the panel.
+// when the loop moves on while the run is held. The panel's events reach every run: a window input event packs as
+// input.event reads it (quantized and saturated, against a layout spelled out here); listed events reach every run
+// from the first; the application layer stages the window's events without handling them, a run takes those staged
+// before its start (a held run's later events feed the next run, and a Busy start takes none), its record holds them
+// and replays from them alone, nothing staged is an open, empty queue, and past the bound the newest are kept and
+// the dropped counted. Expected lines are scanned from the text, never taken from the parser or the panel.
 // ASCII test names.
 
 #include "inspect_panel.hpp"
 
+#include <crd/app/events/input_events.hpp>
+#include <crd/app/events/window_events.hpp>
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/func.hpp>
@@ -38,6 +44,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <limits>
 #include <thread>
 
 using crd::i64;
@@ -771,4 +778,373 @@ TEST_CASE("diag 9a: the sandbox panel's runs read its clock, and a frame-clock r
     REQUIRE(frame_panel.results().size() == 1U);
     CHECK(frame_panel.results()[0] == (frame_index + 1) + 1 + (time_ns + step_ns) + (step_ns + 1));
     CHECK(frames.worst_ms < kFrameBoundMs);
+}
+
+namespace
+{
+// The packed layout, spelled out here independently of ceir::input::pack_event: type, code << 8, mods << 24, x << 32
+// and y << 48, each of x and y as 16 two's-complement bits.
+i64 packed(u64 type, u64 code, u64 mods, i64 x, i64 y)
+{
+    const u64 ux = static_cast<u64>(x) & 0xFFFFU;
+    const u64 uy = static_cast<u64>(y) & 0xFFFFU;
+    return static_cast<i64>(type | (code << 8U) | (mods << 24U) | (ux << 32U) | (uy << 48U));
+}
+
+crd::platform::InputEvent key_event(crd::platform::InputEvent::Type type, crd::platform::Key k,
+                                    crd::platform::KeyMods mods)
+{
+    crd::platform::InputEvent e;
+    e.type            = type;
+    e.mods            = mods;
+    e.payload.key.key = k;
+    return e;
+}
+
+crd::platform::InputEvent button_event(crd::platform::InputEvent::Type type, crd::platform::MouseButton b,
+                                       crd::platform::KeyMods mods)
+{
+    crd::platform::InputEvent e;
+    e.type                        = type;
+    e.mods                        = mods;
+    e.payload.mouse_button.button = b;
+    return e;
+}
+
+crd::platform::InputEvent move_event(crd::platform::InputEvent::Type type, float x, float y)
+{
+    crd::platform::InputEvent e;
+    e.type = type;
+    if (type == crd::platform::InputEvent::Type::Scroll)
+    {
+        e.payload.scroll.dx = x;
+        e.payload.scroll.dy = y;
+    }
+    else
+    {
+        e.payload.mouse_move.x = x;
+        e.payload.mouse_move.y = y;
+    }
+    return e;
+}
+
+crd::platform::InputEvent resize_event(crd::i32 w, crd::i32 h)
+{
+    crd::platform::InputEvent e;
+    e.type                  = crd::platform::InputEvent::Type::Resize;
+    e.payload.resize.width  = w;
+    e.payload.resize.height = h;
+    return e;
+}
+
+// The record of the panel's ended run.
+crd::ceir::cook::ReplayRecord ended_record(InspectPanel& panel, crd::memory::IAllocator* alloc)
+{
+    crd::ceir::cook::ReplayRecord rec(alloc);
+    REQUIRE(panel.host().record(rec) == crd::ceir::cook::HostRecord::Ok);
+    return rec;
+}
+
+// The record replayed from its own program and reads alone, in a fresh Context: no divergence.
+void replays_from_its_reads(const crd::ceir::cook::ReplayRecord& rec, crd::memory::IAllocator* alloc)
+{
+    crd::ceir::Context             ctx(alloc);
+    crd::ceir::cook::ReplayProgram program(alloc);
+    crd::ceir::cook::load_replay_program(ctx, {rec.program.data(), rec.program.size()}, "main",
+                                         &register_replay_dialects, nullptr, program);
+    REQUIRE(program.ok());
+    crd::ceir::cook::ReplayTrace trace(alloc);
+    crd::ceir::cook::InputFeed   feed({rec.input_reads.data(), rec.input_reads.size()}, trace);
+    crd::ceir::cook::run_traced(program, {rec.args.data(), rec.args.size()}, rec.max_events, nullptr, trace,
+                                feed.source());
+    CHECK(crd::ceir::cook::first_divergence(rec, trace).kind == crd::ceir::cook::DivergenceKind::None);
+}
+
+constexpr u32 kHostStateInput = 5U; // the host-state input's slot in a record
+} // namespace
+
+TEST_CASE("diag 9a event: a window input event packs as input.event reads it, quantized and saturated",
+          "[sandbox][inspect][diag][event]")
+{
+    using Type = crd::platform::InputEvent::Type;
+    using crd::platform::Key;
+    using crd::platform::KeyMods;
+    using crd::platform::MouseButton;
+    using crd::sandbox::window_event;
+    const KeyMods none{};
+    const KeyMods shift_alt{true, false, true, false};
+    const KeyMods ctrl_super{false, true, false, true};
+    const KeyMods all{true, true, true, true};
+
+    CHECK(window_event(crd::platform::InputEvent{}) == 0); // a None event is an empty queue's answer
+    CHECK(window_event(key_event(Type::KeyDown, Key::A, shift_alt)) ==
+          packed(1U, static_cast<u64>(Key::A), 1U | 4U, 0, 0));
+    CHECK(window_event(key_event(Type::KeyUp, Key::Escape, ctrl_super)) ==
+          packed(2U, static_cast<u64>(Key::Escape), 2U | 8U, 0, 0));
+    CHECK(window_event(key_event(Type::KeyRepeat, Key::RightAlt, all)) ==
+          packed(3U, static_cast<u64>(Key::RightAlt), 15U, 0, 0));
+    CHECK(window_event(button_event(Type::MouseDown, MouseButton::Right, none)) ==
+          packed(4U, static_cast<u64>(MouseButton::Right), 0U, 0, 0));
+    CHECK(window_event(button_event(Type::MouseUp, MouseButton::X2, ctrl_super)) ==
+          packed(5U, static_cast<u64>(MouseButton::X2), 10U, 0, 0));
+    // The pointer in whole pixels, rounded half away from zero; saturated at 16 signed bits; a NaN is 0.
+    CHECK(window_event(move_event(Type::MouseMove, 12.4F, -7.5F)) == packed(6U, 0U, 0U, 12, -8));
+    CHECK(window_event(move_event(Type::MouseMove, 40000.0F, -40000.0F)) == packed(6U, 0U, 0U, 32767, -32768));
+    CHECK(window_event(move_event(Type::MouseMove, std::numeric_limits<float>::quiet_NaN(), 3.5F)) ==
+          packed(6U, 0U, 0U, 0, 4));
+    // The scroll offset in hundredths of a step.
+    CHECK(window_event(move_event(Type::Scroll, 0.5F, -1.25F)) == packed(7U, 0U, 0U, 50, -125));
+    CHECK(window_event(move_event(Type::Scroll, 1000.0F, -1000.0F)) == packed(7U, 0U, 0U, 32767, -32768));
+    // The new size in pixels.
+    CHECK(window_event(resize_event(1920, 1080)) == packed(8U, 0U, 0U, 1920, 1080));
+    CHECK(window_event(resize_event(70000, -5)) == packed(8U, 0U, 0U, 32767, -5));
+}
+
+TEST_CASE("diag 9a event: the sandbox panel's runs take its listed events, or the window events staged before start",
+          "[sandbox][inspect][diag][event]")
+{
+    using crd::ceir::cook::ReplayInputRead;
+    using crd::ceir::input::InputKind;
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String text = read_text(fs::Path(StringView(kEngineAssets)) / StringView("ceir/event_demo.ceir"), &alloc);
+    const u32    second = line_of(sv(text), "%6, %7, %8, %9, %10 = input.event()");
+    const u32    sw     = line_of(sv(text), "core.switch");
+    REQUIRE(second != 0U);
+    REQUIRE(sw != 0U);
+    crd::scenerender::SceneRenderer renderer(&alloc);
+    REQUIRE(renderer.set_asset_root(kEngineAssets));
+    const i64 args[1] = {7};
+    Frames    frames;
+
+    // Listed events: every run takes them from the first. The panel copies them, so the caller's list may change.
+    {
+        InspectPanel panel(&alloc, renderer);
+        REQUIRE(panel.load(StringView("ceir/event_demo"), StringView("main")).ok());
+        i64                       list[2] = {packed(1U, 65U, 3U, 0, 0), packed(6U, 0U, 0U, -5, 9)};
+        crd::sandbox::PanelInputs inputs;
+        inputs.events = crd::ceir::cook::HostEventsSpec{true, ConstSpan<i64>(list, 2U)};
+        panel.set_inputs(inputs);
+        list[0] = packed(8U, 0U, 0U, 1, 1);
+        panel.push_window_event(resize_event(640, 480)); // not a window-events panel: nothing is staged
+        CHECK(panel.window_events_staged() == 0U);
+        for (u32 run = 0U; run < 2U; ++run)
+        {
+            REQUIRE(panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) ==
+                    insp::Refusal::None);
+            REQUIRE(frames.until(panel, TickEvent::Ended));
+            REQUIRE(panel.state() == PanelState::Finished);
+            REQUIRE(panel.results().size() == 1U);
+            CHECK(panel.results()[0] == 65 - 5 + 9 + 7);
+            const crd::ceir::cook::ReplayRecord rec = ended_record(panel, &alloc);
+            REQUIRE(rec.input_reads.size() == 2U);
+            CHECK(rec.input_reads[0] == ReplayInputRead{InputKind::Event, 0U, true, packed(1U, 65U, 3U, 0, 0)});
+            CHECK(rec.input_reads[1] == ReplayInputRead{InputKind::Event, 0U, true, packed(6U, 0U, 0U, -5, 9)});
+            CHECK(rec.inputs[kHostStateInput].state == crd::ceir::cook::ReplayInputState::Recorded);
+        }
+    }
+
+    // A start the host refuses (nothing loaded) takes none of the staged window events.
+    {
+        InspectPanel              unloaded(&alloc, renderer);
+        crd::sandbox::PanelInputs window;
+        window.window_events = true;
+        unloaded.set_inputs(window);
+        unloaded.push_window_event(resize_event(640, 480));
+        unloaded.push_window_event(crd::platform::InputEvent{}); // a None event is never staged
+        CHECK(unloaded.window_events_staged() == 1U);
+        CHECK(unloaded.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::NotBound);
+        CHECK(unloaded.window_events_staged() == 1U);
+        CHECK(unloaded.run_window_events() == 0U);
+    }
+
+    // Window events: the frame loop's layer stages them; a run takes those that arrived before its start, oldest
+    // first, and events that arrive while it is held feed the next run only.
+    InspectPanel panel(&alloc, renderer);
+    REQUIRE(panel.load(StringView("ceir/event_demo"), StringView("main")).ok());
+    REQUIRE(panel.add_breakpoint(sw) == insp::Refusal::None);
+    panel.watch(second);
+    crd::sandbox::PanelInputs inputs;
+    inputs.window_events = true;
+    panel.set_inputs(inputs);
+    crd::sandbox::InspectEventLayer layer(panel);
+    crd::app::KeyPressedEvent   key(crd::platform::Key::A, crd::platform::KeyMods{true, true, false, false}, false);
+    crd::app::WindowResizeEvent resize(1280, 720);
+    crd::app::WindowCloseEvent  close; // no input event: not staged
+    layer.on_event(key);
+    layer.on_event(close);
+    layer.on_event(resize);
+    CHECK_FALSE(key.handled); // every other consumer still sees them
+    CHECK_FALSE(resize.handled);
+    CHECK(panel.window_events_staged() == 2U);
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+    CHECK(panel.run_window_events() == 2U);
+    CHECK(panel.run_window_dropped() == 0U);
+    CHECK(panel.window_events_staged() == 0U);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    CHECK(panel.stop_line() == sw);
+    REQUIRE(value_at(panel, second).value.status == insp::ValueStatus::Available);
+    CHECK(value_at(panel, second).value.bits == 8); // the second event's type: a resize, which the switch lacks
+
+    // While held: two more window events are staged, and a start is Busy and takes none of them.
+    layer.on_event(key);
+    crd::app::MouseMovedEvent moved(-5.0F, 9.0F);
+    layer.on_event(moved);
+    CHECK(panel.window_events_staged() == 2U);
+    CHECK(panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::Busy);
+    CHECK(panel.window_events_staged() == 2U);
+    REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    CHECK(panel.error() == crd::ceir::plan::RunError::SelectorOutOfRange);
+    {
+        const crd::ceir::cook::ReplayRecord rec = ended_record(panel, &alloc);
+        REQUIRE(rec.input_reads.size() == 2U);
+        CHECK(rec.input_reads[0] == ReplayInputRead{InputKind::Event, 0U, true,
+                                                    packed(1U, static_cast<u64>(crd::platform::Key::A), 3U, 0, 0)});
+        CHECK(rec.input_reads[1] == ReplayInputRead{InputKind::Event, 0U, true, packed(8U, 0U, 0U, 1280, 720)});
+        CHECK(rec.inputs[kHostStateInput].state == crd::ceir::cook::ReplayInputState::Recorded);
+        replays_from_its_reads(rec, &alloc);
+    }
+
+    // "Run again" takes the two events staged while the first run was held: it passes its switch and finishes.
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::None);
+    CHECK(panel.run_window_events() == 2U);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    REQUIRE(value_at(panel, second).value.status == insp::ValueStatus::Available);
+    CHECK(value_at(panel, second).value.bits == 6); // a mouse move
+    REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    REQUIRE(panel.state() == PanelState::Finished);
+    REQUIRE(panel.results().size() == 1U);
+    CHECK(panel.results()[0] == static_cast<i64>(crd::platform::Key::A) - 5 + 9 + 7);
+
+    // Nothing staged: the run's queue is open and empty, so both reads are none events.
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::None);
+    CHECK(panel.run_window_events() == 0U);
+    REQUIRE(frames.until(panel, TickEvent::Stopped));
+    CHECK(value_at(panel, second).value.bits == 0);
+    REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    REQUIRE(panel.results().size() == 1U);
+    CHECK(panel.results()[0] == 7);
+    CHECK(frames.worst_ms < kFrameBoundMs);
+}
+
+TEST_CASE("diag 9a event: the sandbox panel's layer stages every window input event, keeping the newest past its bound",
+          "[sandbox][inspect][diag][event]")
+{
+    using crd::ceir::cook::ReplayInputRead;
+    using crd::ceir::input::InputKind;
+    constexpr u32 extra = 3U;
+    constexpr u32 total = crd::sandbox::kMaxWindowEvents + extra;
+    static_assert(crd::sandbox::kMaxWindowEvents == 4096U);
+
+    crd::memory::GrowableTlsfAllocator alloc;
+    crd::scenerender::SceneRenderer    renderer(&alloc);
+    REQUIRE(renderer.set_asset_root(kEngineAssets));
+    // An application program that takes `n` events and returns 0.
+    const AppRoot    app("crd-diag9a-sandbox-window-events");
+    const StringView reads = R"(module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0(%0 : !i64):
+        %1 = arith.const() {value = 0} : !i64
+        %2 = arith.const() {value = 1} : !i64
+        core.for(%1, %0, %2) {
+          ^bb0(%3 : !i64):
+            %4, %5, %6, %7, %8 = input.event() {queue = 0} : !i64
+            core.yield()
+        }
+        func.return(%1)
+    }
+}
+)";
+    REQUIRE(fs::write_file_text(app.dir / StringView("ceir/event_reads.ceir"), reads));
+    REQUIRE(renderer.set_app_asset_root(String(app.dir.generic(), &alloc).c_str()));
+
+    InspectPanel panel(&alloc, renderer);
+    REQUIRE(panel.load(StringView("ceir/event_reads"), StringView("main")).ok());
+    crd::sandbox::PanelInputs inputs;
+    inputs.window_events = true;
+    panel.set_inputs(inputs);
+    Frames frames;
+
+    // Every input event the application dispatches reaches the run through the layer, in order, rebuilt as the
+    // platform event it came from; an event of another kind does not.
+    {
+        using crd::platform::Key;
+        using crd::platform::MouseButton;
+        const crd::platform::KeyMods       ctrl{false, true, false, false};
+        crd::sandbox::InspectEventLayer    layer(panel);
+        crd::app::KeyPressedEvent          down(Key::B, ctrl, false);
+        crd::app::KeyPressedEvent          repeat(Key::B, ctrl, true);
+        crd::app::KeyReleasedEvent         up(Key::B, ctrl);
+        crd::app::MouseButtonPressedEvent  press(MouseButton::Middle, ctrl);
+        crd::app::MouseButtonReleasedEvent release(MouseButton::Middle, crd::platform::KeyMods{});
+        crd::app::MouseMovedEvent          moved(100.5F, -3.25F);
+        crd::app::MouseScrolledEvent       scrolled(0.0F, -2.0F);
+        crd::app::WindowResizeEvent        resized(800, 600);
+        crd::app::WindowCloseEvent         close;
+        layer.on_event(down);
+        layer.on_event(repeat);
+        layer.on_event(up);
+        layer.on_event(close);
+        layer.on_event(press);
+        layer.on_event(release);
+        layer.on_event(moved);
+        layer.on_event(scrolled);
+        layer.on_event(resized);
+        const i64 nine[1] = {9};
+        REQUIRE(panel.start(ConstSpan<i64>(nine, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+        CHECK(panel.run_window_events() == 8U);
+        REQUIRE(frames.until(panel, TickEvent::Ended));
+        const crd::ceir::cook::ReplayRecord rec = ended_record(panel, &alloc);
+        const u64 b           = static_cast<u64>(Key::B);
+        const u64 mid         = static_cast<u64>(MouseButton::Middle);
+        const i64 expected[9] = {packed(1U, b, 2U, 0, 0),         packed(3U, b, 2U, 0, 0),
+                                 packed(2U, b, 2U, 0, 0),         packed(4U, mid, 2U, 0, 0),
+                                 packed(5U, mid, 0U, 0, 0),       packed(6U, 0U, 0U, 101, -3),
+                                 packed(7U, 0U, 0U, 0, -200),     packed(8U, 0U, 0U, 800, 600),
+                                 0};
+        REQUIRE(rec.input_reads.size() == 9U);
+        for (u32 k = 0U; k < 9U; ++k)
+        {
+            INFO("read " << k);
+            CHECK(rec.input_reads[k] == ReplayInputRead{InputKind::Event, 0U, true, expected[k]});
+        }
+    }
+
+    for (u32 i = 0U; i < total; ++i)
+    {
+        const u32 x = i % 1000U;
+        const u32 y = i / 1000U; // whole: the event's y is the thousands of its index
+        panel.push_window_event(
+            move_event(crd::platform::InputEvent::Type::MouseMove, static_cast<float>(x), static_cast<float>(y)));
+    }
+    CHECK(panel.window_events_staged() == crd::sandbox::kMaxWindowEvents);
+    CHECK(panel.window_events_dropped() == extra);
+
+    // The run reads every staged event, oldest first (the first `extra` were dropped), then a none event.
+    const i64 args[1] = {static_cast<i64>(crd::sandbox::kMaxWindowEvents) + 1};
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+    CHECK(panel.run_window_events() == crd::sandbox::kMaxWindowEvents);
+    CHECK(panel.run_window_dropped() == extra);
+    CHECK(panel.window_events_staged() == 0U);
+    CHECK(panel.window_events_dropped() == 0U);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    REQUIRE(panel.state() == PanelState::Finished);
+    const crd::ceir::cook::ReplayRecord rec = ended_record(panel, &alloc);
+    REQUIRE(rec.input_reads.size() == crd::sandbox::kMaxWindowEvents + 1U);
+    u32 wrong = 0U;
+    for (u32 k = 0U; k < crd::sandbox::kMaxWindowEvents; ++k)
+    {
+        const u32             i = k + extra;
+        const ReplayInputRead staged{InputKind::Event, 0U, true, packed(6U, 0U, 0U, i % 1000U, i / 1000U)};
+        if (!(rec.input_reads[k] == staged))
+        {
+            ++wrong;
+        }
+    }
+    CHECK(wrong == 0U);
+    CHECK(rec.input_reads[crd::sandbox::kMaxWindowEvents] == ReplayInputRead{InputKind::Event, 0U, true, 0});
+    CHECK(rec.inputs[kHostStateInput].state == crd::ceir::cook::ReplayInputState::Recorded);
 }

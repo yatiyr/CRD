@@ -18,7 +18,7 @@
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/inspect_script.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
-#include <crd/ceir/cook/replay_diag.hpp> // RunInputs, parse_clock_argument
+#include <crd/ceir/cook/replay_diag.hpp> // RunInputs, parse_clock_argument, parse_events_argument
 #include <crd/ceir/cook/replay_record.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
@@ -891,7 +891,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
                                      crd::containers::ConstSpan<crd::u32> watches,
                                      crd::containers::ConstSpan<const char*> actions, crd::u32 max_stops,
                                      crd::memory::IAllocator* alloc, const char* record_path, const char* seed_text,
-                                     const InspectClockFlags* clock)
+                                     const InspectClockFlags* clock, const char* events_text)
 {
     // Validate COMPLETELY before the program runs.
     if (program_path == nullptr)
@@ -953,6 +953,18 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
             }
         }
     }
+    crd::containers::Array<crd::i64> events(alloc);
+    if (events_text != nullptr)
+    {
+        crd::containers::StringView requirement;
+        if (!ck::parse_events_argument(crd::containers::StringView(events_text), &events, requirement))
+        {
+            return fail(alloc, "inspect",
+                        "--events takes at most 32 comma-separated events: key_down, key_up, key_repeat, mouse_down "
+                        "or mouse_up:<code>[:<mods>], mouse_move, scroll or resize:<x>:<y>");
+        }
+    }
+    const ck::HostEventsSpec events_spec{events_text != nullptr, crd::containers::as_const_span(events)};
     if (record_path != nullptr && fs::exists(fs::Path(crd::containers::StringView(record_path))))
     {
         return fail(alloc, "inspect", "refusing to overwrite an existing --record file");
@@ -967,11 +979,11 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     const crd::containers::StringView file(program_path);
     const crd::containers::StringView source(text.c_str(), text.size());
     const crd::containers::StringView entry_view(entry_name);
-    // DIAG.9a: the run's host random streams (seeded, or none) and its clock, declared before the host so they
-    // outlive its run; the streams grow on their own allocator while this thread (the controller) allocates from
-    // `alloc`.
+    // DIAG.9a: the run's host random streams (seeded, or none), its clock and its event queue, declared before the
+    // host so they outlive its run; they grow on their own allocator while this thread (the controller) allocates
+    // from `alloc`.
     ck::RunInputs inputs("ceridc-inspect-inputs");
-    inputs.set(seed_text != nullptr, seed, clock_spec);
+    inputs.set(seed_text != nullptr, seed, clock_spec, events_spec);
     ck::InspectHost          host(alloc, &register_host_dialects, nullptr);
     const ck::HostLoadResult lr = host.load(ck::AssetId{1U}, source, file, entry_view);
     JsonWriter w(alloc);
@@ -986,6 +998,8 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     w.kv("sim_time_ns", clock_spec.sim_time);
     w.kv("sim_step", clock_spec.has_sim_step ? "set" : "none");
     w.kv("sim_step_ns", clock_spec.sim_step);
+    w.kv("event_queue", events_spec.open ? "open" : "none");
+    w.kv("input_events", static_cast<crd::u64>(events.size()));
     if (!lr.ok())
     {
         w.kv("ok", false);

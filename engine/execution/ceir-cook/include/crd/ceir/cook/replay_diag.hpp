@@ -172,10 +172,11 @@ void apply_events(const HostEventsSpec& spec, input::HostEvents& events);
                                          containers::StringView& requirement);
 
 // The host inputs of one run on a one-shot or interactive host: input.random reads the input::SeededInputs of a seed
-// (no random source without one) and input.clock / input.time_step read a HostClock set from a HostClockSpec (a
-// domain the spec leaves unset has no value). The seeded source grows on its own allocator, because a run reads it on
-// its executing thread while the controller allocates from the caller's (the inspect host's threading rule). A run's
-// host keeps this object alive until the run has ended, so declare it before the host; change it only between runs.
+// (no random source without one), input.clock / input.time_step read a HostClock set from a HostClockSpec (a domain
+// the spec leaves unset has no value) and input.event reads the input::HostEvents a HostEventsSpec describes (no queue
+// without one). The seeded source and the event queues grow on their own allocator, because a run reads them on its
+// executing thread while the controller allocates from the caller's (the inspect host's threading rule). A run's host
+// keeps this object alive until the run has ended, so declare it before the host; change it only between runs.
 class RunInputs
 {
 public:
@@ -186,12 +187,16 @@ public:
     RunInputs& operator=(RunInputs&&)      = delete;
     ~RunInputs()                           = default;
 
-    // The next run's inputs: seeded (`seeded`, from draw 0 of every stream of `seed`) or no random source, and the
-    // clock `clock` describes (a live wall's epoch is this call).
-    void set(bool seeded, crd::u64 seed, const HostClockSpec& clock);
+    // The next run's inputs: seeded (`seeded`, from draw 0 of every stream of `seed`) or no random source, the clock
+    // `clock` describes (a live wall's epoch is this call) and the event queue `events` describes (none unless it is
+    // open). Every call starts over: the queues an earlier run read are gone.
+    void set(bool seeded, crd::u64 seed, const HostClockSpec& clock, const HostEventsSpec& events = {});
 
     // The clock, for a host that sets more than a HostClockSpec does (the sandbox's frame domain). Between runs only.
     [[nodiscard]] input::HostClock& clock() noexcept { return m_clock; }
+    // The event queues, for a host that queues more than a HostEventsSpec does (the sandbox's window events). Between
+    // runs only.
+    [[nodiscard]] input::HostEvents& events() noexcept { return m_events; }
 
     // The source to install for the run; it points at this object.
     [[nodiscard]] const input::InputSource* source() const noexcept { return m_router.source(); }
@@ -200,6 +205,7 @@ private:
     memory::GrowableTlsfAllocator m_alloc;
     input::SeededInputs           m_seeded;
     input::HostClock              m_clock;
+    input::HostEvents             m_events;
     input::InputRouter            m_router;
 };
 

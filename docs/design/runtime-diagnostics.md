@@ -1073,16 +1073,41 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-input-events.md)):
   summary answers `event_queue` (open or none) and `input_events`. The committed `assets/ceir/event_demo.ceir` takes
   two events and fails `selector-out-of-range` when the second is a resize; otherwise it returns the first event's
   code plus the second's x and y plus its argument.
-- Still open in DIAG.9a, as work that can be done now: input events at the interactive hosts (`program.inspect`,
-  `ceridc inspect`, and crd-sandbox's panel fed from the window's real `platform::InputEvent` stream at a run's start,
-  the frame-clock precedent); backend-specific numeric replay of GPU dispatches with a declared tolerance or oracle
-  (the acceptance criterion; it needs a readback of dispatch results into the trace first); host records from
-  crd-sandbox's panel (the host provider needs an enrolled thread). Waiting on a consumer or an op: state cells across
-  invokes and a run spanning a reload wait for a host that keeps one interpreter across invokes (only tests call
-  `migrate_state` today); external I/O completions and network or physical effects stubbed only in explicit test
-  replay wait for an op that declares `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`, `AgentAction` or a physics
-  write (none does). Until then a program that needs external results keeps `external-results` missing and its record
-  is refused before anything runs (`test_replay_diag.cpp`, `test_replay_record.cpp`).
+- What stayed open after this batch is listed at the end of the next settled block (input events at the interactive
+  hosts are settled there).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-interactive-host-events.md)):
+- Input events at the interactive hosts. `cook::RunInputs` also owns an `input::HostEvents` on its own allocator,
+  routed for `InputKind::Event`; `set(seeded, seed, clock, events)` applies a `HostEventsSpec` through
+  `apply_events`, so every call starts the queue over (no spec: no queue), and `events()` lets a host queue more
+  between runs. `program.inspect events=` (checked in the service's argument step with `parse_events_argument`; the
+  summary answers `event_queue` and `input_events` after the clock fields, so three existing summary assertions were
+  updated) and `ceridc inspect --events <list>` (refused before anything runs; the report names the same two fields)
+  give a run the listed events on queue 0, as `replay.record events=` does.
+- crd-sandbox's panel has two exclusive sources for queue 0 (the sandbox refuses both together): `--inspect-events`
+  (`PanelInputs::events`, copied by `set_inputs`, every run from the first event) and `--inspect-window-events`
+  (`PanelInputs::window_events`). The application drains the window's `platform::InputEvent` queue itself and
+  dispatches typed events through its layer stack, so the sandbox pushes `sandbox::InspectEventLayer`, which rebuilds
+  each key, mouse button, pointer, scroll and resize event as the platform event it came from and never marks it
+  handled. `sandbox::window_event` is the host adapter's quantization: the type in the platform's order (each value
+  `static_assert`ed against `input::EventType`), the key or button as its platform enum value, the modifiers as
+  shift 1, ctrl 2, alt 4 and super 8, and x and y saturated to 16 signed bits: the pointer rounded half away from zero
+  to whole pixels, the scroll offset in hundredths of a step, the new size in pixels (a NaN is 0).
+- Window events are staged, never written into a live queue. The panel keeps them on the frame-loop thread (at most
+  `kMaxWindowEvents`, the queue's own 4,096; past it the newest replaces the oldest and the dropped are counted);
+  `start` copies them, oldest first, into an open queue before the run's thread exists, and they are taken only when
+  the start succeeds (a `Busy` start keeps them). Events arriving while a run is held feed the next run. The first
+  run starts before the first frame, so its queue is open and empty; "Run again" takes what arrived since. The record
+  keeps every read, so it replays from its reads alone.
+- Still open in DIAG.9a, as work that can be done now: backend-specific numeric replay of GPU dispatches with a
+  declared tolerance or oracle (the acceptance criterion; it needs a readback of dispatch results into the trace
+  first); host records from crd-sandbox's panel (the host provider needs an enrolled thread). Waiting on a consumer
+  or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one interpreter across
+  invokes (only tests call `migrate_state` today); external I/O completions and network or physical effects stubbed
+  only in explicit test replay wait for an op that declares `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`,
+  `AgentAction` or a physics write (none does). Until then a program that needs external results keeps
+  `external-results` missing and its record is refused before anything runs (`test_replay_diag.cpp`,
+  `test_replay_record.cpp`).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

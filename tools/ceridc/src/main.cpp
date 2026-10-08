@@ -80,6 +80,7 @@ void print_usage()
         "                 [--record <f.crpl>]  (a new run record of the inspected run; never overwrites)\n"
         "                 [--seed <u64>]  (the run's host random streams; without it a draw fails)\n"
         "                 [--clock wall] [--sim-time <ns>] [--sim-step <ns>]  (the run's time domains)\n"
+        "                 [--events <list>]  (the run's input event queue, as replay.record's events)\n"
         "  ceridc diag --command <name> [--path <rel>] [--param <name>=<value>]... [--cursor <n>]\n"
         "              [--page-items <n>] [--page-bytes <n>] [--schema <n>] [--grant <list>] [--root <dir>]\n"
         "              (grant defaults to read; program.inspect needs execute; replay.record needs execute,record\n"
@@ -275,7 +276,8 @@ int main(int argc, char* argv[])
             crd::containers::as_const_span(args), crd::containers::as_const_span(breaks),
             crd::containers::as_const_span(watches), crd::containers::as_const_span(steps),
             static_cast<crd::u32>(std::strtoul(flag_of(argc, argv, "--max-stops", "0"), nullptr, 10)), &g_alloc,
-            flag_of(argc, argv, "--record", nullptr), flag_of(argc, argv, "--seed", nullptr), &clock));
+            flag_of(argc, argv, "--record", nullptr), flag_of(argc, argv, "--seed", nullptr), &clock,
+            flag_of(argc, argv, "--events", nullptr)));
     }
     print_usage();
     return 1;

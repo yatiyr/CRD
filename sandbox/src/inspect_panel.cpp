@@ -2,12 +2,17 @@
 
 #include "inspect_panel.hpp"
 
+#include <crd/app/event_dispatcher.hpp>
+#include <crd/app/events/input_events.hpp>
+#include <crd/app/events/window_events.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/gen/input_ops.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/renderasset/identity.hpp>
+
+#include <cmath>
 
 namespace crd::sandbox
 {
@@ -25,7 +30,61 @@ void register_program_dialects(ceir::Context& ctx, void* /*user*/)
     (void)ceir::arith::register_arith_ops(ctx);
     (void)ceir::core::register_core_ops(ctx);
     (void)ceir::func::register_dialect(ctx);
-    (void)ceir::input::register_input_ops(ctx); // DIAG.9a: loads; the inspect host has no input source (unavailable)
+    (void)ceir::input::register_input_ops(ctx); // DIAG.9a: the run reads the panel's host inputs
+}
+
+// The packed type is the platform's type value: the two orders are one list (append-only on both sides).
+using PlatformType = platform::InputEvent::Type;
+using EventType    = ceir::input::EventType;
+static_assert(static_cast<crd::u8>(PlatformType::None) == static_cast<crd::u8>(EventType::None));
+static_assert(static_cast<crd::u8>(PlatformType::KeyDown) == static_cast<crd::u8>(EventType::KeyDown));
+static_assert(static_cast<crd::u8>(PlatformType::KeyUp) == static_cast<crd::u8>(EventType::KeyUp));
+static_assert(static_cast<crd::u8>(PlatformType::KeyRepeat) == static_cast<crd::u8>(EventType::KeyRepeat));
+static_assert(static_cast<crd::u8>(PlatformType::MouseDown) == static_cast<crd::u8>(EventType::MouseDown));
+static_assert(static_cast<crd::u8>(PlatformType::MouseUp) == static_cast<crd::u8>(EventType::MouseUp));
+static_assert(static_cast<crd::u8>(PlatformType::MouseMove) == static_cast<crd::u8>(EventType::MouseMove));
+static_assert(static_cast<crd::u8>(PlatformType::Scroll) == static_cast<crd::u8>(EventType::Scroll));
+static_assert(static_cast<crd::u8>(PlatformType::Resize) == static_cast<crd::u8>(EventType::Resize));
+static_assert(EventType::Resize == ceir::input::kLastEventType);
+
+// `v` rounded half away from zero and saturated to 16 signed bits (a NaN is 0).
+[[nodiscard]] crd::i16 saturate16(crd::f64 v) noexcept
+{
+    if (std::isnan(v))
+    {
+        return 0;
+    }
+    if (v >= 32767.0)
+    {
+        return 32767;
+    }
+    if (v <= -32768.0)
+    {
+        return -32768;
+    }
+    return static_cast<crd::i16>(std::lround(v));
+}
+
+[[nodiscard]] crd::u8 mods_of(const platform::KeyMods& m) noexcept
+{
+    crd::u8 bits = 0U;
+    if (m.shift)
+    {
+        bits = static_cast<crd::u8>(bits | ceir::input::kModShift);
+    }
+    if (m.ctrl)
+    {
+        bits = static_cast<crd::u8>(bits | ceir::input::kModCtrl);
+    }
+    if (m.alt)
+    {
+        bits = static_cast<crd::u8>(bits | ceir::input::kModAlt);
+    }
+    if (m.super)
+    {
+        bits = static_cast<crd::u8>(bits | ceir::input::kModSuper);
+    }
+    return bits;
 }
 
 [[nodiscard]] insp::Resume resume_of(PanelAction a) noexcept
@@ -99,10 +158,44 @@ bool parse_panel_action(containers::StringView s, PanelAction& out) noexcept
     return false;
 }
 
+crd::i64 window_event(const platform::InputEvent& e) noexcept
+{
+    ceir::input::Event out;
+    out.type = static_cast<crd::u8>(e.type);
+    out.mods = mods_of(e.mods);
+    switch (e.type) // no default (-Werror=switch)
+    {
+    case PlatformType::None:
+        return 0;
+    case PlatformType::KeyDown:
+    case PlatformType::KeyUp:
+    case PlatformType::KeyRepeat:
+        out.code = static_cast<crd::u16>(e.payload.key.key);
+        break;
+    case PlatformType::MouseDown:
+    case PlatformType::MouseUp:
+        out.code = static_cast<crd::u16>(e.payload.mouse_button.button);
+        break;
+    case PlatformType::MouseMove:
+        out.x = saturate16(static_cast<crd::f64>(e.payload.mouse_move.x));
+        out.y = saturate16(static_cast<crd::f64>(e.payload.mouse_move.y));
+        break;
+    case PlatformType::Scroll:
+        out.x = saturate16(static_cast<crd::f64>(e.payload.scroll.dx) * 100.0);
+        out.y = saturate16(static_cast<crd::f64>(e.payload.scroll.dy) * 100.0);
+        break;
+    case PlatformType::Resize:
+        out.x = saturate16(static_cast<crd::f64>(e.payload.resize.width));
+        out.y = saturate16(static_cast<crd::f64>(e.payload.resize.height));
+        break;
+    }
+    return ceir::input::pack_event(out);
+}
+
 InspectPanel::InspectPanel(memory::IAllocator* alloc, scenerender::SceneRenderer& programs)
-    : m_alloc(alloc), m_programs(&programs), m_run_inputs("sandbox-inspect-inputs"),
-      m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc), m_watches(alloc), m_values(alloc),
-      m_script(alloc)
+    : m_alloc(alloc), m_programs(&programs), m_fixed_events(alloc), m_window(alloc),
+      m_run_inputs("sandbox-inspect-inputs"), m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc),
+      m_watches(alloc), m_values(alloc), m_script(alloc)
 {
 }
 
@@ -184,8 +277,9 @@ ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args,
         m_last_refusal = insp::Refusal::Busy; // the running execution still reads the host inputs
         return m_last_refusal;
     }
-    // Every run reads its streams from their first draw, and the clock as it is now.
-    m_run_inputs.set(m_inputs.seeded, m_inputs.seed, m_inputs.clock);
+    // Every run reads its streams from their first draw, the clock as it is now and its events from the first.
+    m_run_inputs.set(m_inputs.seeded, m_inputs.seed, m_inputs.clock,
+                     m_inputs.window_events ? ceir::cook::HostEventsSpec{} : m_inputs.events);
     if (m_inputs.frame_clock)
     {
         ceir::input::HostClock& clock = m_run_inputs.clock();
@@ -194,8 +288,30 @@ ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args,
         clock.set_reading(ceir::cook::kFrameDomain, m_frame_index);
         clock.set_step(ceir::cook::kFrameDomain, 1);
     }
+    if (m_inputs.window_events)
+    {
+        // The staged window events, oldest first, into an open queue (empty when none arrived). The run's thread does
+        // not exist yet, and the frame loop only stages into m_window from now on.
+        ceir::input::HostEvents& queue = m_run_inputs.events();
+        (void)queue.open(ceir::cook::kEventQueue);
+        const auto n = static_cast<crd::u32>(m_window.size());
+        for (crd::u32 i = 0U; i < n; ++i)
+        {
+            // At most kMaxWindowEvents, the queue's own bound, so every push is kept.
+            (void)queue.push(ceir::cook::kEventQueue, m_window[(m_window_head + i) % n]);
+        }
+    }
     const insp::Refusal r = m_host.start(args, recording, m_run_inputs.source());
     m_last_refusal        = r;
+    if (r == insp::Refusal::None && m_inputs.window_events)
+    {
+        // Taken by this run: the next run reads only what arrives from now on.
+        m_run_window_events  = static_cast<crd::u32>(m_window.size());
+        m_run_window_dropped = m_window_dropped;
+        m_window.clear();
+        m_window_head    = 0U;
+        m_window_dropped = 0U;
+    }
     if (r == insp::Refusal::None)
     {
         m_state       = PanelState::Running;
@@ -297,5 +413,88 @@ void InspectPanel::ended()
     {
         m_state = PanelState::Failed;
     }
+}
+
+void InspectPanel::set_inputs(const PanelInputs& inputs)
+{
+    m_inputs = inputs;
+    m_fixed_events.clear();
+    for (const crd::i64 e : inputs.events.events)
+    {
+        m_fixed_events.push_back(e);
+    }
+    m_inputs.events.events = containers::as_const_span(m_fixed_events);
+}
+
+void InspectPanel::push_window_event(const platform::InputEvent& e)
+{
+    if (!m_inputs.window_events || e.type == PlatformType::None)
+    {
+        return;
+    }
+    const crd::i64 packed = window_event(e);
+    if (m_window.size() < kMaxWindowEvents)
+    {
+        m_window.push_back(packed);
+        return;
+    }
+    // Full: the newest replaces the oldest, which moves the ring's start on.
+    m_window[m_window_head] = packed;
+    m_window_head           = (m_window_head + 1U) % kMaxWindowEvents;
+    ++m_window_dropped;
+}
+
+void InspectEventLayer::on_event(app::Event& event)
+{
+    app::EventDispatcher d(event);
+    platform::InputEvent e;
+    const auto           key = [&e](PlatformType type, platform::Key k, const platform::KeyMods& mods)
+    {
+        e.type            = type;
+        e.mods            = mods;
+        e.payload.key.key = k;
+        return false; // never handled: every other consumer still sees it
+    };
+    const auto button = [&e](PlatformType type, platform::MouseButton b, const platform::KeyMods& mods)
+    {
+        e.type                        = type;
+        e.mods                        = mods;
+        e.payload.mouse_button.button = b;
+        return false;
+    };
+    (void)d.dispatch<app::KeyPressedEvent>(
+        [&key](app::KeyPressedEvent& k)
+        { return key(k.repeated() ? PlatformType::KeyRepeat : PlatformType::KeyDown, k.key(), k.mods()); });
+    (void)d.dispatch<app::KeyReleasedEvent>([&key](app::KeyReleasedEvent& k)
+                                            { return key(PlatformType::KeyUp, k.key(), k.mods()); });
+    (void)d.dispatch<app::MouseButtonPressedEvent>([&button](app::MouseButtonPressedEvent& b)
+                                                   { return button(PlatformType::MouseDown, b.button(), b.mods()); });
+    (void)d.dispatch<app::MouseButtonReleasedEvent>([&button](app::MouseButtonReleasedEvent& b)
+                                                    { return button(PlatformType::MouseUp, b.button(), b.mods()); });
+    (void)d.dispatch<app::MouseMovedEvent>(
+        [&e](app::MouseMovedEvent& m)
+        {
+            e.type                 = PlatformType::MouseMove;
+            e.payload.mouse_move.x = m.x();
+            e.payload.mouse_move.y = m.y();
+            return false;
+        });
+    (void)d.dispatch<app::MouseScrolledEvent>(
+        [&e](app::MouseScrolledEvent& m)
+        {
+            e.type              = PlatformType::Scroll;
+            e.payload.scroll.dx = m.dx();
+            e.payload.scroll.dy = m.dy();
+            return false;
+        });
+    (void)d.dispatch<app::WindowResizeEvent>(
+        [&e](app::WindowResizeEvent& w)
+        {
+            e.type                  = PlatformType::Resize;
+            e.payload.resize.width  = w.width();
+            e.payload.resize.height = w.height();
+            return false;
+        });
+    m_panel->push_window_event(e); // any other event leaves e a None event, which is not staged
 }
 } // namespace crd::sandbox
