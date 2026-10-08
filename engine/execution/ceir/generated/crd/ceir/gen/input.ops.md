@@ -5,7 +5,7 @@
 
 DIAG.9a host inputs a program reads: values the host delivers at run time through its input seam (crd/ceir/input.hpp), so a run record can hold them and a replay can feed them back. Each op names one input kind and carries that kind's own effect family, so the replay-input analysis classifies it without a special case. A host with no source for a kind fails the read with a typed InputUnavailable error, never a made-up value.
 
-**3 ops:** `clock`, `random`, `time_step`
+**4 ops:** `clock`, `event`, `random`, `time_step`
 
 ## `input.clock`
 
@@ -33,6 +33,37 @@ input.clock {domain = D} -> %t. The host's input seam delivers domain D's curren
 | name | kind | required | doc |
 | --- | --- | --- | --- |
 | `domain` | `string` | yes | the time domain to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins). wall is the host's monotonic clock since its own epoch, never calendar time. |
+
+## `input.event`
+
+Take the next event of a host input event queue.
+
+input.event {queue = Q} -> %type, %code, %mods, %x, %y. The host's input seam delivers queue Q's next event as one raw packed i64 (InputSource, InputKind::Event, channel = Q) and the op unpacks it: bits 0..7 the type (0 none, 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize), bits 8..23 the key or button, bits 24..31 the modifiers (shift 1, ctrl 2, alt 4, super 8), bits 32..47 x and 48..63 y as signed 16-bit values. An open queue with no event left delivers 0 (type none). With no queue Q the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A queue out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Taking an event consumes it (UIRead and UIWrite: two reads never reorder). Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.
+
+- **Version:** 1
+- **Traits:** _none_
+- **Regions:** 0
+- **Effects:** `UIRead`, `UIWrite`
+- **Determinism:** `ExternalNondeterminism`
+- **Native binding:** provider=`host`, determinism=`ExternalNondeterminism`, hot_reload_safe=`true`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `type` | any | the event type (an integer): 0 none (the queue is empty), 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize |
+| `code` | any | the key or mouse button (an integer in [0, 65536)), 0 for other events |
+| `mods` | any | the modifiers held (an integer): shift 1, ctrl 2, alt 4, super 8 |
+| `x` | any | the event's first signed 16-bit payload: the pointer x in pixels, the scroll x in hundredths, or the new width |
+| `y` | any | the event's second signed 16-bit payload: the pointer y in pixels, the scroll y in hundredths, or the new height |
+
+**Attributes:**
+
+| name | kind | required | doc |
+| --- | --- | --- | --- |
+| `queue` | `int` | yes | the host event queue to take from, in [0, 2^32). Queues are independent: taking from one never moves another. |
 
 ## `input.random`
 

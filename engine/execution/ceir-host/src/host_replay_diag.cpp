@@ -3,7 +3,7 @@
 #include <crd/ceir/host/host_replay_diag.hpp>
 
 #include <crd/ceir/host/host_replay.hpp>
-#include <crd/ceir/input.hpp> // HostClock, InputRouter, SeededInputs
+#include <crd/ceir/input.hpp> // HostClock, HostEvents, InputRouter, SeededInputs
 
 #include <utility>
 
@@ -62,6 +62,9 @@ cook::HostExecutorStatus record(const cook::HostRecordRequest& request, cook::Re
     inputs.route(input::InputKind::Random, request.has_seed ? seeded.source() : nullptr);
     inputs.route(input::InputKind::Clock, clock.source());
     inputs.route(input::InputKind::TimeStep, clock.source());
+    input::HostEvents events(out.program.allocator()); // the host's input event queue
+    cook::apply_events(request.events, events);
+    inputs.route(input::InputKind::Event, events.source());
     const HostReplayStatus s =
         record_host_run(request.blob, request.path, request.entry, request.args, schedule, request.max_events,
                         request.registrar, request.user, out, &missing, &fault, inputs.source());

@@ -38,9 +38,12 @@
 // which is what the record then holds), `clock` (`wall`: input.clock {domain = "wall"} reads the host's monotonic
 // clock live, in nanoseconds since the run's clock was made; without it the wall has no reading), `sim_time` and
 // `sim_step` (i64 nanoseconds: the sim domain's reading and current step; without them the sim domain has none). The
-// other time domains have no reading or step on this one-shot host. Every host input read is kept in the record
-// (`random` and `clock` recorded); a replay feeds those reads back and never reads a live source, so it needs no seed
-// and no clock.
+// other time domains have no reading or step on this one-shot host. `events` (at most 32 comma-separated events, see
+// parse_events_argument) opens the host's input event queue 0 holding those events in order, so input.event
+// {queue = 0} takes them and then reads none; without it the host has no event queue and a read fails
+// input-unavailable. Every host input read is kept in the record (`random`, `clock` and `host-state` recorded, the
+// last when no op reads host state outside the seam); a replay feeds those reads back and never reads a live source,
+// so it needs no seed, no clock and no events.
 //
 // `replay.run` (Execute, a record path) replays a record in this process, refusing an incompatible one before it runs
 // anything: a file that is not a record, another record schema, a bad checksum, a program blob whose content hash is
@@ -145,6 +148,29 @@ enum class ClockArgument : crd::u8
 [[nodiscard]] ClockArgument parse_clock_argument(containers::StringView name, containers::StringView value,
                                                  HostClockSpec* spec, containers::StringView& requirement) noexcept;
 
+// The input event queue a one-shot host gives a recorded run: replay.record's `events`. Every event goes to queue
+// kEventQueue.
+inline constexpr crd::u32 kEventQueue        = 0U;
+inline constexpr crd::u32 kMaxArgumentEvents = 32U;
+struct HostEventsSpec
+{
+    bool                            open = false; // the queue exists (an `events` argument was given, even empty)
+    containers::ConstSpan<crd::i64> events;       // packed (input::pack_event), in delivery order
+};
+
+// Set `events` to what `spec` says, from no queue at all: none, or queue kEventQueue holding spec's events.
+void apply_events(const HostEventsSpec& spec, input::HostEvents& events);
+
+// `events`, the events a one-shot host queues: at most kMaxArgumentEvents comma-separated events, each one of
+//   key_down:<key>[:<mods>]   key_up:<key>[:<mods>]   key_repeat:<key>[:<mods>]
+//   mouse_down:<button>[:<mods>]   mouse_up:<button>[:<mods>]
+//   mouse_move:<x>:<y>   scroll:<x>:<y>   resize:<x>:<y>
+// with <key> and <button> in [0, 65535], <mods> in [0, 15] (shift 1, ctrl 2, alt 4, super 8) and <x>, <y> in
+// [-32768, 32767] (decimal). An empty value is an open queue with no event. Each event is appended to `out` packed
+// (when `out` is not null). False, with `requirement` saying what the value must be, when it is malformed.
+[[nodiscard]] bool parse_events_argument(containers::StringView value, containers::Array<crd::i64>* out,
+                                         containers::StringView& requirement);
+
 // The host inputs of one run on a one-shot or interactive host: input.random reads the input::SeededInputs of a seed
 // (no random source without one) and input.clock / input.time_step read a HostClock set from a HostClockSpec (a
 // domain the spec leaves unset has no value). The seeded source grows on its own allocator, because a run reads it on
@@ -192,6 +218,7 @@ struct HostRecordRequest
     bool                            has_seed   = false; // false: the run has no host random source
     crd::u64                        seed       = 0U;    // the input::SeededInputs seed when `has_seed`
     HostClockSpec                   clock;              // the run's time domains
+    HostEventsSpec                  events;             // the run's input event queue
 };
 
 // One replay of a host record.

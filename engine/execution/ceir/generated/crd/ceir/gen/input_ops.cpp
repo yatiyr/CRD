@@ -38,6 +38,29 @@ namespace
     }
     return true;
 }
+[[nodiscard]] bool verify_event(const Context& ctx, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 5U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("queue");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::Int)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 [[nodiscard]] bool verify_random(const Context& ctx, const Operation& op) noexcept
 {
     if (op.num_operands() != 0U)
@@ -99,6 +122,12 @@ Operation* build_clock(Context& ctx, AttrId domain, TypeId result_type)
     ctx.set_attr(op, "domain", domain);
     return op;
 }
+Operation* build_event(Context& ctx, AttrId queue, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(event_kind(ctx), {}, 5U, result_type, 0U);
+    ctx.set_attr(op, "queue", queue);
+    return op;
+}
 Operation* build_random(Context& ctx, AttrId stream, AttrId bound, TypeId result_type)
 {
     Operation* const op = ctx.create_operation(random_kind(ctx), {}, 1U, result_type, 0U);
@@ -116,6 +145,7 @@ Operation* build_time_step(Context& ctx, AttrId domain, TypeId result_type)
 namespace
 {
 constexpr EffectRecord kClockEffects[] = {{EffectFamily::TimeRead, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kEventEffects[] = {{EffectFamily::UIRead, EffectTarget::None, 0U, 0U}, {EffectFamily::UIWrite, EffectTarget::None, 0U, 0U}};
 constexpr EffectRecord kRandomEffects[] = {{EffectFamily::RandomRead, EffectTarget::None, 0U, 0U}};
 constexpr EffectRecord kTimeStepEffects[] = {{EffectFamily::TimeRead, EffectTarget::None, 0U, 0U}};
 } // namespace
@@ -124,6 +154,7 @@ Dialect* register_input_ops(Context& ctx)
 {
     Dialect* const d = ctx.register_dialect("input");
     d->register_op("clock", {.traits = 0U, .verify = &verify_clock, .effects = containers::ConstSpan<EffectRecord>(kClockEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
+    d->register_op("event", {.traits = 0U, .verify = &verify_event, .effects = containers::ConstSpan<EffectRecord>(kEventEffects, 2U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
     d->register_op("random", {.traits = 0U, .verify = &verify_random, .effects = containers::ConstSpan<EffectRecord>(kRandomEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
     d->register_op("time_step", {.traits = 0U, .verify = &verify_time_step, .effects = containers::ConstSpan<EffectRecord>(kTimeStepEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
     return d;
@@ -133,6 +164,8 @@ namespace
 {
 constexpr ResultInfo kClockResults[] = {{"now", "the domain's current reading (an integer): nanoseconds for wall and sim, ticks of the domain otherwise"}};
 constexpr AttrInfo kClockAttrs[] = {{"domain", AttrKind::String, true, "the time domain to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins). wall is the host's monotonic clock since its own epoch, never calendar time."}};
+constexpr ResultInfo kEventResults[] = {{"type", "the event type (an integer): 0 none (the queue is empty), 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize"}, {"code", "the key or mouse button (an integer in [0, 65536)), 0 for other events"}, {"mods", "the modifiers held (an integer): shift 1, ctrl 2, alt 4, super 8"}, {"x", "the event's first signed 16-bit payload: the pointer x in pixels, the scroll x in hundredths, or the new width"}, {"y", "the event's second signed 16-bit payload: the pointer y in pixels, the scroll y in hundredths, or the new height"}};
+constexpr AttrInfo kEventAttrs[] = {{"queue", AttrKind::Int, true, "the host event queue to take from, in [0, 2^32). Queues are independent: taking from one never moves another."}};
 constexpr ResultInfo kRandomResults[] = {{"value", "the draw reduced to [0, bound) (an integer)"}};
 constexpr AttrInfo kRandomAttrs[] = {{"stream", AttrKind::Int, true, "the host random stream to draw from, in [0, 2^32). Streams are independent: a draw from one never advances another."}, {"bound", AttrKind::Int, true, "the exclusive upper bound of the result, in [1, 2^32). The raw draw is reduced by unsigned remainder."}};
 constexpr ResultInfo kTimeStepResults[] = {{"step", "the length of the domain's current step (an integer), in the domain's own unit"}};
@@ -142,6 +175,9 @@ constexpr OpSchema kOpSchemas[] = {
     {"clock", "input.clock", "input", 1U, "Read the host's current time in one time domain.", "input.clock {domain = D} -> %t. The host's input seam delivers domain D's current reading (InputSource, InputKind::Clock, channel = D's ordinal among the time dialect's built-in domains) and %t is that raw value: nanoseconds for wall (monotonic, from the host clock's epoch, never calendar time) and sim, a tick count for frame, audio_sample, sequencer and logical. With no reading for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A domain that is absent, not a string or not a built-in is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.",
      containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kClockResults, 1U), containers::ConstSpan<AttrInfo>(kClockAttrs, 1U),
      0U, 0U, containers::ConstSpan<EffectRecord>(kClockEffects, 1U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
+    {"event", "input.event", "input", 1U, "Take the next event of a host input event queue.", "input.event {queue = Q} -> %type, %code, %mods, %x, %y. The host's input seam delivers queue Q's next event as one raw packed i64 (InputSource, InputKind::Event, channel = Q) and the op unpacks it: bits 0..7 the type (0 none, 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize), bits 8..23 the key or button, bits 24..31 the modifiers (shift 1, ctrl 2, alt 4, super 8), bits 32..47 x and 48..63 y as signed 16-bit values. An open queue with no event left delivers 0 (type none). With no queue Q the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A queue out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Taking an event consumes it (UIRead and UIWrite: two reads never reorder). Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kEventResults, 5U), containers::ConstSpan<AttrInfo>(kEventAttrs, 1U),
+     0U, 0U, containers::ConstSpan<EffectRecord>(kEventEffects, 2U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
     {"random", "input.random", "input", 1U, "Draw the next value of a host random stream, reduced to [0, bound).", "input.random {stream = S, bound = B} -> %v. The host's input seam delivers the raw draw of stream S (InputSource, InputKind::Random); %v = draw mod B (unsigned). Deterministic given the host's stream (a seeded host, or a run record's recorded draws), which the host chooses externally. With no source for the stream the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A stream or bound out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (a draw order would depend on the schedule): the shared pre-flight refuses it as ParallelBodyStateful, and a launch body that reads one runs inline on the submitting thread.",
      containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kRandomResults, 1U), containers::ConstSpan<AttrInfo>(kRandomAttrs, 2U),
      0U, 0U, containers::ConstSpan<EffectRecord>(kRandomEffects, 1U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
@@ -151,5 +187,5 @@ constexpr OpSchema kOpSchemas[] = {
 };
 } // namespace
 
-containers::ConstSpan<OpSchema> input_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 3U); }
+containers::ConstSpan<OpSchema> input_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 4U); }
 } // namespace crd::ceir::input

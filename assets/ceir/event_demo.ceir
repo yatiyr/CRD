@@ -1,0 +1,18 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0(%0 : !i64):
+        %1, %2, %3, %4, %5 = input.event() {queue = 0} : !i64
+        %6, %7, %8, %9, %10 = input.event() {queue = 0} : !i64
+        %11 = arith.const() {value = 7} : !i64
+        %12 = arith.cmpi(%6, %11) {predicate = "sgt"} : !i1
+        core.switch(%12) {
+          ^bb0:
+            core.yield()
+        }
+        %13 = arith.addi(%2, %9) : !i64
+        %14 = arith.addi(%13, %10) : !i64
+        %15 = arith.addi(%14, %0) : !i64
+        func.return(%15)
+    }
+}

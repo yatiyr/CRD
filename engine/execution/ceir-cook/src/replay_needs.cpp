@@ -35,7 +35,8 @@ constexpr ReplayInputSpec kInputs[kReplayInputCount] = {
      bits(EffectFamily::HostStateRead) | bits(EffectFamily::SceneRead) | bits(EffectFamily::EcsRead) |
          bits(EffectFamily::PhysicsRead) | bits(EffectFamily::AudioRead) | bits(EffectFamily::DocumentRead) |
          bits(EffectFamily::ConstraintRead) | bits(EffectFamily::UIRead),
-     "host and world state reads", "nothing records the host and world state read"},
+     "host and world state reads",
+     "the host-state reads are not held; replay.record keeps only input.event reads"},
     {"external-results", "event",
      bits(EffectFamily::FileIO) | bits(EffectFamily::NetworkIO) | bits(EffectFamily::DeviceIO) |
          bits(EffectFamily::ExternalCall) | bits(EffectFamily::AgentAction),

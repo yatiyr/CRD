@@ -4,7 +4,8 @@
 // draws would depend on the schedule): one that does runs inline on the submitting thread, which has the source, while
 // the same launch without a draw pools. A parallel body that draws is refused by the shared pre-flight. The committed
 // assets/ceir/random_demo.ceir fails when a stream-0 draw reduces to 3; which seed fails is computed here from
-// SeededInputs::draw. Lines come from scanning the text. ASCII test names.
+// SeededInputs::draw. The clock and event cases record the time reads of assets/ceir/clock_demo.ceir and the packed
+// events of assets/ceir/event_demo.ceir the same way. Lines come from scanning the text. ASCII test names.
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
@@ -55,6 +56,11 @@ constexpr const char* kWallLine   = "%4 = input.clock() {domain = \"wall\"} : !i
 constexpr i64         kHitch      = 50000000; // over the program's 33,333,333 ns budget
 constexpr i64         kSteady     = 16666667;
 constexpr u32         kSim        = 1U; // the sim domain's ordinal, the seam channel
+
+// The committed event program: two events from queue 0, and a resize (type 8) out of the switch's range.
+constexpr const char* kEventAsset        = CRD_REPO_DIR "/assets/ceir/event_demo.ceir";
+constexpr const char* kSecondEvent       = "%6, %7, %8, %9, %10 = input.event() {queue = 0} : !i64";
+constexpr const char* kSecondEventEdited = "%6, %7, %8, %9, %10 = input.event() {queue = 1} : !i64";
 
 // main() launches a body that draws once from stream 5 and awaits it; the second program's body only adds.
 constexpr const char* kLaunchDraws = R"(module {
@@ -192,6 +198,14 @@ const Operation* first_random(const Context& ctx, const Region* r)
         }
     }
     return nullptr;
+}
+
+// The packed event layout, spelled out here: type, code << 8, mods << 24, x << 32, y << 48 (x and y as 16 bits).
+i64 packed_event(u64 type, u64 code, u64 mods, i64 x, i64 y)
+{
+    const u64 ux = static_cast<u64>(x) & 0xFFFFU;
+    const u64 uy = static_cast<u64>(y) & 0xFFFFU;
+    return static_cast<i64>(type | (code << 8U) | (mods << 24U) | (ux << 32U) | (uy << 48U));
 }
 
 Module* parse_ok(Context& ctx, const char* text)
@@ -459,4 +473,115 @@ TEST_CASE("diag 9a clock: a host record keeps every time read and replays them o
     CHECK(changed.divergence.recorded == 123456789);
     CHECK(changed.divergence.observed == 123456789 + 1000);
     CHECK(changed.site.line == wall);
+}
+
+TEST_CASE("diag 9a event: a host record keeps every event read and replays them on any job split",
+          "[ceir][host][diag][input][event]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    const String                  text    = slurp(kEventAsset, &alloc);
+    const StringView              src     = StringView{text.data(), text.size()};
+    const Array<u8>               blob    = cooked(src, &alloc);
+    const u32                     second  = line_of(src, kSecondEvent);
+    const u32                     sw      = line_of(src, "core.switch(%12)");
+    const i64                     args[1] = {7};
+    const i64                     key     = packed_event(1U, 65U, 3U, 0, 0);
+    const i64                     resize  = packed_event(8U, 0U, 0U, 1280, 720);
+
+    // A key, then a resize the program has no case for.
+    input::HostEvents events(&alloc);
+    REQUIRE(events.push(0U, key));
+    REQUIRE(events.push(0U, resize));
+    ck::ReplayRecord rec(&alloc);
+    String           missing(&alloc);
+    hs::HostSite     fault(&alloc);
+    REQUIRE(hs::record_host_run({blob.data(), blob.size()}, StringView{kFile}, StringView{"main"},
+                                ConstSpan<i64>(args, 1U), hs::HostSchedule{}, 64U, &register_dialects, nullptr, rec,
+                                &missing, &fault, events.source()) == hs::HostReplayStatus::Ok);
+    CHECK(rec.host_error == exec::ExecError::SelectorOutOfRange);
+    CHECK(fault.line == sw);
+    CHECK(StringView{missing.data(), missing.size()}.empty());
+    CHECK(rec.inputs[5].state == ck::ReplayInputState::Recorded); // host-state
+    REQUIRE(rec.input_reads.size() == 2U);
+    CHECK(rec.input_reads[0] == ck::ReplayInputRead{input::InputKind::Event, 0U, true, key});
+    CHECK(rec.input_reads[1] == ck::ReplayInputRead{input::InputKind::Event, 0U, true, resize});
+
+    // The host executor of the replay commands makes the same record from the same events argument.
+    {
+        Array<i64> parsed(&alloc);
+        StringView requirement;
+        REQUIRE(ck::parse_events_argument("key_down:65:3,resize:1280:720", &parsed, requirement));
+        ck::HostRecordRequest request;
+        request.blob        = {blob.data(), blob.size()};
+        request.path        = StringView{kFile};
+        request.entry       = StringView{"main"};
+        request.args        = ConstSpan<i64>(args, 1U);
+        request.max_events  = 64U;
+        request.registrar   = &register_dialects;
+        request.events.open = true;
+        request.events.events = {parsed.data(), parsed.size()};
+        ck::ReplayRecord    via(&alloc);
+        ck::OwnedReplaySite site(&alloc);
+        String              via_missing(&alloc);
+        String              reason(&alloc);
+        REQUIRE(hs::host_replay_executor().record(request, via, site, via_missing, reason) ==
+                ck::HostExecutorStatus::Ok);
+        Array<u8> a(&alloc);
+        Array<u8> b(&alloc);
+        ck::encode_record(rec, a);
+        ck::encode_record(via, b);
+        CHECK(StringView{reinterpret_cast<const char*>(a.data()), a.size()} ==
+              StringView{reinterpret_cast<const char*>(b.data()), b.size()});
+    }
+
+    // Replays from the record's own reads, with no queue, on the recorded split and on 1 and 16 jobs.
+    for (const u32 jobs : {0U, 1U, 16U})
+    {
+        INFO("jobs " << jobs);
+        hs::HostReplayOptions options;
+        options.num_jobs = jobs;
+        hs::HostReplay out(&alloc);
+        REQUIRE(hs::replay_host_record(rec, &register_dialects, nullptr, options, out) == hs::HostReplayStatus::Ok);
+        CHECK(out.divergence.kind == ck::DivergenceKind::None);
+        CHECK(out.trace.host_error == exec::ExecError::SelectorOutOfRange);
+        CHECK(out.fault.line == sw);
+        CHECK(out.trace.input_reads_total == 2U);
+    }
+
+    // The same reads against an edit whose second read takes from queue 1: refused at that read, named at its line.
+    const String    edit  = replaced(src, kSecondEvent, kSecondEventEdited, &alloc);
+    const Array<u8> other = cooked(StringView{edit.data(), edit.size()}, &alloc);
+    {
+        hs::HostReplayOptions options;
+        options.against = {other.data(), other.size()};
+        hs::HostReplay out(&alloc);
+        REQUIRE(hs::replay_host_record(rec, &register_dialects, nullptr, options, out) == hs::HostReplayStatus::Ok);
+        CHECK(out.divergence.kind == ck::DivergenceKind::Input);
+        CHECK(out.divergence.recorded == 0);
+        CHECK(out.divergence.observed == 1);
+        CHECK(out.divergence.recorded_input == input::InputKind::Event);
+        CHECK(out.divergence.observed_input == input::InputKind::Event);
+        CHECK(out.site.line == second);
+    }
+
+    // A pointer move instead: main(7) returns 65 + 10 - 20 + 7; a changed x is named at the second read.
+    input::HostEvents moves(&alloc);
+    REQUIRE(moves.push(0U, key));
+    REQUIRE(moves.push(0U, packed_event(6U, 0U, 0U, 10, -20)));
+    ck::ReplayRecord pass(&alloc);
+    REQUIRE(hs::record_host_run({blob.data(), blob.size()}, StringView{kFile}, StringView{"main"},
+                                ConstSpan<i64>(args, 1U), hs::HostSchedule{}, 64U, &register_dialects, nullptr, pass,
+                                nullptr, &fault, moves.source()) == hs::HostReplayStatus::Ok);
+    CHECK(pass.host_error == exec::ExecError::None);
+    REQUIRE(pass.results.size() == 1U);
+    CHECK(pass.results[0] == 65 + 10 - 20 + 7);
+    REQUIRE(pass.input_reads.size() == 2U);
+    pass.input_reads[1].value = packed_event(6U, 0U, 0U, 11, -20);
+    hs::HostReplay changed(&alloc);
+    REQUIRE(hs::replay_host_record(pass, &register_dialects, nullptr, hs::HostReplayOptions{}, changed) ==
+            hs::HostReplayStatus::Ok);
+    CHECK(changed.divergence.kind == ck::DivergenceKind::Value);
+    CHECK(changed.divergence.recorded == 10);
+    CHECK(changed.divergence.observed == 11);
+    CHECK(changed.site.line == second);
 }

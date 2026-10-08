@@ -68,6 +68,7 @@ enum class Op : crd::u8
     Random,       // input.random: result = raw draw of stream (imm >> 32) mod bound (imm & 0xFFFFFFFF)
     Clock,        // input.clock: result = the raw reading of built-in time domain imm
     TimeStep,     // input.time_step: result = the raw current step of built-in time domain imm
+    Event,        // input.event: results = the next packed event of host queue imm, unpacked (type, code, mods, x, y)
 };
 
 // The compiled comparison predicate (the "predicate" STRING attr → this dense enum at compile — the §153 immediate).

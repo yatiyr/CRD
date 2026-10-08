@@ -1,11 +1,12 @@
 #pragma once
 
 // crd-ceir -- DIAG.9a the host INPUT SEAM. A program reads values the host chooses at run time (a random stream, a time
-// domain's reading and its step) through the `input` dialect's ops; both executors deliver them through one
-// `InputSource` the host installs (`exec::Interpreter::set_input_source`, the `inputs` argument of `plan::run`). The
-// seam delivers the RAW value of one read; the op applies its own semantics to it (input.random reduces it to
-// [0, bound); a time read takes it as is), so the reduction is program semantics and a replay that feeds the same raw
-// values to an edited program sees what that program would see.
+// domain's reading and its step, the next event of an input event queue) through the `input` dialect's ops; both
+// executors deliver them through one `InputSource` the host installs (`exec::Interpreter::set_input_source`, the
+// `inputs` argument of `plan::run`). The seam delivers the RAW value of one read; the op applies its own semantics to
+// it (input.random reduces it to [0, bound); a time read takes it as is; input.event unpacks it), so those semantics
+// are the program's and a replay that feeds the same raw values to an edited program sees what that program would
+// see.
 //
 // A source is called on the executing thread, once per read, in program order: a run record keeps every read (and a
 // read the host could not answer) and a replay feeds them back in that order, never asking a live host. A host with no
@@ -16,8 +17,9 @@
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
 
 #include <crd/ceir/context.hpp>
-#include <crd/ceir/gen/input_ops.hpp> // register_input_ops, random_kind, clock_kind, time_step_kind, build_*
+#include <crd/ceir/gen/input_ops.hpp> // register_input_ops, random_kind, clock_kind, time_step_kind, event_kind
 #include <crd/ceir/ir.hpp>
+#include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
@@ -32,10 +34,11 @@ enum class InputKind : crd::u8
     Random = 0, // input.random: one raw 64-bit draw of a random stream (the channel is the stream)
     Clock,      // input.clock: a time domain's current reading (the channel is the built-in domain's ordinal)
     TimeStep,   // input.time_step: the length of a time domain's current step (the channel as for Clock)
+    Event,      // input.event: the next packed event of a host input event queue (the channel is the queue)
 };
-inline constexpr InputKind kLastInputKind = InputKind::TimeStep;
+inline constexpr InputKind kLastInputKind = InputKind::Event;
 
-// The op that reads the kind: "random", "clock" or "time_step".
+// The op that reads the kind: "random", "clock", "time_step" or "event".
 [[nodiscard]] containers::StringView input_kind_name(InputKind k) noexcept;
 
 // The host's input seam. `next` delivers the next raw value of `kind` on `channel` into `out` and returns true, or
@@ -49,8 +52,8 @@ struct InputSource
 // One read through `source`. A null source, or one without `next`, has no value: false.
 [[nodiscard]] bool read_input(const InputSource* source, InputKind kind, crd::u32 channel, crd::i64& out);
 
-// Whether `kind` names an op of this dialect that reads a host input (input.random, input.clock, input.time_step). No
-// interning: `ctx` may be const.
+// Whether `kind` names an op of this dialect that reads a host input (input.random, input.clock, input.time_step,
+// input.event). No interning: `ctx` may be const.
 [[nodiscard]] bool reads_input(const Context& ctx, OpId kind) noexcept;
 
 // input.random's attributes: `stream` in [0, 2^32) and `bound` in [1, 2^32). False when either is absent, not an
@@ -62,10 +65,77 @@ struct InputSource
 // built-in (UndefinedValue at eval, BadConst at plan compile).
 [[nodiscard]] bool time_attrs(const Context& ctx, const Operation& op, crd::u32& domain) noexcept;
 
+// input.event's attribute: `queue` in [0, 2^32). False when it is absent, not an integer or out of range
+// (UndefinedValue at eval, BadConst at plan compile).
+[[nodiscard]] bool event_attrs(const Context& ctx, const Operation& op, crd::u32& queue) noexcept;
+
 // input.random's reduction of a raw draw to [0, bound): the unsigned remainder. `bound` is at least 1.
 [[nodiscard]] constexpr crd::i64 reduce_draw(crd::i64 raw, crd::u64 bound) noexcept
 {
     return static_cast<crd::i64>(static_cast<crd::u64>(raw) % bound);
+}
+
+// The type of a host input event, in the platform's InputEvent::Type order. ⛔ Append at end: the value is stored in
+// run records as part of a packed event. None is an empty queue's answer.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class EventType : crd::u8
+{
+    None = 0,
+    KeyDown,
+    KeyUp,
+    KeyRepeat,
+    MouseDown,
+    MouseUp,
+    MouseMove, // x, y: the pointer position in whole window pixels
+    Scroll,    // x, y: the scroll offset in hundredths of a step
+    Resize,    // x, y: the new size in pixels
+};
+inline constexpr EventType kLastEventType = EventType::Resize;
+
+// The modifier bits of an event's `mods`.
+inline constexpr crd::u8 kModShift = 1U;
+inline constexpr crd::u8 kModCtrl  = 2U;
+inline constexpr crd::u8 kModAlt   = 4U;
+inline constexpr crd::u8 kModSuper = 8U;
+
+// "none", "key_down", "key_up", "key_repeat", "mouse_down", "mouse_up", "mouse_move", "scroll", "resize" ("?" past the
+// last type).
+[[nodiscard]] containers::StringView event_type_name(EventType t) noexcept;
+
+// The type named `name` (see event_type_name; "none" included). False when it names none.
+[[nodiscard]] bool event_type_of(containers::StringView name, EventType& out) noexcept;
+
+// One host input event, as input.event's results see it. The packed form (pack_event) is what the seam delivers and a
+// run record keeps: bits 0..7 the type, 8..23 the code, 24..31 the mods, 32..47 x and 48..63 y (two's complement).
+struct Event
+{
+    crd::u8  type = 0U; // an EventType (a packed value may hold one past the last; the op unpacks it as is)
+    crd::u16 code = 0U; // the key or mouse button
+    crd::u8  mods = 0U; // kMod* bits
+    crd::i16 x    = 0;
+    crd::i16 y    = 0;
+};
+
+[[nodiscard]] constexpr crd::i64 pack_event(const Event& e) noexcept
+{
+    const crd::u64 bits = static_cast<crd::u64>(e.type) | (static_cast<crd::u64>(e.code) << 8U) |
+                          (static_cast<crd::u64>(e.mods) << 24U) |
+                          (static_cast<crd::u64>(static_cast<crd::u16>(e.x)) << 32U) |
+                          (static_cast<crd::u64>(static_cast<crd::u16>(e.y)) << 48U);
+    return static_cast<crd::i64>(bits);
+}
+
+// input.event's unpacking of a raw read: every field, whatever its value (a raw 0 is a None event).
+[[nodiscard]] constexpr Event unpack_event(crd::i64 raw) noexcept
+{
+    const auto bits = static_cast<crd::u64>(raw);
+    Event      e;
+    e.type = static_cast<crd::u8>(bits & 0xFFU);
+    e.code = static_cast<crd::u16>((bits >> 8U) & 0xFFFFU);
+    e.mods = static_cast<crd::u8>((bits >> 24U) & 0xFFU);
+    e.x    = static_cast<crd::i16>(static_cast<crd::u16>((bits >> 32U) & 0xFFFFU));
+    e.y    = static_cast<crd::i16>(static_cast<crd::u16>((bits >> 48U) & 0xFFFFU));
+    return e;
 }
 
 // A host input source whose random streams are drawn from one seed. Draw `n` of stream `s` is a splitmix64 mix of
@@ -154,6 +224,62 @@ private:
     void*           m_wall_user  = nullptr;
     crd::i64        m_wall_epoch = 0;
     InputSource     m_source;
+};
+
+// A host's input event queues, answering Event reads (other kinds have no value). A queue exists once the host opens
+// it or pushes to it; a read takes that queue's next event in push order (packed, see pack_event) and, once none is
+// left, delivers 0 (a None event). A read of a queue the host does not have has no value. Queues are independent: a
+// read of one never moves another. It holds at most kMaxEvents events and kMaxQueues queues; a push or open past
+// either is refused. Reads never allocate; `open` and `push` grow the arrays on the host's allocator. One run's
+// source: the host changes it only while no run reads through `source()`.
+class HostEvents
+{
+public:
+    static constexpr crd::u32 kMaxEvents = 4096U;
+    static constexpr crd::u32 kMaxQueues = 16U;
+
+    explicit HostEvents(memory::IAllocator* alloc);
+    HostEvents(const HostEvents&)            = delete;
+    HostEvents& operator=(const HostEvents&) = delete;
+    HostEvents(HostEvents&&)                 = delete;
+    HostEvents& operator=(HostEvents&&)      = delete;
+    ~HostEvents()                            = default;
+
+    // The source to install; it points at this object.
+    [[nodiscard]] const InputSource* source() const noexcept { return &m_source; }
+
+    // Queue `queue` exists (empty until pushed). False when it would be one queue past kMaxQueues.
+    bool open(crd::u32 queue);
+    // Append `event` (packed) to queue `queue`, opening it. False (nothing kept) past kMaxEvents or kMaxQueues.
+    bool push(crd::u32 queue, crd::i64 event);
+    // Every queue reads again from its first event.
+    void rewind() noexcept;
+    // No queue and no event.
+    void clear() noexcept;
+
+    // The events queue `queue` has not delivered yet (0 for a queue it does not have).
+    [[nodiscard]] crd::u32 pending(crd::u32 queue) const noexcept;
+    // Every event held, delivered or not.
+    [[nodiscard]] crd::u32 size() const noexcept { return static_cast<crd::u32>(m_events.size()); }
+
+private:
+    struct Entry
+    {
+        crd::u32 queue = 0U;
+        crd::i64 event = 0;
+    };
+    struct Queue
+    {
+        crd::u32 id   = 0U;
+        crd::u32 next = 0U; // the index in m_events its next event is searched from
+    };
+
+    [[nodiscard]] crd::usize find(crd::u32 queue) const noexcept; // m_queues.size() when it has none
+    static bool              next(InputKind kind, crd::u32 channel, crd::i64& out, void* user);
+
+    containers::Array<Entry> m_events;
+    containers::Array<Queue> m_queues;
+    InputSource              m_source;
 };
 
 // One source over several: each kind goes to the source the host routed it to (none: no value). The sources are the

@@ -16,6 +16,7 @@ namespace crd::ceir::input
 {
 // -- op-kind identities (interned lazily against `ctx`, idempotent) --
 [[nodiscard]] inline OpId clock_kind(Context& ctx) { return ctx.intern_op("input", "clock"); }
+[[nodiscard]] inline OpId event_kind(Context& ctx) { return ctx.intern_op("input", "event"); }
 [[nodiscard]] inline OpId random_kind(Context& ctx) { return ctx.intern_op("input", "random"); }
 [[nodiscard]] inline OpId time_step_kind(Context& ctx) { return ctx.intern_op("input", "time_step"); }
 
@@ -28,6 +29,22 @@ public:
     [[nodiscard]] Operation* operation() const noexcept { return m_op; }
     [[nodiscard]] Value* now() const noexcept { return m_op->result(0U); }
     [[nodiscard]] AttrId domain() const noexcept { return m_op->attr("domain"); }
+
+private:
+    Operation* m_op;
+};
+// input.event - Take the next event of a host input event queue.
+class EventOp
+{
+public:
+    explicit EventOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* type() const noexcept { return m_op->result(0U); }
+    [[nodiscard]] Value* code() const noexcept { return m_op->result(1U); }
+    [[nodiscard]] Value* mods() const noexcept { return m_op->result(2U); }
+    [[nodiscard]] Value* x() const noexcept { return m_op->result(3U); }
+    [[nodiscard]] Value* y() const noexcept { return m_op->result(4U); }
+    [[nodiscard]] AttrId queue() const noexcept { return m_op->attr("queue"); }
 
 private:
     Operation* m_op;
@@ -62,6 +79,7 @@ private:
 // produces the MINIMUM arity on every variadic axis (operands / results / regions); build the full arity
 // (extra variadic operands, N result values, N case regions) directly with `Context::create_operation`. --
 [[nodiscard]] Operation* build_clock(Context& ctx, AttrId domain, TypeId result_type = {});
+[[nodiscard]] Operation* build_event(Context& ctx, AttrId queue, TypeId result_type = {});
 [[nodiscard]] Operation* build_random(Context& ctx, AttrId stream, AttrId bound, TypeId result_type = {});
 [[nodiscard]] Operation* build_time_step(Context& ctx, AttrId domain, TypeId result_type = {});
 

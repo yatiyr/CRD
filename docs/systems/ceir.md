@@ -117,6 +117,12 @@ The interactive hosts take the same clock: `program.inspect clock= sim_time= sim
 --sim-time --sim-step` and crd-sandbox's `--inspect-clock`, `--inspect-sim-time` and `--inspect-sim-step` (one shared
 parser, `parse_clock_argument`, and one input bundle, `cook::RunInputs`), and crd-sandbox's `--inspect-frame-clock`
 gives a run the frame loop's time, step and frame index as they are at its start.
+An input event (`input.event {queue}`) is one raw packed i64 per read (type, key or button, modifiers and two signed
+16-bit payloads; `input::pack_event`), unpacked by the op into five results; an open queue with nothing left answers a
+`none` event, and a queue the host lacks is `input-unavailable`. `input::HostEvents` holds the host's queues, the
+reads are recorded under `host-state` (missing when an op reads host state outside the seam), and `replay.record
+events=` queues them on both executors, so an unhandled event (`assets/ceir/event_demo.ceir`) reproduces in another
+process with no queue.
 
 ## Maturity and further work
 

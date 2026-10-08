@@ -1,10 +1,12 @@
 // DIAG.9a -- the host INPUT SEAM (input.hpp). A program reads host-chosen values through the `input` dialect
-// (input.random today), and both executors deliver them through one InputSource the host installs: the reference
-// interpreter (Interpreter::set_input_source) and the compiled plan (the `inputs` argument of plan::run). The seam
-// delivers the raw draw; the op reduces it to [0, bound), so both executors answer the same reduced values for the same
-// source. With no source a read fails with a typed InputUnavailable error at the op, never with a made-up value. A
-// read is schedule-dependent like a §20 cell, so a parallel body (or a callee it reaches) may not contain one. Expected
-// values come from SeededInputs::draw, computed here independently of either executor. ASCII test names.
+// (input.random, input.clock, input.time_step, input.event), and both executors deliver them through one InputSource
+// the host installs: the reference interpreter (Interpreter::set_input_source) and the compiled plan (the `inputs`
+// argument of plan::run). The seam delivers the raw value; the op applies its own semantics (a draw reduced to
+// [0, bound), a time read as is, an event unpacked), so both executors answer the same values for the same source.
+// With no source a read fails with a typed InputUnavailable error at the op, never with a made-up value. A read is
+// schedule-dependent like a §20 cell, so a parallel body (or a callee it reaches) may not contain one. Expected values
+// come from SeededInputs::draw, the host clock's settings and packed events, computed here independently of either
+// executor. ASCII test names.
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/effect.hpp>
@@ -669,4 +671,324 @@ TEST_CASE("diag 9a clock: a parallel body may not read a time domain", "[ceir][i
         CHECK(cr.error == plan::CompileError::ParallelStateful);
         CHECK(cr.op == read);
     }
+}
+
+namespace
+{
+// main() takes two events from queue 0, one from queue 2 between them, and returns every field of the three reads.
+constexpr const char* kEventReads = R"(module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %1, %2, %3, %4, %5 = input.event() {queue = 0} : !i64
+        %6, %7, %8, %9, %10 = input.event() {queue = 2} : !i64
+        %11, %12, %13, %14, %15 = input.event() {queue = 0} : !i64
+        func.return(%1, %2, %3, %4, %5, %6, %7, %8, %9, %10, %11, %12, %13, %14, %15)
+    }
+})";
+
+// The packed layout, spelled out independently of pack_event: type, code << 8, mods << 24, x << 32, y << 48.
+i64 packed(u64 type, u64 code, u64 mods, i64 x, i64 y)
+{
+    const u64 ux = static_cast<u64>(x) & 0xFFFFU;
+    const u64 uy = static_cast<u64>(y) & 0xFFFFU;
+    return static_cast<i64>(type | (code << 8U) | (mods << 24U) | (ux << 32U) | (uy << 48U));
+}
+
+// The text of a module whose main takes one event with `read` (the op and its attributes) and returns its type.
+containers::String one_event_module(const char* read, memory::IAllocator* alloc)
+{
+    containers::String text(alloc);
+    text.append("module {\n  ^bb0:\n    func.func() {sym_name = \"main\"} {\n      ^bb0:\n"
+                "        %0, %1, %2, %3, %4 = ");
+    text.append(StringView{read});
+    text.append(" : !i64\n        func.return(%0)\n    }\n}\n");
+    return text;
+}
+
+// main() runs a four-index parallel body that takes an event.
+constexpr const char* kParallelEvent = R"(module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0:
+        %1 = arith.const() {value = 0} : !i64
+        %2 = arith.const() {value = 4} : !i64
+        %3 = arith.const() {value = 1} : !i64
+        task.parallel_for(%1, %2, %3) {
+          ^bb0(%4 : !i64):
+            %5, %6, %7, %8, %9 = input.event() {queue = 0} : !i64
+            core.yield(%5)
+        }
+        func.return(%1)
+    }
+})";
+} // namespace
+
+TEST_CASE("diag 9a event: an event packs into one raw i64 and unpacks to the same fields",
+          "[ceir][input][event][diag 9a]")
+{
+    CHECK(input::input_kind_name(input::InputKind::Event) == StringView{"event"});
+    CHECK(input::kLastInputKind == input::InputKind::Event);
+
+    const char* const names[] = {"none",     "key_down",   "key_up", "key_repeat", "mouse_down",
+                                 "mouse_up", "mouse_move", "scroll", "resize"};
+    REQUIRE(static_cast<u32>(input::kLastEventType) == 8U);
+    for (u32 i = 0U; i <= 8U; ++i)
+    {
+        CHECK(input::event_type_name(static_cast<input::EventType>(i)) == StringView{names[i]});
+        input::EventType t = input::EventType::None;
+        REQUIRE(input::event_type_of(StringView{names[i]}, t));
+        CHECK(static_cast<u32>(t) == i);
+    }
+    CHECK(input::event_type_name(static_cast<input::EventType>(9U)) == StringView{"?"});
+    input::EventType t = input::EventType::None;
+    CHECK_FALSE(input::event_type_of(StringView{"Key_down"}, t));
+    CHECK_FALSE(input::event_type_of(StringView{""}, t));
+
+    // The layout, against bits computed here.
+    struct Case
+    {
+        u8  type;
+        u16 code;
+        u8  mods;
+        i16 x;
+        i16 y;
+    };
+    const Case cases[] = {{0U, 0U, 0U, 0, 0},
+                          {1U, 65U, input::kModShift | input::kModCtrl, 0, 0},
+                          {6U, 0U, 0U, -2, 5},
+                          {7U, 0U, input::kModSuper, -32768, 32767},
+                          {8U, 0xFFFFU, 0xFFU, 1280, 720},
+                          {200U, 7U, 0U, -1, -1}};
+    for (const Case& c : cases)
+    {
+        const input::Event e{c.type, c.code, c.mods, c.x, c.y};
+        const i64          raw = input::pack_event(e);
+        CHECK(raw == packed(c.type, c.code, c.mods, c.x, c.y));
+        const input::Event back = input::unpack_event(raw);
+        CHECK(back.type == c.type);
+        CHECK(back.code == c.code);
+        CHECK(back.mods == c.mods);
+        CHECK(back.x == c.x);
+        CHECK(back.y == c.y);
+    }
+    // A raw 0 is a None event; a raw value with every bit set unpacks every field at its widest.
+    const input::Event zero = input::unpack_event(0);
+    CHECK(zero.type == 0U);
+    CHECK(zero.code == 0U);
+    CHECK(zero.x == 0);
+    const input::Event ones = input::unpack_event(-1);
+    CHECK(ones.type == 0xFFU);
+    CHECK(ones.code == 0xFFFFU);
+    CHECK(ones.mods == 0xFFU);
+    CHECK(ones.x == -1);
+    CHECK(ones.y == -1);
+}
+
+TEST_CASE("diag 9a event: the host queues deliver each queue's events in order, then none",
+          "[ceir][input][event][diag 9a]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    input::HostEvents             events(&alloc);
+    i64                           v = 7;
+    // No queue: no value.
+    CHECK_FALSE(input::read_input(events.source(), input::InputKind::Event, 0U, v));
+    CHECK(events.pending(0U) == 0U);
+
+    // An open, empty queue delivers a None event (raw 0), every time.
+    REQUIRE(events.open(0U));
+    REQUIRE(input::read_input(events.source(), input::InputKind::Event, 0U, v));
+    CHECK(v == 0);
+    v = 7;
+    REQUIRE(input::read_input(events.source(), input::InputKind::Event, 0U, v));
+    CHECK(v == 0);
+
+    // Interleaved pushes: each queue keeps its own order, and taking from one never moves another.
+    events.clear();
+    REQUIRE(events.push(0U, 11));
+    REQUIRE(events.push(3U, 31));
+    REQUIRE(events.push(0U, 12));
+    REQUIRE(events.push(3U, 32));
+    REQUIRE(events.push(0U, 13));
+    CHECK(events.size() == 5U);
+    CHECK(events.pending(0U) == 3U);
+    CHECK(events.pending(3U) == 2U);
+    CHECK_FALSE(input::read_input(events.source(), input::InputKind::Event, 1U, v));  // never opened
+    CHECK_FALSE(input::read_input(events.source(), input::InputKind::Random, 0U, v)); // another kind
+    CHECK_FALSE(input::read_input(events.source(), input::InputKind::Clock, 0U, v));
+    const u32 order[] = {0U, 0U, 3U, 0U, 3U, 3U, 0U};
+    const i64 want[]  = {11, 12, 31, 13, 32, 0, 0};
+    for (u32 i = 0U; i < 7U; ++i)
+    {
+        INFO(i);
+        REQUIRE(input::read_input(events.source(), input::InputKind::Event, order[i], v));
+        CHECK(v == want[i]);
+    }
+    CHECK(events.pending(0U) == 0U);
+    CHECK(events.pending(3U) == 0U);
+
+    // rewind reads every queue again from its first event.
+    events.rewind();
+    CHECK(events.pending(0U) == 3U);
+    REQUIRE(input::read_input(events.source(), input::InputKind::Event, 3U, v));
+    CHECK(v == 31);
+    REQUIRE(input::read_input(events.source(), input::InputKind::Event, 0U, v));
+    CHECK(v == 11);
+
+    // clear forgets every queue.
+    events.clear();
+    CHECK(events.size() == 0U);
+    CHECK_FALSE(input::read_input(events.source(), input::InputKind::Event, 0U, v));
+
+    // The bounds: kMaxQueues queues, kMaxEvents events; past either nothing is kept.
+    for (u32 q = 0U; q < input::HostEvents::kMaxQueues; ++q)
+    {
+        REQUIRE(events.open(100U + q));
+    }
+    CHECK_FALSE(events.open(99U));
+    CHECK_FALSE(events.push(99U, 1));
+    CHECK(events.open(100U)); // an existing queue is still open
+    for (u32 i = 0U; i < input::HostEvents::kMaxEvents; ++i)
+    {
+        REQUIRE(events.push(100U, static_cast<i64>(i) + 1));
+    }
+    CHECK_FALSE(events.push(100U, 9));
+    CHECK(events.size() == input::HostEvents::kMaxEvents);
+    CHECK(events.pending(100U) == input::HostEvents::kMaxEvents);
+}
+
+TEST_CASE("diag 9a event: both executors take events through the seam in program order and unpack them identically",
+          "[ceir][input][event][diag 9a]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    Context                       ctx(&alloc);
+    const Module* const           m = parse_ok(ctx, StringView{kEventReads});
+
+    // The op reads and consumes host UI input (UIRead and UIWrite), claims external nondeterminism, is a host
+    // intrinsic and reads through the seam.
+    const OpId kind     = input::event_kind(ctx);
+    bool       ui_read  = false;
+    bool       ui_write = false;
+    for (const EffectRecord& e : ctx.op_effects(kind))
+    {
+        ui_read  = ui_read || e.family == EffectFamily::UIRead;
+        ui_write = ui_write || e.family == EffectFamily::UIWrite;
+    }
+    CHECK(ui_read);
+    CHECK(ui_write);
+    CHECK(ctx.op_determinism(kind) == DeterminismClass::ExternalNondeterminism);
+    REQUIRE(ctx.op_info(kind) != nullptr);
+    CHECK(ctx.op_info(kind)->native_provider == StringView{"host"});
+    CHECK(input::reads_input(ctx, kind));
+
+    plan::CompileResult cr = plan::compile(ctx, *m, StringView{"main"}, &alloc);
+    REQUIRE(cr.ok());
+
+    // Queue 0: a ctrl+shift key_down of key 65, then a mouse_move to (-3, 700). Queue 2: a resize to 1280 x 720.
+    // Once with both events on queue 0, once with only the first (its second read is then a None event).
+    for (const bool both : {true, false})
+    {
+        INFO(both);
+        input::HostEvents events(&alloc);
+        REQUIRE(events.push(0U, packed(1U, 65U, 3U, 0, 0)));
+        if (both)
+        {
+            REQUIRE(events.push(0U, packed(6U, 0U, 0U, -3, 700)));
+        }
+        REQUIRE(events.push(2U, packed(8U, 0U, 0U, 1280, 720)));
+        const i64 want[15] = {1, 65, 3, 0, 0, 8, 0, 0, 1280, 720, both ? 6 : 0, 0, 0, both ? -3 : 0, both ? 700 : 0};
+
+        Logged ref_log;
+        ref_log.inner              = events.source();
+        const exec::ExecResult ref = interpret(ctx, *m, {}, &ref_log.source);
+        REQUIRE(ref.ok());
+        REQUIRE(ref.values.size() == 15U);
+
+        events.rewind();
+        Logged plan_log;
+        plan_log.inner           = events.source();
+        const plan::RunResult rr = plan::run(cr.plan, {}, &alloc, plan::RunHooks{}, nullptr, &plan_log.source);
+        REQUIRE(rr.ok());
+        REQUIRE(rr.values.size() == 15U);
+        for (u32 i = 0U; i < 15U; ++i)
+        {
+            INFO(i);
+            CHECK(ref.values[i] == want[i]);
+            CHECK(rr.values[i] == want[i]);
+        }
+
+        // The same three reads, in program order, through both executors.
+        const u32 channels[3] = {0U, 2U, 0U};
+        REQUIRE(ref_log.reads == 3U);
+        REQUIRE(plan_log.reads == 3U);
+        for (u32 i = 0U; i < 3U; ++i)
+        {
+            CHECK(ref_log.kinds[i] == input::InputKind::Event);
+            CHECK(ref_log.channels[i] == channels[i]);
+            CHECK(plan_log.kinds[i] == input::InputKind::Event);
+            CHECK(plan_log.channels[i] == channels[i]);
+        }
+    }
+}
+
+TEST_CASE("diag 9a event: a queue the host does not have fails InputUnavailable at its op in both executors",
+          "[ceir][input][event][diag 9a]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    Context                       ctx(&alloc);
+    const Module* const           m  = parse_ok(ctx, StringView{kEventReads});
+    plan::CompileResult           cr = plan::compile(ctx, *m, StringView{"main"}, &alloc);
+    REQUIRE(cr.ok());
+
+    // Queue 0 is open (and empty); queue 2 is not: the second read fails.
+    input::HostEvents events(&alloc);
+    REQUIRE(events.open(0U));
+    const exec::ExecResult ref = interpret(ctx, *m, {}, events.source());
+    CHECK(ref.error == exec::ExecError::InputUnavailable);
+    CHECK(ref.op == nth_read(ctx, *m, 1U));
+
+    events.rewind();
+    const plan::RunResult rr = plan::run(cr.plan, {}, &alloc, plan::RunHooks{}, nullptr, events.source());
+    CHECK(rr.error == plan::RunError::InputUnavailable);
+    REQUIRE(rr.fault.valid());
+    CHECK(plan::instr_provenance(cr.plan, rr.fault).op == nth_read(ctx, *m, 1U)->stable_id());
+}
+
+TEST_CASE("diag 9a event: a bad queue is refused like a bad constant, and a parallel body may not take an event",
+          "[ceir][input][event][diag 9a]")
+{
+    const char* const reads[] = {"input.event() {queue = -1}", "input.event() {queue = 4294967296}",
+                                 "input.event() {queue = \"0\"}", "input.event()"};
+    for (const char* const r : reads)
+    {
+        INFO(r);
+        memory::GrowableTlsfAllocator alloc;
+        Context                       ctx(&alloc);
+        const containers::String      text = one_event_module(r, &alloc);
+        register_dialects(ctx);
+        const ParseResult pr = parse(ctx, StringView{text.data(), text.size()});
+        REQUIRE(pr.module != nullptr);
+        ctx.assign_stable_ids(*pr.module);
+
+        input::HostEvents events(&alloc);
+        REQUIRE(events.open(0U));
+        const exec::ExecResult ref = interpret(ctx, *pr.module, {}, events.source());
+        CHECK(ref.error == exec::ExecError::UndefinedValue);
+        CHECK(ref.op == nth_read(ctx, *pr.module, 0U));
+
+        const plan::CompileResult cr = plan::compile(ctx, *pr.module, StringView{"main"}, &alloc);
+        CHECK(cr.error == plan::CompileError::BadConst);
+        CHECK(cr.op == nth_read(ctx, *pr.module, 0U));
+    }
+
+    memory::GrowableTlsfAllocator alloc;
+    Context                       ctx(&alloc);
+    const Module* const           m    = parse_ok(ctx, StringView{kParallelEvent});
+    const Operation* const        read = nth_read(ctx, *m, 0U);
+    const exec::PreflightResult   pf   = exec::preflight_parallel(ctx, *m);
+    CHECK(pf.err == exec::ExecError::ParallelBodyStateful);
+    CHECK(pf.op == read);
+    const plan::CompileResult cr = plan::compile(ctx, *m, StringView{"main"}, &alloc);
+    CHECK(cr.error == plan::CompileError::ParallelStateful);
+    CHECK(cr.op == read);
 }

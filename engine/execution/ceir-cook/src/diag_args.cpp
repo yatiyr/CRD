@@ -67,4 +67,10 @@ void clock_fields(perf::DiagFields& fields, const HostClockSpec& spec)
         .str("sim_step", spec.has_sim_step ? containers::StringView{"set"} : containers::StringView{"none"})
         .i64("sim_step_ns", spec.sim_step);
 }
+
+void event_fields(perf::DiagFields& fields, const HostEventsSpec& spec)
+{
+    fields.str("event_queue", spec.open ? containers::StringView{"open"} : containers::StringView{"none"})
+        .u64("input_events", spec.events.size());
+}
 } // namespace crd::ceir::cook::detail

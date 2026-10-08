@@ -15,6 +15,7 @@ class DiagFields;
 namespace crd::ceir::cook
 {
 struct HostClockSpec;
+struct HostEventsSpec;
 } // namespace crd::ceir::cook
 
 namespace crd::ceir::cook::detail
@@ -56,4 +57,7 @@ template <class Fn>
 // The clock a run was given, as every command's answer names it: `wall_clock` (live or none), `sim_time` and
 // `sim_step` (set or none) with their nanoseconds.
 void clock_fields(perf::DiagFields& fields, const HostClockSpec& spec);
+
+// The input event queue a run was given: `event_queue` (open or none) and `input_events`, the events it held.
+void event_fields(perf::DiagFields& fields, const HostEventsSpec& spec);
 } // namespace crd::ceir::cook::detail

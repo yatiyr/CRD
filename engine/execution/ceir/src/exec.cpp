@@ -584,6 +584,27 @@ ExecError eval_time_step(Interpreter& in, const Operation& op)
 {
     return eval_time_read(in, op, input::InputKind::TimeStep);
 }
+// DIAG.9a input.event: the next packed event of a host queue, unpacked into its five results.
+ExecError eval_event(Interpreter& in, const Operation& op)
+{
+    crd::u32 queue = 0U;
+    if (!input::event_attrs(in.ctx(), op, queue))
+    {
+        return in.fail(ExecError::UndefinedValue, &op); // the arith.const precedent for a bad attribute
+    }
+    crd::i64 raw = 0;
+    if (!input::read_input(in.input_source(), input::InputKind::Event, queue, raw))
+    {
+        return in.fail(ExecError::InputUnavailable, &op);
+    }
+    const input::Event e = input::unpack_event(raw);
+    in.set_value(op.result(0), static_cast<crd::i64>(e.type));
+    in.set_value(op.result(1), static_cast<crd::i64>(e.code));
+    in.set_value(op.result(2), static_cast<crd::i64>(e.mods));
+    in.set_value(op.result(3), static_cast<crd::i64>(e.x));
+    in.set_value(op.result(4), static_cast<crd::i64>(e.y));
+    return ExecError::None;
+}
 ExecError eval_addi(Interpreter& in, const Operation& op)
 {
     crd::i64 l = 0;
@@ -1112,6 +1133,7 @@ void install_input_semantics(Interpreter& in) // DIAG.9a host inputs — a SEPAR
     in.install(input::random_kind(in.ctx()), &eval_random);
     in.install(input::clock_kind(in.ctx()), &eval_clock);
     in.install(input::time_step_kind(in.ctx()), &eval_time_step);
+    in.install(input::event_kind(in.ctx()), &eval_event);
 }
 
 // ── the parallel-purity pre-flight (CEIR-11a — moved from crd-ceir-host; the 9d hoist-at-second-consumer) ──

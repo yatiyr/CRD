@@ -16,6 +16,12 @@ namespace
     return z ^ (z >> 31U);
 }
 
+// The event type names, by EventType ordinal.
+constexpr containers::StringView kEventTypeNames[] = {"none",     "key_down",   "key_up", "key_repeat", "mouse_down",
+                                                      "mouse_up", "mouse_move", "scroll", "resize"};
+static_assert(sizeof(kEventTypeNames) / sizeof(kEventTypeNames[0]) == static_cast<crd::usize>(kLastEventType) + 1U,
+              "every event type is named");
+
 // An integer attribute in [lo, 2^32).
 [[nodiscard]] bool u32_attr(const Context& ctx, const Operation& op, containers::StringView name, crd::i64 lo,
                             crd::u64& out) noexcept
@@ -42,6 +48,7 @@ containers::StringView input_kind_name(InputKind k) noexcept
     case InputKind::Random: return containers::StringView{"random"};
     case InputKind::Clock: return containers::StringView{"clock"};
     case InputKind::TimeStep: return containers::StringView{"time_step"};
+    case InputKind::Event: return containers::StringView{"event"};
     }
     return containers::StringView{"?"};
 }
@@ -59,7 +66,7 @@ bool reads_input(const Context& ctx, OpId kind) noexcept
 {
     const containers::StringView name = ctx.op_name(kind);
     return name == containers::StringView{"input.random"} || name == containers::StringView{"input.clock"} ||
-           name == containers::StringView{"input.time_step"};
+           name == containers::StringView{"input.time_step"} || name == containers::StringView{"input.event"};
 }
 
 bool time_attrs(const Context& ctx, const Operation& op, crd::u32& domain) noexcept
@@ -75,6 +82,36 @@ bool time_attrs(const Context& ctx, const Operation& op, crd::u32& domain) noexc
         return false;
     }
     return time::builtin_domain_index(v.s, domain);
+}
+
+bool event_attrs(const Context& ctx, const Operation& op, crd::u32& queue) noexcept
+{
+    crd::u64 q = 0U;
+    if (!u32_attr(ctx, op, "queue", 0, q))
+    {
+        return false;
+    }
+    queue = static_cast<crd::u32>(q);
+    return true;
+}
+
+containers::StringView event_type_name(EventType t) noexcept
+{
+    const auto i = static_cast<crd::usize>(t);
+    return i <= static_cast<crd::usize>(kLastEventType) ? kEventTypeNames[i] : containers::StringView{"?"};
+}
+
+bool event_type_of(containers::StringView name, EventType& out) noexcept
+{
+    for (crd::usize i = 0U; i <= static_cast<crd::usize>(kLastEventType); ++i)
+    {
+        if (name == kEventTypeNames[i])
+        {
+            out = static_cast<EventType>(i);
+            return true;
+        }
+    }
+    return false;
 }
 
 bool random_attrs(const Context& ctx, const Operation& op, crd::u32& stream, crd::u64& bound) noexcept
@@ -200,6 +237,102 @@ bool HostClock::next(InputKind kind, crd::u32 channel, crd::i64& out, void* user
     }
     out = d.now;
     return d.has_now;
+}
+
+HostEvents::HostEvents(memory::IAllocator* alloc)
+    : m_events(alloc), m_queues(alloc), m_source{&HostEvents::next, this}
+{
+}
+
+crd::usize HostEvents::find(crd::u32 queue) const noexcept
+{
+    for (crd::usize i = 0U; i < m_queues.size(); ++i)
+    {
+        if (m_queues[i].id == queue)
+        {
+            return i;
+        }
+    }
+    return m_queues.size();
+}
+
+bool HostEvents::open(crd::u32 queue)
+{
+    if (find(queue) < m_queues.size())
+    {
+        return true;
+    }
+    if (m_queues.size() >= kMaxQueues)
+    {
+        return false;
+    }
+    m_queues.push_back(Queue{queue, 0U});
+    return true;
+}
+
+bool HostEvents::push(crd::u32 queue, crd::i64 event)
+{
+    if (m_events.size() >= kMaxEvents || !open(queue))
+    {
+        return false;
+    }
+    m_events.push_back(Entry{queue, event});
+    return true;
+}
+
+void HostEvents::rewind() noexcept
+{
+    for (Queue& q : m_queues)
+    {
+        q.next = 0U;
+    }
+}
+
+void HostEvents::clear() noexcept
+{
+    m_events.clear();
+    m_queues.clear();
+}
+
+crd::u32 HostEvents::pending(crd::u32 queue) const noexcept
+{
+    const crd::usize at = find(queue);
+    if (at == m_queues.size())
+    {
+        return 0U;
+    }
+    crd::u32 n = 0U;
+    for (crd::usize i = m_queues[at].next; i < m_events.size(); ++i)
+    {
+        if (m_events[i].queue == queue)
+        {
+            ++n;
+        }
+    }
+    return n;
+}
+
+bool HostEvents::next(InputKind kind, crd::u32 channel, crd::i64& out, void* user)
+{
+    auto&            self = *static_cast<HostEvents*>(user);
+    const crd::usize at   = self.find(channel);
+    if (kind != InputKind::Event || at == self.m_queues.size())
+    {
+        return false;
+    }
+    Queue& q = self.m_queues[at];
+    for (crd::usize i = q.next; i < self.m_events.size(); ++i)
+    {
+        if (self.m_events[i].queue == channel)
+        {
+            out    = self.m_events[i].event;
+            q.next = static_cast<crd::u32>(i + 1U);
+            return true;
+        }
+    }
+    q.next = static_cast<crd::u32>(self.m_events.size());
+    out    = 0; // an open queue with no event left: a None event
+    return true;
 }
 
 InputRouter::InputRouter() noexcept : m_source{&InputRouter::next, this} {}

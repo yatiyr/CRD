@@ -66,3 +66,37 @@ effects = [ "TimeRead" ]
 determinism = "ExternalNondeterminism"
 native = { provider = "host", determinism = "ExternalNondeterminism", hot_reload_safe = true }
 docs = "input.time_step {domain = D} -> %dt. The host's input seam delivers the length of domain D's current step (InputSource, InputKind::TimeStep, channel = D's ordinal among the time dialect's built-in domains), in D's unit: nanoseconds for wall and sim, ticks otherwise. With no step for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A bad domain is ExecError::UndefinedValue at eval and CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# input.event -- take the next event of the host's input event queue `queue`. The host delivers ONE raw 64-bit packed
+# event per read (InputSource, kind Event, channel = the queue) and the op unpacks it, so the unpacking is program
+# semantics and a replay of the same raw reads sees exactly what the run saw. The packing (input::pack_event):
+#   bits 0..7    type: 0 none (the queue is empty), 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up,
+#                6 mouse_move, 7 scroll, 8 resize (the platform's InputEvent::Type order)
+#   bits 8..23   code: the key (key events) or the mouse button (mouse_down, mouse_up), the platform's own ordinals
+#   bits 24..31  mods: shift 1, ctrl 2, alt 4, super 8
+#   bits 32..47  x and bits 48..63 y, each a signed 16-bit value: the pointer position in whole window pixels
+#                (mouse_move), the scroll offset in hundredths of a step (scroll), the new size in pixels (resize), 0
+#                otherwise
+# An open queue with no event left delivers 0, a "none" event: an empty queue is a value, not a missing input. A queue
+# the host does not have is no value, and the read fails InputUnavailable. Taking an event CONSUMES it (UIWrite), so two
+# reads never reorder, and like every input read it is schedule-dependent: a parallel or pooled body may not hold one.
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "event"
+summary = "Take the next event of a host input event queue."
+version = 1
+results = [
+    { name = "type", type = "any", doc = "the event type (an integer): 0 none (the queue is empty), 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize" },
+    { name = "code", type = "any", doc = "the key or mouse button (an integer in [0, 65536)), 0 for other events" },
+    { name = "mods", type = "any", doc = "the modifiers held (an integer): shift 1, ctrl 2, alt 4, super 8" },
+    { name = "x", type = "any", doc = "the event's first signed 16-bit payload: the pointer x in pixels, the scroll x in hundredths, or the new width" },
+    { name = "y", type = "any", doc = "the event's second signed 16-bit payload: the pointer y in pixels, the scroll y in hundredths, or the new height" },
+]
+attributes = [
+    { name = "queue", kind = "int", required = true, doc = "the host event queue to take from, in [0, 2^32). Queues are independent: taking from one never moves another." },
+]
+effects = [ "UIRead", "UIWrite" ]
+determinism = "ExternalNondeterminism"
+native = { provider = "host", determinism = "ExternalNondeterminism", hot_reload_safe = true }
+docs = "input.event {queue = Q} -> %type, %code, %mods, %x, %y. The host's input seam delivers queue Q's next event as one raw packed i64 (InputSource, InputKind::Event, channel = Q) and the op unpacks it: bits 0..7 the type (0 none, 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize), bits 8..23 the key or button, bits 24..31 the modifiers (shift 1, ctrl 2, alt 4, super 8), bits 32..47 x and 48..63 y as signed 16-bit values. An open queue with no event left delivers 0 (type none). With no queue Q the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A queue out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Taking an event consumes it (UIRead and UIWrite: two reads never reorder). Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline."

@@ -44,6 +44,65 @@
       }
     },
     {
+      "name": "event",
+      "qualified": "input.event",
+      "version": 1,
+      "summary": "Take the next event of a host input event queue.",
+      "docs": "input.event {queue = Q} -> %type, %code, %mods, %x, %y. The host's input seam delivers queue Q's next event as one raw packed i64 (InputSource, InputKind::Event, channel = Q) and the op unpacks it: bits 0..7 the type (0 none, 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize), bits 8..23 the key or button, bits 24..31 the modifiers (shift 1, ctrl 2, alt 4, super 8), bits 32..47 x and 48..63 y as signed 16-bit values. An open queue with no event left delivers 0 (type none). With no queue Q the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A queue out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Taking an event consumes it (UIRead and UIWrite: two reads never reorder). Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.",
+      "operands": [],
+      "results": [
+        {
+          "name": "type",
+          "doc": "the event type (an integer): 0 none (the queue is empty), 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up, 6 mouse_move, 7 scroll, 8 resize"
+        },
+        {
+          "name": "code",
+          "doc": "the key or mouse button (an integer in [0, 65536)), 0 for other events"
+        },
+        {
+          "name": "mods",
+          "doc": "the modifiers held (an integer): shift 1, ctrl 2, alt 4, super 8"
+        },
+        {
+          "name": "x",
+          "doc": "the event's first signed 16-bit payload: the pointer x in pixels, the scroll x in hundredths, or the new width"
+        },
+        {
+          "name": "y",
+          "doc": "the event's second signed 16-bit payload: the pointer y in pixels, the scroll y in hundredths, or the new height"
+        }
+      ],
+      "attributes": [
+        {
+          "name": "queue",
+          "kind": "int",
+          "required": true,
+          "doc": "the host event queue to take from, in [0, 2^32). Queues are independent: taking from one never moves another."
+        }
+      ],
+      "traits": [],
+      "regions": 0,
+      "effects": [
+        {
+          "family": "UIRead"
+        },
+        {
+          "family": "UIWrite"
+        }
+      ],
+      "determinism": "ExternalNondeterminism",
+      "domain": "",
+      "native": {
+        "provider": "host",
+        "determinism": "ExternalNondeterminism",
+        "thread_safe": null,
+        "hot_reload_safe": true,
+        "lifetime": "",
+        "cost": "",
+        "capabilities": []
+      }
+    },
+    {
       "name": "random",
       "qualified": "input.random",
       "version": 1,

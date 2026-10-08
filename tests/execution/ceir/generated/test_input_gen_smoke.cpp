@@ -26,7 +26,7 @@ TEST_CASE("ceir input gen smoke: the dialect self-registers and reflects a coher
     CHECK(dlt->name() == crd::containers::StringView("input"));
 
     const crd::containers::ConstSpan<OpSchema> schemas = input::input_op_schemas();
-    REQUIRE(schemas.size() == 3U);
+    REQUIRE(schemas.size() == 4U);
 
     crd::containers::StringView prev;
     for (const OpSchema& s : schemas)
@@ -57,6 +57,13 @@ TEST_CASE("ceir input gen smoke: every op builds through its generated builder a
         CHECK(ctx.verify(*op));
     }
 
+    // input.event
+    {
+        Operation* const op = input::build_event(ctx, ctx.attr_int(0), ctx.type_i32());
+        CHECK(op != nullptr);
+        CHECK(ctx.verify(*op));
+    }
+
     // input.random
     {
         Operation* const op = input::build_random(ctx, ctx.attr_int(0), ctx.attr_int(0), ctx.type_i32());
@@ -82,6 +89,12 @@ TEST_CASE("ceir input gen smoke: the generated verifier rejects a malformed cons
     // input.clock
     {
         Operation* const bad = ctx.create_operation(input::clock_kind(ctx), {}, 1U, ctx.type_i32());
+        CHECK_FALSE(ctx.verify(*bad));
+    }
+
+    // input.event
+    {
+        Operation* const bad = ctx.create_operation(input::event_kind(ctx), {}, 5U, ctx.type_i32());
         CHECK_FALSE(ctx.verify(*bad));
     }
 

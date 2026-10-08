@@ -494,8 +494,8 @@ TEST_CASE("diag 8c: replay.prepare blames each needed input on the first op that
               view(blame_fields("func.call", kEffectsFile, call,
                                 "the random draws are not held; replay.record keeps every input.random draw", &root))));
     CHECK(has(view(items[5]), view(state_fields("host-state", "event", "yes", "missing", 3U, &root))));
-    CHECK(has(view(items[5]), view(blame_fields("func.call", kEffectsFile, call,
-                                                "nothing records the host and world state read", &root))));
+    const char* const host_state = "the host-state reads are not held; replay.record keeps only input.event reads";
+    CHECK(has(view(items[5]), view(blame_fields("func.call", kEffectsFile, call, host_state, &root))));
     CHECK(has(view(items[4]), view(state_fields("clock", "event", "yes", "missing", 1U, &root))));
     CHECK(has(view(items[4]), view(blame_fields("rp.clock", kEffectsFile, clock,
                                                 "the time reads are not held; replay.record keeps every "

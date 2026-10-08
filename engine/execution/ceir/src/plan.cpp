@@ -156,6 +156,7 @@ struct CC
     OpId pfor, mreduce;         // 4c: task.parallel_for / task.map_reduce
     OpId irandom;               // DIAG.9a: input.random → Op::Random
     OpId iclock, istep;         // DIAG.9a: input.clock → Op::Clock, input.time_step → Op::TimeStep
+    OpId ievent;                // DIAG.9a: input.event → Op::Event
     // 4c: this CC compiles a map/combine body → a slot MISS is a capture, not an internal bug
     bool             isolated = false;
     CompileError     err      = CompileError::Ok;
@@ -276,6 +277,7 @@ CC make_cc(Context& ctx, CompiledPlan& plan, containers::HashMap<const Value*, c
               input::random_kind(ctx),
               input::clock_kind(ctx),
               input::time_step_kind(ctx),
+              input::event_kind(ctx),
               isolated};
 }
 crd::u32 compile_seq(CC& cc, Block* b);                             // fwd (mutual recursion with compile_fn_body)
@@ -332,7 +334,9 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         const bool is_dp     = op->kind() == cc.pfor || op->kind() == cc.mreduce;
         const bool is_random = op->kind() == cc.irandom; // DIAG.9a: a host input read
         const bool is_time   = op->kind() == cc.iclock || op->kind() == cc.istep;
-        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp && !is_random && !is_time)
+        const bool is_event  = op->kind() == cc.ievent;
+        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp && !is_random && !is_time &&
+            !is_event)
         {
             cc.err = CompileError::UnsupportedOp; // core.foreach etc. — no compiled semantics
             return fail_at(cc, op);
@@ -429,6 +433,17 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
                 return fail_at(cc, op);
             }
             instr.imm = static_cast<crd::i64>(domain);
+        }
+        else if (is_event) // DIAG.9a input.event: the queue is the immediate; the five results are unpacked at run
+        {
+            instr.op       = Op::Event;
+            crd::u32 queue = 0U;
+            if (!input::event_attrs(cc.ctx, *op, queue))
+            {
+                cc.err = CompileError::BadConst; // the reference: UndefinedValue (the arith.const precedent)
+                return fail_at(cc, op);
+            }
+            instr.imm = static_cast<crd::i64>(queue);
         }
         else if (op->kind() == cc.addi)
         {
@@ -893,6 +908,23 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 return raise(rs, seq_idx, k, RunError::InputUnavailable);
             }
             rs.stack[rslot] = raw;
+            break;
+        }
+        case Op::Event: // DIAG.9a: a host queue's next packed event through the run's input seam, unpacked
+        {
+            crd::i64 raw = 0;
+            if (!input::read_input(rs.inputs, input::InputKind::Event, static_cast<crd::u32>(in.imm), raw))
+            {
+                return raise(rs, seq_idx, k, RunError::InputUnavailable);
+            }
+            const input::Event e        = input::unpack_event(raw);
+            const crd::i64     fields[] = {static_cast<crd::i64>(e.type), static_cast<crd::i64>(e.code),
+                                           static_cast<crd::i64>(e.mods), static_cast<crd::i64>(e.x),
+                                           static_cast<crd::i64>(e.y)};
+            for (crd::u32 j = 0U; j < in.results_cnt && j < 5U; ++j)
+            {
+                rs.stack[base + rez[in.results_off + j]] = fields[j];
+            }
             break;
         }
         case Op::AddI:

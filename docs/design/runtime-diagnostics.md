@@ -1040,12 +1040,49 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-interactive-host-c
   clock would need a per-domain reader that is safe to call from the executing thread, which nothing needs yet. The
   first run starts before the first frame (time 0, frame 0, the fixed step or 0). It replaces the spec's sim domain;
   the sandbox refuses it together with `--inspect-sim-time` or `--inspect-sim-step`.
-- Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
-  interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
-  input events and external I/O completions, which need their ops specified before the seam can carry them;
-  backend-specific numeric replay of GPU dispatches with a declared tolerance; network and physical effects stubbed
-  only in explicit test replay; host records from crd-sandbox's panel (it would need the request run on an enrolled
-  thread).
+- What stayed open after this batch is listed at the end of the next settled block (input events are settled there).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-input-events.md)):
+- Input events. `input.event {queue}` (specified in `input.ceirop.toml`) takes the next event of host input event
+  queue `queue` (in [0, 2^32); out of range is `UndefinedValue` at eval and `BadConst` at plan compile). The seam
+  delivers one raw packed i64 per read (`InputKind::Event`, appended; the channel is the queue) and the op unpacks it
+  into five results: bits 0..7 the type (0 none, 1 key_down, 2 key_up, 3 key_repeat, 4 mouse_down, 5 mouse_up,
+  6 mouse_move, 7 scroll, 8 resize: `input::EventType`, the platform's `InputEvent::Type` order, append-only), 8..23
+  the key or button, 24..31 the modifiers (shift 1, ctrl 2, alt 4, super 8), 32..47 x and 48..63 y as signed 16-bit
+  values (the pointer position in whole pixels, the scroll offset in hundredths of a step, the new size; 0 otherwise).
+  The host adapter quantizes: CEIR values are integers, so the packed form is what a record keeps and a replay feeds.
+  An open queue with nothing left delivers 0, a `none` event (an empty queue is a value, not a missing input); a queue
+  the host does not have is no value and the read fails `input-unavailable`.
+- Effects `UIRead` and `UIWrite`: taking an event reads the host's UI input and consumes it, so the hazard analysis
+  orders two reads like two random draws (RandomRead writes its class for the same reason). `ExternalNondeterminism`,
+  native provider host. Both executors read it in program order (`Op::Event`, the queue in the immediate; the plan
+  writes the five results through the instr's result slots); the parallel-body pre-flight refuses it.
+- `input::HostEvents` holds up to 16 queues and 4,096 events; a read takes its queue's next event in push order and
+  never allocates (`open` and `push` grow on the host's allocator, between runs); `rewind` and `clear` start over.
+- Records stay schema 4. `UIRead` was already one of `host-state`'s families, so the input is now a seam input under
+  `random`'s rule (`is_seam_input`, also in the inspect host's bound): recorded when every read is held and every op
+  that declares a host-state family itself reads through the seam. A scene, ECS, physics, audio, document, constraint
+  or other UI read keeps `host-state` missing and the replay refused. Its missing reason became "the host-state reads
+  are not held; replay.record keeps only input.event reads" (the `replay.prepare` expectation was updated). The trace
+  keeps four results per event, so an event read's fifth result (y) is never compared in the trace; it is a fixed
+  function of the recorded raw read, which the replay feeds back unchanged.
+- `replay.record events=` (both executors; `HostEventsSpec` on `HostRecordRequest`; `cook::parse_events_argument`,
+  `cook::apply_events`) opens queue 0 holding at most 32 comma-separated events: `key_down`, `key_up`, `key_repeat`,
+  `mouse_down` or `mouse_up:<code>[:<mods>]`, `mouse_move`, `scroll` or `resize:<x>:<y>`, every field range-checked
+  and no field left over. An empty value is an open, empty queue; without the argument the host has no queue. The
+  summary answers `event_queue` (open or none) and `input_events`. The committed `assets/ceir/event_demo.ceir` takes
+  two events and fails `selector-out-of-range` when the second is a resize; otherwise it returns the first event's
+  code plus the second's x and y plus its argument.
+- Still open in DIAG.9a, as work that can be done now: input events at the interactive hosts (`program.inspect`,
+  `ceridc inspect`, and crd-sandbox's panel fed from the window's real `platform::InputEvent` stream at a run's start,
+  the frame-clock precedent); backend-specific numeric replay of GPU dispatches with a declared tolerance or oracle
+  (the acceptance criterion; it needs a readback of dispatch results into the trace first); host records from
+  crd-sandbox's panel (the host provider needs an enrolled thread). Waiting on a consumer or an op: state cells across
+  invokes and a run spanning a reload wait for a host that keeps one interpreter across invokes (only tests call
+  `migrate_state` today); external I/O completions and network or physical effects stubbed only in explicit test
+  replay wait for an op that declares `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`, `AgentAction` or a physics
+  write (none does). Until then a program that needs external results keeps `external-results` missing and its record
+  is refused before anything runs (`test_replay_diag.cpp`, `test_replay_record.cpp`).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

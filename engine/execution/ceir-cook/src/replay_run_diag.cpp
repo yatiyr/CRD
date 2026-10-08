@@ -62,7 +62,7 @@ void join(cont::StringView root, cont::StringView relative, cont::String& out)
 
 struct RecordArgs
 {
-    explicit RecordArgs(crd::memory::IAllocator* alloc) : args(alloc) {}
+    explicit RecordArgs(crd::memory::IAllocator* alloc) : args(alloc), events(alloc) {}
 
     cont::StringView      entry{"main"};
     cont::Array<crd::i64> args;
@@ -74,6 +74,13 @@ struct RecordArgs
     bool                  have_seed  = false; // seed=: the run's host random streams (none without it)
     crd::u64              seed       = 0U;
     HostClockSpec         clock;              // clock=, sim_time=, sim_step=: the run's time domains
+    bool                  have_events = false; // events=: the run's input event queue (none without it)
+    cont::Array<crd::i64> events;              // packed, in delivery order
+
+    [[nodiscard]] HostEventsSpec events_spec() const noexcept
+    {
+        return HostEventsSpec{have_events, cont::as_const_span(events)};
+    }
 };
 
 constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
@@ -195,6 +202,17 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
                 out->seed      = v;
             }
         }
+        else if (a.name == "events")
+        {
+            if (!parse_events_argument(a.value, out != nullptr ? &out->events : nullptr, requirement))
+            {
+                return bad(reason, a.name, requirement);
+            }
+            if (out != nullptr)
+            {
+                out->have_events = true;
+            }
+        }
         else if (const ClockArgument c =
                      parse_clock_argument(a.name, a.value, out != nullptr ? &out->clock : nullptr, requirement);
                  c != ClockArgument::NotClock)
@@ -222,7 +240,7 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
             reason.append("unknown argument '");
             reason.append(a.name);
             reason.append("'; replay.record takes out, entry, args, max_events, seed, clock, sim_time, sim_step, "
-                          "executor, jobs and sub_fuel");
+                          "events, executor, jobs and sub_fuel");
             return DiagStatus::BadArgument;
         }
     }
@@ -367,6 +385,7 @@ struct FaultSite
         .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
         .u64("seed", parsed.seed);
     detail::clock_fields(out.summary, parsed.clock);
+    detail::event_fields(out.summary, parsed.events_spec());
     out.summary.u64("input_reads", record.input_reads_total)
         .str("missing_inputs", missing)
         .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
@@ -396,6 +415,7 @@ struct FaultSite
     request.has_seed   = parsed.have_seed;
     request.seed       = parsed.seed;
     request.clock      = parsed.clock;
+    request.events     = parsed.events_spec();
     ReplayRecord    record(alloc);
     OwnedReplaySite fault(alloc);
     cont::String    missing(alloc);
@@ -474,14 +494,18 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
 
     cmd->executions.fetch_add(1U, std::memory_order_relaxed);
     ReplayTrace trace(alloc);
-    // The host's random streams (seeded, or none) and its clock, every read kept in the trace through the recorder.
+    // The host's random streams (seeded, or none), its clock and its event queue, every read kept in the trace
+    // through the recorder.
     input::SeededInputs seeded(parsed.seed, alloc);
     input::HostClock    clock;
     apply_clock(parsed.clock, clock);
+    input::HostEvents events(alloc);
+    apply_events(parsed.events_spec(), events);
     input::InputRouter host_inputs;
     host_inputs.route(input::InputKind::Random, parsed.have_seed ? seeded.source() : nullptr);
     host_inputs.route(input::InputKind::Clock, clock.source());
     host_inputs.route(input::InputKind::TimeStep, clock.source());
+    host_inputs.route(input::InputKind::Event, events.source());
     InputRecorder inputs(trace, host_inputs.source());
     run_traced(program, cont::as_const_span(parsed.args), parsed.max_events, call.cancel, trace, inputs.source());
     if (trace.error == plan::RunError::Cancelled)
@@ -954,6 +978,125 @@ ClockArgument parse_clock_argument(cont::StringView name, cont::StringView value
         spec->sim_step     = v;
     }
     return ClockArgument::Ok;
+}
+
+void apply_events(const HostEventsSpec& spec, input::HostEvents& events)
+{
+    events.clear();
+    if (!spec.open)
+    {
+        return;
+    }
+    (void)events.open(kEventQueue);
+    for (const crd::i64 e : spec.events)
+    {
+        (void)events.push(kEventQueue, e); // at most kMaxArgumentEvents, far below the source's bound
+    }
+}
+
+namespace
+{
+constexpr cont::StringView kEventsRule{
+    "must be at most 32 comma-separated events: key_down, key_up, key_repeat, mouse_down or mouse_up:<code 0 to "
+    "65535>[:<mods 0 to 15>], or mouse_move, scroll or resize:<x>:<y> (each -32768 to 32767)"};
+
+// The next ':'-separated field of `item` from `at` (advanced past it); false when there is none.
+[[nodiscard]] bool next_field(cont::StringView item, crd::usize& at, cont::StringView& field) noexcept
+{
+    if (at > item.size())
+    {
+        return false;
+    }
+    crd::usize end = item.find(':', at);
+    if (end == cont::StringView::npos)
+    {
+        end = item.size();
+    }
+    field = item.substr(at, end - at);
+    at    = end + 1U;
+    return true;
+}
+
+// A decimal in [lo, hi].
+[[nodiscard]] bool bounded(cont::StringView text, crd::i64 lo, crd::i64 hi, crd::i64& out) noexcept
+{
+    return detail::parse_i64(text, out) && out >= lo && out <= hi;
+}
+
+// One event of the `events` argument, packed.
+[[nodiscard]] bool parse_event(cont::StringView item, crd::i64& packed) noexcept
+{
+    crd::usize       at = 0U;
+    cont::StringView name;
+    input::EventType type = input::EventType::None;
+    if (!next_field(item, at, name) || !input::event_type_of(name, type) || type == input::EventType::None)
+    {
+        return false;
+    }
+    input::Event     e;
+    cont::StringView a;
+    cont::StringView b;
+    crd::i64         first  = 0;
+    crd::i64         second = 0;
+    e.type = static_cast<crd::u8>(type);
+    const bool pointer =
+        type == input::EventType::MouseMove || type == input::EventType::Scroll || type == input::EventType::Resize;
+    if (!next_field(item, at, a))
+    {
+        return false;
+    }
+    if (pointer)
+    {
+        if (!bounded(a, -32768, 32767, first) || !next_field(item, at, b) || !bounded(b, -32768, 32767, second))
+        {
+            return false;
+        }
+        e.x = static_cast<crd::i16>(first);
+        e.y = static_cast<crd::i16>(second);
+    }
+    else
+    {
+        if (!bounded(a, 0, 65535, first))
+        {
+            return false;
+        }
+        e.code = static_cast<crd::u16>(first);
+        if (next_field(item, at, b))
+        {
+            if (!bounded(b, 0, 15, second))
+            {
+                return false;
+            }
+            e.mods = static_cast<crd::u8>(second);
+        }
+    }
+    packed = input::pack_event(e);
+    return at > item.size(); // no field left over
+}
+} // namespace
+
+bool parse_events_argument(cont::StringView value, cont::Array<crd::i64>* out, cont::StringView& requirement)
+{
+    crd::u32   count = 0U;
+    const bool ok    = detail::for_each_item(value,
+                                             [out, &count](cont::StringView item)
+                                             {
+                                                 crd::i64 packed = 0;
+                                                 if (!parse_event(item, packed) || ++count > kMaxArgumentEvents)
+                                                 {
+                                                     return false;
+                                                 }
+                                                 if (out != nullptr)
+                                                 {
+                                                     out->push_back(packed);
+                                                 }
+                                                 return true;
+                                             });
+    if (!ok)
+    {
+        requirement = kEventsRule;
+    }
+    return ok;
 }
 
 // A seeded source holds one counter per random stream, so its own allocator grows from a small first chunk.

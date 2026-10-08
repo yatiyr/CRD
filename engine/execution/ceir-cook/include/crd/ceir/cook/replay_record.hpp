@@ -35,13 +35,14 @@
 // per-body step budget); the provider's other schedule choices are fixed by the build (a race answers its first
 // operand, the lowest failing index wins, folds run in index order).
 //
-// Host inputs (input.hpp: input.random's draws) are read through the run's input seam. A recorded run's reads go
+// Host inputs (input.hpp: input.random's draws, input.clock's and input.time_step's time reads, input.event's packed
+// events) are read through the run's input seam. A recorded run's reads go
 // through an `InputRecorder` wrapped around the host's live source, which keeps every read in order: its kind,
 // channel, whether the host had a value and the value. A replay installs an `InputFeed` over the record's reads
 // instead and never asks a live host; a read the record cannot answer (another kind or channel at that position, or
 // past its last read) stops the replay there with InputUnavailable and is reported as an `input` divergence at that
 // op. The record keeps at most kReplayMaxInputReads reads and counts all of them; a run that read more holds an
-// incomplete stream, so its `random` input is stored missing and a replay refuses it.
+// incomplete stream, so its seam inputs (`random`, `clock`, `host-state`) are stored missing and a replay refuses it.
 //
 // Guarantee: a plan record is event replay of the integer, sequential compiled-plan executor; a program needing
 // schedule choices records the schedule as missing there. A host record is schedule replay of the host provider.
@@ -162,7 +163,7 @@ struct ReplayEvent
 struct ReplayInputRead
 {
     input::InputKind kind      = input::InputKind::Random;
-    crd::u32         channel   = 0U;    // the stream (Random)
+    crd::u32         channel   = 0U;    // the stream, the time domain or the event queue
     bool             delivered = false; // false: the host had no value, and the read failed InputUnavailable
     crd::i64         value     = 0;     // the raw value the host delivered (0 when not delivered)
 };
