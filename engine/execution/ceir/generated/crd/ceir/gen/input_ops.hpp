@@ -15,9 +15,23 @@
 namespace crd::ceir::input
 {
 // -- op-kind identities (interned lazily against `ctx`, idempotent) --
+[[nodiscard]] inline OpId clock_kind(Context& ctx) { return ctx.intern_op("input", "clock"); }
 [[nodiscard]] inline OpId random_kind(Context& ctx) { return ctx.intern_op("input", "random"); }
+[[nodiscard]] inline OpId time_step_kind(Context& ctx) { return ctx.intern_op("input", "time_step"); }
 
 // -- typed op wrappers (a thin view over an Operation*; the registered verifier enforces shape) --
+// input.clock - Read the host's current time in one time domain.
+class ClockOp
+{
+public:
+    explicit ClockOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* now() const noexcept { return m_op->result(0U); }
+    [[nodiscard]] AttrId domain() const noexcept { return m_op->attr("domain"); }
+
+private:
+    Operation* m_op;
+};
 // input.random - Draw the next value of a host random stream, reduced to [0, bound).
 class RandomOp
 {
@@ -31,11 +45,25 @@ public:
 private:
     Operation* m_op;
 };
+// input.time_step - Read the length of the current step of one time domain.
+class TimeStepOp
+{
+public:
+    explicit TimeStepOp(Operation* op) noexcept : m_op(op) {}
+    [[nodiscard]] Operation* operation() const noexcept { return m_op; }
+    [[nodiscard]] Value* step() const noexcept { return m_op->result(0U); }
+    [[nodiscard]] AttrId domain() const noexcept { return m_op->attr("domain"); }
+
+private:
+    Operation* m_op;
+};
 
 // -- builders (through the ordinary Context factories - no privileged construction). NOTE: a builder
 // produces the MINIMUM arity on every variadic axis (operands / results / regions); build the full arity
 // (extra variadic operands, N result values, N case regions) directly with `Context::create_operation`. --
+[[nodiscard]] Operation* build_clock(Context& ctx, AttrId domain, TypeId result_type = {});
 [[nodiscard]] Operation* build_random(Context& ctx, AttrId stream, AttrId bound, TypeId result_type = {});
+[[nodiscard]] Operation* build_time_step(Context& ctx, AttrId domain, TypeId result_type = {});
 
 // -- registration: self-registers the dialect + every op (traits + verifier), NO central edit (section 7) --
 Dialect* register_input_ops(Context& ctx);

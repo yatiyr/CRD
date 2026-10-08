@@ -5,7 +5,34 @@
 
 DIAG.9a host inputs a program reads: values the host delivers at run time through its input seam (crd/ceir/input.hpp), so a run record can hold them and a replay can feed them back. Each op names one input kind and carries that kind's own effect family, so the replay-input analysis classifies it without a special case. A host with no source for a kind fails the read with a typed InputUnavailable error, never a made-up value.
 
-**1 op:** `random`
+**3 ops:** `clock`, `random`, `time_step`
+
+## `input.clock`
+
+Read the host's current time in one time domain.
+
+input.clock {domain = D} -> %t. The host's input seam delivers domain D's current reading (InputSource, InputKind::Clock, channel = D's ordinal among the time dialect's built-in domains) and %t is that raw value: nanoseconds for wall (monotonic, from the host clock's epoch, never calendar time) and sim, a tick count for frame, audio_sample, sequencer and logical. With no reading for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A domain that is absent, not a string or not a built-in is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.
+
+- **Version:** 1
+- **Traits:** _none_
+- **Regions:** 0
+- **Effects:** `TimeRead`
+- **Determinism:** `ExternalNondeterminism`
+- **Native binding:** provider=`host`, determinism=`ExternalNondeterminism`, hot_reload_safe=`true`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `now` | any | the domain's current reading (an integer): nanoseconds for wall and sim, ticks of the domain otherwise |
+
+**Attributes:**
+
+| name | kind | required | doc |
+| --- | --- | --- | --- |
+| `domain` | `string` | yes | the time domain to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins). wall is the host's monotonic clock since its own epoch, never calendar time. |
 
 ## `input.random`
 
@@ -34,3 +61,30 @@ input.random {stream = S, bound = B} -> %v. The host's input seam delivers the r
 | --- | --- | --- | --- |
 | `stream` | `int` | yes | the host random stream to draw from, in [0, 2^32). Streams are independent: a draw from one never advances another. |
 | `bound` | `int` | yes | the exclusive upper bound of the result, in [1, 2^32). The raw draw is reduced by unsigned remainder. |
+
+## `input.time_step`
+
+Read the length of the current step of one time domain.
+
+input.time_step {domain = D} -> %dt. The host's input seam delivers the length of domain D's current step (InputSource, InputKind::TimeStep, channel = D's ordinal among the time dialect's built-in domains), in D's unit: nanoseconds for wall and sim, ticks otherwise. With no step for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A bad domain is ExecError::UndefinedValue at eval and CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.
+
+- **Version:** 1
+- **Traits:** _none_
+- **Regions:** 0
+- **Effects:** `TimeRead`
+- **Determinism:** `ExternalNondeterminism`
+- **Native binding:** provider=`host`, determinism=`ExternalNondeterminism`, hot_reload_safe=`true`
+
+**Operands:** _none_
+
+**Results:**
+
+| name | type | doc |
+| --- | --- | --- |
+| `step` | any | the length of the domain's current step (an integer), in the domain's own unit |
+
+**Attributes:**
+
+| name | kind | required | doc |
+| --- | --- | --- | --- |
+| `domain` | `string` | yes | the time domain whose step to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins). |

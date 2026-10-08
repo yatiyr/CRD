@@ -81,6 +81,15 @@ constexpr const char* kRandomNative  = "ceridc_diag_random_native.crpl";
 constexpr const char* kRandomOut     = "ceridc_diag_random_out.json";
 constexpr const char* kRandomIn      = "ceridc_diag_random_in.jsonl";
 constexpr const char* kDrawLine      = "%4 = input.random() {stream = 0, bound = 4} : !i32";
+// DIAG.9a clock inputs: the committed clock demo, its copy, records and outputs.
+constexpr const char* kClockDemo    = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir";
+constexpr const char* kClockProgram = "ceridc_diag_clock.ceir";
+constexpr const char* kClockRecord  = "ceridc_diag_clock.crpl";
+constexpr const char* kClockNative  = "ceridc_diag_clock_native.crpl";
+constexpr const char* kClockPass    = "ceridc_diag_clock_pass.crpl";
+constexpr const char* kClockOut     = "ceridc_diag_clock_out.json";
+constexpr const char* kClockIn      = "ceridc_diag_clock_in.jsonl";
+constexpr const char* kStepLine     = "%1 = input.time_step() {domain = \"sim\"} : !i64";
 constexpr const char* kAwaitLine   = "%6 = async.await(%3) : !i32";
 
 // The host provider's crd::jobs pool for the native and in-process calls of this binary (ceridc's own diag and mcp
@@ -1140,4 +1149,180 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
     (void)fs::remove_file(fs::Path(StringView(kHostRecord)));
     (void)fs::remove_file(fs::Path(StringView(kHostNative)));
     (void)fs::remove_file(fs::Path(StringView(kHostProgram)));
+}
+
+TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces in another from its time reads",
+          "[ceridc][diag]")
+{
+    // DIAG.9a clock inputs: process 1 records main(7) of the committed clock demo with the sim domain's step over the
+    // program's budget (and a live wall clock it never reaches); the record is this process's native record, byte for
+    // byte. The program file is edited so the step read asks for the frame domain. Process 2 replays the record with no
+    // clock and reproduces the failure from the read it holds; process 3 replays it against the edited file and names
+    // the read the record cannot answer. Process 4 records a steady step, reading the live wall; process 5 reproduces
+    // that run, wall-dependent result included, from the reads alone. Each replay answer equals this process's native
+    // call, and so does an MCP stdio process's tool text.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    (void)fs::remove_file(fs::Path(StringView(kClockRecord)));
+    (void)fs::remove_file(fs::Path(StringView(kClockNative)));
+    (void)fs::remove_file(fs::Path(StringView(kClockPass)));
+
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView(kClockDemo)), text));
+    const StringView pristine{text.data(), text.size()};
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kClockProgram)), pristine));
+    const crd::usize step_at = pristine.find(StringView{kStepLine});
+    REQUIRE(step_at != StringView::npos);
+    crd::u32 step_line = 1U;
+    for (crd::usize i = 0U; i < step_at; ++i)
+    {
+        step_line += pristine[i] == '\n' ? 1U : 0U;
+    }
+
+    const auto read_out = [&]()
+    {
+        String out(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kClockOut)), out));
+        while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
+        {
+            out.resize(out.size() - 1U);
+        }
+        return out;
+    };
+    const crd::perf::DiagAuthoritySet execute = crd::perf::authority_bit(DiagAuthority::Execute);
+    const auto                        native  = [&](const char* record, const char* program)
+    {
+        DiagCommandService svc(execute, rooted(), &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg against[] = {{"program", program != nullptr ? program : ""}};
+        DiagRequest              r;
+        r.command = "replay.run";
+        r.path    = record;
+        r.args    = {against, program != nullptr ? 1U : 0U};
+        return svc.execute(r);
+    };
+
+    // Process 1 records the over-budget step.
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=7 "
+                        "--param sim_step=50000000 --param sim_time=4000000000 --param clock=wall "
+                        "--grant execute,record --root . > %s",
+                        exe, kClockProgram, kClockRecord, kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String recorded = read_out();
+    INFO(recorded.c_str());
+    CHECK(has(recorded, "\"error\":\"selector-out-of-range\""));
+    CHECK(has(recorded, "\"wall_clock\":\"live\""));
+    CHECK(has(recorded, "\"sim_step\":\"set\",\"sim_step_ns\":50000000,"));
+    CHECK(has(recorded, "\"input_reads\":1,"));
+    CHECK(has(recorded, R"("input":"clock","guarantee":"event","needed":"yes","state":"recorded")"));
+    CHECK(has(recorded, "\"replay\":\"replayable\""));
+
+    // This process's native record of the same run is the same file.
+    {
+        const crd::perf::DiagAuthoritySet both = execute | crd::perf::authority_bit(DiagAuthority::Record);
+        DiagCommandService                svc(both, rooted(), &g_alloc);
+        bind(svc);
+        const crd::perf::DiagArg args[] = {{"out", kClockNative},
+                                           {"args", "7"},
+                                           {"sim_step", "50000000"},
+                                           {"sim_time", "4000000000"},
+                                           {"clock", "wall"}};
+        DiagRequest              r;
+        r.command = "replay.record";
+        r.path    = kClockProgram;
+        r.args    = {args, 5U};
+        REQUIRE(svc.execute(r).status == crd::perf::DiagStatus::Ok);
+        String a(&g_alloc);
+        String b(&g_alloc);
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kClockRecord)), a));
+        REQUIRE(fs::read_file_text(fs::Path(StringView(kClockNative)), b));
+        CHECK(view(a) == view(b));
+    }
+
+    // The program file is edited after the run: the step read now asks for the frame domain.
+    String edit(&g_alloc);
+    edit.append(pristine.substr(0U, step_at));
+    edit.append("%1 = input.time_step() {domain = \"frame\"} : !i64");
+    edit.append(pristine.substr(step_at + StringView{kStepLine}.size()));
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kClockProgram)), StringView{edit.data(), edit.size()}));
+
+    // Process 2 replays the record, with no clock: the failure reproduces from the recorded step.
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
+                        exe, kClockRecord, kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String same = read_out();
+    INFO(same.c_str());
+    CHECK(has(same, "\"result\":\"reproduced\""));
+    CHECK(has(same, "\"run\":\"replayed\",\"error\":\"selector-out-of-range\""));
+    const crd::perf::DiagResult same_native = native(kClockRecord, nullptr);
+    CHECK(view(same) == view(same_native.json));
+
+    // Process 3 replays the same reads against the edited file: its first read asks for another domain.
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kClockRecord, kClockProgram, kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String diff = read_out();
+    INFO(diff.c_str());
+    CHECK(has(diff, "\"result\":\"diverged\""));
+    CHECK(has(diff, "\"divergence\":\"input\",\"index\":0,"));
+    CHECK(has(diff, "\"recorded\":1,\"observed\":2,"));
+    CHECK(has(diff, "\"recorded_input\":\"time_step\",\"observed_input\":\"time_step\""));
+    char at_line[96];
+    (void)std::snprintf(at_line, sizeof(at_line), R"("file":"%s","line":%u,)", kClockProgram, step_line);
+    CHECK(has(diff, at_line));
+    const crd::perf::DiagResult diff_native = native(kClockRecord, kClockProgram);
+    CHECK(view(diff) == view(diff_native.json));
+
+    // Process 4 records a steady step from the pristine file: the run reads the live wall and returns a value from it.
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kClockProgram)), pristine));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.record --path %s --param out=%s --param args=7 "
+                        "--param sim_step=16666667 --param sim_time=4000000000 --param clock=wall "
+                        "--grant execute,record --root . > %s",
+                        exe, kClockProgram, kClockPass, kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String passed = read_out();
+    INFO(passed.c_str());
+    CHECK(has(passed, "\"error\":\"none\""));
+    CHECK(has(passed, "\"input_reads\":3,"));
+    CHECK(has(passed, "{\"kind\":\"result\",\"index\":0,\"value\":"));
+
+    // Process 5, with no clock, reproduces it: the wall reading it returns is the one process 4 read.
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
+                        exe, kClockPass, kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String again = read_out();
+    INFO(again.c_str());
+    CHECK(has(again, "\"result\":\"reproduced\""));
+    CHECK(has(again, "\"recorded_input_reads\":3,"));
+    CHECK(view(again) == view(native(kClockPass, nullptr).json));
+
+    // Over MCP stdio, under the process's execute grant, the tool text is the native document.
+    DiagRequest r;
+    r.command = "replay.run";
+    r.path    = kClockRecord;
+    String line(&g_alloc);
+    line.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    line.append(arguments_of(r).c_str());
+    line.append("}}\n");
+    REQUIRE(fs::write_file_text(fs::Path(StringView(kClockIn)), view(line)));
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" mcp --diag-grant execute --diag-root . < %s > %s", exe, kClockIn,
+                        kClockOut);
+    REQUIRE(std::system(cmd) == 0);
+    const String     mcp = read_out();
+    const StringView all = view(mcp);
+    const ToolReply  got = reply_of(all.substr(0U, all.find('\n')));
+    REQUIRE(got.parsed);
+    CHECK_FALSE(got.is_error);
+    CHECK(view(got.text) == view(same_native.json));
+
+    (void)fs::remove_file(fs::Path(StringView(kClockIn)));
+    (void)fs::remove_file(fs::Path(StringView(kClockOut)));
+    (void)fs::remove_file(fs::Path(StringView(kClockRecord)));
+    (void)fs::remove_file(fs::Path(StringView(kClockNative)));
+    (void)fs::remove_file(fs::Path(StringView(kClockPass)));
+    (void)fs::remove_file(fs::Path(StringView(kClockProgram)));
 }

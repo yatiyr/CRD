@@ -97,8 +97,8 @@ records before reading anything. A host run can be recorded under an inspection 
 program so the session binds to the module that runs, and `record_host_run(program, ..., session, ...)` hands the
 recorder's step hooks to the session (`inspect::StepObserver`), so stops, steps and value reads leave the record equal
 to an unobserved run's; a cancelled run is not recorded.
-Host inputs: a program reads values the host chooses through the `input` dialect (`input.random {stream, bound}`
-today, `crd/ceir/input.hpp`); both executors deliver the raw value through one `InputSource` the host installs
+Host inputs: a program reads values the host chooses through the `input` dialect (`input.random {stream, bound}`,
+`input.clock {domain}` and `input.time_step {domain}`, `crd/ceir/input.hpp`); both executors deliver the raw value through one `InputSource` the host installs
 (`Interpreter::set_input_source`, the `inputs` argument of `plan::run`, `HostProvider::set_input_source`) and the op
 reduces it. With no source a read fails `input-unavailable`. A recorded run keeps every read in the record (schema 4,
 `InputRecorder`), and a replay feeds them back (`InputFeed`) and never asks a live source, so `replay.record seed=`
@@ -108,6 +108,11 @@ pooled bodies. The inspect host takes the caller's source at `InspectHost::start
 recorded inspected run keeps its reads like `replay.record`, so a debugged seeded run's record reproduces without the
 seed; `ceridc inspect --seed`, `program.inspect seed=` and crd-sandbox's `--inspect-seed` (every panel run from the
 first draw) give one.
+A time read names one of the time dialect's built-in domains (its ordinal is the seam channel) and gets the raw
+value: nanoseconds for `wall` (the host's monotonic clock from the clock's own epoch, never calendar time) and `sim`,
+ticks for the others. `input::HostClock` answers the domains the host set (and a live wall), `input::InputRouter`
+sends each input kind to its own source, and `replay.record` takes `clock=wall`, `sim_time=` and `sim_step=` on both
+executors, so a time-step failure (`assets/ceir/clock_demo.ceir`) reproduces in another process with no clock.
 
 ## Maturity and further work
 

@@ -47,6 +47,15 @@ constexpr const char* kSwitchLine  = "core.switch(%4)";
 constexpr u32         kDraws       = 4U;
 constexpr u64         kSeed        = 77U; // the launch and parallel cases' host seed
 
+// The clock case: the committed clock demo, its step read, the edit to the frame domain and its wall read.
+constexpr const char* kClockAsset = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir";
+constexpr const char* kStepLine   = "%1 = input.time_step() {domain = \"sim\"} : !i64";
+constexpr const char* kStepEdited = "%1 = input.time_step() {domain = \"frame\"} : !i64";
+constexpr const char* kWallLine   = "%4 = input.clock() {domain = \"wall\"} : !i64";
+constexpr i64         kHitch      = 50000000; // over the program's 33,333,333 ns budget
+constexpr i64         kSteady     = 16666667;
+constexpr u32         kSim        = 1U; // the sim domain's ordinal, the seam channel
+
 // main() launches a body that draws once from stream 5 and awaits it; the second program's body only adds.
 constexpr const char* kLaunchDraws = R"(module {
   ^bb0:
@@ -344,4 +353,110 @@ TEST_CASE("diag 9a input: a launch body that draws runs inline with the source, 
         REQUIRE(input::read_input(live.source(), input::InputKind::Random, 0U, next));
         CHECK(next == input::SeededInputs::draw(kSeed, 0U, 0U)); // nothing was drawn
     }
+}
+
+TEST_CASE("diag 9a clock: a host record keeps every time read and replays them on any job split",
+          "[ceir][host][diag][input][clock]")
+{
+    memory::GrowableTlsfAllocator alloc;
+    const String                  text    = slurp(kClockAsset, &alloc);
+    const StringView              src     = StringView{text.data(), text.size()};
+    const Array<u8>               blob    = cooked(src, &alloc);
+    const u32                     step    = line_of(src, kStepLine);
+    const u32                     wall    = line_of(src, kWallLine);
+    const u32                     sw      = line_of(src, "core.switch(%3)");
+    const i64                     args[1] = {7};
+
+    // A step over budget: the switch has no case for it.
+    input::HostClock clock;
+    clock.set_step(kSim, kHitch);
+    ck::ReplayRecord rec(&alloc);
+    String           missing(&alloc);
+    hs::HostSite     fault(&alloc);
+    REQUIRE(hs::record_host_run({blob.data(), blob.size()}, StringView{kFile}, StringView{"main"},
+                                ConstSpan<i64>(args, 1U), hs::HostSchedule{}, 64U, &register_dialects, nullptr, rec,
+                                &missing, &fault, clock.source()) == hs::HostReplayStatus::Ok);
+    CHECK(rec.host_error == exec::ExecError::SelectorOutOfRange);
+    CHECK(fault.line == sw);
+    CHECK(StringView{missing.data(), missing.size()}.empty());
+    CHECK(rec.inputs[4].state == ck::ReplayInputState::Recorded);
+    REQUIRE(rec.input_reads.size() == 1U);
+    CHECK(rec.input_reads[0] == ck::ReplayInputRead{input::InputKind::TimeStep, kSim, true, kHitch});
+
+    // The host executor of the replay commands makes the same record from the same clock arguments.
+    {
+        ck::HostRecordRequest request;
+        request.blob               = {blob.data(), blob.size()};
+        request.path               = StringView{kFile};
+        request.entry              = StringView{"main"};
+        request.args               = ConstSpan<i64>(args, 1U);
+        request.max_events         = 64U;
+        request.registrar          = &register_dialects;
+        request.clock.has_sim_step = true;
+        request.clock.sim_step     = kHitch;
+        ck::ReplayRecord    via(&alloc);
+        ck::OwnedReplaySite site(&alloc);
+        String              via_missing(&alloc);
+        String              reason(&alloc);
+        REQUIRE(hs::host_replay_executor().record(request, via, site, via_missing, reason) ==
+                ck::HostExecutorStatus::Ok);
+        Array<u8> a(&alloc);
+        Array<u8> b(&alloc);
+        ck::encode_record(rec, a);
+        ck::encode_record(via, b);
+        CHECK(StringView{reinterpret_cast<const char*>(a.data()), a.size()} ==
+              StringView{reinterpret_cast<const char*>(b.data()), b.size()});
+    }
+
+    // Replays from the record's own reads, with no clock, on the recorded split and on 1 and 16 jobs.
+    for (const u32 jobs : {0U, 1U, 16U})
+    {
+        INFO("jobs " << jobs);
+        hs::HostReplayOptions options;
+        options.num_jobs = jobs;
+        hs::HostReplay out(&alloc);
+        REQUIRE(hs::replay_host_record(rec, &register_dialects, nullptr, options, out) == hs::HostReplayStatus::Ok);
+        CHECK(out.divergence.kind == ck::DivergenceKind::None);
+        CHECK(out.trace.host_error == exec::ExecError::SelectorOutOfRange);
+        CHECK(out.fault.line == sw);
+        CHECK(out.trace.input_reads_total == 1U);
+    }
+
+    // The same reads against an edit that reads the frame domain's step: refused at that read, named at its line.
+    const String    edit  = replaced(src, kStepLine, kStepEdited, &alloc);
+    const Array<u8> other = cooked(StringView{edit.data(), edit.size()}, &alloc);
+    {
+        hs::HostReplayOptions options;
+        options.against = {other.data(), other.size()};
+        hs::HostReplay out(&alloc);
+        REQUIRE(hs::replay_host_record(rec, &register_dialects, nullptr, options, out) == hs::HostReplayStatus::Ok);
+        CHECK(out.divergence.kind == ck::DivergenceKind::Input);
+        CHECK(out.divergence.recorded == static_cast<i64>(kSim));
+        CHECK(out.divergence.observed == 2);
+        CHECK(out.divergence.recorded_input == input::InputKind::TimeStep);
+        CHECK(out.divergence.observed_input == input::InputKind::TimeStep);
+        CHECK(out.site.line == step);
+    }
+
+    // A steady step: the wall and sim readings are read and returned; a changed wall reading is named at its read.
+    input::HostClock steady;
+    steady.set_step(kSim, kSteady);
+    steady.set_reading(kSim, 9000);
+    steady.set_reading(0U, 123456789);
+    ck::ReplayRecord pass(&alloc);
+    REQUIRE(hs::record_host_run({blob.data(), blob.size()}, StringView{kFile}, StringView{"main"},
+                                ConstSpan<i64>(args, 1U), hs::HostSchedule{}, 64U, &register_dialects, nullptr, pass,
+                                nullptr, &fault, steady.source()) == hs::HostReplayStatus::Ok);
+    CHECK(pass.host_error == exec::ExecError::None);
+    REQUIRE(pass.results.size() == 1U);
+    CHECK(pass.results[0] == 123456789 + 9000 + 7);
+    REQUIRE(pass.input_reads.size() == 3U);
+    pass.input_reads[1].value += 1000;
+    hs::HostReplay changed(&alloc);
+    REQUIRE(hs::replay_host_record(pass, &register_dialects, nullptr, hs::HostReplayOptions{}, changed) ==
+            hs::HostReplayStatus::Ok);
+    CHECK(changed.divergence.kind == ck::DivergenceKind::Value);
+    CHECK(changed.divergence.recorded == 123456789);
+    CHECK(changed.divergence.observed == 123456789 + 1000);
+    CHECK(changed.site.line == wall);
 }

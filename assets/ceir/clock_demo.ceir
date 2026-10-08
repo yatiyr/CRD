@@ -1,0 +1,18 @@
+module {
+  ^bb0:
+    func.func() {sym_name = "main"} {
+      ^bb0(%0 : !i64):
+        %1 = input.time_step() {domain = "sim"} : !i64
+        %2 = arith.const() {value = 33333333} : !i64
+        %3 = arith.cmpi(%1, %2) {predicate = "sgt"} : !i1
+        core.switch(%3) {
+          ^bb0:
+            core.yield()
+        }
+        %4 = input.clock() {domain = "wall"} : !i64
+        %5 = input.clock() {domain = "sim"} : !i64
+        %6 = arith.addi(%4, %5) : !i64
+        %7 = arith.addi(%6, %0) : !i64
+        func.return(%7)
+    }
+}

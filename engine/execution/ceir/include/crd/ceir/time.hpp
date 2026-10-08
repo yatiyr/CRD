@@ -11,6 +11,7 @@
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/id.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/types.hpp>
 
 namespace crd::ceir::time
 {
@@ -24,4 +25,16 @@ Dialect* register_dialect(Context& ctx);
 // Build a time TYPE in domain-class `cls` over `underlying` (a numeric/quantity type). The Extern type carries the
 // domain, so distinct domains are distinct TypeIds. `cls` must be registered (type_extern asserts its verify hook).
 [[nodiscard]] TypeId time_type(Context& ctx, TypeClassId cls, TypeId underlying);
+
+// The six built-in domains, in their stable order: wall, sim, frame, audio_sample, sequencer, logical. DIAG.9a: a
+// built-in's ordinal is the input seam's channel for input.clock / input.time_step and is stored in run records, so
+// the order only grows at the end.
+inline constexpr crd::u32 kBuiltinDomainCount = 6U;
+
+// The ordinal of the built-in domain `name` in [0, kBuiltinDomainCount), or false for any other name (a plugin domain
+// is a valid type-class but has no ordinal).
+[[nodiscard]] bool builtin_domain_index(containers::StringView name, crd::u32& out) noexcept;
+
+// The name of built-in domain `index`, or an empty view when `index` is out of range.
+[[nodiscard]] containers::StringView builtin_domain_name(crd::u32 index) noexcept;
 } // namespace crd::ceir::time

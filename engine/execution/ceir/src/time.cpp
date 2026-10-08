@@ -22,8 +22,32 @@ bool verify_time_domain(const Context& ctx, const Type& t) noexcept
 }
 
 // The six built-in U-§17 domains. ⛔ append-at-end is fine — an open-world set (a plugin adds `game.turn` freely).
+// DIAG.9a: an ordinal here is a stored input-seam channel, so append only.
 constexpr const char* kDomains[] = {"wall", "sim", "frame", "audio_sample", "sequencer", "logical"};
+static_assert(sizeof(kDomains) / sizeof(kDomains[0]) == kBuiltinDomainCount, "kBuiltinDomainCount names every domain");
 } // namespace
+
+bool builtin_domain_index(containers::StringView name, crd::u32& out) noexcept
+{
+    for (crd::u32 i = 0U; i < kBuiltinDomainCount; ++i)
+    {
+        if (name == containers::StringView{kDomains[i]})
+        {
+            out = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+containers::StringView builtin_domain_name(crd::u32 index) noexcept
+{
+    if (index >= kBuiltinDomainCount)
+    {
+        return containers::StringView{};
+    }
+    return containers::StringView{kDomains[index]};
+}
 
 Dialect* register_dialect(Context& ctx)
 {

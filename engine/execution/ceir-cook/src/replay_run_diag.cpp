@@ -12,9 +12,11 @@
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
+#include <crd/ceir/input.hpp> // HostClock, InputRouter, SeededInputs
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/perf/diag_commands.hpp>
+#include <crd/time/clocks.hpp> // MonotonicClock: the live wall domain
 
 #include <utility>
 
@@ -58,6 +60,8 @@ void join(cont::StringView root, cont::StringView relative, cont::String& out)
 
 // ---- replay.record --------------------------------------------------------------------------------------------------
 
+constexpr crd::u32 kSimDomain = 1U; // time::builtin_domain_index("sim")
+
 struct RecordArgs
 {
     explicit RecordArgs(crd::memory::IAllocator* alloc) : args(alloc) {}
@@ -71,6 +75,7 @@ struct RecordArgs
     crd::u64              sub_fuel   = crd::u64{1} << 20U;
     bool                  have_seed  = false; // seed=: the run's host random streams (none without it)
     crd::u64              seed       = 0U;
+    HostClockSpec         clock;              // clock=, sim_time=, sim_step=: the run's time domains
 };
 
 constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
@@ -191,6 +196,35 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
                 out->seed      = v;
             }
         }
+        else if (a.name == "clock")
+        {
+            if (a.value != "wall")
+            {
+                return bad(reason, a.name, "must be 'wall'");
+            }
+            if (out != nullptr)
+            {
+                out->clock.live_wall = true;
+            }
+        }
+        else if (a.name == "sim_time" || a.name == "sim_step")
+        {
+            crd::i64 v = 0;
+            if (!detail::parse_i64(a.value, v))
+            {
+                return bad(reason, a.name, "must be an i64 count of nanoseconds");
+            }
+            if (out != nullptr && a.name == "sim_time")
+            {
+                out->clock.has_sim_time = true;
+                out->clock.sim_time     = v;
+            }
+            else if (out != nullptr)
+            {
+                out->clock.has_sim_step = true;
+                out->clock.sim_step     = v;
+            }
+        }
         else if (a.name == "sub_fuel")
         {
             crd::u64 v = 0U;
@@ -208,7 +242,8 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; replay.record takes out, entry, args, max_events, seed, executor, jobs and sub_fuel");
+            reason.append("'; replay.record takes out, entry, args, max_events, seed, clock, sim_time, sim_step, "
+                          "executor, jobs and sub_fuel");
             return DiagStatus::BadArgument;
         }
     }
@@ -352,6 +387,11 @@ struct FaultSite
         .u64("results", record.results.size())
         .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
         .u64("seed", parsed.seed)
+        .str("wall_clock", parsed.clock.live_wall ? cont::StringView{"live"} : cont::StringView{"none"})
+        .str("sim_time", parsed.clock.has_sim_time ? cont::StringView{"set"} : cont::StringView{"none"})
+        .i64("sim_time_ns", parsed.clock.sim_time)
+        .str("sim_step", parsed.clock.has_sim_step ? cont::StringView{"set"} : cont::StringView{"none"})
+        .i64("sim_step_ns", parsed.clock.sim_step)
         .u64("input_reads", record.input_reads_total)
         .str("missing_inputs", missing)
         .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
@@ -380,6 +420,7 @@ struct FaultSite
     request.user       = cmd.user;
     request.has_seed   = parsed.have_seed;
     request.seed       = parsed.seed;
+    request.clock      = parsed.clock;
     ReplayRecord    record(alloc);
     OwnedReplaySite fault(alloc);
     cont::String    missing(alloc);
@@ -458,9 +499,15 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
 
     cmd->executions.fetch_add(1U, std::memory_order_relaxed);
     ReplayTrace trace(alloc);
-    // The host's random streams (seeded, or none), every read kept in the trace through the recorder.
-    input::SeededInputs  seeded(parsed.seed, alloc);
-    InputRecorder        inputs(trace, parsed.have_seed ? seeded.source() : nullptr);
+    // The host's random streams (seeded, or none) and its clock, every read kept in the trace through the recorder.
+    input::SeededInputs seeded(parsed.seed, alloc);
+    input::HostClock    clock;
+    apply_clock(parsed.clock, clock);
+    input::InputRouter host_inputs;
+    host_inputs.route(input::InputKind::Random, parsed.have_seed ? seeded.source() : nullptr);
+    host_inputs.route(input::InputKind::Clock, clock.source());
+    host_inputs.route(input::InputKind::TimeStep, clock.source());
+    InputRecorder inputs(trace, host_inputs.source());
     run_traced(program, cont::as_const_span(parsed.args), parsed.max_events, call.cancel, trace, inputs.source());
     if (trace.error == plan::RunError::Cancelled)
     {
@@ -580,6 +627,11 @@ void add_divergence(DiagFields& item, const Divergence& d)
         .i64("observed", d.observed)
         .u64("recorded_op", d.recorded_op)
         .u64("observed_op", d.observed_op);
+    if (d.kind == DivergenceKind::Input && !d.count)
+    {
+        item.str("recorded_input", input::input_kind_name(d.recorded_input))
+            .str("observed_input", input::input_kind_name(d.observed_input));
+    }
 }
 
 // The artifact of the explicit other program `path` (an edited checkout), bounded before a byte is read.
@@ -867,6 +919,28 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     return DiagStatus::Ok;
 }
 } // namespace
+
+crd::i64 monotonic_ns(void* /*user*/) noexcept
+{
+    return crd::time::MonotonicClock::now().ns_since_epoch();
+}
+
+void apply_clock(const HostClockSpec& spec, input::HostClock& clock) noexcept
+{
+    clock.clear();
+    if (spec.live_wall)
+    {
+        clock.use_live_wall(&monotonic_ns, nullptr);
+    }
+    if (spec.has_sim_time)
+    {
+        clock.set_reading(kSimDomain, spec.sim_time);
+    }
+    if (spec.has_sim_step)
+    {
+        clock.set_step(kSimDomain, spec.sim_step);
+    }
+}
 
 bool register_replay_record(perf::DiagCommandService& service, ReplayCommands& commands)
 {

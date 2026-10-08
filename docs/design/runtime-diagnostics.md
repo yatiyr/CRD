@@ -977,11 +977,46 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspect-host-input
   argument step; the summary answers `random_source` and `seed`); crd-sandbox's `InspectPanel::set_inputs` and
   `--inspect-seed <u64>`: the panel owns a `SeededInputs` and its allocator (before its host) and resets it at every
   start, so "Run again" reads the same draws from the first.
+- What stayed open after this batch is listed at the end of the next settled block (the clock and time-step inputs
+  it named are settled there).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-clock-inputs.md)):
+- Two `input` ops, specified in `input.ceirop.toml`: `input.clock {domain}` reads a time domain's current reading and
+  `input.time_step {domain}` the length of its current step. `domain` must name one of the time dialect's six
+  built-in domains (`time::builtin_domain_index`: wall 0, sim 1, frame 2, audio_sample 3, sequencer 4, logical 5, an
+  append-only order stored in records); anything else is `UndefinedValue` at eval and `BadConst` at plan compile. The
+  value is the host's raw i64, unreduced: nanoseconds for wall and sim, ticks of the domain otherwise. The wall domain
+  is the host's monotonic clock from the clock's own epoch, never calendar time, so a record names no date. Both ops
+  declare `TimeRead` (a pure read in the hazard classification) and `ExternalNondeterminism`.
+- Read order: the seam's read order is the executors' program order. Both executors run a block in list order and no
+  pass reorders ops between cook and execution today (the cook runs no transform, and nothing on the host
+  executors' path reorders by the hazard analysis), and a replay runs the record's own blob, so the order a record keeps is the order it feeds back. A pass
+  that reorders time reads would have to keep that order or bump `kReplayExecutor`.
+- Seam: `InputKind::Clock` and `InputKind::TimeStep` (appended; the channel is the domain ordinal). `input::HostClock`
+  answers the readings and steps the host set (`set_reading`, `set_step`, `advance`, `clear`) and, with
+  `use_live_wall(reader, user)`, the wall domain live from the host's monotonic reader (crd-ceir links no clock;
+  crd-ceir-cook's `monotonic_ns` reads crd-time's `MonotonicClock`). `input::InputRouter` sends each kind to its own
+  source. Neither allocates, so either can serve the inspect host's executing thread. Both executors read the ops
+  through the seam (`Op::Clock` and `Op::TimeStep` in the plan); the parallel-body pre-flight refuses them like
+  `input.random`, and a pooled launch body that reads one runs inline.
+- Records: the schema stays 4 (no layout changed; a kind past the last is still refused, and a time read of a channel
+  past the built-in domains is now refused as malformed). `clock` is recorded under the same rule as `random`: every
+  read held and every op declaring `TimeRead` reading through the seam; otherwise it is missing and a replay refuses
+  the record (the inspect host's bound applies to both). An `input` divergence also names the recorded and the
+  requested kind (`recorded_input`, `observed_input`), since a clock read and a step read of one domain share its
+  channel.
+- `replay.record` takes `clock=wall` (the live wall), `sim_time=` and `sim_step=` (i64 nanoseconds) on both executors
+  (`HostClockSpec` on `HostRecordRequest`); the summary answers `wall_clock`, `sim_time`, `sim_time_ns`, `sim_step`
+  and `sim_step_ns`. The other domains have no reading on that one-shot host. The committed
+  `assets/ceir/clock_demo.ceir` fails when the sim step is over 33,333,333 ns and otherwise returns the wall reading
+  plus the sim reading plus its argument: a failure recorded by one `ceridc` process reproduces in another with no
+  clock, and a live-wall result replays to the recorded value.
 - Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
   interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
-  clock and time-step inputs, input events and external I/O completions, which need their ops specified (units and
-  time domains for the clock) before the seam can carry them; backend-specific numeric replay of GPU dispatches with
-  a declared tolerance; network and physical effects stubbed only in explicit test replay; host records from
+  input events and external I/O completions, which need their ops specified before the seam can carry them; a clock at
+  the interactive hosts (`ceridc inspect`, `program.inspect` and the sandbox panel take a random source only; the
+  sandbox frame loop's real frame step is the natural live source); backend-specific numeric replay of GPU dispatches
+  with a declared tolerance; network and physical effects stubbed only in explicit test replay; host records from
   crd-sandbox's panel (it would need the request run on an enrolled thread).
 
 <a id="diag-9b"></a>

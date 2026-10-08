@@ -15,6 +15,29 @@ namespace
 {
 // verifiers - structural conformance (operand/result/region counts + required attrs & kinds), wired to
 // Context::verify via register_op. Semantic verification (types/effects/domain) lands at CEIR-3/4.
+[[nodiscard]] bool verify_clock(const Context& ctx, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("domain");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 [[nodiscard]] bool verify_random(const Context& ctx, const Operation& op) noexcept
 {
     if (op.num_operands() != 0U)
@@ -45,8 +68,37 @@ namespace
     }
     return true;
 }
+[[nodiscard]] bool verify_time_step(const Context& ctx, const Operation& op) noexcept
+{
+    if (op.num_operands() != 0U)
+    {
+        return false;
+    }
+    if (op.num_results() != 1U)
+    {
+        return false;
+    }
+    if (op.num_regions() != 0U)
+    {
+        return false;
+    }
+    {
+        const AttrId a = op.attr("domain");
+        if (!a.valid() || ctx.attr_value(a).kind != AttrKind::String)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 } // namespace
 
+Operation* build_clock(Context& ctx, AttrId domain, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(clock_kind(ctx), {}, 1U, result_type, 0U);
+    ctx.set_attr(op, "domain", domain);
+    return op;
+}
 Operation* build_random(Context& ctx, AttrId stream, AttrId bound, TypeId result_type)
 {
     Operation* const op = ctx.create_operation(random_kind(ctx), {}, 1U, result_type, 0U);
@@ -54,30 +106,50 @@ Operation* build_random(Context& ctx, AttrId stream, AttrId bound, TypeId result
     ctx.set_attr(op, "bound", bound);
     return op;
 }
+Operation* build_time_step(Context& ctx, AttrId domain, TypeId result_type)
+{
+    Operation* const op = ctx.create_operation(time_step_kind(ctx), {}, 1U, result_type, 0U);
+    ctx.set_attr(op, "domain", domain);
+    return op;
+}
 
 namespace
 {
+constexpr EffectRecord kClockEffects[] = {{EffectFamily::TimeRead, EffectTarget::None, 0U, 0U}};
 constexpr EffectRecord kRandomEffects[] = {{EffectFamily::RandomRead, EffectTarget::None, 0U, 0U}};
+constexpr EffectRecord kTimeStepEffects[] = {{EffectFamily::TimeRead, EffectTarget::None, 0U, 0U}};
 } // namespace
 
 Dialect* register_input_ops(Context& ctx)
 {
     Dialect* const d = ctx.register_dialect("input");
+    d->register_op("clock", {.traits = 0U, .verify = &verify_clock, .effects = containers::ConstSpan<EffectRecord>(kClockEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
     d->register_op("random", {.traits = 0U, .verify = &verify_random, .effects = containers::ConstSpan<EffectRecord>(kRandomEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
+    d->register_op("time_step", {.traits = 0U, .verify = &verify_time_step, .effects = containers::ConstSpan<EffectRecord>(kTimeStepEffects, 1U), .determinism = DeterminismClass::ExternalNondeterminism, .domain = EvalDomain::Unspecified, .intrinsic = true, .native_provider = "host"});
     return d;
 }
 
 namespace
 {
+constexpr ResultInfo kClockResults[] = {{"now", "the domain's current reading (an integer): nanoseconds for wall and sim, ticks of the domain otherwise"}};
+constexpr AttrInfo kClockAttrs[] = {{"domain", AttrKind::String, true, "the time domain to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins). wall is the host's monotonic clock since its own epoch, never calendar time."}};
 constexpr ResultInfo kRandomResults[] = {{"value", "the draw reduced to [0, bound) (an integer)"}};
 constexpr AttrInfo kRandomAttrs[] = {{"stream", AttrKind::Int, true, "the host random stream to draw from, in [0, 2^32). Streams are independent: a draw from one never advances another."}, {"bound", AttrKind::Int, true, "the exclusive upper bound of the result, in [1, 2^32). The raw draw is reduced by unsigned remainder."}};
+constexpr ResultInfo kTimeStepResults[] = {{"step", "the length of the domain's current step (an integer), in the domain's own unit"}};
+constexpr AttrInfo kTimeStepAttrs[] = {{"domain", AttrKind::String, true, "the time domain whose step to read: wall, sim, frame, audio_sample, sequencer or logical (the time dialect's built-ins)."}};
 
 constexpr OpSchema kOpSchemas[] = {
+    {"clock", "input.clock", "input", 1U, "Read the host's current time in one time domain.", "input.clock {domain = D} -> %t. The host's input seam delivers domain D's current reading (InputSource, InputKind::Clock, channel = D's ordinal among the time dialect's built-in domains) and %t is that raw value: nanoseconds for wall (monotonic, from the host clock's epoch, never calendar time) and sim, a tick count for frame, audio_sample, sequencer and logical. With no reading for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A domain that is absent, not a string or not a built-in is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kClockResults, 1U), containers::ConstSpan<AttrInfo>(kClockAttrs, 1U),
+     0U, 0U, containers::ConstSpan<EffectRecord>(kClockEffects, 1U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
     {"random", "input.random", "input", 1U, "Draw the next value of a host random stream, reduced to [0, bound).", "input.random {stream = S, bound = B} -> %v. The host's input seam delivers the raw draw of stream S (InputSource, InputKind::Random); %v = draw mod B (unsigned). Deterministic given the host's stream (a seeded host, or a run record's recorded draws), which the host chooses externally. With no source for the stream the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A stream or bound out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (a draw order would depend on the schedule): the shared pre-flight refuses it as ParallelBodyStateful, and a launch body that reads one runs inline on the submitting thread.",
      containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kRandomResults, 1U), containers::ConstSpan<AttrInfo>(kRandomAttrs, 2U),
      0U, 0U, containers::ConstSpan<EffectRecord>(kRandomEffects, 1U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
+    {"time_step", "input.time_step", "input", 1U, "Read the length of the current step of one time domain.", "input.time_step {domain = D} -> %dt. The host's input seam delivers the length of domain D's current step (InputSource, InputKind::TimeStep, channel = D's ordinal among the time dialect's built-in domains), in D's unit: nanoseconds for wall and sim, ticks otherwise. With no step for D the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A bad domain is ExecError::UndefinedValue at eval and CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (ParallelBodyStateful); a launch body that reads one runs inline.",
+     containers::ConstSpan<OperandInfo>{}, containers::ConstSpan<ResultInfo>(kTimeStepResults, 1U), containers::ConstSpan<AttrInfo>(kTimeStepAttrs, 1U),
+     0U, 0U, containers::ConstSpan<EffectRecord>(kTimeStepEffects, 1U), DeterminismClass::ExternalNondeterminism, EvalDomain::Unspecified, true, "host", DeterminismClass::ExternalNondeterminism},
 };
 } // namespace
 
-containers::ConstSpan<OpSchema> input_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 1U); }
+containers::ConstSpan<OpSchema> input_op_schemas() noexcept { return containers::ConstSpan<OpSchema>(kOpSchemas, 3U); }
 } // namespace crd::ceir::input

@@ -155,6 +155,7 @@ struct CC
     OpId tspawn, tmain, tworker, tgroup, tfiber, tcont;  // task.*
     OpId pfor, mreduce;         // 4c: task.parallel_for / task.map_reduce
     OpId irandom;               // DIAG.9a: input.random → Op::Random
+    OpId iclock, istep;         // DIAG.9a: input.clock → Op::Clock, input.time_step → Op::TimeStep
     // 4c: this CC compiles a map/combine body → a slot MISS is a capture, not an internal bug
     bool             isolated = false;
     CompileError     err      = CompileError::Ok;
@@ -273,6 +274,8 @@ CC make_cc(Context& ctx, CompiledPlan& plan, containers::HashMap<const Value*, c
               ctx.intern_op("task", "parallel_for"),
               ctx.intern_op("task", "map_reduce"),
               input::random_kind(ctx),
+              input::clock_kind(ctx),
+              input::time_step_kind(ctx),
               isolated};
 }
 crd::u32 compile_seq(CC& cc, Block* b);                             // fwd (mutual recursion with compile_fn_body)
@@ -328,7 +331,8 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         // op-id dispatch, so is_dp is deliberately OUT of the `is_cf||is_launch||is_cont` child-in-parent-frame set.
         const bool is_dp     = op->kind() == cc.pfor || op->kind() == cc.mreduce;
         const bool is_random = op->kind() == cc.irandom; // DIAG.9a: a host input read
-        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp && !is_random)
+        const bool is_time   = op->kind() == cc.iclock || op->kind() == cc.istep;
+        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp && !is_random && !is_time)
         {
             cc.err = CompileError::UnsupportedOp; // core.foreach etc. — no compiled semantics
             return fail_at(cc, op);
@@ -414,6 +418,17 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
                 return fail_at(cc, op);
             }
             instr.imm = static_cast<crd::i64>((static_cast<crd::u64>(stream) << 32U) | bound);
+        }
+        else if (is_time) // DIAG.9a input.clock / input.time_step: the built-in domain's ordinal is the immediate
+        {
+            instr.op        = op->kind() == cc.iclock ? Op::Clock : Op::TimeStep;
+            crd::u32 domain = 0U;
+            if (!input::time_attrs(cc.ctx, *op, domain))
+            {
+                cc.err = CompileError::BadConst; // the reference: UndefinedValue (the arith.const precedent)
+                return fail_at(cc, op);
+            }
+            instr.imm = static_cast<crd::i64>(domain);
         }
         else if (op->kind() == cc.addi)
         {
@@ -866,6 +881,18 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 return raise(rs, seq_idx, k, RunError::InputUnavailable);
             }
             rs.stack[rslot] = input::reduce_draw(raw, bound);
+            break;
+        }
+        case Op::Clock:    // DIAG.9a: a time domain's raw reading through the run's input seam
+        case Op::TimeStep: // DIAG.9a: a time domain's raw current step
+        {
+            const input::InputKind kind = in.op == Op::Clock ? input::InputKind::Clock : input::InputKind::TimeStep;
+            crd::i64               raw  = 0;
+            if (!input::read_input(rs.inputs, kind, static_cast<crd::u32>(in.imm), raw))
+            {
+                return raise(rs, seq_idx, k, RunError::InputUnavailable);
+            }
+            rs.stack[rslot] = raw;
             break;
         }
         case Op::AddI:

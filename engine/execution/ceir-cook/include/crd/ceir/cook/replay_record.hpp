@@ -478,6 +478,10 @@ struct Divergence
     crd::i64       observed    = 0;
     bool           count       = false; // `recorded` and `observed` are counts (events, read results, values)
     plan::InstrRef site;             // the replay's instr to blame (invalid when none, and for a host trace)
+    // Input, not `count`: the kind of input the record holds at that read and the kind the replay asked for (a clock
+    // read and a time-step read of one domain share its channel).
+    input::InputKind recorded_input = input::InputKind::Random;
+    input::InputKind observed_input = input::InputKind::Random;
 };
 
 // The first divergence of `trace` from `record` (kind None: the replay reproduced the record). Only the kept events

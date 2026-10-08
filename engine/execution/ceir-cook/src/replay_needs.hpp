@@ -46,9 +46,17 @@ inline constexpr crd::u32 kReplayProgramInput   = 0U;
 inline constexpr crd::u32 kReplayBuildInput     = 1U;
 inline constexpr crd::u32 kReplayArgumentsInput = 2U;
 inline constexpr crd::u32 kReplayRandomInput    = 3U;
+inline constexpr crd::u32 kReplayClockInput     = 4U;
 inline constexpr crd::u32 kReplayScheduleInput  = 7U;
 
 using Need = ReplayNeed;
+
+// Whether input `index` is one the host input seam carries (random, clock): every read of it goes through an
+// InputRecorder, so a record holds it when the run kept every read and no op reads it outside the seam.
+[[nodiscard]] constexpr bool is_seam_input(crd::u32 index) noexcept
+{
+    return index == kReplayRandomInput || index == kReplayClockInput;
+}
 
 // "no", "yes", "unknown".
 [[nodiscard]] containers::StringView need_name(Need n) noexcept;

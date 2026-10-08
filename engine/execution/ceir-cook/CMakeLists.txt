@@ -24,6 +24,7 @@ target_link_libraries(crd-ceir-cook
     PRIVATE
         crd-resources         # the CRDR container writer/reader — the 'CEIR' chunk (still NOT in any public header)
         crd-perf              # the program diagnostic commands register into crd-perf's command service
+        crd-time              # DIAG.9a: the monotonic clock behind replay.record clock=wall
         crd-warnings
 )
 

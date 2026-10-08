@@ -498,7 +498,9 @@ TEST_CASE("diag 8c: replay.prepare blames each needed input on the first op that
                                                 "nothing records the host and world state read", &root))));
     CHECK(has(view(items[4]), view(state_fields("clock", "event", "yes", "missing", 1U, &root))));
     CHECK(has(view(items[4]), view(blame_fields("rp.clock", kEffectsFile, clock,
-                                                "nothing records the clock and time-step inputs read", &root))));
+                                                "the time reads are not held; replay.record keeps every "
+                                                "input.clock and input.time_step read",
+                                                &root))));
 
     // A resolved call is not an opaque one: only the file read needs external results.
     CHECK(has(view(items[6]), view(state_fields("external-results", "event", "yes", "missing", 1U, &root))));
@@ -557,7 +559,9 @@ TEST_CASE("diag 8c: replay.prepare reports an op it cannot know as an unknown ne
     // A known op that does need an input is still blamed by name.
     CHECK(has(view(items[4]), view(state_fields("clock", "event", "yes", "missing", 1U, &root))));
     CHECK(has(view(items[4]), view(blame_fields("rp.clock", kOpaqueFile, clock,
-                                                "nothing records the clock and time-step inputs read", &root))));
+                                                "the time reads are not held; replay.record keeps every "
+                                                "input.clock and input.time_step read",
+                                                &root))));
     (void)std::remove(kOpaqueFile);
 }
 

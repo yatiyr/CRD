@@ -3,6 +3,7 @@
 #include <crd/ceir/host/host_replay_diag.hpp>
 
 #include <crd/ceir/host/host_replay.hpp>
+#include <crd/ceir/input.hpp> // HostClock, InputRouter, SeededInputs
 
 #include <utility>
 
@@ -55,9 +56,15 @@ cook::HostExecutorStatus record(const cook::HostRecordRequest& request, cook::Re
 {
     const HostSchedule  schedule{request.num_jobs, request.sub_fuel};
     input::SeededInputs seeded(request.seed, out.program.allocator()); // the host's random streams, when seeded
-    const HostReplayStatus s = record_host_run(request.blob, request.path, request.entry, request.args, schedule,
-                                               request.max_events, request.registrar, request.user, out, &missing,
-                                               &fault, request.has_seed ? seeded.source() : nullptr);
+    input::HostClock    clock;                                         // the host's time domains
+    cook::apply_clock(request.clock, clock);
+    input::InputRouter inputs;
+    inputs.route(input::InputKind::Random, request.has_seed ? seeded.source() : nullptr);
+    inputs.route(input::InputKind::Clock, clock.source());
+    inputs.route(input::InputKind::TimeStep, clock.source());
+    const HostReplayStatus s =
+        record_host_run(request.blob, request.path, request.entry, request.args, schedule, request.max_events,
+                        request.registrar, request.user, out, &missing, &fault, inputs.source());
     return refuse(s, cont::StringView{}, reason);
 }
 

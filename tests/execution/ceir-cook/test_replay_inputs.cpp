@@ -743,7 +743,7 @@ TEST_CASE("diag 9a input: the record format holds the reads exactly and refuses 
     CHECK(decode(encode(rec)) == ck::RecordError::UnsupportedSchema);
 
     rec                     = decode_file(out, &alloc);
-    rec.input_reads[0].kind = static_cast<input::InputKind>(1U); // past the last kind
+    rec.input_reads[0].kind = static_cast<input::InputKind>(static_cast<u8>(input::kLastInputKind) + 1U); // past it
     CHECK(decode(encode(rec)) == ck::RecordError::Malformed);
 
     rec                          = decode_file(out, &alloc);

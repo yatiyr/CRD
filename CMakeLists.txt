@@ -314,7 +314,7 @@ crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir ceir-cook co
     TESTS execution/ceir-host)
 # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
 crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core memory perf render-asset-core
-    resources TESTS execution/ceir-cook)
+    resources time TESTS execution/ceir-cook)
 # D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
 crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers core gpu-context kir memory
     TESTS execution/ceir-gpu TEST_DEPENDS hesap-autodiff)

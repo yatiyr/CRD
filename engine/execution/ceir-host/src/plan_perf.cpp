@@ -8,10 +8,10 @@
 
 namespace crd::ceir::host
 {
-// ⛔ the per-Op arrays are indexed by u8(op); if plan::Op ever grows past kMaxOps this becomes a SILENT drop. Random
+// ⛔ the per-Op arrays are indexed by u8(op); if plan::Op ever grows past kMaxOps this becomes a SILENT drop. TimeStep
 // (DIAG.9a) is the last member today — widening the enum must audit THIS consumer (the widen-enum-audit-every-consumer
 // rule).
-static_assert(static_cast<crd::u8>(plan::Op::Random) < PlanProfile::kMaxOps,
+static_assert(static_cast<crd::u8>(plan::Op::TimeStep) < PlanProfile::kMaxOps,
               "PlanProfile::kMaxOps < the plan::Op count");
 namespace
 {

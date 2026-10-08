@@ -207,7 +207,7 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
         m_rec_blob     = std::move(cr.blob);
         detail::ProgramNeeds needs;
         (void)detail::analyze_needs(*g->ctx, *g->program.module, m_alloc, nullptr, needs); // no cancel: always whole
-        // Every host input read is kept through the run's InputRecorder, so the random input is recorded here as held;
+        // Every host input read is kept through the run's InputRecorder, so the seam inputs are recorded here as held;
         // `record` stores it missing when the run made more reads than a record keeps (only known once it has ended).
         detail::record_inputs(needs, ReplayExecutorKind::Plan, /*host_inputs_held=*/true, m_rec_inputs, nullptr);
     }
@@ -279,11 +279,14 @@ HostRecord InspectHost::record(ReplayRecord& out) const
     {
         out.inputs[i] = m_rec_inputs[i];
     }
-    // A run that read past the bound has reads the record does not hold: its random input cannot be fed back.
-    if (m_rec_trace.input_reads_total > kReplayMaxInputReads &&
-        out.inputs[detail::kReplayRandomInput].state == ReplayInputState::Recorded)
+    // A run that read past the bound has reads the record does not hold: no seam input of it can be fed back.
+    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
     {
-        out.inputs[detail::kReplayRandomInput].state = ReplayInputState::Missing;
+        if (m_rec_trace.input_reads_total > kReplayMaxInputReads && detail::is_seam_input(i) &&
+            out.inputs[i].state == ReplayInputState::Recorded)
+        {
+            out.inputs[i].state = ReplayInputState::Missing;
+        }
     }
     out.input_reads_total = m_rec_trace.input_reads_total;
     out.input_reads.clear();

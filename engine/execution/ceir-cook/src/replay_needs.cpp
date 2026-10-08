@@ -30,7 +30,7 @@ constexpr ReplayInputSpec kInputs[kReplayInputCount] = {
     {"random", "event", bits(EffectFamily::RandomRead), "random streams",
      "the random draws are not held; replay.record keeps every input.random draw"},
     {"clock", "event", bits(EffectFamily::TimeRead), "clock and time-step inputs",
-     "nothing records the clock and time-step inputs read"},
+     "the time reads are not held; replay.record keeps every input.clock and input.time_step read"},
     {"host-state", "event",
      bits(EffectFamily::HostStateRead) | bits(EffectFamily::SceneRead) | bits(EffectFamily::EcsRead) |
          bits(EffectFamily::PhysicsRead) | bits(EffectFamily::AudioRead) | bits(EffectFamily::DocumentRead) |
@@ -216,7 +216,7 @@ void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, bool 
         }
         else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput ||
                  (host && i == kReplayScheduleInput) ||
-                 (i == kReplayRandomInput && in.need == ReplayNeed::Yes && host_inputs_held &&
+                 (is_seam_input(i) && in.need == ReplayNeed::Yes && host_inputs_held &&
                   needs.inputs[i].uncaptured == 0U))
         {
             in.state = ReplayInputState::Recorded;

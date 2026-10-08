@@ -4,6 +4,7 @@
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/provenance.hpp>
+#include <crd/ceir/time.hpp> // kBuiltinDomainCount: a time read's channel
 #include <crd/containers/hash.hpp> // fnv1a_64
 #include <crd/core/build_config.hpp>
 #include <crd/core/platform.hpp>
@@ -386,10 +387,12 @@ private:
         {
             return RecordError::Truncated;
         }
+        const bool time_read = read_kind == static_cast<crd::u8>(input::InputKind::Clock) ||
+                               read_kind == static_cast<crd::u8>(input::InputKind::TimeStep);
         if (read_kind > static_cast<crd::u8>(input::kLastInputKind) || delivered > 1U ||
-            (delivered == 0U && read.value != 0))
+            (delivered == 0U && read.value != 0) || (time_read && read.channel >= time::kBuiltinDomainCount))
         {
-            return RecordError::Malformed; // an unknown kind, or a value the host never delivered
+            return RecordError::Malformed; // an unknown kind or time domain, or a value the host never delivered
         }
         read.kind      = static_cast<input::InputKind>(read_kind);
         read.delivered = delivered != 0U;
@@ -1102,6 +1105,11 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
                           : static_cast<crd::i64>(record.input_reads[static_cast<crd::usize>(refusal.read)].channel),
                 exhausted ? static_cast<crd::i64>(refusal.read + 1U) : static_cast<crd::i64>(refusal.channel));
         d.count = exhausted;
+        if (!exhausted)
+        {
+            d.recorded_input = record.input_reads[static_cast<crd::usize>(refusal.read)].kind;
+            d.observed_input = refusal.kind;
+        }
         if (refusal.event < trace.events.size())
         {
             const auto e  = static_cast<crd::usize>(refusal.event);

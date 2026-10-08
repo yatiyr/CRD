@@ -66,6 +66,8 @@ enum class Op : crd::u8
     MapReduce,    // op[0..3]=lo,hi,step,init; map (child0), then fold the combine fn (child1, args=acc,elem) in INDEX order
     // ── DIAG.9a host inputs (input.hpp): one read through the run's input source; no value → InputUnavailable ──
     Random,       // input.random: result = raw draw of stream (imm >> 32) mod bound (imm & 0xFFFFFFFF)
+    Clock,        // input.clock: result = the raw reading of built-in time domain imm
+    TimeStep,     // input.time_step: result = the raw current step of built-in time domain imm
 };
 
 // The compiled comparison predicate (the "predicate" STRING attr → this dense enum at compile — the §153 immediate).

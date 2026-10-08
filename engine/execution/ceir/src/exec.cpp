@@ -560,6 +560,30 @@ ExecError eval_random(Interpreter& in, const Operation& op)
     in.set_value(op.result(0), input::reduce_draw(raw, bound));
     return ExecError::None;
 }
+// DIAG.9a input.clock / input.time_step: the raw value of one built-in time domain's reading or step, unreduced.
+ExecError eval_time_read(Interpreter& in, const Operation& op, input::InputKind kind)
+{
+    crd::u32 domain = 0U;
+    if (!input::time_attrs(in.ctx(), op, domain))
+    {
+        return in.fail(ExecError::UndefinedValue, &op); // the arith.const precedent for a bad attribute
+    }
+    crd::i64 raw = 0;
+    if (!input::read_input(in.input_source(), kind, domain, raw))
+    {
+        return in.fail(ExecError::InputUnavailable, &op);
+    }
+    in.set_value(op.result(0), raw);
+    return ExecError::None;
+}
+ExecError eval_clock(Interpreter& in, const Operation& op)
+{
+    return eval_time_read(in, op, input::InputKind::Clock);
+}
+ExecError eval_time_step(Interpreter& in, const Operation& op)
+{
+    return eval_time_read(in, op, input::InputKind::TimeStep);
+}
 ExecError eval_addi(Interpreter& in, const Operation& op)
 {
     crd::i64 l = 0;
@@ -1086,6 +1110,8 @@ void install_task_semantics(Interpreter& in) // §38 host-task SEQUENTIAL refere
 void install_input_semantics(Interpreter& in) // DIAG.9a host inputs — a SEPARATE installer
 {
     in.install(input::random_kind(in.ctx()), &eval_random);
+    in.install(input::clock_kind(in.ctx()), &eval_clock);
+    in.install(input::time_step_kind(in.ctx()), &eval_time_step);
 }
 
 // ── the parallel-purity pre-flight (CEIR-11a — moved from crd-ceir-host; the 9d hoist-at-second-consumer) ──
