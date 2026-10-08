@@ -5,10 +5,12 @@
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/program_cook.hpp> // cook_error_name
+#include <crd/ceir/input.hpp>              // SeededInputs (seed=)
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 
 namespace crd::ceir::cook
@@ -39,6 +41,9 @@ using detail::parse_u64;
     return true;
 }
 
+// A seeded source's own allocator grows from a small first chunk: it holds one counter per random stream.
+constexpr crd::usize kSourceChunkBytes = crd::usize{64} << 10U;
+
 [[nodiscard]] bool valid_entry(cont::StringView name) noexcept
 {
     return detail::valid_entry_name(name, kInspectMaxEntryBytes);
@@ -55,6 +60,8 @@ struct Parsed
     cont::Array<crd::u32>     watches;
     cont::Array<ScriptAction> steps;
     crd::u32                  max_stops = kScriptDefaultMaxStops;
+    bool                      have_seed = false; // seed=: the run's host random streams (none without it)
+    crd::u64                  seed      = 0U;
 };
 
 [[nodiscard]] DiagStatus bad(cont::String& reason, cont::StringView name, cont::StringView what)
@@ -164,11 +171,24 @@ struct Parsed
             }
             max_stops = static_cast<crd::u32>(v);
         }
+        else if (a.name == "seed")
+        {
+            crd::u64 v = 0U;
+            if (!parse_u64(a.value, ~crd::u64{0U}, v))
+            {
+                return bad(reason, a.name, "must be a u64");
+            }
+            if (out != nullptr)
+            {
+                out->have_seed = true;
+                out->seed      = v;
+            }
+        }
         else
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; program.inspect takes entry, args, breaks, watches, steps and max_stops");
+            reason.append("'; program.inspect takes entry, args, breaks, watches, steps, max_stops and seed");
             return DiagStatus::BadArgument;
         }
     }
@@ -272,6 +292,8 @@ void write_answer(const InspectHost& host, const InspectReport& report, const Pa
         .u64("breakpoints", report.binds.size())
         .u64("stops", report.stops.size())
         .u64("max_stops", parsed.max_stops)
+        .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
+        .u64("seed", parsed.seed)
         .boolean("truncated", report.truncated)
         .str("outcome", script_outcome_name(report.outcome))
         .str("error", plan::run_error_name(report.error))
@@ -306,6 +328,12 @@ DiagStatus run_program_inspect(void* context, const DiagCall& call, DiagSnapshot
         return DiagStatus::Cancelled;
     }
 
+    // The host's random streams (seeded, or none). Declared before the host: a run the script leaves attached still
+    // reads through it until the host's destructor has cancelled and joined it. On their own allocator: the executing
+    // thread grows them while this thread, the controller, allocates the answer from `alloc`.
+    crd::memory::GrowableTlsfAllocator source_alloc(kSourceChunkBytes, nullptr, "program-inspect-inputs");
+    input::SeededInputs                seeded(parsed.seed, &source_alloc);
+
     // Cooked under the request's own relative path: breakpoints and stops are positions in that name.
     const cont::StringView path = call.request->path;
     InspectHost            host(alloc, command->registrar, command->user);
@@ -329,6 +357,7 @@ DiagStatus run_program_inspect(void* context, const DiagCall& call, DiagSnapshot
     script.cancel    = call.cancel;
     script.on_stop   = command->on_stop;
     script.user      = command->stop_user;
+    script.inputs    = parsed.have_seed ? seeded.source() : nullptr;
     InspectReport report(alloc);
     run_inspect_script(host, script, report);
 

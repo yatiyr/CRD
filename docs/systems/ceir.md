@@ -104,7 +104,10 @@ reduces it. With no source a read fails `input-unavailable`. A recorded run keep
 `InputRecorder`), and a replay feeds them back (`InputFeed`) and never asks a live source, so `replay.record seed=`
 (`SeededInputs`) makes a record whose seeded failure reproduces in another process without the seed
 (`assets/ceir/random_demo.ceir`). A read is schedule-dependent, so the shared pre-flight keeps it out of parallel and
-pooled bodies. The inspect host installs no source and keeps no reads, so its records hold `random` missing.
+pooled bodies. The inspect host takes the caller's source at `InspectHost::start` (`InspectScript::inputs`), and a
+recorded inspected run keeps its reads like `replay.record`, so a debugged seeded run's record reproduces without the
+seed; `ceridc inspect --seed`, `program.inspect seed=` and crd-sandbox's `--inspect-seed` (every panel run from the
+first draw) give one.
 
 ## Maturity and further work
 

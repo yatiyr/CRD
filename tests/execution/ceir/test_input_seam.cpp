@@ -161,6 +161,17 @@ TEST_CASE("diag 9a input: the seeded source draws each stream independently and 
     CHECK(input::SeededInputs::draw(kSeed + 1U, 7U, 0U) != a7[0]);
     CHECK(a.seed() == kSeed);
 
+    // reset starts every stream over at draw 0 of its seed: what a new source of that seed delivers.
+    a.reset(kSeed + 1U);
+    CHECK(a.seed() == kSeed + 1U);
+    REQUIRE(input::read_input(a.source(), input::InputKind::Random, 7U, v));
+    CHECK(v == input::SeededInputs::draw(kSeed + 1U, 7U, 0U));
+    REQUIRE(input::read_input(a.source(), input::InputKind::Random, 3U, v));
+    CHECK(v == input::SeededInputs::draw(kSeed + 1U, 3U, 0U));
+    a.reset(kSeed);
+    REQUIRE(input::read_input(a.source(), input::InputKind::Random, 7U, v));
+    CHECK(v == a7[0]);
+
     // No source, or one without `next`, has no value.
     CHECK_FALSE(input::read_input(nullptr, input::InputKind::Random, 0U, v));
     const input::InputSource empty{};

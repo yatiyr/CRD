@@ -949,19 +949,40 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-input-seam.md
   no random source, and the failed read is what the record holds) and answers `random_source`, `seed` and
   `input_reads`; `replay.run` answers `recorded_input_reads` and `replayed_input_reads`. The host executor takes the
   seed through `HostRecordRequest`, and `record_host_run` / `run_host_traced` take the live source; host replays feed
-  the record's reads on any job split. The inspect host installs no source and keeps no reads, so a program that draws
-  fails `input-unavailable` there and its record stores `random` missing.
+  the record's reads on any job split. The inspect host installed no source and kept no reads, so a program that drew
+  failed `input-unavailable` there and its record stored `random` missing (superseded by the next block).
 - ceridc, crd-sandbox's diagnostic service and its inspect panel register the dialect. The committed
   `assets/ceir/random_demo.ceir` draws `main(n)` values from stream 0, switches on each (a draw of 3 has no case) and
   returns a stream-1 draw; a seeded failure recorded by one `ceridc` process reproduces in another without the seed,
   after the program file was edited.
+- What stayed open after this batch is listed at the end of the next settled block.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspect-host-inputs.md)):
+- A live input source at the inspect host. `inspect::Session::run` (the plan form with an observer) takes the run's
+  `inputs` and passes them to `plan::run`. `InspectHost::start(args, recording, inputs)` takes the caller's source,
+  read on the executing thread; it must stay valid until the execution has ended, so a caller declares it before the
+  host (`run_inspect_script` can return `Unfinished` with the run attached, and the host's destructor cancels and joins
+  it). It runs concurrently with the controller, so it must not share the controller's allocator: a `SeededInputs`
+  grows its per-stream counters on first use, so each consumer gives it its own `GrowableTlsfAllocator` (the TSan lane
+  caught the shared form: the controller's report allocation raced the executing thread's first draw).
+  `InspectScript::inputs` carries it to the scripted consumers.
+- A recorded inspected execution always reads through an `InputRecorder` (over the source, or none), so its record
+  keeps every read, delivered or not, as `replay.record` does: a stepped, held and value-read seeded run records the
+  same reads, inputs, trace and outcome as the unobserved `replay.record seed=` run, and with no source the failed read
+  is the record (`random` recorded, as `replay.record` without a seed). `random` is classified held at `start`; once
+  the run has ended, `record` stores it missing when more reads were made than a record keeps (`kReplayMaxInputReads`).
+- `SeededInputs::reset(seed)` starts every stream over at draw 0, so one source can serve successive runs.
+- Consumers: `ceridc inspect --seed <u64>` (a strict decimal u64, refused before anything runs; the report names
+  `random_source`, `seed` and the record's `input_reads`); `program.inspect seed=` (a u64, checked in the service's
+  argument step; the summary answers `random_source` and `seed`); crd-sandbox's `InspectPanel::set_inputs` and
+  `--inspect-seed <u64>`: the panel owns a `SeededInputs` and its allocator (before its host) and resets it at every
+  start, so "Run again" reads the same draws from the first.
 - Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
   interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
   clock and time-step inputs, input events and external I/O completions, which need their ops specified (units and
-  time domains for the clock) before the seam can carry them; a live input source at the inspect host (ceridc
-  inspect, `program.inspect`, the sandbox panel); backend-specific numeric replay of GPU dispatches with a declared
-  tolerance; network and physical effects stubbed only in explicit test replay; host records from crd-sandbox's panel
-  (it would need the request run on an enrolled thread).
+  time domains for the clock) before the seam can carry them; backend-specific numeric replay of GPU dispatches with
+  a declared tolerance; network and physical effects stubbed only in explicit test replay; host records from
+  crd-sandbox's panel (it would need the request run on an enrolled thread).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

@@ -10,7 +10,9 @@
 // loop and a cancel ends it; a scripted run; a load while paused is Busy; commands for a replaced generation are
 // refused; destroying the panel while paused returns. DIAG.9a: a run the frame loop holds, steps and lets fault is
 // recorded on the panel's host and replays without a session to the same trace and fault; a run started again without
-// recording forgets the record. Expected lines are scanned from the text, never taken from the parser or the panel.
+// recording forgets the record. The panel's seeded host inputs reach every run from the first draw (the held run
+// reads them, "Run again" reads the same draws, and the record replays from its draws alone); without inputs a draw
+// fails. Expected lines are scanned from the text, never taken from the parser or the panel.
 // ASCII test names.
 
 #include "inspect_panel.hpp"
@@ -20,6 +22,8 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/input_ops.hpp>
+#include <crd/ceir/input.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -196,6 +200,13 @@ void register_replay_dialects(crd::ceir::Context& ctx, void* /*user*/)
     (void)crd::ceir::arith::register_arith_ops(ctx);
     (void)crd::ceir::core::register_core_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
+    (void)crd::ceir::input::register_input_ops(ctx);
+}
+
+// Draw `n` of stream 0 for `seed`, reduced as random_demo.ceir's switch reads it.
+i64 random_switch_draw(u64 seed, u64 n)
+{
+    return crd::ceir::input::reduce_draw(crd::ceir::input::SeededInputs::draw(seed, 0U, n), 4U);
 }
 
 bool contains(const String& s, StringView needle)
@@ -552,4 +563,94 @@ TEST_CASE("diag 9a: the sandbox frame loop records the inspected run, and the re
     REQUIRE(panel.command(panel.generation(), PanelAction::Cancel) == insp::Refusal::None);
     REQUIRE(frames.until(panel, TickEvent::Ended));
     CHECK(panel.host().record(rec) == crd::ceir::cook::HostRecord::NotRecorded);
+}
+
+TEST_CASE("diag 9a: the sandbox panel's runs read its seeded host inputs, each run from the first draw",
+          "[sandbox][inspect][diag]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String text = read_text(fs::Path(StringView(kEngineAssets)) / StringView("ceir/random_demo.ceir"), &alloc);
+    const u32    draw = line_of(sv(text), "input.random() {stream = 0");
+    const u32    sw   = line_of(sv(text), "core.switch");
+    REQUIRE(draw != 0U);
+    REQUIRE(sw != 0U);
+
+    // A seed whose four draws all take a case (from SeededInputs::draw, not from the panel), and what main(4) returns.
+    u64 seed = 0U;
+    for (u64 s = 1U; s < 10000U && seed == 0U; ++s)
+    {
+        bool passes = true;
+        for (u64 i = 0U; i < 4U; ++i)
+        {
+            passes = passes && random_switch_draw(s, i) != 3;
+        }
+        seed = passes ? s : 0U;
+    }
+    REQUIRE(seed != 0U);
+    const i64 expected = crd::ceir::input::reduce_draw(crd::ceir::input::SeededInputs::draw(seed, 1U, 0U), 100U);
+
+    crd::scenerender::SceneRenderer renderer(&alloc);
+    REQUIRE(renderer.set_asset_root(kEngineAssets));
+    InspectPanel panel(&alloc, renderer);
+    REQUIRE(panel.load(StringView("ceir/random_demo"), StringView("main")).ok());
+    const i64 args[1] = {4};
+
+    // No inputs chosen: the host has no random source, and the first draw fails.
+    CHECK_FALSE(panel.inputs().seeded);
+    Frames frames;
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::None);
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    CHECK(panel.state() == PanelState::Failed);
+    CHECK(panel.error() == crd::ceir::plan::RunError::InputUnavailable);
+
+    // Seeded and recorded: held at each switch, the watched draw is the seed's draw; the run returns its stream-1
+    // draw, and the record holds all five draws and replays from them alone.
+    panel.set_inputs(crd::sandbox::PanelInputs{true, seed});
+    REQUIRE(panel.add_breakpoint(sw) == insp::Refusal::None);
+    panel.watch(draw);
+    REQUIRE(panel.start(ConstSpan<i64>(args, 1U), crd::ceir::cook::HostRecording{true, 0U}) == insp::Refusal::None);
+    for (u32 n = 0U; n < 4U; ++n)
+    {
+        REQUIRE(frames.until(panel, TickEvent::Stopped));
+        const crd::sandbox::PanelValue& v = value_at(panel, draw);
+        REQUIRE(v.value.status == insp::ValueStatus::Available);
+        CHECK(v.value.bits == random_switch_draw(seed, n));
+        REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+    }
+    REQUIRE(frames.until(panel, TickEvent::Ended));
+    REQUIRE(panel.state() == PanelState::Finished);
+    REQUIRE(panel.results().size() == 1U);
+    CHECK(panel.results()[0] == expected);
+
+    crd::ceir::cook::ReplayRecord rec(&alloc);
+    REQUIRE(panel.host().record(rec) == crd::ceir::cook::HostRecord::Ok);
+    CHECK(rec.input_reads_total == 5U);
+    String missing(&alloc);
+    CHECK(crd::ceir::cook::record_missing_inputs(rec, missing));
+    crd::ceir::Context             ctx(&alloc);
+    crd::ceir::cook::ReplayProgram program(&alloc);
+    crd::ceir::cook::load_replay_program(ctx, {rec.program.data(), rec.program.size()}, "main",
+                                         &register_replay_dialects, nullptr, program);
+    REQUIRE(program.ok());
+    crd::ceir::cook::ReplayTrace trace(&alloc);
+    crd::ceir::cook::InputFeed   feed({rec.input_reads.data(), rec.input_reads.size()}, trace);
+    crd::ceir::cook::run_traced(program, {rec.args.data(), rec.args.size()}, rec.max_events, nullptr, trace,
+                                feed.source());
+    CHECK(crd::ceir::cook::first_divergence(rec, trace).kind == crd::ceir::cook::DivergenceKind::None);
+
+    // "Run again" reads the same seed from its first draw: the same result, not the streams' continuation.
+    for (u32 run = 0U; run < 2U; ++run)
+    {
+        REQUIRE(panel.start(ConstSpan<i64>(args, 1U)) == insp::Refusal::None);
+        for (u32 n = 0U; n < 4U; ++n)
+        {
+            REQUIRE(frames.until(panel, TickEvent::Stopped));
+            CHECK(value_at(panel, draw).value.bits == random_switch_draw(seed, n));
+            REQUIRE(panel.command(panel.generation(), PanelAction::Continue) == insp::Refusal::None);
+        }
+        REQUIRE(frames.until(panel, TickEvent::Ended));
+        CHECK(panel.state() == PanelState::Finished);
+        REQUIRE(panel.results().size() == 1U);
+        CHECK(panel.results()[0] == expected);
+    }
 }

@@ -19,6 +19,7 @@
 // refused `StaleGeneration` by the session before any work. A load while the program runs or is paused is `Busy`.
 
 #include <crd/ceir/cook/inspect_host.hpp>
+#include <crd/ceir/input.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -26,6 +27,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/scenerender/scene_renderer.hpp>
 
 namespace crd::sandbox
@@ -71,6 +73,15 @@ struct PanelValue
     explicit PanelValue(memory::IAllocator* a) : value(a) {}
 };
 
+// DIAG.9a: the host inputs every run of the panel reads. Seeded: input.random reads the `SeededInputs` of `seed`,
+// started over at draw 0 by every `start` (so "Run again" reads the same draws); otherwise the host has no random
+// source and a draw fails input-unavailable.
+struct PanelInputs
+{
+    bool     seeded = false;
+    crd::u64 seed   = 0U;
+};
+
 struct PanelLoad
 {
     scenerender::ProgramSource source = scenerender::ProgramSource::NotFound;
@@ -102,9 +113,13 @@ public:
     // Actions applied, in order, at each new stop; once they are used up every later stop continues. Without a
     // script the panel waits for a command at each stop.
     void set_script(containers::ConstSpan<PanelAction> actions);
+    // DIAG.9a: the host inputs of every later `start` (see PanelInputs).
+    void                      set_inputs(PanelInputs inputs) noexcept { m_inputs = inputs; }
+    [[nodiscard]] PanelInputs inputs() const noexcept { return m_inputs; }
 
     // Start the installed generation with `args` (NotBound before a successful load, Busy while running). DIAG.9a:
-    // `recording` records the run on the host; `host().record` gives the run record once it has ended.
+    // `recording` records the run on the host; `host().record` gives the run record once it has ended. The run reads
+    // the host inputs `set_inputs` chose, from their first draw.
     [[nodiscard]] ceir::inspect::Refusal start(containers::ConstSpan<crd::i64> args,
                                                ceir::cook::HostRecording recording = {});
 
@@ -140,6 +155,11 @@ private:
 
     memory::IAllocator*                m_alloc;
     scenerender::SceneRenderer*        m_programs;
+    PanelInputs                        m_inputs{};
+    // The seeded source and its own allocator, before m_host: the host's executing thread reads (and grows) it until
+    // joined, while the frame loop allocates from m_alloc.
+    memory::GrowableTlsfAllocator      m_seed_alloc;
+    ceir::input::SeededInputs          m_seeded;
     ceir::cook::InspectHost            m_host;
     containers::String                 m_rel;
     scenerender::ProgramSource         m_source = scenerender::ProgramSource::NotFound;

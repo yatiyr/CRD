@@ -5,8 +5,9 @@
 // item per watched value, and the results. Refusals (authority, malformed or oversized arguments, an unsafe path, a
 // raised cancel) run nothing and read nothing; an oversized file is refused unread; a source that does not cook is
 // refused with its line and column. The stop bound truncates; a scripted cancel ends the run; the caller's cancel flag
-// ends it at a stop and while it runs. Expected lines come from scanning the committed text, never from the parser.
-// ASCII test names (ctest by-name).
+// ends it at a stop and while it runs. DIAG.9a: `seed=` gives the run a seeded host random source, whose draws the
+// held run reads (assets/ceir/random_demo.ceir); without it a draw fails where it is authored. Expected lines come from
+// scanning the committed text, never from the parser. ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_diag.hpp>
 
@@ -14,6 +15,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/input.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -49,9 +51,11 @@ using crd::perf::DiagResult;
 using crd::perf::DiagServiceConfig;
 using crd::perf::DiagStatus;
 
-constexpr const char* kFile   = "ceir/inspect_demo.ceir";
-constexpr const char* kAssets = CRD_REPO_DIR "/assets";
-constexpr const char* kAsset  = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
+constexpr const char* kFile        = "ceir/inspect_demo.ceir";
+constexpr const char* kAssets      = CRD_REPO_DIR "/assets";
+constexpr const char* kAsset       = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
+constexpr const char* kRandomFile  = "ceir/random_demo.ceir"; // DIAG.9a
+constexpr const char* kRandomAsset = CRD_REPO_DIR "/assets/ceir/random_demo.ceir";
 
 // This case's own scratch file in the working directory (the file root ".").
 constexpr const char* kBrokenFile = "diag8c_inspect_broken.ceir";
@@ -61,6 +65,7 @@ void registrar(Context& ctx, void* /*user*/)
     (void)crd::ceir::arith::register_arith_ops(ctx);
     (void)crd::ceir::core::register_core_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
+    (void)crd::ceir::input::register_input_ops(ctx); // DIAG.9a: random_demo.ceir
 }
 
 String slurp(const char* path, crd::memory::IAllocator* a)
@@ -256,6 +261,37 @@ void raise_at_stop(void* user, u64 /*sequence*/)
 {
     static_cast<std::atomic<bool>*>(user)->store(true, std::memory_order_release);
 }
+
+// DIAG.9a: the committed random_demo.ceir draws main(4) values from stream 0 and switches on each (a draw of 3 has no
+// case). Which seed fails, and at which draw, is computed from SeededInputs::draw, independently of the executor.
+constexpr u32 kRandomDraws = 4U;
+
+crd::i64 random_switch_draw(u64 seed, u64 n)
+{
+    return crd::ceir::input::reduce_draw(crd::ceir::input::SeededInputs::draw(seed, 0U, n), 4U);
+}
+
+// The first seed whose main(4) fails (`fails`) or finishes; `failing` gets the failing draw's index.
+u64 random_seed_where(bool fails, u32& failing)
+{
+    for (u64 seed = 1U; seed < 10000U; ++seed)
+    {
+        failing = kRandomDraws;
+        for (u32 i = 0U; i < kRandomDraws && failing == kRandomDraws; ++i)
+        {
+            if (random_switch_draw(seed, i) == 3)
+            {
+                failing = i;
+            }
+        }
+        if ((failing < kRandomDraws) == fails)
+        {
+            return seed;
+        }
+    }
+    FAIL("no seed found");
+    return 0U;
+}
 } // namespace
 
 TEST_CASE("diag 8c: program.inspect runs an authored program to its script under Execute", "[ceir][cook][diag]")
@@ -279,7 +315,8 @@ TEST_CASE("diag 8c: program.inspect runs an authored program to its script under
     REQUIRE(r.status == DiagStatus::Ok);
     CHECK(r.complete);
     CHECK(has(view(r.json), R"("path":"ceir/inspect_demo.ceir","entry":"main",)"));
-    CHECK(has(view(r.json), R"("breakpoints":1,"stops":3,"max_stops":64,"truncated":false,"outcome":"finished",)"));
+    CHECK(has(view(r.json), R"("breakpoints":1,"stops":3,"max_stops":64,"random_source":"none","seed":0,)"
+                            R"("truncated":false,"outcome":"finished",)"));
     CHECK(has(view(r.json), R"("error":"none","fault_line":0,"fault_col":0,"results":1})"));
     CHECK_FALSE(has(view(r.json), StringView{CRD_REPO_DIR})); // the host's root never reaches the answer
 
@@ -401,6 +438,9 @@ TEST_CASE("diag 8c: program.inspect refuses before any work and names where a so
             {"entry name", {"entry", "main()"}, DiagStatus::BadArgument},
             {"unknown name", {"verbose", "1"}, DiagStatus::BadArgument},
             {"name charset", {"Breaks", "3"}, DiagStatus::BadArgument},
+            {"seed not a number", {"seed", "x"}, DiagStatus::BadArgument},
+            {"negative seed", {"seed", "-1"}, DiagStatus::BadArgument},
+            {"seed overflow", {"seed", "18446744073709551616"}, DiagStatus::BadArgument},
             {"value over its bound", {"args", view(long_value)}, DiagStatus::Oversized},
         };
         for (const Bad& b : bad)
@@ -495,7 +535,8 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         const DiagResult r      = svc.execute(inspect_request(kFile, {args, 3U}));
         INFO(r.json.c_str());
         REQUIRE(r.status == DiagStatus::Ok);
-        CHECK(has(view(r.json), R"("stops":2,"max_stops":2,"truncated":true,"outcome":"cancelled",)"));
+        CHECK(has(view(r.json), R"("stops":2,"max_stops":2,"random_source":"none","seed":0,"truncated":true,)"
+                                R"("outcome":"cancelled",)"));
         CHECK(count(view(r.json), view(fragment(R"("reason":"breakpoint","file":"ceir/inspect_demo.ceir","line":%u,)",
                                                 {ln.x.line}, &root))) == 2U);
         CHECK_FALSE(has(view(r.json), R"("kind":"result")"));
@@ -511,7 +552,8 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         const DiagResult r      = svc.execute(inspect_request(kFile, {args, 3U}));
         INFO(r.json.c_str());
         REQUIRE(r.status == DiagStatus::Ok);
-        CHECK(has(view(r.json), R"("stops":2,"max_stops":64,"truncated":false,"outcome":"cancelled",)"));
+        CHECK(has(view(r.json), R"("stops":2,"max_stops":64,"random_source":"none","seed":0,"truncated":false,)"
+                                R"("outcome":"cancelled",)"));
         CHECK(has(view(r.json), R"("sequence":2,)"));
         CHECK(has(view(r.json), R"("action":"cancel"})"));
     }
@@ -566,5 +608,71 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         INFO(r.json.c_str());
         CHECK(r.status == DiagStatus::Cancelled);
         CHECK(has(view(r.json), "cancelled by the caller after 0 stops"));
+    }
+}
+
+TEST_CASE("diag 9a: program.inspect reads the draws of the seed it is given", "[ceir][cook][diag][input]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const String                       text = slurp(kRandomAsset, &root);
+    const Site                         draw = site_of(view(text), "input.random() {stream = 0", 0U);
+    const Site                         sw   = site_of(view(text), "core.switch", 0U);
+    REQUIRE(draw.line != 0U);
+    REQUIRE(sw.line != 0U);
+
+    ProgramInspectCommand cmd;
+    cmd.registrar = &registrar;
+    DiagCommandService svc(kExecute, rooted(kAssets), &root);
+    REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
+    const String breaks  = join({sw.line}, &root);
+    const String watches = join({draw.line}, &root);
+
+    SECTION("a failing seed: each held switch reads the seeded draw, and the run fails at the switch")
+    {
+        u32          k    = 0U;
+        const u64    seed = random_seed_where(true, k);
+        const String s    = join({seed}, &root);
+        INFO("seed " << seed << " fails at draw " << k);
+        const DiagArg args[] = {{"args", "4"}, {"breaks", view(breaks)}, {"watches", view(watches)}, {"seed", view(s)}};
+        const DiagResult r   = svc.execute(inspect_request(kRandomFile, {args, 4U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), view(fragment(R"("random_source":"seeded","seed":%u,)", {seed}, &root))));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"selector-out-of-range",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {sw.line, sw.col}, &root))));
+        const Array<String> items = items_of(r, &root);
+        REQUIRE(items.size() == 1U + 2U * (k + 1U));
+        for (u32 n = 0U; n <= k; ++n)
+        {
+            const u64 v = static_cast<u64>(random_switch_draw(seed, n));
+            CHECK(view(items[2U + 2U * n]) ==
+                  view(fragment(R"({"kind":"value","stop":%u,"line":%u,"status":"available","type":"!i32",)"
+                                R"("unit":false,"value":%u})",
+                                {n + 1U, draw.line, v}, &root)));
+        }
+    }
+    SECTION("a passing seed returns the seeded stream-1 draw")
+    {
+        u32           k      = 0U;
+        const u64     seed   = random_seed_where(false, k);
+        const String  s      = join({seed}, &root);
+        const DiagArg args[] = {{"args", "4"}, {"seed", view(s)}};
+        const DiagResult r   = svc.execute(inspect_request(kRandomFile, {args, 2U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        const u64 value =
+            static_cast<u64>(crd::ceir::input::reduce_draw(crd::ceir::input::SeededInputs::draw(seed, 1U, 0U), 100U));
+        CHECK(has(view(r.json), view(fragment(R"({"kind":"result","index":0,"value":%u})", {value}, &root))));
+        CHECK(has(view(r.json), R"("outcome":"finished","error":"none",)"));
+    }
+    SECTION("no seed: the host has no random source and the first draw fails where it is authored")
+    {
+        const DiagArg    args[] = {{"args", "4"}};
+        const DiagResult r      = svc.execute(inspect_request(kRandomFile, {args, 1U}));
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(has(view(r.json), R"("random_source":"none","seed":0,)"));
+        CHECK(has(view(r.json), R"("outcome":"error","error":"input-unavailable",)"));
+        CHECK(has(view(r.json), view(fragment(R"("fault_line":%u,"fault_col":%u,)", {draw.line, draw.col}, &root))));
     }
 }

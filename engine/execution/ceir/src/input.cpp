@@ -73,6 +73,12 @@ SeededInputs::SeededInputs(crd::u64 seed, memory::IAllocator* alloc)
 {
 }
 
+void SeededInputs::reset(crd::u64 seed)
+{
+    m_seed = seed;
+    m_drawn.clear();
+}
+
 crd::i64 SeededInputs::draw(crd::u64 seed, crd::u32 stream, crd::u64 n) noexcept
 {
     return static_cast<crd::i64>(mix64(mix64(seed ^ mix64(static_cast<crd::u64>(stream))) + n));

@@ -61,7 +61,8 @@ struct InputSource
 
 // A host input source whose random streams are drawn from one seed. Draw `n` of stream `s` is a splitmix64 mix of
 // (seed, s, n): streams are independent (a draw from one never moves another) and one seed always gives the same
-// draws. Not cryptographic. Other kinds have no value. One run's source: construct it per run, use it on one thread.
+// draws. Not cryptographic. Other kinds have no value. One run's source: construct it per run (or `reset` it between
+// runs), use it on one thread at a time.
 class SeededInputs
 {
 public:
@@ -75,6 +76,10 @@ public:
     // The source to install; it points at this object.
     [[nodiscard]] const InputSource* source() const noexcept { return &m_source; }
     [[nodiscard]] crd::u64           seed() const noexcept { return m_seed; }
+
+    // Start every stream over at draw 0 of `seed`: the next run reads what a new source for `seed` would deliver. Not
+    // while a run reads through `source()`.
+    void reset(crd::u64 seed);
 
     // Draw `n` (0-based) of stream `stream` for `seed`: what the source delivers for that read.
     [[nodiscard]] static crd::i64 draw(crd::u64 seed, crd::u32 stream, crd::u64 n) noexcept;

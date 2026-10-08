@@ -253,9 +253,11 @@ public:
     // The same, with an OBSERVER of every safe point (e.g. a DIAG.9a replay recorder). Its `safe_point` is called on
     // the executing thread at every safe point of the run, before the session decides whether to stop there, so it
     // sees the instr a stop holds as well as every instr that runs through; a `Cancel` it returns cancels the run.
-    // Its `cancel` flag is not read: the session's own flag is the run's. Null observes nothing.
+    // Its `cancel` flag is not read: the session's own flag is the run's. Null observes nothing. DIAG.9a: `inputs` is
+    // the run's host input seam (input.hpp), called on the executing thread once per read; null answers no value.
     [[nodiscard]] plan::RunResult run(const plan::CompiledPlan& plan, containers::ConstSpan<i64> args,
-                                      memory::IAllocator* alloc, const plan::RunControl* observer);
+                                      memory::IAllocator* alloc, const plan::RunControl* observer,
+                                      const input::InputSource* inputs = nullptr);
     // Invoke through the reference interpreter. The session installs its step hook and cancel flag for the call and
     // removes both afterwards (an interpreter's own hooks and flag are replaced for that call).
     [[nodiscard]] exec::ExecResult invoke(exec::Interpreter& in, const Module& m, containers::StringView entry,

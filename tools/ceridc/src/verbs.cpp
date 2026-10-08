@@ -22,10 +22,12 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/input.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/cooker/cook_command.hpp>
+#include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/hdr_image.hpp>
@@ -857,6 +859,31 @@ namespace
         }
         w.end_array();
     }
+
+    // A strict decimal u64 (no sign, no blanks, no overflow): `--seed`.
+    [[nodiscard]] bool parse_seed(const char* text, crd::u64& out) noexcept
+    {
+        if (text == nullptr || *text == '\0')
+        {
+            return false;
+        }
+        crd::u64 v = 0U;
+        for (const char* c = text; *c != '\0'; ++c)
+        {
+            if (*c < '0' || *c > '9')
+            {
+                return false;
+            }
+            const auto digit = static_cast<crd::u64>(*c - '0');
+            if (v > (~crd::u64{0U} - digit) / 10U)
+            {
+                return false;
+            }
+            v = v * 10U + digit;
+        }
+        out = v;
+        return true;
+    }
 } // namespace
 
 crd::containers::String verb_inspect(const char* program_path, const char* entry,
@@ -864,7 +891,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
                                      crd::containers::ConstSpan<crd::u32> breaks,
                                      crd::containers::ConstSpan<crd::u32> watches,
                                      crd::containers::ConstSpan<const char*> actions, crd::u32 max_stops,
-                                     crd::memory::IAllocator* alloc, const char* record_path)
+                                     crd::memory::IAllocator* alloc, const char* record_path, const char* seed_text)
 {
     // Validate COMPLETELY before the program runs.
     if (program_path == nullptr)
@@ -896,6 +923,11 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
             return fail(alloc, "inspect", "a --watch line is 1-based");
         }
     }
+    crd::u64 seed = 0U;
+    if (seed_text != nullptr && !parse_seed(seed_text, seed))
+    {
+        return fail(alloc, "inspect", "a --seed is a decimal u64");
+    }
     if (record_path != nullptr && fs::exists(fs::Path(crd::containers::StringView(record_path))))
     {
         return fail(alloc, "inspect", "refusing to overwrite an existing --record file");
@@ -907,16 +939,22 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     }
 
     // The program is cooked under the path it was named by, so breakpoints and stops are positions in that file.
-    const crd::containers::StringView file(program_path);
-    const crd::containers::StringView source(text.c_str(), text.size());
-    const crd::containers::StringView entry_view(entry_name);
-    ck::InspectHost                   host(alloc, &register_host_dialects, nullptr);
-    const ck::HostLoadResult          lr = host.load(ck::AssetId{1U}, source, file, entry_view);
+    const crd::containers::StringView  file(program_path);
+    const crd::containers::StringView  source(text.c_str(), text.size());
+    const crd::containers::StringView  entry_view(entry_name);
+    // DIAG.9a: the run's host random streams (seeded, or none), declared before the host so they outlive its run, on
+    // their own allocator: the executing thread grows them while this thread (the controller) allocates from `alloc`.
+    crd::memory::GrowableTlsfAllocator seed_alloc(crd::usize{64} << 10U, nullptr, "ceridc-inspect-inputs");
+    crd::ceir::input::SeededInputs     seeded(seed, &seed_alloc);
+    ck::InspectHost                    host(alloc, &register_host_dialects, nullptr);
+    const ck::HostLoadResult           lr = host.load(ck::AssetId{1U}, source, file, entry_view);
     JsonWriter w(alloc);
     w.begin_object();
     w.kv("verb", "inspect");
     w.kv("program", program_path);
     w.kv("entry", entry_name);
+    w.kv("random_source", (seed_text != nullptr) ? "seeded" : "none");
+    w.kv("seed", seed);
     if (!lr.ok())
     {
         w.kv("ok", false);
@@ -944,6 +982,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
     script.actions   = crd::containers::as_const_span(script_actions);
     script.max_stops = (max_stops != 0U) ? max_stops : ck::kScriptDefaultMaxStops;
     script.record.enabled = record_path != nullptr;
+    script.inputs         = (seed_text != nullptr) ? seeded.source() : nullptr;
     ck::InspectReport report(alloc);
     ck::run_inspect_script(host, script, report);
     if (report.outcome == ck::ScriptOutcome::NotStarted)
@@ -1037,6 +1076,7 @@ crd::containers::String verb_inspect(const char* program_path, const char* entry
             w.kv("generation", rec.generation);
             w.kv("content_hash", rec.content_hash);
             w.kv("events_total", rec.events_total);
+            w.kv("input_reads", rec.input_reads_total);
         }
         w.end_object();
     }

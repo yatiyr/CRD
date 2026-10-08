@@ -9,9 +9,11 @@
 // against an edit that reads another stream names that read; a passing seed and a host without a random source; a
 // replay whose record cannot answer a read (exhausted, a different stream, draws left over) and an earlier value
 // difference reported first; an incomplete or uncaptured stream stored missing and refused; the record format's
-// bounds; the inspect host, which keeps no draws, recording random as missing. ASCII test names (ctest by-name).
+// bounds; the inspect host, run to a script with a seeded source, recording exactly the unobserved run's draws, with
+// no source recording the failed draw, and past the bound storing random missing. ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_host.hpp>
+#include <crd/ceir/cook/inspect_script.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
 
@@ -67,6 +69,9 @@ constexpr const char* kAsset = CRD_REPO_DIR "/assets/ceir/random_demo.ceir";
 constexpr const char* kDrawLine   = "%4 = input.random() {stream = 0, bound = 4} : !i32";
 constexpr const char* kDrawEdited = "%4 = input.random() {stream = 2, bound = 4} : !i32";
 constexpr u32         kDraws      = 4U; // main(4)
+
+// A seeded source's own allocator: it is grown on the inspect host's executing thread, never the controller's.
+constexpr usize kSourceChunk = usize{64} << 10U;
 
 // The effect of a probe op that draws randomness itself, outside the input seam.
 constexpr crd::ceir::EffectRecord kRandomRead[] = {
@@ -357,6 +362,66 @@ String decimal(u64 v, crd::memory::IAllocator* a)
     String s(a);
     s.append(buf);
     return s;
+}
+
+// Whether two records hold the same host input reads, trace and outcome, and input states.
+bool same_reads(const ReplayRecord& a, const ReplayRecord& b)
+{
+    if (a.input_reads_total != b.input_reads_total || a.input_reads.size() != b.input_reads.size())
+    {
+        return false;
+    }
+    for (usize i = 0U; i < a.input_reads.size(); ++i)
+    {
+        if (!(a.input_reads[i] == b.input_reads[i]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_trace(const ReplayRecord& a, const ReplayRecord& b)
+{
+    if (a.events_total != b.events_total || a.events.size() != b.events.size() || a.error != b.error ||
+        a.fault_op != b.fault_op || a.results.size() != b.results.size() || a.cells.size() != b.cells.size())
+    {
+        return false;
+    }
+    for (usize i = 0U; i < a.events.size(); ++i)
+    {
+        if (!(a.events[i] == b.events[i]))
+        {
+            return false;
+        }
+    }
+    for (usize i = 0U; i < a.results.size(); ++i)
+    {
+        if (a.results[i] != b.results[i])
+        {
+            return false;
+        }
+    }
+    for (usize i = 0U; i < a.cells.size(); ++i)
+    {
+        if (a.cells[i] != b.cells[i])
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_inputs(const ReplayRecord& a, const ReplayRecord& b)
+{
+    for (u32 i = 0U; i < ck::kReplayInputs; ++i)
+    {
+        if (a.inputs[i].need != b.inputs[i].need || a.inputs[i].state != b.inputs[i].state)
+        {
+            return false;
+        }
+    }
+    return true;
 }
 } // namespace
 
@@ -700,23 +765,218 @@ TEST_CASE("diag 9a input: the record format holds the reads exactly and refuses 
     forget(program);
 }
 
-TEST_CASE("diag 9a input: the inspect host keeps no draws, so its record stores random missing",
+TEST_CASE("diag 9a input: a seeded run inspected on the inspect host records the draws of the unobserved run",
           "[ceir][cook][diag][input]")
 {
     crd::memory::GrowableTlsfAllocator alloc;
     const String                       text = slurp(kAsset, &alloc);
+    const Where                        draw = locate(view(text), kDrawLine);
+    const Where                        sw   = locate(view(text), "core.switch(%4)");
+    u32                                k    = 0U;
+    const u64                          seed = seed_where(true, k);
+    INFO("seed " << seed << " fails at draw " << k);
+
+    const char* const program  = "diag9a_in_insp.ceir";
+    const char* const plain_at = "diag9a_in_insp_plain.crpl";
+    const char* const host_at  = "diag9a_in_insp_host.crpl";
+    forget(plain_at);
+    forget(host_at);
+    spill(program, view(text));
+
+    // The unobserved run: replay.record with the same seed, no session.
+    Host h;
+    REQUIRE(record(h, program, plain_at, "4", decimal(seed, &alloc).c_str()).status == DiagStatus::Ok);
+    const ReplayRecord plain = decode_file(plain_at, &alloc);
+
+    // The same run on the inspect host, held at every switch and stepped over the first one, its draws read from the
+    // seeded host's streams. The source is declared before the host, on its own allocator: the host's executing thread
+    // reads it (and grows its streams) while this thread, the controller, allocates the report from `alloc`.
+    crd::memory::GrowableTlsfAllocator source_alloc(kSourceChunk);
+    input::SeededInputs                seeded(seed, &source_alloc);
     ck::InspectHost                    host(&alloc, &registrar, nullptr);
     REQUIRE(host.load(ck::AssetId{9200U}, view(text), "ceir/random_demo.ceir", "main").ok());
-    const i64 args[1] = {4};
-    REQUIRE(host.start({args, 1U}, ck::HostRecording{true, 0U}) == crd::ceir::inspect::Refusal::None);
-    REQUIRE(host.wait_finished(20000U));
-    CHECK(host.result().error == crd::ceir::plan::RunError::InputUnavailable);
+    const i64              args[1]    = {kDraws};
+    const u32              breaks[1]  = {sw.line};
+    const u32              watches[1] = {draw.line};
+    const ck::ScriptAction actions[1] = {ck::ScriptAction::Over};
+    ck::InspectScript      script;
+    script.file           = StringView{"ceir/random_demo.ceir"};
+    script.args           = {args, 1U};
+    script.breaks         = {breaks, 1U};
+    script.watches        = {watches, 1U};
+    script.actions        = {actions, 1U};
+    script.record.enabled = true;
+    script.inputs         = seeded.source();
+    ck::InspectReport report(&alloc);
+    ck::run_inspect_script(host, script, report);
+    REQUIRE(report.outcome == ck::ScriptOutcome::Error);
+    CHECK(report.error == crd::ceir::plan::RunError::SelectorOutOfRange);
+    CHECK(report.fault_line == sw.line);
+    CHECK(report.fault_col == sw.col);
+
+    // The paused run read the seeded host's draws: at the n-th switch the watched draw is draw n of stream 0.
+    u32  at_switch = 0U;
+    bool stepped   = false;
+    for (const ck::ScriptStop& s : report.stops)
+    {
+        stepped = stepped || s.reason == crd::ceir::inspect::StopReason::Step;
+        if (s.reason != crd::ceir::inspect::StopReason::Breakpoint)
+        {
+            continue;
+        }
+        CHECK(s.line == sw.line);
+        const ck::ScriptValue& v = report.values[s.first_value];
+        REQUIRE(v.answered);
+        REQUIRE(v.status == crd::ceir::inspect::ValueStatus::Available);
+        CHECK(v.bits == switch_draw(seed, at_switch));
+        ++at_switch;
+    }
+    CHECK(stepped);
+    CHECK(at_switch == k + 1U);
+
+    // The debugger is invisible to the record: the draws, inputs, trace and outcome of the unobserved run.
+    ReplayRecord rec(&alloc);
+    REQUIRE(host.record(rec) == ck::HostRecord::Ok);
+    CHECK(rec.content_hash == plain.content_hash);
+    CHECK(rec.inputs[3].state == ck::ReplayInputState::Recorded);
+    CHECK(same_inputs(rec, plain));
+    CHECK(same_reads(rec, plain));
+    REQUIRE(rec.input_reads.size() == k + 1U);
+    for (u32 i = 0U; i <= k; ++i)
+    {
+        const ReplayInputRead expected{input::InputKind::Random, 0U, true, input::SeededInputs::draw(seed, 0U, i)};
+        CHECK(rec.input_reads[i] == expected);
+    }
+    CHECK(same_trace(rec, plain));
+    String missing(&alloc);
+    CHECK(ck::record_missing_inputs(rec, missing));
+    CHECK(missing.empty());
+
+    // Its draws replay in a fresh Context with no seed and no live source.
+    const Replayed fed = replay_feed(rec, &alloc);
+    CHECK(fed.d.kind == ck::DivergenceKind::None);
+
+    // From the file, in a fresh service: reproduced; against the edited file, the edited draw is named.
+    REQUIRE(ck::write_record_file(StringView{host_at}, rec) == ck::RecordWrite::Ok);
+    const String edit = replaced(view(text), kDrawLine, kDrawEdited, &alloc);
+    spill(program, view(edit));
+    {
+        Host             later;
+        const DiagResult r = replay(later, host_at);
+        INFO(r.json.c_str());
+        REQUIRE(r.status == DiagStatus::Ok);
+        const StringView j = view(r.json);
+        CHECK(view(field(j, "result", &alloc)) == "\"reproduced\"");
+        CHECK(number(j, "recorded_input_reads", &alloc) == static_cast<i64>(k) + 1);
+        CHECK(number(j, "replayed_input_reads", &alloc) == static_cast<i64>(k) + 1);
+
+        const DiagResult e = replay(later, host_at, program);
+        INFO(e.json.c_str());
+        REQUIRE(e.status == DiagStatus::Ok);
+        const StringView ej = view(e.json);
+        CHECK(view(field(ej, "result", &alloc)) == "\"diverged\"");
+        const usize at = ej.find(StringView{R"("kind":"divergence")"});
+        REQUIRE(at != StringView::npos);
+        CHECK(view(field(ej, "divergence", &alloc, at)) == "\"input\"");
+        CHECK(number(ej, "observed", &alloc, at) == 2);
+        CHECK(number(ej, "line", &alloc, at) == draw.line);
+        CHECK(number(ej, "col", &alloc, at) == draw.col);
+    }
+    forget(plain_at);
+    forget(host_at);
+    forget(program);
+}
+
+TEST_CASE("diag 9a input: the inspect host reads a passing seed, and without a source records the failed draw",
+          "[ceir][cook][diag][input]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String                       text = slurp(kAsset, &alloc);
+    const Where                        draw = locate(view(text), kDrawLine);
+
+    const i64 args[1] = {kDraws};
+
+    SECTION("a passing seed, not recorded: the run returns the seeded stream-1 draw; a new start draws from the first")
+    {
+        u32                                k    = 0U;
+        const u64                          seed = seed_where(false, k);
+        crd::memory::GrowableTlsfAllocator source_alloc(kSourceChunk);
+        input::SeededInputs                seeded(seed, &source_alloc);
+        ck::InspectHost                    host(&alloc, &registrar, nullptr);
+        REQUIRE(host.load(ck::AssetId{9201U}, view(text), "ceir/random_demo.ceir", "main").ok());
+        const i64 expected = input::reduce_draw(input::SeededInputs::draw(seed, 1U, 0U), 100U);
+        REQUIRE(host.start({args, 1U}, {}, seeded.source()) == crd::ceir::inspect::Refusal::None);
+        REQUIRE(host.wait_finished(20000U));
+        CHECK(host.result().error == crd::ceir::plan::RunError::None);
+        REQUIRE(host.result().values.size() == 1U);
+        CHECK(host.result().values[0] == expected);
+        ReplayRecord rec(&alloc);
+        CHECK(host.record(rec) == ck::HostRecord::NotRecorded);
+
+        // The same source again continues its streams; reset starts them over, as a new source would.
+        seeded.reset(seed);
+        REQUIRE(host.start({args, 1U}, {}, seeded.source()) == crd::ceir::inspect::Refusal::None);
+        REQUIRE(host.wait_finished(20000U));
+        REQUIRE(host.result().values.size() == 1U);
+        CHECK(host.result().values[0] == expected);
+    }
+    SECTION("no source, recorded: the first draw fails and the record holds that read, as replay.record's does")
+    {
+        const char* const program  = "diag9a_in_insp_none.ceir";
+        const char* const plain_at = "diag9a_in_insp_none.crpl";
+        forget(plain_at);
+        spill(program, view(text));
+        Host h;
+        REQUIRE(record(h, program, plain_at, "4", nullptr).status == DiagStatus::Ok);
+        const ReplayRecord plain = decode_file(plain_at, &alloc);
+
+        ck::InspectHost host(&alloc, &registrar, nullptr);
+        REQUIRE(host.load(ck::AssetId{9202U}, view(text), "ceir/random_demo.ceir", "main").ok());
+        REQUIRE(host.start({args, 1U}, ck::HostRecording{true, 0U}) == crd::ceir::inspect::Refusal::None);
+        REQUIRE(host.wait_finished(20000U));
+        CHECK(host.result().error == crd::ceir::plan::RunError::InputUnavailable);
+
+        ReplayRecord rec(&alloc);
+        REQUIRE(host.record(rec) == ck::HostRecord::Ok);
+        CHECK(rec.error == crd::ceir::plan::RunError::InputUnavailable);
+        CHECK(rec.inputs[3].state == ck::ReplayInputState::Recorded);
+        REQUIRE(rec.input_reads.size() == 1U);
+        CHECK(rec.input_reads[0] == ReplayInputRead{input::InputKind::Random, 0U, false, 0});
+        CHECK(same_inputs(rec, plain));
+        CHECK(same_reads(rec, plain));
+        CHECK(same_trace(rec, plain));
+        String missing(&alloc);
+        CHECK(ck::record_missing_inputs(rec, missing));
+        const Replayed fed = replay_feed(rec, &alloc);
+        CHECK(fed.d.kind == ck::DivergenceKind::None);
+        Context           ctx(&alloc);
+        ck::ReplayProgram p(&alloc);
+        ck::load_replay_program(ctx, {rec.program.data(), rec.program.size()}, "main", &registrar, nullptr, p);
+        REQUIRE(p.ok());
+        CHECK(ck::replay_site_of_op(ctx, p, rec.fault_op).line == draw.line);
+        forget(plain_at);
+        forget(program);
+    }
+}
+
+TEST_CASE("diag 9a input: an inspected run that draws more than a record keeps stores random missing",
+          "[ceir][cook][diag][input]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    crd::memory::GrowableTlsfAllocator source_alloc(kSourceChunk);
+    input::SeededInputs                seeded(1U, &source_alloc);
+    ck::InspectHost                    host(&alloc, &registrar, nullptr);
+    REQUIRE(host.load(ck::AssetId{9203U}, StringView{kMany}, "many.ceir", "main").ok());
+    const i64 args[1] = {static_cast<i64>(ck::kReplayMaxInputReads) + 1};
+    REQUIRE(host.start({args, 1U}, ck::HostRecording{true, 16U}, seeded.source()) == crd::ceir::inspect::Refusal::None);
+    REQUIRE(host.wait_finished(120000U));
+    CHECK(host.result().error == crd::ceir::plan::RunError::None);
 
     ReplayRecord rec(&alloc);
     REQUIRE(host.record(rec) == ck::HostRecord::Ok);
-    CHECK(rec.error == crd::ceir::plan::RunError::InputUnavailable);
+    CHECK(rec.input_reads_total == ck::kReplayMaxInputReads + 1U);
+    CHECK(rec.input_reads.size() == ck::kReplayMaxInputReads);
     CHECK(rec.inputs[3].state == ck::ReplayInputState::Missing);
-    CHECK(rec.input_reads.empty());
     String missing(&alloc);
     CHECK_FALSE(ck::record_missing_inputs(rec, missing));
     CHECK(view(missing) == "random");

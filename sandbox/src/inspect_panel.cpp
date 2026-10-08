@@ -19,6 +19,9 @@ namespace insp = crd::ceir::inspect;
 // hanging if something else (a native debugger) holds that thread.
 constexpr crd::u32 kSnapshotMs = 2000U;
 
+// The seeded source's own allocator grows from a small first chunk: it holds one counter per random stream.
+constexpr crd::usize kSeedChunkBytes = crd::usize{64} << 10U;
+
 // The dialects the compiled plan runs (its scalar host subset), installed into every generation's Context.
 void register_program_dialects(ceir::Context& ctx, void* /*user*/)
 {
@@ -100,8 +103,9 @@ bool parse_panel_action(containers::StringView s, PanelAction& out) noexcept
 }
 
 InspectPanel::InspectPanel(memory::IAllocator* alloc, scenerender::SceneRenderer& programs)
-    : m_alloc(alloc), m_programs(&programs), m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc),
-      m_watches(alloc), m_values(alloc), m_script(alloc)
+    : m_alloc(alloc), m_programs(&programs), m_seed_alloc(kSeedChunkBytes, nullptr, "sandbox-inspect-inputs"),
+      m_seeded(0U, &m_seed_alloc), m_host(alloc, &register_program_dialects, nullptr), m_rel(alloc), m_watches(alloc),
+      m_values(alloc), m_script(alloc)
 {
 }
 
@@ -178,7 +182,13 @@ void InspectPanel::set_script(containers::ConstSpan<PanelAction> actions)
 
 ceir::inspect::Refusal InspectPanel::start(containers::ConstSpan<crd::i64> args, ceir::cook::HostRecording recording)
 {
-    const insp::Refusal r = m_host.start(args, recording);
+    if (m_host.running())
+    {
+        m_last_refusal = insp::Refusal::Busy; // the running execution still reads the seeded streams
+        return m_last_refusal;
+    }
+    m_seeded.reset(m_inputs.seed); // every run reads its streams from their first draw
+    const insp::Refusal r = m_host.start(args, recording, m_inputs.seeded ? m_seeded.source() : nullptr);
     m_last_refusal        = r;
     if (r == insp::Refusal::None)
     {

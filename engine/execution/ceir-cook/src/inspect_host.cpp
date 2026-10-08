@@ -158,7 +158,8 @@ inspect::Refusal InspectHost::add_line_breakpoint(containers::StringView file, c
     return m_session.add_line_breakpoint(file, line, out_index);
 }
 
-inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRecording recording)
+inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRecording recording,
+                                    const input::InputSource* inputs)
 {
     if (!m_loaded || !m_compiled.ok())
     {
@@ -206,11 +207,11 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
         m_rec_blob     = std::move(cr.blob);
         detail::ProgramNeeds needs;
         (void)detail::analyze_needs(*g->ctx, *g->program.module, m_alloc, nullptr, needs); // no cancel: always whole
-        // The inspect host installs no input source and keeps no host input reads, so a program that draws random
-        // values records its random input missing (DIAG.9a: the seam is recorded by replay.record and the host
-        // provider).
-        detail::record_inputs(needs, ReplayExecutorKind::Plan, /*host_inputs_held=*/false, m_rec_inputs, nullptr);
+        // Every host input read is kept through the run's InputRecorder, so the random input is recorded here as held;
+        // `record` stores it missing when the run made more reads than a record keeps (only known once it has ended).
+        detail::record_inputs(needs, ReplayExecutorKind::Plan, /*host_inputs_held=*/true, m_rec_inputs, nullptr);
     }
+    m_inputs = inputs;
     m_done.store(false, std::memory_order_release);
     m_thread = std::thread(
         [this]
@@ -218,15 +219,17 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
             const containers::ConstSpan<crd::i64> run_args(m_args.data(), m_args.size());
             if (m_rec_on)
             {
-                // The recorder observes every safe point before the session decides, so the trace is the run's own.
+                // The recorder observes every safe point before the session decides, so the trace is the run's own;
+                // every read through the host's seam (delivered or not) is kept in it, in order.
                 ReplayRecorder         rec(m_rec_trace, m_rec_max);
+                InputRecorder          reads(m_rec_trace, m_inputs);
                 const plan::RunControl observer = rec.control();
-                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer);
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, &observer, reads.source());
                 rec.finish(m_compiled.plan, m_result);
             }
             else
             {
-                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc);
+                m_result = m_session.run(m_compiled.plan, run_args, &m_exec_alloc, nullptr, m_inputs);
             }
             m_done.store(true, std::memory_order_release);
         });
@@ -275,6 +278,19 @@ HostRecord InspectHost::record(ReplayRecord& out) const
     for (crd::u32 i = 0U; i < kReplayInputs; ++i)
     {
         out.inputs[i] = m_rec_inputs[i];
+    }
+    // A run that read past the bound has reads the record does not hold: its random input cannot be fed back.
+    if (m_rec_trace.input_reads_total > kReplayMaxInputReads &&
+        out.inputs[detail::kReplayRandomInput].state == ReplayInputState::Recorded)
+    {
+        out.inputs[detail::kReplayRandomInput].state = ReplayInputState::Missing;
+    }
+    out.input_reads_total = m_rec_trace.input_reads_total;
+    out.input_reads.clear();
+    out.input_reads.reserve(m_rec_trace.input_reads.size());
+    for (const ReplayInputRead& r : m_rec_trace.input_reads)
+    {
+        out.input_reads.push_back(r);
     }
     out.max_events   = m_rec_max;
     out.events_total = m_rec_trace.events_total;

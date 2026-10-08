@@ -8,8 +8,11 @@
 // scripted run as the program.inspect diagnostic command, under the host's Execute grant: test_ceridc_diag.cpp).
 // DIAG.9a: `--record` writes the inspected run as a run record (refusing an existing file before it runs, writing
 // nothing for a cancelled run), and another ceridc process reproduces it through `replay.run` without a session.
+// `--seed` gives the run a seeded host random source: the held run reads its draws, a malformed seed is refused
+// before anything runs, and the record replays in another process without the seed after the program was edited.
 // Expected lines come from scanning the committed text; the expected JSON fragments are built here.
 
+#include <crd/ceir/input.hpp>
 #include <crd/ceridc/verbs.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -34,6 +37,12 @@ constexpr const char* kVerbRecord = "ceridc_inspect_verb.crpl";
 constexpr const char* kCliRecord  = "ceridc_inspect_cli.crpl";
 constexpr const char* kCancelled  = "ceridc_inspect_cancelled.crpl";
 constexpr const char* kOut        = "ceridc_inspect_replay_out.json";
+
+// DIAG.9a: the committed random demo, its scratch copy (edited after recording), and the seeded runs' records.
+constexpr const char* kRandomDemo    = CRD_REPO_DIR "/assets/ceir/random_demo.ceir";
+constexpr const char* kSeedProgram   = "ceridc_inspect_random.ceir";
+constexpr const char* kSeedRecord    = "ceridc_inspect_seed_verb.crpl";
+constexpr const char* kCliSeedRecord = "ceridc_inspect_seed_cli.crpl";
 
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 crd::memory::GrowableTlsfAllocator g_alloc{crd::usize{16} << 20U, nullptr, "ceridc-inspect-tests"};
@@ -126,6 +135,12 @@ struct Lines
     s.append(digits);
     s.append(at + 2);
     return s;
+}
+
+// Draw `n` of stream 0 for `seed`, reduced as random_demo.ceir's switch reads it.
+[[nodiscard]] crd::i64 switch_draw(crd::u64 seed, crd::u64 n)
+{
+    return crd::ceir::input::reduce_draw(crd::ceir::input::SeededInputs::draw(seed, 0U, n), 4U);
 }
 
 [[nodiscard]] bool has(const String& report, const String& needle)
@@ -345,6 +360,130 @@ TEST_CASE("diag 9a: ceridc inspect --record writes the inspected run as a record
         CHECK(has(replayed, "\"run\":\"replayed\",\"error\":\"selector-out-of-range\""));
     }
     for (const char* f : {kVerbRecord, kCliRecord, kCancelled, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+}
+
+TEST_CASE("diag 9a: ceridc inspect --seed reads a seeded host's draws and its record replays without the seed",
+          "[ceridc][inspect][diag]")
+{
+    for (const char* f : {kSeedProgram, kSeedRecord, kCliSeedRecord, kOut})
+    {
+        (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
+    }
+    String text(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kRandomDemo)), text));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kSeedProgram)),
+                                crd::containers::StringView(text.c_str(), text.size())));
+    const u32 draw = line_of(text, "input.random() {stream = 0", 0U);
+    const u32 sw   = line_of(text, "core.switch", 0U);
+    REQUIRE(draw != 0U);
+    REQUIRE(sw != 0U);
+
+    // A seed whose main(4) fails, and the draw that fails: from SeededInputs::draw, not from ceridc.
+    crd::u64 seed  = 0U;
+    u32      fails = 0U;
+    for (crd::u64 s = 1U; s < 10000U && seed == 0U; ++s)
+    {
+        for (u32 i = 0U; i < 4U; ++i)
+        {
+            if (switch_draw(s, i) == 3)
+            {
+                seed  = s;
+                fails = i;
+                break;
+            }
+        }
+    }
+    REQUIRE(seed != 0U);
+    char seed_text[24];
+    (void)std::snprintf(seed_text, sizeof(seed_text), "%llu", static_cast<unsigned long long>(seed));
+    INFO("seed " << seed << " fails at draw " << fails);
+
+    // In process: held at every switch, each watched draw is the seeded draw; the run fails at the failing one.
+    const crd::i64 args[1]    = {4};
+    const u32      breaks[1]  = {sw};
+    const u32      watches[1] = {draw};
+    const String   report =
+        crd::ceridc::verb_inspect(kSeedProgram, "main", ConstSpan<crd::i64>(args, 1U), ConstSpan<u32>(breaks, 1U),
+                                  ConstSpan<u32>(watches, 1U), {}, 0U, &g_alloc, kSeedRecord, seed_text);
+    INFO(report.c_str());
+    char expect[256];
+    (void)std::snprintf(expect, sizeof(expect), R"("random_source":"seeded","seed":%s,)", seed_text);
+    CHECK(has(report, expect));
+    CHECK(has(report, "\"outcome\":\"error\",\"error\":\"selector-out-of-range\""));
+    CHECK(count(report, "\"reason\":\"breakpoint\"") == fails + 1U);
+    for (u32 n = 0U; n <= fails; ++n)
+    {
+        (void)std::snprintf(expect, sizeof(expect),
+                            "\"values\":[{\"line\":%u,\"status\":\"available\",\"type\":\"!i32\",\"unit\":false,"
+                            "\"value\":%lld}]",
+                            draw, static_cast<long long>(switch_draw(seed, n)));
+        CHECK(has(report, expect));
+    }
+    (void)std::snprintf(expect, sizeof(expect), "\"input_reads\":%u}", fails + 1U);
+    CHECK(has(report, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(report, expect));
+
+    // No seed: the host has no random source, and the first draw fails.
+    const String none =
+        crd::ceridc::verb_inspect(kSeedProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {}, {}, 0U, &g_alloc);
+    CHECK(has(none, "\"random_source\":\"none\",\"seed\":0,"));
+    CHECK(has(none, "\"outcome\":\"error\",\"error\":\"input-unavailable\""));
+
+    // A malformed seed is refused before anything runs.
+    for (const char* bad : {"x", "-1", "", "18446744073709551616", "12 "})
+    {
+        INFO(bad);
+        const String refused = crd::ceridc::verb_inspect(kSeedProgram, "main", ConstSpan<crd::i64>(args, 1U), {}, {},
+                                                         {}, 0U, &g_alloc, nullptr, bad);
+        CHECK(has(refused, "a --seed is a decimal u64"));
+        CHECK_FALSE(has(refused, "\"stops\""));
+    }
+
+    // The real binary records a seeded run; after the program is edited, another process reproduces it from the
+    // record alone (no seed), and a third names the edited draw.
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr);
+    char cmd[2048];
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" inspect --program %s --arg 4 --seed %s --record %s > %s", exe,
+                        kSeedProgram, seed_text, kCliSeedRecord, kOut);
+    CHECK(std::system(cmd) != 0); // the run faults, so the report's ok is false
+    String cli(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), cli));
+    INFO(cli.c_str());
+    CHECK(has(cli, "\"written\":true,\"status\":\"ok\""));
+    CHECK(has(cli, expect));
+
+    String edited(&g_alloc);
+    const char* const from = std::strstr(text.c_str(), "{stream = 0, bound = 4}");
+    REQUIRE(from != nullptr);
+    edited.append(text.c_str(), static_cast<crd::usize>(from - text.c_str()));
+    edited.append("{stream = 2, bound = 4}");
+    edited.append(from + std::strlen("{stream = 0, bound = 4}"));
+    REQUIRE(fs::write_file_text(fs::Path(crd::containers::StringView(kSeedProgram)),
+                                crd::containers::StringView(edited.c_str(), edited.size())));
+    (void)std::snprintf(cmd, sizeof(cmd), "\"%s\" diag --command replay.run --path %s --grant execute --root . > %s",
+                        exe, kCliSeedRecord, kOut);
+    REQUIRE(std::system(cmd) == 0);
+    String replayed(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), replayed));
+    INFO(replayed.c_str());
+    CHECK(has(replayed, "\"result\":\"reproduced\""));
+    CHECK(has(replayed, "\"run\":\"replayed\",\"error\":\"selector-out-of-range\""));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command replay.run --path %s --param program=%s --grant execute --root . > %s",
+                        exe, kCliSeedRecord, kSeedProgram, kOut);
+    REQUIRE(std::system(cmd) == 0);
+    String diverged(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(crd::containers::StringView(kOut)), diverged));
+    INFO(diverged.c_str());
+    CHECK(has(diverged, "\"result\":\"diverged\""));
+    CHECK(has(diverged, "\"divergence\":\"input\""));
+    (void)std::snprintf(expect, sizeof(expect), "\"line\":%u,", draw);
+    CHECK(has(diverged, expect));
+    for (const char* f : {kSeedProgram, kSeedRecord, kCliSeedRecord, kOut})
     {
         (void)fs::remove_file(fs::Path(crd::containers::StringView(f)));
     }

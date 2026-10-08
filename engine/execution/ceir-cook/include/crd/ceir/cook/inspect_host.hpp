@@ -25,11 +25,21 @@
 // cancelled execution gives none (a replay would not stop where it stopped). A run never spans a reload: a load is
 // refused while an execution is attached.
 //
+// ⛔ HOST INPUTS (DIAG.9a). A `start` may name the host's input seam (`crd/ceir/input.hpp`): the program's input ops
+// read through it on the executing thread, once per read in program order; without one every read fails
+// `InputUnavailable`. The source is the caller's and must stay valid until the execution has ended (`wait_finished`
+// returned true, or the host was destroyed), so a caller declares it before the host. It runs concurrently with the
+// controller, so it must not share an allocator or other state with it (THREADS): a `SeededInputs` grows its streams
+// from its own allocator, never the controller's. A recorded execution keeps every
+// read, delivered or not, in its record, as `replay.record` does; its random input is recorded when the record holds
+// them all.
+//
 // ⛔ LIFETIME. The destructor cancels an execution that is still running or paused (through the session, at its next
 // safe point) and joins the executing thread, so a consumer that leaves early can neither hang nor leak the thread.
 
 #include <crd/ceir/cook/hot_reload.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
+#include <crd/ceir/input.hpp>
 #include <crd/ceir/inspect.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
@@ -114,8 +124,10 @@ public:
     // Rebind the session to the installed generation and start the compiled entry with `args` on the executing
     // thread. `NotBound` before a successful load, `Busy` while an execution is attached. `binds()` then reports how
     // every breakpoint resolved in this generation. `recording` records this execution (see RECORDING); a start
-    // without it forgets the previous record.
-    [[nodiscard]] inspect::Refusal start(containers::ConstSpan<crd::i64> args, HostRecording recording = {});
+    // without it forgets the previous record. `inputs` is the execution's host input seam (see HOST INPUTS; null:
+    // none).
+    [[nodiscard]] inspect::Refusal start(containers::ConstSpan<crd::i64> args, HostRecording recording = {},
+                                         const input::InputSource* inputs = nullptr);
 
     // The run record of the last execution started with recording, once it has ended (`out` is overwritten; its
     // arrays and strings allocate from their own allocators). Controller thread.
@@ -157,6 +169,7 @@ private:
     containers::Array<inspect::BindReport> m_binds;
     containers::Array<crd::i64>            m_args;
     plan::RunResult                        m_result;
+    const input::InputSource*              m_inputs = nullptr; // the execution's host input seam (the caller's)
 
     // DIAG.9a: the recorded execution. The controller writes all but the trace at `start`; the executing thread
     // writes the trace (from m_exec_alloc); the controller reads it only after the execution has ended.

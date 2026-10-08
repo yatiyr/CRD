@@ -15,6 +15,8 @@
 //   --inspect-arg N (the entry's argument, default 3), --app-assets <dir> (the application's own tree at app://).
 //   --inspect-record <file>       — DIAG.9a: write the inspected run as a new run record when it ends (never
 //                                   overwrites; a cancelled run writes none); `replay.run` reproduces it.
+//   --inspect-seed <u64>          — DIAG.9a: every inspected run (and "Run again") reads input.random draws of this
+//                                   seed, from the first; without it the host has no random source and a draw fails.
 // DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
 //   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
 //                                   page of its answer
@@ -84,6 +86,7 @@
 #include <GLFW/glfw3native.h>
 #endif
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -267,9 +270,9 @@ void write_inspect_record(crd::sandbox::InspectPanel& panel, const char* path)
     }
     [[maybe_unused]] const crd::ceir::cook::RecordWrite w =
         crd::ceir::cook::write_record_file(crd::containers::StringView(path), rec);
-    CRD_LOG_INFO(g_log_sandbox, "DIAG.9a record: {} {} (asset {} generation {}, {} events, {})", path,
+    CRD_LOG_INFO(g_log_sandbox, "DIAG.9a record: {} {} (asset {} generation {}, {} events, {} input reads, {})", path,
                  crd::ceir::cook::record_write_name(w), rec.asset, rec.generation, rec.events_total,
-                 crd::ceir::plan::run_error_name(rec.error));
+                 rec.input_reads_total, crd::ceir::plan::run_error_name(rec.error));
 }
 
 // ⭐⭐ DIAG.8c: the diagnostic command panel's service. The sandbox is its host: it grants the authority (start-up
@@ -499,6 +502,7 @@ int main(int argc, char** argv)
     const char*               app_assets                         = nullptr;
     const char*               inspect_record                     = nullptr; // DIAG.9a
     crd::i64                  inspect_arg                        = 3;
+    crd::sandbox::PanelInputs inspect_inputs                     = {}; // DIAG.9a: --inspect-seed
     crd::u32                  inspect_breaks[kInspectMaxLines]   = {};
     crd::u32                  inspect_watches[kInspectMaxLines]  = {};
     crd::sandbox::PanelAction inspect_script[kInspectMaxLines]   = {};
@@ -720,6 +724,19 @@ int main(int argc, char** argv)
         {
             inspect_record = argv[++i];
         }
+        else if (std::strcmp(argv[i], "--inspect-seed") == 0 && i + 1 < argc)
+        {
+            // A decimal u64, whole: a typo must not silently become another seed.
+            const char* const text = argv[++i];
+            char*             end  = nullptr;
+            errno                  = 0;
+            const unsigned long long v = std::strtoull(text, &end, 10);
+            if (text[0] < '0' || text[0] > '9' || end == text || *end != '\0' || errno == ERANGE)
+            {
+                inspect_args_ok = false;
+            }
+            inspect_inputs = crd::sandbox::PanelInputs{true, static_cast<crd::u64>(v)};
+        }
         else if (std::strcmp(argv[i], "--inspect-arg") == 0 && i + 1 < argc)
         {
             inspect_arg = static_cast<crd::i64>(std::strtoll(argv[++i], nullptr, 10));
@@ -779,7 +796,7 @@ int main(int argc, char** argv)
     {
         CRD_LOG_ERROR(g_log_sandbox,
                       "--inspect-break/--inspect-watch take 1-based lines (at most {} each); --inspect-step takes "
-                      "continue|into|over|out|cancel, comma-separated",
+                      "continue|into|over|out|cancel, comma-separated; --inspect-seed takes a decimal u64",
                       kInspectMaxLines);
         crd::log::shutdown();
         return 1;
@@ -1329,6 +1346,7 @@ int main(int argc, char** argv)
             crd::log::shutdown();
             return 1;
         }
+        inspect_panel->set_inputs(inspect_inputs);
         if (inspect_panel->start(crd::containers::ConstSpan<crd::i64>(&inspect_arg, 1U),
                                  crd::ceir::cook::HostRecording{inspect_record != nullptr, 0U})
             != crd::ceir::inspect::Refusal::None)
