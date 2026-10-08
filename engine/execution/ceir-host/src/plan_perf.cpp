@@ -8,9 +8,11 @@
 
 namespace crd::ceir::host
 {
-// ⛔ the per-Op arrays are indexed by u8(op); if plan::Op ever grows past kMaxOps this becomes a SILENT drop. MapReduce
-// is the last member today — widening the enum must audit THIS consumer (the widen-enum-audit-every-consumer rule).
-static_assert(static_cast<crd::u8>(plan::Op::MapReduce) < PlanProfile::kMaxOps, "PlanProfile::kMaxOps < the plan::Op count");
+// ⛔ the per-Op arrays are indexed by u8(op); if plan::Op ever grows past kMaxOps this becomes a SILENT drop. Random
+// (DIAG.9a) is the last member today — widening the enum must audit THIS consumer (the widen-enum-audit-every-consumer
+// rule).
+static_assert(static_cast<crd::u8>(plan::Op::Random) < PlanProfile::kMaxOps,
+              "PlanProfile::kMaxOps < the plan::Op count");
 namespace
 {
 constexpr crd::u32 kStack = 256U; // the parent-pause op stack; deeper nesting is witnessed (depth_overflow), never silent.

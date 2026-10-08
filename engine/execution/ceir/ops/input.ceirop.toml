@@ -1,0 +1,26 @@
+schema_version = 1
+dialect = "input"
+summary = "DIAG.9a host inputs a program reads: values the host delivers at run time through its input seam (crd/ceir/input.hpp), so a run record can hold them and a replay can feed them back. Each op names one input kind and carries that kind's own effect family, so the replay-input analysis classifies it without a special case. A host with no source for a kind fails the read with a typed InputUnavailable error, never a made-up value."
+
+# ----------------------------------------------------------------------------------------------------------------------
+# input.random -- one draw from the host's random stream `stream`, reduced to [0, bound). The host delivers the raw
+# 64-bit draw (InputSource, kind Random); the op reduces it (unsigned remainder by `bound`), so the reduction is program
+# semantics and a replay of the same raw draws against an edited bound sees what the edited program would see. A draw
+# ADVANCES its stream (RandomRead writes the Random class in hazard.hpp), so two draws never reorder. A read is a
+# schedule-dependent input exactly like a §20 cell: a parallel or pooled body may not contain one (exec::region_state_free).
+# ----------------------------------------------------------------------------------------------------------------------
+[[op]]
+name = "random"
+summary = "Draw the next value of a host random stream, reduced to [0, bound)."
+version = 1
+results = [
+    { name = "value", type = "any", doc = "the draw reduced to [0, bound) (an integer)" },
+]
+attributes = [
+    { name = "stream", kind = "int", required = true, doc = "the host random stream to draw from, in [0, 2^32). Streams are independent: a draw from one never advances another." },
+    { name = "bound", kind = "int", required = true, doc = "the exclusive upper bound of the result, in [1, 2^32). The raw draw is reduced by unsigned remainder." },
+]
+effects = [ "RandomRead" ]
+determinism = "ExternalNondeterminism"
+native = { provider = "host", determinism = "ExternalNondeterminism", hot_reload_safe = true }
+docs = "input.random {stream = S, bound = B} -> %v. The host's input seam delivers the raw draw of stream S (InputSource, InputKind::Random); %v = draw mod B (unsigned). Deterministic given the host's stream (a seeded host, or a run record's recorded draws), which the host chooses externally. With no source for the stream the read fails ExecError::InputUnavailable / plan::RunError::InputUnavailable. A stream or bound out of range is the arith.const precedent: ExecError::UndefinedValue at eval, CompileError::BadConst at plan compile. Not legal in a parallel_for / map_reduce body or a pooled launch body (a draw order would depend on the schedule): the shared pre-flight refuses it as ParallelBodyStateful, and a launch body that reads one runs inline on the submitting thread."

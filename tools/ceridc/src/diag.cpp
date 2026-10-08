@@ -17,6 +17,7 @@
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/async_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/input_ops.hpp>
 #include <crd/ceir/gen/task_ops.hpp>
 #include <crd/ceir/host/host_replay_diag.hpp>
 #include <crd/perf/diag_commands.hpp>
@@ -32,6 +33,7 @@ void register_host_dialects(crd::ceir::Context& ctx, void* /*user*/)
     (void)crd::ceir::task::register_task_ops(ctx);
     (void)crd::ceir::async::register_async_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
+    (void)crd::ceir::input::register_input_ops(ctx); // DIAG.9a: host inputs (input.random), recorded by replay.record
 }
 
 bool bind_diag_commands(crd::perf::DiagCommandService& service)

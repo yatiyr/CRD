@@ -33,7 +33,10 @@
 // cooked) as an immutable blob, the build, the arguments, every input's need and state (an input the recorder cannot
 // capture is stored missing), a bounded trace and the outcome. The record is created exclusively: an existing file is
 // never overwritten. Arguments: `out` (the record's path under the root, required), `entry` (default main), `args`
-// (comma-separated i64), `max_events` (1 to 65536, default 4096).
+// (comma-separated i64), `max_events` (1 to 65536, default 4096), `seed` (a u64: the host random streams the run
+// draws from, input::SeededInputs; without it the host has no random source and a draw fails input-unavailable,
+// which is what the record then holds). Every host input read is kept in the record (`random` recorded); a replay
+// feeds those reads back and never draws from a live source, so it needs no seed.
 //
 // `replay.run` (Execute, a record path) replays a record in this process, refusing an incompatible one before it runs
 // anything: a file that is not a record, another record schema, a bad checksum, a program blob whose content hash is
@@ -111,6 +114,8 @@ struct HostRecordRequest
     crd::u32                        max_events = kReplayDefaultMaxEvents;
     Registrar                       registrar  = nullptr;
     void*                           user       = nullptr;
+    bool                            has_seed   = false; // false: the run has no host random source
+    crd::u64                        seed       = 0U;    // the input::SeededInputs seed when `has_seed`
 };
 
 // One replay of a host record.

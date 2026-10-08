@@ -3,6 +3,7 @@
 #include <crd/ceir/attr.hpp> // AttrValue / AttrKind
 #include <crd/ceir/exec.hpp> // 4c: the SHARED parallel-region pre-flight (check_parallel_region — analysis, not execution)
 #include <crd/ceir/func.hpp> // func_body_block / func kinds
+#include <crd/ceir/input.hpp> // DIAG.9a: input.random's attributes, reduction and the run's input seam
 #include <crd/ceir/symbol_table.hpp>
 #include <crd/containers/hash_map.hpp>
 
@@ -42,6 +43,7 @@ containers::StringView run_error_name(RunError e) noexcept
     case RunError::BadToken: return containers::StringView("bad-token");
     case RunError::ContinuationArity: return containers::StringView("continuation-arity");
     case RunError::Cancelled: return containers::StringView("cancelled");
+    case RunError::InputUnavailable: return containers::StringView("input-unavailable");
     }
     return containers::StringView("?");
 }
@@ -152,6 +154,7 @@ struct CC
     OpId alaunch, aawait, ajoin, arace, acancel, ascope; // async.*
     OpId tspawn, tmain, tworker, tgroup, tfiber, tcont;  // task.*
     OpId pfor, mreduce;         // 4c: task.parallel_for / task.map_reduce
+    OpId irandom;               // DIAG.9a: input.random → Op::Random
     // 4c: this CC compiles a map/combine body → a slot MISS is a capture, not an internal bug
     bool             isolated = false;
     CompileError     err      = CompileError::Ok;
@@ -269,6 +272,7 @@ CC make_cc(Context& ctx, CompiledPlan& plan, containers::HashMap<const Value*, c
               ctx.intern_op("task", "continuation"),
               ctx.intern_op("task", "parallel_for"),
               ctx.intern_op("task", "map_reduce"),
+              input::random_kind(ctx),
               isolated};
 }
 crd::u32 compile_seq(CC& cc, Block* b);                             // fwd (mutual recursion with compile_fn_body)
@@ -322,8 +326,9 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
         const bool is_async  = is_launch || is_cont || is_await || is_join || is_race || is_cancel;
         // 4c data-parallel: the map/combine bodies are ISOLATED mini-functions (NOT parent-frame children) — handled in the
         // op-id dispatch, so is_dp is deliberately OUT of the `is_cf||is_launch||is_cont` child-in-parent-frame set.
-        const bool is_dp = op->kind() == cc.pfor || op->kind() == cc.mreduce;
-        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp)
+        const bool is_dp     = op->kind() == cc.pfor || op->kind() == cc.mreduce;
+        const bool is_random = op->kind() == cc.irandom; // DIAG.9a: a host input read
+        if (!is_cf && !is_arith && !is_state && !is_call && !is_async && !is_dp && !is_random)
         {
             cc.err = CompileError::UnsupportedOp; // core.foreach etc. — no compiled semantics
             return fail_at(cc, op);
@@ -397,6 +402,18 @@ crd::u32 compile_seq(CC& cc, Block* b) // NOLINT(misc-no-recursion)
                 return fail_at(cc, op);
             }
             instr.imm = v.i;
+        }
+        else if (is_random) // DIAG.9a input.random: the stream and bound pack into the immediate (both below 2^32)
+        {
+            instr.op        = Op::Random;
+            crd::u32 stream = 0U;
+            crd::u64 bound  = 0U;
+            if (!input::random_attrs(cc.ctx, *op, stream, bound))
+            {
+                cc.err = CompileError::BadConst; // the reference: UndefinedValue (the arith.const precedent)
+                return fail_at(cc, op);
+            }
+            instr.imm = static_cast<crd::i64>((static_cast<crd::u64>(stream) << 32U) | bound);
         }
         else if (op->kind() == cc.addi)
         {
@@ -658,6 +675,7 @@ struct RS
     // active run_seq, outermost first, so a safe point can tell which values are live in its frame.
     const RunControl*             control = nullptr;
     containers::Array<PathEntry>* path    = nullptr;
+    const input::InputSource*     inputs  = nullptr; // DIAG.9a: the host input seam (null: every read is unavailable)
 };
 // DIAG.8a: an error ORIGINATES at instr `k` of seq `seq_idx`: latch that address (first wins — outer frames only
 // propagate) and return `e`. Error paths only; the dispatch loop never reads `fault`.
@@ -837,6 +855,19 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
         switch (in.op) // a compile-time jump table (§153); every slot is `stack[base + slot]` (the current frame window)
         {
         case Op::ConstI: rs.stack[rslot] = in.imm; break;
+        case Op::Random: // DIAG.9a: one raw draw through the run's input seam, reduced to [0, bound)
+        {
+            const auto     packed = static_cast<crd::u64>(in.imm);
+            const auto     stream = static_cast<crd::u32>(packed >> 32U);
+            const crd::u64 bound  = packed & 0xFFFFFFFFULL;
+            crd::i64       raw    = 0;
+            if (!input::read_input(rs.inputs, input::InputKind::Random, stream, raw))
+            {
+                return raise(rs, seq_idx, k, RunError::InputUnavailable);
+            }
+            rs.stack[rslot] = input::reduce_draw(raw, bound);
+            break;
+        }
         case Op::AddI:
             rs.stack[rslot] = static_cast<crd::i64>(static_cast<crd::u64>(rs.stack[base + ops[in.operands_off]]) +
                                                     static_cast<crd::u64>(rs.stack[base + ops[in.operands_off + 1U]]));
@@ -1257,7 +1288,7 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
 }
 
 RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc, RunHooks hooks,
-              const RunControl* control)
+              const RunControl* control, const input::InputSource* inputs)
 {
     RunResult r(alloc);
     if (plan.entry_fn >= static_cast<crd::u32>(plan.funcs.size())) // an empty/failed compile — no entry
@@ -1284,6 +1315,7 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
         map_outputs.push_back(containers::Array<crd::i64>(alloc));
     }
     RS rs{plan, stack, cells, tokens, map_outputs, alloc, crd::u64{1} << 24U, hooks}; // reference's step budget + the 11c seam
+    rs.inputs = inputs;
     containers::Array<PathEntry> path(alloc); // DIAG.8b: maintained only while a RunControl is attached
     if (control != nullptr)
     {

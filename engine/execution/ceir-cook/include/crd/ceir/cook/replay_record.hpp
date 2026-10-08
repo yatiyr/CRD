@@ -35,6 +35,14 @@
 // per-body step budget); the provider's other schedule choices are fixed by the build (a race answers its first
 // operand, the lowest failing index wins, folds run in index order).
 //
+// Host inputs (input.hpp: input.random's draws) are read through the run's input seam. A recorded run's reads go
+// through an `InputRecorder` wrapped around the host's live source, which keeps every read in order: its kind,
+// channel, whether the host had a value and the value. A replay installs an `InputFeed` over the record's reads
+// instead and never asks a live host; a read the record cannot answer (another kind or channel at that position, or
+// past its last read) stops the replay there with InputUnavailable and is reported as an `input` divergence at that
+// op. The record keeps at most kReplayMaxInputReads reads and counts all of them; a run that read more holds an
+// incomplete stream, so its `random` input is stored missing and a replay refuses it.
+//
 // Guarantee: a plan record is event replay of the integer, sequential compiled-plan executor; a program needing
 // schedule choices records the schedule as missing there. A host record is schedule replay of the host provider.
 // Backend-specific numeric replay is a different guarantee. Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
@@ -42,6 +50,7 @@
 #include <crd/ceir/cook/hot_reload.hpp> // Registrar
 #include <crd/ceir/cook/program_cook.hpp> // ReadError
 #include <crd/ceir/exec.hpp>
+#include <crd/ceir/input.hpp> // InputSource, InputKind
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -59,7 +68,7 @@ class Context;
 
 namespace crd::ceir::cook
 {
-inline constexpr crd::u32 kReplayRecordSchema = 3U; // the record file layout (3: the executor and its schedule)
+inline constexpr crd::u32 kReplayRecordSchema = 4U; // the record file layout (4: the host input reads)
 inline constexpr crd::u32 kReplayExecutor     = 1U; // the executor semantics a trace is valid for
 
 inline constexpr crd::u32 kReplayDefaultMaxEvents = 4096U;
@@ -71,6 +80,7 @@ inline constexpr crd::u32 kReplayMaxValues        = 65536U; // results, and stat
 inline constexpr crd::u64 kReplayMaxProgramBytes  = 16ULL * 1024ULL * 1024ULL;
 inline constexpr crd::u32 kReplayInputs           = 9U;
 inline constexpr crd::u32 kReplayMaxHostJobs      = 256U; // a host record's job split
+inline constexpr crd::u32 kReplayMaxInputReads    = 65536U; // host input reads kept in a record
 
 // Which executor ran a recorded run. A record replays only on its own executor.
 // NOLINTNEXTLINE(performance-enum-size)
@@ -148,11 +158,35 @@ struct ReplayEvent
 
 [[nodiscard]] bool operator==(const ReplayEvent& a, const ReplayEvent& b) noexcept;
 
+// One read of a host input, in the order the run made them.
+struct ReplayInputRead
+{
+    input::InputKind kind      = input::InputKind::Random;
+    crd::u32         channel   = 0U;    // the stream (Random)
+    bool             delivered = false; // false: the host had no value, and the read failed InputUnavailable
+    crd::i64         value     = 0;     // the raw value the host delivered (0 when not delivered)
+};
+
+[[nodiscard]] bool operator==(const ReplayInputRead& a, const ReplayInputRead& b) noexcept;
+
+// A replay's first host input read the record could not answer.
+struct ReplayInputRefusal
+{
+    bool             refused = false;
+    crd::u64         read    = 0U; // its position in the read order
+    crd::u64         event   = 0U; // the trace event of the op that asked (its index in the trace)
+    input::InputKind kind    = input::InputKind::Random;
+    crd::u32         channel = 0U;
+};
+
 // What one traced run produced. `sites` is parallel to `events` (the instr of each kept event), for blame; it is not
 // stored in a record.
 struct ReplayTrace
 {
-    explicit ReplayTrace(memory::IAllocator* alloc) : events(alloc), sites(alloc), results(alloc), cells(alloc) {}
+    explicit ReplayTrace(memory::IAllocator* alloc)
+        : events(alloc), sites(alloc), results(alloc), cells(alloc), input_reads(alloc)
+    {
+    }
 
     containers::Array<ReplayEvent>    events;
     containers::Array<plan::InstrRef> sites;
@@ -163,13 +197,18 @@ struct ReplayTrace
     exec::ExecError                   host_error = exec::ExecError::None; // a host trace's run error
     containers::Array<crd::i64>       results;
     containers::Array<crd::i64>       cells;
+    // The host input reads the run made (the first kReplayMaxInputReads), all of them counted, and for a replay the
+    // first read its record could not answer.
+    containers::Array<ReplayInputRead> input_reads;
+    crd::u64                           input_reads_total = 0U;
+    ReplayInputRefusal                 input_refusal;
 };
 
 struct ReplayRecord
 {
     explicit ReplayRecord(memory::IAllocator* alloc)
         : build(alloc), program_path(alloc), program(alloc), entry(alloc), args(alloc), events(alloc), results(alloc),
-          cells(alloc)
+          cells(alloc), input_reads(alloc)
     {
     }
 
@@ -194,6 +233,8 @@ struct ReplayRecord
     crd::u64                       fault_op   = 0U;
     containers::Array<crd::i64>    results;
     containers::Array<crd::i64>    cells;
+    crd::u64                           input_reads_total = 0U; // every host input read the run made
+    containers::Array<ReplayInputRead> input_reads;            // the first min(input_reads_total, kReplayMaxInputReads)
 };
 
 // Why a record did not decode.
@@ -313,10 +354,59 @@ private:
     containers::Array<Open> m_open; // dispatched ops whose post hook has not run yet, innermost last
 };
 
+// The host input reads of a recorded run. Install `source()` as the run's input seam: each read is passed to `live`
+// (the host's own source; null answers none) and kept in `out.input_reads` in order, the first kReplayMaxInputReads of
+// them, with every read counted in `out.input_reads_total`. Clears both. Threads: the executing thread.
+class InputRecorder
+{
+public:
+    InputRecorder(ReplayTrace& out, const input::InputSource* live);
+    InputRecorder(const InputRecorder&)            = delete;
+    InputRecorder& operator=(const InputRecorder&) = delete;
+    InputRecorder(InputRecorder&&)                 = delete;
+    InputRecorder& operator=(InputRecorder&&)      = delete;
+    ~InputRecorder()                               = default;
+
+    [[nodiscard]] const input::InputSource* source() const noexcept { return &m_source; }
+
+private:
+    static bool next(input::InputKind kind, crd::u32 channel, crd::i64& out, void* user);
+
+    ReplayTrace*              m_out;
+    const input::InputSource* m_live;
+    input::InputSource        m_source;
+};
+
+// The host inputs of a replay: install `source()` as the run's input seam and it answers each read from `reads` in
+// order, never from a live host. A read of another kind or channel than the recorded one at its position, or past the
+// last recorded read, is refused (the read fails InputUnavailable) and noted in `out.input_refusal` with the trace
+// event of the op that asked; later reads are refused too. Answered reads are kept in `out.input_reads`. Clears both.
+// Threads: the executing thread.
+class InputFeed
+{
+public:
+    InputFeed(containers::ConstSpan<ReplayInputRead> reads, ReplayTrace& out);
+    InputFeed(const InputFeed&)            = delete;
+    InputFeed& operator=(const InputFeed&) = delete;
+    InputFeed(InputFeed&&)                 = delete;
+    InputFeed& operator=(InputFeed&&)      = delete;
+    ~InputFeed()                           = default;
+
+    [[nodiscard]] const input::InputSource* source() const noexcept { return &m_source; }
+
+private:
+    static bool next(input::InputKind kind, crd::u32 channel, crd::i64& out, void* user);
+
+    containers::ConstSpan<ReplayInputRead> m_reads;
+    ReplayTrace*                           m_out;
+    input::InputSource                     m_source;
+};
+
 // Run `program` on `args`, keeping at most `max_events` events. `cancel` stops the run at its next safe point
-// (RunError::Cancelled).
+// (RunError::Cancelled). `inputs` is the run's host input seam (null: every read fails InputUnavailable); pass an
+// `InputRecorder`'s or an `InputFeed`'s source to record or replay the reads.
 void run_traced(const ReplayProgram& program, containers::ConstSpan<crd::i64> args, crd::u32 max_events,
-                const std::atomic<bool>* cancel, ReplayTrace& out);
+                const std::atomic<bool>* cancel, ReplayTrace& out, const input::InputSource* inputs = nullptr);
 
 // The authored position of instr `at` of `program`, as plain values (`file` is a view into `ctx`).
 struct ReplaySite
@@ -348,13 +438,15 @@ struct OwnedReplaySite
                                                memory::IAllocator* scratch);
 
 // The input states a record of `module` holds when `executor` runs it: the program, build and entry arguments are
-// recorded, and so is the schedule on the host executor (its settings are in the record); any other input the
-// program needs, or may need through an opaque op, is missing, never assumed; the rest are not needed. `missing`
-// (when not null) gains the missing inputs' names, comma-separated, in record order. Returns false, with `inputs`
-// incomplete, when `cancel` was raised during the walk.
+// recorded, and so is the schedule on the host executor (its settings are in the record); `random` is recorded when
+// `host_inputs_held` (the record holds every host input read the run made) and every op that reads randomness is an
+// input op reading through the seam; any other input the program needs, or may need through an opaque op, is missing,
+// never assumed; the rest are not needed. `missing` (when not null) gains the missing inputs' names, comma-separated,
+// in record order. Returns false, with `inputs` incomplete, when `cancel` was raised during the walk.
 [[nodiscard]] bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExecutorKind executor,
-                                          memory::IAllocator* alloc, const std::atomic<bool>* cancel,
-                                          ReplayInput (&inputs)[kReplayInputs], containers::String* missing);
+                                          bool host_inputs_held, memory::IAllocator* alloc,
+                                          const std::atomic<bool>* cancel, ReplayInput (&inputs)[kReplayInputs],
+                                          containers::String* missing);
 
 // The names of `record`'s missing inputs, comma-separated in record order, appended to `out`. True when none is.
 [[nodiscard]] bool record_missing_inputs(const ReplayRecord& record, containers::String& out);
@@ -369,9 +461,10 @@ enum class DivergenceKind : crd::u8
     Outcome, // the run error (the executor's own) or the op it blamed differs
     Results, // result `index` (or the result count) differs
     Cells,   // state cell `index` (or the cell count) differs
+    Input,   // host input read `index` asked for another kind or channel than recorded, or the read counts differ
 };
 
-// "none", "path", "value", "length", "outcome", "results", "cells".
+// "none", "path", "value", "length", "outcome", "results", "cells", "input".
 [[nodiscard]] containers::StringView divergence_kind_name(DivergenceKind k) noexcept;
 
 struct Divergence
@@ -381,13 +474,16 @@ struct Divergence
     crd::u32       value_index = 0U;
     crd::u64       recorded_op = 0U; // Path, Value, Outcome: the op the record names
     crd::u64       observed_op = 0U; // Path, Value, Outcome: the op the replay reached
-    crd::i64       recorded    = 0;  // the recorded value, count (when `count`) or run error
+    crd::i64       recorded    = 0;  // the recorded value, count (when `count`), run error or input channel
     crd::i64       observed    = 0;
     bool           count       = false; // `recorded` and `observed` are counts (events, read results, values)
     plan::InstrRef site;             // the replay's instr to blame (invalid when none, and for a host trace)
 };
 
 // The first divergence of `trace` from `record` (kind None: the replay reproduced the record). Only the kept events
-// are compared one by one; `events_total` is compared whole.
+// are compared one by one; `events_total` is compared whole. In run order: the kept events up to the op whose host
+// input read was refused, then that refusal (Input: `recorded` and `observed` are the recorded and requested channels,
+// or the read counts when the record had no read left), then the rest of the events, length, a different number of
+// host input reads (Input, counts), outcome, results and cells.
 [[nodiscard]] Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace) noexcept;
 } // namespace crd::ceir::cook

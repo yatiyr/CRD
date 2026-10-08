@@ -911,12 +911,57 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-inspected-host-rec
   and refused `DetachedBody`, never paused, and leaves no event.
 - No interactive consumer inspects host runs yet (ceridc inspect, `program.inspect` and the sandbox panel drive the
   compiled plan through `InspectHost`), so this is a library capability with its tests.
+- What stayed open after this batch is listed at the end of the next settled block.
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-host-input-seam.md)):
+- A host input seam. A program reads values the host chooses at run time through the `input` dialect
+  (`engine/execution/ceir/ops/input.ceirop.toml`); `input.random {stream, bound}` is its first op: one raw 64-bit
+  draw of host random stream `stream` (in [0, 2^32)), reduced by the op to [0, `bound`) (unsigned remainder; `bound`
+  in [1, 2^32)). It declares `RandomRead` (so the replay-input walk classifies it with no special case), claims
+  `ExternalNondeterminism` and is a native intrinsic of the `host` provider. No clock, time-step, input-event or
+  external-completion op is specified anywhere yet, so none was added: each needs its own specification (units,
+  domains) first.
+- `crd/ceir/input.hpp` (crd-ceir) defines `InputKind` (stored in records; append only), `InputSource` (one `next`
+  call per read on the executing thread, in program order, false when the host has no value), `read_input`,
+  `reads_input`, `random_attrs`, `reduce_draw` and `SeededInputs`, a source whose stream `s`'s draw `n` is a
+  splitmix64 mix of (seed, s, n): independent streams, the same draws for one seed, not cryptographic.
+- Both executors read through the seam: the reference interpreter's `install_input_semantics` (a separate installer,
+  like async and task) with `Interpreter::set_input_source` (not copied to sub-interpreters), and the compiled plan's
+  `Op::Random` (stream and bound packed in the immediate) with `plan::run(..., inputs)`. With no value the read fails
+  `ExecError::InputUnavailable` / `RunError::InputUnavailable` at the op, never a made-up value; an out-of-range
+  attribute is `UndefinedValue` / `BadConst` (the `arith.const` precedent). A read is schedule-dependent like a §20
+  cell, so `exec::region_state_free` refuses it: a parallel or map_reduce body (or a callee it reaches) that reads one
+  is `ParallelBodyStateful` / `ParallelStateful`, and a launch body that reads one is not pool-eligible and runs inline
+  on the submitting interpreter, which has the source. `HostProvider::set_input_source` hands the source to its
+  submitting interpreter.
+- Record schema 4 holds the host input reads after the cells: every read's kind, channel, whether the host had a
+  value and the raw value, the first `kReplayMaxInputReads` (65536) kept and all counted; the decoder bounds the
+  count and refuses an unknown kind or a value the host never delivered; schema 3 is refused. A recorded run's reads
+  go through `InputRecorder`, which wraps the host's live source; a replay installs `InputFeed` over the record's reads
+  and never asks a live source. A read the record cannot answer (another kind or channel at its position, or past its
+  last read) fails `InputUnavailable` there and is noted with the trace event of the op that asked.
+- `first_divergence` reports in run order: the kept events up to the op whose read was refused, then that refusal
+  (`input`: the recorded and requested channels, or the read counts when the record had none left), then the rest
+  of the events, length, a different number of reads (`input`, counts), outcome, results and cells.
+- `random` is recorded only when the record holds every read the run made (`host_inputs_held`: not past the bound)
+  and every op that itself declares `RandomRead` is an input op reading through the seam; otherwise it is missing and
+  a replay refuses the record. `replay.record` takes `seed=` (a u64: the run's `SeededInputs`; without it the host has
+  no random source, and the failed read is what the record holds) and answers `random_source`, `seed` and
+  `input_reads`; `replay.run` answers `recorded_input_reads` and `replayed_input_reads`. The host executor takes the
+  seed through `HostRecordRequest`, and `record_host_run` / `run_host_traced` take the live source; host replays feed
+  the record's reads on any job split. The inspect host installs no source and keeps no reads, so a program that draws
+  fails `input-unavailable` there and its record stores `random` missing.
+- ceridc, crd-sandbox's diagnostic service and its inspect panel register the dialect. The committed
+  `assets/ceir/random_demo.ceir` draws `main(n)` values from stream 0, switches on each (a draw of 3 has no case) and
+  returns a stream-1 draw; a seeded failure recorded by one `ceridc` process reproduces in another without the seed,
+  after the program file was edited.
 - Still open in DIAG.9a: state cells across invokes and a run spanning a reload, which need a host that keeps one
   interpreter across invokes (a multi-invoke record with reload steps and the migrated cells as its host-state input);
-  a host input seam with the ops that read random streams, clocks and time steps, input events and external
-  completions; backend-specific numeric replay of GPU dispatches with a declared tolerance; network and physical
-  effects stubbed only in explicit test replay; host records from crd-sandbox's panel (it would need the request run
-  on an enrolled thread).
+  clock and time-step inputs, input events and external I/O completions, which need their ops specified (units and
+  time domains for the clock) before the seam can carry them; a live input source at the inspect host (ceridc
+  inspect, `program.inspect`, the sandbox panel); backend-specific numeric replay of GPU dispatches with a declared
+  tolerance; network and physical effects stubbed only in explicit test replay; host records from crd-sandbox's panel
+  (it would need the request run on an enrolled thread).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

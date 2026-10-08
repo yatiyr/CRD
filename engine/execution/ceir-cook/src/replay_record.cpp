@@ -344,8 +344,8 @@ private:
     {
         return RecordError::Truncated;
     }
-    if (error > static_cast<crd::u8>(plan::RunError::Cancelled) ||
-        host_error > static_cast<crd::u8>(exec::ExecError::Cancelled))
+    if (error > static_cast<crd::u8>(plan::RunError::InputUnavailable) ||
+        host_error > static_cast<crd::u8>(exec::ExecError::InputUnavailable))
     {
         return RecordError::Malformed;
     }
@@ -362,6 +362,38 @@ private:
     if (const RecordError e = read_values(r, kReplayMaxValues, out.cells); e != RecordError::Ok)
     {
         return e;
+    }
+
+    crd::u32 reads = 0U;
+    if (!r.u64(out.input_reads_total) || !r.u32(reads))
+    {
+        return RecordError::Truncated;
+    }
+    const crd::u64 kept_reads =
+        out.input_reads_total < kReplayMaxInputReads ? out.input_reads_total : crd::u64{kReplayMaxInputReads};
+    if (reads != kept_reads)
+    {
+        return RecordError::Malformed;
+    }
+    out.input_reads.clear();
+    out.input_reads.reserve(reads);
+    for (crd::u32 i = 0U; i < reads; ++i)
+    {
+        crd::u8         read_kind = 0U;
+        crd::u8         delivered = 0U;
+        ReplayInputRead read;
+        if (!r.u8(read_kind) || !r.u32(read.channel) || !r.u8(delivered) || !r.i64(read.value))
+        {
+            return RecordError::Truncated;
+        }
+        if (read_kind > static_cast<crd::u8>(input::kLastInputKind) || delivered > 1U ||
+            (delivered == 0U && read.value != 0))
+        {
+            return RecordError::Malformed; // an unknown kind, or a value the host never delivered
+        }
+        read.kind      = static_cast<input::InputKind>(read_kind);
+        read.delivered = delivered != 0U;
+        out.input_reads.push_back(read);
     }
     return r.done() ? RecordError::Ok : RecordError::Malformed;
 }
@@ -561,6 +593,7 @@ cont::StringView divergence_kind_name(DivergenceKind k) noexcept
     case DivergenceKind::Outcome: return cont::StringView{"outcome"};
     case DivergenceKind::Results: return cont::StringView{"results"};
     case DivergenceKind::Cells: return cont::StringView{"cells"};
+    case DivergenceKind::Input: return cont::StringView{"input"};
     }
     return cont::StringView{"?"};
 }
@@ -579,6 +612,11 @@ bool operator==(const ReplayEvent& a, const ReplayEvent& b) noexcept
         }
     }
     return true;
+}
+
+bool operator==(const ReplayInputRead& a, const ReplayInputRead& b) noexcept
+{
+    return a.kind == b.kind && a.channel == b.channel && a.delivered == b.delivered && a.value == b.value;
 }
 
 // ---- the record file ------------------------------------------------------------------------------------------------
@@ -637,6 +675,15 @@ void encode_record(const ReplayRecord& record, cont::Array<crd::u8>& out)
     put_u64(payload, record.fault_op);
     put_values(payload, record.results);
     put_values(payload, record.cells);
+    put_u64(payload, record.input_reads_total);
+    put_u32(payload, static_cast<crd::u32>(record.input_reads.size()));
+    for (const ReplayInputRead& read : record.input_reads)
+    {
+        put_u8(payload, static_cast<crd::u8>(read.kind));
+        put_u32(payload, read.channel);
+        put_u8(payload, read.delivered ? 1U : 0U);
+        put_i64(payload, read.value);
+    }
 
     out.clear();
     out.reserve(kHeaderBytes + payload.size());
@@ -782,13 +829,65 @@ void ReplayRecorder::finish(const plan::CompiledPlan& plan, const plan::RunResul
     }
 }
 
+InputRecorder::InputRecorder(ReplayTrace& out, const input::InputSource* live)
+    : m_out(&out), m_live(live), m_source{&InputRecorder::next, this}
+{
+    out.input_reads.clear();
+    out.input_reads_total = 0U;
+}
+
+bool InputRecorder::next(input::InputKind kind, crd::u32 channel, crd::i64& out, void* user)
+{
+    auto&      self      = *static_cast<InputRecorder*>(user);
+    crd::i64   value     = 0;
+    const bool delivered = input::read_input(self.m_live, kind, channel, value);
+    ReplayTrace& trace   = *self.m_out;
+    if (trace.input_reads_total < kReplayMaxInputReads)
+    {
+        trace.input_reads.push_back(ReplayInputRead{kind, channel, delivered, delivered ? value : 0});
+    }
+    ++trace.input_reads_total;
+    out = value;
+    return delivered;
+}
+
+InputFeed::InputFeed(cont::ConstSpan<ReplayInputRead> reads, ReplayTrace& out)
+    : m_reads(reads), m_out(&out), m_source{&InputFeed::next, this}
+{
+    out.input_reads.clear();
+    out.input_reads_total = 0U;
+    out.input_refusal     = ReplayInputRefusal{};
+}
+
+bool InputFeed::next(input::InputKind kind, crd::u32 channel, crd::i64& out, void* user)
+{
+    auto&          self  = *static_cast<InputFeed*>(user);
+    ReplayTrace&   trace = *self.m_out;
+    const crd::u64 index = trace.input_reads_total++;
+    if (trace.input_refusal.refused)
+    {
+        return false; // the replay already left the record
+    }
+    if (index >= self.m_reads.size() || self.m_reads[index].kind != kind || self.m_reads[index].channel != channel)
+    {
+        // The record cannot answer this read: note it, with the event of the op that asked (dispatched just now).
+        trace.input_refusal = ReplayInputRefusal{true, index, trace.events_total > 0U ? trace.events_total - 1U : 0U,
+                                                 kind, channel};
+        return false;
+    }
+    const ReplayInputRead& read = self.m_reads[index];
+    trace.input_reads.push_back(read);
+    out = read.value;
+    return read.delivered;
+}
+
 void run_traced(const ReplayProgram& program, cont::ConstSpan<crd::i64> args, crd::u32 max_events,
-                const std::atomic<bool>* cancel, ReplayTrace& out)
+                const std::atomic<bool>* cancel, ReplayTrace& out, const input::InputSource* inputs)
 {
     ReplayRecorder            rec(out, max_events);
     const plan::RunControl    control  = rec.control(cancel);
     const plan::CompiledPlan& compiled = program.compiled.plan;
-    const plan::RunResult r = plan::run(compiled, args, out.events.allocator(), plan::RunHooks{}, &control);
+    const plan::RunResult r = plan::run(compiled, args, out.events.allocator(), plan::RunHooks{}, &control, inputs);
     rec.finish(compiled, r);
 }
 
@@ -962,7 +1061,10 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
 {
     Divergence       d;
     const crd::usize kept = record.events.size() < trace.events.size() ? record.events.size() : trace.events.size();
-    for (crd::usize i = 0U; i < kept; ++i)
+    // A refused host input read stopped the replay at the op that asked: the events before it come first.
+    const ReplayInputRefusal& refusal = trace.input_refusal;
+    const crd::usize before = refusal.refused && refusal.event < kept ? static_cast<crd::usize>(refusal.event) : kept;
+    for (crd::usize i = 0U; i < before; ++i)
     {
         const ReplayEvent& a = record.events[i];
         const ReplayEvent& b = trace.events[i];
@@ -991,6 +1093,24 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
         }
     }
     d = Divergence{};
+    if (refusal.refused)
+    {
+        // The read asked for another kind or channel than the record holds at its position, or for one past its end.
+        const bool exhausted = refusal.read >= record.input_reads.size();
+        diverge(d, DivergenceKind::Input, refusal.read,
+                exhausted ? static_cast<crd::i64>(record.input_reads_total)
+                          : static_cast<crd::i64>(record.input_reads[static_cast<crd::usize>(refusal.read)].channel),
+                exhausted ? static_cast<crd::i64>(refusal.read + 1U) : static_cast<crd::i64>(refusal.channel));
+        d.count = exhausted;
+        if (refusal.event < trace.events.size())
+        {
+            const auto e  = static_cast<crd::usize>(refusal.event);
+            d.observed_op = trace.events[e].op;
+            d.recorded_op = e < record.events.size() ? record.events[e].op : 0U;
+            d.site        = e < trace.sites.size() ? trace.sites[e] : plan::InstrRef{};
+        }
+        return d;
+    }
     if (record.events_total != trace.events_total || record.events.size() != trace.events.size())
     {
         diverge(d, DivergenceKind::Length, kept, static_cast<crd::i64>(record.events_total),
@@ -1000,6 +1120,13 @@ Divergence first_divergence(const ReplayRecord& record, const ReplayTrace& trace
         {
             d.site = trace.sites[kept];
         }
+        return d;
+    }
+    if (record.input_reads_total != trace.input_reads_total)
+    {
+        diverge(d, DivergenceKind::Input, trace.input_reads_total, static_cast<crd::i64>(record.input_reads_total),
+                static_cast<crd::i64>(trace.input_reads_total));
+        d.count = true; // the replay made fewer host input reads than the record holds
         return d;
     }
     if (record.error != trace.error || record.host_error != trace.host_error || record.fault_op != trace.fault_op)

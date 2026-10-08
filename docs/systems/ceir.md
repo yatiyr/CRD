@@ -97,6 +97,14 @@ records before reading anything. A host run can be recorded under an inspection 
 program so the session binds to the module that runs, and `record_host_run(program, ..., session, ...)` hands the
 recorder's step hooks to the session (`inspect::StepObserver`), so stops, steps and value reads leave the record equal
 to an unobserved run's; a cancelled run is not recorded.
+Host inputs: a program reads values the host chooses through the `input` dialect (`input.random {stream, bound}`
+today, `crd/ceir/input.hpp`); both executors deliver the raw value through one `InputSource` the host installs
+(`Interpreter::set_input_source`, the `inputs` argument of `plan::run`, `HostProvider::set_input_source`) and the op
+reduces it. With no source a read fails `input-unavailable`. A recorded run keeps every read in the record (schema 4,
+`InputRecorder`), and a replay feeds them back (`InputFeed`) and never asks a live source, so `replay.record seed=`
+(`SeededInputs`) makes a record whose seeded failure reproduces in another process without the seed
+(`assets/ceir/random_demo.ceir`). A read is schedule-dependent, so the shared pre-flight keeps it out of parallel and
+pooled bodies. The inspect host installs no source and keeps no reads, so its records hold `random` missing.
 
 ## Maturity and further work
 

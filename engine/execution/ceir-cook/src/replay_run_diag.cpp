@@ -69,6 +69,8 @@ struct RecordArgs
     bool                  host       = false; // executor=host
     crd::u32              jobs       = 8U;
     crd::u64              sub_fuel   = crd::u64{1} << 20U;
+    bool                  have_seed  = false; // seed=: the run's host random streams (none without it)
+    crd::u64              seed       = 0U;
 };
 
 constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
@@ -176,6 +178,19 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
                 out->jobs = static_cast<crd::u32>(v);
             }
         }
+        else if (a.name == "seed")
+        {
+            crd::u64 v = 0U;
+            if (!detail::parse_u64(a.value, ~crd::u64{0U}, v))
+            {
+                return bad(reason, a.name, "must be a u64");
+            }
+            if (out != nullptr)
+            {
+                out->have_seed = true;
+                out->seed      = v;
+            }
+        }
         else if (a.name == "sub_fuel")
         {
             crd::u64 v = 0U;
@@ -193,7 +208,7 @@ constexpr crd::u64 kMaxSubFuel = crd::u64{1} << 32U;
         {
             reason.append("unknown argument '");
             reason.append(a.name);
-            reason.append("'; replay.record takes out, entry, args, max_events, executor, jobs and sub_fuel");
+            reason.append("'; replay.record takes out, entry, args, max_events, seed, executor, jobs and sub_fuel");
             return DiagStatus::BadArgument;
         }
     }
@@ -335,6 +350,9 @@ struct FaultSite
         .u64("fault_line", fault.line)
         .u64("fault_col", fault.col)
         .u64("results", record.results.size())
+        .str("random_source", parsed.have_seed ? cont::StringView{"seeded"} : cont::StringView{"none"})
+        .u64("seed", parsed.seed)
+        .u64("input_reads", record.input_reads_total)
         .str("missing_inputs", missing)
         .str("replay", missing.empty() ? cont::StringView{"replayable"} : cont::StringView{"incomplete"});
     return DiagStatus::Ok;
@@ -360,6 +378,8 @@ struct FaultSite
     request.max_events = parsed.max_events;
     request.registrar  = cmd.registrar;
     request.user       = cmd.user;
+    request.has_seed   = parsed.have_seed;
+    request.seed       = parsed.seed;
     ReplayRecord    record(alloc);
     OwnedReplaySite fault(alloc);
     cont::String    missing(alloc);
@@ -438,7 +458,10 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
 
     cmd->executions.fetch_add(1U, std::memory_order_relaxed);
     ReplayTrace trace(alloc);
-    run_traced(program, cont::as_const_span(parsed.args), parsed.max_events, call.cancel, trace);
+    // The host's random streams (seeded, or none), every read kept in the trace through the recorder.
+    input::SeededInputs  seeded(parsed.seed, alloc);
+    InputRecorder        inputs(trace, parsed.have_seed ? seeded.source() : nullptr);
+    run_traced(program, cont::as_const_span(parsed.args), parsed.max_events, call.cancel, trace, inputs.source());
     if (trace.error == plan::RunError::Cancelled)
     {
         out.reason.append("cancelled while the program ran; no record was written");
@@ -453,7 +476,10 @@ DiagStatus run_replay_record(void* context, const DiagCall& call, DiagSnapshot& 
     record.entry.append(parsed.entry);
     record.args = std::move(parsed.args);
     cont::String missing(alloc);
-    detail::record_inputs(needs, ReplayExecutorKind::Plan, record.inputs, &missing);
+    const bool   held = trace.input_reads_total <= kReplayMaxInputReads; // every read is in the record
+    detail::record_inputs(needs, ReplayExecutorKind::Plan, held, record.inputs, &missing);
+    record.input_reads_total = trace.input_reads_total;
+    record.input_reads       = std::move(trace.input_reads);
     record.max_events   = parsed.max_events;
     record.events_total = trace.events_total;
     record.events       = std::move(trace.events);
@@ -659,6 +685,8 @@ void add_divergence(DiagFields& item, const Divergence& d)
         .u64("recorded_events", record.events_total)
         .u64("replayed_events", answer.trace.events_total)
         .u64("verified_events", verified)
+        .u64("recorded_input_reads", record.input_reads_total)
+        .u64("replayed_input_reads", answer.trace.input_reads_total)
         .str("result", d.kind == DivergenceKind::None ? cont::StringView{"reproduced"} : cont::StringView{"diverged"})
         .str("divergence", divergence_kind_name(d.kind));
     return DiagStatus::Ok;
@@ -779,8 +807,9 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
     }
 
     cmd->executions.fetch_add(1U, std::memory_order_relaxed);
-    ReplayTrace trace(alloc);
-    run_traced(*replayed, cont::as_const_span(record.args), record.max_events, call.cancel, trace);
+    ReplayTrace     trace(alloc);
+    InputFeed       feed({record.input_reads.data(), record.input_reads.size()}, trace); // never a live source
+    run_traced(*replayed, cont::as_const_span(record.args), record.max_events, call.cancel, trace, feed.source());
     if (trace.error == plan::RunError::Cancelled && call.cancelled())
     {
         out.reason.append("cancelled while the program ran");
@@ -831,6 +860,8 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         .u64("recorded_events", record.events_total)
         .u64("replayed_events", trace.events_total)
         .u64("verified_events", verified)
+        .u64("recorded_input_reads", record.input_reads_total)
+        .u64("replayed_input_reads", trace.input_reads_total)
         .str("result", d.kind == DivergenceKind::None ? cont::StringView{"reproduced"} : cont::StringView{"diverged"})
         .str("divergence", divergence_kind_name(d.kind));
     return DiagStatus::Ok;

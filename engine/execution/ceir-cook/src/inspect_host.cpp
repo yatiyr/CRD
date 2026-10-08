@@ -206,7 +206,10 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
         m_rec_blob     = std::move(cr.blob);
         detail::ProgramNeeds needs;
         (void)detail::analyze_needs(*g->ctx, *g->program.module, m_alloc, nullptr, needs); // no cancel: always whole
-        detail::record_inputs(needs, ReplayExecutorKind::Plan, m_rec_inputs, nullptr);
+        // The inspect host installs no input source and keeps no host input reads, so a program that draws random
+        // values records its random input missing (DIAG.9a: the seam is recorded by replay.record and the host
+        // provider).
+        detail::record_inputs(needs, ReplayExecutorKind::Plan, /*host_inputs_held=*/false, m_rec_inputs, nullptr);
     }
     m_done.store(false, std::memory_order_release);
     m_thread = std::thread(

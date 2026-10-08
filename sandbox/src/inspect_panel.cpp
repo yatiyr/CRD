@@ -5,6 +5,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/input_ops.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/renderasset/identity.hpp>
 
@@ -24,6 +25,7 @@ void register_program_dialects(ceir::Context& ctx, void* /*user*/)
     (void)ceir::arith::register_arith_ops(ctx);
     (void)ceir::core::register_core_ops(ctx);
     (void)ceir::func::register_dialect(ctx);
+    (void)ceir::input::register_input_ops(ctx); // DIAG.9a: loads; the inspect host has no input source (unavailable)
 }
 
 [[nodiscard]] insp::Resume resume_of(PanelAction a) noexcept

@@ -1,6 +1,7 @@
 #include <crd/ceir/exec.hpp>
 
 #include <crd/ceir/func.hpp>
+#include <crd/ceir/input.hpp>
 #include <crd/ceir/symbol_table.hpp>
 
 #include <utility> // std::move
@@ -26,6 +27,7 @@ containers::StringView exec_error_name(ExecError e) noexcept
     case ExecError::ParallelYieldArity: return containers::StringView("parallel-yield-arity");
     case ExecError::BadToken: return containers::StringView("bad-token");
     case ExecError::Cancelled: return containers::StringView("cancelled");
+    case ExecError::InputUnavailable: return containers::StringView("input-unavailable");
     }
     return containers::StringView("?");
 }
@@ -539,6 +541,23 @@ ExecError eval_const(Interpreter& in, const Operation& op)
         return in.fail(ExecError::UndefinedValue, &op);
     }
     in.set_value(op.result(0), v.i);
+    return ExecError::None;
+}
+// DIAG.9a input.random: one raw draw of the stream through the host's input seam, reduced to [0, bound).
+ExecError eval_random(Interpreter& in, const Operation& op)
+{
+    crd::u32 stream = 0U;
+    crd::u64 bound  = 0U;
+    if (!input::random_attrs(in.ctx(), op, stream, bound))
+    {
+        return in.fail(ExecError::UndefinedValue, &op); // the arith.const precedent for a bad attribute
+    }
+    crd::i64 raw = 0;
+    if (!input::read_input(in.input_source(), input::InputKind::Random, stream, raw))
+    {
+        return in.fail(ExecError::InputUnavailable, &op);
+    }
+    in.set_value(op.result(0), input::reduce_draw(raw, bound));
     return ExecError::None;
 }
 ExecError eval_addi(Interpreter& in, const Operation& op)
@@ -1064,10 +1083,16 @@ void install_task_semantics(Interpreter& in) // §38 host-task SEQUENTIAL refere
     in.install(c.intern_op("task", "map_reduce"), &eval_map_reduce_seq);
 }
 
+void install_input_semantics(Interpreter& in) // DIAG.9a host inputs — a SEPARATE installer
+{
+    in.install(input::random_kind(in.ctx()), &eval_random);
+}
+
 // ── the parallel-purity pre-flight (CEIR-11a — moved from crd-ceir-host; the 9d hoist-at-second-consumer) ──
 namespace
 {
-// The body + its resolved callees must be StateEdge-free (a cell would make the result depend on the range split).
+// The body + its resolved callees must be StateEdge-free (a cell would make the result depend on the range split) and
+// read no host input (DIAG.9a: the order of the reads would depend on the schedule, exactly like a cell's updates).
 // `call_kind` is passed in (interned once by the caller) so this recursion never re-interns. Offenses point at the
 // precise inner op (stateful / unresolved-call).
 PreflightResult preflight_region_walk(const Context& ctx, const SymbolTable& syms, OpId call_kind, Region* r,
@@ -1081,7 +1106,7 @@ PreflightResult preflight_region_walk(const Context& ctx, const SymbolTable& sym
     {
         for (Operation* op = b->first_op(); op != nullptr; op = op->next_in_block())
         {
-            if (ctx.has_trait(op->kind(), OpTrait::StateEdge))
+            if (ctx.has_trait(op->kind(), OpTrait::StateEdge) || input::reads_input(ctx, op->kind()))
             {
                 return {ExecError::ParallelBodyStateful, op};
             }

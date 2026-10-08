@@ -26,6 +26,11 @@ namespace crd::ceir
 class SymbolTable;
 }
 
+namespace crd::ceir::input
+{
+struct InputSource;
+} // namespace crd::ceir::input
+
 namespace crd::ceir::exec
 {
 // The typed failure modes (§118 — a reference executor REPORTS, never crashes or hangs).
@@ -51,6 +56,8 @@ enum class ExecError : u8
                           // static misuse, this catches a runtime-forged handle instead of silently yielding nothing).
     Cancelled,            // CEIR-6c: cooperative cancellation was requested (the cancel flag) and the running op observed
                           // it in the step loop — distinct from FuelExhausted (both stop loops; this is a REQUESTED stop).
+    InputUnavailable,     // DIAG.9a: an `input` op read a host input and the interpreter's source had no value for it
+                          // (no source installed, or the host answered none) — never a made-up value (input.hpp).
 };
 [[nodiscard]] containers::StringView exec_error_name(ExecError e) noexcept;
 
@@ -122,6 +129,12 @@ public:
     // NOT copied by the prototype ctor. `cancelled()` ⇒ the running program should stop with `ExecError::Cancelled`.
     void                                set_cancel_flag(const std::atomic<bool>* f) noexcept { m_cancel = f; }
     [[nodiscard]] bool cancelled() const noexcept { return m_cancel != nullptr && m_cancel->load(std::memory_order_relaxed); }
+    // DIAG.9a: the host's input seam (input.hpp) the `input` ops read through; null (the default) answers no value, so
+    // a read fails `InputUnavailable`. Borrowed — it must outlive the run. ⛔ NOT copied by the prototype ctor: a
+    // sub-interpreter (a parallel range, a fold step, a pooled launch body) has no source, and the shared pre-flight
+    // keeps input reads out of those bodies.
+    void set_input_source(const input::InputSource* s) noexcept { m_inputs = s; }
+    [[nodiscard]] const input::InputSource* input_source() const noexcept { return m_inputs; }
     // §112 STEP HOOKS (CEIR-11a — the debugger SEAM, hooks only; no debugger/stepping UI): `pre` fires BEFORE each op
     // dispatches, `post` fires ONLY after a SUCCESSFUL dispatch (never on an error). Null by default → ZERO work when
     // unset (a single null check in the hot loop). ⛔ NOT copied by the prototype ctor (per-session, like set_user/cancel).
@@ -225,6 +238,7 @@ private:
     StepHook                                      m_post_hook = nullptr; // §112 post-op hook (successful dispatch only)
     void*                                         m_hook_user = nullptr; // opaque user for the step hooks
     crd::u32                                      m_depth     = 0U;      // DIAG.8b: func.call frames above the entry
+    const input::InputSource*                     m_inputs    = nullptr; // DIAG.9a: the input seam; not proto-copied
 };
 
 // Install the built-in reference semantics (open-world — a caller may install more or override).
@@ -243,6 +257,10 @@ void install_async_semantics(Interpreter& in);
 // continuation (antecedent yields → body block-args → new token). Jobs-backed placement is the crd-ceir-host provider
 // (CEIR-11a stage 3). A SEPARATE installer (uses the yield-store, like install_async_semantics; NOT in builtin).
 void install_task_semantics(Interpreter& in);
+// DIAG.9a host-input ops (input.hpp): input.random reads one raw draw through the interpreter's input source and
+// reduces it to [0, bound). A SEPARATE installer (NOT in builtin): a host that runs programs reading host inputs
+// installs it and sets the source.
+void install_input_semantics(Interpreter& in);
 
 // ── the parallel-purity PRE-FLIGHT (CEIR-11a — moved from crd-ceir-host at the sequential reference's arrival) ──
 // ⭐ The 9d hoist-at-second-consumer: the provider's PARALLEL run (submit-thread check) and the reference's SEQUENTIAL run
@@ -255,7 +273,8 @@ struct PreflightResult
 };
 // The STATE-FREE / calls-resolved transitive walk over a region (the pre-flight core, WITHOUT the arity/terminator
 // checks): every op in `r` + its resolved callees is StateEdge-free (a §20 cell would make a parallel result depend on
-// the schedule) and every call resolves. ⛔ `err == ParallelBodyStateful` / `UnresolvedCall` on the offender, else None.
+// the schedule), reads no host input (DIAG.9a: input.hpp — the read order would depend on the schedule too) and every
+// call resolves. ⛔ `err == ParallelBodyStateful` / `UnresolvedCall` on the offender, else None.
 // Exported so a variadic-body consumer (the CEIR-11a jobs-backed launch pool-eligibility classifier — launch bodies take
 // 0 block-args + yield variadic, so `check_parallel_region`'s arity/terminator checks don't apply) reuses it, not dup it.
 [[nodiscard]] PreflightResult region_state_free(Context& ctx, const SymbolTable& syms, Region* r);

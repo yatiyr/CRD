@@ -74,6 +74,12 @@ public:
                                            containers::ConstSpan<crd::i64> args, inspect::Session& session,
                                            const HostObserver& observer);
 
+    // DIAG.9a: the host input seam (input.hpp) the next executions' `input` ops read through, on the submitting
+    // interpreter only (sub-interpreters get none, and the shared pre-flight keeps input reads out of the bodies they
+    // run: a launch body that reads one runs inline). Null (the default): every read fails `InputUnavailable`.
+    // Borrowed; it must outlive each execute().
+    void set_input_source(const input::InputSource* s) noexcept { m_inputs = s; }
+
     // DIAG.9a: the schedule settings a run record stores (the constructor's, after its zero-job clamp).
     [[nodiscard]] crd::u32 num_jobs() const noexcept { return m_num_jobs; }
     [[nodiscard]] crd::u64 sub_fuel() const noexcept { return m_sub_fuel; }
@@ -137,5 +143,6 @@ private:
                                               // moves an entry the JobDecl captured by pointer — the push-back-UAF scar)
     crd::usize m_pooled_total = 0U;           // cumulative pooled-this-execution (the witness; NOT reset by drain)
     inspect::Session* m_session = nullptr;    // DIAG.8b: the attached session while execute() runs (else null)
+    const input::InputSource* m_inputs = nullptr; // DIAG.9a: the host input seam of the submitting interpreter
 };
 } // namespace crd::ceir::host

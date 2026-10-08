@@ -3,6 +3,7 @@
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/dialect.hpp> // OpInfo
 #include <crd/ceir/effect.hpp>
+#include <crd/ceir/input.hpp> // reads_input
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
 
@@ -26,7 +27,8 @@ constexpr ReplayInputSpec kInputs[kReplayInputCount] = {
      "a program file names no build; replay.record writes the build a run used into a run record"},
     {"entry-arguments", "event", 0U, "the entry arguments and initial state",
      "a program file holds no run's entry arguments; replay.record writes them into a run record"},
-    {"random", "event", bits(EffectFamily::RandomRead), "random streams", "nothing records the random streams drawn"},
+    {"random", "event", bits(EffectFamily::RandomRead), "random streams",
+     "the random draws are not held; replay.record keeps every input.random draw"},
     {"clock", "event", bits(EffectFamily::TimeRead), "clock and time-step inputs",
      "nothing records the clock and time-step inputs read"},
     {"host-state", "event",
@@ -72,6 +74,13 @@ void tally_op(const Context& ctx, const Operation& op, const EffectQuery& query,
             tally.weakest = claim;
         }
     }
+    // DIAG.9a: what the op declares itself (a call's callee effects are not its own), for the reads no seam sees.
+    crd::u64 own = 0U;
+    for (const EffectRecord& e : ctx.op_effects(op.kind()))
+    {
+        own |= bits(e.family);
+    }
+    const bool through_seam = input::reads_input(ctx, op.kind());
     if ((mask & bits(EffectFamily::ExternalCall)) != 0U)
     {
         ++tally.opaque;
@@ -89,6 +98,10 @@ void tally_op(const Context& ctx, const Operation& op, const EffectQuery& query,
             if (t.cause == nullptr)
             {
                 t.cause = &op;
+            }
+            if (!through_seam && (own & kInputs[i].families) != 0U)
+            {
+                ++t.uncaptured;
             }
         }
     }
@@ -189,8 +202,8 @@ bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator*
     return true;
 }
 
-void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, ReplayInput (&inputs)[kReplayInputCount],
-                   containers::String* missing)
+void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, bool host_inputs_held,
+                   ReplayInput (&inputs)[kReplayInputCount], containers::String* missing)
 {
     const bool host = executor == ReplayExecutorKind::Host;
     for (crd::u32 i = 0U; i < kReplayInputCount; ++i)
@@ -202,7 +215,9 @@ void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, Repla
             in.state = ReplayInputState::NotNeeded;
         }
         else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput ||
-                 (host && i == kReplayScheduleInput))
+                 (host && i == kReplayScheduleInput) ||
+                 (i == kReplayRandomInput && in.need == ReplayNeed::Yes && host_inputs_held &&
+                  needs.inputs[i].uncaptured == 0U))
         {
             in.state = ReplayInputState::Recorded;
         }
@@ -226,7 +241,7 @@ void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, Repla
 namespace crd::ceir::cook
 {
 bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExecutorKind executor,
-                            memory::IAllocator* alloc, const std::atomic<bool>* cancel,
+                            bool host_inputs_held, memory::IAllocator* alloc, const std::atomic<bool>* cancel,
                             ReplayInput (&inputs)[kReplayInputs], containers::String* missing)
 {
     detail::ProgramNeeds needs;
@@ -234,7 +249,7 @@ bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExec
     {
         return false;
     }
-    detail::record_inputs(needs, executor, inputs, missing);
+    detail::record_inputs(needs, executor, host_inputs_held, inputs, missing);
     return true;
 }
 } // namespace crd::ceir::cook

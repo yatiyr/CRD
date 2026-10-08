@@ -18,6 +18,10 @@
 // `record_host_run` with the session): the recorder's step hooks run inside the session's, so the record is the one
 // an unobserved run makes. A run the session cancels is not recorded.
 //
+// Host inputs: a recorded run's input reads (input.random's draws) go through a `cook::InputRecorder` around the
+// host's live source (`inputs`; null: the host has none and every read fails InputUnavailable, which is recorded) and
+// are kept in the record; a replay feeds them back through a `cook::InputFeed` and never asks a live source.
+//
 // ⛔ The caller owns the crd::jobs pool lifecycle, as for HostProvider. Contract: docs/design/runtime-diagnostics.md.
 
 #include <crd/ceir/cook/hot_reload.hpp> // Registrar
@@ -48,9 +52,11 @@ struct HostSchedule
 // Run `entry(args)` of `module` (in `ctx`, stable ids assigned) on a fresh HostProvider with `schedule`, keeping at
 // most `max_events` events of its submitting interpreter in `out`. Under `session` (bound to `module`, may be null)
 // the execution stops, steps and answers value reads as the session's controller asks; the trace is the same.
+// `inputs` is the run's host input seam (null: none).
 void run_host_traced(Context& ctx, const Module& module, containers::StringView entry,
                      containers::ConstSpan<crd::i64> args, const HostSchedule& schedule, crd::u32 max_events,
-                     cook::ReplayTrace& out, inspect::Session* session = nullptr);
+                     cook::ReplayTrace& out, inspect::Session* session = nullptr,
+                     const input::InputSource* inputs = nullptr);
 
 // An authored position, owned (the Context it was read from is gone when a call returns).
 using HostSite = cook::OwnedReplaySite;
@@ -75,12 +81,14 @@ enum class HostReplayStatus : crd::u8
 // Run the cooked program `blob` (authored at `path`) once on `entry(args)` with `schedule` and make its host record
 // in `out`. `registrar` installs the program's dialects into the fresh Context it is loaded in. `missing` (when not
 // null) gains the inputs stored as missing. The record is made whatever the run's outcome (a failing run is recorded
-// with its error and the op it blamed); `fault` (when not null) gets that op's authored position.
+// with its error and the op it blamed); `fault` (when not null) gets that op's authored position. `inputs` is the
+// host's live input source (null: none); every read through it is kept in the record.
 [[nodiscard]] HostReplayStatus record_host_run(containers::ConstSpan<crd::u8> blob, containers::StringView path,
                                                containers::StringView entry, containers::ConstSpan<crd::i64> args,
                                                const HostSchedule& schedule, crd::u32 max_events,
                                                cook::Registrar registrar, void* user, cook::ReplayRecord& out,
-                                               containers::String* missing, HostSite* fault = nullptr);
+                                               containers::String* missing, HostSite* fault = nullptr,
+                                               const input::InputSource* inputs = nullptr);
 
 // A cooked program loaded for recording: its own Context with the host's dialects, the program read and stable ids
 // assigned, and a copy of the artifact the record will hold. A host that inspects the recorded run binds its session
@@ -124,7 +132,7 @@ private:
                                                containers::ConstSpan<crd::i64> args, const HostSchedule& schedule,
                                                crd::u32 max_events, inspect::Session* session,
                                                cook::ReplayRecord& out, containers::String* missing,
-                                               HostSite* fault = nullptr);
+                                               HostSite* fault = nullptr, const input::InputSource* inputs = nullptr);
 
 struct HostReplayOptions
 {

@@ -491,7 +491,8 @@ TEST_CASE("diag 8c: replay.prepare blames each needed input on the first op that
     // each call counts as well as the callee's own op.
     CHECK(has(view(items[3]), view(state_fields("random", "event", "yes", "missing", 3U, &root))));
     CHECK(has(view(items[3]),
-              view(blame_fields("func.call", kEffectsFile, call, "nothing records the random streams drawn", &root))));
+              view(blame_fields("func.call", kEffectsFile, call,
+                                "the random draws are not held; replay.record keeps every input.random draw", &root))));
     CHECK(has(view(items[5]), view(state_fields("host-state", "event", "yes", "missing", 3U, &root))));
     CHECK(has(view(items[5]), view(blame_fields("func.call", kEffectsFile, call,
                                                 "nothing records the host and world state read", &root))));
@@ -546,8 +547,8 @@ TEST_CASE("diag 8c: replay.prepare reports an op it cannot know as an unknown ne
                                 "nothing records the external I/O completions and opaque call results", &root))));
     CHECK(has(view(items[3]), view(state_fields("random", "event", "unknown", "missing", 0U, &root))));
     CHECK(has(view(items[3]), view(blame_fields("zz.mystery", kOpaqueFile, mystery,
-                                                "an opaque op may need random streams; nothing records the random "
-                                                "streams drawn",
+                                                "an opaque op may need random streams; the random draws are not "
+                                                "held; replay.record keeps every input.random draw",
                                                 &root))));
     CHECK(has(view(items[5]), view(state_fields("host-state", "event", "unknown", "missing", 0U, &root))));
     CHECK(has(view(items[7]), view(state_fields("schedule", "schedule", "unknown", "missing", 0U, &root))));

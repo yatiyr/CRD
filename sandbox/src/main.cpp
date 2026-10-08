@@ -33,6 +33,7 @@
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/gen/input_ops.hpp>
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -280,6 +281,7 @@ void register_sandbox_dialects(crd::ceir::Context& ctx, void* /*user*/)
     (void)crd::ceir::arith::register_arith_ops(ctx);
     (void)crd::ceir::core::register_core_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
+    (void)crd::ceir::input::register_input_ops(ctx); // DIAG.9a: host inputs, recorded by replay.record
 }
 
 struct SandboxDiagCommands

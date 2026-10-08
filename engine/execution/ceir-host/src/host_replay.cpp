@@ -71,6 +71,7 @@ void site_of(const Context& ctx, const Module& module, crd::u64 op, HostSite& ou
     case cook::DivergenceKind::Length:
         return d.index < trace.events.size() ? trace.events[static_cast<crd::usize>(d.index)].op : 0U;
     case cook::DivergenceKind::Outcome: return trace.fault_op;
+    case cook::DivergenceKind::Input: return d.observed_op; // the op whose read the record could not answer, if any
     case cook::DivergenceKind::Results:
     case cook::DivergenceKind::Cells: return 0U;
     }
@@ -96,11 +97,12 @@ cont::StringView host_replay_status_name(HostReplayStatus s) noexcept
 
 void run_host_traced(Context& ctx, const Module& module, cont::StringView entry, cont::ConstSpan<crd::i64> args,
                      const HostSchedule& schedule, crd::u32 max_events, cook::ReplayTrace& out,
-                     inspect::Session* session)
+                     inspect::Session* session, const input::InputSource* inputs)
 {
     cook::InterpreterRecorder rec(out, max_events);
     HostProvider              provider(out.events.allocator(), schedule.num_jobs, schedule.sub_fuel);
-    const HostObserver        observer{&attach_recorder, &detach_recorder, &rec};
+    provider.set_input_source(inputs);
+    const HostObserver observer{&attach_recorder, &detach_recorder, &rec};
     const exec::ExecResult    r = session != nullptr ? provider.execute(ctx, module, entry, args, *session, observer)
                                                      : provider.execute(ctx, module, entry, args, observer);
     rec.finish(r);
@@ -133,7 +135,7 @@ HostProgram::HostProgram(memory::IAllocator* alloc, cont::ConstSpan<crd::u8> blo
 HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView path, cont::StringView entry,
                                  cont::ConstSpan<crd::i64> args, const HostSchedule& schedule, crd::u32 max_events,
                                  cook::Registrar registrar, void* user, cook::ReplayRecord& out, cont::String* missing,
-                                 HostSite* fault)
+                                 HostSite* fault, const input::InputSource* inputs)
 {
     if (!valid_schedule(schedule) || max_events == 0U || args.size() > cook::kReplayMaxArgs ||
         entry.size() > cook::kReplayMaxStringBytes || path.size() > cook::kReplayMaxStringBytes ||
@@ -146,12 +148,13 @@ HostReplayStatus record_host_run(cont::ConstSpan<crd::u8> blob, cont::StringView
     {
         return program.status();
     }
-    return record_host_run(program, entry, args, schedule, max_events, nullptr, out, missing, fault);
+    return record_host_run(program, entry, args, schedule, max_events, nullptr, out, missing, fault, inputs);
 }
 
 HostReplayStatus record_host_run(HostProgram& program, cont::StringView entry, cont::ConstSpan<crd::i64> args,
                                  const HostSchedule& schedule, crd::u32 max_events, inspect::Session* session,
-                                 cook::ReplayRecord& out, cont::String* missing, HostSite* fault)
+                                 cook::ReplayRecord& out, cont::String* missing, HostSite* fault,
+                                 const input::InputSource* inputs)
 {
     if (program.status() != HostReplayStatus::Ok)
     {
@@ -167,8 +170,9 @@ HostReplayStatus record_host_run(HostProgram& program, cont::StringView entry, c
     const Module&             module = *program.module();
 
     // Run first: a cancelled run leaves `out` as it was.
-    cook::ReplayTrace trace(alloc);
-    run_host_traced(ctx, module, entry, args, schedule, max_events, trace, session);
+    cook::ReplayTrace   trace(alloc);
+    cook::InputRecorder recorded_inputs(trace, inputs); // every host input read, kept for the record
+    run_host_traced(ctx, module, entry, args, schedule, max_events, trace, session, recorded_inputs.source());
     if (trace.host_error == exec::ExecError::Cancelled)
     {
         return HostReplayStatus::Cancelled;
@@ -199,8 +203,11 @@ HostReplayStatus record_host_run(HostProgram& program, cont::StringView entry, c
     {
         out.args.push_back(a);
     }
-    (void)cook::classify_replay_inputs(ctx, module, cook::ReplayExecutorKind::Host, alloc, nullptr, out.inputs,
+    const bool held = trace.input_reads_total <= cook::kReplayMaxInputReads; // every read is in the record
+    (void)cook::classify_replay_inputs(ctx, module, cook::ReplayExecutorKind::Host, held, alloc, nullptr, out.inputs,
                                        missing); // no cancel: always whole
+    out.input_reads_total = trace.input_reads_total;
+    out.input_reads       = std::move(trace.input_reads);
 
     out.max_events   = max_events < cook::kReplayMaxEvents ? max_events : cook::kReplayMaxEvents;
     out.events_total = trace.events_total;
@@ -274,8 +281,9 @@ HostReplayStatus replay_host_record(const cook::ReplayRecord& record, cook::Regi
 
     site_of(rctx, *recorded, record.fault_op, out.recorded_fault);
     out.num_jobs = schedule.num_jobs;
+    cook::InputFeed feed({record.input_reads.data(), record.input_reads.size()}, out.trace); // never a live source
     run_host_traced(*ctx, *module, cont::StringView{record.entry.data(), record.entry.size()},
-                    cont::as_const_span(record.args), schedule, record.max_events, out.trace);
+                    cont::as_const_span(record.args), schedule, record.max_events, out.trace, nullptr, feed.source());
     out.divergence = cook::first_divergence(record, out.trace);
     site_of(*ctx, *module, blamed_op(out.divergence, out.trace), out.site);
     site_of(*ctx, *module, out.trace.fault_op, out.fault);

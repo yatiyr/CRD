@@ -55,6 +55,7 @@ add_executable(crd-ceir-tests
     test_rewrite_driver.cpp # CEIR-26b: the greedy rewrite DRIVER (rewrite_driver.hpp) - collect-per-round fixpoint, is_erased skip, reshape-fold+DCE compose, non-monotone cap->FATAL
     test_provenance.cpp  # DIAG.8a: authored-source provenance - text positions through CSE, ORIG serialization, plan compile/run errors, layout-independent hashes
     test_inspect.cpp     # DIAG.8b: runtime inspection - line breakpoints, stepping, pause/cancel and typed value snapshots on the plan and the reference interpreter, from a second thread
+    test_input_seam.cpp  # DIAG.9a: the host input seam - input.random read through one InputSource by both executors, InputUnavailable without one, refused in parallel bodies
     test_cse.cpp         # CEIR-26c: Common-Subexpression Elimination (cse.hpp) - eligibility (Pure/registered/leaf/results/det), structural equality, three-collapse, cascade, negatives
 
     test_diagnostic.cpp  # CEIR-8g: DiagnosticEngine (ADR-0117) - stable codes/severity/SourceLoc/notes/fixits, one surface, text copied

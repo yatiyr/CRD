@@ -53,10 +53,11 @@ namespace cont = crd::containers;
 cook::HostExecutorStatus record(const cook::HostRecordRequest& request, cook::ReplayRecord& out,
                                 cook::OwnedReplaySite& fault, cont::String& missing, cont::String& reason)
 {
-    const HostSchedule     schedule{request.num_jobs, request.sub_fuel};
+    const HostSchedule  schedule{request.num_jobs, request.sub_fuel};
+    input::SeededInputs seeded(request.seed, out.program.allocator()); // the host's random streams, when seeded
     const HostReplayStatus s = record_host_run(request.blob, request.path, request.entry, request.args, schedule,
                                                request.max_events, request.registrar, request.user, out, &missing,
-                                               &fault);
+                                               &fault, request.has_seed ? seeded.source() : nullptr);
     return refuse(s, cont::StringView{}, reason);
 }
 

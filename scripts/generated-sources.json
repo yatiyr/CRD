@@ -264,6 +264,39 @@
       "sha256": "cbafbe3d234a26cbbcb5cfa19a74f8b5889aa2947d966efbbb36d44c184b4b69"
     },
     {
+      "path": "engine/execution/ceir/generated/crd/ceir/gen/input.ops.md",
+      "generator": "tools/ceir_opgen/ceir_opgen.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "tools/ceir_opgen/ceir_opgen.py",
+        "--check"
+      ],
+      "sha256": "81ece21ed04696edbd4c0e8204e064ddc1eee74c3d2b6d1a449cddb4f5c0fcc2"
+    },
+    {
+      "path": "engine/execution/ceir/generated/crd/ceir/gen/input_ops.cpp",
+      "generator": "tools/ceir_opgen/ceir_opgen.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "tools/ceir_opgen/ceir_opgen.py",
+        "--check"
+      ],
+      "sha256": "d05171af833c80fc3aa93d8617c397c00ea9337cbe6c8215a27fceda44ca0c64"
+    },
+    {
+      "path": "engine/execution/ceir/generated/crd/ceir/gen/input_ops.hpp",
+      "generator": "tools/ceir_opgen/ceir_opgen.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "tools/ceir_opgen/ceir_opgen.py",
+        "--check"
+      ],
+      "sha256": "7408255c101de23207b8c81f6fb7f6834bfdb8de1203e3f640bd54e7d78a9bbd"
+    },
+    {
       "path": "engine/execution/ceir/generated/crd/ceir/gen/layout.ops.md",
       "generator": "tools/ceir_opgen/ceir_opgen.py",
       "status": "reproducible",
@@ -1086,6 +1119,17 @@
         "--check"
       ],
       "sha256": "5649fa1997b67104a981d297baba2a9d784b7e68d8757fe2f3231ce248e28fa6"
+    },
+    {
+      "path": "tests/execution/ceir/generated/test_input_gen_smoke.cpp",
+      "generator": "tools/ceir_opgen/ceir_opgen.py",
+      "status": "reproducible",
+      "check_command": [
+        "python",
+        "tools/ceir_opgen/ceir_opgen.py",
+        "--check"
+      ],
+      "sha256": "d9d77d0eb3bff34c076d58258bac1a14ad48276ff5901fd22a1a62c08824f5fe"
     },
     {
       "path": "tests/execution/ceir/generated/test_layout_gen_smoke.cpp",

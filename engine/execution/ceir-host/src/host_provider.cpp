@@ -581,6 +581,8 @@ exec::ExecResult HostProvider::run(Context& ctx, const Module& m, containers::St
     exec::install_builtin_semantics(proto);
     exec::install_async_semantics(proto); // §37 (so a scope / launch in an entry runs — sequential reference)
     exec::install_task_semantics(proto);  // §38 host-task ops (so a task.spawn in an entry runs — sequential reference)
+    exec::install_input_semantics(proto); // DIAG.9a host inputs, read through this provider's input source
+    proto.set_input_source(m_inputs);     // the submitting interpreter only (not copied to sub-interpreters)
     // ⛔ then OVERRIDE parallel_for/map_reduce with the PARALLEL (jobs-backed) versions (last-install-wins — the seam).
     proto.install(ctx.intern_op("task", "parallel_for"), &eval_parallel_for);
     proto.install(ctx.intern_op("task", "map_reduce"), &eval_map_reduce); // CEIR-6z: the in-IR fixed-order reduction

@@ -45,6 +45,7 @@ inline constexpr crd::u32 kReplayInputCount = kReplayInputs;
 inline constexpr crd::u32 kReplayProgramInput   = 0U;
 inline constexpr crd::u32 kReplayBuildInput     = 1U;
 inline constexpr crd::u32 kReplayArgumentsInput = 2U;
+inline constexpr crd::u32 kReplayRandomInput    = 3U;
 inline constexpr crd::u32 kReplayScheduleInput  = 7U;
 
 using Need = ReplayNeed;
@@ -60,6 +61,9 @@ struct InputNeed
     Need             need  = Need::Yes;
     crd::u64         ops   = 0U;      // ops whose effective effects need it
     const Operation* cause = nullptr; // the first of them in pre-order (the first opaque op when Unknown)
+    // DIAG.9a: ops that declare one of its families themselves and are not host input reads (input.hpp), so nothing
+    // at the input seam sees what they read. A call is charged with its callee's effects but declares none itself.
+    crd::u64 uncaptured = 0U;
 };
 
 struct ProgramNeeds
@@ -79,9 +83,11 @@ struct ProgramNeeds
                                  const std::atomic<bool>* cancel, ProgramNeeds& out);
 
 // A run record's input states from `needs`: the program, its build and its entry arguments are recorded, and so is
-// the schedule when the host executor ran it (the record holds its settings); any other input the program needs (or
-// may need, through an opaque op) is missing, because nothing captures it at the executor's boundary; the rest are
-// not needed. `missing` (when not null) gains the missing inputs' names, comma-separated, in record order.
-void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, ReplayInput (&inputs)[kReplayInputCount],
-                   containers::String* missing);
+// the schedule when the host executor ran it (the record holds its settings); random streams are recorded when
+// `host_inputs_held` (the record holds every host input read of the run) and only input ops read randomness
+// (`uncaptured` is 0); any other input the program needs (or may need, through an opaque op) is missing, because
+// nothing captures it at the executor's boundary; the rest are not needed. `missing` (when not null) gains the missing
+// inputs' names, comma-separated, in record order.
+void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, bool host_inputs_held,
+                   ReplayInput (&inputs)[kReplayInputCount], containers::String* missing);
 } // namespace crd::ceir::cook::detail

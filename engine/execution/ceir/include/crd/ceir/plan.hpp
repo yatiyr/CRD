@@ -26,6 +26,11 @@
 
 #include <atomic> // DIAG.8b: the cooperative cancel flag a RunControl observes (the exec.hpp primitive)
 
+namespace crd::ceir::input
+{
+struct InputSource;
+} // namespace crd::ceir::input
+
 namespace crd::ceir::plan
 {
 // The dense compiled op-id. Dispatch is a switch over THIS — a compile-time jump table, NOT a dynamic map lookup (§153).
@@ -59,6 +64,8 @@ enum class Op : crd::u8
     //    (child_pool[children_off] = its compiled-FUNCTION index, NOT a seq index — captures rejected at compile). ──
     ParallelFor,  // op[0..2]=lo,hi,step; per index run the map fn (arg=iv), collect the yield → map_output[imm] (statement)
     MapReduce,    // op[0..3]=lo,hi,step,init; map (child0), then fold the combine fn (child1, args=acc,elem) in INDEX order
+    // ── DIAG.9a host inputs (input.hpp): one read through the run's input source; no value → InputUnavailable ──
+    Random,       // input.random: result = raw draw of stream (imm >> 32) mod bound (imm & 0xFFFFFFFF)
 };
 
 // The compiled comparison predicate (the "predicate" STRING attr → this dense enum at compile — the §153 immediate).
@@ -186,6 +193,7 @@ enum class RunError : crd::u8
     BadToken,           // 4b: await/join/continuation of a value that is not a live token handle (reference: BadToken)
     ContinuationArity,  // 4b: a continuation body's arg count != the antecedent token's yield count (reference: BadArity)
     Cancelled,          // DIAG.8b: a RunControl's cancel flag or safe point stopped the run (reference: Cancelled)
+    InputUnavailable,   // DIAG.9a: an input op's read got no value from the run's input source (reference: same)
 };
 [[nodiscard]] containers::StringView run_error_name(RunError e) noexcept;
 
@@ -275,8 +283,11 @@ struct RunControl
     const std::atomic<bool>* cancel = nullptr;
 };
 
+// DIAG.9a: `inputs` is the host's input seam (input.hpp) the input ops read through, called on the executing thread
+// once per read in program order; null answers no value, so a read fails `RunError::InputUnavailable`.
 [[nodiscard]] RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc,
-                            RunHooks hooks = {}, const RunControl* control = nullptr);
+                            RunHooks hooks = {}, const RunControl* control = nullptr,
+                            const input::InputSource* inputs = nullptr);
 
 // DIAG.8b: whether a value can be read at a safe point. A value is read only from the frame the safe point is in
 // (the innermost call frame), never by address.
