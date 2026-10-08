@@ -771,4 +771,25 @@ void VulkanComputeContext::submit_and_wait()
 
 double VulkanComputeContext::last_gpu_ms() const noexcept { return m_impl->last_gpu_ms; }
 
+ComputeAdapter VulkanComputeContext::adapter() const noexcept
+{
+    ComputeAdapter a{};
+    if (m_impl->physical == VK_NULL_HANDLE)
+    {
+        return a;
+    }
+    VkPhysicalDeviceProperties p{};
+    vkGetPhysicalDeviceProperties(m_impl->physical, &p);
+    std::memcpy(a.backend, "vulkan", sizeof("vulkan"));
+    static_assert(sizeof(a.name) >= VK_MAX_PHYSICAL_DEVICE_NAME_SIZE, "a Vulkan device name fits");
+    std::memcpy(a.name, p.deviceName, VK_MAX_PHYSICAL_DEVICE_NAME_SIZE);
+    a.name[sizeof(a.name) - 1U] = '\0';
+    a.vendor = p.vendorID;
+    a.device = p.deviceID;
+    a.driver = p.driverVersion;
+    a.api    = p.apiVersion;
+    a.known  = true;
+    return a;
+}
+
 } // namespace crd::gpu

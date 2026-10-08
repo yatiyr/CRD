@@ -8,6 +8,9 @@
 #include <crd/gpu/command_model.hpp>     // crd::gpu::kMaxBindings — the binding structural cap
 #include <crd/gpu/identity_registry.hpp> // DIAG.8a: mint/retire the per-dispatch Pass identity
 
+#include <cstring> // DIAG.9a: execute_lowered_host's host copies
+#include <memory>
+
 namespace crd::ceir::gpu
 {
 namespace
@@ -227,6 +230,7 @@ containers::StringView execute_error_name(ExecuteError e) noexcept
     case ExecuteError::WorkDispatchFailed: return containers::StringView("WorkDispatchFailed");
     case ExecuteError::InspectRefused: return containers::StringView("InspectRefused");
     case ExecuteError::Cancelled: return containers::StringView("Cancelled");
+    case ExecuteError::HostTransfer: return containers::StringView("HostTransfer");
     }
     return containers::StringView("None");
 }
@@ -360,6 +364,100 @@ ExecuteError execute_lowered(const Context& ctx, containers::ConstSpan<LoweredCo
     if (sites != nullptr)
     {
         sites->set_fault(nullptr);
+    }
+    return ExecuteError::None;
+}
+
+ExecuteError execute_lowered_host(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                  crd::gpu::IComputeContext& device, KernelResolveFn resolver, void* user,
+                                  containers::ConstSpan<HostBufferBinding> buffers, DispatchSites* sites)
+{
+    namespace g = crd::gpu;
+    using g::compute_usage::storage;
+    using g::compute_usage::transfer_dst;
+    using g::compute_usage::transfer_src;
+
+    const crd::usize n = buffers.size();
+    if (n > kMaxHostBufferBindings)
+    {
+        return ExecuteError::HostTransfer;
+    }
+    std::unique_ptr<g::ComputeBuffer> dev[kMaxHostBufferBindings];
+    std::unique_ptr<g::ComputeBuffer> up[kMaxHostBufferBindings];
+    std::unique_ptr<g::ComputeBuffer> back[kMaxHostBufferBindings];
+    ResolvedBinding                   table[kMaxHostBufferBindings];
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        const HostBufferBinding& hb = buffers[b];
+        if (hb.data == nullptr || hb.bytes == 0U)
+        {
+            return ExecuteError::HostTransfer;
+        }
+        dev[b] = device.create_buffer(hb.bytes, storage | transfer_dst | transfer_src, g::ComputeMemory::GpuOnly);
+        up[b]  = device.create_buffer(hb.bytes, transfer_src, g::ComputeMemory::CpuToGpu);
+        if (hb.read_back)
+        {
+            back[b] = device.create_buffer(hb.bytes, transfer_dst, g::ComputeMemory::GpuToCpu);
+        }
+        if (dev[b] == nullptr || up[b] == nullptr || (hb.read_back && back[b] == nullptr))
+        {
+            return ExecuteError::HostTransfer;
+        }
+        table[b] = ResolvedBinding{hb.resource, dev[b].get()};
+    }
+    const containers::ConstSpan<ResolvedBinding> resolved(table, n);
+    if (const ExecuteError err = validate_lowered(ctx, commands, resolver, user, resolved); err != ExecuteError::None)
+    {
+        return err; // nothing recorded or submitted
+    }
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        void* const p = up[b]->map();
+        if (p == nullptr)
+        {
+            return ExecuteError::HostTransfer;
+        }
+        std::memcpy(p, buffers[b].data, static_cast<crd::usize>(buffers[b].bytes));
+        up[b]->unmap();
+    }
+
+    g::ComputeRecorder& rec = device.begin();
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        rec.copy(*up[b], *dev[b], 0U, 0U, buffers[b].bytes);
+    }
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        rec.barrier(*dev[b], g::ComputeAccess::TransferDst, g::ComputeAccess::ShaderRead);
+    }
+    const ExecuteError err = execute_lowered(ctx, commands, rec, resolver, user, resolved, sites);
+    if (err != ExecuteError::None)
+    {
+        (void)device.begin(); // discard the partial recording: never submitted
+        return err;
+    }
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        if (buffers[b].read_back)
+        {
+            rec.barrier(*dev[b], g::ComputeAccess::ShaderWrite, g::ComputeAccess::TransferSrc);
+            rec.copy(*dev[b], *back[b], 0U, 0U, buffers[b].bytes);
+        }
+    }
+    device.submit_and_wait();
+    for (crd::usize b = 0U; b < n; ++b)
+    {
+        if (!buffers[b].read_back)
+        {
+            continue;
+        }
+        const void* const p = back[b]->map();
+        if (p == nullptr)
+        {
+            return ExecuteError::HostTransfer;
+        }
+        std::memcpy(buffers[b].data, p, static_cast<crd::usize>(buffers[b].bytes));
+        back[b]->unmap();
     }
     return ExecuteError::None;
 }

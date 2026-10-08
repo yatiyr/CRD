@@ -14,6 +14,7 @@ add_executable(crd-ceir-cook-tests
     test_replay_events.cpp  # DIAG.9a: recorded input events - every input.event read kept raw in the record and fed back on replay, never from a live queue; an unhandled event reproduced after an edit and the edit named at its read; no queue and an empty queue; incomplete or uncaptured host state stored missing
     test_replay_clock.cpp   # DIAG.9a: recorded clock and time-step inputs - every input.clock and input.time_step read kept in the record and fed back on replay, never from a live clock; a time-step failure reproduced after an edit; a live wall reading replayed to its recorded value; incomplete or uncaptured clocks stored missing
     test_replay_inputs.cpp  # DIAG.9a: recorded host inputs - every input.random draw kept in the record and fed back on replay, never from a live source; refused reads named at their op; incomplete or uncaptured streams stored missing
+    test_replay_device.cpp  # DIAG.9a: device records - numeric replay of compute dispatches on the CPU reference executor within a declared exact or ulp envelope; exact refused on another adapter or build; the first element outside the envelope named at its dispatch; edited kernels and programs; decoder and request refusals
     test_replay_record.cpp  # DIAG.9a: run records - replay.record writes the artifact, build, arguments, input states and a bounded trace; replay.run reproduces after an asset edit, names the first divergence and refuses incompatible records
     test_large_graph.cpp     # CEIR-35d Q6: large-graph SCALABILITY correctness - cook + load + execute a synthetic ~8k-op arith graph to the exact sum (no O(N^2)/buffer/recursion blowup); time-scaling is the Q7 board
 )
@@ -25,6 +26,8 @@ target_link_libraries(crd-ceir-cook-tests PRIVATE
     crd-ceir-cook
     crd-resources      # the test FORGES CRDR containers directly (missing-CDEP / wrong-type) — the ceir-host precedent
     crd-perf           # DIAG.8c: the diagnostic command service program.provenance, program.inspect and replay.prepare register into
+    crd-kir            # DIAG.9a: the device record fixture builds its kernels and writes them as CKIR text
+    crd-math           # DIAG.9a: crd::math::exp, the independent evaluation of the device fixture's kernel
     Catch2::Catch2WithMain
 )
 

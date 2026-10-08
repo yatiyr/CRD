@@ -42,13 +42,14 @@ inline constexpr crd::u32 kReplayInputCount = kReplayInputs;
 // program, build, entry-arguments, random, clock, host-state, external-results, schedule, device-tolerance.
 [[nodiscard]] const ReplayInputSpec& replay_input(crd::u32 index) noexcept;
 
-inline constexpr crd::u32 kReplayProgramInput   = 0U;
-inline constexpr crd::u32 kReplayBuildInput     = 1U;
-inline constexpr crd::u32 kReplayArgumentsInput = 2U;
-inline constexpr crd::u32 kReplayRandomInput    = 3U;
-inline constexpr crd::u32 kReplayClockInput     = 4U;
-inline constexpr crd::u32 kReplayHostStateInput = 5U;
-inline constexpr crd::u32 kReplayScheduleInput  = 7U;
+inline constexpr crd::u32 kReplayProgramInput         = 0U;
+inline constexpr crd::u32 kReplayBuildInput           = 1U;
+inline constexpr crd::u32 kReplayArgumentsInput       = 2U;
+inline constexpr crd::u32 kReplayRandomInput          = 3U;
+inline constexpr crd::u32 kReplayClockInput           = 4U;
+inline constexpr crd::u32 kReplayHostStateInput       = 5U;
+inline constexpr crd::u32 kReplayScheduleInput        = 7U;
+inline constexpr crd::u32 kReplayDeviceToleranceInput = 8U;
 
 using Need = ReplayNeed;
 

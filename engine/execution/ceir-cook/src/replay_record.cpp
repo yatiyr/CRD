@@ -222,6 +222,178 @@ private:
     return RecordError::Ok;
 }
 
+[[nodiscard]] RecordError read_words(Reader& r, crd::u64& budget, cont::Array<crd::u32>& out)
+{
+    crd::u32 n = 0U;
+    if (!r.u32(n))
+    {
+        return RecordError::Truncated;
+    }
+    if (n > budget)
+    {
+        return RecordError::Malformed; // past the record's element bound
+    }
+    budget -= n;
+    out.clear();
+    out.reserve(n);
+    for (crd::u32 i = 0U; i < n; ++i)
+    {
+        crd::u32 w = 0U;
+        if (!r.u32(w))
+        {
+            return RecordError::Truncated;
+        }
+        out.push_back(w);
+    }
+    return RecordError::Ok;
+}
+
+// The device section. Every field is empty and zero unless the record is a device record, which needs an adapter, at
+// least one kernel and one buffer, an envelope within its bounds, and outputs exactly for the written buffers.
+[[nodiscard]] RecordError read_device(Reader& r, ReplayRecord& out)
+{
+    const bool device = out.executor == ReplayExecutorKind::Device;
+    for (cont::String* const field : {&out.device_adapter.backend, &out.device_adapter.name})
+    {
+        if (const RecordError e = read_str(r, *field); e != RecordError::Ok)
+        {
+            return e;
+        }
+    }
+    crd::u8  envelope = 0U;
+    crd::u32 kernels  = 0U;
+    if (!r.u32(out.device_adapter.vendor) || !r.u32(out.device_adapter.device) || !r.u64(out.device_adapter.driver) ||
+        !r.u32(out.device_adapter.api) || !r.u8(envelope) || !r.u32(out.device_envelope.ulps) ||
+        !r.u8(out.device_error) || !r.u32(kernels))
+    {
+        return RecordError::Truncated;
+    }
+    if (envelope > static_cast<crd::u8>(DeviceEnvelopeKind::Ulp))
+    {
+        return RecordError::Malformed;
+    }
+    out.device_envelope.kind = static_cast<DeviceEnvelopeKind>(envelope);
+    const bool exact         = out.device_envelope.kind == DeviceEnvelopeKind::Exact;
+    if ((exact && out.device_envelope.ulps != 0U) || out.device_envelope.ulps > kReplayMaxUlps)
+    {
+        return RecordError::Malformed;
+    }
+    if (kernels > kReplayMaxDeviceKernels || (device && (kernels == 0U || out.device_adapter.backend.empty())))
+    {
+        return RecordError::Malformed;
+    }
+    out.device_kernels.clear();
+    for (crd::u32 i = 0U; i < kernels; ++i)
+    {
+        DeviceKernelRecord k(out.device_kernels.allocator());
+        if (const RecordError e = read_str(r, k.symbol); e != RecordError::Ok)
+        {
+            return e;
+        }
+        const crd::u8* text    = nullptr;
+        crd::usize     text_n  = 0U;
+        bool           bounded = true;
+        if (!r.bytes(kReplayMaxKernelBytes, text, text_n, bounded))
+        {
+            return RecordError::Truncated;
+        }
+        if (!bounded || k.symbol.empty())
+        {
+            return RecordError::Malformed;
+        }
+        k.ckir.append(cont::StringView{reinterpret_cast<const char*>(text), text_n});
+        if (!r.u64(k.hash))
+        {
+            return RecordError::Truncated;
+        }
+        out.device_kernels.push_back(std::move(k));
+    }
+
+    crd::u32 buffers = 0U;
+    if (!r.u32(buffers))
+    {
+        return RecordError::Truncated;
+    }
+    if (buffers > kReplayMaxDeviceBuffers || (device && buffers == 0U))
+    {
+        return RecordError::Malformed;
+    }
+    crd::u64 budget = kReplayMaxDeviceWords; // initial and output words each count once
+    out.device_buffers.clear();
+    for (crd::u32 i = 0U; i < buffers; ++i)
+    {
+        DeviceBufferRecord b(out.device_buffers.allocator());
+        crd::u8            element = 0U;
+        crd::u8            written = 0U;
+        if (!r.u8(element) || !r.u8(written))
+        {
+            return RecordError::Truncated;
+        }
+        if (element > static_cast<crd::u8>(DeviceElement::U32) || written > 1U)
+        {
+            return RecordError::Malformed;
+        }
+        b.element = static_cast<DeviceElement>(element);
+        b.written = written != 0U;
+        if (const RecordError e = read_words(r, budget, b.initial); e != RecordError::Ok)
+        {
+            return e;
+        }
+        crd::u64 output_budget = b.initial.size(); // the outputs mirror the initial contents
+        if (const RecordError e = read_words(r, output_budget, b.output); e != RecordError::Ok)
+        {
+            return e;
+        }
+        if (b.initial.empty() || b.output.size() != (b.written ? b.initial.size() : 0U))
+        {
+            return RecordError::Malformed; // an empty buffer, or outputs that are not exactly the written buffer's
+        }
+        out.device_buffers.push_back(std::move(b));
+    }
+    if (!device && (!out.device_adapter.backend.empty() || !out.device_adapter.name.empty() ||
+                    out.device_adapter.vendor != 0U || out.device_adapter.device != 0U ||
+                    out.device_adapter.driver != 0U || out.device_adapter.api != 0U || !exact ||
+                    out.device_error != 0U))
+    {
+        return RecordError::Malformed; // a device field in another executor's record
+    }
+    return RecordError::Ok;
+}
+
+void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
+{
+    put_str(payload, record.device_adapter.backend);
+    put_str(payload, record.device_adapter.name);
+    put_u32(payload, record.device_adapter.vendor);
+    put_u32(payload, record.device_adapter.device);
+    put_u64(payload, record.device_adapter.driver);
+    put_u32(payload, record.device_adapter.api);
+    put_u8(payload, static_cast<crd::u8>(record.device_envelope.kind));
+    put_u32(payload, record.device_envelope.ulps);
+    put_u8(payload, record.device_error);
+    put_u32(payload, static_cast<crd::u32>(record.device_kernels.size()));
+    for (const DeviceKernelRecord& k : record.device_kernels)
+    {
+        put_str(payload, k.symbol);
+        put_str(payload, k.ckir);
+        put_u64(payload, k.hash);
+    }
+    put_u32(payload, static_cast<crd::u32>(record.device_buffers.size()));
+    for (const DeviceBufferRecord& b : record.device_buffers)
+    {
+        put_u8(payload, static_cast<crd::u8>(b.element));
+        put_u8(payload, b.written ? 1U : 0U);
+        for (const cont::Array<crd::u32>* const words : {&b.initial, &b.output})
+        {
+            put_u32(payload, static_cast<crd::u32>(words->size()));
+            for (const crd::u32 w : *words)
+            {
+                put_u32(payload, w);
+            }
+        }
+    }
+}
+
 [[nodiscard]] RecordError read_payload(Reader& r, ReplayRecord& out)
 {
     for (cont::String* const field :
@@ -239,7 +411,7 @@ private:
     {
         return RecordError::Truncated;
     }
-    if (asserts > 1U || kind > static_cast<crd::u8>(ReplayExecutorKind::Host))
+    if (asserts > 1U || kind > static_cast<crd::u8>(ReplayExecutorKind::Device))
     {
         return RecordError::Malformed;
     }
@@ -397,6 +569,18 @@ private:
         read.kind      = static_cast<input::InputKind>(read_kind);
         read.delivered = delivered != 0U;
         out.input_reads.push_back(read);
+    }
+
+    if (const RecordError e = read_device(r, out); e != RecordError::Ok)
+    {
+        return e;
+    }
+    if (out.executor == ReplayExecutorKind::Device &&
+        (!out.entry.empty() || !out.args.empty() || out.max_events != 1U || out.events_total != 0U ||
+         out.error != plan::RunError::None || !out.results.empty() || !out.cells.empty() ||
+         out.input_reads_total != 0U))
+    {
+        return RecordError::Malformed; // a device run has no entry, trace, results or host input reads
     }
     return r.done() ? RecordError::Ok : RecordError::Malformed;
 }
@@ -567,6 +751,28 @@ cont::StringView replay_executor_name(ReplayExecutorKind k) noexcept
     {
     case ReplayExecutorKind::Plan: return cont::StringView{"plan"};
     case ReplayExecutorKind::Host: return cont::StringView{"host"};
+    case ReplayExecutorKind::Device: return cont::StringView{"device"};
+    }
+    return cont::StringView{"?"};
+}
+
+cont::StringView device_element_name(DeviceElement e) noexcept
+{
+    switch (e) // no default (-Werror=switch)
+    {
+    case DeviceElement::F32: return cont::StringView{"f32"};
+    case DeviceElement::I32: return cont::StringView{"i32"};
+    case DeviceElement::U32: return cont::StringView{"u32"};
+    }
+    return cont::StringView{"?"};
+}
+
+cont::StringView device_envelope_name(DeviceEnvelopeKind k) noexcept
+{
+    switch (k) // no default (-Werror=switch)
+    {
+    case DeviceEnvelopeKind::Exact: return cont::StringView{"exact"};
+    case DeviceEnvelopeKind::Ulp: return cont::StringView{"ulp"};
     }
     return cont::StringView{"?"};
 }
@@ -687,6 +893,7 @@ void encode_record(const ReplayRecord& record, cont::Array<crd::u8>& out)
         put_u8(payload, read.delivered ? 1U : 0U);
         put_i64(payload, read.value);
     }
+    put_device(payload, record);
 
     out.clear();
     out.reserve(kHeaderBytes + payload.size());

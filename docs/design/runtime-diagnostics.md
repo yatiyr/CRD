@@ -1099,15 +1099,63 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-interactive-host-e
   the start succeeds (a `Busy` start keeps them). Events arriving while a run is held feed the next run. The first
   run starts before the first frame, so its queue is open and empty; "Run again" takes what arrived since. The record
   keeps every read, so it replays from its reads alone.
-- Still open in DIAG.9a, as work that can be done now: backend-specific numeric replay of GPU dispatches with a
-  declared tolerance or oracle (the acceptance criterion; it needs a readback of dispatch results into the trace
-  first); host records from crd-sandbox's panel (the host provider needs an enrolled thread). Waiting on a consumer
-  or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one interpreter across
-  invokes (only tests call `migrate_state` today); external I/O completions and network or physical effects stubbed
-  only in explicit test replay wait for an op that declares `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`,
-  `AgentAction` or a physics write (none does). Until then a program that needs external results keeps
-  `external-results` missing and its record is refused before anything runs (`test_replay_diag.cpp`,
-  `test_replay_record.cpp`).
+- What stayed open after this batch is listed at the end of the next settled block (device numeric replay is
+  settled there).
+
+Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-device-records.md)):
+- Backend-specific numeric replay of compute dispatches, the acceptance criterion's "declared tolerance/oracle". A
+  device record is a run record of a third executor, `ReplayExecutorKind::Device` (schema 5; schema 4 is refused
+  `unsupported-schema`). It holds no trace: it holds the adapter that ran it (backend, name, vendor, device, driver and
+  API versions, as the executor reports them), the declared envelope, the CKIR text of every dispatched kernel with
+  its FNV-1a 64 hash, each declared buffer's initial contents and, for the buffers a dispatch writes, their contents
+  after the run, and the executor's error code and blamed dispatch. Its `entry-arguments` are the initial contents and
+  its `device-tolerance` input is recorded (the envelope). The decoder refuses device fields in another executor's
+  record, a device record with an entry, trace, results or input reads, an exact envelope with a bound, a bound past
+  2^24 ULP, outputs that are not exactly the written buffers' and more than 16 kernels, 16 buffers, 1 MiB of kernel
+  text or 2^22 elements.
+- A device program is a cooked module whose one top-level block holds only `arith.const`, `resource.declare` of a
+  plain f32, i32 or u32 buffer, and `compute.dispatch` over a positive constant grid binding buffers declared before
+  it, with a `kernel` symbol and one `r`, `w` or `rw` access per binding; anything else is refused `unsupported`
+  naming the op. The envelope is declared by whoever records, never inferred: `exact` (every bit pattern equal) is
+  claimed only on the recording adapter and build, so a replay on another adapter is refused `other-adapter` naming the
+  differing fields, and on another build `other-build` even when another build is allowed, both before anything runs;
+  `ulp:N` holds f32 outputs within N representable values (both zeros 0 apart, a NaN matching only a NaN, one NaN
+  incomparable) and integer outputs equal, on any adapter, and replays across builds only when asked. Bit identity
+  across hardware is never claimed.
+- `crd/ceir/cook/device_replay.hpp` (crd-ceir-cook, which now links crd-kir): `record_device_run` and
+  `replay_device_record` take a `DeviceExecutor` (a run function, its user pointer and its adapter); crd-ceir-cook
+  still names no GPU API. `reference_device_executor` is the CPU reference: crd-kir's `eval_cpu_kernel`, the oracle
+  the GPU backends are proven against, over each dispatch in block order (f32 widened to f64 and narrowed after each
+  dispatch, integers exact). It refuses, rather than evaluate wrongly, a kernel that is not a scalar compute kernel
+  with a one-dimensional workgroup and grid or that reads a builtin other than `LocalInvocationIndex` and
+  `WorkgroupIndex`. A replay loads the record's own blob, refuses a blob or kernel text that is not its recorded
+  content (`content-mismatch`) and a missing input, runs the recorded initial contents, then compares the executor's
+  outcome first and every written element in declaration and element order. The first element outside the envelope is
+  the divergence: buffer, element, both bit patterns, the distance and the bound, the buffer's declaration and the
+  last dispatch writing it at their authored positions. `max_distance` reports the largest f32 distance over every
+  element. Replaying against another program or other kernel text is an explicit option, reported as such.
+- The GPU side stays a caller hook. `gpu::execute_lowered_host` (crd-ceir-gpu) runs a lowered list on host data:
+  one device-local buffer per binding, `validate_lowered` before anything is recorded, upload with the CKIR harness's
+  barriers, `execute_lowered`, read back the written buffers, submit and wait; a binding without data or a buffer the
+  device refuses is the new `ExecuteError::HostTransfer`. `IComputeContext::adapter()` (appended, default unknown)
+  reports `ComputeAdapter`; the Vulkan context answers from its physical device's properties, the DX12 context from
+  its device's DXGI adapter (driver: the user-mode driver version). The tests' GPU executor lowers the block,
+  compiles each kernel's CKIR text for its backend and reports the context's adapter.
+- Measured on this machine (RTX 4070 Ti SUPER): the fixture's `exp(b) * a` over 256 elements recorded on Vulkan and
+  on DX12 replays bit-identically from its file on its own adapter, is refused on the CPU reference under `exact`,
+  and differs from the CPU reference by at most 3 ULP on both backends, inside the declared 32 (a budget from Vulkan's
+  3 + 2|x| ULP exp bound and D3D's relative bound, not a measurement); declared one ULP below the measured distance it
+  diverges at `@wave`'s dispatch. lavapipe (llvmpipe, LLVM 20.1.2) differs by at most 4 ULP; WARP was not
+  measured.
+- Still open in DIAG.9a, as work that can be done now: a device executor bound to the replay commands (`replay.record`
+  and `replay.run` for device records in a host with a GPU context, crd-sandbox first: ceridc has none; until then
+  `replay.run` refuses a device record before it loads the program); host records from crd-sandbox's panel (the host
+  provider needs an enrolled thread). Waiting on a consumer or an op: state cells across invokes and a run spanning a
+  reload wait for a host that keeps one interpreter across invokes (only tests call `migrate_state` today); external
+  I/O completions and network or physical effects stubbed only in explicit test replay wait for an op that declares
+  `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`, `AgentAction` or a physics write (none does). Until then a
+  program that needs external results keeps `external-results` missing and its record is refused before anything runs
+  (`test_replay_diag.cpp`, `test_replay_record.cpp`).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

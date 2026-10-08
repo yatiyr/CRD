@@ -17,6 +17,7 @@ add_executable(crd-ceir-gpu-dx12-tests
     test_ceir_fft_dx12.cpp      # CEIR-22b: synth_fft → a CKIR FFT (kernel tier, dispatch_kernel_1wg) vs eval_cpu_kernel AND an independent naive DFT
     test_ceir_pipeline_dx12.cpp # CEIR-22c-3e: the parse-loaded design-B GEMM->FFT->mag->reduce->normalize pipeline on D3D12 (portable copy-readback) vs a composed ref
     test_ceir_quant_dx12.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real D3D12 device vs the CPU ref (the HLSL/GLSL emitter-agreement check)
+    test_device_replay_dx12.cpp # DIAG.9a: the DX12 twin of the device record gate (bit-exact on its adapter, within its declared ulp envelope on the CPU reference, an edited kernel named)
     test_ceir_sparse_dx12.cpp   # CEIR-23e: the authored CSR spmv_csr.ckir (runtime For + ForBreakIf + col_idx indirection) on a real D3D12 device vs the CPU CSR SpMV ref (the HLSL loop-lowering agreement check)
 )
 
@@ -26,6 +27,7 @@ target_link_libraries(crd-ceir-gpu-dx12-tests PRIVATE
     crd-memory
     crd-ceir          # the IR + the asset builder
     crd-ceir-gpu      # lower_region + execute_lowered (ADR-0125/0126)
+    crd-ceir-cook     # DIAG.9a: device records (record_device_run / replay_device_record)
     crd-hesap-autodiff # CEIR-25b-4b: nn_reverse::matmul_vjp (analytic grad ref) + gradient_check::grad_fd (FD witness)
     crd-kir           # the CKIR add kernel + the CPU dispatch harness
     crd-kir-dx12      # the D3D12 CKIR backend (emit_compute_kernel_hlsl support)

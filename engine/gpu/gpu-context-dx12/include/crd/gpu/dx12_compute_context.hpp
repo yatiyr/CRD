@@ -40,6 +40,7 @@ public:
     [[nodiscard]] crd::u32 subgroup_size() const noexcept override;        // REN-38: OPTIONS1 WaveLaneCountMin
     [[nodiscard]] crd::u32 shared_memory_bytes() const noexcept override;  // REN-38: 32 KB TGSM spec limit
     [[nodiscard]] double   last_gpu_ms() const noexcept override;          // CGP-0: portable GPU timing (timestamp query heap)
+    [[nodiscard]] ComputeAdapter adapter() const noexcept override;      // DIAG.9a: the device's DXGI adapter
 
     [[nodiscard]] std::unique_ptr<ComputeBuffer> create_buffer(crd::u64 bytes, crd::u32 usage, ComputeMemory memory) override;
 

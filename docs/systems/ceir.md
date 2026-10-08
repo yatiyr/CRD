@@ -127,6 +127,15 @@ The interactive hosts take the same events: `program.inspect events=`, `ceridc i
 `--inspect-events` (through `cook::RunInputs`, whose every `set` starts the queue over), and crd-sandbox's
 `--inspect-window-events` gives each run the window's own input events that arrived before its start
 (`sandbox::InspectEventLayer` stages them; `sandbox::window_event` quantizes them).
+Device records (schema 5, `crd/ceir/cook/device_replay.hpp`) are backend-specific numeric replay of compute
+dispatches: `record_device_run` runs a device program (one block of constants, plain f32/i32/u32 buffer declarations
+and constant-grid `compute.dispatch`es) on a `DeviceExecutor` and keeps the adapter, the CKIR text of every kernel,
+the buffers' initial contents and written outputs and a declared envelope; `replay_device_record` compares a replay
+element by element within it. `exact` is claimed only on the recording adapter and build (refused elsewhere before
+anything runs); `ulp:N` replays on any adapter, including the CPU reference (`reference_device_executor`, crd-kir's
+`eval_cpu_kernel`), and names the first element outside the bound at the dispatch that writes it. crd-ceir-gpu's
+`execute_lowered_host` runs a lowered list on host data, and `IComputeContext::adapter()` names the adapter a GPU
+executor records. No host binds a device executor to `replay.run` yet, so it refuses device records.
 
 ## Maturity and further work
 

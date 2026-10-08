@@ -206,7 +206,8 @@ bool analyze_needs(const Context& ctx, const Module& module, memory::IAllocator*
 void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, bool host_inputs_held,
                    ReplayInput (&inputs)[kReplayInputCount], containers::String* missing)
 {
-    const bool host = executor == ReplayExecutorKind::Host;
+    const bool host   = executor == ReplayExecutorKind::Host;
+    const bool device = executor == ReplayExecutorKind::Device;
     for (crd::u32 i = 0U; i < kReplayInputCount; ++i)
     {
         ReplayInput& in = inputs[i];
@@ -216,7 +217,7 @@ void record_inputs(const ProgramNeeds& needs, ReplayExecutorKind executor, bool 
             in.state = ReplayInputState::NotNeeded;
         }
         else if (i == kReplayProgramInput || i == kReplayBuildInput || i == kReplayArgumentsInput ||
-                 (host && i == kReplayScheduleInput) ||
+                 (host && i == kReplayScheduleInput) || (device && i == kReplayDeviceToleranceInput) ||
                  (is_seam_input(i) && in.need == ReplayNeed::Yes && host_inputs_held &&
                   needs.inputs[i].uncaptured == 0U))
         {

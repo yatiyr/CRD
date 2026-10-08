@@ -75,6 +75,8 @@ public:
     // timestamps bracketing the recorded work, so it EXCLUDES CPU record/submit overhead. For fair kernel benchmarking.
     // CGP-0: now the override of the portable `IComputeContext::last_gpu_ms()` (was a Vulkan-only method).
     [[nodiscard]] double last_gpu_ms() const noexcept override;
+    // DIAG.9a: the physical device's vendor, device, driver and API versions and name.
+    [[nodiscard]] ComputeAdapter adapter() const noexcept override;
 
 private:
     struct Impl;

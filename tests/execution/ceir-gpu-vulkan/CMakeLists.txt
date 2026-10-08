@@ -15,6 +15,7 @@ add_executable(crd-ceir-gpu-vulkan-tests
     test_ceir_pipeline_vulkan.cpp # CEIR-22c-2: the §137 GEMM->FFT->reduction pipeline plan_+execute_tensor_pipeline device-resident (one submit) vs a composed ref
     test_ceir_quant_vulkan.cpp    # CEIR-23b-1: the authored Q8 dequant .ckir (u32-pack + float sign-extend) on a real Vulkan device vs the CPU (int8-zp)*scale ref
     test_dispatch_provenance_vulkan.cpp # DIAG.8a: a validation error finds the authored dispatch; DIAG.8b: dispatches are non-pausable under a session
+    test_device_replay_vulkan.cpp # DIAG.9a: a device record of a two-dispatch program replays bit-exact on its adapter, within its declared ulp envelope on the CPU reference, and names an edited kernel's dispatch
     test_ceir_sparse_vulkan.cpp   # CEIR-23e: the authored CSR spmv_csr.ckir (runtime For + ForBreakIf + col_idx indirection) on a real Vulkan device vs the CPU CSR SpMV ref
 )
 

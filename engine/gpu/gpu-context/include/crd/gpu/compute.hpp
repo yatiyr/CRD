@@ -34,11 +34,12 @@ enum class ComputeMemory : crd::u8
 // NOLINTBEGIN(readability-identifier-naming)
 namespace compute_usage
 {
-constexpr crd::u32 storage      = 1U;
-constexpr crd::u32 transfer_src = 2U;
-constexpr crd::u32 transfer_dst = 4U;
-constexpr crd::u32 indirect     = 8U; // B4: an INDIRECT-dispatch args buffer (a compute pass writes the mesh-workgroup count a
-                                      // later vkCmdDrawMeshTasksIndirectEXT / ExecuteIndirect consumes — GPU-driven, no CPU round-trip)
+inline constexpr crd::u32 storage      = 1U;
+inline constexpr crd::u32 transfer_src = 2U;
+inline constexpr crd::u32 transfer_dst = 4U;
+inline constexpr crd::u32 indirect     = 8U; // B4: an INDIRECT-dispatch args buffer (a compute pass writes the
+                                             // mesh-workgroup count a later vkCmdDrawMeshTasksIndirectEXT /
+                                             // ExecuteIndirect consumes — GPU-driven, no CPU round-trip)
 } // namespace compute_usage
 // NOLINTEND(readability-identifier-naming)
 
@@ -120,6 +121,20 @@ public:
     virtual void end_label() {}
 };
 
+// DIAG.9a: the adapter a compute context runs on, as its API reports it. A device run's numerics belong to this
+// adapter: a run record claims bit identity only on the adapter (and build) that recorded it. `known` is false for a
+// backend that does not report one.
+struct ComputeAdapter
+{
+    char     backend[16] = {}; // "vulkan", "dx12", ...
+    char     name[256]   = {}; // the adapter's description (UTF-8, truncated to fit)
+    crd::u32 vendor      = 0U;
+    crd::u32 device      = 0U;
+    crd::u64 driver      = 0U; // Vulkan: driverVersion; D3D12: the user-mode driver version
+    crd::u32 api         = 0U; // Vulkan: the device's apiVersion; D3D12: 0
+    bool     known       = false;
+};
+
 // The one GPU compute dispatch surface (ADR-0100). Kernel-source-agnostic: pipelines are requested BY NAME and the
 // backend loads its own cooked kernel. Consumers depend on THIS, never on a concrete backend.
 class IComputeContext
@@ -161,6 +176,9 @@ public:
     // (best-effort — a backend without a timestamp query pool under-promises, it never reports a wrong time). Real
     // backends override with the device-measured value (Vulkan `timestampPeriod`, D3D12 `GetTimestampFrequency`).
     [[nodiscard]] virtual double last_gpu_ms() const noexcept { return 0.0; }
+
+    // DIAG.9a: the adapter this context runs on. Appended at END (vtable stability); the default reports none.
+    [[nodiscard]] virtual ComputeAdapter adapter() const noexcept { return ComputeAdapter{}; }
 };
 
 } // namespace crd::gpu

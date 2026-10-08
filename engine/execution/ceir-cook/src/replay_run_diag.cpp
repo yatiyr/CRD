@@ -772,6 +772,12 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
 
     // Compatibility, before anything runs: the executor, the build, then the inputs the program needs.
     const bool host = record.executor == ReplayExecutorKind::Host;
+    if (record.executor == ReplayExecutorKind::Device)
+    {
+        out.reason.append("incompatible replay: the record was made by the device executor and replay.run binds no "
+                          "device executor; replay it with cook::replay_device_record on a device executor");
+        return DiagStatus::Unavailable;
+    }
     if (host && (cmd->host == nullptr || cmd->host->replay == nullptr))
     {
         out.reason.append("incompatible replay: the record was made by the ");

@@ -64,6 +64,8 @@ enum class ExecuteError : crd::u8
     // DIAG.8b (an execute_lowered recording under an inspect::Session) — append at end.
     InspectRefused, // the session refused to attach the recording (DeviceInspect::refusal says why); nothing recorded
     Cancelled,      // the session was cancelled; the dispatch about to be recorded (and every later one) was not
+    // DIAG.9a (execute_lowered_host) — append at end.
+    HostTransfer, // a host buffer binding has no data, or a device buffer could not be created or mapped
 };
 [[nodiscard]] containers::StringView execute_error_name(ExecuteError e) noexcept;
 
@@ -152,6 +154,29 @@ struct DeviceInspect
                                            crd::gpu::ComputeRecorder& rec, KernelResolveFn resolver, void* user,
                                            containers::ConstSpan<ResolvedBinding> bindings,
                                            DispatchSites* sites = nullptr, DeviceInspect* inspect = nullptr);
+
+// ── DIAG.9a: one complete run of a lowered list on host data, the device side of a device run record. Each binding
+// root gets a device-local storage buffer filled from host memory; `read_back` buffers are copied back after the run.
+struct HostBufferBinding
+{
+    const Value* resource  = nullptr; // a binding root (resource_root-normalized), as for ResolvedBinding
+    void*        data      = nullptr; // `bytes` bytes: uploaded before the run, overwritten after it when `read_back`
+    crd::u64     bytes     = 0U;
+    bool         read_back = false;
+};
+
+inline constexpr crd::u32 kMaxHostBufferBindings = 16U;
+
+// Create one device-local buffer per binding (HostTransfer when a binding has no data, there are more than
+// kMaxHostBufferBindings, or the device refuses a buffer), then validate_lowered over them: a refusal returns before
+// anything is recorded or submitted. Otherwise begin a recording on `device`, upload every buffer (a transfer then a
+// TransferDst -> ShaderRead barrier, as the CKIR dispatch harness does), record the list with execute_lowered (its
+// barriers between dispatches included; `sites` as there), copy every `read_back` buffer out after a ShaderWrite ->
+// TransferSrc barrier, submit, wait and copy the results into `data`. Returns the first ExecuteError.
+[[nodiscard]] ExecuteError execute_lowered_host(const Context& ctx, containers::ConstSpan<LoweredCommand> commands,
+                                                crd::gpu::IComputeContext& device, KernelResolveFn resolver, void* user,
+                                                containers::ConstSpan<HostBufferBinding> buffers,
+                                                DispatchSites* sites = nullptr);
 
 // ── CEIR-19c: the ceir.rt EXECUTION seam (§134) ──────────────────────────────────────────────────────────────────────
 // A SECOND executor beside execute_lowered, consuming the SAME 13d-lowered list (the render_materialize precedent: ONE

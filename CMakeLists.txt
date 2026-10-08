@@ -313,8 +313,8 @@ crd_module(engine/execution/ceir engine/ceir DEPENDS containers core log memory 
 crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir ceir-cook containers core jobs memory perf time
     TESTS execution/ceir-host)
 # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
-crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core memory perf render-asset-core
-    resources time TESTS execution/ceir-cook)
+crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core kir memory perf
+    render-asset-core resources time TESTS execution/ceir-cook)
 # D-007 CEIR-13d: the GPU lowering bridge (ADR-0125/0109 §4.2) — crd-ceir + crd-gpu-context
 crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers core gpu-context kir memory
     TESTS execution/ceir-gpu TEST_DEPENDS hesap-autodiff)
@@ -462,7 +462,8 @@ crd_module(engine/gpu/kir-vulkan engine/kir-vulkan DEPENDS containers core gpu-c
 crd_module(engine/gpu/kir-cuda engine/kir-cuda DEPENDS containers core kir memory TESTS gpu/kir-cuda)
 # v17-d; CKIR DirectX 12 backend (KirBackend over D3D12 + dxc); Windows-only; ADR-0098
 crd_module(engine/gpu/kir-dx12 engine/kir-dx12 DEPENDS containers core kir memory
-    TESTS gpu/kir-dx12 execution/ceir-gpu-dx12 TEST_DEPENDS ceir ceir-gpu gpu-context-dx12 hesap-autodiff)
+    TESTS gpu/kir-dx12 execution/ceir-gpu-dx12 TEST_DEPENDS ceir ceir-cook ceir-gpu gpu-context-dx12
+    hesap-autodiff)
 # v17-d; CKIR WebGPU backend (KirBackend over wgpu-native); browser/everywhere; guarded on the prebuilt; ADR-0098
 crd_module(engine/gpu/kir-webgpu engine/kir-webgpu DEPENDS containers core kir memory TESTS gpu/kir-webgpu)
 # v17-d; CKIR HIP/ROCm backend (KirBackend over HIP + hiprtc); guarded on the HIP SDK; validated at Part C; ADR-0098

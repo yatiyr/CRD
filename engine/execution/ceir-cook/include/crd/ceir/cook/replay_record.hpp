@@ -44,9 +44,15 @@
 // op. The record keeps at most kReplayMaxInputReads reads and counts all of them; a run that read more holds an
 // incomplete stream, so its seam inputs (`random`, `clock`, `host-state`) are stored missing and a replay refuses it.
 //
+// A device record is a run of a block of compute dispatches on a GPU or another device executor
+// (crd/ceir/cook/device_replay.hpp). It holds no trace: it holds the adapter that ran it, the declared numeric
+// envelope its outputs are compared under, the CKIR text of every kernel it dispatched, each declared buffer's initial
+// contents and, for the buffers the dispatches write, their contents after the run.
+//
 // Guarantee: a plan record is event replay of the integer, sequential compiled-plan executor; a program needing
-// schedule choices records the schedule as missing there. A host record is schedule replay of the host provider.
-// Backend-specific numeric replay is a different guarantee. Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
+// schedule choices records the schedule as missing there. A host record is schedule replay of the host provider. A
+// device record is backend-specific numeric replay within its declared envelope: bit identity is claimed only on the
+// recording adapter and build, never across hardware. Contract: docs/design/runtime-diagnostics.md (DIAG.9a).
 
 #include <crd/ceir/cook/hot_reload.hpp> // Registrar
 #include <crd/ceir/cook/program_cook.hpp> // ReadError
@@ -69,7 +75,7 @@ class Context;
 
 namespace crd::ceir::cook
 {
-inline constexpr crd::u32 kReplayRecordSchema = 4U; // the record file layout (4: the host input reads)
+inline constexpr crd::u32 kReplayRecordSchema = 5U; // the record file layout (5: the device section)
 inline constexpr crd::u32 kReplayExecutor     = 1U; // the executor semantics a trace is valid for
 
 inline constexpr crd::u32 kReplayDefaultMaxEvents = 4096U;
@@ -82,16 +88,22 @@ inline constexpr crd::u64 kReplayMaxProgramBytes  = 16ULL * 1024ULL * 1024ULL;
 inline constexpr crd::u32 kReplayInputs           = 9U;
 inline constexpr crd::u32 kReplayMaxHostJobs      = 256U; // a host record's job split
 inline constexpr crd::u32 kReplayMaxInputReads    = 65536U; // host input reads kept in a record
+inline constexpr crd::u32 kReplayMaxDeviceKernels = 16U;     // kernels in a device record
+inline constexpr crd::u32 kReplayMaxDeviceBuffers = 16U;     // declared buffers in a device record
+inline constexpr crd::u64 kReplayMaxKernelBytes   = 1024ULL * 1024ULL; // one kernel's CKIR text
+inline constexpr crd::u64 kReplayMaxDeviceWords   = 1ULL << 22U; // 32-bit elements over all of a record's buffers
+inline constexpr crd::u32 kReplayMaxUlps          = 1U << 24U;   // the widest envelope a device record may declare
 
 // Which executor ran a recorded run. A record replays only on its own executor.
 // NOLINTNEXTLINE(performance-enum-size)
 enum class ReplayExecutorKind : crd::u8
 {
-    Plan = 0, // the compiled-plan executor (crd-ceir-cook replays it)
-    Host = 1, // the crd-jobs host provider's interpreter (crd-ceir-host replays it)
+    Plan   = 0, // the compiled-plan executor (crd-ceir-cook replays it)
+    Host   = 1, // the crd-jobs host provider's interpreter (crd-ceir-host replays it)
+    Device = 2, // a device executor running compute dispatches (device_replay.hpp replays it)
 };
 
-// "plan", "host".
+// "plan", "host", "device".
 [[nodiscard]] containers::StringView replay_executor_name(ReplayExecutorKind k) noexcept;
 
 // The build and configuration a record was made by. Every field must match for a replay unless the request
@@ -205,11 +217,75 @@ struct ReplayTrace
     ReplayInputRefusal                 input_refusal;
 };
 
+// The element type of a device buffer. Every element is stored as its 32-bit pattern.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class DeviceElement : crd::u8
+{
+    F32 = 0,
+    I32 = 1,
+    U32 = 2,
+};
+
+// "f32", "i32", "u32".
+[[nodiscard]] containers::StringView device_element_name(DeviceElement e) noexcept;
+
+// How a device record's outputs are compared on replay. Declared when the run is recorded, never inferred.
+// NOLINTNEXTLINE(performance-enum-size)
+enum class DeviceEnvelopeKind : crd::u8
+{
+    Exact = 0, // every output bit pattern equal; claimed only on the recording adapter and build
+    Ulp   = 1, // f32 outputs within `ulps` representable values of the recorded ones (integers equal), any adapter
+};
+
+// "exact", "ulp".
+[[nodiscard]] containers::StringView device_envelope_name(DeviceEnvelopeKind k) noexcept;
+
+struct DeviceEnvelope
+{
+    DeviceEnvelopeKind kind = DeviceEnvelopeKind::Exact;
+    crd::u32           ulps = 0U; // Ulp: the bound (at most kReplayMaxUlps); 0 for Exact
+};
+
+// The adapter a device run used, as its executor reports it. A device record's bit-identity claim names this adapter.
+struct DeviceAdapterRecord
+{
+    explicit DeviceAdapterRecord(memory::IAllocator* alloc) : backend(alloc), name(alloc) {}
+
+    containers::String backend; // "vulkan", "dx12", "cpu-reference", ...
+    containers::String name;    // the adapter's own description
+    crd::u32           vendor = 0U;
+    crd::u32           device = 0U;
+    crd::u64           driver = 0U; // the driver version as the API reports it
+    crd::u32           api    = 0U; // the API version the device runs (0 when the API has none)
+};
+
+// One kernel a device record dispatched: its symbol and its CKIR text, with the text's FNV-1a 64 hash.
+struct DeviceKernelRecord
+{
+    explicit DeviceKernelRecord(memory::IAllocator* alloc) : symbol(alloc), ckir(alloc) {}
+
+    containers::String symbol;
+    containers::String ckir;
+    crd::u64           hash = 0U;
+};
+
+// One declared buffer of a device record, in declaration order: its initial contents and, when a dispatch writes it,
+// its contents after the run (same length).
+struct DeviceBufferRecord
+{
+    explicit DeviceBufferRecord(memory::IAllocator* alloc) : initial(alloc), output(alloc) {}
+
+    DeviceElement               element = DeviceElement::F32;
+    bool                        written = false;
+    containers::Array<crd::u32> initial;
+    containers::Array<crd::u32> output; // empty unless `written`
+};
+
 struct ReplayRecord
 {
     explicit ReplayRecord(memory::IAllocator* alloc)
         : build(alloc), program_path(alloc), program(alloc), entry(alloc), args(alloc), events(alloc), results(alloc),
-          cells(alloc), input_reads(alloc)
+          cells(alloc), input_reads(alloc), device_adapter(alloc), device_kernels(alloc), device_buffers(alloc)
     {
     }
 
@@ -236,6 +312,14 @@ struct ReplayRecord
     containers::Array<crd::i64>    cells;
     crd::u64                           input_reads_total = 0U; // every host input read the run made
     containers::Array<ReplayInputRead> input_reads;            // the first min(input_reads_total, kReplayMaxInputReads)
+
+    // Device only (empty and zero for the other executors). A device record has no entry, arguments, events, results,
+    // cells or input reads; `max_events` is 1 and `fault_op` is the dispatch its executor blamed.
+    DeviceAdapterRecord                   device_adapter;
+    DeviceEnvelope                        device_envelope;
+    containers::Array<DeviceKernelRecord> device_kernels;
+    containers::Array<DeviceBufferRecord> device_buffers;
+    crd::u8                               device_error = 0U; // the executor's error code (0: none)
 };
 
 // Why a record did not decode.
@@ -439,7 +523,9 @@ struct OwnedReplaySite
                                                memory::IAllocator* scratch);
 
 // The input states a record of `module` holds when `executor` runs it: the program, build and entry arguments are
-// recorded, and so is the schedule on the host executor (its settings are in the record); `random` is recorded when
+// recorded (a device record's arguments are its buffers' initial contents), and so is the schedule on the host
+// executor (its settings are in the record) and the device tolerance on the device executor (its declared envelope
+// is in the record); `random` is recorded when
 // `host_inputs_held` (the record holds every host input read the run made) and every op that reads randomness is an
 // input op reading through the seam; any other input the program needs, or may need through an opaque op, is missing,
 // never assumed; the rest are not needed. `missing` (when not null) gains the missing inputs' names, comma-separated,
