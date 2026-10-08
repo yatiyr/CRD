@@ -33,7 +33,13 @@
 //   --diag-grant <list>           — the authority the sandbox grants its service (default read; e.g. read,execute)
 //   --diag-root <dir>             — the file root for path arguments (default: none, so path commands are refused)
 //   --diag-path <rel>, --diag-param name=value (repeatable) — the started command's path and named arguments.
+// Environment:
+//   CRD_ASSETS_DIR=<dir>          — the engine asset root (the disk `assets/` tree that shadows the embedded pack). Set
+//                                   and non-empty, it always wins. Unset or empty, a developer build falls back to
+//                                   `<CRD_SOURCE_DIR>/assets` when that tree holds scene_programs.manifest; a shipping
+//                                   build never does. With no root the scene is overlay-only (see asset_root.hpp).
 
+#include "asset_root.hpp"    // the engine asset root: CRD_ASSETS_DIR, else the source tree
 #include "inspect_panel.hpp" // DIAG.8b: the authored-program inspect panel
 
 #include <crd/anim/anim_resources.hpp>
@@ -447,6 +453,13 @@ void draw_inspect_window(crd::sandbox::InspectPanel& panel, crd::i64 arg)
 }
 
 } // namespace
+
+// A shipping build (CRD_SHIPPING) never falls back to the source tree for its engine asset root (asset_root.hpp).
+#ifdef CRD_SANDBOX_SHIPPING
+constexpr bool kSandboxShipping = true;
+#else
+constexpr bool kSandboxShipping = false;
+#endif
 
 // C4996-safe env read (the engine's `mf_getenv` pattern): a FIXED, documented dev knob, not a security
 // surface. The sandbox honours `CRD_ASSETS_DIR` so a shipped `assets/**` tree shadows the embedded pack.
@@ -1366,10 +1379,24 @@ int main(int argc, char** argv)
     // ⛔ 38-G1: the asset root MUST install BEFORE `init_programs` — every default (materials, lighting,
     // vertex programs, post graphs) resolves disk-first AT COOK TIME. Installing it after meant the cooked
     // programs came from the embedded pack and the shipped assets only governed the frame graphs.
-    if (const char* aroot = sandbox_getenv("CRD_ASSETS_DIR"); aroot != nullptr && aroot[0] != 0)
+    // An explicit CRD_ASSETS_DIR wins; a developer build launched without it (a terminal, a script, a smoke run) uses
+    // its own source tree when that tree is usable, so it renders the scene the debugger and ctest render. A shipping
+    // build never reads a source tree: with no variable it installs no root, exactly as before.
+    const crd::sandbox::AssetRootChoice aroot =
+        crd::sandbox::choose_asset_root(sandbox_getenv("CRD_ASSETS_DIR"), CRD_SOURCE_DIR "/assets", kSandboxShipping,
+                                        &crd::sandbox::is_usable_asset_root);
+    if (aroot.root != nullptr)
     {
-        const bool root_ok = scene_renderer.set_asset_root(aroot);
-        CRD_LOG_INFO(g_log_sandbox, "asset root '{}' -> {}", aroot, root_ok ? "installed" : "REJECTED");
+        const bool root_ok = scene_renderer.set_asset_root(aroot.root);
+        CRD_LOG_INFO(g_log_sandbox, "asset root '{}' from {} -> {}", aroot.root,
+                     crd::sandbox::asset_root_source_name(aroot.source), root_ok ? "installed" : "REJECTED");
+    }
+    else if (aroot.source == crd::sandbox::AssetRootSource::SourceTreeUnusable)
+    {
+        CRD_LOG_INFO(g_log_sandbox,
+                     "no asset root: CRD_ASSETS_DIR is unset and '{}' holds no {} (set CRD_ASSETS_DIR to an assets/ "
+                     "tree)",
+                     CRD_SOURCE_DIR "/assets", crd::sandbox::kAssetRootManifest);
     }
     if (app_assets != nullptr)
     {

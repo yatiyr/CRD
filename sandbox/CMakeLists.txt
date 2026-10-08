@@ -4,6 +4,7 @@
 # BUILD, not the tree: their content returns through the RET-6 draw port onto gpu-context.
 add_executable(crd-sandbox
     src/main.cpp
+    src/asset_root.cpp    # the engine asset root: CRD_ASSETS_DIR, else the developer build's source tree
     src/inspect_panel.cpp # DIAG.8b: an authored CEIR program under runtime inspection (`--inspect`)
 )
 
@@ -38,6 +39,9 @@ target_link_libraries(crd-sandbox PRIVATE
     # ⛔ crd-rhi / crd-rhi-vulkan / crd-renderer / crd-shader* — RETIRED (ADR-0105; deleted at RET-8).
 )
 target_compile_definitions(crd-sandbox PRIVATE CRD_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# A shipping build never falls back to `${CMAKE_SOURCE_DIR}/assets` when CRD_ASSETS_DIR is unset (asset_root.hpp). The
+# root's shipping condition, so a native multi-config solution gets it per configuration.
+target_compile_definitions(crd-sandbox PRIVATE $<${_crd_shipping}:CRD_SANDBOX_SHIPPING=1>)
 crd_enable_default_pch(crd-sandbox)
 set_property(TARGET crd-sandbox PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "$<TARGET_FILE_DIR:crd-sandbox>")
 set_property(TARGET crd-sandbox PROPERTY VS_DEBUGGER_ENVIRONMENT "CRD_ASSETS_DIR=${CMAKE_SOURCE_DIR}/assets")

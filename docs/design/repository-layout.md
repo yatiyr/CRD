@@ -37,6 +37,9 @@ and dependencies with two MSBuild workers. [Configuration guide](visual-studio-c
 CMake preset selector and native Debug/Release/RelWithDebInfo/ASan/Shipping/ShippingProfile/DebugScalar/DebugSSE2 profiles. The sandbox is the startup project. Debugger working directory and cooked
 assets follow the executable's configuration directory, including the selected native configuration suffix.
 The debugger sets `CRD_ASSETS_DIR` to the repository's `assets/` tree for disk-first authoring and overrides.
+A developer build launched without it (from a terminal, a script or a smoke run) falls back to the source tree's
+`assets/` when that tree holds `scene_programs.manifest`, and logs the root it chose. A set variable always wins. A
+shipping build never falls back ([asset root](../sessions/2026-10-08-sandbox-asset-root-fallback.md)).
 
 ```powershell
 python scripts/project-sync.py open --preset win-vs
