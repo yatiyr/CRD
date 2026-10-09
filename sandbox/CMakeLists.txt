@@ -4,8 +4,10 @@
 # BUILD, not the tree: their content returns through the RET-6 draw port onto gpu-context.
 add_executable(crd-sandbox
     src/main.cpp
-    src/asset_root.cpp    # the engine asset root: CRD_ASSETS_DIR, else the developer build's source tree
-    src/inspect_panel.cpp # DIAG.8b: an authored CEIR program under runtime inspection (`--inspect`)
+    src/asset_root.cpp          # the engine asset root: CRD_ASSETS_DIR, else the developer build's source tree
+    src/inspect_panel.cpp       # DIAG.8b: an authored CEIR program under runtime inspection (`--inspect`)
+    src/frame_thread_calls.cpp  # DIAG.9a: device runs handed from the diagnostic panel's worker to the frame loop
+    src/gpu_device_executor.cpp # DIAG.9a: the replay commands' GPU device executor
 )
 
 # CI-1 (2026-07-23): SYSTEM must lead its own call — mid-list it becomes a literal "SYSTEM" include dir.
@@ -31,6 +33,7 @@ target_link_libraries(crd-sandbox PRIVATE
     crd-memory
     crd-ceir                 # DIAG.8b: the inspect session the panel drives
     crd-ceir-cook            # DIAG.8b: InspectHost (the authored program's generations, plan and executing thread)
+    crd-ceir-gpu             # DIAG.9a: run_device_block, the GPU half of the replay commands' device executor
     crd-render-asset-core    # DIAG.8b: the program's canonical asset id
     crd-perf       # D-003 v0h: profiler substrate
     crd-perf-ui    # D-003 v0h: profiler ImGui frontend (ProfilerPanel); DIAG.8c: the diagnostic command panel

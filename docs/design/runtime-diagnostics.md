@@ -1179,11 +1179,32 @@ Settled (2026-10-08, [session](../sessions/2026-10-08-diag-9a-device-record-comm
   it with its compute context's adapter. The Vulkan and DX12 gates bind that executor to the commands: on this
   machine's RTX 4070 Ti SUPER a command-made ulp record is the library's record byte for byte, reproduces on the
   device and replays on the CPU reference at the library's measured distance.
-- Still open in DIAG.9a, as work that can be done now: a GPU device executor bound to crd-sandbox's replay commands.
-  The panel's requests run on its own thread, and `VulkanComputeContext` submits on the compute queue, which is the
-  graphics queue the frame loop uses on a device without a dedicated compute family; the run must be marshalled onto
-  the frame-loop thread. Host records from crd-sandbox's panel (the host provider needs an enrolled thread). Waiting
-  on a consumer or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one
+- What stayed open after this batch is listed at the end of the next settled block (the sandbox's device executor is
+  settled there).
+
+Settled (2026-10-09, [session](../sessions/2026-10-09-diag-9a-sandbox-device-records.md)):
+- crd-sandbox binds a GPU device executor to its replay commands. `GpuDeviceExecutor` (`sandbox/src`) is a compute
+  context on the sandbox's backend, `run_device_block` over it and the context's own adapter: on Vulkan a
+  `VulkanComputeContext` over the sandbox's own device, on DX12 a `Dx12ComputeContext` (its own D3D12 device and
+  compute queue on the default adapter). Kernels compile through the concrete contexts' new
+  `create_pipeline_from_ckir` (crd-kir's compute-kernel emitter, then SPIR-V or HLSL), which the Vulkan and DX12 gates
+  now use too. With no valid context the executor is not bound and device requests are refused `unavailable`.
+- The panel's requests run on its worker thread, so every device run is handed to the frame-loop thread:
+  `FrameThreadCalls` holds one posted call at a time, the worker blocks in `call` until the frame loop's `pump` (once
+  per frame, before the panel's tick) has run it, and `FrameThreadDevice` wraps the executor so its runs go through
+  it with the same adapter. A run therefore never submits from the worker, and it holds the frame that pumps it for its
+  bounded length. The frame loop closes the calls when it ends, before the panel joins its worker (an explicit close in
+  the teardown, and a guard declared after the panel for every other return path): the posted run and every later one
+  are refused (`failed`, "the frame loop has ended"), nothing runs and nothing is written. DX12 goes through the same
+  hand-over although its queue is its own, so one contract covers both backends.
+- Measured on this machine (RTX 4070 Ti SUPER): the sandbox records the fixture program under `ulp:32` through its
+  panel on Vulkan and on DX12; each record reproduces in a second sandbox process on its own backend (distance 0), the
+  Vulkan record reproduces on the DX12 sandbox (another adapter, distance 0), and ceridc replays both on the CPU
+  reference at 3 ULP. A device record is now replayed on a GPU in another process.
+- Still open in DIAG.9a, as work that can be done now: host records from crd-sandbox's panel. The host provider takes
+  its job arrays from the calling thread's frame arena, so a host run must also be handed to an enrolled thread (the
+  frame loop's); `cook::ReplayHostExecutor` has no user pointer, so a wrapping executor needs one. Waiting on a
+  consumer or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one
   interpreter across invokes (only tests call `migrate_state` today); external I/O completions and network or
   physical effects stubbed only in explicit test replay wait for an op that declares `FileIO`, `NetworkIO`,
   `DeviceIO`, `ExternalCall`, `AgentAction` or a physics write (none does). Until then a program that needs external

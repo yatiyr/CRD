@@ -9,6 +9,8 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp> // DIAG.9a: create_pipeline_from_ckir
+#include <crd/kir/ckir_glsl.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <cstdint>
@@ -608,6 +610,26 @@ std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spir
                                                                                  int n_bindings, crd::u32 push_size)
 {
     return create_pipeline_from_spirv(spirv, n_bindings, push_size, crd::containers::ConstSpan<SpecConstantBinding>{});
+}
+
+std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_ckir(const crd::kir::KGraph& graph,
+                                                                                 const crd::kir::KEntry& entry,
+                                                                                 int n_bindings, crd::u32 push_size,
+                                                                                 crd::memory::IAllocator* scratch)
+{
+    crd::kir::GlslKernel kernel(scratch);
+    if (!crd::kir::emit_compute_kernel_glsl(graph, entry, scratch, kernel))
+    {
+        return nullptr;
+    }
+    const ShaderCompileResult spirv = compile_glsl_to_spirv(
+        ShaderStage::Compute, crd::containers::to_view(kernel.source), "ckir_compute_kernel", scratch);
+    if (!spirv.ok)
+    {
+        return nullptr;
+    }
+    return create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8>(spirv.spirv.data(), spirv.spirv.size()),
+                                      n_bindings, push_size);
 }
 
 std::unique_ptr<ComputePipeline> VulkanComputeContext::create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8> spirv,

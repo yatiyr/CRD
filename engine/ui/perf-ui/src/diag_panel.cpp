@@ -313,7 +313,10 @@ bool DiagCommandPanel::set_path(cont::StringView path)
     {
         return false;
     }
-    std::memcpy(m_path, path.data(), path.size());
+    if (!path.empty()) // an empty view may have no data, and memcpy's source must never be null
+    {
+        std::memcpy(m_path, path.data(), path.size());
+    }
     m_path[path.size()] = '\0';
     return true;
 }
@@ -324,7 +327,10 @@ bool DiagCommandPanel::set_args(cont::StringView text)
     {
         return false;
     }
-    std::memcpy(m_args, text.data(), text.size());
+    if (!text.empty()) // an empty view may have no data, and memcpy's source must never be null
+    {
+        std::memcpy(m_args, text.data(), text.size());
+    }
     m_args[text.size()] = '\0';
     return true;
 }

@@ -22,6 +22,12 @@ namespace crd::memory
 class IAllocator;
 }
 
+namespace crd::kir
+{
+class KGraph;
+struct KEntry;
+} // namespace crd::kir
+
 namespace crd::gpu
 {
 
@@ -55,6 +61,14 @@ public:
     // CKIR's runtime-emitted kernels + tests — NOT on the backend-agnostic IComputeContext (HLSL is a DX12 concern).
     [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_hlsl(crd::containers::StringView hlsl,
                                                                              int n_bindings, crd::u32 push_size);
+
+    // DIAG.9a: a pipeline from a CKIR compute kernel (crd-kir's emit_compute_kernel_hlsl, then
+    // create_pipeline_from_hlsl), with `n_bindings` UAVs and `push_size` root-constant bytes. nullptr when the kernel
+    // does not emit or compile. `scratch` backs the emission.
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_ckir(const crd::kir::KGraph& graph,
+                                                                             const crd::kir::KEntry& entry,
+                                                                             int n_bindings, crd::u32 push_size,
+                                                                             crd::memory::IAllocator* scratch);
 
     // DX12-specific: a pipeline straight from PRE-COMPILED DXIL (mirrors create_pipeline_from_spirv). The zero-runtime-compile
     // load path for D-007 D2 cooked `.crdr` bundles — no dxc at runtime.

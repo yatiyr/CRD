@@ -19,6 +19,12 @@ namespace crd::memory
 class IAllocator;
 }
 
+namespace crd::kir
+{
+class KGraph;
+struct KEntry;
+} // namespace crd::kir
+
 namespace crd::gpu
 {
 
@@ -49,6 +55,14 @@ public:
     // the backend-agnostic IComputeContext (SPIR-V is a Vulkan format; only the Vulkan backend consumes it).
     [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_spirv(crd::containers::ConstSpan<crd::u8> spirv,
                                                                               int n_bindings, crd::u32 push_size);
+
+    // DIAG.9a: a pipeline from a CKIR compute kernel (crd-kir's emit_compute_kernel_glsl, then GLSL to SPIR-V), with
+    // `n_bindings` storage-buffer bindings and `push_size` push bytes. nullptr when the kernel does not emit or
+    // compile. `scratch` backs the emission and the compile.
+    [[nodiscard]] std::unique_ptr<ComputePipeline> create_pipeline_from_ckir(const crd::kir::KGraph& graph,
+                                                                             const crd::kir::KEntry& entry,
+                                                                             int n_bindings, crd::u32 push_size,
+                                                                             crd::memory::IAllocator* scratch);
 
     // D-007 D12: a specialization-constant binding — the SPIR-V constant_id and its 4-byte value (bit-cast from float/int/uint).
     struct SpecConstantBinding

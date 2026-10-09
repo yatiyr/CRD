@@ -12,6 +12,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/hash_set.hpp>
 #include <crd/core/types.hpp>
+#include <crd/kir/ckir_hlsl.hpp> // DIAG.9a: create_pipeline_from_ckir
 
 #include <cstring>
 
@@ -650,6 +651,19 @@ std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_hlsl(c
         return nullptr;
     }
     return build_dxil_pipeline(impl.device.Get(), impl.pipe_lib.Get(), impl.pipe_keys, dxil->GetBufferPointer(), dxil->GetBufferSize(), n_bindings, push_size);
+}
+
+std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_ckir(const crd::kir::KGraph& graph,
+                                                                               const crd::kir::KEntry& entry,
+                                                                               int n_bindings, crd::u32 push_size,
+                                                                               crd::memory::IAllocator* scratch)
+{
+    crd::kir::GlslKernel kernel(scratch);
+    if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, scratch, kernel))
+    {
+        return nullptr;
+    }
+    return create_pipeline_from_hlsl(crd::containers::to_view(kernel.source), n_bindings, push_size);
 }
 
 std::unique_ptr<ComputePipeline> Dx12ComputeContext::create_pipeline_from_dxil(crd::containers::ConstSpan<crd::u8> dxil,

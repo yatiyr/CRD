@@ -343,6 +343,15 @@ TEST_CASE("diag panel: the grant stays the host's and the form only shapes the s
     CHECK_FALSE(panel.set_path(long_path));
     CHECK(panel.path().empty());
 
+    // An empty view clears a field, whether or not it has data (a default view has none: nothing may be copied from
+    // it; UBSan reports a null memcpy source).
+    REQUIRE(panel.set_path("p"));
+    REQUIRE(panel.set_args("a=1"));
+    CHECK(panel.set_path(cont::StringView{}));
+    CHECK(panel.set_args(cont::StringView{}));
+    CHECK(panel.path().empty());
+    CHECK(panel.args().empty());
+
     const crd::u64 runs_before = host.service.handler_runs();
 
     // capture.start needs record; the host granted read. The panel can only show the service's refusal.

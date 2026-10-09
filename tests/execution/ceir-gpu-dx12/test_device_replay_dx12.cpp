@@ -8,7 +8,6 @@
 #include "../ceir-gpu-vulkan/device_replay_gate.hpp"
 
 #include <crd/gpu/dx12_compute_context.hpp>
-#include <crd/kir/ckir_hlsl.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -18,13 +17,8 @@ namespace
 std::unique_ptr<crd::gpu::ComputePipeline> compile_dx12(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry,
                                                         int bindings, void* user, crd::memory::IAllocator* alloc)
 {
-    auto* const          compute = static_cast<crd::gpu::Dx12ComputeContext*>(user);
-    crd::kir::GlslKernel kernel(alloc);
-    if (!crd::kir::emit_compute_kernel_hlsl(graph, entry, alloc, kernel))
-    {
-        return nullptr;
-    }
-    return compute->create_pipeline_from_hlsl(crd::containers::to_view(kernel.source), bindings, 0U);
+    return static_cast<crd::gpu::Dx12ComputeContext*>(user)->create_pipeline_from_ckir(graph, entry, bindings, 0U,
+                                                                                       alloc);
 }
 } // namespace
 

@@ -9,8 +9,6 @@
 
 #include <crd/gpu/vulkan_compute_context.hpp>
 #include <crd/gpu/vulkan_context.hpp>
-#include <crd/gpu/vulkan_shader_compile.hpp>
-#include <crd/kir/ckir_glsl.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -20,20 +18,8 @@ namespace
 std::unique_ptr<crd::gpu::ComputePipeline> compile_vulkan(const crd::kir::KGraph& graph, const crd::kir::KEntry& entry,
                                                           int bindings, void* user, crd::memory::IAllocator* alloc)
 {
-    auto* const          compute = static_cast<crd::gpu::VulkanComputeContext*>(user);
-    crd::kir::GlslKernel kernel(alloc);
-    if (!crd::kir::emit_compute_kernel_glsl(graph, entry, alloc, kernel))
-    {
-        return nullptr;
-    }
-    const auto spirv = crd::gpu::compile_glsl_to_spirv(crd::gpu::ShaderStage::Compute,
-                                                       crd::containers::to_view(kernel.source), "diag9a_device", alloc);
-    if (!spirv.ok)
-    {
-        return nullptr;
-    }
-    return compute->create_pipeline_from_spirv(
-        crd::containers::ConstSpan<crd::u8>(spirv.spirv.data(), spirv.spirv.size()), bindings, 0U);
+    return static_cast<crd::gpu::VulkanComputeContext*>(user)->create_pipeline_from_ckir(graph, entry, bindings, 0U,
+                                                                                         alloc);
 }
 } // namespace
 
