@@ -414,6 +414,16 @@ class RegisteredFailures(unittest.TestCase):
         self.assertEqual(code, 1, lines)
         self.assertTrue(any('UNEXPECTED ABSENT' in line for line in lines), lines)
 
+    def test_unregistered_capability_skip_is_neither_a_pass_nor_a_failure(self):
+        # A device test that exits with its skip code on a lane without the device: reported as skipped, never failed.
+        code, lines = self.gate(self.LANES, 'win-asan', {'A (DX12)': 'failed', 'B (DX12)': 'failed', 'V': 'skipped'}, 8)
+        self.assertEqual(code, 0, lines)
+        self.assertIn('skipped: 1;', lines[0])
+        self.assertFalse(any('UNEXPECTED' in line for line in lines), lines)
+        code, lines = self.gate(self.LANES, 'win-debug', {'C': 'passed', 'V': 'skipped'}, 0)
+        self.assertEqual(code, 0, lines)
+        self.assertIn('observed failures: 0; skipped: 1; results: 2', lines[0])
+
     def test_lane_without_entries_requires_zero_failures_and_propagates_ctest_exit(self):
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 0)[0], 0)
         self.assertEqual(self.gate(self.LANES, 'win-debug', {'A (DX12)': 'passed'}, 3)[0], 3)

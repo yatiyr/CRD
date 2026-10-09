@@ -91,10 +91,13 @@ def junit_results(path):
 def evaluate(expected, results, ctest_exit):
     """Return (exit_code, report_lines). Exit 0 only when the failing set equals the registered set."""
     failed = {name for name, state in results.items() if state == 'failed'}
+    # A test that exits with its declared skip code (a capability the lane lacks, e.g. no GPU device) is counted
+    # apart: it is neither a pass nor a failure, so the report shows it rather than folding it into the results.
+    skipped = sum(1 for state in results.values() if state == 'skipped')
     unexpected = sorted(failed - set(expected))
     not_failing = sorted(name for name in expected if results.get(name) != 'failed')
     lines = [f'registered failures for this lane: {len(expected)}; observed failures: {len(failed)}; '
-             f'results: {len(results)}; ctest exit: {ctest_exit}']
+             f'skipped: {skipped}; results: {len(results)}; ctest exit: {ctest_exit}']
     for name in sorted(expected):
         state = results.get(name, 'absent')
         lines.append(f'  registered {expected[name]}: {state:7s} {name}')

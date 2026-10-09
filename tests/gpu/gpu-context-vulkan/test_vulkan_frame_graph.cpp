@@ -8887,7 +8887,7 @@ TEST_CASE("REN-40-C2 GATE: the cull kernel selects the LOD slot the projected sc
 // ensure_multi_args / ensure_multi_idx_args), FIXED-size (create-once, NO grow -> no re-stamp), retired in the context
 // dtor. So each mints ONE Resource identity the first time its verb runs and NOTHING on later calls. The delta is
 // measured immediately around each frame-graph execute() (so intervening target creation never pollutes it), and
-// multi_batch_count()/multi_indexed_batch_count() are the "the multi-draw path actually ran" probes. WARN-skips.
+// multi_batch_count()/multi_indexed_batch_count() are the "the multi-draw path actually ran" probes. SKIPs.
 namespace
 {
 struct ArgRingNI // non-indexed multi-draw pass state
@@ -9021,7 +9021,7 @@ TEST_CASE("D2b-vk: the multi-draw arg rings each mint one Resource identity (con
 // into a VulkanGpuProgramImpl (P2, owns a VkShaderModule); create_raster_program LINKS two P2 into a VulkanRasterProgram
 // (P3, owns its OWN VkShaderEXT pair + a pipeline layout -- it READS the P2 inputs' SPIR-V, it does NOT own them). So a
 // full raster program is THREE logical programs, and the ordered resets below prove each layer retires independently.
-// live_count(Program) is a separate kind from the buffer/texture Resource count. Device-gated: WARN/SKIP.
+// live_count(Program) is a separate kind from the buffer/texture Resource count. Device-gated: SKIPs.
 TEST_CASE("D2b-vk: raster programs mint one Program identity per compiled stage and per linked program",
           "[gpu-context][vulkan][program][identity][naming]")
 {

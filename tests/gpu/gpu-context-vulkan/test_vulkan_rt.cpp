@@ -4200,7 +4200,7 @@ TEST_CASE("CEIR-20b: the AUTHORED wavefront_work.frame.toml DRIVES the device wa
 // DIAG.7a(d2b-vk): the AS group. A built RtScene is ONE logical Resource -- its TLAS (the bound handle) + BLAS. The scene
 // builder mints ONE identity on the TLAS and NAMES the BLAS with the same id; ~RtSceneImpl retires it. The native AS +
 // backing buffers live in the CONTEXT's arena (freed at context teardown), so the identity tracks the scene HANDLE's
-// lifetime -- one id per scene regardless of the two AS objects + backing buffers it references. Device-gated: WARN-skips.
+// lifetime -- one id per scene regardless of the two AS objects + backing buffers it references. Device-gated: SKIPs.
 TEST_CASE("D2b-vk: build_scene mints one Resource identity per acceleration-structure scene",
           "[gpu-context][vulkan][rt][identity][naming]")
 {
@@ -4210,20 +4210,17 @@ TEST_CASE("D2b-vk: build_scene mints one Resource identity per acceleration-stru
     auto ctx     = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     if (!vk->ray_query())
     {
-        WARN("adapter has no VK_KHR_ray_query; skipping");
-        return;
+        SKIP("adapter has no VK_KHR_ray_query");
     }
     gpu::VulkanRayTracingContext rt(*vk);
     if (!rt.valid())
     {
-        WARN("no valid Vulkan RT context; skipping");
-        return;
+        SKIP("no valid Vulkan RT context");
     }
 
     static const float kTriangle[9] = {0.0F, 0.5F, 0.0F, -0.5F, -0.5F, 0.0F, 0.5F, -0.5F, 0.0F};

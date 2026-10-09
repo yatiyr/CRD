@@ -76,8 +76,7 @@ TEST_CASE("Vulkan validation resolves the Cerid identity from a named object the
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr) // absence of a GPU, not a failure
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
@@ -165,8 +164,7 @@ TEST_CASE("DIAG.7a(g): a Core hazard on a named Cerid buffer yields an error cor
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
@@ -376,8 +374,7 @@ TEST_CASE("DIAG.7a(g-2): sync validation flags a WAW on a named buffer (correlat
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
@@ -822,15 +819,13 @@ TEST_CASE("DIAG.7a(g-3): GPU-assisted validation flags a shader OOB access corre
     auto ctx = make_gpuav_context();
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     if (!vk->validation_activation().is_active(gpu::ValidationMode::GpuAssisted))
     {
-        WARN("GPU-assisted validation not active on this device; skipping"); // env capability, not a masked failure
-        return;
+        SKIP("GPU-assisted validation not active on this device"); // env capability, not a masked failure
     }
     CHECK(vk->validation_layer().gpu_assisted_guarded); // GPU-AV never runs unguarded
 
@@ -858,15 +853,13 @@ TEST_CASE("DIAG.7c(e): a layout using the GPU-assisted slot is reported uninstru
     auto ctx = make_gpuav_context();
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
     if (!vk->validation_activation().is_active(gpu::ValidationMode::GpuAssisted))
     {
-        WARN("GPU-assisted validation not active on this device; skipping"); // env capability, not a masked failure
-        return;
+        SKIP("GPU-assisted validation not active on this device"); // env capability, not a masked failure
     }
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(vk->vk_physical_device(), &props);
@@ -942,8 +935,7 @@ TEST_CASE("DIAG.7a(g-4): a hazard inside a PassLabelScope correlates to the Pass
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr)
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     REQUIRE(vk->valid());
@@ -1174,14 +1166,12 @@ TEST_CASE("DIAG.7a lifetime: a destroyed Cerid buffer in a submitted command buf
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr || !ctx->valid())
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     if (!vk->validation_activation().is_active(gpu::ValidationMode::Core))
     {
-        WARN("the validation layer is not present here; skipping");
-        return;
+        SKIP("the validation layer is not present here");
     }
 
     const LifetimeLeg hazard = run_lifetime_leg(*vk, true);
@@ -1333,14 +1323,12 @@ TEST_CASE("DIAG.7c(f): a stale image layout is reported at submit and correlated
     auto ctx = gpu::create_vulkan_gpu_context(cfg);
     if (ctx == nullptr || !ctx->valid())
     {
-        WARN("no Vulkan device available; skipping");
-        return;
+        SKIP("no Vulkan device available");
     }
     auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
     if (!vk->validation_activation().is_active(gpu::ValidationMode::Core))
     {
-        WARN("the validation layer is not present here; skipping");
-        return;
+        SKIP("the validation layer is not present here");
     }
 
     const LayoutLeg stale = run_layout_leg(*vk, false);
