@@ -558,7 +558,7 @@ void add_input_items(const ReplayRecord& record, DiagFields& item, DiagSnapshot&
     ReplayRecord    record(alloc);
     OwnedReplaySite fault(alloc);
     cont::String    missing(alloc);
-    if (const HostExecutorStatus s = cmd.host->record(request, record, fault, missing, out.reason);
+    if (const HostExecutorStatus s = cmd.host->record(request, record, fault, missing, out.reason, cmd.host->user);
         s != HostExecutorStatus::Ok)
     {
         return diag_status_of(s);
@@ -1121,7 +1121,8 @@ void add_divergence(DiagFields& item, const Divergence& d)
     request.registrar = cmd.registrar;
     request.user      = cmd.user;
     HostReplayAnswer answer(alloc);
-    if (const HostExecutorStatus s = cmd.host->replay(request, answer, out.reason); s != HostExecutorStatus::Ok)
+    if (const HostExecutorStatus s = cmd.host->replay(request, answer, out.reason, cmd.host->user);
+        s != HostExecutorStatus::Ok)
     {
         return diag_status_of(s);
     }

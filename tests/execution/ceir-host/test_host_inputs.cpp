@@ -265,8 +265,8 @@ TEST_CASE("diag 9a input: a host record keeps every draw and replays them on any
         ck::OwnedReplaySite  site(&alloc);
         String               via_missing(&alloc);
         String               reason(&alloc);
-        REQUIRE(hs::host_replay_executor().record(request, via, site, via_missing, reason) ==
-                ck::HostExecutorStatus::Ok);
+        const ck::ReplayHostExecutor& executor = hs::host_replay_executor();
+        REQUIRE(executor.record(request, via, site, via_missing, reason, executor.user) == ck::HostExecutorStatus::Ok);
         Array<u8> a(&alloc);
         Array<u8> b(&alloc);
         ck::encode_record(rec, a);
@@ -412,8 +412,8 @@ TEST_CASE("diag 9a clock: a host record keeps every time read and replays them o
         ck::OwnedReplaySite site(&alloc);
         String              via_missing(&alloc);
         String              reason(&alloc);
-        REQUIRE(hs::host_replay_executor().record(request, via, site, via_missing, reason) ==
-                ck::HostExecutorStatus::Ok);
+        const ck::ReplayHostExecutor& executor = hs::host_replay_executor();
+        REQUIRE(executor.record(request, via, site, via_missing, reason, executor.user) == ck::HostExecutorStatus::Ok);
         Array<u8> a(&alloc);
         Array<u8> b(&alloc);
         ck::encode_record(rec, a);
@@ -524,8 +524,8 @@ TEST_CASE("diag 9a event: a host record keeps every event read and replays them 
         ck::OwnedReplaySite site(&alloc);
         String              via_missing(&alloc);
         String              reason(&alloc);
-        REQUIRE(hs::host_replay_executor().record(request, via, site, via_missing, reason) ==
-                ck::HostExecutorStatus::Ok);
+        const ck::ReplayHostExecutor& executor = hs::host_replay_executor();
+        REQUIRE(executor.record(request, via, site, via_missing, reason, executor.user) == ck::HostExecutorStatus::Ok);
         Array<u8> a(&alloc);
         Array<u8> b(&alloc);
         ck::encode_record(rec, a);

@@ -1201,15 +1201,36 @@ Settled (2026-10-09, [session](../sessions/2026-10-09-diag-9a-sandbox-device-rec
   panel on Vulkan and on DX12; each record reproduces in a second sandbox process on its own backend (distance 0), the
   Vulkan record reproduces on the DX12 sandbox (another adapter, distance 0), and ceridc replays both on the CPU
   reference at 3 ULP. A device record is now replayed on a GPU in another process.
-- Still open in DIAG.9a, as work that can be done now: host records from crd-sandbox's panel. The host provider takes
-  its job arrays from the calling thread's frame arena, so a host run must also be handed to an enrolled thread (the
-  frame loop's); `cook::ReplayHostExecutor` has no user pointer, so a wrapping executor needs one. Waiting on a
-  consumer or an op: state cells across invokes and a run spanning a reload wait for a host that keeps one
-  interpreter across invokes (only tests call `migrate_state` today); external I/O completions and network or
-  physical effects stubbed only in explicit test replay wait for an op that declares `FileIO`, `NetworkIO`,
-  `DeviceIO`, `ExternalCall`, `AgentAction` or a physics write (none does). Until then a program that needs external
-  results keeps `external-results` missing and its record is refused before anything runs (`test_replay_diag.cpp`,
-  `test_replay_record.cpp`).
+- What stayed open after this batch is listed at the end of the next settled block (the sandbox's host records are
+  settled there).
+
+Settled (2026-10-09, [session](../sessions/2026-10-09-diag-9a-sandbox-host-records.md)):
+- `cook::ReplayHostExecutor` carries a `user` pointer, passed to its `record` and `replay` as their last argument
+  (the executor's own state, distinct from the requests' `user`, which is the registrar's). The host provider's table
+  is stateless (`user` null), so ceridc and the other hosts that bind `host_replay_executor()` are unchanged.
+- crd-sandbox binds the host provider's executor to its replay commands through `FrameThreadHost`, over the same
+  `FrameThreadCalls` as the device executor, so a host run and a device run never overlap. The panel's worker thread
+  has no crd::jobs frame arena, and the host provider's parallel ranges take their job arrays from the calling
+  thread's arena, so a host run on the worker is not allowed (a debug build asserts there). The wrapper hands each
+  `record` and `replay` to the frame-loop thread, the thread that initialised the pool. That thread never resets its
+  arena, so the wrapper takes the arena's mark before the inner call and puts it back after: a run's job arrays are
+  dead once it returns, and runs do not accumulate in the arena. A refused call (the frame loop has ended) is
+  `failed` with "the frame loop has ended: the host run did not start", and nothing is recorded. Teardown is the
+  device executor's: the calls close before the panel joins its worker, and the wrapper dies after the commands and
+  before the jobs pool.
+- The sandbox's dialect registrar moved to `sandbox/src/sandbox_dialects.cpp` and gained `task` and `async`, the host
+  provider's dialects. Without them, a host program such as `assets/ceir/host_replay_demo.ceir` did not load in the
+  sandbox. crd-sandbox-inspect-tests compiles that source, so its panel cases load programs with the sandbox's own
+  registrar.
+- Measured on this machine: the real sandbox records `host_replay_demo.ceir` through `--diag replay.record
+  executor=host`. A second sandbox process reproduces the record, and ceridc reproduces it as well. A host record is
+  now made and replayed by a GUI host whose requests come from a worker thread.
+- Still open in DIAG.9a, waiting on a consumer or an op (no local work can do these honestly yet): state cells across
+  invokes and a run spanning a reload wait for a host that keeps one interpreter across invokes (only tests call
+  `migrate_state` today); external I/O completions and network or physical effects stubbed only in explicit test
+  replay wait for an op that declares `FileIO`, `NetworkIO`, `DeviceIO`, `ExternalCall`, `AgentAction` or a physics
+  write (none does). Until then a program that needs external results keeps `external-results` missing and its
+  record is refused before anything runs (`test_replay_diag.cpp`, `test_replay_record.cpp`).
 
 <a id="diag-9b"></a>
 ## DIAG.9b — triggerable flight recording and fault injection

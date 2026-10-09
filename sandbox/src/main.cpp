@@ -35,6 +35,8 @@
 //   --diag-path <rel>, --diag-param name=value (repeatable) — the started command's path and named arguments.
 //   DIAG.9a: `replay.record executor=device` and a device record's `replay.run` run on this backend's GPU (a compute
 //   context on the sandbox's Vulkan device, or a D3D12 compute device), each run handed to the frame-loop thread.
+//   `replay.record executor=host` and a host record's `replay.run` run on the host provider over the sandbox's jobs
+//   pool, also handed to the frame-loop thread.
 // Environment:
 //   CRD_ASSETS_DIR=<dir>          — the engine asset root (the disk `assets/` tree that shadows the embedded pack). Set
 //                                   and non-empty, it always wins. Unset or empty, a developer build falls back to
@@ -45,6 +47,7 @@
 #include "frame_thread_calls.hpp"  // DIAG.9a: device runs handed to the frame-loop thread
 #include "gpu_device_executor.hpp" // DIAG.9a: the replay commands' GPU device executor
 #include "inspect_panel.hpp"       // DIAG.8b: the authored-program inspect panel
+#include "sandbox_dialects.hpp"    // DIAG.8c/9a: the dialects the diagnostic commands load programs with
 
 #include <crd/anim/anim_resources.hpp>
 #include <crd/app/app.hpp>
@@ -52,12 +55,7 @@
 #include <crd/ceir/cook/program_diag.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp> // DIAG.9a: the inspected run's record
-#include <crd/ceir/func.hpp>
-#include <crd/ceir/gen/arith_ops.hpp>
-#include <crd/ceir/gen/compute_ops.hpp>
-#include <crd/ceir/gen/core_ops.hpp>
-#include <crd/ceir/gen/input_ops.hpp>
-#include <crd/ceir/gen/resource_ops.hpp>
+#include <crd/ceir/host/host_replay_diag.hpp> // DIAG.9a: the replay commands' host executor (the host provider)
 #include <crd/draw/overlay_pass.hpp>
 #include <crd/draw/render_buffer.hpp>
 #include <crd/draw/renderer.hpp>
@@ -301,16 +299,10 @@ void write_inspect_record(crd::sandbox::InspectPanel& panel, const char* path)
 // flags only, never the window), registers the program commands with the dialects it registers, and summarizes its
 // real GPU context. ⛔ No frame graph is registered: the panel calls the service from its own worker thread, and a
 // frame graph's counters may only be read from the thread that drives the graph. DIAG.9a: for the same reason a
-// device record's run is handed to the frame-loop thread (FrameThreadDevice), which pumps it once per frame.
-void register_sandbox_dialects(crd::ceir::Context& ctx, void* /*user*/)
-{
-    (void)crd::ceir::arith::register_arith_ops(ctx);
-    (void)crd::ceir::core::register_core_ops(ctx);
-    (void)crd::ceir::func::register_dialect(ctx);
-    (void)crd::ceir::input::register_input_ops(ctx);       // DIAG.9a: host inputs, recorded by replay.record
-    (void)crd::ceir::resource::register_resource_ops(ctx); // DIAG.9a: device programs (replay.record executor=device)
-    (void)crd::ceir::compute::register_compute_ops(ctx);
-}
+// device record's run is handed to the frame-loop thread (FrameThreadDevice), which pumps it once per frame, and so is
+// a host record's run (FrameThreadHost): its parallel ranges need a crd::jobs frame arena, which the worker lacks.
+// The commands load programs with the sandbox's dialects (sandbox_dialects.hpp).
+using crd::sandbox::register_sandbox_dialects;
 
 struct SandboxDiagCommands
 {
@@ -1001,12 +993,18 @@ int main(int argc, char** argv)
     CRD_LOG_INFO(g_log_sandbox, "backend: {}", want_dx12 ? "DX12" : "Vulkan");
     // ⭐⭐ DIAG.9a: the replay commands' device executor, on this backend's GPU. The panel's worker thread calls the
     // service, so every run is handed to the frame loop (frame_calls.pump below), which owns the queue it submits to.
+    // The host executor's runs are handed over the same way: the pool's frame arenas (crd::jobs::init below, on
+    // this thread) serve the host provider's parallel ranges, and the worker has none.
     crd::sandbox::FrameThreadCalls                      frame_calls;
     std::unique_ptr<crd::memory::GrowableTlsfAllocator> device_alloc;
     std::unique_ptr<crd::sandbox::GpuDeviceExecutor>    gpu_device;
     std::unique_ptr<crd::sandbox::FrameThreadDevice>    frame_device;
+    std::unique_ptr<crd::sandbox::FrameThreadHost>      frame_host;
     if (diag_commands != nullptr)
     {
+        frame_host =
+            std::make_unique<crd::sandbox::FrameThreadHost>(frame_calls, crd::ceir::host::host_replay_executor());
+        diag_commands->replay_runs.host = &frame_host->executor();    // before the panel's worker exists
         (void)diag_commands->gpu_resources.add_context(*gpu_context); // the first of eight: it always fits
         device_alloc = std::make_unique<crd::memory::GrowableTlsfAllocator>(crd::usize{16} << 20U, nullptr,
                                                                             "sandbox device records");
@@ -1821,7 +1819,7 @@ int main(int argc, char** argv)
                 inspect_record = nullptr; // the first run only: "Run again" starts without recording
             }
         }
-        (void)frame_calls.pump(); // DIAG.9a: a device run the panel's worker handed over runs here, on this thread
+        (void)frame_calls.pump(); // DIAG.9a: a device or host run the panel's worker handed over runs here
         if (diag_panel != nullptr && diag_panel->tick() == crd::perf::ui::DiagPanelTick::Completed) // a poll as well
         {
             report_diag(*diag_panel);
@@ -2304,12 +2302,14 @@ int main(int argc, char** argv)
     inspect_panel.reset();
     // ⛔ DIAG.8c: the diagnostic panel cancels and joins a running request before its service, the service before the
     // commands it holds, and all of them before jobs, perf and the GPU context the commands read.
-    // ⛔ DIAG.9a: the frame loop has ended, so the calls close first: a device run the worker still waits on is refused
-    // and the panel's join returns. The device executor dies after the commands that point at it, before the device.
+    // ⛔ DIAG.9a: the frame loop has ended, so the calls close first: a device or host run the worker still waits on
+    // is refused and the panel's join returns. The executors die after the commands that point at them, the device
+    // executor before the device and the host wrapper before the jobs pool.
     frame_calls.close();
     diag_panel.reset();
     diag_service.reset();
     diag_commands.reset();
+    frame_host.reset();
     frame_device.reset();
     gpu_device.reset();
     device_alloc.reset();

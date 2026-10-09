@@ -52,7 +52,8 @@ namespace cont = crd::containers;
 }
 
 cook::HostExecutorStatus record(const cook::HostRecordRequest& request, cook::ReplayRecord& out,
-                                cook::OwnedReplaySite& fault, cont::String& missing, cont::String& reason)
+                                cook::OwnedReplaySite& fault, cont::String& missing, cont::String& reason,
+                                void* /*user*/)
 {
     const HostSchedule  schedule{request.num_jobs, request.sub_fuel};
     input::SeededInputs seeded(request.seed, out.program.allocator()); // the host's random streams, when seeded
@@ -72,7 +73,7 @@ cook::HostExecutorStatus record(const cook::HostRecordRequest& request, cook::Re
 }
 
 cook::HostExecutorStatus replay(const cook::HostReplayRequest& request, cook::HostReplayAnswer& out,
-                                cont::String& reason)
+                                cont::String& reason, void* /*user*/)
 {
     HostReplayOptions options;
     options.against   = request.against;
@@ -95,7 +96,7 @@ cook::HostExecutorStatus replay(const cook::HostReplayRequest& request, cook::Ho
     return cook::HostExecutorStatus::Ok;
 }
 
-const cook::ReplayHostExecutor kExecutor{&record, &replay};
+const cook::ReplayHostExecutor kExecutor{&record, &replay, nullptr}; // stateless
 } // namespace
 
 const cook::ReplayHostExecutor& host_replay_executor() noexcept

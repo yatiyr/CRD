@@ -16,10 +16,18 @@
 //
 // FrameThreadDevice wraps a cook::DeviceExecutor so that its runs go through a FrameThreadCalls. It reports the
 // wrapped executor's adapter. A refused call is a run that could not start (false, with the reason), so the replay
-// commands answer it as the executor's refusal and record nothing. Contract: docs/design/runtime-diagnostics.md
-// (DIAG.9a).
+// commands answer it as the executor's refusal and record nothing.
+//
+// FrameThreadHost does the same for a cook::ReplayHostExecutor (the host provider's). A host run cannot run on the
+// panel's worker either: the host provider's parallel ranges take their job arrays from the calling thread's
+// crd::jobs frame arena, and only the pool's own threads have one (the frame-loop thread initialised the pool). The
+// frame loop never resets its arena, so the wrapper puts the arena's mark back after each run: a run's job arrays are
+// dead once it returns, and runs do not accumulate. A refused call is `Failed` with nothing recorded. The sandbox
+// binds both wrappers over one FrameThreadCalls, so a device run and a host run never overlap either. Contract:
+// docs/design/runtime-diagnostics.md (DIAG.9a).
 
 #include <crd/ceir/cook/device_replay.hpp>
+#include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/core/types.hpp>
 
 #include <condition_variable>
@@ -110,5 +118,29 @@ private:
     FrameThreadCalls*          m_calls;
     ceir::cook::DeviceExecutor m_inner;
     ceir::cook::DeviceExecutor m_executor;
+};
+
+class FrameThreadHost
+{
+public:
+    // `calls` and `inner` must outlive this object and every call through it. The frame-loop thread must be one the
+    // crd::jobs pool enrolled (it initialised the pool) whenever it pumps a host call.
+    FrameThreadHost(FrameThreadCalls& calls, const ceir::cook::ReplayHostExecutor& inner);
+
+    // The executor to bind on the replay commands: `inner`'s record and replay, each run on the frame-loop thread.
+    [[nodiscard]] const ceir::cook::ReplayHostExecutor& executor() const noexcept { return m_executor; }
+
+private:
+    // The executor's functions: each hands the inner call to the frame-loop thread and waits for it.
+    static ceir::cook::HostExecutorStatus record(const ceir::cook::HostRecordRequest& request,
+                                                 ceir::cook::ReplayRecord& out, ceir::cook::OwnedReplaySite& fault,
+                                                 containers::String& missing, containers::String& reason, void* user);
+    static ceir::cook::HostExecutorStatus replay(const ceir::cook::HostReplayRequest& request,
+                                                 ceir::cook::HostReplayAnswer& out, containers::String& reason,
+                                                 void* user);
+
+    FrameThreadCalls*              m_calls;
+    ceir::cook::ReplayHostExecutor m_inner;
+    ceir::cook::ReplayHostExecutor m_executor;
 };
 } // namespace crd::sandbox

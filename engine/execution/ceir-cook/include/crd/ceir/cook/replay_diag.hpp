@@ -271,16 +271,21 @@ struct HostReplayAnswer
 };
 
 // The host executor (crd-ceir-host provides one). Both functions run on the calling thread and need the process's
-// crd::jobs pool. A non-Ok status leaves `reason` saying why and runs nothing when it is a refusal.
+// crd::jobs pool; the host provider's parallel ranges take their job arrays from that thread's frame arena, so the
+// thread must be one the pool enrolled (the thread that initialised it, or a worker). A host whose requests arrive on
+// another thread wraps the executor and hands each call to such a thread (crd-sandbox's FrameThreadHost). A non-Ok
+// status leaves `reason` saying why and runs nothing when it is a refusal. Each function also receives `user`, the
+// executor's own state (a wrapping executor's); the requests' `user` is the registrar's.
 struct ReplayHostExecutor
 {
     // Run the request's program once and make its host record in `out` (whatever the run's outcome). `fault` gets
     // the faulting op's authored position; `missing` gains the inputs stored missing, comma-separated.
     HostExecutorStatus (*record)(const HostRecordRequest& request, ReplayRecord& out, OwnedReplaySite& fault,
-                                 containers::String& missing, containers::String& reason) = nullptr;
+                                 containers::String& missing, containers::String& reason, void* user) = nullptr;
     // Replay a host record, refusing an incompatible one before anything runs.
-    HostExecutorStatus (*replay)(const HostReplayRequest& request, HostReplayAnswer& out,
-                                 containers::String& reason) = nullptr;
+    HostExecutorStatus (*replay)(const HostReplayRequest& request, HostReplayAnswer& out, containers::String& reason,
+                                 void* user) = nullptr;
+    void* user = nullptr; // passed to both functions
 };
 
 // The host's configuration of `replay.record` and `replay.run`, and evidence of their work. One configuration serves
