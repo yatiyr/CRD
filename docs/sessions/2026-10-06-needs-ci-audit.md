@@ -2,7 +2,8 @@
 
 <!-- doc-role: historical -->
 > Dated evidence. Live owners: [REPO.DEV](../ROADMAP.md#slice-repo.dev) and its children,
-> [DIAG.3a](../ROADMAP.md#slice-diag.3a), [DIAG.3b](../ROADMAP.md#slice-diag.3b). Rules: [AGENTS](../../AGENTS.md).
+> [DIAG.3a](../ROADMAP.md#slice-diag.3a) through [DIAG.7a](../ROADMAP.md#slice-diag.7a).
+> Rules: [AGENTS](../../AGENTS.md).
 
 ## Why this audit
 
@@ -185,3 +186,44 @@ Fixes, both in `scripts/test-dev-workflow.py`. No oracle changes; every expected
 
 Checked: the suite passes on Windows (54 tests) and on the WSL reference host.
 
+
+## Rows closed on 6bd1ba59 (2026-10-09)
+
+Both runs on `6bd1ba59` resolved to the complete tier and passed every job:
+- push run [37852297628](https://github.com/yatiyr/CRD/actions/runs/37852297628);
+- nightly run [37915366121](https://github.com/yatiyr/CRD/actions/runs/37915366121).
+
+Each Needs CI row was checked in the job logs (the per-test status on all 20 test lanes of both runs) and in the
+`win-debug`, `win-asan`, `linux-gcc-debug`, `linux-gcc-asan` and `linux-clang-tsan` evidence bundles (`LastTest.log`
+of the push run). The only failures are the registered ones: TP-1 on `win-asan` (five DX12 ray-tracing gates) and TP-5
+on `linux-gcc-asan` (the mikktspace oracle). Both lanes' register gates passed.
+
+| Row | What the logs show | New state |
+|---|---|---|
+| DIAG.3a | the memory suite (162 cases) green on every lane, `linux-clang-tsan` included | Done |
+| DIAG.3b | the allocator ASan case green everywhere; 25 `use-after-poison` and 6 `container-overflow` reports on both ASan lanes, `InstrumentAbsent` elsewhere | Done |
+| DIAG.3c, 3d, 3e | their memory and container cases green on every lane | Done |
+| DIAG.3f | use-after-free caught on both ASan lanes; use-after-return and the leak caught on `linux-gcc-asan` and reported absent on `win-asan`, as declared | Done |
+| DIAG.4a | identity, observer and wait-contract cases and both negative controls green on every lane | Done |
+| DIAG.4b | the jobs suites green, but the GenMC model has never been run | Partial |
+| DIAG.4c to 6b | each row's cases green on every lane; the perf-bundle corpus replays on every lane | Needs CI, waits on DIAG.4b |
+| DIAG.6c | its C++ cases green, but no hosted job runs its three script suites | Partial |
+| DIAG.7a | DX12 cases with assertions on every Windows lane (WARP); Vulkan cases with assertions on lavapipe | Needs CI, waits on DIAG.4b and 6c |
+
+### Gaps found
+
+- **DIAG.4b.** The row said the weak-memory model was "qualified on a pinned Linux GenMC lane". No such lane exists,
+  `cmake/pins.json` pins no GenMC, and no run is recorded. The model's own header calls its verdicts lane-pending. The
+  design acceptance needs "the repaired bounded model passes with bounds stated", which nothing has shown, so the row
+  returns to Partial. Local work: pin GenMC and run both invocations on the WSL reference host. User decision: a hosted
+  GenMC lane in the nightly/complete tier, as for TSan, or the recorded WSL run accepted as declared evidence.
+- **DIAG.6c.** Its hosted clause is "the tooling tests green", meaning `test-sample-cpu-wpr.py`,
+  `test-counters-capability.py` and `test-debugger-recipes.py`. `ci.yml` runs five other tooling suites and none of
+  these. Running them in the repository-checks job is local work, so the row is Partial.
+- **Vulkan cases on hosted Windows.** The runners have no Vulkan device. DIAG.7a(f) reports skipped. The other five
+  Vulkan 7a cases return early with a warning and pass with no assertions, which is a skip reported as a pass. Their
+  hosted evidence is lavapipe on Linux, where all six run with assertions. Converting the early returns to `SKIP()` is
+  separate work.
+
+DIAG.7a had no local or user item left (the DX12 hardware pass-to-fault route is unqualified by user decision), so it
+moved from Partial to Needs CI. The first unfinished row is now DIAG.4b.
