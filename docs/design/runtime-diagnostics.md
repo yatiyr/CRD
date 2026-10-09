@@ -1282,11 +1282,45 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
   `try_allocate` triggers; a failed `allocate` triggers before the backing allocator's own out-of-memory path, whose
   `CRD_FATAL` then closes the window through the assert trigger) and resource pressure (`FlightPressurePolicy`, an
   `IResidencyPolicy` decorator that triggers on each `StreamingAllocator` eviction request).
-- Still open in this row: the fault-injection facility (seeded allocator failure, delayed or cancelled completion,
-  partial I/O, device-loss simulation, reload interruption), injection across load/cook/install/execute/reload/
-  teardown with the previous working assets surviving, the shipping capability checks (the `Inject` authority, a
-  build gate, refusal of arbitrary external I/O replay), loading the policy as an authored asset, `flight.*` diag
-  commands and doctor reporting, and a real host installing the recorder and its triggers.
+
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-fault-injection.md)):
+- Fault injection is `crd::perf::FaultInjector` (`crd/perf/fault_injection.hpp`) over a validated, versioned
+  `FaultPlan`: a seed and up to 8 rules (site, first hit, hit count or unbounded, probability in parts per million,
+  value), with a plain-text form that round-trips (`seed=7;allocation-failure@2+1%1000000;partial-read@0+0%250000=16`).
+  Whether hit n of a site fires is a pure function of seed, site, rule and n (`fault_plan_fires`), so the same plan
+  over the same call sequence injects the same faults. Arming restarts every site's hit count.
+- Sites are existing seams with existing failure paths: `allocation-failure` (`FaultAllocator`, an `IAllocator`
+  decorator; only `try_allocate` fails, since `allocate` is non-null or fatal), and four read sites on the I/O fault
+  seam: `failed-read`, `partial-read` (deliver n bytes), `delayed-completion` and `cancelled-completion` (the last two
+  only at an `AsyncFile` completion, the engine's one asynchronous completion; crd-jobs has no cancellation). A read
+  counts a hit at every site it is eligible for and applies the first that fires (failed, partial, cancelled,
+  delayed).
+- The I/O fault seam is crd-core's `crd/core/fault_seam.hpp`: one hook, consulted by `read_file_binary`,
+  `read_file_range` and the `AsyncFile` completion job; with no hook it is one atomic load; uninstall waits for calls
+  in progress. A synchronous read fails on Fail, Short or Cancel, as a real failed or short read does.
+- `AsyncFile::read_async(offset, dst, status)` reports `Complete`, `Short`, `Failed` or `Cancelled`; there is no
+  status-less form. Before this a failed or short completion silently zero-filled `dst` and the streamed load handed
+  those bytes to the loader; now any status but Complete fails the load before the loader runs.
+- Evidence: a fired fault is recorded into the attached flight recorder (`kFlightCodeFaultInjected`, a = site,
+  b = hit) and, unless the plan says `notrigger`, registers its recipe and fires an `InjectedFault` trigger (kind 9).
+  The recipe `fault-plan/1 fired=<site>#<hit> minimal=<one-hit plan> plan=<armed plan>` names the one-hit plan first,
+  so even a clipped recipe (marked `...`) reproduces the fault alone (minimization by construction). While armed, the
+  plan owns the recorder's recipe: `arm` registers `fault-plan/1 plan=<text>`, each fired fault its own, and `disarm`
+  marks replay unavailable until the host registers a recipe again. Any plan's text fits 800 bytes unclipped.
+- Shipping checks: `arm` needs `DiagAuthority::Inject` in the caller's grant (refused Unauthorized first, as the
+  command service orders it) and a build with fault seams. A shipping build (`CRD_SHIPPING`) compiles the seam out
+  (`CRD_FAULT_SEAMS`, private to crd-core, from the top-level `_crd_shipping` condition, so native multi-config
+  profiles keep working): every arm is Unavailable, the hook cannot be installed and every read and allocation runs
+  plain. `fault.arm` and `fault.disarm` declare Inject; `fault.status` (Read) reports `compiled`.
+- Recovery shown at the resource manager: a reload interrupted by an allocation failure in the real MESH loader, a
+  failed pack read or a short pack read keeps the last good payload, generation and bytes; a streamed load whose
+  completion is short, failed or cancelled ends Failed without reaching the loader; a delayed one completes.
+- Still open in this row: device-loss simulation (the DX12 and Vulkan device-removal paths of DIAG.7b/7c);
+  injection during cook, install, execute and teardown; refusal of arbitrary external I/O replay as a shipping
+  capability check (a record needing external results is already refused before it runs, DIAG.9a); the flight
+  policy and fault plans as authored assets, `flight.*` commands and doctor reporting of both modes; the build and
+  symbol identity sections in a flight bundle; and a real host (crd-sandbox) installing the recorder, its triggers,
+  its sink and the fault commands.
 
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization

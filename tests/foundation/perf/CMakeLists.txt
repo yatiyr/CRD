@@ -43,6 +43,7 @@ add_executable(crd-perf-tests
     test_diag_gpu_resolve.cpp
     test_diag_commands.cpp # typed bounded diagnostic commands through a native caller (no transport linked)
     test_diag_flight_recorder.cpp # DIAG.9b: triggerable bounded flight recording on the existing failure seams
+    test_diag_fault_injection.cpp # DIAG.9b: seeded, authorized fault injection and its shipping refusal
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

@@ -1,6 +1,12 @@
+#include "filesystem_detail.hpp"
+
+#include <crd/core/fault_seam.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/platform/log_channel.hpp>
+
+#include <chrono>
+#include <thread>
 
 #include <cstdint>
 #include <cstdlib>
@@ -381,6 +387,19 @@ bool read_file_text(const Path& path, containers::String& out) noexcept
 
 bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
 {
+    // DIAG.9b fault seam: a failed, short or cancelled read reports false like a real one; a delay is slept here.
+    const containers::StringView generic = path.generic();
+    const IoFault fault = consult_io_fault(IoFaultOp::ReadWhole, generic.data(), generic.size(), 0U, 0U);
+    if (fault.action == IoFaultAction::Fail || fault.action == IoFaultAction::Short ||
+        fault.action == IoFaultAction::Cancel)
+    {
+        out.clear();
+        return false;
+    }
+    if (fault.action == IoFaultAction::Delay)
+    {
+        detail::sleep_for_injected_delay(fault.value);
+    }
     try
     {
         std::ifstream in(to_native_path(path), std::ios::binary | std::ios::ate);
@@ -415,6 +434,19 @@ bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
 
 bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, containers::Array<u8>& out) noexcept
 {
+    // DIAG.9b fault seam: as read_file_binary.
+    const containers::StringView generic = path.generic();
+    const IoFault fault = consult_io_fault(IoFaultOp::ReadRange, generic.data(), generic.size(), offset, size);
+    if (fault.action == IoFaultAction::Fail || fault.action == IoFaultAction::Short ||
+        fault.action == IoFaultAction::Cancel)
+    {
+        out.clear();
+        return false;
+    }
+    if (fault.action == IoFaultAction::Delay)
+    {
+        detail::sleep_for_injected_delay(fault.value);
+    }
     try
     {
         std::ifstream in(to_native_path(path), std::ios::binary);
@@ -550,4 +582,42 @@ void list_directory(const Path& path, containers::Array<Path>& out) noexcept
         out.clear(); // consistent failure contract with the read_* family: empty output, never std::terminate
     }
 }
+namespace detail
+{
+RangeRead read_range_into(const Path& path, crd::u64 offset, crd::u8* dst, crd::u64 size) noexcept
+{
+    RangeRead result;
+    try
+    {
+        std::ifstream in(to_native_path(path), std::ios::binary);
+        if (!in)
+        {
+            return result;
+        }
+        in.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+        if (!in)
+        {
+            return result;
+        }
+        result.opened = true;
+        if (size > 0U)
+        {
+            in.read(reinterpret_cast<char*>(dst), static_cast<std::streamsize>(size));
+            const std::streamsize got = in.gcount();
+            result.delivered          = got > 0 ? static_cast<crd::u64>(got) : 0U;
+        }
+        return result;
+    }
+    catch (...)
+    {
+        return result;
+    }
+}
+
+void sleep_for_injected_delay(crd::u64 ns) noexcept
+{
+    std::this_thread::sleep_for(std::chrono::nanoseconds(static_cast<std::chrono::nanoseconds::rep>(ns)));
+}
+} // namespace detail
+
 } // namespace crd::platform::fs

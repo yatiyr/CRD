@@ -71,6 +71,7 @@ cont::StringView flight_trigger_name(FlightTrigger t) noexcept
     case FlightTrigger::QueueStarvation:   return cont::StringView{"queue-starvation"};
     case FlightTrigger::Hang:              return cont::StringView{"hang"};
     case FlightTrigger::ResourcePressure:  return cont::StringView{"resource-pressure"};
+    case FlightTrigger::InjectedFault:     return cont::StringView{"injected-fault"};
     }
     return cont::StringView{"unknown"};
 }

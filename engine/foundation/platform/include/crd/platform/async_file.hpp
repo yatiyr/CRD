@@ -14,6 +14,20 @@ using Counter = detail::Counter;
 namespace crd::platform
 {
 
+// How one read_async completion ended. The job writes it before the returned counter reaches 0, so it is final once
+// wait() on that counter returns. Only Complete means `dst` holds the requested bytes.
+enum class AsyncReadStatus : crd::u8
+{
+    Pending   = 0U, // submitted; not yet complete
+    Complete  = 1U, // every requested byte was read
+    Short     = 2U, // the read stopped early: the bytes it delivered are in place, the rest of dst is zeroed
+    Failed    = 3U, // the file could not be opened or sought, or the read was refused; dst is zeroed
+    Cancelled = 4U, // the completion was cancelled (an injected fault); dst is untouched
+};
+
+// "pending", "complete", "short", "failed", "cancelled".
+[[nodiscard]] crd::containers::StringView async_read_status_name(AsyncReadStatus s) noexcept;
+
 // Job-pool-based async file reader.
 //
 // Each read_async() call submits a small job to crd-jobs that performs a
@@ -27,6 +41,10 @@ namespace crd::platform
 //     read jobs have completed (i.e., wait() has been called on their counters).
 //   - Callers must call crd::jobs::wait() on every counter returned; failing to do
 //     so leaks a counter slot from the job system pool.
+//   - `status` must remain valid until the counter reaches 0, and the caller must read it: a short or failed read
+//     is reported there (DIAG.9b), never as silently zeroed bytes. One read is at most 4 GiB - 1 bytes.
+//   - Each completion consults the I/O fault seam (crd/core/fault_seam.hpp) as an AsyncRead, so a diagnostics host
+//     can fail, shorten, delay or cancel it.
 //
 // v1d: thread-pool-based implementation (jobs doing synchronous reads).
 //      True kernel async I/O (IOCP / io_uring) is deferred.
@@ -49,10 +67,11 @@ public:
     [[nodiscard]] bool     is_open() const noexcept;
     [[nodiscard]] crd::u64 size()    const noexcept { return m_size; }
 
-    // Submit an async read of `dst.size()` bytes at `offset`.
-    // Returns a Counter* the caller must wait() on; returns nullptr on error.
-    [[nodiscard]] crd::jobs::Counter* read_async(crd::u64                        offset,
-                                                  crd::containers::Span<crd::u8>  dst) noexcept;
+    // Submit an async read of `dst.size()` bytes at `offset`; `status` is Pending until the read completes.
+    // Returns a Counter* the caller must wait() on; returns nullptr (status Failed) on error: a closed file, an empty
+    // or oversized dst, or a range past the end of the file.
+    [[nodiscard]] crd::jobs::Counter* read_async(crd::u64 offset, crd::containers::Span<crd::u8> dst,
+                                                 AsyncReadStatus& status) noexcept;
 
 private:
     crd::containers::String m_path;   // uses default_allocator()

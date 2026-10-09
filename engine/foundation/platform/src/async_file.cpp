@@ -1,11 +1,15 @@
 #include <crd/platform/async_file.hpp>
 
+#include "filesystem_detail.hpp"
+
 #include <crd/containers/array.hpp>
+#include <crd/core/fault_seam.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <cstring>
+#include <limits>
 #include <type_traits>
 
 namespace crd::platform
@@ -16,32 +20,57 @@ namespace
 
 // Trivially-copyable, trivially-destructible closure for the async read job.
 // Captures a pointer into the owning AsyncFile's m_path (valid while the AsyncFile
-// lives — documented constraint in async_file.hpp) plus the read parameters.
-//
-// sizeof == 40 bytes (five 8-byte fields on 64-bit) ≤ 41-byte SBO limit.
+// lives — documented constraint in async_file.hpp) plus the read parameters and the
+// caller's status slot. The two sizes are 32-bit so the closure stays within the SBO:
+// sizeof == 40 bytes (8 + 4 + 4 + 8 + 8 + 8) ≤ 41-byte SBO limit.
 struct ReadJob
 {
-    const char* path_data; // ptr into AsyncFile::m_path
-    crd::usize  path_size;
-    crd::u64    offset;
-    crd::u8*    dst_ptr;
-    crd::usize  dst_size;
+    const char*      path_data; // ptr into AsyncFile::m_path
+    crd::u32         path_size;
+    crd::u32         dst_size;
+    crd::u64         offset;
+    crd::u8*         dst_ptr;
+    AsyncReadStatus* status;
 
-    void operator()() noexcept
+    void operator()() const noexcept
     {
-        crd::memory::IAllocator* const         alloc = crd::memory::default_allocator();
-        const crd::containers::StringView      sv{path_data, path_size};
-        const fs::Path                         p(sv);
-        crd::containers::Array<crd::u8>        tmp(alloc);
-        const bool ok = fs::read_file_range(p, offset, dst_size, tmp);
-        if (ok && tmp.size() == dst_size)
+        // DIAG.9b fault seam: the completion may be failed, cut short, delayed or cancelled.
+        const IoFault fault = consult_io_fault(IoFaultOp::AsyncRead, path_data, path_size, offset, dst_size);
+        crd::u64      want  = dst_size;
+        switch (fault.action) // no default: every action is handled
         {
-            std::memcpy(dst_ptr, tmp.data(), dst_size);
+        case IoFaultAction::Proceed:
+            break;
+        case IoFaultAction::Fail:
+            std::memset(dst_ptr, 0, dst_size);
+            *status = AsyncReadStatus::Failed;
+            return;
+        case IoFaultAction::Cancel:
+            *status = AsyncReadStatus::Cancelled;
+            return;
+        case IoFaultAction::Delay:
+            fs::detail::sleep_for_injected_delay(fault.value);
+            break;
+        case IoFaultAction::Short:
+            want = fault.value < static_cast<crd::u64>(dst_size) ? fault.value : static_cast<crd::u64>(dst_size) - 1U;
+            break;
         }
-        else
+
+        const fs::Path              p(crd::containers::StringView{path_data, path_size});
+        const fs::detail::RangeRead r = fs::detail::read_range_into(p, offset, dst_ptr, want);
+        if (!r.opened)
         {
             std::memset(dst_ptr, 0, dst_size);
+            *status = AsyncReadStatus::Failed;
+            return;
         }
+        if (r.delivered < static_cast<crd::u64>(dst_size))
+        {
+            std::memset(dst_ptr + r.delivered, 0, static_cast<crd::usize>(dst_size - r.delivered));
+            *status = AsyncReadStatus::Short;
+            return;
+        }
+        *status = AsyncReadStatus::Complete;
     }
 };
 
@@ -90,10 +119,25 @@ bool AsyncFile::is_open() const noexcept
     return !m_path.empty();
 }
 
-crd::jobs::Counter* AsyncFile::read_async(crd::u64                       offset,
-                                           crd::containers::Span<crd::u8> dst) noexcept
+crd::containers::StringView async_read_status_name(AsyncReadStatus s) noexcept
 {
-    if (!is_open() || dst.empty())
+    switch (s) // no default: every status is named
+    {
+    case AsyncReadStatus::Pending:   return crd::containers::StringView{"pending"};
+    case AsyncReadStatus::Complete:  return crd::containers::StringView{"complete"};
+    case AsyncReadStatus::Short:     return crd::containers::StringView{"short"};
+    case AsyncReadStatus::Failed:    return crd::containers::StringView{"failed"};
+    case AsyncReadStatus::Cancelled: return crd::containers::StringView{"cancelled"};
+    }
+    return crd::containers::StringView{"unknown"};
+}
+
+crd::jobs::Counter* AsyncFile::read_async(crd::u64 offset, crd::containers::Span<crd::u8> dst,
+                                          AsyncReadStatus& status) noexcept
+{
+    constexpr crd::usize max_bytes = std::numeric_limits<crd::u32>::max();
+    status                         = AsyncReadStatus::Failed;
+    if (!is_open() || dst.empty() || dst.size() > max_bytes || m_path.size() > max_bytes)
     {
         return nullptr;
     }
@@ -102,12 +146,14 @@ crd::jobs::Counter* AsyncFile::read_async(crd::u64                       offset,
         return nullptr;
     }
 
+    status = AsyncReadStatus::Pending;
     const ReadJob job_data{
         m_path.data(),
-        m_path.size(),
+        static_cast<crd::u32>(m_path.size()),
+        static_cast<crd::u32>(dst.size()),
         offset,
         dst.data(),
-        dst.size()
+        &status
     };
 
     return crd::jobs::run(crd::jobs::make_job(job_data));

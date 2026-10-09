@@ -3,10 +3,10 @@
 // crd-perf -- triggerable bounded flight recording (DIAG.9b).
 //
 // A FlightRecorder keeps the most recent events in a preallocated ring of fixed-size records. When a trigger fires
-// (an assertion, a fatal invariant, an allocation failure, a frame hitch, queue starvation, a hang, resource pressure
-// or a manual request) it keeps the window before the trigger and records a bounded window after it, then freezes into
-// one capture: the trigger and its causal inputs, the events from before and after it, the loss metadata and a replay
-// recipe (or the precise reason replay is unavailable).
+// (an assertion, a fatal invariant, an allocation failure, a frame hitch, queue starvation, a hang, resource pressure,
+// an injected fault or a manual request) it keeps the window before the trigger and records a bounded window after
+// it, then freezes into one capture: the trigger and its causal inputs, the events from before and after it, the loss
+// metadata and a replay recipe (or the precise reason replay is unavailable).
 //
 // Bounds and the post-window split. The ring holds `capacity` events. A policy declares `pre_events` and
 // `post_events` with pre_events + post_events <= capacity, so the events that make up the post window can never
@@ -53,6 +53,7 @@ inline constexpr EventCode kFlightCodeFrameHitch        = 0x0904U;
 inline constexpr EventCode kFlightCodeQueueStarvation   = 0x0905U;
 inline constexpr EventCode kFlightCodeHang              = 0x0906U;
 inline constexpr EventCode kFlightCodeResourcePressure  = 0x0907U;
+inline constexpr EventCode kFlightCodeFaultInjected     = 0x0908U; // a seeded fault fired (a = FaultSite, b = hit)
 inline constexpr EventCode kFlightCodeFrame             = 0x0910U; // one frame boundary (a = interval, b = duration)
 
 // What fired a trigger. A fatal invariant keeps its own event code; the others use the codes above.
@@ -67,12 +68,13 @@ enum class FlightTrigger : crd::u8
     QueueStarvation   = 6U,
     Hang              = 7U,
     ResourcePressure  = 8U,
+    InjectedFault     = 9U, // a FaultInjector fault fired (crd/perf/fault_injection.hpp)
 };
 
-inline constexpr crd::u32 kFlightTriggerCount = 9U;
+inline constexpr crd::u32 kFlightTriggerCount = 10U;
 
 // "none", "manual", "assertion", "fatal-invariant", "allocation-failure", "frame-hitch", "queue-starvation", "hang",
-// "resource-pressure".
+// "resource-pressure", "injected-fault".
 [[nodiscard]] cont::StringView flight_trigger_name(FlightTrigger t) noexcept;
 
 [[nodiscard]] constexpr crd::u32 flight_trigger_bit(FlightTrigger t) noexcept
@@ -81,7 +83,7 @@ inline constexpr crd::u32 kFlightTriggerCount = 9U;
 }
 
 // Every real trigger kind (None excluded).
-inline constexpr crd::u32 kFlightAllTriggers = 0x1FEU;
+inline constexpr crd::u32 kFlightAllTriggers = 0x3FEU;
 
 // Why a post window ended.
 enum class FlightEnd : crd::u8

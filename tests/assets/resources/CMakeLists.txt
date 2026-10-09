@@ -12,6 +12,7 @@ target_link_libraries(crd-resources-tests PRIVATE
     crd-resources
     crd-cooker
     crd-jobs
+    crd-perf                 # DIAG.9b: the seeded FaultInjector drives load and reload faults (test_fault_injection)
     crd-gpu-context          # ADR-0103: ShaderStage
     crd-gpu-context-vulkan   # ADR-0103: GLSL→SPIR-V round-trip (was crd-shader::compile_glsl)
     Catch2::Catch2WithMain

@@ -1192,14 +1192,27 @@ CRD_NOINLINE void ResourceManager::run_stream_load_job(void* raw_ctx) noexcept
         crd::containers::Array<crd::u8> buf(mgr->m_alloc);
         buf.resize(ctx->blob_size);
 
+        crd::platform::AsyncReadStatus read_status = crd::platform::AsyncReadStatus::Pending;
         crd::jobs::Counter* c = af.read_async(
             ctx->blob_offset,
-            crd::containers::Span<crd::u8>(buf.data(), buf.size()));
+            crd::containers::Span<crd::u8>(buf.data(), buf.size()),
+            read_status);
 
         if (c != nullptr)
         {
             crd::jobs::wait(c); // suspend fiber or spin until read completes
+        }
 
+        if (c != nullptr && read_status != crd::platform::AsyncReadStatus::Complete)
+        {
+            // DIAG.9b: a short, failed or cancelled read never reaches the loader as zero-filled bytes; the load
+            // fails like the sync and async paths do on a failed read.
+            CRD_LOG_ERROR(g_log_resources,
+                          "ResourceManager::run_stream_load_job: artifact read ended {}",
+                          crd::platform::async_read_status_name(read_status));
+        }
+        else if (c != nullptr)
+        {
             LoadContext load_ctx{};
             load_ctx.id            = ctx->id;
             load_ctx.bytes         = crd::containers::as_const_span(buf);

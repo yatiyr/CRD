@@ -16,9 +16,10 @@ class ResourceManager; // forward-declared; full type available in resource_mana
 // Context passed to ILoader::load() and ILoader::load_placeholder().
 //
 // When stream_file is non-null the loader is running on a fiber (load_streamed path).
-// The loader may submit additional reads via stream_file->read_async(offset, dst) and
+// The loader may submit additional reads via stream_file->read_async(offset, dst, status) and
 // suspend on the returned Counter. All Counters must be waited on before load() returns
-// — the AsyncFile's lifetime is bounded by the streaming job body.
+// — the AsyncFile's lifetime is bounded by the streaming job body — and a read whose status
+// is not Complete must fail the load (its bytes are not the artifact's).
 struct LoadContext
 {
     ResourceId                           id;

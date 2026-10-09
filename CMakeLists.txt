@@ -525,7 +525,7 @@ crd_module(engine/numerics/hesap-motion engine/hesap-motion
 crd_module(engine/numerics/hesap-tensor engine/hesap-tensor DEPENDS containers core jobs math memory platform
     TESTS numerics/hesap-tensor TEST_DEPENDS hesap hesap-autodiff hesap-dense hesap-resources)
 crd_module(engine/assets/resources engine/resources DEPENDS containers core jobs log memory platform PACKAGES zstd
-    TESTS assets/resources TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan)
+    TESTS assets/resources TEST_DEPENDS asset_cooker gpu-context gpu-context-vulkan perf)
 crd_module(engine/world/scene engine/scene
     DEPENDS containers core geometry-primitives geometry-spatial math memory resources
     TESTS foundation/stress world/scene TEST_DEPENDS preset profile)

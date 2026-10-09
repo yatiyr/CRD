@@ -21,6 +21,13 @@ target_include_directories(crd-core
 
 target_compile_features(crd-core PUBLIC cxx_std_20)
 
+# DIAG.9b: the I/O fault seam (crd/core/fault_seam.hpp) is compiled out of a shipping build, so nothing can install
+# a fault hook there. Private: callers ask fault_seams_compiled(), never the macro.
+if(NOT DEFINED _crd_shipping)
+    message(FATAL_ERROR "[crd] crd-core needs the top-level shipping condition (_crd_shipping)")
+endif()
+target_compile_definitions(crd-core PRIVATE "CRD_FAULT_SEAMS=$<IF:${_crd_shipping},0,1>")
+
 # crd-warnings (/W4 /WX or -Wall -Werror) reaches every engine target through this edge and stays inside the
 # build tree: a package consumer keeps its own warning policy.
 target_link_libraries(crd-core PUBLIC $<BUILD_INTERFACE:crd-warnings>)
