@@ -61,15 +61,17 @@ inline constexpr crd::u32 kBundleFormatVersion = 1U;
 // Section identity. Foundation owns the low reserved range [1, 0xFFFF]; later
 // slices/modules register tags above 0x00010000 from their own side. 0 is
 // reserved (invalid) so a zeroed buffer never reads as a real section.
+// NOLINTNEXTLINE(performance-enum-size): the on-disk tag field is u32 and modules register tags above 0x00010000.
 enum class BundleSectionTag : crd::u32
 {
-    Invalid     = 0,
-    Manifest    = 1, // cerid-diagnostics manifest (redaction-honest; never claims a raw dump is redacted)
-    CrashRecord = 2, // the 5a/5b async-signal-safe record bytes
-    RawDump     = 3, // Windows minidump / Linux core (raw; ID-8: never *declared* redacted)
-    LogTail     = 4, // recent log records (bytes; the composer that fills it is a later slice)
-    SymbolIndex = 5, // module identities (filled by (c))
-    // 6 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
+    Invalid      = 0,
+    Manifest     = 1, // cerid-diagnostics manifest (redaction-honest; never claims a raw dump is redacted)
+    CrashRecord  = 2, // the 5a/5b async-signal-safe record bytes
+    RawDump      = 3, // Windows minidump / Linux core (raw; ID-8: never *declared* redacted)
+    LogTail      = 4, // recent log records (bytes; the composer that fills it is a later slice)
+    SymbolIndex  = 5, // module identities (filled by (c))
+    FlightRecord = 6, // DIAG.9b triggered flight capture (flight_recorder.hpp: encode/decode_flight_record)
+    // 7 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
 };
 
 // Per-section flags (bitset in BundleSectionHeader::flags).
@@ -101,7 +103,7 @@ struct BundleSectionHeader
     crd::u64 payload_length;  // 8  bytes of payload stored immediately after this header
     crd::u64 original_length; // 8  logical size before truncation (== payload_length when not truncated)
     crd::u32 payload_crc32;   // 4  crc32 of the payload bytes (0 when payload_length == 0)
-    crd::u32 _pad_a;          // 4  reserved (0)
+    crd::u32 _pad_a;          // 4  reserved (0) NOLINT(readability-identifier-naming): pinned on-disk spare slot
 };
 
 static_assert(sizeof(BundleSectionHeader) == 32, "BundleSectionHeader is 32 B; on-disk pin");
@@ -129,7 +131,7 @@ struct BundleLimits
 class BundleWriter
 {
 public:
-    enum class AddStatus : crd::u32
+    enum class AddStatus : crd::u8
     {
         Ok,              // stored in full
         StoredTruncated, // stored, truncated to fit a cap; Truncated flag + original_length set
@@ -181,7 +183,7 @@ private:
 // importer (traversal / oversized / bomb / version-mismatch rejection, golden
 // manifests, fuzz corpus) is (e); it builds on these types.
 
-enum class BundleReadStatus : crd::u32
+enum class BundleReadStatus : crd::u8
 {
     Ok,                 // header valid and every declared section present + crc-verified
     RecoveredTruncated, // header valid; a valid prefix of sections recovered, then parsing stopped

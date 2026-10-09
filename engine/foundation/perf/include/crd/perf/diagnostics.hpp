@@ -173,11 +173,20 @@ void reset_code_registry() noexcept;
 using FatalInvariantHandler = void (*)(const DiagnosticEvent& e);
 void set_fatal_invariant_handler(FatalInvariantHandler handler) noexcept;
 
+// The installed handler (nullptr: the default). A handler that adds evidence and then chains reads the previous one
+// here (DIAG.9b's flight trigger does).
+[[nodiscard]] FatalInvariantHandler get_fatal_invariant_handler() noexcept;
+
+// The default fatal path check_invariant takes when no handler is installed: report the event and terminate. A
+// chaining handler with no previous handler ends here, so the process still terminates.
+[[noreturn]] void default_fatal_invariant(const DiagnosticEvent& e);
+
 // Required runtime validation: if `cond` is false, build a FatalInvariant event and route it to
 // the fatal handler. Unlike CRD_ASSERT this is present in every build. Prefer the macro, which
 // captures the source identity.
 void check_invariant(bool cond, EventCode code, SourceIdentity src, cont::StringView message);
 
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): only a macro captures the call site's __FILE__, __func__ and __LINE__.
 #define CRD_DIAG_INVARIANT(cond, code, msg)                                                                            \
     ::crd::perf::check_invariant((cond), (code),                                                                       \
                                  ::crd::perf::SourceIdentity{cont::StringView{__FILE__},                               \

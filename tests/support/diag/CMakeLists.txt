@@ -86,3 +86,9 @@ target_link_libraries(crd-diag-fiber-exhaustion-specimen PRIVATE crd-jobs Thread
 # Links crd-core (the crash API), crd-jobs (the fiber mode drives a real fiber) and Threads (concurrent/overflow modes).
 crd_diag_specimen(crd-diag-crash-capture-specimen SOURCES specimens/crash_capture_specimen.cpp)
 target_link_libraries(crd-diag-crash-capture-specimen PRIVATE crd-core crd-jobs Threads::Threads)
+
+# The DIAG.9b fatal-path flight-recorder specimen: records events, then enters a real fatal path (a failed
+# CRD_DIAG_INVARIANT, or a headless assertion) with the flight triggers installed; the trigger's sink writes the
+# window to a bundle before the process dies. crd-perf-tests runs it once per mode and reads the bundle.
+crd_diag_specimen(crd-diag-flight-fatal-specimen SOURCES specimens/flight_fatal_specimen.cpp)
+target_link_libraries(crd-diag-flight-fatal-specimen PRIVATE crd-perf)

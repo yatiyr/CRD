@@ -1244,6 +1244,50 @@ Acceptance: each trigger yields evidence from before the event, bounded post-win
 replay/minimization recipe. Inject during load/cook/install/execute/reload/teardown; previous working assets survive
 recoverable failure. Shipping capability checks reject injection and arbitrary external I/O replay.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md)):
+- The flight recorder is `crd::perf::FlightRecorder` (`crd/perf/flight_recorder.hpp`), separate from the DIAG.2b
+  `DiagnosticRecorder`: its events are fixed 152-byte records (code, severity, two scalars, a message clipped to 111
+  bytes with the clip flagged), so recording and triggering never allocate. Codes 0x0900..0x09FF belong to it.
+- Bounds are an authored, versioned `FlightPolicy` (capacity at most 65536 events, about 9.5 MiB; `pre_events`,
+  `post_events`, `post_window_ns` at most 60 s, a trigger mask, `hitch_threshold_ns`). `pre_events + post_events <=
+  capacity`, so the post window can never overwrite the pre window it keeps. A rejected candidate (or a reload while a
+  capture is pending, or a generation that would wrap) leaves the active policy, its generation and the ring as they
+  were. Defaults: 1024 events (152 KiB), 768 before, 256 after, 2 s, every trigger, 50 ms hitch.
+- A trigger takes only its own mutex, never the ring's. The first trigger opens the post window; any trigger while a
+  capture is pending is suppressed and counted with its kind, never replacing it. The window closes when
+  `post_events` land, when `post_window_ns` elapses (seen by `poll()`), at shutdown or on the fatal path; the last two
+  mark the post window truncated. Events between the window closing and collection are not recorded (the ring stays
+  frozen) and are counted.
+- A capture carries the trigger record (kind, code, the sequence it fired at, time, two scalars, file:line, message),
+  the policy and its generation, the retained events in sequence order, the loss metadata (`recorded_before_trigger`,
+  `pre_retained`, `post_retained`, `post_truncated`, `ring_unavailable`, `dropped_while_complete`,
+  `suppressed_triggers` with their kinds) and the replay recipe registered when the trigger fired, or the reason
+  replay is unavailable ("no replay recipe was registered with the flight recorder" by default).
+- Collection: `poll()` delivers to the host's sink, `take_capture()` without one, `finish()` closes early. A capture
+  that ended Fatal is terminal: the recorder records and delivers nothing more, so the second fatal path of one failure
+  (`check_invariant`'s default reaches `CRD_FATAL`, which reaches the assert trigger) cannot replace it. On the fatal
+  path the ring is taken with a bounded try-lock; if it stays held, the capture carries the trigger alone and says
+  `ring_unavailable`. Building a capture allocates, so the fatal path is an ordinary handler call, never a signal
+  handler: a hard signal crash still leaves only the DIAG.2b emergency record and the DIAG.5a/5b crash record.
+- The capture is bundle section `FlightRecord` (tag 6), a versioned little-endian payload ('CFR1') whose decoder
+  bounds every length by its fixed limit and by the payload, checks the loss metadata against the event list and
+  refuses trailing bytes; `write_flight_bundle` writes it beside a Manifest. `flight_capture_summary_json` is the
+  one-line summary.
+- Trigger sources (`crd/perf/flight_triggers.hpp`) sit on seams that already existed and change none of them:
+  assertions (`crd::set_assert_handler`, chained to the previous handler; when the assert path will terminate,
+  headless with no platform handler, the window is closed Fatal and delivered first), fatal invariants (new
+  `get_fatal_invariant_handler` and `default_fatal_invariant`, chained the same way), queue starvation and hangs
+  (`flight_on_starvation` / `flight_on_hang` for the jobs watchdog's handlers), frame hitches (`FlightFrameWatch`,
+  fed by the host's frame boundaries), allocation failure (`FlightAllocatorWatch`, an `IAllocator` decorator: a failed
+  `try_allocate` triggers; a failed `allocate` triggers before the backing allocator's own out-of-memory path, whose
+  `CRD_FATAL` then closes the window through the assert trigger) and resource pressure (`FlightPressurePolicy`, an
+  `IResidencyPolicy` decorator that triggers on each `StreamingAllocator` eviction request).
+- Still open in this row: the fault-injection facility (seeded allocator failure, delayed or cancelled completion,
+  partial I/O, device-loss simulation, reload interruption), injection across load/cook/install/execute/reload/
+  teardown with the previous working assets surviving, the shipping capability checks (the `Inject` authority, a
+  build gate, refusal of arbitrary external I/O replay), loading the policy as an authored asset, `flight.*` diag
+  commands and doctor reporting, and a real host installing the recorder and its triggers.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 

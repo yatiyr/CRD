@@ -7,6 +7,7 @@
 
 #include "json_writer.hpp" // DIAG.6c(c): shared locale-safe JSON-append helpers (also used by capture_export.cpp)
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
@@ -35,7 +36,7 @@ cont::Array<CodeRange>&   code_registry()
     return ranges;
 }
 
-FatalInvariantHandler g_fatal_handler = nullptr;
+std::atomic<FatalInvariantHandler> g_fatal_handler{nullptr}; // atomic: a chaining handler reads it from any thread
 
 // append_json_escaped / append_u64 now live in json_writer.hpp (shared with the Perfetto exporter). Pull them into
 // this anonymous namespace so the call sites below are unchanged.
@@ -234,7 +235,20 @@ void reset_code_registry() noexcept
 
 void set_fatal_invariant_handler(FatalInvariantHandler handler) noexcept
 {
-    g_fatal_handler = handler;
+    g_fatal_handler.store(handler, std::memory_order_release);
+}
+
+FatalInvariantHandler get_fatal_invariant_handler() noexcept
+{
+    return g_fatal_handler.load(std::memory_order_acquire);
+}
+
+void default_fatal_invariant(const DiagnosticEvent& e)
+{
+    cont::String line;
+    to_log_line(e, line);
+    CRD_FATAL(line.c_str());
+    std::abort();
 }
 
 void check_invariant(bool cond, EventCode code, SourceIdentity src, cont::StringView message)
@@ -254,16 +268,14 @@ void check_invariant(bool cond, EventCode code, SourceIdentity src, cont::String
     e.timestamp_ns   = diagnostic_now_ns();
     e.message        = cont::String{message};
 
-    if (g_fatal_handler != nullptr)
+    const FatalInvariantHandler handler = g_fatal_handler.load(std::memory_order_acquire);
+    if (handler != nullptr)
     {
-        g_fatal_handler(e);
+        handler(e);
         return; // a test handler may choose to continue; production handler does not return
     }
 
-    cont::String line;
-    to_log_line(e, line);
-    CRD_FATAL(line.c_str());
-    std::abort();
+    default_fatal_invariant(e);
 }
 
 } // namespace crd::perf

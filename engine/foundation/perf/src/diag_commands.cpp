@@ -164,6 +164,8 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
             return "log-tail";
         case BundleSectionTag::SymbolIndex:
             return "symbol-index";
+        case BundleSectionTag::FlightRecord:
+            return "flight-record";
         case BundleSectionTag::Invalid:
             return "invalid";
     }

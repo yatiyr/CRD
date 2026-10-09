@@ -42,6 +42,7 @@ add_executable(crd-perf-tests
     test_diag_gpu_bridge.cpp
     test_diag_gpu_resolve.cpp
     test_diag_commands.cpp # typed bounded diagnostic commands through a native caller (no transport linked)
+    test_diag_flight_recorder.cpp # DIAG.9b: triggerable bounded flight recording on the existing failure seams
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -64,7 +65,8 @@ add_dependencies(crd-perf-tests
     crd-diag-heap-overflow-specimen
     crd-diag-use-after-free-specimen    # DIAG.3f
     crd-diag-use-after-return-specimen  # DIAG.3f
-    crd-diag-leak-specimen)             # DIAG.3f
+    crd-diag-leak-specimen              # DIAG.3f
+    crd-diag-flight-fatal-specimen)     # DIAG.9b: the fatal path writes the flight window before the process dies
 target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_CLEAN_SPECIMEN="$<TARGET_FILE:crd-diag-clean-specimen>"
     CRD_DIAG_CRASH_SPECIMEN="$<TARGET_FILE:crd-diag-crash-specimen>"
@@ -73,6 +75,7 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_USE_AFTER_FREE_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-free-specimen>"
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
     CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
+    CRD_DIAG_FLIGHT_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-flight-fatal-specimen>"
     CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}")
 
 crd_discover_tests(crd-perf-tests)
