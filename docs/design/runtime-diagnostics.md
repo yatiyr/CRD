@@ -1506,6 +1506,44 @@ Acceptance: a small intentional corruption is found by replay/backward inspectio
 missing tool or incomplete recording is instrument failure. A real-multicore test remains separate from rr's serialized
 execution. Platforms without reverse-debugger support retain event/schedule evidence and an explicit capability limit.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-reverse-debug-routes.md)):
+- The intentional corruption is `crd-diag-corruption-specimen` (`tests/support/diag/specimens/corruption_specimen.cpp`,
+  in the default build on every lane, debug information requested): an off-by-one loop in `crd_diag_corrupt_neighbour`
+  writes one word past four cells into a sentinel; bounded churn follows, then the check. `clean` mode runs the same
+  code with the right bound. No library call runs inside the recorded window. It is single-threaded: process record
+  and rr serialize execution, so the TSan and stress specimens stay the multicore evidence.
+- `scripts/reverse-debug-recipes.py` runs each route and judges it. The specimen's uninstrumented run comes first and
+  its outcome is kept: a corrupt run that does not detect the corruption is `SPECIMEN_INVALID`, and an instrumented
+  run whose detection differs from it is `OBSERVER_EFFECT`. A route is `FOUND` only when it names
+  `crd_diag_corrupt_neighbour` in the specimen's source, at the marked store for a reverse route (which stops before
+  the store) or inside the writer for a forward watchpoint (which stops after it). A clean run with a writer is
+  `FALSE_FIND`; a missing tool, a refused permission, an ineligible host, missing symbols, a recording that lost the
+  write, a debugger internal error, a timeout and a trace over its byte bound each have their own failing verdict.
+  The verdict record holds the tool and version, permission state, the natural and instrumented outcomes, the
+  instruction bound and log size, the trace size and bound, and the writer's frame. gdb's debuginfod is turned off and
+  cdb's symbol path is the specimen's directory, so no route reaches the network.
+- Routes and their state on the reference hosts:
+  - `gdb-record` (Linux, gdb 15.1): process record with a bounded instruction log, a live `reverse-continue` to a
+    `watch -l` on the sentinel, then `record save` and an offline replay in a second gdb that restores the log and
+    bisects instruction numbers with `record goto`. gdb 15.1 hits an internal error (`find_inferior_pid`) on
+    `continue`, `reverse-continue` or a watchpoint over a restored log, so the offline leg only navigates and reads.
+    Found live and offline at the store on linux-gcc-debug and linux-gcc-shipping. Not a route on sanitizer builds
+    (declared at configure time): recording works, but `record save` never finishes writing the reserved shadow space.
+  - `gdb-watch` (Linux): a forward hardware watchpoint; a software fallback is `HOST_INELIGIBLE`. Found on all four
+    Linux lanes, sanitizer lanes included.
+  - `cdb-watch` (Windows): cdb from the WinDbg package (not on PATH) with a hardware data breakpoint (`ba w8`) set at
+    the image entry; first-chance access violations do not stop it, because MSVC's ASan commits its shadow through
+    them. Found on win-debug, win-shipping, win-clang-cl-shipping and win-asan. Local evidence only: no hosted
+    Windows job installs a debugger.
+  - `ttd` (Windows): TTD.exe from the WinDbg package records, and cdb replays the trace stepping backwards (`g-`) to
+    the data breakpoint. Recording needs an elevated shell; unelevated the launch is refused and reported
+    `PERMISSION_DENIED`. Unverified until an elevated recording runs.
+  - `rr` (Linux): needs hardware performance counters and `perf_event_paranoid <= 1`. WSL2 exposes no `cpu` PMU
+    (rr 5.7.0: "Unable to open performance counter") and has paranoid 2; the route reports `HOST_INELIGIBLE` and never
+    lowers the setting. The replay leg reuses the gdb-record driver and is unverified until an eligible host exists.
+- Hardware watchpoints (`gdb-watch`, `cdb-watch`) are bounded options: a fixed number of debug registers, a forward
+  stop only, no history. External sampling stays the DIAG.6c runbook (`scripts/sample-cpu-wpr.py`).
+
 <a id="diag-10a"></a>
 ## DIAG.10a — stateful fuzzing and evidence-reader security
 

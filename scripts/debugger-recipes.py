@@ -9,8 +9,10 @@
 #
 # ============================================================================================================
 # RECIPES  (verify command syntax against the tool's own --help / .help; do not recall)
-# NOTE: every command below is DOCUMENTED-ONLY on this box -- no external debugger is runnable here (see the probe
-# results / verdict machine). Verify each against the tool's own help before first use; none was executed live.
+# NOTE: every command below is DOCUMENTED-ONLY. When these recipes were written no external debugger was found on
+# PATH here (see the probe results / verdict machine); verify each against the tool's own help before first use.
+# 2026-10-10 (DIAG.9c): cdb is runnable on this box from the WinDbg package, which is not on PATH; the availability
+# probe below now finds it there, and scripts/reverse-debug-recipes.py runs it (a hardware data breakpoint).
 # ============================================================================================================
 # (1) UNINSTRUMENTED WORK -- CPU time in code with no CRD_PERF_SCOPE (the DIAG.6c(f) case).
 #     WinDbg/cdb : !runaway            -- per-thread user CPU time, hottest first
@@ -53,10 +55,12 @@
 # Usage:
 #   python scripts/debugger-recipes.py [--probe] [--specimen <exe>]
 import argparse
+import importlib.util
 import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 HOT_SYMBOL = "crd_diag_unscoped_hotspot_burn"
 LLDB_FALLBACK = r"C:\LLVM-20.1.8\bin\lldb.exe"
@@ -114,11 +118,26 @@ def probe_lldb(specimen, run_batch=True):
     return 4
 
 
+def _find_cdb():
+    # cdb ships in the WinDbg package (not on PATH) or the Windows Kits debuggers; reverse-debug-recipes.py owns that
+    # discovery, so it is reused rather than repeated.
+    spec = importlib.util.spec_from_file_location("reverse_debug_recipes",
+                                                  Path(__file__).with_name("reverse-debug-recipes.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    found = module.find_windows_tool("cdb.exe", Path("amd64") / "cdb.exe")
+    return str(found) if found else None
+
+
 def observe_availability():
-    # Record what is installed here -- never assume. cdb/windbg need the Windows Debugging Tools; gdb is Linux.
+    # Record what is installed here -- never assume. gdb is Linux; WinDbgX is the WinDbg package's PATH alias.
     rows = []
     for name in ("lldb", "cdb", "windbg", "gdb"):
         path = shutil.which(name) or (LLDB_FALLBACK if name == "lldb" and os.path.isfile(LLDB_FALLBACK) else None)
+        if path is None and name == "cdb":
+            path = _find_cdb()
+        if path is None and name == "windbg":
+            path = shutil.which("WinDbgX")
         rows.append((name, path if path else "ABSENT"))
     width = max(len(n) for n, _ in rows)
     print("platform debuggers on this box (observed, not assumed):")

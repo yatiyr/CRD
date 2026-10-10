@@ -51,6 +51,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `counters-capability.py` (counter classes with permission, multiplexing and missing-tool verdicts) and
   `debugger-recipes.py`. Their mocked verdict tests (`test-sample-cpu-wpr.py`, `test-counters-capability.py`,
   `test-debugger-recipes.py`) need no tools or elevation; they are `crd-diag-*` CTests and repository CI steps.
+- Reverse debugging and watchpoints ([contract](../docs/design/runtime-diagnostics.md#diag-9c)):
+  `reverse-debug-recipes.py --probe` reports which routes this host can run; `--route` runs one (`gdb-record`,
+  `gdb-watch`, `cdb-watch`, `rr`, `ttd`) against the corruption specimen and names its writer or the instrument
+  failure. The gdb routes are `crd-diag-reverse-debug-*` CTests on Linux; `test-reverse-debug-recipes.py` covers
+  every verdict without a debugger and is a CTest and repository CI step.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

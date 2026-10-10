@@ -92,3 +92,52 @@ target_link_libraries(crd-diag-crash-capture-specimen PRIVATE crd-core crd-jobs 
 # window to a bundle before the process dies. crd-perf-tests runs it once per mode and reads the bundle.
 crd_diag_specimen(crd-diag-flight-fatal-specimen SOURCES specimens/flight_fatal_specimen.cpp)
 target_link_libraries(crd-diag-flight-fatal-specimen PRIVATE crd-perf)
+
+# The DIAG.9c corruption specimen: an off-by-one write into a sentinel that every reverse-debugging and watchpoint
+# route of scripts/reverse-debug-recipes.py must name at its marked line. Debug information is part of that contract,
+# so it is requested on every configuration. Unlike the other specimens no test executable depends on it, so a target
+# in the default build carries it onto every lane, where it must compile and link.
+crd_diag_specimen(crd-diag-corruption-specimen SOURCES specimens/corruption_specimen.cpp)
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+    target_compile_options(crd-diag-corruption-specimen PRIVATE -g)
+endif()
+add_custom_target(crd-diag-reverse-debug-specimens ALL)
+add_dependencies(crd-diag-reverse-debug-specimens crd-diag-corruption-specimen)
+
+# The live gdb routes on Linux: a hardware watchpoint on every lane, and gdb's process record with an offline replay
+# of its saved log plus the incomplete-recording control (an instruction log too small to hold the write must be
+# reported, never passed). A host without gdb fails these tests as an instrument failure; it never skips them.
+# Process record is not a route on the sanitizer lanes: the live recording works (134k instructions under ASan), but
+# `record save` writes the process image as a core file and never finishes on the terabytes of shadow and allocator
+# space the ASan and TSan runtimes reserve (gdb 15.1, measured past 300 s). That limit is declared here, at configure
+# time, and the watchpoint route still runs there.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_crd_rd_script "${CMAKE_SOURCE_DIR}/scripts/reverse-debug-recipes.py")
+    set(_crd_rd_args --specimen "$<TARGET_FILE:crd-diag-corruption-specimen>"
+        --source "${CMAKE_CURRENT_SOURCE_DIR}/specimens/corruption_specimen.cpp")
+    set(_crd_rd_tests crd-diag-reverse-debug-gdb-watch crd-diag-reverse-debug-gdb-watch-clean)
+    add_test(NAME crd-diag-reverse-debug-gdb-watch
+        COMMAND Python3::Interpreter "${_crd_rd_script}" --route gdb-watch --mode corrupt --expect FOUND
+                ${_crd_rd_args} --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/reverse-debug/watch-corrupt")
+    add_test(NAME crd-diag-reverse-debug-gdb-watch-clean
+        COMMAND Python3::Interpreter "${_crd_rd_script}" --route gdb-watch --mode clean --expect CLEAN
+                ${_crd_rd_args} --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/reverse-debug/watch-clean")
+    if(CRD_ENABLE_ASAN OR CRD_ENABLE_TSAN)
+        message(STATUS "[crd] DIAG.9c: gdb process record is not a route on a sanitizer build (its saved log would "
+                       "hold the sanitizer's reserved address space); the watchpoint route runs")
+    else()
+        list(APPEND _crd_rd_tests crd-diag-reverse-debug-gdb-record crd-diag-reverse-debug-gdb-record-clean
+             crd-diag-reverse-debug-gdb-record-incomplete)
+        add_test(NAME crd-diag-reverse-debug-gdb-record
+            COMMAND Python3::Interpreter "${_crd_rd_script}" --route gdb-record --mode corrupt --expect FOUND
+                    ${_crd_rd_args} --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/reverse-debug/record-corrupt")
+        add_test(NAME crd-diag-reverse-debug-gdb-record-clean
+            COMMAND Python3::Interpreter "${_crd_rd_script}" --route gdb-record --mode clean --expect CLEAN
+                    ${_crd_rd_args} --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/reverse-debug/record-clean")
+        add_test(NAME crd-diag-reverse-debug-gdb-record-incomplete
+            COMMAND Python3::Interpreter "${_crd_rd_script}" --route gdb-record --mode corrupt --insn-max 2000
+                    --expect INCOMPLETE_RECORDING --expect-reason "fell out of the bounded log"
+                    ${_crd_rd_args} --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/reverse-debug/record-incomplete")
+    endif()
+    set_tests_properties(${_crd_rd_tests} PROPERTIES TIMEOUT 180 ENVIRONMENT "PYTHONUTF8=1")
+endif()
