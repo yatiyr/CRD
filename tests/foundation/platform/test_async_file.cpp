@@ -287,6 +287,9 @@ TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled 
         crd::containers::Array<crd::u8> out(&s_alloc);
         CHECK(fs::read_file_binary(p, out));
         CHECK(out.size() == sizeof(data));
+        crd::containers::String text(&s_alloc);
+        CHECK(fs::read_file_text(p, text));
+        CHECK(text.size() == sizeof(data));
         (void)fs::remove_file(p);
         return;
     }
@@ -307,6 +310,13 @@ TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled 
         CHECK_FALSE(fs::read_file_range(p, 1U, 2U, range));
         CHECK(range.empty());
         CHECK(script.last_op.load() == static_cast<crd::u32>(crd::IoFaultOp::ReadRange));
+        // A text read is a whole-file read on the same seam (configuration, cook sidecars, authored assets).
+        script.last_op.store(99U);
+        crd::containers::String text(&s_alloc);
+        text.push_back('x');
+        CHECK_FALSE(fs::read_file_text(p, text));
+        CHECK(text.size() == 0U);
+        CHECK(script.last_op.load() == static_cast<crd::u32>(crd::IoFaultOp::ReadWhole));
     }
 
     script.fault = crd::IoFault{crd::IoFaultAction::Delay, 20ULL * 1000ULL * 1000ULL};
@@ -320,6 +330,12 @@ TEST_CASE("fs: synchronous reads fail on an injected failed, short or cancelled 
         REQUIRE(range.size() == 2U);
         CHECK(range[0] == 0x20U);
         CHECK(range[1] == 0x30U);
+        crd::containers::String text(&s_alloc);
+        const auto              t1 = std::chrono::steady_clock::now();
+        CHECK(fs::read_file_text(p, text));
+        CHECK(std::chrono::steady_clock::now() - t1 >= std::chrono::milliseconds(20));
+        REQUIRE(text.size() == sizeof(data));
+        CHECK(static_cast<crd::u8>(text.data()[3]) == 0x40U);
     }
     (void)fs::remove_file(p);
 }

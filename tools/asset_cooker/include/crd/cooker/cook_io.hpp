@@ -67,14 +67,28 @@ public:
     // A STABLE id for a named sub-product, persisted in "<source><suffix>.meta" (e.g. suffix ".mesh.hull",
     // ".tex.0_albedo", ".scen") — read on every cook, MINTED once on first use, replayed forever after (the
     // id-stability contract). The sidecar's content is recorded as an input so a hand-edited id recooks the job.
-    // Returns false when the sidecar cannot be written (out_id null).
+    // Returns false when the sidecar cannot be written (out_id null). DIAG.9b: a sidecar that exists but cannot be
+    // read also returns false with out_id null, and is never minted over -- a transient read failure must not give a
+    // sub-product a new identity (every reference to the old id would break).
     [[nodiscard]] bool stable_id(crd::containers::StringView suffix, crd::resources::ResourceId& out_id);
 
     // The recorded dependency edges, in first-read order (deterministic given a deterministic handler).
     [[nodiscard]] const crd::containers::Array<CookInput>& inputs() const noexcept { return m_inputs; }
 
+    // DIAG.9b: whether some input EXISTS but could not be read (a failed or short read, a sharing violation), and the
+    // first such path. Absence is a dependency; an unreadable file is not absence. The processor fails the cook when
+    // this is set, whatever the handler returned, so a product is never cooked without an input that is there, nor
+    // recorded as if that input were absent.
+    [[nodiscard]] bool unreadable() const noexcept { return m_unreadable; }
+    [[nodiscard]] crd::containers::StringView unreadable_path() const noexcept
+    {
+        return crd::containers::StringView(m_unreadable_path.data(), m_unreadable_path.size());
+    }
+
 private:
     void record(crd::containers::StringView path, crd::containers::ConstSpan<crd::u8> bytes, bool existed);
+    // After a failed read of `path`: when the file exists, remember it as unreadable (the first one is kept).
+    void note_failed_read(crd::containers::StringView path);
 
     crd::containers::String            m_source_path;
     crd::containers::String            m_meta_path;
@@ -91,6 +105,8 @@ private:
     bool                               m_source_ok   = false;
     bool                               m_meta_read   = false;
     bool                               m_meta_ok     = false;
+    bool                               m_unreadable  = false;
+    crd::containers::String            m_unreadable_path{m_alloc};
 };
 
 } // namespace crd::cooker

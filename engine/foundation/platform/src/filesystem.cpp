@@ -351,6 +351,20 @@ i64 last_modified_unix_seconds(const Path& path) noexcept
 
 bool read_file_text(const Path& path, containers::String& out) noexcept
 {
+    // DIAG.9b fault seam: the same whole-file consult as read_file_binary, so a text read (configuration, a cook's
+    // .meta sidecars and database, an authored render asset) can be failed, cut short or delayed like a binary one.
+    const containers::StringView generic = path.generic();
+    const IoFault fault = consult_io_fault(IoFaultOp::ReadWhole, generic.data(), generic.size(), 0U, 0U);
+    if (fault.action == IoFaultAction::Fail || fault.action == IoFaultAction::Short ||
+        fault.action == IoFaultAction::Cancel)
+    {
+        out.clear();
+        return false;
+    }
+    if (fault.action == IoFaultAction::Delay)
+    {
+        detail::sleep_for_injected_delay(fault.value);
+    }
     // stream/path machinery can throw (allocation, ios failure) — under noexcept that is std::terminate; an I/O
     // failure must be a FALSE return, never a process kill (same contract as the write side)
     try

@@ -139,6 +139,16 @@ void CookIO::record(crd::containers::StringView path, crd::containers::ConstSpan
     m_inputs.push_back(static_cast<CookInput&&>(edge));
 }
 
+void CookIO::note_failed_read(crd::containers::StringView path)
+{
+    if (m_unreadable || !fs::exists(fs::Path(path)))
+    {
+        return; // absent: absence is the dependency, recorded as such
+    }
+    m_unreadable = true;
+    m_unreadable_path.append(path.data(), path.size());
+}
+
 bool CookIO::read_source(crd::containers::Array<crd::u8>& out)
 {
     out.clear();
@@ -149,6 +159,10 @@ bool CookIO::read_source(crd::containers::Array<crd::u8>& out)
             fs::Path(crd::containers::StringView(m_source_path.data(), m_source_path.size())), m_source_cache);
         record(crd::containers::StringView(m_source_path.data(), m_source_path.size()),
                crd::containers::ConstSpan<crd::u8>(m_source_cache.data(), m_source_cache.size()), m_source_ok);
+        if (!m_source_ok)
+        {
+            note_failed_read(crd::containers::StringView(m_source_path.data(), m_source_path.size()));
+        }
     }
     if (m_source_ok)
     {
@@ -177,6 +191,10 @@ bool CookIO::read_meta(crd::containers::String& out)
                crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(m_meta_cache.data()),
                                                    m_meta_cache.size()),
                m_meta_ok);
+        if (!m_meta_ok)
+        {
+            note_failed_read(crd::containers::StringView(m_meta_path.data(), m_meta_path.size()));
+        }
     }
     if (m_meta_ok)
     {
@@ -236,6 +254,10 @@ bool CookIO::read_input(crd::containers::StringView rel_path, crd::containers::A
         fs::read_file_binary(fs::Path(crd::containers::StringView(resolved.data(), resolved.size())), out);
     record(crd::containers::StringView(resolved.data(), resolved.size()),
            crd::containers::ConstSpan<crd::u8>(out.data(), out.size()), ok);
+    if (!ok)
+    {
+        note_failed_read(crd::containers::StringView(resolved.data(), resolved.size()));
+    }
     return ok;
 }
 
@@ -250,7 +272,16 @@ bool CookIO::stable_id(crd::containers::StringView suffix, crd::resources::Resou
     const fs::Path sidecar_path(crd::containers::StringView(sidecar.data(), sidecar.size()));
 
     crd::containers::String text(m_alloc);
-    if (fs::read_file_text(sidecar_path, text))
+    const bool              read_ok = fs::read_file_text(sidecar_path, text);
+    if (!read_ok)
+    {
+        note_failed_read(crd::containers::StringView(sidecar.data(), sidecar.size()));
+        if (fs::exists(sidecar_path))
+        {
+            return false; // there but unreadable: never mint over an identity that exists (out_id stays null)
+        }
+    }
+    else
     {
         const std::string_view sv(text.data(), text.size());
         const std::string_view key = "uuid = \"";

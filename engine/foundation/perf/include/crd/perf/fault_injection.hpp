@@ -25,10 +25,11 @@
 // fires in the order failed-read, partial-read, cancelled-completion, delayed-completion.
 //
 // Evidence. Every fired fault is recorded into the attached FlightRecorder (kFlightCodeFaultInjected, a = site,
-// b = hit). With FaultPlan::trigger_flight it also registers the recipe as the recorder's replay recipe and fires an
-// InjectedFault trigger, so the capture holds the window around the fault even when the faulty operation cannot
-// complete. The recipe is "fault-plan/1 fired=<site>#<hit> minimal=<one-hit plan text> plan=<armed plan text>"; the
-// one-hit plan comes first, so a recipe clipped to the recorder's bound (and marked "...") still reproduces the fault.
+// b = hit; a read's event message also names the file it failed, by its last path component only). With
+// FaultPlan::trigger_flight it also registers the recipe as the recorder's replay recipe and fires an InjectedFault
+// trigger, so the capture holds the window around the fault even when the faulty operation cannot complete. The
+// recipe is "fault-plan/1 fired=<site>#<hit> minimal=<one-hit plan text> plan=<armed plan text>"; the one-hit plan
+// comes first, so a recipe clipped to the recorder's bound (and marked "...") still reproduces the fault.
 //
 // While a plan is armed the injector owns the recorder's replay recipe: arm() registers "fault-plan/1 plan=<text>"
 // (a capture taken before any fault fired is reproduced by the plan), each fired fault registers its own recipe, and
@@ -188,9 +189,9 @@ public:
 private:
     // Count one hit of `site` and decide it, without recording a fire; commit() records a firing decision (its fired
     // count, recipe, flight event and trigger). io_hook evaluates every eligible site and commits only the one it
-    // applies.
+    // applies, naming the read's file (its last path component, never a directory) as the event's `subject`.
     FaultDecision evaluate(FaultSite site) noexcept;
-    void          commit(const FaultDecision& d) noexcept;
+    void          commit(const FaultDecision& d, cont::StringView subject = {}) noexcept;
 
     mutable std::mutex m_mutex;
     std::mutex         m_recorder_mutex; // orders the recipe registrations and triggers this injector makes

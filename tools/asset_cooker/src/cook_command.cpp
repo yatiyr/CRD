@@ -85,28 +85,38 @@ crd::containers::StringView root_relative(crd::containers::StringView path, crd:
 
 // ── Meta file (.meta sidecar, the [id] section — the PROCESSOR owns main-asset identity) ──────────────────────
 
-bool meta_read(const fs::Path& meta_path, ResourceId& out_id)
+// DIAG.9b: an unreadable .meta is not a malformed one. Regenerating is right for a .meta whose text holds no id; for
+// one that could not be read (a failed or short read, a sharing violation) it would give the asset a new identity and
+// break every reference to the old one, so the cook stops instead and leaves the .meta as it is.
+enum class MetaRead : crd::u8
+{
+    Ok,
+    Unreadable,
+    Malformed,
+};
+
+MetaRead meta_read(const fs::Path& meta_path, ResourceId& out_id)
 {
     crd::containers::String text(&g_cook_alloc);
     if (!fs::read_file_text(meta_path, text))
     {
-        return false;
+        return MetaRead::Unreadable;
     }
     const std::string_view sv(text.data(), text.size());
     const std::string_view key = "uuid = \"";
     auto                   pos = sv.find(key);
     if (pos == std::string_view::npos)
     {
-        return false;
+        return MetaRead::Malformed;
     }
     pos += key.size();
     const auto end = sv.find('"', pos);
     if (end == std::string_view::npos)
     {
-        return false;
+        return MetaRead::Malformed;
     }
     out_id = ResourceId::parse(sv.substr(pos, end - pos));
-    return !out_id.is_null();
+    return out_id.is_null() ? MetaRead::Malformed : MetaRead::Ok;
 }
 
 bool meta_write(const fs::Path& meta_path, const ResourceId& id)
@@ -299,7 +309,14 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         ResourceId asset_id;
         if (fs::is_file(meta_path))
         {
-            if (!meta_read(meta_path, asset_id))
+            const MetaRead meta = meta_read(meta_path, asset_id);
+            if (meta == MetaRead::Unreadable)
+            {
+                std::fprintf(stderr, "cook: cannot read the .meta of %s; its id is kept and nothing is published\n",
+                             src.generic().data());
+                return 1;
+            }
+            if (meta == MetaRead::Malformed)
             {
                 std::fprintf(stderr, "cook: malformed .meta for %s, regenerating\n", src.generic().data());
                 asset_id = ResourceId::mint_random();
@@ -371,6 +388,15 @@ int cmd_cook(const char* root_cstr, const char* out_cstr)
         ctx.io          = &io;
 
         CookResult result = handler(ctx);
+        if (io.unreadable())
+        {
+            // DIAG.9b: an input that exists could not be read. Whatever the handler made of it, the product would be
+            // cooked without that input and the database would record it absent, so nothing is published.
+            const crd::containers::StringView bad = io.unreadable_path();
+            std::fprintf(stderr, "cook: %.*s exists but could not be read; nothing is published for %s\n",
+                         static_cast<int>(bad.size()), bad.data(), src.generic().data());
+            return 1; // the dangling `begin` distrusts this source next run
+        }
         if (!result.ok)
         {
             std::fprintf(stderr, "cook: handler failed for %s\n", src.generic().data());

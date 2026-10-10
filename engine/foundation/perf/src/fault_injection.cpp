@@ -193,6 +193,25 @@ void write_plan(FixedText& out, const FaultPlan& plan)
     out = r;
     return true;
 }
+
+// A read's file as its event names it: the last path component only, never a directory (a host's paths stay out of
+// the evidence). Empty when there is no path.
+[[nodiscard]] cont::StringView file_name_of(const char* path, crd::usize bytes) noexcept
+{
+    if (path == nullptr || bytes == 0U)
+    {
+        return cont::StringView{};
+    }
+    crd::usize start = 0U;
+    for (crd::usize i = 0U; i < bytes; ++i)
+    {
+        if (path[i] == '/' || path[i] == '\\')
+        {
+            start = i + 1U;
+        }
+    }
+    return cont::StringView{path + start, bytes - start};
+}
 } // namespace
 
 cont::StringView fault_site_name(FaultSite s) noexcept
@@ -489,7 +508,7 @@ FaultDecision FaultInjector::evaluate(FaultSite site) noexcept
     return d;
 }
 
-void FaultInjector::commit(const FaultDecision& d) noexcept
+void FaultInjector::commit(const FaultDecision& d, cont::StringView subject) noexcept
 {
     if (!d.fire)
     {
@@ -533,10 +552,22 @@ void FaultInjector::commit(const FaultDecision& d) noexcept
         return;
     }
     const std::lock_guard<std::mutex> order(m_recorder_mutex);
-    char                              message[kFlightMessageBytes];
-    (void)std::snprintf(message, sizeof(message), "injected %s at hit %llu (seed %llu)",
-                        fault_site_name(d.site).data(), static_cast<unsigned long long>(d.hit),
-                        static_cast<unsigned long long>(seed));
+    // Twice the event's bound: a long file name reaches the recorder whole, which clips it and flags the clip.
+    char message[2U * kFlightMessageBytes];
+    if (subject.empty())
+    {
+        (void)std::snprintf(message, sizeof(message), "injected %s at hit %llu (seed %llu)",
+                            fault_site_name(d.site).data(), static_cast<unsigned long long>(d.hit),
+                            static_cast<unsigned long long>(seed));
+    }
+    else
+    {
+        const int shown = subject.size() < kFlightMessageBytes ? static_cast<int>(subject.size())
+                                                               : static_cast<int>(kFlightMessageBytes);
+        (void)std::snprintf(message, sizeof(message), "injected %s at hit %llu (seed %llu) on %.*s",
+                            fault_site_name(d.site).data(), static_cast<unsigned long long>(d.hit),
+                            static_cast<unsigned long long>(seed), shown, subject.data());
+    }
     recorder->record(kFlightCodeFaultInjected, Severity::Warning, cont::StringView{message},
                      static_cast<crd::u64>(d.site), d.hit);
     if (trigger_flight)
@@ -595,8 +626,8 @@ void FaultInjector::last_recipe(cont::String& out) const
     out.append(cont::StringView{m_recipe, m_recipe_length});
 }
 
-crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const char* /*path*/,
-                                    crd::usize /*path_bytes*/, crd::u64 /*offset*/, crd::u64 /*size*/) noexcept
+crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const char* path, crd::usize path_bytes,
+                                    crd::u64 /*offset*/, crd::u64 /*size*/) noexcept
 {
     auto* const self = static_cast<FaultInjector*>(injector);
     if (self == nullptr || !self->armed())
@@ -621,7 +652,7 @@ crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const cha
         {
             continue;
         }
-        self->commit(d);
+        self->commit(d, file_name_of(path, path_bytes));
         switch (d.site) // no default: read sites map to their actions; allocation and device loss never reach here
         {
         case FaultSite::FailedRead:          return crd::IoFault{crd::IoFaultAction::Fail, 0U};

@@ -1387,6 +1387,29 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-bundle-iden
   replay as a shipping capability check; and a real host (crd-sandbox) installing the recorder, its triggers, a
   `FlightCommandHost` sink with its module snapshot and the flight and fault commands.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-cook-faults.md)):
+- The cook stage is the asset processor (crd-cooker's `cmd_cook`), the one step that turns sources into the packs a
+  host loads. Its reads are already on the I/O fault seam, and `read_file_text` now consults it too (a `ReadWhole`
+  consult, like `read_file_binary`), so a cook's `.meta` sidecars and database, configuration and authored render
+  assets can be failed, cut short or delayed. The injector's flight event for a read names the file it failed, by its
+  last path component only ("injected failed-read at hit 4 (seed 11) on a.bin"); a host's directories never reach the
+  evidence, and a name past the event's bound is clipped and flagged.
+- Unreadable is not absent. Absence stays a recorded dependency, but a file that exists and cannot be read (a failed
+  or short read, a sharing violation) is not cooked as if it were missing: `CookIO` keeps the first such input
+  (`unreadable()`), and the processor publishes nothing for that run whatever the handler returned. An asset's `.meta`
+  that cannot be read stops the cook and keeps the asset's id (only a `.meta` whose text holds no id is regenerated),
+  and `CookIO::stable_id` never mints over a sidecar that exists but cannot be read. Before this a transient read
+  failure of a `.meta` or id sidecar gave the asset or sub-product a new identity, breaking every reference to it, and
+  an optional input that failed to read was cooked as absent and published.
+- A cook that stops publishes nothing: the previous pack, the cached artifacts, the cook database and every id are
+  kept byte for byte, a job that had begun leaves its journal `begin` dangling so the next run distrusts and recooks
+  it, and the next clean cook publishes the new content under the same id. A read fault in the up-to-date check (an
+  input or a cached artifact that looks absent or torn) recooks the job and publishes the same bytes; it never ships
+  a stale product. Shown with the recipe's one-hit plan reproducing each interrupted cook alone.
+- Still open in this row: injection during install, execute and teardown; refusal of arbitrary external I/O replay
+  as a shipping capability check; and a real host (crd-sandbox) installing the recorder, its triggers, a
+  `FlightCommandHost` sink with its module snapshot and the flight and fault commands.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 

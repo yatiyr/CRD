@@ -477,6 +477,63 @@ TEST_CASE("fault injector: the I/O hook counts each read at every eligible site 
     CHECK(view.substr(view.size() - 3U) == "...");
 }
 
+// A fired read names the file it failed in its flight event (the causal input), by its last path component only, so
+// a host's directories never reach the evidence; a name longer than the event's bound is clipped and flagged.
+TEST_CASE("fault injector: a fired read's event names its file, never its directory", "[perf][diag][diag9b][fault]")
+{
+    if (!crd::fault_seams_compiled())
+    {
+        cp::FaultInjector injector;
+        CHECK(injector.arm(plan_of("seed=3;failed-read@0+3%1000000"), kInjectRead) == cp::FaultArmStatus::Unavailable);
+        return;
+    }
+
+    cp::FlightRecorder recorder;
+    REQUIRE(recorder.init(small_policy()) == cp::FlightPolicyStatus::Committed);
+    cp::FaultInjector injector;
+    injector.attach_flight_recorder(&recorder);
+    REQUIRE(injector.arm(plan_of("seed=3;failed-read@0+3%1000000"), kInjectRead) == cp::FaultArmStatus::Armed);
+
+    const char forward[] = "D:/private-root/assets/hero.bin.meta";
+    const char back[]    = R"(C:\private-root\cache\0123.crdr)";
+    cont::String long_path("/private-root/");
+    for (crd::u32 i = 0U; i < 150U; ++i)
+    {
+        long_path.push_back(static_cast<char>('a' + (i % 26U)));
+    }
+    CHECK(cp::FaultInjector::io_hook(&injector, crd::IoFaultOp::ReadWhole, forward, sizeof(forward) - 1U, 0U, 0U)
+              .action == crd::IoFaultAction::Fail);
+    CHECK(cp::FaultInjector::io_hook(&injector, crd::IoFaultOp::ReadRange, back, sizeof(back) - 1U, 0U, 8U).action ==
+          crd::IoFaultAction::Fail);
+    CHECK(cp::FaultInjector::io_hook(&injector, crd::IoFaultOp::ReadWhole, long_path.data(), long_path.size(), 0U, 0U)
+              .action == crd::IoFaultAction::Fail);
+
+    cp::FlightCapture capture;
+    REQUIRE(recorder.take_capture(capture)); // the third fault's event closed the two-event post window
+    cont::Array<const cp::FlightEvent*> faults;
+    for (const cp::FlightEvent& e : capture.events)
+    {
+        if (e.code == cp::kFlightCodeFaultInjected)
+        {
+            faults.push_back(&e);
+        }
+    }
+    REQUIRE(faults.size() == 3U);
+    CHECK(faults[0]->message_view() == "injected failed-read at hit 0 (seed 3) on hero.bin.meta");
+    CHECK(faults[1]->message_view() == "injected failed-read at hit 1 (seed 3) on 0123.crdr");
+    CHECK_FALSE(faults[0]->message_truncated);
+    CHECK_FALSE(faults[1]->message_truncated);
+    CHECK(faults[2]->message_truncated);
+    CHECK(faults[2]->message_view().find("injected failed-read at hit 2 (seed 3) on abcdefghij") == 0U);
+    for (const cp::FlightEvent* e : faults)
+    {
+        CHECK(e->message_view().find("private-root") == cont::StringView::npos);
+        CHECK(e->value_a == static_cast<crd::u64>(cp::FaultSite::FailedRead));
+    }
+    injector.disarm();
+    recorder.shutdown();
+}
+
 // The GPU seam's hook: each consulted submission is one device-loss hit, and a firing hit answers LoseDevice with the
 // same evidence as any other site. The providers' own loss paths are driven end to end in crd-gpu-context-vulkan-tests
 // and crd-gpu-context-dx12-tests ("DIAG.9b: an injected device loss ...").
