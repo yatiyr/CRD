@@ -39,6 +39,7 @@
 #   python scripts/sample-cpu-wpr.py [--specimen <exe>] [--symbols <dir>] [--out <dir>] [--stacks] [--linux]
 #   python scripts/sample-cpu-wpr.py --from-etl <trace.etl> [--stacks] [--symbols <dir>] [--out <dir>]
 import argparse
+import ntpath
 import os
 import re
 import shutil
@@ -124,8 +125,9 @@ def analyze_trace(xperf, etl, txt, env, specimen, symbols_dir, stacks):
     #                                           `Profile` stackwalk that populates them)
     # `-a stack` refuses to run without an activity (`error: stack: no option specified`, exit 5, an empty
     # output file -- the first elevated run on 2026-10-07 ended there). `-butterfly` is the stack activity;
-    # `-process` keeps the report to the specimen.
-    process = os.path.splitext(os.path.basename(specimen))[0]
+    # `-process` keeps the report to the specimen. The specimen is a Windows path whatever host runs this, so
+    # ntpath splits it: on POSIX, os.path would keep `dir\crd-spec` whole and name no process xperf knows.
+    process = ntpath.splitext(ntpath.basename(specimen))[0]
     action = ["-a", "stack", "-butterfly", "-process", process] if stacks else ["-a", "profile", "-detail"]
     exp = subprocess.run(
         [xperf, "-i", etl, "-o", txt, "-symbols"] + action,

@@ -46,6 +46,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   [dependency-licenses.md](../docs/generated/dependency-licenses.md) from the pins registry. Both are lane steps.
 - Linux Vulkan validation: `install-vulkan-validation.py --destination <ignored-directory>` installs the pinned,
   SHA-256-checked layer. Export the printed layer/library paths before GPU tests; it does not replace the driver.
+- External diagnostic runbooks ([contract](../docs/design/runtime-diagnostics.md#diag-6c)): `sample-cpu-wpr.py`
+  (WPR/xperf or perf sampling of the unscoped hotspot; `--from-etl` re-analyses a trace without elevation),
+  `counters-capability.py` (counter classes with permission, multiplexing and missing-tool verdicts) and
+  `debugger-recipes.py`. Their mocked verdict tests (`test-sample-cpu-wpr.py`, `test-counters-capability.py`,
+  `test-debugger-recipes.py`) need no tools or elevation; they are `crd-diag-*` CTests and repository CI steps.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

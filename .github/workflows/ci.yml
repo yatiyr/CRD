@@ -143,6 +143,12 @@ jobs:
         run: python scripts/test-module-selection.py
       - name: Affected workflow selection contracts
         run: python scripts/test-dev-workflow.py
+      - name: CPU sampling runbook verdicts
+        run: python scripts/test-sample-cpu-wpr.py
+      - name: Counter capability verdicts
+        run: python scripts/test-counters-capability.py
+      - name: Debugger recipe verdicts
+        run: python scripts/test-debugger-recipes.py
       - name: Project structure synchronization
         run: python scripts/test-project-sync.py
       - name: Canonical build profile contracts

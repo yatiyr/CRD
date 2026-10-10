@@ -18,6 +18,14 @@ add_test(NAME crd-build-profiles
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-native-build-profiles.py")
 add_test(NAME crd-module-selection
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-module-selection.py")
+# DIAG.6c: verdict tests of the external sampling, counter-capability and debugger runbooks. They mock wpr, xperf,
+# perf and lldb, so they need neither the tools nor elevation and run on every host.
+add_test(NAME crd-diag-cpu-sampling-runbook
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-cpu-wpr.py")
+add_test(NAME crd-diag-counters-capability
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-counters-capability.py")
+add_test(NAME crd-diag-debugger-recipes
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-debugger-recipes.py")
 add_test(NAME crd-ci-tiers
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
 add_test(NAME crd-pins
@@ -37,6 +45,8 @@ set_tests_properties(crd-module-selection PROPERTIES TIMEOUT 120 ENVIRONMENT "PY
 set_tests_properties(crd-ci-tiers crd-pins crd-license-manifest PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-generated-sources PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1") # hashes 14 MB of codelets
 set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
+set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
+    PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_test(NAME crd-project-structure-native
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"

@@ -3,11 +3,11 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.6c -->
-**Current work:** [DIAG.6c](docs/ROADMAP.md#slice-diag.6c), first unfinished row: no hosted job runs its three
-script suites ([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-6bd1ba59-2026-10-09)). DIAG.4b
-waits on its first complete run of the GenMC step ([session](docs/sessions/2026-10-10-diag-4b-genmc.md)); 4c-6b and
-7a wait in order.
+<!-- current-slice: DIAG.7b -->
+**Current work:** [DIAG.7b](docs/ROADMAP.md#slice-diag.7b), first unfinished row: (a)-(h1) landed locally, (h2) is
+a recorded unqualified route; it waits for its first hosted run. DIAG.6c's three script suites now run as CTests and
+repository steps ([session](docs/sessions/2026-10-10-diag-6c-script-suites-ci.md)); DIAG.4b waits on its first
+complete run of the GenMC step ([session](docs/sessions/2026-10-10-diag-4b-genmc.md)); 4c-6c and 7a wait in order.
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
