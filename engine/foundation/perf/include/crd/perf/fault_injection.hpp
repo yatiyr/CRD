@@ -227,7 +227,9 @@ private:
 };
 
 // The fault.* commands, owner "perf":
-//   fault.arm     Inject  arm the plan in argument `plan` (parse_fault_plan text) with the service's grant
+//   fault.arm     Inject  arm a plan with the service's grant: argument `plan` (parse_fault_plan text) or argument
+//                         `asset`, a fault-plan asset (crd/perf/diag_assets.hpp) at a safe relative path under the
+//                         host's root. A plan whose text is longer than kDiagMaxArgValueBytes is armed from an asset.
 //   fault.disarm  Inject  disarm
 //   fault.status  Read    whether the build has fault seams, the armed plan, and each site's hits and fired faults
 // Returns false when any of them could not be registered. `injector` must outlive the service.

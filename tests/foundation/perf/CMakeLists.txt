@@ -44,6 +44,7 @@ add_executable(crd-perf-tests
     test_diag_commands.cpp # typed bounded diagnostic commands through a native caller (no transport linked)
     test_diag_flight_recorder.cpp # DIAG.9b: triggerable bounded flight recording on the existing failure seams
     test_diag_fault_injection.cpp # DIAG.9b: seeded, authorized fault injection and its shipping refusal
+    test_diag_flight_commands.cpp # DIAG.9b: authored flight/fault assets, flight.* commands and the doctor's live modes
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -77,7 +78,8 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
     CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
     CRD_DIAG_FLIGHT_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-flight-fatal-specimen>"
-    CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}")
+    CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}"
+    CRD_DIAG_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/diag")
 
 crd_discover_tests(crd-perf-tests)
 

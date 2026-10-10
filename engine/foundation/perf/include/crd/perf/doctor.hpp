@@ -7,8 +7,9 @@
 // actually have?" Most modes are honestly unqualified or unsupported per
 // the capability census; the doctor states that rather than pretending a route is a
 // command. Three dependencies are live-probed (sanitizer runtime, symbolizer,
-// output path); the mode table is census-sourced. No registration hook, bundle or
-// recorder yet -- those are later DIAG leaves.
+// output path); the mode table is census-sourced. Two modes are reported live when the host hands the doctor its
+// instances (DoctorLive): the DIAG.9b flight recorder (installed and armed, or ended on a fatal path) and fault
+// injection (compiled only in builds with fault seams; installed, and whether a plan is armed).
 //
 // Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
@@ -19,6 +20,9 @@
 namespace crd::perf
 {
 namespace cont = crd::containers;
+
+class FlightRecorder;
+class FaultInjector;
 
 // One diagnostic mode's standing in this build.
 struct DiagnosticMode
@@ -51,8 +55,22 @@ struct DoctorReport
     const DiagnosticDependency* find_dependency(cont::StringView name) const noexcept;
 };
 
+// The host's live diagnostic instances, when it has them (nullptr: not installed by this host). They must outlive the
+// run_doctor call.
+struct DoctorLive
+{
+    const FlightRecorder* flight_recorder = nullptr;
+    const FaultInjector*  fault_injector  = nullptr;
+};
+
 // Run the doctor. `output_dir`, when non-empty, is probed for writability (the
 // "output_path" dependency); empty leaves that dependency reported as not checked.
-DoctorReport run_doctor(cont::StringView output_dir = cont::StringView{});
+// The "flight-recorder" and "fault-injection" modes read `live`:
+//   flight-recorder  compiled always; enabled when a recorder is installed and initialised; usable when enabled and
+//                    no capture has ended on a fatal path (a fatal capture is terminal).
+//   fault-injection  compiled when the build has fault seams (crd::fault_seams_compiled(): every build but shipping);
+//                    enabled when a plan is armed; usable when compiled and an injector is installed (arming still
+//                    needs the inject grant).
+DoctorReport run_doctor(cont::StringView output_dir = cont::StringView{}, const DoctorLive& live = DoctorLive{});
 
 } // namespace crd::perf

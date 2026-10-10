@@ -3,6 +3,10 @@
 #include <crd/perf/doctor.hpp>
 
 #include <crd/perf/config.hpp>
+#include <crd/perf/fault_injection.hpp>
+#include <crd/perf/flight_recorder.hpp>
+
+#include <crd/core/fault_seam.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -144,7 +148,7 @@ const DiagnosticDependency* DoctorReport::find_dependency(cont::StringView name)
     return nullptr;
 }
 
-DoctorReport run_doctor(cont::StringView output_dir)
+DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
 {
     DoctorReport report;
     report.schema = cont::StringView{"cerid-diagnostics/1"};
@@ -208,6 +212,43 @@ DoctorReport run_doctor(cont::StringView output_dir)
                                 cont::StringView{"unsupported; DIAG.7"}));
     report.modes.push_back(mode(cont::StringView{"authored-provenance"}, true, true, true,
                                 cont::StringView{"unqualified full chain; DIAG.8"}));
+
+    // ---- live modes (DIAG.9b): read from the host's instances ----------------
+    {
+        const FlightRecorder* flight  = live.flight_recorder;
+        const bool            enabled = flight != nullptr && flight->is_initialized();
+        const bool            usable  = enabled && !flight->fatal_entered();
+        cont::StringView      disposition{"triggered bounded capture, unqualified overhead; DIAG.9b"};
+        if (flight == nullptr)
+        {
+            disposition = cont::StringView{"no flight recorder installed by this host; DIAG.9b"};
+        }
+        else if (!enabled)
+        {
+            disposition = cont::StringView{"flight recorder installed but not initialised; DIAG.9b"};
+        }
+        else if (!usable)
+        {
+            disposition = cont::StringView{"a capture ended on a fatal path; the recorder records no more; DIAG.9b"};
+        }
+        report.modes.push_back(mode(cont::StringView{"flight-recorder"}, true, enabled, usable, disposition));
+    }
+    {
+        const FaultInjector* injector = live.fault_injector;
+        const bool           compiled = crd::fault_seams_compiled();
+        const bool           enabled  = compiled && injector != nullptr && injector->armed();
+        const bool           usable   = compiled && injector != nullptr;
+        cont::StringView     disposition{"test-only seeded injection, needs the inject grant; DIAG.9b"};
+        if (!compiled)
+        {
+            disposition = cont::StringView{"compiled out of this shipping build; DIAG.9b"};
+        }
+        else if (injector == nullptr)
+        {
+            disposition = cont::StringView{"no fault injector installed by this host; DIAG.9b"};
+        }
+        report.modes.push_back(mode(cont::StringView{"fault-injection"}, compiled, enabled, usable, disposition));
+    }
 
     return report;
 }

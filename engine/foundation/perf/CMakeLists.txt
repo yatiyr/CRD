@@ -33,6 +33,7 @@ target_link_libraries(crd-perf
         crd-jobs        # v0c jobs adapter: profiler subscribes to crd::jobs::JobObserver (substrate observes substrate, no reverse edge from jobs)
         crd-memory      # v0e allocator registry: profiler reads IAllocator::stats() snapshots into the FrameRecord ring
         crd-containers  # v0f CPROF capture: Array<u8> for buffer storage, ConstSpan<u8> for reader
+        crd-toml        # DIAG.9b authored diagnostic assets: the flight policy and fault plans are TOML documents
 )
 
 target_compile_features(crd-perf PUBLIC cxx_std_20)

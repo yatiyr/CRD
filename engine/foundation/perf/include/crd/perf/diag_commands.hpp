@@ -43,6 +43,9 @@ namespace crd::perf
 {
 namespace cont = crd::containers;
 
+class FlightRecorder;
+class FaultInjector;
+
 // Response and request schema version. A request naming another version is refused before any work.
 inline constexpr crd::u32 kDiagCommandSchemaVersion = 1U;
 
@@ -259,6 +262,10 @@ struct DiagServiceConfig
     crd::u64         max_bundle_bytes  = 256ULL * 1024ULL * 1024ULL; // bundle.inspect refuses a larger file unread
     crd::u64         max_capture_bytes = 256ULL * 1024ULL * 1024ULL; // capture.stop refuses a larger capture unwritten
     crd::u32         worker_timeout_ms = 20U;                        // jobs.waits' bound on the worker poll
+    // The host's live instances, reported by diag.capabilities through the doctor (nullptr: not installed). They must
+    // outlive the service.
+    const FlightRecorder* flight_recorder = nullptr;
+    const FaultInjector*  fault_injector  = nullptr;
 };
 
 // The command service. Built-in commands, in listing order:

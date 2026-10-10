@@ -2,6 +2,7 @@
 
 #include <crd/perf/fault_injection.hpp>
 
+#include <crd/perf/diag_assets.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
 #include <cstdio>
@@ -694,13 +695,61 @@ namespace
 {
 DiagStatus check_fault_arm(void* /*context*/, cont::ConstSpan<DiagArg> args, cont::String& reason)
 {
-    if (args.size() != 1U || args[0].name != cont::StringView{"plan"})
+    if (args.size() == 1U && args[0].name == cont::StringView{"plan"})
     {
-        reason.append("fault.arm takes exactly one argument, plan=<fault plan text>");
-        return DiagStatus::BadArgument;
+        FaultPlan plan;
+        return parse_fault_plan(args[0].value, plan, reason) ? DiagStatus::Ok : DiagStatus::BadArgument;
     }
-    FaultPlan plan;
-    return parse_fault_plan(args[0].value, plan, reason) ? DiagStatus::Ok : DiagStatus::BadArgument;
+    if (args.size() == 1U && args[0].name == cont::StringView{"asset"})
+    {
+        if (!diag_path_is_safe(args[0].value))
+        {
+            reason.append("asset must be a relative path of plain [A-Za-z0-9._-] names separated by '/'");
+            return DiagStatus::BadArgument;
+        }
+        return DiagStatus::Ok;
+    }
+    reason.append("fault.arm takes exactly one argument: plan=<fault plan text> or asset=<fault-plan asset path>");
+    return DiagStatus::BadArgument;
+}
+
+// Read the plan an armed request names: its text, or the fault-plan asset under the host's root.
+DiagStatus request_plan(const DiagCall& call, FaultPlan& plan, cont::String& reason)
+{
+    const DiagArg& arg = call.request->args[0];
+    if (arg.name == cont::StringView{"plan"})
+    {
+        return parse_fault_plan(arg.value, plan, reason) ? DiagStatus::Ok : DiagStatus::BadArgument;
+    }
+    if (call.root.empty())
+    {
+        reason.append("the host granted no file root");
+        return DiagStatus::Unavailable;
+    }
+    cont::String path(call.root);
+    const char   last = call.root[call.root.size() - 1U];
+    if (last != '/' && last != '\\')
+    {
+        path.push_back('/');
+    }
+    path.append(arg.value);
+    cont::String text;
+    switch (read_diag_asset_file(path.c_str(), text)) // no default: every result is answered
+    {
+    case DiagAssetRead::Ok:
+        break;
+    case DiagAssetRead::Missing:
+        reason.append("the fault-plan asset could not be opened");
+        return DiagStatus::Failed;
+    case DiagAssetRead::TooLarge:
+        reason.append("the fault-plan asset is larger than 16384 bytes");
+        return DiagStatus::Oversized;
+    case DiagAssetRead::Failed:
+        reason.append("the fault-plan asset could not be read");
+        return DiagStatus::Failed;
+    }
+    return parse_fault_plan_asset(cont::StringView{text.data(), text.size()}, plan, reason) ? DiagStatus::Ok
+                                                                                              : DiagStatus::BadArgument;
 }
 
 void write_status(const FaultInjector& injector, DiagSnapshot& out)
@@ -729,9 +778,9 @@ DiagStatus run_fault_arm(void* context, const DiagCall& call, DiagSnapshot& out)
 {
     auto* const injector = static_cast<FaultInjector*>(context);
     FaultPlan   plan;
-    if (!parse_fault_plan(call.request->args[0].value, plan, out.reason))
+    if (const DiagStatus read = request_plan(call, plan, out.reason); read != DiagStatus::Ok)
     {
-        return DiagStatus::BadArgument;
+        return read;
     }
     switch (injector->arm(plan, call.granted)) // no default: every arm status is answered
     {
@@ -771,7 +820,7 @@ bool register_fault_commands(DiagCommandService& service, FaultInjector& injecto
     DiagCommandSpec arm;
     arm.name      = cont::StringView{"fault.arm"};
     arm.owner     = cont::StringView{"perf"};
-    arm.summary   = cont::StringView{"arm a seeded fault plan (plan=<seed=...;site@first+limit%ppm=value...>)"};
+    arm.summary   = cont::StringView{"arm a seeded fault plan (plan=<seed=...;site@first+limit%ppm> or asset=<path>)"};
     arm.authority = DiagAuthority::Inject;
 
     DiagCommandSpec disarm;

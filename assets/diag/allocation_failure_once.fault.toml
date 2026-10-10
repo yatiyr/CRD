@@ -1,0 +1,10 @@
+# A seeded fault plan (DIAG.9b), authored: fail the first try_allocate through a FaultAllocator once.
+# Armed with fault.arm asset=<path> under a grant holding inject; a shipping build refuses it as unavailable.
+# Each rule is <site>@<first hit>+<hit count, 0 = every later hit>%<parts per million>[=<value>].
+
+kind           = "fault-plan"
+schema_version = 1
+
+seed           = 1
+trigger_flight = true # a fired fault also triggers the attached flight recorder
+rules          = ["allocation-failure@0+1%1000000"]

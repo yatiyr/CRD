@@ -1,0 +1,16 @@
+# The default flight policy (DIAG.9b), authored. A host loads it with the flight.policy command or
+# parse_flight_policy_asset; crd-perf-tests holds it equal to FlightPolicy{} so the asset and the in-code
+# defaults cannot drift apart. Unknown keys are refused, so a misspelt bound never falls back to a default.
+
+kind           = "flight-policy"
+schema_version = 1
+
+capacity    = 1024 # ring events, 152 bytes each (152 KiB)
+pre_events  = 768  # kept from before the trigger
+post_events = 256  # recorded after it at most; pre_events + post_events <= capacity
+
+post_window_ns     = 2000000000 # the post window closes after 2 s even when quiet (0: by events only)
+hitch_threshold_ns = 50000000   # a frame interval above 50 ms is a hitch
+
+triggers = ["all"] # or a list: "manual", "assertion", "fatal-invariant", "allocation-failure", "frame-hitch",
+                   # "queue-starvation", "hang", "resource-pressure", "injected-fault"

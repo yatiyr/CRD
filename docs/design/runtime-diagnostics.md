@@ -1332,11 +1332,33 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-device-loss.md)):
   removal bundle is version 3, since a version-2 reader does not know that origin.
 - Recovery from a device loss is a new device: the lost context latches invalid and submits nothing more, and a
   context on a fresh device (the removed DX12 device is released with its context) submits and completes.
-- Still open in this row: injection during cook, install, execute and teardown; refusal of arbitrary external I/O
-  replay as a shipping capability check (a record needing external results is already refused before it runs,
-  DIAG.9a); the flight policy and fault plans as authored assets, `flight.*` commands and doctor reporting of both
-  modes; the build and symbol identity sections in a flight bundle; and a real host (crd-sandbox) installing the
-  recorder, its triggers, its sink and the fault commands.
+
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-assets-commands-doctor.md)):
+- The flight policy and fault plans are authored TOML documents on the existing config path (crd-toml), parsed by
+  `crd/perf/diag_assets.hpp`: `kind` (`flight-policy` or `fault-plan`) and `schema_version = 1` first, every other key
+  optional with the in-code default. A fault plan's `rules` are strings in the plan-text grammar; the document is
+  assembled into plan text and read by `parse_fault_plan`, so the asset and `fault.arm plan=` share one reader (a rule
+  with `;` or without `@` is refused). An unknown key, a wrong type, a negative or oversized integer, an unknown
+  trigger, a missing or other kind or version, invalid TOML, and a policy or plan its own validator refuses are all
+  refused with the key named and the output untouched. An asset file is at most 16 KiB. The committed
+  `assets/diag/flight_default.flight.toml` is held equal to `FlightPolicy{}`.
+- `FlightCommandHost` (`crd/perf/flight_commands.hpp`) is the recorder's sink: once a sink is set a capture is handed
+  over and `take_capture` finds nothing, so the host keeps a copy of the last capture (under its own mutex) and passes
+  each one to an optional forward sink. `flight.status` (Read) answers the recorder's state and active policy and the
+  retained capture, with its events as items; `flight.trigger` (Record) fires a manual trigger; `flight.policy`
+  (Record, request path) reloads the policy from an asset under the root, a refused document, file or reload keeping
+  the active generation; `flight.write` (Record, request path) polls, then writes the retained capture as a flight
+  bundle, never over an existing file.
+- `fault.arm` also takes `asset=<path>`, a fault-plan asset at a safe relative path under the host's root (Unavailable
+  without one); it is the route for a plan longer than the 512-byte argument bound.
+- The doctor reports two live modes from `DoctorLive` (and `diag.capabilities` from `DiagServiceConfig`'s
+  `flight_recorder` and `fault_injector`): `flight-recorder` (compiled; enabled when initialised; usable unless a
+  capture ended Fatal) and `fault-injection` (compiled only with fault seams; enabled when armed; usable when compiled
+  and installed). The default argument keeps every earlier call's report as it was, plus the two modes.
+- Still open in this row: the build and symbol identity sections in a flight bundle; injection during cook, install,
+  execute and teardown; refusal of arbitrary external I/O replay as a shipping capability check (a record needing
+  external results is already refused before it runs, DIAG.9a); and a real host (crd-sandbox) installing the recorder,
+  its triggers, a `FlightCommandHost` sink and the flight and fault commands.
 
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
