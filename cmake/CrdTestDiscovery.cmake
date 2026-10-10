@@ -19,7 +19,10 @@ function(crd_discover_tests TARGET)
     if(NOT _type STREQUAL "EXECUTABLE")
         message(FATAL_ERROR "Test discovery requires an executable: ${TARGET}")
     endif()
-    cmake_parse_arguments(PARSE_ARGV 1 _crd "SKIP_IS_FAILURE"
+    # CASE_DIRECTORIES gives every discovered case its own working directory, <WORKING_DIRECTORY>/cases/<hash of the
+    # case name>, created when CTest loads the list, so cases that write files in their working directory can run in
+    # parallel without sharing them.
+    cmake_parse_arguments(PARSE_ARGV 1 _crd "SKIP_IS_FAILURE;CASE_DIRECTORIES"
         "TEST_PREFIX;TEST_SUFFIX;WORKING_DIRECTORY;TEST_LIST;REPORTER;OUTPUT_DIR;OUTPUT_PREFIX;OUTPUT_SUFFIX;DISCOVERY_MODE"
         "TEST_SPEC;EXTRA_ARGS;PROPERTIES;DL_PATHS;DL_FRAMEWORK_PATHS")
     if(_crd_DISCOVERY_MODE AND NOT _crd_DISCOVERY_MODE STREQUAL "PRE_TEST")
@@ -103,6 +106,17 @@ function(crd_discover_tests TARGET)
     if(_actual_properties)
         string(CONCAT _apply "  foreach(_crd_test IN LISTS ${_test_list})\n"
             "    set_tests_properties(\"\${_crd_test}\" PROPERTIES${_actual_properties})\n  endforeach()\n")
+    endif()
+    if(_crd_CASE_DIRECTORIES)
+        _crd_test_quote(_cases "${_crd_WORKING_DIRECTORY}/cases")
+        string(CONCAT _apply "${_apply}" "  set(_crd_cases ${_cases})\n"
+            "  foreach(_crd_test IN LISTS ${_test_list})\n"
+            "    string(SHA1 _crd_case \"\${_crd_test}\")\n"
+            "    string(SUBSTRING \"\${_crd_case}\" 0 12 _crd_case)\n"
+            "    set(_crd_case \"\${_crd_cases}/\${_crd_case}\")\n"
+            "    file(MAKE_DIRECTORY \"\${_crd_case}\")\n"
+            "    set_tests_properties(\"\${_crd_test}\" PROPERTIES WORKING_DIRECTORY \"\${_crd_case}\")\n"
+            "  endforeach()\n")
     endif()
     string(CONCAT _content
         "if(EXISTS ${_executable})\n  include(${_original})\n${_apply}else()\n"

@@ -28,6 +28,8 @@ configuration remains unqualified. Narrow target selection cannot replace the fu
 Use CTest JSON discovery, not human output. Cerid's `crd_discover_tests` uses Catch PRE_TEST with configuration-specific
 inventories. Its pending annotations carry a validated target/artifact owner; object-consuming guards declare their
 owner with `cerid.test.target`. Preserve those guards for their affected targets. Rediscover after building.
+Cases that write files in their working directory register with `CASE_DIRECTORIES`: each discovered case then runs in
+its own `cases/<hash>` directory, so parallel CTest never shares their files.
 Zero expected tests, missing executable commands, disabled/skipped tests and fixture expansion require
 explicit accounting. Keep existing resource locks, timeouts, validation, precision and performance contracts.
 Direct CTest executable registrations use `crd_test_target` for CMake-owned artifact identity on fresh partial builds;

@@ -30,6 +30,8 @@ target_compile_definitions(crd-ceridc-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE
 
 crd_enable_default_pch(crd-ceridc-tests)
 
-crd_discover_tests(crd-ceridc-tests
+# Every case and the ceridc processes it starts write their files in the working directory, so each case gets its own
+# (CTest runs the cases in parallel).
+crd_discover_tests(crd-ceridc-tests CASE_DIRECTORIES
     PROPERTIES ENVIRONMENT "CRD_CERIDC_EXE=$<TARGET_FILE:ceridc>"
 )

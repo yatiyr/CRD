@@ -858,7 +858,8 @@ foreach(name consumer setup other)
     add_executable(${{name}} probe.cpp)
     target_compile_definitions(${{name}} PRIVATE PROBE_NAME="${{name}}" PROBE_CONFIGURATION="$<CONFIG>")
 endforeach()
-crd_discover_tests(consumer PROPERTIES FIXTURES_REQUIRED database LABELS OFF TIMEOUT 30 RESOURCE_LOCK gpu)
+crd_discover_tests(consumer CASE_DIRECTORIES
+    PROPERTIES FIXTURES_REQUIRED database LABELS OFF TIMEOUT 30 RESOURCE_LOCK gpu)
 crd_discover_tests(setup TEST_PREFIX "fixture-" PROPERTIES FIXTURES_SETUP database LABELS "existing;two")
 crd_discover_tests(other)
 ''', encoding='utf-8')
@@ -898,6 +899,11 @@ crd_discover_tests(other)
                     or consumer['properties']['LABELS'] != ['OFF']
                     or not {'existing', 'two'} <= set(setup['properties']['LABELS'])):
                 raise SelectionError('Original discovery properties were lost: ' + str(tests))
+            # CASE_DIRECTORIES gives each case its own existing directory; a registration without it keeps the default.
+            case = Path(consumer['properties']['WORKING_DIRECTORY']).resolve()
+            if (case.parent != (build / 'cases').resolve() or len(case.name) != 12 or not case.is_dir()
+                    or Path(setup['properties']['WORKING_DIRECTORY']).resolve() != build.resolve()):
+                raise SelectionError('Case working directories were not applied as registered: ' + str(tests))
             print(run([ctest, '--test-dir', str(build), '-C', config, '-R', f'^consumer-{config}$',
                        '--no-tests=error', '--timeout', '30', '--output-on-failure']))
         print(f'PASS: {generator} unbuilt ownership, fixture expansion, properties and configuration-specific discovery')
