@@ -1459,6 +1459,41 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-external-io-replay
 - Still open in this row: a real host (crd-sandbox) installing the recorder, its triggers, a `FlightCommandHost` sink
   with its module snapshot and the flight and fault commands.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-sandbox-flight-host.md)):
+- crd-sandbox is the first real host (`sandbox/src/flight_host.{hpp,cpp}`, `FlightHost`). Every run starts the
+  recorder before the diagnostic service and the window, with the default policy (`FlightPolicy{}`, held equal to the
+  committed default asset) or an authored one (`--flight-policy <asset>`; a refused asset or a missing capture
+  directory refuses the run, as an asked-for and unavailable option does elsewhere in the sandbox).
+- Its trigger sources: assertions and fatal invariants (chained to the handlers before them); the jobs watchdog's
+  starvation and hang reports, with a 250 ms watchdog window the host gives a pool that has none (without a window the
+  handlers never fire); frame hitches, fed from the top of each frame-loop iteration (start to start, so no `continue`
+  skips a frame); and allocation failure at the resource manager's allocator. The sandbox has no `StreamingAllocator`,
+  so the resource-pressure trigger has no seam in this host.
+- The resource manager allocates through `FaultAllocator` over `FlightAllocatorWatch` over the arena: an injected
+  failure is one injected-fault capture (the watch never sees the injected null, so nothing is suppressed), and a real
+  failure of the arena an allocation-failure capture.
+- The recorder's sink is a `FlightCommandHost` whose module snapshot is taken at start and refreshed once the GPU
+  device is up (its driver's modules load then). With `--flight-dir <dir>` every delivered capture is also written as
+  `flight-<n>.cdb` (the first free n, never over an existing file; the newest `kDefaultMaxBundles` are kept). The
+  writer can run on a fatal path, so it takes its own lock with a bounded try that refuses at once on the thread
+  already inside it, reads the snapshot with the new `FlightCommandHost::try_modules` (never waited on: a thread inside
+  a snapshot update, or one that cannot get it in a bounded number of tries, writes the bundle with its module list
+  declared absent), logs nothing and calls neither the recorder nor a command service. Captures are logged from the
+  frame loop.
+- With `--diag` the service also serves `flight.*` and `fault.*`, its doctor reports the live recorder and injector,
+  and the injector's I/O and GPU fault hooks are installed (refused in a shipping build, where every arm answers
+  Unavailable; arming still needs `inject` in the grant).
+- Teardown undoes it in order after the jobs pool is shut down: the hooks (uninstall waits for calls in progress), the
+  plan, the jobs handlers, the assertion and fatal triggers, then the recorder, which delivers and writes a pending
+  capture. The watchdog is a thread, so a return path that skips the ordered teardown still shuts the pool down. A
+  smoke failure now leaves through the ordered teardown with exit 2: an injected device loss reached that path, and
+  leaving through the scope destroyed the device before its children (`VUID-vkDestroyDevice-device-05137`) and then
+  crashed.
+- `flight.status` on a capture whose trigger message and recipe are both at their bounds keeps every field; the two
+  strings are cut at the 160-byte field bound (which alone marks the summary clipped) and the one-hit plan that
+  reproduces the fault survives the cut whole, so no field order changed.
+- With this every local clause of the row is shown; it waits only for its hosted run.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 

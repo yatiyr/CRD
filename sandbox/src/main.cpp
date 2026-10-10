@@ -37,6 +37,15 @@
 //   context on the sandbox's Vulkan device, or a D3D12 compute device), each run handed to the frame-loop thread.
 //   `replay.record executor=host` and a host record's `replay.run` run on the host provider over the sandbox's jobs
 //   pool, also handed to the frame-loop thread.
+// DIAG.9b (the sandbox as a flight-recorder and fault-injection host; see flight_host.hpp): every run records into a
+// flight recorder whose triggers are assertions, fatal invariants, the jobs watchdog's starvation and hang reports,
+// frame hitches and allocation failure at the resource manager's allocator; each delivered capture is logged.
+//   --flight-policy <asset>       — an authored flight-policy asset (assets/diag/*.flight.toml) instead of the
+//                                   default policy; a refused asset refuses the run
+//   --flight-dir <dir>            — an existing directory every delivered capture is also written to as a flight
+//                                   bundle (flight-<n>.cdb, never overwriting, the newest 10 kept)
+//   With --diag the service also serves flight.status/trigger/policy/write and fault.status/arm/disarm, and the fault
+//   seams' hooks are installed (fault.arm still needs `inject` in --diag-grant; a shipping build refuses every arm).
 // Environment:
 //   CRD_ASSETS_DIR=<dir>          — the engine asset root (the disk `assets/` tree that shadows the embedded pack). Set
 //                                   and non-empty, it always wins. Unset or empty, a developer build falls back to
@@ -44,6 +53,7 @@
 //                                   build never does. With no root the scene is overlay-only (see asset_root.hpp).
 
 #include "asset_root.hpp"          // the engine asset root: CRD_ASSETS_DIR, else the source tree
+#include "flight_host.hpp"         // DIAG.9b: the flight recorder, its triggers and the fault injector
 #include "frame_thread_calls.hpp"  // DIAG.9a: device runs handed to the frame-loop thread
 #include "gpu_device_executor.hpp" // DIAG.9a: the replay commands' GPU device executor
 #include "inspect_panel.hpp"       // DIAG.8b: the authored-program inspect panel
@@ -548,6 +558,8 @@ int main(int argc, char** argv)
     const char*             diag_path    = nullptr;
     crd::containers::String diag_params;
     bool                    diag_args_ok = true; // every --diag-param is name=value
+    // ⭐⭐ DIAG.9b: the flight host's options (see the CLI contract above).
+    crd::sandbox::FlightHostOptions flight_options;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0)
@@ -844,6 +856,14 @@ int main(int argc, char** argv)
             diag_params.append(argv[i]);
             diag_params.push_back('\n');
         }
+        else if (std::strcmp(argv[i], "--flight-policy") == 0 && i + 1 < argc)
+        {
+            flight_options.policy_asset = argv[++i];
+        }
+        else if (std::strcmp(argv[i], "--flight-dir") == 0 && i + 1 < argc)
+        {
+            flight_options.capture_dir = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
             smoke_test = true;
@@ -891,6 +911,28 @@ int main(int argc, char** argv)
         crd::log::shutdown();
         return 1;
     }
+    // ⭐⭐ DIAG.9b: the flight host, started before the diagnostic service (whose doctor reports it) and declared
+    // before it, so it outlives the service, the resource manager whose allocator it watches and the jobs pool whose
+    // watchdog reports to it. A refused policy asset or capture directory refuses the run.
+    crd::sandbox::FlightHost flight_host;
+    {
+        crd::containers::String             flight_reason;
+        const crd::sandbox::FlightHostStart flight_start = flight_host.start(flight_options, flight_reason);
+        if (flight_start != crd::sandbox::FlightHostStart::Started)
+        {
+            CRD_LOG_ERROR(g_log_sandbox, "DIAG.9b flight: {} ({})", crd::sandbox::flight_host_start_name(flight_start),
+                          std::string_view(flight_reason.c_str(), flight_reason.size()));
+            crd::log::shutdown();
+            return 1;
+        }
+        [[maybe_unused]] const crd::perf::FlightPolicy flight_policy = flight_host.recorder().policy();
+        CRD_LOG_INFO(g_log_sandbox,
+                     "DIAG.9b flight: recorder started, policy generation {} ({} events, {} before, {} after, hitch "
+                     "{} ns), captures {}",
+                     flight_host.recorder().policy_generation(), flight_policy.capacity, flight_policy.pre_events,
+                     flight_policy.post_events, flight_policy.hitch_threshold_ns,
+                     flight_options.capture_dir != nullptr ? flight_options.capture_dir : "kept in memory");
+    }
     // ⭐⭐ DIAG.8c: the sandbox's diagnostic service, built before the window and the device so that a refused flag
     // exits before anything needs undoing. Its grant is fixed here. A started command must be one it serves (the
     // `--lod` rule: asked for and unavailable refuses to run); its answer, whatever its status, is the report.
@@ -912,14 +954,17 @@ int main(int argc, char** argv)
         {
             diag_config.root = crd::containers::StringView{diag_root};
         }
+        flight_host.configure_service(diag_config); // DIAG.9b: the doctor reports the live recorder and injector
         diag_commands = std::make_unique<SandboxDiagCommands>();
         diag_service  = std::make_unique<crd::perf::DiagCommandService>(diag_authority, diag_config);
-        if (!bind_sandbox_diag_commands(*diag_service, *diag_commands))
+        if (!bind_sandbox_diag_commands(*diag_service, *diag_commands) || !flight_host.serve(*diag_service))
         {
             CRD_LOG_ERROR(g_log_sandbox, "--diag: the sandbox's diagnostic commands could not be registered");
             crd::log::shutdown();
             return 1;
         }
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: flight.* and fault.* served, fault seam hooks {}",
+                     flight_host.hooks_installed() ? "installed" : "unavailable in this build");
         using Panel     = crd::perf::ui::DiagCommandPanel;
         const bool fits = (diag_path == nullptr || std::strlen(diag_path) < Panel::kPathCapacity) &&
                           diag_params.size() < Panel::kArgsCapacity;
@@ -991,6 +1036,8 @@ int main(int argc, char** argv)
         return 1;
     }
     CRD_LOG_INFO(g_log_sandbox, "backend: {}", want_dx12 ? "DX12" : "Vulkan");
+    // DIAG.9b: the device loaded its driver's modules; a flight bundle names them from here on.
+    (void)flight_host.refresh_modules();
     // ⭐⭐ DIAG.9a: the replay commands' device executor, on this backend's GPU. The panel's worker thread calls the
     // service, so every run is handed to the frame loop (frame_calls.pump below), which owns the queue it submits to.
     // The host executor's runs are handed over the same way: the pool's frame arenas (crd::jobs::init below, on
@@ -1055,7 +1102,10 @@ int main(int argc, char** argv)
     // GEO-9: the camera-shot timeline (automation-driven crane move, sampled per frame in rational time)
     const crd::timeline::TimelineResource camera_timeline = build_camera_timeline(&scene_alloc);
 
-    crd::resources::ResourceManager rm(&scene_alloc);
+    // DIAG.9b: the manager allocates through the flight host's decorators: an injected allocation-failure first, then
+    // a real failure of the arena reported as an allocation-failure trigger.
+    crd::memory::IAllocator* const  rm_alloc = flight_host.watch_allocator(&scene_alloc);
+    crd::resources::ResourceManager rm(rm_alloc != nullptr ? rm_alloc : &scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);
     crd::resources::register_openpbr_material_loader(&rm, nullptr);
     // ⛔ REN-2: WITHOUT this the material loader resolves `textures.base_color` to a TXTR id that nothing can
@@ -1607,7 +1657,27 @@ int main(int argc, char** argv)
     crd::perf::install_jobs_adapter();
     crd::perf::ui::ProfilerPanel profiler_panel;
 
+    // DIAG.9b: the watchdog window the flight host's starvation and hang triggers need. The watchdog is a thread, so a
+    // return path that skips the teardown below still shuts the pool down (after the panel, declared later, joins its
+    // worker); the teardown disarms this and shuts it down in its own order.
+    flight_host.configure_jobs(app_desc.jobs_config);
     crd::jobs::init(app_desc.jobs_config);
+    struct JobsShutdownOnExit
+    {
+        bool armed = true;
+        JobsShutdownOnExit() = default;
+        ~JobsShutdownOnExit()
+        {
+            if (armed)
+            {
+                crd::jobs::shutdown();
+            }
+        }
+        JobsShutdownOnExit(const JobsShutdownOnExit&)            = delete;
+        JobsShutdownOnExit& operator=(const JobsShutdownOnExit&) = delete;
+        JobsShutdownOnExit(JobsShutdownOnExit&&)                 = delete;
+        JobsShutdownOnExit& operator=(JobsShutdownOnExit&&)      = delete;
+    } jobs_shutdown_on_exit;
     // ⭐⭐ DIAG.8c: the panel comes up with jobs and perf, after the device, so it dies before the device on every
     // return path (a request it is running reads the GPU context). The started command was checked with the flags.
     std::unique_ptr<crd::perf::ui::DiagCommandPanel> diag_panel;
@@ -1635,6 +1705,7 @@ int main(int argc, char** argv)
                  smoke_duration_s);
 
     crd::u32   frame               = 0;
+    int        exit_code           = 0; // 2: the smoke test presented nothing (the teardown below still runs)
     crd::u32   frames_with_present = 0;
     bool       lod_reported           = false; // REN-40-C2: the chain report is one-shot, not per frame
     crd::scenerender::SyncStats   last_sync{};
@@ -1803,8 +1874,30 @@ int main(int argc, char** argv)
     };
     const auto smoke_start_time    = std::chrono::steady_clock::now();
     crd::f64   inspect_last_tsec   = 0.0; // DIAG.9a: the frame clock's previous time, for its step
+    crd::u64   flight_frame_begin  = 0U;  // DIAG.9b: the previous iteration's start, for the frame-hitch trigger
     while (app.is_running())
     {
+        // ⭐⭐ DIAG.9b: the previous iteration, start to start, is one frame for the hitch trigger (a `continue`
+        // cannot skip it); then a capture whose post window closed is delivered, and logged here, on the frame loop.
+        const crd::u64 flight_now     = crd::perf::diagnostic_now_ns();
+        const crd::u64 flight_bundles = flight_host.bundles_written();
+        if (flight_frame_begin != 0U && flight_host.frame(flight_frame_begin, flight_now))
+        {
+            crd::perf::FlightCapture flight_capture;
+            if (flight_host.command_host().retained(flight_capture))
+            {
+                crd::containers::String flight_summary;
+                crd::perf::flight_capture_summary_json(flight_capture, flight_summary);
+                [[maybe_unused]] const crd::containers::String flight_bundle =
+                    flight_host.bundles_written() != flight_bundles ? flight_host.last_bundle()
+                                                                    : crd::containers::String("not written");
+                CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: capture {} {} bundle {}",
+                             flight_host.command_host().received(),
+                             std::string_view(flight_summary.c_str(), flight_summary.size()),
+                             std::string_view(flight_bundle.c_str(), flight_bundle.size()));
+            }
+        }
+        flight_frame_begin = flight_now;
         if (!app.tick())
         {
             break;
@@ -2247,9 +2340,12 @@ int main(int argc, char** argv)
                 if (frames_with_present == 0)
                 {
                     CRD_LOG_ERROR(g_log_sandbox, "Smoke-test: 0 frames presented in {:.2f}s — failure", elapsed);
-                    crd::log::flush();
-                    crd::log::shutdown();
-                    return 2;
+                    // ⛔ DIAG.9b: the failure still takes the ordered teardown below and exits 2 there. Leaving
+                    // through the scope instead destroyed the device before its children (an injected device loss
+                    // reaches this path: VUID-vkDestroyDevice-device-05137, then a crash).
+                    exit_code = 2;
+                    app.close();
+                    continue;
                 }
                 CRD_LOG_INFO(g_log_sandbox,
                              "Smoke-test: PASS — {} frames presented over {:.2f}s ({:.1f} fps avg); "
@@ -2278,6 +2374,11 @@ int main(int argc, char** argv)
                     CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag: {} answers, {} at the end of the smoke",
                                  diag_panel->completed(), crd::perf::ui::diag_panel_state_name(diag_panel->state()));
                 }
+                CRD_LOG_INFO(g_log_sandbox,
+                             "DIAG.9b flight: {} events recorded, {} captures delivered, {} frame hitches, {} bundles "
+                             "written, {} not written",
+                             flight_host.recorder().total_recorded(), flight_host.command_host().received(),
+                             flight_host.hitches(), flight_host.bundles_written(), flight_host.bundle_failures());
                 app.close();
             }
         }
@@ -2313,7 +2414,12 @@ int main(int argc, char** argv)
     frame_device.reset();
     gpu_device.reset();
     device_alloc.reset();
-    crd::jobs::shutdown();
+    jobs_shutdown_on_exit.armed = false;
+    crd::jobs::shutdown(); // joins the watchdog: nothing reports to the flight host after this
+    // ⛔ DIAG.9b: the service that served flight.* and fault.* is gone, so the host stops here: the fault seams' hooks
+    // first, then the triggers; a capture still pending is delivered (and written) as the recorder shuts down. The
+    // resource manager keeps its decorators, which now pass every call through, until it dies with this scope.
+    flight_host.stop();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
     surface.reset();            // vkDeviceWaitIdle — every frame in flight completes here
@@ -2328,5 +2434,5 @@ int main(int argc, char** argv)
 
     crd::log::flush();
     crd::log::shutdown();
-    return 0;
+    return exit_code;
 }

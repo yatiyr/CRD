@@ -5,6 +5,7 @@
 add_executable(crd-sandbox
     src/main.cpp
     src/asset_root.cpp          # the engine asset root: CRD_ASSETS_DIR, else the developer build's source tree
+    src/flight_host.cpp         # DIAG.9b: the flight recorder, its triggers, its bundle writer and the fault injector
     src/inspect_panel.cpp       # DIAG.8b: an authored CEIR program under runtime inspection (`--inspect`)
     src/frame_thread_calls.cpp  # DIAG.9a: device and host runs handed from the panel's worker to the frame loop
     src/gpu_device_executor.cpp # DIAG.9a: the replay commands' GPU device executor

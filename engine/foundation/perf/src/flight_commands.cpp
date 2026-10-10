@@ -63,6 +63,31 @@ bool FlightCommandHost::retained(FlightCapture& out) const
     return true;
 }
 
+// Holds m_modules_mutex and records the holding thread, so try_modules() on that same thread (a forward sink reached
+// from an assertion inside the merge) refuses instead of locking a mutex its thread already owns.
+class FlightCommandHost::ModulesLock
+{
+public:
+    explicit ModulesLock(const FlightCommandHost& host) : m_host(host)
+    {
+        m_host.m_modules_mutex.lock();
+        m_host.m_modules_owner.store(std::this_thread::get_id(), std::memory_order_release);
+    }
+    ~ModulesLock()
+    {
+        m_host.m_modules_owner.store(std::thread::id{}, std::memory_order_release);
+        m_host.m_modules_mutex.unlock();
+    }
+
+    ModulesLock(const ModulesLock&)            = delete;
+    ModulesLock& operator=(const ModulesLock&) = delete;
+    ModulesLock(ModulesLock&&)                 = delete;
+    ModulesLock& operator=(ModulesLock&&)      = delete;
+
+private:
+    const FlightCommandHost& m_host;
+};
+
 bool FlightCommandHost::refresh_modules()
 {
     const LiveModules live = enumerate_loaded_modules();
@@ -70,8 +95,8 @@ bool FlightCommandHost::refresh_modules()
     {
         return false;
     }
-    const std::lock_guard<std::mutex> guard(m_modules_mutex);
-    bool                              overflow = live.overflow;
+    const ModulesLock guard(*this);
+    bool              overflow = live.overflow;
     (void)merge_module_snapshot(m_modules, cont::ConstSpan<ModuleIdentity>{live.modules.data(), live.modules.size()},
                                 overflow);
     m_modules_overflow = m_modules_overflow || overflow;
@@ -80,14 +105,47 @@ bool FlightCommandHost::refresh_modules()
 
 cont::Array<ModuleIdentity> FlightCommandHost::modules() const
 {
-    const std::lock_guard<std::mutex> guard(m_modules_mutex);
+    const ModulesLock guard(*this);
     return m_modules;
 }
 
 bool FlightCommandHost::modules_overflow() const
 {
-    const std::lock_guard<std::mutex> guard(m_modules_mutex);
+    const ModulesLock guard(*this);
     return m_modules_overflow;
+}
+
+namespace
+{
+// Bounded attempts at the snapshot's lock from a forward sink (the recorder's fatal-path ring lock takes the same).
+constexpr crd::u32 kModulesLockAttempts = 2000U;
+} // namespace
+
+bool FlightCommandHost::try_modules(cont::Array<ModuleIdentity>& out, bool& overflow) const
+{
+    out.clear();
+    overflow = false;
+    if (m_modules_owner.load(std::memory_order_acquire) == std::this_thread::get_id())
+    {
+        return false; // this thread holds the lock: the sink was reached from inside a snapshot update
+    }
+    bool locked = false;
+    for (crd::u32 attempt = 0U; attempt < kModulesLockAttempts && !locked; ++attempt)
+    {
+        locked = m_modules_mutex.try_lock();
+        if (!locked)
+        {
+            std::this_thread::yield();
+        }
+    }
+    if (!locked)
+    {
+        return false;
+    }
+    const std::lock_guard<std::mutex> guard(m_modules_mutex, std::adopt_lock);
+    out      = m_modules;
+    overflow = m_modules_overflow;
+    return true;
 }
 
 namespace

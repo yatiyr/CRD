@@ -25,6 +25,7 @@
 
 #include <atomic>
 #include <mutex>
+#include <thread>
 
 namespace crd::perf
 {
@@ -44,7 +45,9 @@ public:
     // Install this host as the recorder's sink.
     void install_sink() noexcept;
 
-    // Called with each capture after it is retained (nullptr: none). Set it before captures can arrive.
+    // Called with each capture after it is retained (nullptr: none). Set it before captures can arrive. It runs on the
+    // delivering thread: the host's poll, a flight.write request, shutdown, or a fatal path on any thread. It must not
+    // call back into the recorder or a command service, and it reads the module snapshot with try_modules().
     void set_forward(FlightCaptureSink sink, void* user) noexcept;
 
     // The recorder sink: retains a copy of `capture` (replacing the previous one), then forwards it.
@@ -65,17 +68,28 @@ public:
     // false when this platform could not enumerate (the snapshot is unchanged).
     bool refresh_modules();
 
-    // A copy of the module snapshot (empty before the first refresh), for a forward sink that writes its own bundle.
+    // A copy of the module snapshot (empty before the first refresh). It waits for the snapshot's lock, so it is for a
+    // request or the host's own thread; a forward sink uses try_modules().
     [[nodiscard]] cont::Array<ModuleIdentity> modules() const;
     // True when a module was dropped because the snapshot reached kMaxLiveModules.
     [[nodiscard]] bool modules_overflow() const;
 
+    // The module snapshot for a forward sink, which can run on a fatal path (an assertion or a fatal invariant on any
+    // thread). The snapshot's lock is never waited on: a thread that holds it (an assertion inside refresh_modules)
+    // gets false at once, and another thread tries a bounded number of times. On false `out` is empty and `overflow`
+    // false, and the sink writes its bundle with the module list declared absent. A forward sink never calls
+    // refresh_modules(), modules(), the recorder or a command service.
+    [[nodiscard]] bool try_modules(cont::Array<ModuleIdentity>& out, bool& overflow) const;
+
 private:
+    class ModulesLock; // m_modules_mutex held, with its owner recorded for try_modules()
+
     FlightRecorder&                m_recorder;
     mutable std::mutex             m_mutex; // the retained capture
     FlightCapture                  m_last;
     bool                           m_has_last = false;
     mutable std::mutex             m_modules_mutex; // the module snapshot
+    mutable std::atomic<std::thread::id> m_modules_owner{}; // the thread holding m_modules_mutex (default: none)
     cont::Array<ModuleIdentity>    m_modules;
     bool                           m_modules_overflow = false;
     std::atomic<crd::u64>          m_received{0U};
