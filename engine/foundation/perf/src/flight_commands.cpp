@@ -196,7 +196,9 @@ void write_recorder_fields(FlightRecorder& recorder, DiagFields& fields, cont::S
         .u64("post_window_ns", policy.post_window_ns)
         .u64("hitch_threshold_ns", policy.hitch_threshold_ns)
         .str("triggers", cont::StringView{scratch.data(), scratch.size()})
+        .str("detail", flight_detail_name(policy.detail))
         .u64("recorded", recorder.total_recorded())
+        .u64("filtered", recorder.total_filtered())
         .boolean("pending", recorder.capture_pending())
         .boolean("fatal", recorder.fatal_entered())
         .u64("delivered", recorder.captures_delivered());

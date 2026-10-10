@@ -18,6 +18,7 @@
 //     post_events        = 256            # recorded after it at most
 //     post_window_ns     = 2000000000     # the post window's time bound (0: events only)
 //     hitch_threshold_ns = 50000000       # a frame interval above this is a hitch
+//     detail             = "full"         # or "basic": Warning and above only (DIAG.9c)
 //     triggers           = ["all"]        # or a list of flight_trigger_name() names
 //
 // Fault plan (FaultPlan, crd/perf/fault_injection.hpp). Each rule uses the plan text's rule grammar

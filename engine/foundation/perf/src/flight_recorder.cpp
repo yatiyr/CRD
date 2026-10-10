@@ -57,6 +57,8 @@ bool known_trigger(crd::u32 kind) noexcept
 {
     return kind > 0U && kind < kFlightTriggerCount;
 }
+
+constexpr crd::u8 kFlightMaxDetail = static_cast<crd::u8>(FlightDetail::Basic);
 } // namespace
 
 cont::StringView flight_trigger_name(FlightTrigger t) noexcept
@@ -90,6 +92,16 @@ cont::StringView flight_end_name(FlightEnd e) noexcept
     return cont::StringView{"unknown"};
 }
 
+cont::StringView flight_detail_name(FlightDetail d) noexcept
+{
+    switch (d)
+    {
+    case FlightDetail::Full:  return cont::StringView{"full"};
+    case FlightDetail::Basic: return cont::StringView{"basic"};
+    }
+    return cont::StringView{"unknown"};
+}
+
 cont::StringView flight_policy_status_name(FlightPolicyStatus s) noexcept
 {
     switch (s)
@@ -114,7 +126,7 @@ FlightPolicyStatus validate_flight_policy(const FlightPolicy& p) noexcept
     if (p.capacity < 2U || p.capacity > kFlightMaxEvents || p.pre_events == 0U || p.post_events == 0U ||
         p.pre_events > p.capacity || p.post_events > p.capacity - p.pre_events ||
         p.post_window_ns > kFlightMaxPostWindowNs || p.hitch_threshold_ns == 0U || p.trigger_mask == 0U ||
-        (p.trigger_mask & ~kFlightAllTriggers) != 0U)
+        (p.trigger_mask & ~kFlightAllTriggers) != 0U || static_cast<crd::u8>(p.detail) > kFlightMaxDetail)
     {
         return FlightPolicyStatus::RejectedOutOfBounds;
     }
@@ -131,6 +143,7 @@ struct FlightRecorder::Impl
     FlightEnd                end                    = FlightEnd::None;
     crd::u64                 end_ns                 = 0U;
     crd::u64                 dropped_while_complete = 0U;
+    crd::u64                 filtered               = 0U; // events a Basic policy did not record
     // The post window starts at the first event recorded after a trigger became visible (or, when none was, at the
     // total when the window closes). It is fixed under the ring mutex: trigger() cannot take it, and a total read
     // there could be passed by events recorded before the trigger's state store, which would then be miscounted.
@@ -429,7 +442,12 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
     const crd::u64 now = diagnostic_now_ns();
 
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
-    const crd::u32              state = impl->state.load(std::memory_order_acquire);
+    if (impl->policy.detail == FlightDetail::Basic && severity < Severity::Warning)
+    {
+        ++impl->filtered; // outside a Basic policy's scope: not recorded, not in the sequence, counted
+        return;
+    }
+    const crd::u32 state = impl->state.load(std::memory_order_acquire);
     if (state == kStateComplete || state == kStateFatalEntered)
     {
         ++impl->dropped_while_complete; // frozen until collected (for good after a fatal): the windows stay intact
@@ -635,6 +653,17 @@ crd::u64 FlightRecorder::total_recorded() const noexcept
     return (impl != nullptr) ? impl->total.load(std::memory_order_acquire) : 0U;
 }
 
+crd::u64 FlightRecorder::total_filtered() const noexcept
+{
+    Impl* impl = m_impl;
+    if (impl == nullptr)
+    {
+        return 0U;
+    }
+    std::lock_guard<std::mutex> guard(impl->ring_mutex);
+    return impl->filtered;
+}
+
 bool FlightRecorder::capture_pending() const noexcept
 {
     Impl* impl = m_impl;
@@ -789,7 +818,7 @@ cont::Array<crd::u8> encode_flight_record(const FlightCapture& c, crd::memory::I
     put_u8(out, static_cast<crd::u8>(c.trigger.kind));
     put_u8(out, static_cast<crd::u8>(c.end));
     put_u8(out, static_cast<crd::u8>(flags));
-    put_u8(out, 0U);
+    put_u8(out, static_cast<crd::u8>(c.policy.detail)); // the pad of records before detail levels: 0 is Full
 
     put_u32(out, c.trigger.code);
     put_u64(out, c.trigger.sequence);
@@ -857,12 +886,16 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     FlightCapture& c   = r.capture;
     const crd::u8  kind  = in.u8();
     const crd::u8  end   = in.u8();
-    const crd::u8  flags = in.u8();
-    const crd::u8  pad   = in.u8();
+    const crd::u8  flags  = in.u8();
+    const crd::u8  detail = in.u8();
     if (!in.ok || !known_trigger(kind) || end > static_cast<crd::u8>(FlightEnd::Fatal) || end == 0U ||
-        (flags & ~kRecordKnownFlags) != 0U || pad != 0U)
+        (flags & ~kRecordKnownFlags) != 0U)
     {
         return refuse(r, "bad trigger kind, end reason or flags");
+    }
+    if (detail > kFlightMaxDetail)
+    {
+        return refuse(r, "unknown detail level");
     }
     c.trigger.kind     = static_cast<FlightTrigger>(kind);
     c.end              = static_cast<FlightEnd>(end);
@@ -892,6 +925,7 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     c.policy.post_window_ns     = in.u64();
     c.policy.trigger_mask       = in.u32();
     c.policy.hitch_threshold_ns = in.u64();
+    c.policy.detail             = static_cast<FlightDetail>(detail);
     c.policy_generation         = in.u32();
     if (!in.ok || validate_flight_policy(c.policy) != FlightPolicyStatus::Committed)
     {
@@ -1051,6 +1085,8 @@ void flight_capture_summary_json(const FlightCapture& c, cont::String& out)
     append_u64(out, c.suppressed_triggers);
     key("policy_generation", true);
     append_u64(out, c.policy_generation);
+    key("detail", true);
+    str(flight_detail_name(c.policy.detail));
     key("replay_available", true);
     out.append(c.replay_available ? "true" : "false");
     key("replay", true);

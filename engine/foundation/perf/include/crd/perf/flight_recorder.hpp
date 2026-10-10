@@ -151,6 +151,24 @@ struct FlightTriggerRecord
 // The authorable flight policy (versioned; validated before it takes effect).
 inline constexpr crd::u32 kFlightPolicyVersion = 1U;
 
+// How much an initialised recorder keeps (DIAG.9c). The third level, off, is no recorder at all: nothing records and
+// no trigger fires (record() and trigger() before init are no-ops), which is the natural, uninstrumented run.
+//   Full   every event record() receives (the recorder's behaviour before detail levels existed).
+//   Basic  events of Severity::Warning and above only: anomalies, failures and injected faults. Informational events
+//          (a frame boundary from FlightFrameWatch is one) are not recorded and are counted in total_filtered();
+//          triggers fire exactly as at Full, so a hitch still opens a window, carrying its interval in the trigger.
+//          Events a Basic policy leaves out are its declared scope, not loss: a capture's policy says which level it
+//          was recorded at, and post_events counts only the events the level keeps.
+// Full is 0, so a flight record written before detail levels existed reads as Full.
+enum class FlightDetail : crd::u8
+{
+    Full  = 0U,
+    Basic = 1U,
+};
+
+// "full", "basic".
+[[nodiscard]] cont::StringView flight_detail_name(FlightDetail d) noexcept;
+
 struct FlightPolicy
 {
     crd::u32 schema_version     = kFlightPolicyVersion;
@@ -160,6 +178,7 @@ struct FlightPolicy
     crd::u64 post_window_ns     = 2000000000ULL; // the post window's time bound (0: bounded by events only)
     crd::u32 trigger_mask       = kFlightAllTriggers;
     crd::u64 hitch_threshold_ns = 50000000ULL; // a frame interval above this is a hitch (50 ms)
+    FlightDetail detail         = FlightDetail::Full;
 };
 
 enum class FlightPolicyStatus : crd::u8
@@ -280,8 +299,10 @@ public:
     // ring_unavailable. Returns true when a capture was delivered.
     bool finish(FlightEnd reason) noexcept;
 
-    // Counters for tests and the doctor.
+    // Counters for tests and the doctor. total_filtered() counts the events a Basic policy did not record (over the
+    // recorder's life, across policy reloads).
     [[nodiscard]] crd::u64 total_recorded() const noexcept;
+    [[nodiscard]] crd::u64 total_filtered() const noexcept;
     [[nodiscard]] bool     capture_pending() const noexcept; // a post window is open or a capture awaits collection
     [[nodiscard]] bool     fatal_entered() const noexcept;   // a capture ended Fatal; the recorder records no more
     [[nodiscard]] crd::u64 captures_delivered() const noexcept;
@@ -296,6 +317,9 @@ private:
 // Serialization -- the FlightRecord bundle section (BundleSectionTag::FlightRecord) and a JSON summary.
 // ---------------------------------------------------------------------------
 
+// The byte after the record's flags carries the policy's detail level. Records written before detail levels existed
+// hold 0 there (it was a must-be-zero pad), which is Full, the only level they had; a value that names no level is
+// refused, so a reader that predates a level never misreads it.
 inline constexpr crd::u32 kFlightRecordMagic   = 0x31524643U; // bytes 'C','F','R','1'
 inline constexpr crd::u32 kFlightRecordVersion = 1U;
 

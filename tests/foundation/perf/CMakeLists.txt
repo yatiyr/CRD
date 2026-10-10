@@ -47,6 +47,7 @@ add_executable(crd-perf-tests
     test_diag_flight_commands.cpp # DIAG.9b: authored flight/fault assets, flight.* commands and the doctor's live modes
     test_diag_flight_identity.cpp # DIAG.9b: a flight bundle's build identity and live module snapshot
     test_diag_fault_minimize.cpp # DIAG.9c: minimizing a fault plan that reproduces a failure
+    test_diag_observer_effect.cpp # DIAG.9c: flight-recorder detail levels and observer-effect experiments
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

@@ -1594,6 +1594,48 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-minimization.md)):
   minimizing the program text itself; host and device records (schedule replay and numeric replay have no shrinking
   defined); dropping or adding reads, which would change the program's read sequence.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-observer-effect.md)):
+- Instrumentation levels are off, basic and full. Off is no flight recorder at all: nothing records and no trigger
+  fires, which is the natural, uninstrumented run. Basic and full are a `FlightPolicy::detail` (`FlightDetail`,
+  authored as `detail = "full" | "basic"`, default full, the recorder's behaviour before levels existed). Basic records
+  events of `Severity::Warning` and above only (anomalies, failures, injected faults); informational events (frame
+  boundaries from `FlightFrameWatch`) are not recorded, are outside the sequence and are counted in
+  `FlightRecorder::total_filtered()` (and `flight.status`'s `filtered`). Every trigger fires at both levels, so a hitch
+  still opens a window and carries its interval in the trigger. A basic policy's left-out events are its declared
+  scope, not loss: the capture's policy names its level, and `post_events` counts only kept events. The CFR1 record
+  carries the level in the byte after its flags, which was a must-be-zero pad: every earlier record reads as full, a
+  value naming no level is refused ("unknown detail level"), and a reader that predates a level refuses it rather
+  than misreading it; the record version and the committed fuzz corpus are unchanged. The summary JSON and the
+  policy asset name the level.
+- An observer-effect experiment (`run_observer_experiment`, `crd/perf/observer_effect.hpp`, crd-perf) runs a
+  reproduction K times at each level and compares the caller's failure signature (which op, site, hit or frame
+  failed; never a time). The natural runs come first and are kept as `natural`, beside every capture: they must agree
+  and fail (`not-reproduced` otherwise, `natural-unstable` when they disagree, since an observer cannot be judged
+  against an unstable baseline). Each instrumented run gets a fresh recorder; any run whose outcome differs from the
+  natural one, including a level that fails in only some runs, is `observer-effect` naming the level; a level that
+  reproduced but whose run delivered no capture is `instrument-failure` (the instrument missed the failure it was
+  attached to catch); a policy the recorder refuses runs nothing and is `instrument-failure`. Only `consistent` passes.
+  Each level's run times are reported as its cost and judged by nothing. The recorder allocates its ring and captures
+  from the default allocator, never through an allocator a run injects faults into, so an allocation-failure plan
+  counts the same hits at every level by construction.
+- Shown: a frame stream with one long gap (judged by its own 33 ms budget, observed through `FlightFrameWatch`, no
+  fault seams, every lane) and an allocation-failure plan on a real `FaultInjector` behind a `FaultAllocator` are
+  consistent: basic keeps the injected fault and leaves the frames out (counted), full keeps both, and basic's events
+  are a subset of full's; the real cooker, failed by the first single read fault it does not recover from, is
+  consistent with both captures naming the file (the cooker records nothing informational, so the levels keep the
+  same events). A `notrigger` plan and a policy masking the hitch trigger are `instrument-failure`. The
+  `observer-effect` verdict is shown on reproductions perturbed on purpose and labelled synthetic: an instrument that
+  takes one attempt from the allocator under test (the fault moves to the frame before, at both levels), one that
+  moves the gap at full only, and one whose instrumented runs pass one time in three. No real observer effect was found
+  in the engine's instruments. A shipping build cannot arm a plan: those reproductions answer `not-reproduced` there.
+- Found on the way: crd-toml took the last value of a key defined twice in one table, so a diagnostic asset with
+  `capacity = 64` and later `capacity = 1` was read as 1. TOML forbids defining a key twice; crd-toml now refuses it
+  ("duplicate key", at the second definition), in tables and inline tables. Every committed TOML file parses
+  unchanged.
+- Not covered: a diagnostic command that runs an experiment (it is a library call a host or test makes); experiments
+  on schedule-script reproductions (the schedcheck twin runs in no hosted job); the profiler's scope trace as a
+  third instrumented level (a process singleton, compiled out on the perf-off lane).
+
 <a id="diag-10a"></a>
 ## DIAG.10a — stateful fuzzing and evidence-reader security
 

@@ -5,6 +5,7 @@
 #include <crd/toml/toml.hpp>
 
 #include <cstdio>
+#include <initializer_list>
 #include <string_view>
 
 namespace crd::perf
@@ -195,6 +196,29 @@ bool read_triggers(const toml::node& value, crd::u32& mask, cont::String& reason
     return true;
 }
 
+bool read_detail(const toml::node& value, FlightDetail& detail, cont::String& reason)
+{
+    const auto name = value.value<std::string_view>();
+    if (!name.has_value())
+    {
+        refuse_key(reason, cont::StringView{"detail"}, R"(expected "full" or "basic")");
+        return false;
+    }
+    const cont::StringView text{name->data(), name->size()};
+    for (const FlightDetail d : {FlightDetail::Full, FlightDetail::Basic})
+    {
+        if (text == flight_detail_name(d))
+        {
+            detail = d;
+            return true;
+        }
+    }
+    refuse_key(reason, cont::StringView{"detail"}, R"(unknown detail level ")");
+    reason.append(text);
+    reason.append(R"(" (expected "full" or "basic"))");
+    return false;
+}
+
 bool is_header_key(cont::StringView key) noexcept
 {
     return key == cont::StringView{"kind"} || key == cont::StringView{"schema_version"};
@@ -254,6 +278,10 @@ bool parse_flight_policy_asset(cont::StringView text, FlightPolicy& out, cont::S
         else if (key == cont::StringView{"triggers"})
         {
             ok = read_triggers(value, p.trigger_mask, reason);
+        }
+        else if (key == cont::StringView{"detail"})
+        {
+            ok = read_detail(value, p.detail, reason);
         }
         else
         {
@@ -388,7 +416,9 @@ void flight_policy_to_asset(const FlightPolicy& policy, cont::String& out)
     append_decimal(out, policy.post_window_ns);
     out.append("\nhitch_threshold_ns = ");
     append_decimal(out, policy.hitch_threshold_ns);
-    out.append("\ntriggers = [");
+    out.append("\ndetail = \"");
+    out.append(flight_detail_name(policy.detail));
+    out.append("\"\ntriggers = [");
     if (policy.trigger_mask == kFlightAllTriggers)
     {
         out.append("\"all\"");

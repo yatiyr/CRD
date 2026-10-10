@@ -12,5 +12,7 @@ post_events = 256  # recorded after it at most; pre_events + post_events <= capa
 post_window_ns     = 2000000000 # the post window closes after 2 s even when quiet (0: by events only)
 hitch_threshold_ns = 50000000   # a frame interval above 50 ms is a hitch
 
+detail = "full" # every event; "basic" keeps Warning and above (anomalies, failures, injected faults)
+
 triggers = ["all"] # or a list: "manual", "assertion", "fatal-invariant", "allocation-failure", "frame-hitch",
                    # "queue-starvation", "hang", "resource-pressure", "injected-fault"

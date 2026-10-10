@@ -87,6 +87,24 @@ TEST_CASE("toml: malformed input reports a failure, not a crash", "[toml]")
     CHECK_FALSE(cont::StringView{r.error().description()}.empty());
 }
 
+TEST_CASE("toml: a key defined twice in one table is refused, never last-one-wins", "[toml]")
+{
+    const auto root = ct::parse("capacity = 64\nname = \"a\"\ncapacity = 1\n");
+    REQUIRE_FALSE(root);
+    CHECK(cont::StringView{root.error().description()}.find(cont::StringView{"duplicate key"}) !=
+          cont::StringView::npos);
+    CHECK(root.error().line() == 3U);
+
+    const auto in_table = ct::parse("[pass]\nmode = \"a\"\n[other]\nmode = \"b\"\n[pass.params]\nx = 1\nx = 2\n");
+    CHECK_FALSE(in_table);
+    const auto inline_table = ct::parse("point = { x = 1, x = 2 }\n");
+    CHECK_FALSE(inline_table);
+
+    // The same key in different tables, and in successive array-of-tables elements, is not a duplicate.
+    const auto distinct = ct::parse("[a]\nk = 1\n[b]\nk = 2\n[[item]]\nk = 1\n[[item]]\nk = 2\n");
+    CHECK(distinct);
+}
+
 TEST_CASE("toml: build and serialize round-trips", "[toml]")
 {
     ct::table root;

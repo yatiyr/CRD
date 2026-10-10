@@ -819,6 +819,11 @@ private:
         {
             return false;
         }
+        if (tbl.get(cont::StringView{key}) != nullptr)
+        {
+            set_error("duplicate key (a key is defined once per table)");
+            return false;
+        }
         skip_inline_ws();
         if (at_end() || peek() != '=')
         {
@@ -1033,6 +1038,11 @@ private:
             cont::String key;
             if (!parse_key(key))
             {
+                return false;
+            }
+            if (out.get(cont::StringView{key}) != nullptr)
+            {
+                set_error("duplicate key in inline table");
                 return false;
             }
             skip_inline_ws();

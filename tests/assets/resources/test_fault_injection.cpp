@@ -15,6 +15,8 @@
 //     the run made, drains a delayed completion still in flight, and the recorder delivers its open window truncated.
 //   - (DIAG.9c) a seeded read plan that fails a cook after the cook recovered from earlier faults is minimized
 //     against the real cooker to a seed-free plan of single reads, each needed (checked by cooking without it).
+//   - (DIAG.9c) a read fault that fails a cook fails it the same way with no flight recorder, at basic and at full,
+//     and every instrumented run captures it (an observer-effect experiment, crd/perf/observer_effect.hpp).
 // A shipping build cannot arm a plan; there the cases assert the refusal and that every path runs plain.
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b, DIAG.9c); ADR-0133.
@@ -34,6 +36,7 @@
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/fault_minimize.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/observer_effect.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/load_state.hpp>
@@ -1061,6 +1064,87 @@ TEST_CASE("fault injection: a seeded read plan that fails a cook minimizes to th
             CHECK_FALSE(cook_reproduction(&run, reduced, hits));
         }
     }
+}
+
+namespace
+{
+// DIAG.9c: the cook reproduction observed off (no recorder), basic and full. The injector's flight evidence goes to
+// the level's recorder; the signature is the reads the failing cook made and the faults it fired, so an instrument
+// that added or moved a read would change it.
+struct CookObservation
+{
+    CookReproduction repro;
+    cp::FaultPlan    plan;
+};
+
+void cook_observed(void* user, cp::FlightRecorder* recorder, cp::ObservedRun& out)
+{
+    auto& o = *static_cast<CookObservation*>(user);
+    o.repro.injector.attach_flight_recorder(recorder);
+    cp::FaultRunHits hits;
+    out.failed = cook_reproduction(&o.repro, o.plan, hits);
+    o.repro.injector.attach_flight_recorder(nullptr);
+    out.signature = hits.hits[static_cast<crd::u32>(cp::FaultSite::FailedRead)] * 1000U + o.repro.fired;
+}
+} // namespace
+
+TEST_CASE("fault injection: a read fault that fails a cook fails it the same way off, basic and full",
+          "[resources][diag9c][observer][cook]")
+{
+    ck::register_builtin_handlers();
+    CookObservation observed;
+    if (!crd::fault_seams_compiled())
+    {
+        // Shipping: no plan arms, the natural cook succeeds, and nothing instrumented runs.
+        observed.plan = plan_of("seed=0;failed-read@0+0%1000000");
+        cp::ObserverExperiment e;
+        cp::run_observer_experiment(&cook_observed, &observed, cp::FlightPolicy{}, 2U, e);
+        CHECK(e.verdict == cp::ObserverVerdict::NotReproduced);
+        CHECK(observed.repro.arms_refused == 2U);
+        CHECK(e.levels[static_cast<crd::u32>(cp::ObserverLevel::Full)].runs == 0U);
+        return;
+    }
+
+    // The first single read whose fault fails the cook: the cook recovers from a fault at some earlier reads.
+    bool found = false;
+    for (crd::u64 h = 0U; h < 16U && !found; ++h)
+    {
+        observed.plan            = cp::FaultPlan{};
+        observed.plan.rule_count = 1U;
+        observed.plan.rules[0]   = cp::FaultRule{cp::FaultSite::FailedRead, h, 1U, cp::kFaultPpmAlways, 0U};
+        cp::FaultRunHits hits;
+        found = cook_reproduction(&observed.repro, observed.plan, hits);
+    }
+    REQUIRE(found);
+    const crd::u64 hit = observed.plan.rules[0].first_hit;
+    INFO("the cook fails on a fault at read " << hit);
+
+    cp::ObserverExperiment e;
+    cp::run_observer_experiment(&cook_observed, &observed, cp::FlightPolicy{}, 2U, e);
+    INFO(e.reason.c_str());
+    CHECK(e.verdict == cp::ObserverVerdict::Consistent);
+    CHECK(e.natural.failed);
+    CHECK(e.natural.signature % 1000U == 1U); // one fault fired
+    const cp::ObserverLevelResult& basic = e.levels[static_cast<crd::u32>(cp::ObserverLevel::Basic)];
+    const cp::ObserverLevelResult& full  = e.levels[static_cast<crd::u32>(cp::ObserverLevel::Full)];
+    for (const cp::ObserverLevelResult* level : {&basic, &full})
+    {
+        CHECK(level->agreeing_runs == 2U);
+        CHECK(level->captured_runs == 2U);
+        REQUIRE(level->has_capture);
+        const cp::FlightCapture& c = level->capture;
+        CHECK(c.trigger.kind == cp::FlightTrigger::InjectedFault);
+        CHECK(c.trigger.value_b == hit);
+        CHECK(c.end == cp::FlightEnd::Shutdown); // nothing follows the fault, so the window is open until shutdown
+        CHECK(c.post_truncated);
+        REQUIRE(c.events.size() == 1U);
+        CHECK(c.events[0].code == cp::kFlightCodeFaultInjected);
+        CHECK(c.events[0].message_view().find(cont::StringView{" on "}) != cont::StringView::npos); // names the file
+    }
+    // The cooker records nothing informational into the recorder, so the two levels keep the same events here.
+    CHECK(basic.filtered == 0U);
+    CHECK(basic.capture.policy.detail == cp::FlightDetail::Basic);
+    CHECK(full.capture.policy.detail == cp::FlightDetail::Full);
 }
 
 // ---- the install stage ------------------------------------------------------------------------------------------

@@ -101,7 +101,7 @@ bool same_policy(const cp::FlightPolicy& a, const cp::FlightPolicy& b)
 {
     return a.schema_version == b.schema_version && a.capacity == b.capacity && a.pre_events == b.pre_events &&
            a.post_events == b.post_events && a.post_window_ns == b.post_window_ns &&
-           a.trigger_mask == b.trigger_mask && a.hitch_threshold_ns == b.hitch_threshold_ns;
+           a.trigger_mask == b.trigger_mask && a.hitch_threshold_ns == b.hitch_threshold_ns && a.detail == b.detail;
 }
 
 bool same_plan(const cp::FaultPlan& a, const cp::FaultPlan& b)
@@ -212,9 +212,11 @@ TEST_CASE("diag assets: the committed flight policy is the in-code default, and 
     custom.hitch_threshold_ns = 16666667U;
     custom.trigger_mask       = cp::flight_trigger_bit(cp::FlightTrigger::Assertion) |
                           cp::flight_trigger_bit(cp::FlightTrigger::InjectedFault);
+    custom.detail = cp::FlightDetail::Basic;
     cont::String document;
     cp::flight_policy_to_asset(custom, document);
     CHECK(contains(document, "triggers = [\"assertion\", \"injected-fault\"]"));
+    CHECK(contains(document, "detail = \"basic\""));
     cp::FlightPolicy back = sentinel_policy();
     reason.clear();
     REQUIRE(cp::parse_flight_policy_asset(cont::StringView{document.data(), document.size()}, back, reason));
@@ -227,6 +229,13 @@ TEST_CASE("diag assets: the committed flight policy is the in-code default, and 
     cp::FlightPolicy minimal = sentinel_policy();
     REQUIRE(cp::parse_flight_policy_asset("kind = \"flight-policy\"\nschema_version = 1\n", minimal, reason));
     CHECK(same_policy(minimal, cp::FlightPolicy{}));
+
+    // DIAG.9c: the detail level is authored by name.
+    cp::FlightPolicy basic = sentinel_policy();
+    REQUIRE(cp::parse_flight_policy_asset("kind = \"flight-policy\"\nschema_version = 1\ndetail = \"basic\"\n", basic,
+                                          reason));
+    CHECK(basic.detail == cp::FlightDetail::Basic);
+    CHECK(basic.capacity == cp::FlightPolicy{}.capacity);
 }
 
 TEST_CASE("diag assets: a refused flight-policy document names its key and leaves the policy untouched",
@@ -256,6 +265,15 @@ TEST_CASE("diag assets: a refused flight-policy document names its key and leave
     check_policy_refused("kind = \"flight-policy\"\nschema_version = 2\n",
                          "schema_version: this build reads version 1");
     check_policy_refused("kind = \"flight-policy\"\nschema_version = 1\ncapacity = = 3\n", "not valid TOML");
+    check_policy_refused("kind = \"flight-policy\"\nschema_version = 1\ndetail = \"verbose\"\n",
+                         R"(detail: unknown detail level "verbose" (expected "full" or "basic"))");
+    check_policy_refused("kind = \"flight-policy\"\nschema_version = 1\ndetail = 1\n",
+                         R"(detail: expected "full" or "basic")");
+    check_policy_refused("kind = \"flight-policy\"\nschema_version = 1\ndetail = \"off\"\n",
+                         R"(detail: unknown detail level "off")");
+    // A key given twice is not a later value winning: the document is refused before any key is read.
+    check_policy_refused("kind = \"flight-policy\"\nschema_version = 1\ncapacity = 64\ncapacity = 1\n",
+                         "not valid TOML");
 }
 
 TEST_CASE("diag assets: a fault-plan document is the plan its text names, and malformed ones are refused",
@@ -303,6 +321,9 @@ TEST_CASE("diag assets: a fault-plan document is the plan its text names, and ma
                        "\"failed-read@7+1%1000000\", \"failed-read@8+1%1000000\"]\n",
                        "more than 8 rules");
     check_plan_refused("kind = \"flight-policy\"\nschema_version = 1\n", "kind: expected \"fault-plan\"");
+    check_plan_refused("kind = \"fault-plan\"\nschema_version = 1\nseed = 1\nseed = 2\n"
+                       "rules = [\"failed-read@0+1%1000000\"]\n",
+                       "not valid TOML");
 }
 
 TEST_CASE("diag assets: an asset file over the bound is refused, and a missing one says so",
