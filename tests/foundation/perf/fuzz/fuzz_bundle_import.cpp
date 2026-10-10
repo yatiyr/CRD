@@ -12,11 +12,14 @@
 // Seeds: the golden v1 bundle plus the adversarial corpus the acceptance names -- truncated (after the manifest and
 // mid-section), a traversal SymbolIndex (debug_file ".."), an oversized section length, a decompression bomb (the
 // compressed flag with a ~4 GiB original_length), a wrong cerid-diagnostics schema, and a hostile section_count (the
-// pre-walk peek path added in (e1)). crc32s are recomputed where a case must reach a deep check rather than BadHeader.
+// pre-walk peek path added in (e1)), plus a DIAG.9b BuildIdentity section and one with a trailing byte. crc32s are
+// recomputed where a case must reach a deep check rather than BadHeader. A decoded build identity stays within its
+// bounds and is never also reported refused.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_import.hpp>
 #include <crd/perf/bundle_manifest.hpp>
@@ -102,10 +105,51 @@ Array<u8> build_symbol_bundle_traversal()
     return w.finish(0U);
 }
 
+// A fixed build identity (never this lane's own: the committed seeds must be the same bytes on every lane).
+Array<u8> build_identity_bundle(bool trailing_byte)
+{
+    BuildIdentity id;
+    id.diagnostic_schema = kDiagnosticSchemaVersion;
+    id.flags             = kBuildFlagAsserts | kBuildFlagFaultSeams;
+    id.version           = String("0.1.0");
+    id.platform          = String("WINDOWS");
+    id.compiler          = String("MSVC");
+    id.compiler_version  = String("msvc 195000000");
+    id.arch              = String("X64");
+    id.config            = String("debug");
+    Array<u8> payload    = encode_build_identity(id);
+    if (trailing_byte)
+    {
+        payload.push_back(0U);
+    }
+    BundleManifest man;
+    man.schema_version = kDiagnosticSchemaVersion;
+    man.absent_tags.push_back(static_cast<u32>(BundleSectionTag::SymbolIndex));
+    const Array<u8> mp = serialize_manifest(man);
+
+    BundleWriter w;
+    w.add_section(BundleSectionTag::Manifest, span_of(mp.data(), mp.size()));
+    w.add_section(BundleSectionTag::BuildIdentity, span_of(payload.data(), payload.size()));
+    w.add_absent(BundleSectionTag::SymbolIndex);
+    return w.finish(0U);
+}
+
 // The importer's self-consistency oracle, applied to every result.
 void check_result(const BundleImport& r, const u8* data, usize size) noexcept
 {
     CRD_FUZZ_REQUIRE((r.status == ImportStatus::Rejected) == (r.reject != ImportReject::None));
+    // A build identity is either decoded within its bounds or refused, never both and never a plausible half.
+    CRD_FUZZ_REQUIRE(!(r.has_build && r.build_refused));
+    if (r.has_build)
+    {
+        CRD_FUZZ_REQUIRE((r.build.flags & ~kBuildKnownFlags) == 0U);
+        CRD_FUZZ_REQUIRE(r.build.version.size() <= kBuildFieldBytes);
+        CRD_FUZZ_REQUIRE(r.build.platform.size() <= kBuildFieldBytes);
+        CRD_FUZZ_REQUIRE(r.build.compiler.size() <= kBuildFieldBytes);
+        CRD_FUZZ_REQUIRE(r.build.compiler_version.size() <= kBuildFieldBytes);
+        CRD_FUZZ_REQUIRE(r.build.arch.size() <= kBuildFieldBytes);
+        CRD_FUZZ_REQUIRE(r.build.config.size() <= kBuildFieldBytes);
+    }
     if (r.status != ImportStatus::Rejected)
     {
         CRD_FUZZ_REQUIRE(r.header.schema_version == kDiagnosticSchemaVersion);
@@ -143,6 +187,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     CRD_FUZZ_REQUIRE(a.status == b.status && a.reject == b.reject);
     CRD_FUZZ_REQUIRE(a.sections.size() == b.sections.size());
     CRD_FUZZ_REQUIRE(a.unsafe_names == b.unsafe_names && a.has_manifest == b.has_manifest);
+    CRD_FUZZ_REQUIRE(a.has_build == b.has_build && a.build_refused == b.build_refused);
 
     // Reject-path coverage: tight limits exercise every reject enum on the committed corpus -- a low total cap so the
     // larger seeds hit Oversized (which the 64 KiB kMaxInputBytes would otherwise leave as dead code), while the small
@@ -181,6 +226,12 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
 
     sink.add_text("empty", "");
     sink.add_text("garbage", "this is not a diagnostic bundle");
+
+    // DIAG.9b: a flight bundle's BuildIdentity section, well formed and with a trailing byte its decoder must refuse.
+    const Array<u8> build = build_identity_bundle(false);
+    sink.add("build-identity", build.data(), build.size());
+    const Array<u8> build_trailing = build_identity_bundle(true);
+    sink.add("build-identity-trailing", build_trailing.data(), build_trailing.size());
 
     // Traversal: a SymbolIndex whose one module's debug_file is "..".
     const Array<u8> trav = build_symbol_bundle_traversal();

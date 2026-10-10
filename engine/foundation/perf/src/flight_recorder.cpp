@@ -2,6 +2,7 @@
 
 #include <crd/perf/flight_recorder.hpp>
 
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
 
@@ -964,18 +965,35 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     return r;
 }
 
-cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture)
+cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture, cont::ConstSpan<ModuleIdentity> modules)
 {
     BundleManifest manifest;
     manifest.schema_version = kDiagnosticSchemaVersion;
+    if (modules.empty())
+    {
+        manifest.absent_tags.push_back(static_cast<crd::u32>(BundleSectionTag::SymbolIndex));
+    }
     const cont::Array<crd::u8> manifest_bytes = serialize_manifest(manifest);
     const cont::Array<crd::u8> record_bytes   = encode_flight_record(capture);
+    const cont::Array<crd::u8> build_bytes    = encode_build_identity(current_build_identity());
 
     BundleWriter writer;
     (void)writer.add_section(BundleSectionTag::Manifest,
                              cont::ConstSpan<crd::u8>{manifest_bytes.data(), manifest_bytes.size()});
     (void)writer.add_section(BundleSectionTag::FlightRecord,
                              cont::ConstSpan<crd::u8>{record_bytes.data(), record_bytes.size()});
+    (void)writer.add_section(BundleSectionTag::BuildIdentity,
+                             cont::ConstSpan<crd::u8>{build_bytes.data(), build_bytes.size()});
+    if (modules.empty())
+    {
+        (void)writer.add_absent(BundleSectionTag::SymbolIndex);
+    }
+    else
+    {
+        const cont::Array<crd::u8> symbol_bytes = serialize_symbol_index(modules);
+        (void)writer.add_section(BundleSectionTag::SymbolIndex,
+                                 cont::ConstSpan<crd::u8>{symbol_bytes.data(), symbol_bytes.size()});
+    }
     return writer.finish();
 }
 

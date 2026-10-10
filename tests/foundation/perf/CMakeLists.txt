@@ -45,6 +45,7 @@ add_executable(crd-perf-tests
     test_diag_flight_recorder.cpp # DIAG.9b: triggerable bounded flight recording on the existing failure seams
     test_diag_fault_injection.cpp # DIAG.9b: seeded, authorized fault injection and its shipping refusal
     test_diag_flight_commands.cpp # DIAG.9b: authored flight/fault assets, flight.* commands and the doctor's live modes
+    test_diag_flight_identity.cpp # DIAG.9b: a flight bundle's build identity and live module snapshot
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

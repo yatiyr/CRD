@@ -13,7 +13,8 @@
 //   flight.trigger  Record  fire a manual trigger (optional argument message=<text>)
 //   flight.policy   Record  load the flight-policy asset at the request path (crd/perf/diag_assets.hpp) and reload
 //                           the recorder's policy; a refused document or a refused reload keeps the active policy
-//   flight.write    Record  write the retained capture as a flight bundle at the request path (never overwriting)
+//   flight.write    Record  write the retained capture as a flight bundle at the request path (never overwriting),
+//                           with this build's identity and the host's refreshed module snapshot
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
 
@@ -57,11 +58,26 @@ public:
 
     [[nodiscard]] FlightRecorder& recorder() noexcept { return m_recorder; }
 
+    // Enumerate the loaded modules now (enumerate_loaded_modules) and merge them into the host's snapshot
+    // (merge_module_snapshot): a module no longer loaded stays, marked unloaded, so a bundle still names the binary a
+    // capture's events came from. Call it when the host starts and after it loads or unloads modules; flight.write
+    // calls it before writing. It takes the loader lock: never call it from a fatal path or a forward sink. Returns
+    // false when this platform could not enumerate (the snapshot is unchanged).
+    bool refresh_modules();
+
+    // A copy of the module snapshot (empty before the first refresh), for a forward sink that writes its own bundle.
+    [[nodiscard]] cont::Array<ModuleIdentity> modules() const;
+    // True when a module was dropped because the snapshot reached kMaxLiveModules.
+    [[nodiscard]] bool modules_overflow() const;
+
 private:
     FlightRecorder&                m_recorder;
     mutable std::mutex             m_mutex; // the retained capture
     FlightCapture                  m_last;
     bool                           m_has_last = false;
+    mutable std::mutex             m_modules_mutex; // the module snapshot
+    cont::Array<ModuleIdentity>    m_modules;
+    bool                           m_modules_overflow = false;
     std::atomic<crd::u64>          m_received{0U};
     std::atomic<bool>              m_installed{false};
     std::atomic<FlightCaptureSink> m_forward{nullptr};

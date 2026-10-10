@@ -8,6 +8,7 @@
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
 
 #include <crd/perf/bundle.hpp>
+#include <crd/perf/bundle_import.hpp>
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/doctor.hpp>
@@ -403,6 +404,15 @@ TEST_CASE("flight commands: trigger, status, write and policy reload through the
     REQUIRE(decoded.capture.events.size() == 10U);
     CHECK(decoded.capture.events[0].sequence == 4U);
     CHECK(decoded.capture.events[9].sequence == 13U);
+
+    // The bundle also names the build and the binaries: flight.write refreshed the host's module snapshot first.
+    const cp::BundleImport imp = cp::import_bundle(cont::ConstSpan<crd::u8>{bytes.data(), bytes.size()});
+    REQUIRE(imp.status == cp::ImportStatus::Ok);
+    CHECK(imp.has_build);
+    REQUIRE(imp.has_symbols);
+    CHECK(imp.symbols.size() >= 2U);
+    CHECK(imp.symbols.size() == host.modules().size());
+    CHECK(contains(written.json, "\"modules_overflow\":false"));
 
     // Never overwrite: a second write is refused and the file keeps its bytes.
     const cp::DiagResult overwrite = service.execute(command("flight.write", "diag_flight_commands.cdb"));

@@ -6,9 +6,9 @@
 // A BOUNDED, NON-EXECUTING reader over UNTRUSTED bundle bytes. It wraps read_bundle and adds the
 // checks a merely-trusting reader lacks: oversized / too-many-sections / schema-mismatch rejection,
 // a per-section byte cap, duplicate-tag and compressed-section handling, and decode of the Manifest
-// (tag 1) and SymbolIndex (tag 5). It NEVER executes anything -- it decodes POD and bounds-checks;
-// every payload it exposes BORROWS a view into `buf`, which must outlive the result. noexcept
-// throughout (post-mortem code lets no exception escape).
+// (tag 1), SymbolIndex (tag 5) and BuildIdentity (tag 7). It NEVER executes anything -- it decodes POD
+// and bounds-checks; every payload it exposes BORROWS a view into `buf`, which must outlive the result.
+// noexcept throughout (post-mortem code lets no exception escape).
 //
 // This is the acceptance's "CLI import/inspect is bounded and does not execute content" as a LIBRARY;
 // the CLI itself is routed to a later slice (ADR: the bundle is "built by DIAG.5d/6c"). The adversarial
@@ -21,6 +21,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
 #include <crd/perf/symbol_index.hpp>
@@ -28,14 +29,14 @@
 namespace crd::perf
 {
 
-enum class ImportStatus : crd::u32
+enum class ImportStatus : crd::u8
 {
     Ok,                 // fully parsed; every declared section present and valid
     RecoveredTruncated, // a valid prefix recovered (truncation, or a refused compressed tail)
     Rejected,           // structurally unusable (see ImportReject)
 };
 
-enum class ImportReject : crd::u32
+enum class ImportReject : crd::u8
 {
     None,
     Oversized,          // buf larger than limits.max_total_bytes (refused before reading)
@@ -74,14 +75,17 @@ struct BundleImport
 
     bool               has_manifest = false;
     ManifestReadResult manifest;
-    bool               has_symbols = false;
+    bool               has_symbols   = false; // a SymbolIndex section with a payload (an explicit absent one: false)
+    bool               has_build     = false; // a BuildIdentity section (tag 7) decoded into `build`
+    bool               build_refused = false; // a BuildIdentity section was present and its decoder refused it
+    BuildIdentity      build;
 
     crd::containers::Array<ModuleIdentity>  symbols;
     crd::containers::Array<ImportedSection> sections;
 };
 
 // Import `buf`. Rejects structurally-unusable input up front; otherwise returns the recovered sections (borrowing
-// into `buf`) plus the decoded Manifest/SymbolIndex and a set of reported (non-fatal) observations.
+// into `buf`) plus the decoded Manifest/SymbolIndex/BuildIdentity and a set of reported (non-fatal) observations.
 [[nodiscard]] BundleImport import_bundle(crd::containers::ConstSpan<crd::u8> buf, BundleLimits limits = {},
                                          crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
 

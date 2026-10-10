@@ -6,6 +6,9 @@
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
 
+#include "module_file_identity.hpp"
+
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_import.hpp>
 #include <crd/perf/diag_commands.hpp>
@@ -467,9 +470,13 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     req.path                   = "diag_flight_inspect.cdb";
     const cp::DiagResult found = svc.execute(req);
     REQUIRE(found.status == cp::DiagStatus::Ok);
-    CHECK(found.total == 2U);
+    // Four sections (manifest, flight record, build identity, the absent symbol index) and the build item.
+    CHECK(found.total == 5U);
     CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"flight-record\",\"absent\":false") != nullptr);
+    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"build-identity\",\"absent\":false") != nullptr);
+    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"symbol-index\",\"absent\":true") != nullptr);
     CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"reserved\"") == nullptr);
+    CHECK(std::strstr(found.json.c_str(), "\"same_as_host\":true,\"differing\":\"\"") != nullptr);
     (void)std::remove(path);
 }
 
@@ -629,6 +636,30 @@ TEST_CASE("flight trigger: the fatal path in a child process leaves a bundle wit
         CHECK(c.replay_available);
         CHECK(cont::StringView{c.replay.c_str(), c.replay.size()} ==
               "crd-diag-flight-fatal-specimen invariant|assert <bundle path>");
+
+        // The build that wrote it is this lane's own build, and its module snapshot names the specimen's executable
+        // with the identity its file on disk carries (read by a parser separate from the live walk).
+        REQUIRE(imp.has_build);
+        cont::String differing;
+        CHECK(cp::same_build_identity(imp.build, cp::current_build_identity(), differing));
+        CHECK(cont::StringView{differing.c_str(), differing.size()}.empty());
+        REQUIRE(imp.has_symbols);
+        const fs::path            specimen = fs::path(CRD_DIAG_FLIGHT_FATAL_SPECIMEN);
+        const cp::ModuleIdentity* named    = nullptr;
+        for (const cp::ModuleIdentity& m : imp.symbols)
+        {
+            if (specimen.filename().string() == m.name.c_str())
+            {
+                named = &m;
+            }
+        }
+        REQUIRE(named != nullptr);
+        CHECK_FALSE(named->unloaded);
+        cp::ModuleIdentity from_file;
+        REQUIRE(crd::test::module_file::file_identity(specimen.string().c_str(), from_file));
+        CHECK(from_file.id_kind != cp::SymbolIdKind::None);
+        CHECK(crd::test::module_file::same_identity(*named, from_file));
+        CHECK(cp::identity_matches(*named, from_file));
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

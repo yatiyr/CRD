@@ -101,7 +101,7 @@ struct SymbolRecord
     crd::u8  id_len;                  // 45
     crd::u8  id[kMaxSymbolIdBytes];   // 46 .. 66
     crd::u16 flags;                   // 66  kSymbolRecordFlag*
-    crd::u32 _pad_b;                  // 68
+    crd::u32 _pad_b;                  // 68  NOLINT(readability-identifier-naming): pinned on-disk spare slot
 };
 
 // SymbolRecord::flags bits.
@@ -153,6 +153,37 @@ parse_minidump_unloaded_modules(crd::containers::ConstSpan<crd::u8> dump,
 [[nodiscard]] crd::containers::Array<crd::u8>
 build_symbol_index_from_minidump(crd::containers::ConstSpan<crd::u8> dump,
                                  crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
+
+// ---- Live module enumeration (DIAG.9b: the SymbolIndex of a flight bundle) ----
+
+// The most modules one enumeration or snapshot keeps (72 B each on disk plus names: well under a section cap).
+inline constexpr crd::u32 kMaxLiveModules = 1024U;
+
+struct LiveModules
+{
+    crd::containers::Array<ModuleIdentity> modules;
+    bool                                   available = false; // false: this platform or the walk itself failed
+    bool                                   overflow  = false; // more than kMaxLiveModules were loaded; the rest dropped
+};
+
+// Enumerate the modules loaded in this process now, with the same identities a crash dump records:
+//   Windows: every module of a Toolhelp snapshot, each pinned while its in-memory PE headers are read (bounds-checked
+//            against SizeOfImage): base, SizeOfImage, CheckSum, TimeDateStamp and, from the CodeView debug entry, the
+//            RSDS GUID and age (id_kind Rsds; None without one). Only basenames are kept: `name` is the module file
+//            name and `debug_file` the PDB name, so no directory of the machine leaves in a bundle.
+//   Linux:   dl_iterate_phdr: base = load bias + the lowest PT_LOAD address, size = the PT_LOAD span, and the
+//            NT_GNU_BUILD_ID note (id_kind GnuBuildId; None without one). `name` is the basename (the main
+//            executable's from /proc/self/exe).
+// This takes the loader lock and allocates: never call it on a fatal path or from a loader callback. Hosts take a
+// snapshot when they start and after loading modules, and a fatal path writes that snapshot.
+[[nodiscard]] LiveModules enumerate_loaded_modules(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+
+// Merge a live enumeration into a snapshot kept since the host started: a module of `known` that `live` no longer
+// holds (same base, name and identity) is kept and marked unloaded, so a bundle still names the binary a capture's
+// events came from; a module of `live` that `known` lacks is appended. Returns the number of modules newly marked
+// unloaded plus newly appended. The snapshot never grows past kMaxLiveModules; `overflow` is set when one was dropped.
+crd::u32 merge_module_snapshot(crd::containers::Array<ModuleIdentity>&      known,
+                               crd::containers::ConstSpan<ModuleIdentity> live, bool& overflow);
 
 // ---- Matching debug files + wrong-symbol rejection ----
 

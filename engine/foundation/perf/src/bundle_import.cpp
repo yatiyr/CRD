@@ -102,7 +102,7 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
 
     r.total_len_mismatch = (rb.header.total_len != buf.size());
 
-    // 6. Per-section: cap, duplicate detection, decode Manifest/SymbolIndex.
+    // 6. Per-section: cap, duplicate detection, decode Manifest/SymbolIndex/BuildIdentity.
     for (crd::usize i = 0; i < rb.sections.size(); ++i)
     {
         const BundleSectionView& sv = rb.sections[i];
@@ -141,7 +141,18 @@ BundleImport import_bundle(cont::ConstSpan<crd::u8> buf, BundleLimits limits, cr
                 r.manifest     = read_manifest(sv.payload, alloc);
                 r.has_manifest = r.manifest.ok;
             }
-            else if (sv.tag == BundleSectionTag::SymbolIndex && !r.has_symbols)
+            else if (sv.tag == BundleSectionTag::BuildIdentity && (is.section_flags & kSectionFlagAbsent) == 0U)
+            {
+                BuildIdentityRead build = decode_build_identity(sv.payload, alloc);
+                r.has_build             = build.ok;
+                r.build_refused         = !build.ok;
+                if (build.ok)
+                {
+                    r.build = static_cast<BuildIdentity&&>(build.identity);
+                }
+            }
+            else if (sv.tag == BundleSectionTag::SymbolIndex && !r.has_symbols &&
+                     (is.section_flags & kSectionFlagAbsent) == 0U) // an explicit absent section holds no symbols
             {
                 r.symbols     = read_symbol_index(sv.payload, alloc);
                 r.has_symbols = true;

@@ -63,6 +63,33 @@ bool FlightCommandHost::retained(FlightCapture& out) const
     return true;
 }
 
+bool FlightCommandHost::refresh_modules()
+{
+    const LiveModules live = enumerate_loaded_modules();
+    if (!live.available)
+    {
+        return false;
+    }
+    const std::lock_guard<std::mutex> guard(m_modules_mutex);
+    bool                              overflow = live.overflow;
+    (void)merge_module_snapshot(m_modules, cont::ConstSpan<ModuleIdentity>{live.modules.data(), live.modules.size()},
+                                overflow);
+    m_modules_overflow = m_modules_overflow || overflow;
+    return true;
+}
+
+cont::Array<ModuleIdentity> FlightCommandHost::modules() const
+{
+    const std::lock_guard<std::mutex> guard(m_modules_mutex);
+    return m_modules;
+}
+
+bool FlightCommandHost::modules_overflow() const
+{
+    const std::lock_guard<std::mutex> guard(m_modules_mutex);
+    return m_modules_overflow;
+}
+
 namespace
 {
 void append_trigger_names(cont::String& out, crd::u32 mask)
@@ -279,13 +306,19 @@ DiagStatus run_flight_write(void* context, const DiagCall& call, DiagSnapshot& o
         out.reason.append("refusing to overwrite an existing file");
         return DiagStatus::Failed;
     }
-    const cont::Array<crd::u8> bundle = write_flight_bundle(capture);
+    // The module snapshot is refreshed first, outside any recorder lock: this is a request, never a fatal path.
+    (void)host->refresh_modules();
+    const cont::Array<ModuleIdentity> modules = host->modules();
+    const cont::Array<crd::u8>        bundle =
+        write_flight_bundle(capture, cont::ConstSpan<ModuleIdentity>{modules.data(), modules.size()});
     if (bundle.empty() || !write_bundle_atomic(path.c_str(), cont::ConstSpan<crd::u8>{bundle.data(), bundle.size()}))
     {
         out.reason.append("the flight bundle could not be written");
         return DiagStatus::Failed;
     }
     out.summary.u64("bytes", bundle.size())
+        .u64("modules", modules.size())
+        .boolean("modules_overflow", host->modules_overflow())
         .str("trigger", flight_trigger_name(capture.trigger.kind))
         .str("end", flight_end_name(capture.end))
         .u64("events", capture.events.size());

@@ -35,6 +35,7 @@
 // the ring untouched (last known good). Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
 
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/symbol_index.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -313,8 +314,12 @@ struct FlightRecordRead
 // anything is copied; a wrong magic or version, a short or over-long payload, or an inconsistent count is refused.
 [[nodiscard]] FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload);
 
-// A complete bundle: a Manifest section and one FlightRecord section.
-[[nodiscard]] cont::Array<crd::u8> write_flight_bundle(const FlightCapture& capture);
+// A complete flight bundle: a Manifest, the FlightRecord, the BuildIdentity of this build
+// (crd/perf/build_identity.hpp) and a SymbolIndex of `modules` (the host's module snapshot, crd/perf/symbol_index.hpp).
+// With no modules the SymbolIndex is an explicit absent section the manifest declares, never a silently missing one.
+// Nothing here enumerates modules or touches the loader, so the fatal path may call it with a snapshot taken earlier.
+[[nodiscard]] cont::Array<crd::u8> write_flight_bundle(const FlightCapture&           capture,
+                                                       cont::ConstSpan<ModuleIdentity> modules = {});
 
 // A one-line JSON summary of a capture (trigger, end, loss, replay; not the events).
 void flight_capture_summary_json(const FlightCapture& capture, cont::String& out);

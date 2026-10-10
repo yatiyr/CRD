@@ -64,14 +64,15 @@ inline constexpr crd::u32 kBundleFormatVersion = 1U;
 // NOLINTNEXTLINE(performance-enum-size): the on-disk tag field is u32 and modules register tags above 0x00010000.
 enum class BundleSectionTag : crd::u32
 {
-    Invalid      = 0,
-    Manifest     = 1, // cerid-diagnostics manifest (redaction-honest; never claims a raw dump is redacted)
-    CrashRecord  = 2, // the 5a/5b async-signal-safe record bytes
-    RawDump      = 3, // Windows minidump / Linux core (raw; ID-8: never *declared* redacted)
-    LogTail      = 4, // recent log records (bytes; the composer that fills it is a later slice)
-    SymbolIndex  = 5, // module identities (filled by (c))
-    FlightRecord = 6, // DIAG.9b triggered flight capture (flight_recorder.hpp: encode/decode_flight_record)
-    // 7 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
+    Invalid       = 0,
+    Manifest      = 1, // cerid-diagnostics manifest (redaction-honest; never claims a raw dump is redacted)
+    CrashRecord   = 2, // the 5a/5b async-signal-safe record bytes
+    RawDump       = 3, // Windows minidump / Linux core (raw; ID-8: never *declared* redacted)
+    LogTail       = 4, // recent log records (bytes; the composer that fills it is a later slice)
+    SymbolIndex   = 5, // module identities (filled by (c))
+    FlightRecord  = 6, // DIAG.9b triggered flight capture (flight_recorder.hpp: encode/decode_flight_record)
+    BuildIdentity = 7, // DIAG.9b the writing build (build_identity.hpp: encode/decode_build_identity)
+    // 8 .. 0x0000FFFF reserved for foundation; modules register above 0x00010000.
 };
 
 // Per-section flags (bitset in BundleSectionHeader::flags).

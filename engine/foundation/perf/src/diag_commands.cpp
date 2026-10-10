@@ -3,6 +3,7 @@
 #include <crd/perf/diag_commands.hpp>
 
 #include <crd/jobs/jobs.hpp>
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_import.hpp>
 #include <crd/perf/capture.hpp>
@@ -166,6 +167,8 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
             return "symbol-index";
         case BundleSectionTag::FlightRecord:
             return "flight-record";
+        case BundleSectionTag::BuildIdentity:
+            return "build-identity";
         case BundleSectionTag::Invalid:
             return "invalid";
     }
@@ -1178,7 +1181,9 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         .boolean("manifest", imp.has_manifest && imp.manifest.ok)
         .u64("manifest_absent_mismatches", imp.manifest_absent_mismatches)
         .u64("symbols", imp.symbols.size())
-        .u64("unsafe_names", imp.unsafe_names);
+        .u64("unsafe_names", imp.unsafe_names)
+        .boolean("build_identity", imp.has_build)
+        .boolean("build_refused", imp.build_refused);
 
     DiagFields item(out.allocator());
     for (crd::usize i = 0U; i < imp.sections.size(); ++i)
@@ -1197,6 +1202,31 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
             .boolean("duplicate", (s.import_flags & kImportSectionDuplicate) != 0U)
             .u64("original_length", s.original_length)
             .u64("payload_length", s.payload.size());
+        (void)out.add_item(item);
+    }
+    if (imp.has_build)
+    {
+        // The writing build against this host's own: a replay recipe is only trusted on the same build.
+        const BuildIdentity  host = current_build_identity(out.allocator());
+        cont::String         differing(out.allocator());
+        const bool           same = same_build_identity(imp.build, host, differing);
+        const BuildIdentity& b    = imp.build;
+        item.clear();
+        item.str("kind", "build")
+            .u64("diagnostic_schema", b.diagnostic_schema)
+            .str("version", cont::StringView{b.version.data(), b.version.size()})
+            .str("platform", cont::StringView{b.platform.data(), b.platform.size()})
+            .str("compiler", cont::StringView{b.compiler.data(), b.compiler.size()})
+            .str("compiler_version", cont::StringView{b.compiler_version.data(), b.compiler_version.size()})
+            .str("arch", cont::StringView{b.arch.data(), b.arch.size()})
+            .str("config", cont::StringView{b.config.data(), b.config.size()})
+            .boolean("asserts", (b.flags & kBuildFlagAsserts) != 0U)
+            .boolean("profiling", (b.flags & kBuildFlagProfiling) != 0U)
+            .boolean("fault_seams", (b.flags & kBuildFlagFaultSeams) != 0U)
+            .boolean("asan", (b.flags & kBuildFlagAsan) != 0U)
+            .boolean("tsan", (b.flags & kBuildFlagTsan) != 0U)
+            .boolean("same_as_host", same)
+            .str("differing", cont::StringView{differing.data(), differing.size()});
         (void)out.add_item(item);
     }
     cont::String id(out.allocator());

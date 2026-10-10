@@ -1360,6 +1360,33 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-assets-commands-do
   external results is already refused before it runs, DIAG.9a); and a real host (crd-sandbox) installing the recorder,
   its triggers, a `FlightCommandHost` sink and the flight and fault commands.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-bundle-identity.md)):
+- A flight bundle names the build and the binaries that wrote it: `write_flight_bundle(capture, modules)` writes the
+  Manifest, the FlightRecord, a `BuildIdentity` section (tag 7) and a SymbolIndex (tag 5) of the host's module
+  snapshot; with no snapshot the SymbolIndex is an explicit absent section the manifest declares. Writing never
+  enumerates modules, so the fatal path writes a snapshot taken earlier.
+- The build identity (`crd/perf/build_identity.hpp`) is compile-time constants only: the diagnostic schema, the engine
+  version, platform, compiler and its version, arch, `debug`/`release`, and a closed flag set (asserts, profiling,
+  fault seams, ASan, TSan). Its payload ('CBI1', version 1, six fields of at most 64 bytes) is refused on a wrong
+  magic or version, unknown flags, an over-long or short field or trailing bytes. `same_build_identity` names every
+  differing field; `bundle.inspect` reports the bundle's build with `same_as_host` and `differing`, so a reader can
+  refuse a replay recipe recorded by another build.
+- The module snapshot comes from `enumerate_loaded_modules` (`crd/perf/symbol_index.hpp`), the live counterpart of the
+  DIAG.5d minidump parser with the same identities: on Windows a Toolhelp snapshot, each module pinned while its
+  in-memory PE headers are read within SizeOfImage (TimeDateStamp, SizeOfImage, CheckSum, the RSDS GUID and age); on
+  Linux `dl_iterate_phdr` into preallocated slots (the PT_LOAD span and the GNU build-id). Only basenames are kept,
+  module and PDB, and Windows names compare without case (the loader keeps the case a module was loaded by, a dump the
+  mapped file's). At most 1024 modules, with an overflow flag. It takes the loader lock and allocates: hosts call it
+  at start and after loading modules, never on a fatal path or in a loader callback.
+- `merge_module_snapshot` keeps a module that unloads, marked unloaded, so a bundle still names the binary a capture's
+  events came from; a module loaded again is a new generation. `FlightCommandHost::refresh_modules` keeps the host's
+  snapshot and `flight.write` refreshes it before writing.
+- `import_bundle` decodes tag 7 (`has_build`, or `build_refused`) and does not count an explicit absent SymbolIndex as
+  symbols. The bundle fuzz target's oracle covers tag 7 and its corpus holds a BuildIdentity bundle and a refused one.
+- Still open in this row: injection during cook, install, execute and teardown; refusal of arbitrary external I/O
+  replay as a shipping capability check; and a real host (crd-sandbox) installing the recorder, its triggers, a
+  `FlightCommandHost` sink with its module snapshot and the flight and fault commands.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 
