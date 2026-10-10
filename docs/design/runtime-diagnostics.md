@@ -1450,7 +1450,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-external-io-replay
   Before this a record that said `external-results` was recorded, or said it was not needed while its program read
   a file, replayed; the checksum guards integrity, not what the record claims.
 - `record_missing_inputs` counts `external-results` missing unless the record says it is not needed and not held, and
-  `replay.prepare` never answers it available from a record.
+  `replay.prepare` never answers it available from a record. (2026-10-10, DIAG.10a: a record file that says it holds
+  external results, or whose state contradicts its need, is now refused as it is decoded; `record_missing_inputs`
+  remains the guard for records held in memory, and the DIAG.9b cases check both.)
 - The doctor reports `external-io-replay` never compiled, enabled or usable, in any build, beside `fault-injection`
   (compiled out of shipping builds); `diag.capabilities` carries both.
 - Today no engine op declares an external-results effect, so such a program would also fail the plan compiler
@@ -1731,6 +1733,34 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-evidence-readers.
   explanation.
 - Not yet: run records (`decode_record`), command decoding, resource reload, the compiled and reference CEIR
   comparison, the virtual-memory and streaming allocators, and the unknown-origin artifacts.
+
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-run-records.md)):
+- Run records are the fuzz target `crd-fuzz-ceir-record` (`tests/execution/ceir-cook/fuzz`, corpus replayed on every
+  lane, libFuzzer on `linux-clang-fuzz`). Each input is decoded as given and again with its header's payload size and
+  checksum recomputed: the checksum guards integrity, so without the reseal a mutated payload never reaches the
+  payload reader. The program blob is carried, not read; the CRDR reader beneath it is `crd-fuzz-ceir-binary`'s.
+- A run record is evidence only if a recorder could have written it (the DIAG.10a flight-record rule).
+  `decode_record` checked bounds, each executor's own fields and the trace and read-stream counts; it now also
+  refuses what `replay.record`, `record_host_run` and the device recorder never write: an input state its need
+  contradicts (not-needed exactly when no op needs it), program, build or entry arguments that are not needed-and-
+  recorded, external results recorded, a schedule recorded by an executor other than the host (or missing on a host
+  record that needs it), a device tolerance recorded off the device executor (or missing on a device record that needs
+  it), a seam input (random, clock, host-state) recorded when only possibly needed or when the record lost reads past
+  its 65,536-read bound, a kept read of an input the record says is not needed, a cancelled plan or host run, a device
+  kernel whose text does not hash to its recorded hash, and device kernels or buffers in a plan or host record.
+  `replay.prepare` presented a record's recorded states as available inputs, so these claims reached its answer.
+- Every count is checked against the bytes that remain before an array is reserved for it: a record under 500 bytes
+  could make the decoder reserve 3 MB of events, 1.5 MB of reads or 16 MB of device words before it found the bytes
+  missing. The target bounds the decoder's allocations to eight times the input plus 64 KiB.
+- Oracles beside the recorders' restated guarantees: the same verdict twice, an accepted record re-encoding to its own
+  bytes, its missing inputs exactly the ones its states name (external results unless not needed), and no divergence
+  from a trace that repeats it.
+- Record files that make such claims are now refused at `replay.run` and `replay.prepare` as not decoding, before
+  `record_missing_inputs` sees them; it remains the guard for in-memory records (the host and device replays take
+  them), and the DIAG.9b cases check both routes. No record layout or schema changed; every record a recorder writes
+  still reads.
+- Not yet: command decoding, resource reload, the compiled and reference CEIR comparison, the virtual-memory and
+  streaming allocators, the unknown-origin artifacts and the concurrent-load corruption.
 
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness

@@ -1006,11 +1006,33 @@ TEST_CASE("diag 9b: no build replays external I/O; a record or program that need
     }
     SECTION("a record that says it holds or needs external results lacks them, whatever its state says")
     {
+        // No recorder writes external results as held, or a state its need contradicts: such a file is refused as it
+        // is read (DIAG.10a), and nothing runs. The same claims in memory, where no decoder stands in the way, still
+        // count as missing.
         const crd::ceir::cook::ReplayInput claims[] = {{ReplayNeed::Yes, ReplayInputState::Recorded},
                                                        {ReplayNeed::No, ReplayInputState::Recorded},
                                                        {ReplayNeed::Unknown, ReplayInputState::Recorded},
                                                        {ReplayNeed::Yes, ReplayInputState::NotNeeded}};
         for (const crd::ceir::cook::ReplayInput& claim : claims)
+        {
+            ReplayRecord rec           = decode_file(original, &alloc);
+            rec.inputs[external_input] = claim;
+            String missing(&alloc);
+            CHECK_FALSE(crd::ceir::cook::record_missing_inputs(rec, missing));
+            CHECK(view(missing) == "external-results");
+            encode_file(rec, tampered, &alloc);
+            const DiagResult r = replay(h, tampered);
+            INFO(r.reason.c_str());
+            CHECK(r.status == DiagStatus::Failed);
+            CHECK(has(view(r.reason), "not a usable run record: malformed"));
+            CHECK(h.cmd.executions.load() == executions);
+        }
+
+        // What a recorder writes when the program needs them, or may through an opaque op: needed and missing. That
+        // record reads, and its replay is refused for the missing input before anything runs.
+        const crd::ceir::cook::ReplayInput honest[] = {{ReplayNeed::Yes, ReplayInputState::Missing},
+                                                       {ReplayNeed::Unknown, ReplayInputState::Missing}};
+        for (const crd::ceir::cook::ReplayInput& claim : honest)
         {
             ReplayRecord rec           = decode_file(original, &alloc);
             rec.inputs[external_input] = claim;
@@ -1030,15 +1052,22 @@ TEST_CASE("diag 9b: no build replays external I/O; a record or program that need
         encode_file(rec, tampered, &alloc);
         refused(replay(h, tampered), external_refusal("the record's", reading, read_at, &alloc));
 
-        // replay.prepare reads the same record's program: it needs external results, and a record never has them,
-        // even when it says it does.
-        rec.inputs[external_input] = {ReplayNeed::Yes, ReplayInputState::Recorded};
+        // replay.prepare reads the same record's program: it needs external results, and a record never has them.
+        rec.inputs[external_input] = {ReplayNeed::Yes, ReplayInputState::Missing};
         encode_file(rec, tampered, &alloc);
         const DiagResult p = prepare(h, tampered);
         INFO(p.json.c_str());
         REQUIRE(p.status == DiagStatus::Ok);
         CHECK(has(view(p.json), R"("input":"external-results","guarantee":"event","needed":"yes","state":"missing")"));
         CHECK(has(view(p.json), R"("replay":"unavailable")"));
+
+        // A record that says it holds them is refused as it is read (DIAG.10a): prepare presents nothing from it.
+        rec.inputs[external_input] = {ReplayNeed::Yes, ReplayInputState::Recorded};
+        encode_file(rec, tampered, &alloc);
+        const DiagResult claimed = prepare(h, tampered);
+        INFO(claimed.json.c_str());
+        CHECK(claimed.status == DiagStatus::Failed);
+        CHECK(has(view(claimed.reason), "did not decode: malformed"));
     }
     SECTION("replaying honest inputs against a program that reads a file is refused before it runs")
     {

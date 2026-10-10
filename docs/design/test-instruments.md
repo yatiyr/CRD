@@ -47,16 +47,17 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-perf-flight` | `crd::perf::decode_flight_record` (DIAG.10a) | 30: seven captures a real `FlightRecorder` wrote (every end reason, a Basic policy, a suppressed trigger, a replay recipe, a clipped message, an empty post window, the fatal path without the ring) with fixed clock readings, ten records that contradict themselves in one way each, truncations, a trailing byte, a disagreeing count, a text length at its bound, an unknown detail level, garbage |
 | `crd-fuzz-perf-assets` | `parse_flight_policy_asset`, `parse_fault_plan_asset`, `parse_fault_plan` and crd-toml beneath them (DIAG.10a) | 41: the two committed assets, documents for every refusal the readers name, crd-toml's nesting, integer-range and number-length limits, plan texts at their bounds |
 | `crd-fuzz-perf-capture` | `crd::perf::validate_capture_buffer` and `CaptureView` (DIAG.10a) | 33: three captures in the writer's exact layout (one with frames and a correlation section, one whose frame span overflows a 64-bit difference) and one buffer per reader defect DIAG.10a fixed, truncations, garbage, and one adopted libFuzzer finding (a sample span the Perfetto export overflowed) |
+| `crd-fuzz-ceir-record` | `crd::ceir::cook::decode_record`, the run-record reader (DIAG.10a) | 57: eight records in the three recorders' shapes (plan, host and device; a bounded trace, an unavailable read, a reloading host's asset and generation, an ulp and an exact envelope) with a fixed build, 30 records that contradict a recorder in one way each, truncations as given and resealed, a trailing byte, a wrong checksum, an older schema, three counts past the payload, garbage |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
 `<replay> --seed <dir>`, merged units carry libFuzzer's SHA-1 name. The harness directory `tests/support/fuzz` is a
-registered test directory owned by the `ceir`, `kir`, `perf` and `memory` rows, so a fuzz executable's link set is
-the target's own module plus core, containers and memory. Every `crd_fuzz_target()` has exactly one `fuzz.py` entry
-naming its corpus and build-relative executable, and no entry is stale (`test-repository-tools.py`, DIAG.10a). The
-replay driver declares itself headless before the first input (`set_assert_headless`, and on Windows no abort
-dialog), so an engine assertion inside a target ends the replay with its evidence instead of waiting on a modal
-dialog until the CTest timeout.
+registered test directory owned by the `ceir`, `ceir-cook`, `kir`, `perf` and `memory` rows, so a fuzz executable's
+link set is the target's own module plus core, containers and memory. Every `crd_fuzz_target()` has exactly one
+`fuzz.py` entry naming its corpus and build-relative executable, and no entry is stale (`test-repository-tools.py`,
+DIAG.10a). The replay driver declares itself headless before the first input (`set_assert_headless`, and on Windows
+no abort dialog), so an engine assertion inside a target ends the replay with its evidence instead of waiting on a
+modal dialog until the CTest timeout.
 
 The stateful target `crd-fuzz-memory-allocators` (DIAG.10a) is the same harness with a different input shape: the
 first byte picks an allocator and its configuration, the rest is an operation stream replayed against the allocator
@@ -83,7 +84,14 @@ policy readers: a refusal names its reason and leaves the output untouched, and 
 canonical document or text that reads back to the same value. Their seed functions check each seed's verdict while
 writing it (`VerdictSink`), so a regenerated corpus cannot carry an honest seed the reader now refuses, or a forged
 one it now accepts. The perf corpora live in `tests/foundation/perf/fuzz/corpus/<reader>/` (the bundle corpus moved
-to `corpus/bundle/`).
+to `corpus/bundle/`). `crd-fuzz-ceir-record` decodes each input as given and again with its header's payload size and
+checksum recomputed, so a mutated payload reaches the payload reader instead of stopping at the checksum. It restates
+what `replay.record`, `record_host_run` and the device recorder write (each executor's own fields and errors, never a
+cancelled run, each input's state derived from its need, every kept read of an input the program needs, each kernel's
+text with its hash), requires an accepted record to re-encode to its own bytes, to name the missing inputs its states
+name and to show no divergence from a trace that repeats it, and bounds the decoder's allocations to eight times the
+input plus 64 KiB, so a count is checked against the bytes left before anything is reserved for it. It carries the
+program blob without reading it: the CRDR reader is `crd-fuzz-ceir-binary`'s.
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final

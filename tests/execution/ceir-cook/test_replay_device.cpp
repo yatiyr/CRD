@@ -556,8 +556,10 @@ TEST_CASE("diag 9a: device records refuse malformed files, foreign fields and re
         ck::DeviceReplay r(&alloc);
         ReplayRecord     t = copy_of(rec, &alloc);
         t.device_kernels[1].ckir.append(" "); // the text no longer hashes to its recorded hash
-        REQUIRE(decode(encode(t, &alloc), back) == ck::RecordError::Ok);
-        CHECK(ck::replay_device_record(back, reference, &fx::registrar, nullptr, {}, r) ==
+        // DIAG.10a: no recorder writes a kernel with another text's hash, so the file is refused as it is read; the
+        // replay refuses the same record held in memory.
+        CHECK(decode(encode(t, &alloc), back) == ck::RecordError::Malformed);
+        CHECK(ck::replay_device_record(t, reference, &fx::registrar, nullptr, {}, r) ==
               DeviceReplayStatus::ContentMismatch);
         CHECK(has(view(r.reason), "kernel @wave"));
 

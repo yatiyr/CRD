@@ -540,6 +540,12 @@ TEST_CASE("diag 9a: host requests are refused before anything is read or run", "
         plan.host_jobs     = 0U;
         plan.host_sub_fuel = 0U;
         plan.host_error    = crd::ceir::exec::ExecError::None;
+        // The plan recorder stores the schedule missing (DIAG.10a: a plan record that says it holds one is refused).
+        constexpr u32 schedule_input = 7U;
+        if (plan.inputs[schedule_input].need != ck::ReplayNeed::No)
+        {
+            plan.inputs[schedule_input].state = ck::ReplayInputState::Missing;
+        }
         encode_file(plan, tamper, &alloc);
         Host h;
         refused(send(h, ck::kReplayRunCommand, tamper, {{"jobs", "2"}}), DiagStatus::BadArgument,

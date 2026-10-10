@@ -39,3 +39,6 @@ target_compile_definitions(crd-ceir-cook-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOU
 
 crd_enable_default_pch(crd-ceir-cook-tests)
 crd_discover_tests(crd-ceir-cook-tests)
+
+# DIAG.10a: the run-record reader fuzz target and its committed corpus replay.
+add_subdirectory(fuzz)

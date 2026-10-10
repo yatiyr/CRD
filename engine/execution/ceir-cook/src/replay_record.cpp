@@ -1,6 +1,7 @@
 #include <crd/ceir/cook/replay_record.hpp>
 
 #include "bounded_file.hpp"
+#include "replay_needs.hpp" // the input slots and is_seam_input
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/provenance.hpp>
@@ -9,6 +10,7 @@
 #include <crd/core/build_config.hpp>
 #include <crd/core/platform.hpp>
 
+#include <algorithm> // std::ranges::all_of
 #include <initializer_list>
 #include <utility>
 
@@ -24,6 +26,11 @@ constexpr crd::u32 kRecordMagic = 0x4C505243U;
 constexpr crd::usize kHeaderBytes = 4U + 4U + 8U + 8U;
 
 constexpr crd::u64 kNoPending = ~crd::u64{0U};
+
+// The fewest bytes one kept event (op, depth, value count) and one host input read (kind, channel, delivered, value)
+// take in a record.
+constexpr crd::usize kEventMinBytes  = 8U + 4U + 4U;
+constexpr crd::usize kInputReadBytes = 1U + 4U + 1U + 8U;
 
 constexpr cont::StringView kInputNames[kReplayInputs] = {
     "program", "build", "entry-arguments", "random", "clock", "host-state", "external-results", "schedule",
@@ -161,6 +168,14 @@ public:
     [[nodiscard]] bool done() const noexcept { return m_pos == m_size; }
     [[nodiscard]] bool failed() const noexcept { return m_failed; }
 
+    // DIAG.10a: whether `count` elements of at least `bytes_each` bytes can still follow. Checked before an array is
+    // reserved for them, so a count the input cannot hold never sizes an allocation (a record under 500 bytes once
+    // reserved 3 MB of events, and one buffer count 16 MB of words).
+    [[nodiscard]] bool can_hold(crd::u64 count, crd::usize bytes_each) const noexcept
+    {
+        return !m_failed && count <= (m_size - m_pos) / bytes_each;
+    }
+
 private:
     [[nodiscard]] bool take(crd::usize n) noexcept
     {
@@ -232,6 +247,10 @@ private:
     if (n > budget)
     {
         return RecordError::Malformed; // past the record's element bound
+    }
+    if (!r.can_hold(n, 4U))
+    {
+        return RecordError::Truncated; // more words than the record has bytes left
     }
     budget -= n;
     out.clear();
@@ -306,6 +325,10 @@ private:
         {
             return RecordError::Truncated;
         }
+        if (k.hash != cont::fnv1a_64(text, text_n))
+        {
+            return RecordError::Malformed; // the recorder stores each kernel's text with that text's hash
+        }
         out.device_kernels.push_back(std::move(k));
     }
 
@@ -353,11 +376,68 @@ private:
     if (!device && (!out.device_adapter.backend.empty() || !out.device_adapter.name.empty() ||
                     out.device_adapter.vendor != 0U || out.device_adapter.device != 0U ||
                     out.device_adapter.driver != 0U || out.device_adapter.api != 0U || !exact ||
-                    out.device_error != 0U))
+                    out.device_error != 0U || !out.device_kernels.empty() || !out.device_buffers.empty()))
     {
-        return RecordError::Malformed; // a device field in another executor's record
+        return RecordError::Malformed; // a device field (kernels and buffers too) in another executor's record
     }
     return RecordError::Ok;
+}
+
+// The input a host input read is part of: random draws, clock and time-step reads, and input.event's host state.
+[[nodiscard]] crd::u32 input_of_read(input::InputKind kind) noexcept
+{
+    switch (kind) // no default (-Werror=switch)
+    {
+    case input::InputKind::Random: return detail::kReplayRandomInput;
+    case input::InputKind::Clock:
+    case input::InputKind::TimeStep: return detail::kReplayClockInput;
+    case input::InputKind::Event: return detail::kReplayHostStateInput;
+    }
+    return detail::kReplayHostStateInput;
+}
+
+// DIAG.10a: whether the input states and host input reads are ones a recorder writes (detail::record_inputs, through
+// replay.record, record_host_run and the device recorder). A state names the need it was derived from: not-needed
+// exactly when no op needs the input. The program, build and entry arguments are always recorded; external results
+// never are; the schedule is recorded by the host executor and only there (always, when needed), the device tolerance
+// by the device executor and only there; a seam input (random, clock, host-state) is recorded only when the program
+// surely needs it and the record holds every read the run made. Every kept read is of an input the record says the
+// program needs. A record that says otherwise contradicts itself, and replay.prepare would present its claims as
+// evidence, so it is refused.
+[[nodiscard]] bool inputs_as_recorded(const ReplayRecord& r) noexcept
+{
+    const bool host   = r.executor == ReplayExecutorKind::Host;
+    const bool device = r.executor == ReplayExecutorKind::Device;
+    const bool held   = r.input_reads_total <= kReplayMaxInputReads;
+    for (crd::u32 i = 0U; i < kReplayInputs; ++i)
+    {
+        const ReplayInput& in       = r.inputs[i];
+        const bool         identity = i == detail::kReplayProgramInput || i == detail::kReplayBuildInput ||
+                              i == detail::kReplayArgumentsInput;
+        if ((in.need == ReplayNeed::No) != (in.state == ReplayInputState::NotNeeded))
+        {
+            return false;
+        }
+        if (in.state != ReplayInputState::Recorded)
+        {
+            const bool executor_records = (host && i == detail::kReplayScheduleInput) ||
+                                          (device && i == detail::kReplayDeviceToleranceInput);
+            if (identity || (executor_records && in.need != ReplayNeed::No))
+            {
+                return false;
+            }
+            continue;
+        }
+        if (i == kReplayExternalResultsInput || (i == detail::kReplayScheduleInput && !host) ||
+            (i == detail::kReplayDeviceToleranceInput && !device) ||
+            (identity && in.need != ReplayNeed::Yes) ||
+            (detail::is_seam_input(i) && (in.need != ReplayNeed::Yes || !held)))
+        {
+            return false;
+        }
+    }
+    return std::ranges::all_of(r.input_reads, [&r](const ReplayInputRead& read)
+                               { return r.inputs[input_of_read(read.kind)].need != ReplayNeed::No; });
 }
 
 void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
@@ -488,6 +568,10 @@ void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
     {
         return RecordError::Malformed;
     }
+    if (!r.can_hold(kept, kEventMinBytes))
+    {
+        return RecordError::Truncated;
+    }
     out.events.clear();
     out.events.reserve(kept);
     for (crd::u32 i = 0U; i < kept; ++i)
@@ -528,6 +612,10 @@ void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
     {
         return RecordError::Malformed; // each executor reports its own error
     }
+    if (out.error == plan::RunError::Cancelled || out.host_error == exec::ExecError::Cancelled)
+    {
+        return RecordError::Malformed; // a cancelled run is never recorded
+    }
     if (const RecordError e = read_values(r, kReplayMaxValues, out.results); e != RecordError::Ok)
     {
         return e;
@@ -547,6 +635,10 @@ void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
     if (reads != kept_reads)
     {
         return RecordError::Malformed;
+    }
+    if (!r.can_hold(reads, kInputReadBytes))
+    {
+        return RecordError::Truncated;
     }
     out.input_reads.clear();
     out.input_reads.reserve(reads);
@@ -581,6 +673,10 @@ void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
          out.input_reads_total != 0U))
     {
         return RecordError::Malformed; // a device run has no entry, trace, results or host input reads
+    }
+    if (!inputs_as_recorded(out))
+    {
+        return RecordError::Malformed;
     }
     return r.done() ? RecordError::Ok : RecordError::Malformed;
 }

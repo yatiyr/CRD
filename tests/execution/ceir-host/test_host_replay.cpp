@@ -610,7 +610,12 @@ TEST_CASE("diag 9a: an incompatible host record is refused before anything runs"
         rec.executor      = ck::ReplayExecutorKind::Plan;
         rec.host_jobs     = 0U;
         rec.host_sub_fuel = 0U;
-        rec.host_error    = exec::ExecError::BadForStep; // a host error in a plan record
+        constexpr crd::u32 schedule_input = 7U;
+        if (rec.inputs[schedule_input].need != ck::ReplayNeed::No)
+        {
+            rec.inputs[schedule_input].state = ck::ReplayInputState::Missing; // what the plan recorder writes
+        }
+        rec.host_error = exec::ExecError::BadForStep; // a host error in a plan record
         ck::encode_record(rec, bytes);
         CHECK(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::Malformed);
         rec.host_error = exec::ExecError::None;

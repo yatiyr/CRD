@@ -43,6 +43,8 @@ TARGETS = {
                     'executable': 'tests/perf/fuzz/crd-fuzz-perf-assets'},
     'perf-capture': {'corpus': 'tests/foundation/perf/fuzz/corpus/capture',
                      'executable': 'tests/perf/fuzz/crd-fuzz-perf-capture'},
+    'ceir-record': {'corpus': 'tests/execution/ceir-cook/fuzz/corpus',
+                    'executable': 'tests/ceir-cook/fuzz/crd-fuzz-ceir-record'},
     'memory-allocators': {'corpus': 'tests/foundation/memory/fuzz/corpus',
                           'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
 }

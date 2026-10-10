@@ -980,4 +980,14 @@ TEST_CASE("diag 9a input: an inspected run that draws more than a record keeps s
     String missing(&alloc);
     CHECK_FALSE(ck::record_missing_inputs(rec, missing));
     CHECK(view(missing) == "random");
+
+    // DIAG.10a: the record reads back as written, and one that says it holds the incomplete stream is refused as it is
+    // read (no recorder writes random as recorded without every draw).
+    Array<u8> bytes(&alloc);
+    ck::encode_record(rec, bytes);
+    ReplayRecord back(&alloc);
+    CHECK(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::Ok);
+    rec.inputs[3].state = ck::ReplayInputState::Recorded;
+    ck::encode_record(rec, bytes);
+    CHECK(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::Malformed);
 }
