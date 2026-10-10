@@ -1688,6 +1688,50 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-allocator-fuzzing
 - Not yet: capture, policy, flight-record and run-record readers; command decoding; resource reload; the compiled
   and reference CEIR comparison; the reinvestigation of the unknown-origin CEIR and CKIR artifacts.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-evidence-readers.md)):
+- The crd-perf evidence readers are three more fuzz targets on the same harness, each with its corpus under
+  `tests/foundation/perf/fuzz/corpus/<reader>/` replayed on every lane: `crd-fuzz-perf-flight`
+  (`decode_flight_record`), `crd-fuzz-perf-assets` (`parse_flight_policy_asset`, `parse_fault_plan_asset`,
+  `parse_fault_plan` and crd-toml beneath them) and `crd-fuzz-perf-capture` (`validate_capture_buffer` and
+  `CaptureView`). The bundle corpus moved to `corpus/bundle/`. Each oracle is what the writer can produce, never the
+  reader's own verdict, and each seed function checks every seed's verdict as it writes it, so a regenerated corpus
+  cannot carry an honest seed the reader now refuses or a forged one it now accepts.
+- A flight record is evidence only if a recorder could have written it. `decode_flight_record` checked bounds and
+  order but accepted records that contradict themselves; it now also refuses a trigger kind or suppressed kind the
+  recorded policy does not arm, a suppression count without kinds (or kinds without a count), an end reason the post
+  window contradicts (post-events-full exactly when `post_events` landed, elapsed only under a time bound, shutdown
+  and fatal ends exactly when `post_truncated` says so), a capture without the ring that is not fatal or holds events
+  or a drop count, events that are not one contiguous run across the trigger, a clip flag on a message that does not
+  fill its buffer, an event below Warning under a Basic policy, and an unavailable replay without its reason. An
+  accepted record re-encodes to exactly its own bytes. No record version changed: every capture a recorder writes
+  still reads.
+- The CPROF reader validated the header's section sizes and then trusted everything they point at; the profiler panel,
+  `cprof-export`, `capture.validate` and the Perfetto export all read through it. `validate_capture_buffer` now
+  refuses: a name-blob size that wraps the section sum (the frame records then sat before the buffer); a thread's
+  sample array outside the buffer, before the frame records or misaligned; a name blob smaller than its 8-byte header
+  or not a multiple of 8 (the frame records after it misaligned), whose slot count disagrees with the header or whose
+  slots and strings overrun it, with an offset past its strings, or whose strings do not end with a terminator;
+  unterminated thread, counter and allocator names; an unknown counter kind or type; more threads, counters or
+  allocators than the profiler's tables, and frame records whose counts exceed their arrays (the export indexed a
+  record's values by the header's counter count); a buffer that is not 8-aligned. `CaptureView` keeps trusting a
+  validated buffer. No on-disk layout or version changed; every capture the writer produces still validates.
+- crd-toml, which reads every authored asset and configuration, had no bound on nesting: a 20,000-deep array or
+  inline table overflowed the stack (0xC00000FD on win-debug). It now refuses nesting deeper than 64 levels (tables
+  from header paths and array-of-tables elements, arrays and inline tables together), an integer outside the 64-bit
+  signed range (read as `INT64_MAX` before, so `seed = 9223372036854775808` armed seed 9223372036854775807), a float
+  that overflows a double, and a number token longer than 63 characters (read as its first 63 before). No committed
+  asset or configuration is affected.
+- libFuzzer found the Perfetto export computing a span as `end - begin` in `i64`, which overflows for a hostile
+  capture; a duration is now the difference without overflow (0 for a reversed span, at most `INT64_MAX`), and the
+  minimized input is adopted. The policy readers had no defect of their own: a refusal leaves the output untouched,
+  and every accepted policy and plan writes a canonical document or text that reads back to the same value.
+- Fuzzing rounds for DIAG.10a run single-process. Under four concurrent processes, two perf targets (the unchanged
+  bundle target among them) showed input-independent register and stack corruption that no artifact reproduces and
+  single-process runs never showed; the cause is not established and stays an open item of the row, not an
+  explanation.
+- Not yet: run records (`decode_record`), command decoding, resource reload, the compiled and reference CEIR
+  comparison, the virtual-memory and streaming allocators, and the unknown-origin artifacts.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

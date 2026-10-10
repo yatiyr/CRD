@@ -2,6 +2,8 @@
 
 #include <crd/toml/toml.hpp>
 
+#include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -383,6 +385,15 @@ cont::String node::to_toml() const
 
 namespace
 {
+// What the parser refuses besides the syntax (DIAG.10a): a document is never read as something it does not say.
+//   * A key defined twice in one table.
+//   * Nesting deeper than kMaxNestingDepth. The root table is depth 0; every table a header path or an
+//     array-of-tables element opens, every array and every inline table is one level deeper than its parent, so a
+//     hostile `a = [[[[...` cannot exhaust the stack of the recursive parser or of a node's destructor.
+//   * An integer outside the 64-bit signed range or a float that overflows a double (strtoll and strtod would clamp
+//     them), and a number token longer than 63 characters (it would be cut short).
+constexpr crd::u32 kMaxNestingDepth = 64U;
+
 class Parser
 {
 public:
@@ -442,6 +453,7 @@ private:
     cont::String     m_error_msg;
     crd::u32         m_error_line = 0;
     crd::u32         m_error_col = 0;
+    crd::u32         m_table_depth = 0; // depth of the table the following key/values land in (root: 0)
 
     [[nodiscard]] bool at_end() const noexcept { return m_p >= m_end; }
     [[nodiscard]] char peek() const noexcept { return at_end() ? '\0' : *m_p; }
@@ -738,10 +750,19 @@ private:
             set_error("empty table header");
             return false;
         }
+        // Every segment is at least one level, so an over-long path is refused before any table is created; the exact
+        // depth (a segment through an array of tables is two levels) is checked as the path is walked.
+        if (path.size() > kMaxNestingDepth)
+        {
+            set_error("table nesting deeper than the 64-level limit");
+            return false;
+        }
 
-        node* cur = &root;
+        node*    cur   = &root;
+        crd::u32 depth = 0U;
         for (crd::usize i = 0; i + 1 < path.size(); ++i)
         {
+            depth += segment_depth(*cur, path[i]);
             cur = descend_table(*cur, path[i]);
             if (cur == nullptr)
             {
@@ -750,6 +771,13 @@ private:
             }
         }
         const cont::String& leaf = path[path.size() - 1];
+        depth += array_of_tables ? 2U : segment_depth(*cur, leaf);
+        if (depth > kMaxNestingDepth)
+        {
+            set_error("table nesting deeper than the 64-level limit");
+            return false;
+        }
+        m_table_depth = depth;
         if (array_of_tables)
         {
             node* arr = cur->get(cont::StringView{leaf});
@@ -784,6 +812,14 @@ private:
             current->set_source(hline, hcol);
         }
         return true;
+    }
+
+    // The levels descend_table(parent, key) goes down: two through an array of tables (the array, then its most
+    // recent element), otherwise one.
+    static crd::u32 segment_depth(const node& parent, const cont::String& key)
+    {
+        const node* existing = parent.get(cont::StringView{key});
+        return (existing != nullptr && existing->kind() == Kind::Array) ? 2U : 1U;
     }
 
     // Get-or-create a child table `key` inside `parent`.
@@ -835,7 +871,7 @@ private:
         const crd::u32 vline = m_line;
         const crd::u32 vcol = m_col;
         node value;
-        if (!parse_value(value))
+        if (!parse_value(value, m_table_depth + 1U))
         {
             return false;
         }
@@ -844,7 +880,9 @@ private:
         return true;
     }
 
-    bool parse_value(node& out)
+    // `depth` is the level `out` sits at; an array or inline table there opens it, so one past the limit is refused
+    // before its elements are read (the recursion is bounded by kMaxNestingDepth).
+    bool parse_value(node& out, crd::u32 depth)
     {
         skip_inline_ws();
         if (at_end())
@@ -863,13 +901,14 @@ private:
             out.set_string(s);
             return true;
         }
-        if (c == '[')
+        if (c == '[' || c == '{')
         {
-            return parse_array(out);
-        }
-        if (c == '{')
-        {
-            return parse_inline_table(out);
+            if (depth > kMaxNestingDepth)
+            {
+                set_error("nesting deeper than the 64-level limit");
+                return false;
+            }
+            return (c == '[') ? parse_array(out, depth) : parse_inline_table(out, depth);
         }
         if (c == 't' || c == 'f')
         {
@@ -942,15 +981,22 @@ private:
                 break;
             }
         }
-        // Copy the token without underscores into a small buffer.
+        // Copy the token without underscores into a small buffer. A token that does not fit is refused: reading its
+        // first 63 characters would silently be another number.
         char        buf[64];
         std::size_t n = 0;
-        for (const char* q = start; q < m_p && n + 1 < sizeof(buf); ++q)
+        for (const char* q = start; q < m_p; ++q)
         {
-            if (*q != '_')
+            if (*q == '_')
             {
-                buf[n++] = *q;
+                continue;
             }
+            if (n + 1 >= sizeof(buf))
+            {
+                set_error("number longer than 63 characters");
+                return false;
+            }
+            buf[n++] = *q;
         }
         buf[n] = '\0';
         if (n == 0)
@@ -959,12 +1005,20 @@ private:
             return false;
         }
         char* endp = nullptr;
+        errno      = 0;
         if (is_float)
         {
             const double v = std::strtod(buf, &endp);
             if (endp != buf + n)
             {
                 set_error("invalid float");
+                return false;
+            }
+            // strtod reports an overflow as ERANGE with HUGE_VAL; an underflow (ERANGE with a value near zero) reads as
+            // the nearest representable value, which is what the text means.
+            if (errno == ERANGE && (v == HUGE_VAL || v == -HUGE_VAL))
+            {
+                set_error("float out of range");
                 return false;
             }
             out.set_float(v);
@@ -977,12 +1031,17 @@ private:
                 set_error("invalid integer");
                 return false;
             }
+            if (errno == ERANGE) // strtoll clamps to the nearest limit; the text meant another value
+            {
+                set_error("integer out of the 64-bit signed range");
+                return false;
+            }
             out.set_integer(static_cast<crd::i64>(v));
         }
         return true;
     }
 
-    bool parse_array(node& out)
+    bool parse_array(node& out, crd::u32 depth)
     {
         advance(); // '['
         out.set_kind(Kind::Array);
@@ -1000,7 +1059,7 @@ private:
                 return true;
             }
             node elem;
-            if (!parse_value(elem))
+            if (!parse_value(elem, depth + 1U))
             {
                 return false;
             }
@@ -1022,7 +1081,7 @@ private:
         }
     }
 
-    bool parse_inline_table(node& out)
+    bool parse_inline_table(node& out, crd::u32 depth)
     {
         advance(); // '{'
         out.set_kind(Kind::Table);
@@ -1054,7 +1113,7 @@ private:
             advance();
             skip_inline_ws();
             node value;
-            if (!parse_value(value))
+            if (!parse_value(value, depth + 1U))
             {
                 return false;
             }

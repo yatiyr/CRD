@@ -11,6 +11,7 @@
 
 #include <bit>    // std::bit_cast
 #include <cstdio> // std::FILE for the _to_file twin
+#include <limits>
 
 namespace crd::perf
 {
@@ -42,6 +43,20 @@ using detail::append_us_from_ns;
     case Category::Wait:   return "wait";
     }
     return "unknown";
+}
+
+// A span's duration in nanoseconds: never negative and never overflowing. A capture file is untrusted, and the
+// difference of two arbitrary i64 endpoints is undefined when it overflows (DIAG.10a: libFuzzer found
+// end - begin = 72057947567445849 - INT64_MIN). A reversed span is 0, as append_us_from_ns already clamps it.
+[[nodiscard]] crd::i64 duration_ns(crd::i64 begin_ns, crd::i64 end_ns) noexcept
+{
+    if (end_ns <= begin_ns)
+    {
+        return 0;
+    }
+    const crd::u64 span = static_cast<crd::u64>(end_ns) - static_cast<crd::u64>(begin_ns);
+    constexpr auto max = static_cast<crd::u64>(std::numeric_limits<crd::i64>::max());
+    return span > max ? std::numeric_limits<crd::i64>::max() : static_cast<crd::i64>(span);
 }
 
 // A reserved tid for the per-frame span row (kept clear of real thread indices).
@@ -228,7 +243,7 @@ struct SeenSet
                 append_us_from_ns(out, s.begin_ns);
             }
             out.append(",\"dur\":");
-            const crd::i64 dur = s.end_ns - s.begin_ns;
+            const crd::i64 dur = duration_ns(s.begin_ns, s.end_ns);
             if (raw_gpu)
             {
                 append_i64(out, dur);
@@ -302,7 +317,7 @@ struct SeenSet
         out.append(",\"ts\":");
         append_us_from_ns(out, fr.frame_begin_ns);
         out.append(",\"dur\":");
-        append_us_from_ns(out, fr.frame_end_ns - fr.frame_begin_ns);
+        append_us_from_ns(out, duration_ns(fr.frame_begin_ns, fr.frame_end_ns));
         out.append(R"(,"name":"frame )");
         append_u64(out, fr.frame_index);
         out.append(R"(","cat":"frame"})");

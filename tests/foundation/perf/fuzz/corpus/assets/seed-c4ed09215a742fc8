@@ -1,0 +1,4 @@
+kind = "flight-policy"
+schema_version = 1
+capacity = 64
+capacity = 1

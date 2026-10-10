@@ -1,0 +1,4 @@
+kind = "fault-plan"
+schema_version = 1
+seed = 9223372036854775808
+rules = ["device-loss@0+1%1"]

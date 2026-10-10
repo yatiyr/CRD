@@ -1,0 +1,9 @@
+kind = "flight-policy"
+schema_version = 1
+capacity = 64
+pre_events = 40
+post_events = 24
+post_window_ns = 0
+hitch_threshold_ns = 1
+detail = "basic"
+triggers = ["manual", "hang"]

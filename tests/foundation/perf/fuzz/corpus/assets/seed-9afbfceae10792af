@@ -1,0 +1,6 @@
+kind           = "fault-plan"
+schema_version = 1
+
+seed           = 1
+trigger_flight = true # a fired fault also triggers the attached flight recorder
+rules          = ["allocation-failure@0+1%1000000"]

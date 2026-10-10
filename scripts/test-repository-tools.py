@@ -1323,7 +1323,8 @@ class TestInstruments(unittest.TestCase):
 
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
         self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-text', 'ckir-binary', 'ckir-text',
-                                                       'memory-allocators', 'perf-bundle'])
+                                                       'memory-allocators', 'perf-assets', 'perf-bundle',
+                                                       'perf-capture', 'perf-flight'])
         for name, target in fuzz_driver.TARGETS.items():
             corpus = ROOT / target['corpus']
             self.assertTrue(corpus.is_dir(), f'{name}: committed corpus {corpus} is missing')

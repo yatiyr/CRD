@@ -1,0 +1,15 @@
+# The default flight policy.
+
+kind           = "flight-policy"
+schema_version = 1
+
+capacity    = 1024
+pre_events  = 768
+post_events = 256
+
+post_window_ns     = 2000000000
+hitch_threshold_ns = 50000000
+
+detail = "full"
+
+triggers = ["all"]

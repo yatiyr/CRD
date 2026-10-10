@@ -40,6 +40,44 @@ public:
     void         add_text(const char* name, const char* text) { add(name, reinterpret_cast<const u8*>(text), std::strlen(text)); }
 };
 
+// A seed sink that checks each seed's verdict as it is written (DIAG.10a): `accepted(data, size)` must be true for
+// exactly the seeds named in `expected`, then the seed is passed on to `next`. A seed the reader judges otherwise ends
+// the run naming it, so a regenerated corpus can never carry a seed whose role changed silently (an honest input the
+// reader now refuses, or a forged one it now accepts). Sinks chain: one per reader of a shared corpus.
+class VerdictSink final : public SeedSink
+{
+public:
+    using Verdict = bool (*)(const u8* data, usize size);
+
+    VerdictSink(SeedSink& next, Verdict accepted, const char* const* expected, usize expected_count) noexcept
+        : m_next(next), m_accepted(accepted), m_expected(expected), m_expected_count(expected_count)
+    {
+    }
+
+    void add(const char* name, const u8* data, usize size) override
+    {
+        bool expected = false;
+        for (usize i = 0U; i < m_expected_count; ++i)
+        {
+            expected = expected || std::strcmp(m_expected[i], name) == 0;
+        }
+        if (m_accepted(data, size) != expected)
+        {
+            std::fprintf(stderr, "fuzz seeds: %s was %s, but the seed list says it %s\n", name,
+                         expected ? "refused" : "accepted", expected ? "is accepted" : "is refused");
+            std::fflush(stderr);
+            fatal_exit();
+        }
+        m_next.add(name, data, size);
+    }
+
+private:
+    SeedSink&          m_next;
+    Verdict            m_accepted;
+    const char* const* m_expected;
+    usize              m_expected_count;
+};
+
 // A root allocator for one input: every block carries a header, live and peak bytes are tracked, and an allocation
 // that would exceed the budget is a fatal with a message the replay and libFuzzer artifacts carry verbatim.
 class BudgetAllocator final : public memory::IAllocator

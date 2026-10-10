@@ -944,12 +944,40 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     {
         return refuse(r, "inconsistent loss metadata");
     }
+    // What a recorder writes and nothing else (DIAG.10a: a record that contradicts itself is not evidence). trigger()
+    // starts or suppresses only a kind the policy arms, and counts every suppression with its kind; build_capture() and
+    // finish() derive the end and the truncation from the post window: it ends post-events-full exactly when
+    // post_events events landed, it can elapse only under a time bound, and a capture without the ring is a fatal one
+    // with no events and no drop count.
+    if ((c.policy.trigger_mask & flight_trigger_bit(c.trigger.kind)) == 0U ||
+        (c.suppressed_kinds & ~c.policy.trigger_mask) != 0U ||
+        (c.suppressed_triggers == 0U) != (c.suppressed_kinds == 0U))
+    {
+        return refuse(r, "the trigger or a suppressed kind is not armed by the recorded policy, or the suppression "
+                         "count disagrees with its kinds");
+    }
+    const bool ended_early = c.end == FlightEnd::Shutdown || c.end == FlightEnd::Fatal;
+    if ((c.end == FlightEnd::PostEventsFull) != (c.post_retained == c.policy.post_events) ||
+        c.post_truncated != (ended_early && c.post_retained < c.policy.post_events) ||
+        (c.end == FlightEnd::PostWindowElapsed && c.policy.post_window_ns == 0U))
+    {
+        return refuse(r, "the end reason disagrees with the post window");
+    }
+    if (c.ring_unavailable &&
+        (c.end != FlightEnd::Fatal || c.pre_retained != 0U || c.post_retained != 0U || c.dropped_while_complete != 0U))
+    {
+        return refuse(r, "a capture without the ring must be fatal and hold no events");
+    }
 
     char           replay[kFlightRecipeBytes] = {};
     const crd::u16 replay_n                   = in.u16();
     if (!in.text(replay, kFlightRecipeBytes, replay_n))
     {
         return refuse(r, "replay text over its bound or past the payload");
+    }
+    if (!c.replay_available && replay_n == 0U)
+    {
+        return refuse(r, "replay unavailable without its reason");
     }
     c.replay.clear();
     c.replay.append(cont::StringView{replay, replay_n});
@@ -983,11 +1011,16 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
         }
         e.severity          = static_cast<Severity>(severity);
         e.message_truncated = truncated != 0U;
-        const bool pre      = i < c.pre_retained;
-        if ((pre && e.sequence >= c.trigger.sequence) || (!pre && e.sequence < c.trigger.sequence) ||
-            (i > 0U && e.sequence <= c.events[i - 1U].sequence))
+        // The capture copies one contiguous run of the ring, from pre_retained before the trigger's sequence on.
+        if (e.sequence != c.trigger.sequence - c.pre_retained + i)
         {
-            return refuse(r, "event sequence out of order or on the wrong side of the trigger");
+            return refuse(r, "event sequence not contiguous across the trigger");
+        }
+        // A clipped message fills its buffer; a Basic policy records Warning and above only.
+        if ((e.message_truncated && e.message_length != kFlightMessageBytes - 1U) ||
+            (c.policy.detail == FlightDetail::Basic && e.severity < Severity::Warning))
+        {
+            return refuse(r, "an event the recorder could not have written (clip flag or detail level)");
         }
         c.events.push_back(e);
     }

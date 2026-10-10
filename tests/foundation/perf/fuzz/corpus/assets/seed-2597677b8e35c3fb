@@ -1,0 +1,4 @@
+kind = "fault-plan"
+schema_version = 1
+trigger_flight = 1
+rules = ["device-loss@0+1%1"]

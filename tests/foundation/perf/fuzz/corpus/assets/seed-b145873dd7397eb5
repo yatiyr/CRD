@@ -1,0 +1,5 @@
+kind = "fault-plan"
+schema_version = 1
+seed = 9223372036854775807
+trigger_flight = false
+rules = ["allocation-failure@0+0%1", "failed-read@1+2%500000", "partial-read@0+1%1000000=16", "delayed-completion@5+1%1000000=10000000000", "cancelled-completion@0+1%1000000", "device-loss@18446744073709551614+1%1000000"]

@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <optional>
 #include <string_view>
 
 namespace
@@ -103,6 +104,126 @@ TEST_CASE("toml: a key defined twice in one table is refused, never last-one-win
     // The same key in different tables, and in successive array-of-tables elements, is not a duplicate.
     const auto distinct = ct::parse("[a]\nk = 1\n[b]\nk = 2\n[[item]]\nk = 1\n[[item]]\nk = 2\n");
     CHECK(distinct);
+}
+
+namespace
+{
+// crd-toml's nesting limit (toml.cpp): the root table is depth 0, and each table, array or inline table one deeper.
+constexpr crd::u32 kMaxNestingDepth = 64U;
+
+// `levels` nested arrays (`[[[...]]]`) as the value of `v`, or inline tables (`{ a = { a = ... } }`) when `tables`.
+cont::String nested_value(crd::u32 levels, bool tables)
+{
+    cont::String text{"v = "};
+    for (crd::u32 i = 0U; i < levels; ++i)
+    {
+        text.append(tables ? cont::StringView{"{ a = "} : cont::StringView{"["});
+    }
+    text.append(cont::StringView{"1"});
+    for (crd::u32 i = 0U; i < levels; ++i)
+    {
+        text.append(tables ? cont::StringView{" }"} : cont::StringView{"]"});
+    }
+    text.push_back('\n');
+    return text;
+}
+
+// A `[t.t.t...]` header of `segments` segments, then one key.
+cont::String nested_header(crd::u32 segments)
+{
+    cont::String text{"[t"};
+    for (crd::u32 i = 1U; i < segments; ++i)
+    {
+        text.append(cont::StringView{".t"});
+    }
+    text.append(cont::StringView{"]\nk = 1\n"});
+    return text;
+}
+
+bool refused_with(const cont::String& text, const char* reason)
+{
+    const auto r = ct::parse(std::string_view{text.data(), text.size()});
+    return !r && cont::StringView{r.error().description()}.find(cont::StringView{reason}) != cont::StringView::npos;
+}
+
+bool accepts(const cont::String& text)
+{
+    return static_cast<bool>(ct::parse(std::string_view{text.data(), text.size()}));
+}
+} // namespace
+
+TEST_CASE("toml: nesting past the depth limit is refused, never a stack overflow", "[toml][diag10a]")
+{
+    // A key's value sits one level below its table, so 64 nested containers are the deepest a root key may hold.
+    CHECK(accepts(nested_value(kMaxNestingDepth, false)));
+    CHECK(accepts(nested_value(kMaxNestingDepth, true)));
+    CHECK(refused_with(nested_value(kMaxNestingDepth + 1U, false), "64-level limit"));
+    CHECK(refused_with(nested_value(kMaxNestingDepth + 1U, true), "64-level limit"));
+    // Far past the limit (the recursion is refused at the limit, not after it ran out of stack).
+    CHECK(refused_with(nested_value(20000U, false), "64-level limit"));
+    CHECK(refused_with(nested_value(20000U, true), "64-level limit"));
+
+    // Header paths count too, and a value under a deep table counts from the table's depth.
+    CHECK(accepts(nested_header(kMaxNestingDepth)));
+    CHECK(refused_with(nested_header(kMaxNestingDepth + 1U), "64-level limit"));
+    CHECK(refused_with(nested_header(30000U), "64-level limit"));
+    cont::String deep_table = nested_header(kMaxNestingDepth - 1U);
+    deep_table.append(cont::StringView{"x = [1]\n"});
+    CHECK(accepts(deep_table));
+    deep_table.append(cont::StringView{"y = [[1]]\n"});
+    CHECK(refused_with(deep_table, "64-level limit"));
+
+    // A segment through an array of tables is two levels: the array, then its most recent element.
+    cont::String through_arrays;
+    for (crd::u32 i = 1U; i <= 33U; ++i)
+    {
+        through_arrays.append(cont::StringView{"[["});
+        for (crd::u32 s = 0U; s < i; ++s)
+        {
+            through_arrays.append(s == 0U ? cont::StringView{"a"} : cont::StringView{".a"});
+        }
+        through_arrays.append(cont::StringView{"]]\n"});
+        if (i == 32U)
+        {
+            CHECK(accepts(through_arrays)); // 32 arrays of tables, each with its element: 64 levels
+        }
+    }
+    CHECK(refused_with(through_arrays, "64-level limit"));
+}
+
+TEST_CASE("toml: an out-of-range or over-long number is refused, never clamped or cut", "[toml][diag10a]")
+{
+    const auto integer = [](const char* text) {
+        const auto r = ct::parse(text);
+        return r ? r.table().get(cont::StringView{"n"})->value<crd::i64>() : std::optional<crd::i64>{};
+    };
+    CHECK(integer("n = 9223372036854775807\n") == crd::i64{9223372036854775807});
+    CHECK(integer("n = -9223372036854775808\n") == (-crd::i64{9223372036854775807} - 1));
+    CHECK(refused_with(cont::String{"n = 9223372036854775808\n"}, "64-bit signed range"));
+    CHECK(refused_with(cont::String{"n = -9223372036854775809\n"}, "64-bit signed range"));
+    CHECK(refused_with(cont::String{"n = 99999999999999999999999\n"}, "64-bit signed range"));
+
+    CHECK(refused_with(cont::String{"f = 1e999\n"}, "float out of range"));
+    CHECK(refused_with(cont::String{"f = -1e999\n"}, "float out of range"));
+    CHECK(accepts(cont::String{"f = 1e-999\n"})); // an underflow is the nearest double, not an error
+
+    // 63 characters fit; the 64th would have been dropped, reading "1000...0" as a number ten times smaller.
+    cont::String fits{"f = 0."};
+    cont::String over{"n = 1"};
+    for (crd::u32 i = 0U; i < 60U; ++i)
+    {
+        fits.push_back('0');
+    }
+    fits.append(cont::StringView{"1\n"});
+    for (crd::u32 i = 0U; i < 63U; ++i)
+    {
+        over.push_back('0');
+    }
+    over.push_back('\n');
+    CHECK(accepts(fits));
+    CHECK(refused_with(over, "longer than 63 characters"));
+    // Underscores are not characters of the number.
+    CHECK(integer("n = 1_000_000\n") == crd::i64{1000000});
 }
 
 TEST_CASE("toml: build and serialize round-trips", "[toml]")

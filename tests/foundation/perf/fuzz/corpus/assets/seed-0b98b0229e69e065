@@ -1,0 +1,3 @@
+kind = "flight-policy"
+schema_version = 1
+pre_events = -1

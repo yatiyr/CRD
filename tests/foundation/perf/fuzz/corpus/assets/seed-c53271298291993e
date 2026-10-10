@@ -1,0 +1,5 @@
+kind = "flight-policy"
+schema_version = 1
+capacity = 8
+pre_events = 6
+post_events = 3

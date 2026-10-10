@@ -31,6 +31,7 @@
 #include <crd/time/clocks.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -515,10 +516,57 @@ load_capture_from_file(const char* path, crd::memory::IAllocator* alloc) noexcep
     return buf;
 }
 
+namespace
+{
+// A fixed-size name field the reader hands out as a C string must hold its terminator.
+[[nodiscard]] bool fixed_name_terminated(const char* name, crd::usize size) noexcept
+{
+    return std::memchr(name, '\0', size) != nullptr;
+}
+
+// DIAG.10a: the name blob the view resolves NameIds through. Its 8 B header names the slot count (the header's
+// name_blob_count) and the packed string bytes; the offsets array and the strings must fit the declared section, every
+// offset must be empty or land inside the strings, and the strings must end with a terminator, so a resolved name
+// never runs past the section.
+[[nodiscard]] bool name_blob_valid(const crd::u8* blob, const CprofHeader& hdr) noexcept
+{
+    crd::u32 capacity     = 0U;
+    crd::u32 string_bytes = 0U;
+    std::memcpy(&capacity, blob, sizeof(capacity));
+    std::memcpy(&string_bytes, blob + sizeof(crd::u32), sizeof(string_bytes));
+    if (capacity != hdr.name_blob_count ||
+        8U + static_cast<crd::u64>(capacity) * sizeof(crd::u32) + string_bytes > hdr.name_blob_byte_size)
+    {
+        return false;
+    }
+    const auto* offsets = reinterpret_cast<const crd::u32*>(blob + 8U);
+    const auto* strings =
+        reinterpret_cast<const char*>(blob + 8U + static_cast<crd::usize>(capacity) * sizeof(crd::u32));
+    if (string_bytes != 0U && strings[string_bytes - 1U] != '\0')
+    {
+        return false;
+    }
+    for (crd::u32 i = 0U; i < capacity; ++i)
+    {
+        if (offsets[i] != kEmptyNameOffset && offsets[i] >= string_bytes)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
+
 [[nodiscard]] bool validate_capture_buffer(
     crd::containers::ConstSpan<crd::u8> buf) noexcept
 {
     if (buf.size() < sizeof(CprofHeader))
+    {
+        return false;
+    }
+    // The view reads every section in place through typed pointers, so the buffer must be 8-aligned (an Array<u8> or
+    // a file buffer always is).
+    if ((reinterpret_cast<std::uintptr_t>(buf.data()) & 7U) != 0U)
     {
         return false;
     }
@@ -539,17 +587,70 @@ load_capture_from_file(const char* path, crd::memory::IAllocator* alloc) noexcep
     {
         return false;
     }
+    // DIAG.10a: no writer exceeds the profiler's fixed tables, and a frame record holds kMaxCounters values, which a
+    // reader indexes by the header's counter count. The name blob is at least its own 8 B header and a multiple of
+    // 8, so the frame records after it stay aligned; bounding it by the buffer first keeps the sum below from
+    // wrapping.
+    if (hdr->thread_count > kMaxThreads || hdr->counter_count > kMaxCounters || hdr->allocator_count > kMaxAllocators ||
+        hdr->name_blob_byte_size < 8U || (hdr->name_blob_byte_size & 7U) != 0U ||
+        hdr->name_blob_byte_size > buf.size())
+    {
+        return false;
+    }
     // Verify the buffer is large enough to hold every section.
+    const crd::u64 blob_offset = sizeof(CprofHeader) + static_cast<crd::u64>(hdr->thread_count) * sizeof(ThreadHeader) +
+                                 static_cast<crd::u64>(hdr->counter_count) * sizeof(CounterMeta) +
+                                 static_cast<crd::u64>(hdr->allocator_count) * sizeof(AllocatorMeta);
     const crd::u64 min_bytes =
-        sizeof(CprofHeader)
-        + static_cast<crd::u64>(hdr->thread_count) * sizeof(ThreadHeader)
-        + static_cast<crd::u64>(hdr->counter_count) * sizeof(CounterMeta)
-        + static_cast<crd::u64>(hdr->allocator_count) * sizeof(AllocatorMeta)
-        + hdr->name_blob_byte_size
-        + static_cast<crd::u64>(hdr->frame_count) * sizeof(FrameRecord);
+        blob_offset + hdr->name_blob_byte_size + static_cast<crd::u64>(hdr->frame_count) * sizeof(FrameRecord);
     if (buf.size() < min_bytes)
     {
         return false;
+    }
+    if (!name_blob_valid(buf.data() + blob_offset, *hdr))
+    {
+        return false;
+    }
+    // DIAG.10a: every thread's sample array lies after the frame records, aligned and inside the buffer; every name the
+    // view hands out as a C string is terminated inside its field; counter kinds and types name an enumerator.
+    const auto* threads = reinterpret_cast<const ThreadHeader*>(buf.data() + sizeof(CprofHeader));
+    for (crd::u32 i = 0U; i < hdr->thread_count; ++i)
+    {
+        const ThreadHeader& th = threads[i];
+        if (th.sample_byte_offset < min_bytes || (th.sample_byte_offset & 7U) != 0U ||
+            th.sample_byte_offset > buf.size() ||
+            static_cast<crd::u64>(th.sample_count) > (buf.size() - th.sample_byte_offset) / sizeof(Sample) ||
+            !fixed_name_terminated(th.name, sizeof(th.name)))
+        {
+            return false;
+        }
+    }
+    const auto* counters = reinterpret_cast<const CounterMeta*>(threads + hdr->thread_count);
+    for (crd::u32 i = 0U; i < hdr->counter_count; ++i)
+    {
+        if (counters[i].kind > static_cast<crd::u8>(CounterKind::Add) ||
+            counters[i].type > static_cast<crd::u8>(CounterType::DurationNs) ||
+            !fixed_name_terminated(counters[i].name, sizeof(counters[i].name)))
+        {
+            return false;
+        }
+    }
+    const auto* allocators = reinterpret_cast<const AllocatorMeta*>(counters + hdr->counter_count);
+    for (crd::u32 i = 0U; i < hdr->allocator_count; ++i)
+    {
+        if (!fixed_name_terminated(allocators[i].name, sizeof(allocators[i].name)))
+        {
+            return false;
+        }
+    }
+    const auto* frames =
+        reinterpret_cast<const FrameRecord*>(buf.data() + blob_offset + hdr->name_blob_byte_size);
+    for (crd::u32 i = 0U; i < hdr->frame_count; ++i)
+    {
+        if (frames[i].counter_count > kMaxCounters || frames[i].allocator_count > kMaxAllocators)
+        {
+            return false;
+        }
     }
     // DIAG.6b(b): a buffer LARGER than min_bytes is fine (an appended section / a tolerated tail). But if a correlation
     // section is ADVERTISED, validate it strictly here so CaptureView can trust the offset/count without OOB-reading a

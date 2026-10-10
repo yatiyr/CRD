@@ -1,0 +1,3 @@
+kind = "flight-policy"
+schema_version = 1
+detail = "verbose"

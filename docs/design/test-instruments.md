@@ -44,6 +44,9 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-ckir-binary` | `crd::kir::deserialize_graph` | 18: the two graphs' blobs, truncations, a flipped byte, garbage, five adopted findings |
 | `crd-fuzz-perf-bundle` | `crd::perf::import_bundle` (DIAG.5d) | 12: the golden bundle, truncations, traversal, a lying length, a decompression bomb, a wrong schema, a hostile section count, build identities |
 | `crd-fuzz-memory-allocators` | every production allocator and the `SlotMap`, as operation sequences (DIAG.10a) | 23: 17 written streams (one or more per allocator, malformed lengths and alignments, a stream cut mid-operation, one per finding of the written seeds) and 6 adopted libFuzzer inputs |
+| `crd-fuzz-perf-flight` | `crd::perf::decode_flight_record` (DIAG.10a) | 30: seven captures a real `FlightRecorder` wrote (every end reason, a Basic policy, a suppressed trigger, a replay recipe, a clipped message, an empty post window, the fatal path without the ring) with fixed clock readings, ten records that contradict themselves in one way each, truncations, a trailing byte, a disagreeing count, a text length at its bound, an unknown detail level, garbage |
+| `crd-fuzz-perf-assets` | `parse_flight_policy_asset`, `parse_fault_plan_asset`, `parse_fault_plan` and crd-toml beneath them (DIAG.10a) | 41: the two committed assets, documents for every refusal the readers name, crd-toml's nesting, integer-range and number-length limits, plan texts at their bounds |
+| `crd-fuzz-perf-capture` | `crd::perf::validate_capture_buffer` and `CaptureView` (DIAG.10a) | 33: three captures in the writer's exact layout (one with frames and a correlation section, one whose frame span overflows a 64-bit difference) and one buffer per reader defect DIAG.10a fixed, truncations, garbage, and one adopted libFuzzer finding (a sample span the Perfetto export overflowed) |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
@@ -68,6 +71,19 @@ The oracles are the model's: no overlap, alignment, ownership, intact payloads, 
 allocator's capacity model is exact, `validate_structure()`, statistics that return to zero, an offset span that
 coalesces back to one region, a parent that gets every byte back, and the same outcome trace on a second run. The
 parent is page aligned so placement does not depend on where the system allocator put the arena.
+
+The evidence-reader targets (DIAG.10a) hold each reader to what its writer can produce. `crd-fuzz-perf-flight`
+restates, independently of the decoder, what `FlightRecorder::trigger()`, `build_capture()` and `finish()` guarantee
+(the trigger and every suppressed kind armed by the recorded policy, one contiguous run of events across the
+trigger, the end reason and truncation derived from the post window, a capture without the ring fatal and empty), and
+an accepted record must re-encode to exactly its own bytes. `crd-fuzz-perf-capture` computes the CPROF layout from
+the header itself and requires every `CaptureView` accessor to answer from exactly where that layout says, with every
+name terminated inside its own field or the blob's strings. `crd-fuzz-perf-assets` offers every input to all three
+policy readers: a refusal names its reason and leaves the output untouched, and an accepted policy or plan writes a
+canonical document or text that reads back to the same value. Their seed functions check each seed's verdict while
+writing it (`VerdictSink`), so a regenerated corpus cannot carry an honest seed the reader now refuses, or a forged
+one it now accepts. The perf corpora live in `tests/foundation/perf/fuzz/corpus/<reader>/` (the bundle corpus moved
+to `corpus/bundle/`).
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final
