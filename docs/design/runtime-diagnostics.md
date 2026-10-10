@@ -1410,6 +1410,32 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-cook-faults.md)):
   as a shipping capability check; and a real host (crd-sandbox) installing the recorder, its triggers, a
   `FlightCommandHost` sink with its module snapshot and the flight and fault commands.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-install-teardown-faults.md)):
+- Install has two forms, both on the I/O fault seam already. A cooked pack is installed into the running resource
+  manager by `mount_manifest` (a patch or DLC pack over the mounted ones; the newest mount serves an id). A cooked
+  render asset is installed into the renderer's live slot by `SceneRenderer::reload` (RAF-11: the resolver reads the
+  source with `read_file_text`, the reloader stages, and the install commits at a frame boundary and bumps the
+  generation). An install interrupted by a failed or short read installs nothing: no mount is added and the mounted
+  pack keeps serving the id with its loaded payload's pointer, generation and bytes; the renderer keeps its live frame
+  and generation (a clean reload of the old source afterwards is a no-op). The capture names the file, and the
+  recipe's one-hit plan interrupts the same install alone.
+- A pack torn on disk is refused at install. `mount_manifest` validated the manifest container but not the entries'
+  byte ranges, so a pack cut inside its artifacts mounted, its entries shadowed the earlier mount's and every later
+  load of those ids failed. A pack whose manifest names bytes past its own end is now refused whole, before the live
+  table is touched (the hot-reload path already skipped such an entry).
+- Execute is the device-loss slice above: a fault injected at a live queue submission is injection while work
+  executes, with recovery on a fresh device. No CPU execution path has a recoverable read or allocation seam today;
+  the DX12 frame descriptor arena's `try_allocate` is the candidate if one is wanted.
+- Teardown has no read or recoverable allocation of its own, and that is checked rather than assumed: with a plan
+  that fails every read and every `try_allocate` armed and hooked, dropping the handles and destroying the resource
+  manager consults no site. After a run in which every fault kind fired, the teardown returns every allocation the
+  run made (counted through the manager's and the payloads' allocator, including a payload retired by a reload and
+  still in its grace period), the host's required drain waits out a delayed completion still in flight, and the
+  recorder's open window is delivered at shutdown marked truncated, with the later faults counted as suppressed.
+- Still open in this row: refusal of arbitrary external I/O replay as a shipping capability check, and a real host
+  (crd-sandbox) installing the recorder, its triggers, a `FlightCommandHost` sink with its module snapshot and the
+  flight and fault commands.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 

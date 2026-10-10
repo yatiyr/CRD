@@ -80,7 +80,9 @@ public:
     void register_loader(std::unique_ptr<ILoader> loader);
 
     // ── Mounts ─────────────────────────────────────────────────────────────
-    // Mount a cooked PACK file. Returns an invalid MountId on failure.
+    // Mount a cooked PACK file. Returns an invalid MountId on failure. A pack that cannot be read, does not parse,
+    // or whose manifest names bytes past its own end (torn on disk) is refused whole: the live table, the earlier
+    // mounts and every loaded payload are left as they were.
     [[nodiscard]] MountId mount_manifest(crd::containers::StringView path);
 
     // Remove a mounted pack. Entries from this mount are evicted from the

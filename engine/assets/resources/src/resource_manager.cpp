@@ -271,6 +271,22 @@ MountId ResourceManager::mount_manifest(crd::containers::StringView path)
         return MountId{0U};
     }
 
+    // A pack whose manifest names bytes past its own end is torn (cut short on disk). Installing it would let its
+    // entries shadow the ones an earlier mount still serves, and every later load of those ids would fail; refuse
+    // it whole, before the live table is touched, so the mounted assets keep serving.
+    const crd::u64 pack_size = static_cast<crd::u64>(file_bytes.size());
+    for (const ManifestEntry& e : entries)
+    {
+        if (e.blob_size > pack_size || e.blob_offset > pack_size - e.blob_size)
+        {
+            CRD_LOG_ERROR(g_log_resources,
+                          "ResourceManager: manifest '{}' names bytes past the end of the pack ({} + {} > {}); "
+                          "not mounted",
+                          path, e.blob_offset, e.blob_size, pack_size);
+            return MountId{0U};
+        }
+    }
+
     const crd::u32 mount_id = m_next_mount_id++;
     MountRecord record(m_alloc, mount_id, path);
 

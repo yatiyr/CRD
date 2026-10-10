@@ -9,6 +9,10 @@
 //     or .meta, or of an input that exists, publishes nothing: the previous pack, cache artifact, cook database and
 //     asset identity are kept byte for byte, the flight capture names the file, and the next clean cook publishes the
 //     new content under the same id; a fault in the up-to-date check recooks the same bytes, never ships stale ones.
+//   - an install (mounting a newly cooked pack over a mounted one) interrupted by a failed or short read, or offered a
+//     pack torn on disk, mounts nothing: the mounted pack keeps serving and its loaded payload is kept;
+//   - a teardown after a run full of fired faults performs no faultable read or allocation, returns every allocation
+//     the run made, drains a delayed completion still in flight, and the recorder delivers its open window truncated.
 // A shipping build cannot arm a plan; there the cases assert the refusal and that every path runs plain.
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
@@ -37,6 +41,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <initializer_list>
 #include <memory>
@@ -891,4 +896,412 @@ TEST_CASE("fault injection: an id sidecar that exists but cannot be read is neve
     CHECK(io.stable_id(cont::StringView{".tex.0"}, id));
     CHECK(id == kept);
     CHECK_FALSE(io.unreadable());
+}
+
+// ---- the install stage ------------------------------------------------------------------------------------------
+
+namespace
+{
+// The file name a pack written by temp_pack_path(stem, id) has, as the flight event names it.
+cont::String pack_file_name(const char* stem, ResourceId id)
+{
+    cont::String name(stem, &s_fi_alloc);
+    name.append(id.to_string(&s_fi_alloc));
+    name.append(".crdr");
+    return name;
+}
+
+// The byte offset of a one-artifact pack's artifact: everything before it is the manifest container.
+crd::u64 artifact_offset(const fs::Path& pack, crd::usize artifact_size)
+{
+    const cont::Array<crd::u8> bytes = bytes_of(pack);
+    REQUIRE(bytes.size() > artifact_size);
+    return static_cast<crd::u64>(bytes.size() - artifact_size);
+}
+} // namespace
+
+TEST_CASE("fault injection: a pack install interrupted by a failed or short read keeps the mounted assets",
+          "[resources][diag9b][fault][install]")
+{
+    const ResourceId           id = ResourceId::mint_random();
+    const ScopedTestFile       base(temp_pack_path("fault_install_base_", id));
+    const ScopedTestFile       patch(temp_pack_path("fault_install_patch_", id));
+    const cont::Array<crd::u8> patch_artifact = mesh_artifact(id, 5.0F);
+    write_pack(base.path(), id, kFourCC_MESH, mesh_artifact(id, 1.0F));
+    write_pack(patch.path(), id, kFourCC_MESH, patch_artifact);
+
+    crd::memory::GrowableTlsfAllocator payload_heap;
+    crd::memory::ThreadSafeAllocator   payload_safe(&payload_heap);
+    ResourceManager                    rm(&s_fi_alloc);
+    register_mesh_loader(&rm, &payload_safe);
+    const MountId base_mount = rm.mount_manifest(base.path().generic());
+    REQUIRE(base_mount.is_valid());
+    auto handle = rm.load_sync<MeshResource>(id);
+    REQUIRE(handle.is_ready());
+    const MeshResource* const good       = handle.get();
+    const crd::u32            generation = handle.generation();
+    REQUIRE(good != nullptr);
+    CHECK(first_x(*good) == 1.0F);
+
+    cp::FaultInjector injector;
+    if (!crd::fault_seams_compiled())
+    {
+        CHECK(injector.arm(plan_of("seed=21;failed-read@0+1%1000000"), kInject) == cp::FaultArmStatus::Unavailable);
+        const ScopedIoHook hook(injector);
+        CHECK_FALSE(hook.installed);
+        const MountId patch_mount = rm.mount_manifest(patch.path().generic());
+        REQUIRE(patch_mount.is_valid());
+        REQUIRE(rm.find_entry(id) != nullptr);
+        CHECK(rm.find_entry(id)->mount_id == patch_mount.value);
+        return;
+    }
+
+    // Everything an install that did not happen must leave as it was: one mount serving the id, and the loaded
+    // payload with its pointer, generation and bytes.
+    const auto check_kept = [&]()
+    {
+        CHECK(rm.mount_count() == 1U);
+        CHECK(rm.entry_count() == 1U);
+        const MountEntry* entry = rm.find_entry(id);
+        REQUIRE(entry != nullptr);
+        CHECK(entry->mount_id == base_mount.value);
+        CHECK(handle.state() == LoadState::Ready);
+        CHECK(handle.get() == good);
+        CHECK(handle.generation() == generation);
+        CHECK(first_x(*handle.get()) == 1.0F);
+    };
+
+    cp::FlightRecorder recorder;
+    cp::FlightPolicy   policy;
+    policy.capacity    = 64U;
+    policy.pre_events  = 32U;
+    policy.post_events = 1U;
+    REQUIRE(recorder.init(policy) == cp::FlightPolicyStatus::Committed);
+    injector.attach_flight_recorder(&recorder);
+
+    // The install reads the pack once, whole. A short read is cut inside the container header (16 bytes), and past
+    // the manifest, four bytes into the artifact: either way the install is refused, never mounted torn.
+    const crd::u64 past_manifest = artifact_offset(patch.path(), patch_artifact.size()) + 4U;
+    char           cut_plan[96];
+    (void)std::snprintf(cut_plan, sizeof(cut_plan), "seed=23;partial-read@0+1%%1000000=%llu",
+                        static_cast<unsigned long long>(past_manifest));
+    const char* const plans[] = {
+        "seed=21;failed-read@0+1%1000000",
+        "seed=22;partial-read@0+1%1000000=16",
+        cut_plan,
+    };
+    const cont::String patch_name = pack_file_name("fault_install_patch_", id);
+    cont::String       tail(" on ", &s_fi_alloc);
+    tail.append(patch_name);
+    const auto install_faulted = [&](const char* plan)
+    {
+        REQUIRE(injector.arm(plan_of(plan), kInject) == cp::FaultArmStatus::Armed);
+        MountId mount;
+        {
+            const ScopedIoHook hook(injector);
+            REQUIRE(hook.installed);
+            mount = rm.mount_manifest(patch.path().generic());
+        }
+        CHECK_FALSE(mount.is_valid());
+        CHECK(injector.fired(cp::FaultSite::FailedRead) + injector.fired(cp::FaultSite::PartialRead) == 1U);
+        check_kept();
+        const FaultEvidence evidence = take_fault_evidence(recorder);
+        CHECK(ends_with(evidence.message, tail.c_str()));
+        return evidence;
+    };
+    for (const char* plan : plans)
+    {
+        INFO(plan);
+        const FaultEvidence evidence = install_faulted(plan);
+        // The recipe's one-hit plan interrupts the same install on its own.
+        INFO(evidence.minimal.c_str());
+        (void)install_faulted(evidence.minimal.c_str());
+    }
+
+    // Disarmed, the same install mounts, the newest mount serves the id, and a reload of it swaps the new content in.
+    injector.disarm();
+    const MountId patch_mount = rm.mount_manifest(patch.path().generic());
+    REQUIRE(patch_mount.is_valid());
+    CHECK(rm.mount_count() == 2U);
+    REQUIRE(rm.find_entry(id) != nullptr);
+    CHECK(rm.find_entry(id)->mount_id == patch_mount.value);
+    CHECK(rm.reload_mount_now(patch_mount) == 1U);
+    CHECK(handle.generation() == generation + 1U);
+    CHECK(first_x(*handle.get()) == 5.0F);
+    recorder.shutdown();
+}
+
+TEST_CASE("a torn pack is refused at install and the mounted asset keeps serving", "[resources][diag9b][install]")
+{
+    const ResourceId           id = ResourceId::mint_random();
+    const ScopedTestFile       base(temp_pack_path("torn_install_base_", id));
+    const ScopedTestFile       patch(temp_pack_path("torn_install_patch_", id));
+    const cont::Array<crd::u8> patch_artifact = mesh_artifact(id, 5.0F);
+    write_pack(base.path(), id, kFourCC_MESH, mesh_artifact(id, 1.0F));
+    write_pack(patch.path(), id, kFourCC_MESH, patch_artifact);
+    const cont::Array<crd::u8> whole = bytes_of(patch.path());
+
+    crd::memory::GrowableTlsfAllocator payload_heap;
+    crd::memory::ThreadSafeAllocator   payload_safe(&payload_heap);
+    ResourceManager                    rm(&s_fi_alloc);
+    register_mesh_loader(&rm, &payload_safe);
+    const MountId base_mount = rm.mount_manifest(base.path().generic());
+    REQUIRE(base_mount.is_valid());
+
+    // The patch on disk ends halfway through its artifact (its manifest is whole), then one byte short of its end,
+    // then inside the manifest container. None may mount: a mounted torn entry would shadow the base mount's.
+    const crd::u64   offset = artifact_offset(patch.path(), patch_artifact.size());
+    const crd::usize cuts[] = {static_cast<crd::usize>(offset) + patch_artifact.size() / 2U, whole.size() - 1U, 40U};
+    for (const crd::usize cut : cuts)
+    {
+        INFO("pack cut to " << cut << " of " << whole.size() << " bytes");
+        REQUIRE(fs::write_file_binary(patch.path(), cont::ConstSpan<crd::u8>{whole.data(), cut}));
+        CHECK_FALSE(rm.mount_manifest(patch.path().generic()).is_valid());
+        CHECK(rm.mount_count() == 1U);
+        REQUIRE(rm.find_entry(id) != nullptr);
+        CHECK(rm.find_entry(id)->mount_id == base_mount.value);
+    }
+
+    // A first load after the refused installs still reads the base mount's artifact.
+    auto handle = rm.load_sync<MeshResource>(id);
+    REQUIRE(handle.is_ready());
+    CHECK(first_x(*handle.get()) == 1.0F);
+
+    // The whole patch mounts and serves the id.
+    REQUIRE(fs::write_file_binary(patch.path(), cont::as_const_span(whole)));
+    const MountId patch_mount = rm.mount_manifest(patch.path().generic());
+    REQUIRE(patch_mount.is_valid());
+    REQUIRE(rm.find_entry(id) != nullptr);
+    CHECK(rm.find_entry(id)->mount_id == patch_mount.value);
+}
+
+// ---- teardown ---------------------------------------------------------------------------------------------------
+
+namespace
+{
+// Counts the allocations live through it, so a case can show a teardown returned every one. Thread-safe when its
+// backing allocator is.
+class CountingAllocator final : public crd::memory::IAllocator
+{
+public:
+    explicit CountingAllocator(crd::memory::IAllocator* backing) noexcept : m_backing(backing)
+    {
+        m_name = "fault-teardown-counting";
+    }
+
+    void* allocate(crd::usize size, crd::usize alignment = crd::memory::kDefaultAlignment) override
+    {
+        void* p = m_backing->allocate(size, alignment);
+        if (p != nullptr)
+        {
+            m_live.fetch_add(1, std::memory_order_relaxed);
+        }
+        return p;
+    }
+    [[nodiscard]] void* try_allocate(crd::usize size, crd::usize alignment = crd::memory::kDefaultAlignment) override
+    {
+        void* p = m_backing->try_allocate(size, alignment);
+        if (p != nullptr)
+        {
+            m_live.fetch_add(1, std::memory_order_relaxed);
+        }
+        return p;
+    }
+    void deallocate(void* p) noexcept override
+    {
+        if (p != nullptr)
+        {
+            m_live.fetch_sub(1, std::memory_order_relaxed);
+            m_backing->deallocate(p);
+        }
+    }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return m_backing->owns(p); }
+    [[nodiscard]] crd::usize allocation_size(const void* p) const noexcept override
+    {
+        return m_backing->allocation_size(p);
+    }
+
+    [[nodiscard]] crd::i64 live() const noexcept { return m_live.load(std::memory_order_relaxed); }
+
+private:
+    crd::memory::IAllocator* m_backing;
+    std::atomic<crd::i64>    m_live{0};
+};
+
+// The capture a recorder delivers when it shuts down with a window open.
+struct TeardownSink
+{
+    crd::u32          delivered  = 0U;
+    cp::FlightEnd     end        = cp::FlightEnd::None;
+    bool              truncated  = false;
+    cp::FlightTrigger kind       = cp::FlightTrigger::Manual;
+    crd::u64          suppressed = 0U;
+};
+
+void teardown_sink(const cp::FlightCapture& capture, void* user)
+{
+    auto* sink = static_cast<TeardownSink*>(user);
+    sink->delivered += 1U;
+    sink->end        = capture.end;
+    sink->truncated  = capture.post_truncated;
+    sink->kind       = capture.trigger.kind;
+    sink->suppressed = capture.suppressed_triggers;
+}
+
+crd::u64 total_hits(const cp::FaultInjector& injector)
+{
+    crd::u64 n = 0U;
+    for (crd::u32 s = 0U; s < cp::kFaultSiteCount; ++s)
+    {
+        n += injector.hits(static_cast<cp::FaultSite>(s));
+    }
+    return n;
+}
+
+crd::u64 total_fired(const cp::FaultInjector& injector)
+{
+    crd::u64 n = 0U;
+    for (crd::u32 s = 0U; s < cp::kFaultSiteCount; ++s)
+    {
+        n += injector.fired(static_cast<cp::FaultSite>(s));
+    }
+    return n;
+}
+} // namespace
+
+TEST_CASE("fault injection: teardown after injected faults releases everything the run allocated",
+          "[resources][diag9b][fault][teardown]")
+{
+    // crd::jobs is initialised by the ResourcesJobsListener in test_resource_manager.cpp (same binary).
+    const ResourceId     id        = ResourceId::mint_random();
+    const ResourceId     stream_id = ResourceId::mint_random();
+    const ScopedTestFile pack(temp_pack_path("fault_teardown_", id));
+    const ScopedTestFile patch(temp_pack_path("fault_teardown_patch_", id));
+    const ScopedTestFile stream_pack(temp_pack_path("fault_teardown_stream_", stream_id));
+    write_pack(pack.path(), id, kFourCC_MESH, mesh_artifact(id, 1.0F));
+    write_pack(patch.path(), id, kFourCC_MESH, mesh_artifact(id, 3.0F));
+    write_pack(stream_pack.path(), stream_id, kFourCC_MESH, mesh_artifact(stream_id, 2.0F));
+
+    crd::memory::GrowableTlsfAllocator heap;
+    crd::memory::ThreadSafeAllocator   heap_safe(&heap);
+    CountingAllocator                  counted(&heap_safe);
+    cp::FaultInjector                  injector;
+    const bool                         seams = crd::fault_seams_compiled();
+
+    TeardownSink       sink;
+    cp::FlightRecorder recorder;
+    cp::FlightPolicy   policy;
+    policy.capacity    = 256U;
+    policy.pre_events  = 32U;
+    policy.post_events = 200U; // the first fault's window stays open until the recorder shuts down
+    REQUIRE(recorder.init(policy) == cp::FlightPolicyStatus::Committed);
+    recorder.set_sink(&teardown_sink, &sink);
+    injector.attach_flight_recorder(&recorder);
+
+    // Arming restarts the injector's counters, so the faults fired under each plan are summed before the next.
+    crd::u64   fired_total = 0U;
+    const auto arm         = [&](const char* plan)
+    {
+        fired_total += total_fired(injector);
+        REQUIRE(injector.arm(plan_of(plan), kInject) == cp::FaultArmStatus::Armed);
+    };
+
+    crd::u64 hits_before_teardown = 0U;
+    {
+        cp::FaultAllocator payload(&counted, &injector, "fault-teardown-payload");
+        const ScopedIoHook hook(injector); // outlives the manager, so the teardown below runs hooked
+        CHECK(hook.installed == seams);
+        {
+            ResourceManager rm(&counted);
+            register_mesh_loader(&rm, &payload);
+            const MountId mount = rm.mount_manifest(pack.path().generic());
+            REQUIRE(mount.is_valid());
+            REQUIRE(rm.mount_manifest(stream_pack.path().generic()).is_valid());
+            auto handle = rm.load_sync<MeshResource>(id);
+            REQUIRE(handle.is_ready());
+            write_pack(pack.path(), id, kFourCC_MESH, mesh_artifact(id, 7.0F));
+
+            if (seams)
+            {
+                // A run in which every kind of read and allocation fault fires: interrupted reloads, a refused
+                // install, streamed loads that fail.
+                arm("seed=31;allocation-failure@0+1%1000000");
+                CHECK(rm.reload_mount_now(mount) == 0U);
+                arm("seed=32;failed-read@0+1%1000000");
+                CHECK(rm.reload_mount_now(mount) == 0U);
+                arm("seed=33;partial-read@0+1%1000000=16");
+                CHECK(rm.reload_mount_now(mount) == 0U);
+                arm("seed=34;failed-read@0+1%1000000");
+                CHECK_FALSE(rm.mount_manifest(patch.path().generic()).is_valid());
+                const char* const streamed[] = {
+                    "seed=35;cancelled-completion@0+1%1000000",
+                    "seed=36;failed-read@0+1%1000000",
+                };
+                for (const char* plan : streamed)
+                {
+                    INFO(plan);
+                    arm(plan);
+                    auto failed = rm.load_streamed<MeshResource>(stream_id);
+                    CHECK(failed.wait_ready() == LoadState::Failed);
+                }
+                REQUIRE(handle.get() != nullptr);
+                CHECK(first_x(*handle.get()) == 1.0F);
+                // A streamed load still in flight when the host starts its teardown.
+                arm("seed=37;delayed-completion@0+1%1000000=50000000");
+            }
+            else
+            {
+                CHECK(injector.arm(plan_of("seed=31;allocation-failure@0+1%1000000"), kInject) ==
+                      cp::FaultArmStatus::Unavailable);
+            }
+
+            // The host's required drain (wait on every handle before the manager dies) waits the delayed completion
+            // out, and the load completes.
+            const auto t0        = std::chrono::steady_clock::now();
+            auto       in_flight = rm.load_streamed<MeshResource>(stream_id);
+            CHECK(in_flight.wait_ready() == LoadState::Ready);
+            if (seams)
+            {
+                CHECK(std::chrono::steady_clock::now() - t0 >= std::chrono::milliseconds(50));
+                CHECK(injector.fired(cp::FaultSite::DelayedCompletion) == 1U);
+            }
+            REQUIRE(in_flight.get() != nullptr);
+            CHECK(first_x(*in_flight.get()) == 2.0F);
+
+            // A clean reload last, so the teardown also frees a retired payload still in its grace period. Disarming
+            // keeps the counters; the next arm adds the delayed completion to the total.
+            injector.disarm();
+            CHECK(rm.reload_mount_now(mount) == 1U);
+            CHECK(first_x(*handle.get()) == 7.0F);
+
+            // The teardown runs with every read and every recoverable allocation armed to fail. It performs neither,
+            // so no site is consulted while the handles drop and the manager is destroyed.
+            if (seams)
+            {
+                arm("seed=38;failed-read@0+0%1000000;allocation-failure@0+0%1000000");
+            }
+            hits_before_teardown = total_hits(injector);
+        }
+        CHECK(total_hits(injector) == hits_before_teardown);
+        CHECK(total_fired(injector) == 0U);
+    }
+    injector.disarm();
+    CHECK(counted.live() == 0);
+
+    // The first fault's window was still open; shutting the recorder down delivers it, marked truncated, with every
+    // later fault counted as suppressed.
+    recorder.shutdown();
+    if (seams)
+    {
+        CHECK(fired_total == 7U);
+        CHECK(sink.delivered == 1U);
+        CHECK(sink.kind == cp::FlightTrigger::InjectedFault);
+        CHECK(sink.end == cp::FlightEnd::Shutdown);
+        CHECK(sink.truncated);
+        CHECK(sink.suppressed + 1U == fired_total);
+    }
+    else
+    {
+        CHECK(sink.delivered == 0U);
+    }
 }

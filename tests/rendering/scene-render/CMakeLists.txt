@@ -5,6 +5,7 @@ add_executable(crd-scene-render-tests
     test_csm.cpp              # REN-3.2-b: CPU cascade fitting + the no-swim stabilization gates
     test_raf10_app.cpp        # RAF-10 (D-007): an APPLICATION customises the renderer ten ways, public headers only
     test_raf11_reload.cpp     # RAF-11 (D-007): dependency-aware hot reload — the reload engine + generations (device-free)
+    test_diag_install_faults.cpp # DIAG.9b: fault injection at the frame install (device-free)
 )
 
 target_link_libraries(crd-scene-render-tests PRIVATE
@@ -38,6 +39,7 @@ target_include_directories(crd-scene-render-tests PRIVATE ${CMAKE_SOURCE_DIR}/en
 target_compile_definitions(crd-scene-render-tests PRIVATE _CRT_SECURE_NO_WARNINGS) # std::getenv (the drift gate's ctest env)
 target_link_libraries(crd-scene-render-tests PRIVATE crd-material-cook crd-vertex-cook crd-light-cook) # REN-38: the drift gate parses all five vocabularies
 target_link_libraries(crd-scene-render-tests PRIVATE crd-render-graph crd-render-pass) # RAF-10: the app's custom executor names RecordContext / PassPayload / pass_param_id directly
+target_link_libraries(crd-scene-render-tests PRIVATE crd-perf) # DIAG.9b: the fault injector and flight recorder
 if(WIN32) # REN-38-F6: the DX12 twins of the advanced-family render gates (the backend exists only on Windows)
     target_link_libraries(crd-scene-render-tests PRIVATE crd-gpu-context-dx12)
     target_include_directories(crd-scene-render-tests PRIVATE "${CMAKE_SOURCE_DIR}/tests/gpu/gpu-shared")
