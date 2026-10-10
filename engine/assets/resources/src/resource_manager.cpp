@@ -90,6 +90,104 @@ ResourceControlBlock* make_failed_block(crd::memory::IAllocator* alloc, Resource
     return block;
 }
 
+// Why a pack was refused by read_pack (mount and both reload paths share it).
+enum class PackRefusal : crd::u8
+{
+    None,
+    Unreadable,
+    Unparsable,
+    NotPack,
+    NoManifest,
+    MalformedManifest,
+    PastEnd,
+    DuplicateId,
+};
+
+struct PackRead
+{
+    PackRefusal refusal     = PackRefusal::None;
+    CrdrError   crdr_error  = CrdrError::Ok;
+    crd::u64    pack_size   = 0U;
+    crd::u64    blob_offset = 0U; // the first entry found past the end, or named twice
+    crd::u64    blob_size   = 0U;
+};
+
+// Read and check one pack whole: it must read, parse as a PACK container with an MFST chunk of whole entries, name
+// only bytes inside the file (a torn pack names bytes past its end) and name each ResourceId once (a second entry
+// would make which artifact serves the id depend on manifest order). On success `entries` holds the manifest, named
+// from the STRP pool and tagged with `mount_id`, `index` maps each id to its entry, and `file_bytes` holds the pack;
+// on a refusal `entries` and `index` are left empty. Nothing outside the arguments is touched.
+PackRead read_pack(const crd::platform::fs::Path& path, crd::u32 mount_id, crd::memory::IAllocator* alloc,
+                   crd::containers::Array<crd::u8>& file_bytes, crd::containers::Array<MountEntry>& entries,
+                   crd::containers::HashMap<ResourceId, crd::usize>& index)
+{
+    PackRead result;
+    if (!crd::platform::fs::read_file_binary(path, file_bytes))
+    {
+        result.refusal = PackRefusal::Unreadable;
+        return result;
+    }
+    result.pack_size = static_cast<crd::u64>(file_bytes.size());
+
+    CrdrFile crdr_file(alloc);
+    result.crdr_error = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, alloc);
+    if (result.crdr_error != CrdrError::Ok)
+    {
+        result.refusal = PackRefusal::Unparsable;
+        return result;
+    }
+    if (crdr_file.type_fourcc != kFourCC_PACK)
+    {
+        result.refusal = PackRefusal::NotPack;
+        return result;
+    }
+    const CrdrChunk* mfst_chunk = crdr_find_chunk(crdr_file, kFourCC_MFST);
+    if (mfst_chunk == nullptr)
+    {
+        result.refusal = PackRefusal::NoManifest;
+        return result;
+    }
+    crd::containers::ConstSpan<crd::u8> strp_data{};
+    const CrdrChunk* strp_chunk = crdr_find_chunk(crdr_file, kFourCC_STRP);
+    if (strp_chunk != nullptr)
+    {
+        strp_data = strp_chunk->payload;
+    }
+    crd::containers::Array<ManifestEntry> manifest(alloc);
+    if (!manifest_read_entries(mfst_chunk->payload, manifest, alloc))
+    {
+        result.refusal = PackRefusal::MalformedManifest;
+        return result;
+    }
+
+    entries.reserve(manifest.size());
+    for (const ManifestEntry& e : manifest)
+    {
+        const bool past_end = e.blob_size > result.pack_size || e.blob_offset > result.pack_size - e.blob_size;
+        if (past_end || index.contains(e.id))
+        {
+            result.refusal     = past_end ? PackRefusal::PastEnd : PackRefusal::DuplicateId;
+            result.blob_offset = e.blob_offset;
+            result.blob_size   = e.blob_size;
+            entries.clear();
+            index.clear();
+            return result;
+        }
+        MountEntry live;
+        live.id          = e.id;
+        live.type_fourcc = e.type_fourcc;
+        live.flags       = e.flags;
+        live.blob_offset = e.blob_offset;
+        live.blob_size   = e.blob_size;
+        live.mount_id    = mount_id;
+        const crd::containers::StringView name = strp_get(strp_data, e.name_strp_idx);
+        live.name = crd::containers::String(name.data(), name.size(), alloc);
+        index.insert(e.id, entries.size());
+        entries.push_back(std::move(live));
+    }
+    return result;
+}
+
 // Heap-allocated context for an in-flight async load job.
 struct AsyncLoadCtx
 {
@@ -220,114 +318,129 @@ void ResourceManager::register_loader(std::unique_ptr<ILoader> loader)
 
 // ── Mounts ─────────────────────────────────────────────────────────────────
 
+namespace
+{
+[[nodiscard]] const char* pack_refusal_text(PackRefusal refusal) noexcept
+{
+    switch (refusal)
+    {
+    case PackRefusal::Unreadable:
+        return "cannot be read";
+    case PackRefusal::Unparsable:
+        return "does not parse as a CRDR container";
+    case PackRefusal::NotPack:
+        return "is not a PACK container";
+    case PackRefusal::NoManifest:
+        return "has no MFST chunk";
+    case PackRefusal::MalformedManifest:
+        return "has a malformed MFST chunk";
+    case PackRefusal::PastEnd:
+        return "names bytes past its end (torn)";
+    case PackRefusal::DuplicateId:
+        return "names one ResourceId twice";
+    case PackRefusal::None:
+        break;
+    }
+    return "was accepted";
+}
+
+// Log a refused pack with its reason; `verb` is the action refused ("not mounted" or "not reloaded").
+void log_pack_refusal(crd::containers::StringView path, const PackRead& read, const char* verb, bool as_error)
+{
+    if (as_error)
+    {
+        CRD_LOG_ERROR(g_log_resources,
+                      "ResourceManager: pack '{}' {} (CRDR error {}, entry {} + {}, pack {} bytes); {}", path,
+                      pack_refusal_text(read.refusal), static_cast<int>(read.crdr_error), read.blob_offset,
+                      read.blob_size, read.pack_size, verb);
+    }
+    else
+    {
+        CRD_LOG_WARN(g_log_resources,
+                     "ResourceManager: pack '{}' {} (CRDR error {}, entry {} + {}, pack {} bytes); {}", path,
+                     pack_refusal_text(read.refusal), static_cast<int>(read.crdr_error), read.blob_offset,
+                     read.blob_size, read.pack_size, verb);
+    }
+}
+} // namespace
+
 MountId ResourceManager::mount_manifest(crd::containers::StringView path)
 {
     const crd::platform::fs::Path fs_path(path);
 
+    // A pack is checked whole before the live table is touched: a torn pack (cut short on disk) installed would
+    // shadow the entries an earlier mount still serves, and every later load of those ids would fail.
     crd::containers::Array<crd::u8> file_bytes(m_alloc);
-    if (!crd::platform::fs::read_file_binary(fs_path, file_bytes))
+    MountRecord                     record(m_alloc, m_next_mount_id, path);
+    const PackRead read = read_pack(fs_path, record.id, m_alloc, file_bytes, record.entries, record.index);
+    if (read.refusal != PackRefusal::None)
     {
-        CRD_LOG_ERROR(g_log_resources, "ResourceManager: failed to read manifest '{}'", path);
+        log_pack_refusal(path, read, "not mounted", true);
         return MountId{0U};
-    }
-
-    CrdrFile crdr_file(m_alloc);
-    const CrdrError err = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, m_alloc);
-    if (err != CrdrError::Ok)
-    {
-        CRD_LOG_ERROR(g_log_resources,
-                      "ResourceManager: manifest '{}' parse error ({})",
-                      path, static_cast<int>(err));
-        return MountId{0U};
-    }
-
-    if (crdr_file.type_fourcc != kFourCC_PACK)
-    {
-        CRD_LOG_ERROR(g_log_resources,
-                      "ResourceManager: '{}' is not a PACK container", path);
-        return MountId{0U};
-    }
-
-    const CrdrChunk* mfst_chunk = crdr_find_chunk(crdr_file, kFourCC_MFST);
-    if (mfst_chunk == nullptr)
-    {
-        CRD_LOG_ERROR(g_log_resources,
-                      "ResourceManager: manifest '{}' missing MFST chunk", path);
-        return MountId{0U};
-    }
-
-    crd::containers::ConstSpan<crd::u8> strp_data{};
-    const CrdrChunk* strp_chunk = crdr_find_chunk(crdr_file, kFourCC_STRP);
-    if (strp_chunk != nullptr)
-    {
-        strp_data = strp_chunk->payload;
-    }
-
-    crd::containers::Array<ManifestEntry> entries(m_alloc);
-    if (!manifest_read_entries(mfst_chunk->payload, entries, m_alloc))
-    {
-        CRD_LOG_ERROR(g_log_resources,
-                      "ResourceManager: manifest '{}' MFST chunk is malformed", path);
-        return MountId{0U};
-    }
-
-    // A pack whose manifest names bytes past its own end is torn (cut short on disk). Installing it would let its
-    // entries shadow the ones an earlier mount still serves, and every later load of those ids would fail; refuse
-    // it whole, before the live table is touched, so the mounted assets keep serving.
-    const crd::u64 pack_size = static_cast<crd::u64>(file_bytes.size());
-    for (const ManifestEntry& e : entries)
-    {
-        if (e.blob_size > pack_size || e.blob_offset > pack_size - e.blob_size)
-        {
-            CRD_LOG_ERROR(g_log_resources,
-                          "ResourceManager: manifest '{}' names bytes past the end of the pack ({} + {} > {}); "
-                          "not mounted",
-                          path, e.blob_offset, e.blob_size, pack_size);
-            return MountId{0U};
-        }
     }
 
     const crd::u32 mount_id = m_next_mount_id++;
-    MountRecord record(m_alloc, mount_id, path);
-
-    for (const ManifestEntry& e : entries)
+    for (const MountEntry& e : record.entries)
     {
-        if (m_live.contains(e.id))
+        if (const MountEntry* existing = m_live.find(e.id); existing != nullptr)
         {
-            const MountEntry* existing = m_live.find(e.id);
-            CRD_ASSERT(existing != nullptr);
             CRD_LOG_WARN(g_log_resources,
                          "ResourceManager: ResourceId collision on mount '{}' "
                          "(existing mount_id={}); newest mount wins",
                          path, existing->mount_id);
-            m_live.erase(e.id);
         }
-
-        MountEntry live;
-        live.id           = e.id;
-        live.type_fourcc  = e.type_fourcc;
-        live.flags        = e.flags;
-        live.blob_offset  = e.blob_offset;
-        live.blob_size    = e.blob_size;
-        live.mount_id     = mount_id;
-
-        const crd::containers::StringView name = strp_get(strp_data, e.name_strp_idx);
-        live.name = crd::containers::String(name.data(), name.size(), m_alloc);
-
-        m_live.insert(e.id, std::move(live));
-        record.entries.push_back(e.id);
     }
-
+    const crd::usize entry_total = record.entries.size();
     m_mounts.push_back(std::move(record));
+    for (const MountEntry& e : m_mounts.back().entries)
+    {
+        refresh_live(e.id);
+    }
 
     const crd::i64 initial_mtime = crd::platform::fs::last_modified_unix_seconds(fs_path);
     m_pack_watches.push_back(PackWatch(m_alloc, mount_id, path, initial_mtime));
 
     CRD_LOG_INFO(g_log_resources,
                  "ResourceManager: mounted '{}' ({} entries, mount_id={})",
-                 path, entries.size(), mount_id);
+                 path, entry_total, mount_id);
 
     return MountId{mount_id};
+}
+
+void ResourceManager::refresh_live(ResourceId id)
+{
+    const MountEntry* newest = nullptr;
+    for (const MountRecord& r : m_mounts)
+    {
+        const crd::usize* pos = r.index.find(id);
+        if (pos != nullptr && (newest == nullptr || r.id > newest->mount_id))
+        {
+            newest = &r.entries[*pos];
+        }
+    }
+    m_live.erase(id);
+    if (newest != nullptr)
+    {
+        m_live.insert(id, MountEntry(*newest));
+    }
+}
+
+bool ResourceManager::reissue_type_matches(ResourceId id, const MountEntry& entry, const char* caller) const
+{
+    ResourceControlBlock* const* pp = m_handles.find(id);
+    if (pp == nullptr || (*pp)->type_fourcc == entry.type_fourcc)
+    {
+        return true;
+    }
+    char was[5];
+    char now[5];
+    fourcc_to_str((*pp)->type_fourcc, was);
+    fourcc_to_str(entry.type_fourcc, now);
+    const auto id_str = id.to_string(m_alloc);
+    CRD_LOG_ERROR(g_log_resources,
+                  "ResourceManager::{}: id {} was loaded as '{}' but is now served as '{}'; not re-issued", caller,
+                  id_str.c_str(), was, now);
+    return false;
 }
 
 void ResourceManager::unmount(MountId id)
@@ -344,16 +457,13 @@ void ResourceManager::unmount(MountId id)
             continue;
         }
 
-        for (const ResourceId& rid : m_mounts[i].entries)
-        {
-            const MountEntry* e = m_live.find(rid);
-            if (e != nullptr && e->mount_id == id.value)
-            {
-                m_live.erase(rid);
-            }
-        }
-
+        // Take the record out first, so each id it served falls back to the newest remaining mount naming it.
+        const MountRecord removed(std::move(m_mounts[i]));
         m_mounts.swap_remove(i);
+        for (const MountEntry& e : removed.entries)
+        {
+            refresh_live(e.id);
+        }
 
         for (crd::usize j = 0U; j < m_pack_watches.size(); ++j)
         {
@@ -672,6 +782,10 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
                               id_str.c_str());
                 return make_failed_block(m_alloc, id);
             }
+            if (re_issue && !reissue_type_matches(id, *entry, "load_sync"))
+            {
+                return make_failed_block(m_alloc, id);
+            }
 
             // 5. Resolve loader.
             std::unique_ptr<ILoader>* lp = m_loaders.find(entry->type_fourcc);
@@ -870,6 +984,10 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
             CRD_LOG_ERROR(g_log_resources,
                           "ResourceManager::load_async: id {} not found in any mounted pack",
                           id_str.c_str());
+            return make_failed_block(m_alloc, id);
+        }
+        if (re_issue && !reissue_type_matches(id, *entry, "load_async"))
+        {
             return make_failed_block(m_alloc, id);
         }
 
@@ -1110,6 +1228,10 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
         // 3. Resolve manifest, loader, and mount.
         const MountEntry* entry = m_live.find(id);
         if (entry == nullptr)
+        {
+            return make_failed_block(m_alloc, id);
+        }
+        if (re_issue && !reissue_type_matches(id, *entry, "load_streamed"))
         {
             return make_failed_block(m_alloc, id);
         }
@@ -1441,44 +1563,21 @@ crd::usize ResourceManager::reload_mount_now(MountId id)
 
 crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
 {
-    // Step 1: re-read and parse the pack file.
+    // Step 1: re-read and check the pack whole, as mount_manifest does. A pack refused here (unreadable, unparsable,
+    // torn, or naming an id twice) changes nothing: the live table, the mount's manifest and every payload stay.
     const crd::containers::StringView pv{watch.pack_path.data(), watch.pack_path.size()};
-    crd::containers::Array<crd::u8> file_bytes(m_alloc);
-    const crd::platform::fs::Path   fs_path(watch.pack_path);
-    if (!crd::platform::fs::read_file_binary(fs_path, file_bytes))
+    const crd::platform::fs::Path     fs_path(watch.pack_path);
+    crd::containers::Array<crd::u8>   file_bytes(m_alloc);
+    MountRecord                       fresh(m_alloc, watch.mount_id, pv);
+    const PackRead read = read_pack(fs_path, watch.mount_id, m_alloc, file_bytes, fresh.entries, fresh.index);
+    if (read.refusal != PackRefusal::None)
     {
-        CRD_LOG_WARN(g_log_resources,
-                     "ResourceManager: hot-reload: failed to read '{}'", pv);
+        log_pack_refusal(pv, read, "not reloaded", false);
         return 0U;
     }
 
-    CrdrFile crdr_file(m_alloc);
-    const CrdrError err = crdr_read(crd::containers::as_const_span(file_bytes), crdr_file, m_alloc);
-    if (err != CrdrError::Ok || crdr_file.type_fourcc != kFourCC_PACK)
-    {
-        CRD_LOG_WARN(g_log_resources,
-                     "ResourceManager: hot-reload: '{}' parse error ({})",
-                     pv, static_cast<int>(err));
-        return 0U;
-    }
-
-    const CrdrChunk* mfst_chunk = crdr_find_chunk(crdr_file, kFourCC_MFST);
-    if (mfst_chunk == nullptr)
-    {
-        CRD_LOG_WARN(g_log_resources,
-                     "ResourceManager: hot-reload: '{}' missing MFST chunk", pv);
-        return 0U;
-    }
-
-    crd::containers::Array<ManifestEntry> new_entries(m_alloc);
-    if (!manifest_read_entries(mfst_chunk->payload, new_entries, m_alloc))
-    {
-        CRD_LOG_WARN(g_log_resources,
-                     "ResourceManager: hot-reload: '{}' MFST chunk malformed", pv);
-        return 0U;
-    }
-
-    // Step 2: under lock — update m_live blob offsets and collect reload tasks.
+    // Step 2: under lock -- the pack becomes the mount's manifest, every id it named before or names now is
+    // re-resolved (newest mount wins; a dropped id falls back to an older mount), and the reload tasks are collected.
     struct ReloadTask
     {
         ResourceControlBlock* block;
@@ -1492,18 +1591,44 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
     {
         std::lock_guard<std::mutex> lk(m_mutex);
 
-        for (const ManifestEntry& e : new_entries)
+        MountRecord* record = nullptr;
+        for (MountRecord& r : m_mounts)
         {
-            MountEntry* existing = m_live.find(e.id);
-            if (existing != nullptr && existing->mount_id == watch.mount_id)
+            if (r.id == watch.mount_id)
             {
-                existing->blob_offset = e.blob_offset;
-                existing->blob_size   = e.blob_size;
+                record = &r;
             }
         }
-
-        for (const ManifestEntry& e : new_entries)
+        if (record == nullptr)
         {
+            return 0U;
+        }
+
+        crd::containers::Array<ResourceId> affected(m_alloc);
+        affected.reserve(record->entries.size() + fresh.entries.size());
+        for (const MountEntry& e : record->entries)
+        {
+            affected.push_back(e.id);
+        }
+        for (const MountEntry& e : fresh.entries)
+        {
+            affected.push_back(e.id);
+        }
+        record->entries = std::move(fresh.entries);
+        record->index   = std::move(fresh.index);
+        for (const ResourceId& id : affected)
+        {
+            refresh_live(id);
+        }
+
+        for (const MountEntry& e : record->entries)
+        {
+            // Only an id this mount serves is reloaded from it; a newer mount's id keeps its payload.
+            const MountEntry* live = m_live.find(e.id);
+            if (live == nullptr || live->mount_id != watch.mount_id)
+            {
+                continue;
+            }
             ResourceControlBlock** pp = m_handles.find(e.id);
             if (pp == nullptr)
             {
@@ -1513,6 +1638,20 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
             const LoadState s = block->state.load(std::memory_order_acquire);
             if (s != LoadState::Ready && s != LoadState::Placeholder)
             {
+                continue;
+            }
+            // A payload is only ever produced and released by its own type's loader: a handle's get() casts it to
+            // that type. An entry retyped in the new pack keeps the last-good payload.
+            if (block->type_fourcc != e.type_fourcc)
+            {
+                char was[5];
+                char now[5];
+                fourcc_to_str(block->type_fourcc, was);
+                fourcc_to_str(e.type_fourcc, now);
+                CRD_LOG_WARN(g_log_resources,
+                             "ResourceManager: hot-reload: '{}' retypes a loaded resource ('{}' to '{}'); keeping the "
+                             "last-good payload",
+                             pv, was, now);
                 continue;
             }
             std::unique_ptr<ILoader>* lp = m_loaders.find(e.type_fourcc);
@@ -1525,20 +1664,12 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
         }
     }
 
-    // Step 3: reload each task — I/O and loader dispatch outside the lock.
+    // Step 3: reload each task -- loader dispatch outside the lock. Every range lies inside file_bytes (step 1).
     crd::usize reloaded = 0U;
     for (ReloadTask& task : tasks)
     {
-        if (task.blob_offset + task.blob_size > static_cast<crd::u64>(file_bytes.size()))
-        {
-            CRD_LOG_WARN(g_log_resources,
-                         "ResourceManager: hot-reload: artifact bounds out of range; skipping");
-            [[maybe_unused]] const crd::u32 r = task.block->release();
-            continue;
-        }
-
         const crd::containers::ConstSpan<crd::u8> artifact_span(
-            file_bytes.data() + task.blob_offset, task.blob_size);
+            file_bytes.data() + task.blob_offset, static_cast<crd::usize>(task.blob_size));
 
         const LoadContext ctx{task.id, artifact_span, this, m_alloc};
         void* new_payload = task.loader->load(ctx);
@@ -1564,10 +1695,13 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
 
         ++reloaded;
 
-        // Copy subscribers under lock, then fire outside.
+        // Account the new payload's size (the budget counts what is resident), then copy the subscribers under the
+        // lock and fire them outside it.
         crd::containers::Array<ReloadSub> subs_copy(m_alloc);
         {
             std::lock_guard<std::mutex> lk(m_mutex);
+            m_memory_used             = m_memory_used - task.block->payload_size + task.blob_size;
+            task.block->payload_size  = task.blob_size;
             crd::containers::Array<ReloadSub>* subs = m_reload_subs.find(task.id);
             if (subs != nullptr)
             {

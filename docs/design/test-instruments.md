@@ -49,12 +49,13 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-perf-capture` | `crd::perf::validate_capture_buffer` and `CaptureView` (DIAG.10a) | 33: three captures in the writer's exact layout (one with frames and a correlation section, one whose frame span overflows a 64-bit difference) and one buffer per reader defect DIAG.10a fixed, truncations, garbage, and one adopted libFuzzer finding (a sample span the Perfetto export overflowed) |
 | `crd-fuzz-ceir-record` | `crd::ceir::cook::decode_record`, the run-record reader (DIAG.10a) | 57: eight records in the three recorders' shapes (plan, host and device; a bounded trace, an unavailable read, a reloading host's asset and generation, an ulp and an exact envelope) with a fixed build, 30 records that contradict a recorder in one way each, truncations as given and resealed, a trailing byte, a wrong checksum, an older schema, three counts past the payload, garbage |
 | `crd-fuzz-ceridc-diag` | command decoding: ceridc's MCP transport (`mcp_handle` over `crd::assetio::json::parse`), its diag tool and `DiagCommandService::execute` with every registered command's argument check (DIAG.10a) | 52: the JSON-RPC lifecycle, every id form (string, integer, null, fraction, past 2^53, object), batch arrays and bare values, names with a NUL, the parser's number, UTF-8, escape and nesting boundaries (15 refused), the diag tool's fields and refusal order, cursors, a 65-byte command, native requests of raw bytes (a stale cursor before any snapshot, a cursor past 2^53), and the flight, fault and CEIR commands under hosts with and without a root |
+| `crd-fuzz-resources-reload` | `crd::resources::crdr_read` and the `ResourceManager` pack ingress: `mount_manifest`, `unmount`, `load_sync`, `reload_mount_now` and eviction (DIAG.10a) | 34: seven packs that mount (honest, compressed manifest, empty, a name past the pool, a zero-length entry, artifacts the loaders refuse, trailing bytes), six refused whole (torn, a range that wraps, a duplicated id, not a PACK, no manifest, a manifest of partial entries), four compressed-chunk claims (past the bound, a sum that wraps, a byte past the frame, exact), three structural, and 14 scripts (reload swaps, a torn and a wrapping reload, a shadowed id, a retyped id reloaded and re-issued, unmount falling back, a reload that drops and adds, a resized reload, a duplicated id on reload, pins and drains, placeholders and last-good, in-place corruption, invalid mounts) |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
 `<replay> --seed <dir>`, merged units carry libFuzzer's SHA-1 name. The harness directory `tests/support/fuzz` is a
-registered test directory owned by the `ceir`, `ceir-cook`, `kir`, `perf` and `memory` rows, so a fuzz executable's
-link set is the target's own module plus core, containers and memory. Every `crd_fuzz_target()` has exactly one
+registered test directory owned by the `ceir`, `ceir-cook`, `ceridc`, `kir`, `perf`, `memory` and `resources` rows,
+so a fuzz executable's link set is the target's own module plus core, containers and memory. Every `crd_fuzz_target()` has exactly one
 `fuzz.py` entry naming its corpus and build-relative executable, and no entry is stale (`test-repository-tools.py`,
 DIAG.10a). The replay driver declares itself headless before the first input (`set_assert_headless`, and on Windows
 no abort dialog), so an engine assertion inside a target ends the replay with its evidence instead of waiting on a
@@ -102,6 +103,19 @@ the request's id echoed exactly, the diag tool's report must equal the native an
 byte, the service must refuse in its documented order without running a handler, and every snapshot is walked to its
 end with repeatable cursors. Its seed function lists the seeds the parser refuses and checks each verdict as it writes
 it.
+
+`crd-fuzz-resources-reload` (DIAG.10a) drives the cooked-pack ingress through real files: the production entry points
+take paths, so each pack an input names is written under the platform temp directory with a per-process name and
+removed after the input. An even first byte makes the rest one pack file (read by `crdr_read` directly, then mounted,
+its ids loaded, reloaded, evicted, loaded again and unmounted); an odd one makes it a script over two pack files and
+one manager. The CRDR layout and the pack rules are restated in the harness (zstd decodes the compressed chunks), and
+a model of the manager (live table by newest mount, loaded blocks with state, generation, bytes and resident size,
+pins, reload events) is compared with `find_entry`, `entry_count`, `mount_count`, `current_memory_use` and every held
+handle after each operation. Two test loaders (one with a placeholder) copy their artifact and refuse one leading byte,
+and each requires that only its own type's payloads reach it. Inputs whose compressed chunks claim more than 16 MiB in
+all are skipped as out of scope; `poll_hot_reload` is not driven (one-second mtimes), both reload paths sharing
+`do_reload_mount`. On Windows Debug builds the replay driver turns a Debug CRT report (heap corruption found at a free)
+into an immediate failure instead of a modal dialog.
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final

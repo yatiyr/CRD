@@ -1806,6 +1806,44 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-command-decoding.
 - Not yet: resource reload, the compiled and reference CEIR comparison, the virtual-memory and streaming allocators,
   the unknown-origin artifacts and the concurrent-load corruption.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-resource-reload.md)):
+- Resource reload is the fuzz target `crd-fuzz-resources-reload` (`tests/assets/resources/fuzz`, corpus replayed on
+  every lane, libFuzzer on `linux-clang-fuzz`; the resources module owns `tests/support/fuzz`). Its ingress is a pack
+  file on disk handed to the real `ResourceManager` (the production entry points take paths): an even first byte makes
+  the rest one pack file, read by `crdr_read` directly and then mounted, loaded, reloaded, evicted, loaded again and
+  unmounted; an odd one makes it a script over two pack files and one manager (packs built through `CrdrWriter` and
+  then overridden with a lying range, a duplicated id, a torn tail, a compressed or dropped chunk; raw bytes; in-place
+  corruption; mount, unmount, `load_sync`, release, `reload_mount_now`, a drain to a zero budget, pin and unpin).
+  `poll_hot_reload` is not driven: its mtime has one-second resolution, and both reload paths share `do_reload_mount`.
+- Oracles, none of them the manager's own verdict: an independent restatement of the CRDR layout decides acceptance,
+  places every uncompressed payload at its exact offset and every compressed one at exactly what zstd decodes;
+  `crdr_read` allocates at most eight times its input plus 64 KiB plus what its accepted claims decode to; a model of
+  the manager holds the live table, every loaded block (state, generation, bytes, resident size), pins and the
+  subscribers' events, and after every operation `find_entry`, `entry_count`, `mount_count`, `current_memory_use`
+  and every held handle must equal it; a payload only ever reaches its own type's loader; the run returns every byte.
+- The contract this pins, now stated in `resource_manager.hpp` (the v1f description was silent on all but the first):
+  a pack is taken whole or not at all by mount and by both reload paths: refused when it cannot be read or parsed,
+  names bytes past its end (torn) or names one id twice; the live table serves each id from the newest mount whose
+  manifest names it, so unmount and a reload that drops an id fall back to an older mount; a reload makes the pack the
+  mount's manifest (ids it adds are served, ids it drops leave or fall back) and swaps only the loaded payloads of
+  their own type that the mount serves; an id keeps its type, so neither a reload nor a re-issue after eviction ever
+  hands a payload to another type's loader or a handle; a reload re-accounts the resident size against the budget.
+- Findings fixed. `crdr_read` sized its decompression buffer by the chunks' claims before reading a byte of them: a
+  97-byte file claiming 1 TiB reserved it, and two claims whose sum wraps reserved 16 bytes and decoded 32 into them
+  (a heap overrun); a claim is now bounded by what its stored bytes can decode to (3-byte zstd block headers, 128 KiB
+  per block, `crdr_max_decompressed_size`), and a frame that decodes to fewer bytes than claimed is refused instead
+  of leaving a zero-filled tail. `do_reload_mount` copied a new manifest's offsets into the live table before any range
+  check (a torn pack picked up by hot reload left entries pointing past the file) and checked a reloaded range as
+  `offset + size > file`, which wraps (an offset near 2^64 read before the buffer); it now refuses what mount refuses,
+  before touching anything. It reloaded an id a newer mount served from the older pack's bytes, swapped a retyped
+  entry's payload into a block of the old type (and freed the old payload with the new type's loader), ignored ids a
+  reload added, kept dropped ids pointing at stale offsets in the new file, swapped a duplicated id twice, and never
+  re-accounted the resident size. Unmount erased an id an older mount still provided, contrary to its header. A
+  re-issue after eviction loaded a retyped entry with the new type's loader into a handle of the old type. A manifest
+  naming one id twice mounted, the later entry silently winning.
+- The replay driver ends the process on a Debug CRT report (a heap overrun found at a free), which until now opened a
+  modal dialog that held a replay until the CTest timeout.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

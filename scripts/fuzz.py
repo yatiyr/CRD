@@ -47,6 +47,8 @@ TARGETS = {
                     'executable': 'tests/ceir-cook/fuzz/crd-fuzz-ceir-record'},
     'ceridc-diag': {'corpus': 'tests/tools/ceridc/fuzz/corpus',
                     'executable': 'tests/ceridc/fuzz/crd-fuzz-ceridc-diag'},
+    'resources-reload': {'corpus': 'tests/assets/resources/fuzz/corpus',
+                         'executable': 'tests/resources/fuzz/crd-fuzz-resources-reload'},
     'memory-allocators': {'corpus': 'tests/foundation/memory/fuzz/corpus',
                           'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
 }

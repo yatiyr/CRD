@@ -166,8 +166,24 @@ enum class CrdrError : crd::u8
 
 // ── Reader ──────────────────────────────────────────────────────────────────
 
+// The most bytes a zstd payload of `compressed_size` bytes can decode to: every zstd block carries a 3-byte header and
+// decodes to at most 128 KiB (RFC 8878, Block_Maximum_Size), so the payload holds at most compressed_size / 3 blocks.
+inline constexpr crd::u64 kCrdrZstdBlockMaxBytes = 128U * 1024U;
+
+[[nodiscard]] constexpr crd::u64 crdr_max_decompressed_size(crd::u64 compressed_size) noexcept
+{
+    const crd::u64 blocks = compressed_size / 3U;
+    if (blocks > ~crd::u64{0} / kCrdrZstdBlockMaxBytes)
+    {
+        return ~crd::u64{0};
+    }
+    return blocks * kCrdrZstdBlockMaxBytes;
+}
+
 // Parse a CRDR blob. Chunk payloads are views into `bytes` — keep `bytes`
-// alive as long as any CrdrChunk from `out` is accessed.
+// alive as long as any CrdrChunk from `out` is accessed. A compressed chunk is refused (InvalidChunk) when it claims
+// more than crdr_max_decompressed_size of its stored bytes, before any memory is reserved for the claim, and
+// (DecompressFailed) unless its payload decodes to exactly the size it claims.
 [[nodiscard]] CrdrError crdr_read(
     crd::containers::ConstSpan<crd::u8> bytes,
     CrdrFile&                           out,

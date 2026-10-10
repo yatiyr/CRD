@@ -151,7 +151,9 @@ CrdrError crdr_read(
 
     // Pass 1: scan chunk headers to compute total decompressed bytes needed,
     // so we can pre-allocate decompressed_backing in one shot (no reallocations
-    // that would invalidate any ConstSpan views into it).
+    // that would invalidate any ConstSpan views into it). A compressed chunk's claimed size is checked against the
+    // most its stored bytes can decode to (crdr_max_decompressed_size) before anything is reserved for it, so the
+    // backing is never sized by a claim the file cannot back, and the total cannot wrap.
     {
         crd::usize scan_offset = header_size;
         crd::usize total_decompressed = 0U;
@@ -170,8 +172,12 @@ CrdrError crdr_read(
             {
                 return CrdrError::Truncated;
             }
-            if (chunk_flags & 0x1U)
+            if ((chunk_flags & 0x1U) != 0U)
             {
+                if (uncomp_size > crdr_max_decompressed_size(compressed_size))
+                {
+                    return CrdrError::InvalidChunk;
+                }
                 total_decompressed += static_cast<crd::usize>(uncomp_size);
             }
             scan_offset += payload_padded_size(static_cast<crd::usize>(compressed_size));
@@ -224,7 +230,9 @@ CrdrError crdr_read(
             const std::size_t result = ZSTD_decompress(
                 dst, uncomp_size,
                 bytes.data() + offset, comp_size);
-            if (ZSTD_isError(result))
+            // A frame that decodes to fewer bytes than the chunk claims would leave the payload's tail as zero fill
+            // the file never held; the claim and the decoded size must agree exactly.
+            if (ZSTD_isError(result) || result != uncomp_size)
             {
                 return CrdrError::DecompressFailed;
             }

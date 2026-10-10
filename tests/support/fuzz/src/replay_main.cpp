@@ -22,6 +22,10 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <crtdbg.h>
+#endif
+
 namespace
 {
 namespace fs = std::filesystem;
@@ -163,6 +167,21 @@ int run(int argc, char** argv)
                 outcome.inputs, outcome.bytes, outcome.rejected, outcome.slowest_ms, outcome.slowest_name.c_str());
     return 0;
 }
+#if defined(_WIN32) && defined(_DEBUG)
+// The Debug CRT reports heap corruption it finds at a free (an overrun past a block's end) and its own assertions
+// through a modal dialog; in a replay that is a finding, so it ends the process with the report instead.
+// NOLINTNEXTLINE(readability-non-const-parameter): the signature is the CRT's _CRT_REPORT_HOOK.
+int crt_report_is_fatal(int type, char* message, int* /*return_value*/)
+{
+    if (type == _CRT_WARN)
+    {
+        return 0;
+    }
+    std::fprintf(stderr, "fuzz replay: debug CRT report: %s\n", message != nullptr ? message : "");
+    std::fflush(stderr);
+    crd::fuzz::fatal_exit();
+}
+#endif
 } // namespace
 
 int main(int argc, char** argv)
@@ -172,6 +191,9 @@ int main(int argc, char** argv)
     crd::set_assert_headless(true);
 #if defined(_WIN32)
     _set_abort_behavior(0U, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#if defined(_DEBUG)
+    (void)_CrtSetReportHook2(_CRT_RPTHOOK_INSTALL, &crt_report_is_fatal);
+#endif
 #endif
     try
     {

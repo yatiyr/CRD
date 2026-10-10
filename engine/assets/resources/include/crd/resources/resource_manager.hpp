@@ -81,12 +81,12 @@ public:
 
     // ── Mounts ─────────────────────────────────────────────────────────────
     // Mount a cooked PACK file. Returns an invalid MountId on failure. A pack that cannot be read, does not parse,
-    // or whose manifest names bytes past its own end (torn on disk) is refused whole: the live table, the earlier
-    // mounts and every loaded payload are left as they were.
+    // whose manifest names bytes past its own end (torn on disk) or names one ResourceId twice is refused whole: the
+    // live table, the earlier mounts and every loaded payload are left as they were.
     [[nodiscard]] MountId mount_manifest(crd::containers::StringView path);
 
-    // Remove a mounted pack. Entries from this mount are evicted from the
-    // live table only when no other mount provides the same ResourceId.
+    // Remove a mounted pack. An id this mount served falls back to the newest remaining mount that names it, and
+    // leaves the live table only when no other mount provides it. Loaded payloads are kept.
     void unmount(MountId id);
 
     // ── Synchronous load ───────────────────────────────────────────────────
@@ -151,6 +151,11 @@ public:
     // Force-reload all loaded resources from a mounted pack, bypassing mtime
     // detection. Useful in tests and external tooling. Returns the number of
     // resources successfully reloaded.
+    //
+    // Both reload paths take the pack whole or not at all. A pack refused as mount_manifest refuses it changes
+    // nothing. An accepted pack becomes the mount's manifest: ids it adds are served (newest mount wins), ids it drops
+    // fall back as on unmount, and an id keeps its type: a loaded payload is reloaded only from an entry of its own
+    // type that this mount serves, so a newer mount's id or a retyped entry keeps its last-good payload.
     crd::usize reload_mount_now(MountId id);
 
     // ── Lookup ─────────────────────────────────────────────────────────────
@@ -182,14 +187,17 @@ private:
     // Loader registry: FourCC → ILoader.
     crd::containers::HashMap<crd::u32, std::unique_ptr<ILoader>> m_loaders;
 
+    // One mounted pack's own manifest. The live table is derived from these: an id is served by the newest mount
+    // (highest id) whose manifest names it, so unmount and reload can fall back to an older mount.
     struct MountRecord
     {
-        crd::u32                           id = 0;
-        crd::containers::String            pack_path;
-        crd::containers::Array<ResourceId> entries;
+        crd::u32                                      id = 0;
+        crd::containers::String                       pack_path;
+        crd::containers::Array<MountEntry>            entries;
+        crd::containers::HashMap<ResourceId, crd::usize> index; // id -> position in entries
 
         MountRecord(crd::memory::IAllocator* a, crd::u32 mount_id, crd::containers::StringView path)
-            : id(mount_id), pack_path(path.data(), path.size(), a), entries(a)
+            : id(mount_id), pack_path(path.data(), path.size(), a), entries(a), index(a)
         {
         }
     };
@@ -263,6 +271,11 @@ private:
     [[nodiscard]] ResourceControlBlock* load_streamed_impl(ResourceId id);
     [[nodiscard]] const MountRecord*    find_mount(crd::u32 mount_id) const noexcept;
     crd::usize                          do_reload_mount(PackWatch& watch);
+    // Under m_mutex (or before loads start): set m_live[id] to the newest mount's entry naming id, or erase it.
+    void                                refresh_live(ResourceId id);
+    // Under m_mutex: an evicted block is re-issued only from an entry of its own type (a handle's get() casts the
+    // payload to that type); a retyped entry fails the load and leaves the block evicted.
+    [[nodiscard]] bool reissue_type_matches(ResourceId id, const MountEntry& entry, const char* caller) const;
 
     // 2Q queue management — all called under m_mutex.
     void insert_into_2q    (ResourceId id, ResourceControlBlock* block); // new load or re-issue
