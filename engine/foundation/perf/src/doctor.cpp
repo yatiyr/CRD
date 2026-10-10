@@ -249,6 +249,10 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
         }
         report.modes.push_back(mode(cont::StringView{"fault-injection"}, compiled, enabled, usable, disposition));
     }
+    // No build replays external I/O (DIAG.9b): a run record holds no external I/O completions or opaque call results,
+    // and replay.run refuses a program that needs them, decided from its ops (crd-ceir-cook check_external_replay).
+    report.modes.push_back(mode(cont::StringView{"external-io-replay"}, false, false, false,
+                                cont::StringView{"refused in every build; records hold no external results; DIAG.9b"}));
 
     return report;
 }

@@ -135,7 +135,7 @@ enum class DeviceReplayStatus : crd::u8
     WrongExecutor,   // not a device record
     OtherBuild,      // made by another build (an ulp envelope replays it anyway when allowed)
     OtherAdapter,    // an exact envelope on another adapter (`reason` names the differing fields)
-    MissingInputs,   // the record lacks an input its program needs
+    MissingInputs,   // the record lacks an input its program needs (external results: always, check_external_replay)
     ContentMismatch, // the record's blob or a kernel's text is not the content it was recorded with
     DeviceFailed,    // the executor could not run the program (`reason` says why)
 };

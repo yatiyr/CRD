@@ -52,6 +52,10 @@
 // arguments with the recorded trace bound, and reports the first divergence or that the run reproduced. With
 // `program=<path>` it replays the same inputs against that program instead (an edited checkout) and says the program
 // differs. Every command loads programs with the host's dialects and bounds every file's size before reading it.
+// DIAG.9b: no build replays external I/O. No record holds external results, so one that says it needs or holds them
+// is missing them, and a replay whose program (the record's own, on every executor, or the `program=` one) needs them
+// is refused Unavailable before it runs, decided from the program's ops and not from the record (check_external_replay
+// in replay_record.hpp); `replay.prepare` never answers them available from a record.
 //
 // Host records. `replay.record executor=host` runs the program once on the crd-jobs host provider instead (with
 // `jobs`, its job split, 1 to 256, default 8, and `sub_fuel`, its step budget per body, default 2^20) and writes a

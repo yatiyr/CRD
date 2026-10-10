@@ -1254,7 +1254,11 @@ bool record_missing_inputs(const ReplayRecord& record, cont::String& out)
     bool none = true;
     for (crd::u32 i = 0U; i < kReplayInputs; ++i)
     {
-        if (record.inputs[i].state == ReplayInputState::Missing)
+        const ReplayInput& in = record.inputs[i];
+        // No record holds external results: unless it says they are not needed, it lacks them, whatever it claims.
+        const bool unheld = i == kReplayExternalResultsInput &&
+                            (in.need != ReplayNeed::No || in.state != ReplayInputState::NotNeeded);
+        if (in.state == ReplayInputState::Missing || unheld)
         {
             if (!out.empty())
             {

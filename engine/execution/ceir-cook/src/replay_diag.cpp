@@ -109,9 +109,11 @@ DiagStatus run_replay_prepare(void* context, const DiagCall& call, DiagSnapshot&
         const detail::InputNeed&       t    = needs.inputs[i];
         const Need                     need = t.need;
 
-        // A record holds the identity and arguments of its run; a program file only its own content hash.
+        // A record holds the identity and arguments of its run; a program file only its own content hash. No record
+        // holds external results, whatever it says (DIAG.9b, check_external_replay).
         const bool available = i == detail::kReplayProgramInput ||
-                               (is_record && record.inputs[i].state == ReplayInputState::Recorded);
+                               (is_record && i != kReplayExternalResultsInput &&
+                                record.inputs[i].state == ReplayInputState::Recorded);
         reason.clear();
         cont::StringView state{"missing"};
         if (need == Need::No)

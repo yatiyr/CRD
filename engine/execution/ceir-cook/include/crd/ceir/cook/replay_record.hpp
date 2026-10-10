@@ -536,7 +536,31 @@ struct OwnedReplaySite
                                           containers::String* missing);
 
 // The names of `record`'s missing inputs, comma-separated in record order, appended to `out`. True when none is.
+// `external-results` counts as missing unless the record says they are not needed (and not held), even when it says
+// they are recorded: no record can hold them (see check_external_replay).
 [[nodiscard]] bool record_missing_inputs(const ReplayRecord& record, containers::String& out);
+
+// The index of `external-results` in a record's inputs.
+inline constexpr crd::u32 kReplayExternalResultsInput = 6U;
+
+// NOLINTNEXTLINE(performance-enum-size)
+enum class ExternalReplay : crd::u8
+{
+    Allowed = 0, // the program needs no external results
+    Refused,     // it does: `reason` says which program and op
+    Cancelled,   // the caller's cancel was raised during the walk
+};
+
+// DIAG.9b: no build replays external I/O. A run record has no section for external I/O completions or opaque call
+// results, so nothing could feed them to a replay but bytes from outside the run. A replay of a program that needs
+// them (an op whose effective effects include FileIO, NetworkIO, DeviceIO, ExternalCall or AgentAction, or an opaque
+// op) is therefore refused in every build, and the need is derived from `module` itself (the record's own program,
+// after its content hash was checked, or the program a replay runs instead), never from what a record says about it.
+// Refused appends to `reason` the program (`whose`), the number of ops that need them and the first one at its
+// authored position.
+[[nodiscard]] ExternalReplay check_external_replay(const Context& ctx, const Module& module,
+                                                   containers::StringView whose, memory::IAllocator* alloc,
+                                                   const std::atomic<bool>* cancel, containers::String& reason);
 
 // NOLINTNEXTLINE(performance-enum-size)
 enum class DivergenceKind : crd::u8

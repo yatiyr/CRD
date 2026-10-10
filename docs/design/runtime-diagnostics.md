@@ -1436,6 +1436,29 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-install-teardown-f
   (crd-sandbox) installing the recorder, its triggers, a `FlightCommandHost` sink with its module snapshot and the
   flight and fault commands.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-external-io-replay.md)):
+- No build replays external I/O. A run record has no section for external I/O completions or opaque call results,
+  and nothing can feed them to a replay but bytes from outside the run, so the refusal is not a shipping-only switch:
+  every build refuses, and a shipping build is checked the same way.
+- The decision comes from the program, never from the record. `check_external_replay` (crd-ceir-cook,
+  `replay_record.hpp`) walks the ops of the program a replay would run with the `replay.prepare` effect walk; a
+  program needing external results (an op whose effective effects include FileIO, NetworkIO, DeviceIO, ExternalCall
+  or AgentAction, or an opaque op) is refused Unavailable before anything runs, naming the program, the number of
+  such ops and the first at its authored file:line:col. `replay.run` asks it on every executor (plan, host, device)
+  for the record's own program after its content hash is checked and for the `program=` program before its plan is
+  compiled; the host path asks before the host executor is called, so a host executor never sees such a program.
+  Before this a record that said `external-results` was recorded, or said it was not needed while its program read
+  a file, replayed; the checksum guards integrity, not what the record claims.
+- `record_missing_inputs` counts `external-results` missing unless the record says it is not needed and not held, and
+  `replay.prepare` never answers it available from a record.
+- The doctor reports `external-io-replay` never compiled, enabled or usable, in any build, beside `fault-injection`
+  (compiled out of shipping builds); `diag.capabilities` carries both.
+- Today no engine op declares an external-results effect, so such a program would also fail the plan compiler
+  (`unsupported-op`); the refusal is decided before that, so it holds when an op that reads a file gains a kernel.
+  Stubbed external completions stay as DIAG.9a records them: only in an explicit test replay, once such an op exists.
+- Still open in this row: a real host (crd-sandbox) installing the recorder, its triggers, a `FlightCommandHost` sink
+  with its module snapshot and the flight and fault commands.
+
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization
 

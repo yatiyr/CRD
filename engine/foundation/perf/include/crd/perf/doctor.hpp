@@ -71,6 +71,8 @@ struct DoctorLive
 //   fault-injection  compiled when the build has fault seams (crd::fault_seams_compiled(): every build but shipping);
 //                    enabled when a plan is armed; usable when compiled and an injector is installed (arming still
 //                    needs the inject grant).
+// "external-io-replay" is never compiled, enabled or usable, in any build: a run record holds no external I/O
+// results, and a replay of a program that needs them is refused before it runs (DIAG.9b).
 DoctorReport run_doctor(cont::StringView output_dir = cont::StringView{}, const DoctorLive& live = DoctorLive{});
 
 } // namespace crd::perf

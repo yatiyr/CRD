@@ -8,9 +8,14 @@
 
 #include "device_replay_fixture.hpp"
 
+#include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/device_replay.hpp>
+#include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
+#include <crd/ceir/dialect.hpp>
+#include <crd/ceir/effect.hpp>
+#include <crd/ceir/semantics.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash.hpp>
@@ -730,4 +735,121 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     CHECK(has(view(prepared.json), R"("input":"device-tolerance")"));
     CHECK(has(view(prepared.json), "a tolerance or oracle for device numerics is in the run record"));
     CHECK(has(view(prepared.json), R"("missing":0,)"));
+}
+
+namespace
+{
+// DIAG.9b: the device program reading one value from a file first (an op no engine dialect has yet, registered here).
+constexpr const char* kFileRead = "%6 = xio.read() : !index";
+constexpr const char* kProgramReading =
+    "module {\n"
+    "  ^bb0:\n"
+    "    %0 = arith.const() {value = 4} : !index\n"
+    "    %1 = arith.const() {value = 1} : !index\n"
+    "    %2 = resource.declare() : !buffer<plain,!f32>\n"
+    "    %3 = resource.declare() : !buffer<plain,!f32>\n"
+    "    %4 = resource.declare() : !buffer<plain,!f32>\n"
+    "    %5 = resource.declare() : !buffer<plain,!u32>\n"
+    "    %6 = xio.read() : !index\n"
+    "    compute.dispatch(%0, %1, %1, %2, %3) {access = \"r,w\", kernel = @scale}\n"
+    "    compute.dispatch(%0, %1, %1, %3, %2, %4, %5) {access = \"r,r,w,w\", kernel = @wave}\n"
+    "}\n";
+
+constexpr crd::ceir::EffectRecord kFileEffect[] = {
+    {crd::ceir::EffectFamily::FileIO, crd::ceir::EffectTarget::None, 0U, 0U}};
+
+void append_number(String& out, u64 v)
+{
+    char  digits[20];
+    usize n = 0U;
+    do
+    {
+        digits[n++] = static_cast<char>('0' + (v % 10U));
+        v /= 10U;
+    } while (v != 0U);
+    while (n > 0U)
+    {
+        out.push_back(digits[--n]);
+    }
+}
+
+void io_registrar(crd::ceir::Context& ctx, void* /*user*/)
+{
+    fx::register_dialects(ctx);
+    crd::ceir::Dialect* const d = ctx.register_dialect("xio");
+    (void)d->register_op("read", {.effects = ConstSpan<crd::ceir::EffectRecord>(kFileEffect, 1U),
+                                  .determinism = crd::ceir::DeterminismClass::ExternalNondeterminism});
+}
+} // namespace
+
+TEST_CASE("diag 9b: a device record or program that needs external results is refused before anything runs",
+          "[ceir][cook][diag][device][diag9b]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    fx::Authored                       a(&alloc);
+    fx::author(a, &alloc);
+    const ReplayRecord rec = record_on(a, ck::reference_device_executor(&alloc), kExact, &alloc);
+
+    Array<u8> reading(&alloc);
+    u64       reading_hash = 0U;
+    {
+        crd::ceir::Context ctx(&alloc);
+        io_registrar(ctx, nullptr);
+        ck::CookResult cooked =
+            ck::cook_program_text(ctx, StringView{kProgramReading}, StringView{fx::kFile}, 1U, &alloc, &alloc);
+        REQUIRE(cooked.ok());
+        reading      = std::move(cooked.blob);
+        reading_hash = cooked.content_hash;
+    }
+    const fx::TextPos at = fx::locate(StringView{kProgramReading}, StringView{kFileRead});
+    const auto expected  = [&](const char* whose)
+    {
+        String out(&alloc);
+        out.append(whose);
+        out.append(" program needs external results (1 op, first xio.read at ");
+        out.append(fx::kFile);
+        out.push_back(':');
+        append_number(out, at.line);
+        out.push_back(':');
+        append_number(out, at.col);
+        out.append("); no build replays external I/O");
+        return out;
+    };
+
+    // The control: the honest record replays with the file-reading op registered.
+    Counted          count{ck::reference_device_executor(&alloc), 0U};
+    ck::DeviceReplay r(&alloc);
+    REQUIRE(ck::replay_device_record(rec, counted_executor(count), &io_registrar, nullptr, {}, r) ==
+            DeviceReplayStatus::Ok);
+    REQUIRE(count.runs == 1U);
+    CHECK(r.divergence.kind == DeviceDivergenceKind::None);
+
+    // A record whose own program reads a file, though it says it needs no external results.
+    ReplayRecord forged = copy_of(rec, &alloc);
+    forged.program.clear();
+    for (const u8 b : reading)
+    {
+        forged.program.push_back(b);
+    }
+    forged.content_hash = reading_hash;
+    REQUIRE(forged.inputs[ck::kReplayExternalResultsInput].need == ck::ReplayNeed::No);
+    CHECK(ck::replay_device_record(forged, counted_executor(count), &io_registrar, nullptr, {}, r) ==
+          DeviceReplayStatus::MissingInputs);
+    INFO(r.reason.c_str());
+    CHECK(has(view(r.reason), view(expected("the record's"))));
+
+    // The honest record replayed against the program that reads a file.
+    ck::DeviceReplayOptions against;
+    against.against = ConstSpan<u8>(reading.data(), reading.size());
+    CHECK(ck::replay_device_record(rec, counted_executor(count), &io_registrar, nullptr, against, r) ==
+          DeviceReplayStatus::MissingInputs);
+    CHECK(has(view(r.reason), view(expected("the given"))));
+
+    // A record that says it holds external results lacks them.
+    ReplayRecord claims = copy_of(rec, &alloc);
+    claims.inputs[ck::kReplayExternalResultsInput] = {ck::ReplayNeed::Yes, ck::ReplayInputState::Recorded};
+    CHECK(ck::replay_device_record(claims, counted_executor(count), &io_registrar, nullptr, {}, r) ==
+          DeviceReplayStatus::MissingInputs);
+    CHECK(has(view(r.reason), "external-results"));
+    CHECK(count.runs == 1U); // nothing ran after the control
 }

@@ -436,6 +436,41 @@ DiagStatus check_replay_record(void* /*context*/, cont::ConstSpan<DiagArg> args,
     return DiagStatus::Failed;
 }
 
+// DIAG.9b: a replay never feeds external results (check_external_replay). Ok when `module` needs none; Unavailable
+// naming the program and its op, or Cancelled, before anything runs.
+[[nodiscard]] DiagStatus refuse_external_replay(const Context& ctx, const Module& module, cont::StringView whose,
+                                                const DiagCall& call, cont::String& reason)
+{
+    switch (check_external_replay(ctx, module, whose, reason.allocator(), call.cancel, reason))
+    {
+    case ExternalReplay::Allowed: return DiagStatus::Ok;
+    case ExternalReplay::Refused: return DiagStatus::Unavailable;
+    case ExternalReplay::Cancelled: break;
+    }
+    reason.append("cancelled before the program ran");
+    return DiagStatus::Cancelled;
+}
+
+// The same check for a cooked program the host executor will load itself: Ok when the blob does not read here (the
+// executor refuses it with its own reason, and nothing runs).
+[[nodiscard]] DiagStatus refuse_external_replay(ReplayCommands& cmd, cont::ConstSpan<crd::u8> blob,
+                                                cont::StringView whose, const DiagCall& call, cont::String& reason)
+{
+    crd::memory::IAllocator* const alloc = reason.allocator();
+    Context                        ctx(alloc);
+    if (cmd.registrar != nullptr)
+    {
+        cmd.registrar(ctx, cmd.user);
+    }
+    const ReadResult rr = read_program(ctx, blob, alloc);
+    if (!rr.ok() || rr.module == nullptr)
+    {
+        return DiagStatus::Ok;
+    }
+    ctx.assign_stable_ids(*rr.module);
+    return refuse_external_replay(ctx, *rr.module, whose, call, reason);
+}
+
 // Where a recorded run failed, as the answer names it (the file views a Context or string the caller keeps alive).
 struct FaultSite
 {
@@ -1107,6 +1142,21 @@ void add_divergence(DiagFields& item, const Divergence& d)
             return s;
         }
     }
+    if (const DiagStatus s = refuse_external_replay(cmd, {record.program.data(), record.program.size()},
+                                                    "the record's", call, out.reason);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
+    if (!against.empty())
+    {
+        if (const DiagStatus s =
+                refuse_external_replay(cmd, {against.data(), against.size()}, "the given", call, out.reason);
+            s != DiagStatus::Ok)
+        {
+            return s;
+        }
+    }
     if (call.cancelled())
     {
         out.reason.append("cancelled before the program ran");
@@ -1424,6 +1474,11 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
         out.reason.append("the record's program does not match the content hash it was recorded with");
         return DiagStatus::Failed;
     }
+    if (const DiagStatus s = refuse_external_replay(rctx, *recorded.module, "the record's", call, out.reason);
+        s != DiagStatus::Ok)
+    {
+        return s;
+    }
     if (!recorded.compiled.ok())
     {
         return describe_unrunnable(recorded, "the record's", out.reason);
@@ -1443,6 +1498,15 @@ DiagStatus run_replay_run(void* context, const DiagCall& call, DiagSnapshot& out
             return s;
         }
         load_replay_program(actx, {blob.data(), blob.size()}, entry, cmd->registrar, cmd->user, against);
+        // Whether it needs external results is decided by its ops, before whether its plan compiled.
+        if (against.module != nullptr)
+        {
+            if (const DiagStatus s = refuse_external_replay(actx, *against.module, "the given", call, out.reason);
+                s != DiagStatus::Ok)
+            {
+                return s;
+            }
+        }
         if (!against.ok())
         {
             return describe_unrunnable(against, "the given", out.reason);

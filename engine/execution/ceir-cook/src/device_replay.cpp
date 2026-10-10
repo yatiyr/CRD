@@ -1000,6 +1000,16 @@ DeviceReplayStatus replay_device_record(const ReplayRecord& record, const Device
         }
         ctx = &actx;
     }
+    // DIAG.9b: a replay never feeds external results, whatever the record says (check_external_replay).
+    if (check_external_replay(rctx, *recorded, "the record's", alloc, nullptr, out.reason) != ExternalReplay::Allowed)
+    {
+        return DeviceReplayStatus::MissingInputs;
+    }
+    if (module != recorded &&
+        check_external_replay(*ctx, *module, "the given", alloc, nullptr, out.reason) != ExternalReplay::Allowed)
+    {
+        return DeviceReplayStatus::MissingInputs;
+    }
     out.program_differs = out.replayed_hash != record.content_hash;
     cont::Array<DeviceKernelSource> kernels(alloc);
     if (options.kernels_against.empty())

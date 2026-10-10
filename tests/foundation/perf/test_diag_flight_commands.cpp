@@ -554,7 +554,7 @@ TEST_CASE("fault commands: fault.arm arms a fault-plan asset under the root and 
     CHECK_FALSE(injector.armed());
 }
 
-TEST_CASE("doctor: the flight-recorder and fault-injection modes are reported live",
+TEST_CASE("doctor: the flight-recorder and fault-injection modes are reported live, external I/O replay never",
           "[perf][diag][diag9b][doctor]")
 {
     const bool seams = seam_installs();
@@ -570,6 +570,12 @@ TEST_CASE("doctor: the flight-recorder and fault-injection modes are reported li
     CHECK(faults->compiled == seams);
     CHECK_FALSE(faults->enabled);
     CHECK_FALSE(faults->usable);
+    // No build, shipping or not, replays external I/O.
+    const cp::DiagnosticMode* external = bare.find_mode("external-io-replay");
+    REQUIRE(external != nullptr);
+    CHECK_FALSE(external->compiled);
+    CHECK_FALSE(external->enabled);
+    CHECK_FALSE(external->usable);
 
     cp::FlightRecorder recorder;
     cp::FaultInjector  injector;
@@ -611,6 +617,8 @@ TEST_CASE("doctor: the flight-recorder and fault-injection modes are reported li
                                       "\"enabled\":true,\"usable\":true,"
                                     : "{\"kind\":\"mode\",\"name\":\"fault-injection\",\"compiled\":false,"
                                       "\"enabled\":false,\"usable\":false,"));
+    CHECK(contains(caps.json, "{\"kind\":\"mode\",\"name\":\"external-io-replay\",\"compiled\":false,"
+                              "\"enabled\":false,\"usable\":false,"));
     injector.disarm();
 
     // A capture that ended on a fatal path is terminal: the recorder is no longer usable.

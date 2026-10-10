@@ -1,9 +1,12 @@
 #include "replay_needs.hpp"
 
+#include "bounded_file.hpp" // append_decimal
+
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/dialect.hpp> // OpInfo
 #include <crd/ceir/effect.hpp>
 #include <crd/ceir/input.hpp> // reads_input
+#include <crd/ceir/provenance.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
 
@@ -253,5 +256,49 @@ bool classify_replay_inputs(const Context& ctx, const Module& module, ReplayExec
     }
     detail::record_inputs(needs, executor, host_inputs_held, inputs, missing);
     return true;
+}
+
+ExternalReplay check_external_replay(const Context& ctx, const Module& module, containers::StringView whose,
+                                     memory::IAllocator* alloc, const std::atomic<bool>* cancel,
+                                     containers::String& reason)
+{
+    detail::ProgramNeeds needs;
+    if (!detail::analyze_needs(ctx, module, alloc, cancel, needs))
+    {
+        return ExternalReplay::Cancelled;
+    }
+    const detail::InputNeed& external = needs.inputs[kReplayExternalResultsInput];
+    if (external.need == ReplayNeed::No)
+    {
+        return ExternalReplay::Allowed;
+    }
+
+    // An opaque op makes the need unknown at worst; either way nothing could feed what it reads.
+    const Operation* const cause = external.cause != nullptr ? external.cause : needs.first_opaque;
+    reason.append("incompatible replay: ");
+    reason.append(whose);
+    reason.append(" program needs external results (");
+    detail::append_decimal(reason, external.ops);
+    reason.append(external.ops == 1U ? containers::StringView{" op"} : containers::StringView{" ops"});
+    if (cause != nullptr)
+    {
+        reason.append(", first ");
+        reason.append(ctx.op_name(cause->kind()));
+        containers::Array<Origin> storage(alloc);
+        const Provenance          p = resolve_provenance(ctx, cause, storage);
+        if (const Origin* const at = p.primary(); at != nullptr)
+        {
+            const containers::StringView file = ctx.file_path(at->loc.file_id);
+            reason.append(" at ");
+            reason.append(file);
+            reason.push_back(':');
+            detail::append_decimal(reason, at->loc.line);
+            reason.push_back(':');
+            detail::append_decimal(reason, at->loc.col);
+        }
+    }
+    reason.append("); no build replays external I/O: a run record holds no external I/O completions or opaque call "
+                  "results");
+    return ExternalReplay::Refused;
 }
 } // namespace crd::ceir::cook

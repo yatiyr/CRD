@@ -10,13 +10,17 @@
 // another schema or a program that is not the recorded hash is refused with nothing run. Expected lines and columns
 // come from scanning the text, never from the parser. ASCII test names (ctest by-name).
 
+#include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
 
 #include <crd/ceir/context.hpp>
+#include <crd/ceir/dialect.hpp>
+#include <crd/ceir/effect.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/semantics.hpp>
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -65,6 +69,22 @@ void registrar(Context& ctx, void* /*user*/)
     (void)crd::ceir::core::register_core_ops(ctx);
     (void)crd::ceir::func::register_dialect(ctx);
 }
+
+// DIAG.9b: a host that also knows an op reading a file (no engine op declares FileIO yet), so a program can need
+// external results.
+constexpr crd::ceir::EffectRecord kFileRead[] = {
+    {crd::ceir::EffectFamily::FileIO, crd::ceir::EffectTarget::None, 0U, 0U}};
+
+void io_registrar(Context& ctx, void* user)
+{
+    registrar(ctx, user);
+    crd::ceir::Dialect* const d = ctx.register_dialect("xio");
+    (void)d->register_op("read", {.effects = crd::containers::ConstSpan<crd::ceir::EffectRecord>(kFileRead, 1U),
+                                  .determinism = crd::ceir::DeterminismClass::ExternalNondeterminism});
+}
+
+// The bias the demo adds, read from a file instead.
+constexpr const char* kBiasRead = "%9 = xio.read() : !i32";
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
@@ -205,13 +225,14 @@ DiagServiceConfig here()
 
 struct Host
 {
-    explicit Host(crd::perf::DiagAuthoritySet grant = kAll) : svc(grant, here())
+    explicit Host(crd::perf::DiagAuthoritySet grant = kAll, crd::ceir::cook::Registrar dialects = &registrar)
+        : svc(grant, here())
     {
-        cmd.registrar = &registrar;
+        cmd.registrar = dialects;
         REQUIRE(crd::ceir::cook::register_replay_record(svc, cmd));
         REQUIRE(crd::ceir::cook::register_replay_run(svc, cmd));
         REQUIRE(crd::ceir::cook::register_replay_prepare(svc, prepare));
-        prepare.registrar = &registrar;
+        prepare.registrar = dialects;
     }
 
     ReplayCommands                        cmd;
@@ -265,13 +286,13 @@ void write_program(const char* path, StringView text)
     spill(path, text.data(), text.size());
 }
 
-String edited(StringView text, crd::memory::IAllocator* a)
+String edited(StringView text, crd::memory::IAllocator* a, const char* replacement = kBiasEdited)
 {
     const usize at = text.find(StringView{kBiasLine});
     REQUIRE(at != StringView::npos);
     String out(a);
     out.append(text.substr(0U, at));
-    out.append(kBiasEdited);
+    out.append(replacement);
     out.append(text.substr(at + StringView{kBiasLine}.size()));
     return out;
 }
@@ -850,4 +871,201 @@ TEST_CASE("diag 9a: the first divergence is ordered path, value, length, outcome
     CHECK(d.index == 2U);
     CHECK(d.recorded == 3);
     CHECK(d.observed == 5);
+}
+
+namespace
+{
+// DIAG.9b: a host executor that only counts the replays that reach it, and refuses them.
+struct StubHost
+{
+    u64 replays = 0U;
+};
+
+crd::ceir::cook::HostExecutorStatus stub_replay(const crd::ceir::cook::HostReplayRequest& /*request*/,
+                                                crd::ceir::cook::HostReplayAnswer& /*out*/, String& reason,
+                                                void* user)
+{
+    ++static_cast<StubHost*>(user)->replays;
+    reason.append("reached the stub host executor");
+    return crd::ceir::cook::HostExecutorStatus::Unavailable;
+}
+
+void append_number(String& out, u64 v)
+{
+    char  digits[20];
+    usize n = 0U;
+    do
+    {
+        digits[n++] = static_cast<char>('0' + (v % 10U));
+        v /= 10U;
+    } while (v != 0U);
+    while (n > 0U)
+    {
+        out.push_back(digits[--n]);
+    }
+}
+
+// The refusal's naming of a program's first op that reads a file: "<whose> program needs external results (1 op,
+// first xio.read at <file>:<line>:<col>)".
+String external_refusal(const char* whose, const char* file, const Where& at, crd::memory::IAllocator* a)
+{
+    String out(a);
+    out.append(whose);
+    out.append(" program needs external results (1 op, first xio.read at ");
+    out.append(file);
+    out.push_back(':');
+    append_number(out, at.line);
+    out.push_back(':');
+    append_number(out, at.col);
+    out.append(")");
+    return out;
+}
+
+DiagResult prepare(Host& h, const char* path)
+{
+    DiagRequest r;
+    r.command    = crd::ceir::cook::kReplayPrepareCommand;
+    r.path       = StringView{path};
+    r.page_items = 64U;
+    r.page_bytes = crd::perf::kDiagMaxPageBytes;
+    return h.svc.execute(r);
+}
+} // namespace
+
+TEST_CASE("diag 9b: no build replays external I/O; a record or program that needs external results is refused "
+          "before anything runs",
+          "[ceir][cook][diag][diag9b]")
+{
+    using crd::ceir::cook::ReplayInputState;
+    using crd::ceir::cook::ReplayNeed;
+    constexpr u32 external_input = crd::ceir::cook::kReplayExternalResultsInput;
+
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String                       text      = slurp(kAsset, &alloc);
+    const String                       read_text = edited(view(text), &alloc, kBiasRead);
+    const Where                        read_at   = locate(view(read_text), kBiasRead);
+    const char* const                  program   = "diag9b_ext_demo.ceir";
+    const char* const                  reading   = "diag9b_ext_read.ceir";
+    const char* const                  original  = "diag9b_ext.crpl";
+    const char* const                  tampered  = "diag9b_ext_tampered.crpl";
+    forget(original);
+    forget(tampered);
+    write_program(program, view(text));
+    write_program(reading, view(read_text));
+
+    // A host that knows the file-reading op, with a host executor that only counts what reaches it.
+    Host                                h(kAll, &io_registrar);
+    StubHost                            stub;
+    crd::ceir::cook::ReplayHostExecutor host_executor;
+    host_executor.replay = &stub_replay;
+    host_executor.user   = &stub;
+    h.cmd.host           = &host_executor;
+    REQUIRE(record(h, program, original, "1").status == DiagStatus::Ok);
+    const u64 executions = h.cmd.executions.load();
+
+    // The program that reads its bias from a file, cooked as a record would hold it.
+    Array<u8> read_blob(&alloc);
+    u64       read_hash = 0U;
+    {
+        Context ctx(&alloc);
+        io_registrar(ctx, nullptr);
+        crd::ceir::cook::CookResult cooked =
+            crd::ceir::cook::cook_program_text(ctx, view(read_text), StringView{reading}, 1U, &alloc, &alloc);
+        REQUIRE(cooked.ok());
+        read_blob = std::move(cooked.blob);
+        read_hash = cooked.content_hash;
+    }
+    const auto with_read_program = [&](ReplayRecord& rec)
+    {
+        rec.program.clear();
+        for (const u8 b : read_blob)
+        {
+            rec.program.push_back(b);
+        }
+        rec.content_hash = read_hash;
+        rec.program_path.clear();
+        rec.program_path.append(reading);
+    };
+    const auto refused = [&](const DiagResult& r, const String& reason)
+    {
+        INFO(r.reason.c_str());
+        CHECK(r.status == DiagStatus::Unavailable);
+        CHECK(has(view(r.reason), view(reason)));
+        CHECK(has(view(r.reason), "no build replays external I/O"));
+        CHECK(h.cmd.executions.load() == executions); // nothing ran
+    };
+
+    SECTION("the honest record needs no external results and replays")
+    {
+        const DiagResult r = replay(h, original);
+        REQUIRE(r.status == DiagStatus::Ok);
+        CHECK(view(field(view(r.json), "result", &alloc)) == "\"reproduced\"");
+        const ReplayRecord rec = decode_file(original, &alloc);
+        CHECK(rec.inputs[external_input].need == ReplayNeed::No);
+        CHECK(rec.inputs[external_input].state == ReplayInputState::NotNeeded);
+    }
+    SECTION("a record that says it holds or needs external results lacks them, whatever its state says")
+    {
+        const crd::ceir::cook::ReplayInput claims[] = {{ReplayNeed::Yes, ReplayInputState::Recorded},
+                                                       {ReplayNeed::No, ReplayInputState::Recorded},
+                                                       {ReplayNeed::Unknown, ReplayInputState::Recorded},
+                                                       {ReplayNeed::Yes, ReplayInputState::NotNeeded}};
+        for (const crd::ceir::cook::ReplayInput& claim : claims)
+        {
+            ReplayRecord rec           = decode_file(original, &alloc);
+            rec.inputs[external_input] = claim;
+            encode_file(rec, tampered, &alloc);
+            const DiagResult r = replay(h, tampered);
+            INFO(r.reason.c_str());
+            CHECK(r.status == DiagStatus::Unavailable);
+            CHECK(has(view(r.reason), "missing inputs its program needs (external-results)"));
+            CHECK(h.cmd.executions.load() == executions);
+        }
+    }
+    SECTION("a record whose own program reads a file is refused from its ops, whatever the record says")
+    {
+        ReplayRecord rec = decode_file(original, &alloc);
+        with_read_program(rec);
+        rec.inputs[external_input] = {ReplayNeed::No, ReplayInputState::NotNeeded};
+        encode_file(rec, tampered, &alloc);
+        refused(replay(h, tampered), external_refusal("the record's", reading, read_at, &alloc));
+
+        // replay.prepare reads the same record's program: it needs external results, and a record never has them,
+        // even when it says it does.
+        rec.inputs[external_input] = {ReplayNeed::Yes, ReplayInputState::Recorded};
+        encode_file(rec, tampered, &alloc);
+        const DiagResult p = prepare(h, tampered);
+        INFO(p.json.c_str());
+        REQUIRE(p.status == DiagStatus::Ok);
+        CHECK(has(view(p.json), R"("input":"external-results","guarantee":"event","needed":"yes","state":"missing")"));
+        CHECK(has(view(p.json), R"("replay":"unavailable")"));
+    }
+    SECTION("replaying honest inputs against a program that reads a file is refused before it runs")
+    {
+        refused(replay(h, original, reading), external_refusal("the given", reading, read_at, &alloc));
+    }
+    SECTION("a host record is refused before the host executor is reached")
+    {
+        ReplayRecord rec  = decode_file(original, &alloc);
+        rec.executor      = crd::ceir::cook::ReplayExecutorKind::Host;
+        rec.host_jobs     = 8U;
+        rec.host_sub_fuel = 1024U;
+        rec.error         = crd::ceir::plan::RunError::None;
+        encode_file(rec, tampered, &alloc);
+
+        // The control: a host record of the demo reaches the host executor.
+        const DiagResult reached = replay(h, tampered);
+        CHECK(has(view(reached.reason), "reached the stub host executor"));
+        REQUIRE(stub.replays == 1U);
+
+        refused(replay(h, tampered, reading), external_refusal("the given", reading, read_at, &alloc));
+        with_read_program(rec);
+        encode_file(rec, tampered, &alloc);
+        refused(replay(h, tampered), external_refusal("the record's", reading, read_at, &alloc));
+        CHECK(stub.replays == 1U);
+    }
+    forget(original);
+    forget(tampered);
+    forget(program);
+    forget(reading);
 }
