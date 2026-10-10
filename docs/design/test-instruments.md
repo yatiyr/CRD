@@ -42,12 +42,32 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-ceir-binary` | `crd::ceir::deserialize` | 16: the rich graph's blob, truncations, a flipped count, garbage, six adopted findings |
 | `crd-fuzz-ckir-text` | `crd::kir::ckir_read` | 11: the D1 scale kernel and the raster fragment entry as written, the malformed table of `test_ckir_asset.cpp`, four adopted findings |
 | `crd-fuzz-ckir-binary` | `crd::kir::deserialize_graph` | 18: the two graphs' blobs, truncations, a flipped byte, garbage, five adopted findings |
+| `crd-fuzz-perf-bundle` | `crd::perf::import_bundle` (DIAG.5d) | 12: the golden bundle, truncations, traversal, a lying length, a decompression bomb, a wrong schema, a hostile section count, build identities |
+| `crd-fuzz-memory-allocators` | every production allocator and the `SlotMap`, as operation sequences (DIAG.10a) | 23: 17 written streams (one or more per allocator, malformed lengths and alignments, a stream cut mid-operation, one per finding of the written seeds) and 6 adopted libFuzzer inputs |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
 `<replay> --seed <dir>`, merged units carry libFuzzer's SHA-1 name. The harness directory `tests/support/fuzz` is a
-registered test directory owned by the `ceir` and `kir` rows, so a fuzz executable's link set is the target's own
-module plus core, containers and memory.
+registered test directory owned by the `ceir`, `kir`, `perf` and `memory` rows, so a fuzz executable's link set is
+the target's own module plus core, containers and memory. Every `crd_fuzz_target()` has exactly one `fuzz.py` entry
+naming its corpus and build-relative executable, and no entry is stale (`test-repository-tools.py`, DIAG.10a). The
+replay driver declares itself headless before the first input (`set_assert_headless`, and on Windows no abort
+dialog), so an engine assertion inside a target ends the replay with its evidence instead of waiting on a modal
+dialog until the CTest timeout.
+
+The stateful target `crd-fuzz-memory-allocators` (DIAG.10a) is the same harness with a different input shape: the
+first byte picks an allocator and its configuration, the rest is an operation stream replayed against the allocator
+and an independent reference model. Only contract-valid operations reach a raw allocator (allocation through
+`try_allocate`, frees of live blocks, a TLSF reallocate only when a probe shows its fallback cannot reach the fatal
+out-of-memory path, strictly increasing ring epochs within K in flight), so a failure is an allocator defect. The
+malformed requests the contract covers (zero, near-`SIZE_MAX` and past-the-arena sizes, top-bit and
+non-power-of-two alignments) are generated on purpose and must be refused without change, and the checked layers
+take the hostile operations they promise to diagnose (double, interior and foreign frees, redzone overruns and
+writes into quarantine for the `DiagnosticAllocator`; stale, double-erased and forged handles for the `SlotMap`).
+The oracles are the model's: no overlap, alignment, ownership, intact payloads, exact success and failure where the
+allocator's capacity model is exact, `validate_structure()`, statistics that return to zero, an offset span that
+coalesces back to one region, a parent that gets every byte back, and the same outcome trace on a second run. The
+parent is page aligned so placement does not depend on where the system allocator put the arena.
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final

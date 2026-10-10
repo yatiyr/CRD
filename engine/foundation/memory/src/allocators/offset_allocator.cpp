@@ -100,10 +100,6 @@ OffsetAllocator::OffsetAllocator(u32 capacity, u32 max_allocations, IAllocator* 
         // through null. This is out of memory for the allocator, as in the other arenas.
         CRD_FATAL("OffsetAllocator: parent refused the node arrays");
     }
-    for (u32 i = 0; i < m_max_allocs; ++i)
-    {
-        m_nodes[i] = Node{};
-    }
     reset();
 }
 
@@ -125,9 +121,13 @@ void OffsetAllocator::reset() noexcept
     {
         bi = kUnused;
     }
-    // Free-node stack: all indices available, top at m_max_allocs - 1.
+    // Free-node stack: all indices available, top at m_max_allocs - 1. Every node returns to its initial state: a
+    // node kept its neighbour links across a reset, so the span's node reused them and its first free coalesced with
+    // regions that no longer existed (DIAG.10a: a 4,096-byte span reported a 4,441-byte free region), and a handle
+    // issued before the reset still looked issued to free().
     for (u32 i = 0; i < m_max_allocs; ++i)
     {
+        m_nodes[i]      = Node{};
         m_free_nodes[i] = i;
     }
     m_free_offset = m_max_allocs - 1U;

@@ -167,6 +167,12 @@ int run(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+    // An engine assertion inside a target is a finding: it must end this process with its evidence, never wait on a
+    // modal dialog (the Windows assert box, then the Debug CRT's abort box) until the CTest timeout.
+    crd::set_assert_headless(true);
+#if defined(_WIN32)
+    _set_abort_behavior(0U, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     try
     {
         return run(argc, argv);

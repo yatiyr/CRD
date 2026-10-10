@@ -429,18 +429,24 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
     if (rec == nullptr) // record table saturated: the allocation still succeeds, but is untracked
     {
         ++m_saturation_count;
-        if (m_cfg.mandatory)
-        {
-            Violation v;
-            v.kind = ViolationKind::MetadataSaturation;
-            v.ptr = user;
-            v.size = size;
-            raise(v); // never silent in mandatory mode
-        }
         // Undo the redzoned block (we cannot track its raw start) and hand back a plain passthrough
         // whose user pointer == the backing block, so deallocate() frees it correctly via owns().
         m_backing->deallocate(raw);
-        return backing_allocate(size, alignment, non_fatal);
+        void* const plain = backing_allocate(size, alignment, non_fatal);
+        if (plain != nullptr)
+        {
+            ++m_passthrough_live;
+        }
+        if (m_cfg.mandatory)
+        {
+            // The report names the block the caller receives, not the discarded redzoned one (DIAG.10a).
+            Violation v;
+            v.kind = ViolationKind::MetadataSaturation;
+            v.ptr = plain;
+            v.size = size;
+            raise(v); // never silent in mandatory mode
+        }
+        return plain;
     }
 
     rec->raw = raw;
@@ -474,8 +480,13 @@ void DiagnosticAllocator::deallocate(void* p) noexcept
     Record* const rec = find_record(p);
     if (rec == nullptr)
     {
-        if (m_backing->owns(p)) // an untracked (saturated) passthrough block
+        // Without a record, p is an untracked passthrough block only while one is live. Otherwise it was never
+        // handed out: a foreign or interior pointer, or a freed block already evicted from quarantine. It is reported
+        // and refused, never passed to the backing heap, whose free lists it would corrupt (DIAG.10a: the backing
+        // range check alone let an interior pointer and an evicted double free through).
+        if (m_passthrough_live > 0U && m_backing->owns(p))
         {
+            --m_passthrough_live;
             m_backing->deallocate(p);
         }
         else

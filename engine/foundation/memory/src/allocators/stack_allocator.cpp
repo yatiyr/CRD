@@ -71,8 +71,10 @@ void* StackAllocator::allocate(usize size, usize alignment)
         return nullptr;
     }
 
+    // The statistics charge what the arena consumed, alignment padding included, so bytes_in_use equals used() and
+    // reset()/reset_to() return it exactly (DIAG.10a: charging only `size` drifted bytes_in_use past zero).
+    m_stats.on_allocate(new_offset - m_offset);
     m_offset = new_offset;
-    m_stats.on_allocate(size);
     u8* const result = m_buffer + (new_offset - size);
     asan_unpoison(result, size); // this logical allocation is now live
     return result;

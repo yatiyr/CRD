@@ -1,4 +1,6 @@
 crd_collect_sources(TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}")
+# The fuzz target is its own executable (fuzz/CMakeLists.txt), never a Catch2 source.
+list(FILTER TEST_SOURCES EXCLUDE REGEX "/fuzz/")
 
 add_executable(crd-memory-tests ${TEST_SOURCES})
 
@@ -27,3 +29,6 @@ target_compile_definitions(crd-memory-tests PRIVATE
 crd_enable_default_pch(crd-memory-tests)
 
 crd_discover_tests(crd-memory-tests)
+
+# DIAG.10a: the allocator operation-sequence fuzz target and its committed corpus replay.
+add_subdirectory(fuzz)

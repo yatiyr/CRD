@@ -1648,6 +1648,46 @@ Acceptance: seed malformed lengths, overflow, cycles, truncated writes, invalid 
 attempts. Minimize/adopt reproducible findings and replay corpora in relevant CI. Reinvestigate retained unknown-origin
 artifacts under the strengthened harness without converting a clean replay into an invented explanation.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-allocator-fuzzing.md)):
+- Allocator operation sequences are one stateful fuzz target, `crd-fuzz-memory-allocators`
+  (`tests/foundation/memory/fuzz`), on the existing harness: its corpus replays as a CTest on every lane and
+  `linux-clang-fuzz` builds the libFuzzer executable. It covers TLSF, pool, linear, stack, the growable TLSF, pool and
+  linear, the offset allocator, the epoch ring, the `DiagnosticAllocator` over TLSF and the generation-checked
+  `SlotMap`. The virtual-memory and streaming allocators are not in it: each input would reserve address space.
+- The production entry points get only operations their contract allows, so a failure is a defect and never harness
+  undefined behaviour; malformed requests are inside that contract (every `try_allocate` refuses a zero size, a size
+  no arena can hold, an alignment at the top bit and one that is not a power of two). Hostile operations go only to
+  the layers that promise to diagnose them: the `DiagnosticAllocator` reports a double free, a foreign or interior
+  free and a free of a block already evicted from quarantine, and finds a seeded rear-redzone overrun and a write
+  into quarantine with exactly that violation; the `SlotMap` refuses stale, double-erased and forged handles and
+  never revives one on slot reuse. Generation wrap (2^32 erases of one slot) is not reached by a bounded input.
+- The oracles are an independent model, never the allocator's own report: no overlap, alignment, ownership,
+  allocation size, intact payloads across every operation, exact success or refusal where the capacity model is
+  exact (pool, linear, stack), `validate_structure()`, `MemoryStats::bytes_in_use` returning to zero (and equal to
+  the arena's use for the bump allocators) where statistics are tracked, the offset span coalescing back to one
+  region, the parent getting every byte back on destruction, and an identical outcome trace on a second run.
+- Seven defects found and fixed, each kept as a corpus input. Five came from the written seeds: TLSF `try_allocate`
+  asserted on a non-power-of-two alignment instead of refusing it; TLSF in-place reallocation never adjusted `bytes_in_use`, which drifted by every
+  in-place resize; the linear, stack and growable linear allocators charged `size` but released the consumed
+  offset, so alignment padding drove `bytes_in_use` past zero (they now charge what they consume, and
+  `bytes_in_use` equals `used()`); the `DiagnosticAllocator` passed any pointer without a record to its backing
+  allocator when the backing range check accepted it, so an interior pointer or a double free after quarantine
+  eviction corrupted the backing heap (only a live untracked passthrough block goes through now; otherwise
+  `UnknownPointer`); and its saturation report named the discarded redzoned block instead of the one handed out.
+  Two came from libFuzzer on `linux-clang-fuzz` (ASan+UBSan): a TLSF pool whose capacity is not a multiple of 16 put
+  its end sentinel at a misaligned address (`init_pool` now rounds the capacity down), and `OffsetAllocator::reset()`
+  kept node neighbour links, so a whole-span free after a reset coalesced with regions that no longer existed
+  (`reset()` now returns every node to its initial state). Two later libFuzzer reports were the harness's own:
+  an offset span no size bin represents exactly can never be handed out whole, by the allocator's bounded
+  internal-fragmentation design, so the drained span is compared with a fresh one; and while an untracked
+  passthrough block is live the `DiagnosticAllocator` cannot tell an evicted pointer from it (the saturation limit
+  its header now states), so that operation is not issued then.
+- Every fuzz target has a `fuzz.py` entry naming its corpus and executable, and no entry is stale; a test enforces it
+  (the bundle target had none). The replay driver is headless, so an engine assertion ends a replay with its
+  evidence instead of a modal dialog that waited out the CTest timeout.
+- Not yet: capture, policy, flight-record and run-record readers; command decoding; resource reload; the compiled
+  and reference CEIR comparison; the reinvestigation of the unknown-origin CEIR and CKIR artifacts.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

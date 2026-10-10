@@ -20,7 +20,10 @@
 //
 // Metadata saturation (the bounded record/stack tables filling) never corrupts the allocator and
 // never silently disables a mandatory mode: the allocation still succeeds, a MetadataSaturation
-// violation is raised, and a saturation counter advances.
+// violation is raised, and a saturation counter advances. Such a block is an untracked passthrough: a pointer with no
+// record is freed through the backing allocator only while one is live (it cannot be told apart from one); with none
+// live, a pointer with no record (foreign, interior, or freed and already evicted from quarantine) is UnknownPointer
+// and is refused, never handed to the backing allocator.
 //
 // Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
@@ -37,7 +40,7 @@ inline constexpr StackId kNullStackId = 0U;
 // Maximum PCs retained per captured stack (frames beyond this are dropped -- cheap capture).
 inline constexpr crd::u32 kMaxStackFrames = 16U;
 
-enum class ViolationKind : crd::u32
+enum class ViolationKind : crd::u8
 {
     RedzoneUnderrun,      // bytes written before the user block
     RedzoneOverrun,       // bytes written past the user block
@@ -208,6 +211,7 @@ private:
     crd::u32   m_q_tail = 0U;
     crd::u32   m_q_size = 0U;
     crd::usize m_quarantine_bytes = 0U;
+    crd::usize m_passthrough_live = 0U;     // untracked (saturation) passthrough blocks not yet freed
 
     crd::u32 m_sample_counter = 0U;
 

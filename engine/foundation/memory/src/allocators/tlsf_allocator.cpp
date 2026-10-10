@@ -312,6 +312,12 @@ void TlsfAllocator::init_pool(void* buffer, usize capacity) noexcept
     // The end sentinel is a zero-size USED block. block_is_last() returns
     // true for any block whose size is 0; we use that to halt forward walks.
 
+    // Every block (and so every header) lies on kAlignSize. A capacity that is not a multiple of it would put the end
+    // sentinel, and every block split off the tail, at a misaligned address (DIAG.10a: a 16,556-byte pool placed its
+    // sentinel 4 bytes off; UBSan). The odd tail is left unused and untouched: owns(), the walker and the poisoning
+    // all stop at the rounded capacity. min_pool_size() is a multiple of kAlignSize, so the floor still holds.
+    capacity &= ~(kAlignSize - 1U);
+
     u8* base = static_cast<u8*>(buffer);
 
     BlockHeader* start_sentinel = reinterpret_cast<BlockHeader*>(base);
@@ -568,6 +574,32 @@ BlockHeader* block_merge_prev(BlockHeader* block, u32& fl_bitmap, u32* sl_bitmap
     block_set_prev(after, prev);
     return prev;
 }
+// A live block resized in place: bytes_in_use (and the peak) follow its new extent; it is the same allocation, so the
+// allocation and deallocation counts and the real-time allocation sentinel are untouched.
+void stats_resize(MemoryStats& stats, usize old_bytes, usize new_bytes) noexcept
+{
+#if CRD_MEMORY_STATS_TRACKING
+    if (new_bytes > old_bytes)
+    {
+        const u64 grown = static_cast<u64>(new_bytes - old_bytes);
+        stats.total_bytes.fetch_add(grown, std::memory_order_relaxed);
+        const u64 in_use = stats.bytes_in_use.fetch_add(grown, std::memory_order_relaxed) + grown;
+        u64       peak   = stats.peak_bytes.load(std::memory_order_relaxed);
+        while (in_use > peak && !stats.peak_bytes.compare_exchange_weak(peak, in_use, std::memory_order_relaxed))
+        {
+            // peak reloaded on failure
+        }
+    }
+    else
+    {
+        stats.bytes_in_use.fetch_sub(static_cast<u64>(old_bytes - new_bytes), std::memory_order_relaxed);
+    }
+#else
+    (void)stats;
+    (void)old_bytes;
+    (void)new_bytes;
+#endif
+}
 } // namespace
 
 // ---- Allocate / deallocate -----------------------------------------------
@@ -584,11 +616,12 @@ void* TlsfAllocator::allocate(usize size, usize alignment)
 
 void* TlsfAllocator::try_allocate(usize size, usize alignment)
 {
-    if (size == 0)
+    // The non-fatal contract (DIAG.3a; IAllocator::try_allocate): a zero size or an alignment that is not a power of
+    // two is refused, never asserted, like every other allocator's try_allocate (DIAG.10a allocator fuzzing).
+    if (size == 0 || !is_pow2(alignment))
     {
         return nullptr;
     }
-    CRD_ASSERT(is_pow2(alignment));
 
     // Round up size to a multiple of kAlignSize and clamp to min user size. DIAG.3a: checked, so a near-SIZE_MAX
     // request fails instead of wrapping to a tiny block (the unchecked round-up returned 16 bytes for SIZE_MAX).
@@ -823,6 +856,8 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
             // The live block shrinks to `needed`; the split-off tail (and a free neighbour it absorbed) is poisoned.
             block_apply_shadow(block);
             block_apply_shadow(remainder);
+            // The statistics follow the block (DIAG.10a: bytes_in_use drifted by every in-place resize).
+            stats_resize(m_stats, current_cap, block_size(block));
         }
         return p;
     }
@@ -857,6 +892,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
             }
             // The live block grew over its free neighbour: its whole new extent becomes addressable.
             block_apply_shadow(merged);
+            stats_resize(m_stats, current_cap, block_size(merged));
             return p;
         }
     }

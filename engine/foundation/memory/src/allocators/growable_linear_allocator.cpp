@@ -93,8 +93,9 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
                               checked_add(c->off + (aligned - current), size, &new_off) && new_off <= c->cap;
             if (fits)
             {
+                // Charge what the chunk consumed, padding included: bytes_in_use equals bytes_used() (DIAG.10a).
+                m_stats.on_allocate(new_off - c->off);
                 c->off = new_off;
-                m_stats.on_allocate(size);
                 u8* const result = cbase + (new_off - size); // pointer arithmetic — no int-to-ptr cast
                 asan_unpoison(result, size); // this logical allocation is now live (padding stays poisoned)
                 return result;

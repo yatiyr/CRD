@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Bounded libFuzzer runs over the ingestion fuzz targets, corpus merge and minimization, and corpus replay.
+"""Bounded libFuzzer runs over the registered fuzz targets (ingestion readers and stateful allocator sequences),
+corpus merge and minimization, and corpus replay.
 
 Contract: docs/design/test-instruments.md. The targets are built by cmake/CrdFuzz.cmake: every configuration builds
 the replay executable and its `<target>-corpus` CTest; a configuration with CRD_ENABLE_FUZZER=ON (clang; the `linux-clang-fuzz` preset) also
@@ -34,6 +35,9 @@ TARGETS = {
     'ceir-binary': {'corpus': 'tests/execution/ceir/fuzz/corpus/binary', 'executable': 'tests/ceir/fuzz/crd-fuzz-ceir-binary'},
     'ckir-text': {'corpus': 'tests/gpu/kir/fuzz/corpus/text', 'executable': 'tests/kir/fuzz/crd-fuzz-ckir-text'},
     'ckir-binary': {'corpus': 'tests/gpu/kir/fuzz/corpus/binary', 'executable': 'tests/kir/fuzz/crd-fuzz-ckir-binary'},
+    'perf-bundle': {'corpus': 'tests/foundation/perf/fuzz/corpus', 'executable': 'tests/perf/fuzz/crd-fuzz-perf-bundle'},
+    'memory-allocators': {'corpus': 'tests/foundation/memory/fuzz/corpus',
+                          'executable': 'tests/memory/fuzz/crd-fuzz-memory-allocators'},
 }
 LIMITS = {'max_len': 65536, 'timeout': 10, 'rss_limit_mb': 2048, 'malloc_limit_mb': 256}
 STAT_PATTERN = re.compile(r'^stat::(\w+):\s+(\d+)', re.MULTILINE)

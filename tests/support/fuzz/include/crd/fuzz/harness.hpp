@@ -69,7 +69,9 @@ public:
 
     [[nodiscard]] void* try_allocate(usize size, usize alignment = memory::kDefaultAlignment) override
     {
-        if (size == 0U || m_live + size > m_budget)
+        // Compared without a sum that can wrap: a near-SIZE_MAX request (a growable allocator asking for a chunk
+        // past every limit) is refused, never wrapped into a small block the caller would overrun.
+        if (size == 0U || size > m_budget - m_live)
         {
             return nullptr;
         }
@@ -77,15 +79,22 @@ public:
         {
             alignment = alignof(Header);
         }
+        if (alignment > m_budget || (alignment & (alignment - 1U)) != 0U)
+        {
+            return nullptr;
+        }
         const usize total = sizeof(Header) + alignment + size;
         void* const base  = m_inner.try_allocate(total, alignof(Header));
         if (base == nullptr)
         {
             return nullptr;
         }
-        const auto  raw     = reinterpret_cast<std::uintptr_t>(base) + sizeof(Header);
-        const auto  aligned = (raw + (alignment - 1U)) & ~static_cast<std::uintptr_t>(alignment - 1U);
-        auto* const header  = reinterpret_cast<Header*>(aligned - sizeof(Header));
+        // The payload is found by pointer arithmetic from the block (the padding to the next aligned address), never by
+        // turning an integer back into a pointer.
+        u8* const   first   = static_cast<u8*>(base) + sizeof(Header);
+        const usize misfit  = static_cast<usize>(reinterpret_cast<std::uintptr_t>(first) & (alignment - 1U));
+        u8* const   payload = first + (misfit == 0U ? 0U : alignment - misfit);
+        auto* const header  = reinterpret_cast<Header*>(payload - sizeof(Header));
         header->base        = base;
         header->size        = size;
         header->magic       = kMagic;
@@ -94,7 +103,7 @@ public:
         {
             m_peak = m_live;
         }
-        return reinterpret_cast<void*>(aligned);
+        return payload;
     }
 
     void deallocate(void* p) noexcept override
@@ -140,11 +149,11 @@ private:
 
     static Header* header_of(void* p) noexcept
     {
-        return reinterpret_cast<Header*>(reinterpret_cast<std::uintptr_t>(p) - sizeof(Header));
+        return reinterpret_cast<Header*>(static_cast<u8*>(p) - sizeof(Header));
     }
     static const Header* header_of(const void* p) noexcept
     {
-        return reinterpret_cast<const Header*>(reinterpret_cast<std::uintptr_t>(p) - sizeof(Header));
+        return reinterpret_cast<const Header*>(static_cast<const u8*>(p) - sizeof(Header));
     }
 
     // Every block goes to the system allocator on purpose: ASan and libFuzzer's malloc limit see each allocation
@@ -188,5 +197,7 @@ private:
         }                                                                                                              \
     } while (false)
 
+// The entry point's name is libFuzzer's ABI, not ours to style.
+// NOLINTNEXTLINE(readability-identifier-naming)
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size);
 void           crd_fuzz_seeds(crd::fuzz::SeedSink& sink);

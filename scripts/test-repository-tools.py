@@ -1298,8 +1298,32 @@ class TestInstruments(unittest.TestCase):
             self.assertIn('corpus directory', output)
             self.assertIn('does not exist; the committed corpus is the regression set', output)
 
+    def test_every_registered_fuzz_target_has_a_driver_entry(self):
+        # DIAG.10a: every ingress surface has a fuzz owner. Each crd_fuzz_target() in the tree has exactly one
+        # fuzz.py entry naming its committed corpus and its build-relative executable, and no entry is stale.
+        aliases = dict(re.findall(r'^crd_tests\(([\w/.-]+) ([\w.-]+)\)', (ROOT / 'tests/CMakeLists.txt').read_text(
+            encoding='utf-8'), re.MULTILINE))
+        registered = {}
+        for cmake in sorted((ROOT / 'tests').rglob('CMakeLists.txt')):
+            text = cmake.read_text(encoding='utf-8')
+            pattern = r'crd_fuzz_target\(([\w-]+).*?CORPUS "\$\{CMAKE_CURRENT_SOURCE_DIR\}/([^"]+)"'
+            for name, corpus in re.findall(pattern, text, re.DOTALL):
+                directory = cmake.parent.relative_to(ROOT / 'tests')
+                owner = next((source for source in aliases if directory.as_posix() == source
+                              or directory.as_posix().startswith(source + '/')), None)
+                self.assertIsNotNone(owner, f'{cmake}: {name} lies in no crd_tests() directory')
+                build = Path('tests') / aliases[owner] / directory.relative_to(owner) / name
+                registered[name] = {'corpus': (Path('tests') / directory / corpus).as_posix(),
+                                    'executable': build.as_posix()}
+        self.assertGreaterEqual(len(registered), 6)
+        driver = {Path(entry['executable']).name: entry for entry in fuzz_driver.TARGETS.values()}
+        self.assertEqual(sorted(driver), sorted(registered), 'fuzz.py TARGETS and the crd_fuzz_target() set differ')
+        for name, entry in registered.items():
+            self.assertEqual(driver[name], entry, name)
+
     def test_fuzz_driver_bounds_every_run_and_names_its_corpora(self):
-        self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-text', 'ckir-binary', 'ckir-text'])
+        self.assertEqual(sorted(fuzz_driver.TARGETS), ['ceir-binary', 'ceir-text', 'ckir-binary', 'ckir-text',
+                                                       'memory-allocators', 'perf-bundle'])
         for name, target in fuzz_driver.TARGETS.items():
             corpus = ROOT / target['corpus']
             self.assertTrue(corpus.is_dir(), f'{name}: committed corpus {corpus} is missing')
