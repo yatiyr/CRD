@@ -11,10 +11,10 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "sched_driver.hpp"
-#include "sched_minimize.hpp"
 #include "sched_record.hpp"
-#include <crd/jobs/jobs.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/core/minimize.hpp>
+#include <crd/jobs/jobs.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -470,24 +470,25 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
     // it across ALL oracle invocations and assert at the end it never happened (never a silent "not found").
     bool choreography_ok = true;
 
-    // All-K-runs-must-find: a subset that only SOMETIMES finds (a race) is not a reproduction. (For this
-    // failure every subset the greedy minimizer visits is in fact deterministic; K is margin.)
-    constexpr int runs = 3;
-    auto          reproduces = [&](const TagTrace& s) -> bool
+    // One run of the reproduction. The shared minimizer (crd/core/minimize.hpp) judges each candidate on all K runs:
+    // a subset that only SOMETIMES finds (a race) is not a reproduction. (For this failure every subset the greedy
+    // minimizer visits is in fact deterministic; K is margin.)
+    const auto run_once = [&](const TagTrace& s) -> bool
     {
-        for (int i = 0; i < runs; ++i)
+        const ExposeResult r = expose_with(s);
+        if (!r.arrived || !r.reacquired)
         {
-            const ExposeResult r = expose_with(s);
-            if (!r.arrived || !r.reacquired)
-            {
-                choreography_ok = false;
-            }
-            if (r.deadlocked || !r.found)
-            {
-                return false;
-            }
+            choreography_ok = false;
         }
-        return true;
+        return !r.deadlocked && r.found;
+    };
+    crd::minimize::Budget budget;
+    budget.runs_per_candidate = 3U;
+    budget.max_runs           = 512U;
+    const auto reproduces     = [&](const TagTrace& s) -> bool
+    {
+        crd::minimize::Stats probe;
+        return crd::minimize::judge(s, run_once, budget, probe) == crd::minimize::Verdict::Yes;
     };
 
     // Seed = the RECORDED failing log, projected to distinct tags in first-occurrence order -- the actual
@@ -517,7 +518,11 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
     // Precondition: minimizing a non-failing input yields garbage, so assert the seed reproduces first.
     REQUIRE(reproduces(seed));
 
-    const TagTrace minimal = crd::jobs::test::minimize_failure(seed, reproduces);
+    TagTrace                    minimal = seed;
+    crd::minimize::Stats        stats;
+    const crd::minimize::Status status  = crd::minimize::minimize_sequence(minimal, run_once, budget, stats);
+    CHECK(status == crd::minimize::Status::Minimal);
+    CHECK(stats.flaky == 0U);
 
     // The reclamation needs exactly one thing: hold fp.finalizing until the test has re-acquired the slot.
     // So the minimal failing sequence is precisely {test.reacquired, fp.finalizing}; nothing else matters.

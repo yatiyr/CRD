@@ -13,9 +13,11 @@
 //     pack torn on disk, mounts nothing: the mounted pack keeps serving and its loaded payload is kept;
 //   - a teardown after a run full of fired faults performs no faultable read or allocation, returns every allocation
 //     the run made, drains a delayed completion still in flight, and the recorder delivers its open window truncated.
+//   - (DIAG.9c) a seeded read plan that fails a cook after the cook recovered from earlier faults is minimized
+//     against the real cooker to a seed-free plan of single reads, each needed (checked by cooking without it).
 // A shipping build cannot arm a plan; there the cases assert the refusal and that every path runs plain.
 //
-// Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
+// Contract: docs/design/runtime-diagnostics.md (DIAG.9b, DIAG.9c); ADR-0133.
 
 #include "scoped_test_file.hpp"
 
@@ -25,10 +27,12 @@
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/cooker/cook_io.hpp>
 #include <crd/core/fault_seam.hpp>
+#include <crd/core/minimize.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/fault_injection.hpp>
+#include <crd/perf/fault_minimize.hpp>
 #include <crd/perf/flight_recorder.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/crdr.hpp>
@@ -896,6 +900,167 @@ TEST_CASE("fault injection: an id sidecar that exists but cannot be read is neve
     CHECK(io.stable_id(cont::StringView{".tex.0"}, id));
     CHECK(id == kept);
     CHECK_FALSE(io.unreadable());
+}
+
+namespace
+{
+// DIAG.9c: one run of the cook reproduction. A fresh tree is cooked clean, its source edited, and the edited cook run
+// under `plan`; the run reproduces when that cook fails and publishes nothing (the pack, .meta, cook database and
+// cached artifact are unchanged).
+struct CookReproduction
+{
+    cp::FaultInjector injector;
+    crd::u32          arms_refused = 0U;
+    crd::u64          fired        = 0U; // the last run's fired faults
+};
+
+bool cook_reproduction(void* user, const cp::FaultPlan& plan, cp::FaultRunHits& hits)
+{
+    auto& r = *static_cast<CookReproduction*>(user);
+    hits    = cp::FaultRunHits{};
+    r.fired = 0U;
+    const CookTree tree;
+    const fs::Path source = tree.src / "a.bin";
+    const fs::Path meta   = tree.src / "a.bin.meta";
+    write_source(source, {1U, 2U, 3U});
+    REQUIRE(tree.cook() == 0);
+    const CookSnapshot good = snapshot(tree, meta);
+    write_source(source, {9U, 9U, 9U, 9U});
+    if (r.injector.arm(plan, kInject) != cp::FaultArmStatus::Armed)
+    {
+        ++r.arms_refused;
+        return false;
+    }
+    int rc = 0;
+    {
+        const ScopedIoHook hook(r.injector);
+        REQUIRE(hook.installed);
+        rc = tree.cook();
+    }
+    for (crd::u32 s = 0U; s < cp::kFaultSiteCount; ++s)
+    {
+        hits.hits[s] = r.injector.hits(static_cast<cp::FaultSite>(s));
+        r.fired += r.injector.fired(static_cast<cp::FaultSite>(s));
+    }
+    r.injector.disarm();
+    if (rc == 0)
+    {
+        return false;
+    }
+    const CookSnapshot now = snapshot(tree, meta);
+    return same_bytes(good.pack, now.pack) && same_bytes(good.meta, now.meta) && same_bytes(good.db, now.db) &&
+           same_bytes(good.artifact, now.artifact);
+}
+} // namespace
+
+TEST_CASE("fault injection: a seeded read plan that fails a cook minimizes to the reads the failure needs",
+          "[resources][diag9c][minimize][cook]")
+{
+    ck::register_builtin_handlers();
+    CookReproduction run;
+    cp::FaultPlan    plan;
+    plan.rule_count = 1U;
+    plan.rules[0]   = cp::FaultRule{cp::FaultSite::FailedRead, 0U, 0U, 400000U, 0U}; // 40% of every read fails
+
+    if (!crd::fault_seams_compiled())
+    {
+        // Shipping: no plan arms, no cook fails, and the plan is returned as given.
+        plan.seed = 1U;
+        cp::FaultMinimizeResult result;
+        cp::minimize_fault_plan(plan, &cook_reproduction, &run, crd::minimize::Budget{}, result);
+        CHECK(result.status == crd::minimize::Status::NotReproduced);
+        CHECK(run.arms_refused == 1U);
+        CHECK(result.plan.rules[0].probability_ppm == 400000U);
+        return;
+    }
+
+    // The first seed whose plan fails the cook after firing at least two faults (so the cook recovered from some).
+    crd::u64         original_fired = 0U;
+    cp::FaultRunHits seen;
+    bool             found = false;
+    for (crd::u64 seed = 1U; seed < 200U && !found; ++seed)
+    {
+        plan.seed      = seed;
+        found          = cook_reproduction(&run, plan, seen) && run.fired >= 2U;
+        original_fired = run.fired;
+    }
+    REQUIRE(found);
+    const crd::u64 reads = seen.hits[static_cast<crd::u32>(cp::FaultSite::FailedRead)];
+    cont::String   fired_at;
+    for (crd::u64 h = 0U; h < reads; ++h)
+    {
+        if (cp::fault_plan_fires(plan, cp::FaultSite::FailedRead, h))
+        {
+            char digits[24];
+            (void)std::snprintf(digits, sizeof(digits), " %llu", static_cast<unsigned long long>(h));
+            fired_at.append(digits);
+        }
+    }
+    INFO("seed " << plan.seed << " fired " << original_fired << " of " << reads << " reads, at" << fired_at.c_str());
+
+    crd::minimize::Budget budget;
+    budget.runs_per_candidate = 2U;
+    cp::FaultMinimizeResult result;
+    cp::minimize_fault_plan(plan, &cook_reproduction, &run, budget, result);
+    cont::String text;
+    cp::fault_plan_to_text(result.plan, text);
+    INFO(text.c_str());
+    CHECK(result.status == crd::minimize::Status::Minimal);
+    CHECK(result.pinned);
+    CHECK(result.plan.seed == 0U);
+    CHECK(result.hits >= 1U);
+    // The cook recovered from some of the original faults (it fired at least two), so fewer are left: with this
+    // cooker the first seed fails the edited cook's first three reads, it recovers from two, and the .meta fails it.
+    CHECK(result.hits < original_fired);
+    CHECK(result.stats.flaky == 0U);
+
+    // Independently of the minimizer: armed alone the result fails the cook, firing exactly its hits, and without any
+    // one of its hits it does not.
+    cp::FaultRunHits hits;
+    CHECK(cook_reproduction(&run, result.plan, hits));
+    CHECK(run.fired == result.hits);
+    for (crd::u32 i = 0U; i < result.plan.rule_count; ++i)
+    {
+        const cp::FaultRule rule = result.plan.rules[i];
+        CHECK(rule.site == cp::FaultSite::FailedRead);
+        CHECK(rule.probability_ppm == cp::kFaultPpmAlways);
+        for (crd::u64 h = rule.first_hit; h < rule.first_hit + rule.hit_limit; ++h)
+        {
+            // Only faults the original plan fired are kept: minimizing removes faults, it never moves one.
+            CHECK(h < reads);
+            CHECK(cp::fault_plan_fires(plan, cp::FaultSite::FailedRead, h));
+            // The plan with hit `h` removed: the rule split around it.
+            cp::FaultPlan reduced;
+            reduced.trigger_flight = result.plan.trigger_flight;
+            for (crd::u32 j = 0U; j < result.plan.rule_count; ++j)
+            {
+                const cp::FaultRule other = result.plan.rules[j];
+                if (j != i)
+                {
+                    reduced.rules[reduced.rule_count++] = other;
+                    continue;
+                }
+                if (h > other.first_hit)
+                {
+                    reduced.rules[reduced.rule_count++] =
+                        cp::FaultRule{other.site, other.first_hit, h - other.first_hit, cp::kFaultPpmAlways, 0U};
+                }
+                if (h + 1U < other.first_hit + other.hit_limit)
+                {
+                    reduced.rules[reduced.rule_count++] = cp::FaultRule{
+                        other.site, h + 1U, other.first_hit + other.hit_limit - h - 1U, cp::kFaultPpmAlways, 0U};
+                }
+            }
+            INFO("without hit " << h);
+            if (reduced.rule_count == 0U)
+            {
+                // The only hit. A plan needs a rule, so this one covers a read no cook reaches: no fault at all.
+                reduced.rules[reduced.rule_count++] =
+                    cp::FaultRule{cp::FaultSite::FailedRead, crd::u64{1U} << 40U, 1U, cp::kFaultPpmAlways, 0U};
+            }
+            CHECK_FALSE(cook_reproduction(&run, reduced, hits));
+        }
+    }
 }
 
 // ---- the install stage ------------------------------------------------------------------------------------------

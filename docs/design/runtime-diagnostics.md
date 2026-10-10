@@ -1544,6 +1544,56 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-reverse-debug-rout
 - Hardware watchpoints (`gdb-watch`, `cdb-watch`) are bounded options: a fixed number of debug registers, a forward
   stop only, no history. External sampling stays the DIAG.6c runbook (`scripts/sample-cpu-wpr.py`).
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-minimization.md)):
+- The reproduction harness is the three reproducible artifacts the engine already makes: a schedule script (DIAG.4b,
+  the choices), a fault plan (DIAG.9b, the seed and the faulting hits) and a run record (DIAG.9a, the inputs). Each is
+  minimized against the caller's run of the reproduction, and nothing new is recorded to do it.
+- `crd/core/minimize.hpp` (header-only, below every module that reproduces something, so the gate-ON schedcheck
+  twin of crd-jobs can use it without linking crd-perf) holds the shared parts. The oracle is all K runs: a candidate
+  counts only when every one of `Budget::runs_per_candidate` runs fails the original way; a candidate that fails in
+  some runs and not in a later one is a race, counted in `Stats::flaky` and never kept. A candidate is never judged on
+  fewer than K runs: when the run budget cannot hold K more, the helper stops with `Budget`, holding the smallest
+  candidate judged so far, which reproduces but is not claimed minimal. Every helper judges its input first and
+  answers `NotReproduced`, leaving it as given, when the input does not reproduce. `minimize_sequence` is the DIAG.4b
+  greedy single-element remover promoted (order kept, the pass restarted after each drop, 1-minimal when a whole pass
+  drops nothing; the reason it is not ddmin is kept in the header). `bisect_toward` moves a reproducing bound toward
+  a non-reproducing one until they are adjacent; `minimize_toward_zero` tries 0, then bisects the magnitude keeping
+  the sign. Bisection claims a local boundary when the predicate is not monotone, never the global one.
+- Choices: the DIAG.4b schedule-script minimization now runs through `minimize_sequence` with K = 3, and still
+  shrinks the recorded failing log to exactly `{test.reacquired, fp.finalizing}` with no race seen.
+- Seed and hits: `minimize_fault_plan` (`crd/perf/fault_minimize.hpp`, crd-perf) takes a plan that reproduces and the
+  caller's run (arm the plan, run, report each site's hit count). It narrows every rule's range in rule order (an
+  unbounded rule bounded first at the hits the last reproducing run counted; then its first hit raised and its last
+  hit lowered by bisection, so moving either end one hit inward was judged not to reproduce); rule indices do not move
+  in that step, so a seeded rule keeps firing on the same hits inside its range. It then pins the plan: the hits each
+  rule fires on are enumerated with `fault_plan_fires`, and when there are at most 64 that fit in 8 rules, the plan of
+  exactly those hits (each always firing, consecutive hits of one site and value merged, seed 0) replaces it if it
+  reproduces, so the seed no longer matters. Last it removes single hits of a pinned plan (a candidate needing more
+  than 8 rules is skipped, never run) or else whole rules, to a 1-minimal result. It never changes what a fault does,
+  only which faults happen. It is pure apart from the caller's runs, so it runs in every build; a shipping run cannot
+  arm, so a shipping reproduction answers `NotReproduced` with the plan unchanged.
+- Inputs: `minimize_record_inputs` (`crd/ceir/cook/replay_minimize.hpp`, crd-ceir-cook) takes a plan record of a
+  failed run. The failure is the recorded outcome: the same run error blamed on the same op, with every host input
+  read answered by the stream. After judging the record's own inputs it cuts the read stream to the reads the failing
+  run made, then shrinks each argument and each delivered read's value toward 0, passes repeating while a value moves;
+  a value is shrunk again only when another value moved after it was last shrunk, so the passes settle. A read's
+  position, kind, channel and delivery never change: those are the program's read sequence. The new record comes from
+  one more run of the final inputs through the recorder `replay.record` uses, made by this build, and `replay.run`
+  reproduces it like any other. Refused before anything runs, as `replay.run` refuses: not a plan record, an incomplete
+  input stream, another build (unless `any_build`), a missing input, a program that is not the recorded content hash,
+  and a program that needs external I/O results (DIAG.9b). A run that did not fail answers `NotAFailure`.
+- Shown: a two-switch program whose argument fails at its first switch from 10 up (and below 0) and at its second for
+  2 to 9 shrinks from 1000 to 10 (the second switch is another failure) and from -1000 to -1; a seeded
+  `random_demo.ceir` run failing at draw k shrinks to `main(k + 1)`, its earlier draws to 0 and its failing draw to a
+  value that still reduces to 3; a plan failing every allocation shrinks to the one needed hit; a seeded four-rule
+  plan to the two needed hits on two sites, seed-free; a half-share plan armed on a real injector through a
+  `FaultAllocator` to its two needed attempts; and a 40% read plan that fails the real cooker after the cook recovered
+  from failures of its first two reads, to the one read that fails it (the `.meta` that holds the asset's id), each
+  remaining hit checked needed by cooking without it.
+- Not covered: a diagnostic command that runs a minimization (the helpers are library calls a host or test makes);
+  minimizing the program text itself; host and device records (schedule replay and numeric replay have no shrinking
+  defined); dropping or adding reads, which would change the program's read sequence.
+
 <a id="diag-10a"></a>
 ## DIAG.10a — stateful fuzzing and evidence-reader security
 
