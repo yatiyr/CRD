@@ -13,6 +13,10 @@
 //                         stops. A synchronous read then reports failure; an AsyncFile completion reports Short.
 //   delayed-completion    the same, AsyncFile completions only: the completion arrives `value` ns late.
 //   cancelled-completion  the same, AsyncFile completions only: the completion reports Cancelled.
+//   device-loss           the GPU fault seam (crd/core/fault_seam.hpp), every queue submission (Vulkan vk_submit, DX12
+//                         dx12_submit) on a device not already lost: nothing is queued and the provider takes its
+//                         device-loss path, labelled Simulated (Vulkan: VK_ERROR_DEVICE_LOST and the loss bundle;
+//                         DX12: ID3D12Device5::RemoveDevice, DRED and the removal bundle).
 //
 // Determinism. Each site counts its hits from 0 while a plan is armed. Whether hit n of a site fires is a pure
 // function of (seed, site, n, the rules) -- fault_plan_fires() -- so the same plan over the same sequence of calls
@@ -60,11 +64,12 @@ enum class FaultSite : crd::u8
     PartialRead         = 2U,
     DelayedCompletion   = 3U,
     CancelledCompletion = 4U,
+    DeviceLoss          = 5U,
 };
 
-inline constexpr crd::u32 kFaultSiteCount = 5U;
+inline constexpr crd::u32 kFaultSiteCount = 6U;
 
-// "allocation-failure", "failed-read", "partial-read", "delayed-completion", "cancelled-completion".
+// "allocation-failure", "failed-read", "partial-read", "delayed-completion", "cancelled-completion", "device-loss".
 [[nodiscard]] cont::StringView fault_site_name(FaultSite s) noexcept;
 [[nodiscard]] bool             parse_fault_site(cont::StringView text, FaultSite& out) noexcept;
 
@@ -175,6 +180,10 @@ public:
     // The I/O fault seam's hook (crd::install_io_fault_hook(&FaultInjector::io_hook, injector)).
     static crd::IoFault io_hook(void* injector, crd::IoFaultOp op, const char* path, crd::usize path_bytes,
                                 crd::u64 offset, crd::u64 size) noexcept;
+
+    // The GPU fault seam's hook (crd::install_gpu_fault_hook(&FaultInjector::gpu_hook, injector)): one device-loss hit
+    // per submission, answered LoseDevice when it fires.
+    static crd::GpuFaultAction gpu_hook(void* injector, crd::GpuFaultOp op, const char* operation) noexcept;
 
 private:
     // Count one hit of `site` and decide it, without recording a fire; commit() records a firing decision (its fired

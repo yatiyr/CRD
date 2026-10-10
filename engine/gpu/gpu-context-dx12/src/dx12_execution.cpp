@@ -2,6 +2,7 @@
 #include "dx12_dred.hpp" // DIAG.7b(d): record DRED on every stopped device
 
 #include <crd/core/assert.hpp>
+#include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
 
 #include <limits>
 
@@ -26,6 +27,19 @@ void stop_failed_device(ID3D12Device* device) noexcept
     }
     control->RemoveDevice();
     dx12_record_removal(device, Dx12RemovalOrigin::EngineForced);
+}
+
+// DIAG.9b: an injected device loss at a submission. Nothing of the submission is queued; the device is removed so that
+// every later call meets a removed device, as after a real loss, and the removal is recorded as Simulated. A runtime
+// without ID3D12Device5 cannot remove the device: the submission still fails and the context latches invalid.
+void simulate_device_loss(ID3D12Device* device) noexcept
+{
+    Microsoft::WRL::ComPtr<ID3D12Device5> control;
+    if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&control))))
+    {
+        control->RemoveDevice();
+    }
+    dx12_record_removal(device, Dx12RemovalOrigin::Simulated);
 }
 } // namespace
 
@@ -65,6 +79,14 @@ HRESULT dx12_submit(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Graph
     if (SUCCEEDED(result) && value >= std::numeric_limits<UINT64>::max() - 1U)
     {
         result = E_UNEXPECTED;
+    }
+    // DIAG.9b: the GPU fault seam, consulted only for a device that is not already removed, before anything is queued.
+    if (SUCCEEDED(result)
+        && crd::consult_gpu_fault(crd::GpuFaultOp::Submit, "Close/execute/signal command list")
+               == crd::GpuFaultAction::LoseDevice)
+    {
+        simulate_device_loss(device);
+        result = DXGI_ERROR_DEVICE_REMOVED;
     }
     if (SUCCEEDED(result))
     {

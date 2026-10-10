@@ -203,6 +203,7 @@ cont::StringView fault_site_name(FaultSite s) noexcept
     case FaultSite::PartialRead:         return cont::StringView{"partial-read"};
     case FaultSite::DelayedCompletion:   return cont::StringView{"delayed-completion"};
     case FaultSite::CancelledCompletion: return cont::StringView{"cancelled-completion"};
+    case FaultSite::DeviceLoss:          return cont::StringView{"device-loss"};
     }
     return cont::StringView{"unknown"};
 }
@@ -620,16 +621,33 @@ crd::IoFault FaultInjector::io_hook(void* injector, crd::IoFaultOp op, const cha
             continue;
         }
         self->commit(d);
-        switch (d.site) // no default: the read sites map to their actions; allocation never reaches here
+        switch (d.site) // no default: read sites map to their actions; allocation and device loss never reach here
         {
         case FaultSite::FailedRead:          return crd::IoFault{crd::IoFaultAction::Fail, 0U};
         case FaultSite::PartialRead:         return crd::IoFault{crd::IoFaultAction::Short, d.value};
         case FaultSite::CancelledCompletion: return crd::IoFault{crd::IoFaultAction::Cancel, 0U};
         case FaultSite::DelayedCompletion:   return crd::IoFault{crd::IoFaultAction::Delay, d.value};
-        case FaultSite::AllocationFailure:   break;
+        case FaultSite::AllocationFailure:
+        case FaultSite::DeviceLoss:          break;
         }
     }
     return crd::IoFault{};
+}
+
+crd::GpuFaultAction FaultInjector::gpu_hook(void* injector, crd::GpuFaultOp /*op*/,
+                                            const char* /*operation*/) noexcept
+{
+    auto* const self = static_cast<FaultInjector*>(injector);
+    if (self == nullptr || !self->armed())
+    {
+        return crd::GpuFaultAction::Proceed;
+    }
+    // Submit is the only GPU op, so each device-loss ordinal counts one queue submission.
+    if (self->decide(FaultSite::DeviceLoss).fire)
+    {
+        return crd::GpuFaultAction::LoseDevice;
+    }
+    return crd::GpuFaultAction::Proceed;
 }
 
 // ---- FaultAllocator ---------------------------------------------------------------------------------------------

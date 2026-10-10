@@ -1,6 +1,7 @@
 #include "vulkan_execution.hpp"
 
 #include <crd/core/crash.hpp> // DIAG.7c(g): a recorded loss is written as a DeviceRemoved live dump
+#include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
 
 #include <cstddef>
 #include <cstring>
@@ -299,10 +300,20 @@ VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, V
     VkResult result = VK_SUCCESS;
     if (!answer_without_driver(device, operation, result))
     {
-        result = vkQueueSubmit(queue, 1U, &submit, fence);
-        if (result != VK_SUCCESS)
+        // DIAG.9b: the GPU fault seam, consulted outside the store's lock (its hook records into the flight recorder).
+        // An injected loss queues nothing and takes the same path as a reported one, labelled Simulated.
+        if (crd::consult_gpu_fault(crd::GpuFaultOp::Submit, operation) == crd::GpuFaultAction::LoseDevice)
         {
-            record(device, result, classify(result), operation);
+            result = VK_ERROR_DEVICE_LOST;
+            record(device, result, VkFailureOrigin::Simulated, operation);
+        }
+        else
+        {
+            result = vkQueueSubmit(queue, 1U, &submit, fence);
+            if (result != VK_SUCCESS)
+            {
+                record(device, result, classify(result), operation);
+            }
         }
     }
     if (result != VK_SUCCESS)

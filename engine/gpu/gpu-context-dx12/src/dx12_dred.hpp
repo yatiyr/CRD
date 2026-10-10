@@ -119,6 +119,7 @@ enum class Dx12RemovalOrigin : u8
     None,         // nothing recorded yet
     Observed,     // the runtime/driver had already removed the device when the engine looked (an actual device loss)
     EngineForced, // the engine called RemoveDevice itself after a failed completion (timeout, signal/submit failure)
+    Simulated,    // DIAG.9b: a device-loss fault injected at a submission; the engine removed the device
 };
 
 struct Dx12RemovalRecord
@@ -134,9 +135,10 @@ struct Dx12RemovalRecord
 // DIAG.7b(f): the removal bundle. Every recorded removal is also written, when crash capture is installed, as a live
 // dump of kind DeviceRemoved (gpu_*.dmp) whose evidence stream holds this header followed by the Dx12RemovalRecord. The
 // reader refuses a stream whose magic, version or size does not match this build, rather than misreading it.
-// Version 2 (DIAG.7b(h1)): breadcrumb nodes carry their op history, context strings and in-flight pass.
+// Version 2 (DIAG.7b(h1)): breadcrumb nodes carry their op history, context strings and in-flight pass. Version 3
+// (DIAG.9b): the origin may be Simulated, which a version-2 reader would not know.
 inline constexpr u32 kDx12RemovalBundleMagic   = 0x52445243U; // 'CRDR'
-inline constexpr u32 kDx12RemovalBundleVersion = 2U;
+inline constexpr u32 kDx12RemovalBundleVersion = 3U;
 
 struct Dx12RemovalBundleHeader
 {

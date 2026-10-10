@@ -477,6 +477,76 @@ TEST_CASE("fault injector: the I/O hook counts each read at every eligible site 
     CHECK(view.substr(view.size() - 3U) == "...");
 }
 
+// The GPU seam's hook: each consulted submission is one device-loss hit, and a firing hit answers LoseDevice with the
+// same evidence as any other site. The providers' own loss paths are driven end to end in crd-gpu-context-vulkan-tests
+// and crd-gpu-context-dx12-tests ("DIAG.9b: an injected device loss ...").
+TEST_CASE("fault injector: the GPU hook loses the device at the plan's submission", "[perf][diag][diag9b][fault]")
+{
+    cp::FaultInjector injector;
+    if (!crd::fault_seams_compiled())
+    {
+        CHECK(injector.arm(plan_of("seed=3;device-loss@1+1%1000000"), kInjectRead) == cp::FaultArmStatus::Unavailable);
+        CHECK_FALSE(crd::install_gpu_fault_hook(&cp::FaultInjector::gpu_hook, &injector));
+        CHECK(crd::consult_gpu_fault(crd::GpuFaultOp::Submit, "submit") == crd::GpuFaultAction::Proceed);
+        return;
+    }
+
+    // The site is named, parsed and takes no value.
+    cp::FaultSite site = cp::FaultSite::AllocationFailure;
+    REQUIRE(cp::parse_fault_site(cont::StringView{"device-loss"}, site));
+    CHECK(site == cp::FaultSite::DeviceLoss);
+    CHECK(cp::fault_site_name(cp::FaultSite::DeviceLoss) == "device-loss");
+    cp::FaultPlan  valued;
+    cont::String   reason;
+    CHECK_FALSE(cp::parse_fault_plan(cont::StringView{"seed=3;device-loss@0+1%1000000=4"}, valued, reason));
+
+    cp::FlightRecorder recorder;
+    REQUIRE(recorder.init(small_policy()) == cp::FlightPolicyStatus::Committed);
+    injector.attach_flight_recorder(&recorder);
+
+    // Disarmed, the hook answers Proceed and counts nothing.
+    CHECK(cp::FaultInjector::gpu_hook(&injector, crd::GpuFaultOp::Submit, "submit") == crd::GpuFaultAction::Proceed);
+    CHECK(injector.hits(cp::FaultSite::DeviceLoss) == 0U);
+
+    REQUIRE(injector.arm(plan_of("seed=3;device-loss@1+1%1000000"), kInjectRead) == cp::FaultArmStatus::Armed);
+    REQUIRE(crd::install_gpu_fault_hook(&cp::FaultInjector::gpu_hook, &injector));
+    CHECK_FALSE(crd::install_gpu_fault_hook(&cp::FaultInjector::gpu_hook, &injector));
+    crd::GpuFaultAction answers[3] = {};
+    for (crd::u32 i = 0U; i < 3U; ++i)
+    {
+        recorder.record(0x0042U, cp::Severity::Info, cont::StringView{"frame"}, i, 0U);
+        answers[i] = crd::consult_gpu_fault(crd::GpuFaultOp::Submit, "compute submit");
+    }
+    CHECK(answers[0] == crd::GpuFaultAction::Proceed);
+    CHECK(answers[1] == crd::GpuFaultAction::LoseDevice);
+    CHECK(answers[2] == crd::GpuFaultAction::Proceed);
+    CHECK(injector.hits(cp::FaultSite::DeviceLoss) == 3U);
+    CHECK(injector.fired(cp::FaultSite::DeviceLoss) == 1U);
+    CHECK(injector.hits(cp::FaultSite::FailedRead) == 0U); // a submission is not a read
+    recorder.record(0x0042U, cp::Severity::Info, cont::StringView{"after"}, 100U, 0U); // fills the post window
+
+    cp::FlightCapture c;
+    REQUIRE(recorder.take_capture(c));
+    CHECK(c.trigger.kind == cp::FlightTrigger::InjectedFault);
+    CHECK(c.trigger.value_a == static_cast<crd::u64>(cp::FaultSite::DeviceLoss));
+    CHECK(c.trigger.value_b == 1U);
+    REQUIRE(c.replay_available);
+    const cont::StringView recipe{c.replay.data(), c.replay.size()};
+    CHECK(recipe.find("fault-plan/1 fired=device-loss#1 minimal=seed=3;device-loss@1+1%1000000") == 0U);
+    // Before the trigger: both frames that preceded the lost submission, then the fault itself.
+    REQUIRE(c.pre_retained == 3U);
+    CHECK(c.events[0].value_a == 0U);
+    CHECK(c.events[1].value_a == 1U);
+    CHECK(c.events[2].code == cp::kFlightCodeFaultInjected);
+
+    // Uninstalled, a consult no longer reaches the injector.
+    crd::uninstall_gpu_fault_hook();
+    CHECK(crd::consult_gpu_fault(crd::GpuFaultOp::Submit, "compute submit") == crd::GpuFaultAction::Proceed);
+    CHECK(injector.hits(cp::FaultSite::DeviceLoss) == 3U);
+    injector.disarm();
+    recorder.shutdown();
+}
+
 TEST_CASE("fault injector: concurrent hits fire exactly the plan's set of ordinals", "[perf][diag][diag9b][fault]")
 {
     cp::FaultInjector   injector;

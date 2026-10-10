@@ -433,7 +433,8 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7b-h1-warp-fault-and-
   CI-capable, labelled software evidence of the whole path.
 - **In-flight pass.** Each breadcrumb node keeps its op history and context strings (bounded), and names the pass the
   GPU was inside when it stopped: of the `BeginEvent` markers open at the stopping op, the innermost whose context
-  carries a Cerid Pass identity. This is the DX12 pass-to-fault route of DIAG.7a; the removal bundle is version 2.
+  carries a Cerid Pass identity. This is the DX12 pass-to-fault route of DIAG.7a; the removal bundle is version 2
+  (version 3 since DIAG.9b added the `Simulated` origin).
 
 <a id="diag-7c"></a>
 ## DIAG.7c — Vulkan synchronization and device faults
@@ -1315,12 +1316,27 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-fault-injection.md
 - Recovery shown at the resource manager: a reload interrupted by an allocation failure in the real MESH loader, a
   failed pack read or a short pack read keeps the last good payload, generation and bytes; a streamed load whose
   completion is short, failed or cancelled ends Failed without reaching the loader; a delayed one completes.
-- Still open in this row: device-loss simulation (the DX12 and Vulkan device-removal paths of DIAG.7b/7c);
-  injection during cook, install, execute and teardown; refusal of arbitrary external I/O replay as a shipping
-  capability check (a record needing external results is already refused before it runs, DIAG.9a); the flight
-  policy and fault plans as authored assets, `flight.*` commands and doctor reporting of both modes; the build and
-  symbol identity sections in a flight bundle; and a real host (crd-sandbox) installing the recorder, its triggers,
-  its sink and the fault commands.
+
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-device-loss.md)):
+- Device-loss simulation is the `device-loss` fault site on a second crd-core seam, the GPU fault seam
+  (`install_gpu_fault_hook` / `consult_gpu_fault` in `crd/core/fault_seam.hpp`, compiled out with the I/O seam in a
+  shipping build). Only a queue submission is consulted (`GpuFaultOp::Submit`), before any of its work is queued, and
+  only on a device not already lost or removed, so each hit ordinal is one live submission. A loss is never injected
+  at a wait: Vulkan cannot stop queued work, and a caller told its wait failed would free memory that work still
+  uses. `FaultInjector::gpu_hook` decides one hit per consult and answers `LoseDevice` when it fires.
+- Each provider then takes its own existing loss path, labelled Simulated, never presented as a real loss. Vulkan's
+  `vk_submit` records `VK_ERROR_DEVICE_LOST` with origin and loss origin `Simulated`, so the fault report, the
+  DIAG.7c(g) loss bundle and the lost-device short cut follow; the injection is consulted outside the completion
+  seam's lock. DX12's `dx12_submit` calls `ID3D12Device5::RemoveDevice`, so every later call meets a removed device
+  as after a real loss, reads DRED and records the removal with the new origin `Dx12RemovalOrigin::Simulated`; the
+  removal bundle is version 3, since a version-2 reader does not know that origin.
+- Recovery from a device loss is a new device: the lost context latches invalid and submits nothing more, and a
+  context on a fresh device (the removed DX12 device is released with its context) submits and completes.
+- Still open in this row: injection during cook, install, execute and teardown; refusal of arbitrary external I/O
+  replay as a shipping capability check (a record needing external results is already refused before it runs,
+  DIAG.9a); the flight policy and fault plans as authored assets, `flight.*` commands and doctor reporting of both
+  modes; the build and symbol identity sections in a flight bundle; and a real host (crd-sandbox) installing the
+  recorder, its triggers, its sink and the fault commands.
 
 <a id="diag-9c"></a>
 ## DIAG.9c — rare-failure escalation and minimization

@@ -1,20 +1,28 @@
 #pragma once
 
-// crd-core -- the process-wide I/O fault seam (DIAG.9b).
+// crd-core -- the process-wide fault seams (DIAG.9b): one for file reads, one for GPU queue submissions.
 //
 // The file reads every engine module shares (crd-platform's read_file_binary, read_file_range and AsyncFile's
-// completion jobs) consult this seam before they touch the file. With no hook installed the consult is one atomic
+// completion jobs) consult the I/O seam before they touch the file. With no hook installed the consult is one atomic
 // load and the read proceeds. A diagnostics host installs one hook (crd-perf's seeded FaultInjector provides
-// fault_io_hook) to fail a read, cut it short, delay its completion or cancel it, so a test can drive the real
-// recovery paths of load, reload and teardown without a broken disk.
+// FaultInjector::io_hook) to fail a read, cut it short, delay its completion or cancel it, so a test can drive the
+// real recovery paths of load, reload and teardown without a broken disk.
 //
-// The seam is a build capability. A shipping build (CRD_SHIPPING) compiles it out: installing is refused and the
-// consult always answers Proceed, so no request, authored asset or host can inject a fault there.
+// The GPU providers' queue submissions (the Vulkan completion seam's vk_submit and DX12's dx12_submit) consult the
+// GPU seam before any work of the submission is queued. Its hook (FaultInjector::gpu_hook) can answer LoseDevice:
+// the provider then takes its own device-loss path as if the runtime had reported the loss, and labels the loss
+// Simulated (Vulkan records VK_ERROR_DEVICE_LOST; DX12 calls ID3D12Device5::RemoveDevice, so every later call sees
+// a removed device). Only a submission is consulted: a loss injected at a wait would let a Vulkan caller free memory
+// that work already queued still uses, since Vulkan cannot stop queued work.
 //
-// One hook at a time. The hook runs under the seam's mutex, so uninstall_io_fault_hook() returns only after every
-// call in progress has finished; the hook's user state may be destroyed after that. The hook must not read a file
-// through the seam, and must not block: a delay is returned as a value and performed by the caller after the
-// mutex is released. Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.
+// Both seams are a build capability. A shipping build (CRD_SHIPPING) compiles them out: installing is refused and
+// every consult answers Proceed, so no request, authored asset or host can inject a fault there.
+//
+// One hook per seam. A hook runs under its seam's mutex, so uninstalling returns only after every call of the old hook
+// in progress has finished; the hook's user state may be destroyed after that. The I/O hook must not read a file
+// through the seam, the GPU hook must not submit GPU work, and neither may block: a delay is returned as a value and
+// performed by the caller after the mutex is released. Contract: docs/design/runtime-diagnostics.md (DIAG.9b);
+// ADR-0133.
 
 #include <crd/core/types.hpp>
 
@@ -60,5 +68,31 @@ void uninstall_io_fault_hook() noexcept;
 
 // What the read described by the arguments must do (Proceed when no hook is installed or the seam is compiled out).
 [[nodiscard]] IoFault consult_io_fault(IoFaultOp op, const char* path, usize path_bytes, u64 offset, u64 size) noexcept;
+
+// Which GPU call is asking.
+enum class GpuFaultOp : u8
+{
+    Submit = 0U, // a queue submission, before any of its work is queued
+};
+
+// What the GPU call must do.
+enum class GpuFaultAction : u8
+{
+    Proceed    = 0U, // submit normally
+    LoseDevice = 1U, // queue nothing; the provider takes its device-loss path and labels the loss Simulated
+};
+
+// `operation` is the provider's static label of the call (for example "compute submit").
+using GpuFaultHook = GpuFaultAction (*)(void* user, GpuFaultOp op, const char* operation) noexcept;
+
+// Install `hook`. Returns false, changing nothing, when the seam is compiled out, `hook` is null or a hook is
+// already installed.
+[[nodiscard]] bool install_gpu_fault_hook(GpuFaultHook hook, void* user) noexcept;
+
+// Remove the hook. When it returns, no call of the old hook is in progress.
+void uninstall_gpu_fault_hook() noexcept;
+
+// What the GPU call must do (Proceed when no hook is installed or the seam is compiled out).
+[[nodiscard]] GpuFaultAction consult_gpu_fault(GpuFaultOp op, const char* operation) noexcept;
 
 } // namespace crd

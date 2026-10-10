@@ -21,7 +21,7 @@ enum class VkFailureOrigin : crd::u8
     Observed,  // the runtime/driver returned VK_ERROR_DEVICE_LOST: an actual device loss
     TimedOut,  // a bounded fence wait expired; the device is not known to be lost
     Failed,    // another error result from a submission or wait
-    Simulated, // a result injected at the seam by a test (error-path coverage, never a real loss)
+    Simulated, // injected at the seam (vk_inject_next_result, or a DIAG.9b device-loss fault): never a real loss
 };
 
 struct VkDeviceFailure
