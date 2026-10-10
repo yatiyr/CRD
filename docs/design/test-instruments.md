@@ -48,6 +48,7 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-perf-assets` | `parse_flight_policy_asset`, `parse_fault_plan_asset`, `parse_fault_plan` and crd-toml beneath them (DIAG.10a) | 41: the two committed assets, documents for every refusal the readers name, crd-toml's nesting, integer-range and number-length limits, plan texts at their bounds |
 | `crd-fuzz-perf-capture` | `crd::perf::validate_capture_buffer` and `CaptureView` (DIAG.10a) | 33: three captures in the writer's exact layout (one with frames and a correlation section, one whose frame span overflows a 64-bit difference) and one buffer per reader defect DIAG.10a fixed, truncations, garbage, and one adopted libFuzzer finding (a sample span the Perfetto export overflowed) |
 | `crd-fuzz-ceir-record` | `crd::ceir::cook::decode_record`, the run-record reader (DIAG.10a) | 57: eight records in the three recorders' shapes (plan, host and device; a bounded trace, an unavailable read, a reloading host's asset and generation, an ulp and an exact envelope) with a fixed build, 30 records that contradict a recorder in one way each, truncations as given and resealed, a trailing byte, a wrong checksum, an older schema, three counts past the payload, garbage |
+| `crd-fuzz-ceridc-diag` | command decoding: ceridc's MCP transport (`mcp_handle` over `crd::assetio::json::parse`), its diag tool and `DiagCommandService::execute` with every registered command's argument check (DIAG.10a) | 52: the JSON-RPC lifecycle, every id form (string, integer, null, fraction, past 2^53, object), batch arrays and bare values, names with a NUL, the parser's number, UTF-8, escape and nesting boundaries (15 refused), the diag tool's fields and refusal order, cursors, a 65-byte command, native requests of raw bytes (a stale cursor before any snapshot, a cursor past 2^53), and the flight, fault and CEIR commands under hosts with and without a root |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
@@ -91,7 +92,16 @@ cancelled run, each input's state derived from its need, every kept read of an i
 text with its hash), requires an accepted record to re-encode to its own bytes, to name the missing inputs its states
 name and to show no divergence from a trace that repeats it, and bounds the decoder's allocations to eight times the
 input plus 64 KiB, so a count is checked against the bytes left before anything is reserved for it. It carries the
-program blob without reading it: the CRDR reader is `crd-fuzz-ceir-binary`'s.
+program blob without reading it: the CRDR reader is `crd-fuzz-ceir-binary`'s. `crd-fuzz-ceridc-diag` reads an input
+as a host line (the grant, and an optional file root that does not exist) and request lines: JSON-RPC lines fed to
+`mcp_handle` as ceridc's stdio loop would, the diag tool's `arguments` spliced into a fixed envelope (`@`), and native
+requests of raw bytes (`!`). A line that could reach one of ceridc's file verbs is not fed: they read and write paths
+the input names. An independent iterative RFC 8259 validator (UTF-8 decoded to code points) must agree with the parser
+within its documented limits, every reply must be one line of valid UTF-8 JSON that follows the JSON-RPC rules with
+the request's id echoed exactly, the diag tool's report must equal the native answer for the page it names byte for
+byte, the service must refuse in its documented order without running a handler, and every snapshot is walked to its
+end with repeatable cursors. Its seed function lists the seeds the parser refuses and checks each verdict as it writes
+it.
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final

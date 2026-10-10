@@ -1,0 +1,12 @@
+@{"command":7}
+@{"path":"x"}
+@{"command":"diag.commands","path":1}
+@{"command":"diag.commands","cursor":1.5}
+@{"command":"diag.commands","cursor":-1}
+@{"command":"diag.commands","page_items":9007199254740992}
+@{"command":"diag.commands","page_items":4294967296}
+@{"command":"diag.commands","schema":"1"}
+@{"command":"diag.commands","args":[]}
+@{"command":"diag.commands","args":{"a":1}}
+@[]
+@"diag.commands"

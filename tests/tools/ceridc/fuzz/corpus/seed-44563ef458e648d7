@@ -1,0 +1,11 @@
+@{"command":"diag.commands","schema":2}
+@{"command":"no.such"}
+@{"command":"capture.start","page_items":300}
+@{"command":"diag.commands","page_items":257}
+@{"command":"diag.commands","page_bytes":262145}
+@{"command":"diag.commands","page_bytes":1023}
+@{"command":"diag.commands","path":"x"}
+@{"command":"bundle.inspect"}
+@{"command":"bundle.inspect","path":"../secret"}
+@{"command":"bundle.inspect","path":"a/b.cdb"}
+@{"command":"diag.commands","args":{"x":"1"}}

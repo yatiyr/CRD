@@ -1,0 +1,10 @@
+#host read,inject root
+@{"command":"fault.status"}
+@{"command":"fault.arm","args":{"plan":"seed=3;failed-read@0+2%500000"}}
+@{"command":"fault.status"}
+@{"command":"fault.arm","args":{"plan":"seed=3;disk-full@0+1%1"}}
+@{"command":"fault.arm","args":{"asset":"../plan.fault.toml"}}
+@{"command":"fault.arm","args":{"asset":"plans/once.fault.toml"}}
+@{"command":"fault.arm","args":{"plan":"x","asset":"y"}}
+@{"command":"fault.arm"}
+@{"command":"fault.disarm"}

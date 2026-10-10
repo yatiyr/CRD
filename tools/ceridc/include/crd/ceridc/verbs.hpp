@@ -125,6 +125,10 @@ struct DiagHostOptions
 // One JSON-RPC 2.0 request line → the response line ("" for notifications). Handles initialize · ping ·
 // tools/list · tools/call (each tool = one verb above; errors surface as isError content, protocol faults as
 // JSON-RPC errors). The stdio loop in main.cpp is read-line → mcp_handle → write-line.
+// DIAG.10a: the reply echoes the request's id exactly (a string or an integer within +-(2^53 - 1)); a request that is
+// not an object, has another id or a method that is not a string is answered -32600 (with a null id when the id cannot
+// be echoed). Method and tool names are compared whole. A tool argument is used as sent or refused as -32602: a string
+// too long for its verb or holding a NUL, a number of the wrong type or range, a flag that is not a boolean.
 [[nodiscard]] crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request,
                                                  crd::memory::IAllocator* alloc);
 

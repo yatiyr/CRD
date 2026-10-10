@@ -27,6 +27,10 @@
 // snapshot of the same command) is refused StaleCursor. A page is bounded by an item count and by the serialized size
 // of its items; each item is itself bounded below the smallest page, so every page makes progress.
 //
+// Every response document is valid UTF-8 JSON whatever bytes the request or the evidence held: the echoed command is
+// clipped at a sequence boundary, and a byte that does not begin a well-formed UTF-8 sequence is written as \ufffd
+// (DIAG.10a; the crd-fuzz-ceridc-diag target holds the service, its argument checks and the MCP transport to this).
+//
 // Upper modules (CEIR program provenance, replay preparation) register their own commands through register_command,
 // so foundation never includes their headers. Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
@@ -151,7 +155,8 @@ struct DiagResult
     DiagStatus   status = DiagStatus::Failed;
     cont::String reason;             // why, for every status but Ok
     crd::u64     generation   = 0U;  // snapshot this page was cut from (0 when refused)
-    crd::u64     cursor       = 0U;  // the cursor this page answers (the snapshot's first page for a cursor-0 request)
+    crd::u64     cursor       = 0U;  // the cursor this page answers (the snapshot's first page for a cursor-0 request;
+                                     // a refusal answers the request's own cursor, as its document says)
     crd::u64     next_cursor  = 0U;  // 0 when this page reaches the end
     crd::u32     total        = 0U;  // items in the snapshot
     crd::u32     items        = 0U;  // items on this page

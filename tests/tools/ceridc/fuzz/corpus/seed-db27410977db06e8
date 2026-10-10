@@ -1,0 +1,10 @@
+#host read,record root
+@{"command":"flight.status"}
+@{"command":"flight.trigger","args":{"message":"first \u00fc"}}
+@{"command":"flight.trigger"}
+@{"command":"flight.status","page_items":1}
+@{"command":"flight.trigger","args":{"msg":"x"}}
+@{"command":"flight.policy","path":"p.flight.toml"}
+@{"command":"flight.write","path":"out/flight.cdb"}
+@{"command":"capture.start"}
+@{"command":"capture.stop","path":"c.cprof"}

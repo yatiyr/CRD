@@ -8,6 +8,12 @@
 // to f64 (JSON's own model; glTF integer indices are exact in f64 far beyond any real asset). Depth-capped recursive
 // descent (64) — a hostile 1-MB "[[[[…" cannot blow the stack. Parse failures return false with a byte offset, never a
 // partial DOM.
+//
+// DIAG.10a (the command-decoding fuzz target, crd-fuzz-ceridc-diag): a number must match the RFC grammar exactly (no
+// leading '+' or zero, no bare '.', an exponent with a digit) and is read whole by std::from_chars, locale-independent;
+// one a double cannot hold is refused, never clamped or cut. A string's raw bytes must be well-formed UTF-8
+// (crd/core/utf8.hpp). A decoded string may hold NUL (\u0000): compare it by its length (str_value_eq), never as a C
+// string.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -73,7 +79,8 @@ struct JsonDoc
 
 [[nodiscard]] crd::u32 count_of(const JsonDoc& doc, crd::u32 node) noexcept;
 
-// Typed reads with defaults (kInvalid/type-mismatch → the default).
+// Typed reads with defaults (kInvalid/type-mismatch → the default). as_i64 truncates toward zero, and a number outside
+// the i64 range answers the default too.
 [[nodiscard]] crd::f64 as_f64(const JsonDoc& doc, crd::u32 node, crd::f64 def) noexcept;
 [[nodiscard]] crd::i64 as_i64(const JsonDoc& doc, crd::u32 node, crd::i64 def) noexcept;
 [[nodiscard]] bool     as_bool(const JsonDoc& doc, crd::u32 node, bool def) noexcept;

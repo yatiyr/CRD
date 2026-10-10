@@ -35,3 +35,6 @@ crd_enable_default_pch(crd-ceridc-tests)
 crd_discover_tests(crd-ceridc-tests CASE_DIRECTORIES
     PROPERTIES ENVIRONMENT "CRD_CERIDC_EXE=$<TARGET_FILE:ceridc>"
 )
+
+# DIAG.10a: the command-decoding fuzz target and its committed corpus replay.
+add_subdirectory(fuzz)

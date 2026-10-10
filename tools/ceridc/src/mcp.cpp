@@ -7,6 +7,7 @@
 #include <crd/ceridc/verbs.hpp>
 #include <crd/perf/diag_commands.hpp>
 
+#include <cfloat> // FLT_MAX: the f32 arguments' range
 #include <cmath>
 #include <cstring>
 
@@ -106,20 +107,87 @@ namespace
         w.end_object();
     }
 
-    // pull a string/number/bool argument out of the `arguments` object (buf-copied strings)
+    // DIAG.10a: an argument is used exactly as sent or refused (a protocol error, so nothing runs); it is never cut,
+    // clamped or read as a default because its type is wrong.
+
+    // A required string argument copied into `buf` as a C string. False when it is absent, not a string, empty, too long
+    // for `buf` (a path cut short names another file) or holding a NUL (which would end the C string early).
     [[nodiscard]] bool arg_str(const json::JsonDoc& doc, crd::u32 args, const char* key, char* buf,
                                crd::u32 cap)
     {
         const crd::u32 node = json::find(doc, args, key);
-        return node != json::kInvalid && json::str_value(doc, node, buf, cap) > 0;
+        if (node == json::kInvalid || doc.nodes[node].type != json::JsonType::String)
+        {
+            return false;
+        }
+        const crd::u32    len   = doc.nodes[node].str_len;
+        const char* const bytes = doc.strings.data() + doc.nodes[node].str_off;
+        if (len == 0U || len >= cap || std::memchr(bytes, '\0', len) != nullptr)
+        {
+            return false;
+        }
+        return json::str_value(doc, node, buf, cap) == len;
     }
-    [[nodiscard]] crd::f64 arg_num(const json::JsonDoc& doc, crd::u32 args, const char* key, crd::f64 def)
+
+    constexpr crd::f64 kMaxExactWhole = 9007199254740991.0; // 2^53 - 1: every whole number up to it is exact in a f64
+
+    // An optional whole-number argument within +-(2^53 - 1). An absent argument keeps `out`; any other value is false.
+    [[nodiscard]] bool arg_whole(const json::JsonDoc& doc, crd::u32 args, const char* key, crd::i64& out)
     {
-        return json::as_f64(doc, json::find(doc, args, key), def);
+        const crd::u32 node = json::find(doc, args, key);
+        if (node == json::kInvalid)
+        {
+            return true;
+        }
+        if (doc.nodes[node].type != json::JsonType::Number)
+        {
+            return false;
+        }
+        const crd::f64 v = doc.nodes[node].number;
+        if (!(v >= -kMaxExactWhole && v <= kMaxExactWhole) || v != std::floor(v))
+        {
+            return false;
+        }
+        out = static_cast<crd::i64>(v);
+        return true;
     }
-    [[nodiscard]] bool arg_bool(const json::JsonDoc& doc, crd::u32 args, const char* key)
+
+    // An optional number argument a f32 can hold. An absent argument keeps `out`; any other value is false.
+    [[nodiscard]] bool arg_f32(const json::JsonDoc& doc, crd::u32 args, const char* key, crd::f32& out)
     {
-        return json::as_bool(doc, json::find(doc, args, key), false);
+        const crd::u32 node = json::find(doc, args, key);
+        if (node == json::kInvalid)
+        {
+            return true;
+        }
+        if (doc.nodes[node].type != json::JsonType::Number)
+        {
+            return false;
+        }
+        const crd::f64 v = doc.nodes[node].number;
+        if (!(v >= -static_cast<crd::f64>(FLT_MAX) && v <= static_cast<crd::f64>(FLT_MAX)))
+        {
+            return false;
+        }
+        out = static_cast<crd::f32>(v);
+        return true;
+    }
+
+    // An optional boolean argument. An absent argument keeps `out`; a value of another type is false (a dry_run sent as
+    // the string "true" must not write the file).
+    [[nodiscard]] bool arg_flag(const json::JsonDoc& doc, crd::u32 args, const char* key, bool& out)
+    {
+        const crd::u32 node = json::find(doc, args, key);
+        if (node == json::kInvalid)
+        {
+            return true;
+        }
+        if (doc.nodes[node].type != json::JsonType::Bool)
+        {
+            return false;
+        }
+        out = doc.nodes[node].boolean;
+        return true;
     }
 
     // A whole JSON number in [0, max], or false. An absent argument keeps `out` (the request's default).
@@ -213,10 +281,14 @@ namespace
     [[nodiscard]] crd::containers::String call_tool(const json::JsonDoc& doc, crd::u32 params,
                                                     crd::memory::IAllocator* alloc, crd::perf::DiagCommandService* diag)
     {
-        char name[64] = {};
-        (void)json::str_value(doc, json::find(doc, params, "name"), name, sizeof(name));
+        // The tool's name is compared whole (DIAG.10a): "import\u0000x" names no tool, it is not "import".
+        const crd::u32 name = json::find(doc, params, "name");
+        const auto     is   = [&doc, name](const char* tool)
+        {
+            return json::str_value_eq(doc, name, tool);
+        };
         const crd::u32 args = json::find(doc, params, "arguments");
-        if (std::strcmp(name, "diag") == 0)
+        if (is("diag"))
         {
             if (diag == nullptr || args == json::kInvalid || doc.nodes[args].type != json::JsonType::Object)
             {
@@ -229,7 +301,7 @@ namespace
         char b[512];
         char c[512];
         char d[512];
-        if (std::strcmp(name, "import") == 0)
+        if (is("import"))
         {
             if (!arg_str(doc, args, "path", a, sizeof(a)))
             {
@@ -237,7 +309,7 @@ namespace
             }
             return verb_import(a, alloc);
         }
-        if (std::strcmp(name, "cook") == 0)
+        if (is("cook"))
         {
             if (!arg_str(doc, args, "root", a, sizeof(a)) || !arg_str(doc, args, "out", b, sizeof(b)))
             {
@@ -245,7 +317,7 @@ namespace
             }
             return verb_cook(a, b, alloc);
         }
-        if (std::strcmp(name, "query") == 0)
+        if (is("query"))
         {
             if (!arg_str(doc, args, "pack", a, sizeof(a)))
             {
@@ -253,42 +325,48 @@ namespace
             }
             return verb_query(a, alloc);
         }
-        if (std::strcmp(name, "instantiate") == 0)
+        if (is("instantiate"))
         {
+            crd::f32 translate[3] = {0.0F, 0.0F, 0.0F};
+            bool     dry_run      = false;
             if (!arg_str(doc, args, "pack", a, sizeof(a)) || !arg_str(doc, args, "asset", b, sizeof(b)) ||
-                !arg_str(doc, args, "out", c, sizeof(c)))
+                !arg_str(doc, args, "out", c, sizeof(c)) || !arg_f32(doc, args, "x", translate[0]) ||
+                !arg_f32(doc, args, "y", translate[1]) || !arg_f32(doc, args, "z", translate[2]) ||
+                !arg_flag(doc, args, "dry_run", dry_run))
             {
                 return crd::containers::String("", alloc);
             }
-            const crd::f32 translate[3] = {static_cast<crd::f32>(arg_num(doc, args, "x", 0.0)),
-                                           static_cast<crd::f32>(arg_num(doc, args, "y", 0.0)),
-                                           static_cast<crd::f32>(arg_num(doc, args, "z", 0.0))};
-            return verb_instantiate(a, b, translate, arg_bool(doc, args, "dry_run"), c, alloc);
+            return verb_instantiate(a, b, translate, dry_run, c, alloc);
         }
-        if (std::strcmp(name, "sequence") == 0)
+        if (is("sequence"))
         {
-            char clip_a[256];
-            char clip_b[256];
+            char     clip_a[256];
+            char     clip_b[256];
+            crd::i64 frames_a   = 0;
+            crd::i64 frames_b   = 0;
+            crd::i64 transition = 0;
             if (!arg_str(doc, args, "name", a, sizeof(a)) ||
                 !arg_str(doc, args, "clip_a", clip_a, sizeof(clip_a)) ||
                 !arg_str(doc, args, "clip_b", clip_b, sizeof(clip_b)) ||
-                !arg_str(doc, args, "out_timl", c, sizeof(c)) || !arg_str(doc, args, "out_otio", d, sizeof(d)))
+                !arg_str(doc, args, "out_timl", c, sizeof(c)) || !arg_str(doc, args, "out_otio", d, sizeof(d)) ||
+                !arg_whole(doc, args, "frames_a", frames_a) || !arg_whole(doc, args, "frames_b", frames_b) ||
+                !arg_whole(doc, args, "transition", transition))
             {
                 return crd::containers::String("", alloc);
             }
-            return verb_sequence(a, clip_a, static_cast<crd::i64>(arg_num(doc, args, "frames_a", 0.0)),
-                                 clip_b, static_cast<crd::i64>(arg_num(doc, args, "frames_b", 0.0)),
-                                 static_cast<crd::i64>(arg_num(doc, args, "transition", 0.0)), c, d, alloc);
+            return verb_sequence(a, clip_a, frames_a, clip_b, frames_b, transition, c, d, alloc);
         }
-        if (std::strcmp(name, "render") == 0)
+        if (is("render"))
         {
-            if (!arg_str(doc, args, "otio", a, sizeof(a)) || !arg_str(doc, args, "dir", b, sizeof(b)))
+            crd::i64 max_frames = 0;
+            if (!arg_str(doc, args, "otio", a, sizeof(a)) || !arg_str(doc, args, "dir", b, sizeof(b)) ||
+                !arg_whole(doc, args, "max_frames", max_frames))
             {
                 return crd::containers::String("", alloc);
             }
-            return verb_render(a, b, static_cast<crd::i64>(arg_num(doc, args, "max_frames", 0.0)), alloc);
+            return verb_render(a, b, max_frames, alloc);
         }
-        if (std::strcmp(name, "export") == 0)
+        if (is("export"))
         {
             if (!arg_str(doc, args, "timl", a, sizeof(a)) || !arg_str(doc, args, "out", b, sizeof(b)))
             {
@@ -310,7 +388,8 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
 {
     json::JsonDoc doc(alloc);
     JsonWriter    w(alloc);
-    if (!json::parse(request, doc) || doc.root == json::kInvalid)
+    // A reply to a request whose id cannot be echoed (JSON-RPC 2.0 section 5.1: the id is null then).
+    const auto fail_without_id = [&w](crd::i64 code, const char* message)
     {
         w.begin_object();
         w.kv("jsonrpc", "2.0");
@@ -318,30 +397,82 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         w.value_null();
         w.key("error");
         w.begin_object();
-        w.kv("code", static_cast<crd::i64>(-32700));
-        w.kv("message", "parse error");
+        w.kv("code", code);
+        w.kv("message", message);
         w.end_object();
         w.end_object();
         return crd::containers::String(w.str());
+    };
+    if (!json::parse(request, doc) || doc.root == json::kInvalid)
+    {
+        return fail_without_id(-32700, "parse error");
     }
-
-    char method[64] = {};
-    (void)json::str_value(doc, json::find(doc, doc.root, "method"), method, sizeof(method));
+    // DIAG.10a: a request is an object (a batch array or a bare value is an invalid request, never a silent drop), and
+    // its reply echoes its id exactly: a string as the same string, an integer as the same integer. Any other id (null,
+    // a fraction, a number past 2^53 - 1 that a double cannot hold exactly, an array or object) cannot be echoed and is
+    // an invalid request.
+    if (doc.nodes[doc.root].type != json::JsonType::Object)
+    {
+        return fail_without_id(-32600, "invalid request");
+    }
     const crd::u32 id_node = json::find(doc, doc.root, "id");
     if (id_node == json::kInvalid) // notification — no reply
     {
         return crd::containers::String("", alloc);
     }
-    const crd::i64 id = json::as_i64(doc, id_node, 0);
-
-    const auto begin_result = [&] {
+    const json::JsonNode& id = doc.nodes[id_node];
+    const bool            string_id = id.type == json::JsonType::String;
+    const bool            whole_id  = id.type == json::JsonType::Number && id.number >= -kMaxExactWhole &&
+                                      id.number <= kMaxExactWhole && id.number == std::floor(id.number);
+    if (!string_id && !whole_id)
+    {
+        return fail_without_id(-32600, "invalid request");
+    }
+    const auto write_id = [&]
+    {
+        w.key("id");
+        if (string_id)
+        {
+            w.value_string(crd::containers::StringView{doc.strings.data() + id.str_off, id.str_len});
+        }
+        else
+        {
+            w.value_i64(static_cast<crd::i64>(id.number));
+        }
+    };
+    const auto begin_result = [&]
+    {
         w.begin_object();
         w.kv("jsonrpc", "2.0");
-        w.kv("id", id);
+        write_id();
         w.key("result");
     };
+    const auto fail_with_id = [&](crd::i64 code, const char* message)
+    {
+        w.begin_object();
+        w.kv("jsonrpc", "2.0");
+        write_id();
+        w.key("error");
+        w.begin_object();
+        w.kv("code", code);
+        w.kv("message", message);
+        w.end_object();
+        w.end_object();
+        return crd::containers::String(w.str());
+    };
 
-    if (std::strcmp(method, "initialize") == 0)
+    // The method is compared whole: "tools/call\u0000x" is not "tools/call".
+    const crd::u32 method_node = json::find(doc, doc.root, "method");
+    if (method_node == json::kInvalid || doc.nodes[method_node].type != json::JsonType::String)
+    {
+        return fail_with_id(-32600, "invalid request");
+    }
+    const auto method_is = [&doc, method_node](const char* m)
+    {
+        return json::str_value_eq(doc, method_node, m);
+    };
+
+    if (method_is("initialize"))
     {
         begin_result();
         w.begin_object();
@@ -361,7 +492,7 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         w.end_object();
         return crd::containers::String(w.str());
     }
-    if (std::strcmp(method, "ping") == 0)
+    if (method_is("ping"))
     {
         begin_result();
         w.begin_object();
@@ -369,7 +500,7 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         w.end_object();
         return crd::containers::String(w.str());
     }
-    if (std::strcmp(method, "tools/list") == 0)
+    if (method_is("tools/list"))
     {
         begin_result();
         w.begin_object();
@@ -398,22 +529,13 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         w.end_object();
         return crd::containers::String(w.str());
     }
-    if (std::strcmp(method, "tools/call") == 0)
+    if (method_is("tools/call"))
     {
         const crd::u32                params = json::find(doc, doc.root, "params");
         const crd::containers::String report = call_tool(doc, params, alloc, diag);
-        if (report.empty()) // unknown tool / missing required args = a PROTOCOL fault
+        if (report.empty()) // unknown tool / missing or refused arguments = a PROTOCOL fault
         {
-            w.begin_object();
-            w.kv("jsonrpc", "2.0");
-            w.kv("id", id);
-            w.key("error");
-            w.begin_object();
-            w.kv("code", static_cast<crd::i64>(-32602));
-            w.kv("message", "unknown tool or missing required arguments");
-            w.end_object();
-            w.end_object();
-            return crd::containers::String(w.str());
+            return fail_with_id(-32602, "unknown tool or missing required arguments");
         }
         // the report is a JSON object with an "ok" field — surface !ok as isError
         const bool is_error = std::strstr(report.c_str(), "\"ok\":false") != nullptr;
@@ -423,7 +545,7 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         w.begin_array();
         w.begin_object();
         w.kv("type", "text");
-        w.kv("text", report.c_str());
+        w.kv("text", crd::containers::StringView{report.data(), report.size()});
         w.end_object();
         w.end_array();
         w.kv("isError", is_error);
@@ -432,16 +554,7 @@ crd::containers::String mcp_handle(crd::containers::ConstSpan<crd::u8> request, 
         return crd::containers::String(w.str());
     }
 
-    w.begin_object();
-    w.kv("jsonrpc", "2.0");
-    w.kv("id", id);
-    w.key("error");
-    w.begin_object();
-    w.kv("code", static_cast<crd::i64>(-32601));
-    w.kv("message", "method not found");
-    w.end_object();
-    w.end_object();
-    return crd::containers::String(w.str());
+    return fail_with_id(-32601, "method not found");
 }
 
 } // namespace crd::ceridc

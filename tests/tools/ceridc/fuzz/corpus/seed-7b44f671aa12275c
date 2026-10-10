@@ -1,0 +1,3 @@
+@{"command":"fault.arm","args":{"plan":"seed=1;failed-read@0+1%1000000"}}
+@{"command":"flight.trigger"}
+@{"command":"replay.run","path":"r.crrr"}

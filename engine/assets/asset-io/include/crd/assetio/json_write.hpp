@@ -7,10 +7,14 @@
 // Number contract: f64 emits with enough digits to round-trip an f32 exactly (%.9g — glTF's numeric payloads are
 // f32-valued), integers emit exactly. NaN/Inf are NOT representable in JSON — the writer asserts (an exporter must
 // sanitize upstream; silently writing "null" would corrupt a mesh).
+//
+// String contract: control characters are escaped and well-formed UTF-8 passes through; a byte that does not begin
+// one is written as \ufffd, so every document is valid UTF-8 JSON whatever bytes a report was handed (DIAG.10a).
 
 #include <crd/containers/string.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/core/utf8.hpp>
 #include <cmath> // std::isfinite — the classification fn (the gltf.cpp idiom; the transcendental ban does not cover it)
 
 #include <cstdio>
@@ -118,7 +122,23 @@ private:
             {
                 m_out.append("\\\\");
             }
-            else if (u >= 0x20U) // UTF-8 bytes pass through verbatim
+            else if (u >= 0x80U)
+            {
+                // A well-formed UTF-8 sequence passes through whole; any other byte (a file's Latin-1 name, a cut
+                // sequence) becomes U+FFFD, so the document stays valid JSON whatever bytes it was handed (DIAG.10a).
+                const crd::usize length =
+                    crd::utf8_sequence_length(reinterpret_cast<const crd::u8*>(s.data()) + i, s.size() - i);
+                if (length == 0U)
+                {
+                    m_out.append("\\ufffd");
+                }
+                else
+                {
+                    m_out.append(crd::containers::StringView{s.data() + i, length});
+                    i += length - 1U;
+                }
+            }
+            else if (u >= 0x20U)
             {
                 m_out.push_back(c);
             }

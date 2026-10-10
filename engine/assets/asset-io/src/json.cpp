@@ -2,8 +2,11 @@
 
 #include <crd/assetio/json.hpp>
 
-#include <cstdlib>
+#include <crd/core/utf8.hpp>
+
+#include <charconv> // std::from_chars: the number's value, locale-independent
 #include <cstring>
+#include <system_error>
 
 namespace crd::assetio::json
 {
@@ -174,35 +177,97 @@ struct Parser
                 fail();
                 return false;
             }
-            doc->strings.push_back(static_cast<char>(c));
-            ++p;
+            // JSON text is UTF-8 (RFC 8259 section 8.1): a raw byte at or above 0x80 must start a well-formed
+            // sequence, which is kept whole. A stray continuation byte, a cut sequence, an overlong form or an
+            // encoded surrogate is refused rather than handed on as a string a writer would echo.
+            const crd::usize length = crd::utf8_sequence_length(p, static_cast<crd::usize>(end - p));
+            if (length == 0U)
+            {
+                fail();
+                return false;
+            }
+            for (crd::usize i = 0U; i < length; ++i)
+            {
+                doc->strings.push_back(static_cast<char>(p[i]));
+            }
+            p += length;
         }
     }
 
+    [[nodiscard]] static bool digit(const crd::u8* q, const crd::u8* stop) noexcept
+    {
+        return q < stop && *q >= '0' && *q <= '9';
+    }
+
+    // The RFC 8259 number grammar, -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)?, then the value by std::from_chars
+    // (locale-independent, every digit read). A leading '+' or zero, a bare '.', a missing exponent digit and a
+    // magnitude a double cannot hold (out of range either way) are refused; nothing is cut short or clamped.
     [[nodiscard]] bool parse_number(crd::f64& out)
     {
-        // bounded copy → strtod (JSON numbers are a strict strtod subset; reject trailing junk via the end pointer)
-        char       buf[64];
-        crd::usize n = 0;
         const crd::u8* q = p;
-        while (q < end
-               && ((*q >= '0' && *q <= '9') || *q == '-' || *q == '+' || *q == '.' || *q == 'e' || *q == 'E'))
+        if (q < end && *q == '-')
         {
-            if (n + 1 < sizeof(buf))
-            {
-                buf[n++] = static_cast<char>(*q);
-            }
             ++q;
         }
-        buf[n]      = '\0';
-        char* endp  = nullptr;
-        out         = std::strtod(buf, &endp);
-        if (endp == buf || *endp != '\0')
+        if (q < end && *q == '0')
+        {
+            ++q;
+        }
+        else if (digit(q, end))
+        {
+            while (digit(q, end))
+            {
+                ++q;
+            }
+        }
+        else
         {
             fail();
             return false;
         }
-        p = q;
+        if (q < end && *q == '.')
+        {
+            ++q;
+            if (!digit(q, end))
+            {
+                p = q;
+                fail();
+                return false;
+            }
+            while (digit(q, end))
+            {
+                ++q;
+            }
+        }
+        if (q < end && (*q == 'e' || *q == 'E'))
+        {
+            ++q;
+            if (q < end && (*q == '+' || *q == '-'))
+            {
+                ++q;
+            }
+            if (!digit(q, end))
+            {
+                p = q;
+                fail();
+                return false;
+            }
+            while (digit(q, end))
+            {
+                ++q;
+            }
+        }
+        const char* const first = reinterpret_cast<const char*>(p);
+        const char* const last  = reinterpret_cast<const char*>(q);
+        crd::f64          value = 0.0;
+        const auto        res   = std::from_chars(first, last, value, std::chars_format::general);
+        if (res.ec != std::errc{} || res.ptr != last)
+        {
+            fail();
+            return false;
+        }
+        out = value;
+        p   = q;
         return true;
     }
 
@@ -443,7 +508,14 @@ crd::i64 as_i64(const JsonDoc& doc, crd::u32 node, crd::i64 def) noexcept
     {
         return def;
     }
-    return static_cast<crd::i64>(doc.nodes[node].number);
+    // A double outside the i64 range has no i64 value (and converting it is undefined behaviour): the default, like
+    // any other value that is not one. 2^63 is exact in a double; -2^63 is the smallest i64.
+    const crd::f64 v = doc.nodes[node].number;
+    if (!(v >= -9223372036854775808.0 && v < 9223372036854775808.0))
+    {
+        return def;
+    }
+    return static_cast<crd::i64>(v);
 }
 
 bool as_bool(const JsonDoc& doc, crd::u32 node, bool def) noexcept

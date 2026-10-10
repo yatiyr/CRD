@@ -5,9 +5,12 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/assetio/json.hpp>
+#include <crd/assetio/json_write.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <cstdint>
 #include <cstring>
+#include <initializer_list>
 
 namespace js = crd::assetio::json;
 
@@ -82,6 +85,73 @@ TEST_CASE("assetio: JSON failure classes -- no partial DOM survives", "[assetio]
     }
     bomb[160] = '\0';
     CHECK_FALSE(js::parse(span_of(bomb), doc));
+}
+
+TEST_CASE("assetio: JSON numbers follow the RFC grammar exactly and are read whole", "[assetio][json][diag10a]")
+{
+    // DIAG.10a (crd-fuzz-ceridc-diag): a strtod over a 63-byte copy accepted forms outside the grammar, cut a longer
+    // token short (so it read another number) and turned an overflow into infinity.
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    js::JsonDoc                doc(&alloc);
+    for (const char* refused : {"+1", "01", "-01", ".5", "-.5", "1.", "1.e5", "1e", "1e+", "-", "--1", "1e400",
+                                "-1e400", "0x10", "Infinity", "NaN"})
+    {
+        INFO(refused);
+        CHECK_FALSE(js::parse(span_of(refused), doc));
+    }
+    REQUIRE(js::parse(span_of("[0, -0, 0.5, -12.25e-1, 1E+2, 7e0, 9007199254740993]"), doc));
+    CHECK(js::as_f64(doc, js::at(doc, doc.root, 3), 0.0) == -1.225);
+    CHECK(js::as_f64(doc, js::at(doc, doc.root, 4), 0.0) == 100.0);
+    CHECK(js::as_f64(doc, js::at(doc, doc.root, 6), 0.0) == 9007199254740992.0); // the nearest double
+
+    // A 70-digit integer is read as its own value (1e69), never as its first 63 digits (1e62).
+    const char* const long_token = "1000000000000000000000000000000000000000000000000000000000000000000000";
+    REQUIRE(std::strlen(long_token) == 70U);
+    REQUIRE(js::parse(span_of(long_token), doc));
+    CHECK(js::as_f64(doc, doc.root, 0.0) == 1e69);
+
+    // as_i64 answers its default for a number with no i64 value (the cast was undefined behaviour), and still
+    // truncates one that has.
+    REQUIRE(js::parse(span_of("[1e300, -1e300, 9223372036854775808, -9223372036854775808, -2.75]"), doc));
+    CHECK(js::as_i64(doc, js::at(doc, doc.root, 0), -7) == -7);
+    CHECK(js::as_i64(doc, js::at(doc, doc.root, 1), -7) == -7);
+    CHECK(js::as_i64(doc, js::at(doc, doc.root, 2), -7) == -7);
+    CHECK(js::as_i64(doc, js::at(doc, doc.root, 3), -7) == INT64_MIN);
+    CHECK(js::as_i64(doc, js::at(doc, doc.root, 4), -7) == -2);
+}
+
+TEST_CASE("assetio: JSON strings are well-formed UTF-8; the writer never emits anything else",
+          "[assetio][json][diag10a]")
+{
+    crd::memory::TlsfAllocator alloc(4U << 20U);
+    js::JsonDoc                doc(&alloc);
+    // Raw bytes that are not a well-formed sequence: overlong, an encoded surrogate, past U+10FFFF, cut short, a
+    // stray continuation byte, a lead byte that never starts one.
+    for (const char* refused : {"\"\xC0\xAF\"", "\"\xE0\x80\xAF\"", "\"\xED\xA0\x80\"", "\"\xF4\x90\x80\x80\"",
+                                "\"\xF5\x80\x80\x80\"", "\"\xE2\x82\"", "\"\x80\"", "\"\xFF\"", "\"a\xC3\""})
+    {
+        INFO(refused);
+        CHECK_FALSE(js::parse(span_of(refused), doc));
+    }
+    // Every well-formed length, the extremes included, is kept byte for byte.
+    const char* const kept = "\"\x7F\xC2\x80\xDF\xBF\xE0\xA0\x80\xED\x9F\xBF\xEE\x80\x80\xF0\x90\x80\x80\xF4\x8F\xBF\xBF\"";
+    REQUIRE(js::parse(span_of(kept), doc));
+    CHECK(doc.nodes[doc.root].str_len == std::strlen(kept) - 2U);
+    CHECK(std::memcmp(doc.strings.data() + doc.nodes[doc.root].str_off, kept + 1, std::strlen(kept) - 2U) == 0);
+
+    // A decoded string may hold NUL: compared by its length it is not the name before the NUL.
+    REQUIRE(js::parse(span_of(R"({"m": "ping\u0000x"})"), doc));
+    CHECK_FALSE(js::str_value_eq(doc, js::find(doc, doc.root, "m"), "ping"));
+
+    // The writer keeps well-formed sequences and writes every other byte as \ufffd, so its output parses.
+    crd::assetio::JsonWriter w(&alloc);
+    w.begin_object();
+    w.kv("s", crd::containers::StringView{"a\xC3\xA9\xFF\xE2\x82z\xF0\x9F\x98\x80", 11U});
+    w.end_object();
+    CHECK(std::strcmp(w.str().c_str(), "{\"s\":\"a\xC3\xA9\\ufffd\\ufffd\\ufffdz\xF0\x9F\x98\x80\"}") == 0);
+    CHECK(js::parse(crd::containers::ConstSpan<crd::u8>(reinterpret_cast<const crd::u8*>(w.str().data()),
+                                                        w.str().size()),
+                    doc));
 }
 
 TEST_CASE("assetio: JSON empty containers + whitespace tolerance", "[assetio][json]")

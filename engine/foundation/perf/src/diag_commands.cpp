@@ -637,7 +637,18 @@ void begin_document(cont::String& json, const DiagRequest& request, DiagStatus s
     json.append(R"({"schema":)");
     append_u64(json, kDiagCommandSchemaVersion);
     json.append(R"(,"command":")");
-    append_json_escaped(json, request.command.substr(0U, kDiagMaxCommandBytes));
+    // The echo is clipped like a field value: never inside a UTF-8 sequence (back off over continuation bytes).
+    cont::StringView command = request.command;
+    if (command.size() > kDiagMaxCommandBytes)
+    {
+        crd::usize cut = kDiagMaxCommandBytes;
+        while (cut > 0U && (static_cast<unsigned char>(command[cut]) & 0xC0U) == 0x80U)
+        {
+            --cut;
+        }
+        command = command.substr(0U, cut);
+    }
+    append_json_escaped(json, command);
     json.append(R"(","ok":)");
     json.append(status == DiagStatus::Ok ? "true" : "false");
     json.append(R"(,"status":")");
@@ -669,7 +680,17 @@ void append_flag(cont::String& json, cont::StringView key, bool value)
 void DiagCommandService::refuse(DiagResult& result, const DiagRequest& request, DiagStatus status,
                                 cont::StringView reason) const
 {
-    result.status = status;
+    // The typed result says what the document says (DIAG.10a: a refused cursor request's typed cursor was left 0
+    // while its document named the request's cursor).
+    result.status       = status;
+    result.generation   = 0U;
+    result.cursor       = request.cursor;
+    result.next_cursor  = 0U;
+    result.total        = 0U;
+    result.items        = 0U;
+    result.dropped      = 0U;
+    result.complete     = false;
+    result.byte_bounded = false;
     result.reason.clear();
     result.reason.append(reason);
     result.json.clear();

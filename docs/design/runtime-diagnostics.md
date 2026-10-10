@@ -1762,6 +1762,50 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-run-records.md)):
 - Not yet: command decoding, resource reload, the compiled and reference CEIR comparison, the virtual-memory and
   streaming allocators, the unknown-origin artifacts and the concurrent-load corruption.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-command-decoding.md)):
+- Command decoding is the fuzz target `crd-fuzz-ceridc-diag` (`tests/tools/ceridc/fuzz`, corpus replayed on every lane,
+  libFuzzer on `linux-clang-fuzz`; the ceridc module owns `tests/support/fuzz`). Its ingress is the line ceridc's
+  stdio MCP transport reads: the owned JSON parser (crd-asset-io), `mcp_handle`, the diag tool's argument decoding and
+  `DiagCommandService::execute` with every command ceridc binds plus the sandbox's flight and fault commands, so every
+  registered argument check is reachable. An input's host line chooses the grant and whether there is a file root;
+  the root is a directory that does not exist, so a path command reaches its argument check and handler and opens
+  nothing. A line that could reach one of ceridc's file verbs (import, cook, query, instantiate, sequence, render,
+  export) is not fed, because those read and write paths the input names; their argument decoding is covered in
+  crd-ceridc-tests.
+- Oracles, none of them the decoder's own verdict: an independent RFC 8259 validator (iterative, decoding UTF-8 to
+  code points) must agree with the parser within its documented limits (64 levels, numbers a double holds); every
+  reply is one line of valid UTF-8 JSON that follows the JSON-RPC rules (-32700, -32600 with a null id, no reply to a
+  notification, the request's id echoed exactly); the diag tool's documented decoding is restated and the report it
+  returns equals the native answer for the page the report names, byte for byte; the service's refusal order is
+  restated (a refusal runs no handler, an argument check answers only bad-argument or unavailable); every document's
+  fields equal the typed result, its pages respect their item and byte bounds, a walk to the end covers the snapshot
+  once with each cursor repeatable, and the run returns every byte it allocated.
+- Findings fixed. The JSON parser (glTF, OTIO and every MCP line): numbers went through `strtod` on a 63-byte copy,
+  so `+1`, `01`, `.5` and `1.` were accepted, a longer token was read as its first 63 characters, and an overflow
+  became infinity; a number now matches the RFC grammar and is read whole by `std::from_chars`, one a double cannot
+  hold is refused. Raw string bytes were never checked, so ill-formed UTF-8 reached every consumer; it is refused
+  (`crd/core/utf8.hpp`). `as_i64` cast any double, undefined past the i64 range (an MCP id of `1e300`); it answers the
+  default there. The MCP transport answered a string id as 0, truncated a fractional one and rounded one past 2^53;
+  it silently dropped a batch array or a bare value (a client waits for a reply that never comes); it compared method
+  and tool names as C strings cut at a NUL (`"ping\u0000x"` was `ping`, `"diag\u0000"` was `diag`); it cut a string
+  argument past 511 bytes, or at a NUL, to another path; it read a `dry_run` of another type as false (the string
+  `"true"` wrote the file); and it cast frame counts and translations from any double. Ids now echo exactly (a string,
+  or an integer within 2^53 - 1), anything else is -32600, names compare whole, and an argument is used as sent or the
+  call is -32602. Both JSON writers (crd-perf's and crd-asset-io's) passed every byte at or above 0x80 through, so a
+  request's raw bytes (a CLI argument, an argument a check echoes in its reason) or evidence bytes (a bundle's module
+  names, an OBJ's names in an import report) made a document that is not UTF-8, and the service cut the command echo
+  at 64 bytes inside a sequence; ill-formed bytes are now written as `\ufffd` and the echo stops at a boundary.
+- libFuzzer found that a refused request's typed `DiagResult` kept `cursor` at 0 while its document named the
+  request's cursor; `refuse()` now sets every typed field the document states. A refusal echoes the request's cursor,
+  which a native caller can set past 2^53: only the cursors the service issues are promised exact in a double.
+- Duplicate member names keep the parser's first occurrence (RFC 8259 leaves them to the implementation); the
+  transport, the service and the target read them the same way.
+- The commands' file readers (`bundle.inspect`, the diag asset reader, crd-ceir-cook's bounded file reader) open files
+  directly, outside crd-core's I/O fault seam, so neither fault injection nor this target observes which paths they
+  open; the target's root does not exist, so they open nothing.
+- Not yet: resource reload, the compiled and reference CEIR comparison, the virtual-memory and streaming allocators,
+  the unknown-origin artifacts and the concurrent-load corruption.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

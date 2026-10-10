@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 namespace fs = crd::platform::fs;
 
@@ -247,4 +248,74 @@ TEST_CASE("the stdio transport: the real binary answers over pipes", "[ceridc][a
     CHECK(std::strstr(text, "serverInfo") != nullptr);
     CHECK(std::strstr(text, "\"sequence\"") != nullptr);
     CHECK(std::strstr(text, "\"id\":3") != nullptr);
+}
+
+TEST_CASE("the MCP envelope: ids echo exactly, names compare whole, arguments are used as sent or refused",
+          "[ceridc][mcp][diag10a]")
+{
+    // DIAG.10a (crd-fuzz-ceridc-diag). Before: a string id was answered as 0, a fraction truncated and 1e300 cast to
+    // i64 (undefined); a batch array or bare value got no reply at all; "ping\u0000x" was ping; a path past 511
+    // bytes or one holding a NUL was cut to another path; dry_run sent as "true" wrote the file; frames of 1e300
+    // were cast to i64 (undefined).
+    const auto has = [](const crd::containers::String& reply, const char* needle)
+    {
+        return std::strstr(reply.c_str(), needle) != nullptr;
+    };
+
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":"req-7","method":"ping"})"), R"("id":"req-7","result":{})"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":-9007199254740991,"method":"ping"})"), R"("id":-9007199254740991,)"));
+    for (const char* id : {"null", "1.5", "9007199254740993", "1e300", "{}", "[1]", "true"})
+    {
+        char line[160];
+        std::snprintf(line, sizeof(line), R"({"jsonrpc":"2.0","id":%s,"method":"ping"})", id);
+        INFO(line);
+        CHECK(has(rpc(line), R"({"jsonrpc":"2.0","id":null,"error":{"code":-32600,)"));
+    }
+    CHECK(has(rpc(R"([{"jsonrpc":"2.0","id":1,"method":"ping"}])"), R"("id":null,"error":{"code":-32600,)"));
+    CHECK(has(rpc("42"), R"("id":null,"error":{"code":-32600,)"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":2,"method":7})"), R"("id":2,"error":{"code":-32600,)"));
+    CHECK(rpc(R"({"jsonrpc":"2.0","method":"notifications/initialized"})").empty()); // still no reply
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":3,"method":"ping\u0000x"})"), R"("id":3,"error":{"code":-32601,)"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"query\u0000",)"
+                  R"("arguments":{"pack":"x.crdr"}}})"),
+              R"("id":4,"error":{"code":-32602,)"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":5,"method":"ping","params":1e400})"), R"("id":null,"error":{"code":-32700,)"));
+
+    // A path is used whole or refused: 511 bytes still reach the verb, 512 do not, and neither does a NUL.
+    crd::containers::String exact(&g_alloc);
+    exact.append(R"({"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"query","arguments":{"pack":")");
+    for (int i = 0; i < 511; ++i)
+    {
+        exact.push_back('p');
+    }
+    crd::containers::String over(exact, &g_alloc);
+    over.push_back('p');
+    exact.append(R"("}}})");
+    over.append(R"("}}})");
+    CHECK(has(rpc(exact.c_str()), R"("id":6,"result":)")); // the verb ran and reported the missing pack
+    CHECK(has(rpc(over.c_str()), R"("id":6,"error":{"code":-32602,)"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"query",)"
+                  R"("arguments":{"pack":"ceridc_envelope.crdr\u0000.txt"}}})"),
+              R"("id":7,"error":{"code":-32602,)"));
+
+    // Numbers and flags of the wrong type or range are refused before the verb, so nothing is written.
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"instantiate","arguments":)"
+                  R"({"pack":"none.crdr","asset":"a","out":"ceridc_envelope.scen","dry_run":"true"}}})"),
+              R"("id":8,"error":{"code":-32602,)"));
+    CHECK(has(rpc(R"({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"instantiate","arguments":)"
+                  R"({"pack":"none.crdr","asset":"a","out":"ceridc_envelope.scen","x":1e39}}})"),
+              R"("id":9,"error":{"code":-32602,)"));
+    CHECK_FALSE(fs::exists(fs::Path(crd::containers::StringView("ceridc_envelope.scen"))));
+    for (const char* frames : {"1e300", "1.5", "\"48\""})
+    {
+        char line[400];
+        std::snprintf(line, sizeof(line),
+                      R"({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"sequence","arguments":)"
+                      R"({"name":"n","clip_a":"a","frames_a":%s,"clip_b":"b","frames_b":4,)"
+                      R"("out_timl":"ceridc_envelope.timl.crdr","out_otio":"ceridc_envelope.otio"}}})",
+                      frames);
+        INFO(line);
+        CHECK(has(rpc(line), R"("id":10,"error":{"code":-32602,)"));
+    }
+    CHECK_FALSE(fs::exists(fs::Path(crd::containers::StringView("ceridc_envelope.otio"))));
 }

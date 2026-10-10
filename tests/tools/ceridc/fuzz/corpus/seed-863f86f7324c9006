@@ -1,0 +1,5 @@
+#host read,record,inject,remote-enable,upload,process-memory,execute
+@{"command":"replay.run","path":"r.crrr"}
+@{"command":"jobs.waits"}
+@{"command":"memory.allocators"}
+@{"command":"diag.commands","page_items":1,"page_bytes":1024}

@@ -1,0 +1,17 @@
+#host read,record,execute root
+@{"command":"program.provenance","path":"demo.ceir"}
+@{"command":"replay.prepare","path":"demo.ceir"}
+@{"command":"program.inspect","path":"demo.ceir","args":{"entry":"main","args":"1,2","breaks":"3","watches":"3","steps":"into,over,out","max_stops":"4","seed":"18446744073709551615","events":"1,2,3"}}
+@{"command":"program.inspect","path":"demo.ceir","args":{"steps":"jump"}}
+@{"command":"program.inspect","path":"demo.ceir","args":{"max_stops":"0"}}
+@{"command":"program.inspect","path":"demo.ceir","args":{"seed":"18446744073709551616"}}
+@{"command":"program.inspect","path":"demo.ceir","args":{"clock":"wall","sim_time":"-5","sim_step":"1"}}
+@{"command":"replay.record","path":"demo.ceir","args":{"out":"r.crrr","executor":"host","jobs":"2"}}
+@{"command":"replay.record","path":"demo.ceir","args":{"executor":"plan"}}
+@{"command":"replay.record","path":"demo.ceir","args":{"out":"../r.crrr"}}
+@{"command":"replay.run","path":"r.crrr","args":{"program":"edited.ceir"}}
+@{"command":"replay.run","path":"r.crrr","args":{"program":"../edited.ceir"}}
+@{"command":"replay.run","path":"r.crrr","args":{"kernel_dir":"k","jobs":"x"}}
+@{"command":"gpu.resources"}
+!program.inspect|demo.ceir||||1|steps=into|steps=over
+@{"command":"program.inspect","path":"demo.ceir","args":{"steps":"into","steps":"over"}}

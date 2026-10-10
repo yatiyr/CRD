@@ -1,0 +1,6 @@
+#host read,record,inject root
+!flight.trigger||||||message=ğ(Œ(
+!flight.trigger||||||Message=x
+!flight.trigger||||||message=a|message=b
+!fault.arm||||||a=1|b=2|c=3|d=4|e=5|f=6|g=7|h=8|i=9
+!fault.arm||||||plan=seed=1;failed-read@0+1%1000000|asset=x

@@ -7,6 +7,7 @@
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
+#include <crd/core/utf8.hpp>
 
 #include <bit>   // std::bit_cast
 #include <cmath> // std::isfinite, std::llround
@@ -15,11 +16,29 @@ namespace crd::perf::detail
 {
 namespace cont = crd::containers;
 
-// Append a JSON-escaped string body (NO surrounding quotes) to `out`.
+// Append a JSON-escaped string body (NO surrounding quotes) to `out`. A well-formed UTF-8 sequence passes through
+// whole; any other byte at or above 0x80 (a request's raw bytes, a cut sequence) is written as \ufffd, so the
+// document stays valid UTF-8 JSON whatever bytes it was handed (DIAG.10a).
 inline void append_json_escaped(cont::String& out, cont::StringView s)
 {
-    for (const char c : s)
+    for (crd::usize i = 0U; i < s.size(); ++i)
     {
+        const char c = s[i];
+        if (static_cast<unsigned char>(c) >= 0x80U)
+        {
+            const crd::usize length =
+                crd::utf8_sequence_length(reinterpret_cast<const crd::u8*>(s.data()) + i, s.size() - i);
+            if (length == 0U)
+            {
+                out.append("\\ufffd");
+            }
+            else
+            {
+                out.append(cont::StringView{s.data() + i, length});
+                i += length - 1U;
+            }
+            continue;
+        }
         switch (c)
         {
         case '"':  out.append("\\\""); break;

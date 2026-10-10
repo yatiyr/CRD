@@ -944,3 +944,74 @@ TEST_CASE("diag commands: jobs.waits reports a parked fiber's wait edge and the 
     CHECK(contains(waits.json, "{\"kind\":\"worker\",\"thread\":0,"));
     crd::jobs::shutdown();
 }
+
+namespace
+{
+// A check that refuses its argument and names its bytes in the reason, and a handler whose item carries them: the
+// paths by which request bytes and evidence bytes reach a document.
+crd::perf::DiagStatus check_echo(void* /*context*/, cont::ConstSpan<crd::perf::DiagArg> args, cont::String& reason)
+{
+    if (args.size() == 1U && args[0].name == cont::StringView{"bad"})
+    {
+        reason.append("refused '");
+        reason.append(args[0].value);
+        reason.append("'");
+        return DiagStatus::BadArgument;
+    }
+    return DiagStatus::Ok;
+}
+
+crd::perf::DiagStatus run_echo(void* /*context*/, const crd::perf::DiagCall& call, crd::perf::DiagSnapshot& out)
+{
+    crd::perf::DiagFields item(out.allocator());
+    item.str("value", call.request->args.empty() ? cont::StringView{} : call.request->args[0].value);
+    (void)out.add_item(item);
+    return DiagStatus::Ok;
+}
+} // namespace
+
+TEST_CASE("diag commands: every document is valid UTF-8 whatever bytes the request or the evidence held",
+          "[perf][diag][commands][diag10a]")
+{
+    // DIAG.10a (crd-fuzz-ceridc-diag): the escaper passed every byte at or above 0x80 through, so a request's raw
+    // bytes (a command name from a CLI argument, an argument a check echoed) or evidence bytes reached the document as
+    // invalid UTF-8; and the command echo was cut at 64 bytes inside a sequence.
+    crd::memory::TlsfAllocator alloc{4U << 20U, nullptr, "diag-commands-utf8"};
+    DiagCommandService         svc{crd::perf::authority_bit(DiagAuthority::Read), DiagServiceConfig{}, &alloc};
+    REQUIRE(svc.register_command({"test.echo", "test", "echo", DiagAuthority::Read, false}, &run_echo, nullptr,
+                                 &check_echo));
+
+    // An unknown command of raw bytes: each byte that starts no sequence is \ufffd, a well-formed one is kept.
+    DiagRequest raw = request("");
+    raw.command     = cont::StringView{"\xFF\xC3\xA9\xE2\x82", 5U};
+    const DiagResult unknown = svc.execute(raw);
+    CHECK(unknown.status == DiagStatus::UnknownCommand);
+    CHECK(contains(unknown.json, "\"command\":\"\\ufffd\xC3\xA9\\ufffd\\ufffd\""));
+
+    // 63 bytes and then a two-byte sequence: the echo stops before the sequence, never inside it.
+    cont::String long_name(&alloc);
+    long_name.resize(63U, 'a');
+    long_name.append("\xC3\xA9");
+    const DiagResult clipped = svc.execute(request(long_name.c_str()));
+    CHECK(clipped.status == DiagStatus::UnknownCommand);
+    cont::String echo(&alloc);
+    echo.append(R"("command":")");
+    echo.append(cont::StringView{long_name.data(), 63U});
+    echo.append("\",");
+    CHECK(contains(clipped.json, echo.c_str()));
+
+    // A reason that names the argument's bytes, and an item that carries them.
+    const crd::perf::DiagArg bad[] = {{"bad", cont::StringView{"x\xF0\x28\x8C\xBC", 5U}}};
+    DiagRequest              refused = request("test.echo");
+    refused.args                     = cont::ConstSpan<crd::perf::DiagArg>(bad, 1U);
+    const DiagResult refusal         = svc.execute(refused);
+    CHECK(refusal.status == DiagStatus::BadArgument);
+    CHECK(contains(refusal.json, "\"reason\":\"refused 'x\\ufffd(\\ufffd\\ufffd'\""));
+
+    const crd::perf::DiagArg good[] = {{"good", cont::StringView{"\xED\xA0\x80ok", 5U}}};
+    DiagRequest              item    = request("test.echo");
+    item.args                        = cont::ConstSpan<crd::perf::DiagArg>(good, 1U);
+    const DiagResult answered        = svc.execute(item);
+    REQUIRE(answered.status == DiagStatus::Ok);
+    CHECK(contains(answered.json, "{\"value\":\"\\ufffd\\ufffd\\ufffdok\"}"));
+}
