@@ -113,7 +113,9 @@ add_dependencies(crd-diag-reverse-debug-specimens crd-diag-corruption-specimen)
 # time, and the watchpoint route still runs there.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     set(_crd_rd_script "${CMAKE_SOURCE_DIR}/scripts/reverse-debug-recipes.py")
-    set(_crd_rd_args --specimen "$<TARGET_FILE:crd-diag-corruption-specimen>"
+    # Each debugger leg gets 60 s (a healthy one takes about 2 s), so the script reports a timeout as its own verdict
+    # well inside the CTest budget below: the natural run and up to two gdb sessions.
+    set(_crd_rd_args --specimen "$<TARGET_FILE:crd-diag-corruption-specimen>" --timeout 60
         --source "${CMAKE_CURRENT_SOURCE_DIR}/specimens/corruption_specimen.cpp")
     set(_crd_rd_tests crd-diag-reverse-debug-gdb-watch crd-diag-reverse-debug-gdb-watch-clean)
     add_test(NAME crd-diag-reverse-debug-gdb-watch
