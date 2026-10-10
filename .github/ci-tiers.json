@@ -37,6 +37,9 @@
     "linux-gcc-public-checks": {"tier": "complete", "job": "linux-gcc"},
     "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"}
   },
+  "preset_steps": {
+    "GenMC weak-memory model": {"preset": "linux-clang-tsan", "tier": "complete"}
+  },
   "classes": [
     {"name": "register", "tier": "complete", "patterns": ["docs/third-party-defects.md"]},
     {"name": "documentation", "tier": "preflight",

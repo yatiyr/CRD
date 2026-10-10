@@ -3,8 +3,10 @@
 
 Contract: docs/design/ci-tiers.md. Every visible configure preset has exactly one owner in
 `.github/ci-tiers.json`; every owning job reads its preset list from the preflight job, is gated on a non-empty
-list, and is a dependency of the required aggregate; the class table ends with a catch-all so every changed path
-resolves to a tier; cancellation stays limited to superseded pull-request runs.
+list, and is a dependency of the required aggregate; a preset step (a non-CMake check riding on one preset's matrix
+entry, such as the GenMC model on linux-clang-tsan) exists in that preset's job, is gated on it and inherits its
+tier; the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited
+to superseded pull-request runs.
 """
 from pathlib import Path
 import argparse
@@ -114,6 +116,21 @@ def validate(tiers, presets_document, workflow_text):
             problems.append('job %s must take its matrix from fromJSON(needs.preflight.outputs.%s)' % (job, key))
         if 'runs-on: %s' % jobs[job]['runner'] not in block:
             problems.append('job %s must run on %s' % (job, jobs[job]['runner']))
+    for step, spec in tiers.get('preset_steps', {}).items():
+        preset = spec.get('preset')
+        entry = entries.get(preset)
+        if entry is None or entry.get('tier') == 'diagnostic':
+            problems.append('step %r rides on %r, which is not a hosted preset' % (step, preset))
+            continue
+        if entry.get('tier') != spec.get('tier'):
+            problems.append('step %r is declared %s-tier but its preset %s is %s-tier'
+                            % (step, spec.get('tier'), preset, entry.get('tier')))
+        step_block = re.search(r'^ +- name: %s\n((?: {8,}\S.*\n)+)' % re.escape(step),
+                               blocks.get(entry.get('job', ''), ''), re.M)
+        if step_block is None:
+            problems.append('job %s lacks the step %r' % (entry.get('job'), step))
+        elif ("matrix.preset == '%s'" % preset) not in step_block.group(1):
+            problems.append("step %r must be gated on matrix.preset == '%s'" % (step, preset))
     for name, entry in entries.items():
         test = entry.get('test')
         if test and not re.search(r'--preset\s+%s\b' % re.escape(test), blocks.get(entry.get('job', ''), '')):

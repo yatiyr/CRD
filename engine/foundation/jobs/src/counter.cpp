@@ -122,10 +122,10 @@ void CounterPool::release(Counter* counter) noexcept
     CRD_ASSERT_MSG(counter != nullptr, "CounterPool::release: null pointer");
 
     // Precondition: the zero-decrement has finished draining counter->waiters. jobs::wait() enforces this by
-    // spinning on counter->drained (set right after that decrement's waiters.exchange) before calling us, so
-    // the slot is never recycled while the exchange is still pending. value == 0 alone does NOT establish it —
-    // the fetch_sub that hits zero is sequenced before the exchange, and a fast-path / ABA-cancelled waiter
-    // could otherwise reach release in that gap.
+    // spinning on counter->drained (set after that decrement's drain loop) before calling us, so the slot is
+    // never recycled while the exchange is still pending. value == 0 alone does NOT establish it — the
+    // fetch_sub that hits zero is sequenced before the exchange, and a fast-path / ABA-cancelled waiter could
+    // otherwise reach release in that gap.
     //
     // Given the precondition, no leftover-waiter assert walk here, deliberately: the zero-decrement drained
     // counter->waiters and claimed/skipped every entry, so no Pending waiter can survive to here. The only
@@ -203,14 +203,9 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
     // We are the decrement that satisfies every waiter. Drain the list.
     Waiter* list = counter->waiters.exchange(nullptr, std::memory_order_acq_rel);
 
-    // The exchange above is this decrement's LAST access to `counter` — the drain below only touches the
-    // stolen Waiter nodes. Signal that the counter is safe to recycle. jobs::wait() spins on this before
-    // release(): value==0 only means the fetch_sub landed, but a fast-path / ABA-cancelled waiter could
-    // otherwise release the slot before this exchange runs, letting a concurrent acquire recycle it and this
-    // exchange then steal the NEW generation's waiters (a premature wake → early release cascade that ends in
-    // a decrement past zero). release-store pairs with the acquire-load in jobs::wait().
-    counter->drained.store(1U, std::memory_order_release);
-
+    // The exchange above is this decrement's last access to `counter`, but the drain below still touches the
+    // stolen Waiter nodes, and each lives in its waiting fiber's jobs::wait() frame. `drained` is stored only
+    // after the loop (see there): jobs::wait() spins on it before its Waiter leaves scope and before release().
     Waiter* woken = nullptr;  // fibers this call owes a resume
     while (list != nullptr)
     {
@@ -245,6 +240,18 @@ Waiter* counter_decrement(Counter* counter, crd::u32 amount) noexcept
         // else: counter_finish_park canceled it between our load and CAS — drop it.
         list = nxt;
     }
+
+    // Signal that this decrement is done with the counter AND with every stolen Waiter. Storing it any earlier
+    // is two races. (1) Counter: value==0 only means the fetch_sub landed; a fast-path / ABA-cancelled waiter
+    // could release the slot before the exchange runs, a concurrent acquire recycle it, and the exchange then
+    // steal the NEW generation's waiters (a premature wake → early release cascade that ends in a decrement
+    // past zero). (2) Waiter (found by the DIAG.4b GenMC model, 2026-10-10): with the store right after the
+    // exchange, a Waiter this loop loaded as Pending could lose the claim race to counter_finish_park's ABA
+    // cancel; its fiber then resumed, passed this gate and unwound the frame holding the Waiter while the
+    // claim CAS above was still to run on it. Woken Waiters stay safe after the store: their fibers resume
+    // only once our caller enqueues them, and it reads each node before enqueueing it. release-store pairs
+    // with the acquire-load in jobs::wait().
+    counter->drained.store(1U, std::memory_order_release);
 
     return woken;
 }

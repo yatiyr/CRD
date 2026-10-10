@@ -204,6 +204,17 @@
       "version": "20.1.8",
       "acquired_by": "KyleMayes/install-llvm-action",
       "license": "Apache-2.0 WITH LLVM-exception"
+    },
+    "genmc": {
+      "version": "0.19.0",
+      "repository": "MPI-SWS/genmc",
+      "commit": "9f6c4c0772d0c42b325681581acc6a0f3eb9b5f7",
+      "url": "https://github.com/MPI-SWS/genmc/archive/9f6c4c0772d0c42b325681581acc6a0f3eb9b5f7.tar.gz",
+      "file": "genmc-9f6c4c07.tar.gz",
+      "sha256": "d1a2bf4c0d63433bb64308140b55cea76ab7c23bad4e34cb3149be9247d1fb9c",
+      "llvm_major": "20",
+      "license": "Apache-2.0 OR MIT",
+      "note": "Built from source by scripts/install-genmc.py against the runner's apt LLVM of llvm_major (llvm-20-dev, clang-20; the exact package versions are recorded with dpkg-query). Parts of lli/Runtime are LLVM 3.5 derived under NCSA as well as Apache/MIT."
     }
   },
   "actions": {
@@ -255,8 +266,12 @@
       "libxcursor-dev",
       "libxi-dev",
       "mesa-common-dev",
-      "mesa-vulkan-drivers"
+      "mesa-vulkan-drivers",
+      "llvm-20-dev",
+      "clang-20",
+      "g++-14",
+      "libedit-dev"
     ],
-    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census. The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
+    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
   }
 }

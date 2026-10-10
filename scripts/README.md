@@ -22,7 +22,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
   it; `pins.py fetch <section> <name>` downloads and verifies one entry; `install-vulkan-sdk.py` (Windows),
   `install-vulkan-headers.py` (Linux), `install-vulkan-validation.py` and `install-warp.py` acquire their inputs
   from it, accepting `--archive`/`--archive-dir` for verified offline copies; `install-sccache.py` takes `--archive`
-  and `--download-dir`.
+  and `--download-dir`. `install-genmc.py --destination <dir>` builds the pinned GenMC against the apt LLVM of its
+  pinned major (Linux; stamped, so a cached install is reused only while pin and LLVM match) and
+  `check-genmc-models.py --genmc <dir>/bin/genmc` runs the DIAG.4b model both ways and checks both verdicts.
 - Build performance ([design](../docs/design/build-performance.md)): `build-bench.py run` measures configure, cold,
   no-op, source-edit, header-edit, PCH-header-edit and link rows of one preset in a fresh scratch directory (explicit
   `--jobs`, optional `--sccache` statistics) and `render` merges boards for `docs/bench/`; the lane evidence bundle

@@ -3,11 +3,11 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.4b -->
-**Current work:** [DIAG.4b](docs/ROADMAP.md#slice-diag.4b), first unfinished row: its GenMC weak-memory model has
-never been run (pin GenMC, run it on WSL; the user decides lane vs recorded run). DIAG.3a-4a closed on complete runs
-of `6bd1ba59`; 4c-6b and 7a wait in order, 6c needs its script suites in CI
-([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-6bd1ba59-2026-10-09)).
+<!-- current-slice: DIAG.6c -->
+**Current work:** [DIAG.6c](docs/ROADMAP.md#slice-diag.6c), first unfinished row: no hosted job runs its three
+script suites ([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-6bd1ba59-2026-10-09)). DIAG.4b
+waits on its first complete run of the GenMC step ([session](docs/sessions/2026-10-10-diag-4b-genmc.md)); 4c-6b and
+7a wait in order.
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 

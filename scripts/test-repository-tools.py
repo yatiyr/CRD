@@ -66,6 +66,12 @@ cold_spec.loader.exec_module(cold_acquisition)
 allman_spec = importlib.util.spec_from_file_location('check_allman_braces', ROOT / 'scripts/check-allman-braces.py')
 allman = importlib.util.module_from_spec(allman_spec)
 allman_spec.loader.exec_module(allman)
+genmc_install_spec = importlib.util.spec_from_file_location('install_genmc', ROOT / 'scripts/install-genmc.py')
+install_genmc = importlib.util.module_from_spec(genmc_install_spec)
+genmc_install_spec.loader.exec_module(install_genmc)
+genmc_models_spec = importlib.util.spec_from_file_location('check_genmc_models', ROOT / 'scripts/check-genmc-models.py')
+genmc_models = importlib.util.module_from_spec(genmc_models_spec)
+genmc_models_spec.loader.exec_module(genmc_models)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -1507,6 +1513,144 @@ class AllmanBraces(unittest.TestCase):
                          '    switch (n)\n    {\n        case 1:\n            return a;\n        default:\n'
                          '            break;\n    }')
         self.assertEqual(self.kinds(self.fixed('    for (;;) if (x) { y(); } else z();')), [])
+
+
+class GenmcModelLane(unittest.TestCase):
+    """DIAG.4b: the pinned GenMC build helper and the three-variant verdict check (check-genmc-models.py)."""
+
+    CLEAN = ('*** Verification complete.\nNo errors were detected.\nNumber of complete executions explored: 6\n'
+             'Number of blocked executions seen: 2\nTotal wall-clock time: 0.13s\n')
+    FREED = ('Error: Attempt to access freed memory!\nEvent (3, 4) conflicts with event (2, 7) in graph:\n'
+             '\n*** Verification unsuccesful.\nNumber of complete executions explored: 4\n')
+    ASSERTED = ('Error: Safety violation!\n\t(1, 11): ERROR counter_publish_reclaim.c:114\n'
+                '[sched_finish_park] counter_publish_reclaim.c: 114: '
+                'assert(atomic_load_explicit(&g_gen, memory_order_relaxed) == snapshot);\n'
+                '\n*** Verification unsuccesful.\nNumber of complete executions explored: 1\n')
+    OTHER = 'Error: Non-atomic race!\n\n*** Verification unsuccesful.\nNumber of complete executions explored: 2\n'
+
+    def test_repaired_model_must_verify_with_explored_executions(self):
+        passed, reason = genmc_models.judge('repaired', 0, self.CLEAN)
+        self.assertTrue(passed, reason)
+        self.assertIn('6 complete executions', reason)
+        self.assertFalse(genmc_models.judge('repaired', 42, self.FREED)[0])
+        self.assertFalse(genmc_models.judge('repaired', 0, 'Number of complete executions explored: 3\n')[0])
+        self.assertFalse(genmc_models.judge('repaired', 0, self.CLEAN.replace(': 6', ': 0'))[0])
+        facts = genmc_models.summarize(self.CLEAN)
+        self.assertEqual((facts['executions'], facts['blocked'], facts['genmc_seconds']), (6, 2, 0.13))
+
+    def test_seeded_variants_must_report_their_own_defect(self):
+        self.assertTrue(genmc_models.judge('handshake', 42, self.FREED)[0])
+        self.assertTrue(genmc_models.judge('handshake', 42, self.ASSERTED)[0])
+        self.assertTrue(genmc_models.judge('early-drained', 42, self.FREED)[0])
+        self.assertFalse(genmc_models.judge('early-drained', 42, self.ASSERTED)[0])  # wrong defect class
+        passed, reason = genmc_models.judge('handshake', 0, self.CLEAN)
+        self.assertFalse(passed)
+        self.assertIn('no teeth', reason)
+        passed, reason = genmc_models.judge('early-drained', 42, self.OTHER)
+        self.assertFalse(passed)
+        self.assertIn('Non-atomic race', reason)
+        passed, reason = genmc_models.judge('handshake', 139, 'Segmentation fault\n')
+        self.assertFalse(passed)
+        self.assertIn('tool failure', reason)
+
+    def test_commands_disable_estimation_and_trace_only_seeded_variants(self):
+        model = Path('model.c')
+        self.assertEqual(genmc_models.command_for('genmc', 'repaired', model),
+                         ['genmc', '--disable-estimation', '--', 'model.c'])
+        self.assertEqual(genmc_models.command_for('genmc', 'early-drained', model),
+                         ['genmc', '--disable-estimation', '-print-error-trace', '--', '-DCRD_MODEL_EARLY_DRAINED',
+                          'model.c'])
+        text = genmc_models.MODEL.read_text(encoding='utf-8')
+        for variant, (defines, _) in genmc_models.VARIANTS.items():
+            for define in defines:
+                self.assertIn(define[2:], text, variant)
+
+    def test_installer_refuses_another_llvm_major_and_reuses_only_a_matching_stamp(self):
+        pin = pins_registry.entry('tools', 'genmc')
+        self.assertIn(pin['commit'], pin['url'])
+        install_genmc.check_llvm(pin, pin['llvm_major'] + '.1.2')
+        with self.assertRaisesRegex(pins_registry.PinError, 'pinned against LLVM'):
+            install_genmc.check_llvm(pin, '18.1.3')
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        for package in ('llvm-%s-dev' % pin['llvm_major'], 'clang-%s' % pin['llvm_major']):
+            self.assertIn(package, workflow)
+            self.assertIn(package, self_unpinned_apt())
+        self.assertIn('scripts/install-genmc.py', check_pins.HELPERS)
+        drifted = json.loads(json.dumps(pins_registry.load()))
+        drifted['tools']['genmc']['url'] = drifted['tools']['genmc']['url'].replace(pin['commit'], 'v' + pin['version'])
+        problems = check_pins.validate_registry(drifted)
+        self.assertTrue(any('tool genmc: url must be addressed by its commit' in p for p in problems), problems)
+        stamp =install_genmc.expected_stamp(pin, '20.1.2')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertFalse(install_genmc.reusable(root, stamp))
+            (root / install_genmc.STAMP).write_text(json.dumps(stamp), encoding='utf-8')
+            with patch.object(install_genmc, 'installed_version', return_value='GenMC v%s' % pin['version']):
+                self.assertTrue(install_genmc.reusable(root, stamp))
+                self.assertFalse(install_genmc.reusable(root, dict(stamp, llvm='20.1.3')))
+            with patch.object(install_genmc, 'installed_version', return_value=None):
+                self.assertFalse(install_genmc.reusable(root, stamp))
+
+    def test_extraction_needs_one_top_directory_and_keeps_links_inside(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+
+            def archive(name, members):
+                path = root / name
+                with tarfile.open(path, 'w:gz') as package:
+                    for member, link in members:
+                        info = tarfile.TarInfo(member)
+                        if link is None:
+                            info.size = 1
+                            package.addfile(info, io.BytesIO(b'x'))
+                        else:
+                            info.type = tarfile.SYMTYPE
+                            info.linkname = link
+                            package.addfile(info)
+                return path
+
+            good = archive('good.tar.gz', [('genmc-abc/CMakeLists.txt', None), ('genmc-abc/c/cassert', 'assert.h'),
+                                           ('genmc-abc/c/assert.h', None)])
+            top = install_genmc.extract(good, root / 'good')
+            self.assertEqual(top, root / 'good' / 'genmc-abc')
+            self.assertTrue((top / 'CMakeLists.txt').is_file())
+            two = archive('two.tar.gz', [('a/x', None), ('b/y', None)])
+            with self.assertRaisesRegex(pins_registry.PinError, 'one top-level directory'):
+                install_genmc.extract(two, root / 'two')
+            escaping = archive('escape.tar.gz', [('genmc-abc/x', None), ('genmc-abc/out', '../../outside')])
+            with self.assertRaises(tarfile.FilterError):
+                install_genmc.extract(escaping, root / 'escape')
+
+
+def self_unpinned_apt():
+    return pins_registry.load()['unpinned']['apt']
+
+
+class CiPresetSteps(unittest.TestCase):
+    """A preset step (the GenMC model on linux-clang-tsan) stays in its preset's job, gated and tier-matched."""
+
+    def test_preset_step_must_exist_be_gated_and_match_its_preset_tier(self):
+        tiers = ci_tiers.load_json(ROOT / '.github/ci-tiers.json')
+        presets = ci_tiers.load_json(ROOT / 'CMakePresets.json')
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        self.assertEqual(ci_tiers.validate(tiers, presets, workflow), [])
+        self.assertEqual(tiers['preset_steps']['GenMC weak-memory model']['preset'], 'linux-clang-tsan')
+        step_body = "\n        run: |\n          python3 scripts/install-genmc"
+        gate_line = "if: \"!cancelled() && matrix.preset == 'linux-clang-tsan'\"" + step_body
+        self.assertIn(gate_line, workflow)
+        ungated = workflow.replace(gate_line, "if: \"!cancelled()\"" + step_body)
+        problems = ci_tiers.validate(tiers, presets, ungated)
+        self.assertTrue(any('must be gated' in p for p in problems), problems)
+        missing = workflow.replace('- name: GenMC weak-memory model', '- name: Something else')
+        problems = ci_tiers.validate(tiers, presets, missing)
+        self.assertTrue(any('lacks the step' in p for p in problems), problems)
+        retiered = json.loads(json.dumps(tiers))
+        retiered['preset_steps']['GenMC weak-memory model']['tier'] = 'change'
+        problems = ci_tiers.validate(retiered, presets, workflow)
+        self.assertTrue(any('declared change-tier' in p for p in problems), problems)
+        retiered['preset_steps']['GenMC weak-memory model'] = {'preset': 'linux-clang-fuzz', 'tier': 'complete'}
+        problems = ci_tiers.validate(retiered, presets, workflow)
+        self.assertTrue(any('not a hosted preset' in p for p in problems), problems)
 
 
 if __name__ == '__main__':

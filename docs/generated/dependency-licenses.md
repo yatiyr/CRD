@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **9** · tools: **11** · workflow actions: **7** · runner images: **3** · unpinned apt packages: **13**
+- packages: **9** · tools: **12** · workflow actions: **7** · runner images: **3** · unpinned apt packages: **17**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -40,6 +40,7 @@
 | sccache-windows | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-pc-windows-msvc.zip` |
 | sccache-linux | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz` |
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | pinned action KyleMayes/install-llvm-action | installed by the action |
+| genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 
 ## Workflow actions (pinned to a reviewed commit)
 
@@ -63,6 +64,6 @@
 
 ## Unpinned inputs
 
-OS packages of the Linux image, recorded with their installed versions in every Linux lane census: `libvulkan-dev`, `glslang-tools`, `libshaderc-dev`, `libwayland-dev`, `wayland-protocols`, `libxkbcommon-dev`, `libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `mesa-common-dev`, `mesa-vulkan-drivers`.
+OS packages of the Linux image, recorded with their installed versions in every Linux lane census: `libvulkan-dev`, `glslang-tools`, `libshaderc-dev`, `libwayland-dev`, `wayland-protocols`, `libxkbcommon-dev`, `libx11-dev`, `libxrandr-dev`, `libxinerama-dev`, `libxcursor-dev`, `libxi-dev`, `mesa-common-dev`, `mesa-vulkan-drivers`, `llvm-20-dev`, `clang-20`, `g++-14`, `libedit-dev`.
 
-OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census. The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle.
+OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle.

@@ -84,9 +84,10 @@ struct Waiter
 struct alignas(64) Counter
 {
     std::atomic<crd::u32>    value      {0U};
-    // Set by the zero-decrement in counter_decrement() once it has stolen the waiters list (its last touch of
-    // this Counter); jobs::wait() spins on it before release(), so a slot is never recycled while that decrement
-    // is still mid-drain. Reset to 0 on acquire(). Occupies the former alignment pad, so waiters stays 8-aligned.
+    // Set by the zero-decrement in counter_decrement() once it has drained the waiters list (after its last touch
+    // of this Counter and of every stolen Waiter); jobs::wait() spins on it while its Waiter is in scope and before
+    // release(), so neither a Waiter frame nor the slot is reclaimed while that decrement is still mid-drain.
+    // Reset to 0 on acquire(). Occupies the former alignment pad, so waiters stays 8-aligned.
     std::atomic<crd::u32>    drained    {0U};
     std::atomic<Waiter*>     waiters    {nullptr};  // Treiber stack of pending waiters
     crd::u32                 pool_index  = kCounterNullIndex;

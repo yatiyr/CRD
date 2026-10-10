@@ -29,13 +29,17 @@ signal. The diagnostic presets stay local. clang++ on Linux became a hosted comp
 which GCC's never included ([inventory and triage](../sessions/2026-10-05-clang-werror-and-tsan-inventory.md)). The
 lane runs the whole suite under ThreadSanitizer, four tests at a time, with
 [third-party suppressions](../../tests/support/diag/tsan-suppressions.txt) for uninstrumented libraries only.
+The same matrix entry runs the DIAG.4b GenMC weak-memory model (user decision 2026-10-10): `install-genmc.py` builds
+the pinned GenMC against the runner's apt LLVM 20 (cached per pin and LLVM version) and `check-genmc-models.py`
+requires the repaired model to verify and the seeded broken handshake to be found. It is a *preset step*, a
+non-CMake check that rides on one preset and inherits its tier, declared under `preset_steps` in the mapping.
 
 [check-ci-tiers.py](../../scripts/check-ci-tiers.py) is the `crd-ci-tiers` CTest, a preflight step, a repository
 step and a tooling test. It fails when a visible preset has no owner or an entry names no preset, when an owning job
 does not need `preflight`, is not gated on its non-empty list, does not take its matrix from the resolver's output,
-is missing from the required aggregate or runs on another runner than declared, when a diagnostic preset is
-invoked, when the class table lacks a catch-all, when a trigger is missing, or when cancellation is not limited to
-pull requests.
+is missing from the required aggregate or runs on another runner than declared, when a preset step is missing from
+its preset's job, is not gated on that preset or declares another tier, when a diagnostic preset is invoked, when
+the class table lacks a catch-all, when a trigger is missing, or when cancellation is not limited to pull requests.
 
 ## Resolution
 

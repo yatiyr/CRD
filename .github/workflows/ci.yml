@@ -687,6 +687,36 @@ jobs:
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
 
+      # DIAG.4b weak-memory model (user decision 2026-10-10): GenMC runs in the complete tier beside ThreadSanitizer,
+      # whatever the TSan tests concluded. It is built from the pinned source (tools/genmc) against the runner's apt
+      # LLVM of the pinned major and cached per pin and LLVM version; the helper rebuilds a cached install whose stamp
+      # no longer matches. Both model variants are held to their verdicts: repaired verifies, broken must fail.
+      - name: Install GenMC toolchain
+        id: genmc-toolchain
+        if: "!cancelled() && matrix.preset == 'linux-clang-tsan'"
+        run: |
+          sudo apt-get install -y llvm-20-dev clang-20 g++-14 libedit-dev
+          dpkg-query -W -f='${Package} ${Version}\n' llvm-20-dev clang-20 libllvm20 g++-14 \
+            | tee -a "$RUNNER_TEMP/packages.txt"
+          echo "llvm=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore GenMC build
+        if: "!cancelled() && matrix.preset == 'linux-clang-tsan'"
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/genmc
+          key: >-
+            genmc-${{ runner.os }}-${{ steps.genmc-toolchain.outputs.llvm }}-${{ hashFiles('cmake/pins.json',
+            'scripts/install-genmc.py') }}
+
+      - name: GenMC weak-memory model
+        if: "!cancelled() && matrix.preset == 'linux-clang-tsan'"
+        run: |
+          python3 scripts/install-genmc.py --destination "$RUNNER_TEMP/genmc" --work-dir "$RUNNER_TEMP/genmc-work"
+          evidence="build/${{ matrix.preset }}/evidence/genmc"
+          python3 scripts/check-genmc-models.py --genmc "$RUNNER_TEMP/genmc/bin/genmc" \
+            --json "$evidence/genmc.json" --log-dir "$evidence"
+
       - name: Evidence bundle and summary
         if: always()
         shell: bash

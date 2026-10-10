@@ -294,6 +294,11 @@ void wait(Counter* counter, crd::u32 target)
 
     detail::Fiber* current_fiber = detail::tl_current_fiber_ref();
 
+    // The fiber path's Waiter. It is declared here, not in that branch, because the zero-decrement that drains
+    // it may still touch it after this fiber resumes (an ABA-cancelled park): it must outlive the `drained` spin
+    // below. The non-fiber path never publishes it.
+    detail::Waiter w;
+
     if (current_fiber == nullptr)
     {
         // Non-fiber spin path.
@@ -325,17 +330,20 @@ void wait(Counter* counter, crd::u32 target)
     else
     {
         detail::FiberContext& sched_ctx = detail::tl_scheduler_context();
-        detail::Waiter w;
         detail::counter_wait(counter, &w, current_fiber, sched_ctx, target);
     }
 
-    // Gate release on the zero-decrement having finished draining the waiters list. value == target only means
-    // the fetch_sub that hit zero landed; the same decrement's waiters.exchange (its last touch of this
-    // Counter) may still be pending. Releasing here would recycle the slot under that exchange, which would
-    // then steal the next generation's waiters. counter_decrement sets `drained` right after the exchange, a
-    // few instructions away, so this almost never actually spins (mirrors counter_wait's park_finalized spin).
+    // Gate both reclamations on the zero-decrement having finished draining the waiters list. value == target
+    // only means the fetch_sub that hit zero landed; the same decrement's waiters.exchange (its last touch of
+    // this Counter) and its drain loop (its last touch of `w`, when this park was ABA-cancelled) may still be
+    // pending. Releasing here would recycle the slot under that exchange, which would then steal the next
+    // generation's waiters; returning would end `w` under that loop. counter_decrement sets `drained` after the
+    // loop, a few instructions away, so this almost never actually spins (mirrors counter_wait's
+    // park_finalized spin).
     while (!counter->drained.load(std::memory_order_acquire))
-    { /* counter_decrement's exchange is a handful of instructions away */ }
+    {
+        // counter_decrement's drain loop is a handful of instructions away
+    }
 
     g_pool.counter_pool().release(counter);
 }

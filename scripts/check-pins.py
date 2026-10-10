@@ -20,7 +20,7 @@ DEFAULT_CMAKE = ROOT / 'CMakeLists.txt'
 DEFAULT_TIERS = ROOT / '.github/ci-tiers.json'
 HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-vulkan-headers.py',
            'scripts/install-vulkan-validation.py', 'scripts/install-warp.py', 'scripts/install-sccache.py',
-           'scripts/pins.py')
+           'scripts/install-genmc.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX40 = re.compile(r'^[0-9a-f]{40}$')
@@ -70,6 +70,9 @@ def validate_registry(pins):
                     problems.append('tool %s lacks %s' % (name, field))
             if entry.get('sha256') and not HEX64.match(entry['sha256']):
                 problems.append('tool %s: sha256 must be 64 hex digits' % name)
+            commit = entry.get('commit')
+            if commit and (not HEX40.match(commit) or commit not in entry.get('url', '')):
+                problems.append('tool %s: url must be addressed by its commit' % name)
     for name, entry in pins.get('actions', {}).items():
         if not entry.get('ref') or not HEX40.match(entry.get('sha', '')):
             problems.append('action %s needs a ref and a 40-hex sha' % name)

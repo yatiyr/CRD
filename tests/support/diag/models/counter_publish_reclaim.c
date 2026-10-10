@@ -1,52 +1,55 @@
-/* DIAG.4b -- weak-memory model of the job-counter publication/reclamation handshake, for the GenMC
+/* DIAG.4b -- weak-memory model of the job-counter publication/reclamation handshakes, for the GenMC
  * stateless model checker (https://github.com/MPI-SWS/genmc). This is a standalone C11 artifact, NOT
  * engine code: it links nothing from crd and is never compiled by the Windows/CI build (crd_collect_sources
- * globs only .cpp/.hpp/.h, and this directory is not registered as a test target). It is authored here
- * and QUALIFIED ON A PINNED LINUX GenMC LANE -- not run on the Windows dev box -- exactly as the TSan/LSan
- * specimens are qualified on their sanitizer lanes (DIAG.1b/3f) and report InstrumentAbsent elsewhere.
+ * globs only .cpp/.hpp/.h, and this directory is not registered as a test target). It is checked on Linux
+ * with the pinned GenMC (cmake/pins.json tools/genmc, built by scripts/install-genmc.py) by
+ * scripts/check-genmc-models.py: in the complete CI tier on the linux-clang-tsan entry, and on the WSL
+ * reference host (recorded run: docs/sessions/2026-10-10-diag-4b-genmc.md).
  *
  * REGIME (per the DIAG.4b acceptance, which requires the three be kept distinct):
  *   - THIS artifact = the WEAK-MEMORY MODEL result: GenMC exhaustively explores every thread interleaving
- *     AND every C11 memory-model reordering, for the bounded topology below. It is exhaustive for those
- *     bounds; it says nothing about real hardware.
+ *     AND every RC11 reordering, for the bounded topology below. It is exhaustive for those bounds; it says
+ *     nothing about real hardware.
  *   - The controlled-interleaving driver (test_sched_check.cpp) = LOGICAL SCHEDULE REPLAY: one scripted
  *     interleaving of the production code, no weak-memory exploration.
- *   - The DG05 multicore stress (test_counter.cpp / test_fiber_pool.cpp) = REAL HARDWARE execution, many
- *     uncontrolled interleavings. None of the three subsumes the others.
+ *   - The DG05 multicore stress (test_counter.cpp / test_fiber_pool.cpp / test_sched_check.cpp case 6) = REAL
+ *     HARDWARE execution, many uncontrolled interleavings. None of the three subsumes the others.
  *
- * WHAT IS MODELLED: one Counter "slot" and one Waiter, list length 1, four worker threads -- the smallest
- * topology that exposes the reclamation race. Every atomic ordering below is transcribed verbatim from
- * engine/foundation/jobs/src/counter.cpp (line numbers cited); a wrong ordering would either hide the bug
- * or manufacture a race the engine does not have, making the verdict meaningless.
+ * BOUNDS: one Counter slot, one Waiter, list length 1, four worker threads (scheduler, zero-decrement,
+ * waiting fiber, re-acquirer) -- the smallest topology that exposes both reclamation races. Every atomic
+ * ordering is transcribed from engine/foundation/jobs/src/counter.cpp (counter_finish_park, counter_decrement,
+ * counter_wait) and jobs.cpp (jobs::wait); a wrong ordering would either hide a bug or manufacture one the
+ * engine does not have. Spin loops are side-effect free and are cut by GenMC's spin-assume transformation; no
+ * -unroll bound is used.
  *
- * SCOPE LIMIT: this models the park/publish/reclaim handshake (park_finalized) only. It does NOT model the
- * separate zero-drain/release race -- where jobs::wait() could release a counter after counter_decrement's
- * fetch_sub hit zero but before its waiters.exchange, letting a concurrent acquire recycle the slot under
- * the stale drain (fixed by the Counter::drained gate). That race was surfaced by the perturbed multicore
- * stress in test_sched_check.cpp, not by this model, and is deliberately out of scope here: extending the
- * model to cover it is not done, since a GenMC extension that cannot be run on this dev box would be an
- * unverifiable artifact.
+ * ONE ABSTRACTION: the publish loop's compare_exchange_weak is modelled as a strong CAS. GenMC 0.19.0 cannot
+ * explore this weak CAS loop (it warns that the weak CAS "could not be strengthened", diverges without -unroll
+ * and crashes with exit 139 under -unroll=N). The abstraction is sound here: a spurious failure only repeats
+ * the relaxed store of the same head into w->next before w is published, which no other thread can observe,
+ * and then retries -- every other behaviour of the weak loop is a behaviour of the strong one.
  *
- * TWO VARIANTS, selected by -DCRD_MODEL_BROKEN_HANDSHAKE:
- *   repaired (default): counter_wait spins on w->park_finalized before unwinding, and counter_finish_park
- *     stores it last. The store happens-before the free/reacquire, so the scheduler's last touch of the
- *     Waiter and of the slot precede reclamation. GenMC must find NO error.
- *   broken (-DCRD_MODEL_BROKEN_HANDSHAKE): the spin and the store are both removed. The Waiter can be freed
- *     and the slot re-acquired while counter_finish_park is still mid-flight, so:
- *       (1) a heap use-after-free: the scheduler's ABA claim CAS (counter.cpp:339) touches w->claim after
- *           the waiter thread free()d it -- GenMC's native malloc/free oracle catches this;
- *       (2) a stale-slot read on the re-acquire branch: the scheduler sees value==1 (the re-acquirer reset
- *           it), skips the CAS so there is no UAF, but the slot's generation has advanced -- the assert()
- *           on the snapshot (the same invariant the C++ gate-only detector reports) catches this.
- *     Both oracles are needed: without (2) the re-acquire interleaving would read as clean.
+ * WHAT IS CHECKED. Both reclamation handshakes guard a Waiter that lives in jobs::wait()'s frame and a Counter
+ * slot that jobs::wait() releases for re-acquisition:
+ *   (a) park_finalized: counter_wait spins on it before unwinding, counter_finish_park stores it last, so the
+ *       scheduler's last touch of the Waiter and of the slot precede reclamation.
+ *   (b) drained: counter_decrement stores it after its drain loop -- its last touch of any stolen Waiter --
+ *       and jobs::wait() spins on it before the Waiter's frame ends and before release(). The first GenMC run
+ *       (2026-10-10) found the engine storing it right after the exchange instead: the decrement could still
+ *       be inside the loop, holding a Waiter that the scheduler's ABA cancel had already handed back to its
+ *       fiber, when that fiber unwound -- the decrement's claim CAS then touched a dead stack Waiter.
+ * Oracles: GenMC's native malloc/free oracle (the Waiter is heap-allocated here so a touch after free() is an
+ * "Attempt to access freed memory") and the assert() on the slot generation (the same owner-release
+ * invariant the C++ gate-only detector reports).
  *
- * TO QUALIFY ON THE GenMC LANE (both invocations; verdicts are lane-pending, like the TSan routes):
- *     genmc -- counter_publish_reclaim.c
- *         expected: "Number of complete executions explored: N" with no error (handshake verified).
- *     genmc -- -DCRD_MODEL_BROKEN_HANDSHAKE counter_publish_reclaim.c
- *         expected: an error report -- an "Attempt to access freed memory" (UAF) and/or a failed
- *         assertion "gen == gen_snapshot" -- with -print-error-trace showing the reclaim-under-park order.
- * The side-effect-free spin loops are cut by GenMC's spin-assume transformation; no -unroll is required.
+ * THREE VARIANTS (scripts/check-genmc-models.py runs all three; each is held to its expected verdict):
+ *     genmc --disable-estimation -- counter_publish_reclaim.c
+ *         repaired: "No errors were detected" with the explored execution count.
+ *     genmc --disable-estimation -print-error-trace -- -DCRD_MODEL_BROKEN_HANDSHAKE counter_publish_reclaim.c
+ *         seeded (a): the park_finalized spin and store are removed. Must report an access to freed memory or
+ *         the failed generation assertion "... == snapshot".
+ *     genmc --disable-estimation -print-error-trace -- -DCRD_MODEL_EARLY_DRAINED counter_publish_reclaim.c
+ *         seeded (b): drained is stored right after the exchange (the pre-2026-10-10 engine). Must report an
+ *         access to freed memory (the decrement's claim CAS on the unwound Waiter).
  */
 
 #include <assert.h>
@@ -57,119 +60,133 @@
 
 enum
 {
-    CLAIM_PENDING  = 0, /* WaiterClaim::Pending  */
-    CLAIM_WAKEUP   = 1, /* WaiterClaim::Wakeup   */
+    CLAIM_PENDING = 0,  /* WaiterClaim::Pending  */
+    CLAIM_WAKEUP = 1,   /* WaiterClaim::Wakeup   */
     CLAIM_CANCELED = 2, /* WaiterClaim::Canceled */
 };
 
 typedef struct Waiter
 {
     _Atomic(struct Waiter*) next;
-    atomic_int              claim;          /* Pending/Wakeup/Canceled */
-    atomic_int              park_finalized; /* the handshake flag */
+    atomic_int claim;          /* Pending/Wakeup/Canceled */
+    atomic_int park_finalized; /* handshake (a) */
 } Waiter;
 
 /* The pooled Counter slot. It persists for the pool's lifetime (never freed); a re-acquire "recycles" it
- * by bumping the generation (task_id in the engine) and resetting value/waiters -- see counter.cpp
- * acquire() (:90-97). */
-static atomic_int       g_value;   /* Counter::value   */
+ * by bumping the generation (task_id in the engine) and resetting value/drained/waiters -- see
+ * CounterPool::acquire(). */
+static atomic_int g_value;         /* Counter::value   */
+static atomic_int g_drained;       /* Counter::drained, handshake (b) */
 static _Atomic(Waiter*) g_waiters; /* Counter::waiters (Treiber head) */
-static atomic_uint      g_gen;     /* stands in for the per-acquire task_id */
+static atomic_uint g_gen;          /* stands in for the per-acquire task_id */
 
 /* Cross-thread handoffs (modelling harness, not part of the algorithm under test). */
-static _Atomic(Waiter*) g_w;         /* the Waiter counter_wait handed to the scheduler */
-static atomic_int       g_slot_free; /* waiter -> reacquirer: jobs::wait() released the slot */
+static _Atomic(Waiter*) g_w;   /* the Waiter counter_wait handed to the scheduler */
+static atomic_int g_slot_free; /* waiter -> reacquirer: jobs::wait() released the slot */
 
-/* counter_finish_park -- runs on the scheduler thread (counter.cpp:314). */
+/* counter_finish_park -- runs on the scheduler thread. */
 static void* sched_finish_park(void* unused)
 {
     (void)unused;
-    Waiter* const      w        = atomic_load_explicit(&g_w, memory_order_acquire);
+    Waiter* const w = atomic_load_explicit(&g_w, memory_order_acquire);
     const unsigned int snapshot = atomic_load_explicit(&g_gen, memory_order_relaxed); /* task_id at entry */
 
-    /* Publish w onto the waiters list (Treiber push); CAS is release / relaxed (counter.cpp:321-327). */
+    /* Publish w onto the waiters list (Treiber push); CAS is release / relaxed. The engine's weak CAS is
+     * modelled strong (see ONE ABSTRACTION above). */
     Waiter* head = atomic_load_explicit(&g_waiters, memory_order_relaxed);
     do
     {
         atomic_store_explicit(&w->next, head, memory_order_relaxed);
-    } while (!atomic_compare_exchange_weak_explicit(&g_waiters, &head, w, memory_order_release,
-                                                    memory_order_relaxed));
+    } while (
+        !atomic_compare_exchange_strong_explicit(&g_waiters, &head, w, memory_order_release, memory_order_relaxed));
 
-    /* ABA re-check: value.load acquire (:336). If the counter already hit target(0), race the decrement
-     * for this Waiter with a claim CAS Pending->Canceled, acq_rel / acquire (:339). */
+    /* ABA re-check: value.load acquire. If the counter already hit target(0), race the decrement for this
+     * Waiter with a claim CAS Pending->Canceled, acq_rel / acquire; winning it resumes the fiber. */
     if (atomic_load_explicit(&g_value, memory_order_acquire) == 0)
     {
         int expected = CLAIM_PENDING;
-        (void)atomic_compare_exchange_strong_explicit(&w->claim, &expected, CLAIM_CANCELED,
-                                                      memory_order_acq_rel, memory_order_acquire);
+        (void)atomic_compare_exchange_strong_explicit(&w->claim, &expected, CLAIM_CANCELED, memory_order_acq_rel,
+                                                      memory_order_acquire);
     }
 
     /* Owner-release invariant (the C++ gate-only detector's check): the slot must still be ours before our
-     * last touch. Broken variant lets a re-acquire bump the generation before we get here. */
+     * last touch. Seeded (a) lets a re-acquire bump the generation before we get here. */
     assert(atomic_load_explicit(&g_gen, memory_order_relaxed) == snapshot);
 
 #ifndef CRD_MODEL_BROKEN_HANDSHAKE
-    /* Release the fiber; counter_wait spins on this before unwinding. Store is release (:347). */
+    /* Release the fiber; counter_wait spins on this before unwinding. Store is release. */
     atomic_store_explicit(&w->park_finalized, 1, memory_order_release);
 #endif
     return NULL;
 }
 
-/* counter_decrement -- the decrement that brings the counter to zero (counter.cpp:176). */
+/* counter_decrement -- the decrement that brings the counter to zero. */
 static void* dec_to_zero(void* unused)
 {
     (void)unused;
-    const int old = atomic_fetch_sub_explicit(&g_value, 1, memory_order_acq_rel); /* :181 */
+    const int old = atomic_fetch_sub_explicit(&g_value, 1, memory_order_acq_rel);
     if (old - 1 != 0)
     {
         return NULL;
     }
 
-    /* Drain the waiters list: exchange acq_rel (:193). */
+    /* Drain the waiters list: exchange acq_rel. */
     Waiter* list = atomic_exchange_explicit(&g_waiters, NULL, memory_order_acq_rel);
+#ifdef CRD_MODEL_EARLY_DRAINED
+    /* Seeded (b): the pre-2026-10-10 placement, before the loop below still touches the stolen Waiters. */
+    atomic_store_explicit(&g_drained, 1, memory_order_release);
+#endif
     while (list != NULL)
     {
         Waiter* const nxt = atomic_load_explicit(&list->next, memory_order_relaxed);
-        if (atomic_load_explicit(&list->claim, memory_order_acquire) == CLAIM_CANCELED) /* :200 */
+        if (atomic_load_explicit(&list->claim, memory_order_acquire) == CLAIM_CANCELED)
         {
             list = nxt;
             continue;
         }
         int expected = CLAIM_PENDING;
-        /* Claim CAS Pending->Wakeup, acq_rel / acquire (:212). Winning it owns the fiber's resume. */
-        (void)atomic_compare_exchange_strong_explicit(&list->claim, &expected, CLAIM_WAKEUP,
-                                                      memory_order_acq_rel, memory_order_acquire);
+        /* Claim CAS Pending->Wakeup, acq_rel / acquire. Winning it owns the fiber's resume. */
+        (void)atomic_compare_exchange_strong_explicit(&list->claim, &expected, CLAIM_WAKEUP, memory_order_acq_rel,
+                                                      memory_order_acquire);
         list = nxt;
     }
+#ifndef CRD_MODEL_EARLY_DRAINED
+    /* The drain's last touch of any stolen Waiter is behind us: the Waiters' frames and the slot may go. */
+    atomic_store_explicit(&g_drained, 1, memory_order_release);
+#endif
     return NULL;
 }
 
-/* counter_wait's tail -- runs on the waiting fiber after it is resumed (counter.cpp:284). */
+/* counter_wait's tail and jobs::wait()'s release -- runs on the waiting fiber after it is resumed. */
 static void* waiter_unwind(void* unused)
 {
     (void)unused;
     Waiter* const w = atomic_load_explicit(&g_w, memory_order_acquire);
 
     /* Resumed when the claim leaves Pending: Wakeup (the decrement owns us) or Canceled (the scheduler's
-     * ABA cancel; the scheduler re-queues the fiber). Side-effect-free spin -> GenMC spin-assume. */
+     * ABA cancel; the scheduler re-queues the fiber). */
     while (atomic_load_explicit(&w->claim, memory_order_acquire) == CLAIM_PENDING)
     {
     }
 
 #ifndef CRD_MODEL_BROKEN_HANDSHAKE
-    /* The handshake: do not unwind (free w, release the slot) until counter_finish_park finished touching
-     * w. Load is acquire (:294). */
+    /* Handshake (a): do not unwind until counter_finish_park finished touching w and the slot. Acquire. */
     while (atomic_load_explicit(&w->park_finalized, memory_order_acquire) == 0)
     {
     }
 #endif
 
-    free(w); /* the fiber frame unwinds; the stack-resident Waiter is gone */
-    atomic_store_explicit(&g_slot_free, 1, memory_order_release); /* jobs::wait() released the counter */
+    /* Handshake (b): jobs::wait() spins on drained (acquire) while its Waiter is still in scope. */
+    while (atomic_load_explicit(&g_drained, memory_order_acquire) == 0)
+    {
+    }
+
+    free(w); /* jobs::wait() returns: the frame holding the Waiter is gone */
+    atomic_store_explicit(&g_slot_free, 1, memory_order_release); /* release(): the slot may be recycled */
     return NULL;
 }
 
-/* The pool re-acquiring the freed slot for another job -- counter.cpp acquire() (:69-99). */
+/* The pool re-acquiring the freed slot for another job -- CounterPool::acquire(). */
 static void* reacquire_slot(void* unused)
 {
     (void)unused;
@@ -178,13 +195,14 @@ static void* reacquire_slot(void* unused)
     }
     atomic_fetch_add_explicit(&g_gen, 1, memory_order_relaxed); /* new task_id */
     atomic_store_explicit(&g_value, 1, memory_order_relaxed);
+    atomic_store_explicit(&g_drained, 0, memory_order_relaxed);
     atomic_store_explicit(&g_waiters, NULL, memory_order_relaxed);
     return NULL;
 }
 
 int main(void)
 {
-    /* counter_wait's pre-switch prep (counter.cpp:266-276): fill the Waiter, value already 1. */
+    /* counter_wait's pre-switch prep: fill the Waiter, value already 1. */
     Waiter* const w = (Waiter*)malloc(sizeof(Waiter));
     if (w == NULL)
     {
@@ -195,6 +213,7 @@ int main(void)
     atomic_init(&w->park_finalized, 0);
 
     atomic_init(&g_value, 1);
+    atomic_init(&g_drained, 0);
     atomic_init(&g_waiters, NULL);
     atomic_init(&g_gen, 0u);
     atomic_init(&g_slot_free, 0);
