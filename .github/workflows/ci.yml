@@ -696,7 +696,7 @@ jobs:
         if: "!cancelled() && matrix.preset == 'linux-clang-tsan'"
         run: |
           sudo apt-get install -y llvm-20-dev clang-20 g++-14 libedit-dev
-          dpkg-query -W -f='${Package} ${Version}\n' llvm-20-dev clang-20 libllvm20 g++-14 \
+          dpkg-query -W -f='${Package} ${Version}\n' llvm-20-dev clang-20 libllvm20 g++-14 libedit-dev libffi-dev \
             | tee -a "$RUNNER_TEMP/packages.txt"
           echo "llvm=$(dpkg-query -W -f='${Version}' llvm-20-dev)" >> "$GITHUB_OUTPUT"
 

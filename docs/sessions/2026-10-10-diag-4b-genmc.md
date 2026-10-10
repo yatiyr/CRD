@@ -47,8 +47,12 @@ runner's count, with the same apt packages a runner installs: `llvm-20-dev`, `cl
 | `install-genmc.py --jobs 4`: verify, configure, build (149 Ninja steps), install | 69 s |
 | model check, all three variants | under 1 s |
 
+A second container installing only the workflow's apt line (`llvm-20-dev clang-20 g++-14 libedit-dev`, plus the
+`cmake`, `ninja-build` and `python3` the runner already has) built the same GenMC in 68 s and passed the model check,
+so `libffi-dev` and LLVM's other dependencies arrive with `llvm-20-dev`.
+
 GenMC reports `GenMC v0.19.0, Built with LLVM 20.1.2`. Verdicts of the final model (RC11, no `-unroll`; bounds: one
-counter slot, one Waiter, list length 1, four threads):
+counter slot, one Waiter, list length 1, four threads; GenMC times vary run to run, the counts do not):
 
 | Variant | Exit | Verdict | Complete / blocked executions | GenMC time |
 |---|---|---|---|---|
