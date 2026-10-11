@@ -55,7 +55,11 @@
    "paths": ["tests/support/diag/src/*.cpp"]},
   {"group": "numerical-mode probe", "rows": ["DIAG.10c"],
    "paths": ["engine/foundation/core/src/fp_environment.cpp",
-             "engine/foundation/core/include/crd/core/fp_environment.hpp"]}
+             "engine/foundation/core/include/crd/core/fp_environment.hpp"]},
+  {"group": "value-domain probes and the result oracle", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/value_domain.cpp",
+             "engine/foundation/core/include/crd/core/value_domain.hpp",
+             "engine/execution/ceir-cook/src/result_oracle.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -124,12 +128,22 @@
   {"name": "specimen Verdict", "kind": "error-path", "row": "DIAG.10b",
    "enum": "Verdict", "header": "tests/support/diag/include/crd/diag/specimen_runner.hpp",
    "files": ["tests/support/diag/src/*.cpp"]},
+  {"name": "FpDifference", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "FpDifference", "header": "engine/foundation/core/include/crd/core/fp_environment.hpp"},
+  {"name": "ValueClass", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "ValueClass", "header": "engine/foundation/core/include/crd/core/value_domain.hpp"},
+  {"name": "ValueViolation", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "ValueViolation", "header": "engine/foundation/core/include/crd/core/value_domain.hpp"},
+  {"name": "ResultVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "ResultVerdict", "header": "engine/execution/ceir-cook/include/crd/ceir/cook/result_oracle.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",
    "files": ["engine/foundation/perf/src/flight_recorder.cpp"]}
  ],
  "exclusions": [
+  {"outcome": "ResultVerdict", "value": "Agrees", "class": "default-value",
+   "reason": "ResultCheck::verdict's initializer in result_oracle.hpp; a run whose results all agree keeps it."},
   {"outcome": "ImportReject", "value": "None", "class": "default-value",
    "reason": "BundleImport::reject's initializer in bundle_import.hpp; an accepted import keeps it."},
   {"outcome": "HostLoad", "value": "Ok", "class": "default-value",

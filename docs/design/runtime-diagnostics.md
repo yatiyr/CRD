@@ -2178,7 +2178,37 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-numerical-mode.md
   units and time-domain, lifetime accounting beyond heap bytes, queue/VRAM pressure and budgets, warm/cold, soak,
   reload and shutdown workloads with one stressor at a time and seeded injection, slowdown measurement before
   classification, device-reset and host-pressure evidence, and the mode probe at other boundaries (an audio callback,
-  a CEIR plan run, third-party library calls).
+  a CEIR plan run, third-party library calls). (2026-10-11: the value-domain probes, the oracle and the CEIR plan run's
+  mode are settled in the next block.)
+
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-value-domains-and-result-oracle.md)):
+- A value domain is data a boundary declares: `crd/core/value_domain.hpp` (crd-core). A `FloatDomain` says, class by
+  class, which special values it allows (NaN, +Inf, -Inf, subnormals, -0) and a closed range [minimum, maximum]; the
+  default is "finite" (no NaN or infinity; subnormals and -0 allowed; no bound), and named domains cover the cases
+  where a special value is right: `any` (NaN encodes a missing sample), `distance` ([0, +Inf], +Inf for a ray that
+  hits nothing), `unit-interval` ([0, 1]). An `IntDomain` is a closed i64 range. A domain whose bound is a NaN or whose
+  minimum exceeds its maximum is invalid and the probe judges nothing against it, saying so.
+- The range is numeric: -0 equals 0, an infinite bound admits that infinity when its class is allowed, and a NaN has
+  no place on the line, so only its class is judged. Several violations of one value are all reported (a disallowed
+  -Inf below a finite minimum carries both).
+- The probe reads bit patterns only and does no floating-point arithmetic or comparison, so no verdict depends on the
+  caller's numerical mode: under denormals-are-zero a float comparison sees a subnormal as zero and a negative
+  subnormal as not below 0, and a classifier built on `x == 0` reports a subnormal as a zero. A binary32 value is
+  classified from its own bits (its subnormals are normal binary64 values) and widened to binary64 exactly before it
+  is compared with the bounds. `probe_values` reports the values checked and violating, the union of violations and
+  the first offender's index, violations and bit pattern; it never changes a value.
+- The wrong-but-noncrashing oracle at the CEIR boundary is `crd/ceir/cook/result_oracle.hpp` (crd-ceir-cook). It
+  judges the results of a run that succeeded against an independent expectation: an `IntDomain` invariant and, when
+  given, reference values computed another way (a closed form, a slower algorithm, a recorded good run). The verdict
+  is the first offending result: CountMismatch (another number of results than the reference), OutOfDomain (the
+  domain is checked first at each index) or DiffersFromReference; Agrees when none, InvalidDomain when the expectation
+  cannot judge. A wrong result is attributed by `ReloadSet::locate_result` to the generation the caller's handle names,
+  never to whatever is installed now: asset, generation, Current/Retiring/Gone, content hash, and the op that defined
+  that result in that generation's own Context (`file:line:col op#id`; the closing `func.return` when the result is a
+  parameter or past its operands; no op for an entry the generation does not define). That op produced the value; it
+  need not be the op an edit changed. A run that failed is not judged: its error already names the op it blames.
+- The CEIR executors are integer-only (wrapping i64), so the oracle uses the integer domain, and a CEIR plan run has
+  no floating-point mode to probe; the float domains wait for the tensor and audio boundaries, the next clauses.
 
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles

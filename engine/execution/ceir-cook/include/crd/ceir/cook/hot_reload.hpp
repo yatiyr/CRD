@@ -186,6 +186,12 @@ public:
     // Context. A handle whose generation the set no longer holds is reported Gone with no `where`.
     [[nodiscard]] GenerationSite locate(const ProgramHandle& h, const Provenance& p, memory::IAllocator* out) const;
     [[nodiscard]] GenerationSite locate(const ProgramHandle& h, const Operation* op, memory::IAllocator* out) const;
+    // DIAG.10c: locate result `index` of `entry` in the generation `h` names (current or retiring): `where` is the op
+    // that defined that operand of the entry body's closing `func.return`, or the return op itself when the operand is
+    // a parameter or `index` is past its operands. An entry the generation does not define has no op (the NoOperation
+    // gap). It names the op that produced the value, which need not be the op an edit changed.
+    [[nodiscard]] GenerationSite locate_result(const ProgramHandle& h, containers::StringView entry, crd::u32 index,
+                                               memory::IAllocator* out) const;
     // The transitive DEPENDENTS of `id` (the "recompiles-affected" set) via the 8h dag. false ⇒ a cycle.
     [[nodiscard]] bool affected(AssetId id, containers::Array<AssetId>& out) const;
 

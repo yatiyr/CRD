@@ -648,6 +648,35 @@ GenerationSite ReloadSet::locate(const ProgramHandle& h, const Operation* op, me
     return locate(h, resolve_provenance(*g->ctx, op, storage), out);
 }
 
+GenerationSite ReloadSet::locate_result(const ProgramHandle& h, containers::StringView entry, crd::u32 index,
+                                        memory::IAllocator* out) const
+{
+    GenerationState         state = GenerationState::Gone;
+    const Generation* const g     = held(h, state);
+    if (g == nullptr)
+    {
+        return locate(h, Provenance{}, out);
+    }
+    const Operation*         at      = nullptr;
+    const SymbolTable* const symbols = g->program.module->symbols();
+    const SymbolEntry* const sym     = symbols != nullptr ? symbols->lookup(entry) : nullptr;
+    Block* const             body    = (sym != nullptr && sym->op != nullptr) ? func::func_body_block(sym->op) : nullptr;
+    Operation* const         ret     = body != nullptr ? body->last_op() : nullptr;
+    if (ret != nullptr && ret->kind() == func::return_kind(*g->ctx))
+    {
+        at = ret;
+        if (index < ret->num_operands())
+        {
+            const Operation* const def = ret->operand(index)->defining_op();
+            if (def != nullptr)
+            {
+                at = def;
+            }
+        }
+    }
+    return locate(h, at, out);
+}
+
 bool ReloadSet::affected(AssetId id, containers::Array<AssetId>& out) const
 {
     out.clear();
