@@ -2049,8 +2049,38 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-seeded-detector-f
 - The committed suppression files may name only third-party shared libraries; the verdict tests refuse any other
   entry. CI has no retry: no `--repeat` or `--rerun-failed` in [ci.yml](../../.github/workflows/ci.yml) or the CTest
   wrappers, and the registered-failure gate admits only reproduced third-party defects.
-- Not yet measured: branch, region, error-path and state-transition coverage of the DIAG scope with its denominator,
-  the register of coverage exclusions and nonreproduced failures, and the seeds on hosted lanes.
+- Not yet measured (2026-10-11, superseded by the next block for coverage and the register): branch, region,
+  error-path and state-transition coverage of the DIAG scope with its denominator, the register of coverage
+  exclusions and nonreproduced failures, and the seeds on hosted lanes.
+
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-coverage-and-failure-register.md)):
+- The DIAG scope is a committed denominator, [coverage-scope.json](../../tests/support/diag/coverage-scope.json):
+  63 files in nine groups, each naming its rows (core assertion, crash and real-time capture; fault seams;
+  minimization; the memory module; the job observer, interleaving and hang code; all of crd-perf's sources; the
+  CEIR inspection and command-decoding sources with ceridc's diag and MCP transport; run records and replay; the
+  specimen harness). Ordinary logging, the application host (DIAG.11a) and product algorithms are outside it.
+- The route is clang source-based coverage on the `linux-clang-coverage` preset (`CRD_ENABLE_COVERAGE`; diagnostic
+  tier, never hosted). MSVC has no equivalent, so a Win32-only branch is outside this lane's denominator, and a
+  value produced only there is owned `windows-only`; such an exclusion is stale the moment the site is compiled on
+  the lane. [diag-coverage.py](../../scripts/diag-coverage.py) runs the test set once (eight CTest programs, seven
+  corpus replays and the schedcheck program CTest does not register), requires every selected test to pass in the
+  JUnit, merges profiles with `--failure-mode=any` and exports exactly the scope files from every program, specimen
+  and ceridc.
+- Error-path coverage is defined per outcome: every value of 32 registered result/status enums must be produced at
+  a site whose innermost coverage region ran (a producing site is `Enum::Value` that is not a `case` label or an
+  operand of `==`/`!=`). State-transition coverage is per transition site (the flight recorder's window machine:
+  every `state.store`/`exchange`/`compare_exchange` naming a state), not per edge pair. Region, branch, function and
+  line totals are reported per file and group and are never a threshold.
+- Gaps are owned evidence, never silently missing: each unrun value or site needs an exclusion with a class and a
+  reason, and an exclusion that matches nothing, now runs, or contradicts its class is stale. A child that dies
+  writes no profile, so the Linux crash record's write path is `dying-child`. The first measurement found 30 gaps;
+  15 are real untested error paths owned as `owned-gap` with their rows (four record-minimization verdicts, the
+  host-executor adapter's refusals, inspection script and host-load failures, a failed record write, a cancelled
+  external-results analysis, the flight recorder's fatal path with the ring held, the harness's own timeout
+  verdict and two generation wraps with no seam), and one declared verdict (`MissingSymbolizer`) is never produced.
+- [nonreproduced-failures.json](../../tests/support/diag/nonreproduced-failures.json) registers flaky and
+  nonreproduced failures with signature, reruns, status and session; a test fails if any build file, CI step or
+  script reads it, so it cannot become a quarantine list.
 
 <a id="diag-10c"></a>
 ## DIAG.10c — correctness and pressure sanity probes

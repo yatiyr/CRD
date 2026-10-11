@@ -299,6 +299,28 @@ The committed sanitizer suppression files may name only third-party shared libra
 (`test-diag-seeded-faults.py`, the `crd-diag-seeded-faults` CTest and a repository CI step) refuse any other entry,
 so the rule above about Cerid code is enforced, not only stated. A seed may add such an entry for its own run.
 
+## Diagnostic coverage and the nonreproduced-failure register (DIAG.10b)
+
+The coverage configuration is `linux-clang-coverage` (diagnostic tier, never hosted): clang++ with
+`CRD_ENABLE_COVERAGE` (`-fprofile-instr-generate -fcoverage-mapping` on every TU, exclusive with the sanitizers and
+libFuzzer). [diag-coverage.py](../../scripts/diag-coverage.py) runs the test set named by
+[coverage-scope.json](../../tests/support/diag/coverage-scope.json) once (selected CTests plus the Catch2 programs
+CTest does not register), requires every selected test to pass in the JUnit, merges the raw profiles and reads
+llvm-cov's export of the scope files. It reports regions, branches, functions and lines per scope file with the
+denominator stated (scope files, files this lane instrumented, files excluded by path). Percentages are never a
+gate. The gate is the outcome sets: every value of a registered result enum must be produced at a site that ran,
+and every transition site of a registered state machine must have run, unless an exclusion owns it with a class
+(`dying-child`, `windows-only`, `other-configuration`, `resource-failure`, `no-producer`, `default-value`,
+`owned-gap`) and a reason. An exclusion that names something that now runs, no longer exists, or calls a site
+compiled on this lane `windows-only` is stale and fails the run. A child that dies writes no profile, so paths
+reached only inside dying specimens are owned as `dying-child`, never counted as untested.
+
+[nonreproduced-failures.json](../../tests/support/diag/nonreproduced-failures.json) registers flaky and
+nonreproduced failures: first seen, lane, target, signature, reruns, status (`nonreproduced`, `explained`,
+`toolchain`, `host`), explanation and session. It is evidence only. The verdict tests (`test-diag-coverage.py`, the
+`crd-diag-coverage` CTest and a repository CI step) hold every entry complete and fail if any build file, CI step or
+script reads it, so it can never select, skip or retry a test.
+
 ## Not in scope
 
 REPO.DEV.9 remains the bounded ingestion baseline. DIAG now owns the immediate diagnostic extensions above;

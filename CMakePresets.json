@@ -360,6 +360,28 @@
             }
         },
         {
+            "name": "linux-clang-coverage",
+            "displayName": "Linux clang Debug + source-based coverage (diagnostic: warnings shown, not errors; scripts/diag-coverage.py)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_ENABLE_COVERAGE": "ON",
+                "CRD_WARNINGS_AS_ERRORS": "OFF"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-clang-x64"
+                }
+            }
+        },
+        {
             "name": "linux-clang-tsan",
             "displayName": "Linux clang Debug + ThreadSanitizer (DIAG.1b)",
             "inherits": "linux-base",
@@ -541,6 +563,10 @@
         {
             "name": "linux-clang-fuzz",
             "configurePreset": "linux-clang-fuzz"
+        },
+        {
+            "name": "linux-clang-coverage",
+            "configurePreset": "linux-clang-coverage"
         },
         {
             "name": "linux-clang-tsan",
@@ -753,6 +779,13 @@
         {
             "name": "linux-clang-fuzz",
             "configurePreset": "linux-clang-fuzz",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-clang-coverage",
+            "configurePreset": "linux-clang-coverage",
             "output": {
                 "outputOnFailure": true
             }

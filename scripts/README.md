@@ -62,6 +62,15 @@ Run commands from the repository root. Build/test rules and exact quality requir
   reruns its detecting tests and reads their JUnit; it restores and rebuilds the tree after each seed. `--validate`
   checks the registry against the tree; `test-diag-seeded-faults.py` covers every verdict without a build and is a
   CTest and repository CI step.
+- Diagnostic coverage ([contract](../docs/design/runtime-diagnostics.md#diag-10b)):
+  `diag-coverage.py --build-dir <linux-clang-coverage tree>` runs the test set of
+  `tests/support/diag/coverage-scope.json` once under clang source-based coverage, reports regions, branches,
+  functions and lines per scope file with the instrumented denominator, and fails on an error-path value or state
+  transition that did not run unless an exclusion owns it (a stale exclusion also fails). `--validate` checks the
+  registry against the tree; `--export <json>` re-evaluates an existing llvm-cov export. `test-diag-coverage.py`
+  covers every verdict without a build, and holds `tests/support/diag/nonreproduced-failures.json` (flaky and
+  nonreproduced failures, evidence only) complete and unread by any build or test step; it is a CTest and repository
+  CI step.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

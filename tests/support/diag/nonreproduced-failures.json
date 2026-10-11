@@ -1,0 +1,79 @@
+{
+ "schema": "cerid-diag-nonreproduced/1",
+ "contract": "docs/design/runtime-diagnostics.md#diag-10b",
+ "note": "Evidence, never a quarantine list: no build, test run or CI step reads this file (scripts/test-diag-coverage.py enforces that), so an entry cannot skip, retry or excuse a test. A first failure is recorded with its signature and reruns; a clean rerun does not establish a root cause, and an entry stays nonreproduced until its explanation is shown.",
+ "failures": [
+  {
+   "id": "win-asan-allocator-corpus-rtlcreateheap",
+   "first_seen": "2026-10-11",
+   "lane": "win-asan (local, inside vcvars)",
+   "target": "crd-fuzz-memory-allocators-corpus",
+   "signature": "AddressSanitizer use-after-poison inside RtlCreateHeap, reached from msvcrt.dll during process start, 0.11 s after launch and before any corpus input ran",
+   "reruns": "The immediate rerun passed; the next run of the same seed was clean.",
+   "status": "nonreproduced",
+   "explanation": "No input or Cerid frame is involved. Not explained.",
+   "session": "2026-10-11-diag-10b-seeded-detector-failures.md",
+   "rows": ["DIAG.10b"]
+  },
+  {
+   "id": "ren-40-g1-dx12-parallel-segfault",
+   "first_seen": "2026-10-10",
+   "lane": "win-debug (local full ctest, parallel)",
+   "target": "REN-40-G1 GATE (DX12)",
+   "signature": "Segmentation fault of the DX12 gate during the full parallel CTest run",
+   "reruns": "Run alone it then passed 5 of 5 and 20 of 20.",
+   "status": "nonreproduced",
+   "explanation": "No renderer or frame-cook code calls the CEIR plan or interpreter the batch changed. Not explained.",
+   "session": "2026-10-10-diag-10a-ceir-differential.md",
+   "rows": ["DIAG.10a"]
+  },
+  {
+   "id": "wsl-host-misexecution",
+   "first_seen": "2026-10-10",
+   "lane": "linux-clang-fuzz, linux-gcc-debug and linux-gcc-asan on this host's WSL2 guest (i9-14900K)",
+   "target": "crd-fuzz-perf-flight, crd-fuzz-perf-bundle, crd-fuzz-ceir-differential, crd-fuzz-ceir-text, crd-fuzz-ckir-binary and the plain corpus replays",
+   "signature": "Wild jumps with corrupted registers and locals; ASan SEGV writing address 4 in asan_annotate_live_range; a container overflow on a byte push_back had just marked usable; MallocAllocator's power-of-two check failing on the constant 8; once a silently wrong result in an unsanitized gcc build",
+   "reruns": "Every artifact replays clean (39 replays of the 13 control artifacts, 3 x 10,000 repetitions, 328,000 sequential runs); the rate rose from about one per 400,000 to one per 18,000 executions within an hour; native Windows loops and a known-answer probe stayed clean.",
+   "status": "host",
+   "explanation": "Input-independent and seen with the container annotation off, outside libFuzzer and without a sanitizer, so the evidence points at this machine (CPU or WSL guest), not Cerid code. Not settled: the separating run on another machine is the user's item in DIAG.10a.",
+   "session": "2026-10-10-diag-10a-evidence-readers.md",
+   "rows": ["DIAG.10a"]
+  },
+  {
+   "id": "clang-cl-thin-lto-link-crash",
+   "first_seen": "2026-09-16",
+   "lane": "win-clang-cl-shipping (local)",
+   "target": "lld-link of large test executables (thin LTO)",
+   "signature": "lld-link 20.1.8 crashes with 0xC0000005 or Illegal instruction while running LTO codegen of a module unrelated to the change; no source diagnostic",
+   "reruns": "Reproduced twice in isolation with two different crash types on the same module; a re-link sometimes links and sometimes crashes.",
+   "status": "toolchain",
+   "explanation": "A nondeterministic crash inside the linker's LTO code generation, not a defect of the linked code; every link since this note is retried at most twice and recorded.",
+   "session": "2026-09-16-diag-7a-gpu-validation-identity-census.md",
+   "rows": ["DIAG.7a"]
+  },
+  {
+   "id": "ceridc-parallel-sharing-violation",
+   "first_seen": "2026-10-10",
+   "lane": "win-debug (local ctest -j 4)",
+   "target": "crd-ceridc-tests (inspect cases)",
+   "signature": "1 or 2 of the 15 ceridc cases failed, varying between runs, with a Windows sharing violation in a child ceridc process; serially all passed",
+   "reruns": "Varied between runs; reproduced under -j 4 and never serially.",
+   "status": "explained",
+   "explanation": "Four inspect cases redirected their child's report into the same file in one shared working directory. Each discovered case now gets its own working directory (crd_discover_tests CASE_DIRECTORIES).",
+   "session": "2026-10-10-ceridc-case-directories.md",
+   "rows": ["DIAG.9a"]
+  },
+  {
+   "id": "device-replay-shared-record-file",
+   "first_seen": "2026-10-11",
+   "lane": "win-debug (local full ctest, parallel)",
+   "target": "crd-ceir-cook-tests DIAG.9a device replay cases",
+   "signature": "One of two device replay cases failed once in a full parallel run; its output was not kept",
+   "reruns": "After the fix the 14 device cases passed 10 repeats at -j 16.",
+   "status": "explained",
+   "explanation": "Two cases wrote the same record file while CTest ran them as separate processes in one directory; the second now writes its own file. The shared file is the likely cause, not a reproduced one.",
+   "session": "2026-10-11-diag-10a-host-parallel-range.md",
+   "rows": ["DIAG.9a", "DIAG.10a"]
+  }
+ ]
+}

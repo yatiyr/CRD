@@ -31,6 +31,9 @@ add_test(NAME crd-diag-reverse-debug-recipes # DIAG.9c: every reverse-debugging 
 # DIAG.10b: every seeded-failure verdict, the registry against the tree and the suppression policy, without a build
 add_test(NAME crd-diag-seeded-faults
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-seeded-faults.py")
+# DIAG.10b: every coverage verdict, the coverage registry and the nonreproduced-failure register, without a build
+add_test(NAME crd-diag-coverage
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-coverage.py")
 add_test(NAME crd-ci-tiers
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
 add_test(NAME crd-pins
@@ -53,7 +56,7 @@ set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "P
 set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
     crd-diag-reverse-debug-recipes PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
-set_tests_properties(crd-diag-seeded-faults PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_test(NAME crd-project-structure-native
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"

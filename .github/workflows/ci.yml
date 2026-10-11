@@ -153,6 +153,8 @@ jobs:
         run: python scripts/test-reverse-debug-recipes.py
       - name: Seeded detector failure verdicts
         run: python scripts/test-diag-seeded-faults.py
+      - name: Diagnostic coverage verdicts
+        run: python scripts/test-diag-coverage.py
       - name: Project structure synchronization
         run: python scripts/test-project-sync.py
       - name: Canonical build profile contracts

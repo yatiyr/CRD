@@ -43,6 +43,7 @@ option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
 option(CRD_ENABLE_UBSAN     "Enable Undefined Behavior San."   OFF)
 option(CRD_ENABLE_TSAN      "Enable Thread Sanitizer (GCC/clang; exclusive with ASan)" OFF)
 option(CRD_ENABLE_FUZZER    "Build the libFuzzer fuzz targets (clang; coverage instrumentation tree-wide)" OFF)
+option(CRD_ENABLE_COVERAGE  "Clang source-based coverage tree-wide (DIAG.10b; scripts/diag-coverage.py)" OFF)
 option(CRD_SHIPPING         "Maximum optimizations + debug symbol generation for crash diagnostics" OFF)
 option(CRD_ENABLE_CLANG_TIDY "Run clang-tidy during build" OFF)
 option(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS "Treat clang-tidy warnings as build errors (OFF only for diagnostic preview)" ON)
@@ -166,6 +167,23 @@ if(CRD_ENABLE_FUZZER)
     endif()
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=fuzzer-no-link>)
     message(STATUS "[crd] libFuzzer targets ENABLED (coverage instrumentation tree-wide; cmake/CrdFuzz.cmake)")
+endif()
+
+# Source-based coverage (DIAG.10b, docs/design/runtime-diagnostics.md#diag-10b): every TU carries region and branch
+# counters; scripts/diag-coverage.py runs the DIAG test set and reads llvm-cov's export. A diagnostic configuration
+# only: it never ships and it is exclusive with the sanitizers, whose own instrumentation would change what is counted.
+if(CRD_ENABLE_COVERAGE)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR MSVC)
+        message(FATAL_ERROR "[crd] CRD_ENABLE_COVERAGE needs clang++ (source-based coverage through the clang driver); "
+                            "the compiler is ${CMAKE_CXX_COMPILER_ID}${CMAKE_CXX_SIMULATE_ID}")
+    endif()
+    if(CRD_ENABLE_ASAN OR CRD_ENABLE_UBSAN OR CRD_ENABLE_TSAN OR CRD_ENABLE_FUZZER)
+        message(FATAL_ERROR "[crd] CRD_ENABLE_COVERAGE is exclusive with the sanitizer and fuzzer instruments")
+    endif()
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fprofile-instr-generate>
+                        $<$<COMPILE_LANGUAGE:C,CXX>:-fcoverage-mapping>)
+    add_link_options(-fprofile-instr-generate)
+    message(STATUS "[crd] Source-based coverage ENABLED (region and branch counters; scripts/diag-coverage.py)")
 endif()
 
 # ----- Shipping optimizations + debug symbols --------------------------------
