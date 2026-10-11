@@ -71,7 +71,8 @@ add_dependencies(crd-perf-tests
     crd-diag-use-after-free-specimen    # DIAG.3f
     crd-diag-use-after-return-specimen  # DIAG.3f
     crd-diag-leak-specimen              # DIAG.3f
-    crd-diag-flight-fatal-specimen)     # DIAG.9b: the fatal path writes the flight window before the process dies
+    crd-diag-flight-fatal-specimen      # DIAG.9b: the fatal path writes the flight window before the process dies
+    crd-diag-cpu-hotspot-specimen)      # DIAG.10b: the harness's own Timeout verdict
 target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_CLEAN_SPECIMEN="$<TARGET_FILE:crd-diag-clean-specimen>"
     CRD_DIAG_CRASH_SPECIMEN="$<TARGET_FILE:crd-diag-crash-specimen>"
@@ -81,6 +82,7 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
     CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
     CRD_DIAG_FLIGHT_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-flight-fatal-specimen>"
+    CRD_DIAG_CPU_HOTSPOT_SPECIMEN="$<TARGET_FILE:crd-diag-cpu-hotspot-specimen>"
     CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}"
     CRD_DIAG_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/diag")
 

@@ -2082,6 +2082,21 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-coverage-and-fail
   nonreproduced failures with signature, reruns, status and session; a test fails if any build file, CI step or
   script reads it, so it cannot become a quarantine list.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-owned-gaps-closed.md)):
+- Twelve of the fifteen owned gaps are closed by `[diag10b]` cases that assert the answer, not only the line: the
+  record minimizer's Unrunnable (a cut blob, an undefined entry), NotReproduced (inputs failing elsewhere or not at
+  all), Budget (the record made under the bound still fails the recorded way) and Cancelled (with
+  `check_external_replay`'s own Cancelled); the host executor adapter's Unavailable and BadArgument when a host calls
+  it directly (the service checks those first); a record written where no file can be created; an inspect-host load
+  of asset 0 or of another asset; a script on a host with nothing loaded; `program.inspect` past its wait bound; and
+  the specimen harness's own Timeout. Their exclusions are removed: the measurement with the old registry was STALE
+  naming exactly those twelve, and PASS without them (regions 9,210/10,356, branches 5,967/7,634, lines
+  17,107/19,662). Each producing site was broken once and its case failed.
+- The three left need a seam in an engine header: a generation setter for `DiagnosticPolicyStore` and for
+  `FlightRecorder` (2^32 - 1 loads otherwise), and a way to hold the flight recorder's ring mutex across
+  `finish(Fatal)` (no public call holds it while calling out). A host lacking a program's dialects reads it with every
+  op opaque, so the minimizer refuses it as needing external results rather than calling it unrunnable.
+
 <a id="diag-10c"></a>
 ## DIAG.10c — correctness and pressure sanity probes
 

@@ -12,7 +12,7 @@
 // request leaves unset fails its read where it is authored. `events=` gives the run an input event queue
 // (assets/ceir/event_demo.ceir): the held switch reads the listed resize and the run fails there, handled events
 // finish on their values, an empty list reads none events, and without it the first read fails where it is authored.
-// ASCII test names (ctest by-name).
+// DIAG.10b: a run that outlasts the host's wait bound fails unfinished. ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/inspect_diag.hpp>
 
@@ -635,6 +635,32 @@ TEST_CASE("diag 8c: program.inspect bounds its stops and stops when cancelled", 
         INFO(r.json.c_str());
         CHECK(r.status == DiagStatus::Cancelled);
         CHECK(has(view(r.json), "cancelled by the caller after 0 stops"));
+    }
+
+    SECTION("a run that outlasts the host's wait bound fails unfinished, and the service is not left holding it")
+    {
+        // DIAG.10b: no breakpoint, no cancel and a loop far longer than a 50 ms bound: the wait runs out, the answer
+        // says so, and the command's host cancels and joins the run before the next request.
+        ProgramInspectCommand cmd;
+        cmd.registrar = &registrar;
+        cmd.wait_ms   = 50U;
+        DiagCommandService svc(kExecute, rooted(kAssets), &root);
+        REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
+        const DiagArg    args[] = {{"args", "1000000000000"}};
+        const DiagResult r      = svc.execute(inspect_request(kFile, {args, 1U}));
+        INFO(r.json.c_str());
+        CHECK(r.status == DiagStatus::Failed);
+        CHECK(has(view(r.json), "the run did not finish within the host's wait bound: timeout"));
+        CHECK_FALSE(has(view(r.json), R"("kind":"result")"));
+        CHECK(cmd.starts.load() == 1U);
+
+        cmd.wait_ms                   = crd::ceir::cook::kScriptDefaultWaitMs;
+        const DiagArg    short_args[] = {{"args", "5"}};
+        const DiagResult again        = svc.execute(inspect_request(kFile, {short_args, 1U}));
+        INFO(again.json.c_str());
+        CHECK(again.status == DiagStatus::Ok);
+        CHECK(has(view(again.json), R"("outcome":"finished",)"));
+        CHECK(cmd.starts.load() == 2U);
     }
 }
 

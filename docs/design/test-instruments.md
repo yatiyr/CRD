@@ -313,7 +313,10 @@ and every transition site of a registered state machine must have run, unless an
 (`dying-child`, `windows-only`, `other-configuration`, `resource-failure`, `no-producer`, `default-value`,
 `owned-gap`) and a reason. An exclusion that names something that now runs, no longer exists, or calls a site
 compiled on this lane `windows-only` is stale and fails the run. A child that dies writes no profile, so paths
-reached only inside dying specimens are owned as `dying-child`, never counted as untested.
+reached only inside dying specimens are owned as `dying-child`, never counted as untested. Closing an owned gap
+removes its exclusion in the same change; on 2026-10-11 twelve were closed by cases
+([session](../sessions/2026-10-11-diag-10b-owned-gaps-closed.md)) and three remain, each waiting for an engine seam.
+The harness's own Timeout verdict is exercised with the CPU-hotspot specimen under a 200 ms bound.
 
 [nonreproduced-failures.json](../../tests/support/diag/nonreproduced-failures.json) registers flaky and
 nonreproduced failures: first seen, lane, target, signature, reruns, status (`nonreproduced`, `explained`,

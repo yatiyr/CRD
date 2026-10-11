@@ -8,8 +8,9 @@
 // for byte; a fresh service reproduces it after the program file is edited (the record holds its own artifact) and on
 // another job split; replaying the same inputs against the edited file names the edited launch constant at the await
 // that reads its value (recorded 25, observed 36); a small step budget's failure is reproduced only because the
-// budget is in the record. Incompatible records and bad arguments are refused with nothing run. Expected lines and
-// columns come from scanning the text, never from the parser.
+// budget is in the record. Incompatible records and bad arguments are refused with nothing run, by the service and
+// (DIAG.10b) by the executor called directly. Expected lines and columns come from scanning the text, never from the
+// parser.
 // ⛔ The jobs pool is owned by the listener in test_host_provider.cpp (same binary). ASCII test names.
 
 #include <crd/ceir/context.hpp>
@@ -597,4 +598,133 @@ TEST_CASE("diag 9a: host requests are refused before anything is read or run", "
     forget(out);
     forget(tamper);
     forget(program);
+}
+
+// DIAG.10b: the service checks the job split, the build and the inputs before it calls the executor, so the adapter's
+// own refusals are reached only by a host that calls the executor directly. Each must still answer the documented
+// status and sentence, with nothing run and nothing written to the answer.
+TEST_CASE("diag 10b: the host executor refuses an incompatible record or schedule when called directly",
+          "[ceir][host][diag][diag10b]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String                       text = slurp(kAsset, &alloc);
+    Context                            cctx(&alloc);
+    registrar(cctx, nullptr);
+    const StringView     program = StringView{"diag10b_adapter.ceir"};
+    const ck::CookResult cooked  = ck::cook_program_text(cctx, view(text), program, 1U, &alloc, &alloc);
+    REQUIRE(cooked.ok());
+
+    // The library's host record of main(0), held in memory.
+    ReplayRecord rec(&alloc);
+    hs::HostSite fault(&alloc);
+    const i64    zero[1] = {0};
+    String       missing(&alloc);
+    REQUIRE(hs::record_host_run({cooked.blob.data(), cooked.blob.size()}, program, StringView{"main"}, {zero, 1U},
+                                hs::HostSchedule{2U, u64{1} << 20U}, ck::kReplayDefaultMaxEvents, &registrar, nullptr,
+                                rec, &missing, &fault) == hs::HostReplayStatus::Ok);
+    REQUIRE(rec.executor == ck::ReplayExecutorKind::Host);
+
+    const ck::ReplayHostExecutor& executor = hs::host_replay_executor();
+    REQUIRE(executor.replay != nullptr);
+    REQUIRE(executor.record != nullptr);
+
+    struct Refusal
+    {
+        explicit Refusal(crd::memory::IAllocator* a) : reason(a) {}
+
+        ck::HostExecutorStatus status = ck::HostExecutorStatus::Ok;
+        String                 reason;
+        u64                    events = 0U;
+    };
+    const auto replay_of = [&](const ReplayRecord& record, u32 jobs, bool any_build)
+    {
+        ck::HostReplayRequest request;
+        request.record    = &record;
+        request.any_build = any_build;
+        request.num_jobs  = jobs;
+        request.registrar = &registrar;
+        ck::HostReplayAnswer answer(&alloc);
+        Refusal              r(&alloc);
+        r.status = executor.replay(request, answer, r.reason, executor.user);
+        r.events = answer.trace.events_total + answer.trace.events.size();
+        return r;
+    };
+    const auto check = [](const Refusal& r, ck::HostExecutorStatus want, const char* reason)
+    {
+        INFO(r.reason.c_str());
+        CHECK(r.status == want);
+        CHECK(has(view(r.reason), StringView{reason}));
+        CHECK(r.events == 0U); // refused before anything ran
+    };
+
+    SECTION("the record itself replays, so each refusal below is the one change it makes")
+    {
+        const Refusal r = replay_of(rec, 0U, false);
+        INFO(r.reason.c_str());
+        CHECK(r.status == ck::HostExecutorStatus::Ok);
+        CHECK(r.reason.empty());
+    }
+    SECTION("a plan record is unavailable on the host executor")
+    {
+        ReplayRecord plan(&alloc);
+        plan          = rec;
+        plan.executor = ck::ReplayExecutorKind::Plan;
+        check(replay_of(plan, 0U, false), ck::HostExecutorStatus::Unavailable,
+              "the record was made by the plan executor; the host executor replays host records only");
+    }
+    SECTION("another build is unavailable unless any build is allowed")
+    {
+        ReplayRecord other(&alloc);
+        other = rec;
+        other.build.version.append("-other");
+        check(replay_of(other, 0U, false), ck::HostExecutorStatus::Unavailable,
+              "made by another build (differs in version); pass build=any");
+        const Refusal any = replay_of(other, 0U, true);
+        INFO(any.reason.c_str());
+        CHECK(any.status == ck::HostExecutorStatus::Ok);
+    }
+    SECTION("a record missing an input its program needs is unavailable")
+    {
+        ReplayRecord lacking(&alloc);
+        lacking                 = rec;
+        lacking.inputs[3].need  = ck::ReplayNeed::Yes; // random
+        lacking.inputs[3].state = ck::ReplayInputState::Missing;
+        check(replay_of(lacking, 0U, false), ck::HostExecutorStatus::Unavailable,
+              "the record is missing inputs its program needs (random)");
+    }
+    SECTION("a job split out of range is a bad argument, on replay and on record")
+    {
+        check(replay_of(rec, ck::kReplayMaxHostJobs + 1U, false), ck::HostExecutorStatus::BadArgument,
+              "the host executor's job split or step budget is out of range");
+
+        ck::HostRecordRequest request;
+        request.blob      = {cooked.blob.data(), cooked.blob.size()};
+        request.path      = program;
+        request.entry     = StringView{"main"};
+        request.args      = {zero, 1U};
+        request.registrar = &registrar;
+        for (const u32 jobs : {0U, ck::kReplayMaxHostJobs + 1U})
+        {
+            INFO("jobs " << jobs);
+            request.num_jobs = jobs;
+            ReplayRecord         made(&alloc);
+            ck::OwnedReplaySite  at(&alloc);
+            String               held(&alloc);
+            String               reason(&alloc);
+            const ck::HostExecutorStatus s = executor.record(request, made, at, held, reason, executor.user);
+            INFO(reason.c_str());
+            CHECK(s == ck::HostExecutorStatus::BadArgument);
+            CHECK(has(view(reason), StringView{"the host executor's job split or step budget is out of range"}));
+            CHECK(made.events_total == 0U);
+            CHECK(made.program.empty());
+        }
+        request.num_jobs = 2U;
+        request.sub_fuel = 0U;
+        ReplayRecord        made(&alloc);
+        ck::OwnedReplaySite at(&alloc);
+        String              held(&alloc);
+        String              reason(&alloc);
+        CHECK(executor.record(request, made, at, held, reason, executor.user) == ck::HostExecutorStatus::BadArgument);
+        CHECK(made.program.empty());
+    }
 }

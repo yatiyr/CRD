@@ -7,11 +7,13 @@
 // frames; cancel at a pause ends the run Cancelled; a hot reload installs a new generation and requests naming the
 // replaced one are refused before any work, while a load or start during an execution is refused Busy; a rejected
 // reload keeps the last good generation; a failed cook names its line; and destroying the host while the execution is
-// paused cancels and joins it. Expected lines come from scanning the text itself, never from the parser or the host.
-// ASCII test names.
+// paused cancels and joins it. DIAG.10b: a load naming no asset or another asset fails and keeps what is installed,
+// and a script on a host with nothing loaded is not started. Expected lines come from scanning the text itself, never
+// from the parser or the host. ASCII test names.
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/inspect_host.hpp>
+#include <crd/ceir/cook/inspect_script.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/gen/arith_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
@@ -405,4 +407,51 @@ TEST_CASE("diag 8b: destroying the inspect host cancels and joins a paused execu
         CHECK(host.running());
     } // the destructor cancels the paused execution and joins its thread: reaching here is the check
     SUCCEED();
+}
+
+TEST_CASE("diag 10b: the inspect host refuses a load of another asset, and a script it cannot start is not started",
+          "[ceir][inspect][diag][diag10b]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const String                       text = read_asset(&root);
+    InspectHost                        host(&root, &registrar, nullptr);
+
+    // Nothing loaded: a script cannot start, says why, and runs nothing.
+    const i64     n = 1;
+    InspectScript script;
+    script.file = StringView(kFile);
+    script.args = ConstSpan<i64>(&n, 1U);
+    InspectReport report(&root);
+    report.outcome = ScriptOutcome::Finished; // the report's default is NotStarted: the run must set it
+    run_inspect_script(host, script, report);
+    CHECK(report.outcome == ScriptOutcome::NotStarted);
+    CHECK(report.refusal == insp::Refusal::NotBound);
+    CHECK(report.generation == 0U);
+    CHECK(report.stops.empty());
+    CHECK(report.results.empty());
+    CHECK_FALSE(host.running());
+
+    // Asset id 0 is no asset: the first load fails and installs nothing.
+    const HostLoadResult zero = host.load(AssetId{0U}, sv(text), StringView(kFile), StringView("main"));
+    CHECK(zero.status == HostLoad::LoadFailed);
+    CHECK(zero.add_error == AddError::InvalidAssetId);
+    CHECK(zero.generation == 0U);
+    CHECK(host.generation() == 0U);
+
+    // The first good load fixes the asset; a later load naming another asset fails and keeps the installed generation.
+    const HostLoadResult first = host.load(kId, sv(text), StringView(kFile), StringView("main"));
+    REQUIRE(first.ok());
+    const HostLoadResult other = host.load(AssetId{kId.value + 1U}, sv(text), StringView(kFile), StringView("main"));
+    CHECK(other.status == HostLoad::LoadFailed);
+    CHECK(other.add_error == AddError::InvalidAssetId);
+    CHECK(other.generation == first.generation);
+    CHECK(host.generation() == first.generation);
+
+    // The installed generation still runs to its result.
+    InspectReport ran(&root);
+    run_inspect_script(host, script, ran);
+    CHECK(ran.outcome == ScriptOutcome::Finished);
+    CHECK(ran.generation == first.generation);
+    REQUIRE(ran.results.size() == 1U);
+    CHECK(ran.results[0] == 36);
 }

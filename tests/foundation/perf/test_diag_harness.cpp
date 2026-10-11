@@ -38,6 +38,10 @@ cont::String leak_specimen()
 {
     return cont::String{CRD_DIAG_LEAK_SPECIMEN};
 }
+cont::String cpu_hotspot_specimen()
+{
+    return cont::String{CRD_DIAG_CPU_HOTSPOT_SPECIMEN};
+}
 
 bool built_with_asan()
 {
@@ -218,4 +222,29 @@ TEST_CASE("diag harness: a missing executable is an instrument failure", "[diag]
     const cd::Outcome o =
         cd::run_specimen(cont::String{"./no-such-specimen-binary"}, cont::Array<cont::String>{}, e);
     CHECK(o.verdict == cd::Verdict::MissingExecutable);
+}
+
+TEST_CASE("diag 10b: a specimen that outlives its bound is the harness timeout, never a pass",
+          "[diag][harness][diag10b]")
+{
+    // The hotspot specimen burns about two seconds of CPU (more on debug and sanitizer lanes); a 200 ms bound must end
+    // it as the harness's own Timeout verdict (the harness kills the child at the bound).
+    cd::Expectation e;
+    e.want              = cd::Expectation::Want::CleanExit;
+    e.timeout_ms        = 200U;
+    const cd::Outcome o = cd::run_specimen(cpu_hotspot_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " reason=" << o.reason.c_str() << " exit=" << o.exit_code);
+    CHECK(o.verdict == cd::Verdict::Timeout);
+    CHECK(o.timed_out);
+    CHECK(cont::StringView{o.reason} == cont::StringView{"exceeded 200 ms"});
+
+    // The same specimen with room to finish is a clean exit: the verdict is the bound's, not the specimen's.
+    cont::Array<cont::String> quick;
+    quick.push_back(cont::String{"q"});
+    cd::Expectation roomy;
+    roomy.want             = cd::Expectation::Want::CleanExit;
+    const cd::Outcome done = cd::run_specimen(cpu_hotspot_specimen(), quick, roomy);
+    INFO("verdict=" << cd::verdict_name(done.verdict) << " reason=" << done.reason.c_str());
+    CHECK(done.verdict == cd::Verdict::Clean);
+    CHECK_FALSE(done.timed_out);
 }

@@ -6,8 +6,10 @@
 // (shrinking further fails at the other switch, which is another failure) and from -1000 to -1. The committed
 // assets/ceir/random_demo.ceir draws main(n) values and fails on a draw that reduces to 3: a seeded run failing at draw
 // k shrinks to main(k + 1), its earlier draws to 0 and its failing draw to a value that still reduces to 3 while the
-// value one step closer to 0 does not. Records that cannot be minimized are refused before anything runs. ASCII test
-// names (ctest by-name).
+// value one step closer to 0 does not. Records that cannot be minimized are refused before anything runs. DIAG.10b
+// adds the verdicts no case reached: a program the host cannot load or compile, inputs that do not fail the recorded
+// way here, a run budget too small to finish (the record it makes still fails the recorded way) and a raised cancel.
+// ASCII test names (ctest by-name).
 
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -33,8 +35,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <cstdio>
 #include <fstream>
+#include <initializer_list>
 #include <utility>
 
 namespace
@@ -553,5 +557,115 @@ TEST_CASE("diag 9c input: records that cannot be minimized are refused before an
     }
     forget(failed);
     forget(passed);
+    forget(program);
+}
+
+TEST_CASE("diag 10b: a minimization that cannot run, does not reproduce, runs out of budget or is cancelled says so",
+          "[ceir][cook][diag][diag9c][diag10b][minimize]")
+{
+    crd::memory::GrowableTlsfAllocator alloc;
+    const String                       text    = two_switch_program(&alloc);
+    const u32                          first   = line_of(view(text), StringView{kFirstSwitch});
+    const char* const                  program = "diag10b_min_verdicts.ceir";
+    const char* const                  failed  = "diag10b_min_verdicts.crpl";
+    const char* const                  shrunk  = "diag10b_min_verdicts_small.crpl";
+    forget(failed);
+    spill(program, view(text));
+    Host h;
+    REQUIRE(record(h, program, failed, "1000").status == DiagStatus::Ok);
+    const ReplayRecord fail_rec = decode_file(failed, &alloc);
+    REQUIRE(fail_rec.error == crd::ceir::plan::RunError::SelectorOutOfRange);
+
+    // A verdict reached before or instead of a new record leaves `out` untouched; `runs` is how many runs it took.
+    const auto untouched_by = [&](const ReplayRecord& rec, const std::atomic<bool>* cancel, RecordMinimizeStatus status,
+                                  const char* reason, u64 runs)
+    {
+        ReplayRecord         untouched(&alloc);
+        RecordMinimizeResult result(&alloc);
+        ck::minimize_record_inputs(rec, &registrar, nullptr, options_k(2U), cancel, untouched, result);
+        INFO(result.reason.c_str());
+        CHECK(result.status == status);
+        CHECK(has(view(result.reason), StringView{reason}));
+        CHECK(result.stats.runs == runs);
+        CHECK(result.stats.reproduced == 0U);
+        CHECK(untouched.args.empty());
+        CHECK(untouched.program.empty());
+    };
+
+    SECTION("a program the host cannot load or compile is unrunnable, and nothing runs")
+    {
+        // Bytes that are not a whole program.
+        ReplayRecord torn(&alloc);
+        torn = fail_rec;
+        torn.program.resize(torn.program.size() / 2U);
+        untouched_by(torn, nullptr, RecordMinimizeStatus::Unrunnable, "the record's program does not load", 0U);
+        // The recorded program and content, with an entry it does not define.
+        ReplayRecord no_entry(&alloc);
+        no_entry = fail_rec;
+        no_entry.entry.clear();
+        no_entry.entry.append("not_main");
+        untouched_by(no_entry, nullptr, RecordMinimizeStatus::Unrunnable, "the record's program does not compile", 0U);
+    }
+    SECTION("inputs that do not fail the recorded way here are not reproduced: K runs at most, out untouched")
+    {
+        // main(5) fails, but at the second switch; main(0) does not fail. Neither is the recorded failure.
+        for (const i64 arg : {i64{5}, i64{0}})
+        {
+            INFO("main(" << arg << ")");
+            ReplayRecord other(&alloc);
+            other         = fail_rec;
+            other.args[0] = arg;
+            // The first run already disagreed, so the K = 2 judgement stopped there.
+            untouched_by(other, nullptr, RecordMinimizeStatus::NotReproduced,
+                         "the record's own inputs did not fail the recorded way in every run", 1U);
+        }
+    }
+    SECTION("a budget too small to finish ends Budget with a record that still fails the recorded way")
+    {
+        RecordMinimizeOptions tight;
+        tight.budget.runs_per_candidate = 1U;
+        tight.budget.max_runs           = 2U;
+        ReplayRecord         small(&alloc);
+        RecordMinimizeResult result(&alloc);
+        ck::minimize_record_inputs(fail_rec, &registrar, nullptr, tight, nullptr, small, result);
+        INFO(result.reason.c_str());
+        CHECK(result.status == RecordMinimizeStatus::Budget);
+        CHECK(result.stats.runs <= tight.budget.max_runs);
+        REQUIRE(small.args.size() == 1U);
+        // Not claimed minimal: the argument is wherever the budget stopped, but it still fails at the first switch.
+        CHECK(small.args[0] >= 10);
+        CHECK(small.args[0] <= 1000);
+        CHECK(small.error == fail_rec.error);
+        CHECK(small.fault_op == fail_rec.fault_op);
+        CHECK(reproduced_line(h, small, shrunk, &alloc) == first);
+        // With room to finish, the same record is minimal at 10.
+        ReplayRecord         done(&alloc);
+        RecordMinimizeResult full(&alloc);
+        ck::minimize_record_inputs(fail_rec, &registrar, nullptr, options_k(1U), nullptr, done, full);
+        CHECK(full.status == RecordMinimizeStatus::Minimal);
+        REQUIRE(done.args.size() == 1U);
+        CHECK(done.args[0] == 10);
+    }
+    SECTION("a raised cancel ends the minimization before the program runs, and the needs walk says cancelled")
+    {
+        const std::atomic<bool> cancel{true};
+        untouched_by(fail_rec, &cancel, RecordMinimizeStatus::Cancelled, "cancelled before the program ran", 0U);
+
+        // The walk itself: cancelled with nothing said, and allowed when the cancel is not raised.
+        Context           ctx(&alloc);
+        ck::ReplayProgram p(&alloc);
+        ck::load_replay_program(ctx, {fail_rec.program.data(), fail_rec.program.size()}, view(fail_rec.entry),
+                                &registrar, nullptr, p);
+        REQUIRE(p.ok());
+        String reason(&alloc);
+        CHECK(ck::check_external_replay(ctx, *p.module, "the record's", &alloc, &cancel, reason) ==
+              ck::ExternalReplay::Cancelled);
+        CHECK(reason.empty());
+        const std::atomic<bool> lowered{false};
+        CHECK(ck::check_external_replay(ctx, *p.module, "the record's", &alloc, &lowered, reason) ==
+              ck::ExternalReplay::Allowed);
+        CHECK(reason.empty());
+    }
+    forget(failed);
     forget(program);
 }

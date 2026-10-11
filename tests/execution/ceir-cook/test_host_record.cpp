@@ -9,8 +9,9 @@
 // replay.run command reproduces it from the file; after a hot reload the record still names, and holds, the generation
 // that ran, and replaying its inputs against the edited program names the edited constant; a start without recording
 // forgets the record; a running, cancelled or unrecorded execution gives no record; a record file is never
-// overwritten; a schema 1 or 2 record and a generation without an asset are refused; and an observer's Cancel ends a
-// session's run. Expected lines and columns come from scanning the text, never from the parser. ASCII test names.
+// overwritten, and a path that cannot be created fails (DIAG.10b); a schema 1 or 2 record and a generation without
+// an asset are refused; and an observer's Cancel ends a session's run. Expected lines and columns come from scanning
+// the text, never from the parser. ASCII test names.
 
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/inspect_script.hpp>
@@ -433,6 +434,17 @@ TEST_CASE("diag 9a: a run inspected on the inspect host records the trace of the
         unchanged = unchanged && after[i] == before[i];
     }
     CHECK(unchanged);
+
+    // DIAG.10b: a path that cannot be created fails, and leaves nothing behind. An existing file used as a directory
+    // cannot be written on either platform; neither can a file in a directory that does not exist.
+    String under_file(&alloc);
+    under_file.append(host_out);
+    under_file.append("/record.crpl");
+    CHECK(ck::write_record_file(view(under_file), other) == ck::RecordWrite::Failed);
+    CHECK(slurp_bytes(host_out, &alloc).size() == before.size());
+    const char* const no_dir = "diag10b_no_such_dir/record.crpl";
+    CHECK(ck::write_record_file(StringView{no_dir}, other) == ck::RecordWrite::Failed);
+    CHECK_FALSE(std::ifstream(no_dir, std::ios::binary).good());
 
     forget(plain_out);
     forget(host_out);
