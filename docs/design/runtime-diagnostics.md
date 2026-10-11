@@ -1891,6 +1891,42 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-ceir-differential
   that does not link crd-perf, single-process; the 588 inputs of that round replay clean (the concurrent-load
   corruption item, still open).
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-host-parallel-range.md)):
+- The crd-jobs host provider (`crd-ceir-host`, the parallel tier) counts a parallel range with
+  `exec::parallel_range_count` and indexes it with `parallel_range_index`, as both sequential tiers do. It computed
+  `hi - lo` in i64 (undefined past half the line; `[INT64_MIN, INT64_MAX)` by 2^62 came out empty) and cut the count
+  to 32 bits (2^32 + 3 indices ran as 3, 2^33 as none).
+- The parallel tier's budget rule. Everything the submitting thread runs spends the run's budget (the provider's
+  submitting interpreter, 2^24), as in the reference: its own ops, one step per parallel index and the map_reduce fold
+  (one step per fold step plus the fold's ops, charged back with `charge_from`). The indices are spent at once
+  (`Interpreter::spend_fuel(steps)`) before anything is sized from the count, so a range past the budget is
+  FuelExhausted on the parallel op before a map slot, an error slot or a job exists; the provider used to size three
+  per-index arrays from whatever count the program chose and never charged the indices. Each body a pool worker runs
+  (a range index's body, a pooled launch body) keeps its own budget `sub_fuel`, so a body's budget does not depend on
+  the job split. With bodies that dispatch nothing, the submitting interpreter ends with exactly the reference's
+  remaining budget. The fold used to run on one `sub_fuel` budget, uncharged.
+- A body the provider runs on a sub-interpreter (a range index on a worker, a fold step, a pooled launch body) starts at
+  the level of the op that runs it, so it stops at `exec::kMaxNesting` on the op the reference blames. The level is read
+  on the submitting thread while the op runs and travels with the job (`Interpreter::set_nesting`), because a pooled
+  launch's body runs after its submitter has moved on. Each body started at level 0, so a body run 20 levels down had
+  20 more levels than its program.
+- Bodies on pool workers run on Medium fibers (512 KiB). On Small (64 KiB) fibers a win-asan worker faulted on the guard
+  page past about 35 levels (34 fitted, 36 did not; about 1.9 KB a level), so a parallel body recursing 30 calls deep
+  ended the process with an access violation and no report. 64 levels take about 120 KiB. A body never waits, so it
+  holds a fiber only while it runs, one per worker; Large has 16 fibers, fewer than a pool may have workers. This
+  assumes a pool has at least as many Medium fibers as workers: every caller that runs the provider (crd-sandbox and
+  the application through the default `jobs::Config`, ceridc, the tests) keeps the default 64, and only the
+  fiber-exhaustion specimen lowers it.
+- Each body's scratch allocator starts with a 64 KiB chunk and grows by chunks: every range index, pooled launch and
+  fold allocated the default 256 MiB first chunk, which the debug heap fills (256 indices took 16.8 s on win-debug,
+  0.27 s now) and which each busy worker held.
+- Unchanged and recorded: a parallel op inside a body the provider runs on a sub-interpreter (a range body, a fold, a
+  pooled launch body) fails NoSemantics, because sub-interpreters carry no parallel context, where the reference runs
+  it; and a pooled launch's error reaches the run at its await, where the reference raises it when the launch runs.
+- Not yet: the provider is not in a fuzz target. Per-item budgets, the nested-parallel refusal and asynchronous launch
+  errors make its agreement with the sequential tiers a filtered oracle (the same answer when the reference completes,
+  no body needs more than `sub_fuel` and no parallel op runs inside a body), not an identity.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

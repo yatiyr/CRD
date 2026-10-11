@@ -701,8 +701,11 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     fx::Authored                       a(&alloc);
     fx::author(a, &alloc);
     const ReplayRecord rec = record_on(a, ck::reference_device_executor(&alloc), kExact, &alloc);
-    (void)std::remove(kRecordFile);
-    REQUIRE(ck::write_record_file(StringView{kRecordFile}, rec) == ck::RecordWrite::Ok);
+    // Its own file: CTest runs each case as its own process in one directory, in parallel, and the first case's file
+    // was removed under it.
+    constexpr const char* unbound_file = "diag9a_device_record_unbound.crpl";
+    (void)std::remove(unbound_file);
+    REQUIRE(ck::write_record_file(StringView{unbound_file}, rec) == ck::RecordWrite::Ok);
 
     namespace perf = crd::perf;
     perf::DiagServiceConfig config;
@@ -716,7 +719,7 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     REQUIRE(ck::register_replay_run(svc, cmd));
     perf::DiagRequest r;
     r.command    = ck::kReplayRunCommand;
-    r.path       = StringView{kRecordFile};
+    r.path       = StringView{unbound_file};
     r.page_items = 64U;
     r.page_bytes = perf::kDiagMaxPageBytes;
     const perf::DiagResult result = svc.execute(r);
@@ -731,7 +734,7 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     REQUIRE(ck::register_replay_prepare(svc, prepare));
     r.command = ck::kReplayPrepareCommand;
     const perf::DiagResult prepared = svc.execute(r);
-    (void)std::remove(kRecordFile);
+    (void)std::remove(unbound_file);
     INFO(prepared.json.c_str());
     CHECK(prepared.status == perf::DiagStatus::Ok);
     CHECK(has(view(prepared.json), R"("input":"device-tolerance")"));

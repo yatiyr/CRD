@@ -4,12 +4,24 @@
 #include <crd/jobs/jobs.hpp> // crd::jobs::parallel_for / wait / Counter — the PRIVATE backend (never in a public header)
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
+#include <cstdint> // UINT32_MAX
 #include <new>     // placement new
 #include <utility> // std::move
 
 namespace crd::ceir::host
 {
 using exec::ExecError;
+
+// DIAG.10a: the fiber stack of a body a pool worker runs (a parallel range's indices, a pooled launch body). Such a
+// body starts at the level of the op that runs it and may nest up to exec::kMaxNesting. On win-asan a worker spent
+// about 1.9 KB of fiber stack per level (34 levels fitted in a Small 64 KiB fiber and 36 faulted on its guard page), so
+// 64 levels take about 120 KiB: Medium (512 KiB) holds that four times over. A body never waits, so it holds its fiber
+// only while it runs, at most one per worker; Large has 16 fibers, fewer than a pool may have workers.
+constexpr crd::jobs::StackSize kBodyStack = crd::jobs::StackSize::Medium;
+// DIAG.10a: the first chunk of a body's own scratch (each parallel index, each pooled launch and each fold); it grows
+// by further chunks as a body needs them. The default first chunk is 256 MiB: every index of a range took one (the
+// debug heap filled it, about 65 ms an index on win-debug), and each busy worker held 256 MiB.
+constexpr crd::usize kBodyScratchChunk = crd::usize{64} << 10U;
 
 // CEIR-11a stage 3: one jobs-backed launch's state — its OWN allocator (the worker's sub-interpreter + the result buffer),
 // the body's yields (filled by the worker BEFORE the counter decrements — the counter is the happens-before edge), the
@@ -28,8 +40,9 @@ struct PooledToken
     ExecError                    err      = ExecError::None;
     const Operation*             err_op   = nullptr;      // DIAG.8a: the body op the error was recorded on (or null)
     inspect::Session*            session  = nullptr;      // DIAG.8b: the attached session (the body is detached)
+    crd::u32                     nesting  = 0U;           // DIAG.10a: the launch op's level, read when it ran
     bool                         waited   = false;        // resolve waits the counter exactly once
-    PooledToken() : result(&scratch) {}
+    PooledToken() : scratch(kBodyScratchChunk), result(&scratch) {}
 };
 
 namespace
@@ -40,6 +53,7 @@ void run_launch(void* data)
 {
     auto* const t = static_cast<PooledToken*>(data);
     exec::Interpreter sub(*t->proto, &t->scratch, t->sub_fuel);
+    sub.set_nesting(t->nesting); // DIAG.10a: the body runs inside its launch op's level, as the reference runs it
     sub.set_cancel_flag(t->cancel);
     if (t->session != nullptr)
     {
@@ -169,6 +183,7 @@ struct RangeJob
     crd::i64                 lo;
     crd::i64                 step;
     crd::u64                 sub_fuel;
+    crd::u32                 nesting; // DIAG.10a: the parallel op's level (each index's body runs inside it)
     crd::i64*                out;  // pre-sized [count]; each index writes its DISJOINT slot
     ExecError*               errs; // pre-sized [count], all None; each failing index writes its own slot (no atomics)
     const Operation**        err_ops; // DIAG.8a: pre-sized [count], all null; the body op each failing index blamed
@@ -193,18 +208,28 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
         return in.fail(ExecError::BadForStep, &op);
     }
 
-    const crd::u32 count = (hi > lo) ? static_cast<crd::u32>((hi - lo + step - 1) / step) : 0U;
-    for (crd::u32 i = 0; i < count; ++i)
+    // DIAG.10a: the reference's count, in unsigned arithmetic (`hi - lo` overflowed i64 for a range spanning more than
+    // half of it, and the count was cut to 32 bits). Each index is one step of the run's budget, as in the reference,
+    // spent here before anything is sized from the count: the per-index slots below used to be reserved for whatever
+    // count the program chose. Each index's body still runs on its own budget (`sub_fuel`, the per-item rule of this
+    // tier), so a body's budget does not depend on how the range is split. The jobs split takes a u32 count; the run's
+    // budget (2^24) refuses a larger one first.
+    const crd::u64 count = exec::parallel_range_count(lo, hi, step);
+    if (count > UINT32_MAX || !in.spend_fuel(count))
     {
-        out.push_back(0);
+        return in.fail(ExecError::FuelExhausted, &op);
     }
     if (count == 0U) // empty range: an empty map, no jobs
     {
         return ExecError::None;
     }
+    for (crd::u64 i = 0; i < count; ++i)
+    {
+        out.push_back(0);
+    }
     containers::Array<ExecError> errs(pc->self->map_allocator());
     containers::Array<const Operation*> err_ops(pc->self->map_allocator());
-    for (crd::u32 i = 0; i < count; ++i)
+    for (crd::u64 i = 0; i < count; ++i)
     {
         errs.push_back(ExecError::None);
         err_ops.push_back(nullptr);
@@ -215,21 +240,23 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
     (void)in.ctx().op_region_exec(op, re);
     const crd::jobs::Priority prio = priority_for(re.realtime);
 
-    RangeJob rj{pc->proto,  pc->module,  op.region(0),   pc->cancel, lo, step, pc->sub_fuel,
+    RangeJob rj{pc->proto,  pc->module,  op.region(0),   pc->cancel, lo, step, pc->sub_fuel, in.nesting(),
                 out.data(), errs.data(), err_ops.data(), pc->session};
     crd::jobs::Counter* const counter = crd::jobs::parallel_for(
-        count, pc->num_jobs,
+        static_cast<crd::u32>(count), pc->num_jobs,
         [rjp = &rj](crd::u32 begin, crd::u32 end) {
             for (crd::u32 idx = begin; idx < end; ++idx)
             {
-                crd::memory::GrowableTlsfAllocator item_scratch; // this index's OWN scratch — never the shared Context arena
+                // this index's OWN scratch — never the shared Context arena
+                crd::memory::GrowableTlsfAllocator item_scratch(kBodyScratchChunk);
                 exec::Interpreter           sub(*rjp->proto, &item_scratch, rjp->sub_fuel);
+                sub.set_nesting(rjp->nesting);    // DIAG.10a: the body runs inside the parallel op's level
                 sub.set_cancel_flag(rjp->cancel); // §30 cooperative cancel — ranges observe it in the step loop
                 if (rjp->session != nullptr)
                 {
                     rjp->session->attach_detached(sub);
                 }
-                const crd::i64              iv     = rjp->lo + static_cast<crd::i64>(idx) * rjp->step;
+                const crd::i64              iv     = exec::parallel_range_index(rjp->lo, rjp->step, idx);
                 crd::i64                    iva[1] = {iv};
                 containers::Array<crd::i64> yield(&item_scratch);
                 const ExecError e = sub.invoke_region(*rjp->module, *rjp->body, containers::ConstSpan<crd::i64>(iva, 1U),
@@ -249,13 +276,13 @@ ExecError run_parallel_map(exec::Interpreter& in, const Operation& op, ParallelC
                 }
             }
         },
-        crd::jobs::StackSize::Small, prio);
+        kBodyStack, prio);
     crd::jobs::wait(counter);
 
     // first-in-index-order error (deterministic first-offender; disjoint per-index slots, no atomics). DIAG.8a: blame
     // that index's innermost body op, as the sequential reference and the compiled plan do; the parallel op only when
     // the body named none.
-    for (crd::u32 idx = 0; idx < count; ++idx)
+    for (crd::usize idx = 0; idx < errs.size(); ++idx)
     {
         if (errs[idx] != ExecError::None)
         {
@@ -306,15 +333,23 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
     }
 
     const Region* const           combine = op.region(1);
-    crd::memory::GrowableTlsfAllocator  fold_scratch; // the fold's OWN scratch — never the shared Context arena or `in`'s frame
-    exec::Interpreter             fold(*pc->proto, &fold_scratch, pc->sub_fuel);
+    // the fold's OWN scratch — never the shared Context arena or `in`'s frame
+    crd::memory::GrowableTlsfAllocator fold_scratch(kBodyScratchChunk);
+    // DIAG.10a: the fold runs in index order on this thread, so it spends the run's budget and runs inside this op's
+    // level, as the reference's fold does (it ran on one `sub_fuel` budget, from level 0).
+    exec::Interpreter             fold(*pc->proto, &fold_scratch, in.fuel());
+    fold.set_nesting(in.nesting());
     fold.set_cancel_flag(pc->cancel); // §30: request_cancel also stops a long reduce
     if (pc->session != nullptr)
     {
         pc->session->attach_detached(fold); // a sub-interpreter: the session's stop state belongs to the top run
     }
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i)
+    for (crd::usize i = 0; i < out.size(); ++i)
     {
+        if (!fold.spend_fuel()) // DIAG.10a: each fold step is one step, as each index is
+        {
+            return in.fail(ExecError::FuelExhausted, &op);
+        }
         crd::i64                    ba[2] = {acc, out[i]}; // (acc, elem) — the combine reads its two block-args in INDEX order
         containers::Array<crd::i64> yield(&fold_scratch);
         const ExecError e = fold.invoke_region(*pc->module, *combine, containers::ConstSpan<crd::i64>(ba, 2U), yield);
@@ -328,6 +363,7 @@ ExecError eval_map_reduce(exec::Interpreter& in, const Operation& op)
         }
         acc = yield[0];
     }
+    in.charge_from(fold); // DIAG.10a: the fold's steps are the run's
     pc->self->store_map(&op, std::move(out)); // §118 inspection parity — the intermediate map is free (already built)
     in.set_value(op.result(0U), acc);
     return ExecError::None; // task.map_reduce is an EXPRESSION op — the reduced value is its SSA result
@@ -381,8 +417,8 @@ ExecError launch_pooled_impl(exec::Interpreter& in, const Operation& op, crd::i3
     }
     RegionExec re{};
     (void)in.ctx().op_region_exec(op, re);
-    const crd::i64 handle =
-        pc->self->pool_launch(*pc->proto, *pc->module, op.region(0), pc->cancel, pc->sub_fuel, priority_for(re.realtime), pin_thread);
+    const crd::i64 handle = pc->self->pool_launch(*pc->proto, *pc->module, op.region(0), pc->cancel, pc->sub_fuel,
+                                                  priority_for(re.realtime), pin_thread, in.nesting());
     in.set_value(op.result(0), handle);
     return ExecError::None;
 }
@@ -648,7 +684,7 @@ crd::jobs::Priority priority_for(RealtimeClass rc) noexcept
 
 crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module& module, const Region* body,
                                    const std::atomic<bool>* cancel, crd::u64 sub_fuel, crd::jobs::Priority prio,
-                                   crd::i32 pin_thread)
+                                   crd::i32 pin_thread, crd::u32 nesting)
 {
     void* const  mem = m_alloc->allocate(sizeof(PooledToken), alignof(PooledToken));
     auto* const  t   = new (mem) PooledToken(); // heap-owned (the table never moves it — the JobDecl captures &t)
@@ -658,6 +694,7 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
     t->cancel = cancel;
     t->sub_fuel = sub_fuel;
     t->session  = m_session;
+    t->nesting  = nesting;
     const crd::i64 handle = kPoolBase + static_cast<crd::i64>(m_pooled.size());
     m_pooled.push_back(t);
     ++m_pooled_total; // the cumulative witness (survives the drain)
@@ -666,6 +703,7 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
     jd.data       = t;
     jd.pin_thread = pin_thread;
     jd.priority   = prio;
+    jd.stack      = kBodyStack; // DIAG.10a: the body may nest to exec::kMaxNesting
     t->counter    = crd::jobs::run(jd);
     return handle;
 }

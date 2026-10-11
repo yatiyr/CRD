@@ -185,6 +185,9 @@ public:
     // of `parent` (a parallel map or fold step) starts at the parent's level, so a body calling back cannot reset it.
     [[nodiscard]] crd::u32 nesting() const noexcept { return m_nesting; }
     void inherit_nesting(const Interpreter& parent) noexcept { m_nesting = parent.m_nesting; }
+    // The same for a body that runs later or on another thread (a pooled launch or a parallel range on a pool
+    // worker): the submitting thread reads `nesting()` while the op runs and hands the level over with the job.
+    void set_nesting(crd::u32 level) noexcept { m_nesting = level; }
     // DIAG.10a: the steps a sub-interpreter spent running a body of an op of this one are this run's steps: this
     // interpreter keeps what `sub` has left. A body given a fresh copy of the budget at every nesting level made the
     // work of a body that re-enters the program grow as the budget to the power of the depth.
@@ -207,6 +210,17 @@ public:
     [[nodiscard]] ExecError call(const Operation& call_op, containers::Array<crd::i64>& out_results); // a func.call frame
     [[nodiscard]] crd::i64  cell_read(const Operation& state_op);       // §20: init-fill on first eval; return ring oldest
     [[nodiscard]] bool      spend_fuel() noexcept;                      // decrement the step budget; false ⇒ exhausted
+    // DIAG.10a: spend `steps` at once (a parallel range's indices, charged before anything is sized from its count);
+    // false ⇒ the budget holds fewer, and nothing is spent.
+    [[nodiscard]] bool spend_fuel(crd::u64 steps) noexcept
+    {
+        if (steps > m_fuel)
+        {
+            return false;
+        }
+        m_fuel -= steps;
+        return true;
+    }
     ExecError               fail(ExecError e, const Operation* op) noexcept; // record the offending op (first wins), return e
     // DIAG.8a: the op the current run's error was recorded on (null when ok, or when the failure named no op). A caller
     // that ran a body on a SEPARATE sub-interpreter reads it before the sub dies and blames that innermost op, falling

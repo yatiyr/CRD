@@ -50,6 +50,10 @@ class HostProvider final : public IExecutionProvider
 public:
     // `alloc` backs the persistent map-output buffers (must outlive the provider). `num_jobs` = the parallel_for job
     // split (⭐ the RESULT is num_jobs-INDEPENDENT — the 6z determinism seed); `sub_fuel` = a per-index step budget.
+    // DIAG.10a: `sub_fuel` bounds each body a pool worker runs (a parallel index's body, a pooled launch body), so a
+    // body's budget does not depend on the split. Everything the submitting thread runs spends the run's budget (2^24),
+    // as in the reference: its own ops, one step per parallel index (spent before the range is sized, so a range past
+    // the budget is FuelExhausted on the parallel op) and the map_reduce fold, one step per fold step plus its ops.
     explicit HostProvider(memory::IAllocator* alloc, crd::u32 num_jobs = 8U, crd::u64 sub_fuel = crd::u64{1} << 20U);
 
     [[nodiscard]] containers::StringView name() const noexcept override;
@@ -105,9 +109,11 @@ public:
     static constexpr crd::i64 kPoolBase = crd::i64{1} << 40; // far above any sequential yield-store index
     // Create a pooled token for a launch body + SUBMIT it to the pool (the body runs on a fresh sub over the token's own
     // scratch, filling its result before the counter decrements). Returns the token's i64 handle (kPoolBase + index).
+    // DIAG.10a: `nesting` is the launch op's level on the submitting interpreter (`Interpreter::nesting()` while the op
+    // runs); the body starts there, as the reference runs it inline, and stops at exec::kMaxNesting.
     [[nodiscard]] crd::i64 pool_launch(const exec::Interpreter& proto, const Module& module, const Region* body,
                                        const std::atomic<bool>* cancel, crd::u64 sub_fuel, crd::jobs::Priority prio,
-                                       crd::i32 pin_thread);
+                                       crd::i32 pin_thread, crd::u32 nesting);
     // Resolve a token's yields: pooled ⇒ wait the counter (once) + return its result (or its typed error); returns false
     // ⇒ a bad/forged handle. `out` is valid only when the return is true AND `*out_err == None`. DIAG.8a: `out_op`
     // is the launch body's op that raised the error (null when ok or when the body named none), for the await to blame.
