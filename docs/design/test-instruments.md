@@ -295,6 +295,18 @@ the classes it must cover: [DIAG.10b](runtime-diagnostics.md#diag-10b). Run it i
 Windows, one lane at a time: a seed edits the shared checkout, so a second lane building from it would compile the
 seed.
 
+The seeds run hosted (2026-10-11): the `Seeded detector failures` step of the `windows` and `linux-gcc` jobs runs the
+runner on win-debug, win-asan, linux-gcc-debug, linux-gcc-asan and linux-clang-tsan, the lanes the seeds were
+qualified on, after the lane's build and tests pass, in the lane's own tier. It passes `--preset` so every run starts
+from the test preset's environment (linux-clang-tsan's TSan options and suppressions), and writes the report and each
+phase's build log, CTest log and JUnit under `build/<preset>/evidence/diag-seeded-faults`, which the lane's evidence
+artifact carries. The runner puts the lane's own `Testing/Temporary/Last*.log` back as the lane's test run left them
+and removes any its runs created, so the uploaded record is the lane's, not a `LastTestsFailed.log` naming the tests a
+seed broke. The step is a multi-preset entry of `preset_steps` in the [tier mapping](ci-tiers.md), and the
+verdict tests derive the hosted lanes' facts from those presets, so a seed no hosted lane runs, or a hosted lane no
+seed applies to, fails them. Applicable seeds: 3 on win-debug and linux-gcc-debug, 5 on win-asan, 6 on
+linux-gcc-asan and linux-clang-tsan.
+
 The committed sanitizer suppression files may name only third-party shared libraries (`lib*.so*`): the verdict tests
 (`test-diag-seeded-faults.py`, the `crd-diag-seeded-faults` CTest and a repository CI step) refuse any other entry,
 so the rule above about Cerid code is enforced, not only stated. A seed may add such an entry for its own run.

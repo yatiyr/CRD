@@ -3,10 +3,11 @@
 
 Contract: docs/design/ci-tiers.md. Every visible configure preset has exactly one owner in
 `.github/ci-tiers.json`; every owning job reads its preset list from the preflight job, is gated on a non-empty
-list, and is a dependency of the required aggregate; a preset step (a non-CMake check riding on one preset's matrix
-entry, such as the GenMC model on linux-clang-tsan) exists in that preset's job, is gated on it and inherits its
-tier; the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited
-to superseded pull-request runs.
+list, and is a dependency of the required aggregate; a preset step (a non-CMake check riding on preset matrix
+entries, such as the GenMC model on linux-clang-tsan or the seeded detector failures on the five lanes they were
+qualified on) exists in each listed preset's job, is gated on exactly the listed presets and inherits each one's
+tier; the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited to
+superseded pull-request runs.
 """
 from pathlib import Path
 import argparse
@@ -52,6 +53,47 @@ def workflow_jobs(text):
         elif current is not None:
             blocks[current] += line
     return blocks
+
+
+def validate_preset_step(step, spec, entries, blocks):
+    """Problems of one preset step.
+
+    A step rides on one preset (`preset` with the `tier` it inherits, e.g. the GenMC model on linux-clang-tsan) or
+    on several (`presets`, each leg in its own preset's tier, e.g. the seeded detector failures). In every owning job
+    the step exists, is gated on each listed preset of that job, and names no preset the mapping does not list.
+    """
+    if 'presets' in spec:
+        presets = spec.get('presets')
+        listed_once = isinstance(presets, list) and presets and len(set(presets)) == len(presets)
+        if set(spec) != {'presets'} or not listed_once:
+            return ['step %r lists its presets once each and declares no tier of its own (each leg inherits its '
+                    "preset's)" % step]
+    elif set(spec) == {'preset', 'tier'}:
+        presets = [spec['preset']]
+    else:
+        return ['step %r declares preset and tier, or a presets list' % step]
+    problems = []
+    gated = {}
+    for preset in presets:
+        entry = entries.get(preset)
+        if entry is None or entry.get('tier') == 'diagnostic':
+            problems.append('step %r rides on %r, which is not a hosted preset' % (step, preset))
+            continue
+        if 'tier' in spec and entry.get('tier') != spec['tier']:
+            problems.append('step %r is declared %s-tier but its preset %s is %s-tier'
+                            % (step, spec['tier'], preset, entry.get('tier')))
+        job = entry.get('job', '')
+        step_block = re.search(r'^ +- name: %s\n((?: {8,}\S.*\n)+)' % re.escape(step), blocks.get(job, ''), re.M)
+        if step_block is None:
+            problems.append('job %s lacks the step %r' % (job, step))
+            continue
+        gated.setdefault(job, set(re.findall(r"matrix\.preset == '([^']+)'", step_block.group(1))))
+        if preset not in gated[job]:
+            problems.append("step %r must be gated on matrix.preset == '%s'" % (step, preset))
+    for job, names in sorted(gated.items()):
+        for name in sorted(names - set(presets)):
+            problems.append("step %r in job %s is gated on %s, which the mapping does not list" % (step, job, name))
+    return problems
 
 
 def validate(tiers, presets_document, workflow_text):
@@ -117,20 +159,7 @@ def validate(tiers, presets_document, workflow_text):
         if 'runs-on: %s' % jobs[job]['runner'] not in block:
             problems.append('job %s must run on %s' % (job, jobs[job]['runner']))
     for step, spec in tiers.get('preset_steps', {}).items():
-        preset = spec.get('preset')
-        entry = entries.get(preset)
-        if entry is None or entry.get('tier') == 'diagnostic':
-            problems.append('step %r rides on %r, which is not a hosted preset' % (step, preset))
-            continue
-        if entry.get('tier') != spec.get('tier'):
-            problems.append('step %r is declared %s-tier but its preset %s is %s-tier'
-                            % (step, spec.get('tier'), preset, entry.get('tier')))
-        step_block = re.search(r'^ +- name: %s\n((?: {8,}\S.*\n)+)' % re.escape(step),
-                               blocks.get(entry.get('job', ''), ''), re.M)
-        if step_block is None:
-            problems.append('job %s lacks the step %r' % (entry.get('job'), step))
-        elif ("matrix.preset == '%s'" % preset) not in step_block.group(1):
-            problems.append("step %r must be gated on matrix.preset == '%s'" % (step, preset))
+        problems.extend(validate_preset_step(step, spec, entries, blocks))
     for name, entry in entries.items():
         test = entry.get('test')
         if test and not re.search(r'--preset\s+%s\b' % re.escape(test), blocks.get(entry.get('job', ''), '')):

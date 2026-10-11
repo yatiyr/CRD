@@ -302,6 +302,19 @@ jobs:
           python scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit $testExit
           exit $LASTEXITCODE
 
+      # DIAG.10b seeded detector failures (docs/design/runtime-diagnostics.md#diag-10b): once the lane's build and
+      # tests pass, each seed that applies to the lane breaks one instrument (a sanitizer not compiled in, a report
+      # redirected or suppressed, a removed redzone check, a lost fatal record, a half-compared symbol identity),
+      # rebuilds its targets and must make the named tests fail with the named text in CTest's JUnit; the tree is
+      # restored byte for byte and rebuilt green. Nothing is rerun. The report and every phase's logs and JUnit land in
+      # the lane's evidence.
+      - name: Seeded detector failures
+        if: matrix.preset == 'win-debug' || matrix.preset == 'win-asan'
+        shell: pwsh
+        run: |
+          python scripts/diag-seeded-faults.py --build-dir build/${{ matrix.preset }} --preset ${{ matrix.preset }} `
+            --trace-dir build/${{ matrix.preset }}/evidence/diag-seeded-faults
+
       - name: Evidence bundle and summary
         if: always()
         shell: pwsh
@@ -700,6 +713,16 @@ jobs:
           test_exit=$?
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
+
+      # DIAG.10b seeded detector failures, as on win-debug and win-asan: the preset's test environment (the
+      # TSan suppressions and options) is the base every seed changes.
+      - name: Seeded detector failures
+        if: >-
+          matrix.preset == 'linux-gcc-debug' || matrix.preset == 'linux-gcc-asan' ||
+          matrix.preset == 'linux-clang-tsan'
+        run: |
+          python3 scripts/diag-seeded-faults.py --build-dir build/${{ matrix.preset }} --preset ${{ matrix.preset }} \
+            --trace-dir build/${{ matrix.preset }}/evidence/diag-seeded-faults
 
       # DIAG.4b weak-memory model (user decision 2026-10-10): GenMC runs in the complete tier beside ThreadSanitizer,
       # whatever the TSan tests concluded. It is built from the pinned source (tools/genmc) against the runner's apt

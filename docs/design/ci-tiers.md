@@ -32,14 +32,22 @@ lane runs the whole suite under ThreadSanitizer, four tests at a time, with
 The same matrix entry runs the DIAG.4b GenMC weak-memory model (user decision 2026-10-10): `install-genmc.py` builds
 the pinned GenMC against the runner's apt LLVM 20 (cached per pin and LLVM version) and `check-genmc-models.py`
 requires the repaired model to verify and the seeded broken handshake to be found. It is a *preset step*, a
-non-CMake check that rides on one preset and inherits its tier, declared under `preset_steps` in the mapping.
+non-CMake check that rides on one preset and inherits its tier, declared under `preset_steps` in the mapping. A
+preset step may instead list several presets (`presets`, no tier of its own): each leg then runs in its own preset's
+tier. The DIAG.10b seeded detector failures are one (2026-10-11): the `Seeded detector failures` step of the
+`windows` and `linux-gcc` jobs runs [diag-seeded-faults.py](../../scripts/diag-seeded-faults.py) on win-debug,
+win-asan, linux-gcc-debug and linux-gcc-asan in the change tier and on linux-clang-tsan in the complete tier, after
+the lane's build and tests pass ([test instruments](test-instruments.md#seeded-detector-failures-diag10b)). Each seed
+rebuilds only the targets holding its detecting tests, so a lane adds a few incremental builds: 16 s on the local
+win-debug tree and 92 s on win-asan.
 
 [check-ci-tiers.py](../../scripts/check-ci-tiers.py) is the `crd-ci-tiers` CTest, a preflight step, a repository
 step and a tooling test. It fails when a visible preset has no owner or an entry names no preset, when an owning job
 does not need `preflight`, is not gated on its non-empty list, does not take its matrix from the resolver's output,
 is missing from the required aggregate or runs on another runner than declared, when a preset step is missing from
-its preset's job, is not gated on that preset or declares another tier, when a diagnostic preset is invoked, when
-the class table lacks a catch-all, when a trigger is missing, or when cancellation is not limited to pull requests.
+a listed preset's job, is not gated on that preset, is gated on a preset the mapping does not list, rides on a
+diagnostic preset or declares another tier, when a diagnostic preset is invoked, when the class table lacks a
+catch-all, when a trigger is missing, or when cancellation is not limited to pull requests.
 
 ## Resolution
 

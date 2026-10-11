@@ -1678,6 +1678,36 @@ class CiPresetSteps(unittest.TestCase):
         problems = ci_tiers.validate(retiered, presets, workflow)
         self.assertTrue(any('not a hosted preset' in p for p in problems), problems)
 
+    def test_a_step_on_several_presets_is_gated_on_exactly_those_in_each_job(self):
+        tiers = ci_tiers.load_json(ROOT / '.github/ci-tiers.json')
+        presets = ci_tiers.load_json(ROOT / 'CMakePresets.json')
+        workflow = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+        step = 'Seeded detector failures'
+        self.assertEqual(tiers['preset_steps'][step],
+                         {'presets': ['win-debug', 'win-asan', 'linux-gcc-debug', 'linux-gcc-asan', 'linux-clang-tsan']})
+        windows_gate = "if: matrix.preset == 'win-debug' || matrix.preset == 'win-asan'\n"
+        self.assertIn(windows_gate, workflow)
+        dropped = workflow.replace(windows_gate, "if: matrix.preset == 'win-debug'\n")
+        problems = ci_tiers.validate(tiers, presets, dropped)
+        self.assertEqual(["step %r must be gated on matrix.preset == 'win-asan'" % step], problems)
+        widened = workflow.replace(windows_gate, windows_gate[:-1] + " || matrix.preset == 'win-release'\n")
+        problems = ci_tiers.validate(tiers, presets, widened)
+        self.assertEqual(["step %r in job windows is gated on win-release, which the mapping does not list" % step],
+                         problems)
+        linux_step = workflow.rindex('- name: %s' % step)
+        missing = workflow[:linux_step] + '- name: Something else' + workflow[linux_step + len(step) + 8:]
+        problems = ci_tiers.validate(tiers, presets, missing)
+        self.assertEqual(['job linux-gcc lacks the step %r' % step] * 3, problems)
+        for spec, text in (({'presets': ['win-debug', 'win-debug']}, 'once each'),
+                           ({'presets': []}, 'once each'),
+                           ({'presets': ['win-debug'], 'tier': 'change'}, 'no tier of its own'),
+                           ({'preset': 'win-debug'}, 'preset and tier'),
+                           ({'presets': ['win-debug', 'linux-clang-coverage']}, 'not a hosted preset')):
+            respecified = json.loads(json.dumps(tiers))
+            respecified['preset_steps'][step] = spec
+            problems = ci_tiers.validate(respecified, presets, workflow)
+            self.assertTrue(any(text in p for p in problems), (spec, problems))
+
 
 if __name__ == '__main__':
     unittest.main()

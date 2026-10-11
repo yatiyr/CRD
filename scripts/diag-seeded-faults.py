@@ -14,7 +14,8 @@ or extra environment for the test run. For every seed that applies to the build 
 
 A seed is DETECTED only when each of its detecting tests is in the JUnit, failed, and its output carries the
 diagnostic text the registry names. The verdict is read from JUnit and the test output, never from CTest's exit
-status, and no test is ever rerun to turn a failure into a pass.
+status, and no test is ever rerun to turn a failure into a pass. The lane's own CTest record
+(`Testing/Temporary/Last*.log`) is put back as the lane's test run left it once the seeds are done.
 
 Verdicts (exit code of a single seed; a run exits 0 only when every applicable seed is DETECTED):
   DETECTED 0, SURVIVED 2, CONTROL_FAILED 3, ZERO_RUN 4, BUILD_FAILED 5, RESTORE_FAILED 6, REGISTRY_STALE 7,
@@ -460,6 +461,32 @@ class Lane:
                 return None
 
 
+class LaneTestRecord:
+    """Keep the lane's own CTest record (`Testing/Temporary/Last*.log`) as the lane's test run left it.
+
+    The seeds run CTest in the lane's build tree, which rewrites those files: a seeded run would leave a
+    `LastTestsFailed.log` naming the tests it broke, and the last restored run would replace the lane's full
+    `LastTest.log`. On exit every such file is put back byte for byte and any the seeds created is removed; the
+    seeds' own CTest logs and JUnit live in the trace directory.
+    """
+
+    def __init__(self, build_dir):
+        self.directory = Path(build_dir) / "Testing" / "Temporary"
+        self.saved = {}
+
+    def __enter__(self):
+        self.saved = {path.name: path.read_bytes() for path in self.directory.glob("Last*.log") if path.is_file()}
+        return self
+
+    def __exit__(self, *exc):
+        for path in self.directory.glob("Last*.log"):
+            if path.name not in self.saved:
+                path.unlink()
+        for name, data in self.saved.items():
+            (self.directory / name).write_bytes(data)
+        return False
+
+
 def git_state(paths, root):
     """git's porcelain status lines for `paths` ([] when all are unchanged; None when git cannot say)."""
     if not paths:
@@ -659,10 +686,12 @@ def main(argv):
     lane = Lane(args.build_dir, cmake, ctest, args.jobs, args.test_timeout, args.build_timeout)
 
     records = []
-    for seed in selected:
-        record = run_seed(seed, facts, lane, base_env, trace_root, ROOT)
-        records.append(record)
-        print("%-40s %-22s %s: %s" % (record["id"], record["class"], record["verdict"], record["reason"]), flush=True)
+    with LaneTestRecord(args.build_dir):
+        for seed in selected:
+            record = run_seed(seed, facts, lane, base_env, trace_root, ROOT)
+            records.append(record)
+            print("%-40s %-22s %s: %s" % (record["id"], record["class"], record["verdict"], record["reason"]),
+                  flush=True)
     report = {"schema": REPORT_SCHEMA, "lane": facts, "build_dir": str(Path(args.build_dir).resolve()),
               "preset": args.preset, "seeds": records}
     (args.json or trace_root / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

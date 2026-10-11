@@ -39,7 +39,9 @@
     "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"}
   },
   "preset_steps": {
-    "GenMC weak-memory model": {"preset": "linux-clang-tsan", "tier": "complete"}
+    "GenMC weak-memory model": {"preset": "linux-clang-tsan", "tier": "complete"},
+    "Seeded detector failures": {"presets": ["win-debug", "win-asan", "linux-gcc-debug", "linux-gcc-asan",
+                                             "linux-clang-tsan"]}
   },
   "classes": [
     {"name": "register", "tier": "complete", "patterns": ["docs/third-party-defects.md"]},

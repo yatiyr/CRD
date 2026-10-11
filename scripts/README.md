@@ -61,7 +61,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `tests/support/diag/seeded-faults.json` that fits the lane (a source edit or extra sanitizer environment), rebuilds,
   reruns its detecting tests and reads their JUnit; it restores and rebuilds the tree after each seed. `--validate`
   checks the registry against the tree; `test-diag-seeded-faults.py` covers every verdict without a build and is a
-  CTest and repository CI step.
+  CTest and repository CI step. The `Seeded detector failures` CI step runs it on the five lanes the seeds were
+  qualified on (win-debug, win-asan, linux-gcc-debug, linux-gcc-asan, linux-clang-tsan) and keeps the lane's own
+  `Testing/Temporary/Last*.log` record as the lane's test run left it.
 - Diagnostic coverage ([contract](../docs/design/runtime-diagnostics.md#diag-10b)):
   `diag-coverage.py --build-dir <linux-clang-coverage tree>` runs the test set of
   `tests/support/diag/coverage-scope.json` once under clang source-based coverage, reports regions, branches,

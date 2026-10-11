@@ -27,6 +27,30 @@ FACTS = {"os": "linux", "asan": True, "tsan": False, "ubsan": True, "msvc": Fals
          "shipping": False}
 
 
+def preset_facts(name):
+    """The lane facts a configure preset promises: its cache variables through `inherits`, and its compiler."""
+    presets = {p["name"]: p for p in
+               json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))["configurePresets"]}
+
+    def cache(preset):
+        parents = presets[preset].get("inherits", [])
+        values = {}
+        for parent in reversed([parents] if isinstance(parents, str) else parents):
+            values.update(cache(parent))
+        values.update(presets[preset].get("cacheVariables", {}))
+        return values
+
+    values = cache(name)
+
+    def on(key):
+        return str(values.get(key, "OFF")).upper() == "ON"
+
+    msvc = values.get("CMAKE_CXX_COMPILER") == "cl"
+    return {"os": "windows" if msvc else "linux", "asan": on("CRD_ENABLE_ASAN"), "tsan": on("CRD_ENABLE_TSAN"),
+            "ubsan": on("CRD_ENABLE_UBSAN"), "msvc": msvc, "asserts": on("CRD_ENABLE_ASSERTS"),
+            "shipping": on("CRD_SHIPPING")}
+
+
 def junit(cases):
     """A CTest-shaped JUnit document: cases maps a name to (status, output)."""
     body = []
@@ -123,21 +147,23 @@ class RegistryTests(unittest.TestCase):
             self.assertIsNone(mod.stale_edit(s, ROOT), s["id"])
         self.assertEqual(set(mod.CLASSES), {s["class"] for s in seeds})
 
-    def test_every_committed_seed_applies_to_some_ci_lane(self):
-        lanes = [
-            {"os": "windows", "asan": False, "tsan": False, "ubsan": False, "msvc": True, "asserts": True,
-             "shipping": False},
-            {"os": "windows", "asan": True, "tsan": False, "ubsan": False, "msvc": True, "asserts": True,
-             "shipping": False},
-            {"os": "linux", "asan": False, "tsan": False, "ubsan": False, "msvc": False, "asserts": True,
-             "shipping": False},
-            {"os": "linux", "asan": True, "tsan": False, "ubsan": True, "msvc": False, "asserts": True,
-             "shipping": False},
-            {"os": "linux", "asan": False, "tsan": True, "ubsan": False, "msvc": False, "asserts": True,
-             "shipping": False},
-        ]
-        for s in mod.load_registry(mod.DEFAULT_REGISTRY):
-            self.assertTrue(any(mod.applicable_detect(s, lane) for lane in lanes), s["id"])
+    def test_every_committed_seed_runs_on_a_ci_lane_and_every_ci_lane_runs_a_seed(self):
+        # The hosted lanes are the presets the CI step `Seeded detector failures` rides on (.github/ci-tiers.json),
+        # with the lane facts their configure presets promise. A lane where no seed applies would end ZERO_RUN.
+        step = json.loads((ROOT / ".github" / "ci-tiers.json").read_text(encoding="utf-8"))["preset_steps"]
+        names = step["Seeded detector failures"]["presets"]
+        self.assertEqual(["win-debug", "win-asan", "linux-gcc-debug", "linux-gcc-asan", "linux-clang-tsan"], names)
+        lanes = {name: preset_facts(name) for name in names}
+        self.assertEqual({"os": "windows", "asan": True, "tsan": False, "ubsan": False, "msvc": True,
+                          "asserts": True, "shipping": False}, lanes["win-asan"])
+        self.assertEqual({"os": "linux", "asan": False, "tsan": True, "ubsan": False, "msvc": False,
+                          "asserts": True, "shipping": False}, lanes["linux-clang-tsan"])
+        seeds = mod.load_registry(mod.DEFAULT_REGISTRY)
+        for s in seeds:
+            self.assertTrue(any(mod.applicable_detect(s, lane) for lane in lanes.values()), s["id"])
+        applied = {name: [s["id"] for s in seeds if mod.applicable_detect(s, lane)] for name, lane in lanes.items()}
+        self.assertEqual({"win-debug": 3, "win-asan": 5, "linux-gcc-debug": 3, "linux-gcc-asan": 6,
+                          "linux-clang-tsan": 6}, {name: len(ids) for name, ids in applied.items()}, applied)
 
     def test_validate_mode_passes_on_the_tree(self):
         self.assertEqual(0, mod.main(["--validate"]))
@@ -263,6 +289,31 @@ class LaneTests(unittest.TestCase):
             self.assertEqual(root.as_posix() + "/x", env["B"])
             with self.assertRaises(mod.RegistryError):
                 mod.preset_environment("missing", root)
+
+    def test_the_lane_test_record_survives_the_seed_runs(self):
+        # The hosted evidence artifact uploads Testing/Temporary/*.log: the seeds' CTest runs must leave the lane's
+        # own record, not a LastTestsFailed.log naming the tests a seed broke.
+        with tempfile.TemporaryDirectory() as d:
+            temporary = Path(d) / "Testing" / "Temporary"
+            temporary.mkdir(parents=True)
+            (temporary / "LastTest.log").write_bytes(b"the lane's full run\r\n")
+            (temporary / "CTestCostData.txt").write_text("cost", encoding="utf-8")
+            with self.assertRaises(KeyboardInterrupt):
+                with mod.LaneTestRecord(d):
+                    (temporary / "LastTest.log").write_text("restored run", encoding="utf-8")
+                    (temporary / "LastTestsFailed.log").write_text("1:seeded test", encoding="utf-8")
+                    raise KeyboardInterrupt()
+            self.assertEqual(b"the lane's full run\r\n", (temporary / "LastTest.log").read_bytes())
+            self.assertFalse((temporary / "LastTestsFailed.log").exists())
+            self.assertEqual("cost", (temporary / "CTestCostData.txt").read_text(encoding="utf-8"))
+            (temporary / "LastTestsFailed.log").write_text("1:a lane failure", encoding="utf-8")
+            with mod.LaneTestRecord(d):
+                (temporary / "LastTestsFailed.log").unlink()
+            self.assertEqual("1:a lane failure", (temporary / "LastTestsFailed.log").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as d:
+            with mod.LaneTestRecord(d):
+                pass
+            self.assertFalse((Path(d) / "Testing").exists())
 
     def test_env_placeholders_and_seed_files(self):
         tree = Tree()

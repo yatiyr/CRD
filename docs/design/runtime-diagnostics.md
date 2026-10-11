@@ -2117,6 +2117,18 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-engine-seams.md))
   No `owned-gap` exclusion is left: the 20 remaining are `windows-only`, `dying-child`, `default-value`,
   `resource-failure`, `other-configuration` and the one `no-producer` verdict.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-seeds-on-hosted-lanes.md)):
+- The seeds run hosted on the five lanes they were qualified on (win-debug, win-asan, linux-gcc-debug, linux-gcc-asan,
+  linux-clang-tsan), as the `Seeded detector failures` step after each lane's build and tests pass, in that lane's
+  own tier, with the test preset's environment as every run's base. The runner's exit is the step's verdict (0 only
+  when every applicable seed is DETECTED; a lane where none applies is ZERO_RUN), nothing is rerun, and the report
+  with every phase's build log, CTest log and JUnit is part of the lane's evidence artifact. The seeds' CTest runs
+  share the lane's build tree, so the runner restores the lane's `Testing/Temporary/Last*.log` afterwards: the
+  uploaded record stays the lane's own run, never a `LastTestsFailed.log` naming the tests a seed broke.
+- The step is a multi-preset `preset_steps` entry of the [tier mapping](ci-tiers.md); `check-ci-tiers.py` requires
+  it in each listed preset's job, gated on exactly those presets. The verdict tests derive each hosted lane's facts
+  from its configure preset, so a seed no hosted lane runs or a hosted lane no seed applies to fails them.
+
 <a id="diag-10c"></a>
 ## DIAG.10c — correctness and pressure sanity probes
 
