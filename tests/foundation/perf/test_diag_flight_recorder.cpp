@@ -232,6 +232,53 @@ TEST_CASE("flight policy: out-of-bounds candidates are refused and the last good
     CHECK(r.policy().capacity == 32U);
 }
 
+#if CRD_ENABLE_ASSERTS
+// The wrap guard needs 2^32 - 1 reloads, each allocating a ring; the test-only seam starts the counter near the end.
+TEST_CASE("flight policy: a reload that would wrap the generation is refused and keeps the ring",
+          "[perf][diag][diag9b][diag10b][flight]")
+{
+    cp::FlightRecorder r;
+    CHECK_FALSE(r.test_set_policy_generation(7U)); // before init
+    REQUIRE(r.init(small_policy(16U, 8U, 4U)) == cp::FlightPolicyStatus::Committed);
+    CHECK_FALSE(r.test_set_policy_generation(0U)); // 0 is never a generation
+    CHECK(r.policy_generation() == 1U);
+    REQUIRE(r.test_set_policy_generation(0xFFFFFFFEU));
+    CHECK(r.policy().capacity == 16U); // the seam moves only the counter
+
+    // One more reload still fits: it takes the last generation.
+    REQUIRE(r.reload_policy(small_policy(32U, 8U, 4U)) == cp::FlightPolicyStatus::Committed);
+    CHECK(r.policy_generation() == 0xFFFFFFFFU);
+
+    // The next valid reload would wrap to 0: refused, and neither the policy nor the ring moves.
+    record_n(r, 0U, 6U);
+    CHECK(r.reload_policy(small_policy(64U, 16U, 8U)) == cp::FlightPolicyStatus::RejectedGenerationWrap);
+    CHECK(r.policy_generation() == 0xFFFFFFFFU);
+    CHECK(r.policy().capacity == 32U);
+    CHECK(r.policy().pre_events == 8U);
+    // A malformed candidate is still refused for what it is: validation runs before the wrap guard.
+    CHECK(r.reload_policy(small_policy(16U, 8U, 9U)) == cp::FlightPolicyStatus::RejectedOutOfBounds);
+
+    // The ring was not reallocated: the six events recorded before the refusal are the capture's pre window.
+    REQUIRE(r.trigger(manual("after the wrap")) == cp::FlightTriggerResult::Started);
+    record_n(r, 6U, 4U);
+    cp::FlightCapture c;
+    REQUIRE(r.take_capture(c));
+    CHECK(capture_is_consistent(c));
+    CHECK(c.policy_generation == 0xFFFFFFFFU);
+    CHECK(c.policy.capacity == 32U);
+    CHECK(c.end == cp::FlightEnd::PostEventsFull);
+    CHECK(c.pre_retained == 6U);
+    CHECK(c.post_retained == 4U);
+    REQUIRE(c.events.size() == 10U);
+    CHECK(c.events[0].value_a == 0U);
+    CHECK(c.events[9].value_a == 9U);
+
+    // Re-armed after collection, the guard still holds.
+    CHECK(r.reload_policy(small_policy(64U, 16U, 8U)) == cp::FlightPolicyStatus::RejectedGenerationWrap);
+    CHECK(r.policy_generation() == 0xFFFFFFFFU);
+}
+#endif
+
 TEST_CASE("flight recorder: a trigger keeps the pre window and a bounded post window, with loss counted",
           "[perf][diag][diag9b][flight]")
 {
@@ -564,6 +611,157 @@ TEST_CASE("flight trigger: a failed invariant closes the window as fatal, delive
     CHECK(cp::get_fatal_invariant_handler() != nullptr); // the previous (test) handler is restored
     cp::set_fatal_invariant_handler(nullptr);
 }
+
+#if CRD_ENABLE_ASSERTS
+namespace
+{
+// A crd-jobs worker holds the recorder's ring mutex (through the test-only seam) until the test releases it, so the
+// test's own thread can run finish(Fatal) against a held ring. A std::mutex cannot be try-locked by its owner.
+struct RingHold
+{
+    cp::FlightRecorder* recorder = nullptr;
+    std::atomic<bool>   held{false};
+    std::atomic<bool>   release{false};
+    std::atomic<bool>   seam_ran{false};
+};
+
+void hold_until_released(void* data)
+{
+    auto* hold = static_cast<RingHold*>(data);
+    hold->held.store(true, std::memory_order_release);
+    while (!hold->release.load(std::memory_order_acquire))
+    {
+        std::this_thread::yield();
+    }
+}
+
+void hold_ring_job(void* data) noexcept
+{
+    auto* hold = static_cast<RingHold*>(data);
+    hold->seam_ran.store(hold->recorder->test_with_ring_held(&hold_until_released, hold), std::memory_order_release);
+}
+
+struct HeldFinish
+{
+    bool held      = false; // the worker held the ring when finish(Fatal) ran
+    bool seam_ran  = false;
+    bool delivered = false; // finish(Fatal)'s answer
+};
+
+HeldFinish finish_fatal_with_ring_held(cp::FlightRecorder& r)
+{
+    RingHold hold;
+    hold.recorder = &r;
+    crd::jobs::JobDecl job{};
+    job.fn                         = &hold_ring_job;
+    job.data                       = &hold;
+    crd::jobs::Counter* const done = crd::jobs::run(job);
+
+    HeldFinish out;
+    for (int i = 0; i < 5000 && !out.held; ++i)
+    {
+        out.held = hold.held.load(std::memory_order_acquire);
+        if (!out.held)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    if (out.held)
+    {
+        out.delivered = r.finish(cp::FlightEnd::Fatal);
+    }
+    hold.release.store(true, std::memory_order_release); // always, so the worker never outlives the case
+    crd::jobs::wait(done);
+    out.seam_ran = hold.seam_ran.load(std::memory_order_acquire);
+    return out;
+}
+
+int g_seam_calls = 0;
+
+void count_call(void* /*user*/)
+{
+    ++g_seam_calls;
+}
+} // namespace
+
+TEST_CASE("flight trigger: the fatal path that finds the ring held delivers the trigger alone and is terminal",
+          "[perf][diag][diag9b][diag10b][flight]")
+{
+    SinkLog            log;
+    cp::FlightRecorder r;
+    g_seam_calls = 0;
+    CHECK_FALSE(r.test_with_ring_held(&count_call, nullptr)); // before init: `fn` is not called
+    CHECK(g_seam_calls == 0);
+    REQUIRE(r.init(small_policy(16U, 8U, 4U)) == cp::FlightPolicyStatus::Committed);
+    CHECK_FALSE(r.test_with_ring_held(nullptr, nullptr));
+    r.set_sink(&sink_into, &log);
+    r.set_replay_recipe(cont::StringView{"ceridc replay run --record held.crun"});
+
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U; // main (not pumping) + one worker that holds the ring
+    crd::jobs::init(cfg);
+
+    // Nothing is pending: a fatal finish with the ring held has nothing to deliver and leaves the recorder armed.
+    record_n(r, 0U, 5U);
+    const HeldFinish armed = finish_fatal_with_ring_held(r);
+
+    // A trigger is pending and two post events landed; the ring is held when the fatal path runs.
+    const cp::FlightTriggerResult started = r.trigger(manual("ring held"));
+    record_n(r, 5U, 2U);
+    const HeldFinish pending = finish_fatal_with_ring_held(r);
+    crd::jobs::shutdown();
+
+    CHECK(armed.held);
+    CHECK(armed.seam_ran);
+    CHECK_FALSE(armed.delivered);
+    REQUIRE(started == cp::FlightTriggerResult::Started);
+
+    REQUIRE(pending.held);
+    CHECK(pending.seam_ran);
+    REQUIRE(pending.delivered);
+    REQUIRE(log.calls.load() == 1);
+    CHECK(r.captures_delivered() == 1U);
+    const cp::FlightCapture& c = log.last;
+    CHECK(c.ring_unavailable);
+    CHECK(c.end == cp::FlightEnd::Fatal);
+    CHECK(c.post_truncated);
+    CHECK(c.pre_retained == 0U);
+    CHECK(c.post_retained == 0U);
+    CHECK(c.events.empty());
+    CHECK(c.dropped_while_complete == 0U);
+    CHECK(c.trigger.kind == cp::FlightTrigger::Manual);
+    CHECK(c.trigger.message_view() == "ring held");
+    CHECK(c.trigger.sequence == 5U); // the provisional total the trigger read
+    CHECK(c.recorded_before_trigger == c.trigger.sequence);
+    CHECK(c.policy_generation == 1U);
+    CHECK(c.policy.capacity == 16U);
+    CHECK(c.replay_available);
+    CHECK(cont::StringView{c.replay.c_str(), c.replay.size()} == "ceridc replay run --record held.crun");
+
+    // Terminal, as after any fatal capture: nothing is recorded, triggered or delivered again.
+    CHECK(r.fatal_entered());
+    CHECK_FALSE(r.capture_pending());
+    const crd::u64 recorded = r.total_recorded();
+    record_n(r, 7U, 3U);
+    CHECK(r.total_recorded() == recorded);
+    CHECK(r.trigger(manual("later")) == cp::FlightTriggerResult::Suppressed);
+    CHECK_FALSE(r.finish(cp::FlightEnd::Fatal));
+    cp::FlightCapture none;
+    CHECK_FALSE(r.take_capture(none));
+    r.shutdown();
+    CHECK(log.calls.load() == 1);
+
+    // The capture survives the record encoding, whose reader requires a capture without the ring to end fatal and to
+    // hold no events.
+    const cont::Array<crd::u8> bytes = cp::encode_flight_record(c);
+    const cp::FlightRecordRead read  = cp::decode_flight_record(cont::ConstSpan<crd::u8>{bytes.data(), bytes.size()});
+    REQUIRE(read.ok);
+    CHECK(read.capture.ring_unavailable);
+    CHECK(read.capture.end == cp::FlightEnd::Fatal);
+    CHECK(read.capture.events.empty());
+    CHECK(read.capture.trigger.sequence == 5U);
+}
+#endif
 
 TEST_CASE("flight trigger: the fatal path in a child process leaves a bundle with the window before it",
           "[perf][diag][diag9b][flight]")

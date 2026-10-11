@@ -81,6 +81,49 @@ TEST_CASE("diag: a malformed or oversized policy cannot move the active generati
     CHECK(store.active().max_message_bytes == 256U);
 }
 
+#if CRD_ENABLE_ASSERTS
+// The wrap guard needs 2^32 - 1 committed loads; the test-only seam starts the counter near the end instead.
+TEST_CASE("diag: a load that would wrap the generation is refused and keeps the last good policy",
+          "[diag][policy][diag10b]")
+{
+    cp::DiagnosticPolicyStore store;
+    cp::DiagnosticPolicy      first;
+    first.max_message_bytes = 128U;
+    REQUIRE(store.load(first) == cp::PolicyLoadStatus::Committed);
+    REQUIRE(store.generation() == 2U);
+
+    CHECK_FALSE(store.test_set_generation(0U)); // 0 means "never loaded"
+    CHECK(store.generation() == 2U);
+    REQUIRE(store.test_set_generation(0xFFFFFFFEU));
+    CHECK(store.active().max_message_bytes == 128U); // the seam moves only the counter
+
+    // One more load still fits: it takes the last generation.
+    cp::DiagnosticPolicy last;
+    last.max_message_bytes = 256U;
+    REQUIRE(store.load(last) == cp::PolicyLoadStatus::Committed);
+    CHECK(store.generation() == 0xFFFFFFFFU);
+    CHECK_FALSE(store.generation_overflowed());
+
+    // The next valid load would wrap to 0: refused, flagged, and nothing else moves.
+    cp::DiagnosticPolicy next;
+    next.max_message_bytes = 512U;
+    CHECK(store.load(next) == cp::PolicyLoadStatus::RejectedGenerationWrap);
+    CHECK(store.generation() == 0xFFFFFFFFU);
+    CHECK(store.generation_overflowed());
+    CHECK(store.active().max_message_bytes == 256U);
+
+    // A malformed candidate is still refused for what it is: validation runs before the wrap guard.
+    cp::DiagnosticPolicy bad_version = next;
+    bad_version.schema_version       = 999U;
+    CHECK(store.load(bad_version) == cp::PolicyLoadStatus::RejectedUnknownVersion);
+    cp::DiagnosticPolicy zero = next;
+    zero.max_events           = 0U;
+    CHECK(store.load(zero) == cp::PolicyLoadStatus::RejectedOutOfBounds);
+    CHECK(store.generation() == 0xFFFFFFFFU);
+    CHECK(store.active().max_message_bytes == 256U);
+}
+#endif
+
 TEST_CASE("diag: message truncation to the policy bound is explicit", "[diag][events]")
 {
     cp::DiagnosticPolicyStore store;

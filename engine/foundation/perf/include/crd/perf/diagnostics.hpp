@@ -11,6 +11,7 @@
 // Contract: docs/design/runtime-diagnostics.md; ADR-0133.
 
 #include <crd/containers/string.hpp>
+#include <crd/core/build_config.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::perf
@@ -54,7 +55,8 @@ struct SourceIdentity
 };
 
 // A stable, monotonic key identifying a logical generation (e.g. an asset reload, a policy
-// epoch). Wrap is explicit: next_generation() flags overflow rather than silently reusing 0.
+// epoch). Wrap is explicit: DiagnosticPolicyStore::load() refuses a load that would wrap its
+// generation and flags the overflow rather than silently reusing 0.
 struct GenerationKey
 {
     crd::u64 value = 0U;
@@ -119,6 +121,14 @@ public:
     [[nodiscard]] const DiagnosticPolicy& active() const noexcept { return m_active; }
     [[nodiscard]] crd::u32 generation() const noexcept { return m_generation; }
     [[nodiscard]] bool generation_overflowed() const noexcept { return m_overflowed; }
+
+#if CRD_ENABLE_ASSERTS
+    // Test-only seam: continue counting from `generation`, so the wrap guard in load() is reachable without
+    // 2^32 - 1 committed loads. It moves only the counter; the active policy and the overflow flag stay. Returns
+    // false, changing nothing, for 0 (reserved for "never loaded"). Compiled only where asserts are, never in a
+    // shipping build.
+    [[nodiscard]] bool test_set_generation(crd::u32 generation) noexcept;
+#endif
 
 private:
     DiagnosticPolicy m_active{};        // default policy is valid and active from construction

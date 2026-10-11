@@ -2097,6 +2097,26 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-owned-gaps-closed
   `finish(Fatal)` (no public call holds it while calling out). A host lacking a program's dialects reads it with every
   op opaque, so the minimizer refuses it as needing external results rather than calling it unrunnable.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-engine-seams.md)):
+- The last three owned gaps are closed through test-only seams, compiled only where `CRD_ENABLE_ASSERTS` is (never
+  in a shipping build, following `crd::crash::test_fatal_path`): `DiagnosticPolicyStore::test_set_generation` and
+  `FlightRecorder::test_set_policy_generation` move only the counter (0 and a recorder before init are refused), and
+  `FlightRecorder::test_with_ring_held` calls a function while its thread holds the ring mutex. A seam never
+  returns a status itself, so the producing sites the measurement names are the engine's own.
+- `[diag10b]` cases: a policy load and a flight reload one past generation 2^32 - 1 are refused with
+  RejectedGenerationWrap, the active policy, the generation and the flight ring stay (the six events recorded before
+  the refusal are the next capture's pre window), and validation still refuses a malformed candidate first. A
+  crd-jobs worker holds the ring while the test's thread runs `finish(Fatal)`: with nothing pending nothing is
+  delivered and the recorder stays armed; with a trigger pending the capture carries the trigger alone
+  (`ring_unavailable`, `post_truncated`, no events, the provisional sequence, the replay recipe), the recorder enters
+  FatalEntered (nothing is recorded, triggered or delivered again), and the capture round-trips through the record
+  encoding. Seven breaks (both wrap guards, the generation seam, the seam not holding the ring, and the fatal
+  branch delivering nothing, re-arming or not saying so) each failed a case.
+- The measurement with the old registry was STALE naming exactly the three, and PASS without them (853 CTests;
+  regions 9,235/10,372, branches 5,989/7,644, lines 17,163/19,691; the seams add 16 regions to the denominator).
+  No `owned-gap` exclusion is left: the 20 remaining are `windows-only`, `dying-child`, `default-value`,
+  `resource-failure`, `other-configuration` and the one `no-producer` verdict.
+
 <a id="diag-10c"></a>
 ## DIAG.10c — correctness and pressure sanity probes
 

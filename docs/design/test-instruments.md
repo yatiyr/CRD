@@ -315,7 +315,8 @@ and every transition site of a registered state machine must have run, unless an
 compiled on this lane `windows-only` is stale and fails the run. A child that dies writes no profile, so paths
 reached only inside dying specimens are owned as `dying-child`, never counted as untested. Closing an owned gap
 removes its exclusion in the same change; on 2026-10-11 twelve were closed by cases
-([session](../sessions/2026-10-11-diag-10b-owned-gaps-closed.md)) and three remain, each waiting for an engine seam.
+([session](../sessions/2026-10-11-diag-10b-owned-gaps-closed.md)) and the last three through test-only engine seams
+([session](../sessions/2026-10-11-diag-10b-engine-seams.md)), so no `owned-gap` exclusion is left.
 The harness's own Timeout verdict is exercised with the CPU-hotspot specimen under a 200 ms bound.
 
 [nonreproduced-failures.json](../../tests/support/diag/nonreproduced-failures.json) registers flaky and

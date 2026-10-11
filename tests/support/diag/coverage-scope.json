@@ -137,8 +137,6 @@
    "reason": "DeviceDivergence::kind's initializer in device_replay.hpp; an agreeing replay keeps it."},
   {"outcome": "specimen Verdict", "value": "MissingSymbolizer", "class": "no-producer",
    "reason": "Declared since DIAG.0 but the harness never returns it: no case checks for a symbolizer. A dead outcome, owned until a symbolizer check exists."},
-  {"outcome": "PolicyLoadStatus", "value": "RejectedGenerationWrap", "class": "owned-gap", "reason": "Needs 2^32 - 1 committed loads: DiagnosticPolicyStore has no way to start at a later generation. Closing it needs a test seam that sets the store's generation (diagnostics.hpp); DIAG.10b owns it."},
-  {"outcome": "FlightPolicyStatus", "value": "RejectedGenerationWrap", "class": "owned-gap", "reason": "Needs 2^32 - 1 committed reloads, each allocating a ring: FlightRecorder has no way to start at a later policy generation. Closing it needs a test seam that sets the generation (flight_recorder.hpp); DIAG.10b owns it."},
   {"outcome": "FlightPolicyStatus", "value": "RejectedOutOfMemory", "class": "resource-failure", "reason": "new (std::nothrow) or the ring allocation must fail; the recorder takes no allocator a test could fail."},
   {"outcome": "DiagAssetRead", "value": "Failed", "class": "resource-failure", "reason": "std::ferror after fread; diag_assets.cpp reads with stdio and bypasses the I/O fault seam (queued follow-up), so no test can fail the read."},
   {"outcome": "FaultArmStatus", "value": "Unavailable", "class": "other-configuration", "reason": "Returned only where fault seams are not compiled (shipping lanes); crd-perf-tests asserts it on win-shipping and linux-gcc-shipping."},
@@ -153,7 +151,6 @@
   {"outcome": "WriteResult", "value": "NotInstalled", "class": "windows-only", "reason": "Only the Win32 on-demand dump path reports it."},
   {"outcome": "WriteResult", "value": "FlushFailed", "class": "windows-only", "reason": "Only the Win32 minidump file flush reports it."},
   {"outcome": "WriteResult", "value": "HandlerTimeout", "class": "windows-only", "reason": "Only the Win32 out-of-process dump wait reports it."},
-  {"outcome": "specimen Verdict", "value": "SanitizerCaught", "class": "other-configuration", "reason": "Only a sanitizer lane builds specimens that print a sanitizer report; the seeded-fault runner checks it on win-asan, linux-gcc-asan and linux-clang-tsan."},
-  {"outcome": "flight recorder window", "value": "kStateFatalEntered", "text": "impl->state.store(kStateFatalEntered, std::memory_order_release);", "class": "owned-gap", "reason": "The fatal path that finds the ring mutex held and delivers the trigger alone (ring_unavailable). No public call holds the ring while it calls out (the sink runs after the unlock), so a case needs a test seam that holds the ring mutex across finish(Fatal) (flight_recorder.hpp). DIAG.9b owns the case; DIAG.10b the seam."}
+  {"outcome": "specimen Verdict", "value": "SanitizerCaught", "class": "other-configuration", "reason": "Only a sanitizer lane builds specimens that print a sanitizer report; the seeded-fault runner checks it on win-asan, linux-gcc-asan and linux-clang-tsan."}
  ]
 }

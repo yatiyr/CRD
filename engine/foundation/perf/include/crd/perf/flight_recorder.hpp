@@ -40,6 +40,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/build_config.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -306,6 +307,20 @@ public:
     [[nodiscard]] bool     capture_pending() const noexcept; // a post window is open or a capture awaits collection
     [[nodiscard]] bool     fatal_entered() const noexcept;   // a capture ended Fatal; the recorder records no more
     [[nodiscard]] crd::u64 captures_delivered() const noexcept;
+
+#if CRD_ENABLE_ASSERTS
+    // Test-only seams, compiled only where asserts are (never in a shipping build).
+    //
+    // Continue the policy generation from `generation` (set under both mutexes), so reload_policy()'s wrap guard is
+    // reachable without 2^32 - 1 reloads. Only the counter moves. Returns false, changing nothing, before init or
+    // for 0.
+    [[nodiscard]] bool test_set_policy_generation(crd::u32 generation) noexcept;
+
+    // Call `fn(user)` while this thread holds the ring mutex, so a finish(Fatal) on another thread finds the ring
+    // held and takes its ring_unavailable path. `fn` must not call into this recorder. Returns false without calling
+    // `fn` before init or when `fn` is null.
+    bool test_with_ring_held(void (*fn)(void* user), void* user) noexcept;
+#endif
 
     struct Impl; // opaque; public only so the implementation's helpers can name it
 

@@ -687,6 +687,33 @@ crd::u64 FlightRecorder::captures_delivered() const noexcept
     return (impl != nullptr) ? impl->delivered.load(std::memory_order_relaxed) : 0U;
 }
 
+#if CRD_ENABLE_ASSERTS
+bool FlightRecorder::test_set_policy_generation(crd::u32 generation) noexcept
+{
+    Impl* impl = m_impl;
+    if (impl == nullptr || generation == 0U)
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> ring_guard(impl->ring_mutex);
+    std::lock_guard<std::mutex> trigger_guard(impl->trigger_mutex);
+    impl->policy_generation = generation;
+    return true;
+}
+
+bool FlightRecorder::test_with_ring_held(void (*fn)(void* user), void* user) noexcept
+{
+    Impl* impl = m_impl;
+    if (impl == nullptr || fn == nullptr)
+    {
+        return false;
+    }
+    std::lock_guard<std::mutex> ring_guard(impl->ring_mutex);
+    fn(user);
+    return true;
+}
+#endif
+
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------

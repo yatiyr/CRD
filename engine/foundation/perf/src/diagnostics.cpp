@@ -123,6 +123,18 @@ PolicyLoadStatus DiagnosticPolicyStore::load(const DiagnosticPolicy& candidate) 
     return PolicyLoadStatus::Committed;
 }
 
+#if CRD_ENABLE_ASSERTS
+bool DiagnosticPolicyStore::test_set_generation(crd::u32 generation) noexcept
+{
+    if (generation == 0U)
+    {
+        return false;
+    }
+    m_generation = generation;
+    return true;
+}
+#endif
+
 DiagnosticEvent make_event(EventCode code, Severity sev, SourceIdentity src, cont::StringView message,
                            const DiagnosticPolicyStore& policy, GenerationKey gen)
 {
