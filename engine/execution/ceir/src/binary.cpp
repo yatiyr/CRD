@@ -103,6 +103,43 @@ struct Cursor
     [[nodiscard]] i64 i64v() noexcept { return static_cast<i64>(u64v()); }
 };
 
+// DIAG.10a fuzz finding: a name the printer writes BARE (an op name, a struct/enum/param/trait name, a field or case
+// label, a symbolic dim, a type- or attr-class name) must be one the text lexer reads back: [A-Za-z_][A-Za-z0-9_.]*
+// (parse.cpp is_ident_start/is_ident_char). A blob carrying any other such name (`tes).sink`, a trait `2rd`) used to
+// load and then print text the parser refuses, breaking "print . deserialize . serialize == print" (binary.hpp).
+[[nodiscard]] bool is_bare_name(containers::StringView s) noexcept
+{
+    if (s.empty())
+    {
+        return false;
+    }
+    for (usize i = 0; i < s.size(); ++i)
+    {
+        const char c     = s[i];
+        const bool alpha = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
+        const bool digit = c >= '0' && c <= '9';
+        if (!(alpha || (i != 0U && (digit || c == '.'))))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The type kinds whose `name` and `labels` print bare (print.cpp emit_type); an Extern's are quoted.
+[[nodiscard]] bool type_names_print_bare(const Type& t) noexcept
+{
+    switch (t.kind)
+    {
+    case TypeKind::Struct:
+    case TypeKind::Enum:
+    case TypeKind::TypeParam:
+    case TypeKind::Trait: return true;
+    case TypeKind::Dim: return t.cols == static_cast<u32>(DimKind::Symbolic);
+    default: return false;
+    }
+}
+
 // "dialect.op" → (dialect, op) on the FIRST '.', reproducing intern_op's concatenation exactly (mirrors parse.cpp).
 [[nodiscard]] bool split_op_name(containers::StringView full, containers::StringView& dialect,
                                  containers::StringView& op) noexcept
@@ -910,7 +947,7 @@ private:
                         break;
                     }
                 }
-                if (!found || dot == 0U || dot + 1U >= cn.size())
+                if (!found || dot == 0U || dot + 1U >= cn.size() || !is_bare_name(cn))
                 {
                     fail(m_type_off + c.pos, "Extern class name must be 'dialect.class'");
                     return false;
@@ -937,6 +974,19 @@ private:
             {
                 fail(m_type_off + c.pos, "non-canonical or structurally-invalid TYPE record");
                 return false;
+            }
+            if (type_names_print_bare(t))
+            {
+                bool bare = is_bare_name(t.name);
+                for (usize l = 0; l < t.labels.size(); ++l)
+                {
+                    bare = bare && is_bare_name(t.labels[l]);
+                }
+                if (!bare)
+                {
+                    fail(m_type_off + c.pos, "TYPE name or label is not an identifier");
+                    return false;
+                }
             }
             // the tri-split DECODER arm: a composite kind's members (already decoded — child-first) must be the right
             // kinds, else interning would assert / a consumer would mis-render.
@@ -1077,6 +1127,12 @@ private:
                     fail(m_attr_off + c.pos, "ATTR string index out of range");
                     return false;
                 }
+                if (kind == static_cast<u8>(AttrKind::SymbolRef) && m_strings[sidx].empty())
+                {
+                    // DIAG.10a: the text parser refuses `@""` (a nameless symbol ref is never printable), so must this.
+                    fail(m_attr_off + c.pos, "empty symbol name");
+                    return false;
+                }
                 id = kind == static_cast<u8>(AttrKind::String) ? m_ctx.attr_string(m_strings[sidx])
                                                                : m_ctx.attr_symbol(m_strings[sidx]);
             }
@@ -1086,6 +1142,13 @@ private:
                 const TypeId ty = type_from_ref(ref, m_attr_off + c.pos);
                 if (!m_ok)
                 {
+                    return false;
+                }
+                if (!ty.valid())
+                {
+                    // DIAG.10a libFuzzer finding: a type value naming no type (ref 0) loaded, and printing it asserted
+                    // in type_of (an out-of-range read where asserts are off); the text form has no such value.
+                    fail(m_attr_off + c.pos, "ATTR type value names no type");
                     return false;
                 }
                 id = m_ctx.attr_type(ty);
@@ -1242,7 +1305,7 @@ private:
                         break;
                     }
                 }
-                if (!found || dot == 0U || dot + 1U >= cn.size())
+                if (!found || dot == 0U || dot + 1U >= cn.size() || !is_bare_name(cn))
                 {
                     fail(m_attr_off + c.pos, "ATTR extern class name must be 'dialect.attr'");
                     return false;
@@ -1458,7 +1521,7 @@ private:
 
         containers::StringView dialect;
         containers::StringView opname;
-        if (!split_op_name(str(name_idx), dialect, opname))
+        if (!split_op_name(str(name_idx), dialect, opname) || !is_bare_name(str(name_idx)))
         {
             if (m_ok)
             {

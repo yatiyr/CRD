@@ -1961,6 +1961,38 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-vm-streaming-allo
   64 bytes (16-byte granules and a remainder too small to be a free block), which the target checks on every success.
 - Not yet: the reinvestigation of the unknown-origin CEIR and CKIR artifacts, and the concurrent-load corruption.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-unknown-origin-artifacts.md)):
+- The four loader targets carry cross-format oracles, the identities their headers already state: an accepted CEIR
+  text module serializes to a blob that deserializes and prints to the same text (`binary.hpp`: print . deserialize .
+  serialize == print); an accepted CEIR blob prints text that the parser accepts and prints identically, so every
+  module the binary loader accepts has a text form; an accepted CKIR blob writes `.ckir` text that reads back to the
+  same blob (`ckir_asset.hpp`). The CKIR text target already compared the two forms. This is the strengthened harness
+  the acceptance names for the retained artifacts.
+- The six round-four artifacts REPO.DEV.11 adopted with unknown origin each replay clean on that harness: alone, 10,000
+  times in one libFuzzer process under ASan and UBSan (stack-use-after-return, strict string and init-order checks),
+  and under valgrind memcheck on the unsanitized linux-gcc-debug build (with the whole of the four corpora). None
+  reproduces its recorded symptom, so they stay labelled unknown; `183a3e2e` is now refused by the name rule below
+  (its bytes hold an op name the text form cannot express), which is a property of its bytes, not an explanation of
+  its round-four report.
+- A name the CEIR printer writes bare (op names; struct, enum, param and trait names; field and case labels; a
+  symbolic dim; a type- or attr-class name) must be `[A-Za-z_][A-Za-z0-9_.]*` in a blob, the text lexer's rule; a
+  symbol ref must not be empty and a type attribute must name a type. Each of these loaded before and then printed
+  text the parser refused, or, for the type attribute, asserted in `type_of` while printing (an out-of-range read
+  where asserts are off).
+- The CEIR text reader accepts `!tuple<>` and `!variant<>`: the type model, the factories, the binary form and the
+  printer all allow zero members, so the reader was the narrower side.
+- A CKIR blob must hold only what the builder and the text reader produce (`records_canonical` in
+  `ckir_serialize.hpp`): every enum byte names an enumerator, a shape's rank is within [0, 8] with every dim past it
+  zero, and every stage-output slot past `n_out` is the default one. An out-of-range enum indexed past the text
+  writer's name tables; a dim past the rank or a stray output slot loaded and then lost in the text form, so two blobs
+  of one program hashed apart. The `.ckir` reader reads INT64_MIN, which its writer emits for a shape dim.
+- The corruption of unknown origin is not settled. It recurred in single libFuzzer processes on targets that do not
+  link crd-perf, never from a reproducing input, and each site this time was in `crd::containers::Array`'s
+  container-annotation path (`annotate_size`, `asan_annotate_live_range`, a byte `push_back` right after its
+  annotation). A known-answer CPU probe found no wrong result, and the host's own toolchain processes crash at
+  varying offsets. The discriminating local experiment is a timed comparison of the same rounds with
+  `ASAN_OPTIONS=detect_container_overflow=0` against the default; a run on another machine is the user's.
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

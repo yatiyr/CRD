@@ -342,10 +342,16 @@ private:
             const bool is_tuple = sv_eq(head, "tuple");
             expect('<', "expected '<'");
             containers::Array<TypeId> elems(m_ctx.allocator());
-            elems.push_back(parse_type(depth + 1U));
-            while (accept(','))
+            // DIAG.10a libFuzzer finding: the type model, the factories, the binary form and the printer all allow
+            // zero members (`!tuple<>`, `!variant<>`); only this reader required one, so such a type printed text that
+            // did not parse back. Accept the empty list as `shape<>` does.
+            if (la() != '>')
             {
                 elems.push_back(parse_type(depth + 1U));
+                while (accept(','))
+                {
+                    elems.push_back(parse_type(depth + 1U));
+                }
             }
             expect('>', "expected '>'");
             const containers::ConstSpan<TypeId> sp(elems.data(), elems.size());

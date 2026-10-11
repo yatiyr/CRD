@@ -93,6 +93,32 @@ TEST_CASE("ceir roundtrip: a non-ident symbol/attr-name round-trips via the quot
     CHECK(bytes_equal(t1, t2)); // print(parse(print)) fixpoint — both quoted forms re-parse to the identical name
 }
 
+TEST_CASE("ceir roundtrip: a zero-member tuple and variant print and parse back", "[ceir][roundtrip][diag10a]")
+{
+    // DIAG.10a: the type model and the factories allow zero members; the reader used to require one, so a module
+    // holding `!tuple<>` or `!variant<>` printed text it could not read.
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    Module* const                      m   = ctx.create_module();
+    Block* const                       top = ctx.create_block(0U);
+    m->body()->append(top);
+    Operation* const op = ctx.create_operation(ctx.intern_op("test", "unit"), {}, 0U);
+    ctx.set_attr(op, "unit", ctx.attr_type(ctx.type_tuple({})));
+    ctx.set_attr(op, "never", ctx.attr_type(ctx.type_variant({})));
+    top->append(op);
+
+    const String t1 = print(ctx, *m, &root);
+    CHECK(std::strstr(t1.c_str(), "unit = !tuple<>") != nullptr);
+    CHECK(std::strstr(t1.c_str(), "never = !variant<>") != nullptr);
+
+    Context           ctx2(&root);
+    const ParseResult pr = parse(ctx2, t1);
+    REQUIRE(pr.ok);
+    REQUIRE(pr.module != nullptr);
+    const String t2 = print(ctx2, *pr.module, &root);
+    CHECK(bytes_equal(t1, t2));
+}
+
 TEST_CASE("ceir roundtrip: parsing is deterministic across two independent parses", "[ceir][roundtrip]")
 {
     crd::memory::GrowableTlsfAllocator root;

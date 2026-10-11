@@ -267,12 +267,15 @@ struct Tok
             neg = in[pos] == '-';
             ++pos;
         }
-        crd::u64   v = 0;
-        crd::usize d = pos;
+        // DIAG.10a fuzz finding: the magnitude limit is one larger for a negative value, so INT64_MIN, which the
+        // writer emits for a shape dim, reads back instead of failing as out of range.
+        const crd::u64 limit = neg ? 0x8000000000000000ULL : 0x7FFFFFFFFFFFFFFFULL;
+        crd::u64       v     = 0;
+        crd::usize     d     = pos;
         for (; pos < in.size() && in[pos] >= '0' && in[pos] <= '9'; ++pos)
         {
             const crd::u64 digit = static_cast<crd::u64>(in[pos] - '0');
-            if (v > (0x7FFFFFFFFFFFFFFFULL - digit) / 10U) // REPO.DEV.9 fuzz finding
+            if (v > (limit - digit) / 10U) // REPO.DEV.9 fuzz finding
             {
                 fail("integer out of range");
                 return 0;
@@ -285,7 +288,7 @@ struct Tok
             fail("expected integer");
             return 0;
         }
-        return neg ? -static_cast<crd::i64>(v) : static_cast<crd::i64>(v);
+        return neg ? static_cast<crd::i64>(0U - v) : static_cast<crd::i64>(v);
     }
     [[nodiscard]] bool bool_val() noexcept
     {

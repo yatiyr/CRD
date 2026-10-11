@@ -308,6 +308,77 @@ inline bool refs_valid(const crd::containers::Array<KNode>& nodes, const crd::co
     return true;
 }
 
+// DIAG.10a fuzz findings (the blob -> .ckir text -> blob oracle): a decoded record must hold only what the graph
+// builder and the text reader can produce. Every enum byte names an enumerator (an out-of-range op, dtype, kind, tier,
+// statement kind, scope, stage, depth mode or interpolation indexed past the writer's name tables), a shape's rank is
+// within [0, kMaxRank] with every dim past the rank zero, and every stage-output slot past n_out is the default one.
+// Junk in a slot the text form does not carry (a dim past the rank) loaded and then wrote text that read back to a
+// different blob, so two blobs of one program hashed apart.
+[[nodiscard]] inline bool type_in_range(const KType& t) noexcept
+{
+    return static_cast<crd::u32>(t.scalar) <= static_cast<crd::u32>(DType::U32)
+           && static_cast<crd::u32>(t.kind) <= static_cast<crd::u32>(TKind::Sampler);
+}
+[[nodiscard]] inline bool records_canonical(const crd::containers::Array<KNode>& nodes,
+                                            const crd::containers::Array<KType>& sfields,
+                                            const crd::containers::Array<KStmt>& stmts, const KEntry& e) noexcept
+{
+    for (crd::usize i = 0; i < nodes.size(); ++i)
+    {
+        const KNode& n = nodes[i];
+        if (static_cast<crd::u32>(n.op) > static_cast<crd::u32>(KOp::CallableDataDecl) || !type_in_range(n.type)
+            || static_cast<crd::u32>(n.tier) > static_cast<crd::u32>(DetTier::Fast))
+        {
+            return false;
+        }
+        if (n.shape.rank < 0 || n.shape.rank > kMaxRank)
+        {
+            return false;
+        }
+        for (int k = n.shape.rank; k < kMaxRank; ++k)
+        {
+            if (n.shape.dims[k] != 0)
+            {
+                return false;
+            }
+        }
+    }
+    for (crd::usize i = 0; i < sfields.size(); ++i)
+    {
+        if (!type_in_range(sfields[i]))
+        {
+            return false;
+        }
+    }
+    for (crd::usize i = 0; i < stmts.size(); ++i)
+    {
+        if (static_cast<crd::u32>(stmts[i].kind) > static_cast<crd::u32>(KStmtKind::ExecuteCallable)
+            || static_cast<crd::u32>(stmts[i].scope) > static_cast<crd::u32>(BarrierScope::Buffer))
+        {
+            return false;
+        }
+    }
+    if (static_cast<int>(e.stage) >= kStageCount
+        || static_cast<crd::u32>(e.depth_mode) > static_cast<crd::u32>(DepthMode::Less))
+    {
+        return false;
+    }
+    const KStageOutput unused{};
+    for (int k = 0; k < kMaxStageOutputs; ++k)
+    {
+        const KStageOutput& o = e.out[k];
+        if (static_cast<crd::u32>(o.interp) > static_cast<crd::u32>(Interp::Sample))
+        {
+            return false;
+        }
+        if (k >= e.n_out && (o.node != unused.node || o.location != unused.location || o.interp != unused.interp))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 inline void write_node(ByteArray& b, const KNode& n)
 {
     put_u8(b, static_cast<crd::u8>(n.op));
@@ -633,7 +704,7 @@ inline KEntry read_entry(Cursor& c)
     // REPO.DEV.9 fuzz findings: a blob is validated against its FINAL sizes before anything iterates it, the same
     // bounds the .ckir text reader applies (node refs >= -1 and < n, ext windows, struct ids, field offsets, stmt
     // body ranges, the entry refs and its stage outputs, the input count as a prefix of the node array).
-    if (!sd::refs_valid(nodes, ext, sfields, sbegin, stmts, e, nin))
+    if (!sd::refs_valid(nodes, ext, sfields, sbegin, stmts, e, nin) || !sd::records_canonical(nodes, sfields, stmts, e))
     {
         return false;
     }

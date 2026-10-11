@@ -1,12 +1,16 @@
 // crd-fuzz-ceir-text: the CEIR textual loader (crd::ceir::parse) under the bounded fuzz harness (REPO.DEV.9;
 // docs/design/test-instruments.md). Oracle: a rejected input leaves no module; an accepted input prints, re-parses
-// and prints byte-identically, the CEIR-1e round-trip contract the unit tests hold. Seeds: the rich graph the
-// round-trip tests use plus the hand malformed table of test_malformed.cpp, so the corpus starts on both sides.
+// and prints byte-identically, the CEIR-1e round-trip contract the unit tests hold, and (DIAG.10a) serializes to a
+// blob that deserializes and prints to the same text, the cross-format contract of binary.hpp. Seeds: the rich graph
+// the round-trip tests use plus the hand malformed table of test_malformed.cpp, so the corpus starts on both sides.
 #include <crd/fuzz/harness.hpp>
 
+#include <crd/ceir/binary.hpp>
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
+#include <crd/containers/array.hpp>
+#include <crd/containers/span.hpp>
 
 #include <cstdio>
 
@@ -14,6 +18,8 @@
 
 namespace
 {
+using crd::containers::Array;
+using crd::containers::ConstSpan;
 using crd::containers::String;
 using crd::containers::StringView;
 using crd::u8;
@@ -72,6 +78,21 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size
     CRD_FUZZ_REQUIRE(second.ok && second.module != nullptr);
     const String reprinted = crd::ceir::print(again, *second.module, &root);
     CRD_FUZZ_REQUIRE(crd::fuzz::bytes_equal(bytes_of(printed), printed.size(), bytes_of(reprinted), reprinted.size()));
+
+    // DIAG.10a cross-format oracle (binary.hpp: print . deserialize . serialize == print): every module the text
+    // loader accepts also survives the binary form and prints back to the same text.
+    const Array<u8>              blob = crd::ceir::serialize(ctx, *first.module, &root);
+    crd::ceir::Context           binary_ctx(&root);
+    const crd::ceir::ParseResult loaded = crd::ceir::deserialize(binary_ctx, ConstSpan<u8>(blob.data(), blob.size()));
+    if (!loaded.ok)
+    {
+        std::fprintf(stderr, "fuzz: deserialize rejected serialize output: %s at byte %zu\n", loaded.error,
+                     static_cast<std::size_t>(loaded.error_offset));
+    }
+    CRD_FUZZ_REQUIRE(loaded.ok && loaded.module != nullptr);
+    const String from_binary = crd::ceir::print(binary_ctx, *loaded.module, &root);
+    CRD_FUZZ_REQUIRE(
+        crd::fuzz::bytes_equal(bytes_of(printed), printed.size(), bytes_of(from_binary), from_binary.size()));
     return 0;
 }
 
