@@ -1,6 +1,7 @@
 #include <crd/resources/resource_manager.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/log/log.hpp>
 #include <crd/memory/construct.hpp>
@@ -302,6 +303,15 @@ ResourceManager::~ResourceManager()
         ResourceControlBlock* block = it.value();
         block->~ResourceControlBlock();
         m_alloc->deallocate(block);
+    }
+
+    // Every reload subscription still registered ends with the manager (DIAG.10c lifetime ledger).
+    for (auto it = m_reload_subs.begin(); it != m_reload_subs.end(); ++it)
+    {
+        for (crd::usize i = 0U; i < it.value().size(); ++i)
+        {
+            crd::lifetime_ledger().released(crd::LifetimeClass::CallbackRegistration);
+        }
     }
 }
 
@@ -1459,6 +1469,7 @@ crd::u32 ResourceManager::subscribe_reload(ResourceId id, ReloadCallback cb, voi
     {
         subs->push_back(ReloadSub{cb, user, token});
     }
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::CallbackRegistration);
     return token;
 }
 
@@ -1475,6 +1486,7 @@ void ResourceManager::unsubscribe_reload(ResourceId id, crd::u32 token)
         if ((*subs)[i].token == token)
         {
             subs->swap_remove(i);
+            crd::lifetime_ledger().released(crd::LifetimeClass::CallbackRegistration);
             return;
         }
     }

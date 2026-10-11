@@ -2257,6 +2257,52 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-tensor-and-audio-
   through it on every path (`DlpackImported::release`, which returns the bits, the destructor, and the spec-mandated
   disposal of a newer-major capsule). The GPU drivers' calls belong with the driver and device-reset evidence clause.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-lifetime-accounting.md)):
+- Lifetime accounting beyond heap bytes is the ledger `crd/core/lifetime_ledger.hpp` (crd-core, below every module
+  that must feed it). Five classes: FileHandle (an OS file handle or descriptor kept open past the call that opened
+  it), LibraryHandle (a LoadLibrary/dlopen reference), MappedRegion (a reserved or mapped range, with its bytes),
+  DeviceObject (a GPU resource or program carrying a Cerid identity) and CallbackRegistration (a callback, subscriber,
+  sink or observer registered with an owner). Per class it keeps acquired, matched releases, live, the high water and
+  live bytes. Recording is relaxed atomics in a fixed constant-initialized table: no lock, no allocation, valid from
+  any thread and during static destruction. A snapshot is a set of independent reads, meaningful once the bracketed
+  workload has finished.
+- The ledger checks itself. A release it cannot match (nothing of the class is live, or more bytes than are live)
+  changes nothing and is counted as unmatched; a window over it is Underflowed, never a wrapped or clamped count. A
+  window between two snapshots is, worst first, Underflowed, Outstanding (a class holds more live count or bytes),
+  Drained (it released earlier acquisitions) or Balanced, with per-class masks and signed deltas, and
+  `format_lifetime_report` renders one line ("outstanding: file-handle +1, mapped-region +1 (+4096 bytes)").
+- Wired sites, each recording after the OS or owner granted and after it took back (a failed free stays live, as it
+  does in the process): `vm::reserve`/`vm::release` and the crd-jobs fiber stacks (MappedRegion, with the reserved
+  size including the guard page); `DynamicLibrary` open and destructor (LibraryHandle); `log::FileSink`'s open, close
+  and rotation (FileHandle); the process-wide `gpu::identity_registry()` mint and retire of Resource and Program
+  identities (DeviceObject; a Pass identity names a recorded pass and is not counted; a registry built without the
+  feed, such as a test's own, records nothing); and, as CallbackRegistration, `app::EventBus` subscriptions (now
+  move-only, released by unsubscribe, a move-assignment over a bus holding them, or destruction),
+  `platform::FileWatcher` entries (the same), `ResourceManager::subscribe_reload` (released by unsubscribe or the
+  manager's destruction), installed log sinks (released by `clear_sinks` and `shutdown`) and the jobs observer
+  (installing over nothing acquires, clearing releases, replacing keeps).
+- Not recorded, by rule: a handle opened and closed inside one call cannot outlive it, so the RAII streams of
+  `platform::fs`, `ceir::cook`'s bounded file reads and writes, the perf bundle, capture, export, diag-asset, command,
+  doctor and flight-command file writes, crd-jobs' topology reads and the module snapshot of `module_enumeration` are
+  scoped; a wired test judges them through the OS oracle below when it needs to. `crash.cpp` is not wired: its dump
+  files are written on the fatal path, which must touch no more shared state, and its handler thread and events live
+  for the process. Not yet recorded: the window, the WASAPI device's COM objects and event, worker and logger threads,
+  and native device objects without a Cerid identity (devices, queues, fences, swapchains); they belong with the
+  shutdown workloads that exercise their owners.
+- The independent oracle is `crd/core/os_resource_probe.hpp`, which asks the OS, sharing no code with the wired sites.
+  `os_file_open_in_process(path)`: Windows reads the process's own handle table (NtQueryInformationProcess,
+  ProcessHandleSnapshotInformation, Windows 8 and later), keeps the handles of the File object type that are disk files
+  and compares their normalized final paths with the path's, excluding the probe's own attribute-only handle; Linux
+  compares the (device, inode) of every descriptor in `/proc/self/fd`. Another process's handle (a scanner, an indexer)
+  never counts. `os_range_mapped(base, bytes)`: Windows walks VirtualQuery (any state but MEM_FREE); Linux reads
+  `/proc/self/maps`; the answer is Present, Absent or Partial. A path that cannot be identified, an empty or wrapping
+  range, or another OS is Unavailable with a reason, never Absent. The handle-table read lives in pages from the OS, not
+  the heap; it queries every File-type handle (the console and ctest pipes included), so it is for quiet test and
+  investigation processes, where no synchronous pipe read is pending on another thread. Libraries have no oracle: both
+  OSes reference-count a module and expose no per-process count, so the library cases are judged by the ledger and the
+  API's behaviour alone. Device objects are held to the registry's own `live_count`, a second count the ledger must
+  agree with.
+
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles
 

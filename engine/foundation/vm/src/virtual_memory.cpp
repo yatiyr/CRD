@@ -1,3 +1,4 @@
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/log/log.hpp>
 #include <crd/vm/log_channel.hpp>
 #include <crd/vm/virtual_memory.hpp>
@@ -142,6 +143,7 @@ VmRegion reserve_at(void* hint, crd::usize bytes) noexcept
         return {};
     }
 #endif
+    lifetime_ledger().acquired(LifetimeClass::MappedRegion, size);
     return VmRegion{base, size};
 }
 
@@ -159,17 +161,23 @@ void release(VmRegion& region) noexcept
     }
 #if CRD_OS_WINDOWS
     // MEM_RELEASE requires size == 0 and base == the original reservation base.
-    if (::VirtualFree(region.base, 0, MEM_RELEASE) == 0)
+    const bool released = ::VirtualFree(region.base, 0, MEM_RELEASE) != 0;
+    if (!released)
     {
         CRD_LOG_ERROR(g_log_vm, "vm::release failed: VirtualFree err={}",
                       static_cast<unsigned long>(::GetLastError()));
     }
 #else
-    if (::munmap(region.base, region.size) != 0)
+    const bool released = ::munmap(region.base, region.size) == 0;
+    if (!released)
     {
         CRD_LOG_ERROR(g_log_vm, "vm::release failed: munmap errno={}", errno);
     }
 #endif
+    if (released) // a range the OS kept stays live in the ledger, as it does in the address space
+    {
+        lifetime_ledger().released(LifetimeClass::MappedRegion, region.size);
+    }
     region = {};
 }
 

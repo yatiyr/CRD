@@ -68,7 +68,11 @@
              "engine/numerics/hesap-tensor/include/crd/hesap/tensor/probe.hpp",
              "engine/numerics/hesap-tensor/include/crd/hesap/tensor/dlpack.hpp",
              "engine/media/audio/src/audio_boundary.cpp",
-             "engine/media/audio/include/crd/audio/audio_boundary.hpp"]}
+             "engine/media/audio/include/crd/audio/audio_boundary.hpp"]},
+  {"group": "lifetime ledger and its OS oracle", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/lifetime_ledger.cpp",
+             "engine/foundation/core/include/crd/core/lifetime_ledger.hpp",
+             "engine/foundation/core/src/os_resource_probe.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -151,6 +155,10 @@
    "enum": "LayoutOverlap", "header": "engine/foundation/core/include/crd/core/layout_probe.hpp"},
   {"name": "SourceBindingVerdict", "kind": "error-path", "row": "DIAG.10c",
    "enum": "SourceBindingVerdict", "header": "engine/media/audio/include/crd/audio/audio_boundary.hpp"},
+  {"name": "LifetimeVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "LifetimeVerdict", "header": "engine/foundation/core/include/crd/core/lifetime_ledger.hpp"},
+  {"name": "OsPresence", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "OsPresence", "header": "engine/foundation/core/include/crd/core/os_resource_probe.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",

@@ -32,7 +32,8 @@ target_compile_definitions(crd-core PRIVATE "CRD_FAULT_SEAMS=$<IF:${_crd_shippin
 # build tree: a package consumer keeps its own warning policy.
 target_link_libraries(crd-core PUBLIC $<BUILD_INTERFACE:crd-warnings>)
 if(WIN32)
-    target_link_libraries(crd-core PRIVATE dbghelp)
+    # ntdll: the lifetime ledger's handle-table oracle (crd/core/os_resource_probe.hpp) asks NtQueryInformationProcess.
+    target_link_libraries(crd-core PRIVATE dbghelp ntdll)
 endif()
 
 crd_enable_default_pch(crd-core)

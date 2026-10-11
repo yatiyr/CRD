@@ -14,7 +14,9 @@ namespace crd::gpu
 
 IdentityRegistry& identity_registry()
 {
-    static IdentityRegistry instance; // default_allocator(); first-use init, destroyed at exit after that allocator
+    // default_allocator(); first-use init, destroyed at exit after that allocator. The one registry that feeds the
+    // lifetime ledger's DeviceObject count (DIAG.10c).
+    static IdentityRegistry instance(memory::default_allocator(), /*feeds_lifetime_ledger=*/true);
     return instance;
 }
 

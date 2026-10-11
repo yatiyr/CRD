@@ -1,6 +1,7 @@
 #include "log_formatter.hpp"
 
 #include <crd/core/assert.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/log/log.hpp>
 #include <crd/log/log_channel.hpp>
 #include <crd/log/log_record.hpp>
@@ -242,6 +243,16 @@ void crd_log_default_assert_handler(const char* expression, const char* file, in
     // sink-locked path; bounding that reentrant case is DIAG.5c(d).)
     (void)flush_for(state().config.assert_flush_timeout_ms);
 }
+// Remove every installed sink; each was a callback registration in the lifetime ledger (DIAG.10c). Caller holds
+// sinks_mutex.
+void release_sinks(LoggerState& st) noexcept
+{
+    for (crd::usize i = 0; i < st.sinks.size(); ++i)
+    {
+        lifetime_ledger().released(LifetimeClass::CallbackRegistration);
+    }
+    st.sinks.clear();
+}
 } // namespace
 
 // ------------------------------------------------------------------
@@ -309,7 +320,7 @@ void shutdown() noexcept
 
     {
         std::lock_guard<std::mutex> lock(st.sinks_mutex);
-        st.sinks.clear();
+        release_sinks(st);
     }
     st.initialized.store(false, std::memory_order_release);
 }
@@ -335,6 +346,7 @@ void add_sink(std::unique_ptr<ISink> sink) noexcept
         std::lock_guard<std::mutex> lock(st.sinks_mutex);
         SinkDeliveryScope           in_delivery;
         st.sinks.push_back(std::move(sink));
+        lifetime_ledger().acquired(LifetimeClass::CallbackRegistration); // an installed sink, until it is cleared
     }
     catch (...)
     {
@@ -349,7 +361,7 @@ void clear_sinks() noexcept
     LoggerState& st = state();
     std::lock_guard<std::mutex> lock(st.sinks_mutex);
     SinkDeliveryScope           in_delivery;
-    st.sinks.clear();
+    release_sinks(st);
 }
 
 void flush() noexcept

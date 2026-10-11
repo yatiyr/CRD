@@ -19,6 +19,10 @@ namespace crd::platform
 /// Implemented as OS-agnostic mtime polling via fs::last_modified_unix_seconds().
 /// For low-frequency hot-reload scenarios this is sufficient; inotify / FSEvents
 /// style event-driven watching is out of scope.
+///
+/// Each watched path's callback is a callback registration in the lifetime ledger
+/// (crd/core/lifetime_ledger.hpp, DIAG.10c): add() records it, remove() and the
+/// watcher's destruction release it.
 class FileWatcher
 {
 public:
@@ -26,9 +30,9 @@ public:
     using Callback = std::function<void(const fs::Path& path)>;
 
     FileWatcher()                              = default;
-    ~FileWatcher()                             = default;
-    FileWatcher(FileWatcher&&)                 = default;
-    FileWatcher& operator=(FileWatcher&&)      = default;
+    ~FileWatcher();
+    FileWatcher(FileWatcher&& other) noexcept;
+    FileWatcher& operator=(FileWatcher&& other) noexcept;
     FileWatcher(const FileWatcher&)            = delete;
     FileWatcher& operator=(const FileWatcher&) = delete;
 
@@ -47,6 +51,8 @@ public:
     [[nodiscard]] usize count() const noexcept { return m_entries.size(); }
 
 private:
+    void release_all() noexcept;
+
     struct Entry
     {
         u64      handle;

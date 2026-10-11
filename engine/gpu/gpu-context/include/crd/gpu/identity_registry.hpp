@@ -17,8 +17,15 @@
 //
 // Thread-safe: mint/retire/alive/live_count take an internal mutex, because resource creation and the validation
 // callbacks can run concurrently (DIAG.7a(d1) proved concurrent message delivery). No vendor types appear here.
+//
+// DIAG.10c: the process-wide registry also feeds the lifetime ledger (crd/core/lifetime_ledger.hpp). A Resource or
+// Program identity is a live device object from mint to retire; a Pass identity names a recorded pass, not a device
+// object, and is not counted. A registry built without `feeds_lifetime_ledger` (a test's own) records nothing. The
+// ledger is fed under the registry's mutex, so its DeviceObject count moves with live_count(Resource) +
+// live_count(Program).
 
 #include <crd/containers/slot_map.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/types.hpp>
 #include <crd/gpu/object_identity.hpp>
 #include <crd/memory/allocator.hpp>
@@ -31,10 +38,12 @@ namespace crd::gpu
 class IdentityRegistry
 {
 public:
-    explicit IdentityRegistry(memory::IAllocator* allocator = memory::default_allocator())
+    explicit IdentityRegistry(memory::IAllocator* allocator = memory::default_allocator(),
+                              bool                feeds_lifetime_ledger = false)
         : m_slots{crd::containers::SlotMap<crd::u8>(allocator),  // ObjectKind::Resource
                   crd::containers::SlotMap<crd::u8>(allocator),  // ObjectKind::Program
-                  crd::containers::SlotMap<crd::u8>(allocator)}  // ObjectKind::Pass
+                  crd::containers::SlotMap<crd::u8>(allocator)}, // ObjectKind::Pass
+          m_feeds_ledger(feeds_lifetime_ledger)
     {
     }
 
@@ -48,6 +57,10 @@ public:
     {
         const std::lock_guard<std::mutex> lock(m_mutex);
         const auto handle = map(kind).insert(crd::u8{0});
+        if (counts_as_device_object(kind))
+        {
+            crd::lifetime_ledger().acquired(crd::LifetimeClass::DeviceObject);
+        }
         return ObjectIdentity{kind, handle.index, handle.generation};
     }
 
@@ -60,7 +73,12 @@ public:
             return false;
         }
         const std::lock_guard<std::mutex> lock(m_mutex);
-        return map(id.kind).erase(handle_of(id));
+        const bool                        erased = map(id.kind).erase(handle_of(id));
+        if (erased && counts_as_device_object(id.kind))
+        {
+            crd::lifetime_ledger().released(crd::LifetimeClass::DeviceObject);
+        }
+        return erased;
     }
 
     // True iff `id` still names a live slot at its generation.
@@ -92,9 +110,16 @@ private:
     {
         return Handle{id.index, id.generation};
     }
+    [[nodiscard]] bool counts_as_device_object(ObjectKind kind) const noexcept
+    {
+        return m_feeds_ledger && (kind == ObjectKind::Resource || kind == ObjectKind::Program);
+    }
 
     mutable std::mutex m_mutex;
+    // Built from the constructor's allocator argument, which a default member initializer cannot name.
+    // NOLINTNEXTLINE(cppcoreguidelines-use-default-member-init,modernize-use-default-member-init)
     Map                m_slots[3]; // indexed by ObjectKind: Resource, Program, Pass
+    bool               m_feeds_ledger = false;
 };
 
 // DIAG.7a(d2b): the process-wide registry. Identity uniqueness scope must equal the validation capture's correlation

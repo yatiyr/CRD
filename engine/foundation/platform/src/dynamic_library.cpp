@@ -1,3 +1,4 @@
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/log/log.hpp>
 #include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/log_channel.hpp>
@@ -54,6 +55,7 @@ DynamicLibrary DynamicLibrary::open(const fs::Path& path, bool log_on_failure) n
         }
         return DynamicLibrary{};
     }
+    lifetime_ledger().acquired(LifetimeClass::LibraryHandle);
     return DynamicLibrary{static_cast<void*>(handle)};
 #else
     void* handle = dlopen(path.generic().data(), RTLD_NOW | RTLD_LOCAL);
@@ -65,6 +67,7 @@ DynamicLibrary DynamicLibrary::open(const fs::Path& path, bool log_on_failure) n
         }
         return DynamicLibrary{};
     }
+    lifetime_ledger().acquired(LifetimeClass::LibraryHandle);
     return DynamicLibrary{handle};
 #endif
 }
@@ -92,10 +95,14 @@ DynamicLibrary::~DynamicLibrary() noexcept
         return;
     }
 #if CRD_OS_WINDOWS
-    FreeLibrary(static_cast<HMODULE>(m_handle));
+    const bool freed = FreeLibrary(static_cast<HMODULE>(m_handle)) != 0;
 #else
-    dlclose(m_handle);
+    const bool freed = dlclose(m_handle) == 0;
 #endif
+    if (freed) // a reference the OS kept stays live in the ledger
+    {
+        lifetime_ledger().released(LifetimeClass::LibraryHandle);
+    }
     m_handle = nullptr;
 }
 

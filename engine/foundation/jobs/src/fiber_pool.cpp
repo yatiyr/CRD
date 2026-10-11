@@ -1,6 +1,7 @@
 #include "fiber_pool.hpp"
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/platform.hpp>
 
 #if CRD_OS_WINDOWS
@@ -54,14 +55,15 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
         ::VirtualFree(base, 0, MEM_RELEASE);
         return nullptr;
     }
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::MappedRegion, out_total);
     return base;
 }
 
-static void platform_stack_free(void* base, crd::usize /*total*/) noexcept
+static void platform_stack_free(void* base, crd::usize total) noexcept
 {
-    if (base)
+    if (base != nullptr && ::VirtualFree(base, 0, MEM_RELEASE) != 0)
     {
-        ::VirtualFree(base, 0, MEM_RELEASE);
+        crd::lifetime_ledger().released(crd::LifetimeClass::MappedRegion, total);
     }
 }
 
@@ -88,14 +90,15 @@ static void* platform_stack_alloc(crd::usize usable_bytes, crd::usize guard_byte
         ::munmap(base, out_total);
         return nullptr;
     }
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::MappedRegion, out_total);
     return base;
 }
 
 static void platform_stack_free(void* base, crd::usize total) noexcept
 {
-    if (base)
+    if (base != nullptr && ::munmap(base, total) == 0)
     {
-        ::munmap(base, total);
+        crd::lifetime_ledger().released(crd::LifetimeClass::MappedRegion, total);
     }
 }
 

@@ -1,6 +1,7 @@
 #include "../log_formatter.hpp"
 
 #include <crd/containers/string.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/log/sinks/file_sink.hpp>
 
 #include <cerrno>
@@ -58,6 +59,7 @@ void FileSink::open_file() noexcept
 #endif
     if (m_file)
     {
+        lifetime_ledger().acquired(LifetimeClass::FileHandle);
         std::fseek(m_file, 0, SEEK_END);
         const long pos = std::ftell(m_file);
         m_bytes_written = pos > 0 ? static_cast<u64>(pos) : 0;
@@ -68,7 +70,9 @@ void FileSink::close_file() noexcept
 {
     if (m_file)
     {
+        // The handle is gone whether or not fclose reports a flush error, so the release is recorded either way.
         std::fclose(m_file);
+        lifetime_ledger().released(LifetimeClass::FileHandle);
         m_file = nullptr;
     }
 }

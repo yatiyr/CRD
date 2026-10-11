@@ -13,6 +13,7 @@
 #include <crd/jobs/observer.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <atomic>
@@ -37,7 +38,16 @@ void set_observer(const JobObserver* observer) noexcept
                   "observer only when no run() is outstanding, so every job begins and ends under the "
                   "same observer.");
     }
-    g_observer.store(observer, std::memory_order_release);
+    // An installed observer is a callback registration in the lifetime ledger (DIAG.10c); replacing one keeps it.
+    const JobObserver* const previous = g_observer.exchange(observer, std::memory_order_acq_rel);
+    if (previous == nullptr && observer != nullptr)
+    {
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::CallbackRegistration);
+    }
+    else if (previous != nullptr && observer == nullptr)
+    {
+        crd::lifetime_ledger().released(crd::LifetimeClass::CallbackRegistration);
+    }
 }
 
 [[nodiscard]] const JobObserver* current_observer() noexcept

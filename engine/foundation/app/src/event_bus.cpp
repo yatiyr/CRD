@@ -2,6 +2,40 @@
 
 namespace crd::app
 {
+EventBus::~EventBus()
+{
+    release_all_subscriptions();
+}
+
+EventBus::EventBus(EventBus&& other) noexcept
+    : m_buckets(std::move(other.m_buckets))
+    , m_next_subscription_id(other.m_next_subscription_id)
+{
+}
+
+EventBus& EventBus::operator=(EventBus&& other) noexcept
+{
+    if (this != &other)
+    {
+        release_all_subscriptions(); // the subscriptions this bus held end here
+        m_buckets              = std::move(other.m_buckets);
+        m_next_subscription_id = other.m_next_subscription_id;
+    }
+    return *this;
+}
+
+void EventBus::release_all_subscriptions() noexcept
+{
+    for (const Bucket& bucket : m_buckets)
+    {
+        for (crd::usize i = 0; i < bucket.subscribers.size(); ++i)
+        {
+            crd::lifetime_ledger().released(crd::LifetimeClass::CallbackRegistration);
+        }
+    }
+    m_buckets.clear();
+}
+
 EventBus::Bucket* EventBus::find_bucket(EventTypeId type_id) noexcept
 {
     for (auto& bucket : m_buckets)
@@ -52,6 +86,7 @@ void EventBus::unsubscribe(EventSubscription subscription) noexcept
         if (bucket->subscribers[i].id == subscription.subscription_id)
         {
             bucket->subscribers.swap_remove(i);
+            crd::lifetime_ledger().released(crd::LifetimeClass::CallbackRegistration);
             return;
         }
     }

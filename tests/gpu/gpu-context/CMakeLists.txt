@@ -3,6 +3,7 @@ add_executable(crd-gpu-context-tests
     test_diag_validation_vocab.cpp  # DIAG.7a(b): common backend-agnostic validation vocabulary (device-free)
     test_diag_object_identity.cpp  # DIAG.7a(c): stable Cerid object identity + name encoding (device-free)
     test_diag_identity_registry.cpp  # DIAG.7a(d2a): identity minting registry + debug-name builder (device-free)
+    test_diag_lifetime_device_objects.cpp  # DIAG.10c: the registry feeds the lifetime ledger (device-free)
 )
 
 target_link_libraries(crd-gpu-context-tests PRIVATE
