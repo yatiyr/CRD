@@ -80,6 +80,12 @@ public:
     // the fail path so a handler intercepting the fatal can read a non-zero count. Relaxed: an event tally.
     [[nodiscard]] crd::u32 exhaustions() const noexcept { return m_exhaustions.load(std::memory_order_relaxed); }
 
+    // DIAG.10c queue pressure, per tier: its configured count, the fibers acquired now, and the acquire() calls that
+    // found it empty. Relaxed reads.
+    [[nodiscard]] crd::u32 tier_count(FiberTier tier) const noexcept;
+    [[nodiscard]] crd::u32 acquired_count(FiberTier tier) const noexcept;
+    [[nodiscard]] crd::u32 exhaustions(FiberTier tier) const noexcept;
+
     // Diagnostics walk: invoke fn(const Fiber&, FiberTier) for every fiber slot in every tier. Read-only and
     // lock-free; it may run concurrently with acquire()/release(), so callers must treat the fiber fields as a
     // racy point-in-time snapshot, never as an oracle (see jobs::wait_graph_snapshot). Bodies of inline member
@@ -112,6 +118,7 @@ private:
         std::atomic<crd::u64>    free_head   {pack_head(kFiberNullIndex, 0U)};
         std::atomic<crd::u32>    acquired_count{0U};
         std::atomic<crd::u32>    peak_count    {0U};
+        std::atomic<crd::u32>    exhaustions   {0U}; // acquire()-found-empty events on this tier
     };
 
     // Tagged-head helpers: [gen:32 | idx:32]

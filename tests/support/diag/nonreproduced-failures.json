@@ -86,6 +86,18 @@
    "explanation": "The batch changed only the Linux fiber switch, the Windows fiber frame's constants (same values) and a new crd-core probe; the BVH builders do not read or set the floating-point mode. Not explained.",
    "session": "2026-10-11-diag-10c-numerical-mode.md",
    "rows": ["DIAG.10c"]
+  },
+  {
+   "id": "wsl-tsan-symbolizer-debuginfod",
+   "first_seen": "2026-10-11",
+   "lane": "linux-clang-tsan (local WSL2, run through bash -lc)",
+   "target": "crd-jobs-tests: tsan harness: the data-race specimen is caught, or reported absent",
+   "signature": "Verdict Timeout (exceeded 10000 ms) instead of SanitizerCaught; the specimen sat in a futex wait with near-zero CPU, its racing thread blocked in __tsan::ReportRace reading from the llvm-symbolizer child",
+   "reruns": "Reproduced on an immediate rerun of the same exe and when run directly; with DEBUGINFOD_URLS unset it was caught in 0.05 s and the whole program passed (188 cases).",
+   "status": "explained",
+   "explanation": "The login shell sets DEBUGINFOD_URLS (Ubuntu's profile.d), so llvm-symbolizer-18 waited on an unreachable debuginfod server after a WSL restart. The specimen links only Threads; no Cerid code is involved. Local WSL scripts now unset the variable; hosted steps are non-login shells.",
+   "session": "2026-10-11-diag-10c-queue-pressure.md",
+   "rows": ["DIAG.10c"]
   }
  ]
 }

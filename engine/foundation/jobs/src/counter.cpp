@@ -28,6 +28,7 @@ bool CounterPool::init(crd::u32 capacity) noexcept
     m_capacity = capacity;
     m_counters = std::make_unique<Counter[]>(capacity);
     m_acquired.store(0U, std::memory_order_relaxed);
+    m_peak.store(0U, std::memory_order_relaxed);
 
     // Wire the singly-linked free list: 0 → 1 → … → (capacity-1) → nil.
     for (crd::u32 i = 0U; i < capacity; ++i)
@@ -103,7 +104,11 @@ Counter* CounterPool::acquire(crd::u32 initial_value) noexcept
             // Retain the causal parent edge: the submitting task is whatever job runs on the calling
             // fiber right now (0 when submitted from the main thread / outside any job).
             c->parent_task_id.store(crd::jobs::current_task_id(), std::memory_order_relaxed);
-            m_acquired.fetch_add(1U, std::memory_order_relaxed);
+            const crd::u32 held = m_acquired.fetch_add(1U, std::memory_order_relaxed) + 1U;
+            crd::u32       peak = m_peak.load(std::memory_order_relaxed);
+            while (held > peak && !m_peak.compare_exchange_weak(peak, held, std::memory_order_relaxed))
+            {
+            }
             return c;
         }
     }

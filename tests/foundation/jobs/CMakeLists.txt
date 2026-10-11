@@ -44,6 +44,12 @@ target_compile_definitions(crd-jobs-tests PRIVATE
     CRD_DIAG_COUNTER_EXHAUSTION_SPECIMEN="$<TARGET_FILE:crd-diag-counter-exhaustion-specimen>"
     CRD_DIAG_FIBER_EXHAUSTION_SPECIMEN="$<TARGET_FILE:crd-diag-fiber-exhaustion-specimen>")
 
+# DIAG.10c queue-full positive control: a push into a full injection queue or pinned lane must fire an always-on,
+# counted fatal whose pressure reading names the refusal. The specimen exits 42; 60/97, 0 (dropped job) or a hang fail.
+add_dependencies(crd-jobs-tests crd-diag-queue-full-specimen)
+target_compile_definitions(crd-jobs-tests PRIVATE
+    CRD_DIAG_QUEUE_FULL_SPECIMEN="$<TARGET_FILE:crd-diag-queue-full-specimen>")
+
 crd_enable_default_pch(crd-jobs-tests)
 
 crd_discover_tests(crd-jobs-tests)

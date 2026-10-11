@@ -72,7 +72,9 @@
   {"group": "lifetime ledger and its OS oracle", "rows": ["DIAG.10c"],
    "paths": ["engine/foundation/core/src/lifetime_ledger.cpp",
              "engine/foundation/core/include/crd/core/lifetime_ledger.hpp",
-             "engine/foundation/core/src/os_resource_probe.cpp"]}
+             "engine/foundation/core/src/os_resource_probe.cpp"]},
+  {"group": "queue and budget pressure probe", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/budget_pressure.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -159,6 +161,10 @@
    "enum": "LifetimeVerdict", "header": "engine/foundation/core/include/crd/core/lifetime_ledger.hpp"},
   {"name": "OsPresence", "kind": "error-path", "row": "DIAG.10c",
    "enum": "OsPresence", "header": "engine/foundation/core/include/crd/core/os_resource_probe.hpp"},
+  {"name": "PressureLevel", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "PressureLevel", "header": "engine/foundation/core/include/crd/core/budget_pressure.hpp"},
+  {"name": "PressureVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "PressureVerdict", "header": "engine/foundation/core/include/crd/core/budget_pressure.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",

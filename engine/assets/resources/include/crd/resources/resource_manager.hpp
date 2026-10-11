@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/hash_map.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
@@ -116,6 +117,13 @@ public:
 
     // Total bytes currently tracked against the budget. Thread-safe.
     [[nodiscard]] crd::u64 current_memory_use() const noexcept;
+
+    // DIAG.10c budget pressure: the budget as a reading of the crd-core pressure probe
+    // (crd/core/budget_pressure.hpp). capacity is the budget (unbounded at the default ~0), in_use is
+    // current_memory_use(), high_water the most held once a load's (or a reload's) accounting settled, and overruns
+    // counts the times it settled above the budget because nothing was evictable (pinned, held or not Ready). The
+    // budget is soft: it never refuses a load, so refusals stay 0. Thread-safe.
+    [[nodiscard]] crd::BudgetReading memory_pressure() const noexcept;
 
     // Pin / unpin a resource by id. Pinned resources are never evicted.
     // Reference-counted — each pin() must be paired with exactly one unpin().
@@ -259,6 +267,8 @@ private:
     //   m_pin_counts — refcounted pin records; pinned blocks skip eviction.
     crd::u64                                           m_memory_budget  = ~0ULL;
     crd::u64                                           m_memory_used    = 0;
+    crd::u64                                           m_memory_peak    = 0; // DIAG.10c: settled high water
+    crd::u64                                           m_budget_overruns = 0; // DIAG.10c: settled above budget
     crd::containers::Array<ResourceId>                 m_a1in;
     crd::containers::Array<ResourceId>                 m_am;
     crd::containers::Array<ResourceId>                 m_a1out;
@@ -282,6 +292,7 @@ private:
     void touch_in_am       (ResourceId id);                              // LRU bump for Am hit
     CRD_NOINLINE void evict_block_locked(ResourceId id, ResourceControlBlock* block); // evict one block
     CRD_NOINLINE void try_evict_to_budget();                                          // evict until within budget
+    void note_budget_settled() noexcept; // DIAG.10c: raise the peak, count an overrun (under m_mutex)
 
 public:
     // Job entry points. Public so anonymous-namespace SBO closures can call them.

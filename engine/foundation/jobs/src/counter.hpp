@@ -150,6 +150,10 @@ public:
     // event tally, not ordered against other memory.
     [[nodiscard]] crd::u32 exhaustions() const noexcept { return m_exhaustions.load(std::memory_order_relaxed); }
 
+    // DIAG.10c queue pressure: counters held now, and the most held at once since init(). Relaxed reads.
+    [[nodiscard]] crd::u32 acquired() const noexcept { return m_acquired.load(std::memory_order_relaxed); }
+    [[nodiscard]] crd::u32 peak_acquired() const noexcept { return m_peak.load(std::memory_order_relaxed); }
+
     // Diagnostics walk: invoke fn(const Counter&) for every slot. Read-only and lock-free; may run concurrently
     // with acquire()/release()/counter_decrement, so callers treat fields as a racy snapshot, never an oracle.
     // A released slot sits at value 0 (its last decrement drove it there), so a caller counting value > 0 sees
@@ -175,6 +179,9 @@ private:
     std::unique_ptr<Counter[]>  m_counters;
     std::atomic<crd::u64>       m_free_head  {pack_head(kCounterNullIndex, 0U)};
     std::atomic<crd::u32>       m_acquired   {0U};
+    // The most counters acquired at once since init(): raised after the acquire's own increment, read by
+    // jobs::pressure_snapshot(). Beside m_acquired, so the raise touches a line acquire() already owns.
+    std::atomic<crd::u32>       m_peak       {0U};
     // Monotonic source of unique task-instance ids (0 reserved = "no task"). Relaxed: the
     // id only needs to be unique, not ordered against other memory.
     std::atomic<crd::u64>       m_next_task_id {1U};

@@ -6,13 +6,15 @@
 // that, on the exhaustion message, reads the tally back through progress_snapshot() and exits 42 only if it was
 // actually surfaced (60 if the message fired but the count did not surface, 97 for a different assert). If no
 // fatal fires at all, control falls through to a clean exit 0 -- which the test rejects, so a broken guard can
-// never pass.
+// never pass. Since DIAG.10c the counters' pressure reading (crd::jobs::pressure_snapshot) must also show the
+// refusal with the pool at its bound, or the exit is 60.
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is a scheduler-liveness control
 
 #include "specimen_common.hpp"
 
 #include <crd/core/assert.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <cstdio>
@@ -26,9 +28,15 @@ int counter_exhaustion_assert_handler(const char* formatted_message)
     if (formatted_message != nullptr && std::strstr(formatted_message, "CounterPool exhausted") != nullptr)
     {
         const crd::u32 ex = crd::jobs::progress_snapshot().exhaustions;
-        std::printf("CRD_DIAG_EXHAUSTIONS=%u\n", ex);
+        // DIAG.10c: the counters' pressure reading must carry the refusal too, at its bound.
+        const crd::BudgetReading counters = crd::jobs::pressure_snapshot().counters;
+        std::printf("CRD_DIAG_EXHAUSTIONS=%u CRD_DIAG_COUNTERS=%llu/%llu refused %llu\n", ex,
+                    static_cast<unsigned long long>(counters.in_use),
+                    static_cast<unsigned long long>(counters.capacity),
+                    static_cast<unsigned long long>(counters.refusals));
         std::fflush(stdout);
-        std::_Exit(ex >= 1U ? 42 : 60); // 42 = exhaustion counted+surfaced; 60 = message fired but count absent
+        const bool counted = ex >= 1U && counters.refusals >= 1U && counters.in_use == counters.capacity;
+        std::_Exit(counted ? 42 : 60); // 42 = exhaustion counted+surfaced; 60 = message fired but count absent
     }
     std::_Exit(97); // a different assert fired first -- distinguishable from the expected one
 }

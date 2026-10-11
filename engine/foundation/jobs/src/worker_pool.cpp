@@ -517,6 +517,7 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     sched_cfg.num_threads        = m_num_threads;
     sched_cfg.deque_capacity     = cfg.deque_capacity;
     sched_cfg.injection_capacity = cfg.injection_capacity;
+    sched_cfg.pinned_capacity    = cfg.pinned_capacity;
     sched_cfg.targeted_wake      = cfg.pcore_routing; // ADR-0094 opt-in; default false ⇒ shared-semaphore path
 
     if (!m_scheduler.init(sched_cfg))

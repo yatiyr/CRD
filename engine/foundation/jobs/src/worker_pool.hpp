@@ -21,6 +21,7 @@ struct WorkerConfig
     crd::u32 num_threads        = 0U;       // 0 = hardware_concurrency()
     crd::u32 deque_capacity     = 256U;
     crd::u32 injection_capacity = 4096U;
+    crd::u32 pinned_capacity    = 64U;      // per-thread pinned lane (DIAG.10c)
     crd::u32 small_fiber_count  = 128U;
     crd::u32 medium_fiber_count = 64U;
     crd::u32 large_fiber_count  = 16U;

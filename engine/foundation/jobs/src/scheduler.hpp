@@ -5,6 +5,7 @@
 #include <crd/containers/concurrent_queue.hpp>
 #include <crd/jobs/job_decl.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
@@ -14,7 +15,7 @@
 #include <crd/containers/array.hpp>
 
 // MSVC C4324: structure padded due to alignment specifier. Expected — alignas(64) on
-// ThreadState::pinned_available is intentional (separate cache line for the pinned slot).
+// ThreadState::pinned_peak is intentional (the producers' tally stays off the deques' lines).
 #if CRD_COMPILER_MSVC
 #pragma warning(push)
 #pragma warning(disable : 4324)
@@ -29,15 +30,16 @@ namespace crd::jobs::detail
 // Thread-safety contract:
 //   high / normal / low  — push() and pop() only from the owning thread;
 //                          steal() from any thread.
-//   pinned_available     — written by any thread (producer of pinned jobs);
-//                          read and cleared by the owning thread only.
+//   pinned               — pushed by any thread (producers of pinned jobs);
+//                          popped by the owning thread only.
 struct ThreadState
 {
-    explicit ThreadState(crd::u32 deque_cap, crd::u32 idx)
+    explicit ThreadState(crd::u32 deque_cap, crd::u32 pinned_cap, crd::u32 idx)
         : high(deque_cap)
         , normal(deque_cap)
         , low(deque_cap)
         , thread_index(idx)
+        , pinned(pinned_cap)
     {}
 
     ThreadState(const ThreadState&)            = delete;
@@ -51,22 +53,14 @@ struct ThreadState
     WorkStealingDeque<crd::jobs::JobDecl> low;
     crd::u32 thread_index;
 
-    // Single-slot pinned-job lane. Stores exactly one pinned job at a time.
-    //
-    // Producer protocol (any thread):
-    //   1. Write pinned_storage.
-    //   2. pinned_available.store(true, release).
-    //
-    // Consumer protocol (owning thread only):
-    //   1. pinned_available.load(acquire) — if false, skip.
-    //   2. Copy job from pinned_storage.
-    //   3. pinned_available.store(false, release).
-    //   4. Execute the job.
-    //
-    // The release/acquire pair establishes happens-before: step 1 of producer
-    // is visible to the consumer after step 1 of consumer succeeds.
-    alignas(64) std::atomic<bool>  pinned_available{false};
-    crd::jobs::JobDecl             pinned_storage{};
+    // Pinned-job lane: a bounded MPMC queue of SchedulerConfig::pinned_capacity jobs, drained by the owning thread
+    // before anything else. It was a single slot (DIAG.10c): a second job pinned to a thread before that thread
+    // drained the first asserted where asserts are on and overwrote the first elsewhere, losing it, and concurrent
+    // producers raced on the plain slot. A full lane is now a counted, always-on fatal in Scheduler::push.
+    crd::containers::ConcurrentQueue<crd::jobs::JobDecl> pinned;
+
+    // The most jobs this lane has held at once since init(): raised by producers after a push (a rare path).
+    alignas(64) std::atomic<crd::u32> pinned_peak{0U};
 
     // Per-worker wake semaphore — used ONLY on the opt-in targeted-wake path (ADR-0094 P-core routing). The default
     // path uses the shared Scheduler::m_semaphore and never touches this. It lets a SPECIFIC worker be woken (e.g.
@@ -82,14 +76,15 @@ struct SchedulerConfig
     crd::u32 num_threads        = 1;
     crd::u32 deque_capacity     = 256;
     crd::u32 injection_capacity = 4096;
+    crd::u32 pinned_capacity    = 64;    // per-thread pinned lane (DIAG.10c); a power of two >= 2
     bool     targeted_wake      = false; // opt-in per-worker wake (ADR-0094); default = shared-semaphore path
 };
 
 // Priority scheduler: three global injection queues, per-thread local Chase-Lev
-// deques, and per-thread pinned-job slots.
+// deques, and per-thread pinned-job lanes.
 //
 // Drain order per execute_one() call (highest to lowest):
-//   1. Pinned slot for the calling thread (if occupied)
+//   1. Pinned lane of the calling thread (if not empty)
 //   2. High injection queue  → High local deque → steal High from peers
 //   3. Normal injection queue→ Normal local deque→ steal Normal from peers
 //   4. Low injection queue   → Low local deque  → steal Low from peers
@@ -118,15 +113,16 @@ public:
     // Tear down all state. Safe to call even if init() was never called (idempotent).
     void shutdown() noexcept;
 
-    // Inject a job. If job.pin_thread >= 0, stored in that thread's pinned slot.
+    // Inject a job. If job.pin_thread >= 0, queued in that thread's pinned lane.
     // Otherwise enqueued into the global injection queue for the job's priority.
     // Posts the semaphore once to wake one sleeping worker.
-    // Thread-safe; lock-free.
+    // Thread-safe; lock-free. A full lane or queue is counted and is an always-on fatal (CRD_FATAL): a job is never
+    // dropped (DIAG.10c; in builds without asserts a full queue used to lose the job and hang its waiter).
     void push(const crd::jobs::JobDecl& job);
 
     // Push directly to a thread's local deque (must be called by the owning thread).
     // Avoids injection-queue contention for child jobs spawned by a running job.
-    // Posts the semaphore once.
+    // Posts the semaphore once. A full deque is an always-on fatal, like push().
     void push_local(crd::u32 thread_index, const crd::jobs::JobDecl& job);
 
     // Try to execute one job according to the drain order for thread_index.
@@ -160,6 +156,13 @@ public:
     // which is exactly the lane a starved job waits in. Both arrays are caller-provided (no allocation).
     void injection_diagnostics(crd::u32 backlog[3], crd::u64 pops[3]) const noexcept;
 
+    // DIAG.10c queue pressure. Each injection queue by Priority: its capacity, its racy depth now and the pushes it
+    // refused; its high water is not kept (it would cost every push a read of the consumers' position). The pinned
+    // lanes as one budget: the per-thread capacity, the fullest lane now, the highest lane peak and the refusals of
+    // all lanes. Relaxed reads -- a diagnostic sample, not an oracle.
+    void injection_pressure(crd::BudgetReading out[3]) const noexcept;
+    [[nodiscard]] crd::BudgetReading pinned_pressure() const noexcept;
+
 private:
     static void run_job(const crd::jobs::JobDecl& job);
 
@@ -184,6 +187,10 @@ private:
     // Cerid-owned futex/WaitOnAddress primitive — std::counting_semaphore lost wakes on the CI's libstdc++
     // (GCC 13.3), hanging determinism-moat tests at shutdown. See semaphore.hpp for the full mechanism.
     Semaphore m_semaphore{};
+
+    // DIAG.10c refusal tallies, bumped just before the always-on fatal so a handler intercepting it can read them.
+    std::atomic<crd::u64> m_injection_refusals[3]{};
+    std::atomic<crd::u64> m_pinned_refusals{0U};
 
     // Targeted-wake state (opt-in; untouched on the default path). idle bit i set ⇒ worker i is parked on its own
     // ThreadState::wake. ≤ 64 workers (asserted in init when targeted_wake is requested).

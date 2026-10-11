@@ -26,12 +26,22 @@ bool Scheduler::init(const SchedulerConfig& cfg)
                    "Scheduler: injection_capacity must be >= 2");
     CRD_ASSERT_MSG((cfg.injection_capacity & (cfg.injection_capacity - 1U)) == 0U,
                    "Scheduler: injection_capacity must be a power of two");
+    if (cfg.pinned_capacity < 2U || (cfg.pinned_capacity & (cfg.pinned_capacity - 1U)) != 0U)
+    {
+        CRD_FATAL("Scheduler: pinned_capacity must be a power of two >= 2");
+        return false;
+    }
 
     m_config = cfg;
     m_targeted_wake = cfg.targeted_wake;
     CRD_ASSERT_MSG(!m_targeted_wake || cfg.num_threads <= 64U,
                    "Scheduler: targeted_wake supports up to 64 workers (idle mask is 64-bit)");
     m_idle_mask.store(0U, std::memory_order_relaxed);
+    for (std::atomic<crd::u64>& r : m_injection_refusals)
+    {
+        r.store(0U, std::memory_order_relaxed);
+    }
+    m_pinned_refusals.store(0U, std::memory_order_relaxed);
 
     m_high_injection   = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
     m_normal_injection = std::make_unique<JobInjectionQueue>(cfg.injection_capacity);
@@ -40,8 +50,7 @@ bool Scheduler::init(const SchedulerConfig& cfg)
     m_thread_states.reserve(cfg.num_threads);
     for (crd::u32 i = 0U; i < cfg.num_threads; ++i)
     {
-        m_thread_states.push_back(
-            std::make_unique<ThreadState>(cfg.deque_capacity, i));
+        m_thread_states.push_back(std::make_unique<ThreadState>(cfg.deque_capacity, cfg.pinned_capacity, i));
     }
 
     m_initialized = true;
@@ -65,9 +74,9 @@ void Scheduler::shutdown() noexcept
 // ---------------------------------------------------------------------------
 // push
 //
-// Pinned jobs bypass the injection queues and land directly in the target
-// thread's single-slot pinned lane. The slot must be empty at the time of
-// push (asserted in debug; design invariant — pinned jobs are infrequent).
+// Pinned jobs bypass the injection queues and land in the target thread's
+// bounded pinned lane. A full lane or injection queue is counted, then an
+// always-on fatal: the job is never dropped (DIAG.10c).
 // ---------------------------------------------------------------------------
 
 void Scheduler::push(const crd::jobs::JobDecl& job)
@@ -80,10 +89,17 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         CRD_ASSERT_MSG(pin < m_config.num_threads,
                        "Scheduler::push: pin_thread out of range");
         ThreadState& ts = *m_thread_states[pin]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-        CRD_ASSERT_MSG(!ts.pinned_available.load(std::memory_order_acquire),
-                       "Scheduler::push: pinned slot already occupied");
-        ts.pinned_storage = job;
-        ts.pinned_available.store(true, std::memory_order_release);
+        if (!ts.pinned.try_push(job))
+        {
+            m_pinned_refusals.fetch_add(1U, std::memory_order_relaxed);
+            CRD_FATAL("Scheduler::push: pinned lane full — raise pinned_queue_capacity in jobs::Config");
+            return;
+        }
+        const auto held = static_cast<crd::u32>(ts.pinned.size());
+        crd::u32   peak = ts.pinned_peak.load(std::memory_order_relaxed);
+        while (held > peak && !ts.pinned_peak.compare_exchange_weak(peak, held, std::memory_order_relaxed))
+        {
+        }
         if (m_targeted_wake)
         {
             wake_worker(pin); // wake the SPECIFIC target (the shared semaphore couldn't)
@@ -95,20 +111,19 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         return;
     }
 
-    [[maybe_unused]] bool ok = false;
-    switch (job.priority)
+    const auto lane = static_cast<crd::u32>(job.priority); // 0 = High, 1 = Normal, 2 = Low
+    if (lane > 2U)
     {
-    case crd::jobs::Priority::High:
-        ok = m_high_injection->try_push(job);
-        break;
-    case crd::jobs::Priority::Normal:
-        ok = m_normal_injection->try_push(job);
-        break;
-    case crd::jobs::Priority::Low:
-        ok = m_low_injection->try_push(job);
-        break;
+        CRD_FATAL("Scheduler::push: unknown job priority");
+        return;
     }
-    CRD_ASSERT_MSG(ok, "Scheduler::push: injection queue full — raise injection_capacity");
+    JobInjectionQueue* const lanes[3] = {m_high_injection.get(), m_normal_injection.get(), m_low_injection.get()};
+    if (!lanes[lane]->try_push(job))
+    {
+        m_injection_refusals[lane].fetch_add(1U, std::memory_order_relaxed);
+        CRD_FATAL("Scheduler::push: injection queue full — raise injection_queue_capacity in jobs::Config");
+        return;
+    }
     if (m_targeted_wake)
     {
         wake_one_idle();
@@ -133,14 +148,24 @@ void Scheduler::push_local(crd::u32 thread_index, const crd::jobs::JobDecl& job)
                    "Scheduler::push_local: thread_index out of range");
 
     ThreadState& ts = *m_thread_states[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
-    [[maybe_unused]] bool ok = false;
+    bool ok = false;
     switch (job.priority)
     {
-    case crd::jobs::Priority::High:   ok = ts.high.push(job);   break;
-    case crd::jobs::Priority::Normal: ok = ts.normal.push(job); break;
-    case crd::jobs::Priority::Low:    ok = ts.low.push(job);    break;
+    case crd::jobs::Priority::High:
+        ok = ts.high.push(job);
+        break;
+    case crd::jobs::Priority::Normal:
+        ok = ts.normal.push(job);
+        break;
+    case crd::jobs::Priority::Low:
+        ok = ts.low.push(job);
+        break;
     }
-    CRD_ASSERT_MSG(ok, "Scheduler::push_local: local deque full — raise deque_capacity");
+    if (!ok)
+    {
+        CRD_FATAL("Scheduler::push_local: local deque full — raise deque_capacity");
+        return;
+    }
     if (m_targeted_wake)
     {
         wake_one_idle();
@@ -173,13 +198,14 @@ bool Scheduler::execute_one(crd::u32 thread_idx)
 
     ThreadState& me = *m_thread_states[thread_idx]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
-    // 1. Pinned slot — highest priority override.
-    if (me.pinned_available.load(std::memory_order_acquire))
+    // 1. Pinned lane — highest priority override.
     {
-        const crd::jobs::JobDecl job = me.pinned_storage;
-        me.pinned_available.store(false, std::memory_order_release);
-        run_job(job);
-        return true;
+        crd::jobs::JobDecl job{};
+        if (me.pinned.try_pop(job))
+        {
+            run_job(job);
+            return true;
+        }
     }
 
     // 2. High priority: injection → local → steal.
@@ -273,12 +299,13 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
 
     ThreadState& me = *m_thread_states[thread_idx]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
 
-    // 1. Pinned slot.
-    if (me.pinned_available.load(std::memory_order_acquire))
+    // 1. Pinned lane.
     {
-        const crd::jobs::JobDecl job = me.pinned_storage;
-        me.pinned_available.store(false, std::memory_order_release);
-        return job;
+        crd::jobs::JobDecl job{};
+        if (me.pinned.try_pop(job))
+        {
+            return job;
+        }
     }
 
     // 2. High priority: injection → local → steal.
@@ -434,6 +461,46 @@ void Scheduler::injection_diagnostics(crd::u32 backlog[3], crd::u64 pops[3]) con
         backlog[i] = (lanes[i] != nullptr) ? static_cast<crd::u32>(lanes[i]->size()) : 0U;
         pops[i]    = (lanes[i] != nullptr) ? lanes[i]->dequeued() : 0U;
     }
+}
+
+void Scheduler::injection_pressure(crd::BudgetReading out[3]) const noexcept
+{
+    const JobInjectionQueue* const lanes[3] = {m_high_injection.get(), m_normal_injection.get(), m_low_injection.get()};
+    for (crd::u32 i = 0U; i < 3U; ++i)
+    {
+        crd::BudgetReading r;
+        if (lanes[i] != nullptr)
+        {
+            r.read     = true;
+            r.bounded  = true;
+            r.capacity = lanes[i]->capacity();
+            r.in_use   = lanes[i]->size();
+            r.refusals = m_injection_refusals[i].load(std::memory_order_relaxed);
+        }
+        out[i] = r;
+    }
+}
+
+crd::BudgetReading Scheduler::pinned_pressure() const noexcept
+{
+    crd::BudgetReading r;
+    if (!m_initialized)
+    {
+        return r;
+    }
+    r.read               = true;
+    r.bounded            = true;
+    r.high_water_tracked = true;
+    r.capacity           = m_config.pinned_capacity;
+    r.refusals           = m_pinned_refusals.load(std::memory_order_relaxed);
+    for (const std::unique_ptr<ThreadState>& ts : m_thread_states)
+    {
+        const crd::u64 held = ts->pinned.size();
+        const crd::u64 peak = ts->pinned_peak.load(std::memory_order_relaxed);
+        r.in_use            = held > r.in_use ? held : r.in_use;
+        r.high_water        = peak > r.high_water ? peak : r.high_water;
+    }
+    return r;
 }
 
 // ---------------------------------------------------------------------------

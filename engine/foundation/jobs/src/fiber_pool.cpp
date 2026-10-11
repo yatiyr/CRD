@@ -120,6 +120,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
     tier.free_head.store(pack_head(kFiberNullIndex, 0U), std::memory_order_relaxed);
     tier.acquired_count.store(0U, std::memory_order_relaxed);
     tier.peak_count.store(0U, std::memory_order_relaxed);
+    tier.exhaustions.store(0U, std::memory_order_relaxed);
 
     for (crd::u32 i = 0; i < count; ++i)
     {
@@ -259,6 +260,7 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
             // contract: assert with Ignore semantics and return nullptr. run_job_in_fiber turns that nullptr into
             // an always-on fatal (worker_pool.cpp) so a Release build fails fast instead of dropping the job;
             // the direct-pool stress tests rely on the graceful nullptr here.
+            tier.exhaustions.fetch_add(1U, std::memory_order_relaxed);
             m_exhaustions.fetch_add(1U, std::memory_order_relaxed);
             CRD_ASSERT_MSG(false, "fiber pool exhausted — raise pool counts in jobs::Config");
             return nullptr;
@@ -362,6 +364,21 @@ crd::u32 FiberPool::available_count(FiberTier tier_kind) const noexcept
 crd::u32 FiberPool::peak_acquired(FiberTier tier_kind) const noexcept
 {
     return tier_of(tier_kind).peak_count.load(std::memory_order_relaxed);
+}
+
+crd::u32 FiberPool::tier_count(FiberTier tier_kind) const noexcept
+{
+    return tier_of(tier_kind).count;
+}
+
+crd::u32 FiberPool::acquired_count(FiberTier tier_kind) const noexcept
+{
+    return tier_of(tier_kind).acquired_count.load(std::memory_order_relaxed);
+}
+
+crd::u32 FiberPool::exhaustions(FiberTier tier_kind) const noexcept
+{
+    return tier_of(tier_kind).exhaustions.load(std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------

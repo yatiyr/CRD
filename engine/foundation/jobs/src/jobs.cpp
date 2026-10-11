@@ -199,6 +199,7 @@ void init(const Config& cfg)
     wc.large_fiber_count  = cfg.large_fiber_count;
     wc.max_counters       = cfg.max_counters;
     wc.injection_capacity = cfg.injection_queue_capacity;
+    wc.pinned_capacity    = cfg.pinned_queue_capacity;
     wc.frame_arena_bytes  = cfg.frame_alloc_bytes;
     wc.pcore_routing      = cfg.pcore_routing;
 
@@ -643,6 +644,41 @@ ProgressSample progress_snapshot() noexcept
     s.quiescent   = is_quiescent();
     s.exhaustions = g_pool.counter_pool().exhaustions() + g_pool.fiber_pool().exhaustions();
     return s;
+}
+
+JobsPressure pressure_snapshot() noexcept
+{
+    JobsPressure p{};
+    if (!g_pool.is_initialized())
+    {
+        return p;
+    }
+    detail::CounterPool& cp       = g_pool.counter_pool();
+    p.counters.read               = true;
+    p.counters.bounded            = true;
+    p.counters.high_water_tracked = true;
+    p.counters.capacity           = cp.capacity();
+    p.counters.in_use             = cp.acquired();
+    p.counters.high_water         = cp.peak_acquired();
+    p.counters.refusals           = cp.exhaustions();
+
+    detail::FiberPool&      fp       = g_pool.fiber_pool();
+    const detail::FiberTier tiers[3] = {detail::FiberTier::Small, detail::FiberTier::Medium, detail::FiberTier::Large};
+    for (crd::u32 i = 0U; i < 3U; ++i)
+    {
+        crd::BudgetReading& r = p.fibers[i];
+        r.read                = true;
+        r.bounded             = true;
+        r.high_water_tracked  = true;
+        r.capacity            = fp.tier_count(tiers[i]);
+        r.in_use              = fp.acquired_count(tiers[i]);
+        r.high_water          = fp.peak_acquired(tiers[i]);
+        r.refusals            = fp.exhaustions(tiers[i]);
+    }
+
+    g_pool.scheduler().injection_pressure(p.injection);
+    p.pinned = g_pool.scheduler().pinned_pressure();
+    return p;
 }
 
 LaneSample lane_snapshot() noexcept

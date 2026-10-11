@@ -2303,6 +2303,45 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-lifetime-accounti
   API's behaviour alone. Device objects are held to the registry's own `live_count`, a second count the ledger must
   agree with.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md)):
+- Queue and budget pressure is a reading the owner of a bounded resource reports and a probe judges:
+  `crd/core/budget_pressure.hpp` (crd-core). A `BudgetReading` carries the bound (or that there is none), what is
+  held now, the most held at once where the owner keeps it, the requests refused for want of room and the times a
+  soft bound was left exceeded. `pressure_level` judges one amount: Unread (no reading), Unbounded (reported, never
+  judged), Within, Near (amount × 1000 ≥ bound × threshold, 900 by default, computed exactly without an overflowing
+  product), Full (at the bound; a bound of 0 is full when empty) or Over. `pressure_report` judges the window between
+  two readings of one resource, worst first: Exhausted (a refusal in the window), Overrun (an overrun counted, or the
+  window held more than the bound), Saturated (it reached the bound), Near, then Relaxed only when a kept high water
+  proves the peak below Near; otherwise Undetermined (a high water the owner does not keep, or one from before the
+  window that is at or above Near). Readings that cannot be compared (unread, unbounded, another bound, a monotonic
+  count that went back) are Unjudged. The peak is reported as a range: at least the larger end, raised to the high
+  water when it rose in the window, and at most the high water. Integer arithmetic only; one rendered line per window.
+- At the crd-jobs boundary `crd::jobs::pressure_snapshot()` reports the completion counters (`max_counters`, with a
+  high water kept beside the acquired count), each fiber tier (its count, acquired, peak and its own refusals), each
+  injection queue by priority (capacity, depth and refusals; no high water, which would cost every push a read of the
+  consumers' position, so a window over an injection queue is never called Relaxed) and the pinned lanes as one budget
+  (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals).
+- Defects found and fixed. A job pushed into a full injection queue, or into a full local deque, was guarded only by
+  `CRD_ASSERT_MSG`: with asserts compiled out the job was dropped, its counter never reached zero and its waiter hung
+  (resume jobs go through the High queue, so a dropped resume strands a parked fiber). And each thread's pinned work
+  was a single slot: a second job pinned to a thread before that thread drained the first asserted where asserts are
+  on and silently overwrote the first elsewhere, and concurrent producers raced on the plain slot. Authored CEIR
+  reaches it: two `task.main_thread` tasks launched before either is awaited (the CEIR host lowers each to a job
+  pinned to thread 0). On the old code the new crd-ceir-host-tests case and the first crd-jobs-tests case hit the
+  assert on win-debug, and that jobs case hung on win-shipping until it was killed at 60 s. The pinned lane is now a bounded MPMC queue
+  (`Config::pinned_queue_capacity`, default 64, a power of two, checked by an always-on fatal at init), drained by its
+  thread before anything else; a full pinned lane, injection queue or local deque is counted and is an always-on
+  fatal naming the resource ("pinned lane full", "injection queue full", "local deque full"), as counter and fiber
+  exhaustion already were. A job is never dropped; a refusal is visible to a handler intercepting the fatal, which
+  is where a refusal count can be read ([ADR-0033](../decisions/0033-jobs-implementation-architecture.md) amended).
+- The ResourceManager's memory budget is soft: it never refuses a load, and when every resident block is pinned,
+  held or loading it stays above the budget silently. `ResourceManager::memory_pressure()` reports the budget
+  (unbounded at the default), the use, the high water of the use once a load's eviction (or a reload's
+  re-accounting, which does not evict) settled, and the overruns: the settles that ended above the budget.
+- Not settled here: the OS view of device memory (DXGI `QueryVideoMemoryInfo`, `VK_EXT_memory_budget`), GPU queue
+  depth and the frame graph's transient budget readings belong with the driver/device-reset and host-pressure
+  clause; the hang watchdog does not yet classify a stall from these readings.
+
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles
 

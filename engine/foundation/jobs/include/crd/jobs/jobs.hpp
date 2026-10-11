@@ -1,6 +1,7 @@
 #pragma once
 
 #include <crd/core/assert.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/core/types.hpp>
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/jobs/job_decl.hpp>
@@ -42,6 +43,11 @@ struct Config
     // (no behavior/perf change for any existing system). When true, the pool uses per-worker targeted wake +
     // pins workers to cores (performance cores first) so MemoryBoundElementwise batches can route to P-cores.
     bool pcore_routing = false;
+
+    // DIAG.10c: jobs each thread's pinned lane holds (JobDecl::pin_thread), a power of two >= 2. A pinned job that
+    // finds its lane full is a counted, always-on fatal ("pinned lane full"), as a full injection queue is ("injection
+    // queue full"): neither drops the job. Appended last so designated initializers keep their order.
+    crd::u32 pinned_queue_capacity = 64U;
 };
 
 void init(const Config& cfg = {});
@@ -284,6 +290,33 @@ struct LaneSample
 };
 
 [[nodiscard]] LaneSample lane_snapshot() noexcept;
+
+// ---------------------------------------------------------------------------
+// Queue pressure (DIAG.10c): the fill of every bounded resource of the pool, as readings the crd-core pressure probe
+// judges (crd/core/budget_pressure.hpp). Each reading carries its bound, what it holds now, its high water where the
+// pool keeps one and the requests it refused. A refusal is always followed by the always-on fatal that names the
+// resource ("CounterPool exhausted", "fiber pool exhausted", "injection queue full", "pinned lane full"), so a
+// refusal count above zero is visible only to a handler intercepting that fatal; in a live process the readings show
+// how near each bound the workload ran.
+//
+//   counters     -- completion counters (Config::max_counters): held now, the most held at once, refusals.
+//   fibers[t]    -- fiber tier t (0 = Small, 1 = Medium, 2 = Large): acquired now, peak, refusals.
+//   injection[p] -- the injection queue of Priority p (0 = High, 1 = Normal, 2 = Low): its depth now and refusals.
+//                   Its high water is not kept: tracking it would cost every push a read of the consumers' position.
+//   pinned       -- the per-thread pinned lanes as one budget (Config::pinned_queue_capacity per lane): the fullest
+//                   lane now, the highest lane peak, and the refusals of all lanes.
+//
+// Every reading is unread before init(). Relaxed, racy point-in-time reads: a diagnostic sample, not an oracle.
+// ---------------------------------------------------------------------------
+struct JobsPressure
+{
+    crd::BudgetReading counters;
+    crd::BudgetReading fibers[3];
+    crd::BudgetReading injection[3];
+    crd::BudgetReading pinned;
+};
+
+[[nodiscard]] JobsPressure pressure_snapshot() noexcept;
 
 // ---------------------------------------------------------------------------
 // Hang watchdog handler (opt-in via Config::hang_watchdog_period_ms).

@@ -8,13 +8,16 @@
 // With small_fiber_count == 1 and several small-stack jobs that spin forever (holding their fiber), the first
 // dispatched job takes the one fiber and a second worker's dispatch finds the tier empty -> CRD_FATAL. The
 // installed handler reads the tally through progress_snapshot() and exits 42 only if it surfaced (60 otherwise,
-// 97 for a different assert). The fatal fires on a worker thread and _Exit terminates the process directly.
+// 97 for a different assert). The fatal fires on a worker thread and _Exit terminates the process directly. Since
+// DIAG.10c the small tier's pressure reading (crd::jobs::pressure_snapshot) must also show the refusal with the
+// tier at its bound, or the exit is 60.
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is a scheduler-liveness control
 
 #include "specimen_common.hpp"
 
 #include <crd/core/assert.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <atomic>
@@ -31,9 +34,14 @@ int fiber_exhaustion_assert_handler(const char* formatted_message)
     if (formatted_message != nullptr && std::strstr(formatted_message, "fiber pool exhausted") != nullptr)
     {
         const crd::u32 ex = crd::jobs::progress_snapshot().exhaustions;
-        std::printf("CRD_DIAG_EXHAUSTIONS=%u\n", ex);
+        // DIAG.10c: the small tier's pressure reading must carry the refusal too, at its bound.
+        const crd::BudgetReading small = crd::jobs::pressure_snapshot().fibers[0];
+        std::printf("CRD_DIAG_EXHAUSTIONS=%u CRD_DIAG_SMALL_TIER=%llu/%llu refused %llu\n", ex,
+                    static_cast<unsigned long long>(small.in_use), static_cast<unsigned long long>(small.capacity),
+                    static_cast<unsigned long long>(small.refusals));
         std::fflush(stdout);
-        std::_Exit(ex >= 1U ? 42 : 60); // 42 = exhaustion counted+surfaced; 60 = message fired but count absent
+        const bool counted = ex >= 1U && small.refusals >= 1U && small.in_use == small.capacity;
+        std::_Exit(counted ? 42 : 60); // 42 = exhaustion counted+surfaced; 60 = message fired but count absent
     }
     std::_Exit(97); // a different assert fired first -- distinguishable from the expected one
 }

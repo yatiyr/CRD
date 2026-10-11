@@ -521,6 +521,32 @@ crd::u64 ResourceManager::current_memory_use() const noexcept
     return m_memory_used;
 }
 
+crd::BudgetReading ResourceManager::memory_pressure() const noexcept
+{
+    std::lock_guard<std::mutex> lk(m_mutex);
+    crd::BudgetReading r;
+    r.read               = true;
+    r.bounded            = m_memory_budget != ~0ULL;
+    r.capacity           = m_memory_budget;
+    r.in_use             = m_memory_used;
+    r.high_water_tracked = true;
+    r.high_water         = m_memory_peak;
+    r.overruns           = m_budget_overruns;
+    return r;
+}
+
+void ResourceManager::note_budget_settled() noexcept
+{
+    if (m_memory_used > m_memory_peak)
+    {
+        m_memory_peak = m_memory_used;
+    }
+    if (m_memory_used > m_memory_budget)
+    {
+        ++m_budget_overruns;
+    }
+}
+
 void ResourceManager::pin(ResourceId id)
 {
     std::lock_guard<std::mutex> lk(m_mutex);
@@ -702,6 +728,7 @@ CRD_NOINLINE void ResourceManager::try_evict_to_budget()
             evict_block_locked(victim_id, *pp);
         }
     }
+    note_budget_settled(); // DIAG.10c: the settled use is the budget's peak; still above it is an overrun
 }
 
 // ── Internal helpers ───────────────────────────────────────────────────────
@@ -1714,6 +1741,7 @@ crd::usize ResourceManager::do_reload_mount(PackWatch& watch)
             std::lock_guard<std::mutex> lk(m_mutex);
             m_memory_used             = m_memory_used - task.block->payload_size + task.blob_size;
             task.block->payload_size  = task.blob_size;
+            note_budget_settled(); // DIAG.10c: a reload does not evict, so a larger payload can overrun
             crd::containers::Array<ReloadSub>* subs = m_reload_subs.find(task.id);
             if (subs != nullptr)
             {

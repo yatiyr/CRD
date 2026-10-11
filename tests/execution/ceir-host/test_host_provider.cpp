@@ -914,3 +914,49 @@ TEST_CASE("ceir 11a: a main_thread-pinned task pooled + awaited from main comple
     CHECK(rp.values[0] == 77);
     CHECK(prov.pooled_count() == 1U); // main_thread pooled (pure body)
 }
+
+TEST_CASE("ceir diag10c: two main_thread tasks in flight before either is awaited both complete",
+          "[ceir][host][diag10c]")
+{
+    // Both launches pin a job to thread 0 before thread 0 pumps. The pinned lane was one slot, so the second
+    // push found it occupied: an assert where asserts are on, and an overwritten (lost) first job elsewhere,
+    // whose await then never returned.
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const Ops                          o(ctx);
+    const OpId                         main_thread = ctx.intern_op("task", "main_thread");
+    const OpId                         fiber_wait  = ctx.intern_op("task", "fiber_wait");
+    Module* const                      m           = ctx.create_module();
+    Operation* const                   fm          = mkfunc(ctx, *m, "main", 0U);
+    Block* const                       mb          = func::func_body_block(fm);
+    // @main() -> i32 { %a = task.main_thread { yield 77 }; %b = task.main_thread { yield 5 };
+    //                  %x = task.fiber_wait(%a); %y = task.fiber_wait(%b); ret %x + %y }
+    Operation* launches[2] = {nullptr, nullptr};
+    const i64  yields[2]   = {77, 5};
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        Operation* const l  = ctx.create_operation(main_thread, {}, 1U, ctx.type_i32(), 1U);
+        Block* const     lb = ctx.create_block(0U);
+        l->region(0)->append(lb);
+        yield1(ctx, o, lb, konst(ctx, o, lb, yields[i])->result(0U));
+        mb->append(l);
+        launches[i] = l;
+    }
+    Value* waited[2] = {nullptr, nullptr};
+    for (crd::u32 i = 0U; i < 2U; ++i)
+    {
+        Value* wt[1] = {launches[i]->result(0U)};
+        Operation* const fw = ctx.create_operation(fiber_wait, ConstSpan<Value*>(wt, 1U), 1U, ctx.type_i32());
+        mb->append(fw);
+        waited[i] = fw->result(0U);
+    }
+    Operation* const sum = bin(ctx, o.addi, waited[0], waited[1], mb);
+    Value*           rv[1] = {sum->result(0U)};
+    mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
+    crd::memory::GrowableTlsfAllocator palloc;
+    host::HostProvider                 prov(&palloc, 4U);
+    const exec::ExecResult             rp = prov.execute(ctx, *m, "main", {});
+    REQUIRE(rp.ok());
+    CHECK(rp.values[0] == 82);
+    CHECK(prov.pooled_count() == 2U);
+}

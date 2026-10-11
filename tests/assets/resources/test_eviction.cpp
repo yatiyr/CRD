@@ -351,3 +351,86 @@ TEST_CASE("Eviction: load_streamed delivers correct payload via AsyncFile",
 
     (void)crd::platform::fs::remove_file(path);
 }
+
+TEST_CASE("Eviction diag10c: the budget reading shows an overrun when nothing is evictable",
+          "[resources][eviction][diag10c]")
+{
+    // DIAG.10c: the budget is soft, so a load is never refused; when every resident block is pinned or held the
+    // budget is left exceeded, and that was silent. memory_pressure() reports the budget, the settled use, its high
+    // water and the overruns for the crd-core pressure probe to judge.
+    ResourceManager rm(&s_ev_alloc);
+    rm.register_loader(std::make_unique<EVBlobLoader>());
+
+    const crd::usize n_packs = 3;
+    EvPack           packs[n_packs];
+    for (crd::usize i = 0; i < n_packs; ++i)
+    {
+        packs[i].id   = ResourceId::mint_random();
+        packs[i].path = crd::platform::fs::Path(ev_tmp_path("ev_pressure_", packs[i].id));
+        ev_write_blob_pack(packs[i].path, packs[i].id, static_cast<crd::u32>(i + 30U));
+        packs[i].mid = rm.mount_manifest(packs[i].path.generic());
+        REQUIRE(packs[i].mid.is_valid());
+    }
+    const crd::u64 blob_sz = rm.find_entry(packs[0].id)->blob_size;
+
+    // The default budget has no bound: reported, never judged.
+    const crd::BudgetReading open = rm.memory_pressure();
+    CHECK(open.read);
+    CHECK_FALSE(open.bounded);
+    CHECK(open.in_use == 0U);
+    CHECK(crd::pressure_level(open, open.in_use) == crd::PressureLevel::Unbounded);
+
+    // Room for one blob, and the first two pinned: the second load cannot be evicted back under the budget.
+    rm.pin(packs[0].id);
+    rm.pin(packs[1].id);
+    rm.set_memory_budget(blob_sz);
+    const crd::BudgetReading start = rm.memory_pressure();
+    CHECK(start.bounded);
+    CHECK(start.capacity == blob_sz);
+    CHECK(start.overruns == 0U);
+    for (crd::usize i = 0; i < 2U; ++i)
+    {
+        auto h = rm.load_sync<EVBlobResource>(packs[i].id);
+        CHECK(h.state() == LoadState::Ready);
+    }
+    const crd::BudgetReading pinned = rm.memory_pressure();
+    CHECK(pinned.in_use == 2U * blob_sz);
+    CHECK(pinned.in_use == rm.current_memory_use());
+    CHECK(pinned.high_water == 2U * blob_sz);
+    CHECK(pinned.overruns == 1U); // the first load fitted; the second settled above the budget
+    CHECK(pinned.refusals == 0U);
+    CHECK(crd::pressure_level(pinned, pinned.in_use) == crd::PressureLevel::Over);
+    const crd::PressureReport overrun = crd::pressure_report(start, pinned);
+    CHECK(overrun.verdict == crd::PressureVerdict::Overrun);
+    CHECK(overrun.overran == 1U);
+
+    // Unpinned, the next load evicts both back under the budget: no new overrun, the high water stays.
+    rm.unpin(packs[0].id);
+    rm.unpin(packs[1].id);
+    const crd::BudgetReading unpinned = rm.memory_pressure();
+    {
+        auto h = rm.load_sync<EVBlobResource>(packs[2].id);
+        CHECK(h.state() == LoadState::Ready);
+    }
+    const crd::BudgetReading settled = rm.memory_pressure();
+    CHECK(settled.in_use == blob_sz);
+    CHECK(settled.high_water == 2U * blob_sz);
+    CHECK(settled.overruns == 1U);
+    CHECK(crd::pressure_level(settled, settled.in_use) == crd::PressureLevel::Full);
+    const crd::PressureReport recovered = crd::pressure_report(unpinned, settled);
+    CHECK(recovered.overran == 0U);
+    CHECK(recovered.level_now == crd::PressureLevel::Full);
+    CHECK(recovered.verdict == crd::PressureVerdict::Overrun); // the window opened above the budget
+
+    // A window that stays at the budget is saturated, not overrun.
+    {
+        auto h = rm.load_sync<EVBlobResource>(packs[2].id);
+        CHECK(h.state() == LoadState::Ready);
+    }
+    CHECK(crd::pressure_report(settled, rm.memory_pressure()).verdict == crd::PressureVerdict::Saturated);
+
+    for (crd::usize i = 0; i < n_packs; ++i)
+    {
+        (void)crd::platform::fs::remove_file(packs[i].path);
+    }
+}

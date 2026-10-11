@@ -32,7 +32,12 @@ busy-polls (wasted power). Joining the pool means every core is productive durin
 window (the main OS thread, thread 0). To preserve this, `crd-jobs` introduces a **pinned job**
 concept: a job tagged with a required thread index. The main thread worker loop checks for pinned
 work at every iteration before stealing from other queues. GLFW event pumping runs as a pinned job
-each frame.
+each frame. Amended 2026-10-11 (DIAG.10c): each thread's pinned work was a single slot, so a second
+job pinned to a thread before that thread drained the first asserted where asserts are on and
+overwrote (lost) the first elsewhere; authored CEIR reaches this with two `task.main_thread` tasks
+in flight. The pinned lane is now a bounded MPMC queue (`Config::pinned_queue_capacity`, default
+64), and a full pinned lane, like a full injection queue, is a counted, always-on fatal instead of
+a dropped job ([session](../sessions/2026-10-11-diag-10c-queue-pressure.md)).
 
 ### 2. Hand-rolled assembly context switch
 

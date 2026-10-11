@@ -99,6 +99,11 @@ target_link_libraries(crd-diag-counter-exhaustion-specimen PRIVATE crd-jobs)
 crd_diag_specimen(crd-diag-fiber-exhaustion-specimen SOURCES specimens/fiber_exhaustion_specimen.cpp)
 target_link_libraries(crd-diag-fiber-exhaustion-specimen PRIVATE crd-jobs Threads::Threads)
 
+# The DIAG.10c queue-full positive control: a push into a full injection queue or a full pinned lane must fire an
+# always-on, counted fatal (not a silently dropped or overwritten job). Mode argument: injection | pinned.
+crd_diag_specimen(crd-diag-queue-full-specimen SOURCES specimens/queue_full_specimen.cpp)
+target_link_libraries(crd-diag-queue-full-specimen PRIVATE crd-jobs)
+
 # The DIAG.5a crash-capture acceptance specimen: installs the real crd crash handler and faults in one of several
 # modes (av / concurrent / fastfail / denied / logger_lock / stack-overflow x3 / fiber / injected-failure) so the
 # harness can verify termination, the retained fault reason and the on-disk dump outcome from outside the process.
