@@ -1732,7 +1732,8 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-evidence-readers.
 - Fuzzing rounds for DIAG.10a run single-process. Under four concurrent processes, two perf targets (the unchanged
   bundle target among them) showed input-independent register and stack corruption that no artifact reproduces and
   single-process runs never showed; the cause is not established and stays an open item of the row, not an
-  explanation.
+  explanation. (2026-10-11: concurrency is not a condition of it. It has since appeared in single libFuzzer
+  processes, in the replay driver and in an unsanitized gcc build; see the container-overflow control block below.)
 - Not yet: run records (`decode_record`), command decoding, resource reload, the compiled and reference CEIR
   comparison, the virtual-memory and streaming allocators, and the unknown-origin artifacts.
 
@@ -1992,6 +1993,26 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-unknown-origin-ar
   annotation). A known-answer CPU probe found no wrong result, and the host's own toolchain processes crash at
   varying offsets. The discriminating local experiment is a timed comparison of the same rounds with
   `ASAN_OPTIONS=detect_container_overflow=0` against the default; a run on another machine is the user's.
+
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-container-overflow-control.md)):
+- The container-annotation path is not the cause of the corruption of unknown origin. With
+  `detect_container_overflow=0` (shown to disable the annotation in this runtime: the Array live-range case fails
+  under it) libFuzzer processes paired by seed, run count and moment faulted 7 times in 12 against 8 in 12 with the
+  default, about one event per 1.5 M and 1.0 M executions, and one arm-B fault was inside
+  `asan_annotate_live_range` itself. That path is where corruption is noticed, not where it is made.
+- Neither libFuzzer, the sanitizers nor the input is needed. The replay driver over 790 inputs faulted 130 times in
+  about 2.31 M executions; an unsanitized linux-gcc-debug loop faulted twice in about 4.68 M, once as a wrong result
+  (serialize output its own deserializer rejected) on an input it handled correctly 5,922 other times; every one of
+  the control's 13 artifacts replays clean and one is a committed seed. `MallocAllocator::try_allocate` asserted
+  `is_pow2(alignment)` on the constant 8 its caller loads immediately before the call, a value that only the CPU,
+  the kernel or hypervisor's register save and restore, or a foreign write into the live stack can change.
+- No defect in the engine, the harness or the instruments is indicated. Which part of the execution environment
+  misbehaves (the host CPU or the WSL2 guest) is not separated here: native Windows loops were clean at small
+  exposure with different executables, a compile-determinism probe (716 concurrent compiles) and the known-answer
+  probe were clean, and the rate rose about twentyfold within the session. The separating run is the user's (the
+  same loops on another machine, or on this one booted into native Linux).
+- Artifacts this host's fault produces are counted and recorded, not adopted, until that run (a dated exception to
+  the adoption rule in [test instruments](test-instruments.md)).
 
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness

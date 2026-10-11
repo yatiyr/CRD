@@ -202,7 +202,12 @@ overflows, two CEIR binary dangling-view reports, two CKIR blob cursor reports) 
 clang 18 ASan+UBSan build, alone or over 5,000 in-process repetitions each, and were adopted as corpus inputs.
 The policy that follows: a libFuzzer-process finding that does not replay in isolation is adopted, counted and
 recorded with its repetition evidence; a recurrence with a reproducing artifact gets an owner through the
-ordinary route. No `fuzz/pending/` directory remains.
+ordinary route. No `fuzz/pending/` directory remains. Exception (2026-10-11,
+[container-overflow control](../sessions/2026-10-11-diag-10a-container-overflow-control.md)): the development host
+now faults in sanitized and unsanitized builds, with and without libFuzzer and independent of the input (a
+committed seed failed in-process, and an input handled correctly thousands of times produced a wrong result once).
+Until a run on another machine settles whether the host is the cause, findings from this host that do not replay
+alone are counted and recorded in the session, not adopted: such an input carries no regression value.
 
 Every adopted artifact replays clean on MSVC 19.51 (`win-debug`), clang 18 (ASan+UBSan) and GCC 13.3
 (`linux-gcc-asan`, UBSan without recovery, `-Werror`), and the CEIR and CKIR unit suites (534 and 311 cases) pass
