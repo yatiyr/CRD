@@ -3,6 +3,7 @@
     test_audio_graph.cpp   # GEO-10: ABUF/AGRF round-trips + THE 4-TRACK bit-stable offline render gate
     test_midi_realtime.cpp # GEO-10: SMF -> MIDI 2.0 exact events + SPSC ring + THE device SOAK
     test_ceir_audio_render.cpp # CEIR-31a-1b-ii: execute_audio_graph_ceir BIT-EXACT vs render_graph (committed .ceir vs AGRF)
+    test_diag_audio_boundary.cpp # DIAG.10c: binding shape/rate, the sample domain and the render-period mode probe
 )
 
 target_link_libraries(crd-audio-tests PRIVATE

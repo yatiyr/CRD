@@ -61,6 +61,7 @@ crd_discover_tests(crd-hesap-tensor-hyperopt-tests)
 # --- v14-l I/O gates (separate executable: links platform for filesystem) ---
 add_executable(crd-hesap-tensor-io-tests
     test_io.cpp
+    test_diag_tensor_probe.cpp # DIAG.10c: the layout and value probes at the tensor boundary (DLPack import)
 )
 
 target_link_libraries(crd-hesap-tensor-io-tests PRIVATE

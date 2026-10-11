@@ -19,6 +19,8 @@
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
+#include <utility>
+
 namespace crd
 {
 
@@ -128,5 +130,21 @@ public:
 private:
     FpEnvironment m_saved;
 };
+
+// Call code the engine does not own (a framework's DLPack deleter, a driver, a user callback) and keep a mode it sets
+// from reaching the caller. Returns the FpDifference bits between the mode the call left and the mode before it
+// (0 = untouched) and, when they differ, puts the mode from before the call back. A foreign call that changes the
+// thread's mode is a defect in that code; the caller decides how to report it.
+template <typename Call> [[nodiscard]] crd::u32 call_keeping_fp_environment(Call&& call)
+{
+    const FpEnvironment before = read_fp_environment();
+    std::forward<Call>(call)();
+    const crd::u32 changed = fp_differences(read_fp_environment(), before);
+    if (changed != 0U)
+    {
+        write_fp_environment(before);
+    }
+    return changed;
+}
 
 } // namespace crd

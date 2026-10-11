@@ -9,7 +9,9 @@
   "tests/ceir-cook/crd-ceir-cook-tests",
   "tests/ceir-host/crd-ceir-host-tests",
   "tests/sandbox-inspect/crd-sandbox-inspect-tests",
-  "tests/ceridc/crd-ceridc-tests"
+  "tests/ceridc/crd-ceridc-tests",
+  "tests/hesap-tensor/crd-hesap-tensor-io-tests",
+  "tests/audio/crd-audio-tests"
  ],
  "ctests": [
   "crd-fuzz-perf-bundle-corpus",
@@ -59,7 +61,14 @@
   {"group": "value-domain probes and the result oracle", "rows": ["DIAG.10c"],
    "paths": ["engine/foundation/core/src/value_domain.cpp",
              "engine/foundation/core/include/crd/core/value_domain.hpp",
-             "engine/execution/ceir-cook/src/result_oracle.cpp"]}
+             "engine/execution/ceir-cook/src/result_oracle.cpp"]},
+  {"group": "layout probes and the tensor and audio boundaries", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/layout_probe.cpp",
+             "engine/foundation/core/include/crd/core/layout_probe.hpp",
+             "engine/numerics/hesap-tensor/include/crd/hesap/tensor/probe.hpp",
+             "engine/numerics/hesap-tensor/include/crd/hesap/tensor/dlpack.hpp",
+             "engine/media/audio/src/audio_boundary.cpp",
+             "engine/media/audio/include/crd/audio/audio_boundary.hpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -136,6 +145,12 @@
    "enum": "ValueViolation", "header": "engine/foundation/core/include/crd/core/value_domain.hpp"},
   {"name": "ResultVerdict", "kind": "error-path", "row": "DIAG.10c",
    "enum": "ResultVerdict", "header": "engine/execution/ceir-cook/include/crd/ceir/cook/result_oracle.hpp"},
+  {"name": "LayoutViolation", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "LayoutViolation", "header": "engine/foundation/core/include/crd/core/layout_probe.hpp"},
+  {"name": "LayoutOverlap", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "LayoutOverlap", "header": "engine/foundation/core/include/crd/core/layout_probe.hpp"},
+  {"name": "SourceBindingVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "SourceBindingVerdict", "header": "engine/media/audio/include/crd/audio/audio_boundary.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",

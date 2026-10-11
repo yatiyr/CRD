@@ -2,6 +2,7 @@
 
 #include <crd/audio/ceir_audio_render.hpp>
 
+#include <crd/audio/audio_boundary.hpp> // DIAG.10c: check_source_binding
 #include <crd/audio/audio_kernels.hpp> // apply_source / apply_gain / apply_biquad / apply_delay / apply_compressor (SHARED)
 #include <crd/ceir/attr.hpp>           // AttrValue / AttrKind
 #include <crd/ceir/id.hpp>             // AttrId
@@ -215,7 +216,7 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
                 return 0;
             }
             const GraphSourceBinding* const b = binding_for(bindings, sname);
-            if (b == nullptr || b->samples.size() == 0 || b->channels == 0)
+            if (b == nullptr || !source_binding_renders(check_source_binding(*b, sample_rate))) // DIAG.10c
             {
                 return 0;
             }

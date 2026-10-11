@@ -209,6 +209,11 @@ public:
     [[nodiscard]] crd::u32 sample_rate() const noexcept;
     [[nodiscard]] crd::u32 xrun_count() const noexcept;   // event timeouts + starved periods — the soak metric
     [[nodiscard]] crd::u64 frames_rendered() const noexcept;
+    // DIAG.10c (audio_boundary.hpp, render_audio_period): periods the device thread entered, or the callback left, in
+    // a floating-point mode other than the declared one (each put back), and periods whose callback wrote a value
+    // outside audio_sample_domain (NaN or infinity)
+    [[nodiscard]] crd::u32 fp_mode_divergence_count() const noexcept;
+    [[nodiscard]] crd::u32 nonfinite_period_count() const noexcept;
 
 private:
     struct Impl;

@@ -3,11 +3,18 @@
 // dedicated OS thread (the correct primitive for a device callback — crd-jobs fibers are for work, not
 // latency-critical device service). Xruns count event timeouts and fully-starved periods — the soak metric.
 // On non-Windows hosts start() returns false (the Linux backend rides the cross-platform sweep with hardware
-// to verify on — the interface is the contract).
+// to verify on — the interface is the contract). DIAG.10c: each period runs through render_audio_period
+// (audio_boundary.hpp): the callback runs in the declared numerical mode, a mode it leaves set stays in its period,
+// a non-stereo endpoint gets the callback's stereo in its first two channels, and divergent or non-finite periods
+// are counted.
 
 #include <crd/audio/audio_realtime.hpp>
 
 #ifdef _WIN32
+
+#include <crd/audio/audio_boundary.hpp>
+#include <crd/containers/array.hpp>
+#include <crd/memory/allocator.hpp>
 
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -34,6 +41,9 @@ struct AudioDevice::Impl
     std::atomic<bool>    running{false};
     std::atomic<crd::u32> xruns{0};
     std::atomic<crd::u64> frames_done{0};
+    std::atomic<crd::u32> fp_divergences{0};    // periods entered or left in a mode other than the declared one
+    std::atomic<crd::u32> nonfinite_periods{0}; // periods whose callback wrote a value outside audio_sample_domain
+    crd::containers::Array<crd::f32> scratch{crd::memory::default_allocator()}; // stereo for a non-stereo endpoint
     crd::u32             buffer_frames = 0;
     AudioRenderFn        callback      = nullptr;
     void*                user          = nullptr;
@@ -118,13 +128,16 @@ void AudioDevice::Impl::run(Impl* impl)
                 continue;
             }
             auto* out = reinterpret_cast<float*>(raw);
-            for (UINT32 i = 0; i < avail * channels; ++i)
+            const AudioPeriodReport period =
+                render_audio_period(impl->callback, impl->user, out, avail, channels, impl->mix->nSamplesPerSec,
+                                    impl->scratch.data(), impl->scratch.size());
+            if (period.entry_fp_difference != 0U || period.exit_fp_difference != 0U)
             {
-                out[i] = 0.0F;
+                impl->fp_divergences.fetch_add(1, std::memory_order_relaxed);
             }
-            if (impl->callback != nullptr && channels >= 2)
+            if (period.called && !period.samples.ok())
             {
-                impl->callback(impl->user, out, avail, impl->mix->nSamplesPerSec);
+                impl->nonfinite_periods.fetch_add(1, std::memory_order_relaxed);
             }
             (void)impl->render->ReleaseBuffer(avail, 0);
             impl->frames_done.fetch_add(avail, std::memory_order_relaxed);
@@ -194,6 +207,12 @@ bool AudioDevice::start(AudioRenderFn fn, void* user)
         im.release();
         return false;
     }
+    // a non-stereo endpoint renders through a stereo scratch sized here, never on the render thread
+    im.scratch.clear();
+    if (im.mix->nChannels != 2)
+    {
+        im.scratch.resize(static_cast<crd::usize>(im.buffer_frames) * 2U, 0.0F);
+    }
 
     im.callback = fn;
     im.user     = user;
@@ -241,6 +260,14 @@ crd::u64 AudioDevice::frames_rendered() const noexcept
 {
     return m_impl->frames_done.load(std::memory_order_relaxed);
 }
+crd::u32 AudioDevice::fp_mode_divergence_count() const noexcept
+{
+    return m_impl->fp_divergences.load(std::memory_order_relaxed);
+}
+crd::u32 AudioDevice::nonfinite_period_count() const noexcept
+{
+    return m_impl->nonfinite_periods.load(std::memory_order_relaxed);
+}
 
 } // namespace crd::audio
 
@@ -261,6 +288,8 @@ void AudioDevice::stop() {}
 crd::u32 AudioDevice::sample_rate() const noexcept { return 0; }
 crd::u32 AudioDevice::xrun_count() const noexcept { return 0; }
 crd::u64 AudioDevice::frames_rendered() const noexcept { return 0; }
+crd::u32 AudioDevice::fp_mode_divergence_count() const noexcept { return 0; }
+crd::u32 AudioDevice::nonfinite_period_count() const noexcept { return 0; }
 } // namespace crd::audio
 
 #endif

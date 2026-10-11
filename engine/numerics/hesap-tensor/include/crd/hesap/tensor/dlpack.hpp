@@ -38,6 +38,11 @@
 
 #include "detail/dlpack.h"
 
+#include <crd/core/fp_environment.hpp>
+#include <crd/core/layout_probe.hpp>
+
+#include <limits>
+
 namespace crd::hesap::tensor
 {
 
@@ -283,7 +288,7 @@ public:
     {
         if (this != &other)
         {
-            release();
+            (void)release();
             m_versioned = other.m_versioned;
             m_legacy = other.m_legacy;
             m_view = other.m_view;
@@ -295,16 +300,20 @@ public:
         return *this;
     }
 
-    ~DlpackImported() { release(); }
+    ~DlpackImported() { (void)release(); }
 
-    // Invoke the producer's deleter (exactly once) and drop the view.
-    void release() noexcept
+    // Invoke the producer's deleter (exactly once) and drop the view. The deleter is the producing framework's code:
+    // a floating-point mode it leaves set is put back (DIAG.10c), and the FpDifference bits it changed are returned
+    // (0 = none, or nothing to release) so the caller can report the producer.
+    crd::u32 release() noexcept
     {
+        crd::u32 changed = 0U;
         if (m_versioned != nullptr)
         {
             if (m_versioned->deleter != nullptr)
             {
-                m_versioned->deleter(m_versioned);
+                DLManagedTensorVersioned* const capsule = m_versioned;
+                changed |= crd::call_keeping_fp_environment([capsule]() { capsule->deleter(capsule); });
             }
             m_versioned = nullptr;
         }
@@ -312,11 +321,13 @@ public:
         {
             if (m_legacy->deleter != nullptr)
             {
-                m_legacy->deleter(m_legacy);
+                DLManagedTensor* const capsule = m_legacy;
+                changed |= crd::call_keeping_fp_environment([capsule]() { capsule->deleter(capsule); });
             }
             m_legacy = nullptr;
         }
         m_view = TensorView<T>{};
+        return changed;
     }
 
     [[nodiscard]] bool valid() const noexcept { return m_versioned != nullptr || m_legacy != nullptr; }
@@ -362,9 +373,12 @@ template <typename T>
         return TensorStatus::ShapeMismatch; // dtype mismatch — same status as typed file reads
     }
     const crd::u32 rank = static_cast<crd::u32>(dl.ndim);
+    if (rank > 0U && dl.shape == nullptr)
+    {
+        return TensorStatus::BadInput;
+    }
     crd::u64 shape[kMaxRank] = {};
     crd::i64 strides[kMaxRank] = {};
-    crd::u64 elems = 1;
     for (crd::u32 d = 0; d < rank; ++d)
     {
         if (dl.shape[d] < 0)
@@ -372,7 +386,6 @@ template <typename T>
             return TensorStatus::BadInput;
         }
         shape[d] = static_cast<crd::u64>(dl.shape[d]);
-        elems *= shape[d];
     }
     if (dl.strides != nullptr)
     {
@@ -387,9 +400,28 @@ template <typename T>
         for (crd::u32 d = rank; d-- > 0U;)
         {
             strides[d] = s;
-            s *= static_cast<crd::i64>(shape[d]);
+            const auto extent = static_cast<crd::i64>(shape[d]); // a DLPack extent is an i64, so it fits
+            if (extent != 0 && s > std::numeric_limits<crd::i64>::max() / extent)
+            {
+                return TensorStatus::BadInput; // the compact strides of these extents do not fit an i64
+            }
+            s *= extent;
         }
     }
+    // DIAG.10c: the producer's shape and strides are a claim. An element count that wraps, or an element whose offset
+    // (in elements or bytes) leaves the i64 range, is refused; the view would otherwise read as a small tensor or make
+    // the first walk over it undefined pointer arithmetic. A proven overlap is not refused: a stride-0 (expanded)
+    // capsule is a valid DLPack tensor; probe_tensor_layout reports it.
+    crd::LayoutExpectation expect{};
+    expect.max_rank     = kMaxRank;
+    expect.element_size = sizeof(U);
+    const crd::LayoutReport layout = crd::probe_layout(shape, strides, rank, expect);
+    if ((layout.violations & (static_cast<crd::u32>(crd::LayoutViolation::ElementCountOverflow) |
+                              static_cast<crd::u32>(crd::LayoutViolation::OffsetOverflow))) != 0U)
+    {
+        return TensorStatus::BadInput;
+    }
+    const crd::u64 elems = layout.element_count;
     if (elems == 0U)
     {
         out = TensorView<T>{nullptr, {shape, rank}, {strides, rank}};
@@ -403,6 +435,18 @@ template <typename T>
     if ((reinterpret_cast<crd::u64>(base) % alignof(U)) != 0U)
     {
         return TensorStatus::BadInput; // misaligned element pointer would be UB
+    }
+    // The first and last addressed bytes must lie in the address space (the probe proved the byte offsets fit an i64).
+    const auto     address = reinterpret_cast<crd::u64>(base);
+    const crd::u64 below   = layout.min_offset < 0 ? static_cast<crd::u64>(-(layout.min_offset + 1)) + 1U : 0U;
+    const crd::u64 above   = static_cast<crd::u64>(layout.max_offset);
+    if (address < below * sizeof(U))
+    {
+        return TensorStatus::BadInput;
+    }
+    if (above * sizeof(U) > std::numeric_limits<crd::u64>::max() - address)
+    {
+        return TensorStatus::BadInput;
     }
     out = TensorView<T>{reinterpret_cast<T*>(const_cast<crd::u8*>(base)), {shape, rank}, {strides, rank}}; // NOLINT
     return TensorStatus::Ok;
@@ -426,7 +470,8 @@ template <typename T>
     {
         if (src->deleter != nullptr)
         {
-            src->deleter(src); // the spec-mandated disposal on ABI mismatch
+            // the spec-mandated disposal on ABI mismatch; a mode the producer's deleter sets does not reach the caller
+            (void)crd::call_keeping_fp_environment([src]() { src->deleter(src); });
         }
         return TensorStatus::Unsupported;
     }
@@ -441,7 +486,7 @@ template <typename T>
     {
         return st;
     }
-    out.release();
+    (void)out.release();
     out.m_versioned = src;
     out.m_view = view;
     out.m_read_only = read_only;
@@ -463,7 +508,7 @@ template <typename T>
     {
         return st;
     }
-    out.release();
+    (void)out.release();
     out.m_legacy = src;
     out.m_view = view;
     out.m_read_only = false;

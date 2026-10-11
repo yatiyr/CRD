@@ -233,4 +233,7 @@ TEST_CASE("THE SOAK: the device renders voices live with zero xruns", "[audio][r
                         << " xruns=" << device.xrun_count());
     CHECK(device.frames_rendered() > 0);
     CHECK(device.xrun_count() == 0); // THE GATE: glitch-free over the soak
+    // DIAG.10c: every period ran the callback in the declared numerical mode and the voices wrote finite samples
+    CHECK(device.fp_mode_divergence_count() == 0U);
+    CHECK(device.nonfinite_period_count() == 0U);
 }

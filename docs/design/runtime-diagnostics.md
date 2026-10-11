@@ -2209,6 +2209,53 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-value-domains-and
   need not be the op an edit changed. A run that failed is not judged: its error already names the op it blames.
 - The CEIR executors are integer-only (wrapping i64), so the oracle uses the integer domain, and a CEIR plan run has
   no floating-point mode to probe; the float domains wait for the tensor and audio boundaries, the next clauses.
+  (2026-10-11: the tensor and audio boundaries, shape/stride and units/time-domain are settled in the next block.)
+
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-tensor-and-audio-boundaries.md)):
+- Shape and stride are a claim a boundary checks before it walks a view: `crd/core/layout_probe.hpp` (crd-core, so
+  every module's views inherit it). `probe_layout` reports, class by class, a rank past the boundary's bound, an
+  element count (or its byte size) past the u64 range, an addressed element's offset (in elements or bytes) past the
+  i64 range, an addressed element outside the storage the caller names, and a proven overlap. An empty view's other
+  extents must still multiply out, because a compact layout of the same dims is computed from them. Offsets are formed
+  per dimension with checked arithmetic, never by multiplying along. Storage the caller does not name is reported as
+  unchecked, never as inside. Overlap is reported only when proven: a zero stride on an extent above 1, or two strides
+  where the smaller divides the larger and its extent reaches the quotient, overlap for certain; strides that nest are
+  disjoint for certain; anything else is "not proven" and never an overlap. A proven overlap is a violation only for a
+  view the boundary writes through: a broadcast (stride-0) read is valid.
+- `probe_strided_values` walks a strided view whose elements are one or more scalar lanes and judges every scalar
+  against a `FloatDomain` from its bits, naming the first offender by its logical coordinates, its row-major index and
+  its lane (1 for a complex value's imaginary part), never by a physical offset. It walks only a layout the probe
+  passed, so it forms no out-of-range offset, and no verdict depends on the caller's numerical mode.
+- The tensor boundary is `crd/hesap/tensor/probe.hpp`: `probe_tensor_layout` (a const view is a read) and
+  `probe_tensor_values` for f32, f64, c32 and c64 views. Integer and mask tensors are not float domains and have no
+  value walk. DLPack import, the boundary where another framework's tensor arrives, now routes the producer's shape
+  and strides through the layout probe. Defects found and fixed in `wrap_dl_tensor`: an element count that wraps
+  (`[2^32, 2^32, 2]`) imported as an empty tensor; an element whose offset is past the i64 range (`[3]` with stride
+  2^62) imported, making any walk undefined pointer arithmetic; NULL strides over an empty shape with large extents
+  overflowed a signed product; a capsule with `ndim > 0` and no shape array was dereferenced; and a view whose first
+  or last byte wraps the address space imported. Each is now BadInput. An expanded (stride-0) capsule and an empty one
+  still import; the probe reports the expanded one's overlap.
+- The time domain at the audio boundary is the sample rate. `GraphSourceBinding` declares the rate its samples were
+  made at (0 = undeclared), and `check_source_binding` (`crd/audio/audio_boundary.hpp`) judges a binding Bound,
+  RateUndeclared, Unbound, PartialFrame or RateMismatch against the graph's rate (`AudioGraphResource::sample_rate`,
+  or the CEIR func's `sample_rate`, 48 kHz when absent). Both renderers refuse a binding that does not render; an
+  undeclared rate renders exactly as before and is reported as unchecked, never as a match. A mismatch is refused, not
+  resampled. The shape check found two defects: a buffer that is not a whole number of frames had its trailing samples
+  silently dropped, and a looped source of less than one frame divided by zero (`f %= bframes`) and killed the
+  process.
+- The value domain of a rendered sample is `audio_sample_domain()`: finite, no bound (headroom above 1 before the
+  master stage is legal), subnormals and -0 allowed. A NaN in one source reaches the bus and the probe names it.
+- The mode probe at the audio callback is `render_audio_period`, the device's per-period work separated from the
+  device: it runs the callback in the declared mode whatever mode the device thread is in, keeps a mode the callback
+  sets inside its period, reports both as `FpDifference` bits, and probes the stereo the callback wrote. The WASAPI
+  device counts divergent and non-finite periods (`fp_mode_divergence_count`, `nonfinite_period_count`). Defect found
+  and fixed: the device handed the stereo callback a buffer interleaved at the endpoint's channel count, so a 5.1 or
+  7.1 endpoint garbled the layout; a non-stereo endpoint now renders through a stereo scratch the device sizes in
+  `start()` and gets the callback's stereo in its first two channels.
+- Around third-party calls the witness is `call_keeping_fp_environment` (`crd/core/fp_environment.hpp`): it reports
+  the `FpDifference` bits a foreign call left and puts the caller's mode back. A DLPack producer's deleter runs
+  through it on every path (`DlpackImported::release`, which returns the bits, the destructor, and the spec-mandated
+  disposal of a newer-major capsule). The GPU drivers' calls belong with the driver and device-reset evidence clause.
 
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles

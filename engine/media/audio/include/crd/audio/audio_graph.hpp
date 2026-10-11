@@ -20,12 +20,14 @@ namespace crd::audio
 // per-NODE-index buffer binding (only Source nodes read theirs; others may be empty)
 struct GraphSourceBinding
 {
-    crd::containers::ConstSpan<crd::f32> samples; // interleaved at `channels`
-    crd::u32                             channels = 0;
+    crd::containers::ConstSpan<crd::f32> samples; // interleaved at `channels`: a whole number of frames
+    crd::u32                             channels    = 0;
+    crd::u32                             sample_rate = 0; // Hz the samples were made at; 0 = undeclared (unchecked)
 };
 
 // Render `frames` frames of the graph's output node into `out` (resized: frames × 2, interleaved stereo).
-// Returns frames rendered (0 on an invalid graph / missing source binding — never a partial buffer).
+// Returns frames rendered (0 on an invalid graph / a source binding check_source_binding (audio_boundary.hpp) does not
+// pass: missing, a partial frame, or a declared rate other than the graph's — never a partial buffer).
 [[nodiscard]] crd::i64 render_graph(const AudioGraphResource& graph,
                                     crd::containers::ConstSpan<GraphSourceBinding> bindings, crd::i64 frames,
                                     crd::containers::Array<crd::f32>& out);

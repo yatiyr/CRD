@@ -2,6 +2,7 @@
 
 #include <crd/audio/audio_graph.hpp>
 
+#include <crd/audio/audio_boundary.hpp> // DIAG.10c: check_source_binding
 #include <crd/audio/audio_kernels.hpp> // CEIR-31a-1b: the extracted per-node stages (apply_source/gain/biquad + db_to_linear)
 #include <crd/hesap/interp/keyframe.hpp>
 #include <crd/time/rational_time.hpp>
@@ -96,10 +97,12 @@ crd::i64 render_graph(const AudioGraphResource& graph, crd::containers::ConstSpa
     {
         return 0;
     }
-    for (crd::u32 i = 0; i < n; ++i) // every Source must be bound — a missing buffer is a refusal, not silence
+    // every Source must be bound — a missing buffer is a refusal, not silence; so are a partial frame and a declared
+    // rate other than the graph's (DIAG.10c, audio_boundary.hpp)
+    for (crd::u32 i = 0; i < n; ++i)
     {
         if (static_cast<AudioNodeType>(graph.nodes[i].type) == AudioNodeType::Source &&
-            (bindings[i].samples.size() == 0 || bindings[i].channels == 0))
+            !source_binding_renders(check_source_binding(bindings[i], graph.sample_rate)))
         {
             return 0;
         }
