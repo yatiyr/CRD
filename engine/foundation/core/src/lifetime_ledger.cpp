@@ -119,6 +119,7 @@ const char* lifetime_class_name(LifetimeClass c) noexcept
     case LifetimeClass::MappedRegion:         return "mapped-region";
     case LifetimeClass::DeviceObject:         return "device-object";
     case LifetimeClass::CallbackRegistration: return "callback-registration";
+    case LifetimeClass::Thread:               return "thread";
     }
     return "unknown";
 }

@@ -1,8 +1,9 @@
 // DIAG.10c -- the job system's own lifetimes in the lifetime ledger, and the ledger under concurrent recording.
 // Declared contract (docs/design/runtime-diagnostics.md, DIAG.10c): every fiber stack is one MappedRegion of its
-// reserved size (guard page included) from jobs::init to jobs::shutdown, so a shutdown gives back exactly what the
-// init took; an installed job observer is one CallbackRegistration until it is cleared (replacing one keeps it); and
-// recording is wait-free, so concurrent acquisitions and releases from many jobs balance exactly.
+// reserved size (guard page included), and every worker thread one Thread, from jobs::init to jobs::shutdown, so a
+// shutdown gives back exactly what the init took; an installed job observer is one CallbackRegistration until it is
+// cleared (replacing one keeps it); and recording is wait-free, so concurrent acquisitions and releases from many jobs
+// balance exactly.
 
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -45,7 +46,7 @@ void hammer(void* data) noexcept
 }
 } // namespace
 
-TEST_CASE("diag10c: jobs init holds each fiber stack as a mapped region and shutdown gives every one back",
+TEST_CASE("diag10c: jobs init holds each fiber stack and worker thread and shutdown gives every one back",
           "[jobs][lifetime][diag10c]")
 {
     crd::jobs::Config cfg;
@@ -63,8 +64,10 @@ TEST_CASE("diag10c: jobs init holds each fiber stack as a mapped region and shut
     // Seven stacks of 64 KiB, 512 KiB and 2 MiB usable bytes, each with its guard page.
     constexpr crd::i64 usable_bytes = (4 * 64 + 2 * 512 + 1 * 2048) * 1024;
     CHECK(running.verdict == LifetimeVerdict::Outstanding);
-    CHECK(running.outstanding == crd::lifetime_class_bit(LifetimeClass::MappedRegion));
+    CHECK(running.outstanding ==
+          (crd::lifetime_class_bit(LifetimeClass::MappedRegion) | crd::lifetime_class_bit(LifetimeClass::Thread)));
     CHECK(running.live_change(LifetimeClass::MappedRegion) == 7);
+    CHECK(running.live_change(LifetimeClass::Thread) == 1); // the one worker beside the calling thread
     CHECK(running.byte_change(LifetimeClass::MappedRegion) > usable_bytes);
     CHECK(running.byte_change(LifetimeClass::MappedRegion) <= usable_bytes + 7 * 65536);
 

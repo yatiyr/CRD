@@ -3,7 +3,8 @@
 // its constructor to the close in its destructor, and a rotation closes one file and opens the next without leaving
 // either behind; each sink installed with add_sink() is one CallbackRegistration until clear_sinks() or shutdown()
 // removes it. Whether the file is really held is asked of the OS (crd::os_file_open_in_process), which shares no
-// code with the sink.
+// code with the sink. The asynchronous logger's worker is one Thread from init to shutdown, and flush() returns only
+// after every record logged before it, including one the worker has taken off the queue, has been written.
 
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/os_resource_probe.hpp>
@@ -14,11 +15,13 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <memory>
 #include <source_location>
 #include <system_error>
+#include <thread>
 
 CRD_DEFINE_LOG_CHANNEL(g_log_lifetime_test, "Lifetime", crd::log::LogLevel::Trace)
 
@@ -136,10 +139,10 @@ TEST_CASE("diag10c: each installed sink is one callback registration until the s
     {
         crd::log::shutdown();
     }
-    crd::log::clear_sinks(); // the window starts with no sink installed
-    crd::log::init();
+    crd::log::clear_sinks(); // the window starts with no sink installed and no logger thread
 
     const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
+    crd::log::init();
     crd::log::add_sink(std::make_unique<crd::log::RingBufferSink>(4));
     crd::log::add_sink(std::make_unique<crd::log::RingBufferSink>(4));
     crd::log::add_sink(nullptr); // refused: nothing is installed
@@ -147,7 +150,7 @@ TEST_CASE("diag10c: each installed sink is one callback registration until the s
     CHECK(r.live_change(LifetimeClass::CallbackRegistration) == 2);
 
     crd::log::clear_sinks();
-    CHECK(since(start).verdict == LifetimeVerdict::Balanced);
+    CHECK(since(start).live_change(LifetimeClass::CallbackRegistration) == 0);
 
     crd::log::add_sink(std::make_unique<crd::log::RingBufferSink>(4));
     CHECK(since(start).live_change(LifetimeClass::CallbackRegistration) == 1);
@@ -155,4 +158,121 @@ TEST_CASE("diag10c: each installed sink is one callback registration until the s
     r = since(start);
     CHECK(r.verdict == LifetimeVerdict::Balanced);
     CHECK(r.underflowed == 0U);
+}
+
+namespace
+{
+// Records which OS thread delivered the records; the logger owns the sink, the test owns this.
+struct DeliverySeen
+{
+    crd::OsThreadIdentity thread;
+    int                   records = 0;
+};
+
+class IdentitySink final : public crd::log::ISink
+{
+public:
+    explicit IdentitySink(DeliverySeen* seen) : m_seen(seen) {}
+    void write(const crd::log::LogRecord& /*rec*/) override
+    {
+        m_seen->thread = crd::os_current_thread_identity();
+        ++m_seen->records;
+    }
+    void flush() override {}
+
+private:
+    DeliverySeen* m_seen;
+};
+} // namespace
+
+TEST_CASE("diag10c: the asynchronous logger's worker is one thread from init to shutdown, and the OS sees it end",
+          "[log][lifetime][diag10c]")
+{
+    if (crd::log::is_initialized())
+    {
+        crd::log::shutdown();
+    }
+    crd::log::clear_sinks();
+
+    static DeliverySeen seen; // outlives the case: a failed REQUIRE below leaves the logger holding the sink
+    seen                              = DeliverySeen{};
+    const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
+    crd::log::LoggerConfig      cfg;
+    cfg.async = true;
+    crd::log::init(cfg);
+    crd::log::add_sink(std::make_unique<IdentitySink>(&seen));
+    crd::log::detail::dispatch(crd::log::LogLevel::Info, g_log_lifetime_test, std::source_location::current(),
+                               "delivered");
+    crd::log::flush(); // returns once the worker has delivered the record
+
+    crd::LifetimeReport r = since(start);
+    CHECK(r.live_change(LifetimeClass::Thread) == 1);
+    REQUIRE(seen.records == 1);
+    REQUIRE(seen.thread.known);
+    CHECK(seen.thread.id != crd::os_current_thread_identity().id); // delivered on the worker, not here
+    CHECK(crd::os_thread_alive(seen.thread).presence == OsPresence::Present);
+
+    crd::log::shutdown(); // joins the worker
+    r = since(start);
+    CHECK(r.verdict == LifetimeVerdict::Balanced);
+    CHECK(crd::os_thread_alive(seen.thread).presence == OsPresence::Absent);
+}
+
+namespace
+{
+// A sink that counts what it was given to write.
+class CountingSink final : public crd::log::ISink
+{
+public:
+    explicit CountingSink(std::atomic<int>* written) : m_written(written) {}
+    void write(const crd::log::LogRecord& /*rec*/) override
+    {
+        m_written->fetch_add(1, std::memory_order_acq_rel);
+    }
+    void flush() override {}
+
+private:
+    std::atomic<int>* m_written;
+};
+} // namespace
+
+// Found by the case above under linux-clang-tsan (2026-10-11): the worker pops a record before it takes the sink lock,
+// and flush() waited only for an empty queue, so it could take the sink lock first and return before the record was
+// written. Each round logs one record and flushes after a pause that sweeps the worker's pop-to-lock window; every
+// flush must return with that record written.
+TEST_CASE("diag10c: flush returns only after the record the worker is delivering is written", "[log][diag10c]")
+{
+    if (crd::log::is_initialized())
+    {
+        crd::log::shutdown();
+    }
+    crd::log::clear_sinks();
+    static std::atomic<int> written{0}; // outlives the case: the logger holds the sink until shutdown
+    written.store(0, std::memory_order_relaxed);
+    crd::log::LoggerConfig cfg;
+    cfg.async = true;
+    crd::log::init(cfg);
+    crd::log::add_sink(std::make_unique<CountingSink>(&written));
+
+    constexpr int rounds = 4000;
+    int           early  = 0;
+    for (int round = 0; round < rounds; ++round)
+    {
+        crd::log::detail::dispatch(crd::log::LogLevel::Info, g_log_lifetime_test, std::source_location::current(),
+                                   "counted");
+        const auto pause = std::chrono::steady_clock::now() + std::chrono::microseconds(round % 64);
+        while (std::chrono::steady_clock::now() < pause)
+        {
+            std::this_thread::yield();
+        }
+        crd::log::flush();
+        if (written.load(std::memory_order_acquire) != round + 1)
+        {
+            ++early;
+            crd::log::flush(); // catch up, so the next round starts even
+        }
+    }
+    crd::log::shutdown();
+    CHECK(early == 0);
+    CHECK(written.load(std::memory_order_acquire) == rounds);
 }

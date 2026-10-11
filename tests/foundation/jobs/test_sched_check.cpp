@@ -333,7 +333,12 @@ TEST_CASE("schedcheck: the recording oracle captures the counter-path trace and 
     root.fn = [](void*) noexcept
     {
         crd::jobs::JobDecl child{};
-        child.fn = [](void*) noexcept { child_ran.store(true, std::memory_order_release); };
+        child.fn = [](void*) noexcept
+        {
+            // Long enough that the root reaches its wait first and parks, whichever thread takes the child.
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            child_ran.store(true, std::memory_order_release);
+        };
         crd::jobs::run_and_wait(child); // parks the root fiber on the counter path
     };
     crd::jobs::Counter* const c = crd::jobs::run(root);
@@ -392,7 +397,13 @@ TEST_CASE("schedcheck: the driver replays a scripted order without deadlock", "[
     root.fn = [](void*) noexcept
     {
         crd::jobs::JobDecl child{};
-        child.fn = [](void*) noexcept { child_ran2.store(true, std::memory_order_release); };
+        child.fn = [](void*) noexcept
+        {
+            // Without this a peer worker (three threads here) could finish the child before the root waits, so the
+            // root never parked and none of the scripted points occurred (3 of 20 runs under linux-clang-tsan).
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            child_ran2.store(true, std::memory_order_release);
+        };
         crd::jobs::run_and_wait(child);
     };
     crd::jobs::Counter* const c = crd::jobs::run(root);

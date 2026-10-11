@@ -74,7 +74,9 @@
              "engine/foundation/core/include/crd/core/lifetime_ledger.hpp",
              "engine/foundation/core/src/os_resource_probe.cpp"]},
   {"group": "queue and budget pressure probe", "rows": ["DIAG.10c"],
-   "paths": ["engine/foundation/core/src/budget_pressure.cpp"]}
+   "paths": ["engine/foundation/core/src/budget_pressure.cpp"]},
+  {"group": "workload oracles", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/workload_probe.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -165,6 +167,16 @@
    "enum": "PressureLevel", "header": "engine/foundation/core/include/crd/core/budget_pressure.hpp"},
   {"name": "PressureVerdict", "kind": "error-path", "row": "DIAG.10c",
    "enum": "PressureVerdict", "header": "engine/foundation/core/include/crd/core/budget_pressure.hpp"},
+  {"name": "StressorChange", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "StressorChange", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
+  {"name": "SlowdownVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "SlowdownVerdict", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
+  {"name": "ProgressVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "ProgressVerdict", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
+  {"name": "WorkloadVerdict", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "WorkloadVerdict", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
+  {"name": "FindingAttribution", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "FindingAttribution", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",
@@ -173,6 +185,8 @@
  "exclusions": [
   {"outcome": "ResultVerdict", "value": "Agrees", "class": "default-value",
    "reason": "ResultCheck::verdict's initializer in result_oracle.hpp; a run whose results all agree keeps it."},
+  {"outcome": "WorkloadVerdict", "value": "Clean", "class": "default-value",
+   "reason": "WorkloadResult::verdict's initializer in workload_probe.hpp; a run with no finding keeps it."},
   {"outcome": "ImportReject", "value": "None", "class": "default-value",
    "reason": "BundleImport::reject's initializer in bundle_import.hpp; an accepted import keeps it."},
   {"outcome": "HostLoad", "value": "Ok", "class": "default-value",

@@ -2,6 +2,8 @@
 
 #include <crd/perf/ui/diag_panel.hpp>
 
+#include <crd/core/lifetime_ledger.hpp>
+
 #include <imgui.h>
 
 #include <cstdio>
@@ -260,6 +262,7 @@ DiagCommandPanel::~DiagCommandPanel()
     {
         m_cancel.store(true, std::memory_order_release);
         m_worker.join();
+        crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
     }
 }
 
@@ -476,6 +479,7 @@ DiagPanelSubmit DiagCommandPanel::send(crd::u64 cursor)
             m_pending = m_service->execute(m_request, &m_cancel);
             m_done.store(true, std::memory_order_release);
         });
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::Thread); // DIAG.10c: until join() or the destructor
     return DiagPanelSubmit::Started;
 }
 
@@ -494,6 +498,7 @@ void DiagCommandPanel::join() noexcept
     if (m_worker.joinable())
     {
         m_worker.join();
+        crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
     }
 }
 

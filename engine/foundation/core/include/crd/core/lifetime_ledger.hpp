@@ -3,9 +3,10 @@
 // Lifetime accounting beyond heap bytes: the resource-lifetime ledger of DIAG.10c.
 //
 // Heap bytes are only one thing a long run can leak. A file the engine keeps open, a library it loaded, an address
-// range it reserved, a GPU object it created and a callback someone registered all outlive the call that made them,
-// and each must end when its owner ends. The ledger counts them per class, so a window around a workload (a warm/cold
-// cycle, a reload, a shutdown) can say what it left behind (docs/design/runtime-diagnostics.md, DIAG.10c).
+// range it reserved, a GPU object it created, a callback someone registered and a thread it started all outlive the
+// call that made them, and each must end when its owner ends. The ledger counts them per class, so a window around a
+// workload (a warm/cold cycle, a reload, a shutdown) can say what it left behind (docs/design/runtime-diagnostics.md,
+// DIAG.10c).
 //
 // The engine records at the site that acquires and the site that releases: `lifetime_ledger().acquired(c)` once the
 // OS (or the owner) has granted the thing, `released(c)` once it has taken it back. Sites that open and close a
@@ -36,8 +37,9 @@ enum class LifetimeClass : crd::u8
     MappedRegion,         // a reserved or mapped address range; its bytes are counted too
     DeviceObject,         // a GPU resource or program carrying a Cerid identity
     CallbackRegistration, // a callback, subscriber, sink or observer registered with an owner
+    Thread,               // an OS thread the engine started and must join (a worker, a watchdog, a host's run)
 };
-inline constexpr crd::usize kLifetimeClassCount = 5U;
+inline constexpr crd::usize kLifetimeClassCount = 6U;
 [[nodiscard]] const char* lifetime_class_name(LifetimeClass c) noexcept;
 [[nodiscard]] constexpr crd::u8 lifetime_class_bit(LifetimeClass c) noexcept
 {

@@ -106,7 +106,13 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         }
         else
         {
-            m_semaphore.release(1);
+            // DIAG.10c: wake every sleeper, so the target is among them. A release(1) woke one arbitrary sleeper; when
+            // that was another worker it took the token, found nothing it may run and slept again, and the target
+            // slept on with the job in its lane. The fence pairs with the one in wait_for_work: a target that missed
+            // this push in its last look at the lane has announced it is sleeping before anyone who takes this token
+            // looks (wake_pinned_sleeper), so the token's taker wakes it instead of sleeping.
+            std::atomic_thread_fence(std::memory_order_seq_cst);
+            m_semaphore.release_broadcast();
         }
         return;
     }
@@ -388,7 +394,22 @@ void Scheduler::wait_for_work(crd::u32 thread_index)
         // acquire() one worker could drain all the broadcast's tokens while the rest re-slept inside it unacknowledged
         // (hosted linux-gcc-debug-sse2, 2026-10-04: an idle 2-worker snapshot saw 1 response). A wake without a token
         // costs one extra loop turn (the ack store and an empty try_pop) before the worker sleeps again.
+        //
+        // Pinned work (DIAG.10c). Tokens are shared, so the token a pinned push posts for this worker can be taken by
+        // another one first. So a worker announces it is sleeping, then takes a last look at its own pinned lane; and
+        // before sleeping it looks for another announced sleeper whose lane holds a job, and if it finds one it wakes
+        // every sleeper and returns instead of sleeping. With the push's fence, either this worker's last look sees
+        // the job, or whoever takes the push's token sees this worker's announcement and its job.
+        ThreadState& me = *m_thread_states[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        me.sleeping.store(1U, std::memory_order_seq_cst);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if (!me.pinned.empty() || wake_pinned_sleeper(thread_index))
+        {
+            me.sleeping.store(0U, std::memory_order_relaxed);
+            return;
+        }
         m_semaphore.acquire_or_wake();
+        me.sleeping.store(0U, std::memory_order_relaxed);
         return;
     }
     // TARGETED PATH (opt-in): mark this worker idle, then park on its own semaphore with a short timeout. The
@@ -419,6 +440,25 @@ void Scheduler::wake_all(crd::u32 count)
     {
         m_semaphore.release(count);
     }
+}
+
+bool Scheduler::wake_pinned_sleeper(crd::u32 self) noexcept
+{
+    // Thread 0 never sleeps here (it pumps its own lane), so only workers 1..N-1 are looked at.
+    for (crd::u32 i = 1U; i < m_config.num_threads; ++i)
+    {
+        if (i == self)
+        {
+            continue;
+        }
+        const ThreadState& ts = *m_thread_states[i]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        if (ts.sleeping.load(std::memory_order_seq_cst) != 0U && !ts.pinned.empty())
+        {
+            m_semaphore.release_broadcast();
+            return true;
+        }
+    }
+    return false;
 }
 
 void Scheduler::wake_worker(crd::u32 thread_index) noexcept

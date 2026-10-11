@@ -11,7 +11,11 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <unistd.h>
+
+#include <cerrno>
+#include <cstdio>
 #endif
 
 namespace crd
@@ -409,6 +413,172 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
     return coverage(covered, bytes);
 #else
     return unavailable("no address-space probe on this OS");
+#endif
+}
+
+namespace
+{
+#if CRD_OS_LINUX
+// What /proc/self/task/<tid>/stat says about a task: whether it exists, its start time and whether it has ended.
+struct TaskStat
+{
+    bool     readable = false; // the file was opened and parsed
+    bool     missing  = false; // no such task in this process
+    bool     ended    = false; // a zombie or dead task
+    crd::u64 start    = 0U;
+};
+
+TaskStat read_task_stat(crd::u64 tid) noexcept
+{
+    TaskStat out;
+    char     path[64];
+    (void)std::snprintf(path, sizeof(path), "/proc/self/task/%llu/stat", static_cast<unsigned long long>(tid));
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0)
+    {
+        out.missing = errno == ENOENT || errno == ESRCH;
+        return out;
+    }
+    char       text[1024];
+    crd::usize length = 0U;
+    while (length + 1U < sizeof(text))
+    {
+        const ssize_t got = ::read(fd, text + length, sizeof(text) - 1U - length);
+        if (got <= 0)
+        {
+            break;
+        }
+        length += static_cast<crd::usize>(got);
+    }
+    (void)::close(fd);
+    // "tid (comm) state ppid ...": the name may hold spaces and parentheses, so the fields start after the last ')'.
+    crd::usize close_at = length;
+    for (crd::usize i = 0U; i < length; ++i)
+    {
+        if (text[i] == ')')
+        {
+            close_at = i;
+        }
+    }
+    if (close_at == length || close_at + 2U >= length)
+    {
+        return out;
+    }
+    const char state = text[close_at + 2U];
+    out.ended        = state == 'Z' || state == 'X' || state == 'x';
+    // The state is field 3 and starttime field 22, each after one space.
+    crd::usize field = 3U;
+    crd::usize i     = close_at + 2U;
+    while (i < length && field < 22U)
+    {
+        if (text[i] == ' ')
+        {
+            ++field;
+        }
+        ++i;
+    }
+    if (field != 22U || i >= length || text[i] < '0' || text[i] > '9')
+    {
+        return out;
+    }
+    crd::u64 value = 0U;
+    while (i < length && text[i] >= '0' && text[i] <= '9')
+    {
+        value = (value * 10U) + static_cast<crd::u64>(text[i] - '0');
+        ++i;
+    }
+    out.start    = value;
+    out.readable = true;
+    return out;
+}
+#endif
+} // namespace
+
+OsThreadIdentity os_current_thread_identity() noexcept
+{
+    OsThreadIdentity out;
+#if CRD_OS_WINDOWS
+    FILETIME created{};
+    FILETIME exited{};
+    FILETIME kernel{};
+    FILETIME user{};
+    if (::GetThreadTimes(::GetCurrentThread(), &created, &exited, &kernel, &user) == 0)
+    {
+        return out;
+    }
+    out.id    = ::GetCurrentThreadId();
+    out.start = (static_cast<crd::u64>(created.dwHighDateTime) << 32U) | created.dwLowDateTime;
+    out.known = true;
+#elif CRD_OS_LINUX
+    const auto     tid  = static_cast<crd::u64>(::syscall(SYS_gettid));
+    const TaskStat stat = read_task_stat(tid);
+    if (!stat.readable)
+    {
+        return out;
+    }
+    out.id    = tid;
+    out.start = stat.start;
+    out.known = true;
+#endif
+    return out;
+}
+
+OsProbeResult os_thread_alive(const OsThreadIdentity& t) noexcept
+{
+    if (!t.known)
+    {
+        return unavailable("the thread's identity was not read");
+    }
+#if CRD_OS_WINDOWS
+    if (t.id > 0xFFFFFFFFULL)
+    {
+        return unavailable("not a Windows thread id");
+    }
+    HANDLE h = ::OpenThread(THREAD_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, static_cast<DWORD>(t.id));
+    if (h == nullptr)
+    {
+        if (::GetLastError() == ERROR_INVALID_PARAMETER)
+        {
+            return OsProbeResult{OsPresence::Absent, ""}; // no thread has this id now
+        }
+        return unavailable("OpenThread refused the thread id");
+    }
+    OsProbeResult result{OsPresence::Present, ""};
+    FILETIME      created{};
+    FILETIME      exited{};
+    FILETIME      kernel{};
+    FILETIME      user{};
+    const bool    ours = ::GetProcessIdOfThread(h) == ::GetCurrentProcessId();
+    if (ours && ::GetThreadTimes(h, &created, &exited, &kernel, &user) == 0)
+    {
+        result = unavailable("GetThreadTimes failed");
+    }
+    else if (!ours || ((static_cast<crd::u64>(created.dwHighDateTime) << 32U) | created.dwLowDateTime) != t.start ||
+             ::WaitForSingleObject(h, 0U) == WAIT_OBJECT_0)
+    {
+        // The id now names a thread of another process or a later thread of this one, or the thread has exited and
+        // something still holds its handle.
+        result = OsProbeResult{OsPresence::Absent, ""};
+    }
+    (void)::CloseHandle(h);
+    return result;
+#elif CRD_OS_LINUX
+    const TaskStat stat = read_task_stat(t.id);
+    if (stat.missing)
+    {
+        return OsProbeResult{OsPresence::Absent, ""};
+    }
+    if (!stat.readable)
+    {
+        return unavailable("cannot read /proc/self/task/<tid>/stat");
+    }
+    if (stat.start != t.start || stat.ended)
+    {
+        return OsProbeResult{OsPresence::Absent, ""};
+    }
+    return OsProbeResult{OsPresence::Present, ""};
+#else
+    return unavailable("no thread probe on this OS");
 #endif
 }
 

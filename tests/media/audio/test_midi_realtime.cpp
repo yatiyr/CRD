@@ -9,6 +9,7 @@
 
 #include <crd/audio/audio_realtime.hpp>
 #include <crd/audio/midi.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -204,9 +205,15 @@ TEST_CASE("THE SOAK: the device renders voices live with zero xruns", "[audio][r
         }
     }
 
-    audio::AudioDevice device;
+    audio::AudioDevice          device;
+    const crd::LifetimeSnapshot before = crd::lifetime_ledger().snapshot();
+    const auto render_threads = [&]
+    {
+        return crd::lifetime_report(before, crd::lifetime_ledger().snapshot()).live_change(LifetimeClass::Thread);
+    };
     if (!device.start(&soak_render, &soak))
     {
+        CHECK(render_threads() == 0); // a failed start joins the thread it began
         WARN("[soak] no render endpoint on this host — the realtime gate needs audio hardware (skipped)");
         return;
     }
@@ -220,6 +227,7 @@ TEST_CASE("THE SOAK: the device renders voices live with zero xruns", "[audio][r
     play.gain     = 1.0F;
     play.loop     = 1;
     REQUIRE(soak.ring.try_push(play));
+    CHECK(render_threads() == 1); // DIAG.10c: the render thread, until stop() joins it
 
     std::this_thread::sleep_for(std::chrono::seconds(10)); // the soak window
 
@@ -228,6 +236,7 @@ TEST_CASE("THE SOAK: the device renders voices live with zero xruns", "[audio][r
     (void)soak.ring.try_push(stop);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     device.stop();
+    CHECK(render_threads() == 0);
 
     WARN("[soak] rate=" << device.sample_rate() << " frames=" << device.frames_rendered()
                         << " xruns=" << device.xrun_count());

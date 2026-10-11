@@ -2,6 +2,7 @@
 #include "hang_watchdog.hpp" // HangVerdict / hang_verdict / HangDetector (pure classifier)
 #include "worker_pool.hpp"
 #include <crd/core/assert.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/rt_sentinel.hpp>
 #include <crd/containers/static_array.hpp>
 
@@ -214,6 +215,7 @@ void init(const Config& cfg)
             g_watchdog_stop = false;
         }
         g_watchdog_thread = std::thread(&watchdog_loop, cfg.hang_watchdog_period_ms);
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::Thread); // DIAG.10c: until shutdown joins it
     }
 }
 
@@ -230,6 +232,7 @@ void shutdown()
         }
         g_watchdog_cv.notify_all();
         g_watchdog_thread.join();
+        crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
     }
 
     g_pool.shutdown();

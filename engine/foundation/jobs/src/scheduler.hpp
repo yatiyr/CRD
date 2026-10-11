@@ -62,6 +62,11 @@ struct ThreadState
     // The most jobs this lane has held at once since init(): raised by producers after a push (a rare path).
     alignas(64) std::atomic<crd::u32> pinned_peak{0U};
 
+    // Default wake path only: 1 while this worker is going to sleep on the shared semaphore (set before its last look
+    // at its pinned lane, cleared once it is awake again). Another worker that finds a sleeper with pinned work wakes
+    // every sleeper instead of sleeping itself (Scheduler::wake_pinned_sleeper, DIAG.10c).
+    alignas(64) std::atomic<crd::u32> sleeping{0U};
+
     // Per-worker wake semaphore — used ONLY on the opt-in targeted-wake path (ADR-0094 P-core routing). The default
     // path uses the shared Scheduler::m_semaphore and never touches this. It lets a SPECIFIC worker be woken (e.g.
     // for a pinned P-core job), which the single shared semaphore cannot do.
@@ -171,6 +176,10 @@ private:
     // a busy worker will drain the job via execute_one, and the parked workers' timeout is the backstop).
     void wake_worker(crd::u32 thread_index) noexcept;
     void wake_one_idle() noexcept;
+
+    // Default path (DIAG.10c): when a worker other than `self` has announced it is sleeping and its pinned lane holds a
+    // job, wake every sleeper and return true (the caller then does not sleep); otherwise false.
+    bool wake_pinned_sleeper(crd::u32 self) noexcept;
 
     // Injection queues — MPMC, shared across all threads. Allocated in init().
     // crd::containers::ConcurrentQueue is the promoted (allocator-aware) form of

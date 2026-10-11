@@ -81,6 +81,14 @@ public:
         }
     }
 
+    // Add one token and wake EVERY sleeper. Used where the token is meant for one particular worker (a job pinned to
+    // it): wake_one could pick another sleeper, which would take the token, find nothing it may run and sleep again.
+    void release_broadcast() noexcept
+    {
+        m_count.fetch_add(1U, std::memory_order_release);
+        wake_all();
+    }
+
     // Block until a token is consumed.
     void acquire() noexcept
     {

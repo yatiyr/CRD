@@ -14,6 +14,7 @@
 
 #include <crd/audio/audio_boundary.hpp>
 #include <crd/containers/array.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/memory/allocator.hpp>
 
 #define WIN32_LEAN_AND_MEAN
@@ -218,11 +219,13 @@ bool AudioDevice::start(AudioRenderFn fn, void* user)
     im.user     = user;
     im.running.store(true, std::memory_order_release);
     im.thread = std::thread(Impl::run, m_impl);
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::Thread); // DIAG.10c: until stop() or a failed start joins it
     if (FAILED(im.client->Start()))
     {
         im.running.store(false, std::memory_order_release);
         SetEvent(im.event);
         im.thread.join();
+        crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
         im.release();
         return false;
     }
@@ -244,6 +247,7 @@ void AudioDevice::stop()
     if (im.thread.joinable())
     {
         im.thread.join();
+        crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
     }
     if (im.client != nullptr)
     {

@@ -2,11 +2,13 @@
 //
 // The panel is driven the way a frame loop drives it: submit, then tick until the answer arrives. Every page it shows
 // is compared byte for byte with a native call of the same service at the same cursor, the grant stays the host's, a
-// running request never holds a tick and the panel's cancel reaches the command's handler. No ImGui context is
-// needed: `draw` is the only call that touches ImGui and it is not made here.
+// running request never holds a tick and the panel's cancel reaches the command's handler. Each request's worker is
+// one Thread in the lifetime ledger until the tick that delivers its answer, or the destructor, joins it (DIAG.10c).
+// No ImGui context is needed: `draw` is the only call that touches ImGui and it is not made here.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/ui/diag_panel.hpp>
@@ -422,17 +424,23 @@ TEST_CASE("diag panel: the grant stays the host's and the form only shapes the s
 }
 
 TEST_CASE("diag panel: a running request never holds a tick, and the panel's cancel reaches the command",
-          "[perf-ui][diag][diag-panel]")
+          "[perf-ui][diag][diag-panel][diag10c]")
 {
     crd::memory::GrowableTlsfAllocator alloc{64ULL << 20, nullptr, "diag-panel-test"};
     Host                               host(&alloc);
     DiagCommandPanel                   panel(host.service, &alloc);
+    const crd::LifetimeSnapshot        before = crd::lifetime_ledger().snapshot();
+    const auto threads = [&]
+    {
+        return crd::lifetime_report(before, crd::lifetime_ledger().snapshot());
+    };
 
     REQUIRE(panel.select("test.block"));
     const Clock::time_point start = Clock::now();
     REQUIRE(panel.submit() == DiagPanelSubmit::Started);
     REQUIRE(wait_flag(host.block.entered));
     CHECK(panel.state() == DiagPanelState::Running);
+    CHECK(threads().live_change(crd::LifetimeClass::Thread) == 1); // the request's worker
 
     // The command holds the service's lock now. Frames keep ticking, and nothing the frame reads takes that lock.
     crd::u64 slowest_us = 0U;
@@ -462,13 +470,16 @@ TEST_CASE("diag panel: a running request never holds a tick, and the panel's can
     CHECK(elapsed_ms(start) < kBlockBackstop); // the cancel ended it, not the backstop
     CHECK_FALSE(panel.cancel());               // nothing runs now
     CHECK(panel.refresh_commands());
+    CHECK(threads().verdict == crd::LifetimeVerdict::Balanced); // the tick that delivered the answer joined it
 }
 
-TEST_CASE("diag panel: destroying the panel cancels and joins its running request", "[perf-ui][diag][diag-panel]")
+TEST_CASE("diag panel: destroying the panel cancels and joins its running request",
+          "[perf-ui][diag][diag-panel][diag10c]")
 {
     crd::memory::GrowableTlsfAllocator alloc{64ULL << 20, nullptr, "diag-panel-test"};
     Host                               host(&alloc);
-    const Clock::time_point            start = Clock::now();
+    const Clock::time_point            start  = Clock::now();
+    const crd::LifetimeSnapshot        before = crd::lifetime_ledger().snapshot();
     {
         DiagCommandPanel panel(host.service, &alloc);
         REQUIRE(panel.select("test.block"));
@@ -476,6 +487,7 @@ TEST_CASE("diag panel: destroying the panel cancels and joins its running reques
         REQUIRE(wait_flag(host.block.entered));
     }
     CHECK(host.block.left.load()); // the destructor joined the worker
+    CHECK(crd::lifetime_report(before, crd::lifetime_ledger().snapshot()).verdict == crd::LifetimeVerdict::Balanced);
     CHECK(host.block.saw_cancel.load() == 1U);
     CHECK(elapsed_ms(start) < kBlockBackstop);
 }

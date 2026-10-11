@@ -37,7 +37,14 @@ job pinned to a thread before that thread drained the first asserted where asser
 overwrote (lost) the first elsewhere; authored CEIR reaches this with two `task.main_thread` tasks
 in flight. The pinned lane is now a bounded MPMC queue (`Config::pinned_queue_capacity`, default
 64), and a full pinned lane, like a full injection queue, is a counted, always-on fatal instead of
-a dropped job ([session](../sessions/2026-10-11-diag-10c-queue-pressure.md)).
+a dropped job ([session](../sessions/2026-10-11-diag-10c-queue-pressure.md)). Amended again
+2026-10-11 (DIAG.10c workloads): on the default (shared-semaphore) wake path a job pinned to a
+worker thread posted one token and woke one arbitrary sleeper; when that was another worker it took
+the token, found nothing it could run and slept again, and the target slept on with the job in its
+lane, so whoever waited on it hung. A pinned push now wakes every sleeper, and a worker announces
+that it is going to sleep before its last look at its own pinned lane; a worker about to sleep that
+finds an announced sleeper holding pinned work wakes every sleeper instead of sleeping. The opt-in
+targeted path (ADR-0094) is unchanged ([session](../sessions/2026-10-11-diag-10c-workloads.md)).
 
 ### 2. Hand-rolled assembly context switch
 

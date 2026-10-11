@@ -21,6 +21,7 @@
 //
 // Contract: docs/design/runtime-diagnostics.md (DIAG.9b, DIAG.9c); ADR-0133.
 
+#include "fault_pack_support.hpp"
 #include "scoped_test_file.hpp"
 
 #include <catch2/catch_test_macros.hpp>
@@ -66,90 +67,24 @@ alignas(crd::memory::GrowableTlsfAllocator) unsigned char s_fi_alloc_buf[sizeof(
 crd::memory::GrowableTlsfAllocator& s_fi_alloc = // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
     *::new (s_fi_alloc_buf) crd::memory::GrowableTlsfAllocator();
 
-constexpr cp::DiagAuthoritySet kInject = cp::authority_bit(cp::DiagAuthority::Inject);
-
-cp::FaultPlan plan_of(const char* text)
-{
-    cp::FaultPlan plan;
-    cont::String  reason;
-    const bool    parsed = cp::parse_fault_plan(cont::StringView{text}, plan, reason);
-    INFO(reason.c_str());
-    REQUIRE(parsed);
-    return plan;
-}
+using crd_test::fault_pack::first_x;
+using crd_test::fault_pack::kInject;
+using crd_test::fault_pack::plan_of;
+using crd_test::fault_pack::ScopedIoHook;
 
 fs::Path temp_pack_path(const char* stem, ResourceId id)
 {
-    cont::String name(stem, &s_fi_alloc);
-    name.append(id.to_string(&s_fi_alloc));
-    name.append(".crdr");
-    return fs::temp_directory() / cont::StringView{name.data(), name.size()};
+    return crd_test::fault_pack::temp_pack_path(&s_fi_alloc, stem, id);
 }
 
-// One artifact in a PACK: the manifest, then the artifact bytes.
 void write_pack(const fs::Path& path, ResourceId id, crd::u32 fourcc, const cont::Array<crd::u8>& artifact)
 {
-    cont::Array<crd::u8> pool(&s_fi_alloc);
-    for (const char c : cont::StringView{"fault.art"})
-    {
-        pool.push_back(static_cast<crd::u8>(c));
-    }
-    pool.push_back(0U);
-
-    cont::Array<ManifestEntry> entries(&s_fi_alloc);
-    ManifestEntry              e;
-    e.id            = id;
-    e.type_fourcc   = fourcc;
-    e.flags         = 0U;
-    e.blob_offset   = 0U;
-    e.blob_size     = static_cast<crd::u64>(artifact.size());
-    e.name_strp_idx = 0U;
-    entries.push_back(e);
-
-    const ResourceId pack_id = ResourceId::mint_random();
-    {
-        CrdrWriter measure(&s_fi_alloc, pack_id, kFourCC_PACK);
-        manifest_write(measure, cont::as_const_span(entries), cont::as_const_span(pool));
-        entries[0].blob_offset = static_cast<crd::u64>(measure.finish().size());
-    }
-    CrdrWriter writer(&s_fi_alloc, pack_id, kFourCC_PACK);
-    manifest_write(writer, cont::as_const_span(entries), cont::as_const_span(pool));
-    cont::Array<crd::u8> bytes = writer.finish();
-    for (const crd::u8 b : artifact)
-    {
-        bytes.push_back(b);
-    }
-    REQUIRE(fs::write_file_binary(path, cont::as_const_span(bytes)));
+    crd_test::fault_pack::write_pack(&s_fi_alloc, path, id, fourcc, artifact);
 }
 
-// A one-triangle MESH artifact whose first vertex's x is `x` (so a reload's new content is visible).
 cont::Array<crd::u8> mesh_artifact(ResourceId id, crd::f32 x)
 {
-    constexpr crd::u32 stride = 48U;
-    crd::u8            vertices[3U * stride] = {};
-    for (crd::u32 v = 0U; v < 3U; ++v)
-    {
-        const crd::f32 pos[3] = {v == 0U ? x : static_cast<crd::f32>(v), 0.0F, 0.0F};
-        std::memcpy(vertices + v * stride, pos, sizeof(pos));
-    }
-    const crd::u32 indices[3] = {0U, 1U, 2U};
-    crd::u8        prim[4U + 32U] = {};
-    const crd::u32 prim_header[5] = {1U, 3U, 3U, 0U, 0U}; // count; vertex count, index count, both offsets 0
-    std::memcpy(prim, prim_header, sizeof(prim_header));
-
-    CrdrWriter writer(&s_fi_alloc, id, kFourCC_MESH);
-    writer.add_chunk(kFourCC_VERT, cont::ConstSpan<crd::u8>{vertices, sizeof(vertices)});
-    writer.add_chunk(kFourCC_INDX,
-                     cont::ConstSpan<crd::u8>{reinterpret_cast<const crd::u8*>(indices), sizeof(indices)});
-    writer.add_chunk(kFourCC_PRIM, cont::ConstSpan<crd::u8>{prim, sizeof(prim)});
-    return writer.finish();
-}
-
-crd::f32 first_x(const MeshResource& mesh)
-{
-    crd::f32 x = 0.0F;
-    std::memcpy(&x, mesh.vertices.data(), sizeof(x));
-    return x;
+    return crd_test::fault_pack::mesh_artifact(&s_fi_alloc, id, x);
 }
 
 // A BLOB loader that counts every call, so a case can prove the loader never saw a faulted read's bytes.
@@ -214,27 +149,6 @@ cont::Array<crd::u8> blob_artifact(ResourceId id)
     return writer.finish();
 }
 
-// Installs the injector on the I/O fault seam for one scope.
-struct ScopedIoHook
-{
-    bool installed = false;
-
-    explicit ScopedIoHook(cp::FaultInjector& injector)
-        : installed(crd::install_io_fault_hook(&cp::FaultInjector::io_hook, &injector))
-    {
-    }
-    ~ScopedIoHook()
-    {
-        if (installed)
-        {
-            crd::uninstall_io_fault_hook();
-        }
-    }
-    ScopedIoHook(const ScopedIoHook&)            = delete;
-    ScopedIoHook& operator=(const ScopedIoHook&) = delete;
-    ScopedIoHook(ScopedIoHook&&)                 = delete;
-    ScopedIoHook& operator=(ScopedIoHook&&)      = delete;
-};
 } // namespace
 
 TEST_CASE("fault injection: a reload interrupted by an injected fault keeps the last good mesh",

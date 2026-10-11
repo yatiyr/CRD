@@ -4,6 +4,7 @@
 
 #include <crd/ceir/cook/program_cook.hpp> // cook_program (the recorded generation's immutable blob)
 #include <crd/ceir/provenance.hpp>        // Origin / Provenance (a stop's authored position)
+#include <crd/core/lifetime_ledger.hpp>    // the run thread is a Thread in the ledger (DIAG.10c)
 
 #include <chrono>
 #include <utility> // std::move
@@ -14,6 +15,13 @@ namespace
 {
 // Each owned allocator grows from a small first chunk: a debug run of an authored program is small.
 constexpr crd::usize kHostChunkBytes = crd::usize{1} << 20U;
+
+// Join a run's thread and give its lifetime back (DIAG.10c).
+void join_run(std::thread& t) noexcept
+{
+    t.join();
+    crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
+}
 } // namespace
 
 containers::StringView host_load_name(HostLoad s) noexcept
@@ -69,7 +77,7 @@ void InspectHost::stop_execution()
         (void)m_session.cancel(m_generation);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    m_thread.join();
+    join_run(m_thread);
 }
 
 bool InspectHost::running() const noexcept
@@ -89,7 +97,7 @@ HostLoadResult InspectHost::load(AssetId id, containers::StringView source, cont
     }
     if (m_thread.joinable()) // a finished execution: its thread ends with the run
     {
-        m_thread.join();
+        join_run(m_thread);
     }
     if (!m_loaded)
     {
@@ -171,7 +179,7 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
     }
     if (m_thread.joinable())
     {
-        m_thread.join();
+        join_run(m_thread);
     }
     // Rebinding resolves breakpoints added since the last bind and resets a finished session to idle, so the
     // controller's next wait sees this execution rather than the previous one's end.
@@ -233,6 +241,7 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
             }
             m_done.store(true, std::memory_order_release);
         });
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::Thread);
     return inspect::Refusal::None;
 }
 
@@ -331,7 +340,7 @@ bool InspectHost::wait_finished(crd::u32 timeout_ms)
     }
     if (m_thread.joinable())
     {
-        m_thread.join();
+        join_run(m_thread);
     }
     return true;
 }

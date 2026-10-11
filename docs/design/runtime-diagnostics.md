@@ -2342,6 +2342,80 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   depth and the frame graph's transient budget readings belong with the driver/device-reset and host-pressure
   clause; the hang watchdog does not yet classify a stall from these readings.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-workloads.md)):
+- Workloads are driven and judged by `crd/core/workload_probe.hpp` (crd-core, so every module can run its own).
+  `run_workload` runs `cycles` times: setup, `iterations` iterations, teardown. Iteration 0 of a cycle is cold (just
+  after setup: nothing cached or resident: a fresh job pool's first fibers, a fresh resource manager's first read of
+  the pack from disk); the rest are warm. Each iteration reports success, a signature of its result and, when it knows
+  it, the signature it should have; one that does not know it must equal the reference, the signature of cycle 0's
+  cold iteration. A lifetime-ledger window brackets every cycle from before setup to after teardown.
+- Seeded failure injection. Iteration i of cycle c is injected exactly when `workload_injects(seed, permille, c, i,
+  iterations)` says so: a pure function, never the cold iteration nor the last, only odd iterations (so a clean one
+  follows each), and splitmix64 of (seed, cycle, iteration) below the share. The spec's hook arms a fault before the
+  iteration and reports afterwards how many fired. An injected iteration must report failure and keep the result it
+  says it keeps; the next one must succeed with its expected result.
+- The verdict is the worst finding, first occurrence located by cycle and iteration: SetupFailed, Diverged (a
+  signature differs from what it should be: a wrong result that did not crash), FaultMissed (a fault fired and the
+  iteration reported success), NotRecovered, IterationFailed, Leaked (a cycle window Outstanding or Underflowed),
+  Stalled, FaultNotFired (an injected fault never fired, so the run proves nothing about that path), else Clean.
+- One changed stressor at a time. The stressors are enumerated (`Stressor`: iterations, cycles, threads, fault plan,
+  memory budget, reload cadence, payload size, injected delay) and a run carries its `StressorSet`.
+  `compare_stressors` answers Identical, OneChanged (naming it) or SeveralChanged. `attribute_finding` blames a
+  variant's finding on a stressor only against a clean baseline that differs in exactly that one: otherwise
+  BaselineFailing or NotOneStressor, and NoNewFinding when the variant is clean.
+- Progress. `progress_report` judges readings (when, how much done) in time order: Stalled when no advance is seen for
+  longer than the bound (a reading without an advance counts toward the gap; readings after the target are not
+  judged), Regressed when the count goes back (the counter itself is wrong), Unfinished when it never stalled but ended
+  below its target, Progressing otherwise, and Unmeasured with fewer than two readings, no bound, or time going back.
+  A workload's progress is read at the end of every iteration, counting the work units of successful ones, so setup and
+  teardown fall inside the gaps the bound must cover.
+- Slowdowns are measured before they are classified. `slowdown_report` compares two windows of durations (at most
+  1024 samples each) by nearest-rank quartiles with integer arithmetic only (products saturate). Unmeasured: fewer than
+  8 samples in either window, or a baseline median below 1000 ns (too short to time). Noisy: the baseline's
+  interquartile range exceeds its median. Slower: the candidate median exceeds the baseline's by more than the
+  tolerance (250 permille) AND the candidate's lower quartile lies above the baseline's upper quartile; Faster the
+  mirror image; Inconclusive when the median moved past the tolerance but the quartiles overlap; Steady otherwise. A
+  workload's own report compares the first and second halves of its warm, clean, non-recovery iterations.
+- Hosted lanes judge results, lifetimes and progress, never speed: a wall-clock verdict depends on the runner, and CI
+  has no retry. The workloads print their one-line report (timing included) on every run as evidence; the
+  classifier's verdicts are each held to synthetic durations, and the stall cases sleep far longer than their bound.
+  The progress bound is the one wall-clock judgment the hosted lanes make; it is 5 s for the real workloads, far above
+  any init/shutdown or reload seen on a sanitizer lane.
+- Threads joined the ledger as a sixth class, Thread: an OS thread the engine started and must join. Wired: the crd-jobs
+  workers and hang watchdog (init/shutdown), the asynchronous logger's worker, an inspect host's run thread (released
+  when a later load, start or wait, or the destructor, joins it), the diagnostic panel's request worker and the WASAPI
+  render thread (also when a failed start joins it). Not wired: the crash handler thread, which lives for the process.
+  The OS oracle is identity, not a count: `os_current_thread_identity` read inside a thread gives its OS id and start
+  time (Windows: thread id and creation FILETIME; Linux: gettid and the starttime field of
+  `/proc/self/task/<tid>/stat`), and `os_thread_alive` answers Present while that thread runs in this process and Absent
+  once it has ended, its id names another process's thread or a later thread (start time differs), or it is a zombie.
+  A process thread count is no oracle: the OS loader and thread pool start and retire threads of their own.
+- Workloads in place: crd-jobs-tests runs a soak across jobs init/shutdown cycles (3 cycles of 64 parallel sums with a
+  closed-form answer, 2 threads, and the one-stressor variant of 4 threads), requiring every sum, a balanced window per
+  cycle with the workers and the watchdog counted, every worker the OS saw running gone after its cycle, and progress
+  within a 5 s bound; a variant with one 7 s delay stalls and is attributed to Delay. crd-resources-tests runs 3
+  cycles of a fresh ResourceManager (mount, cold load, 23 reloads of new content, destruction) as the baseline, a
+  memory-budget variant (clean, its pressure reading counting overruns) and two fault-plan variants arming a failed or
+  a short read of every injected reload's pack on the real I/O seam: each injected reload fails, keeps the last good
+  mesh and recovers on the next; a shipping build refuses the arms and the variant answers FaultNotFired.
+- Defect found and fixed by the jobs soak. On the default (shared-semaphore) wake path a job pinned to a worker posted
+  one token and woke one arbitrary sleeper; when that was another worker, it took the token, found nothing it could run
+  and slept again, and the target slept on with the job in its lane, so the waiter hung (the 4-thread variant hung on
+  its second run on win-debug; a dedicated case pinning to each idle worker of an 8-thread pool lost the first job). A
+  pinned push now wakes every sleeper behind a sequentially consistent fence, and a worker announces it is going to
+  sleep before its last look at its own lane; a worker about to sleep that finds an announced sleeper holding pinned
+  work wakes every sleeper instead of sleeping, so whoever takes the push's token wakes the target
+  ([ADR-0033](../decisions/0033-jobs-implementation-architecture.md) amended). The targeted path is unchanged.
+- Defect found and fixed by the logger-thread case under linux-clang-tsan: `log::flush()` ("block until all queued
+  records are written") waited only for an empty queue, but the worker pops a record before it takes the sink lock, so
+  a flush could take the sink lock first and return before that record was written. The worker now counts the record
+  it is delivering (under the queue lock), and `flush()` and `flush_for()` wait until the queue is empty and nothing is
+  being delivered.
+- Not settled here: driver/device-reset and host-pressure evidence (with the GPU side of pressure and the mode witness
+  around driver calls), and the window, the WASAPI device's COM objects and event, and native device objects without a
+  Cerid identity in the ledger; they belong with the device clause, whose owners the hosted lanes can exercise only
+  in part (no display or render endpoint there).
+
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles
 

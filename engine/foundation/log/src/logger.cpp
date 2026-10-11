@@ -84,6 +84,9 @@ struct LoggerState
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
     std::condition_variable drain_cv; // for flush()
+    // Records the worker has taken off the queue and not yet delivered (under queue_mutex). flush() waits for them as
+    // for queued ones: an empty queue alone does not mean delivered (DIAG.10c).
+    u32 delivering = 0;
     std::thread worker;
     std::atomic<bool> running{false};
     std::atomic<u64> dropped{0};
@@ -195,13 +198,15 @@ void worker_main(LoggerState* st_ptr) noexcept
             }
 
             (void)st.queue.try_pop(q);
+            ++st.delivering;
         }
         deliver_queued(st, q);
 
-        // If queue is now empty, notify flush() callers.
+        // If nothing is queued or being delivered now, notify flush() callers.
         {
             std::lock_guard<std::mutex> lock(st.queue_mutex);
-            if (st.queue.empty())
+            --st.delivering;
+            if (st.queue.empty() && st.delivering == 0U)
             {
                 st.drain_cv.notify_all();
             }
@@ -273,6 +278,7 @@ void init(const LoggerConfig& cfg) noexcept
         st.queue = crd::containers::RingBuffer<QueuedRecord>(next_pow2_at_least(st.config.async_queue_capacity + 1));
         st.running.store(true, std::memory_order_release);
         st.worker = std::thread(&worker_main, &st);
+        lifetime_ledger().acquired(LifetimeClass::Thread); // DIAG.10c: until shutdown joins it
     }
     st.initialized.store(true, std::memory_order_release);
 
@@ -313,6 +319,7 @@ void shutdown() noexcept
         if (st.worker.joinable())
         {
             st.worker.join();
+            lifetime_ledger().released(LifetimeClass::Thread);
         }
     }
 
@@ -371,8 +378,11 @@ void flush() noexcept
     // Drain async queue (if any).
     if (st.config.async)
     {
+        // Wait for the records the worker is delivering too: it pops a record before it takes the sink lock, so an
+        // empty queue alone let flush() take the sink lock first and return before the last record was written
+        // (DIAG.10c, seen under linux-clang-tsan).
         std::unique_lock<std::mutex> lock(st.queue_mutex);
-        st.drain_cv.wait(lock, [&] { return st.queue.empty(); });
+        st.drain_cv.wait(lock, [&] { return st.queue.empty() && st.delivering == 0U; });
     }
 
     std::lock_guard<std::mutex> lock(st.sinks_mutex);
@@ -402,7 +412,8 @@ bool flush_for(u32 timeout_ms) noexcept
     if (st.config.async)
     {
         std::unique_lock<std::mutex> lock(st.queue_mutex);
-        if (!st.drain_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return st.queue.empty(); }))
+        if (!st.drain_cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                                  [&] { return st.queue.empty() && st.delivering == 0U; }))
         {
             ok = false;
         }

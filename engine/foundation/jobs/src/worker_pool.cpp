@@ -4,6 +4,7 @@
 #include <crd/jobs/observer.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/crash.hpp> // guard_current_thread_stack: give each worker an alternate signal stack
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
@@ -567,6 +568,7 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     for (crd::u32 i = 1U; i < m_num_threads; ++i)
     {
         m_threads.emplace_back(&WorkerPool::worker_loop, this, i);
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::Thread); // DIAG.10c: until shutdown joins it
     }
 
     if (m_pcore_routing)
@@ -598,6 +600,7 @@ void WorkerPool::shutdown() noexcept
         if (t.joinable())
         {
             t.join();
+            crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
         }
     }
     m_threads.clear();

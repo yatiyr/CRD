@@ -8,8 +8,9 @@
 // replaced one are refused before any work, while a load or start during an execution is refused Busy; a rejected
 // reload keeps the last good generation; a failed cook names its line; and destroying the host while the execution is
 // paused cancels and joins it. DIAG.10b: a load naming no asset or another asset fails and keeps what is installed,
-// and a script on a host with nothing loaded is not started. Expected lines come from scanning the text itself, never
-// from the parser or the host. ASCII test names.
+// and a script on a host with nothing loaded is not started. DIAG.10c: each execution's thread is one Thread in the
+// lifetime ledger from start until a later load, start or wait, or the destructor, joins it. Expected lines come from
+// scanning the text itself, never from the parser or the host. ASCII test names.
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/inspect_host.hpp>
@@ -24,6 +25,7 @@
 #include <crd/ceir/provenance.hpp>
 #include <crd/ceir/type.hpp>
 
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -454,4 +456,42 @@ TEST_CASE("diag 10b: the inspect host refuses a load of another asset, and a scr
     CHECK(ran.generation == first.generation);
     REQUIRE(ran.results.size() == 1U);
     CHECK(ran.results[0] == 36);
+}
+
+TEST_CASE("diag 10c: each inspect execution is one thread until the host joins it", "[ceir][inspect][diag][diag10c]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    const String                       text = read_asset(&root);
+    const Lines                        ln(sv(text));
+    const crd::LifetimeSnapshot        start = crd::lifetime_ledger().snapshot();
+    const auto threads = [&]
+    {
+        return crd::lifetime_report(start, crd::lifetime_ledger().snapshot());
+    };
+    {
+        InspectHost host(&root, &registrar, nullptr);
+        REQUIRE(host.load(kId, sv(text), StringView(kFile), StringView("main")).ok());
+        CHECK(threads().live_change(crd::LifetimeClass::Thread) == 0);
+
+        // A run to its end: the script waits for it, which joins its thread.
+        const i64 n = 1;
+        InspectScript script;
+        script.file = StringView(kFile);
+        script.args = ConstSpan<i64>(&n, 1U);
+        InspectReport ran(&root);
+        run_inspect_script(host, script, ran);
+        REQUIRE(ran.outcome == ScriptOutcome::Finished);
+        CHECK(threads().live_change(crd::LifetimeClass::Thread) == 0);
+
+        // A paused run: one thread, never two.
+        u32 bp = 0U;
+        REQUIRE(host.add_line_breakpoint(kFile, ln.a, bp) == insp::Refusal::None);
+        REQUIRE(host.start(ConstSpan<i64>(&n, 1U)) == insp::Refusal::None);
+        insp::StopRecord stop;
+        REQUIRE(host.session().wait_for_stop(host.generation(), kWaitMs, stop) == insp::Refusal::None);
+        CHECK(threads().live_change(crd::LifetimeClass::Thread) == 1);
+    } // the destructor cancels the paused execution and joins its thread
+    const crd::LifetimeReport after = threads();
+    CHECK(after.verdict == crd::LifetimeVerdict::Balanced);
+    CHECK(after.underflowed == 0U);
 }
