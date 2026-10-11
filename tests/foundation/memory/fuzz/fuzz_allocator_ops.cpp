@@ -12,6 +12,17 @@
 // diagnose: the DiagnosticAllocator gets double frees, interior and foreign frees, redzone overruns and writes into
 // quarantined blocks; the SlotMap gets stale handles, double erases and handles to reused slots.
 //
+// The address-space allocators reserve a small range per input (at most 16 MiB, released with the allocator). The
+// VirtualMemoryAllocator is held to an exact model of its bump offset and committed high-water mark (commits in whole
+// commit blocks capped at the reservation, purge back to the page holding the live top, freshly committed bytes read
+// zero, the committed tail poisoned under ASan); its reallocate runs only where the model shows neither fatal path
+// (past the reservation, the copy's allocate) can be reached. The StreamingAllocator runs with a residency policy the
+// input scripts (shed blocks of the category, of any category, one block, nothing, or claim bytes it never freed):
+// every category's charge moves by exactly what is allocated and released, a success stays within the budget, a
+// request nothing can serve never consults the policy, and the pressure loop stays within its retry bound. A
+// vm::commit failure (out of commit charge) is not modelled; with these reservation sizes it would appear as a model
+// mismatch.
+//
 // Oracles, after every operation: live blocks never overlap, every block is aligned, inside its allocator and still
 // holds the pattern written into it; owns() and allocation_size() agree with the model; validate_structure() passes
 // where the allocator has one; exact-capacity models (pool, linear, stack, offset) predict success and failure; the
@@ -31,9 +42,14 @@
 #include <crd/memory/allocators/pool_allocator.hpp>
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
+#include <crd/memory/allocators/streaming_allocator.hpp>
+#include <crd/memory/allocators/streaming_category_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/allocators/virtual_memory_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 #include <crd/memory/memory_stats.hpp>
+#include <crd/vm/virtual_memory.hpp>
 
 #include <cstdint>
 #include <cstring>
@@ -63,6 +79,9 @@ enum class Kind : u8
     Ring,
     Diagnostic,
     SlotMap,
+    // Appended: every committed input's kind byte is below 11, so it keeps its kind under the larger modulus.
+    VirtualMemory,
+    Streaming,
     Count
 };
 
@@ -198,7 +217,8 @@ class LiveSet
 public:
     [[nodiscard]] usize count() const noexcept { return m_count; }
     [[nodiscard]] bool  full() const noexcept { return m_count == kMaxLive; }
-    [[nodiscard]] Block& at(usize i) noexcept { return m_blocks[i]; }
+    [[nodiscard]] Block&       at(usize i) noexcept { return m_blocks[i]; }
+    [[nodiscard]] const Block& at(usize i) const noexcept { return m_blocks[i]; }
 
     // A new block: aligned, non-overlapping with every live block, then stamped with its pattern.
     void add(u8* p, usize size, usize alignment, u8 pattern, u64 tag) noexcept
@@ -326,6 +346,18 @@ template <typename Heap> bool heap_valid(Heap& heap) noexcept
     }
 }
 
+template <typename Heap> usize chunk_count(const Heap& heap) noexcept
+{
+    if constexpr (requires { heap.num_chunks(); })
+    {
+        return heap.num_chunks();
+    }
+    else
+    {
+        return 0U;
+    }
+}
+
 template <typename Heap> void run_heap(Heap& heap, Reader& r, Trace& trace, usize medium_cap) noexcept
 {
     LiveSet live;
@@ -336,11 +368,18 @@ template <typename Heap> void run_heap(Heap& heap, Reader& r, Trace& trace, usiz
         {
             const usize size      = decode_size(r, medium_cap);
             const usize alignment = decode_alignment(r);
+            const usize chunks    = chunk_count(heap);
             void* const p         = heap.try_allocate(size, alignment);
             trace.add(p != nullptr ? 1U : 0U);
             if (malformed(size, alignment))
             {
                 CRD_FUZZ_REQUIRE(p == nullptr);
+            }
+            if (p == nullptr)
+            {
+                // A refusal grows nothing: a chunk taken from the parent for a request that then fails is committed
+                // memory the heap keeps for good (a virtual-memory parent never takes its range back).
+                CRD_FUZZ_REQUIRE(chunk_count(heap) == chunks);
             }
             if (p != nullptr)
             {
@@ -1229,6 +1268,691 @@ void fuzz_slot_map(Reader& r, Trace& trace, Parent& parent)
     CRD_FUZZ_REQUIRE(map.empty());
 }
 
+// ---- the virtual-memory bump arena -------------------------------------------------------------------------------
+
+// Reservations stay small: each input reserves at most this much address space, commits only what it bumps through
+// and releases the whole range when the arena is destroyed, so an input costs a few system calls and no lasting
+// address space.
+constexpr usize kMaxReserveBytes = usize{16} << 20U;
+
+// The smallest multiple of `block` at or above `value`, or `cap` when that multiple lies past it (value <= cap).
+usize round_to_block(usize value, usize block, usize cap) noexcept
+{
+    const usize rem = value % block;
+    if (rem == 0U)
+    {
+        return value;
+    }
+    return block - rem > cap - value ? cap : value + (block - rem);
+}
+
+// The commit granularity the VirtualMemoryAllocator documents: the configured block (0 means one page) rounded up to
+// whole pages. A block too large for any page multiple is larger than every reservation, so it commits the whole
+// reservation at once.
+usize expected_commit_block(usize configured, usize page) noexcept
+{
+    const usize block = configured == 0U ? page : configured;
+    if (block > ~usize{0} - (page - 1U))
+    {
+        return ~usize{0} & ~(page - 1U);
+    }
+    return (block + (page - 1U)) & ~(page - 1U);
+}
+
+// The exact model of the arena: bump offset, committed high-water mark, the most recent allocation, and the end of
+// the bytes the harness has written since their pages were last committed (bytes past it must read zero).
+struct VmModel
+{
+    usize reserved  = 0U;
+    usize page      = 0U;
+    usize block     = 0U;
+    usize used      = 0U;
+    usize committed = 0U;
+    usize last      = 0U;
+    bool  has_last  = false;
+    usize dirty_end = 0U;
+
+    void commit_to(usize target) noexcept
+    {
+        if (target > committed)
+        {
+            committed = round_to_block(target, block, reserved);
+        }
+    }
+};
+
+// Freshly committed memory reads zero: every byte of [from, to) the harness never wrote since its page was committed.
+void require_fresh_zero(const u8* base, usize from, usize to, usize dirty_end) noexcept
+{
+    for (usize k = from > dirty_end ? from : dirty_end; k < to; ++k)
+    {
+        CRD_FUZZ_REQUIRE(base[k] == 0U);
+    }
+}
+
+void require_vm_state(const mem::VirtualMemoryAllocator& vm, const VmModel& m, const LiveSet& live,
+                      const u8* base) noexcept
+{
+    CRD_FUZZ_REQUIRE(vm.used_bytes() == m.used);
+    CRD_FUZZ_REQUIRE(vm.committed_bytes() == m.committed);
+    CRD_FUZZ_REQUIRE(vm.reserved_bytes() == m.reserved);
+    CRD_FUZZ_REQUIRE(vm.base() == base);
+    CRD_FUZZ_REQUIRE(m.used <= m.committed && m.committed <= m.reserved);
+    CRD_FUZZ_REQUIRE(!vm.owns(base + m.used)); // the first byte past the live top is never owned
+    CRD_FUZZ_REQUIRE(!vm.owns(g_foreign));
+    for (usize i = 0U; i < live.count(); ++i)
+    {
+        const Block& b = live.at(i);
+        CRD_FUZZ_REQUIRE(vm.owns(b.p) && vm.owns(b.p + (b.size - 1U)));
+        CRD_FUZZ_REQUIRE(!mem::asan_is_poisoned(b.p));
+    }
+    // Under ASan the committed tail above the live top is poisoned (exact from a granule boundary).
+    if (m.used < m.committed && (m.used & 7U) == 0U)
+    {
+        CRD_FUZZ_REQUIRE(mem::asan_is_poisoned(base + m.used) == (CRD_MEM_ASAN != 0));
+    }
+#if CRD_MEMORY_STATS_TRACKING
+    CRD_FUZZ_REQUIRE(vm.stats().snapshot().bytes_in_use == m.used); // padding is charged, as it is consumed
+#endif
+}
+
+void fuzz_virtual_memory(Reader& r, Trace& trace)
+{
+    const usize                         page = crd::vm::page_size();
+    mem::VirtualMemoryAllocator::Config cfg;
+    cfg.reserve_bytes = 1U + (static_cast<usize>(r.word()) % kMaxReserveBytes);
+    switch (r.byte() & 3U)
+    {
+        case 0U:
+            cfg.commit_block = 0U;
+            break;
+        case 1U:
+            cfg.commit_block = r.half(); // any byte count: rounded up to whole pages
+            break;
+        case 2U:
+            cfg.commit_block = page * (1U + (r.byte() % 32U)); // page multiples, most not a power of two
+            break;
+        default:
+            cfg.commit_block = ~usize{0} - r.byte(); // no page multiple represents it
+            break;
+    }
+    switch (r.byte() % 3U)
+    {
+        case 0U:
+            cfg.initial_commit_bytes = 0U;
+            break;
+        case 1U:
+            cfg.initial_commit_bytes = static_cast<usize>(r.word()) % (2U * kMaxReserveBytes); // past the end too
+            break;
+        default:
+            cfg.initial_commit_bytes = ~usize{0};
+            break;
+    }
+    mem::VirtualMemoryAllocator vm(cfg, "fuzz-vm");
+    VmModel                     m;
+    m.page     = page;
+    m.reserved = (cfg.reserve_bytes + (page - 1U)) & ~(page - 1U);
+    m.block    = expected_commit_block(cfg.commit_block, page);
+    if (cfg.initial_commit_bytes != 0U)
+    {
+        m.commit_to(cfg.initial_commit_bytes < m.reserved ? cfg.initial_commit_bytes : m.reserved);
+    }
+    const u8* const base = static_cast<const u8*>(vm.base());
+    CRD_FUZZ_REQUIRE(base != nullptr && (reinterpret_cast<std::uintptr_t>(base) & (page - 1U)) == 0U);
+    LiveSet live;
+    usize   markers[16]  = {};
+    usize   marker_count = 0U;
+    require_vm_state(vm, m, live, base);
+    trace.add(m.reserved);
+    trace.add(m.committed);
+
+    // A bump the model predicts: the start and end offsets, committing on demand.
+    const auto bumped = [&](usize start, usize end) noexcept
+    {
+        m.commit_to(end);
+        require_fresh_zero(base, start, end, m.dirty_end);
+        m.used     = end;
+        m.last     = start;
+        m.has_last = true;
+    };
+    for (usize op = 0U; op < kMaxOps && !r.done(); ++op)
+    {
+        const u8 code = static_cast<u8>(r.byte() % 10U);
+        if (code <= 2U || (code >= 8U && live.count() == 0U))
+        {
+            const usize size      = decode_size(r, m.reserved);
+            const usize alignment = decode_alignment(r);
+            usize       end       = 0U;
+            const bool  fits      = !malformed(size, alignment) &&
+                              bump_fits(base, m.used, m.reserved, size, alignment, &end);
+            void* const p = vm.try_allocate(size, alignment);
+            trace.add(p != nullptr ? static_cast<u64>(static_cast<const u8*>(p) - base) : ~u64{0});
+            CRD_FUZZ_REQUIRE((p != nullptr) == fits); // exact: refused iff malformed or past the reservation
+            if (p != nullptr)
+            {
+                CRD_FUZZ_REQUIRE(static_cast<const u8*>(p) == base + (end - size));
+                bumped(end - size, end);
+                if (!live.full())
+                {
+                    live.add(static_cast<u8*>(p), size, alignment, pattern_for(op), end - size);
+                    m.dirty_end = m.dirty_end > end ? m.dirty_end : end;
+                }
+            }
+        }
+        else if (code == 3U)
+        {
+            if (marker_count < 16U)
+            {
+                markers[marker_count] = vm.mark();
+                CRD_FUZZ_REQUIRE(markers[marker_count] == m.used);
+                marker_count += 1U;
+            }
+        }
+        else if (code == 4U && marker_count > 0U)
+        {
+            // Pop back to a marker: blocks reaching past it are gone (checked before the rewind poisons them).
+            const usize idx  = r.byte() % marker_count;
+            const usize mark = markers[idx];
+            marker_count     = idx;
+            live.remove_if([mark](const Block& b) { return b.tag + b.size > mark; });
+            vm.reset_to(mark);
+            m.used     = mark;
+            m.has_last = false;
+        }
+        else if (code == 5U || code == 7U)
+        {
+            live.remove_if([](const Block&) { return true; });
+            marker_count = 0U;
+            if (code == 5U)
+            {
+                vm.reset();
+            }
+            else
+            {
+                vm.reset_and_purge();
+            }
+            m.used     = 0U;
+            m.has_last = false;
+        }
+        else if (code == 8U)
+        {
+            // Reallocate a live block. The fatal paths (past the reservation; the copy's allocate) are never
+            // issued: the model predicts which path runs and that it fits. In place iff the block is the most
+            // recent allocation and already satisfies the requested alignment; otherwise a bump-copy.
+            const usize i         = live.pick(r);
+            const usize new_size  = 1U + static_cast<usize>(r.half());
+            const usize alignment = usize{1} << (r.byte() % 13U);
+            Block&      b         = live.at(i);
+            const usize start     = static_cast<usize>(b.tag);
+            const bool  top       = m.has_last && m.last == start;
+            const bool  in_place  = top && (reinterpret_cast<std::uintptr_t>(b.p) & (alignment - 1U)) == 0U;
+            usize       copy_end  = 0U;
+            const bool  issue     = in_place ? new_size <= m.reserved - start
+                                             : bump_fits(base, m.used, m.reserved, new_size, alignment, &copy_end);
+            const u64   path      = in_place ? 2U : 1U;
+            trace.add(issue ? path : 0U);
+            if (issue)
+            {
+                CRD_FUZZ_REQUIRE(LiveSet::intact(b));
+                const usize old_size = b.size;
+                const usize keep     = old_size < new_size ? old_size : new_size;
+                u8* const   np = static_cast<u8*>(vm.reallocate(b.p, old_size, new_size, alignment));
+                CRD_FUZZ_REQUIRE(np != nullptr && (reinterpret_cast<std::uintptr_t>(np) & (alignment - 1U)) == 0U);
+                for (usize k = 0U; k < keep; ++k)
+                {
+                    CRD_FUZZ_REQUIRE(np[k] == b.pattern);
+                }
+                if (in_place)
+                {
+                    CRD_FUZZ_REQUIRE(np == b.p);
+                    const usize end = start + new_size;
+                    m.commit_to(end);
+                    require_fresh_zero(base, start + old_size, end, m.dirty_end);
+                    m.used = end;
+                    b.size = new_size;
+                    // A shrink below a marker leaves that marker past the live top: it is no longer a valid marker.
+                    while (marker_count > 0U && markers[marker_count - 1U] > m.used)
+                    {
+                        marker_count -= 1U;
+                    }
+                }
+                else
+                {
+                    CRD_FUZZ_REQUIRE(np == base + (copy_end - new_size));
+                    m.commit_to(copy_end);
+                    require_fresh_zero(base, copy_end - new_size + keep, copy_end, m.dirty_end);
+                    m.used     = copy_end;
+                    m.last     = copy_end - new_size;
+                    m.has_last = true;
+                    b.p        = np;
+                    b.size     = new_size;
+                    b.tag      = copy_end - new_size;
+                }
+                CRD_FUZZ_REQUIRE(!live.overlaps(b.p, b.size, i));
+                std::memset(b.p, b.pattern, b.size);
+                const usize written = static_cast<usize>(b.tag) + b.size;
+                m.dirty_end         = m.dirty_end > written ? m.dirty_end : written;
+            }
+        }
+        else if (code == 9U)
+        {
+            // A bump arena's free is a no-op: the bytes stay handed out and owned.
+            const usize i = live.pick(r);
+            u8* const   p = live.at(i).p;
+            live.remove(i);
+            vm.deallocate(p);
+            CRD_FUZZ_REQUIRE(vm.owns(p));
+        }
+        if (code == 6U || code == 7U)
+        {
+            // Purge hands the pages above the live top back; the page holding the top stays.
+            const usize keep = (m.used + (m.page - 1U)) & ~(m.page - 1U);
+            if (code == 6U)
+            {
+                vm.purge();
+            }
+            if (keep < m.committed)
+            {
+                m.committed = keep;
+            }
+            m.dirty_end = m.dirty_end < m.committed ? m.dirty_end : m.committed;
+        }
+        live.require_all_intact();
+        require_vm_state(vm, m, live, base);
+        trace.add(m.used);
+        trace.add(m.committed);
+    }
+    live.remove_if([](const Block&) { return true; });
+    vm.reset();
+    require_stats_drained(vm);
+}
+
+// ---- the streaming allocator: budgets, residency policy, staging ---------------------------------------------------
+
+struct Resident
+{
+    u8*   p        = nullptr;
+    usize size     = 0U;
+    u8    pattern  = 0U;
+    u32   category = 0U;
+    u64   charge   = 0U; // what the category was charged for it, as observed through used()
+};
+
+class Residents
+{
+public:
+    [[nodiscard]] usize     count() const noexcept { return m_count; }
+    [[nodiscard]] bool      full() const noexcept { return m_count == kMaxLive; }
+    [[nodiscard]] Resident& at(usize i) noexcept { return m_items[i]; }
+
+    void add(const Resident& item) noexcept
+    {
+        m_items[m_count] = item;
+        m_count += 1U;
+    }
+    [[nodiscard]] bool overlaps(const u8* p, usize size) const noexcept
+    {
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            const u8* lo = m_items[i].p;
+            if (p < lo + m_items[i].size && lo < p + size)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    void remove(usize i) noexcept
+    {
+        for (usize k = 0U; k < m_items[i].size; ++k)
+        {
+            CRD_FUZZ_REQUIRE(m_items[i].p[k] == m_items[i].pattern);
+        }
+        m_items[i] = m_items[m_count - 1U];
+        m_count -= 1U;
+    }
+    void require_all_intact() const noexcept
+    {
+        for (usize i = 0U; i < m_count; ++i)
+        {
+            for (usize k = 0U; k < m_items[i].size; ++k)
+            {
+                CRD_FUZZ_REQUIRE(m_items[i].p[k] == m_items[i].pattern);
+            }
+        }
+    }
+
+private:
+    Resident m_items[kMaxLive] = {};
+    usize    m_count           = 0U;
+};
+
+// The pressure loop's documented bound: the allocation is attempted at most 1 + kMaxEvictRetries (16) times, so the
+// policy is consulted at most 17 times for one request.
+constexpr u32 kMaxEvictCalls = 17U;
+
+// What the resident heap may charge beyond the request: TLSF rounds a block up to 16 bytes and keeps a trailing
+// remainder only when it is too small to be a free block (32 bytes), so a block's size exceeds the request by less
+// than 64 bytes. A request within that distance of its budget can fail on the charge without consulting the policy.
+constexpr u64 kChargeSlack = 64U;
+
+// A residency policy scripted by the input. It sheds blocks the model knows to be resident (verifying each payload
+// first and that release un-charges exactly what the allocation charged), or sheds nothing, or lies: it claims bytes
+// it never freed, which the allocator must survive within its retry bound.
+class ScriptedPolicy final : public mem::IResidencyPolicy
+{
+public:
+    enum class Mode : u8
+    {
+        Null,
+        SameCategory,
+        AnyCategory,
+        OneBlock,
+        Liar,
+        Count
+    };
+
+    explicit ScriptedPolicy(Residents* residents) noexcept : m_residents(residents) {}
+
+    void arm(Mode mode, mem::CategoryId category, u64 needed) noexcept
+    {
+        m_mode     = mode;
+        m_category = category;
+        m_needed   = needed;
+        m_calls    = 0U;
+        for (u64& f : m_freed)
+        {
+            f = 0U;
+        }
+    }
+    [[nodiscard]] u32 calls() const noexcept { return m_calls; }
+    [[nodiscard]] u64 freed(u32 category) const noexcept { return m_freed[category]; }
+
+    [[nodiscard]] u64 evict(mem::StreamingAllocator& sa, mem::CategoryId category, u64 needed) override
+    {
+        m_calls += 1U;
+        CRD_FUZZ_REQUIRE(m_calls <= kMaxEvictCalls); // the pressure loop is bounded
+        CRD_FUZZ_REQUIRE(category == m_category && needed == m_needed);
+        if (m_mode == Mode::Liar)
+        {
+            return needed + 1U;
+        }
+        u64   freed = 0U;
+        usize i     = 0U;
+        while (m_mode != Mode::Null && i < m_residents->count() && freed < needed &&
+               (m_mode != Mode::OneBlock || freed == 0U))
+        {
+            const Resident item = m_residents->at(i);
+            if (m_mode != Mode::AnyCategory && item.category != category)
+            {
+                i += 1U;
+                continue;
+            }
+            m_residents->remove(i); // its payload survived until now
+            const u64 before = sa.used(item.category);
+            sa.release_resident(item.category, item.p);
+            CRD_FUZZ_REQUIRE(before - sa.used(item.category) == item.charge);
+            m_freed[item.category] += item.charge;
+            freed += item.charge;
+        }
+        return freed;
+    }
+
+private:
+    Residents*      m_residents;
+    Mode            m_mode     = Mode::Null;
+    mem::CategoryId m_category = 0U;
+    u64             m_needed   = 0U;
+    u32             m_calls    = 0U;
+    u64             m_freed[mem::StreamingAllocator::kMaxCategories] = {};
+};
+
+void fuzz_streaming(Reader& r, Trace& trace)
+{
+    const usize                       page = crd::vm::page_size();
+    mem::StreamingAllocator::Config cfg;
+    cfg.staging_bytes        = 64U + static_cast<usize>(r.half());
+    cfg.staging_epochs       = usize{2} << (r.byte() % 4U);
+    cfg.num_categories       = 1U + (r.byte() % mem::StreamingAllocator::kMaxCategories);
+    cfg.resident_chunk_bytes = static_cast<usize>(r.half()) * 4U; // clamped up to the TLSF floor by the heap
+    cfg.reserve_bytes        = cfg.staging_bytes + (static_cast<usize>(r.word()) % (usize{8} << 20U));
+    const usize reserved     = (cfg.reserve_bytes + (page - 1U)) & ~(page - 1U);
+
+    Residents      residents;
+    ScriptedPolicy policy(&residents);
+    {
+        mem::StreamingAllocator sa(cfg, &policy, "fuzz-streaming");
+        CRD_FUZZ_REQUIRE(sa.num_categories() == cfg.num_categories);
+        CRD_FUZZ_REQUIRE(sa.staging_capacity() == cfg.staging_bytes);
+        u64 limit[mem::StreamingAllocator::kMaxCategories] = {};
+        u64 model_used[mem::StreamingAllocator::kMaxCategories] = {};
+        for (u32 c = 0U; c < cfg.num_categories; ++c)
+        {
+            limit[c] = ~u64{0};
+            CRD_FUZZ_REQUIRE(sa.budget(c) == limit[c] && sa.used(c) == 0U);
+        }
+        LiveSet   staged; // staging claims, tagged with the epoch they belong to
+        const u64 k         = cfg.staging_epochs;
+        u64       fence     = 0U;
+        u64       unretired = 0U;
+        auto      retire    = [&](u64 c) noexcept
+        {
+            const u64 open = fence;
+            staged.remove_if([c, open](const Block& b) { return b.tag <= c && b.tag < open; });
+            sa.retire_staging(c);
+            if (c + 1U > unretired)
+            {
+                unretired = c + 1U < fence ? c + 1U : fence;
+            }
+        };
+        for (usize op = 0U; op < kMaxOps && !r.done(); ++op)
+        {
+            const u8 code = static_cast<u8>(r.byte() % 9U);
+            if (code <= 2U || (code == 3U && residents.count() == 0U))
+            {
+                const mem::CategoryId category  = r.byte() % cfg.num_categories;
+                const usize           size      = decode_size(r, usize{256} << 10U);
+                const usize           alignment = decode_alignment(r);
+                const u8              mode_byte = r.byte();
+                const auto            mode      = static_cast<ScriptedPolicy::Mode>(
+                    mode_byte % static_cast<u8>(ScriptedPolicy::Mode::Count));
+                const bool via_view  = (mode_byte & 0x80U) != 0U;
+                const usize committed = sa.resident_committed_bytes();
+                u64         before[mem::StreamingAllocator::kMaxCategories] = {};
+                for (u32 c = 0U; c < cfg.num_categories; ++c)
+                {
+                    before[c] = sa.used(c);
+                }
+                policy.arm(mode, category, size);
+                void* p = nullptr;
+                if (via_view)
+                {
+                    mem::StreamingCategoryAllocator view(&sa, category);
+                    p = view.try_allocate(size, alignment);
+                }
+                else
+                {
+                    p = sa.try_allocate_resident(category, size, alignment);
+                }
+                trace.add(p != nullptr ? 1U : 0U);
+                trace.add(policy.calls());
+                // Requests nothing can serve: malformed, larger than the whole budget, larger than the whole
+                // reservation, or aligned past every address in it (decoded alignments are at most 4 KiB or the top
+                // bit, and no reservation starts on a 2^63 boundary). Refused without consulting the policy: nothing
+                // is shed and no heap chunk is committed for them.
+                const bool unservable = malformed(size, alignment) || static_cast<u64>(size) > limit[category] ||
+                                        size > reserved || alignment > reserved;
+                if (unservable)
+                {
+                    CRD_FUZZ_REQUIRE(p == nullptr);
+                    CRD_FUZZ_REQUIRE(policy.calls() == 0U);
+                    CRD_FUZZ_REQUIRE(sa.resident_committed_bytes() == committed);
+                }
+                // Every category moved by exactly what the policy released, plus the new block's charge.
+                for (u32 c = 0U; c < cfg.num_categories; ++c)
+                {
+                    CRD_FUZZ_REQUIRE(before[c] == model_used[c]);
+                    model_used[c] -= policy.freed(c);
+                    if (c != category || p == nullptr)
+                    {
+                        CRD_FUZZ_REQUIRE(sa.used(c) == model_used[c]);
+                    }
+                }
+                if (p == nullptr)
+                {
+                    // Pressure the policy did not relieve: a valid request that failed asked it at least once, and a
+                    // lying policy was asked exactly the bounded number of times.
+                    if (!unservable)
+                    {
+                        // Zero calls only when the rounded block alone would pass the budget.
+                        CRD_FUZZ_REQUIRE(policy.calls() >= 1U || limit[category] - size < kChargeSlack);
+                        if (mode == ScriptedPolicy::Mode::Null && policy.calls() != 0U)
+                        {
+                            CRD_FUZZ_REQUIRE(policy.calls() == 1U);
+                        }
+                        if (mode == ScriptedPolicy::Mode::Liar && policy.calls() != 0U)
+                        {
+                            CRD_FUZZ_REQUIRE(policy.calls() == kMaxEvictCalls);
+                        }
+                    }
+                }
+                else
+                {
+                    // The budget check saw the category after the evictions: it fitted, and the charge (the block's
+                    // real size) keeps the category within its budget.
+                    const u64 charge = sa.used(category) - model_used[category];
+                    CRD_FUZZ_REQUIRE(charge >= size && charge - size < kChargeSlack);
+                    CRD_FUZZ_REQUIRE(sa.used(category) <= limit[category]);
+                    CRD_FUZZ_REQUIRE((reinterpret_cast<std::uintptr_t>(p) & (alignment - 1U)) == 0U);
+                    auto* const bytes = static_cast<u8*>(p);
+                    CRD_FUZZ_REQUIRE(!residents.overlaps(bytes, size) && !staged.overlaps(bytes, size, kMaxLive));
+                    model_used[category] += charge;
+                    if (residents.full())
+                    {
+                        sa.release_resident(category, p);
+                        model_used[category] -= charge;
+                    }
+                    else
+                    {
+                        std::memset(bytes, pattern_for(op), size);
+                        residents.add(Resident{bytes, size, pattern_for(op), category, charge});
+                    }
+                }
+            }
+            else if (code == 3U)
+            {
+                const usize    i    = r.byte() % residents.count();
+                const Resident item = residents.at(i);
+                residents.remove(i);
+                if ((r.byte() & 1U) != 0U)
+                {
+                    mem::StreamingCategoryAllocator view(&sa, item.category);
+                    view.deallocate(item.p);
+                }
+                else
+                {
+                    sa.release_resident(item.category, item.p);
+                }
+                model_used[item.category] -= item.charge; // release un-charges exactly the block's charge
+            }
+            else if (code == 4U)
+            {
+                const mem::CategoryId category = r.byte() % cfg.num_categories;
+                u64                   value    = 0U;
+                switch (r.byte() % 5U)
+                {
+                    case 0U:
+                        value = 0U;
+                        break;
+                    case 1U:
+                        value = ~u64{0};
+                        break;
+                    case 2U:
+                        value = r.word();
+                        break;
+                    case 3U:
+                        value = model_used[category]; // exactly full
+                        break;
+                    default:
+                        value = model_used[category] + r.half();
+                        break;
+                }
+                sa.set_budget(category, value);
+                limit[category] = value;
+                CRD_FUZZ_REQUIRE(sa.budget(category) == value);
+            }
+            else if (code == 5U)
+            {
+                const usize size      = decode_size(r, cfg.staging_bytes);
+                const u8    selector  = r.byte();
+                const usize alignment = selector == 0xFEU ? 24U : (usize{1} << (selector % 8U));
+                void* const p         = sa.try_stage(size, alignment);
+                trace.add(p != nullptr ? 1U : 0U);
+                if (malformed(size, alignment) || size > cfg.staging_bytes || alignment > mem::kCachelineSize)
+                {
+                    CRD_FUZZ_REQUIRE(p == nullptr);
+                }
+                if (p != nullptr)
+                {
+                    CRD_FUZZ_REQUIRE(!residents.overlaps(static_cast<u8*>(p), size));
+                    if (staged.full())
+                    {
+                        std::memset(p, 0, size);
+                    }
+                    else
+                    {
+                        staged.add(static_cast<u8*>(p), size, alignment, pattern_for(op), fence);
+                    }
+                }
+            }
+            else if (code == 6U)
+            {
+                if (fence - unretired >= k)
+                {
+                    retire(unretired);
+                }
+                sa.begin_staging_epoch(fence + 1U);
+                fence += 1U;
+            }
+            else if (code == 7U && fence > 0U)
+            {
+                retire(r.byte() % fence);
+            }
+            residents.require_all_intact();
+            staged.require_all_intact();
+            for (u32 c = 0U; c < cfg.num_categories; ++c)
+            {
+                CRD_FUZZ_REQUIRE(sa.used(c) == model_used[c]);
+                CRD_FUZZ_REQUIRE(sa.budget(c) == limit[c]);
+            }
+            CRD_FUZZ_REQUIRE(sa.resident_committed_bytes() <= reserved);
+        }
+        // Release everything: every category returns to zero; the staging ring drains.
+        while (residents.count() > 0U)
+        {
+            const Resident item = residents.at(0U);
+            residents.remove(0U);
+            sa.release_resident(item.category, item.p);
+            model_used[item.category] -= item.charge;
+            CRD_FUZZ_REQUIRE(sa.used(item.category) == model_used[item.category]);
+        }
+        for (u32 c = 0U; c < cfg.num_categories; ++c)
+        {
+            CRD_FUZZ_REQUIRE(sa.used(c) == 0U);
+            trace.add(model_used[c]);
+        }
+        if (fence > 0U)
+        {
+            retire(fence - 1U);
+        }
+        sa.begin_staging_epoch(fence + 1U);
+        fence += 1U;
+        retire(fence - 1U);
+        CRD_FUZZ_REQUIRE(staged.count() == 0U);
+        trace.add(sa.resident_committed_bytes());
+    }
+}
+
 u64 run_once(const u8* data, usize size)
 {
     Trace                      trace;
@@ -1268,6 +1992,12 @@ u64 run_once(const u8* data, usize size)
                 break;
             case Kind::Diagnostic:
                 fuzz_diagnostic(r, trace, parent);
+                break;
+            case Kind::VirtualMemory:
+                fuzz_virtual_memory(r, trace);
+                break;
+            case Kind::Streaming:
+                fuzz_streaming(r, trace);
                 break;
             case Kind::SlotMap:
             case Kind::Count:
@@ -1505,5 +2235,138 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
         s.b(3U).b(0U).b(4U).b(1U).b(1U).b(4U).b(1U).b(2U).b(4U).b(0xFFU).b(0U);
         s.b(2U).b(0U).b(2U).b(0U).b(2U).b(0U).b(3U).b(1U);
         s.emit(sink, "slotmap-stale-reuse-forged");
+    }
+    {
+        // A request no chunk can serve (a non-power-of-two alignment) is refused before a chunk is grown for it.
+        Seed s(Kind::GrowableTlsf);
+        s.h(1024U);
+        s.b(0U).small(32U).not_pow2().b(0U).small(32U).align(4U).b(0U).small(32U).not_pow2();
+        s.emit(sink, "growable-tlsf-refusal-grows-nothing");
+    }
+
+    // VirtualMemoryAllocator (reserve 1 + w % 16 MiB; commit block selector b & 3: 0 none, 1 h, 2 page * (1 + b % 32),
+    // 3 SIZE_MAX - b; initial commit selector b % 3: 0 none, 1 w, 2 SIZE_MAX). Ops: 0-2 alloc, 3 mark, 4 rewind to
+    // marker b, 5 reset, 6 purge, 7 reset and purge, 8 realloc (pick, h + 1, 1 << b % 13), 9 free (pick).
+    {
+        // Fill the reservation exactly, then every malformed or oversized request is refused without change.
+        Seed s(Kind::VirtualMemory);
+        s.w(65535U).b(0U).b(0U); // 64 KiB, commit by pages, nothing pre-committed
+        s.b(0U).small(16U).align(0U).b(0U).raw(65520U).align(0U).b(0U).small(1U).align(0U);
+        s.b(0U).extreme(0U).align(4U).b(0U).raw(0U).align(4U).b(0U).raw(0xFFFFFFFFU).align(4U);
+        s.b(0U).small(8U).top_bit().b(5U).b(0U).raw(65536U).align(12U).b(0U).raw(65537U).align(0U);
+        s.emit(sink, "vm-exhaust-exact");
+    }
+    {
+        Seed s(Kind::VirtualMemory);
+        s.w(65535U).b(0U).b(0U);
+        s.b(0U).small(16U).align(4U).b(0U).small(16U).not_pow2().b(0U).small(16U).align(4U);
+        s.emit(sink, "vm-non-pow2-alignment-refused");
+    }
+    {
+        // A 12 KiB commit block is a page multiple but not a power of two: commits land on its multiples.
+        Seed s(Kind::VirtualMemory);
+        s.w(1048575U).b(2U).b(2U).b(1U).w(5000U);
+        s.b(0U).medium(9000U).align(4U).b(0U).raw(20000U).align(6U).b(0U).raw(70000U).align(12U);
+        s.b(6U).b(0U).small(200U).align(4U);
+        s.emit(sink, "vm-commit-block-not-pow2");
+    }
+    {
+        // A commit block no page multiple represents commits the whole reservation, not one page.
+        Seed s(Kind::VirtualMemory);
+        s.w(262143U).b(3U).b(0U).b(0U);
+        s.b(0U).small(100U).align(4U).b(0U).raw(100000U).align(4U).b(7U).b(0U).small(1U).align(0U);
+        s.emit(sink, "vm-commit-block-past-size-max");
+    }
+    {
+        // Markers, rewinds, a purge of the tail and a recommit that must read zero; pre-commit past the end.
+        Seed s(Kind::VirtualMemory);
+        s.w(262143U).b(2U).b(15U).b(2U); // 256 KiB, 64 KiB commit block, initial commit SIZE_MAX (clamped)
+        s.b(0U).medium(20000U).align(4U).b(3U).b(0U).raw(50000U).align(6U).b(3U).b(0U).small(100U).align(12U);
+        s.b(4U).b(1U).b(6U).b(0U).raw(70000U).align(4U).b(4U).b(0U).b(7U);
+        s.b(0U).small(10U).align(0U).b(9U).b(0U).b(0U).small(20U).align(3U).b(6U).b(0U).raw(200000U).align(4U);
+        s.emit(sink, "vm-markers-purge-recommit");
+    }
+    {
+        // Reallocate: the top block grows and shrinks in place, a lower block moves by bump-copy.
+        Seed s(Kind::VirtualMemory);
+        s.w(131071U).b(1U).h(5000U).b(0U); // 5000-byte commit block: rounded up to two pages
+        s.b(0U).small(100U).align(4U).b(8U).b(0U).h(5999U).b(4U).b(8U).b(0U).h(9U).b(4U);
+        s.b(0U).small(50U).align(4U).b(8U).b(0U).h(399U).b(5U).b(3U).b(8U).b(1U).h(29999U).b(3U);
+        s.emit(sink, "vm-realloc-in-place-and-copy");
+    }
+    {
+        // The top block, asked for an alignment it does not have, cannot grow in place: it moves.
+        Seed s(Kind::VirtualMemory);
+        s.w(131071U).b(0U).b(0U);
+        s.b(0U).small(8U).align(0U).b(0U).small(100U).align(4U).b(8U).b(1U).h(199U).b(12U);
+        s.emit(sink, "vm-realloc-alignment");
+    }
+
+    // StreamingAllocator (staging 64 + h, epochs 2 << b % 4, categories 1 + b % 16, resident chunk 4 * h, reserve
+    // staging + w % 8 MiB). Ops: 0-2 alloc (category, size, alignment, mode: b % 5 = null, same category, any
+    // category, one block, liar; bit 7 through the category view), 3 release (pick, view bit), 4 set budget
+    // (category, b % 5: 0, max, w, used, used + h), 5 stage (size, alignment selector), 6 close epoch, 7 retire, 8 check.
+    {
+        // The budget check and the charge must agree: a block whose real size passes the budget is not kept.
+        Seed s(Kind::Streaming);
+        s.h(0U).b(0U).b(1U).h(16384U).w(1048576U);
+        s.b(4U).b(0U).b(2U).w(1000U).b(0U).b(0U).medium(999U).align(4U).b(0U);
+        for (u32 i = 0U; i < 4U; ++i)
+        {
+            s.b(0U).b(0U).small(250U).align(0U).b(0U);
+        }
+        s.b(0U).b(0U).small(232U).align(0U).b(1U); // fits the request, not its 240-byte block: one block is shed
+        s.emit(sink, "stream-budget-charge");
+    }
+    {
+        // Requests no state can serve never consult the policy: nothing resident is shed for them.
+        Seed s(Kind::Streaming);
+        s.h(0U).b(0U).b(0U).h(16384U).w(1048576U);
+        s.b(0U).b(0U).small(200U).align(4U).b(0U).b(0U).b(0U).small(100U).align(4U).b(0U);
+        s.b(0U).b(0U).raw(0xFFFFFFFFU).align(4U).b(1U).b(0U).b(0U).extreme(0U).align(4U).b(2U);
+        s.b(0U).b(0U).raw(2000000U).align(4U).b(1U).b(0U).b(0U).small(16U).top_bit().b(2U);
+        s.emit(sink, "stream-unservable-sheds-nothing");
+    }
+    {
+        Seed s(Kind::Streaming);
+        s.h(0U).b(0U).b(0U).h(16384U).w(1048576U);
+        s.b(0U).b(0U).small(200U).align(4U).b(0U).b(0U).b(0U).small(64U).not_pow2().b(1U);
+        s.b(0U).b(0U).small(64U).align(4U).b(0U);
+        s.emit(sink, "stream-non-pow2-alignment");
+    }
+    {
+        // A small reservation fills; the scripted policies shed blocks of the category, of any category, one at a
+        // time, or nothing, and the allocation succeeds or fails gracefully.
+        Seed s(Kind::Streaming);
+        s.h(0U).b(1U).b(2U).h(16384U).w(262144U); // 3 categories, 64 KiB chunks, 256 KiB of reservation
+        for (u32 i = 0U; i < 6U; ++i)
+        {
+            s.b(0U).b(i % 3U).medium(40000U).align(4U).b(0U);
+        }
+        s.b(0U).b(0U).medium(40000U).align(4U).b(1U).b(0U).b(1U).medium(60000U).align(6U).b(2U);
+        s.b(0U).b(2U).medium(30000U).align(4U).b(3U).b(0U).b(2U).medium(65000U).align(4U).b(0U);
+        s.b(3U).b(0U).b(1U).b(8U);
+        s.emit(sink, "stream-pressure-policies");
+    }
+    {
+        // A lying policy (it claims bytes it never freed) ends in a refusal within the bounded retry count.
+        Seed s(Kind::Streaming);
+        s.h(0U).b(0U).b(1U).h(16384U).w(1048576U);
+        s.b(0U).b(0U).small(100U).align(4U).b(0U).b(4U).b(0U).b(3U);
+        s.b(0U).b(0U).small(16U).align(4U).b(4U).b(0U).b(0U).small(16U).align(4U).b(0x84U);
+        s.b(4U).b(1U).b(0U).b(0U).b(1U).small(1U).align(0U).b(4U);
+        s.emit(sink, "stream-liar-bounded");
+    }
+    {
+        // Staging claims across epochs, refusals past the ring or its cache-line alignment, and the view's release.
+        Seed s(Kind::Streaming);
+        s.h(192U).b(0U).b(1U).h(16384U).w(1048576U); // 256-byte ring, K = 2
+        for (u32 i = 0U; i < 6U; ++i)
+        {
+            s.b(5U).small(60U).b(6U).b(6U);
+        }
+        s.b(5U).small(10U).b(7U).b(5U).small(10U).b(0xFEU).b(5U).raw(257U).b(0U).b(7U).b(0U).b(7U).b(2U);
+        s.b(0U).b(1U).small(64U).align(6U).b(0x80U).b(3U).b(0U).b(1U).b(8U);
+        s.emit(sink, "stream-staging-and-view");
     }
 }

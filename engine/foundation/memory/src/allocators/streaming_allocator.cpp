@@ -32,7 +32,12 @@ StreamingAllocator::~StreamingAllocator() = default;
 void* StreamingAllocator::try_allocate_resident(CategoryId category, usize size, usize alignment)
 {
     CRD_ASSERT(category < m_num_categories);
-    if (size == 0)
+    // Requests no resident heap state can serve are refused before the policy is asked: evicting cannot help, so
+    // shedding resident data for them only destroys it, and the heap would grow a chunk for each attempt (a
+    // non-power-of-two alignment, a size past the whole reservation, an alignment past any chunk; DIAG.10a
+    // allocator fuzzing).
+    if (size == 0 || !is_pow2(alignment) || size > m_resident_vm.reserved_bytes() ||
+        alignment > GrowableTlsfAllocator::max_chunk_bytes())
     {
         return nullptr;
     }
@@ -53,12 +58,23 @@ void* StreamingAllocator::try_allocate_resident(CategoryId category, usize size,
                 void* p = m_resident_heap.try_allocate(size, alignment);
                 if (p != nullptr)
                 {
-                    // Charge the ACTUAL block size so release un-charges the same amount.
-                    b.used.fetch_add(static_cast<u64>(m_resident_heap.allocation_size(p)), std::memory_order_relaxed);
-                    return p;
+                    // Charge the ACTUAL block size so release un-charges the same amount, and hold the budget to
+                    // that charge: checking only the request let the heap's rounding carry the category past its
+                    // budget (DIAG.10a allocator fuzzing). A block rounded past the remaining budget goes back.
+                    const u64 charge = static_cast<u64>(m_resident_heap.allocation_size(p));
+                    if (charge <= lim - cur)
+                    {
+                        b.used.fetch_add(charge, std::memory_order_relaxed);
+                        return p;
+                    }
+                    m_resident_heap.deallocate(p);
+                    if (charge > lim)
+                    {
+                        return nullptr; // the rounded block alone exceeds the budget: evicting cannot help
+                    }
                 }
-                // Within budget but the resident heap is physically full -> fall through
-                // to eviction (freeing this category's blocks frees heap space).
+                // Within budget but the resident heap is physically full, or the rounded block does not fit the
+                // remaining budget -> fall through to eviction (freeing this category's blocks frees both).
             }
         } // release the lock BEFORE evicting: the policy calls release_resident, which
           // re-locks; holding it here would deadlock (std::mutex is non-recursive).

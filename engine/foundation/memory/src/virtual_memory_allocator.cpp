@@ -2,6 +2,7 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/memory/alignment.hpp>
+#include <crd/memory/checked_math.hpp>
 
 #include <cstddef>
 #include <cstring>
@@ -60,11 +61,13 @@ VirtualMemoryAllocator::VirtualMemoryAllocator() : VirtualMemoryAllocator(Config
 VirtualMemoryAllocator::VirtualMemoryAllocator(const Config& cfg, const char* name)
 {
     m_name         = name;
-    m_page         = vm::page_size();
-    m_commit_block = align_up(cfg.commit_block == 0 ? m_page : cfg.commit_block, m_page);
-    if (m_commit_block < m_page)
+    m_page = vm::page_size();
+    // A whole number of pages, never fewer than one. A configured block that no page multiple can hold (near
+    // SIZE_MAX) wrapped to 0 here and silently became one page; it is larger than any reservation, so it now commits
+    // the whole reservation at once (DIAG.10a allocator fuzzing).
+    if (!checked_align_up(cfg.commit_block == 0 ? m_page : cfg.commit_block, m_page, &m_commit_block))
     {
-        m_commit_block = m_page;
+        m_commit_block = ~usize{0} & ~(m_page - 1U);
     }
 
     m_region = vm::reserve(cfg.reserve_bytes);
@@ -102,12 +105,16 @@ bool VirtualMemoryAllocator::ensure_committed(usize target) noexcept
     {
         return true;
     }
-    // Round the new high-water mark up to a whole commit block, capped at the
-    // (page-aligned) reservation size.
-    usize new_commit = align_up(target, m_commit_block);
-    if (new_commit > m_reserved)
+    // Round the new high-water mark up to a whole commit block, capped at the (page-aligned) reservation size. The
+    // block is a page multiple but not necessarily a power of two (12 KiB, 20 KiB), so the round-up divides: the mask
+    // round-up of align_up() committed to page multiples that were not block multiples (DIAG.10a allocator fuzzing).
+    // target <= m_reserved, so the step past it is compared before it is added.
+    const usize remainder  = target % m_commit_block;
+    usize       new_commit = target;
+    if (remainder != 0U)
     {
-        new_commit = m_reserved;
+        const usize step = m_commit_block - remainder;
+        new_commit       = step > m_reserved - target ? m_reserved : target + step;
     }
     if (!vm::commit(m_base + m_commit_pos, new_commit - m_commit_pos))
     {
@@ -166,7 +173,12 @@ void* VirtualMemoryAllocator::allocate(usize size, usize alignment)
 
 void* VirtualMemoryAllocator::try_allocate(usize size, usize alignment)
 {
-    CRD_ASSERT(is_pow2(alignment));
+    // The non-fatal contract (IAllocator::try_allocate, DIAG.3a): an alignment that is not a power of two is refused,
+    // never asserted, like every other allocator's try_allocate (DIAG.10a allocator fuzzing).
+    if (!is_pow2(alignment))
+    {
+        return nullptr;
+    }
     return bump(size, alignment);
 }
 
@@ -199,8 +211,10 @@ void* VirtualMemoryAllocator::reallocate(void* p, usize old_size, usize new_size
     }
     CRD_ASSERT(owns(p));
 
-    // In-place grow/shrink iff p is the most-recent allocation (the arena top).
-    if (m_has_last && p == m_base + m_last_offset)
+    // In-place grow/shrink iff p is the most-recent allocation (the arena top) and already has the requested
+    // alignment; a top block asked for a stricter alignment moves like any other (it was returned in place,
+    // misaligned; DIAG.10a allocator fuzzing).
+    if (m_has_last && p == m_base + m_last_offset && (reinterpret_cast<usize>(p) & (alignment - 1U)) == 0U)
     {
         const usize new_top = m_last_offset + new_size;
         if (new_size > m_reserved || m_last_offset > m_reserved - new_size)

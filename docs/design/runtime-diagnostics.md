@@ -1656,6 +1656,8 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-allocator-fuzzing
   `linux-clang-fuzz` builds the libFuzzer executable. It covers TLSF, pool, linear, stack, the growable TLSF, pool and
   linear, the offset allocator, the epoch ring, the `DiagnosticAllocator` over TLSF and the generation-checked
   `SlotMap`. The virtual-memory and streaming allocators are not in it: each input would reserve address space.
+  (2026-10-11: they are now, each input reserving at most 16 MiB and releasing it with the allocator; see the
+  Settled block of that date below.)
 - The production entry points get only operations their contract allows, so a failure is a defect and never harness
   undefined behaviour; malformed requests are inside that contract (every `try_allocate` refuses a zero size, a size
   no arena can hold, an alignment at the top bit and one that is not a power of two). Hostile operations go only to
@@ -1926,6 +1928,38 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-host-parallel-ran
 - Not yet: the provider is not in a fuzz target. Per-item budgets, the nested-parallel refusal and asynchronous launch
   errors make its agreement with the sequential tiers a filtered oracle (the same answer when the reference completes,
   no body needs more than `sub_fuel` and no parallel op runs inside a body), not an identity.
+
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10a-vm-streaming-allocators.md)):
+- The `VirtualMemoryAllocator` and the `StreamingAllocator` are two more kinds of `crd-fuzz-memory-allocators`
+  (appended to its kind enum; every committed input's kind byte is below the old count, so each keeps its kind). Each
+  input reserves at most 16 MiB of address space, commits only what it bumps through and releases the range with the
+  allocator, so an input costs a few system calls and no lasting address space.
+- The arena is held to an exact model: the bump offset (the bump arenas' model), the committed high-water mark (the
+  next multiple of the commit block, capped at the reservation; a purge back to the page holding the live top), the
+  most recent allocation (reallocated in place, everything else moved), freshly committed bytes reading zero, the
+  committed tail poisoned under ASan, `owns()` bounded by the live top and `bytes_in_use` equal to the offset. Its
+  `reallocate` runs only where the model shows neither fatal path (past the reservation, the copy's `allocate`) can be
+  reached; a `vm::commit` failure is not modelled.
+- Defects fixed in the arena: `try_allocate` asserted on a non-power-of-two alignment instead of refusing it (the
+  DIAG.3a contract every other allocator keeps); a commit block that is a page multiple but not a power of two (12 KiB)
+  was rounded with the power-of-two mask, committing page multiples that are not block multiples; a commit block too
+  large for any page multiple wrapped to 0 and became one page (it now commits the whole reservation); a reallocate of
+  the top block asking for a stricter alignment than the block has returned it in place, misaligned (it now moves).
+- The streaming allocator runs under a residency policy the input scripts: shed blocks of the category, of any
+  category, one block, nothing, or claim bytes it never freed. Every category's `used()` moves by exactly what is
+  allocated and what release un-charges, staging claims and resident blocks never overlap, a lying policy ends in a
+  refusal after exactly 17 consultations (the retry bound) and a request nothing can serve never consults the policy.
+- Defects fixed in the streaming layer and the heap under it: a request no resident heap state can serve (a
+  non-power-of-two alignment, a size past the whole reservation, an alignment past any chunk) reached the eviction
+  loop, so the policy shed resident data for it; `GrowableTlsfAllocator::try_allocate` walked its chunks with a
+  non-power-of-two alignment, every chunk refused it, and it then took a new chunk from its parent and refused again,
+  so each such request left a chunk behind (committed and kept for good under a virtual-memory parent; up to 17 per
+  streaming request); the budget compared the request but charged the heap's block, so rounding carried a category
+  past its budget (999 bytes against a budget of 1000 charged 1008). The budget now holds the charge: a block rounded
+  past the remaining budget goes back to the heap and the request takes the eviction path, and one whose block alone
+  exceeds the whole budget is refused without consulting the policy. The charge exceeds the request by less than
+  64 bytes (16-byte granules and a remainder too small to be a free block), which the target checks on every success.
+- Not yet: the reinvestigation of the unknown-origin CEIR and CKIR artifacts, and the concurrent-load corruption.
 
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness

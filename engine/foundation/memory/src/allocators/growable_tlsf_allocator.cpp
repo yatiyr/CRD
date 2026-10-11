@@ -94,7 +94,10 @@ GrowableTlsfAllocator::Chunk* GrowableTlsfAllocator::grow(usize min_bytes)
 
 void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
 {
-    if (size == 0)
+    // Refused before any chunk is consulted or grown: every chunk refuses a non-power-of-two alignment, so the walk
+    // used to end in a chunk taken from the parent for nothing (committed and kept for good under a virtual-memory
+    // parent; DIAG.10a allocator fuzzing).
+    if (size == 0 || !is_pow2(alignment))
     {
         return nullptr;
     }

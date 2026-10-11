@@ -136,6 +136,27 @@ TEST_CASE("StreamingAllocator null policy fails gracefully (no fatal) when full"
     REQUIRE(sa.try_allocate_resident(1, 8 * 1024, 16) == nullptr); // over budget -> nullptr, not abort
 }
 
+TEST_CASE("StreamingAllocator sheds nothing for a block its whole budget cannot hold", "[memory][streaming][diag10a]")
+{
+    FifoEvictPolicy    policy(crd::memory::default_allocator());
+    StreamingAllocator sa(small_cfg(), &policy);
+    sa.set_budget(0, 1000);
+
+    // 999 bytes fit the budget as a request, but the heap's block for them is 1008 bytes (16-byte granules): no
+    // eviction can make it fit, so the policy is never asked and nothing is charged (DIAG.10a).
+    CHECK(sa.try_allocate_resident(0, 999, 16) == nullptr);
+    CHECK(policy.evict_calls() == 0U);
+    CHECK(sa.used(0) == 0U);
+
+    // A request whose block fits is charged the block and stays within the budget.
+    void* resident = sa.try_allocate_resident(0, 992, 16);
+    REQUIRE(resident != nullptr);
+    CHECK(sa.used(0) >= 992U);
+    CHECK(sa.used(0) <= sa.budget(0));
+    sa.release_resident(0, resident);
+    CHECK(sa.used(0) == 0U);
+}
+
 TEST_CASE("StreamingAllocator budgets are per-category isolated", "[memory][streaming]")
 {
     StreamingAllocator sa(small_cfg());

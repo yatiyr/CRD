@@ -43,7 +43,7 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-ckir-text` | `crd::kir::ckir_read` | 11: the D1 scale kernel and the raster fragment entry as written, the malformed table of `test_ckir_asset.cpp`, four adopted findings |
 | `crd-fuzz-ckir-binary` | `crd::kir::deserialize_graph` | 18: the two graphs' blobs, truncations, a flipped byte, garbage, five adopted findings |
 | `crd-fuzz-perf-bundle` | `crd::perf::import_bundle` (DIAG.5d) | 12: the golden bundle, truncations, traversal, a lying length, a decompression bomb, a wrong schema, a hostile section count, build identities |
-| `crd-fuzz-memory-allocators` | every production allocator and the `SlotMap`, as operation sequences (DIAG.10a) | 23: 17 written streams (one or more per allocator, malformed lengths and alignments, a stream cut mid-operation, one per finding of the written seeds) and 6 adopted libFuzzer inputs |
+| `crd-fuzz-memory-allocators` | every production allocator and the `SlotMap`, as operation sequences, the `VirtualMemoryAllocator` and `StreamingAllocator` on small per-input reservations (DIAG.10a) | 37: 31 written streams (one or more per allocator, malformed lengths and alignments, a stream cut mid-operation, one per finding of the written seeds; for the arena exact exhaustion, commit blocks, purge and recommit, reallocation paths; for the streaming layer the budget charge, unservable requests, policy pressure, a lying policy, staging and the category view) and 6 adopted libFuzzer inputs |
 | `crd-fuzz-perf-flight` | `crd::perf::decode_flight_record` (DIAG.10a) | 30: seven captures a real `FlightRecorder` wrote (every end reason, a Basic policy, a suppressed trigger, a replay recipe, a clipped message, an empty post window, the fatal path without the ring) with fixed clock readings, ten records that contradict themselves in one way each, truncations, a trailing byte, a disagreeing count, a text length at its bound, an unknown detail level, garbage |
 | `crd-fuzz-perf-assets` | `parse_flight_policy_asset`, `parse_fault_plan_asset`, `parse_fault_plan` and crd-toml beneath them (DIAG.10a) | 41: the two committed assets, documents for every refusal the readers name, crd-toml's nesting, integer-range and number-length limits, plan texts at their bounds |
 | `crd-fuzz-perf-capture` | `crd::perf::validate_capture_buffer` and `CaptureView` (DIAG.10a) | 33: three captures in the writer's exact layout (one with frames and a correlation section, one whose frame span overflows a 64-bit difference) and one buffer per reader defect DIAG.10a fixed, truncations, garbage, and one adopted libFuzzer finding (a sample span the Perfetto export overflowed) |
@@ -74,7 +74,13 @@ writes into quarantine for the `DiagnosticAllocator`; stale, double-erased and f
 The oracles are the model's: no overlap, alignment, ownership, intact payloads, exact success and failure where the
 allocator's capacity model is exact, `validate_structure()`, statistics that return to zero, an offset span that
 coalesces back to one region, a parent that gets every byte back, and the same outcome trace on a second run. The
-parent is page aligned so placement does not depend on where the system allocator put the arena.
+parent is page aligned so placement does not depend on where the system allocator put the arena. The address-space
+allocators (2026-10-11) reserve at most 16 MiB per input and release it with the allocator: the
+`VirtualMemoryAllocator` is held to an exact model of its bump offset and committed high-water mark (with recommitted
+bytes reading zero and the committed tail poisoned under ASan), and the `StreamingAllocator` runs under a residency
+policy the input scripts, with every category's charge tracked exactly through `used()`, the budget held on every
+success, the retry bound and no policy consultation for a request nothing can serve. Kinds are appended to the enum
+so that every committed input keeps the kind its first byte selected.
 
 The evidence-reader targets (DIAG.10a) hold each reader to what its writer can produce. `crd-fuzz-perf-flight`
 restates, independently of the decoder, what `FlightRecorder::trigger()`, `build_capture()` and `finish()` guarantee
