@@ -8,7 +8,9 @@
 // Vulkan context suite (test_vulkan_gpu_resources_diag.cpp).
 
 #include <crd/assetio/json.hpp>
+#include <crd/core/budget_pressure.hpp>
 #include <crd/gpu/context.hpp>
+#include <crd/gpu/device_pressure.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/object_identity.hpp>
@@ -61,6 +63,9 @@ public:
         return nullptr;
     }
     [[nodiscard]] g::ValidationActivation validation_activation() const noexcept override { return m_activation; }
+    [[nodiscard]] g::DeviceMemoryReading  device_memory() const noexcept override { return memory; }
+
+    g::DeviceMemoryReading memory; // DIAG.10c: what the fake reports; unavailable by default
 
 private:
     g::GpuBackend           m_backend;
@@ -95,6 +100,7 @@ public:
     crd::u32 presents = 0U;
     bool     over     = false;
     bool     timing   = false;
+    crd::BudgetReading transient; // DIAG.10c: unread by default, like a backend that keeps no counts
 
     [[nodiscard]] g::FgImage  import_target(g::IRasterTarget& /*t*/) override { return g::FgImage{0U}; }
     [[nodiscard]] g::FgBuffer import_storage(g::IStorageBuffer& /*b*/) override { return g::FgBuffer{0U}; }
@@ -117,6 +123,7 @@ public:
     [[nodiscard]] crd::u32 last_present_count() const noexcept override { return presents; }
     [[nodiscard]] crd::u32 last_async_pass_count() const noexcept override { return async; }
     [[nodiscard]] bool     last_build_exceeded_budget() const noexcept override { return over; }
+    [[nodiscard]] crd::BudgetReading transient_pressure() const noexcept override { return transient; }
 
 private:
     FakePassBuilder m_builder;
@@ -226,6 +233,14 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
 
     FakeContext vk(g::GpuBackend::Vulkan, "Fake Vulkan Adapter", vulkan_like());
     FakeContext dx(g::GpuBackend::Dx12, "Fake DX12 Adapter", g::ValidationActivation{});
+    // DIAG.10c: the Vulkan fake reports its device-local memory near the budget (7.5 of 8 GiB is 937 permille) and no
+    // non-local heap; the DX12 fake keeps the default, a backend that cannot ask.
+    vk.memory.source             = g::DeviceMemorySource::VulkanMemoryBudget;
+    vk.memory.reason             = "the device has no heap outside device-local memory";
+    vk.memory.local.read         = true;
+    vk.memory.local.bounded      = true;
+    vk.memory.local.capacity     = crd::u64{8} << 30U;
+    vk.memory.local.in_use       = crd::u64{15} << 29U;
     REQUIRE(command.add_context(vk));
     REQUIRE(command.add_context(dx));
     CHECK_FALSE(command.add_context(vk)); // already registered
@@ -240,8 +255,18 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
     graph.presents = 0U;
     graph.over     = false;
     graph.timing   = true;
+    // DIAG.10c: a bounded transient budget at half use, a larger past build and two refused builds.
+    graph.transient.read               = true;
+    graph.transient.bounded            = true;
+    graph.transient.capacity           = 8192U;
+    graph.transient.in_use             = 4096U;
+    graph.transient.high_water         = 6144U;
+    graph.transient.high_water_tracked = true;
+    graph.transient.refusals           = 2U;
     REQUIRE(command.add_frame_graph(graph, "main"));
     CHECK_FALSE(command.add_frame_graph(graph, "again"));
+    FakeFrameGraph uncounted; // keeps no transient counts
+    REQUIRE(command.add_frame_graph(uncounted, "uncounted"));
 
     // The registry is process-wide: read the baseline, then mint and expect exactly that many more.
     g::IdentityRegistry& reg       = g::identity_registry();
@@ -257,7 +282,7 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         const DiagResult r = service.execute(whole());
         INFO(r.json.c_str());
         REQUIRE(r.status == DiagStatus::Ok);
-        CHECK(r.total == 3U + 2U * 2U + 1U); // identities, a context and a heap item per context, one graph
+        CHECK(r.total == 3U + 2U * 2U + 2U); // identities, a context and a heap item per context, two graphs
         CHECK(r.complete);
         Answer a;
         parse_answer(r, a);
@@ -266,8 +291,8 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(num(a, a.summary, "live_programs") == base_prog + 1);
         CHECK(num(a, a.summary, "live_passes") == base_pass + 1);
         CHECK(num(a, a.summary, "contexts") == 2);
-        CHECK(num(a, a.summary, "frame_graphs") == 1);
-        CHECK(text_is(a, a.summary, "heap_usage", "unavailable"));
+        CHECK(num(a, a.summary, "frame_graphs") == 2);
+        CHECK(num(a, a.summary, "device_memory_read") == 1);
 
         const char*    objects[] = {"res", "prog", "pass"};
         const crd::i64 lives[]   = {base_res + 2, base_prog + 1, base_pass + 1};
@@ -296,14 +321,25 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(text_is(a, c1, "adapter", "Fake DX12 Adapter"));
         CHECK(text_is(a, c1, "core", "not-requested"));
 
+        // DIAG.10c: each context's device memory, as the context reported it.
         CHECK(count_kind(a, "heap") == 2U);
-        for (crd::u32 i = 0U; i < 2U; ++i)
-        {
-            const crd::u32 h = item_of(a, "heap", i);
-            CHECK(num(a, h, "context") == static_cast<crd::i64>(i));
-            CHECK(text_is(a, h, "status", "unavailable"));
-            CHECK(has_text(a, h, "reason"));
-        }
+        const crd::u32 h0 = item_of(a, "heap", 0U);
+        REQUIRE(h0 != json::kInvalid);
+        CHECK(num(a, h0, "context") == 0);
+        CHECK(text_is(a, h0, "status", "read"));
+        CHECK(text_is(a, h0, "source", "vulkan-memory-budget"));
+        CHECK(num(a, h0, "local_budget") == static_cast<crd::i64>(crd::u64{8} << 30U));
+        CHECK(num(a, h0, "local_usage") == static_cast<crd::i64>(crd::u64{15} << 29U));
+        CHECK(text_is(a, h0, "local_level", "near"));
+        CHECK(text_is(a, h0, "non_local", "unavailable"));
+        CHECK(json::find(a.doc, h0, "non_local_budget") == json::kInvalid);
+        CHECK(text_is(a, h0, "reason", "the device has no heap outside device-local memory"));
+        const crd::u32 h1 = item_of(a, "heap", 1U);
+        REQUIRE(h1 != json::kInvalid);
+        CHECK(num(a, h1, "context") == 1);
+        CHECK(text_is(a, h1, "status", "unavailable"));
+        CHECK(text_is(a, h1, "reason", "backend does not query device memory"));
+        CHECK(json::find(a.doc, h1, "local_budget") == json::kInvalid);
 
         const crd::u32 fg = item_of(a, "frame-graph");
         REQUIRE(fg != json::kInvalid);
@@ -318,7 +354,17 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(num(a, fg, "async_passes") == 1);
         CHECK(num(a, fg, "presents") == 0);
         CHECK(flag(a, fg, "gpu_timing"));
+        CHECK(num(a, fg, "transient_budget") == 8192);
+        CHECK(num(a, fg, "transient_high_water") == 6144);
+        CHECK(num(a, fg, "budget_refusals") == 2);
+        CHECK(text_is(a, fg, "transient_level", "within"));
+        const crd::u32 fg1 = item_of(a, "frame-graph", 1U);
+        REQUIRE(fg1 != json::kInvalid);
+        CHECK(text_is(a, fg1, "label", "uncounted"));
+        CHECK(text_is(a, fg1, "transient_pressure", "unavailable"));
+        CHECK(json::find(a.doc, fg1, "budget_refusals") == json::kInvalid);
     }
+    CHECK(command.remove_frame_graph(uncounted));
 
     // The answer follows the registry and the host's lists: retire, remove, and the next snapshot says so.
     CHECK(reg.retire(r0));

@@ -8,6 +8,7 @@
 #include "dx12_execution.hpp"
 #include "dx12_frame_descriptors.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-a): mint + SetName a Cerid identity on a native ID3D12Object
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: Present runs under the mode witness
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-dx12): mint(ObjectKind::Pass) for frame-graph pass identities
 
 #include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
@@ -711,7 +712,8 @@ public:
 
         const UINT sync  = m_mode == PresentMode::Fifo ? 1U : 0U;
         const UINT flags = m_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0U;
-        const HRESULT pr = m_swapchain->Present(sync, flags);
+        const HRESULT pr = witness_driver_call(DriverCall::Present, "IDXGISwapChain::Present",
+                                               [&]() { return m_swapchain->Present(sync, flags); });
         // Include DXGI's queue work as well as our copy/overlay list in the surface's retirement fence.
         if (FAILED(detail::dx12_signal(m_device, m_queue, m_fence.Get(), m_fence_value)))
         {
@@ -8966,6 +8968,7 @@ public:
     {
         wait_pending_submit(); // ⛔ free_transients() releases resources the in-flight frame may still read
         free_transients();
+        m_transients_built = false; // DIAG.10c: the next recording may build again
         m_images.clear();
         m_buffers.clear();
         retire_pass_identities(); // DIAG.7a(d2c-dx12): retire pass ids BEFORE clearing the records they live on
@@ -8978,6 +8981,19 @@ public:
     [[nodiscard]] crd::u32 last_present_count() const noexcept override { return m_present_count; }
     void set_memory_budget(crd::u64 bytes) noexcept override { m_budget = bytes; }
     [[nodiscard]] bool last_build_exceeded_budget() const noexcept override { return m_over_budget; }
+    // DIAG.10c: the transient budget as a reading (frame_graph.hpp).
+    [[nodiscard]] crd::BudgetReading transient_pressure() const noexcept override
+    {
+        crd::BudgetReading r;
+        r.read               = true;
+        r.bounded            = m_budget != 0U;
+        r.capacity           = m_budget;
+        r.in_use             = m_physical_bytes;
+        r.high_water         = m_transient_high_water;
+        r.high_water_tracked = true;
+        r.refusals           = m_budget_refusals;
+        return r;
+    }
     [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }
     [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
     // REN-8: same opt-out as Vulkan — the per-frame full-target host copy is a TEST affordance, so a presenting
@@ -9318,6 +9334,9 @@ private:
     crd::u32 m_submit_count   = 0U;
     crd::u32 m_present_count  = 0U; // REN-38-A5: present passes that ACTUALLY presented last execute()
     crd::u64 m_budget         = 0U;  // REN-38-B6: 0 = unbounded
+    crd::u64 m_transient_high_water = 0U; // DIAG.10c: the largest post-aliasing footprint any build planned
+    crd::u64 m_budget_refusals      = 0U; // DIAG.10c: builds the budget refused
+    bool     m_transients_built     = false; // DIAG.10c: this recording's transients are placed; build() refuses again
     bool     m_over_budget    = false;
     bool     m_readback       = true;  // REN-8: opt-out; gates keep read_pixel
     bool     m_pending_submit = false; // REN-8: a submit not yet waited on
@@ -9343,6 +9362,15 @@ private:
 
 bool Dx12FrameGraph::build()
 {
+    // DIAG.10c: one build per recording. A second build placed the transients again over the first build's, leaking
+    // their wrappers and, through the placed resources they hold, the device (the device memory reading saw 16 MiB a
+    // rebuild stay in use after the graph was destroyed). It is refused, and it is not a budget refusal.
+    if (m_transients_built)
+    {
+        CRD_LOG_ERROR(g_log_dx12raster, "frame graph build REJECTED: already built; reset() and record again");
+        m_over_budget = false;
+        return false;
+    }
     m_barrier_count = 0U;
     m_submit_count  = 0U;
     m_over_budget   = false; // REN-38-B6: a fresh verdict every build
@@ -9554,6 +9582,8 @@ bool Dx12FrameGraph::build()
         }
     }
 
+    m_transients_built = true; // DIAG.10c: from here this recording holds transients until reset()
+
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
     //    occupant's lifetime ended before this one begins (disjoint ⇒ shared heap). Images then buffers (each a
     //    heap class — RT/DS vs buffers); physical = Σ heap sizes (post-aliasing), logical = Σ transient sizes.
@@ -9574,8 +9604,15 @@ bool Dx12FrameGraph::build()
     // graphs that fit comfortably. ⛔ FAIL, never warn: the failure this prevents is an allocation that succeeds
     // on the dev machine and OOMs on the target months later, in a build nobody can bisect.
     m_over_budget = m_budget != 0U && static_cast<crd::u64>(m_physical_bytes) > m_budget;
+    // DIAG.10c: the reading's high water and refusals. The footprint was allocated before the check, so a refused
+    // build's footprint is part of the high water too.
+    if (m_physical_bytes > m_transient_high_water)
+    {
+        m_transient_high_water = m_physical_bytes;
+    }
     if (m_over_budget)
     {
+        ++m_budget_refusals;
         return false;
     }
     return true;

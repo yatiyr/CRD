@@ -7,6 +7,7 @@
 #include "dx12_execution.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-b) batch 3b: mint/name a Cerid Program identity on a compute pipeline
 
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: driver and compiler calls under the mode witness
 #include <crd/gpu/dx12_compute_context.hpp>
 
 #include <crd/containers/string.hpp>
@@ -93,7 +94,10 @@ bool compile_dxil(IDxcCompiler3* dxc, const char* src, ComPtr<IDxcBlob>& obj)
     buf.Encoding          = DXC_CP_UTF8;
     const wchar_t* args[] = {L"-T", L"cs_6_0", L"-E", L"cs_main"};
     ComPtr<IDxcResult>    result;
-    if (FAILED(dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result))))
+    const HRESULT compiled = witness_driver_call(DriverCall::CompileShader, "dxc Compile (compute DXIL)", [&]() {
+        return dxc->Compile(&buf, args, 4, nullptr, IID_PPV_ARGS(&result));
+    });
+    if (FAILED(compiled))
     {
         return false;
     }

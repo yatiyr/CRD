@@ -7,8 +7,10 @@
 #include "dx12_device_scope.hpp"
 
 #include "dx12_adapter_classification.hpp"
+#include "dx12_device_memory.hpp" // DIAG.10c: device_memory() through DXGI
 #include "dx12_execution.hpp" // B1-f: dx12_inner_coverage_route shared with the raster context
 
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: dxc's Compile runs under the mode witness
 #include <crd/gpu/dx12_context.hpp>
 
 #include <crd/kir/ckir_hlsl.hpp> // emit_stage_hlsl (+ ckir.hpp: KGraph/KEntry/KStage, and ckir_glsl.hpp: GlslKernel)
@@ -206,6 +208,16 @@ public:
     [[nodiscard]] GpuBackend  backend() const noexcept override { return GpuBackend::Dx12; }
     [[nodiscard]] const char* adapter_name() const noexcept override { return m_adapter; }
     [[nodiscard]] ValidationActivation validation_activation() const noexcept override { return m_validation_activation; } // DIAG.7a(f-3)
+    [[nodiscard]] DeviceMemoryReading device_memory() const noexcept override // DIAG.10c
+    {
+        if (!m_ok)
+        {
+            DeviceMemoryReading none;
+            none.reason = "the D3D12 context has no device";
+            return none;
+        }
+        return detail::dx12_device_memory(m_device.Get());
+    }
 
     [[nodiscard]] std::unique_ptr<IGpuProgram>
     create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked) override
@@ -541,7 +553,10 @@ static DxilCompileResult compile_dxil_core(crd::containers::StringView source, c
     src.Encoding = DXC_CP_UTF8;
 
     ComPtr<IDxcResult> dxc_result;
-    if (FAILED(compiler->Compile(&src, args, nargs, nullptr, IID_PPV_ARGS(&dxc_result))))
+    const HRESULT compiled = witness_driver_call(DriverCall::CompileShader, "dxc Compile (DXIL)", [&]() {
+        return compiler->Compile(&src, args, nargs, nullptr, IID_PPV_ARGS(&dxc_result));
+    });
+    if (FAILED(compiled))
     {
         result.error_message = crd::containers::String("dxc: Compile() failed", a);
         return result;

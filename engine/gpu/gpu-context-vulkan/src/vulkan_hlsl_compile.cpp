@@ -4,6 +4,8 @@
 
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: dxc runs under the mode witness
+
 #include <crd/core/platform.hpp>
 
 #if CRD_HAS_DXC
@@ -138,8 +140,11 @@ ShaderCompileResult compile_hlsl_to_spirv(ShaderStage stage, crd::containers::St
     };
 
     IDxcResult* dxc_result = nullptr;
-    hr = compiler->Compile(&src_buf, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])),
-                           /*include handler*/ nullptr, __uuidof(IDxcResult), reinterpret_cast<void**>(&dxc_result));
+    hr = witness_driver_call(DriverCall::CompileShader, "dxc Compile (SPIR-V)", [&]() {
+        return compiler->Compile(&src_buf, args, static_cast<UINT32>(sizeof(args) / sizeof(args[0])),
+                                 /*include handler*/ nullptr, __uuidof(IDxcResult),
+                                 reinterpret_cast<void**>(&dxc_result));
+    });
     if (FAILED(hr) || dxc_result == nullptr)
     {
         if (dxc_result != nullptr)

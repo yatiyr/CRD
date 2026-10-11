@@ -13,6 +13,7 @@
 
 #include "vulkan_execution.hpp"       // DIAG.7c(c): every submission and wait goes through the completion seam
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per logical GPU object
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: vkQueuePresentKHR runs under the mode witness
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-vk): mint(ObjectKind::Pass) for frame-graph pass identities
 
 #include <crd/containers/hash.hpp> // fnv1a_64: content-hash identity for the RT pipeline cache (see RtPipe::key SCAR)
@@ -765,7 +766,8 @@ public:
         pi.swapchainCount     = 1;
         pi.pSwapchains        = &m_swapchain;
         pi.pImageIndices      = &idx;
-        const VkResult pr     = vkQueuePresentKHR(m_queue, &pi);
+        const VkResult pr     = witness_driver_call(DriverCall::Present, "vkQueuePresentKHR",
+                                                    [&]() { return vkQueuePresentKHR(m_queue, &pi); });
 
         // ⛔ NO WAIT HERE. The fence is reclaimed at the TOP of the present that reuses this slot — that
         // deferral IS the pipelining. (`wait_idle()` below still drains everything for teardown/resize.)
@@ -9424,6 +9426,7 @@ public:
         {
             free_transients();
         }
+        m_transients_built = false; // DIAG.10c: the next recording may build again
         m_images.clear();
         m_buffers.clear();
         retire_pass_identities(); // DIAG.7a(d2c-vk): retire pass ids BEFORE clearing the records they live on
@@ -9437,6 +9440,19 @@ public:
     [[nodiscard]] crd::u32 last_async_pass_count() const noexcept override { return m_async_pass_count; }
     void set_memory_budget(crd::u64 bytes) noexcept override { m_budget = bytes; }
     [[nodiscard]] bool last_build_exceeded_budget() const noexcept override { return m_over_budget; }
+    // DIAG.10c: the transient budget as a reading (frame_graph.hpp).
+    [[nodiscard]] crd::BudgetReading transient_pressure() const noexcept override
+    {
+        crd::BudgetReading r;
+        r.read               = true;
+        r.bounded            = m_budget != 0U;
+        r.capacity           = m_budget;
+        r.in_use             = m_physical_bytes;
+        r.high_water         = m_transient_high_water;
+        r.high_water_tracked = true;
+        r.refusals           = m_budget_refusals;
+        return r;
+    }
 
     // REN-38-A14: does any pass in the built order actually get the compute queue? (`build()` answered this.)
     [[nodiscard]] bool async_pass_pending() const noexcept
@@ -9978,6 +9994,9 @@ private:
     crd::u32 m_present_count  = 0U; // REN-38-A5: present passes that ACTUALLY presented last execute()
     crd::u32 m_async_pass_count = 0U; // REN-38-A14: passes that ACTUALLY ran on the async-compute queue
     crd::u64 m_budget       = 0U;     // REN-38-B6: 0 = unbounded
+    crd::u64 m_transient_high_water = 0U; // DIAG.10c: the largest post-aliasing footprint any build planned
+    crd::u64 m_budget_refusals      = 0U; // DIAG.10c: builds the budget refused
+    bool     m_transients_built     = false; // DIAG.10c: this recording's transients are bound; build() refuses again
     bool     m_over_budget  = false;
     VkCommandPool   m_async_pool = VK_NULL_HANDLE;
     VkCommandBuffer m_async_cmd  = VK_NULL_HANDLE;
@@ -10035,6 +10054,15 @@ VkBuffer vk_buffer_of(IStorageBuffer& b) noexcept
 
 bool VulkanFrameGraph::build()
 {
+    // DIAG.10c: one build per recording. The transients' images are created when they are declared and bound to memory
+    // here; a second build would bind memory to images already bound and overwrite the first build's views and
+    // wrappers. It is refused, and it is not a budget refusal.
+    if (m_transients_built)
+    {
+        CRD_LOG_ERROR(g_log_vkraster, "frame graph build REJECTED: already built; reset() and record again");
+        m_over_budget = false;
+        return false;
+    }
     m_barrier_count = 0U;
     m_submit_count  = 0U;
     m_over_budget   = false; // REN-38-B6: a fresh verdict every build
@@ -10327,6 +10355,8 @@ bool VulkanFrameGraph::build()
         }
     }
 
+    m_transients_built = true; // DIAG.10c: from here this recording holds transients until reset()
+
     // 3) ALIASING — greedy interval assignment: process transients in first_pass order; reuse a slot whose last
     //    occupant's lifetime ended before this one begins (disjoint ⇒ shared memory). Images then buffers (each a
     //    memory class); physical = Σ slot sizes (post-aliasing), logical = Σ transient sizes (no aliasing).
@@ -10590,8 +10620,15 @@ bool VulkanFrameGraph::materialize_image(ImageNode& n)
     // graphs that fit comfortably. ⛔ FAIL, never warn: the failure this prevents is an allocation that succeeds
     // on the dev machine and OOMs on the target months later, in a build nobody can bisect.
     m_over_budget = m_budget != 0U && static_cast<crd::u64>(m_physical_bytes) > m_budget;
+    // DIAG.10c: the reading's high water and refusals. The footprint was allocated before the check, so a refused
+    // build's footprint is part of the high water too.
+    if (m_physical_bytes > m_transient_high_water)
+    {
+        m_transient_high_water = m_physical_bytes;
+    }
     if (m_over_budget)
     {
+        ++m_budget_refusals;
         return false;
     }
     return true;

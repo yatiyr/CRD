@@ -4,6 +4,8 @@
 
 #include <crd/gpu/vulkan_shader_compile.hpp>
 
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: shaderc runs under the mode witness
+
 #include <crd/platform/dynamic_library.hpp>
 #include <crd/platform/filesystem.hpp>
 
@@ -241,8 +243,12 @@ public:
         // compiles concurrently from separate compiler objects by design, and D10 gates parallel == serial BYTE-IDENTICAL,
         // so a lock here would only throw away the parallel cook's speedup for a symptom it never caused.
         const shaderc_compiler_t           comp = thread_compiler();
+        // DIAG.10c: shaderc runs on the caller's thread, under the mode witness.
         const shaderc_compilation_result_t res =
-            m_api.compile_into_spv(comp, source.data(), source.size(), to_shaderc_kind(stage), name_str.c_str(), "main", opts);
+            witness_driver_call(DriverCall::CompileShader, "shaderc_compile_into_spv", [&]() {
+                return m_api.compile_into_spv(comp, source.data(), source.size(), to_shaderc_kind(stage),
+                                              name_str.c_str(), "main", opts);
+            });
 
         m_api.options_release(opts);
 

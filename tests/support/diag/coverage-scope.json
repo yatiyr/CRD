@@ -11,7 +11,8 @@
   "tests/sandbox-inspect/crd-sandbox-inspect-tests",
   "tests/ceridc/crd-ceridc-tests",
   "tests/hesap-tensor/crd-hesap-tensor-io-tests",
-  "tests/audio/crd-audio-tests"
+  "tests/audio/crd-audio-tests",
+  "tests/gpu-context/crd-gpu-context-tests"
  ],
  "ctests": [
   "crd-fuzz-perf-bundle-corpus",
@@ -76,7 +77,10 @@
   {"group": "queue and budget pressure probe", "rows": ["DIAG.10c"],
    "paths": ["engine/foundation/core/src/budget_pressure.cpp"]},
   {"group": "workload oracles", "rows": ["DIAG.10c"],
-   "paths": ["engine/foundation/core/src/workload_probe.cpp"]}
+   "paths": ["engine/foundation/core/src/workload_probe.cpp"]},
+  {"group": "host and device pressure evidence and the driver-call mode witness", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/host_pressure.cpp", "engine/gpu/gpu-context/src/device_pressure.cpp",
+             "engine/gpu/gpu-context/src/driver_witness.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",
@@ -177,6 +181,8 @@
    "enum": "WorkloadVerdict", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
   {"name": "FindingAttribution", "kind": "error-path", "row": "DIAG.10c",
    "enum": "FindingAttribution", "header": "engine/foundation/core/include/crd/core/workload_probe.hpp"},
+  {"name": "FaultAttribution", "kind": "error-path", "row": "DIAG.10c",
+   "enum": "FaultAttribution", "header": "engine/gpu/gpu-context/include/crd/gpu/device_pressure.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
    "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",

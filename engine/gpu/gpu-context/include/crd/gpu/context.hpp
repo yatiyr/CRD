@@ -11,6 +11,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/device_pressure.hpp> // DIAG.10c: DeviceMemoryReading (vendor-free)
 #include <crd/gpu/validation.hpp> // DIAG.7a(f): ValidationActivation + ValidationMode (vendor-free)
 
 #include <memory>
@@ -81,6 +82,11 @@ public:
     // reason). Append-only with a default so a backend that has not wired (f) yet reports "nothing requested" rather
     // than forcing every impl to change. The Vulkan context overrides it; DX12 reporting arrives with (f-3).
     [[nodiscard]] virtual ValidationActivation validation_activation() const noexcept { return ValidationActivation{}; }
+
+    // DIAG.10c: this device's memory as the OS sees it for this process (crd/gpu/device_pressure.hpp): the budget the
+    // OS grants and the process's use, for device-local and for non-local memory. Appended with a default that reports
+    // both as unread, so a backend that cannot ask says so instead of reporting zero use.
+    [[nodiscard]] virtual DeviceMemoryReading device_memory() const noexcept { return DeviceMemoryReading{}; }
 };
 
 // Owns the configured set of live contexts. Per-backend factories construct them; the manager holds + serves them, so

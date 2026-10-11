@@ -33,6 +33,7 @@
 // SceneRenderer composes N mesh groups + the overlay in ONE submission, transient aliasing proven, validation-
 // silent, and a multi-pass readback BIT-IDENTICAL to the synchronous path.
 
+#include <crd/core/budget_pressure.hpp> // DIAG.10c: the transient budget as a reading
 #include <crd/core/types.hpp>
 
 namespace crd::gpu
@@ -322,6 +323,10 @@ public:
     // Compile: topo-sort passes by declared read/write dependencies, run transient lifetime analysis +
     // aliasing, and compute the barrier schedule. Returns false on a dependency CYCLE, an unresolved handle,
     // or a transient that no pass writes (never a partial schedule).
+    // DIAG.10c: ONE build per recording. Once a build has placed the transients (whether it then succeeded or the
+    // budget refused it), a second build() without reset() is refused: it is not a budget refusal
+    // (last_build_exceeded_budget() is false, transient_pressure().refusals does not move). To retry after a budget
+    // refusal, reset(), record again and build.
     [[nodiscard]] virtual bool build() = 0;
 
     // Record every pass into ONE command buffer in dependency order (inserting the scheduled barriers, incl.
@@ -456,6 +461,15 @@ public:
     // The QUEUE pass `i` actually ran on (graphics / async). The bridge maps it to a perf GPU queue id so async
     // work lands on its own track. Default Graphics matches the single-queue backends.
     [[nodiscard]] virtual FgQueue pass_queue(crd::u32 /*i*/) const noexcept { return FgQueue::Graphics; }
+
+    // ── DIAG.10c: THE TRANSIENT BUDGET AS A READING. Appended at the END of the vtable (D135). ──
+    // The graph-owned transients as a crd::BudgetReading (crd/core/budget_pressure.hpp): the bound is the budget set
+    // by `set_memory_budget` (unbounded at 0), in use is the post-aliasing footprint of the last build
+    // (`transient_memory_bytes`), the high water is the largest footprint any build of this graph planned, and each
+    // build the budget refused counts once (a second build of one recording is refused for that, not counted here).
+    // The bound is hard (it refuses, never overruns), so `overruns` stays 0.
+    // Default: unread, for a backend that keeps no such counts.
+    [[nodiscard]] virtual crd::BudgetReading transient_pressure() const noexcept { return crd::BudgetReading{}; }
 };
 
 } // namespace crd::gpu

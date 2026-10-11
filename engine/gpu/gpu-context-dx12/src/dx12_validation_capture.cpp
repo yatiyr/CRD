@@ -1,6 +1,7 @@
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
 
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: driver and compiler calls under the mode witness
 #include <crd/gpu/dx12_validation_capture.hpp>
 
 #include <cstring>
@@ -421,7 +422,9 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         }
     }
     apply_dred_settings(state.dred, m_req_dred_breadcrumbs, m_req_dred_page_faults, m_dred);
-    const HRESULT result = D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&output));
+    const HRESULT result = witness_driver_call(DriverCall::CreateDevice, "D3D12CreateDevice", [&]() {
+        return D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&output));
+    });
     if (SUCCEEDED(result) && (m_req_dred_breadcrumbs || m_req_dred_page_faults))
     {
         Microsoft::WRL::ComPtr<ID3D12DeviceRemovedExtendedData1> dred_data;

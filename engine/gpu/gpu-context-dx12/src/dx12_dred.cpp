@@ -1,4 +1,5 @@
 #include "dx12_dred.hpp"
+#include "dx12_device_memory.hpp" // DIAG.10c: the pressure taken with each recorded removal
 
 #include <crd/core/crash.hpp> // DIAG.7b(f): DeviceRemoved live dumps carry the removal bundle
 
@@ -265,6 +266,7 @@ struct RemovalStore
 {
     std::mutex        mutex;
     Dx12RemovalRecord last{};
+    GpuLossPressure   pressure{}; // DIAG.10c: the readings taken with `last`, same sequence
 };
 
 RemovalStore& removal_store() noexcept
@@ -287,6 +289,8 @@ static_assert(offsetof(RemovalBundle, record) == sizeof(Dx12RemovalBundleHeader)
 void dx12_record_removal(ID3D12Device* device, Dx12RemovalOrigin origin) noexcept
 {
     const Dx12DredReport report = dx12_read_dred(device); // read outside the lock: queries may be slow after a loss
+    // DIAG.10c: the host and device memory at the removal, read outside the lock too (the adapter still answers).
+    GpuLossPressure      pressure = take_loss_pressure(0U, dx12_device_memory(device));
     RemovalBundle        bundle{};
     RemovalStore&        store = removal_store();
     {
@@ -295,7 +299,9 @@ void dx12_record_removal(ID3D12Device* device, Dx12RemovalOrigin origin) noexcep
         store.last.dred          = report;
         store.last.bundle_result = static_cast<u32>(crd::crash::WriteResult::NotInstalled);
         ++store.last.sequence;
-        bundle.record = store.last;
+        pressure.loss_sequence = store.last.sequence;
+        store.pressure         = pressure;
+        bundle.record          = store.last;
     }
     // (f) Persist it as a DeviceRemoved live dump when crash capture is installed (otherwise NotInstalled, no file).
     bundle.header.record_bytes = static_cast<u32>(sizeof(Dx12RemovalRecord));
@@ -343,5 +349,11 @@ Dx12RemovalRecord dx12_last_removal() noexcept
     RemovalStore&         store = removal_store();
     const std::lock_guard lock(store.mutex);
     return store.last;
+}
+GpuLossPressure dx12_last_loss_pressure() noexcept
+{
+    RemovalStore&         store = removal_store();
+    const std::lock_guard lock(store.mutex);
+    return store.pressure;
 }
 } // namespace crd::gpu::detail

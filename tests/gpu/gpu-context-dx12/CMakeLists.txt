@@ -9,6 +9,7 @@ add_executable(crd-gpu-context-dx12-tests
     test_dx12_validation.cpp
     test_dx12_device_fault.cpp # DIAG.7b(h): a real device fault in a bounded child, captured by DRED
     test_dx12_device_loss_injection.cpp # DIAG.9b: an injected device loss through the GPU fault seam
+    test_diag_dx12_pressure.cpp # DIAG.10c: device memory, transient budget, mode witness and loss pressure
     test_dx12_compute.cpp
     test_dx12_frame_graph.cpp # REN-1 pt-2 (D-007 row 98): the DX12 frame graph — one submission + transient aliasing
     test_dx12_gsplat.cpp

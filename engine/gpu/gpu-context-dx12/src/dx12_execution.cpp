@@ -3,6 +3,7 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: ExecuteCommandLists runs under the mode witness
 
 #include <limits>
 
@@ -91,7 +92,8 @@ HRESULT dx12_submit(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Graph
     if (SUCCEEDED(result))
     {
         ID3D12CommandList* lists[] = {list};
-        queue->ExecuteCommandLists(1U, lists);
+        witness_driver_call(DriverCall::Submit, "ExecuteCommandLists",
+                            [&]() { queue->ExecuteCommandLists(1U, lists); });
         submitted = true;
         result = device->GetDeviceRemovedReason();
         if (SUCCEEDED(result))

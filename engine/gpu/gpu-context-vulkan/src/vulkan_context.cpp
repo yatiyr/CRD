@@ -5,10 +5,12 @@
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp> // the relocated GLSL→SPIR-V compiler (C1-c graph on-ramp)
 
+#include "vulkan_device_memory.hpp" // DIAG.10c: device_memory() through VK_EXT_memory_budget
 #include "vulkan_execution.hpp"      // DIAG.7c(c): the device's failure record is released with the device
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Program identity per compiled shader stage
 
 #include <crd/core/platform.hpp> // CRD_OS_* for the platform surface extension (C2-a)
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: instance and device creation under the mode witness
 
 #include <crd/kir/ckir.hpp>      // KGraph / KEntry / KStage (ADR-0103 IR currency)
 #include <crd/kir/ckir_glsl.hpp> // the crd-kir GLSL emitter: emit_(vec|elementwise)_glsl + graph_uses_vec
@@ -278,6 +280,16 @@ public:
     [[nodiscard]] bool     draw_indirect_count() const noexcept override { return m_draw_indirect_count; }
     [[nodiscard]] bool     timeline_semaphore() const noexcept override { return m_timeline_semaphore; } // DIAG.7c(c)
     [[nodiscard]] bool     device_fault() const noexcept override { return m_device_fault; }             // DIAG.7c(d)
+    [[nodiscard]] DeviceMemoryReading device_memory() const noexcept override // DIAG.10c
+    {
+        if (!m_valid)
+        {
+            DeviceMemoryReading none;
+            none.reason = "the Vulkan context has no device";
+            return none;
+        }
+        return detail::vk_device_memory(m_physical, m_memory_budget);
+    }
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
     [[nodiscard]] bool     rt_pipeline() const noexcept override { return m_rt_pipeline; }           // FA-2
@@ -683,7 +695,9 @@ private:
             ici.pNext             = &settings;
         }
         m_surface_ext = surface_ok;
-        if (vkCreateInstance(&ici, nullptr, &m_instance) != VK_SUCCESS)
+        if (witness_driver_call(DriverCall::CreateInstance, "vkCreateInstance",
+                                [&]() { return vkCreateInstance(&ici, nullptr, &m_instance); })
+            != VK_SUCCESS)
         {
             return;
         }
@@ -777,8 +791,13 @@ private:
         bool has_dgc_comp  = false; // C5: VK_NV_device_generated_commands_compute (compute dispatch + indirect-bindable pipelines)
         bool has_dgc_ext   = false; // CEIR-20c-2: VK_EXT_device_generated_commands (CROSS-VENDOR device-generated command streams)
         bool has_maint5    = false; // CEIR-20c-2: VK_KHR_maintenance5 (VkBufferUsageFlags2 — the DGC preprocess-buffer usage bit)
+        bool has_budget    = false; // DIAG.10c: VK_EXT_memory_budget (the OS's per-process heap budget and usage)
         for (std::uint32_t i = 0; i < ne; ++i)
         {
+            if (std::strcmp(exts[i].extensionName, VK_EXT_MEMORY_BUDGET_EXTENSION_NAME) == 0) // DIAG.10c
+            {
+                has_budget = true;
+            }
             if (std::strcmp(exts[i].extensionName, "VK_NV_device_generated_commands") == 0)
             {
                 has_dgc = true;
@@ -880,6 +899,7 @@ private:
                 has_defhost = true;
             }
         }
+        m_memory_budget = has_budget; // DIAG.10c: a query-only extension, no feature bit
         m_coopmat2      = has_cm1 && has_cm2;
         m_shader_object = has_shobj && m_graphics_family != UINT32_MAX; // no point on a compute-only adapter
         m_fragment_shading_rate = has_vrs && m_graphics_family != UINT32_MAX; // B1-e: raster-only feature
@@ -1473,6 +1493,10 @@ private:
         {
             devexts[ndevext++] = VK_EXT_SHADER_OBJECT_EXTENSION_NAME;
         }
+        if (m_memory_budget) // DIAG.10c
+        {
+            devexts[ndevext++] = VK_EXT_MEMORY_BUDGET_EXTENSION_NAME;
+        }
         if (m_device_fault) // DIAG.7c(d)
         {
             devexts[ndevext++] = VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
@@ -1545,7 +1569,9 @@ private:
         dci.enabledExtensionCount   = ndevext;
         dci.ppEnabledExtensionNames = (ndevext != 0U) ? devexts : nullptr;
 
-        if (vkCreateDevice(m_physical, &dci, nullptr, &m_device) != VK_SUCCESS)
+        if (witness_driver_call(DriverCall::CreateDevice, "vkCreateDevice",
+                                [&]() { return vkCreateDevice(m_physical, &dci, nullptr, &m_device); })
+            != VK_SUCCESS)
         {
             return;
         }
@@ -1565,6 +1591,7 @@ private:
         VkPhysicalDeviceProperties adapter{};
         vkGetPhysicalDeviceProperties(m_physical, &adapter);
         detail::vk_register_device_adapter(m_device, adapter);
+        detail::vk_register_device_memory(m_device, m_physical, m_memory_budget); // DIAG.10c
         if (!m_device_fault)
         {
             return;
@@ -1613,6 +1640,7 @@ private:
     bool             m_draw_indirect_count   = false;
     bool             m_timeline_semaphore    = false; // DIAG.7c(c): VkPhysicalDeviceTimelineSemaphoreFeatures enabled
     bool             m_device_fault          = false; // DIAG.7c(d): VK_EXT_device_fault enabled and its query resolved
+    bool             m_memory_budget         = false; // DIAG.10c: VK_EXT_memory_budget enabled
     bool             m_ray_query             = false; // B9/RT: VK_KHR_ray_query + acceleration_structure + BDA enabled
     bool             m_opacity_micromap      = false; // FA-1: VK_EXT_opacity_micromap
     bool             m_rt_pipeline           = false; // FA-2: VK_KHR_ray_tracing_pipeline

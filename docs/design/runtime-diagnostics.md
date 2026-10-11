@@ -2340,7 +2340,8 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   re-accounting, which does not evict) settled, and the overruns: the settles that ended above the budget.
 - Not settled here: the OS view of device memory (DXGI `QueryVideoMemoryInfo`, `VK_EXT_memory_budget`), GPU queue
   depth and the frame graph's transient budget readings belong with the driver/device-reset and host-pressure
-  clause; the hang watchdog does not yet classify a stall from these readings.
+  clause; the hang watchdog does not yet classify a stall from these readings. (2026-10-12: device memory and the
+  transient budget are settled in the device and host pressure block below; queue depth is not yet.)
 
 Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-workloads.md)):
 - Workloads are driven and judged by `crd/core/workload_probe.hpp` (crd-core, so every module can run its own).
@@ -2414,7 +2415,67 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-workloads.md)):
 - Not settled here: driver/device-reset and host-pressure evidence (with the GPU side of pressure and the mode witness
   around driver calls), and the window, the WASAPI device's COM objects and event, and native device objects without a
   Cerid identity in the ledger; they belong with the device clause, whose owners the hosted lanes can exercise only
-  in part (no display or render endpoint there).
+  in part (no display or render endpoint there). (2026-10-12: the evidence, the GPU side of pressure except queue
+  depth, and the mode witness are settled in the block below; the ledger owners are not yet.)
+
+Settled (2026-10-12, [session](../sessions/2026-10-12-diag-10c-device-and-host-pressure.md)):
+- Host pressure is a reading of the OS's memory, `crd/core/host_pressure.hpp` (crd-core): `read_host_memory` reports
+  three `BudgetReading`s. Physical memory is bounded by the usable RAM, with in use = that minus what the OS reports
+  available (Windows `GlobalMemoryStatusEx`; Linux `/proc/meminfo` MemTotal and MemAvailable), no high water. The
+  commit charge is bounded by the commit limit only where the OS enforces it: Windows always (its system peak from
+  `GetPerformanceInfo` is the high water), Linux only in strict overcommit mode (`vm.overcommit_memory` 2); otherwise
+  it is unbounded, reported and never judged. The resident set is this process's own (working set or VmRSS) with its
+  peak (PeakWorkingSetSize or VmHWM) and no bound. A reading the OS could not give is unread with a reason, never zero
+  use; no heap memory is allocated, so it can run on a failure path. `host_physical_total_cross_check` asks a second
+  interface (`GetPerformanceInfo`, `sysinfo`) for the usable RAM, the independent check of the physical bound.
+- Device memory is `IGpuContext::device_memory()` (appended at the vtable end; default: unread with a reason),
+  `crd/gpu/device_pressure.hpp`. The bound is the budget the OS grants this process and in use is the process's use,
+  per adapter whichever device of the process allocated: DX12 asks DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`, the
+  local and non-local segment groups of node 0); Vulkan enables `VK_EXT_memory_budget` whenever the device advertises
+  it and sums the device-local heaps into `local` and the others into `non_local`. The budget is soft, so use past it
+  reads Over. A segment group or heap with a zero budget and zero use is absent, not full: WARP answers 0/0 for its
+  non-local group and it stays unread. Observed: DXGI usage moves by at least a committed 256 MiB buffer and back on
+  the RTX 4070 Ti SUPER and on WARP; `VK_EXT_memory_budget` does the same on the RTX driver; Mesa's llvmpipe (the
+  hosted Linux lanes' device) advertises the extension but reports a heap usage that does not follow the process's
+  allocations (constant across a 256 MiB allocation and its free), so its reading is the driver's estimate and its
+  test names that instead of calling it tracked.
+- The frame graph's transient budget is `IFrameGraph::transient_pressure()` (appended at the end): the bound is
+  `set_memory_budget` (unbounded at 0), in use the last build's post-aliasing footprint, the high water the largest
+  footprint any build planned (a refused build's included: it was allocated before the check) and each refused
+  build counts once. The bound is hard, so it never overruns. `gpu.resources` now reports both: each context's
+  device memory (status read or unavailable with a reason; per segment a budget, a usage and the usage's pressure
+  level, or "unavailable") with a `device_memory_read` count in the summary in place of `heap_usage: "unavailable"`,
+  and each frame graph's transient budget, high water, refusals and level (or `transient_pressure: "unavailable"`).
+- Defect found and fixed by the transient-budget cases: a second `build()` of one recording placed the transients again
+  over the first build's. On DX12 it overwrote the wrappers that hold the placed resources and leaked them, with their
+  heaps and the device behind them: DXGI usage stayed 32 MiB up after the graph was destroyed, and the leaked device
+  made the next test's validation-enabled device creation fail. On Vulkan the images are created when declared and
+  bound in the build, so a second build bound memory to images already bound; on the RTX the VK budget saw a 16 MiB
+  leak. A frame graph now builds once per recording on both backends: once a build has placed transients (whether it
+  then succeeded or the budget refused it), another `build()` without `reset()` is refused, logged, and is not a
+  budget refusal. The documented recovery from a budget refusal is reset, record again, build.
+- The numerical-mode witness around code the engine does not own on its threads: `crd/gpu/driver_witness.hpp`.
+  `witness_driver_call(kind, label, call)` reads the thread's mode before and after the call, puts the earlier mode
+  back when they differ, counts calls and divergences per kind (process-wide relaxed atomics) and keeps the first
+  divergence's fields, kind and label; it returns what the call returned and never judges the caller's own mode. Wired:
+  CreateInstance (`vkCreateInstance`), CreateDevice (`D3D12CreateDevice` in the device scope every DX12 context uses,
+  `vkCreateDevice`), CompileShader (dxc for DXIL and for SPIR-V, shaderc), Submit (`ExecuteCommandLists` and
+  `vkQueueSubmit` in the two completion seams) and Present (`IDXGISwapChain::Present`, `vkQueuePresentKHR`). No
+  divergence was seen on the RTX driver, on WARP or on llvmpipe.
+- Device-reset evidence and attribution. Each backend takes a `GpuLossPressure` when it records a loss (DX12: every
+  recorded removal; Vulkan: the first loss of a device): the host reading and that adapter's device memory, with the
+  loss's own sequence (`dx12_last_loss_pressure`, `vk_last_loss_pressure`; the adapter still answers after its device
+  is removed). `attribute_device_fault` refuses to call a failure an engine defect without a discriminating
+  reproduction: a simulated failure is always Injected; a failure the same inputs reproduce on another configuration
+  (another adapter, the software adapter, the other backend) is an EngineDefect; otherwise a reading at the failure
+  that is Full or Over (physical memory, an enforced commit limit, the device's local or non-local budget) makes it
+  PressureCoincident, a reproduction that did not fail NotReproduced, and anything else (no reproduction, or one only
+  on the same adapter) Undiscriminated. A real loss stays the user-gated hardware route of DIAG.7b(h2) and DIAG.7c(h);
+  the injected losses here prove the evidence path and are attributed Injected.
+- Not settled here: GPU queue depth (an in-flight count at the completion seams) and the native owners in the
+  lifetime ledger (the window, the WASAPI device's COM objects and event, and native devices, queues, fences and
+  swapchains without a Cerid identity) belong together with the shutdown of those owners; the hang watchdog does not
+  yet classify a stall from the pressure readings.
 
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles

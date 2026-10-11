@@ -124,9 +124,24 @@ TEST_CASE("diag gpu.resources: a real Vulkan context, its identities and a real 
         CHECK(text_is(a, c, "core", expected_mode(act, g::ValidationMode::Core)));
         CHECK(text_is(a, c, "synchronization", expected_mode(act, g::ValidationMode::Synchronization)));
         CHECK(text_is(a, c, "gpu_assisted", expected_mode(act, g::ValidationMode::GpuAssisted)));
-        const crd::u32 h = item_of(a, "heap");
+        // DIAG.10c: the heap item is the context's own device memory reading: read through VK_EXT_memory_budget when
+        // the device enabled it (usage moves between reads, so only the shape is compared), else unavailable.
+        const crd::u32                h      = item_of(a, "heap");
+        const g::DeviceMemoryReading memory = ctx->device_memory();
         REQUIRE(h != json::kInvalid);
-        CHECK(text_is(a, h, "status", "unavailable"));
+        if (memory.source == g::DeviceMemorySource::Unavailable)
+        {
+            CHECK(text_is(a, h, "status", "unavailable"));
+            CHECK(num(a, a.summary, "device_memory_read") == 0);
+        }
+        else
+        {
+            CHECK(text_is(a, h, "status", "read"));
+            CHECK(text_is(a, h, "source", "vulkan-memory-budget"));
+            CHECK(num(a, a.summary, "device_memory_read") == 1);
+            CHECK((json::find(a.doc, h, "local_budget") != json::kInvalid) == memory.local.read);
+            CHECK((json::find(a.doc, h, "non_local_budget") != json::kInvalid) == memory.non_local.read);
+        }
         baseline = num(a, a.summary, "live_resources");
         CHECK(baseline == static_cast<crd::i64>(g::identity_registry().live_count(g::ObjectKind::Resource)));
     }
@@ -178,6 +193,11 @@ TEST_CASE("diag gpu.resources: a real Vulkan context, its identities and a real 
         CHECK(num(a, fg, "submits") == 1);
         CHECK(num(a, fg, "passes") == 2);
         CHECK(num(a, fg, "barriers") == static_cast<crd::i64>(fgraph->last_barrier_count()));
+        // DIAG.10c: no budget was set, so the reading is unbounded and nothing was refused.
+        CHECK(num(a, fg, "transient_budget") == 0);
+        CHECK(num(a, fg, "transient_high_water") == physical);
+        CHECK(num(a, fg, "budget_refusals") == 0);
+        CHECK(text_is(a, fg, "transient_level", "unbounded"));
     }
     CHECK(command.remove_frame_graph(*fgraph));
     CHECK(command.remove_context(*ctx));

@@ -6,11 +6,15 @@
 //   - the process-wide identity registry's live resource, program and pass identities (one index space shared by every
 //     backend, so the counts cover every context in the process, registered here or not);
 //   - for each GPU context the host registered: its backend, adapter, whether it is valid, and each validation mode's
-//     state (active, or the reason it is not);
+//     state (active, or the reason it is not); and its device memory as the OS reports it for this process
+//     (IGpuContext::device_memory: DXGI or VK_EXT_memory_budget), each of the local and non-local segments as a
+//     budget, a usage and the pressure level of the usage (DIAG.10c);
 //   - for each frame graph the host registered: its last build's transient footprint after and before aliasing, and
-//     its last execute's barrier, submit, pass, async-pass and present counts, budget refusal and timing support.
-// Evidence that cannot exist is an item with "status":"unavailable" and a reason: no backend queries device heap
-// usage, so heap usage is always unavailable, and a host that registered no context or no frame graph is told so.
+//     its last execute's barrier, submit, pass, async-pass and present counts, budget refusal and timing support, and
+//     its transient budget as a reading (bound, high water, refusals, level; DIAG.10c).
+// Evidence that cannot exist is an item or field with "status":"unavailable" (or the value "unavailable") and a
+// reason: a context whose backend or device cannot report its memory, a segment it has not got, a frame graph that
+// keeps no transient counts, and a host that registered no context or no frame graph are told so.
 //
 // The command lives in this bridge, not in crd-gpu-context: crd-gpu-context may not link crd-perf, and this module is
 // the one place that names both (see its CMakeLists). It is registered into a crd-perf DiagCommandService, so a native

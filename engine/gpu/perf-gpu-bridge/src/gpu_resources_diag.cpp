@@ -1,6 +1,8 @@
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
 
+#include <crd/core/budget_pressure.hpp>
 #include <crd/gpu/context.hpp>
+#include <crd/gpu/device_pressure.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/object_identity.hpp>
@@ -44,6 +46,21 @@ void add_unavailable(DiagFields& item, crd::perf::DiagSnapshot& out, cont::Strin
     item.clear();
     item.str("kind", kind).str("status", "unavailable").str("reason", reason);
     (void)out.add_item(item);
+}
+
+// DIAG.10c: one segment of a device memory reading as `<prefix>_budget`, `<prefix>_usage` and `<prefix>_level`, or
+// `<prefix>: "unavailable"` when it was not read.
+void add_segment(DiagFields& item, const crd::BudgetReading& r, const char* budget_key, const char* usage_key,
+                 const char* level_key, const char* missing_key)
+{
+    if (!r.read)
+    {
+        item.str(missing_key, "unavailable");
+        return;
+    }
+    item.u64(budget_key, r.capacity)
+        .u64(usage_key, r.in_use)
+        .str(level_key, cont::StringView{crd::pressure_level_name(crd::pressure_level(r, r.in_use))});
 }
 } // namespace
 
@@ -149,12 +166,25 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
     const crd::u64 live_prog = registry.live_count(crd::gpu::ObjectKind::Program);
     const crd::u64 live_pass = registry.live_count(crd::gpu::ObjectKind::Pass);
 
+    // DIAG.10c: each context's device memory, read once per run (the reading is a moment; the items and the summary
+    // count agree because both come from this array).
+    crd::gpu::DeviceMemoryReading memory[kGpuResourcesMaxContexts]{};
+    crd::u64                      memory_read = 0U;
+    for (crd::u32 i = 0U; i < cmd->m_context_count; ++i)
+    {
+        memory[i] = cmd->m_contexts[i]->device_memory();
+        if (memory[i].source != crd::gpu::DeviceMemorySource::Unavailable)
+        {
+            ++memory_read;
+        }
+    }
+
     out.summary.u64("live_resources", live_res)
         .u64("live_programs", live_prog)
         .u64("live_passes", live_pass)
         .u64("contexts", cmd->m_context_count)
         .u64("frame_graphs", cmd->m_graph_count)
-        .str("heap_usage", "unavailable");
+        .u64("device_memory_read", memory_read);
 
     DiagFields item(out.allocator());
 
@@ -192,11 +222,24 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
             .str("gpu_assisted", mode_state(activation, crd::gpu::ValidationMode::GpuAssisted));
         (void)out.add_item(item);
 
+        const crd::gpu::DeviceMemoryReading& m = memory[i];
         item.clear();
-        item.str("kind", "heap")
-            .u64("context", i)
-            .str("status", "unavailable")
-            .str("reason", "no Cerid GPU backend queries device heap usage or budget");
+        item.str("kind", "heap").u64("context", i);
+        if (m.source == crd::gpu::DeviceMemorySource::Unavailable)
+        {
+            item.str("status", "unavailable")
+                .str("reason", cont::StringView{m.reason != nullptr ? m.reason : "device memory was not read"});
+        }
+        else
+        {
+            item.str("status", "read").str("source", cont::StringView{crd::gpu::device_memory_source_name(m.source)});
+            add_segment(item, m.local, "local_budget", "local_usage", "local_level", "local");
+            add_segment(item, m.non_local, "non_local_budget", "non_local_usage", "non_local_level", "non_local");
+            if (m.reason != nullptr && m.reason[0] != '\0')
+            {
+                item.str("reason", cont::StringView{m.reason});
+            }
+        }
         (void)out.add_item(item);
     }
 
@@ -220,6 +263,20 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
             .u64("async_passes", graph.last_async_pass_count())
             .u64("presents", graph.last_present_count())
             .boolean("gpu_timing", graph.gpu_timing_available());
+        // DIAG.10c: the transient budget as a reading (its bound is 0 when the graph has none).
+        const crd::BudgetReading transient = graph.transient_pressure();
+        if (transient.read)
+        {
+            item.u64("transient_budget", transient.bounded ? transient.capacity : 0U)
+                .u64("transient_high_water", transient.high_water)
+                .u64("budget_refusals", transient.refusals)
+                .str("transient_level",
+                     cont::StringView{crd::pressure_level_name(crd::pressure_level(transient, transient.in_use))});
+        }
+        else
+        {
+            item.str("transient_pressure", "unavailable");
+        }
         (void)out.add_item(item);
     }
     return DiagStatus::Ok;

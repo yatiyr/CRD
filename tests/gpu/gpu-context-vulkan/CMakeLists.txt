@@ -9,6 +9,7 @@ add_executable(crd-gpu-context-vulkan-tests
     test_vulkan_device_loss_injection.cpp # DIAG.9b: an injected device loss through the GPU fault seam
     test_vulkan_frame_graph.cpp # REN-1 (D-007 row 98): the frame graph — one submission + transient aliasing
     test_vulkan_gpu_resources_diag.cpp # the gpu.resources diagnostic command over a real context and frame graph
+    test_diag_vulkan_pressure.cpp # DIAG.10c: device memory, transient budget, mode witness and loss pressure
     test_ckir_glsl_compile.cpp
     test_vulkan_rt.cpp
     test_vulkan_hair_showcase.cpp

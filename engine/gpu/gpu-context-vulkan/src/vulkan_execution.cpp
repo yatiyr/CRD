@@ -1,7 +1,9 @@
 #include "vulkan_execution.hpp"
+#include "vulkan_device_memory.hpp" // DIAG.10c: the pressure taken when a device is first recorded lost
 
 #include <crd/core/crash.hpp> // DIAG.7c(g): a recorded loss is written as a DeviceRemoved live dump
 #include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
+#include <crd/gpu/driver_witness.hpp> // DIAG.10c: vkQueueSubmit runs under the mode witness
 
 #include <cstddef>
 #include <cstring>
@@ -26,12 +28,16 @@ struct FailureStore
     bool                        fault_done[kMaxDevices] = {}; // (g) the fault query of a lost device has finished
     VkLossAdapter               adapters[kMaxDevices]   = {}; // (g) registered at device creation
     bool                        bundled[kMaxDevices]    = {}; // (g) the loss bundle of this device has been written
+    VkPhysicalDevice            physicals[kMaxDevices]  = {}; // DIAG.10c: registered at device creation
+    bool                        budgets[kMaxDevices]    = {}; // DIAG.10c: the device enabled VK_EXT_memory_budget
+    bool                        pressured[kMaxDevices]  = {}; // DIAG.10c: the loss pressure of this device was taken
     crd::usize                  next                   = 0;
     crd::u64                    sequence               = 0;
     VkResult                    injected               = VK_SUCCESS;
     VkDeviceFailure             last{};       // the most recent first failure, kept after its device is forgotten
     VkDeviceFaultReport         last_fault{}; // the fault report that belongs to `last`
     VkLossRecord                last_loss{};  // (g) the most recently written loss
+    GpuLossPressure             last_pressure{}; // DIAG.10c: the pressure of the most recently lost device
 };
 
 FailureStore& store() noexcept
@@ -63,6 +69,9 @@ crd::usize slot_index(FailureStore& s, VkDevice device, bool create) noexcept
     s.fault_done[i]    = false;
     s.adapters[i]      = VkLossAdapter{};
     s.bundled[i]       = false;
+    s.physicals[i]     = VK_NULL_HANDLE;
+    s.budgets[i]       = false;
+    s.pressured[i]     = false;
     return i;
 }
 
@@ -257,10 +266,46 @@ void write_loss_bundle(VkDevice device) noexcept
     s.last_loss = bundle.record;
 }
 
-// After a failed seam call: read the device's fault report if it is now lost, then write its loss bundle.
+// DIAG.10c: once per lost device, the host and device memory at the loss. The readings are taken outside the lock
+// (they read /proc or ask the OS and the driver); the stored pressure is the most recently lost device's.
+void take_loss_pressure_once(VkDevice device) noexcept
+{
+    FailureStore&    s        = store();
+    VkPhysicalDevice physical = VK_NULL_HANDLE;
+    bool             budget   = false;
+    crd::u64         sequence = 0U;
+    {
+        const std::lock_guard lock(s.mutex);
+        const crd::usize      i = slot_index(s, device, false);
+        if (i == kMaxDevices || !s.records[i].lost() || s.pressured[i])
+        {
+            return;
+        }
+        s.pressured[i] = true;
+        physical       = s.physicals[i];
+        budget         = s.budgets[i];
+        sequence       = s.records[i].sequence;
+    }
+    DeviceMemoryReading device_reading;
+    if (physical != VK_NULL_HANDLE)
+    {
+        device_reading = vk_device_memory(physical, budget);
+    }
+    else
+    {
+        device_reading.reason = "the device registered no physical device";
+    }
+    const GpuLossPressure pressure = take_loss_pressure(sequence, device_reading);
+    const std::lock_guard lock(s.mutex);
+    s.last_pressure = pressure;
+}
+
+// After a failed seam call: read the device's fault report if it is now lost, take the pressure at the loss, then
+// write its loss bundle.
 void after_failure(VkDevice device) noexcept
 {
     collect_device_fault(device);
+    take_loss_pressure_once(device);
     write_loss_bundle(device);
 }
 
@@ -309,7 +354,8 @@ VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, V
         }
         else
         {
-            result = vkQueueSubmit(queue, 1U, &submit, fence);
+            result = witness_driver_call(DriverCall::Submit, operation,
+                                         [&]() { return vkQueueSubmit(queue, 1U, &submit, fence); });
             if (result != VK_SUCCESS)
             {
                 record(device, result, classify(result), operation);
@@ -460,6 +506,22 @@ void vk_register_device_adapter(VkDevice device, const VkPhysicalDevicePropertie
     FailureStore&         s = store();
     const std::lock_guard lock(s.mutex);
     s.adapters[slot_index(s, device, true)] = adapter;
+}
+
+void vk_register_device_memory(VkDevice device, VkPhysicalDevice physical, bool budget_enabled) noexcept
+{
+    FailureStore&         s = store();
+    const std::lock_guard lock(s.mutex);
+    const crd::usize      i = slot_index(s, device, true);
+    s.physicals[i]          = physical;
+    s.budgets[i]            = budget_enabled;
+}
+
+GpuLossPressure vk_last_loss_pressure() noexcept
+{
+    FailureStore&         s = store();
+    const std::lock_guard lock(s.mutex);
+    return s.last_pressure;
 }
 
 VkDeviceFaultReport vk_device_fault_report(VkDevice device) noexcept
