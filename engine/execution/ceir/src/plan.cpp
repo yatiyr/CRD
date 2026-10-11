@@ -44,6 +44,7 @@ containers::StringView run_error_name(RunError e) noexcept
     case RunError::ContinuationArity: return containers::StringView("continuation-arity");
     case RunError::Cancelled: return containers::StringView("cancelled");
     case RunError::InputUnavailable: return containers::StringView("input-unavailable");
+    case RunError::NestingTooDeep: return containers::StringView("nesting-too-deep");
     }
     return containers::StringView("?");
 }
@@ -706,6 +707,8 @@ struct RS
     const RunControl*             control = nullptr;
     containers::Array<PathEntry>* path    = nullptr;
     const input::InputSource*     inputs  = nullptr; // DIAG.9a: the host input seam (null: every read is unavailable)
+    crd::u32                      nesting = 0U; // DIAG.10a: running instrs with children or calls (exec::kMaxNesting)
+    crd::u32                      token_base = 0U; // DIAG.10a: the running parallel body's first token (TokenScope)
 };
 // DIAG.8a: an error ORIGINATES at instr `k` of seq `seq_idx`: latch that address (first wins — outer frames only
 // propagate) and return `e`. Error paths only; the dispatch loop never reads `fault`.
@@ -726,7 +729,16 @@ crd::u32 store_token(RS& rs, const Seq& child, crd::u32 base)
         t.push_back(rs.stack[base + child.yield_slots[i]]);
     }
     rs.tokens.push_back(std::move(t));
-    return static_cast<crd::u32>(rs.tokens.size() - 1U);
+    return static_cast<crd::u32>(rs.tokens.size() - 1U) - rs.token_base;
+}
+// DIAG.10a: the tokens the running store holds (a parallel body's store starts empty) and the token behind handle `h`.
+crd::u32 live_tokens(const RS& rs) noexcept
+{
+    return static_cast<crd::u32>(rs.tokens.size()) - rs.token_base;
+}
+const containers::Array<crd::i64>& token_at(const RS& rs, crd::u32 h) noexcept
+{
+    return rs.tokens[rs.token_base + h];
 }
 RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base); // fwd — `base` = the current frame's slot-stack offset
 // 4c: run an isolated map/combine fn once in a fresh frame WINDOW (bind `args` → param slots, run, read its single yield
@@ -754,27 +766,26 @@ RunError run_body(RS& rs, crd::u32 fn_idx, const crd::i64* args, crd::u32 argc, 
 // a parallel body would see the run-global store: a body `await(parent-handle)` would WRONGLY resolve (reference:
 // BadToken on the empty sub store), and a body-launched handle would leak the parent's numbering. RAII so an error-return
 // restores. Numbering inside starts at 0 (the sub); the body's tokens are DISCARDED at scope end (nothing migrates back).
+// DIAG.10a: the body's store is the tail of the run-wide one past `token_base`, so opening and closing a scope costs
+// only the body's own tokens; it used to move the whole run-wide store out and back for every parallel activation,
+// quadratic in a loop that both launches and runs a parallel op.
 struct TokenScope
 {
-    RS&                                            rs;
-    containers::Array<containers::Array<crd::i64>> saved;
-    explicit TokenScope(RS& r) : rs(r), saved(r.alloc)
+    RS&      rs;
+    crd::u32 saved_base;
+    explicit TokenScope(RS& r) : rs(r), saved_base(r.token_base)
     {
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(rs.tokens.size()); ++i)
-        {
-            saved.push_back(std::move(rs.tokens[i]));
-        }
-        rs.tokens.clear(); // the body sees an EMPTY store, numbering from 0
+        rs.token_base = static_cast<crd::u32>(rs.tokens.size()); // the body sees an EMPTY store, numbering from 0
     }
     TokenScope(const TokenScope&)            = delete;
     TokenScope& operator=(const TokenScope&) = delete;
     ~TokenScope()
     {
-        rs.tokens.clear(); // discard the body's tokens (the sub is discarded — nothing migrates back)
-        for (crd::u32 i = 0; i < static_cast<crd::u32>(saved.size()); ++i)
+        while (static_cast<crd::u32>(rs.tokens.size()) > rs.token_base) // discard the body's tokens (nothing migrates)
         {
-            rs.tokens.push_back(std::move(saved[i]));
+            rs.tokens.pop_back();
         }
+        rs.token_base = saved_base;
     }
 };
 // forward a child seq's yield slots into `dst` result slots (if / scope) — child shares the parent's frame `base`.
@@ -866,6 +877,15 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             return raise(rs, seq_idx, k, RunError::FuelExhausted);
         }
         --rs.fuel;
+        const Instr& in = seq.instrs[k];
+        // DIAG.10a: an instr that runs a child sequence or calls nests one level while it runs — the reference's rule
+        // (an op with a region, or a func.call), checked at the same point (after the step is spent).
+        const bool nests = in.children_cnt > 0U || in.op == Op::Call;
+        if (nests && rs.nesting >= exec::kMaxNesting)
+        {
+            return raise(rs, seq_idx, k, RunError::NestingTooDeep);
+        }
+        rs.nesting += nests ? 1U : 0U;
         if (rs.control != nullptr) // DIAG.8b: one predicted branch when no debugger is attached
         {
             if (const RunError e = safe_point(rs, seq_idx, k); e != RunError::None)
@@ -873,7 +893,6 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 return e;
             }
         }
-        const Instr&   in    = seq.instrs[k];
         const crd::u32 rslot = base + ((in.results_cnt > 0U) ? rez[in.results_off] : 0U);
         // CEIR-11c profiling seam: `pre` fires for EVERY dispatched instr (⛔ terminators/latches are NOT instrs — they
         // are captured at compile, so this counts exactly the dispatched Ops, matching the §112 semantics). Null-default →
@@ -970,7 +989,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             }
             const crd::u32 body = kids[in.children_off];
             const crd::i64 ivslot = in.imm; // the body's induction slot (−1 if no arg)
-            for (crd::i64 iv = lo; iv < hi; iv += st)
+            for (crd::i64 iv = lo; iv < hi;)
             {
                 if (rs.fuel == 0U)
                 {
@@ -985,6 +1004,12 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                 {
                     return e;
                 }
+                // DIAG.10a: the last iteration is the one within `st` of `hi`; `iv += st` past it would overflow.
+                if (static_cast<crd::u64>(hi) - static_cast<crd::u64>(iv) <= static_cast<crd::u64>(st))
+                {
+                    break;
+                }
+                iv += st;
             }
             break;
         }
@@ -1090,12 +1115,12 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
         case Op::Await: // 4b: op0 = token; retrieve its stored yields → results (min-copy). A bad handle → BadToken.
         {
             const crd::i64 tok = rs.stack[base + ops[in.operands_off]];
-            if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
+            if (tok < 0 || static_cast<crd::u32>(tok) >= live_tokens(rs))
             { // ⛔ truncate to u32 EXACTLY like the reference `valid_yield_handle(static_cast<u32>(tok))` (a 2^32+ handle
                 // wraps identically in both tiers — no divergence even on unreachable inputs).
                 return raise(rs, seq_idx, k, RunError::BadToken);
             }
-            const containers::Array<crd::i64>& ys = rs.tokens[static_cast<crd::u32>(tok)];
+            const containers::Array<crd::i64>& ys = token_at(rs, static_cast<crd::u32>(tok));
             for (crd::u32 j = 0; j < in.results_cnt && j < static_cast<crd::u32>(ys.size()); ++j)
             {
                 rs.stack[base + rez[in.results_off + j]] = ys[j];
@@ -1105,7 +1130,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
         case Op::Continuation: // 4b: read the antecedent token, bind ITS yields as the body's args, run, store → new token
         {
             const crd::i64 tok = rs.stack[base + ops[in.operands_off]];
-            if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
+            if (tok < 0 || static_cast<crd::u32>(tok) >= live_tokens(rs))
             { // ⛔ truncate to u32 EXACTLY like the reference `valid_yield_handle(static_cast<u32>(tok))` (a 2^32+ handle
                 // wraps identically in both tiers — no divergence even on unreachable inputs).
                 return raise(rs, seq_idx, k, RunError::BadToken);
@@ -1116,7 +1141,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             // the token store out from under a span into it (the reference's exact hazard).
             containers::Array<crd::i64> ante(rs.alloc);
             {
-                const containers::Array<crd::i64>& src = rs.tokens[static_cast<crd::u32>(tok)];
+                const containers::Array<crd::i64>& src = token_at(rs, static_cast<crd::u32>(tok));
                 for (crd::u32 i = 0; i < static_cast<crd::u32>(src.size()); ++i)
                 {
                     ante.push_back(src[i]);
@@ -1143,12 +1168,12 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             for (crd::u32 i = 0; i < in.operands_cnt; ++i)
             {
                 const crd::i64 tok = rs.stack[base + ops[in.operands_off + i]];
-                if (tok < 0 || static_cast<crd::u32>(tok) >= static_cast<crd::u32>(rs.tokens.size()))
+                if (tok < 0 || static_cast<crd::u32>(tok) >= live_tokens(rs))
                 {
                     // ⛔ u32-truncate like the reference (identical wrap in both tiers)
                     return raise(rs, seq_idx, k, RunError::BadToken);
                 }
-                const containers::Array<crd::i64>& ys = rs.tokens[static_cast<crd::u32>(tok)]; // store not grown in-loop
+                const containers::Array<crd::i64>& ys = token_at(rs, static_cast<crd::u32>(tok)); // not grown in-loop
                 for (crd::u32 w = 0; w < static_cast<crd::u32>(ys.size()); ++w)
                 {
                     merged.push_back(ys[w]);
@@ -1157,7 +1182,7 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             rs.tokens.push_back(std::move(merged)); // ONE store after reading all spans (the reference order)
             if (in.results_cnt > 0U)
             {
-                rs.stack[rslot] = static_cast<crd::i64>(rs.tokens.size() - 1U);
+                rs.stack[rslot] = static_cast<crd::i64>(live_tokens(rs) - 1U);
             }
             break;
         }
@@ -1179,24 +1204,33 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             }
             const crd::u32 map_fn = kids[in.children_off];
             const crd::u32 mapidx = static_cast<crd::u32>(in.imm);
-            const crd::u32 count  = (hi > lo) ? static_cast<crd::u32>((hi - lo + st - 1) / st) : 0U; // verbatim reference
-            rs.map_outputs[mapidx].clear();
-            const crd::u64 saved = rs.fuel; // ⛔ the reference gives the body a SEPARATE budget — restore so the parent is uncharged
+            const crd::u64 count  = exec::parallel_range_count(lo, hi, st); // the reference's count (DIAG.10a)
+            // DIAG.10a: this activation builds its own map and stores it when it completes, as the reference does. The
+            // op runs again inside its own body when a body call recurses into it, and the old in-place clear and push
+            // let that inner activation's entries land in this one's map. The slot's storage is reused (amortized).
+            containers::Array<crd::i64> map(std::move(rs.map_outputs[mapidx]));
+            map.clear();
+            // DIAG.10a: the body's steps are the run's (the reference charges its parent what the sub spent); a body
+            // that once got a fresh copy of the budget re-entered the program with work growing as budget^depth.
             {
                 TokenScope ts(rs); // ⛔ fresh per-phase token store (the reference sub's m_yield_store)
-                for (crd::u32 i = 0; i < count; ++i)
+                for (crd::u64 i = 0; i < count; ++i)
                 {
-                    const crd::i64 iv     = lo + static_cast<crd::i64>(i) * st;
-                    const crd::i64 arg[1] = {iv};
+                    if (rs.fuel == 0U) // DIAG.10a: each index is one step of the body budget (the reference's rule)
+                    {
+                        return raise(rs, seq_idx, k, RunError::FuelExhausted);
+                    }
+                    --rs.fuel;
+                    const crd::i64 arg[1] = {exec::parallel_range_index(lo, st, i)};
                     crd::i64       y      = 0;
                     if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None) // ts restores
                     {
                         return e;
                     }
-                    rs.map_outputs[mapidx].push_back(y);
+                    map.push_back(y);
                 }
             }
-            rs.fuel = saved;
+            rs.map_outputs[mapidx] = std::move(map);
             break;
         }
         case Op::MapReduce: // 4c: map the range, then FOLD the combine fn over it in INDEX order; result = the reduced acc
@@ -1211,31 +1245,39 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
             const crd::u32 map_fn  = kids[in.children_off];      // ⛔ FN indices, not seq indices
             const crd::u32 comb_fn = kids[in.children_off + 1U];
             const crd::u32 mapidx  = static_cast<crd::u32>(in.imm);
-            const crd::u32 count   = (hi > lo) ? static_cast<crd::u32>((hi - lo + st - 1) / st) : 0U;
-            rs.map_outputs[mapidx].clear();
-            const crd::u64 saved = rs.fuel;
+            const crd::u64 count   = exec::parallel_range_count(lo, hi, st); // the reference's count (DIAG.10a)
+            containers::Array<crd::i64> map(std::move(rs.map_outputs[mapidx])); // this activation's own (ParallelFor)
+            map.clear();
             {
                 TokenScope ts(rs); // the MAP phase — fresh per-phase token store (the 1st sub)
-                for (crd::u32 i = 0; i < count; ++i)
+                for (crd::u64 i = 0; i < count; ++i)
                 {
-                    const crd::i64 iv     = lo + static_cast<crd::i64>(i) * st;
-                    const crd::i64 arg[1] = {iv};
+                    if (rs.fuel == 0U) // DIAG.10a: each index is one step of the body budget (the reference's rule)
+                    {
+                        return raise(rs, seq_idx, k, RunError::FuelExhausted);
+                    }
+                    --rs.fuel;
+                    const crd::i64 arg[1] = {exec::parallel_range_index(lo, st, i)};
                     crd::i64       y      = 0;
                     if (const RunError e = run_body(rs, map_fn, arg, 1U, y); e != RunError::None)
                     {
                         return e;
                     }
-                    rs.map_outputs[mapidx].push_back(y);
+                    map.push_back(y);
                 }
             }
-            rs.fuel      = saved;                                   // the fold gets its own fresh budget (the 2nd sub)
-            crd::i64 acc = rs.stack[base + ops[in.operands_off + 3U]]; // operand(3) = the init
-            const crd::u32 n = static_cast<crd::u32>(rs.map_outputs[mapidx].size());
+            crd::i64 acc = rs.stack[base + ops[in.operands_off + 3U]]; // the init (operand 3); the fold spends the rest
+            const crd::usize n = map.size();
             {
                 TokenScope ts(rs); // the FOLD phase — ANOTHER fresh per-phase token store (the 2nd sub)
-                for (crd::u32 i = 0; i < n; ++i) // SEQUENTIAL fold in INDEX order — (acc, elem) → acc (NON-associative witness)
+                for (crd::usize i = 0; i < n; ++i) // SEQUENTIAL fold in INDEX order — (acc, elem) → acc
                 {
-                    const crd::i64 ba[2] = {acc, rs.map_outputs[mapidx][i]};
+                    if (rs.fuel == 0U) // DIAG.10a: each fold step is one step of the fold budget (the reference's rule)
+                    {
+                        return raise(rs, seq_idx, k, RunError::FuelExhausted);
+                    }
+                    --rs.fuel;
+                    const crd::i64 ba[2] = {acc, map[i]};
                     crd::i64       y     = 0;
                     if (const RunError e = run_body(rs, comb_fn, ba, 2U, y); e != RunError::None)
                     {
@@ -1244,11 +1286,12 @@ RunError run_seq(RS& rs, crd::u32 seq_idx, crd::u32 base) // NOLINT(misc-no-recu
                     acc = y;
                 }
             }
-            rs.fuel         = saved; // parent fuel untouched by the body runs
-            rs.stack[rslot] = acc;   // the reduced value is the SSA result
+            rs.map_outputs[mapidx] = std::move(map);
+            rs.stack[rslot]        = acc; // the reduced value is the SSA result
             break;
         }
         }
+        rs.nesting -= nests ? 1U : 0U; // DIAG.10a: an error ends the run, so only a dispatch that returns here unwinds
         // CEIR-11c: `post` fires only after a SUCCESSFUL dispatch — an erroring case `return`s above, so the pre/post
         // stream is UNBALANCED (pre>post) on an error; the consumer resets per run + tolerates it.
         if (rs.hooks.post != nullptr)
@@ -1347,7 +1390,7 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
 }
 
 RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc, RunHooks hooks,
-              const RunControl* control, const input::InputSource* inputs)
+              const RunControl* control, const input::InputSource* inputs, crd::u64 max_steps)
 {
     RunResult r(alloc);
     if (plan.entry_fn >= static_cast<crd::u32>(plan.funcs.size())) // an empty/failed compile — no entry
@@ -1373,7 +1416,7 @@ RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, me
     {
         map_outputs.push_back(containers::Array<crd::i64>(alloc));
     }
-    RS rs{plan, stack, cells, tokens, map_outputs, alloc, crd::u64{1} << 24U, hooks}; // reference's step budget + the 11c seam
+    RS rs{plan, stack, cells, tokens, map_outputs, alloc, max_steps, hooks}; // the reference's budget + the 11c seam
     rs.inputs = inputs;
     containers::Array<PathEntry> path(alloc); // DIAG.8b: maintained only while a RunControl is attached
     if (control != nullptr)

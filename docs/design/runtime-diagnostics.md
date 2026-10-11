@@ -1844,6 +1844,53 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-resource-reload.m
 - The replay driver ends the process on a Debug CRT report (a heap overrun found at a free), which until now opened a
   modal dialog that held a replay until the CTest timeout.
 
+Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-ceir-differential.md)):
+- The compiled and reference CEIR comparison is the fuzz target `crd-fuzz-ceir-differential`
+  (`tests/execution/ceir/fuzz`, corpus replayed on every lane, libFuzzer on `linux-clang-fuzz`). An input decodes to a program, never to a parse
+  failure: a header (functions, the step budget, a host input script or none, the entry arguments) and each function's
+  body as a stream of op choices over arith, core control flow, the three cell kinds, `func.call` with recursion,
+  async and task tokens, data-parallel bodies and the input ops, kept inside the module-validity set a cook enforces.
+- Oracles: the reference interpreter and the compiled plan agree on the error class (the ExecError and RunError pairs
+  `plan.hpp` names), the values, every cell, every map output on success and the op an error blames (by stable id);
+  a reference error with no compiled counterpart is a finding, and the only accepted compile refusal is the documented
+  one (a parallel body holding a cell or reading host input, refused whole at compile and by the reference when the op
+  runs). The plan run twice, a fresh reference session and the printed and serialized twins give the same outcome.
+- What a step is, for both tiers: a dispatched op that is not a terminator, a loop iteration, a parallel-range index
+  and a fold step; a parallel body's steps are the run's, so one budget bounds the whole run. The reference charged every `core.yield` and `func.return` a step, so the tiers ran out at
+  different ops (inside a `core.while` condition one step per iteration); it no longer does. `plan::run` takes the
+  budget (`max_steps`, the reference's default `plan::kDefaultMaxSteps`), so FuelExhausted compares at a small budget.
+- The nesting bound `exec::kMaxNesting` (64): an op with a region or a `func.call` counts one level while it runs, and
+  an op that would nest past the bound fails `NestingTooDeep` (appended to ExecError and RunError, `kLastExecError` and
+  `kLastRunError` bounding the run-record decoder) before it runs, blamed on that op in both tiers. A sub-interpreter
+  running a parallel body starts at its parent's level. Unbounded recursion used to overflow the native stack: on
+  win-asan (1 MiB main-thread stack) after about 190 levels, and after about 180 through a `map_reduce` body; the
+  bound is a third of that and equals the loaders' static region-nesting cap. It is a resource limit like the budget.
+- A parallel range's count and indices use unsigned arithmetic (`exec::parallel_range_count`, `parallel_range_index`):
+  `hi - lo` overflowed i64 (undefined), wrapping `[INT64_MIN, INT64_MAX)` by 2^62 to an empty map. Each index is one
+  step of the body budget in both tiers, and the reference's map grows per index: it used to reserve a slot for every
+  index before running any body, so a 2^31-index range reserved 16 GiB. A `for` loop stops at the last iteration
+  within `step` of `hi` instead of computing `iv += step` past INT64_MAX (undefined; on a wrapping target the loop ran
+  on until the budget ran out).
+- A compiled `parallel_for` or `map_reduce` re-entered from its own body (a body call recursing into it) cleared and
+  appended to the op's one map slot, so the inner activation's entries landed in the outer map ([0, 1] where the
+  reference reports [1]); each activation now builds its own map and stores it when it completes, as the reference
+  does, reusing the slot's storage.
+- Found by libFuzzer: a parallel op inside another parallel body stored its map in the reference's parallel
+  sub-interpreter, which was then discarded, so the reference reported no map where the plan reported the last
+  completed activation; the parent now adopts a sub's map outputs when the body's range completes
+  (`Interpreter::adopt_map_outputs`). And the plan opened a parallel body's fresh token store by moving the whole
+  run-wide store out and back, quadratic in a loop that both launches tokens and runs a parallel op (an 8,000-iteration
+  loop took 7.7 s on win-debug); a body's store is now the tail past `token_base`, dropped when the body ends. And
+  both tiers gave a parallel body a copy of the remaining budget and restored the parent's afterwards, so a body that
+  re-enters the program (a 31-byte input: `f0(n)` mapping over `[-63, n)` and calling `f0` from the body) ran for
+  minutes, its work growing as the budget to the power of the nesting depth; the sequential tiers now charge the
+  parent what its bodies spend (`Interpreter::charge_from`). The parallel host provider keeps per-item budgets.
+- Not yet: the host provider (`crd-ceir-host`, the parallel tier) still computes its range count the old way and
+  pre-sizes per-index arrays from it, its worker sub-interpreters start at nesting level 0, and each item has its own
+  budget. The last libFuzzer round ended in an ASan SEGV with a zero frame pointer and no artifact, on this target
+  that does not link crd-perf, single-process; the 588 inputs of that round replay clean (the concurrent-load
+  corruption item, still open).
+
 <a id="diag-10b"></a>
 ## DIAG.10b — coverage and diagnostic effectiveness
 

@@ -45,7 +45,9 @@ enum class ExecError : u8
     SelectorOutOfRange, // a switch/match selector not in [0, num_regions)
     UnknownPredicate,   // arith.cmpi with an unrecognized predicate string
     CondArity,          // a while/if condition region did not yield exactly one value
-    FuelExhausted,      // the step budget ran out (a runaway loop — timeout is not a hang-proof)
+    FuelExhausted,      // the step budget ran out (a runaway loop — timeout is not a hang-proof). A step is one
+                        // dispatched op that is not a terminator, or one loop or parallel-range iteration; a
+                        // parallel body's steps are the run's (DIAG.10a), so one budget bounds the whole run.
     NoEntry,            // the named entry function was not found in the module
     BadArity,           // entry/call argument count != the callee's parameter count
     ParallelBodyStateful, // CEIR-6b: a task.parallel_for body (or a resolved callee) holds a StateEdge cell — results would
@@ -58,8 +60,38 @@ enum class ExecError : u8
                           // it in the step loop — distinct from FuelExhausted (both stop loops; this is a REQUESTED stop).
     InputUnavailable,     // DIAG.9a: an `input` op read a host input and the interpreter's source had no value for it
                           // (no source installed, or the host answered none) — never a made-up value (input.hpp).
+    NestingTooDeep,       // DIAG.10a: an op that enters a region or calls a function ran at kMaxNesting nested entries
+                          // (recursion, or a parallel body calling back): refused before the native stack runs out.
 };
+// ⛔ Append at end: run records store the value; a decoder accepts up to this one.
+inline constexpr ExecError kLastExecError = ExecError::NestingTooDeep;
 [[nodiscard]] containers::StringView exec_error_name(ExecError e) noexcept;
+
+// DIAG.10a: the executors' nesting bound, a resource limit like the step budget. Every op with a region and every
+// func.call counts one level while it runs (a call into a function, an if arm, a loop body, a launch, a parallel body);
+// an op that would nest past kMaxNesting fails NestingTooDeep before it runs, in the reference and in the compiled plan
+// alike, so both blame the same op. Each level is several native frames of the reference: on win-asan (1 MiB main
+// thread stack) recursion overflowed after about 190 levels, and after about 180 through a map_reduce body, so the
+// bound is a third of that. It equals the loaders' static region-nesting cap (64).
+inline constexpr crd::u32 kMaxNesting = 64U;
+
+// DIAG.10a: the index count of a parallel range [lo, hi) by `step` (> 0) and its i-th index, in unsigned arithmetic:
+// `hi - lo` and `lo + i * step` overflow i64 for a range that spans more than half of it (undefined, and the old count
+// wrapped such a range to empty). Both tiers use these, so they agree on every range.
+[[nodiscard]] constexpr crd::u64 parallel_range_count(crd::i64 lo, crd::i64 hi, crd::i64 step) noexcept
+{
+    if (hi <= lo)
+    {
+        return 0U;
+    }
+    const crd::u64 span = static_cast<crd::u64>(hi) - static_cast<crd::u64>(lo);
+    const crd::u64 by   = static_cast<crd::u64>(step);
+    return span / by + (span % by != 0U ? 1U : 0U);
+}
+[[nodiscard]] constexpr crd::i64 parallel_range_index(crd::i64 lo, crd::i64 step, crd::u64 i) noexcept
+{
+    return static_cast<crd::i64>(static_cast<crd::u64>(lo) + i * static_cast<crd::u64>(step));
+}
 
 // The result of an execution: the entry function's `func.return` values, or the FIRST error + the offending op.
 // DIAG.8a: an entry refusal has no op to blame, so it names what was asked for instead: `entry` is an owned copy of the
@@ -149,6 +181,14 @@ public:
     // cancel flag set while it held the op stops the run with `Cancelled` before that op dispatches. `call_depth` is
     // the number of func.call frames above the invoked entry (0 in the entry), for step over / step out.
     [[nodiscard]] crd::u32 call_depth() const noexcept { return m_depth; }
+    // DIAG.10a: the nesting levels (kMaxNesting) the running program holds. A sub-interpreter that runs a body of an op
+    // of `parent` (a parallel map or fold step) starts at the parent's level, so a body calling back cannot reset it.
+    [[nodiscard]] crd::u32 nesting() const noexcept { return m_nesting; }
+    void inherit_nesting(const Interpreter& parent) noexcept { m_nesting = parent.m_nesting; }
+    // DIAG.10a: the steps a sub-interpreter spent running a body of an op of this one are this run's steps: this
+    // interpreter keeps what `sub` has left. A body given a fresh copy of the budget at every nesting level made the
+    // work of a body that re-enters the program grow as the budget to the power of the depth.
+    void charge_from(const Interpreter& sub) noexcept { m_fuel = sub.m_fuel; }
 
     // Run `@entry(args)` against `m` (calls resolve via `m.symbols()`).
     [[nodiscard]] ExecResult invoke(const Module& m, containers::StringView entry, containers::ConstSpan<crd::i64> args);
@@ -204,6 +244,9 @@ public:
     // `provider.map_output(op)` symmetrically. The sequential parallel_for/map_reduce EvalFns store here; the builtin
     // (arith/core/func) installer never touches it (generic, like the yield-store).
     void                                          store_map_output(const Operation* op, containers::Array<crd::i64>&& out);
+    // DIAG.10a: take every map output `sub` stored (a parallel body's own parallel ops), as the last completed
+    // activation of each op — the compiled plan's numbering keeps them run-wide; a discarded sub lost them.
+    void                                          adopt_map_outputs(Interpreter& sub);
     [[nodiscard]] containers::ConstSpan<crd::i64> map_output(const Operation* op) const noexcept;
 
 private:
@@ -238,6 +281,8 @@ private:
     StepHook                                      m_post_hook = nullptr; // §112 post-op hook (successful dispatch only)
     void*                                         m_hook_user = nullptr; // opaque user for the step hooks
     crd::u32                                      m_depth     = 0U;      // DIAG.8b: func.call frames above the entry
+    crd::u32                                      m_nesting   = 0U;      // DIAG.10a: nested region/call levels running
+    OpId                                          m_call_kind{};         // DIAG.10a: func.call (a call nests a level)
     const input::InputSource*                     m_inputs    = nullptr; // DIAG.9a: the input seam; not proto-copied
 };
 

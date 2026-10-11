@@ -50,6 +50,7 @@ serializer defect, never a harness opinion.
 | `crd-fuzz-ceir-record` | `crd::ceir::cook::decode_record`, the run-record reader (DIAG.10a) | 57: eight records in the three recorders' shapes (plan, host and device; a bounded trace, an unavailable read, a reloading host's asset and generation, an ulp and an exact envelope) with a fixed build, 30 records that contradict a recorder in one way each, truncations as given and resealed, a trailing byte, a wrong checksum, an older schema, three counts past the payload, garbage |
 | `crd-fuzz-ceridc-diag` | command decoding: ceridc's MCP transport (`mcp_handle` over `crd::assetio::json::parse`), its diag tool and `DiagCommandService::execute` with every registered command's argument check (DIAG.10a) | 52: the JSON-RPC lifecycle, every id form (string, integer, null, fraction, past 2^53, object), batch arrays and bare values, names with a NUL, the parser's number, UTF-8, escape and nesting boundaries (15 refused), the diag tool's fields and refusal order, cursors, a 65-byte command, native requests of raw bytes (a stale cursor before any snapshot, a cursor past 2^53), and the flight, fault and CEIR commands under hosts with and without a root |
 | `crd-fuzz-resources-reload` | `crd::resources::crdr_read` and the `ResourceManager` pack ingress: `mount_manifest`, `unmount`, `load_sync`, `reload_mount_now` and eviction (DIAG.10a) | 34: seven packs that mount (honest, compressed manifest, empty, a name past the pool, a zero-length entry, artifacts the loaders refuse, trailing bytes), six refused whole (torn, a range that wraps, a duplicated id, not a PACK, no manifest, a manifest of partial entries), four compressed-chunk claims (past the bound, a sum that wraps, a byte past the frame, exact), three structural, and 14 scripts (reload swaps, a torn and a wrapping reload, a shadowed id, a retyped id reloaded and re-issued, unmount falling back, a reload that drops and adds, a resized reload, a duplicated id on reload, pins and drains, placeholders and last-good, in-place corruption, invalid mounts) |
+| `crd-fuzz-ceir-differential` | the compiled execution tier (`crd::ceir::plan::compile` and `run`) against the reference interpreter (`crd::ceir::exec::Interpreter`) on generated programs, with their printed and serialized twins (DIAG.10a) | 35: 32 seeds: straight-line arithmetic over i64 edges, if, for, while, switch and match, the three scope kinds, the three cell kinds with feedback and depths, calls, tokens (launch, spawn, worker, main thread, join, await, race, fiber wait, continuation), host inputs (with a script, exhausted, without a source), map_reduce in index order, and one per finding (a while condition at a small budget, recursion at and past the nesting bound directly and through a map_reduce body, a re-entered map_reduce, a 2^31-index and a full-i64 parallel range, a for step past INT64_MAX, a fold that runs out of steps, a loop that launches tokens and runs a parallel op) and three adopted libFuzzer inputs (a parallel op inside a parallel body; a token store that grew quadratically; a parallel body re-entering the program, its work growing with each nesting level) |
 
 Corpora are raw bytes under `tests/<owner>/fuzz/corpus/<target>/`, `-text -diff -merge` in `.gitattributes` so no
 normalization ever rewrites the bytes that reproduced a finding; seeds carry a content-hash name from
@@ -116,6 +117,19 @@ and each requires that only its own type's payloads reach it. Inputs whose compr
 all are skipped as out of scope; `poll_hot_reload` is not driven (one-second mtimes), both reload paths sharing
 `do_reload_mount`. On Windows Debug builds the replay driver turns a Debug CRT report (heap corruption found at a free)
 into an immediate failure instead of a modal dialog.
+
+`crd-fuzz-ceir-differential` (DIAG.10a) compares the two CEIR execution tiers. Every input decodes to a program, never
+to a parse failure: a header (one to four functions with their parameter and result counts, a step budget of 64 to
+131,072, a host input script or no source at all, the entry arguments) and then each function's body as a stream of op
+choices over arith, core control flow and the three cell kinds, `func.call` (recursion included), async and task
+tokens, data-parallel bodies and the input ops. The generator stays inside the module-validity set a cook enforces
+(the structure, domain, token and borrow verifiers and the recursion policy), so a refused program is out of contract
+and not run. Both tiers run each program at the same budget with the same scripted input: they must agree on the error
+class (the documented ExecError and RunError pairs), the values, every cell, every map output on success and, on an
+error, the stable id of the op it blames. A compile refusal is accepted only for the documented tier difference (a
+parallel body that holds a cell or reads host input, refused whole); a reference error with no compiled counterpart is
+a finding. The plan run twice, a fresh reference session, and the printed-and-parsed and serialized-and-loaded twins
+must give the same outcome. On a failure the program's text is printed with the two outcomes.
 
 `scripts/fuzz.py` never builds: `run` fuzzes a working copy of the committed corpus for `-max_total_time` seconds
 with the limits above, artifacts (`crash-*`, `timeout-*`, `oom-*`, `leak-*`) under scratch, and writes the final

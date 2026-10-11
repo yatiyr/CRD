@@ -1520,3 +1520,357 @@ TEST_CASE("ceir 11z: cells + call frames are AMORTIZED-arena (steady-state zero-
     CHECK(measure(10) == measure(1000)); // ⭐ steady-state ZERO: the ring init-fill + first frame growth are one-time, not
                                          //    per-iteration — so cells + call frames are amortized-arena (§153).
 }
+
+// ── DIAG.10a: what the compiled-versus-reference fuzz target (crd-fuzz-ceir-differential) found, pinned in both tiers.
+// The differential only sees the two tiers disagree; these cases also pin the agreed answer, so both tiers drifting the
+// same way still fails.
+namespace
+{
+// One run through each tier at `max_steps`: the reference's and the plan's outcome, with the stable id each blames.
+struct Tiers
+{
+    exec::ExecError ref       = exec::ExecError::None;
+    plan::RunError  got       = plan::RunError::None;
+    crd::u64        ref_fault = 0U;
+    crd::u64        got_fault = 0U;
+};
+Tiers run_tiers(Context& ctx, const Module& m, crd::u64 max_steps, memory::IAllocator* alloc,
+                exec::Interpreter& in, plan::RunResult& got, ConstSpan<i64> args = {})
+{
+    exec::install_builtin_semantics(in);
+    exec::install_async_semantics(in);
+    exec::install_task_semantics(in);
+    ctx.assign_stable_ids(m); // both tiers blame an op by its stable id
+    Tiers                  t;
+    const exec::ExecResult r = in.invoke(m, "main", args);
+    t.ref                    = r.error;
+    t.ref_fault              = r.op != nullptr ? r.op->stable_id().value : 0U;
+    const plan::CompileResult cr = plan::compile(ctx, m, "main", alloc);
+    REQUIRE(cr.ok());
+    got         = plan::run(cr.plan, args, alloc, {}, nullptr, nullptr, max_steps);
+    t.got       = got.error;
+    t.got_fault = got.fault.valid() ? plan::instr_provenance(cr.plan, got.fault).op.value : 0U;
+    return t;
+}
+// @main(){ parallel_for(lo, hi, step){ (iv): yield iv }; return 0 } — returns the parallel_for op.
+Operation* parallel_range(Context& ctx, const corpus::Kit& o, Module& m, i64 lo, i64 hi, i64 step)
+{
+    Block* bm = nullptr;
+    (void)corpus::mkfunc(ctx, m, "main", 0U, bm);
+    Value* range[3] = {corpus::konst(ctx, o, bm, lo)->result(0U), corpus::konst(ctx, o, bm, hi)->result(0U),
+                       corpus::konst(ctx, o, bm, step)->result(0U)};
+    Operation* const pf = ctx.create_operation(o.pfor, ConstSpan<Value*>(range, 3U), 0U, {}, 1U);
+    bm->append(pf);
+    Block* const body = ctx.create_block(1U, ctx.type_i32());
+    pf->region(0)->append(body);
+    corpus::yield1(ctx, o, body, body->arg(0U));
+    corpus::ret1(ctx, bm, corpus::konst(ctx, o, bm, 0)->result(0U));
+    return pf;
+}
+// @main(n){ m = n - 1; if (n) { <then> }; return n } with `then` built by the caller into the then block.
+Block* countdown(Context& ctx, const corpus::Kit& o, Module& m, Value*& n, Value*& n_minus_one)
+{
+    Block* bm = nullptr;
+    (void)corpus::mkfunc(ctx, m, "main", 1U, bm);
+    n           = bm->arg(0U);
+    n_minus_one = corpus::bin(ctx, o.addi, n, corpus::konst(ctx, o, bm, -1)->result(0U), bm)->result(0U);
+    Value* cond[1]      = {bm->arg(0U)};
+    Operation* const ifop = ctx.create_operation(o.cif, ConstSpan<Value*>(cond, 1U), 0U, {}, 2U);
+    bm->append(ifop);
+    Block* const thenb = ctx.create_block(0U);
+    ifop->region(0)->append(thenb);
+    Block* const elseb = ctx.create_block(0U);
+    ifop->region(1)->append(elseb);
+    elseb->append(ctx.create_operation(o.yield, {}, 0U));
+    corpus::ret1(ctx, bm, bm->arg(0U));
+    return thenb;
+}
+} // namespace
+
+TEST_CASE("diag 10a: a parallel range across the whole i64 line has its four indices in both tiers",
+          "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const corpus::Kit                  o(ctx);
+    Module* const                      m  = ctx.create_module();
+    Operation* const                   pf = parallel_range(ctx, o, *m, INT64_MIN, INT64_MAX, i64{1} << 62U);
+    exec::Interpreter                  in(ctx);
+    plan::RunResult                    got(&root);
+    const Tiers                        t = run_tiers(ctx, *m, plan::kDefaultMaxSteps, &root, in, got);
+    REQUIRE(t.ref == exec::ExecError::None);
+    REQUIRE(t.got == plan::RunError::None);
+    // `hi - lo` overflowed i64 and the count wrapped to 0: an empty map in both tiers.
+    const i64 expected[4] = {INT64_MIN, -(i64{1} << 62U), 0, i64{1} << 62U};
+    const ConstSpan<i64> ref_map = in.map_output(pf);
+    REQUIRE(ref_map.size() == 4U);
+    REQUIRE(got.map_outputs[0].size() == 4U);
+    for (crd::u32 i = 0U; i < 4U; ++i)
+    {
+        CHECK(ref_map[i] == expected[i]);
+        CHECK(got.map_outputs[0][i] == expected[i]);
+    }
+}
+
+TEST_CASE("diag 10a: a parallel range is bounded by the step budget, one step per index, in both tiers",
+          "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const corpus::Kit                  o(ctx);
+    Module* const                      m  = ctx.create_module();
+    Operation* const                   pf = parallel_range(ctx, o, *m, 0, i64{1} << 31U, 1);
+    // An instruction-free body costs nothing per index, so only the per-index step bounds the range; the reference
+    // used to reserve 2^31 slots before running any body.
+    exec::Interpreter in(ctx, 1000U);
+    plan::RunResult   got(&root);
+    const Tiers       t = run_tiers(ctx, *m, 1000U, &root, in, got);
+    CHECK(t.ref == exec::ExecError::FuelExhausted);
+    CHECK(t.got == plan::RunError::FuelExhausted);
+    CHECK(t.ref_fault == pf->stable_id().value);
+    CHECK(t.got_fault == pf->stable_id().value);
+}
+
+TEST_CASE("diag 10a: a for loop whose step reaches past INT64_MAX runs once in both tiers", "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const corpus::Kit                  o(ctx);
+    Module* const                      m  = ctx.create_module();
+    Block*                             bm = nullptr;
+    (void)corpus::mkfunc(ctx, *m, "main", 0U, bm);
+    Value* range[3] = {corpus::konst(ctx, o, bm, INT64_MAX - 1)->result(0U),
+                       corpus::konst(ctx, o, bm, INT64_MAX)->result(0U),
+                       corpus::konst(ctx, o, bm, INT64_MAX)->result(0U)};
+    Operation* const forop = ctx.create_operation(o.cfor, ConstSpan<Value*>(range, 3U), 0U, {}, 1U);
+    bm->append(forop);
+    Block* const body = ctx.create_block(1U, ctx.type_i32());
+    forop->region(0)->append(body);
+    // an iteration counter: count = state(0, count + 1)
+    Operation* const count =
+        corpus::mk_state(ctx, o, corpus::konst(ctx, o, body, 0)->result(0U), body->arg(0U), body);
+    count->set_operand(1U, corpus::bin(ctx, o.addi, count->result(0U), corpus::konst(ctx, o, body, 1)->result(0U), body)
+                               ->result(0U));
+    corpus::ret1(ctx, bm, corpus::konst(ctx, o, bm, 0)->result(0U));
+
+    exec::Interpreter in(ctx, 100U);
+    plan::RunResult   got(&root);
+    const Tiers       t = run_tiers(ctx, *m, 100U, &root, in, got);
+    // `iv += step` overflowed (undefined; on a wrapping target the loop ran on until the budget ran out).
+    REQUIRE(t.ref == exec::ExecError::None);
+    REQUIRE(t.got == plan::RunError::None);
+    i64 iterations = 0;
+    REQUIRE(in.cell_value(count, iterations));
+    CHECK(iterations == 1);
+    REQUIRE(got.cells.size() == 1U);
+    CHECK(got.cells[0] == 1);
+}
+
+TEST_CASE("diag 10a: a step is a dispatched op or an iteration, never a terminator, in both tiers",
+          "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    // @main(){ while { c = const 0; yield c } { }; return 7 } — the while, one iteration, the const and the return's
+    // const: four steps. The reference charged the condition's core.yield and the func.return a step each.
+    const auto run_at = [&root](crd::u64 budget, Tiers& t) {
+        Context           ctx(&root);
+        const corpus::Kit o(ctx);
+        Module* const     m  = ctx.create_module();
+        Block*            bm = nullptr;
+        (void)corpus::mkfunc(ctx, *m, "main", 0U, bm);
+        Operation* const w = ctx.create_operation(ctx.intern_op("core", "while"), {}, 0U, {}, 2U);
+        bm->append(w);
+        Block* const cond = ctx.create_block(0U);
+        w->region(0)->append(cond);
+        corpus::yield1(ctx, o, cond, corpus::konst(ctx, o, cond, 0)->result(0U));
+        w->region(1)->append(ctx.create_block(0U));
+        Operation* const last = corpus::konst(ctx, o, bm, 7);
+        corpus::ret1(ctx, bm, last->result(0U));
+        exec::Interpreter in(ctx, budget);
+        plan::RunResult   got(&root);
+        t = run_tiers(ctx, *m, budget, &root, in, got);
+        return last->stable_id().value;
+    };
+    Tiers enough;
+    (void)run_at(4U, enough);
+    CHECK(enough.ref == exec::ExecError::None);
+    CHECK(enough.got == plan::RunError::None);
+    Tiers          short_one;
+    const crd::u64 last_id = run_at(3U, short_one);
+    CHECK(short_one.ref == exec::ExecError::FuelExhausted);
+    CHECK(short_one.got == plan::RunError::FuelExhausted);
+    CHECK(short_one.ref_fault == last_id); // the fourth step: the return's const, in both tiers
+    CHECK(short_one.got_fault == last_id);
+}
+
+TEST_CASE("diag 10a: recursion stops at exec::kMaxNesting with the same op blamed in both tiers",
+          "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    // @main(n){ m = n - 1; if (n) { call main(m) }; return n }: two levels per call, so n = 31 runs and n = 32 reaches
+    // the bound at its deepest if. Before the bound the native stack overflowed near 100 calls on win-asan.
+    const auto run_n = [&root](i64 n, Tiers& t) {
+        Context           ctx(&root);
+        const corpus::Kit o(ctx);
+        Module* const     m           = ctx.create_module();
+        Value*            arg         = nullptr;
+        Value*            n_minus_one = nullptr;
+        Block* const      thenb       = countdown(ctx, o, *m, arg, n_minus_one);
+        (void)corpus::call_fn(ctx, "main", n_minus_one, thenb);
+        thenb->append(ctx.create_operation(o.yield, {}, 0U));
+        exec::Interpreter in(ctx);
+        plan::RunResult   got(&root);
+        const i64         args[1] = {n};
+        t = run_tiers(ctx, *m, plan::kDefaultMaxSteps, &root, in, got, ConstSpan<i64>(args, 1U));
+    };
+    STATIC_REQUIRE(exec::kMaxNesting == 64U);
+    Tiers inside;
+    run_n(31, inside);
+    CHECK(inside.ref == exec::ExecError::None);
+    CHECK(inside.got == plan::RunError::None);
+    Tiers past;
+    run_n(32, past);
+    CHECK(past.ref == exec::ExecError::NestingTooDeep);
+    CHECK(past.got == plan::RunError::NestingTooDeep);
+    CHECK(past.ref_fault != 0U);
+    CHECK(past.ref_fault == past.got_fault);
+    Tiers unbounded; // a hostile depth ends the same way, never by exhausting the native stack
+    run_n(1000000, unbounded);
+    CHECK(unbounded.ref == exec::ExecError::NestingTooDeep);
+    CHECK(unbounded.got == plan::RunError::NestingTooDeep);
+}
+
+TEST_CASE("diag 10a: a map_reduce re-entered from its own body keeps each activation's map in both tiers",
+          "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const corpus::Kit                  o(ctx);
+    Module* const                      m           = ctx.create_module();
+    Value*                             n           = nullptr;
+    Value*                             n_minus_one = nullptr;
+    Block* const                       thenb       = countdown(ctx, o, *m, n, n_minus_one);
+    // then: map_reduce(m, n, 1, m) { (iv): call main(iv); yield iv } { (a, x): yield a }
+    Value* range[4] = {n_minus_one, n, corpus::konst(ctx, o, thenb, 1)->result(0U), n_minus_one};
+    Operation* const mr = ctx.create_operation(o.mreduce, ConstSpan<Value*>(range, 4U), 1U, ctx.type_i32(), 2U);
+    thenb->append(mr);
+    Block* const mapb = ctx.create_block(1U, ctx.type_i32());
+    mr->region(0)->append(mapb);
+    (void)corpus::call_fn(ctx, "main", mapb->arg(0U), mapb);
+    corpus::yield1(ctx, o, mapb, mapb->arg(0U));
+    Block* const comb = ctx.create_block(2U, ctx.type_i32());
+    mr->region(1)->append(comb);
+    corpus::yield1(ctx, o, comb, comb->arg(0U));
+    thenb->append(ctx.create_operation(o.yield, {}, 0U));
+
+    exec::Interpreter in(ctx);
+    plan::RunResult   got(&root);
+    const i64         args[1] = {2};
+    const Tiers       t = run_tiers(ctx, *m, plan::kDefaultMaxSteps, &root, in, got, ConstSpan<i64>(args, 1U));
+    REQUIRE(t.ref == exec::ExecError::None);
+    REQUIRE(t.got == plan::RunError::None);
+    // main(2) maps [1, 2) and its body's main(1) maps [0, 1) first; the outer activation completes last, so the op's
+    // map is [1]. The plan cleared and appended to one shared slot and reported [0, 1].
+    const ConstSpan<i64> ref_map = in.map_output(mr);
+    REQUIRE(ref_map.size() == 1U);
+    CHECK(ref_map[0] == 1);
+    REQUIRE(got.map_outputs.size() == 1U);
+    REQUIRE(got.map_outputs[0].size() == 1U);
+    CHECK(got.map_outputs[0][0] == 1);
+}
+
+TEST_CASE("diag 10a: a parallel op inside a parallel body keeps its map in both tiers", "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    Context                            ctx(&root);
+    const corpus::Kit                  o(ctx);
+    Module* const                      m  = ctx.create_module();
+    Block*                             bm = nullptr;
+    (void)corpus::mkfunc(ctx, *m, "main", 0U, bm);
+    // parallel_for(0, 2, 1) { (iv): r = map_reduce(0, 3, 1, 0) { (j): yield j + iv } { (a, x): yield a }; yield r }
+    Value* outer_range[3] = {corpus::konst(ctx, o, bm, 0)->result(0U), corpus::konst(ctx, o, bm, 2)->result(0U),
+                             corpus::konst(ctx, o, bm, 1)->result(0U)};
+    Operation* const pf = ctx.create_operation(o.pfor, ConstSpan<Value*>(outer_range, 3U), 0U, {}, 1U);
+    bm->append(pf);
+    Block* const body = ctx.create_block(1U, ctx.type_i32());
+    pf->region(0)->append(body);
+    Value* inner_range[4] = {corpus::konst(ctx, o, body, 0)->result(0U), corpus::konst(ctx, o, body, 3)->result(0U),
+                             corpus::konst(ctx, o, body, 1)->result(0U), corpus::konst(ctx, o, body, 0)->result(0U)};
+    Operation* const mr = ctx.create_operation(o.mreduce, ConstSpan<Value*>(inner_range, 4U), 1U, ctx.type_i32(), 2U);
+    body->append(mr);
+    Block* const mapb = ctx.create_block(1U, ctx.type_i32());
+    mr->region(0)->append(mapb);
+    corpus::yield1(ctx, o, mapb, mapb->arg(0U));
+    Block* const comb = ctx.create_block(2U, ctx.type_i32());
+    mr->region(1)->append(comb);
+    corpus::yield1(ctx, o, comb, comb->arg(0U));
+    corpus::yield1(ctx, o, body, mr->result(0U));
+    corpus::ret1(ctx, bm, corpus::konst(ctx, o, bm, 0)->result(0U));
+
+    exec::Interpreter in(ctx);
+    plan::RunResult   got(&root);
+    const Tiers       t = run_tiers(ctx, *m, plan::kDefaultMaxSteps, &root, in, got);
+    REQUIRE(t.ref == exec::ExecError::None);
+    REQUIRE(t.got == plan::RunError::None);
+    // The inner map_reduce runs on the reference's parallel sub-interpreter, which used to keep its map and be
+    // discarded: the reference reported no map for it while the plan reported [0, 1, 2].
+    const ConstSpan<i64> ref_map = in.map_output(mr);
+    REQUIRE(ref_map.size() == 3U);
+    REQUIRE(got.map_outputs.size() == 2U);
+    // dense map order is compile order: the inner op is compiled with the outer op's body, before the outer op
+    const Array<i64>& got_inner = got.map_outputs[0];
+    REQUIRE(got_inner.size() == 3U);
+    for (crd::u32 i = 0U; i < 3U; ++i)
+    {
+        CHECK(ref_map[i] == static_cast<i64>(i));
+        CHECK(got_inner[i] == static_cast<i64>(i));
+    }
+    CHECK(in.map_output(pf).size() == 2U);
+    CHECK(got.map_outputs[1].size() == 2U);
+}
+
+TEST_CASE("diag 10a: a parallel body's steps are the run's in both tiers", "[ceir][plan][diag10a]")
+{
+    crd::memory::GrowableTlsfAllocator root;
+    // @main(){ for(0, 100, 1) { parallel_for(0, 1, 1) { (iv): for(0, 50, 1) { }; yield iv } }; return 0 }: about 5,800
+    // steps in all, of which the parallel bodies spend 5,400. Both tiers restored the parent's budget after each
+    // parallel op, so the run never ran out (and a body re-entering the program grew as the budget to the depth).
+    const auto run_at = [&root](crd::u64 budget, Tiers& t) {
+        Context           ctx(&root);
+        const corpus::Kit o(ctx);
+        Module* const     m  = ctx.create_module();
+        Block*            bm = nullptr;
+        (void)corpus::mkfunc(ctx, *m, "main", 0U, bm);
+        Value* outer[3] = {corpus::konst(ctx, o, bm, 0)->result(0U), corpus::konst(ctx, o, bm, 100)->result(0U),
+                           corpus::konst(ctx, o, bm, 1)->result(0U)};
+        Operation* const loop = ctx.create_operation(o.cfor, ConstSpan<Value*>(outer, 3U), 0U, {}, 1U);
+        bm->append(loop);
+        Block* const lb = ctx.create_block(1U, ctx.type_i32());
+        loop->region(0)->append(lb);
+        Value* range[3] = {corpus::konst(ctx, o, lb, 0)->result(0U), corpus::konst(ctx, o, lb, 1)->result(0U),
+                           corpus::konst(ctx, o, lb, 1)->result(0U)};
+        Operation* const pf = ctx.create_operation(o.pfor, ConstSpan<Value*>(range, 3U), 0U, {}, 1U);
+        lb->append(pf);
+        Block* const body = ctx.create_block(1U, ctx.type_i32());
+        pf->region(0)->append(body);
+        Value* inner[3] = {corpus::konst(ctx, o, body, 0)->result(0U), corpus::konst(ctx, o, body, 50)->result(0U),
+                           corpus::konst(ctx, o, body, 1)->result(0U)};
+        Operation* const spin = ctx.create_operation(o.cfor, ConstSpan<Value*>(inner, 3U), 0U, {}, 1U);
+        body->append(spin);
+        spin->region(0)->append(ctx.create_block(1U, ctx.type_i32()));
+        corpus::yield1(ctx, o, body, body->arg(0U));
+        corpus::ret1(ctx, bm, corpus::konst(ctx, o, bm, 0)->result(0U));
+        exec::Interpreter in(ctx, budget);
+        plan::RunResult   got(&root);
+        t = run_tiers(ctx, *m, budget, &root, in, got);
+    };
+    Tiers enough;
+    run_at(10000U, enough);
+    CHECK(enough.ref == exec::ExecError::None);
+    CHECK(enough.got == plan::RunError::None);
+    Tiers short_one;
+    run_at(1000U, short_one);
+    CHECK(short_one.ref == exec::ExecError::FuelExhausted);
+    CHECK(short_one.got == plan::RunError::FuelExhausted);
+    CHECK(short_one.ref_fault == short_one.got_fault);
+}

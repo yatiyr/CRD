@@ -197,7 +197,10 @@ enum class RunError : crd::u8
     ContinuationArity,  // 4b: a continuation body's arg count != the antecedent token's yield count (reference: BadArity)
     Cancelled,          // DIAG.8b: a RunControl's cancel flag or safe point stopped the run (reference: Cancelled)
     InputUnavailable,   // DIAG.9a: an input op's read got no value from the run's input source (reference: same)
+    NestingTooDeep,     // DIAG.10a: a nesting instr ran at exec::kMaxNesting nested levels (reference: same)
 };
+// ⛔ Append at end: run records store the value; a decoder accepts up to this one.
+inline constexpr RunError kLastRunError = RunError::NestingTooDeep;
 [[nodiscard]] containers::StringView run_error_name(RunError e) noexcept;
 
 // CEIR-11c: cheap plan-SHAPE stats, all already computed at compile — a perf-linking bridge publishes them as crd-perf
@@ -288,9 +291,12 @@ struct RunControl
 
 // DIAG.9a: `inputs` is the host's input seam (input.hpp) the input ops read through, called on the executing thread
 // once per read in program order; null answers no value, so a read fails `RunError::InputUnavailable`.
+// DIAG.10a: `max_steps` is the run's step budget, spent exactly as the reference interpreter spends the `max_steps` it
+// is constructed with (the same default), so a differential can compare FuelExhausted at a small budget.
+inline constexpr crd::u64 kDefaultMaxSteps = crd::u64{1} << 24U;
 [[nodiscard]] RunResult run(const CompiledPlan& plan, containers::ConstSpan<crd::i64> args, memory::IAllocator* alloc,
                             RunHooks hooks = {}, const RunControl* control = nullptr,
-                            const input::InputSource* inputs = nullptr);
+                            const input::InputSource* inputs = nullptr, crd::u64 max_steps = kDefaultMaxSteps);
 
 // DIAG.8b: whether a value can be read at a safe point. A value is read only from the frame the safe point is in
 // (the innermost call frame), never by address.

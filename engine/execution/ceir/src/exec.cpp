@@ -28,19 +28,20 @@ containers::StringView exec_error_name(ExecError e) noexcept
     case ExecError::BadToken: return containers::StringView("bad-token");
     case ExecError::Cancelled: return containers::StringView("cancelled");
     case ExecError::InputUnavailable: return containers::StringView("input-unavailable");
+    case ExecError::NestingTooDeep: return containers::StringView("nesting-too-deep");
     }
     return containers::StringView("?");
 }
 
 Interpreter::Interpreter(Context& ctx, crd::u64 max_steps, memory::IAllocator* scratch)
     : m_ctx(ctx), m_scratch(scratch != nullptr ? scratch : ctx.allocator()), m_fuel(max_steps), m_sem(m_scratch),
-      m_cells(m_scratch), m_yield_store(m_scratch), m_map_output(m_scratch)
+      m_cells(m_scratch), m_yield_store(m_scratch), m_map_output(m_scratch), m_call_kind(ctx.intern_op("func", "call"))
 {
 }
 
 Interpreter::Interpreter(const Interpreter& proto, memory::IAllocator* scratch, crd::u64 max_steps)
     : m_ctx(proto.m_ctx), m_scratch(scratch), m_fuel(max_steps), m_sem(scratch), m_cells(scratch), m_yield_store(scratch),
-      m_map_output(scratch) // fresh (per-session, like cells/yields — NOT copied from proto)
+      m_map_output(scratch), m_call_kind(proto.m_call_kind) // fresh (per-session, like cells/yields — NOT copied)
 {
     // copy the installed semantics (intern-free — the keys are already OpId.value); env / cells / fuel start FRESH.
     for (auto it = proto.m_sem.begin(); it != proto.m_sem.end(); ++it)
@@ -86,6 +87,21 @@ void Interpreter::store_map_output(const Operation* op, containers::Array<crd::i
     {
         m_map_output.insert(op, std::move(out));
     }
+}
+
+void Interpreter::adopt_map_outputs(Interpreter& sub)
+{
+    for (auto it = sub.m_map_output.begin(); it != sub.m_map_output.end(); ++it)
+    {
+        const containers::Array<crd::i64>& from = it.value();
+        containers::Array<crd::i64>        map(m_scratch);
+        for (crd::usize i = 0; i < from.size(); ++i)
+        {
+            map.push_back(from[i]);
+        }
+        store_map_output(it.key(), std::move(map));
+    }
+    sub.m_map_output.clear();
 }
 
 containers::ConstSpan<crd::i64> Interpreter::map_output(const Operation* op) const noexcept
@@ -340,11 +356,22 @@ ExecError Interpreter::eval_block(const Block& b)
         {
             return fail(ExecError::Cancelled, op);
         }
-        if (!spend_fuel())
+        // DIAG.10a: a step is a dispatched op or a loop iteration; a terminator (core.yield / func.return) does no work
+        // of its own (run_region reads its operands), so it spends none — the budget the compiled plan spends, where a
+        // terminator is never an instr. Charging it made the two tiers exhaust at different ops.
+        if (!m_ctx.has_trait(op->kind(), OpTrait::Terminator) && !spend_fuel())
         {
             return fail(ExecError::FuelExhausted, op);
         }
+        // DIAG.10a: an op that enters a region or calls nests one level while it runs (kMaxNesting).
+        const bool nests = op->num_regions() > 0U || op->kind() == m_call_kind;
+        if (nests && m_nesting >= kMaxNesting)
+        {
+            return fail(ExecError::NestingTooDeep, op);
+        }
+        m_nesting += nests ? 1U : 0U;
         const ExecError e = eval_op(*op);
+        m_nesting -= nests ? 1U : 0U;
         if (e != ExecError::None)
         {
             return e;
@@ -745,7 +772,7 @@ ExecError eval_for(Interpreter& in, const Operation& op)
     }
     const Region* const body = op.region(0);
     Block* const        eb   = body->first_block();
-    for (crd::i64 iv = lo; iv < hi; iv += st)
+    for (crd::i64 iv = lo; iv < hi;)
     {
         if (in.cancelled())
         {
@@ -763,6 +790,12 @@ ExecError eval_for(Interpreter& in, const Operation& op)
         {
             return e;
         }
+        // DIAG.10a: the last iteration is the one within `st` of `hi`; `iv += st` past it would overflow (undefined).
+        if (static_cast<crd::u64>(hi) - static_cast<crd::u64>(iv) <= static_cast<crd::u64>(st))
+        {
+            break;
+        }
+        iv += st;
     }
     return ExecError::None;
 }
@@ -957,7 +990,7 @@ ExecError eval_cancel(Interpreter& in, const Operation& op)
 // ── the SEQUENTIAL reference for task.parallel_for / task.map_reduce (CEIR-11a — the §118 oracle) ──
 // ⛔ The body runs on ONE fresh SUB-interpreter cloned from `in` (the 6z fold pattern): NOT run_region in `in`'s frame
 // (outer captures would wrongly RESOLVE — the TOML pins them UndefinedValue) and NOT invoke_region on `in` (its frame is
-// live). The sub gets `in`'s remaining fuel; captures are structurally UndefinedValue, matching the provider. Runs the
+// live). The sub spends `in`'s remaining fuel (charged back); captures are structurally UndefinedValue. Runs the
 // map SEQUENTIALLY in index order — the SAME output as the provider's parallel run (index-order-disjoint slots), so the
 // §118 differential compare is byte-identical WITHOUT sharing execution (only the pre-flight ANALYSIS is shared).
 ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<crd::i64>& out)
@@ -984,32 +1017,37 @@ ExecError run_seq_map(Interpreter& in, const Operation& op, containers::Array<cr
     {
         return in.fail(pf.err, pf.op);
     }
-    const crd::u32 count = (hi > lo) ? static_cast<crd::u32>((hi - lo + step - 1) / step) : 0U; // == the provider's count
-    for (crd::u32 i = 0; i < count; ++i)
-    {
-        out.push_back(0);
-    }
+    const crd::u64 count = parallel_range_count(lo, hi, step);
     if (count == 0U) // empty range: an empty map (matches the provider's empty store)
     {
         return ExecError::None;
     }
     Interpreter sub(in, in.allocator(), in.fuel()); // ONE fresh sub (semantics copied; fresh env/cells/fuel)
-    for (crd::u32 i = 0; i < count; ++i)
+    sub.inherit_nesting(in);                        // DIAG.10a: the body runs inside this op's nesting level
+    for (crd::u64 i = 0; i < count; ++i)
     {
         if (in.cancelled()) // per-index (eval_for granularity)
         {
             return in.fail(ExecError::Cancelled, &op);
         }
-        const crd::i64              iv     = lo + static_cast<crd::i64>(i) * step;
-        const crd::i64              iva[1] = {iv};
+        // DIAG.10a: each index is one step of the body's budget (the eval_for rule), so a range ends within the budget
+        // even when its body dispatches nothing, and the map grows per index instead of being pre-sized from a count
+        // the program chose (a 2^31-index range reserved 16 GiB before running any body).
+        if (!sub.spend_fuel())
+        {
+            return in.fail(ExecError::FuelExhausted, &op);
+        }
+        const crd::i64              iva[1] = {parallel_range_index(lo, step, i)};
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(0), containers::ConstSpan<crd::i64>(iva, 1U), yield);
         if (e != ExecError::None) // DIAG.8a: blame the body's innermost op (the plan's fault), else the parallel op
         {
             return in.fail(e, sub.failed_op() != nullptr ? sub.failed_op() : &op);
         }
-        out[i] = (yield.size() >= 1U) ? yield[0] : 0; // pre-flight guarantees yield == 1
+        out.push_back((yield.size() >= 1U) ? yield[0] : 0); // pre-flight guarantees yield == 1
     }
+    in.adopt_map_outputs(sub); // DIAG.10a: the body's own parallel ops keep their maps (the plan's run-wide store)
+    in.charge_from(sub);       // DIAG.10a: the body's steps are the run's
     return ExecError::None;
 }
 ExecError eval_parallel_for_seq(Interpreter& in, const Operation& op)
@@ -1042,8 +1080,13 @@ ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
         return in.fail(ExecError::UndefinedValue, &op);
     }
     Interpreter sub(in, in.allocator(), in.fuel());
-    for (crd::u32 i = 0; i < static_cast<crd::u32>(out.size()); ++i) // SEQUENTIAL fold in INDEX order (the fixed order)
+    sub.inherit_nesting(in); // DIAG.10a: the fold runs inside this op's nesting level
+    for (crd::usize i = 0; i < out.size(); ++i) // SEQUENTIAL fold in INDEX order (the fixed order)
     {
+        if (!sub.spend_fuel()) // DIAG.10a: each fold step is one step of the fold's budget, like each map index
+        {
+            return in.fail(ExecError::FuelExhausted, &op);
+        }
         const crd::i64              ba[2] = {acc, out[i]}; // (acc, elem) in index order
         containers::Array<crd::i64> yield(in.allocator());
         const ExecError e = sub.invoke_region(*m, *op.region(1), containers::ConstSpan<crd::i64>(ba, 2U), yield);
@@ -1053,6 +1096,8 @@ ExecError eval_map_reduce_seq(Interpreter& in, const Operation& op)
         }
         acc = (yield.size() >= 1U) ? yield[0] : 0;
     }
+    in.adopt_map_outputs(sub); // DIAG.10a: as for the map phase
+    in.charge_from(sub);
     in.set_value(op.result(0U), acc);           // expression op — the reduced value is its SSA result
     in.store_map_output(&op, std::move(out));   // §118 inspection parity (the intermediate map — the provider stores it too)
     return ExecError::None;

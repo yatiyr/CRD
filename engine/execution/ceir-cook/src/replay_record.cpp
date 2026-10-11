@@ -601,8 +601,7 @@ void put_device(cont::Array<crd::u8>& payload, const ReplayRecord& record)
     {
         return RecordError::Truncated;
     }
-    if (error > static_cast<crd::u8>(plan::RunError::InputUnavailable) ||
-        host_error > static_cast<crd::u8>(exec::ExecError::InputUnavailable))
+    if (error > static_cast<crd::u8>(plan::kLastRunError) || host_error > static_cast<crd::u8>(exec::kLastExecError))
     {
         return RecordError::Malformed;
     }

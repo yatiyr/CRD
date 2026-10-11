@@ -33,6 +33,8 @@ ROOT = Path(__file__).resolve().parent.parent
 TARGETS = {
     'ceir-text': {'corpus': 'tests/execution/ceir/fuzz/corpus/text', 'executable': 'tests/ceir/fuzz/crd-fuzz-ceir-text'},
     'ceir-binary': {'corpus': 'tests/execution/ceir/fuzz/corpus/binary', 'executable': 'tests/ceir/fuzz/crd-fuzz-ceir-binary'},
+    'ceir-differential': {'corpus': 'tests/execution/ceir/fuzz/corpus/differential',
+                          'executable': 'tests/ceir/fuzz/crd-fuzz-ceir-differential'},
     'ckir-text': {'corpus': 'tests/gpu/kir/fuzz/corpus/text', 'executable': 'tests/kir/fuzz/crd-fuzz-ckir-text'},
     'ckir-binary': {'corpus': 'tests/gpu/kir/fuzz/corpus/binary', 'executable': 'tests/kir/fuzz/crd-fuzz-ckir-binary'},
     'perf-bundle': {'corpus': 'tests/foundation/perf/fuzz/corpus/bundle',

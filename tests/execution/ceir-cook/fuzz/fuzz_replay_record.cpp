@@ -160,8 +160,8 @@ bool recorder_could_write(const ReplayRecord& r) noexcept
     }
 
     // Each executor reports its own error, and a cancelled run is never written.
-    if (static_cast<u32>(r.error) > static_cast<u32>(RunError::InputUnavailable) ||
-        static_cast<u32>(r.host_error) > static_cast<u32>(ExecError::InputUnavailable) ||
+    if (static_cast<u32>(r.error) > static_cast<u32>(crd::ceir::plan::kLastRunError) ||
+        static_cast<u32>(r.host_error) > static_cast<u32>(crd::ceir::exec::kLastExecError) ||
         (host && r.error != RunError::None) || (!host && r.host_error != ExecError::None) ||
         r.error == RunError::Cancelled || r.host_error == ExecError::Cancelled)
     {
