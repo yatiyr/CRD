@@ -52,7 +52,10 @@
    "paths": ["engine/execution/ceir-cook/src/replay_*.cpp", "engine/execution/ceir-cook/src/device_replay.cpp",
              "engine/execution/ceir-host/src/host_replay*.cpp"]},
   {"group": "specimen harness (the instrument)", "rows": ["DIAG.0", "DIAG.10b"],
-   "paths": ["tests/support/diag/src/*.cpp"]}
+   "paths": ["tests/support/diag/src/*.cpp"]},
+  {"group": "numerical-mode probe", "rows": ["DIAG.10c"],
+   "paths": ["engine/foundation/core/src/fp_environment.cpp",
+             "engine/foundation/core/include/crd/core/fp_environment.hpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",

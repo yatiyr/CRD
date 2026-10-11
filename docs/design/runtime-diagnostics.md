@@ -2144,6 +2144,42 @@ Acceptance: a wrong-but-noncrashing result is caught by an independent invariant
 generation. Valid special values allowed by a domain are not rejected indiscriminately. Longer offline work remains
 progressing; slowdowns are measured before classified. Future scientific/physics/audio modules inherit the probes.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-numerical-mode.md)):
+- The declared numerical mode is the thread-start mode: MXCSR `0x1F80` (every exception masked, round to nearest
+  even, no flush-to-zero, no denormals-are-zero) on both platforms, and the x87 control word `0x027F` on Windows
+  (the CRT's 53-bit precision) and `0x037F` on Linux (glibc's 64-bit precision). SSE/AVX float and double
+  arithmetic is IEEE binary32/binary64 under it; x87 arithmetic is Linux's `long double` only, since MSVC compiles
+  none on x64. Only control state is a mode: the sticky exception flags are results of past operations and are never
+  compared. No algorithm or unit changes; code that wants another mode sets it for a bounded scope. This is the
+  runtime FPU state [ADR-0063](../decisions/0063-eylem-determinism-contract.md) requires of eylem threads; until
+  now no test checked it.
+- The probe is `crd/core/fp_environment.hpp`, a leaf every module can use: `read_fp_environment`,
+  `declared_fp_environment`, `write_fp_environment`, `ScopedFpEnvironment` and `fp_differences`, which names each
+  differing field (flush-to-zero, denormals-are-zero, rounding, exception masks, x87 precision, rounding, masks and
+  the other bits) and reports a field read on one side only as `Unread`, never as a match. MXCSR is read on every
+  x86-64 compiler; the x87 word only where GNU inline assembly exists (gcc, clang, clang-cl; MSVC has none on x64
+  and emits no x87 arithmetic). AArch64 reads nothing yet: its FPCR belongs to JOBS-PORT.
+- At the crd-jobs boundary every job starts in the declared mode, whatever mode the thread that submitted or runs it
+  is in; a mode a job sets is its own, kept across its waits and thread migrations and gone when it ends; no job
+  changes the mode of the thread that ran it. Windows already held this (its fiber switch saves MXCSR and the x87
+  word and a fiber restarts from a frame holding the defaults). The Linux switch saved neither: its comment called
+  both caller-saved, but the x86-64 psABI makes their control bits callee-saved. A job's flush-to-zero or rounding
+  mode therefore reached the worker's scheduler stack and every later job on that thread, a fresh fiber inherited
+  whatever mode its thread had, and a waiting job resumed in the resuming thread's mode. `[diag10c]` cases in
+  crd-jobs-tests caught all of it on linux-gcc-debug (all four failed, thread 0 itself ending in a job's mode);
+  `fiber_switch_lin64.S` now saves and restores both registers and `fiber_init_stack` writes the declared values
+  into a fresh fiber's frame (now 72 bytes, keeping `crd_fiber_start`'s entry alignment). Both platforms take the
+  defaults from the probe's constants.
+- Every job runs on a fiber (`WorkerPool::run_job_in_fiber`, from the worker loop and from the main thread's pump
+  and wait); the synchronous `Scheduler::execute_one`/`run_job` is called only by the white-box scheduler tests, so
+  the fiber switch is the only boundary to hold.
+- Not yet settled (the rest of this row): value-domain probes (NaN, infinities, subnormals, signed zero and ranges
+  with per-domain allowances), the generation-attributed wrong-result oracle at the CEIR boundary, shape and stride,
+  units and time-domain, lifetime accounting beyond heap bytes, queue/VRAM pressure and budgets, warm/cold, soak,
+  reload and shutdown workloads with one stressor at a time and seeded injection, slowdown measurement before
+  classification, device-reset and host-pressure evidence, and the mode probe at other boundaries (an audio callback,
+  a CEIR plan run, third-party library calls).
+
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles
 

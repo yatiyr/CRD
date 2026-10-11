@@ -42,7 +42,10 @@ the platform ABI:
 
 - **Windows x64 ABI:** RBX, RBP, RDI, RSI, R12–R15, XMM6–XMM15, RSP (+ MXCSR, FCW for
   floating-point environment)
-- **Linux x86-64 SysV ABI:** RBX, RBP, R12–R15, RSP (XMMs are caller-saved; no FP env save needed)
+- **Linux x86-64 SysV ABI:** RBX, RBP, R12–R15, RSP (XMMs are caller-saved), + MXCSR and FCW. Amended
+  2026-10-11 (DIAG.10c): the original "no FP env save needed" was wrong. The psABI makes the MXCSR control bits and
+  the x87 control word callee-saved, and without the save a job's flush-to-zero or rounding mode reached the next
+  job on its thread ([runtime diagnostics](../design/runtime-diagnostics.md#diag-10c)).
 
 **Why:** Platform fiber APIs (CreateFiber / makecontext) save the full CPU state (SSE, AVX,
 TLS slots, debug registers) and pay OS-level overhead (~200 ns per switch). The hand-rolled path

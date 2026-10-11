@@ -1,5 +1,6 @@
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/core/fp_environment.hpp>
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
@@ -37,8 +38,8 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     //
     // Initial frame layout (from saved_RSP low → high):
     //   [  0..159]  XMM6-XMM15    (10 × 16 = 160 bytes, restored with movdqu)
-    //   [160..163]  MXCSR         (4 bytes, default 0x1F80)
-    //   [164..165]  x87 FCW       (2 bytes, default 0x027F)
+    //   [160..163]  MXCSR         (4 bytes, kMxcsrDefault 0x1F80)
+    //   [164..165]  x87 FCW       (2 bytes, kX87ControlDefault 0x027F)
     //   [166..167]  padding       (2 bytes, zero)
     //   [168..175]  RBX           (8 bytes, zero)
     //   [176..183]  RBP           (8 bytes, zero)
@@ -66,9 +67,9 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     auto* frame = reinterpret_cast<crd::u8*>(p - frame_size); // NOLINT(performance-no-int-to-ptr)
     std::memset(frame, 0, frame_size);
 
-    // Default FP environment
-    *reinterpret_cast<crd::u32*>(frame + 160U) = 0x1F80U;  // MXCSR
-    *reinterpret_cast<crd::u16*>(frame + 164U) = 0x027FU;  // x87 FCW
+    // The declared FP environment (DIAG.10c, crd/core/fp_environment.hpp)
+    *reinterpret_cast<crd::u32*>(frame + 160U) = crd::kMxcsrDefault;      // MXCSR 0x1F80
+    *reinterpret_cast<crd::u16*>(frame + 164U) = crd::kX87ControlDefault; // x87 FCW 0x027F
 
     // Entry point and safety net
     *reinterpret_cast<void**>(frame + 232U) = reinterpret_cast<void*>(entry_fn);
@@ -79,28 +80,33 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     ctx.tib_stack_limit = stack_base;                                      // low end (fully committed)
 
 #elif CRD_ARCH_X64
-    // Linux x86-64 SysV ABI — callee-saved: RBX RBP R12-R15 (XMMs are caller-saved)
+    // Linux x86-64 SysV ABI — callee-saved: RBX RBP R12-R15, the MXCSR control bits and the x87 control word
+    // (XMMs are caller-saved). DIAG.10c: fiber_switch_lin64.S saves the two control registers as Windows does, so a
+    // fresh fiber starts in the declared mode (crd/core/fp_environment.hpp), whatever mode its thread is in.
     //
     // Initial frame layout (from saved_RSP low → high):
-    //   [ 0.. 7]  RBX           (8 bytes, zero)
-    //   [ 8..15]  RBP           (8 bytes, zero)
-    //   [16..23]  R12           entry_fn     (crd_fiber_start calls it)
-    //   [24..31]  R13           fiber_abort  (crd_fiber_start calls it if entry_fn returns: safety net)
-    //   [32..39]  R14           (8 bytes, zero)
-    //   [40..47]  R15           (8 bytes, zero)
-    //   [48..55]  crd_fiber_start ← fiber_switch's `ret` jumps here
-    //   [56..63]  zero          (unused; keeps the frame 16-aligned)
-    //   Total: 64 bytes
+    //   [ 0.. 3]  MXCSR         (4 bytes, kMxcsrDefault 0x1F80)
+    //   [ 4.. 5]  x87 FCW       (2 bytes, kX87ControlDefault 0x037F)
+    //   [ 6.. 7]  padding       (2 bytes, zero)
+    //   [ 8..15]  RBX           (8 bytes, zero)
+    //   [16..23]  RBP           (8 bytes, zero)
+    //   [24..31]  R12           entry_fn     (crd_fiber_start calls it)
+    //   [32..39]  R13           fiber_abort  (crd_fiber_start calls it if entry_fn returns: safety net)
+    //   [40..47]  R14           (8 bytes, zero)
+    //   [48..55]  R15           (8 bytes, zero)
+    //   [56..63]  crd_fiber_start ← fiber_switch's `ret` jumps here
+    //   [64..71]  zero          (unused; keeps crd_fiber_start's entry alignment below)
+    //   Total: 72 bytes
     //
     // crd_fiber_start (fiber_switch_lin64.S) carries `.cfi_undefined rip`, so every unwinder stops at the fiber's
     // outermost frame instead of walking past the stack top (DIAG.6c(g); Windows' table walk already stops there).
     //
     // Alignment invariant:
-    //   p = align16(stack_top), saved_RSP = p - 64, saved_RSP % 16 = 0
-    //   crd_fiber_start begins at saved_RSP + 56 (RSP % 16 = 8), adjusts by 8, and calls entry_fn, which therefore
+    //   p = align16(stack_top), saved_RSP = p - 72, saved_RSP % 16 = 8
+    //   crd_fiber_start begins at saved_RSP + 64 (RSP % 16 = 8), adjusts by 8, and calls entry_fn, which therefore
     //   begins at RSP % 16 = 8 per the SysV ABI ✓
 
-    constexpr crd::usize frame_size = 64U;
+    constexpr crd::usize frame_size = 72U;
     CRD_ASSERT(stack_size >= frame_size + 64U);
 
     auto p = reinterpret_cast<std::uintptr_t>(top);
@@ -109,9 +115,13 @@ void fiber_init_stack(FiberContext& ctx, void* stack_base, crd::usize stack_size
     auto* frame = reinterpret_cast<crd::u8*>(p - frame_size); // NOLINT(performance-no-int-to-ptr)
     std::memset(frame, 0, frame_size);
 
-    *reinterpret_cast<void**>(frame + 16U) = reinterpret_cast<void*>(entry_fn);        // R12
-    *reinterpret_cast<void**>(frame + 24U) = reinterpret_cast<void*>(fiber_abort);     // R13
-    *reinterpret_cast<void**>(frame + 48U) = reinterpret_cast<void*>(crd_fiber_start); // first `ret` target
+    // The declared floating-point mode, not the mode of the thread that builds or first runs the fiber
+    *reinterpret_cast<crd::u32*>(frame + 0U) = crd::kMxcsrDefault;      // MXCSR
+    *reinterpret_cast<crd::u16*>(frame + 4U) = crd::kX87ControlDefault; // x87 FCW
+
+    *reinterpret_cast<void**>(frame + 24U) = reinterpret_cast<void*>(entry_fn);        // R12
+    *reinterpret_cast<void**>(frame + 32U) = reinterpret_cast<void*>(fiber_abort);     // R13
+    *reinterpret_cast<void**>(frame + 56U) = reinterpret_cast<void*>(crd_fiber_start); // first `ret` target
 
     ctx.rsp = frame;
 

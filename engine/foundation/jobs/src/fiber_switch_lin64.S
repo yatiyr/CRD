@@ -6,18 +6,26 @@
  *
  * FiberContext layout: { void* rsp; }  — single pointer at offset 0.
  *
- * SysV callee-saved: RBX RBP R12 R13 R14 R15 RSP
+ * SysV callee-saved: RBX RBP R12 R13 R14 R15 RSP, the MXCSR control bits and the x87 control word.
  * XMM registers are caller-saved in SysV — no save/restore required.
- * No MXCSR / x87 FCW save (they are caller-saved in SysV).
+ *
+ * DIAG.10c: MXCSR and the x87 control word are saved and restored like Windows does. The psABI makes their control
+ * bits callee-saved (only the MXCSR status bits and the x87 status word are caller-saved). Without the save, a job
+ * that set flush-to-zero or a rounding mode passed it to the worker's scheduler stack and to every job that ran next
+ * on that thread, and a job that waited resumed in whatever mode the resuming thread had: results changed without
+ * any crash. The whole MXCSR is kept, so a job's sticky exception flags stay its own as well.
  *
  * Stack frame built on the CURRENT fiber's stack (from saved_RSP, low to high):
- *   [ 0.. 7]  RBX
- *   [ 8..15]  RBP
- *   [16..23]  R12
- *   [24..31]  R13
- *   [32..39]  R14
- *   [40..47]  R15
- *   [48..N ]  return address (saved by the original `call fiber_switch`)
+ *   [ 0.. 3]  MXCSR
+ *   [ 4.. 5]  x87 FCW
+ *   [ 6.. 7]  padding
+ *   [ 8..15]  RBX
+ *   [16..23]  RBP
+ *   [24..31]  R12
+ *   [32..39]  R13
+ *   [40..47]  R14
+ *   [48..55]  R15
+ *   [56..N ]  return address (saved by the original `call fiber_switch`)
  */
 
 .text
@@ -33,11 +41,21 @@ fiber_switch:
     push    %rbp
     push    %rbx
 
+    /* Save the floating-point control state (DIAG.10c) */
+    sub     $8, %rsp
+    stmxcsr (%rsp)
+    fnstcw  4(%rsp)
+
     /* Save current RSP into from->rsp ([rdi + 0]) */
     mov     %rsp, (%rdi)
 
     /* Load next RSP from to->rsp ([rsi + 0]) */
     mov     (%rsi), %rsp
+
+    /* Restore the floating-point control state of the fiber being resumed */
+    ldmxcsr (%rsp)
+    fldcw   4(%rsp)
+    add     $8, %rsp
 
     /* Restore callee-saved integer registers from new stack */
     pop     %rbx

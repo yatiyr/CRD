@@ -74,6 +74,18 @@
    "explanation": "Two cases wrote the same record file while CTest ran them as separate processes in one directory; the second now writes its own file. The shared file is the likely cause, not a reproduced one.",
    "session": "2026-10-11-diag-10a-host-parallel-range.md",
    "rows": ["DIAG.9a", "DIAG.10a"]
+  },
+  {
+   "id": "lbvh-gpu-bounds-parallel",
+   "first_seen": "2026-10-11",
+   "lane": "win-debug (local full ctest, -j 8)",
+   "target": "v9a-c GPU N=10000 random: CPU vs GPU topology byte-identical + bounds within 1 ULP",
+   "signature": "Six node bounds (max.x, max.y, max.z) differed between the CPU and GPU builds by 0.003 to 0.049 against a 1-ULP tolerance (test_lbvh.cpp:487-489); 169,984 of 169,990 assertions passed",
+   "reruns": "Run alone it then passed once and 10 of 10 with --repeat until-fail:10.",
+   "status": "nonreproduced",
+   "explanation": "The batch changed only the Linux fiber switch, the Windows fiber frame's constants (same values) and a new crd-core probe; the BVH builders do not read or set the floating-point mode. Not explained.",
+   "session": "2026-10-11-diag-10c-numerical-mode.md",
+   "rows": ["DIAG.10c"]
   }
  ]
 }
