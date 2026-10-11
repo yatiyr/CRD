@@ -53,6 +53,11 @@ bool built_with_asan()
     return false;
 #endif
 }
+
+const char* yes_no(bool value)
+{
+    return value ? "yes" : "no";
+}
 } // namespace
 
 TEST_CASE("diag harness: the clean specimen is an expected-clean positive", "[diag][harness]")
@@ -78,14 +83,20 @@ TEST_CASE("diag harness: the crash specimen is an expected-crash positive", "[di
 TEST_CASE("diag harness: the sanitizer specimen is caught, or reported absent", "[diag][harness]")
 {
     // The falsifier of the whole fixture: an expected sanitizer catch must be a
-    // CATCH when the runtime is present and INSTRUMENT-ABSENT when it is not --
-    // never a silent pass either way. The specimen is built with the same flags as
-    // this test, so the build's sanitizer decides which verdict is correct.
+    // CATCH when the lane promises the runtime and INSTRUMENT-ABSENT when it does
+    // not -- never a silent pass either way. The promise is the lane's configuration
+    // (DIAG.10b), not this binary's flags: a lane that lost -fsanitize everywhere
+    // would otherwise see InstrumentAbsent from both sides and pass. This binary
+    // must also carry what its lane promises.
+    const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
     const cd::Outcome o = cd::run_specimen(heap_overflow_specimen(), cont::Array<cont::String>{}, e);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
-    if (built_with_asan())
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_asan=" << yes_no(lane.asan)
+                    << " binary_asan=" << yes_no(built_with_asan()));
+    CHECK(built_with_asan() == lane.asan);
+    if (lane.asan)
     {
         CHECK(o.verdict == cd::Verdict::SanitizerCaught);
     }
@@ -98,13 +109,18 @@ TEST_CASE("diag harness: the sanitizer specimen is caught, or reported absent", 
 TEST_CASE("diag 3f: heap-use-after-free is caught by ASan, or reported absent", "[diag][harness][diag3f]")
 {
     // A temporal-safety class core AddressSanitizer catches on every ASan lane (win-asan + linux).
-    // Same falsifier as the heap-overflow case: CAUGHT with the runtime present, INSTRUMENT-ABSENT
-    // without -- never a silent pass. Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    // Same falsifier as the heap-overflow case: CAUGHT where the lane promises the runtime,
+    // INSTRUMENT-ABSENT where it does not -- never a silent pass. Contract:
+    // docs/design/runtime-diagnostics.md#diag-3f and #diag-10b.
+    const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
     const cd::Outcome o = cd::run_specimen(use_after_free_specimen(), cont::Array<cont::String>{}, e);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
-    if (built_with_asan())
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_asan=" << yes_no(lane.asan)
+                    << " binary_asan=" << yes_no(built_with_asan()));
+    CHECK(built_with_asan() == lane.asan);
+    if (lane.asan)
     {
         CHECK(o.verdict == cd::Verdict::SanitizerCaught);
     }
@@ -116,18 +132,22 @@ TEST_CASE("diag 3f: heap-use-after-free is caught by ASan, or reported absent", 
 
 TEST_CASE("diag 3f: stack-use-after-return is qualified on the gcc/clang ASan lanes", "[diag][harness][diag3f]")
 {
-    // The design's named "MSVC use-after-return" class. The specimen self-reports its route: on gcc/clang
-    // ASan it tags "asan" and commits a real stack-use-after-return the runtime catches (SanitizerCaught);
-    // on MSVC ASan -- where the fake-stack route is not reliably reported -- it pre-tags "none", so the
-    // route is InstrumentAbsent (explicitly unqualified, a partial-instrumentation dependency, never a
-    // skip-pass). The harness judges purely on the specimen's echoed tag, so no lane #ifdef is needed.
-    // Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    // The design's named "MSVC use-after-return" class. On gcc/clang ASan the specimen tags "asan" and
+    // commits a real stack-use-after-return the runtime catches (SanitizerCaught); on MSVC ASan -- where
+    // the fake-stack route is not reliably reported -- it pre-tags "none", so the route is
+    // InstrumentAbsent (explicitly unqualified, a partial-instrumentation dependency, never a skip-pass).
+    // Which verdict is correct is the lane's promise (DIAG.10b), not the specimen's own tag: judged on the
+    // tag, a specimen that lost -fsanitize on a gcc ASan lane would tag "none" and pass.
+    // Contract: docs/design/runtime-diagnostics.md#diag-3f and #diag-10b.
+    const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
     const cd::Outcome o = cd::run_specimen(use_after_return_specimen(), cont::Array<cont::String>{}, e);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
-    if (cont::StringView{o.sanitizer} == cont::StringView{"asan"})
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_use_after_return=" << yes_no(lane.use_after_return));
+    if (lane.use_after_return)
     {
+        CHECK(cont::StringView{o.sanitizer} == cont::StringView{"asan"});
         CHECK(o.verdict == cd::Verdict::SanitizerCaught); // gcc/clang ASan lane: the route is qualified
     }
     else
@@ -140,14 +160,18 @@ TEST_CASE("diag 3f: a memory leak is caught by LeakSanitizer, or reported absent
 {
     // The "leak routes" class. On a LeakSanitizer build the specimen tags "asan" and aborts on a
     // recoverable leak check (SanitizerCaught); where no LSan route exists it tags "none" and exits
-    // clean (InstrumentAbsent). Judged purely on the specimen's echoed tag -- no lane #ifdef, no
-    // skip-pass. Qualified on linux-gcc-asan. Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    // clean (InstrumentAbsent), never a skip-pass. Qualified on linux-gcc-asan. Which verdict is correct
+    // is the lane's promise (DIAG.10b), not the specimen's own tag. Contract:
+    // docs/design/runtime-diagnostics.md#diag-3f and #diag-10b.
+    const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
     const cd::Outcome o = cd::run_specimen(leak_specimen(), cont::Array<cont::String>{}, e);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
-    if (cont::StringView{o.sanitizer} == cont::StringView{"asan"})
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_leak_route=" << yes_no(lane.leak_route));
+    if (lane.leak_route)
     {
+        CHECK(cont::StringView{o.sanitizer} == cont::StringView{"asan"});
         CHECK(o.verdict == cd::Verdict::SanitizerCaught);
     }
     else

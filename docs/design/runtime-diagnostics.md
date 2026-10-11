@@ -2025,6 +2025,33 @@ Acceptance: broken sanitizer activation, suppressed reports, removed guard, lost
 mapping make the diagnostic suite fail. Read JSON/JUnit and actual artifact contents; exit status alone is insufficient.
 No implementation-mirroring unit tests substitute for these observable failure cases.
 
+Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-seeded-detector-failures.md)):
+- The five acceptance classes are seeds in [seeded-faults.json](../../tests/support/diag/seeded-faults.json), run by
+  [diag-seeded-faults.py](../../scripts/diag-seeded-faults.py) against a real build lane: control run, seed, rebuild,
+  run, byte-exact restore, rebuild, run. The verdict is read from CTest's JUnit and each failing test's output (the
+  registry names the diagnostic text it must print); a passing test is SURVIVED, a failure without that text is
+  WRONG_FAILURE, a mutant that does not compile is never a detection, and nothing is rerun. Eleven seeds: specimens
+  and tests built without the lane's sanitizer, ASan and TSan reports redirected to a log file, a TSan and an LSan
+  suppression naming Cerid's own specimens, MSVC ASan's `continue_on_error`, the rear-redzone check removed, a
+  truncated Windows minidump and Linux crash record, and half-compared symbol identities.
+- A lane's sanitizer promise comes from its configuration (`crd::diag::lane_promise()`, compiled from
+  `CRD_ENABLE_ASAN`/`CRD_ENABLE_TSAN` and the toolchain), not from a binary's own flags. Before, the sanitizer
+  specimen tests judged a specimen by its own tag or by the test binary's flags, so a specimen, or a whole lane, that
+  lost `-fsanitize` reported InstrumentAbsent and passed: the activation seeds survived on linux-gcc-asan (the
+  use-after-return and leak cases) and linux-clang-tsan (the data-race case), and the whole-lane seed survived every
+  case there. The tests now also require their own binary to carry the promised instrument.
+- A sanitizer catch needs the sanitizer's report. The specimen harness reads the child's stderr with its stdout
+  (and repeats it to the test log) and returns SanitizerCaught only when the output holds `ERROR: AddressSanitizer`,
+  `ERROR: LeakSanitizer` or `WARNING: ThreadSanitizer`; a death without it is Unexpected, with the reason
+  `exit <code> without an AddressSanitizer report in the child's output` (or `a ThreadSanitizer`), which the cases
+  print and the log-file seeds name. Before, any non-zero exit of a sanitizer-tagged specimen counted, and both
+  log-file seeds survived on every sanitizer lane.
+- The committed suppression files may name only third-party shared libraries; the verdict tests refuse any other
+  entry. CI has no retry: no `--repeat` or `--rerun-failed` in [ci.yml](../../.github/workflows/ci.yml) or the CTest
+  wrappers, and the registered-failure gate admits only reproduced third-party defects.
+- Not yet measured: branch, region, error-path and state-transition coverage of the DIAG scope with its denominator,
+  the register of coverage exclusions and nonreproduced failures, and the seeds on hosted lanes.
+
 <a id="diag-10c"></a>
 ## DIAG.10c — correctness and pressure sanity probes
 

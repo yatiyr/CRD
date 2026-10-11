@@ -56,6 +56,12 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `gdb-watch`, `cdb-watch`, `rr`, `ttd`) against the corruption specimen and names its writer or the instrument
   failure. The gdb routes are `crd-diag-reverse-debug-*` CTests on Linux; `test-reverse-debug-recipes.py` covers
   every verdict without a debugger and is a CTest and repository CI step.
+- Seeded detector failures ([contract](../docs/design/runtime-diagnostics.md#diag-10b)):
+  `diag-seeded-faults.py --build-dir <dir> [--preset <test-preset>] [--seed <id>]` applies each seed of
+  `tests/support/diag/seeded-faults.json` that fits the lane (a source edit or extra sanitizer environment), rebuilds,
+  reruns its detecting tests and reads their JUnit; it restores and rebuilds the tree after each seed. `--validate`
+  checks the registry against the tree; `test-diag-seeded-faults.py` covers every verdict without a build and is a
+  CTest and repository CI step.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

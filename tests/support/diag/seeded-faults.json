@@ -1,0 +1,401 @@
+{
+  "schema": "cerid-diag-seeded-faults/1",
+  "seeds": [
+    {
+      "id": "specimens-lose-sanitizer",
+      "class": "sanitizer-activation",
+      "summary": "The standalone sanitizer specimens are compiled without the lane's sanitizer while the lane still promises it.",
+      "when": [
+        {
+          "asan": true
+        },
+        {
+          "tsan": true
+        }
+      ],
+      "edits": [
+        {
+          "file": "tests/support/diag/CMakeLists.txt",
+          "old": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\n",
+          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-leak-specimen crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
+        }
+      ],
+      "build": [
+        "crd-perf-tests",
+        "crd-jobs-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag harness: the sanitizer specimen is caught, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: heap-use-after-free is caught by ASan, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: stack-use-after-return is qualified on the gcc/clang ASan lanes",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true,
+            "msvc": false
+          }
+        },
+        {
+          "test": "diag 3f: a memory leak is caught by LeakSanitizer, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true,
+            "msvc": false,
+            "os": "linux"
+          }
+        },
+        {
+          "test": "tsan harness: the data-race specimen is caught, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "tsan": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "lane-loses-sanitizer",
+      "class": "sanitizer-activation",
+      "summary": "The specimens and the tests that judge them are both compiled without the promised sanitizer.",
+      "when": [
+        {
+          "asan": true,
+          "msvc": false
+        },
+        {
+          "tsan": true
+        }
+      ],
+      "edits": [
+        {
+          "file": "tests/support/diag/CMakeLists.txt",
+          "old": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\n",
+          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-leak-specimen crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
+        },
+        {
+          "file": "tests/foundation/perf/CMakeLists.txt",
+          "old": "crd_discover_tests(crd-perf-tests)\n",
+          "new": "crd_discover_tests(crd-perf-tests)\nset_source_files_properties(test_diag_harness.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON\n    COMPILE_OPTIONS \"-fno-sanitize=address;-fno-sanitize=thread;-fno-sanitize=undefined\")\n"
+        },
+        {
+          "file": "tests/foundation/jobs/CMakeLists.txt",
+          "old": "crd_discover_tests(crd-jobs-tests)\n",
+          "new": "crd_discover_tests(crd-jobs-tests)\nset_source_files_properties(test_tsan_race_specimen.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON\n    COMPILE_OPTIONS \"-fno-sanitize=address;-fno-sanitize=thread;-fno-sanitize=undefined\")\n"
+        }
+      ],
+      "build": [
+        "crd-perf-tests",
+        "crd-jobs-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag harness: the sanitizer specimen is caught, or reported absent",
+          "text": [
+            "binary_asan=no"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: heap-use-after-free is caught by ASan, or reported absent",
+          "text": [
+            "binary_asan=no"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: stack-use-after-return is qualified on the gcc/clang ASan lanes",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: a memory leak is caught by LeakSanitizer, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true,
+            "os": "linux"
+          }
+        },
+        {
+          "test": "tsan harness: the data-race specimen is caught, or reported absent",
+          "text": [
+            "binary_tsan=no"
+          ],
+          "when": {
+            "tsan": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "asan-report-to-log-file",
+      "class": "suppressed-report",
+      "summary": "ASan writes its report to a log file, so the run's output carries no report while the process still dies.",
+      "when": {
+        "asan": true
+      },
+      "env": {
+        "ASAN_OPTIONS": "{inherit} log_path='{trace}/asan-report'"
+      },
+      "build": [
+        "crd-perf-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag harness: the sanitizer specimen is caught, or reported absent",
+          "text": [
+            "without an AddressSanitizer report"
+          ]
+        },
+        {
+          "test": "diag 3f: heap-use-after-free is caught by ASan, or reported absent",
+          "text": [
+            "without an AddressSanitizer report"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tsan-report-to-log-file",
+      "class": "suppressed-report",
+      "summary": "TSan writes its report to a log file, so the run's output carries no report while the process still dies.",
+      "when": {
+        "tsan": true
+      },
+      "env": {
+        "TSAN_OPTIONS": "{inherit} log_path='{trace}/tsan-report'"
+      },
+      "build": [
+        "crd-jobs-tests"
+      ],
+      "detect": [
+        {
+          "test": "tsan harness: the data-race specimen is caught, or reported absent",
+          "text": [
+            "without a ThreadSanitizer report"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tsan-suppression-names-cerid-source",
+      "class": "suppressed-report",
+      "summary": "The lane's TSan suppressions gain an entry for Cerid's own source, the data-race specimen.",
+      "when": {
+        "tsan": true
+      },
+      "files": {
+        "tsan-suppressions.txt": {
+          "from": "tests/support/diag/tsan-suppressions.txt",
+          "text": "race:data_race_specimen.cpp\n"
+        }
+      },
+      "env": {
+        "TSAN_OPTIONS": "{inherit} suppressions='{trace}/tsan-suppressions.txt'"
+      },
+      "build": [
+        "crd-jobs-tests"
+      ],
+      "detect": [
+        {
+          "test": "tsan harness: the data-race specimen is caught, or reported absent",
+          "text": [
+            "verdict=Unexpected"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lsan-suppression-names-cerid-source",
+      "class": "suppressed-report",
+      "summary": "A LeakSanitizer suppression names Cerid's own leak specimen.",
+      "when": {
+        "asan": true,
+        "msvc": false,
+        "os": "linux"
+      },
+      "files": {
+        "lsan-suppressions.txt": {
+          "text": "leak:leak_now\n"
+        }
+      },
+      "env": {
+        "LSAN_OPTIONS": "{inherit} suppressions='{trace}/lsan-suppressions.txt'"
+      },
+      "build": [
+        "crd-perf-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag 3f: a memory leak is caught by LeakSanitizer, or reported absent",
+          "text": [
+            "verdict=Unexpected"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "asan-continues-after-report",
+      "class": "suppressed-report",
+      "summary": "MSVC ASan's continue_on_error turns a fatal report into a warning the process survives.",
+      "when": {
+        "asan": true,
+        "msvc": true
+      },
+      "env": {
+        "ASAN_OPTIONS": "{inherit} continue_on_error=1"
+      },
+      "build": [
+        "crd-perf-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag harness: the sanitizer specimen is caught, or reported absent",
+          "text": [
+            "verdict=Unexpected"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "redzone-rear-check-removed",
+      "class": "removed-guard",
+      "summary": "DiagnosticAllocator stops checking the rear redzone, so an overrun past a block goes unreported.",
+      "edits": [
+        {
+          "file": "engine/foundation/memory/src/allocators/diagnostic_allocator.cpp",
+          "old": "    for (crd::u32 i = 0U; i < r.rear; ++i)\n",
+          "new": "    for (crd::u32 i = r.rear; i < r.rear; ++i)\n"
+        }
+      ],
+      "build": [
+        "crd-memory-tests",
+        "crd-fuzz-memory-allocators"
+      ],
+      "detect": [
+        {
+          "test": "diag-alloc: a rear overrun is an attributable RedzoneOverrun",
+          "text": [
+            "RedzoneOverrun"
+          ]
+        },
+        {
+          "test": "crd-fuzz-memory-allocators-corpus",
+          "text": [
+            "oracle failed",
+            "check_all_redzones"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "windows-dump-emptied",
+      "class": "lost-fatal-record",
+      "summary": "The fatal handler truncates the minidump it has just written and still reports it as written.",
+      "when": {
+        "os": "windows",
+        "asan": false
+      },
+      "edits": [
+        {
+          "file": "engine/foundation/core/src/crash.cpp",
+          "old": "    DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw\n",
+          "new": "    DWORD dump_err = GetLastError(); // an HRESULT for MiniDumpWriteDump; stored raw\n    (void)SetFilePointer(file, 0, nullptr, FILE_BEGIN);\n    (void)SetEndOfFile(file);\n"
+        }
+      ],
+      "build": [
+        "crd-core-tests"
+      ],
+      "detect": [
+        {
+          "test": "crash capture: a wild write terminates with the fault code and writes exactly one dump",
+          "text": [
+            "file_size"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "linux-crash-record-truncated",
+      "class": "lost-fatal-record",
+      "summary": "The Linux signal handler writes only the first 32 bytes of its crash record and reports it complete.",
+      "when": {
+        "os": "linux",
+        "asan": false,
+        "tsan": false
+      },
+      "edits": [
+        {
+          "file": "engine/foundation/core/src/crash.cpp",
+          "old": "    const bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);\n",
+          "new": "    const bool ok = write_all(fd, rec, n < 32U ? n : 32U) && (fsync(fd) == 0);\n"
+        }
+      ],
+      "build": [
+        "crd-core-tests"
+      ],
+      "detect": [
+        {
+          "test": "crash capture (linux): a wild write terminates with SIGSEGV and writes one record",
+          "text": [
+            "rf.has_regs"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "symbol-identity-half-compared",
+      "class": "symbol-mapping",
+      "summary": "identity_matches compares only the first half of a PDB GUID or build-id, so a different binary matches.",
+      "edits": [
+        {
+          "file": "engine/foundation/perf/src/symbol_index.cpp",
+          "old": "    if (std::memcmp(have.id, want.id, have.id_len) != 0)\n",
+          "new": "    if (std::memcmp(have.id, want.id, have.id_len / 2U) != 0)\n"
+        }
+      ],
+      "build": [
+        "crd-perf-tests"
+      ],
+      "detect": [
+        {
+          "test": "identity_matches rejects wrong symbols instead of guessing",
+          "text": [
+            "identity_matches(g, g_flip)"
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -16,19 +16,45 @@ namespace
 {
 namespace cd = crd::diag;
 namespace cont = crd::containers;
+
+bool built_with_tsan()
+{
+#if defined(__SANITIZE_THREAD__)
+    return true;
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+    return true;
+#else
+    return false;
+#endif
+#else
+    return false;
+#endif
+}
+
+const char* yes_no(bool value)
+{
+    return value ? "yes" : "no";
+}
 } // namespace
 
 TEST_CASE("tsan harness: the data-race specimen is caught, or reported absent", "[jobs][tsan][diag][harness]")
 {
+    const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
     const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_DATA_RACE_SPECIMEN}, cont::Array<cont::String>{}, e);
-    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str());
-    // The specimen self-reports its route: "tsan" only on a ThreadSanitizer build (where the race is
-    // caught), "none" otherwise -- including an ASan build, where ASan is present but cannot detect a
-    // data race. Judge on the echoed tag so an ASan lane reports InstrumentAbsent, not a false failure.
-    if (cont::StringView{o.sanitizer} == cont::StringView{"tsan"})
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_tsan=" << yes_no(lane.tsan)
+                    << " binary_tsan=" << yes_no(built_with_tsan()));
+    // The specimen tags "tsan" only on a ThreadSanitizer build (where the race is caught) and "none"
+    // otherwise -- including an ASan build, where ASan cannot detect a data race. Which verdict is correct
+    // is the lane's promise (DIAG.10b), and this binary must carry it: judged on the specimen's own tag, a
+    // specimen or a lane that lost -fsanitize=thread would report InstrumentAbsent and pass.
+    CHECK(built_with_tsan() == lane.tsan);
+    if (lane.tsan)
     {
+        CHECK(cont::StringView{o.sanitizer} == cont::StringView{"tsan"});
         CHECK(o.verdict == cd::Verdict::SanitizerCaught);
     }
     else

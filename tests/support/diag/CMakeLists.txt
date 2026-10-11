@@ -8,6 +8,25 @@ add_library(crd-diag-harness STATIC src/specimen_runner.cpp)
 target_include_directories(crd-diag-harness PUBLIC include)
 target_link_libraries(crd-diag-harness PUBLIC crd-core crd-containers)
 target_compile_features(crd-diag-harness PUBLIC cxx_std_20)
+# DIAG.10b: what this lane promises, from its configuration rather than from any binary's own flags, so a specimen or
+# a test that loses its sanitizer fails against the promise instead of reporting InstrumentAbsent and passing. The
+# routes mirror the specimens': use-after-return needs gcc or clang ASan, LeakSanitizer additionally Linux.
+crd_profile_condition(_crd_diag_lane_asan CRD_ENABLE_ASAN)
+if(MSVC)
+    set(_crd_diag_lane_gnu 0)
+else()
+    set(_crd_diag_lane_gnu 1)
+endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    set(_crd_diag_lane_linux 1)
+else()
+    set(_crd_diag_lane_linux 0)
+endif()
+target_compile_definitions(crd-diag-harness PRIVATE
+    "CRD_DIAG_LANE_ASAN=$<IF:${_crd_diag_lane_asan},1,0>"
+    "CRD_DIAG_LANE_TSAN=$<IF:$<BOOL:${CRD_ENABLE_TSAN}>,1,0>"
+    "CRD_DIAG_LANE_GNU=${_crd_diag_lane_gnu}"
+    "CRD_DIAG_LANE_LINUX=${_crd_diag_lane_linux}")
 
 # The detector specimens the harness runs as bounded children (EXCLUDE_FROM_ALL;
 # the tests that use them depend on them explicitly and receive their paths).

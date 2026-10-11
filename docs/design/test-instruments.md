@@ -278,6 +278,27 @@ fixed two engine races (the diagnostic snapshots' fiber and counter fields; the 
 ASan; see the [inventory and triage](../sessions/2026-10-05-clang-werror-and-tsan-inventory.md). The WSL2
 address-space note above did not reproduce with clang 18 on the 2026-10 reference host.
 
+## Seeded detector failures (DIAG.10b)
+
+[diag-seeded-faults.py](../../scripts/diag-seeded-faults.py) breaks one instrument at a time and requires the
+diagnostic suite to notice. The seeds live in [seeded-faults.json](../../tests/support/diag/seeded-faults.json): each
+is a set of exact source edits (each seeded text must occur once in the tree) or extra environment for the test run,
+with the lane facts it applies to (`os`, `asan`, `tsan`, `msvc`, ... read from the build tree) and the exact CTest
+names that must fail, each with the diagnostic text its failure must print. Per seed the runner builds the targets and
+runs the tests unseeded (all must pass), applies the seed, rebuilds and reruns with JUnit output, then restores the
+files byte for byte with a newer timestamp, rebuilds and reruns. The verdict comes from the JUnit and the test
+output, never from CTest's exit status: a seed that leaves a test passing SURVIVED, one whose test fails without the
+named text is a WRONG_FAILURE, a mutant that does not compile is BUILD_FAILED and never a detection, and no test is
+rerun. After the restore git must report each edited file exactly as before (an uncommitted change survives). Every
+seed names the targets holding its detecting tests, so even an environment seed tests the current tree. Contract and
+the classes it must cover: [DIAG.10b](runtime-diagnostics.md#diag-10b). Run it inside the MSVC environment on
+Windows, one lane at a time: a seed edits the shared checkout, so a second lane building from it would compile the
+seed.
+
+The committed sanitizer suppression files may name only third-party shared libraries (`lib*.so*`): the verdict tests
+(`test-diag-seeded-faults.py`, the `crd-diag-seeded-faults` CTest and a repository CI step) refuse any other entry,
+so the rule above about Cerid code is enforced, not only stated. A seed may add such an entry for its own run.
+
 ## Not in scope
 
 REPO.DEV.9 remains the bounded ingestion baseline. DIAG now owns the immediate diagnostic extensions above;

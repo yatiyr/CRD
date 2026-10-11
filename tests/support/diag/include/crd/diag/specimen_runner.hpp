@@ -32,7 +32,7 @@ enum class Verdict : crd::u8
 {
     Clean,             // exited 0, identity matched: the expected-clean positive
     Crashed,           // died by signal / abnormal exit: the expected-crash positive
-    SanitizerCaught,   // a sanitizer reported and aborted: the expected sanitizer positive
+    SanitizerCaught,   // the specimen died and its output carries its sanitizer's report: the sanitizer positive
     InstrumentAbsent,  // a sanitizer catch was expected but the specimen carries no sanitizer
     MissingSymbolizer, // the symbolizer dependency the run needs is unavailable
     ZeroSelection,     // the filter selected no specimen at all
@@ -47,9 +47,11 @@ const char* verdict_name(Verdict v);
 
 // What the caller expects of a specimen. The harness's verdict is judged against
 // this: e.g. Want::SanitizerCatch on a specimen tagged "none" yields
-// InstrumentAbsent, on a sanitized specimen that aborts yields SanitizerCaught,
-// and on a sanitized specimen that exits 0 yields Unexpected (a real instrument
-// failure: the overflow was not caught).
+// InstrumentAbsent, on a sanitized specimen that dies printing its sanitizer's
+// report yields SanitizerCaught, and on a sanitized specimen that exits 0, or dies
+// without that report in its output, yields Unexpected (a real instrument
+// failure: the overflow was not caught, or the report was lost). An exit status
+// alone is never a detection (DIAG.10b).
 struct Expectation
 {
     enum class Want : crd::u8
@@ -65,6 +67,9 @@ struct Expectation
     crd::u32                 timeout_ms = 10000U;
 };
 
+// The child's combined output kept for evidence (a sanitizer report is a few KiB; the cap bounds a runaway child).
+inline constexpr crd::usize kMaxOutputBytes = 1024U * 1024U;
+
 // The classified result of one run. Never carries an exception; a spawn failure is
 // MissingExecutable, not a throw. host_tuple records OS/ISA/compiler per the shared
 // acceptance rules.
@@ -76,10 +81,26 @@ struct Outcome
     bool                    timed_out = false;
     bool                    memory_bound_enforced = false; // false on sanitizer children by design (RLIMIT_AS breaks ASan)
     crd::containers::String identity;   // as echoed by the specimen on stdout
-    crd::containers::String sanitizer;  // "asan" | "ubsan" | "none", as echoed by the specimen
+    crd::containers::String sanitizer;  // "asan" | "tsan" | "none", as echoed by the specimen
     crd::containers::String reason;     // human-readable detail
     crd::containers::String host_tuple; // os/isa/compiler recorded on every run
+    crd::containers::String output;     // the child's stdout and stderr together, first kMaxOutputBytes kept
+    bool                    output_truncated = false; // the child wrote more than kMaxOutputBytes
 };
+
+// What the build lane promises, from its configuration (the CMake options compiled into this harness), never from a
+// specimen's or a test's own compile flags. A lane that loses a sanitizer -- a specimen or a test built without it --
+// must fail its specimen tests rather than see every specimen report InstrumentAbsent and pass (DIAG.10b). Tests
+// judge a specimen against this promise and check that their own binary carries it.
+struct LanePromise
+{
+    bool asan = false;             // CRD_ENABLE_ASAN for the configuration being built
+    bool tsan = false;             // CRD_ENABLE_TSAN
+    bool leak_route = false;       // LeakSanitizer: ASan built by gcc or clang on Linux
+    bool use_after_return = false; // fake-stack use-after-return reports: ASan built by gcc or clang
+};
+
+LanePromise lane_promise();
 
 // Run one specimen executable as a bounded child process and classify it against
 // `expect`. Pre-spawn instrument failures (denied output, missing executable) are

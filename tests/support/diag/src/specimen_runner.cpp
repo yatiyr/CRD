@@ -30,6 +30,12 @@
 #include <unistd.h>
 #endif
 
+// The lane's instrument promise (lane_promise) comes from the configuration, never from this file's own flags.
+#if !defined(CRD_DIAG_LANE_ASAN) || !defined(CRD_DIAG_LANE_TSAN) || !defined(CRD_DIAG_LANE_GNU) ||                     \
+    !defined(CRD_DIAG_LANE_LINUX)
+#error "crd-diag-harness needs the lane's instrument promise from tests/support/diag/CMakeLists.txt"
+#endif
+
 namespace crd::diag
 {
 
@@ -146,9 +152,54 @@ struct ChildResult
     bool            spawned = false;
     bool            timed_out = false;
     bool            crashed = false;
+    bool            truncated = false;
     int             exit_code = 0;
-    cont::String    stdout_text;
+    cont::String    output; // stdout and stderr through one pipe, in the order the child wrote them
 };
+
+// Keep the first kMaxOutputBytes of the child's output; the pipe is still drained past the cap.
+void keep_output(ChildResult& r, const char* data, crd::usize n)
+{
+    const crd::usize room = r.output.size() < kMaxOutputBytes ? kMaxOutputBytes - r.output.size() : 0U;
+    if (n > room)
+    {
+        r.truncated = true;
+        n = room;
+    }
+    if (n > 0U)
+    {
+        r.output.append(data, n);
+    }
+}
+
+// The report each sanitizer prints before it ends the process. A specimen that dies without it was not caught by
+// the sanitizer it names: its exit status alone is no detection (DIAG.10b). LeakSanitizer reports under ASan's tag.
+bool carries_report(std::string_view out, std::string_view tag)
+{
+    if (tag == "asan")
+    {
+        return out.find("ERROR: AddressSanitizer") != std::string_view::npos ||
+               out.find("ERROR: LeakSanitizer") != std::string_view::npos;
+    }
+    if (tag == "tsan")
+    {
+        return out.find("WARNING: ThreadSanitizer") != std::string_view::npos;
+    }
+    return false;
+}
+
+const char* report_name(std::string_view tag)
+{
+    if (tag == "asan")
+    {
+        return "an AddressSanitizer";
+    }
+    if (tag == "tsan")
+    {
+        return "a ThreadSanitizer";
+    }
+    return "a known sanitizer";
+}
 
 #if defined(_WIN32)
 
@@ -202,7 +253,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = wr;
-    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+    si.hStdError = wr; // the sanitizer reports are evidence: read them, never only inherit them
     si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
     PROCESS_INFORMATION pi{};
 
@@ -233,7 +284,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
             DWORD got = 0;
             if (ReadFile(rd, buf, sizeof(buf), &got, nullptr) != 0 && got > 0)
             {
-                r.stdout_text.append(buf, static_cast<crd::usize>(got));
+                keep_output(r, buf, static_cast<crd::usize>(got));
                 continue;
             }
         }
@@ -264,7 +315,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
         {
             break;
         }
-        r.stdout_text.append(buf, static_cast<crd::usize>(got));
+        keep_output(r, buf, static_cast<crd::usize>(got));
     }
 
     DWORD code = 0;
@@ -302,6 +353,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
     if (pid == 0)
     {
         ::dup2(fds[1], STDOUT_FILENO);
+        ::dup2(fds[1], STDERR_FILENO); // the sanitizer reports are evidence: read them, never only inherit them
         ::close(fds[0]);
         ::close(fds[1]);
         cont::Array<char*> argv;
@@ -329,7 +381,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
         const ssize_t got = ::read(rd, buf, sizeof(buf));
         if (got > 0)
         {
-            r.stdout_text.append(buf, static_cast<crd::usize>(got));
+            keep_output(r, buf, static_cast<crd::usize>(got));
             continue;
         }
         const pid_t w = ::waitpid(pid, &status, WNOHANG);
@@ -357,7 +409,7 @@ ChildResult spawn_bounded(const cont::String& exe, const cont::Array<cont::Strin
         {
             break;
         }
-        r.stdout_text.append(buf, static_cast<crd::usize>(got));
+        keep_output(r, buf, static_cast<crd::usize>(got));
     }
     ::close(rd);
 
@@ -462,7 +514,15 @@ Outcome run_specimen(const crd::containers::String& exe_path,
     o.exit_code = c.exit_code;
     o.crashed = c.crashed;
     o.timed_out = c.timed_out;
-    const std::string_view out_view = c.stdout_text;
+    o.output = c.output;
+    o.output_truncated = c.truncated;
+    // The child's stderr used to reach the test log directly; repeat what it wrote so a failing case still shows it.
+    if (!c.output.empty())
+    {
+        (void)std::fwrite(c.output.data(), 1U, c.output.size(), stderr);
+        (void)std::fflush(stderr);
+    }
+    const std::string_view out_view = c.output;
     o.identity = grab_tag(out_view, "CRD_DIAG_IDENTITY=");
     o.sanitizer = grab_tag(out_view, "CRD_DIAG_SANITIZER=");
 
@@ -499,18 +559,46 @@ Outcome run_specimen(const crd::containers::String& exe_path,
         {
             o.verdict = Verdict::InstrumentAbsent;
         }
-        else if (c.crashed || c.exit_code != 0)
+        else if (!c.crashed && c.exit_code == 0)
+        {
+            o.verdict = Verdict::Unexpected;
+        }
+        else if (carries_report(out_view, std::string_view{o.sanitizer}))
         {
             o.verdict = Verdict::SanitizerCaught;
         }
         else
         {
+            // Died, but not by the named sanitizer's report (a suppressed or redirected report, another crash).
             o.verdict = Verdict::Unexpected;
+            o.reason.append("exit ");
+            append_int(o.reason, static_cast<long long>(c.exit_code));
+            o.reason.append(" without ");
+            o.reason.append(report_name(std::string_view{o.sanitizer}));
+            o.reason.append(" report in the child's output; ");
         }
         break;
     }
     o.reason.append(verdict_name(o.verdict));
     return o;
+}
+
+LanePromise lane_promise()
+{
+    LanePromise p;
+#if CRD_DIAG_LANE_ASAN
+    p.asan = true;
+#if CRD_DIAG_LANE_GNU
+    p.use_after_return = true;
+#if CRD_DIAG_LANE_LINUX
+    p.leak_route = true;
+#endif
+#endif
+#endif
+#if CRD_DIAG_LANE_TSAN
+    p.tsan = true;
+#endif
+    return p;
 }
 
 Outcome select_and_run(const crd::containers::Array<crd::containers::String>& candidates,

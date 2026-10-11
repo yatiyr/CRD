@@ -568,6 +568,9 @@ TEST_CASE("allocator asan: every poisoned access is the declared ASan report, or
 {
     namespace cd = crd::diag;
     namespace cont = crd::containers;
+    // The lane's configuration decides which verdict is correct (DIAG.10b); this binary must carry its promise.
+    const cd::LanePromise lane = cd::lane_promise();
+    CHECK(kAsan == lane.asan);
     const char* const modes[] = {
         "linear-reset",         "linear-rewind",  "linear-overrun",   "linear-small-overrun", "linear-underrun",
         "linear-nested-parent", "stack-pop",      "glinear-reset",    "pool-freed-slot",      "pool-overrun",
@@ -587,7 +590,7 @@ TEST_CASE("allocator asan: every poisoned access is the declared ASan report, or
         const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOCATOR_POISON_SPECIMEN}, args, e);
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " sanitizer=" << o.sanitizer.c_str() << " reason=" << o.reason.c_str());
-        if (kAsan)
+        if (lane.asan)
         {
             // 42 = ASan reported the mode's declared kind (use-after-poison, or container-overflow for an array-*
             // mode); 43 = some other report; 95 = the allocator layout the mode needs did not occur; 0 = the read
