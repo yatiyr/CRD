@@ -8,10 +8,12 @@
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-b) batch 3b: mint/name a Cerid Program identity on a compute pipeline
 
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: driver and compiler calls under the mode witness
+#include <crd/gpu/queue_pressure.hpp>  // DIAG.10c: the queue's tracked depth ends with the context
 #include <crd/gpu/dx12_compute_context.hpp>
 
 #include <crd/containers/string.hpp>
 #include <crd/containers/hash_set.hpp>
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the queue, fence and event in the lifetime ledger
 #include <crd/core/types.hpp>
 #include <crd/kir/ckir_hlsl.hpp> // DIAG.9a: create_pipeline_from_ckir
 
@@ -159,9 +161,11 @@ struct Dx12ComputeContext::Impl final : ComputeRecorder
     detail::Dx12DeviceScope validation;
     crd::memory::IAllocator*          alloc = nullptr;
     ComPtr<ID3D12Device>              device;
+    crd::LifetimeHold                 queue_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `queue`
     ComPtr<ID3D12CommandQueue>        queue;
     ComPtr<ID3D12CommandAllocator>    cmd_alloc;
     ComPtr<ID3D12GraphicsCommandList> list;
+    crd::LifetimeHold                 fence_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `fence`
     ComPtr<ID3D12Fence>               fence;
     ComPtr<IDxcCompiler3>             dxc;
     ComPtr<ID3D12DescriptorHeap>      heap; // shader-visible CBV_SRV_UAV
@@ -322,6 +326,7 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
     {
         return;
     }
+    impl.queue_hold.hold();
 
     // CGP-0: the timestamp query heap (2 timestamps) + a 16-byte READBACK buffer for the resolved ticks. Best-effort:
     // any failure leaves ts_ok=false and last_gpu_ms() returns 0. A compute queue supports timestamps on all D3D12 tier-1+
@@ -359,7 +364,12 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
     {
         return;
     }
+    impl.fence_hold.hold();
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (impl.event != nullptr)
+    {
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject); // DIAG.10c: until the destructor closes it
+    }
 
     D3D12_DESCRIPTOR_HEAP_DESC hd{};
     hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -395,9 +405,14 @@ Dx12ComputeContext::Dx12ComputeContext(crd::memory::IAllocator* alloc) : m_impl(
 
 Dx12ComputeContext::~Dx12ComputeContext()
 {
+    if (m_impl->queue != nullptr)
+    {
+        queue_forget_queue(m_impl->device.Get(), m_impl->queue.Get()); // DIAG.10c: work still queued is abandoned
+    }
     if (m_impl->event != nullptr)
     {
         CloseHandle(m_impl->event);
+        (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
     }
 }
 

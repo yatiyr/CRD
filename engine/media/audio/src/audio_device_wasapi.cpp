@@ -52,17 +52,36 @@ struct AudioDevice::Impl
 
     static void run(Impl* impl); // the render service loop (a static member sees the private struct)
 
+    // DIAG.10c: every COM reference and the event this device holds is an OsObject in the lifetime ledger, acquired
+    // as start() obtains it and released here, so a failed start and a stopped device both balance.
+    static void hold_os_object() noexcept
+    {
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject);
+    }
+    static void drop_os_object() noexcept
+    {
+        (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
+    }
+
+    [[nodiscard]] bool holds_session() const noexcept
+    {
+        return enumerator != nullptr || device != nullptr || client != nullptr || render != nullptr
+               || event != nullptr || mix != nullptr || com_owner;
+    }
+
     void release() noexcept
     {
         if (render != nullptr)
         {
             render->Release();
             render = nullptr;
+            drop_os_object();
         }
         if (client != nullptr)
         {
             client->Release();
             client = nullptr;
+            drop_os_object();
         }
         if (mix != nullptr)
         {
@@ -73,16 +92,19 @@ struct AudioDevice::Impl
         {
             device->Release();
             device = nullptr;
+            drop_os_object();
         }
         if (enumerator != nullptr)
         {
             enumerator->Release();
             enumerator = nullptr;
+            drop_os_object();
         }
         if (event != nullptr)
         {
             CloseHandle(event);
             event = nullptr;
+            drop_os_object();
         }
         if (com_owner)
         {
@@ -162,24 +184,41 @@ bool AudioDevice::start(AudioRenderFn fn, void* user)
     {
         return false;
     }
+    // DIAG.10c: a start after stop() used to obtain a second enumerator, endpoint, client, render client, mix format
+    // and event over the first set without releasing it (and initialized COM once more). The stopped session is
+    // released first.
+    if (im.holds_session())
+    {
+        im.release();
+    }
 
     const HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     im.com_owner     = SUCCEEDED(co) && co != S_FALSE ? true : SUCCEEDED(co);
     if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                 __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&im.enumerator))))
     {
+        im.enumerator = nullptr;
         im.release();
         return false;
     }
+    Impl::hold_os_object(); // the enumerator
     if (FAILED(im.enumerator->GetDefaultAudioEndpoint(eRender, eConsole, &im.device)))
     {
+        im.device = nullptr;
         im.release();
         return false; // no endpoint (headless CI) — the honest skip
     }
-    if (FAILED(im.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                   reinterpret_cast<void**>(&im.client))) ||
-        FAILED(im.client->GetMixFormat(&im.mix)))
+    Impl::hold_os_object(); // the endpoint
+    if (FAILED(im.device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&im.client))))
     {
+        im.client = nullptr;
+        im.release();
+        return false;
+    }
+    Impl::hold_os_object(); // the audio client
+    if (FAILED(im.client->GetMixFormat(&im.mix)))
+    {
+        im.mix = nullptr;
         im.release();
         return false;
     }
@@ -201,13 +240,24 @@ bool AudioDevice::start(AudioRenderFn fn, void* user)
         return false;
     }
     im.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (im.event == nullptr || FAILED(im.client->SetEventHandle(im.event)) ||
-        FAILED(im.client->GetBufferSize(&im.buffer_frames)) ||
-        FAILED(im.client->GetService(__uuidof(IAudioRenderClient), reinterpret_cast<void**>(&im.render))))
+    if (im.event == nullptr)
     {
         im.release();
         return false;
     }
+    Impl::hold_os_object(); // the period event
+    if (FAILED(im.client->SetEventHandle(im.event)) || FAILED(im.client->GetBufferSize(&im.buffer_frames)))
+    {
+        im.release();
+        return false;
+    }
+    if (FAILED(im.client->GetService(__uuidof(IAudioRenderClient), reinterpret_cast<void**>(&im.render))))
+    {
+        im.render = nullptr;
+        im.release();
+        return false;
+    }
+    Impl::hold_os_object(); // the render client
     // a non-stereo endpoint renders through a stereo scratch sized here, never on the render thread
     im.scratch.clear();
     if (im.mix->nChannels != 2)

@@ -7,6 +7,7 @@
 #include <crd/kir/dx12/backend_dx12.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/core/lifetime_ledger.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -1174,4 +1175,29 @@ TEST_CASE("v17-i: CKIR scatter-add histogram runs on DX12 (integer atomics, dete
         }
     }
     CHECK(mism == 0);
+}
+
+TEST_CASE("diag10c: the CKIR DX12 backend holds its device, queue, fence and event until it ends",
+          "[kir][dx12][gpu][lifetime][diag10c]")
+{
+    // DIAG.10c (docs/design/runtime-diagnostics.md): this backend creates its own device outside the gpu-context
+    // completion seams, so its native objects are in the lifetime ledger (one device reference, one queue and one
+    // fence as NativeGpuObject, one event as OsObject) though its submissions are not in the queue depth.
+    crd::memory::TlsfAllocator  alloc(16 << 20);
+    const crd::LifetimeSnapshot start = crd::lifetime_ledger().snapshot();
+    {
+        kir::KirBackendDx12 dx(&alloc);
+        if (dx.valid())
+        {
+            const crd::LifetimeReport held = crd::lifetime_report(start, crd::lifetime_ledger().snapshot());
+            CHECK(held.live_change(crd::LifetimeClass::NativeGpuObject) == 3);
+            CHECK(held.live_change(crd::LifetimeClass::OsObject) == 1);
+        }
+        else
+        {
+            WARN("no D3D12 device or dxc: only the release of a partial start is checked");
+        }
+    }
+    const crd::LifetimeReport gone = crd::lifetime_report(start, crd::lifetime_ledger().snapshot());
+    CHECK(gone.verdict == crd::LifetimeVerdict::Balanced);
 }

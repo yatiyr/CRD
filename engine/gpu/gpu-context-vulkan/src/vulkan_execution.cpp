@@ -4,6 +4,7 @@
 #include <crd/core/crash.hpp> // DIAG.7c(g): a recorded loss is written as a DeviceRemoved live dump
 #include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: vkQueueSubmit runs under the mode witness
+#include <crd/gpu/queue_pressure.hpp> // DIAG.10c: every submission and observed completion feeds the queue depth
 
 #include <cstddef>
 #include <cstring>
@@ -304,6 +305,19 @@ void take_loss_pressure_once(VkDevice device) noexcept
 // write its loss bundle.
 void after_failure(VkDevice device) noexcept
 {
+    const VkDeviceFailure failure = vk_device_failure(device);
+    if (failure.lost())
+    {
+        queue_device_lost(device); // DIAG.10c: what it had queued is abandoned, never observed complete
+    }
+    if (failure.loss_origin == VkFailureOrigin::Simulated)
+    {
+        // DIAG.10c: a simulated loss leaves a device that still runs what it was given before the injection, and from
+        // now on every seam wait answers without the driver, so an owner tearing down would destroy objects that work
+        // still uses (lavapipe leaked a worker allocation under ASan). Drain the real device once more, directly:
+        // after this nothing it was given is running, as after a real loss.
+        (void)vkDeviceWaitIdle(device);
+    }
     collect_device_fault(device);
     take_loss_pressure_once(device);
     write_loss_bundle(device);
@@ -360,6 +374,10 @@ VkResult vk_submit(VkDevice device, VkQueue queue, const VkSubmitInfo& submit, V
             {
                 record(device, result, classify(result), operation);
             }
+            else
+            {
+                queue_step_submitted(device, queue, fence, 0U); // DIAG.10c: a binary fence signals value 0
+            }
         }
     }
     if (result != VK_SUCCESS)
@@ -378,6 +396,10 @@ VkResult vk_wait(VkDevice device, VkFence fence, crd::u64 timeout_ns, const char
         if (result != VK_SUCCESS)
         {
             record(device, result, classify(result), operation);
+        }
+        else
+        {
+            queue_timeline_completed(device, fence, kQueueThroughAll); // DIAG.10c
         }
     }
     if (result != VK_SUCCESS)
@@ -406,6 +428,10 @@ VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_
         {
             record(device, result, classify(result), operation);
         }
+        else
+        {
+            queue_timeline_completed(device, fence, kQueueThroughAll); // DIAG.10c
+        }
     }
     if (result != VK_SUCCESS)
     {
@@ -424,6 +450,10 @@ VkResult vk_queue_wait_idle(VkDevice device, VkQueue queue, const char* operatio
         {
             record(device, result, classify(result), operation);
         }
+        else
+        {
+            queue_idle_observed(device, queue); // DIAG.10c
+        }
     }
     if (result != VK_SUCCESS)
     {
@@ -441,6 +471,10 @@ VkResult vk_device_wait_idle(VkDevice device, const char* operation) noexcept
         if (result != VK_SUCCESS)
         {
             record(device, result, classify(result), operation);
+        }
+        else
+        {
+            queue_device_idle_observed(device); // DIAG.10c
         }
     }
     if (result != VK_SUCCESS)
@@ -467,6 +501,7 @@ VkDeviceFailure vk_last_device_failure() noexcept
 
 void vk_forget_device(VkDevice device) noexcept
 {
+    queue_forget_device(device); // DIAG.10c: steps still pending are abandoned; its queues and counts end
     FailureStore&         s = store();
     const std::lock_guard lock(s.mutex);
     for (crd::usize i = 0; i < kMaxDevices; ++i)

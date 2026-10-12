@@ -80,7 +80,9 @@
    "paths": ["engine/foundation/core/src/workload_probe.cpp"]},
   {"group": "host and device pressure evidence and the driver-call mode witness", "rows": ["DIAG.10c"],
    "paths": ["engine/foundation/core/src/host_pressure.cpp", "engine/gpu/gpu-context/src/device_pressure.cpp",
-             "engine/gpu/gpu-context/src/driver_witness.cpp"]}
+             "engine/gpu/gpu-context/src/driver_witness.cpp"]},
+  {"group": "GPU queue depth at the completion seams", "rows": ["DIAG.10c"],
+   "paths": ["engine/gpu/gpu-context/src/queue_pressure.cpp"]}
  ],
  "outcomes": [
   {"name": "AddStatus", "kind": "error-path", "row": "DIAG.5d",

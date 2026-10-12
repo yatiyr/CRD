@@ -12,6 +12,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/gpu/device_pressure.hpp> // DIAG.10c: DeviceMemoryReading (vendor-free)
+#include <crd/gpu/queue_pressure.hpp>  // DIAG.10c: QueueDepthReading (vendor-free)
 #include <crd/gpu/validation.hpp> // DIAG.7a(f): ValidationActivation + ValidationMode (vendor-free)
 
 #include <memory>
@@ -87,6 +88,11 @@ public:
     // OS grants and the process's use, for device-local and for non-local memory. Appended with a default that reports
     // both as unread, so a backend that cannot ask says so instead of reporting zero use.
     [[nodiscard]] virtual DeviceMemoryReading device_memory() const noexcept { return DeviceMemoryReading{}; }
+
+    // DIAG.10c: the depth of this device's queues as the completion seams see it (crd/gpu/queue_pressure.hpp): steps
+    // queued and not yet observed complete, with the high water and the submitted, retired and abandoned counts.
+    // Appended with a default that reports the depth as unread.
+    [[nodiscard]] virtual QueueDepthReading queue_pressure() const noexcept { return QueueDepthReading{}; }
 };
 
 // Owns the configured set of live contexts. Per-backend factories construct them; the manager holds + serves them, so

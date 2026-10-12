@@ -5,6 +5,7 @@ add_executable(crd-gpu-context-tests
     test_diag_identity_registry.cpp  # DIAG.7a(d2a): identity minting registry + debug-name builder (device-free)
     test_diag_lifetime_device_objects.cpp  # DIAG.10c: the registry feeds the lifetime ledger (device-free)
     test_diag_device_pressure.cpp  # DIAG.10c: device fault attribution and the driver-call mode witness (device-free)
+    test_diag_queue_pressure.cpp  # DIAG.10c: GPU queue depth at the completion seams (device-free)
 )
 
 target_link_libraries(crd-gpu-context-tests PRIVATE

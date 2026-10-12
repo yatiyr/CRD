@@ -14,6 +14,7 @@
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/object_identity.hpp>
+#include <crd/gpu/queue_pressure.hpp>
 #include <crd/gpu/validation.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/diag_commands.hpp>
@@ -64,8 +65,10 @@ public:
     }
     [[nodiscard]] g::ValidationActivation validation_activation() const noexcept override { return m_activation; }
     [[nodiscard]] g::DeviceMemoryReading  device_memory() const noexcept override { return memory; }
+    [[nodiscard]] g::QueueDepthReading    queue_pressure() const noexcept override { return queue; }
 
     g::DeviceMemoryReading memory; // DIAG.10c: what the fake reports; unavailable by default
+    g::QueueDepthReading   queue;  // DIAG.10c: likewise unread by default
 
 private:
     g::GpuBackend           m_backend;
@@ -241,6 +244,15 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
     vk.memory.local.bounded      = true;
     vk.memory.local.capacity     = crd::u64{8} << 30U;
     vk.memory.local.in_use       = crd::u64{15} << 29U;
+    // DIAG.10c: the Vulkan fake's queues: 7 steps queued, 5 observed, 1 abandoned, 1 in flight, at most 3 at once.
+    g::QueueDepthCounts queue_counts;
+    queue_counts.submitted  = 7U;
+    queue_counts.retired    = 5U;
+    queue_counts.abandoned  = 1U;
+    queue_counts.in_flight  = 1U;
+    queue_counts.high_water = 3U;
+    queue_counts.queues     = 2U;
+    vk.queue                = g::queue_depth_reading(queue_counts);
     REQUIRE(command.add_context(vk));
     REQUIRE(command.add_context(dx));
     CHECK_FALSE(command.add_context(vk)); // already registered
@@ -293,6 +305,7 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(num(a, a.summary, "contexts") == 2);
         CHECK(num(a, a.summary, "frame_graphs") == 2);
         CHECK(num(a, a.summary, "device_memory_read") == 1);
+        CHECK(num(a, a.summary, "queue_depth_read") == 1);
 
         const char*    objects[] = {"res", "prog", "pass"};
         const crd::i64 lives[]   = {base_res + 2, base_prog + 1, base_pass + 1};
@@ -320,6 +333,17 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(text_is(a, c1, "backend", "dx12"));
         CHECK(text_is(a, c1, "adapter", "Fake DX12 Adapter"));
         CHECK(text_is(a, c1, "core", "not-requested"));
+        // DIAG.10c: each context's queue depth, as the context reported it.
+        CHECK(num(a, c0, "queue_in_flight") == 1);
+        CHECK(num(a, c0, "queue_high_water") == 3);
+        CHECK(num(a, c0, "queue_submitted") == 7);
+        CHECK(num(a, c0, "queue_retired") == 5);
+        CHECK(num(a, c0, "queue_abandoned") == 1);
+        CHECK(num(a, c0, "queues") == 2);
+        CHECK(json::find(a.doc, c0, "queue_depth") == json::kInvalid);
+        CHECK(text_is(a, c1, "queue_depth", "unavailable"));
+        CHECK(text_is(a, c1, "queue_reason", "backend does not track queue depth"));
+        CHECK(json::find(a.doc, c1, "queue_in_flight") == json::kInvalid);
 
         // DIAG.10c: each context's device memory, as the context reported it.
         CHECK(count_kind(a, "heap") == 2U);
@@ -386,6 +410,7 @@ TEST_CASE("diag gpu.resources: live identities, the host's contexts and its fram
         CHECK(num(a, a.summary, "live_programs") == base_prog);
         CHECK(num(a, a.summary, "live_passes") == base_pass);
         CHECK(num(a, a.summary, "contexts") == 1);
+        CHECK(num(a, a.summary, "queue_depth_read") == 0); // the remaining DX12 fake reads no queue depth
         const crd::u32 c0 = item_of(a, "context");
         CHECK(num(a, c0, "index") == 0);
         CHECK(text_is(a, c0, "backend", "dx12"));

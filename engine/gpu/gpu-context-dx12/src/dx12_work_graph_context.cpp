@@ -5,7 +5,9 @@
 #include "dx12_device_scope.hpp"
 #include "dx12_execution.hpp"
 
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the queue, fence and event in the lifetime ledger
 #include <crd/gpu/dx12_work_graph_context.hpp>
+#include <crd/gpu/queue_pressure.hpp> // DIAG.10c: the queue's tracked depth ends with the context
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -65,9 +67,11 @@ struct Dx12WorkGraphContext::Impl
 {
     detail::Dx12DeviceScope validation;
     ComPtr<ID3D12Device9>               device;
+    crd::LifetimeHold                   queue_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `queue`
     ComPtr<ID3D12CommandQueue>          queue;
     ComPtr<ID3D12CommandAllocator>      cmd_alloc;
     ComPtr<ID3D12GraphicsCommandList10> list;
+    crd::LifetimeHold                   fence_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `fence`
     ComPtr<ID3D12Fence>                 fence;
     HANDLE                              event     = nullptr;
     UINT64                              fence_val = 0;
@@ -119,6 +123,7 @@ Dx12WorkGraphContext::Dx12WorkGraphContext() : m_impl(std::make_unique<Impl>())
     {
         return;
     }
+    impl.queue_hold.hold();
     if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
     {
         return;
@@ -137,15 +142,25 @@ Dx12WorkGraphContext::Dx12WorkGraphContext() : m_impl(std::make_unique<Impl>())
     {
         return;
     }
+    impl.fence_hold.hold();
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     impl.ok    = (impl.event != nullptr);
+    if (impl.ok)
+    {
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject); // DIAG.10c: until the destructor closes it
+    }
 }
 
 Dx12WorkGraphContext::~Dx12WorkGraphContext()
 {
+    if (m_impl->queue != nullptr)
+    {
+        queue_forget_queue(m_impl->device.Get(), m_impl->queue.Get()); // DIAG.10c: work still queued is abandoned
+    }
     if (m_impl->event != nullptr)
     {
         CloseHandle(m_impl->event);
+        (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
     }
 }
 

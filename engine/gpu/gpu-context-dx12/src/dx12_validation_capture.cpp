@@ -450,6 +450,7 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         return result;
     }
     m_created = true;
+    m_device_hold.hold(); // DIAG.10c: D3D12CreateDevice handed this scope a device reference
     // DIAG.7a(f-3): device created -> resolve per-mode activation. Core active is OBSERVABLE (ID3D12InfoQueue QI on this
     // device succeeds iff the debug layer is on for it -- the post-hoc oracle Vulkan lacks). GPU-assisted active == the
     // Debug1 enable ran pre-device (enabled, not proven instrumenting; (g) proves that). Sync has no D3D12 equivalent.

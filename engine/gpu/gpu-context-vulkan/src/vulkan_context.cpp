@@ -9,6 +9,7 @@
 #include "vulkan_execution.hpp"      // DIAG.7c(c): the device's failure record is released with the device
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Program identity per compiled shader stage
 
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the instance and device in the lifetime ledger
 #include <crd/core/platform.hpp> // CRD_OS_* for the platform surface extension (C2-a)
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: instance and device creation under the mode witness
 
@@ -243,10 +244,12 @@ public:
         {
             detail::vk_forget_device(m_device); // DIAG.7c(c): a reused handle must not inherit this device's failure
             vkDestroyDevice(m_device, nullptr);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
         }
         if (m_instance != VK_NULL_HANDLE)
         {
             vkDestroyInstance(m_instance, nullptr);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
         }
     }
 
@@ -289,6 +292,17 @@ public:
             return none;
         }
         return detail::vk_device_memory(m_physical, m_memory_budget);
+    }
+    // DIAG.10c: the submissions of this device's queues, as the completion seam saw them.
+    [[nodiscard]] QueueDepthReading queue_pressure() const noexcept override
+    {
+        if (!m_valid)
+        {
+            QueueDepthReading none;
+            none.reason = "the Vulkan context has no device";
+            return none;
+        }
+        return queue_depth_reading(queue_depth_of_device(m_device));
     }
     [[nodiscard]] bool     ray_query() const noexcept override { return m_ray_query; } // B9/RT: VK_KHR_ray_query + acceleration_structure
     [[nodiscard]] bool     opacity_micromap() const noexcept override { return m_opacity_micromap; } // FA-1
@@ -695,9 +709,7 @@ private:
             ici.pNext             = &settings;
         }
         m_surface_ext = surface_ok;
-        if (witness_driver_call(DriverCall::CreateInstance, "vkCreateInstance",
-                                [&]() { return vkCreateInstance(&ici, nullptr, &m_instance); })
-            != VK_SUCCESS)
+        if (!create_instance(ici))
         {
             return;
         }
@@ -1569,9 +1581,7 @@ private:
         dci.enabledExtensionCount   = ndevext;
         dci.ppEnabledExtensionNames = (ndevext != 0U) ? devexts : nullptr;
 
-        if (witness_driver_call(DriverCall::CreateDevice, "vkCreateDevice",
-                                [&]() { return vkCreateDevice(m_physical, &dci, nullptr, &m_device); })
-            != VK_SUCCESS)
+        if (!create_device(dci))
         {
             return;
         }
@@ -1586,6 +1596,33 @@ private:
 
     // DIAG.7c(g): register the adapter, so a loss bundle names the adapter and driver. DIAG.7c(d): with
     // VK_EXT_device_fault enabled, hand its query to the seam, which reads it once this device is lost.
+    // vkCreateInstance / vkCreateDevice under the mode witness. On success the handle is a NativeGpuObject in the
+    // lifetime ledger until the destructor destroys it (DIAG.10c); on failure it is null, so the destructor skips it.
+    [[nodiscard]] bool create_instance(const VkInstanceCreateInfo& ici) noexcept
+    {
+        if (witness_driver_call(DriverCall::CreateInstance, "vkCreateInstance",
+                                [&]() { return vkCreateInstance(&ici, nullptr, &m_instance); })
+            != VK_SUCCESS)
+        {
+            m_instance = VK_NULL_HANDLE;
+            return false;
+        }
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject);
+        return true;
+    }
+    [[nodiscard]] bool create_device(const VkDeviceCreateInfo& dci) noexcept
+    {
+        if (witness_driver_call(DriverCall::CreateDevice, "vkCreateDevice",
+                                [&]() { return vkCreateDevice(m_physical, &dci, nullptr, &m_device); })
+            != VK_SUCCESS)
+        {
+            m_device = VK_NULL_HANDLE;
+            return false;
+        }
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject);
+        return true;
+    }
+
     void register_device_diagnostics() noexcept
     {
         VkPhysicalDeviceProperties adapter{};

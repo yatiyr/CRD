@@ -2288,7 +2288,8 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-lifetime-accounti
   files are written on the fatal path, which must touch no more shared state, and its handler thread and events live
   for the process. Not yet recorded: the window, the WASAPI device's COM objects and event, worker and logger threads,
   and native device objects without a Cerid identity (devices, queues, fences, swapchains); they belong with the
-  shutdown workloads that exercise their owners.
+  shutdown workloads that exercise their owners. (2026-10-12: threads are recorded since the workload slice, and the
+  window, the WASAPI device's objects and the native device objects since the queue-depth slice; see the last block.)
 - The independent oracle is `crd/core/os_resource_probe.hpp`, which asks the OS, sharing no code with the wired sites.
   `os_file_open_in_process(path)`: Windows reads the process's own handle table (NtQueryInformationProcess,
   ProcessHandleSnapshotInformation, Windows 8 and later), keeps the handles of the File object type that are disk files
@@ -2475,7 +2476,82 @@ Settled (2026-10-12, [session](../sessions/2026-10-12-diag-10c-device-and-host-p
 - Not settled here: GPU queue depth (an in-flight count at the completion seams) and the native owners in the
   lifetime ledger (the window, the WASAPI device's COM objects and event, and native devices, queues, fences and
   swapchains without a Cerid identity) belong together with the shutdown of those owners; the hang watchdog does not
-  yet classify a stall from the pressure readings.
+  yet classify a stall from the pressure readings. (2026-10-12: queue depth and the native owners are settled in the
+  next block; the watchdog item stands.)
+
+Settled (2026-10-12, [session](../sessions/2026-10-12-diag-10c-queue-depth-and-native-owners.md)):
+- GPU queue depth is `crd/gpu/queue_pressure.hpp` (crd-gpu-context, device-free, keyed by opaque device, queue and
+  timeline handles). A step is in flight from the completion seam that queued it until a seam observed it complete.
+  A queue runs its steps in order, so a timeline observed complete through a value retires the step that signalled it
+  and every earlier step on its queue, and none on another queue. A DX12 fence signals increasing values; a Vulkan
+  fence is binary (value 0, observed through every value); a submission with no timeline (a Vulkan submit without a
+  fence) is retired by a later timeline on its queue or by an idle wait; a bare `dx12_signal` is a step too. The
+  reading is the engine's own view: work the GPU finished that no seam has looked at still counts, which is what a
+  missing wait, an owner destroyed with work queued or a CPU running ahead of its frames leaves behind.
+- Every other end is counted, never hidden. A device recorded lost, a queue or device forgotten, and a timeline that
+  starts again while it has steps pending (a fence created again at a reused address; a binary fence re-armed before a
+  seam observed it) abandon their steps. A completion observed with nothing pending is unmatched (a second wait on a
+  signalled fence is legal). The tracker is a fixed table under one mutex (512 steps, 64 queues, 32 devices); a step it
+  cannot hold is untracked, and that device's reading is then unread rather than low. Per device the counts are
+  submitted, retired, abandoned, in flight, the high water, untracked, unmatched, live queues and lost; they start
+  fresh once the device, or its last live queue, is forgotten.
+- Fed by the seams only: DX12 `dx12_submit` and `dx12_signal` after their Signal, `dx12_wait` on success (also when
+  the fence had already passed the value), every removal path (`stop_failed_device`, the injected loss) marks the
+  device lost, and each context forgets its own queue in its destructor; Vulkan `vk_submit` on success, `vk_wait` and
+  `vk_wait_complete` on success, both idle waits, the first recorded loss of a device, and `vk_forget_device`. The CKIR
+  DX12 test backend (crd-kir-dx12) submits outside the seams and is not in the depth.
+- Keys are addresses, so a device's counts must end with the device. A Vulkan device is forgotten before
+  `vkDestroyDevice`. A DX12 device has no destroy call, so the seam attaches an `IUnknown` with
+  `SetPrivateDataInterface` the first time it reports a step or a loss on a device (serialized, so two first
+  submissions cannot replace each other's); D3D12 releases it when the device is destroyed, and its final release
+  forgets the device. Seam callers that never forget a queue (the validation cases drive the seam directly on devices
+  of their own) therefore cannot leave a lost reading for a later device created at the same address.
+- The reading is `IGpuContext::queue_pressure()` (appended at the vtable end; default unread with a reason): the
+  device's counts as a `BudgetReading` that is unbounded (a bare queue has no bound, so its depth is reported, never
+  judged against one), in use = in flight, high water tracked; unread while the device is lost (its steps were
+  abandoned, not completed) or a step went untracked. D3D12 hands one device per adapter to the process, so a DX12
+  context's reading covers the raster and compute contexts on its adapter. `gpu.resources` adds `queue_in_flight`,
+  `queue_high_water`, `queue_submitted`, `queue_retired`, `queue_abandoned` and `queues` to each context item (or
+  `queue_depth: "unavailable"` with `queue_reason`), and `queue_depth_read` to the summary.
+- Observed: a synchronous context (compute, ray tracing, work graph, the raster one-shot path) never leaves a step in
+  flight; the DX12 frame graph's deferred wait leaves its frame in flight until the next execute or reset; the Vulkan
+  frame graph's two-slot ring leaves at most two (its high water is exactly 2 over four frames), and its teardown
+  observes both.
+- The native owners are two more ledger classes, eight in all, which fill the report's u8 masks (a ninth widens them
+  first): NativeGpuObject (an instance, a device reference, a created queue, a fence or a swapchain without a Cerid
+  identity) and OsObject (a window, an event, a COM interface reference). Wired: one device reference per
+  `Dx12DeviceScope` (declared before its context's device, so released after it), each created DX12 command queue and
+  fence (compute, ray-tracing, work-graph and raster contexts, the present surface's fence), the DXGI swapchain and
+  every fence event; the crd-kir-dx12 backend's device, queue, fence and event; the Vulkan instance and device, every
+  fence (compute, the present ring, upload batches, frame-graph slots and the async fence) and every swapchain,
+  including the one a resize replaces; the GLFW window (create, destructor, move-assignment over a live window); the
+  WASAPI enumerator, endpoint, audio client, render client and period event. `crd::LifetimeHold` records an
+  acquisition whose release is implicit (a COM smart pointer, a member destroyed with its owner): declared before the
+  member, it is released after it, and a move transfers it.
+- Not recorded, by rule: Vulkan queues (retrieved with `vkGetDeviceQueue`, not created, so the DX12 and Vulkan counts
+  differ by design), semaphores, command pools, allocators and lists, descriptor heaps and pools, pipelines, query
+  heaps, the Vulkan surface, the DXGI factory and COM references a call opens and releases itself; each is owned by an
+  object the ledger already counts or is scoped to one call. A GPU resource or program with a Cerid identity stays a
+  DeviceObject.
+- Defect found and fixed by the audio restart case: `AudioDevice::start()` after `stop()` obtained a second enumerator,
+  endpoint, client, render client, mix format and event over the first set and initialized COM once more, leaking the
+  stopped session; a start now releases a held session first.
+- Defect found and fixed by the Vulkan lost-queue case under ASan: a simulated loss (`vk_inject_next_result`, or the
+  DIAG.9b device-loss fault) leaves a device that still runs what it was given, while every later seam wait answers
+  without the driver, so a frame graph and raster context torn down after it destroyed objects in-flight work still
+  used (lavapipe leaked a worker allocation, which fails the case under LeakSanitizer). After recording a simulated
+  loss the seam now drains the real device once with a direct `vkDeviceWaitIdle`, so nothing it was given still runs,
+  as after a real loss. A real loss is never called again.
+- The shutdown workloads (results and lifetimes only, never speed): three DX12 cycles of a compute context created,
+  used four times and destroyed on the default adapter; three Vulkan cycles of instance, device and compute context;
+  window create and destroy cycles; audio stop and restart. Each cycle's ledger window is Balanced and every value read
+  back is the one written. The OS judges the window (FindWindow by a unique title, and the process's USER-object count,
+  which returns to its value before the platform context once the context is gone); the GPU counts are held to what
+  each owner's code creates (a compute context: a device reference, a queue, a fence and an event; a DX12 present
+  surface: a swapchain, a fence and an event; a Vulkan present surface: a swapchain and two ring fences), since neither
+  OS exposes a per-process count of D3D12 or Vulkan objects. A context, window or audio device that cannot start (no
+  Vulkan device, no display, no render endpoint) must leave the ledger balanced.
+- Not settled here: the hang watchdog does not yet classify a stall from the pressure and depth readings.
 
 <a id="diag-11a"></a>
 ## DIAG.11a — reusable host integration and shipping profiles

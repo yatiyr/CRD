@@ -13,6 +13,7 @@
 
 #include "vulkan_execution.hpp"       // DIAG.7c(c): every submission and wait goes through the completion seam
 #include "vulkan_identity_naming.hpp" // DIAG.7a(d2b-vk): one Cerid Resource identity per logical GPU object
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: fences and swapchains in the lifetime ledger
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: vkQueuePresentKHR runs under the mode witness
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-vk): mint(ObjectKind::Pass) for frame-graph pass identities
 
@@ -545,11 +546,17 @@ public:
         // finished, so it is provably unsignalled by the time we reuse it.
         for (crd::u32 i = 0; i < kPresentFrames; ++i)
         {
-            if (vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_acq_ring[i]) != VK_SUCCESS
-                || vkCreateFence(m_device, &fci, nullptr, &m_fence_ring[i]) != VK_SUCCESS)
+            if (vkCreateSemaphore(m_device, &sci2, nullptr, &m_sem_acq_ring[i]) != VK_SUCCESS)
             {
+                m_sem_acq_ring[i] = VK_NULL_HANDLE;
                 return;
             }
+            if (vkCreateFence(m_device, &fci, nullptr, &m_fence_ring[i]) != VK_SUCCESS)
+            {
+                m_fence_ring[i] = VK_NULL_HANDLE;
+                return;
+            }
+            crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: until teardown
         }
         m_sem_acquire = m_sem_acq_ring[0];
         m_fence       = m_fence_ring[0];
@@ -573,6 +580,7 @@ public:
         if (m_swapchain != VK_NULL_HANDLE)
         {
             vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
         }
         // 38-G1 pacing: the RING owns these now (m_sem_acquire/m_fence are just the current aliases)
         for (crd::u32 i = 0; i < kPresentFrames; ++i)
@@ -594,6 +602,7 @@ public:
             if (m_fence_ring[i] != VK_NULL_HANDLE)
             {
                 vkDestroyFence(m_device, m_fence_ring[i], nullptr);
+                (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
             }
         }
         if (m_pool != VK_NULL_HANDLE)
@@ -910,9 +919,11 @@ private:
         {
             return false;
         }
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: `next`, until replaced
         if (m_swapchain != VK_NULL_HANDLE)
         {
             vkDestroySwapchainKHR(m_device, m_swapchain, nullptr);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: the one it replaced
         }
         m_swapchain = next;
 
@@ -1491,6 +1502,7 @@ public:
             if (b.fence != VK_NULL_HANDLE)
             {
                 vkDestroyFence(m_device, b.fence, nullptr);
+                (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
             }
             detail::vk_detach_identity(b.identity); // DIAG.7a(d2b-vk): retire the ring's identity (no-op if never opened)
             destroy_buffer_bundle(m_device, b.ring);
@@ -8053,8 +8065,10 @@ private:
             fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
             if (vkCreateFence(m_device, &fci, nullptr, &b.fence) != VK_SUCCESS)
             {
+                b.fence = VK_NULL_HANDLE;
                 return;
             }
+            crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: until teardown
         }
         if (b.ring.buffer == VK_NULL_HANDLE)
         {
@@ -8833,7 +8847,14 @@ public:
         for (crd::u32 s = 0; s < kFramesInFlight; ++s)
         {
             vkAllocateCommandBuffers(m_device, &cbai, &m_slots_if[s].cmd);
-            vkCreateFence(m_device, &fci, nullptr, &m_slots_if[s].fence);
+            if (vkCreateFence(m_device, &fci, nullptr, &m_slots_if[s].fence) == VK_SUCCESS)
+            {
+                crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: until teardown
+            }
+            else
+            {
+                m_slots_if[s].fence = VK_NULL_HANDLE;
+            }
         }
         m_cmd   = m_slots_if[0].cmd;
         m_fence = m_slots_if[0].fence;
@@ -8926,6 +8947,7 @@ public:
         if (m_async_fence != VK_NULL_HANDLE)
         {
             vkDestroyFence(m_device, m_async_fence, nullptr);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
         }
         if (m_async_pool != VK_NULL_HANDLE)
         {
@@ -8953,6 +8975,7 @@ public:
             if (fs.fence != VK_NULL_HANDLE)
             {
                 vkDestroyFence(m_device, fs.fence, nullptr);
+                (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
             }
         }
         if (m_pool != VK_NULL_HANDLE)
@@ -9495,11 +9518,17 @@ public:
         sci.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
         VkFenceCreateInfo fci{};
         fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-        if (vkCreateSemaphore(m_device, &sci, nullptr, &m_async_done) != VK_SUCCESS
-            || vkCreateFence(m_device, &fci, nullptr, &m_async_fence) != VK_SUCCESS)
+        if (vkCreateSemaphore(m_device, &sci, nullptr, &m_async_done) != VK_SUCCESS)
         {
+            m_async_done = VK_NULL_HANDLE;
             return false;
         }
+        if (vkCreateFence(m_device, &fci, nullptr, &m_async_fence) != VK_SUCCESS)
+        {
+            m_async_fence = VK_NULL_HANDLE;
+            return false;
+        }
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: until teardown
         return true;
     }
     [[nodiscard]] crd::u32 transient_memory_bytes() const noexcept override { return m_physical_bytes; }

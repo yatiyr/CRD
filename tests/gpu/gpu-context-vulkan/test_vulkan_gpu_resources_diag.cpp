@@ -10,6 +10,7 @@
 #include <crd/assetio/json.hpp>
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
+#include <crd/gpu/queue_pressure.hpp>
 #include <crd/gpu/raster_context.hpp>
 #include <crd/gpu/validation.hpp>
 #include <crd/gpu/vulkan_context.hpp>
@@ -142,6 +143,14 @@ TEST_CASE("diag gpu.resources: a real Vulkan context, its identities and a real 
             CHECK((json::find(a.doc, h, "local_budget") != json::kInvalid) == memory.local.read);
             CHECK((json::find(a.doc, h, "non_local_budget") != json::kInvalid) == memory.non_local.read);
         }
+        // DIAG.10c: the context reads its device's queue depth; the raster context's synchronous work left none in
+        // flight, and the item carries the context's own counts.
+        const g::QueueDepthReading queue = ctx->queue_pressure();
+        REQUIRE(queue.depth.read);
+        CHECK(num(a, a.summary, "queue_depth_read") == 1);
+        CHECK(num(a, c, "queue_in_flight") == 0);
+        CHECK(num(a, c, "queue_submitted") == static_cast<crd::i64>(queue.counts.submitted));
+        CHECK(num(a, c, "queue_abandoned") == 0);
         baseline = num(a, a.summary, "live_resources");
         CHECK(baseline == static_cast<crd::i64>(g::identity_registry().live_count(g::ObjectKind::Resource)));
     }

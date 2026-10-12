@@ -120,6 +120,8 @@ const char* lifetime_class_name(LifetimeClass c) noexcept
     case LifetimeClass::DeviceObject:         return "device-object";
     case LifetimeClass::CallbackRegistration: return "callback-registration";
     case LifetimeClass::Thread:               return "thread";
+    case LifetimeClass::NativeGpuObject:      return "native-gpu-object";
+    case LifetimeClass::OsObject:             return "os-object";
     }
     return "unknown";
 }

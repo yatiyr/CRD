@@ -1,5 +1,6 @@
 #pragma once
 
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: one device reference per scope in the lifetime ledger
 #include <crd/core/types.hpp>
 #include <crd/gpu/validation.hpp> // DIAG.7a(f-3): ValidationActivation
 
@@ -70,6 +71,9 @@ public:
     [[nodiscard]] Dx12DredActivation dred() const noexcept { return m_dred; }
 
 private:
+    // DIAG.10c: the device reference this scope's create() obtained. Released with the scope, which the context
+    // declares before its device, so after the device reference itself.
+    crd::LifetimeHold m_device_hold{crd::LifetimeClass::NativeGpuObject};
     i32 m_slot = -1;
     bool m_created = false;
     u64 m_ordinal = 0;

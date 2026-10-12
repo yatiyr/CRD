@@ -218,6 +218,18 @@ public:
         }
         return detail::dx12_device_memory(m_device.Get());
     }
+    // DIAG.10c: the fence steps of every queue on this context's device, as the completion seams saw them. D3D12
+    // hands one device per adapter to the process, so the raster and compute contexts on that adapter are counted.
+    [[nodiscard]] QueueDepthReading queue_pressure() const noexcept override
+    {
+        if (!m_ok)
+        {
+            QueueDepthReading none;
+            none.reason = "the D3D12 context has no device";
+            return none;
+        }
+        return queue_depth_reading(queue_depth_of_device(m_device.Get()));
+    }
 
     [[nodiscard]] std::unique_ptr<IGpuProgram>
     create_program(ShaderStage stage, crd::containers::ConstSpan<crd::u8> cooked) override

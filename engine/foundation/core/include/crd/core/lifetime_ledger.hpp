@@ -38,8 +38,13 @@ enum class LifetimeClass : crd::u8
     DeviceObject,         // a GPU resource or program carrying a Cerid identity
     CallbackRegistration, // a callback, subscriber, sink or observer registered with an owner
     Thread,               // an OS thread the engine started and must join (a worker, a watchdog, a host's run)
+    NativeGpuObject,      // a GPU API object without a Cerid identity: an instance, a device reference, a created
+                          // queue, a fence or a swapchain
+    OsObject,             // another OS object the engine created and must close or release: a window, an event, a
+                          // COM interface reference
 };
-inline constexpr crd::usize kLifetimeClassCount = 6U;
+// The masks in LifetimeReport are u8: eight classes fill them, so a ninth widens them first.
+inline constexpr crd::usize kLifetimeClassCount = 8U;
 [[nodiscard]] const char* lifetime_class_name(LifetimeClass c) noexcept;
 [[nodiscard]] constexpr crd::u8 lifetime_class_bit(LifetimeClass c) noexcept
 {
@@ -103,6 +108,65 @@ private:
 
 // The process-wide ledger every wired engine site records into. Constant-initialized, never destroyed early.
 [[nodiscard]] LifetimeLedger& lifetime_ledger() noexcept;
+
+// One acquisition an owner holds in the process-wide ledger, for an owner whose release is implicit (a COM smart
+// pointer, a member destroyed with its owner). `hold()` records the acquisition once the thing was granted, and
+// `reset()` or destruction records the release. Declare it before the member it accounts for, so the member is
+// released first and the ledger never shows a release that has not happened yet. A move transfers the hold.
+class LifetimeHold
+{
+public:
+    constexpr explicit LifetimeHold(LifetimeClass c) noexcept : m_class(c) {}
+    ~LifetimeHold() noexcept
+    {
+        reset();
+    }
+
+    LifetimeHold(const LifetimeHold&)            = delete;
+    LifetimeHold& operator=(const LifetimeHold&) = delete;
+    LifetimeHold(LifetimeHold&& other) noexcept : m_class(other.m_class), m_held(other.m_held)
+    {
+        other.m_held = false;
+    }
+    LifetimeHold& operator=(LifetimeHold&& other) noexcept
+    {
+        if (this != &other)
+        {
+            reset();
+            m_class      = other.m_class;
+            m_held       = other.m_held;
+            other.m_held = false;
+        }
+        return *this;
+    }
+
+    // Record the acquisition; a second call while held records nothing.
+    void hold() noexcept
+    {
+        if (!m_held)
+        {
+            lifetime_ledger().acquired(m_class);
+            m_held = true;
+        }
+    }
+    // Record the release, if held.
+    void reset() noexcept
+    {
+        if (m_held)
+        {
+            m_held = false;
+            (void)lifetime_ledger().released(m_class);
+        }
+    }
+    [[nodiscard]] bool held() const noexcept
+    {
+        return m_held;
+    }
+
+private:
+    LifetimeClass m_class;
+    bool          m_held = false;
+};
 
 // What a window between two snapshots left behind, the worst finding first.
 // NOLINTNEXTLINE(performance-enum-size)

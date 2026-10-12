@@ -1,3 +1,4 @@
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: a window is an OS object in the lifetime ledger
 #include <crd/log/log.hpp>
 #include <crd/platform/context.hpp>
 #include <crd/platform/log_channel.hpp>
@@ -195,6 +196,7 @@ Window& Window::operator=(Window&& other) noexcept
         {
             glfwDestroyWindow(m_impl->handle);
             m_impl->handle = nullptr;
+            (void)lifetime_ledger().released(LifetimeClass::OsObject); // DIAG.10c
         }
         m_impl = std::move(other.m_impl);
         // The user pointer in the moved GLFWwindow now points to the OLD
@@ -214,6 +216,7 @@ Window::~Window() noexcept
     {
         glfwDestroyWindow(m_impl->handle);
         m_impl->handle = nullptr;
+        (void)lifetime_ledger().released(LifetimeClass::OsObject); // DIAG.10c
     }
 }
 
@@ -242,6 +245,7 @@ Window Window::create(const PlatformContext& context, const WindowDesc& desc) no
     }
 
     result.m_impl->handle = handle;
+    lifetime_ledger().acquired(LifetimeClass::OsObject); // DIAG.10c: until the destructor or a move-assign over it
 
     // Wire callbacks into the Input owned by this Window's Impl. The user
     // pointer is the Input object directly, so callbacks need a single

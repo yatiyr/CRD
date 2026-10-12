@@ -5,6 +5,7 @@
 
 #include <crd/kir/dx12/backend_dx12.hpp>
 
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the device, queue, fence and event in the lifetime ledger
 #include <crd/kir/ckir_hlsl.hpp>
 
 #include <cstring>
@@ -23,10 +24,14 @@ using Microsoft::WRL::ComPtr;
 struct KirBackendDx12::Impl
 {
     crd::memory::IAllocator*           alloc = nullptr;
+    // DIAG.10c: each hold is declared before the reference it accounts for, so it is released after it.
+    crd::LifetimeHold                  device_hold{crd::LifetimeClass::NativeGpuObject};
     ComPtr<ID3D12Device>               device;
+    crd::LifetimeHold                  queue_hold{crd::LifetimeClass::NativeGpuObject};
     ComPtr<ID3D12CommandQueue>         queue;
     ComPtr<ID3D12CommandAllocator>     cmd_alloc;
     ComPtr<ID3D12GraphicsCommandList>  list;
+    crd::LifetimeHold                  fence_hold{crd::LifetimeClass::NativeGpuObject};
     ComPtr<ID3D12Fence>                fence;
     ComPtr<IDxcCompiler3>              dxc;
     HANDLE                             event = nullptr;
@@ -110,12 +115,14 @@ KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::mak
     {
         return;
     }
+    impl.device_hold.hold();
     D3D12_COMMAND_QUEUE_DESC qd{};
     qd.Type = D3D12_COMMAND_LIST_TYPE_COMPUTE;
     if (FAILED(impl.device->CreateCommandQueue(&qd, IID_PPV_ARGS(&impl.queue))))
     {
         return;
     }
+    impl.queue_hold.hold();
     if (FAILED(impl.device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_COMPUTE, IID_PPV_ARGS(&impl.cmd_alloc))))
     {
         return;
@@ -129,7 +136,12 @@ KirBackendDx12::KirBackendDx12(crd::memory::IAllocator* alloc) : m_impl(std::mak
     {
         return;
     }
+    impl.fence_hold.hold();
     impl.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (impl.event != nullptr)
+    {
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject); // DIAG.10c: until the destructor closes it
+    }
     const HMODULE dxc_dll = LoadLibraryW(L"dxcompiler.dll");
     if (dxc_dll == nullptr)
     {
@@ -149,6 +161,7 @@ KirBackendDx12::~KirBackendDx12()
     if (m_impl->event != nullptr)
     {
         CloseHandle(m_impl->event);
+        (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
     }
 }
 

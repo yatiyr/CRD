@@ -18,6 +18,7 @@
 #include <cstring>
 #include <filesystem>
 #include <system_error>
+#include <utility>
 
 #if CRD_OS_WINDOWS
 #define WIN32_LEAN_AND_MEAN
@@ -303,4 +304,64 @@ TEST_CASE("diag10c: the OS sees a reserved range, part of one, and none of it on
 
     CHECK(crd::os_range_mapped(nullptr, unit).presence == OsPresence::Unavailable);
     CHECK(crd::os_range_mapped(base, 0U).presence == OsPresence::Unavailable);
+}
+
+TEST_CASE("diag10c: native GPU objects and OS objects are classes of their own, and a hold records once each way",
+          "[core][lifetime][diag10c]")
+{
+    CHECK(std::strcmp(crd::lifetime_class_name(LifetimeClass::NativeGpuObject), "native-gpu-object") == 0);
+    CHECK(std::strcmp(crd::lifetime_class_name(LifetimeClass::OsObject), "os-object") == 0);
+    CHECK(crd::kLifetimeClassCount == 8U);
+    // Eight classes fill the u8 masks: every bit is distinct and the last is the top bit.
+    crd::u32 seen = 0U;
+    for (crd::usize i = 0U; i < crd::kLifetimeClassCount; ++i)
+    {
+        const crd::u8 bit = crd::lifetime_class_bit(static_cast<LifetimeClass>(i));
+        CHECK((seen & bit) == 0U);
+        seen |= bit;
+    }
+    CHECK(seen == 0xFFU);
+
+    // The hold records into the process-wide ledger: judge it by a window around it.
+    crd::LifetimeLedger&        ledger = crd::lifetime_ledger();
+    const crd::LifetimeSnapshot start  = ledger.snapshot();
+    const auto                  since  = [&]() { return crd::lifetime_report(start, ledger.snapshot()); };
+    {
+        crd::LifetimeHold hold(LifetimeClass::OsObject);
+        CHECK_FALSE(hold.held());
+        CHECK(since().verdict == LifetimeVerdict::Balanced); // nothing recorded until the thing is granted
+        hold.hold();
+        hold.hold(); // a second hold while held records nothing
+        CHECK(hold.held());
+        crd::LifetimeReport r = since();
+        CHECK(r.verdict == LifetimeVerdict::Outstanding);
+        CHECK(r.live_change(LifetimeClass::OsObject) == 1);
+        CHECK(r.outstanding == crd::lifetime_class_bit(LifetimeClass::OsObject));
+
+        // A move transfers the hold: still one live, and the moved-from side releases nothing.
+        crd::LifetimeHold moved(std::move(hold));
+        CHECK(moved.held());
+        CHECK(since().live_change(LifetimeClass::OsObject) == 1);
+        hold.reset();
+        CHECK(since().live_change(LifetimeClass::OsObject) == 1);
+
+        // Move-assigning over a held object releases what that one held first.
+        crd::LifetimeHold other(LifetimeClass::NativeGpuObject);
+        other.hold();
+        CHECK(since().live_change(LifetimeClass::NativeGpuObject) == 1);
+        other = std::move(moved);
+        r = since();
+        CHECK(r.live_change(LifetimeClass::NativeGpuObject) == 0);
+        CHECK(r.live_change(LifetimeClass::OsObject) == 1);
+        CHECK(other.held());
+        CHECK_FALSE(moved.held());
+
+        other.reset();
+        other.reset(); // a second reset releases nothing
+        CHECK(since().verdict == LifetimeVerdict::Balanced);
+        other.hold(); // and destruction releases a live hold
+    }
+    const crd::LifetimeReport end = since();
+    CHECK(end.verdict == LifetimeVerdict::Balanced);
+    CHECK(end.underflowed == 0U);
 }

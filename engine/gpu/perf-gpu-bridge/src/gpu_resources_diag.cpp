@@ -6,6 +6,7 @@
 #include <crd/gpu/frame_graph.hpp>
 #include <crd/gpu/identity_registry.hpp>
 #include <crd/gpu/object_identity.hpp>
+#include <crd/gpu/queue_pressure.hpp>
 #include <crd/gpu/validation.hpp>
 
 namespace crd::perf::gpu
@@ -169,13 +170,20 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
     // DIAG.10c: each context's device memory, read once per run (the reading is a moment; the items and the summary
     // count agree because both come from this array).
     crd::gpu::DeviceMemoryReading memory[kGpuResourcesMaxContexts]{};
+    crd::gpu::QueueDepthReading   queues[kGpuResourcesMaxContexts]{};
     crd::u64                      memory_read = 0U;
+    crd::u64                      queue_read  = 0U;
     for (crd::u32 i = 0U; i < cmd->m_context_count; ++i)
     {
         memory[i] = cmd->m_contexts[i]->device_memory();
         if (memory[i].source != crd::gpu::DeviceMemorySource::Unavailable)
         {
             ++memory_read;
+        }
+        queues[i] = cmd->m_contexts[i]->queue_pressure(); // DIAG.10c: the completion seams' view of its queues
+        if (queues[i].depth.read)
+        {
+            ++queue_read;
         }
     }
 
@@ -184,7 +192,8 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
         .u64("live_passes", live_pass)
         .u64("contexts", cmd->m_context_count)
         .u64("frame_graphs", cmd->m_graph_count)
-        .u64("device_memory_read", memory_read);
+        .u64("device_memory_read", memory_read)
+        .u64("queue_depth_read", queue_read);
 
     DiagFields item(out.allocator());
 
@@ -220,6 +229,22 @@ DiagStatus GpuResourcesCommand::run(void* self, const crd::perf::DiagCall& call,
             .str("core", mode_state(activation, crd::gpu::ValidationMode::Core))
             .str("synchronization", mode_state(activation, crd::gpu::ValidationMode::Synchronization))
             .str("gpu_assisted", mode_state(activation, crd::gpu::ValidationMode::GpuAssisted));
+        // DIAG.10c: the queue depth (unbounded, so its level is reported, never judged against a bound).
+        const crd::gpu::QueueDepthReading& q = queues[i];
+        if (q.depth.read)
+        {
+            item.u64("queue_in_flight", q.counts.in_flight)
+                .u64("queue_high_water", q.counts.high_water)
+                .u64("queue_submitted", q.counts.submitted)
+                .u64("queue_retired", q.counts.retired)
+                .u64("queue_abandoned", q.counts.abandoned)
+                .u64("queues", q.counts.queues);
+        }
+        else
+        {
+            item.str("queue_depth", "unavailable")
+                .str("queue_reason", cont::StringView{q.reason != nullptr ? q.reason : "queue depth was not read"});
+        }
         (void)out.add_item(item);
 
         const crd::gpu::DeviceMemoryReading& m = memory[i];

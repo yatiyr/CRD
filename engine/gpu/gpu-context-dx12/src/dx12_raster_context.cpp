@@ -9,6 +9,7 @@
 #include "dx12_frame_descriptors.hpp"
 #include "dx12_identity_naming.hpp" // DIAG.7a(d2b-dx12-a): mint + SetName a Cerid identity on a native ID3D12Object
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: Present runs under the mode witness
+#include <crd/gpu/queue_pressure.hpp> // DIAG.10c: the queue's tracked depth ends with the context
 #include <crd/gpu/identity_registry.hpp> // DIAG.7a(d2c-dx12): mint(ObjectKind::Pass) for frame-graph pass identities
 
 #include <crd/gpu/detail/command_lowering.hpp> // RAF-12.4: CommandEncoder<Ctx> — this backend records through its own instantiation
@@ -23,6 +24,7 @@
 #include <crd/containers/hash.hpp>  // fnv1a_64: content-hash identity for the DXR pipeline cache (see DxrPipe::key SCAR)
 #include <crd/memory/allocator.hpp> // REN-1 pt-2: crd::memory::default_allocator() for those arrays
 
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the queue, fence, swapchain and events in the lifetime ledger
 #include <crd/core/types.hpp>
 
 #include <d3d12.h>
@@ -604,6 +606,7 @@ public:
         {
             return;
         }
+        m_swapchain_hold.hold();
 
         if (FAILED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&m_alloc))))
         {
@@ -622,11 +625,13 @@ public:
         {
             return;
         }
+        m_fence_hold.hold();
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         if (m_event == nullptr)
         {
             return;
         }
+        crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject); // DIAG.10c: until the destructor closes it
         m_w     = w;
         m_h     = h;
         m_valid = true;
@@ -638,6 +643,7 @@ public:
         if (m_event != nullptr)
         {
             CloseHandle(m_event);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
         }
     }
     Dx12PresentSurface(const Dx12PresentSurface&)            = delete;
@@ -829,9 +835,11 @@ private:
     ComPtr<ID3D12DescriptorHeap>      m_bb_rtv_heap;
     UINT                              m_bb_rtv_inc = 0U;
     ID3D12Resource*                   m_bb_rtv_for[kBackBufferCount]{};
+    crd::LifetimeHold                 m_swapchain_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before it
     ComPtr<IDXGISwapChain3>           m_swapchain;
     ComPtr<ID3D12CommandAllocator>    m_alloc;
     ComPtr<ID3D12GraphicsCommandList> m_list;
+    crd::LifetimeHold                 m_fence_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `m_fence`
     ComPtr<ID3D12Fence>               m_fence;
     HANDLE                            m_event       = nullptr;
     crd::u64                          m_fence_value = 0;
@@ -1216,6 +1224,7 @@ public:
         {
             return;
         }
+        m_queue_hold.hold();
         // REN-8: the frame graph's allocator+list RING (see frame_rec_begin). Allocation failure is non-fatal —
         // `m_ring_list[0] == nullptr` simply means the graph records on the dedicated pair, exactly as before.
         for (crd::u32 s = 0; s < kFrameRingSize; ++s)
@@ -1254,8 +1263,13 @@ public:
         {
             return;
         }
+        m_fence_hold.hold();
         m_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
         m_ok    = m_event != nullptr;
+        if (m_ok)
+        {
+            crd::lifetime_ledger().acquired(crd::LifetimeClass::OsObject); // DIAG.10c: until the destructor closes it
+        }
 
         // B1-e: VRS. RSSetShadingRate / RSSetShadingRateImage live on ID3D12GraphicsCommandList5 (null on an old runtime).
         m_list.As(&m_list5);
@@ -1382,9 +1396,14 @@ public:
         {
             detail::dx12_detach_identity(m_dxr[i].identity);
         }
+        if (m_queue != nullptr)
+        {
+            queue_forget_queue(m_device.Get(), m_queue.Get()); // DIAG.10c: work still queued is abandoned
+        }
         if (m_event != nullptr)
         {
             CloseHandle(m_event);
+            (void)crd::lifetime_ledger().released(crd::LifetimeClass::OsObject);
         }
     }
     Dx12RasterContext(const Dx12RasterContext&)            = delete;
@@ -8348,6 +8367,7 @@ private:
     detail::Dx12DeviceScope m_validation;
     ComPtr<ID3D12Device>               m_device;
     ComPtr<ID3D12Device2>              m_device2; // B4: CreatePipelineState (stream PSO) for mesh — null on an old runtime
+    crd::LifetimeHold                  m_queue_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `m_queue`
     ComPtr<ID3D12CommandQueue>         m_queue;
     ComPtr<ID3D12CommandAllocator>     m_cmd_alloc;
     // REN-8: the frame graph's per-frame allocator+list RING, plus the dedicated pair saved while it is swapped
@@ -8422,6 +8442,7 @@ private:
     ComPtr<ID3D12Resource> m_identity_ib;
     crd::u32               m_identity_ib_count = 0U; // capacity in u32 indices currently populated
     bool                               m_mesh_shader = false; // B4: D3D12_FEATURE_D3D12_OPTIONS7 MeshShaderTier supported
+    crd::LifetimeHold                  m_fence_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `m_fence`
     ComPtr<ID3D12Fence>                m_fence;
     HANDLE                             m_event     = nullptr;
     crd::u64                           m_fence_val = 0;

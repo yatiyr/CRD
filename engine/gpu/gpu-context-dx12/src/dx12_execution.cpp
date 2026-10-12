@@ -4,8 +4,12 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/fault_seam.hpp> // DIAG.9b: an authorized test can lose the device at a submission
 #include <crd/gpu/driver_witness.hpp> // DIAG.10c: ExecuteCommandLists runs under the mode witness
+#include <crd/gpu/queue_pressure.hpp> // DIAG.10c: every fence step is reported to the queue-depth tracker
 
+#include <atomic>
 #include <limits>
+#include <mutex>
+#include <new>
 
 #include <wrl/client.h>
 
@@ -13,8 +17,88 @@ namespace crd::gpu::detail
 {
 namespace
 {
+// DIAG.10c: the queue-depth tracker keys a device by its address, and a later device may be created at the address of
+// one that is gone. D3D12 releases an object's private-data interfaces when the object is destroyed, so a watch
+// attached to the device the first time a seam reports a step on it tells the tracker exactly when that device ends.
+// {6A1E3C5D-0F27-4B8E-9C41-2D7B5E0A9F13}
+constexpr GUID kQueueDepthWatchGuid = {0x6a1e3c5dU, 0x0f27U, 0x4b8eU,
+                                       {0x9cU, 0x41U, 0x2dU, 0x7bU, 0x5eU, 0x0aU, 0x9fU, 0x13U}};
+
+class DeviceEndWatch final : public IUnknown
+{
+public:
+    explicit DeviceEndWatch(const void* device) noexcept : m_device(device) {}
+    DeviceEndWatch(const DeviceEndWatch&)            = delete;
+    DeviceEndWatch& operator=(const DeviceEndWatch&) = delete;
+    DeviceEndWatch(DeviceEndWatch&&)                 = delete;
+    DeviceEndWatch& operator=(DeviceEndWatch&&)      = delete;
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** out) noexcept override
+    {
+        if (out == nullptr)
+        {
+            return E_POINTER;
+        }
+        if (riid == __uuidof(IUnknown))
+        {
+            *out = static_cast<IUnknown*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() noexcept override
+    {
+        return m_refs.fetch_add(1U, std::memory_order_relaxed) + 1U;
+    }
+    ULONG STDMETHODCALLTYPE Release() noexcept override
+    {
+        const ULONG left = m_refs.fetch_sub(1U, std::memory_order_acq_rel) - 1U;
+        if (left == 0U)
+        {
+            queue_forget_device(m_device); // the device is being destroyed: its counts end with it
+            delete this;
+        }
+        return left;
+    }
+
+private:
+    ~DeviceEndWatch() = default;
+
+    std::atomic<ULONG> m_refs{1U};
+    const void*        m_device = nullptr;
+};
+
+// Attach the watch once per device. Serialized, so two first submissions on one device cannot replace each other's
+// watch (a replaced watch would end the device's counts while it lives).
+void watch_device_end(ID3D12Device* device) noexcept
+{
+    UINT size = 0U;
+    if (device->GetPrivateData(kQueueDepthWatchGuid, &size, nullptr) == S_OK)
+    {
+        return;
+    }
+    static std::mutex     attach_mutex;
+    const std::lock_guard lock(attach_mutex);
+    size = 0U;
+    if (device->GetPrivateData(kQueueDepthWatchGuid, &size, nullptr) == S_OK)
+    {
+        return;
+    }
+    auto* const watch = new (std::nothrow) DeviceEndWatch(device);
+    if (watch == nullptr)
+    {
+        return; // the device's counts then end with its last forgotten queue only
+    }
+    (void)device->SetPrivateDataInterface(kQueueDepthWatchGuid, watch); // holds its own reference on success
+    (void)watch->Release();
+}
+
 void stop_failed_device(ID3D12Device* device) noexcept
 {
+    watch_device_end(device);
+    queue_device_lost(device); // DIAG.10c: its pending fence steps end abandoned, whichever way it is removed
     if (FAILED(device->GetDeviceRemovedReason())) // the runtime/driver already removed it: an actual device loss
     {
         dx12_record_removal(device, Dx12RemovalOrigin::Observed);
@@ -35,6 +119,8 @@ void stop_failed_device(ID3D12Device* device) noexcept
 // without ID3D12Device5 cannot remove the device: the submission still fails and the context latches invalid.
 void simulate_device_loss(ID3D12Device* device) noexcept
 {
+    watch_device_end(device);
+    queue_device_lost(device); // DIAG.10c
     Microsoft::WRL::ComPtr<ID3D12Device5> control;
     if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&control))))
     {
@@ -103,6 +189,8 @@ HRESULT dx12_submit(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Graph
         if (SUCCEEDED(result))
         {
             ++value;
+            watch_device_end(device);
+            queue_step_submitted(device, queue, fence, value); // DIAG.10c: in flight until a wait observes `value`
         }
     }
     if (FAILED(result))
@@ -139,6 +227,8 @@ HRESULT dx12_signal(ID3D12Device* device, ID3D12CommandQueue* queue, ID3D12Fence
     if (SUCCEEDED(result))
     {
         ++value;
+        watch_device_end(device);
+        queue_step_submitted(device, queue, fence, value); // DIAG.10c: a bare signal is a step too
     }
     else
     {
@@ -209,6 +299,10 @@ HRESULT dx12_wait(ID3D12Device* device, ID3D12Fence* fence, UINT64 value, HANDLE
     {
         dx12_execution_failure(result, "Wait for command completion");
         stop_failed_device(device);
+    }
+    else
+    {
+        queue_timeline_completed(device, fence, value); // DIAG.10c: retires `value` and everything before it
     }
     return result;
 }

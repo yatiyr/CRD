@@ -9,6 +9,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/lifetime_ledger.hpp> // DIAG.10c: the fence in the lifetime ledger
 #include <crd/gpu/vulkan_shader_compile.hpp> // DIAG.9a: create_pipeline_from_ckir
 #include <crd/kir/ckir_glsl.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -400,8 +401,10 @@ VulkanComputeContext::VulkanComputeContext(VulkanGpuContext& ctx, crd::memory::I
     fci.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
     if (vkCreateFence(impl.device, &fci, nullptr, &impl.fence) != VK_SUCCESS)
     {
+        impl.fence = VK_NULL_HANDLE;
         return;
     }
+    crd::lifetime_ledger().acquired(crd::LifetimeClass::NativeGpuObject); // DIAG.10c: until the destructor
 
     VkPhysicalDeviceProperties props{};
     vkGetPhysicalDeviceProperties(impl.physical, &props);
@@ -438,6 +441,7 @@ VulkanComputeContext::~VulkanComputeContext()
     if (impl.fence != VK_NULL_HANDLE)
     {
         vkDestroyFence(impl.device, impl.fence, nullptr);
+        (void)crd::lifetime_ledger().released(crd::LifetimeClass::NativeGpuObject); // DIAG.10c
     }
     if (impl.desc_pool != VK_NULL_HANDLE)
     {

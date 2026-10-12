@@ -4,6 +4,7 @@
     test_midi_realtime.cpp # GEO-10: SMF -> MIDI 2.0 exact events + SPSC ring + THE device SOAK
     test_ceir_audio_render.cpp # CEIR-31a-1b-ii: execute_audio_graph_ceir BIT-EXACT vs render_graph (committed .ceir vs AGRF)
     test_diag_audio_boundary.cpp # DIAG.10c: binding shape/rate, the sample domain and the render-period mode probe
+    test_diag_audio_device_lifetime.cpp # DIAG.10c: the device's OS objects in the ledger across stop and restart
 )
 
 target_link_libraries(crd-audio-tests PRIVATE
