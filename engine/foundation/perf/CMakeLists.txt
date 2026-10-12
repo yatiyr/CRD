@@ -23,7 +23,7 @@ add_library(crd-perf STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-perf
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-perf
@@ -38,3 +38,9 @@ target_link_libraries(crd-perf
 
 target_compile_features(crd-perf PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-perf)
+
+# Cerid::perf of the relocatable package (DIAG.11a: the diagnostic host's family), with the authored diagnostic assets
+# its host reads at run time (assets/diag: diagnostic-host profiles, flight policies, fault plans) under
+# <prefix>/share/cerid/diag, found through Cerid_ASSET_DIR.
+crd_package_library(crd-perf NAME perf INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+crd_package_assets("${CMAKE_SOURCE_DIR}/assets/diag" DESTINATION diag)

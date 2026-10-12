@@ -80,7 +80,8 @@ configuration carries them and `cmake --install <build>` produces a prefix with 
 `core` (`Cerid::core`); extending it to a family is the documented next step, one `crd_package_library()` call per
 library whose usage requirements are export-clean: build-tree paths and engine-only interface targets wrapped in
 `$<BUILD_INTERFACE:...>`, so a consumer does not inherit `crd-warnings` (`/W4 /WX` or `-Wall -Werror`) and the
-installed `CeridTargets.cmake` names no source, build or prefix path.
+installed `CeridTargets.cmake` names no source, build or prefix path. (Amended 2026-10-12: that step is taken for the
+diagnostic family; see [below](#the-diagnostic-family-diag11a).)
 
 One installed prefix is one profile. `build_config.hpp` differs per configuration (asserts, profiling,
 `CRD_DEBUG`/`CRD_RELEASE`, the log level), so `CeridConfig.cmake` records the build type and the switches it was
@@ -100,7 +101,41 @@ prove its compile commands carry no engine warning flag, run it and compare the 
 installed header with the packaging switches, then prove the two refusals (mismatching build type, shared
 libraries). It passed on MSVC 19.51 (Ninja, `win-debug` profile) and GCC 13.3 (`linux-gcc-debug` profile).
 
+## The diagnostic family (DIAG.11a)
+
+Amended 2026-10-12 (DIAG.11a, [session](../sessions/2026-10-12-diag-11a-installed-consumer.md)): the package is no
+longer `core` alone. It exports the engine's diagnostic host and its closure, the family an external application needs
+to run, fail and be investigated: `Cerid::core`, `units`, `time`, `vm`, `log`, `containers`, `memory`, `jobs`,
+`toml`, `perf`, plus `math` and the interface target `simd-flags` (the ISA, `CRD_SIMD_TARGET` and the ADR-0063
+floating-point options every consumer of the math headers must compile with). Every module's include directories are
+`$<BUILD_INTERFACE:...>`, so the installed targets carry only `<prefix>/include`.
+
+- Include-only edges are declared where the package needs them: `crd_package_library(... INCLUDE_ONLY <module>)`.
+  The units headers include the header-only `crd/math` transcendental functions (no link edge, which would be a cycle)
+  and the containers headers name crd-log's channel macros; an install that would ship units without math (or
+  containers without log) fails, naming both, instead of writing a package whose headers do not compile. The registry
+  itself still records no include-only edge.
+- Symbols are packaged on purpose. `CeridConfig.cmake` declares `Cerid_DEBUG_INFORMATION`: `pdb` (MSVC with `/Zi`: an
+  archive's types live in its compile PDB, which does not travel with the `.lib`, so the PDB is installed beside its
+  archive, where the linker looks), `embedded` (clang-cl, or MSVC under the compiler launcher's `/Z7`), `dwarf` (GCC and
+  Clang: in the archive members), `none` (Release without the shipping condition) or `not-installed` (a
+  multi-configuration install, the declared gap above).
+- Authored assets a packaged library reads at run time are installed by `crd_package_assets()` under
+  `<prefix>/share/cerid/<dir>` and found through `Cerid_ASSET_DIR` (`set_and_check`, relocatable); `Cerid_ASSETS`
+  lists them. crd-perf installs `assets/diag` (the diagnostic-host profiles, the flight policy, the fault plan).
+- The proof grew with it. `test-package-consumer.py` packages the family (`CRD_MODULES=perf,math`), checks one archive
+  per module and no other, every public header of every module, the declared debug information and the assets byte
+  for byte, moves the prefix, then deletes the engine's build tree before anything consumes the prefix (the nearest
+  local stand-in for a clean machine: with the build tree kept, a missing compile PDB goes unnoticed because the
+  linker finds it at its build path). Besides the core consumer it builds the thin diagnostic application
+  (`tests/support/package/diag-consumer`, `Cerid::perf` only), proves the engine's debug information reached the
+  program (a member of a type defined only inside an engine source must appear in the program's PDB or DWARF;
+  CMake's MSVC link step prints `LNK4099` only for a failing link, so its output cannot tell), and runs the
+  application's deliberate failure and its investigation (the [DIAG.11a](runtime-diagnostics.md#diag-11a) contract).
+
 ## Not in scope
 
 Exporting families beyond `core`, an include-only edge notion in the registry, shared-library builds, a
 multi-configuration install contract, and the fuzz and sanitizer instruments (REPO.DEV.9) are separate rows.
+(Amended 2026-10-12: the diagnostic family above is now exported; families beyond it, the registry's include-only
+edges, shared libraries and the multi-configuration install remain out of scope.)

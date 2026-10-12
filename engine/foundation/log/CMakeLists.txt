@@ -5,7 +5,7 @@ add_library(crd-log STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-log
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-log
@@ -23,3 +23,6 @@ target_link_libraries(crd-log
 
 target_compile_features(crd-log PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-log)
+
+# Cerid::log of the relocatable package.
+crd_package_library(crd-log NAME log INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

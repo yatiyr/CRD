@@ -19,7 +19,7 @@ add_library(crd-time STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-time
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-time
@@ -30,3 +30,6 @@ target_link_libraries(crd-time
 
 target_compile_features(crd-time PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-time)
+
+# Cerid::time of the relocatable package.
+crd_package_library(crd-time NAME time INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

@@ -11,6 +11,16 @@ set(Cerid_SIMD_LEVEL "@CRD_SIMD_LEVEL@")
 set(Cerid_COMPILER "@CMAKE_CXX_COMPILER_ID@ @CMAKE_CXX_COMPILER_VERSION@")
 set(Cerid_PROFILE "@CRD_PACKAGE_PROFILE@")
 set(Cerid_LIBRARIES "@CRD_PACKAGE_LIBRARY_LIST@")
+# How the archives carry their debug information: pdb (each archive's compile PDB is installed beside it), embedded
+# (CodeView in the objects), dwarf (in the archive members), none, or not-installed (multi-configuration install).
+set(Cerid_DEBUG_INFORMATION "@CRD_PACKAGE_DEBUG_INFORMATION@")
+# Authored assets the packaged libraries read at run time, under Cerid_ASSET_DIR (diag: the diagnostic-host profiles,
+# flight policies and fault plans). Empty when no packaged library installs assets.
+set(Cerid_ASSETS "@CRD_PACKAGE_ASSET_LIST@")
+set(Cerid_ASSET_DIR "")
+if(@CRD_PACKAGE_HAS_ASSETS@)
+    set_and_check(Cerid_ASSET_DIR "@PACKAGE_CRD_PACKAGE_ASSET_DIR@")
+endif()
 
 if(Cerid_BUILD_TYPE STREQUAL "")
     message(WARNING "Cerid ${Cerid_VERSION} was installed from a multi-configuration build; its build_config.hpp "

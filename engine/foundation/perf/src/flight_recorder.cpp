@@ -53,6 +53,32 @@ crd::u16 copy_clipped(char* dst, crd::u32 cap, cont::StringView src, bool* trunc
     return static_cast<crd::u16>(n);
 }
 
+// Copy a source path into a fixed buffer of `cap` bytes. A path longer than cap - 1 keeps its tail, which names the
+// file, after a "..." marker (the head is the least telling part of an absolute path); the cut never splits a UTF-8
+// sequence. Returns the stored length.
+crd::u16 copy_path_tail(char* dst, crd::u32 cap, cont::StringView src) noexcept
+{
+    const crd::usize limit = static_cast<crd::usize>(cap) - 1U;
+    if (src.size() <= limit)
+    {
+        return copy_clipped(dst, cap, src, nullptr);
+    }
+    constexpr crd::usize marker = 3U;
+    crd::usize           from   = src.size() - (limit - marker);
+    while (from < src.size() && (static_cast<crd::u8>(src[from]) & 0xC0U) == 0x80U)
+    {
+        ++from;
+    }
+    const crd::usize n = src.size() - from;
+    std::memcpy(dst, "...", marker);
+    if (n > 0U)
+    {
+        std::memcpy(dst + marker, src.data() + from, n);
+    }
+    dst[marker + n] = '\0';
+    return static_cast<crd::u16>(marker + n);
+}
+
 bool known_trigger(crd::u32 kind) noexcept
 {
     return kind > 0U && kind < kFlightTriggerCount;
@@ -521,7 +547,7 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     t.value_a              = input.value_a;
     t.value_b              = input.value_b;
     t.line                 = input.source.line;
-    t.file_length          = copy_clipped(t.file, kFlightTriggerFileBytes, input.source.file, nullptr);
+    t.file_length          = copy_path_tail(t.file, kFlightTriggerFileBytes, input.source.file);
     t.message_length       = copy_clipped(t.message, kFlightTriggerMessageBytes, input.message, nullptr);
 
     std::memcpy(impl->trigger_replay, impl->replay, sizeof(impl->trigger_replay));

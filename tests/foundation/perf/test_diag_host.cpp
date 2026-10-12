@@ -1338,5 +1338,33 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         cp::ModuleIdentity from_file;
         REQUIRE(crd::test::module_file::file_identity(CRD_DIAG_HOST_SPECIMEN, from_file));
         CHECK(cp::identity_matches(*named, from_file));
+
+        // The same evidence through the investigation route an external application has (DIAG.11a): bundle.inspect
+        // decodes the trigger, how the window ended and the forty events before the failure.
+        cp::DiagServiceConfig config;
+        config.root = cont::StringView{captures.data(), captures.size()};
+        cp::DiagCommandService service{cp::authority_bit(cp::DiagAuthority::Read), config};
+        cp::DiagRequest        req;
+        req.command                    = "bundle.inspect";
+        req.path                       = "flight-0.cdb";
+        req.page_items                 = cp::kDiagMaxPageItems;
+        req.page_bytes                 = cp::kDiagMaxPageBytes;
+        const cp::DiagResult inspected = service.execute(req);
+        REQUIRE(inspected.status == cp::DiagStatus::Ok);
+        CHECK(inspected.complete);
+        CHECK(contains(inspected.json, R"("flight_record":true,"flight_refused":false)"));
+        if (std::strcmp(mode, "invariant") == 0)
+        {
+            CHECK(contains(inspected.json, R"({"kind":"trigger","trigger":"fatal-invariant","code":1809,)"));
+        }
+        else
+        {
+            CHECK(contains(inspected.json, R"({"kind":"trigger","trigger":"assertion",)"));
+        }
+        CHECK(contains(inspected.json, R"({"kind":"flight","end":"fatal",)"));
+        CHECK(contains(inspected.json, R"({"kind":"event","index":0,"side":"before",)"));
+        CHECK(contains(inspected.json, R"({"kind":"event","index":39,"side":"before",)"));
+        CHECK(contains(inspected.json, R"("message":"order 39","message_truncated":false})"));
+        CHECK_FALSE(contains(inspected.json, R"("side":"after")"));
     }
 }

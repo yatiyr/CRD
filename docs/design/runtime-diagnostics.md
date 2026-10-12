@@ -2618,7 +2618,43 @@ Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-reusable-diagnost
   the host's family must be exported, symbols and the diagnostic assets installed intentionally, and a clean-machine
   consumer built); the examples for allocator selection, jobs, reload and capture on that consumer; the three binaries
   (profiling disabled, optimized profiling, diagnostic) shown for it; and an investigation route that reads a flight
-  record's trigger and events, which `bundle.inspect` does not decode yet (it lists the section).
+  record's trigger and events, which `bundle.inspect` does not decode yet (it lists the section). (Amended 2026-10-12:
+  all of these but the four examples are settled below.)
+
+Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-installed-consumer.md)):
+- The installed family: the package exports the diagnostic host and its closure (`Cerid::core`, `units`, `time`,
+  `vm`, `log`, `containers`, `memory`, `jobs`, `toml`, `perf`, with `math` and `simd-flags`), installs each archive's
+  symbols as `CeridConfig.cmake` declares them (`Cerid_DEBUG_INFORMATION`: the MSVC compile PDBs beside their
+  archives, DWARF inside the GCC archives) and the authored diagnostic assets under `<prefix>/share/cerid/diag`
+  (`Cerid_ASSET_DIR`). The packaging rules are [public consumption](public-consumption.md#the-diagnostic-family-diag11a).
+- The thin consumer is `tests/support/package/diag-consumer`: a standalone CMake project that only calls
+  `find_package(Cerid)` and links `Cerid::perf`, never part of the engine's build. `scripts/test-package-consumer.py`
+  (the `crd-package-consumer` CTest of the public-check presets) builds it against the moved prefix after deleting the
+  engine's build tree, the nearest local stand-in for a clean machine; the hosted public-check lanes are fresh machines.
+- It runs and fails on purpose: `diag-consumer fail <profile>` starts the engine's `DiagnosticHost` from a profile the
+  test authors from the installed `host_investigate.host.toml` (the installed flight policy, a crash directory and a
+  capture directory of its own), prints this binary's capabilities through the host's own service
+  (`diag.capabilities`), records forty orders and fails a `CRD_DIAG_INVARIANT`. The capture directory receives one
+  flight bundle before the process dies. `CRD_DIAG_INVARIANT` now names its types fully, so an application needs no
+  `cont` namespace alias of its own.
+- It is investigated without engine edits: `diag-consumer inspect <dir> <bundle>` reads the bundle through
+  `bundle.inspect`, which now decodes the flight record. Besides the sections, the build and the modules, it lists a
+  `trigger` item (kind, code, file, line, message, scalars, sequence), a `flight` item (how the window ended, the policy
+  generation and detail, the loss metadata, the replay recipe) and one `event` item per retained event, each saying
+  whether it was recorded before or after the trigger; the summary says `flight_record`, and a record the decoder
+  refuses (or an oversized or compressed section) is `flight_refused` with the reason, never silently absent. The test
+  requires the trigger at the application's failing line with its code and message, the forty events before it in
+  order, the window ended `fatal`, the replay recipe, `same_as_host`, and the application's own module identity. ceridc
+  serves the same command, so the headless host gets the route too.
+- A trigger's source path longer than its 128-byte field keeps its tail (the file name) after `...`, cut on a UTF-8
+  boundary; before, it kept the head, so an application built in a deep directory lost the name of its failing file.
+- The three binaries: the same run under the diagnostic profile (`win-debug`, `linux-gcc-debug`: asserts, profiling,
+  fault injection active), the profiling-disabled one (`win-shipping`, `linux-gcc-shipping`: profiling not compiled,
+  fault injection Unavailable and the run continuing) and the optimized-profiling one (`win-shipping-profile`; Linux
+  has no such preset). The application's own build line and `diag.capabilities` (`basic-recording` and
+  `fault-injection` compiled or not) are held to the profile. Only the Debug public-check presets run the CTest
+  hosted; the shipping profiles are local evidence.
+- Not settled here: the examples for allocator selection, jobs, reload and capture on the consumer.
 
 <a id="diag-11b"></a>
 ## DIAG.11b — cost, CI and fast investigation workflow

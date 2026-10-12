@@ -18,11 +18,11 @@ add_library(crd-units STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-units
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
         # tx-route: the crd::math::* transcendental headers are header-only (inline, deps = crd-core only) and never
         # pull scalar.hpp (the Vec3<Quantity> part that makes crd-math depend on crd-units). So units INCLUDES them
         # for its deterministic nonlinear (dB) conversions WITHOUT linking crd-math — which would be a dep cycle.
-        "${CMAKE_SOURCE_DIR}/engine/foundation/math/include"
+        "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/engine/foundation/math/include>"
 )
 
 target_link_libraries(crd-units
@@ -34,3 +34,7 @@ target_link_libraries(crd-units
 
 target_compile_features(crd-units PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-units)
+
+# Cerid::units of the relocatable package. Its public headers include the header-only crd/math transcendental
+# functions (units_nonlinear.hpp) without a link edge, so math must be packaged with it.
+crd_package_library(crd-units NAME units INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include" INCLUDE_ONLY math)

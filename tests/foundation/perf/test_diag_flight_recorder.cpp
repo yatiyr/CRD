@@ -499,7 +499,12 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     cp::FlightRecorder r;
     REQUIRE(r.init(small_policy(16U, 8U, 2U)) == cp::FlightPolicyStatus::Committed);
     record_n(r, 0U, 4U);
-    REQUIRE(r.trigger(manual("inspect me")) == cp::FlightTriggerResult::Started);
+    cp::FlightTriggerInput in = manual("inspect me");
+    in.source.file            = cont::StringView{"src/orders.cpp"};
+    in.source.line            = 321U;
+    in.value_a                = 7U;
+    in.value_b                = 9U;
+    REQUIRE(r.trigger(in) == cp::FlightTriggerResult::Started);
     record_n(r, 4U, 2U);
     cp::FlightCapture c;
     REQUIRE(r.take_capture(c));
@@ -515,15 +520,137 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     cp::DiagRequest        req;
     req.command                = "bundle.inspect";
     req.path                   = "diag_flight_inspect.cdb";
+    req.page_items             = 64U;
     const cp::DiagResult found = svc.execute(req);
     REQUIRE(found.status == cp::DiagStatus::Ok);
-    // Four sections (manifest, flight record, build identity, the absent symbol index) and the build item.
-    CHECK(found.total == 5U);
-    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"flight-record\",\"absent\":false") != nullptr);
-    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"build-identity\",\"absent\":false") != nullptr);
-    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"symbol-index\",\"absent\":true") != nullptr);
-    CHECK(std::strstr(found.json.c_str(), "\"tag_name\":\"reserved\"") == nullptr);
-    CHECK(std::strstr(found.json.c_str(), "\"same_as_host\":true,\"differing\":\"\"") != nullptr);
+    // Four sections (manifest, flight record, build identity, the absent symbol index), the build item and, decoded
+    // (DIAG.11a), the trigger, the flight window and the six retained events.
+    CHECK(found.total == 13U);
+    CHECK(found.complete);
+    const char* json = found.json.c_str();
+    CHECK(std::strstr(json, "\"tag_name\":\"flight-record\",\"absent\":false") != nullptr);
+    CHECK(std::strstr(json, "\"tag_name\":\"build-identity\",\"absent\":false") != nullptr);
+    CHECK(std::strstr(json, "\"tag_name\":\"symbol-index\",\"absent\":true") != nullptr);
+    CHECK(std::strstr(json, "\"tag_name\":\"reserved\"") == nullptr);
+    CHECK(std::strstr(json, "\"same_as_host\":true,\"differing\":\"\"") != nullptr);
+    CHECK(std::strstr(json, "\"flight_record\":true,\"flight_refused\":false,\"flight_error\":\"\"") != nullptr);
+    CHECK(std::strstr(json, "{\"kind\":\"trigger\",\"trigger\":\"manual\",\"code\":2304,\"file\":\"src/orders.cpp\","
+                            "\"line\":321,\"message\":\"inspect me\",\"value_a\":7,\"value_b\":9,\"sequence\":4,") !=
+          nullptr);
+    CHECK(std::strstr(json, "{\"kind\":\"flight\",\"end\":\"post-events-full\",") != nullptr);
+    CHECK(std::strstr(json, "\"pre_retained\":4,\"post_retained\":2,\"post_truncated\":false,"
+                            "\"ring_unavailable\":false,") != nullptr);
+    CHECK(std::strstr(json, "\"events\":6,\"replay_available\":false,") != nullptr);
+    // Every retained event, on its side of the trigger, with its own scalars and message.
+    char expected[160];
+    for (crd::u32 i = 0U; i < 6U; ++i)
+    {
+        (void)std::snprintf(expected, sizeof(expected),
+                            R"({"kind":"event","index":%u,"side":"%s","sequence":%u,)", static_cast<unsigned>(i),
+                            i < 4U ? "before" : "after", static_cast<unsigned>(i));
+        CHECK(std::strstr(json, expected) != nullptr);
+        (void)std::snprintf(expected, sizeof(expected),
+                            R"("code":66,"severity":"info","value_a":%u,"value_b":0,"message":"event %u",)"
+                            R"("message_truncated":false})",
+                            static_cast<unsigned>(i), static_cast<unsigned>(i));
+        CHECK(std::strstr(json, expected) != nullptr);
+    }
+    CHECK(std::strstr(json, "\"index\":6,") == nullptr);
+    (void)std::remove(path);
+}
+
+TEST_CASE("flight trigger: a source path longer than the field keeps its file name", "[perf][diag][diag11a][flight]")
+{
+    // An application built in a deep directory: the head of its path is the least telling part.
+    char long_path[400];
+    crd::usize at = 0U;
+    for (crd::u32 i = 0U; i < 30U; ++i)
+    {
+        at += static_cast<crd::usize>(
+            std::snprintf(long_path + at, sizeof(long_path) - at, "/dir%02u", static_cast<unsigned>(i)));
+    }
+    // A two-byte UTF-8 letter straddles the cut, which must not split it: its continuation byte sits exactly where a
+    // byte-count cut would start the kept tail (124 bytes from the end: 127 - "...").
+    long_path[at++] = '/';
+    long_path[at++] = static_cast<char>(0xC3);
+    long_path[at++] = static_cast<char>(0xA7);
+    long_path[at++] = '/';
+    for (crd::u32 i = 0U; i < 98U; ++i)
+    {
+        long_path[at++] = 'x';
+    }
+    (void)std::snprintf(long_path + at, sizeof(long_path) - at, "/consumer/src/orders.cpp");
+    const cont::StringView path{long_path};
+    REQUIRE(static_cast<crd::u8>(path[path.size() - 124U]) == 0xA7U);
+    REQUIRE(path.size() > cp::kFlightTriggerFileBytes);
+
+    cp::FlightRecorder r;
+    REQUIRE(r.init(small_policy(16U, 8U, 1U)) == cp::FlightPolicyStatus::Committed);
+    cp::FlightTriggerInput in = manual("deep");
+    in.source.file            = path;
+    in.source.line            = 77U;
+    REQUIRE(r.trigger(in) == cp::FlightTriggerResult::Started);
+    record_n(r, 0U, 1U);
+    cp::FlightCapture c;
+    REQUIRE(r.take_capture(c));
+    const cont::StringView stored = c.trigger.file_view();
+    CHECK(stored.size() <= cp::kFlightTriggerFileBytes - 1U);
+    CHECK(stored.size() >= cp::kFlightTriggerFileBytes - 2U); // at most the straddling lead byte is dropped
+    CHECK(stored.substr(0U, 3U) == "...");
+    const cont::StringView tail{"/consumer/src/orders.cpp"};
+    CHECK(stored.substr(stored.size() - tail.size()) == tail);
+    // The kept tail is the path's own tail, and starts on a UTF-8 lead or ASCII byte, never a continuation byte.
+    CHECK(path.substr(path.size() - (stored.size() - 3U)) == stored.substr(3U));
+    CHECK((static_cast<crd::u8>(stored[3]) & 0xC0U) != 0x80U);
+    CHECK(c.trigger.line == 77U);
+
+    // A path that fits is stored whole.
+    cp::FlightRecorder short_r;
+    REQUIRE(short_r.init(small_policy(16U, 8U, 1U)) == cp::FlightPolicyStatus::Committed);
+    in.source.file = cont::StringView{"src/orders.cpp"};
+    REQUIRE(short_r.trigger(in) == cp::FlightTriggerResult::Started);
+    record_n(short_r, 0U, 1U);
+    REQUIRE(short_r.take_capture(c));
+    CHECK(c.trigger.file_view() == "src/orders.cpp");
+}
+
+TEST_CASE("flight record: bundle.inspect reports a flight record it cannot decode, and lists no trigger or event",
+          "[perf][diag][diag11a][flight]")
+{
+    cp::FlightRecorder r;
+    REQUIRE(r.init(small_policy(16U, 8U, 2U)) == cp::FlightPolicyStatus::Committed);
+    record_n(r, 0U, 3U);
+    REQUIRE(r.trigger(manual("refuse me")) == cp::FlightTriggerResult::Started);
+    record_n(r, 3U, 2U);
+    cp::FlightCapture c;
+    REQUIRE(r.take_capture(c));
+    cont::Array<crd::u8> payload = cp::encode_flight_record(c);
+    REQUIRE(payload.size() > 8U);
+    payload[4] = static_cast<crd::u8>(payload[4] + 1U); // the version word: a record no reader knows
+
+    cp::BundleWriter writer;
+    REQUIRE(writer.add_section(cp::BundleSectionTag::FlightRecord,
+                               cont::ConstSpan<crd::u8>{payload.data(), payload.size()}) ==
+            cp::BundleWriter::AddStatus::Ok);
+    const cont::Array<crd::u8> bundle = writer.finish();
+    char path[512];
+    (void)std::snprintf(path, sizeof(path), "%s/diag_flight_refused.cdb", CRD_DIAG_COMMANDS_SCRATCH);
+    REQUIRE(cp::write_bundle_atomic(path, cont::ConstSpan<crd::u8>{bundle.data(), bundle.size()}));
+
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{CRD_DIAG_COMMANDS_SCRATCH};
+    cp::DiagCommandService svc{cp::authority_bit(cp::DiagAuthority::Read), config, crd::memory::default_allocator()};
+    cp::DiagRequest        req;
+    req.command                = "bundle.inspect";
+    req.path                   = "diag_flight_refused.cdb";
+    const cp::DiagResult found = svc.execute(req);
+    REQUIRE(found.status == cp::DiagStatus::Ok);
+    CHECK(found.total == 1U); // the section alone
+    const char* json = found.json.c_str();
+    CHECK(std::strstr(json, "\"flight_record\":false,\"flight_refused\":true,\"flight_error\":\"") != nullptr);
+    CHECK(std::strstr(json, "\"flight_error\":\"\"") == nullptr);
+    CHECK(std::strstr(json, "\"kind\":\"trigger\"") == nullptr);
+    CHECK(std::strstr(json, "\"kind\":\"event\"") == nullptr);
     (void)std::remove(path);
 }
 

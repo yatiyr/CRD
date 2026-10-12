@@ -7,7 +7,7 @@ add_library(crd-toml STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-toml
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-toml
@@ -18,3 +18,6 @@ target_link_libraries(crd-toml
 
 target_compile_features(crd-toml PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-toml)
+
+# Cerid::toml of the relocatable package.
+crd_package_library(crd-toml NAME toml INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

@@ -278,8 +278,12 @@ struct DiagServiceConfig
 //   diag.capabilities  Read    the doctor's modes and dependencies, the command schema and the grant
 //   jobs.waits         Read    parked fibers and their wait edges, and each worker's responsiveness
 //   memory.allocators  Read    every allocator registered with the profiler and its live statistics
-//   bundle.inspect     Read    a post-mortem bundle under the root, through the bounded non-executing importer
-//   capture.start      Record  open a capture window (the profiler's sample rings are cleared)
+//   bundle.inspect     Read    a post-mortem bundle under the root, through the bounded non-executing importer: its
+//                              sections, build identity and modules, and a flight record decoded into its trigger
+//                              (kind, file:line, message, scalars), the window's end, loss and replay, and one item per
+//                              retained event (before or after the trigger); a flight record the decoder refuses is
+//                              reported as flight_refused with the reason
+//   capture.start     Record  open a capture window (the profiler's sample rings are cleared)
 //   capture.stop       Record  write the open window as a CPROF capture file under the root (never overwriting)
 // Calls are serialized; handlers run on the calling thread.
 class DiagCommandService

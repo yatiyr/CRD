@@ -5,7 +5,7 @@ add_library(crd-containers STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-containers
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-containers
@@ -27,8 +27,11 @@ target_link_libraries(crd-containers
 # in the CMake configure order. (core/build_config.hpp's generated path
 # arrives via the transitive crd-core link.)
 target_include_directories(crd-containers PUBLIC
-    "${CMAKE_SOURCE_DIR}/engine/foundation/log/include"
+    "$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/engine/foundation/log/include>"
 )
 
 target_compile_features(crd-containers PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-containers)
+
+# Cerid::containers of the relocatable package; its headers name crd-log's channel macros (see above).
+crd_package_library(crd-containers NAME containers INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include" INCLUDE_ONLY log)

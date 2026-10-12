@@ -8,7 +8,9 @@
 #include <crd/perf/bundle_import.hpp>
 #include <crd/perf/capture.hpp>
 #include <crd/perf/config.hpp>
+#include <crd/perf/diagnostics.hpp>
 #include <crd/perf/doctor.hpp>
+#include <crd/perf/flight_recorder.hpp>
 #include <crd/perf/memory.hpp>
 #include <crd/perf/profiler.hpp>
 
@@ -225,6 +227,65 @@ void append_hex(cont::String& out, const crd::u8* bytes, crd::usize n)
             return "pe-image";
     }
     return "unknown";
+}
+
+// bundle.inspect's decoded flight record: one trigger item (what fired, where, with its scalars), one flight item (how
+// the window ended, the policy, the loss metadata and the replay recipe) and one event item per retained event, in
+// sequence order, each saying whether it was recorded before or after the trigger.
+void add_flight_items(const FlightCapture& c, DiagFields& item, DiagSnapshot& out)
+{
+    const FlightTriggerRecord& t = c.trigger;
+    item.clear();
+    item.str("kind", "trigger")
+        .str("trigger", flight_trigger_name(t.kind))
+        .u64("code", t.code)
+        .str("file", t.file_view())
+        .u64("line", t.line)
+        .str("message", t.message_view())
+        .u64("value_a", t.value_a)
+        .u64("value_b", t.value_b)
+        .u64("sequence", t.sequence)
+        .u64("timestamp_ns", t.timestamp_ns);
+    (void)out.add_item(item);
+
+    item.clear();
+    item.str("kind", "flight")
+        .str("end", flight_end_name(c.end))
+        .u64("end_ns", c.end_ns)
+        .u64("policy_generation", c.policy_generation)
+        .str("detail", flight_detail_name(c.policy.detail))
+        .u64("pre_events", c.policy.pre_events)
+        .u64("post_events", c.policy.post_events)
+        .u64("recorded_before_trigger", c.recorded_before_trigger)
+        .u64("pre_retained", c.pre_retained)
+        .u64("post_retained", c.post_retained)
+        .boolean("post_truncated", c.post_truncated)
+        .boolean("ring_unavailable", c.ring_unavailable)
+        .u64("dropped_while_complete", c.dropped_while_complete)
+        .u64("suppressed_triggers", c.suppressed_triggers)
+        .u64("suppressed_kinds", c.suppressed_kinds)
+        .u64("events", c.events.size())
+        .boolean("replay_available", c.replay_available)
+        .str("replay", cont::StringView{c.replay.data(), c.replay.size()});
+    (void)out.add_item(item);
+
+    for (crd::usize i = 0U; i < c.events.size(); ++i)
+    {
+        const FlightEvent& e = c.events[i];
+        item.clear();
+        item.str("kind", "event")
+            .u64("index", i)
+            .str("side", i < c.pre_retained ? cont::StringView{"before"} : cont::StringView{"after"})
+            .u64("sequence", e.sequence)
+            .u64("timestamp_ns", e.timestamp_ns)
+            .u64("code", e.code)
+            .str("severity", severity_name(e.severity))
+            .u64("value_a", e.value_a)
+            .u64("value_b", e.value_b)
+            .str("message", e.message_view())
+            .boolean("message_truncated", e.message_truncated);
+        (void)out.add_item(item);
+    }
 }
 
 constexpr DiagAuthority kAuthorityOrder[kDiagAuthorityCount] = {
@@ -1189,6 +1250,40 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
     limits.max_total_bytes = svc->m_config.max_bundle_bytes;
     const BundleImport imp = import_bundle({bytes.data(), bytes.size()}, limits, out.allocator());
 
+    // The flight record (DIAG.11a): the first FlightRecord section is decoded through the same bounded decoder every
+    // offline reader uses, so an investigation reads the trigger and the events, not only the section's size. A
+    // present section that cannot be decoded (refused, oversized, compressed) is reported with the reason, never
+    // silently absent.
+    FlightRecordRead flight;
+    bool             flight_present = false;
+    cont::StringView flight_error;
+    for (const ImportedSection& s : imp.sections)
+    {
+        if (s.tag != BundleSectionTag::FlightRecord || (s.section_flags & kSectionFlagAbsent) != 0U ||
+            (s.import_flags & kImportSectionDuplicate) != 0U)
+        {
+            continue;
+        }
+        flight_present = true;
+        if ((s.import_flags & kImportSectionOversized) != 0U)
+        {
+            flight_error = "the flight-record section is over the importer's section bound";
+        }
+        else if ((s.section_flags & kSectionFlagCompressed) != 0U)
+        {
+            flight_error = "the flight-record section is compressed, which the importer does not decode";
+        }
+        else
+        {
+            flight = decode_flight_record(s.payload);
+            if (!flight.ok)
+            {
+                flight_error = flight.error;
+            }
+        }
+        break;
+    }
+
     out.summary.str("path", call.request->path)
         .u64("bytes", bytes.size())
         .str("status", import_status_name(imp.status))
@@ -1204,7 +1299,10 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
         .u64("symbols", imp.symbols.size())
         .u64("unsafe_names", imp.unsafe_names)
         .boolean("build_identity", imp.has_build)
-        .boolean("build_refused", imp.build_refused);
+        .boolean("build_refused", imp.build_refused)
+        .boolean("flight_record", flight.ok)
+        .boolean("flight_refused", flight_present && !flight.ok)
+        .str("flight_error", flight_error);
 
     DiagFields item(out.allocator());
     for (crd::usize i = 0U; i < imp.sections.size(); ++i)
@@ -1249,6 +1347,10 @@ DiagStatus DiagCommandService::run_bundle_inspect(void* self, const DiagCall& ca
             .boolean("same_as_host", same)
             .str("differing", cont::StringView{differing.data(), differing.size()});
         (void)out.add_item(item);
+    }
+    if (flight.ok)
+    {
+        add_flight_items(flight.capture, item, out);
     }
     cont::String id(out.allocator());
     for (const ModuleIdentity& m : imp.symbols)

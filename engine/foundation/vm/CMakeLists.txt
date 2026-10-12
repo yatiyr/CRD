@@ -5,7 +5,7 @@ add_library(crd-vm STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-vm
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-vm
@@ -16,3 +16,6 @@ target_link_libraries(crd-vm
 
 target_compile_features(crd-vm PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-vm)
+
+# Cerid::vm of the relocatable package.
+crd_package_library(crd-vm NAME vm INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

@@ -31,9 +31,12 @@ Run commands from the repository root. Build/test rules and exact quality requir
   records every hosted build's Ninja log and sccache statistics.
 - Public consumption ([design](../docs/design/public-consumption.md)): `check-headers.py --build <dir> --changed`
   compiles changed public headers standalone with a sibling unit's flags from the compile database (outputs
-  redirected to a scratch directory); `test-package-consumer.py --preset <name> --scratch <dir>` installs a
-  core-only package, moves it, builds and runs a downstream consumer against it and proves the profile header,
-  relocatability and the two refusals (it is the `crd-package-consumer` CTest of the public-check presets).
+  redirected to a scratch directory); `test-package-consumer.py --preset <name> --scratch <dir>` installs the
+  diagnostic family's package (DIAG.11a: archives, headers, declared symbols, the diagnostic assets), moves it,
+  deletes the engine build tree, builds and runs a core consumer and the thin diagnostic application
+  (`tests/support/package/diag-consumer`) against it, and proves the profile header, relocatability, the symbols
+  reaching the program, the application's deliberate failure and its `bundle.inspect` investigation, and the two
+  refusals (it is the `crd-package-consumer` CTest of the public-check presets).
 - Test instruments ([design](../docs/design/test-instruments.md)): `fuzz.py run|merge|minimize|adopt|replay` drives
   the bounded libFuzzer targets of a `linux-clang-fuzz` build (time, length, RSS and allocation limits; artifacts
   in scratch; a finding enters a committed corpus only after its fix, `adopt`; an unfixed one is kept as bytes

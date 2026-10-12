@@ -5,7 +5,7 @@ add_library(crd-memory STATIC ${SOURCES} ${HEADERS})
 
 target_include_directories(crd-memory
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-memory
@@ -17,3 +17,6 @@ target_link_libraries(crd-memory
 
 target_compile_features(crd-memory PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-memory)
+
+# Cerid::memory of the relocatable package.
+crd_package_library(crd-memory NAME memory INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

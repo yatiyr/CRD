@@ -140,6 +140,7 @@ struct FlightTriggerRecord
     crd::u64      value_a      = 0U; // trigger-specific scalars (see each trigger source)
     crd::u64      value_b      = 0U;
     crd::u32      line         = 0U;
+    // The source file. A path longer than kFlightTriggerFileBytes - 1 keeps its tail (the file name) after "...".
     crd::u16      file_length    = 0U;
     crd::u16      message_length = 0U;
     char          file[kFlightTriggerFileBytes]       = {};

@@ -1213,8 +1213,44 @@ class PublicConsumption(unittest.TestCase):
                 (cmake_dir / name).write_text('get_filename_component(_IMPORT_PREFIX "${CMAKE_CURRENT_LIST_FILE}" PATH)\n',
                                               encoding='utf-8')
             (prefix / 'lib/crd-core.lib').write_bytes(b'!<arch>\n')
-            problems, libraries = package_consumer.check_layout(prefix)
+            problems, libraries = package_consumer.check_layout(prefix, modules=('core',), assets={})
             self.assertEqual((problems, libraries), ([], ['crd-core.lib']))
+            # Debug information as declared: pdb needs each archive's compile PDB beside it, the others none.
+            problems, _ = package_consumer.check_layout(prefix, modules=('core',), debug_information='pdb', assets={})
+            self.assertEqual(problems, ['debug information is pdb but crd-core.pdb is not installed beside its archive'])
+            (prefix / 'lib/crd-core.pdb').write_bytes(b'pdb')
+            self.assertEqual(package_consumer.check_layout(prefix, modules=('core',), debug_information='pdb',
+                                                           assets={})[0], [])
+            self.assertEqual(package_consumer.check_layout(prefix, modules=('core',), debug_information='dwarf',
+                                                           assets={})[0],
+                             ['debug information is dwarf but PDBs are installed: crd-core.pdb'])
+            (prefix / 'lib/crd-core.pdb').unlink()
+            # One archive per packaged module and no other; the assets byte for byte.
+            (prefix / 'lib/libcrd-extra.a').write_bytes(b'!<arch>\n')
+            source_assets = Path(temp) / 'assets'
+            source_assets.mkdir()
+            (source_assets / 'a.host.toml').write_text('kind = "diagnostic-host"\n', encoding='utf-8')
+            (source_assets / 'b.flight.toml').write_text('kind = "flight-policy"\n', encoding='utf-8')
+            (prefix / 'share/cerid/diag').mkdir(parents=True)
+            (prefix / 'share/cerid/diag/a.host.toml').write_text('kind = "edited"\n', encoding='utf-8')
+            (prefix / 'share/cerid/diag/stray.toml').write_text('', encoding='utf-8')
+            problems, _ = package_consumer.check_layout(prefix, modules=('core', 'perf'), assets={'diag': source_assets})
+            self.assertIn('no crd-perf archive under lib/', problems)
+            self.assertIn('unexpected archive under lib/: libcrd-extra.a', problems)
+            self.assertIn('asset not installed: share/cerid/diag/b.flight.toml', problems)
+            self.assertIn('unexpected installed asset: share/cerid/diag/stray.toml', problems)
+            self.assertIn('installed asset differs from its source: share/cerid/diag/a.host.toml', problems)
+            self.assertTrue(any(p.startswith('public header not installed: crd/perf/') for p in problems), problems)
+            (prefix / 'lib/libcrd-extra.a').unlink()
+            shutil.rmtree(prefix / 'share')
+            self.assertEqual(package_consumer.archive_module(Path('libcrd-hesap-dense.a')), 'hesap-dense')
+            self.assertIsNone(package_consumer.archive_module(Path('crd-core.pdb')))
+            (cmake_dir / 'CeridConfig.cmake').write_text('set(Cerid_LIBRARIES "crd-core crd-perf")\n'
+                                                         'set(Cerid_DEBUG_INFORMATION "pdb")\n', encoding='utf-8')
+            self.assertEqual(package_consumer.package_record(prefix),
+                             {'Cerid_LIBRARIES': 'crd-core crd-perf', 'Cerid_DEBUG_INFORMATION': 'pdb'})
+            (cmake_dir / 'CeridConfig.cmake').write_text('get_filename_component(_IMPORT_PREFIX '
+                                                         '"${CMAKE_CURRENT_LIST_FILE}" PATH)\n', encoding='utf-8')
             self.assertEqual(package_consumer.relocatability_problems(prefix, [Path(temp) / 'source', Path(temp) / 'build']), [])
             source = Path(temp) / 'Source Tree'
             (cmake_dir / 'CeridTargets.cmake').write_text(
@@ -1225,7 +1261,7 @@ class PublicConsumption(unittest.TestCase):
             self.assertIn('CeridTargets.cmake names', problems[0])
             (prefix / 'include/crd/core/build_config.hpp.in').write_text('', encoding='utf-8')
             (prefix / 'include/crd/core/core.hpp').unlink()
-            problems, _ = package_consumer.check_layout(prefix)
+            problems, _ = package_consumer.check_layout(prefix, modules=('core',), assets={})
             self.assertEqual(problems, ['missing include/crd/core/core.hpp',
                                         'installed include/crd/core/build_config.hpp.in',
                                         'public header not installed: crd/core/core.hpp'])
@@ -1239,6 +1275,110 @@ class PublicConsumption(unittest.TestCase):
                 {'directory': str(build), 'file': 'main.cpp', 'arguments': ['g++', '-O2', '-Wshadow', '-c', 'main.cpp']}]),
                 encoding='utf-8')
             self.assertEqual(package_consumer.compile_command_flags(build), [])
+
+    def test_package_consumer_judges_symbols_and_the_diagnostic_applications_investigation(self):
+        # The probes name what they rely on: an engine-only member, and the application's failing line.
+        recorder = (ROOT / 'engine/foundation/perf/src/flight_recorder.cpp').read_text(encoding='utf-8')
+        self.assertIn(package_consumer.ENGINE_ONLY_NAME.decode(), recorder)
+        header = (ROOT / 'engine/foundation/perf/include/crd/perf/flight_recorder.hpp').read_text(encoding='utf-8')
+        self.assertNotIn(package_consumer.ENGINE_ONLY_NAME.decode(), header)
+        application = (package_consumer.DIAG_CONSUMER / 'main.cpp').read_text(encoding='utf-8')
+        self.assertEqual(application.count(package_consumer.FAILURE_SOURCE), 1)
+        self.assertIn(package_consumer.FAILURE_MESSAGE, application)
+        self.assertEqual(sorted(package_consumer.MODULE_INCLUDES),
+                         sorted(package_consumer.FAMILY))
+        for include in package_consumer.MODULE_INCLUDES.values():
+            self.assertTrue(include.is_dir(), include)
+
+        def profile(compiler, build_type, **defines):
+            return {'cxx_compiler': compiler, 'build_type': build_type, 'defines': defines}
+        expected = package_consumer.expected_debug_information
+        self.assertEqual(expected(profile('cl', 'Debug')), 'pdb')
+        self.assertEqual(expected(profile('C:/VS/bin/cl.exe', 'Release', CRD_SHIPPING='ON')), 'pdb')
+        self.assertEqual(expected(profile('cl', 'Debug', CRD_COMPILER_LAUNCHER='C:/sccache.exe')), 'embedded')
+        self.assertEqual(expected(profile('cl', 'Release', CRD_SHIPPING='ON', CRD_COMPILER_LAUNCHER='sccache')), 'pdb')
+        self.assertEqual(expected(profile('cl', 'Release')), 'none')
+        self.assertEqual(expected(profile('clang-cl', 'RelWithDebInfo')), 'embedded')
+        self.assertEqual(expected(profile('/usr/bin/g++-13', 'Debug')), 'dwarf')
+        self.assertEqual(expected(profile('g++', 'Release', CRD_SHIPPING='OFF')), 'none')
+
+        with tempfile.TemporaryDirectory() as temp:
+            # A minimal 64-bit little-endian ELF with .shstrtab and one .debug_str section.
+            names = b'\0.shstrtab\0.debug_str\0'
+            debug = b'\0' + package_consumer.ENGINE_ONLY_NAME + b'\0'
+            names_at, debug_at = 64, 64 + len(names)
+            headers_at = debug_at + len(debug)
+            header = bytearray(64)
+            header[:6] = b'\x7fELF\x02\x01'
+            header[0x28:0x30] = headers_at.to_bytes(8, 'little')
+            header[0x3A:0x40] = (64).to_bytes(2, 'little') + (3).to_bytes(2, 'little') + (1).to_bytes(2, 'little')
+
+            def section(name, kind, offset, size):
+                entry = bytearray(64)
+                entry[0:4] = name.to_bytes(4, 'little')
+                entry[4:8] = kind.to_bytes(4, 'little')
+                entry[24:32] = offset.to_bytes(8, 'little')
+                entry[32:40] = size.to_bytes(8, 'little')
+                return bytes(entry)
+            image = bytes(header) + names + debug + section(0, 0, 0, 0) + section(1, 3, names_at, len(names)) + \
+                section(11, 1, debug_at, len(debug))
+            program = Path(temp) / 'diag-consumer'
+            program.write_bytes(image)
+            self.assertEqual(package_consumer.elf_sections(program, ('.debug_info', '.debug_str')), debug)
+            self.assertIsNone(package_consumer.engine_debug_information_problem(program, 'dwarf'))
+            program.write_bytes(image.replace(package_consumer.ENGINE_ONLY_NAME, b'x' * 21))
+            self.assertIn('no engine DWARF', package_consumer.engine_debug_information_problem(program, 'dwarf'))
+            windows = Path(temp) / 'diag-consumer.exe'
+            windows.write_bytes(b'MZ')
+            self.assertIsNone(package_consumer.elf_sections(windows, ('.debug_str',)))
+            self.assertIn('not a 64-bit ELF', package_consumer.engine_debug_information_problem(windows, 'dwarf'))
+            self.assertIn('no program database', package_consumer.engine_debug_information_problem(windows, 'pdb'))
+            windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00' + package_consumer.ENGINE_ONLY_NAME)
+            self.assertIsNone(package_consumer.engine_debug_information_problem(windows, 'pdb'))
+            windows.with_suffix('.pdb').write_bytes(b'Microsoft C/C++ MSF 7.00')
+            self.assertIn('LNK4099', package_consumer.engine_debug_information_problem(windows, 'pdb'))
+            self.assertIsNone(package_consumer.engine_debug_information_problem(windows, 'none'))
+
+        # The investigation: everything bundle.inspect must show, and each mismatch named.
+        def page(items, summary=None, status='ok'):
+            return {'status': status, 'summary': summary or {}, 'items': items}
+        summary = {'status': 'ok', 'flight_record': True, 'flight_refused': False, 'build_identity': True}
+        trigger = {'kind': 'trigger', 'trigger': 'fatal-invariant', 'code': package_consumer.FAILURE_CODE,
+                   'file': 'C:\\scratch\\diag-consumer\\main.cpp', 'line': 122,
+                   'message': package_consumer.FAILURE_MESSAGE}
+        flight = {'kind': 'flight', 'end': 'fatal', 'recorded_before_trigger': 40, 'pre_retained': 40, 'events': 40,
+                  'replay_available': True, 'replay': 'diag-consumer fail <profile.host.toml>'}
+        events = [{'kind': 'event', 'index': i, 'side': 'before', 'code': 0x00A10001, 'value_a': i,
+                   'message': f'order {i} booked {-900 if i % 7 == 6 else 25}',
+                   'severity': 'warning' if i % 7 == 6 else 'info'} for i in range(40)]
+        build = {'kind': 'build', 'same_as_host': True, 'fault_seams': True}
+        symbol = {'kind': 'symbol', 'name': 'diag-consumer.exe'}
+        pages = [page([trigger, flight] + events[:20], summary), page(events[20:] + [build, symbol], summary)]
+        judge = package_consumer.investigation_problems
+        self.assertEqual(judge(pages, 122, 'diag-consumer.exe', True), [])
+        self.assertEqual(judge(pages, 123, 'diag-consumer.exe', True), ['trigger line: expected 123, got 122'])
+        self.assertEqual(judge(pages, 122, 'other.exe', True),
+                         ["no module identity names other.exe: ['diag-consumer.exe']"])
+        self.assertEqual(judge(pages, 122, 'diag-consumer.exe', False),
+                         ['build fault_seams: expected False, got True'])
+        shifted = [page([trigger, flight] + events[1:] + [build, symbol], summary)]
+        self.assertEqual(judge(shifted, 122, 'diag-consumer.exe', True), ['expected 40 events, got 39'])
+        wrong_side = [dict(event, side='after') if event['index'] == 39 else event for event in events]
+        problems = judge([page([trigger, flight] + wrong_side + [build, symbol], summary)], 122, 'diag-consumer.exe',
+                         True)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertTrue(problems[0].startswith('event 39:'), problems)
+        refused = dict(summary, flight_record=False, flight_refused=True)
+        problems = judge([page([build, symbol], refused)], 122, 'diag-consumer.exe', True)
+        self.assertIn("summary flight_record: expected True, got False", problems)
+        self.assertIn('no trigger item', problems)
+        self.assertEqual(judge([], 122, 'diag-consumer.exe', True), ['inspect printed no page'])
+        self.assertEqual(package_consumer.inspect_pages('noise\nCONSUMER_INSPECT_PAGE {"status":"ok"}\n'),
+                         [{'status': 'ok'}])
+        caps = {'items': [{'name': 'fault-injection', 'compiled': False}]}
+        self.assertEqual(package_consumer.capability(caps, 'fault-injection'), {'name': 'fault-injection',
+                                                                                'compiled': False})
+        self.assertIsNone(package_consumer.capability(caps, 'basic-recording'))
 
     def test_header_check_commands_write_only_into_the_scratch_directory(self):
         build = 'D:/repo/build' if os.name == 'nt' else '/repo/build'

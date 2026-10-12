@@ -15,7 +15,7 @@ add_library(crd-jobs STATIC ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
 
 target_include_directories(crd-jobs
     PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
 target_link_libraries(crd-jobs
@@ -94,3 +94,6 @@ if(MSVC)
         TARGET_DIRECTORY crd-jobs-schedcheck
     )
 endif()
+
+# Cerid::jobs of the relocatable package (the schedule-check twin above is test-only and stays out).
+crd_package_library(crd-jobs NAME jobs INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

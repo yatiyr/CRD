@@ -1,26 +1,40 @@
 #!/usr/bin/env python3
-"""Install a core-only Cerid package, move the prefix, and build and run a downstream project against it.
+"""Install the Cerid package of the diagnostic host's family, move the prefix, and build and run downstream projects
+against it.
 
-Contract: docs/design/public-consumption.md. One run proves, for one profile (generator, compiler, build type,
-profile switches):
+Contract: docs/design/public-consumption.md (the package) and docs/design/runtime-diagnostics.md (DIAG.11a, the
+installed external consumer). One run proves, for one profile (generator, compiler, build type, profile switches):
 
-- the installed tree is complete and carries no template (`build_config.hpp.in`) and every public header;
+- the installed tree is complete: every public header of every packaged module (the diagnostic host's closure, perf,
+  and math, whose header-only functions the units headers include), one archive per module and nothing else, no
+  template (`build_config.hpp.in`), the authored diagnostic assets byte for byte under share/cerid, and the archives'
+  debug information as `CeridConfig.cmake` declares it (`pdb`: each archive's compile PDB beside it);
 - the generated `<crd/core/build_config.hpp>` says what the packaging configuration said (asserts, profiling,
   debug/release, log level) when a consumer compiles and runs it;
 - every installed CMake file is relocatable: none names the source tree, the build tree or the pre-move prefix;
-- a consumer that only calls `find_package(Cerid CONFIG REQUIRED)` compiles, links and runs `Cerid::core`
-  without inheriting the engine's warning flags;
+- with the engine's build tree deleted (the nearest local stand-in for a clean machine), a consumer that only calls
+  `find_package(Cerid CONFIG REQUIRED)` compiles, links and runs `Cerid::core` without inheriting the engine's
+  warning flags;
+- the thin diagnostic application (tests/support/package/diag-consumer) builds against the moved prefix alone, with
+  the engine's symbols reaching it (no LNK4099 under `pdb`; the engine's DWARF in the program under `dwarf`), starts
+  the engine's DiagnosticHost from a profile authored from the installed assets, reports this binary's capabilities
+  (profiling compiled in or out, fault injection compiled out of a shipping build), fails a fatal invariant on
+  purpose and leaves a flight bundle, which its own `inspect` route (bundle.inspect) decodes into the trigger at the
+  failing line, the forty events before it, this build and its own module identity;
 - `CeridConfig.cmake` refuses a consumer configured for another build type, and the engine refuses
   `BUILD_SHARED_LIBS=ON`.
 
 Registered as the `crd-package-consumer` CTest under CRD_PUBLIC_CHECKS (the lane passes its own generator, compiler,
-build type and switches); locally `--preset win-debug` resolves the same from CMakePresets.json.
+build type and switches); locally `--preset win-debug` resolves the same from CMakePresets.json. The three binaries
+of DIAG.11a are this run under a diagnostic profile (`win-debug`), a profiling-disabled one (`win-shipping`) and an
+optimized profiling one (`win-shipping-profile`).
 """
 import argparse
 import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -36,13 +50,31 @@ DEBUG_TYPES = ('Debug', 'RelWithDebInfo')
 LEVELS = {'Trace': 0, 'Debug': 1, 'Info': 2, 'Warn': 3, 'Error': 4, 'Critical': 5}
 FALSE_VALUES = ('', '0', 'OFF', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND')
 CORE_INCLUDE = ROOT / 'engine/foundation/core/include'
+# The packaged family (DIAG.11a): the diagnostic host (perf) and its closure, plus math, whose header-only
+# transcendental functions the units headers include; crd-simd-flags is the interface target math's consumers compile
+# with. Each module installs its include/ tree and one archive.
+FAMILY = ('core', 'units', 'time', 'vm', 'log', 'containers', 'memory', 'jobs', 'toml', 'math', 'perf')
+INTERFACE_LIBRARIES = ('crd-simd-flags',)
+MODULE_INCLUDES = {name: ROOT / 'engine/foundation' / name / 'include' for name in FAMILY}
+# Authored assets the packaged libraries read at run time: installed directory under share/cerid -> source.
+ASSETS = {'diag': ROOT / 'assets/diag'}
+DIAG_CONSUMER = ROOT / 'tests/support/package/diag-consumer'
 REQUIRED_FILES = ('include/crd/core/build_config.hpp', 'include/crd/core/core.hpp', 'include/crd/core/platform.hpp',
                   'lib/cmake/Cerid/CeridConfig.cmake', 'lib/cmake/Cerid/CeridConfigVersion.cmake',
                   'lib/cmake/Cerid/CeridTargets.cmake')
 FORBIDDEN_FILES = ('include/crd/core/build_config.hpp.in',)
 WARNING_FLAGS = ('/WX', '-Werror', '/W4', '-Wall', '-Wextra', '/permissive-')
-ENGINE_DEFINES = {'CRD_MODULES': 'core', 'CRD_BUILD_TESTS': 'OFF', 'CRD_BUILD_SANDBOX': 'OFF',
+ENGINE_DEFINES = {'CRD_MODULES': 'perf,math', 'CRD_BUILD_TESTS': 'OFF', 'CRD_BUILD_SANDBOX': 'OFF',
                   'CRD_BUILD_BENCHMARKS': 'OFF', 'CRD_PUBLIC_CHECKS': 'OFF'}
+# The diagnostic application's deliberate failure (tests/support/package/diag-consumer/main.cpp).
+FAILURE_CODE = 0x00A10002
+FAILURE_MESSAGE = 'the order total went negative'
+FAILURE_SOURCE = 'CRD_DIAG_INVARIANT(total >= 0'
+ORDERS = 40
+RUN_TIMEOUT = 120
+# A member of crd::perf::FlightRecorder::Impl, a type defined only in engine/foundation/perf/src/flight_recorder.cpp:
+# an application's debug information names it only when the archives' debug information was linked.
+ENGINE_ONLY_NAME = b'trigger_replay_length'
 
 CONSUMER_CMAKE = '''cmake_minimum_required(VERSION 3.25)
 project(cerid_consumer LANGUAGES CXX)
@@ -178,7 +210,17 @@ def parse_output(text):
     return values
 
 
-def check_layout(prefix):
+def archive_module(path):
+    """The module an installed archive belongs to (crd-perf.lib, libcrd-perf.a -> perf), or None."""
+    match = re.fullmatch(r'(?:lib)?crd-([a-z0-9-]+)\.(?:lib|a)', path.name)
+    return match.group(1) if match else None
+
+
+def check_layout(prefix, modules=FAMILY, debug_information=None, assets=None):
+    """Problems of an installed prefix and its archives. Every public header of `modules` and nothing else, one archive
+    per module and no other, the debug information `CeridConfig.cmake` declares (None: not judged) and the `assets`
+    (installed directory under share/cerid -> source directory) byte for byte."""
+    assets = ASSETS if assets is None else assets
     problems = []
     for name in REQUIRED_FILES:
         if not (prefix / name).is_file():
@@ -186,19 +228,188 @@ def check_layout(prefix):
     for name in FORBIDDEN_FILES:
         if (prefix / name).exists():
             problems.append(f'installed {name}')
-    expected = {path.relative_to(CORE_INCLUDE).as_posix() for path in CORE_INCLUDE.rglob('*')
-                if path.is_file() and path.suffix != '.in'}
-    installed = {path.relative_to(prefix / 'include').as_posix() for path in (prefix / 'include').rglob('*')
-                 if path.is_file() and path.suffix != '.in'}
+    expected = set()
+    for module in modules:
+        include = MODULE_INCLUDES[module]
+        expected |= {path.relative_to(include).as_posix() for path in include.rglob('*')
+                     if path.is_file() and path.suffix != '.in'}
+    installed = set()
+    if (prefix / 'include').is_dir():
+        installed = {path.relative_to(prefix / 'include').as_posix() for path in (prefix / 'include').rglob('*')
+                     if path.is_file() and path.suffix != '.in'}
     installed.discard('crd/core/build_config.hpp')
     for name in sorted(expected - installed):
         problems.append(f'public header not installed: {name}')
     for name in sorted(installed - expected):
         problems.append(f'unexpected installed header: {name}')
-    libraries = [path.name for path in (prefix / 'lib').glob('*crd-core*')] if (prefix / 'lib').is_dir() else []
-    if not libraries:
-        problems.append('no crd-core archive under lib/')
-    return problems, sorted(libraries)
+
+    lib = prefix / 'lib'
+    archives = sorted(path for path in lib.iterdir() if path.suffix in ('.lib', '.a')) if lib.is_dir() else []
+    libraries = [path.name for path in archives]
+    found = {archive_module(path): path for path in archives}
+    for module in modules:
+        if module not in found:
+            problems.append(f'no crd-{module} archive under lib/')
+    for path in archives:
+        if archive_module(path) not in modules:
+            problems.append(f'unexpected archive under lib/: {path.name}')
+    pdbs = sorted(path.name for path in lib.glob('*.pdb')) if lib.is_dir() else []
+    if debug_information == 'pdb':
+        for module in modules:
+            if module in found and not (lib / f'crd-{module}.pdb').is_file():
+                problems.append(f'debug information is pdb but crd-{module}.pdb is not installed beside its archive')
+        for name in pdbs:
+            if Path(name).stem.removeprefix('crd-') not in modules:
+                problems.append(f'unexpected PDB under lib/: {name}')
+    elif debug_information is not None and pdbs:
+        problems.append(f'debug information is {debug_information} but PDBs are installed: {", ".join(pdbs)}')
+
+    for destination, source in assets.items():
+        installed_dir = prefix / 'share/cerid' / destination
+        wanted = {path.relative_to(source).as_posix() for path in source.rglob('*') if path.is_file()}
+        present = set()
+        if installed_dir.is_dir():
+            present = {path.relative_to(installed_dir).as_posix() for path in installed_dir.rglob('*')
+                       if path.is_file()}
+        for name in sorted(wanted - present):
+            problems.append(f'asset not installed: share/cerid/{destination}/{name}')
+        for name in sorted(present - wanted):
+            problems.append(f'unexpected installed asset: share/cerid/{destination}/{name}')
+        for name in sorted(wanted & present):
+            if (source / name).read_bytes() != (installed_dir / name).read_bytes():
+                problems.append(f'installed asset differs from its source: share/cerid/{destination}/{name}')
+    return problems, libraries
+
+
+def package_record(prefix):
+    """The Cerid_* values CeridConfig.cmake sets as plain strings (libraries, debug information, assets, profile)."""
+    text = (prefix / 'lib/cmake/Cerid/CeridConfig.cmake').read_text(encoding='utf-8')
+    return dict(re.findall(r'^set\((Cerid_\w+) "([^"]*)"\)', text, flags=re.M))
+
+
+def expected_debug_information(profile):
+    """How the archives of this profile carry debug information (cmake/CrdPackage.cmake decides the same)."""
+    defines = profile['defines']
+    shipping = on(defines.get('CRD_SHIPPING', 'OFF'))
+    if profile['build_type'] not in DEBUG_TYPES and not shipping:
+        return 'none'
+    compiler = Path(profile.get('cxx_compiler') or ('cl' if os.name == 'nt' else 'c++')).name.lower()
+    compiler = compiler.removesuffix('.exe')
+    if compiler == 'cl':
+        launcher = on(defines.get('CRD_COMPILER_LAUNCHER', ''))
+        return 'embedded' if launcher and not shipping else 'pdb'
+    if compiler == 'clang-cl':
+        return 'embedded'
+    return 'dwarf'
+
+
+def elf_sections(path, names):
+    """The bytes of the ELF sections named in `names` that the file has, concatenated (empty when it has none), or
+    None when the file is not a 64-bit ELF. A section of type NOBITS reads as empty."""
+    data = Path(path).read_bytes()
+    if len(data) < 64 or data[:4] != b'\x7fELF' or data[4] != 2:
+        return None
+    order = '<' if data[5] == 1 else '>'
+    (section_offset,) = struct.unpack_from(order + 'Q', data, 0x28)
+    entry_size, count, names_index = struct.unpack_from(order + 'HHH', data, 0x3A)
+    headers = [struct.unpack_from(order + 'IIQQQQ', data, section_offset + i * entry_size) for i in range(count)]
+    table_offset = headers[names_index][4]
+    by_name = {}
+    for name_offset, kind, _flags, _address, offset, size in headers:
+        start = table_offset + name_offset
+        name = data[start:data.index(b'\0', start)].decode('ascii', errors='replace')
+        by_name[name] = b'' if kind == 8 else data[offset:offset + size]
+    return b''.join(by_name[name] for name in names if name in by_name)
+
+
+def engine_debug_information_problem(executable, debug_information):
+    """Whether the engine's own debug information reached a program linked against the package, or why not (None when
+    it did, or when the package declares none). The probe is ENGINE_ONLY_NAME, a member of a type defined only inside
+    an engine source file: the program's own translation units never see it, so its program database (pdb, embedded)
+    or its DWARF (dwarf) names it only when the archives' debug information was found and linked."""
+    executable = Path(executable)
+    if debug_information in ('pdb', 'embedded'):
+        database = executable.with_suffix('.pdb')
+        if not database.is_file():
+            return f'the application has no program database {database.name}'
+        if ENGINE_ONLY_NAME not in database.read_bytes():
+            return (f'the engine archives\' debug information did not reach {database.name} (no '
+                    f'{ENGINE_ONLY_NAME.decode()}); a compile PDB is missing beside its archive (LNK4099)')
+    elif debug_information == 'dwarf':
+        sections = elf_sections(executable, ('.debug_info', '.debug_str', '.debug_line_str'))
+        if sections is None:
+            return f'{executable.name} is not a 64-bit ELF program'
+        if ENGINE_ONLY_NAME not in sections:
+            return f'the application carries no engine DWARF (no {ENGINE_ONLY_NAME.decode()})'
+    return None
+
+
+def inspect_pages(output):
+    """The JSON documents a consumer's `inspect` printed, one per page."""
+    return [json.loads(line.split(' ', 1)[1]) for line in output.splitlines()
+            if line.startswith('CONSUMER_INSPECT_PAGE ')]
+
+
+def capability(document, name):
+    """The diag.capabilities item of one mode, or None."""
+    return next((item for item in document.get('items', []) if item.get('name') == name), None)
+
+
+def investigation_problems(pages, failure_line, executable_name, fault_seams):
+    """What a bundle.inspect of the consumer's flight bundle must show, as problems."""
+    problems = []
+    if not pages:
+        return ['inspect printed no page']
+    summary = pages[0].get('summary', {})
+    items = [item for page in pages for item in page.get('items', [])]
+    if pages[-1].get('status') != 'ok':
+        problems.append(f'bundle.inspect answered {pages[-1].get("status")}')
+    for key, value in (('status', 'ok'), ('flight_record', True), ('flight_refused', False), ('build_identity', True)):
+        if summary.get(key) != value:
+            problems.append(f'summary {key}: expected {value!r}, got {summary.get(key)!r}')
+    trigger = next((item for item in items if item.get('kind') == 'trigger'), None)
+    if trigger is None:
+        problems.append('no trigger item')
+    else:
+        file = trigger.get('file', '').replace('\\', '/')
+        expected = {'trigger': 'fatal-invariant', 'code': FAILURE_CODE, 'line': failure_line,
+                    'message': FAILURE_MESSAGE}
+        for key, value in expected.items():
+            if trigger.get(key) != value:
+                problems.append(f'trigger {key}: expected {value!r}, got {trigger.get(key)!r}')
+        if not file.endswith('diag-consumer/main.cpp'):
+            problems.append(f'trigger file does not name the consumer source: {file!r}')
+    flight = next((item for item in items if item.get('kind') == 'flight'), None)
+    if flight is None:
+        problems.append('no flight item')
+    else:
+        for key, value in (('end', 'fatal'), ('recorded_before_trigger', ORDERS), ('pre_retained', ORDERS),
+                           ('events', ORDERS), ('replay_available', True),
+                           ('replay', 'diag-consumer fail <profile.host.toml>')):
+            if flight.get(key) != value:
+                problems.append(f'flight {key}: expected {value!r}, got {flight.get(key)!r}')
+    events = [item for item in items if item.get('kind') == 'event']
+    if len(events) != ORDERS:
+        problems.append(f'expected {ORDERS} events, got {len(events)}')
+    else:
+        for index, event in enumerate(events):
+            amount = -900 if index % 7 == 6 else 25
+            wanted = {'index': index, 'side': 'before', 'code': 0x00A10001, 'value_a': index,
+                      'message': f'order {index} booked {amount}',
+                      'severity': 'warning' if amount < 0 else 'info'}
+            wrong = {key: event.get(key) for key, value in wanted.items() if event.get(key) != value}
+            if wrong:
+                problems.append(f'event {index}: expected {wanted}, got {wrong}')
+                break
+    build = next((item for item in items if item.get('kind') == 'build'), None)
+    if build is None or build.get('same_as_host') is not True:
+        problems.append(f'the bundle was not written by this build: {build}')
+    elif build.get('fault_seams') is not fault_seams:
+        problems.append(f'build fault_seams: expected {fault_seams}, got {build.get("fault_seams")}')
+    names = [item.get('name', '').lower() for item in items if item.get('kind') == 'symbol']
+    if executable_name.lower() not in names:
+        problems.append(f'no module identity names {executable_name}: {names}')
+    return problems
 
 
 def relocatability_problems(prefix, forbidden):
@@ -235,16 +446,16 @@ class Session:
         self.jobs = jobs
         self.report = {'schema': 'cerid-package-consumer/1', 'profile': profile, 'steps': [], 'problems': []}
 
-    def step(self, name, command, cwd, expect_failure=False):
+    def step(self, name, command, cwd, expect_failure=False, timeout=1800):
         started = time.monotonic()
-        result = run(command, cwd)
+        result = run(command, cwd, timeout=timeout)
         seconds = round(time.monotonic() - started, 1)
         self.report['steps'].append({'name': name, 'seconds': seconds, 'exit_code': result.returncode,
                                      'command': [str(part) for part in command]})
         print(f'[package-consumer] {name}: exit {result.returncode} in {seconds} s', flush=True)
         if expect_failure:
             if result.returncode == 0:
-                raise ConsumerError(f'{name} succeeded but was expected to fail')
+                raise ConsumerError(f'{name} succeeded but was expected to fail:\n{output_tail(result)}')
         elif result.returncode != 0:
             raise ConsumerError(f'{name} failed with exit code {result.returncode}:\n{output_tail(result)}')
         return result
@@ -256,6 +467,22 @@ class Session:
             shutil.rmtree(self.scratch)
         self.scratch.mkdir(parents=True)
         (self.scratch / MARKER).write_text(json.dumps({'owner': 'scripts/test-package-consumer.py'}), encoding='utf-8')
+
+    def check_record(self, prefix):
+        """CeridConfig.cmake names the packaged libraries and declares the debug information this profile has."""
+        record = package_record(prefix)
+        self.report['package_record'] = record
+        wanted = sorted([f'crd-{module}' for module in FAMILY] + list(INTERFACE_LIBRARIES))
+        listed = sorted(record.get('Cerid_LIBRARIES', '').split())
+        if listed != wanted:
+            raise ConsumerError(f'CeridConfig.cmake lists {listed}; the packaged family is {wanted}')
+        debug_information = record.get('Cerid_DEBUG_INFORMATION')
+        if debug_information != expected_debug_information(self.profile):
+            raise ConsumerError(f'CeridConfig.cmake declares debug information {debug_information!r}; this profile '
+                                f'has {expected_debug_information(self.profile)!r}')
+        if sorted(record.get('Cerid_ASSETS', '').split()) != sorted(ASSETS):
+            raise ConsumerError(f'CeridConfig.cmake lists assets {record.get("Cerid_ASSETS")!r}')
+        return debug_information
 
     def execute(self):
         profile = self.profile
@@ -274,16 +501,18 @@ class Session:
 
         engine_defines = dict(ENGINE_DEFINES)
         engine_defines['CMAKE_INSTALL_PREFIX'] = prefix.as_posix()
-        self.step('configure engine (core only)', ['cmake', '-S', self.source, '-B', build,
-                                                   *cmake_arguments(profile, engine_defines)], self.source)
+        self.step('configure engine (the diagnostic family)', ['cmake', '-S', self.source, '-B', build,
+                                                               *cmake_arguments(profile, engine_defines)], self.source)
         self.step('build engine', ['cmake', '--build', build, '--parallel', str(self.jobs)], self.source)
         self.step('install', ['cmake', '--install', build], self.source)
 
-        problems, libraries = check_layout(prefix)
+        debug_information = self.check_record(prefix)
+        problems, libraries = check_layout(prefix, debug_information=debug_information)
         self.report['installed_libraries'] = libraries
         if problems:
             raise ConsumerError('installed layout:\n  ' + '\n  '.join(problems))
-        print(f'[package-consumer] installed layout complete: {", ".join(libraries)}', flush=True)
+        print(f'[package-consumer] installed layout complete: {", ".join(libraries)}; debug information '
+              f'{debug_information}; assets {", ".join(sorted(ASSETS))}', flush=True)
 
         moved.parent.mkdir(parents=True)
         shutil.move(str(prefix), str(moved))
@@ -291,6 +520,10 @@ class Session:
         if problems:
             raise ConsumerError('installed CMake files are not relocatable:\n  ' + '\n  '.join(problems))
         print('[package-consumer] installed CMake files name no source, build or pre-move path', flush=True)
+        # The nearest local stand-in for a clean machine: nothing the engine's build left behind is reachable while the
+        # consumers configure, build, link and run (a compile PDB the linker would find at its build path included).
+        shutil.rmtree(build)
+        print('[package-consumer] engine build tree deleted; the consumers see the moved prefix only', flush=True)
 
         consumer.mkdir()
         (consumer / 'CMakeLists.txt').write_text(CONSUMER_CMAKE, encoding='utf-8')
@@ -321,6 +554,8 @@ class Session:
         print(f'[package-consumer] consumer ran: {result.stdout.strip().splitlines()[-1]}', flush=True)
         print(f'[package-consumer] profile header as packaged: {expected}', flush=True)
 
+        self.diagnostic_application(moved, version, debug_information)
+
         other = 'Release' if profile['build_type'] in DEBUG_TYPES else 'Debug'
         result = self.step(f'configure consumer as {other} (must be refused)',
                            ['cmake', '-S', consumer, '-B', self.scratch / 'consumer-mismatch',
@@ -335,6 +570,109 @@ class Session:
         if 'BUILD_SHARED_LIBS=ON is unsupported' not in result.stdout + result.stderr:
             raise ConsumerError(f'the shared configure failed for another reason:\n{output_tail(result)}')
         self.report['outcome'] = 'pass'
+
+    def diagnostic_application(self, moved, version, debug_information):
+        """Build the thin diagnostic application against the moved prefix, let it fail on purpose, and investigate
+        the bundle it leaves with its own inspect route."""
+        profile = self.profile
+        source = self.scratch / 'diag-consumer'
+        build = self.scratch / 'diag-consumer-build'
+        shutil.copytree(DIAG_CONSUMER, source)
+        defines = {'CMAKE_PREFIX_PATH': moved.as_posix(), 'CMAKE_EXPORT_COMPILE_COMMANDS': 'ON'}
+        result = self.step('configure the diagnostic application',
+                           ['cmake', '-S', source, '-B', build, *cmake_arguments(profile, defines, switches=False)],
+                           source)
+        if f'Cerid {version} profile:' not in result.stdout:
+            raise ConsumerError(f'the diagnostic application did not see Cerid {version}:\n{output_tail(result)}')
+        match = re.search(r'Cerid asset directory: (.+)', result.stdout)
+        asset_dir = Path(match.group(1).strip()) if match else None
+        if asset_dir is None or normalized(str(asset_dir)) != normalized(str(moved / 'share/cerid')):
+            raise ConsumerError(f'Cerid_ASSET_DIR is {asset_dir}; the moved prefix installs its assets at '
+                                f'{moved / "share/cerid"}')
+        if f'Cerid debug information: {debug_information}' not in result.stdout:
+            raise ConsumerError(f'the diagnostic application saw other debug information:\n{output_tail(result)}')
+        result = self.step('build the diagnostic application',
+                           ['cmake', '--build', build, '--parallel', str(self.jobs)], source)
+        flags = compile_command_flags(build)
+        if flags:
+            raise ConsumerError('the diagnostic application inherited engine warning flags: ' + ' '.join(flags))
+        executable = next((path for path in build.rglob('diag-consumer*')
+                           if path.is_file() and path.suffix in ('', '.exe')), None)
+        if executable is None:
+            raise ConsumerError('the diagnostic application was not built')
+
+        # The engine's symbols reach the application as the package declares, judged in the program's own debug
+        # information (CMake's MSVC link step prints LNK4099 only when a link fails, so its output cannot tell).
+        problem = engine_debug_information_problem(executable, debug_information)
+        if problem:
+            raise ConsumerError(problem)
+        print(f'[package-consumer] the diagnostic application built against the moved prefix; the engine\'s debug '
+              f'information ({debug_information}) reached its symbols', flush=True)
+
+        # The application's profile, authored from the installed investigation profile: the installed flight policy,
+        # crash dumps and flight bundles kept in this run's directory.
+        run_dir = self.scratch / 'diag-run'
+        captures = run_dir / 'captures'
+        captures.mkdir(parents=True)
+        text = (asset_dir / 'diag/host_investigate.host.toml').read_text(encoding='utf-8')
+        replacements = {'crash_dir': (run_dir / 'crashes').as_posix(), 'capture_dir': captures.as_posix(),
+                        'flight_policy': (asset_dir / 'diag/flight_default.flight.toml').as_posix()}
+        for key, value in replacements.items():
+            text, count = re.subn(rf'^{key}\s*=.*$', f'{key} = "{value}"', text, flags=re.M)
+            if count != 1:
+                raise ConsumerError(f'the installed investigation profile has no single {key} line')
+        profile_path = run_dir / 'application.host.toml'
+        profile_path.write_text(text, encoding='utf-8')
+
+        shipping = on(profile['defines'].get('CRD_SHIPPING', 'OFF'))
+        fault_seams = not shipping
+        try:
+            result = self.step('run the diagnostic application to its deliberate failure',
+                               [executable, 'fail', profile_path], run_dir, expect_failure=True, timeout=RUN_TIMEOUT)
+        except subprocess.TimeoutExpired as error:
+            raise ConsumerError(f'the diagnostic application did not end within {RUN_TIMEOUT} s') from error
+        output = result.stdout + result.stderr
+        self.report['diagnostic_application'] = {'exit_code': result.returncode, 'output': output.splitlines()[-40:]}
+        expected = expected_values(profile)
+        values = parse_output(next((line for line in output.splitlines() if line.startswith('CONSUMER_BUILD ')), ''))
+        build_expected = {'asserts': str(expected['asserts']), 'profiling': str(expected['profiling']),
+                          'fault_seams': str(int(fault_seams))}
+        mismatches = {key: values.get(key) for key, value in build_expected.items() if values.get(key) != value}
+        if mismatches:
+            raise ConsumerError(f'the application reports another build: expected {build_expected}, got {mismatches}')
+        faults = 'active' if fault_seams else 'unavailable'
+        started = f'CONSUMER_HOST_STARTED crash=active flight=active faults={faults}'
+        if started not in output:
+            raise ConsumerError(f'the host did not start as the profile asks ({started}):\n{output_tail(result)}')
+        if 'CONSUMER_RETURNED_FROM_FATAL' in output:
+            raise ConsumerError('the fatal invariant returned to the application')
+        caps_line = next((line for line in output.splitlines() if line.startswith('CONSUMER_CAPABILITIES ')), None)
+        if caps_line is None:
+            raise ConsumerError(f'the application printed no capabilities:\n{output_tail(result)}')
+        caps = json.loads(caps_line.split(' ', 1)[1])
+        for name, compiled in (('basic-recording', bool(expected['profiling'])), ('fault-injection', fault_seams),
+                               ('flight-recorder', True)):
+            item = capability(caps, name)
+            if item is None or item.get('compiled') is not compiled:
+                raise ConsumerError(f'diag.capabilities {name}: expected compiled={compiled}, got {item}')
+        if capability(caps, 'flight-recorder').get('usable') is not True:
+            raise ConsumerError('the live flight recorder is not usable')
+        bundles = sorted(path.name for path in captures.glob('flight-*.cdb'))
+        if bundles != ['flight-0.cdb']:
+            raise ConsumerError(f'expected one flight bundle in the capture directory, found {bundles}')
+        print(f'[package-consumer] the application failed on purpose (exit {result.returncode}) and left '
+              f'{bundles[0]}; profiling compiled={bool(expected["profiling"])}, fault injection {faults}', flush=True)
+
+        result = self.step("investigate the bundle with the application's inspect route",
+                           [executable, 'inspect', captures, bundles[0]], run_dir, timeout=RUN_TIMEOUT)
+        failure_line = next(number for number, line in
+                            enumerate((DIAG_CONSUMER / 'main.cpp').read_text(encoding='utf-8').splitlines(), 1)
+                            if FAILURE_SOURCE in line)
+        problems = investigation_problems(inspect_pages(result.stdout), failure_line, executable.name, fault_seams)
+        if problems:
+            raise ConsumerError('the investigation did not find the failure:\n  ' + '\n  '.join(problems))
+        print(f'[package-consumer] bundle.inspect named the fatal invariant at main.cpp:{failure_line}, the {ORDERS} '
+              "orders before it, this build and the application's own module", flush=True)
 
     def finish(self, failed):
         (self.scratch / 'report.json').write_text(json.dumps(self.report, indent=2), encoding='utf-8')

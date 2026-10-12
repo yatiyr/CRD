@@ -198,10 +198,11 @@ void check_invariant(bool cond, EventCode code, SourceIdentity src, cont::String
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage): only a macro captures the call site's __FILE__, __func__ and __LINE__.
 #define CRD_DIAG_INVARIANT(cond, code, msg)                                                                            \
-    ::crd::perf::check_invariant((cond), (code),                                                                       \
-                                 ::crd::perf::SourceIdentity{cont::StringView{__FILE__},                               \
-                                                             cont::StringView{static_cast<const char*>(__func__)},    \
-                                                             static_cast<crd::u32>(__LINE__)},                         \
-                                 (msg))
+    ::crd::perf::check_invariant(                                                                                      \
+        (cond), (code),                                                                                                \
+        ::crd::perf::SourceIdentity{::crd::containers::StringView{__FILE__},                                           \
+                                    ::crd::containers::StringView{static_cast<const char*>(__func__)},                 \
+                                    static_cast<::crd::u32>(__LINE__)},                                                \
+        (msg))
 
 } // namespace crd::perf
