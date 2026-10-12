@@ -295,16 +295,25 @@ def count_at(segments, line, column):
 
 
 def export_files(export, source_root):
-    """Repo-relative path -> llvm-cov file entry."""
-    root = str(Path(source_root).resolve()).replace("\\", "/").rstrip("/") + "/"
+    """Repo-relative path -> llvm-cov file entry.
+
+    The export names files as the compiler saw them, which need not be the resolved form of the source root: a
+    Windows 8.3 short name (the hosted runner's temporary directory is C:/Users/RUNNER~1/...) or a symbolic link
+    resolves to a different spelling. Both the root as given and its resolved form are accepted.
+    """
+    roots = []
+    for form in (Path(source_root).absolute(), Path(source_root).resolve()):
+        text = str(form).replace("\\", "/").rstrip("/") + "/"
+        if text not in roots:
+            roots.append(text)
     files = {}
     for data in export.get("data", []):
         for entry in data.get("files", []):
             name = entry["filename"].replace("\\", "/")
-            if name.startswith(root):
-                files[name[len(root):]] = entry
-            elif name.lower().startswith(root.lower()):
-                files[name[len(root):]] = entry
+            for root in roots:
+                if name.startswith(root) or name.lower().startswith(root.lower()):
+                    files[name[len(root):]] = entry
+                    break
     return files
 
 

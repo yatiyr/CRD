@@ -13,7 +13,9 @@
 //   keeps the system's peak (GetPerformanceInfo CommitPeak). Linux enforces CommitLimit only in strict overcommit
 //   mode (vm.overcommit_memory = 2); otherwise the reading is unbounded and its use is reported, never judged.
 // - resident: this process's resident set (Windows: the working set; Linux: VmRSS), with its peak (Windows:
-//   PeakWorkingSetSize; Linux: VmHWM). It has no bound.
+//   PeakWorkingSetSize; Linux: VmHWM), raised to the highest resident set any reading in this process has seen, so
+//   the peak never falls between readings (Linux sums VmRSS approximately and updates VmHWM lazily, and a later
+//   VmHWM can trail an earlier VmRSS). It has no bound.
 //
 // A reading the OS could not give is `read == false` and `reason` says why; it is never reported as zero use. No
 // heap memory is allocated (the Linux files are read into a stack buffer), so it may be called on a failure path.

@@ -982,9 +982,22 @@ TEST_CASE("flight trigger: the fatal path in a child process leaves a bundle wit
         CHECK_FALSE(named->unloaded);
         cp::ModuleIdentity from_file;
         REQUIRE(crd::test::module_file::file_identity(specimen.string().c_str(), from_file));
-        CHECK(from_file.id_kind != cp::SymbolIdKind::None);
         CHECK(crd::test::module_file::same_identity(*named, from_file));
-        CHECK(cp::identity_matches(*named, from_file));
+#if !defined(_WIN32)
+        CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId);
+#endif
+        if (from_file.id_kind != cp::SymbolIdKind::None)
+        {
+            CHECK(cp::identity_matches(*named, from_file));
+        }
+        else
+        {
+            // No CodeView record in the file: a Windows build linked without a PDB (win-release). The bundle claims
+            // none either, so it can never be matched to a debug file; its PE fields above still name the file.
+            CHECK(named->id_kind == cp::SymbolIdKind::None);
+            CHECK(named->timestamp != 0U);
+            CHECK_FALSE(cp::identity_matches(*named, from_file));
+        }
     }
     std::error_code ec;
     fs::remove_all(dir, ec);

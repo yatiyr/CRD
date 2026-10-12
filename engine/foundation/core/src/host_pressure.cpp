@@ -2,6 +2,7 @@
 
 #include <crd/core/platform.hpp>
 
+#include <atomic>
 #include <cstdint>
 
 #if CRD_OS_WINDOWS
@@ -29,6 +30,25 @@ BudgetReading bounded_reading(crd::u64 capacity, crd::u64 in_use) noexcept
     r.capacity = capacity;
     r.in_use   = in_use;
     return r;
+}
+
+// The highest resident set any reading in this process has reported. The OS peak alone is not monotonic across
+// readings: Linux sums VmRSS from per-CPU counters approximately and records VmHWM from such a sum only when the
+// mapping shrinks, so a VmRSS one reading saw can exceed the VmHWM a later one gets (by 17 pages on a hosted runner).
+std::atomic<crd::u64> g_resident_peak{0U};
+
+// Raises the process's resident peak to `observed` and returns the peak, which is never below an earlier one.
+crd::u64 raise_resident_peak(crd::u64 observed) noexcept
+{
+    crd::u64 peak = g_resident_peak.load(std::memory_order_relaxed);
+    while (observed > peak)
+    {
+        if (g_resident_peak.compare_exchange_weak(peak, observed, std::memory_order_relaxed))
+        {
+            return observed;
+        }
+    }
+    return peak;
 }
 
 #if CRD_OS_LINUX
@@ -154,9 +174,11 @@ HostMemoryReading read_host_memory() noexcept
     counters.cb = sizeof(counters);
     if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)) != FALSE)
     {
+        const crd::u64 working          = counters.WorkingSetSize;
+        const crd::u64 os_peak          = counters.PeakWorkingSetSize;
         out.resident.read               = true;
-        out.resident.in_use             = counters.WorkingSetSize;
-        out.resident.high_water         = counters.PeakWorkingSetSize;
+        out.resident.in_use             = working;
+        out.resident.high_water         = raise_resident_peak(os_peak > working ? os_peak : working);
         out.resident.high_water_tracked = true;
     }
     else if (out.reason[0] == '\0')
@@ -200,7 +222,7 @@ HostMemoryReading read_host_memory() noexcept
     {
         out.resident.read               = true;
         out.resident.in_use             = rss;
-        out.resident.high_water         = hwm > rss ? hwm : rss;
+        out.resident.high_water         = raise_resident_peak(hwm > rss ? hwm : rss);
         out.resident.high_water_tracked = true;
     }
     else if (out.reason[0] == '\0')

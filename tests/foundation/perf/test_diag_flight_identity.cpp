@@ -316,14 +316,30 @@ TEST_CASE("live modules: the enumeration names this executable and matches its f
     CHECK(view(exe.name) == fs::path(exe_path.c_str()).filename().string());
     cp::ModuleIdentity from_file;
     REQUIRE(mf::file_identity(exe_path.c_str(), from_file));
-    CHECK(from_file.id_kind != cp::SymbolIdKind::None);
     CHECK(mf::same_identity(exe, from_file));
 #if defined(_WIN32)
-    CHECK(exe.id_kind == cp::SymbolIdKind::Rsds);
-    CHECK(view(exe.debug_file) == view(from_file.debug_file));
-    CHECK(view(exe.debug_file).find('\\') == cont::StringView::npos); // a basename: no directory leaves the machine
+    // The file decides which identity there is to name. A build linked with a PDB carries a CodeView record; one linked
+    // without (win-release: plain Release keeps no debug information) has none, and then the live walk must not
+    // invent one: the module stays named by its PE fields and can never match a debug file.
+    if (from_file.id_kind != cp::SymbolIdKind::None)
+    {
+        CHECK(from_file.id_kind == cp::SymbolIdKind::Rsds);
+        CHECK(exe.id_kind == cp::SymbolIdKind::Rsds);
+        CHECK(view(exe.debug_file) == view(from_file.debug_file));
+        CHECK(view(exe.debug_file).find('\\') == cont::StringView::npos); // a basename: no directory leaves the machine
+        CHECK(cp::identity_matches(exe, from_file));
+    }
+    else
+    {
+        CHECK(exe.id_kind == cp::SymbolIdKind::None);
+        CHECK(view(exe.debug_file).empty());
+        CHECK(exe.timestamp != 0U);
+        CHECK_FALSE(cp::identity_matches(exe, from_file));
+    }
 #else
+    CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId);
     CHECK(exe.id_kind == cp::SymbolIdKind::GnuBuildId);
+    CHECK(cp::identity_matches(exe, from_file));
 #endif
     for (const cp::ModuleIdentity& m : live.modules)
     {

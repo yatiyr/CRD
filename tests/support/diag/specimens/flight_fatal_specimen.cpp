@@ -72,7 +72,6 @@ int main(int argc, char** argv)
 
     if (std::strcmp(argv[1], "invariant") == 0)
     {
-        namespace cont = crd::containers; // CRD_DIAG_INVARIANT names cont::StringView
         CRD_DIAG_INVARIANT(false, 0x0777U, "flight specimen invariant");
     }
     else if (std::strcmp(argv[1], "assert") == 0)

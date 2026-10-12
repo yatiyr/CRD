@@ -162,3 +162,32 @@ TEST_CASE("diag10c: the resident reading follows memory this process touches", "
     SUCCEED("no host memory probe on this OS");
 #endif
 }
+
+TEST_CASE("diag10c: the resident peak never falls between readings while memory comes and goes",
+          "[core][pressure][host][diag10c]")
+{
+#if CRD_OS_WINDOWS || CRD_OS_LINUX
+    crd::u64 previous = 0U;
+    for (int cycle = 0; cycle < 8; ++cycle)
+    {
+        {
+            const TouchedPages pages;
+            REQUIRE(pages.mapped());
+            const crd::HostMemoryReading during = crd::read_host_memory();
+            REQUIRE(during.resident.read);
+            INFO("cycle " << cycle << " during: peak " << during.resident.high_water << " in use "
+                          << during.resident.in_use << ", earlier peak " << previous);
+            CHECK(during.resident.high_water >= previous);
+            CHECK(during.resident.high_water >= during.resident.in_use);
+            previous = during.resident.high_water;
+        }
+        const crd::HostMemoryReading after = crd::read_host_memory();
+        REQUIRE(after.resident.read);
+        INFO("cycle " << cycle << " after: peak " << after.resident.high_water << ", earlier peak " << previous);
+        CHECK(after.resident.high_water >= previous);
+        previous = after.resident.high_water;
+    }
+#else
+    SUCCEED("no host memory probe on this OS");
+#endif
+}

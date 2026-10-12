@@ -7,6 +7,11 @@
 
 # Mesa lavapipe, the hosted Linux Vulkan device: its worker threads' mutex lifetime ordering.
 race:libvulkan_lvp.so
+# lavapipe's JIT backend (Mesa links LLVM 20): its llvmpipe-N worker threads allocate and free the same buffer
+# (llvm::allocate_buffer, then delete) after a hand-off TSan cannot see; the report names only libLLVM and the
+# allocator interceptors, lavapipe appears only in the thread-creation stacks, which suppressions do not match.
+# Nothing in Cerid links LLVM. Run 38209499793, CEIR-17d GATE (crd-scene-render-tests).
+race:libLLVM.so
 
 # Khronos validation layer: its queue-retire thread and DestroyFence order fence state through shared_ptr counts.
 race:libVkLayer_khronos_validation.so

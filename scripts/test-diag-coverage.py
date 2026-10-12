@@ -195,6 +195,17 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(report["groups"]["g"]["instrumented"], 1)
         self.assertIn("VERDICT PASS", mod.render(report))
 
+    def test_an_export_may_name_files_by_the_root_as_given_or_resolved(self):
+        # The compiler sees the source root as it was given, which can differ from its resolved form (an 8.3 short
+        # name, a symbolic link, a ".." step); the export then names every file under the unresolved spelling.
+        with Tree() as root:
+            given = Path(root) / "include" / ".."
+            unresolved = mod.evaluate(registry(), export_for(given, ALL_RAN), root, source_root=given)
+            resolved = mod.evaluate(registry(), export_for(Path(root).resolve(), ALL_RAN), root, source_root=given)
+        for report in (unresolved, resolved):
+            self.assertEqual(report["verdict"], "PASS", report["gaps"] + report["stale"])
+            self.assertEqual(report["denominator"]["instrumented_files"], 1)
+
     def test_an_error_value_that_did_not_run_is_a_gap_naming_its_site(self):
         with Tree() as root:
             report = self.evaluate(root, registry(), unrun(11))

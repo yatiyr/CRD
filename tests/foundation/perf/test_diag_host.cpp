@@ -390,7 +390,21 @@ TEST_CASE("diagnostic host: a frame hitch is a capture the host writes as a bund
     const cp::ModuleIdentity* exe = find_this_executable(bundle.import.symbols);
     REQUIRE(exe != nullptr);
     CHECK_FALSE(exe->unloaded);
-    CHECK(cp::identity_matches(*exe, *find_this_executable(snapshot)));
+    const cp::ModuleIdentity* live_exe = find_this_executable(snapshot);
+    CHECK(crd::test::module_file::same_identity(*exe, *live_exe));
+#if !defined(_WIN32)
+    CHECK(live_exe->id_kind == cp::SymbolIdKind::GnuBuildId);
+#endif
+    // The live walk is held to the file on disk by "live modules: the enumeration names this executable"; a Windows
+    // build linked without a PDB (win-release) has no CodeView record, and then nothing may match a debug file.
+    if (live_exe->id_kind != cp::SymbolIdKind::None)
+    {
+        CHECK(cp::identity_matches(*exe, *live_exe));
+    }
+    else
+    {
+        CHECK_FALSE(cp::identity_matches(*exe, *live_exe));
+    }
 
     // The commands read the same capture.
     const cp::DiagResult status = execute(service, "flight.status");
@@ -1337,7 +1351,22 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         REQUIRE(named != nullptr);
         cp::ModuleIdentity from_file;
         REQUIRE(crd::test::module_file::file_identity(CRD_DIAG_HOST_SPECIMEN, from_file));
-        CHECK(cp::identity_matches(*named, from_file));
+        CHECK(crd::test::module_file::same_identity(*named, from_file));
+#if !defined(_WIN32)
+        CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId);
+#endif
+        if (from_file.id_kind != cp::SymbolIdKind::None)
+        {
+            CHECK(cp::identity_matches(*named, from_file));
+        }
+        else
+        {
+            // No CodeView record in the file: a Windows build linked without a PDB (win-release). The bundle claims
+            // none either, so it can never be matched to a debug file; its PE fields still name the file.
+            CHECK(named->id_kind == cp::SymbolIdKind::None);
+            CHECK(named->timestamp != 0U);
+            CHECK_FALSE(cp::identity_matches(*named, from_file));
+        }
 
         // The same evidence through the investigation route an external application has (DIAG.11a): bundle.inspect
         // decodes the trigger, how the window ended and the forty events before the failure.

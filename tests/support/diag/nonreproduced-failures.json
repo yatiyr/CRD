@@ -98,6 +98,30 @@
    "explanation": "The login shell sets DEBUGINFOD_URLS (Ubuntu's profile.d), so llvm-symbolizer-18 waited on an unreachable debuginfod server after a WSL restart. The specimen links only Threads; no Cerid code is involved. Local WSL scripts now unset the variable; hosted steps are non-login shells.",
    "session": "2026-10-11-diag-10c-queue-pressure.md",
    "rows": ["DIAG.10c"]
+  },
+  {
+   "id": "hosted-linux-resident-peak-below-earlier-rss",
+   "first_seen": "2026-10-12",
+   "lane": "every hosted Linux lane (linux-gcc-debug, -public-checks, -debug-scalar, -debug-sse2, -asan, -release, -relwithdebinfo, linux-clang-tsan), run 38209499793",
+   "target": "diag10c: the resident reading follows memory this process touches (crd-core-tests)",
+   "signature": "CHECK( after.resident.high_water >= peak ) failed: 72708096 >= 72777728, 17 pages short, after 64 MiB was touched and released",
+   "reruns": "Not seen on this host's WSL2 guest (kernel 6.6, 32 CPUs): 200 runs of the case before the fix; 100 runs of the host-pressure cases after it.",
+   "status": "nonreproduced",
+   "explanation": "Probable mechanism, not observed here: the kernel sums VmRSS approximately from per-CPU counters and records VmHWM from such a sum only at some points, so a later VmHWM can be below an earlier VmRSS, and the reading reported max(VmHWM, VmRSS) for each call. read_host_memory now reports a process-wide peak (an atomic maximum) that cannot fall between readings, whatever the kernel's counters do.",
+   "session": "2026-10-12-complete-run-38209499793-repairs.md",
+   "rows": ["DIAG.10c"]
+  },
+  {
+   "id": "hosted-tsan-lavapipe-llvm-allocation-race",
+   "first_seen": "2026-10-12",
+   "lane": "linux-clang-tsan (hosted), run 38209499793",
+   "target": "CEIR-17d GATE: the shipped GPU-cull config's device verdict EQUALS the CPU cull (Vulkan) (crd-scene-render-tests)",
+   "signature": "ThreadSanitizer data race: operator delete on llvmpipe-3 against operator new (llvm::allocate_buffer) on llvmpipe-0, both access stacks only the allocator interceptors and libLLVM.so.20.1; the threads were created by libvulkan_lvp.so under vkCreateDevice",
+   "reruns": "Not seen on this host's WSL2 guest: through ctest on linux-clang-tsan the gate passed 60 of 60 runs with the previous suppression file and 60 of 60 with the new one.",
+   "status": "nonreproduced",
+   "explanation": "Inside Mesa lavapipe's LLVM JIT, which is not built with TSan, so its own hand-offs are invisible; no Cerid frame is in either access stack and nothing in Cerid links LLVM. race:libLLVM.so is now in tests/support/diag/tsan-suppressions.txt under the file's third-party rule.",
+   "session": "2026-10-12-complete-run-38209499793-repairs.md",
+   "rows": ["DIAG.1b"]
   }
  ]
 }
