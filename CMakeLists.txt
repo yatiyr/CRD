@@ -340,7 +340,8 @@ crd_module(engine/execution/ceir-gpu engine/ceir-gpu DEPENDS ceir containers cor
 crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log memory units TESTS execution/chir
     TEST_DEPENDS ceir-cook perf)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
-crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time toml TESTS foundation/perf support/diag support/fuzz)
+crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time toml
+    TESTS foundation/perf support/diag support/fuzz TEST_DEPENDS platform)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory support/diag support/fuzz TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math
@@ -425,7 +426,7 @@ crd_module(engine/rendering/render-graph engine/render-graph
 crd_module(engine/foundation/log engine/log DEPENDS containers core TESTS foundation/log)
 crd_module(engine/foundation/platform engine/platform DEPENDS containers core jobs log memory time PACKAGES glfw
     TESTS foundation/platform)
-crd_module(engine/foundation/app engine/app DEPENDS containers core jobs platform TESTS foundation/app)
+crd_module(engine/foundation/app engine/app DEPENDS containers core jobs perf platform TESTS foundation/app)
 crd_module(engine/foundation/config engine/config DEPENDS containers core log math platform toml
     TESTS foundation/config)
 crd_module(engine/ui/imgui engine/imgui

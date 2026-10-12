@@ -14,6 +14,7 @@ target_link_libraries(crd-app
         crd-containers
         crd-platform
         crd-jobs
+        crd-perf        # DIAG.11a: an Application composes the reusable diagnostic host when one is given
 )
 
 target_compile_features(crd-app PUBLIC cxx_std_20)

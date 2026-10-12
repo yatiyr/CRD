@@ -1,0 +1,25 @@
+# The default diagnostic-host profile (DIAG.11a), authored. An application, a headless tool or the sandbox starts the
+# engine's DiagnosticHost (crd/perf/diagnostic_host.hpp) from a profile like this one before its jobs pool, devices
+# and tools exist. crd-perf-tests holds this file equal to DiagnosticHostProfile{}, so the asset and the in-code
+# defaults cannot drift apart. Unknown keys are refused, so a misspelt key never falls back to a default.
+#
+# It is local and bounded: dumps and bundles stay on this machine, the command service may only read, no fault is
+# injected and no remote debugger is exposed. Relative paths are relative to the process's working directory.
+
+kind           = "diagnostic-host"
+schema_version = 1
+
+crash_handler = "on"      # "off", "on" (used when this build can) or "required" (refuse the run otherwise)
+crash_dir     = "crashes" # where the crash handler writes dumps
+
+flight        = "on" # the flight recorder and its triggers
+flight_policy = ""   # a flight-policy asset (*.flight.toml); "" is the in-code default policy
+capture_dir   = ""   # an existing directory every delivered capture is written to; "" keeps captures in memory
+max_bundles   = 10   # the newest flight bundles kept in capture_dir (1 to 1000)
+
+fault_injection = "off" # the fault seams' hooks and the fault.* commands; a shipping build cannot provide them
+
+command_grant = ["read"] # the authority of the host's diagnostic service; record, inject and execute are opt-in
+allow_remote  = false    # remote-enable, upload and process-memory need this to be true
+
+watchdog_period_ms = 250 # the jobs watchdog window the starvation and hang triggers need (0: the pool's own)

@@ -48,6 +48,7 @@ add_executable(crd-perf-tests
     test_diag_flight_identity.cpp # DIAG.9b: a flight bundle's build identity and live module snapshot
     test_diag_fault_minimize.cpp # DIAG.9c: minimizing a fault plan that reproduces a failure
     test_diag_observer_effect.cpp # DIAG.9c: flight-recorder detail levels and observer-effect experiments
+    test_diag_host.cpp # DIAG.9b/11a: the reusable diagnostic host, its authored profile and its change rules
 )
 
 target_link_libraries(crd-perf-tests PRIVATE
@@ -57,6 +58,7 @@ target_link_libraries(crd-perf-tests PRIVATE
     crd-jobs
     crd-memory
     crd-perf
+    crd-platform    # DIAG.11a: the diagnostic host cases read and write files through the I/O fault seam
     crd-diag-harness
     Catch2::Catch2WithMain
 )
@@ -72,6 +74,7 @@ add_dependencies(crd-perf-tests
     crd-diag-use-after-return-specimen  # DIAG.3f
     crd-diag-leak-specimen              # DIAG.3f
     crd-diag-flight-fatal-specimen      # DIAG.9b: the fatal path writes the flight window before the process dies
+    crd-diag-host-specimen              # DIAG.11a: an application that fails on purpose under its authored profile
     crd-diag-cpu-hotspot-specimen)      # DIAG.10b: the harness's own Timeout verdict
 target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_CLEAN_SPECIMEN="$<TARGET_FILE:crd-diag-clean-specimen>"
@@ -82,6 +85,7 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
     CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
     CRD_DIAG_FLIGHT_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-flight-fatal-specimen>"
+    CRD_DIAG_HOST_SPECIMEN="$<TARGET_FILE:crd-diag-host-specimen>"
     CRD_DIAG_CPU_HOTSPOT_SPECIMEN="$<TARGET_FILE:crd-diag-cpu-hotspot-specimen>"
     CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}"
     CRD_DIAG_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/diag")

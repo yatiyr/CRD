@@ -30,22 +30,29 @@
 // DIAG.8c (the GUI consumer of the typed diagnostic command service; see crd/perf/ui/diag_panel.hpp):
 //   --diag [command]              — open the diagnostic command panel; with a command, send it at start and log every
 //                                   page of its answer
-//   --diag-grant <list>           — the authority the sandbox grants its service (default read; e.g. read,execute)
+//   --diag-grant <list>           — the authority the sandbox grants its service (default: the diagnostic host
+//                                   profile's command_grant, read; e.g. read,execute)
 //   --diag-root <dir>             — the file root for path arguments (default: none, so path commands are refused)
 //   --diag-path <rel>, --diag-param name=value (repeatable) — the started command's path and named arguments.
 //   DIAG.9a: `replay.record executor=device` and a device record's `replay.run` run on this backend's GPU (a compute
 //   context on the sandbox's Vulkan device, or a D3D12 compute device), each run handed to the frame-loop thread.
 //   `replay.record executor=host` and a host record's `replay.run` run on the host provider over the sandbox's jobs
 //   pool, also handed to the frame-loop thread.
-// DIAG.9b (the sandbox as a flight-recorder and fault-injection host; see flight_host.hpp): every run records into a
-// flight recorder whose triggers are assertions, fatal invariants, the jobs watchdog's starvation and hang reports,
-// frame hitches and allocation failure at the resource manager's allocator; each delivered capture is logged.
+// DIAG.9b/11a (the sandbox as a diagnostic host; see crd/perf/diagnostic_host.hpp): the engine's reusable diagnostic
+// host chooses the modes from its profile before the window, the device and the jobs pool exist. With the default
+// profile every run installs the crash handler and records into a flight recorder whose triggers are assertions,
+// fatal invariants, the jobs watchdog's starvation and hang reports, frame hitches (each Application tick) and
+// allocation failure at the resource manager's allocator; each delivered capture is logged.
+//   --diag-host <asset>           — an authored diagnostic-host profile (assets/diag/*.host.toml) instead of the
+//                                   default profile (assets/diag/host_default.host.toml); a refused profile, or a
+//                                   "required" mode this build cannot provide, refuses the run
 //   --flight-policy <asset>       — an authored flight-policy asset (assets/diag/*.flight.toml) instead of the
-//                                   default policy; a refused asset refuses the run
+//                                   profile's flight_policy; a refused asset refuses the run
 //   --flight-dir <dir>            — an existing directory every delivered capture is also written to as a flight
-//                                   bundle (flight-<n>.cdb, never overwriting, the newest 10 kept)
-//   With --diag the service also serves flight.status/trigger/policy/write and fault.status/arm/disarm, and the fault
-//   seams' hooks are installed (fault.arm still needs `inject` in --diag-grant; a shipping build refuses every arm).
+//                                   bundle (flight-<n>.cdb, never overwriting, the profile's max_bundles kept)
+//   With --diag the service also serves flight.status/trigger/policy/write and, when the profile turns fault
+//   injection on (host_investigate.host.toml does), fault.status/arm/disarm with the fault seams' hooks installed
+//   (fault.arm needs `inject` in the grant; a shipping build compiles the seams out and reports injection unavailable).
 // Environment:
 //   CRD_ASSETS_DIR=<dir>          — the engine asset root (the disk `assets/` tree that shadows the embedded pack). Set
 //                                   and non-empty, it always wins. Unset or empty, a developer build falls back to
@@ -53,7 +60,6 @@
 //                                   build never does. With no root the scene is overlay-only (see asset_root.hpp).
 
 #include "asset_root.hpp"          // the engine asset root: CRD_ASSETS_DIR, else the source tree
-#include "flight_host.hpp"         // DIAG.9b: the flight recorder, its triggers and the fault injector
 #include "frame_thread_calls.hpp"  // DIAG.9a: device runs handed to the frame-loop thread
 #include "gpu_device_executor.hpp" // DIAG.9a: the replay commands' GPU device executor
 #include "inspect_panel.hpp"       // DIAG.8b: the authored-program inspect panel
@@ -86,7 +92,9 @@
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
+#include <crd/perf/diagnostic_host.hpp> // DIAG.11a: the engine's reusable diagnostic host
 #include <crd/perf/gpu/gpu_resources_diag.hpp>
 #include <crd/perf/perf.hpp>
 #include <crd/perf/ui/diag_panel.hpp>
@@ -553,13 +561,15 @@ int main(int argc, char** argv)
     // ⭐⭐ DIAG.8c: the diagnostic command panel (see the CLI contract above). The grant is fixed here, at start-up.
     bool                    diag_enabled = false;
     const char*             diag_command = nullptr;
-    const char*             diag_grant   = "read";
+    const char*             diag_grant   = nullptr; // nullptr: the diagnostic host profile's command_grant
     const char*             diag_root    = nullptr;
     const char*             diag_path    = nullptr;
     crd::containers::String diag_params;
     bool                    diag_args_ok = true; // every --diag-param is name=value
-    // ⭐⭐ DIAG.9b: the flight host's options (see the CLI contract above).
-    crd::sandbox::FlightHostOptions flight_options;
+    // ⭐⭐ DIAG.9b/11a: the diagnostic host's profile and its command-line overrides (see the CLI contract above).
+    const char* diag_host_asset     = nullptr;
+    const char* flight_policy_asset = nullptr;
+    const char* flight_dir          = nullptr;
     for (int i = 1; i < argc; ++i)
     {
         if (std::strcmp(argv[i], "--headless") == 0)
@@ -856,13 +866,17 @@ int main(int argc, char** argv)
             diag_params.append(argv[i]);
             diag_params.push_back('\n');
         }
+        else if (std::strcmp(argv[i], "--diag-host") == 0 && i + 1 < argc)
+        {
+            diag_host_asset = argv[++i];
+        }
         else if (std::strcmp(argv[i], "--flight-policy") == 0 && i + 1 < argc)
         {
-            flight_options.policy_asset = argv[++i];
+            flight_policy_asset = argv[++i];
         }
         else if (std::strcmp(argv[i], "--flight-dir") == 0 && i + 1 < argc)
         {
-            flight_options.capture_dir = argv[++i];
+            flight_dir = argv[++i];
         }
         else if (std::strcmp(argv[i], "--smoke-test") == 0)
         {
@@ -911,27 +925,74 @@ int main(int argc, char** argv)
         crd::log::shutdown();
         return 1;
     }
-    // ⭐⭐ DIAG.9b: the flight host, started before the diagnostic service (whose doctor reports it) and declared
-    // before it, so it outlives the service, the resource manager whose allocator it watches and the jobs pool whose
-    // watchdog reports to it. A refused policy asset or capture directory refuses the run.
-    crd::sandbox::FlightHost flight_host;
+    // ⭐⭐ DIAG.11a: the engine's diagnostic host, started from its profile before the diagnostic service (whose doctor
+    // reports it), the window, the device and the jobs pool, and declared before all of them, so it outlives the
+    // service, the resource manager whose allocator it watches and the pool whose watchdog reports to it. The profile
+    // is the authored asset (`--diag-host`) or the default, then the command-line overrides; a refused profile, a
+    // refused policy asset or capture directory, or a "required" mode this build cannot provide refuses the run.
+    crd::perf::DiagnosticHostProfile host_profile;
     {
-        crd::containers::String             flight_reason;
-        const crd::sandbox::FlightHostStart flight_start = flight_host.start(flight_options, flight_reason);
-        if (flight_start != crd::sandbox::FlightHostStart::Started)
+        crd::containers::String host_reason;
+        if (diag_host_asset != nullptr &&
+            !crd::perf::load_diagnostic_host_profile(diag_host_asset, host_profile, host_reason))
         {
-            CRD_LOG_ERROR(g_log_sandbox, "DIAG.9b flight: {} ({})", crd::sandbox::flight_host_start_name(flight_start),
-                          std::string_view(flight_reason.c_str(), flight_reason.size()));
+            CRD_LOG_ERROR(g_log_sandbox, "--diag-host: {}", std::string_view(host_reason.c_str(), host_reason.size()));
             crd::log::shutdown();
             return 1;
         }
-        [[maybe_unused]] const crd::perf::FlightPolicy flight_policy = flight_host.recorder().policy();
+        if (flight_policy_asset != nullptr)
+        {
+            host_profile.flight_policy = crd::containers::String{flight_policy_asset};
+        }
+        if (flight_dir != nullptr)
+        {
+            host_profile.capture_dir = crd::containers::String{flight_dir};
+        }
+        if (diag_grant != nullptr && !crd::perf::parse_authority_list(diag_grant, host_profile.command_grant))
+        {
+            CRD_LOG_ERROR(g_log_sandbox,
+                          "--diag-grant takes 'none' or a comma-separated list of read, record, inject, remote-enable, "
+                          "upload, process-memory and execute");
+            crd::log::shutdown();
+            return 1;
+        }
+    }
+    crd::perf::DiagnosticHost diag_host;
+    {
+        crd::containers::String        host_reason;
+        const crd::perf::DiagHostStart host_start = diag_host.start(host_profile, host_reason);
+        if (host_start != crd::perf::DiagHostStart::Started)
+        {
+            [[maybe_unused]] const crd::containers::StringView start_name = crd::perf::diag_host_start_name(host_start);
+            CRD_LOG_ERROR(g_log_sandbox, "DIAG.11a host: {} ({})",
+                          std::string_view(start_name.data(), start_name.size()),
+                          std::string_view(host_reason.c_str(), host_reason.size()));
+            crd::log::shutdown();
+            return 1;
+        }
+        const crd::perf::DiagnosticHostModes& host_modes = diag_host.modes();
+        [[maybe_unused]] const crd::containers::StringView crash_state =
+            crd::perf::diag_mode_state_name(host_modes.crash);
+        [[maybe_unused]] const crd::containers::StringView flight_state =
+            crd::perf::diag_mode_state_name(host_modes.flight);
+        [[maybe_unused]] const crd::containers::StringView fault_state =
+            crd::perf::diag_mode_state_name(host_modes.faults);
         CRD_LOG_INFO(g_log_sandbox,
-                     "DIAG.9b flight: recorder started, policy generation {} ({} events, {} before, {} after, hitch "
-                     "{} ns), captures {}",
-                     flight_host.recorder().policy_generation(), flight_policy.capacity, flight_policy.pre_events,
-                     flight_policy.post_events, flight_policy.hitch_threshold_ns,
-                     flight_options.capture_dir != nullptr ? flight_options.capture_dir : "kept in memory");
+                     "DIAG.11a host: crash handler {} ({}), flight {}, fault injection {} (seam hooks {})",
+                     std::string_view(crash_state.data(), crash_state.size()), host_profile.crash_dir.c_str(),
+                     std::string_view(flight_state.data(), flight_state.size()),
+                     std::string_view(fault_state.data(), fault_state.size()),
+                     diag_host.hooks_installed() ? "installed" : "not installed");
+        if (host_modes.flight == crd::perf::DiagModeState::Active)
+        {
+            [[maybe_unused]] const crd::perf::FlightPolicy flight_policy = diag_host.recorder().policy();
+            CRD_LOG_INFO(g_log_sandbox,
+                         "DIAG.9b flight: recorder started, policy generation {} ({} events, {} before, {} after, "
+                         "hitch {} ns), captures {}",
+                         diag_host.recorder().policy_generation(), flight_policy.capacity, flight_policy.pre_events,
+                         flight_policy.post_events, flight_policy.hitch_threshold_ns,
+                         host_profile.capture_dir.empty() ? "kept in memory" : host_profile.capture_dir.c_str());
+        }
     }
     // ⭐⭐ DIAG.8c: the sandbox's diagnostic service, built before the window and the device so that a refused flag
     // exits before anything needs undoing. Its grant is fixed here. A started command must be one it serves (the
@@ -940,31 +1001,24 @@ int main(int argc, char** argv)
     std::unique_ptr<crd::perf::DiagCommandService> diag_service;
     if (diag_enabled)
     {
-        crd::perf::DiagAuthoritySet diag_authority = 0U;
-        if (!crd::perf::parse_authority_list(diag_grant, diag_authority))
-        {
-            CRD_LOG_ERROR(g_log_sandbox,
-                          "--diag-grant takes 'none' or a comma-separated list of read, record, inject, remote-enable, "
-                          "upload, process-memory and execute");
-            crd::log::shutdown();
-            return 1;
-        }
-        crd::perf::DiagServiceConfig diag_config;
+        const crd::perf::DiagAuthoritySet diag_authority = diag_host.profile().command_grant;
+        crd::perf::DiagServiceConfig      diag_config;
         if (diag_root != nullptr)
         {
             diag_config.root = crd::containers::StringView{diag_root};
         }
-        flight_host.configure_service(diag_config); // DIAG.9b: the doctor reports the live recorder and injector
+        diag_host.configure_service(diag_config); // DIAG.9b: the doctor reports the live recorder and injector
         diag_commands = std::make_unique<SandboxDiagCommands>();
         diag_service  = std::make_unique<crd::perf::DiagCommandService>(diag_authority, diag_config);
-        if (!bind_sandbox_diag_commands(*diag_service, *diag_commands) || !flight_host.serve(*diag_service))
+        if (!bind_sandbox_diag_commands(*diag_service, *diag_commands) || !diag_host.serve(*diag_service))
         {
             CRD_LOG_ERROR(g_log_sandbox, "--diag: the sandbox's diagnostic commands could not be registered");
             crd::log::shutdown();
             return 1;
         }
-        CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: flight.* and fault.* served, fault seam hooks {}",
-                     flight_host.hooks_installed() ? "installed" : "unavailable in this build");
+        CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: flight.* {}, fault.* {}",
+                     diag_host.modes().flight == crd::perf::DiagModeState::Active ? "served" : "not served",
+                     diag_host.modes().faults == crd::perf::DiagModeState::Active ? "served" : "not served");
         using Panel     = crd::perf::ui::DiagCommandPanel;
         const bool fits = (diag_path == nullptr || std::strlen(diag_path) < Panel::kPathCapacity) &&
                           diag_params.size() < Panel::kArgsCapacity;
@@ -980,6 +1034,7 @@ int main(int argc, char** argv)
     }
 
     crd::app::ApplicationDesc app_desc;
+    app_desc.diagnostics  = &diag_host; // DIAG.11a: the host owns the crash handler; every tick is one of its frames
     app_desc.window.title = crd::containers::String("Cerid Sandbox — 10k instances on gpu-context (GEO-7)");
     app_desc.window.size  = {1280, 720};
 
@@ -1037,7 +1092,7 @@ int main(int argc, char** argv)
     }
     CRD_LOG_INFO(g_log_sandbox, "backend: {}", want_dx12 ? "DX12" : "Vulkan");
     // DIAG.9b: the device loaded its driver's modules; a flight bundle names them from here on.
-    (void)flight_host.refresh_modules();
+    (void)diag_host.refresh_modules();
     // ⭐⭐ DIAG.9a: the replay commands' device executor, on this backend's GPU. The panel's worker thread calls the
     // service, so every run is handed to the frame loop (frame_calls.pump below), which owns the queue it submits to.
     // The host executor's runs are handed over the same way: the pool's frame arenas (crd::jobs::init below, on
@@ -1102,9 +1157,10 @@ int main(int argc, char** argv)
     // GEO-9: the camera-shot timeline (automation-driven crane move, sampled per frame in rational time)
     const crd::timeline::TimelineResource camera_timeline = build_camera_timeline(&scene_alloc);
 
-    // DIAG.9b: the manager allocates through the flight host's decorators: an injected allocation-failure first, then
-    // a real failure of the arena reported as an allocation-failure trigger.
-    crd::memory::IAllocator* const  rm_alloc = flight_host.watch_allocator(&scene_alloc);
+    // DIAG.9b: the manager allocates through the diagnostic host's decorators: an injected allocation-failure first
+    // (when the profile turns injection on), then a real failure of the arena reported as an allocation-failure
+    // trigger.
+    crd::memory::IAllocator* const  rm_alloc = diag_host.watch_allocator(&scene_alloc, "sandbox resources");
     crd::resources::ResourceManager rm(rm_alloc != nullptr ? rm_alloc : &scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);
     crd::resources::register_openpbr_material_loader(&rm, nullptr);
@@ -1657,10 +1713,10 @@ int main(int argc, char** argv)
     crd::perf::install_jobs_adapter();
     crd::perf::ui::ProfilerPanel profiler_panel;
 
-    // DIAG.9b: the watchdog window the flight host's starvation and hang triggers need. The watchdog is a thread, so a
-    // return path that skips the teardown below still shuts the pool down (after the panel, declared later, joins its
-    // worker); the teardown disarms this and shuts it down in its own order.
-    flight_host.configure_jobs(app_desc.jobs_config);
+    // DIAG.9b: the watchdog window the diagnostic host's starvation and hang triggers need. The watchdog is a thread,
+    // so a return path that skips the teardown below still shuts the pool down (after the panel, declared later, joins
+    // its worker); the teardown disarms this and shuts it down in its own order.
+    diag_host.configure_jobs(app_desc.jobs_config);
     crd::jobs::init(app_desc.jobs_config);
     struct JobsShutdownOnExit
     {
@@ -1687,8 +1743,10 @@ int main(int argc, char** argv)
     if (diag_service != nullptr)
     {
         diag_panel = std::make_unique<crd::perf::ui::DiagCommandPanel>(*diag_service);
+        crd::containers::String grant_names;
+        crd::perf::append_authority_list(grant_names, diag_host.profile().command_grant);
         CRD_LOG_INFO(g_log_sandbox, "DIAG.8c diag: panel over {} commands, grant {}", diag_panel->command_count(),
-                     diag_grant);
+                     std::string_view(grant_names.c_str(), grant_names.size()));
         if (diag_command != nullptr)
         {
             diag_follow = diag_panel->select(diag_command) &&
@@ -1874,33 +1932,32 @@ int main(int argc, char** argv)
     };
     const auto smoke_start_time    = std::chrono::steady_clock::now();
     crd::f64   inspect_last_tsec   = 0.0; // DIAG.9a: the frame clock's previous time, for its step
-    crd::u64   flight_frame_begin  = 0U;  // DIAG.9b: the previous iteration's start, for the frame-hitch trigger
+    crd::u64   flight_logged       = 0U;  // DIAG.9b: captures logged so far
+    crd::u64   flight_bundles      = 0U;  // DIAG.9b: bundles written when the last capture was logged
     while (app.is_running())
     {
-        // ⭐⭐ DIAG.9b: the previous iteration, start to start, is one frame for the hitch trigger (a `continue`
-        // cannot skip it); then a capture whose post window closed is delivered, and logged here, on the frame loop.
-        const crd::u64 flight_now     = crd::perf::diagnostic_now_ns();
-        const crd::u64 flight_bundles = flight_host.bundles_written();
-        if (flight_frame_begin != 0U && flight_host.frame(flight_frame_begin, flight_now))
+        // ⭐⭐ DIAG.9b/11a: Application::tick feeds the diagnostic host one frame (start to start, for the hitch
+        // trigger) and delivers a capture whose post window closed; a delivered capture is logged here.
+        if (!app.tick())
         {
+            break;
+        }
+        if (diag_host.command_host().received() != flight_logged)
+        {
+            flight_logged = diag_host.command_host().received();
             crd::perf::FlightCapture flight_capture;
-            if (flight_host.command_host().retained(flight_capture))
+            if (diag_host.command_host().retained(flight_capture))
             {
                 crd::containers::String flight_summary;
                 crd::perf::flight_capture_summary_json(flight_capture, flight_summary);
                 [[maybe_unused]] const crd::containers::String flight_bundle =
-                    flight_host.bundles_written() != flight_bundles ? flight_host.last_bundle()
-                                                                    : crd::containers::String("not written");
-                CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: capture {} {} bundle {}",
-                             flight_host.command_host().received(),
+                    diag_host.bundles_written() != flight_bundles ? diag_host.last_bundle()
+                                                                  : crd::containers::String("not written");
+                CRD_LOG_INFO(g_log_sandbox, "DIAG.9b flight: capture {} {} bundle {}", flight_logged,
                              std::string_view(flight_summary.c_str(), flight_summary.size()),
                              std::string_view(flight_bundle.c_str(), flight_bundle.size()));
             }
-        }
-        flight_frame_begin = flight_now;
-        if (!app.tick())
-        {
-            break;
+            flight_bundles = diag_host.bundles_written();
         }
         if (inspect_panel != nullptr)
         {
@@ -2377,8 +2434,8 @@ int main(int argc, char** argv)
                 CRD_LOG_INFO(g_log_sandbox,
                              "DIAG.9b flight: {} events recorded, {} captures delivered, {} frame hitches, {} bundles "
                              "written, {} not written",
-                             flight_host.recorder().total_recorded(), flight_host.command_host().received(),
-                             flight_host.hitches(), flight_host.bundles_written(), flight_host.bundle_failures());
+                             diag_host.recorder().total_recorded(), diag_host.command_host().received(),
+                             diag_host.hitches(), diag_host.bundles_written(), diag_host.bundle_failures());
                 app.close();
             }
         }
@@ -2415,11 +2472,12 @@ int main(int argc, char** argv)
     gpu_device.reset();
     device_alloc.reset();
     jobs_shutdown_on_exit.armed = false;
-    crd::jobs::shutdown(); // joins the watchdog: nothing reports to the flight host after this
-    // ⛔ DIAG.9b: the service that served flight.* and fault.* is gone, so the host stops here: the fault seams' hooks
-    // first, then the triggers; a capture still pending is delivered (and written) as the recorder shuts down. The
-    // resource manager keeps its decorators, which now pass every call through, until it dies with this scope.
-    flight_host.stop();
+    crd::jobs::shutdown(); // joins the watchdog: nothing reports to the diagnostic host after this
+    // ⛔ DIAG.9b/11a: the service that served flight.* and fault.* is gone, so the host stops here: the fault seams'
+    // hooks first, then the triggers; a capture still pending is delivered (and written) as the recorder shuts down,
+    // and the crash handler goes last. The resource manager keeps its decorators, which now pass every call through,
+    // until it dies with this scope.
+    diag_host.stop();
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
     surface.reset();            // vkDeviceWaitIdle — every frame in flight completes here

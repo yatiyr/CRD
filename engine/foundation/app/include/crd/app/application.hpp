@@ -8,6 +8,11 @@
 
 #include <memory>
 
+namespace crd::perf
+{
+class DiagnosticHost;
+} // namespace crd::perf
+
 namespace crd::app
 {
 struct ApplicationDesc
@@ -17,6 +22,12 @@ struct ApplicationDesc
     crd::jobs::Config         jobs_config{};
     const char*               crash_dir             = "./crashes";
     bool                      install_crash_handler = true;
+    // DIAG.11a: the process's diagnostic host (crd/perf/diagnostic_host.hpp), started by the caller from its profile
+    // before the Application is built. When one is given it owns the crash handler (crash_dir and
+    // install_crash_handler are ignored), run() gives the jobs pool its watchdog window, and every tick() is one frame
+    // for its hitch trigger and delivers a capture whose window has closed. A host that is not started makes the
+    // Application invalid. The caller stops the host after the Application and the jobs pool are gone.
+    crd::perf::DiagnosticHost* diagnostics = nullptr;
 };
 
 class Application
@@ -57,6 +68,7 @@ public:
     [[nodiscard]] const crd::platform::FrameClock& clock() const noexcept { return m_clock; }
 
 private:
+    [[nodiscard]] bool tick_frame();
     void dispatch_propagated(Event& event);
     void dispatch_platform_events();
 
@@ -69,5 +81,6 @@ private:
     crd::containers::Array<std::unique_ptr<Layer>> m_owned_layers{};
     bool m_valid = false;
     bool m_running = false;
+    bool m_crash_installed = false;
 };
 } // namespace crd::app

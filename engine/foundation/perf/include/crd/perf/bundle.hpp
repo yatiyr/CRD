@@ -235,4 +235,9 @@ struct BundleReadResult
 [[nodiscard]] crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const char* suffix,
                                                 crd::u32 max_bundles = kDefaultMaxBundles) noexcept;
 
+// Whether `path` names an existing directory, and whether anything (a file or a directory) exists at `path`. A null
+// path is neither. Used by bundle writers to check a capture directory and to never write over an existing name.
+[[nodiscard]] bool bundle_directory_exists(const char* path) noexcept;
+[[nodiscard]] bool bundle_path_exists(const char* path) noexcept;
+
 } // namespace crd::perf

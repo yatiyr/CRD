@@ -504,4 +504,33 @@ crd::i64 enforce_bundle_retention(const char* dir, const char* prefix, const cha
     return deleted;
 }
 
+bool bundle_directory_exists(const char* path) noexcept
+{
+    if (path == nullptr || path[0] == '\0')
+    {
+        return false;
+    }
+#if defined(_WIN32)
+    const DWORD attributes = GetFileAttributesA(path);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0U;
+#else
+    struct stat st{};
+    return ::stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
+bool bundle_path_exists(const char* path) noexcept
+{
+    if (path == nullptr || path[0] == '\0')
+    {
+        return false;
+    }
+#if defined(_WIN32)
+    return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
+#else
+    struct stat st{};
+    return ::stat(path, &st) == 0;
+#endif
+}
+
 } // namespace crd::perf

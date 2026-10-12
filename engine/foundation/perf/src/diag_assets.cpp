@@ -1,6 +1,7 @@
 // crd-perf -- authored diagnostic assets (DIAG.9b). See crd/perf/diag_assets.hpp.
 
 #include <crd/perf/diag_assets.hpp>
+#include <crd/perf/diagnostic_host.hpp>
 
 #include <crd/toml/toml.hpp>
 
@@ -444,6 +445,331 @@ void flight_policy_to_asset(const FlightPolicy& policy, cont::String& out)
         }
     }
     out.append("]\n");
+}
+
+// ---- The diagnostic-host profile (DIAG.11a) ----------------------------------------------------------------------
+
+namespace
+{
+constexpr cont::StringView kDiagHostKind{"diagnostic-host"};
+constexpr crd::usize       kDiagHostMaxPathBytes = 1024U;
+constexpr DiagAuthoritySet kRemoteAuthorities    = authority_bit(DiagAuthority::RemoteEnable) |
+                                                authority_bit(DiagAuthority::Upload) |
+                                                authority_bit(DiagAuthority::ProcessMemory);
+
+bool read_mode(const toml::node& value, cont::StringView key, DiagMode& out, cont::String& reason)
+{
+    const auto name = value.value<std::string_view>();
+    if (name.has_value())
+    {
+        const cont::StringView text{name->data(), name->size()};
+        for (const DiagMode m : {DiagMode::Off, DiagMode::On, DiagMode::Required})
+        {
+            if (text == diag_mode_name(m))
+            {
+                out = m;
+                return true;
+            }
+        }
+    }
+    refuse_key(reason, key, R"(expected "off", "on" or "required")");
+    return false;
+}
+
+bool read_path(const toml::node& value, cont::StringView key, cont::String& out, cont::String& reason)
+{
+    const auto text = value.value<std::string_view>();
+    if (!text.has_value())
+    {
+        refuse_key(reason, key, "expected a path string");
+        return false;
+    }
+    out.clear();
+    out.append(cont::StringView{text->data(), text->size()});
+    return true;
+}
+
+bool read_grant(const toml::node& value, DiagAuthoritySet& out, cont::String& reason)
+{
+    const cont::StringView key{"command_grant"};
+    if (!value.is_array())
+    {
+        refuse_key(reason, key, "expected an array of authority names");
+        return false;
+    }
+    DiagAuthoritySet set = 0U;
+    for (const toml::node& element : value)
+    {
+        const auto name = element.value<std::string_view>();
+        if (!name.has_value())
+        {
+            refuse_key(reason, key, "every element must be an authority name");
+            return false;
+        }
+        const cont::StringView text{name->data(), name->size()};
+        bool                   known = false;
+        for (crd::u32 bit = 0U; bit < kDiagAuthorityCount && !known; ++bit)
+        {
+            const auto a = static_cast<DiagAuthority>(1U << bit);
+            if (text == authority_name(a))
+            {
+                set |= authority_bit(a);
+                known = true;
+            }
+        }
+        if (!known)
+        {
+            refuse_key(reason, key, "unknown authority \"");
+            reason.append(text);
+            reason.append(R"(" (expected read, record, inject, remote-enable, upload, process-memory or execute))");
+            return false;
+        }
+    }
+    out = set;
+    return true;
+}
+
+// A TOML basic string of `text`: quotes, backslashes and control characters escaped.
+void append_toml_string(cont::String& out, cont::StringView text)
+{
+    out.push_back('"');
+    for (const char c : text)
+    {
+        const auto byte = static_cast<unsigned char>(c);
+        if (c == '"' || c == '\\')
+        {
+            out.push_back('\\');
+            out.push_back(c);
+        }
+        else if (byte < 0x20U || byte == 0x7FU)
+        {
+            char escape[8];
+            (void)std::snprintf(escape, sizeof(escape), "\\u%04X", static_cast<unsigned>(byte));
+            out.append(escape);
+        }
+        else
+        {
+            out.push_back(c);
+        }
+    }
+    out.push_back('"');
+}
+
+bool check_path_bytes(const cont::String& path, cont::StringView key, cont::String& reason)
+{
+    if (path.size() > kDiagHostMaxPathBytes)
+    {
+        refuse_key(reason, key, "is longer than 1024 bytes");
+        return false;
+    }
+    if (cont::StringView{path.data(), path.size()}.find('\0') != cont::StringView::npos)
+    {
+        refuse_key(reason, key, "must not contain a NUL character");
+        return false;
+    }
+    return true;
+}
+} // namespace
+
+bool validate_diagnostic_host_profile(const DiagnosticHostProfile& p, cont::String& reason)
+{
+    if (!check_path_bytes(p.crash_dir, cont::StringView{"crash_dir"}, reason) ||
+        !check_path_bytes(p.flight_policy, cont::StringView{"flight_policy"}, reason) ||
+        !check_path_bytes(p.capture_dir, cont::StringView{"capture_dir"}, reason))
+    {
+        return false;
+    }
+    if (p.crash_handler != DiagMode::Off && p.crash_dir.empty())
+    {
+        refuse_key(reason, cont::StringView{"crash_dir"}, "must name a directory while the crash handler is asked for");
+        return false;
+    }
+    if (p.flight == DiagMode::Off && !p.flight_policy.empty())
+    {
+        refuse_key(reason, cont::StringView{"flight_policy"}, "needs flight on or required");
+        return false;
+    }
+    if (p.flight == DiagMode::Off && !p.capture_dir.empty())
+    {
+        refuse_key(reason, cont::StringView{"capture_dir"}, "flight bundles need flight on or required");
+        return false;
+    }
+    if (p.flight == DiagMode::Off && p.fault_injection != DiagMode::Off)
+    {
+        refuse_key(reason, cont::StringView{"fault_injection"}, "needs flight on or required (a fault is a trigger)");
+        return false;
+    }
+    if (p.max_bundles == 0U || p.max_bundles > kDiagHostMaxBundles)
+    {
+        refuse_key(reason, cont::StringView{"max_bundles"}, "must be 1 to 1000");
+        return false;
+    }
+    if (p.watchdog_period_ms > kDiagHostMaxWatchdogMs)
+    {
+        refuse_key(reason, cont::StringView{"watchdog_period_ms"}, "is larger than 60000");
+        return false;
+    }
+    if ((p.command_grant & ~kDiagAllAuthorities) != 0U)
+    {
+        refuse_key(reason, cont::StringView{"command_grant"}, "names an authority this build does not know");
+        return false;
+    }
+    if ((p.command_grant & kRemoteAuthorities) != 0U && !p.allow_remote)
+    {
+        refuse_key(reason, cont::StringView{"command_grant"},
+                   "remote-enable, upload and process-memory need allow_remote = true");
+        return false;
+    }
+    if (grants(p.command_grant, DiagAuthority::Inject) && p.fault_injection == DiagMode::Off)
+    {
+        refuse_key(reason, cont::StringView{"command_grant"}, "inject needs fault_injection on or required");
+        return false;
+    }
+    return true;
+}
+
+bool parse_diagnostic_host_profile(cont::StringView text, DiagnosticHostProfile& out, cont::String& reason)
+{
+    toml::parse_result doc;
+    if (!parse_document(text, doc, reason))
+    {
+        return false;
+    }
+    const toml::node& root = doc.table();
+    if (!check_header(root, kDiagHostKind, reason))
+    {
+        return false;
+    }
+
+    DiagnosticHostProfile p;
+    for (auto&& [key, value] : root.items())
+    {
+        bool ok = true;
+        if (is_header_key(key))
+        {
+            continue;
+        }
+        if (key == cont::StringView{"crash_handler"})
+        {
+            ok = read_mode(value, key, p.crash_handler, reason);
+        }
+        else if (key == cont::StringView{"crash_dir"})
+        {
+            ok = read_path(value, key, p.crash_dir, reason);
+        }
+        else if (key == cont::StringView{"flight"})
+        {
+            ok = read_mode(value, key, p.flight, reason);
+        }
+        else if (key == cont::StringView{"flight_policy"})
+        {
+            ok = read_path(value, key, p.flight_policy, reason);
+        }
+        else if (key == cont::StringView{"capture_dir"})
+        {
+            ok = read_path(value, key, p.capture_dir, reason);
+        }
+        else if (key == cont::StringView{"max_bundles"})
+        {
+            ok = read_u32(value, key, p.max_bundles, reason);
+        }
+        else if (key == cont::StringView{"fault_injection"})
+        {
+            ok = read_mode(value, key, p.fault_injection, reason);
+        }
+        else if (key == cont::StringView{"command_grant"})
+        {
+            ok = read_grant(value, p.command_grant, reason);
+        }
+        else if (key == cont::StringView{"allow_remote"})
+        {
+            if (!value.is_boolean())
+            {
+                refuse_key(reason, key, "expected true or false");
+                ok = false;
+            }
+            else
+            {
+                p.allow_remote = value.value<bool>().value_or(false);
+            }
+        }
+        else if (key == cont::StringView{"watchdog_period_ms"})
+        {
+            ok = read_u32(value, key, p.watchdog_period_ms, reason);
+        }
+        else
+        {
+            refuse_unknown(reason, key, kDiagHostKind);
+            ok = false;
+        }
+        if (!ok)
+        {
+            return false;
+        }
+    }
+    if (!validate_diagnostic_host_profile(p, reason))
+    {
+        return false;
+    }
+    out = p;
+    return true;
+}
+
+bool load_diagnostic_host_profile(const char* path, DiagnosticHostProfile& out, cont::String& reason)
+{
+    cont::String        text;
+    const DiagAssetRead read = path != nullptr ? read_diag_asset_file(path, text) : DiagAssetRead::Missing;
+    if (read != DiagAssetRead::Ok)
+    {
+        reason.append("the diagnostic-host profile could not be read: ");
+        reason.append(diag_asset_read_name(read));
+        return false;
+    }
+    return parse_diagnostic_host_profile(cont::StringView{text.data(), text.size()}, out, reason);
+}
+
+void diagnostic_host_profile_to_asset(const DiagnosticHostProfile& p, cont::String& out)
+{
+    out.clear();
+    out.append("kind = \"diagnostic-host\"\nschema_version = ");
+    append_decimal(out, kDiagAssetSchemaVersion);
+    out.append("\ncrash_handler = \"");
+    out.append(diag_mode_name(p.crash_handler));
+    out.append("\"\ncrash_dir = ");
+    append_toml_string(out, cont::StringView{p.crash_dir.data(), p.crash_dir.size()});
+    out.append("\nflight = \"");
+    out.append(diag_mode_name(p.flight));
+    out.append("\"\nflight_policy = ");
+    append_toml_string(out, cont::StringView{p.flight_policy.data(), p.flight_policy.size()});
+    out.append("\ncapture_dir = ");
+    append_toml_string(out, cont::StringView{p.capture_dir.data(), p.capture_dir.size()});
+    out.append("\nmax_bundles = ");
+    append_decimal(out, p.max_bundles);
+    out.append("\nfault_injection = \"");
+    out.append(diag_mode_name(p.fault_injection));
+    out.append("\"\ncommand_grant = [");
+    bool first = true;
+    for (crd::u32 bit = 0U; bit < kDiagAuthorityCount; ++bit)
+    {
+        const auto a = static_cast<DiagAuthority>(1U << bit);
+        if (!grants(p.command_grant, a))
+        {
+            continue;
+        }
+        if (!first)
+        {
+            out.append(", ");
+        }
+        first = false;
+        out.push_back('"');
+        out.append(authority_name(a));
+        out.push_back('"');
+    }
+    out.append("]\nallow_remote = ");
+    out.append(p.allow_remote ? "true" : "false");
+    out.append("\nwatchdog_period_ms = ");
+    append_decimal(out, p.watchdog_period_ms);
+    out.push_back('\n');
 }
 
 cont::StringView diag_asset_read_name(DiagAssetRead r) noexcept

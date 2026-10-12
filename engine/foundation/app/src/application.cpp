@@ -2,6 +2,8 @@
 #include <crd/app/events/app_events.hpp>
 #include <crd/app/events/input_events.hpp>
 #include <crd/app/events/window_events.hpp>
+#include <crd/perf/diagnostic_host.hpp>
+#include <crd/perf/diagnostics.hpp>
 
 #include <cstdio>
 
@@ -10,14 +12,24 @@ namespace crd::app
 Application::Application(const ApplicationDesc& desc)
     : m_desc(desc), m_context(crd::platform::PlatformContext::create())
 {
-    if (m_desc.install_crash_handler)
+    if (m_desc.diagnostics != nullptr)
     {
+        // DIAG.11a: the diagnostic host chose the modes (the crash handler among them) before this Application.
+        if (!m_desc.diagnostics->started())
+        {
+            std::fprintf(stderr, "[crd] the application's diagnostic host is not started\n");
+            return;
+        }
+    }
+    else if (m_desc.install_crash_handler)
+    {
+        m_crash_installed                  = true;
         const crd::crash::InstallResult ir = crd::crash::install(m_desc.crash_dir);
         if (ir != crd::crash::InstallResult::Ok && ir != crd::crash::InstallResult::OkReinstalled &&
             ir != crd::crash::InstallResult::OkReplacedForeignFilter)
         {
             std::fprintf(stderr, "[crd] crash handler install failed (result %u); continuing without dumps\n",
-                         static_cast<unsigned>(ir)); // a fuller host diagnostics lifecycle comes later
+                         static_cast<unsigned>(ir));
         }
     }
 
@@ -45,7 +57,7 @@ Application::~Application() noexcept
         (*it)->on_detach();
     }
 
-    if (m_desc.install_crash_handler)
+    if (m_crash_installed)
     {
         crd::crash::uninstall();
     }
@@ -57,7 +69,12 @@ void Application::run()
     {
         return;
     }
-    crd::jobs::init(m_desc.jobs_config);
+    crd::jobs::Config jobs_config = m_desc.jobs_config;
+    if (m_desc.diagnostics != nullptr)
+    {
+        m_desc.diagnostics->configure_jobs(jobs_config); // DIAG.11a: the watchdog window its triggers need
+    }
+    crd::jobs::init(jobs_config);
     while (tick())
     {
     }
@@ -87,6 +104,20 @@ void Application::detach_all_layers()
 }
 
 bool Application::tick()
+{
+    if (m_desc.diagnostics == nullptr || !m_valid)
+    {
+        return tick_frame();
+    }
+    // DIAG.11a: one tick is one frame for the diagnostic host (its hitch trigger measures start to start); then a
+    // capture whose post window has closed is delivered on this thread.
+    const crd::u64 begin   = crd::perf::diagnostic_now_ns();
+    const bool     running = tick_frame();
+    (void)m_desc.diagnostics->frame(begin, crd::perf::diagnostic_now_ns());
+    return running;
+}
+
+bool Application::tick_frame()
 {
     if (!m_valid || !m_running)
     {

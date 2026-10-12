@@ -1644,3 +1644,89 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
     (void)fs::remove_file(fs::Path(StringView(kDeviceIn)));
     (void)fs::remove_file(fs::Path(StringView(kDeviceOut)));
 }
+
+// DIAG.11a: ceridc is the headless host of the engine's reusable diagnostic host. Started with an authored profile it
+// installs the crash handler into the profile's directory, serves flight.* under the profile's grant and writes a
+// capture still pending when the agent closes the session to the profile's capture directory as a flight bundle,
+// which the same binary then reads back through bundle.inspect without any engine edit. A refused profile and a grant
+// override that breaks the profile's rules refuse the start.
+TEST_CASE("diag 11a: the real ceridc binary hosts the diagnostic host from an authored profile",
+          "[ceridc][diag][diag11a]")
+{
+    const char* exe = std::getenv("CRD_CERIDC_EXE");
+    REQUIRE(exe != nullptr); // wired by CMake
+    const fs::Path captures(StringView("ceridc_host_captures"));
+    const fs::Path crashes(StringView("ceridc_host_crashes"));
+    (void)fs::remove_all(captures);
+    (void)fs::remove_all(crashes);
+    REQUIRE(fs::create_directories(captures));
+    REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_host.host.toml")),
+                                StringView("kind = \"diagnostic-host\"\nschema_version = 1\n"
+                                           "crash_dir = \"ceridc_host_crashes\"\n"
+                                           "capture_dir = \"ceridc_host_captures\"\n"
+                                           "command_grant = [\"read\", \"record\"]\n")));
+
+    String script(&g_alloc);
+    script.append(R"({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"diag","arguments":)");
+    script.append(R"({"command":"flight.trigger","args":{"message":"the agent saw a wrong total"}}}})");
+    script.push_back('\n');
+    script.append(R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"diag","arguments":)");
+    script.append(R"({"command":"diag.capabilities"}}})");
+    script.push_back('\n');
+    REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_host_in.jsonl")), view(script)));
+    char cmd[1024];
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" mcp --diag-host ceridc_host.host.toml --diag-root . < ceridc_host_in.jsonl > "
+                        "ceridc_host_out.jsonl",
+                        exe);
+    REQUIRE(std::system(cmd) == 0);
+    String out(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_host_out.jsonl")), out));
+    const StringView all = view(out);
+    const crd::usize eol = all.find('\n');
+    REQUIRE(eol != StringView::npos);
+    const ToolReply trigger = reply_of(all.substr(0U, eol));
+    REQUIRE(trigger.parsed);
+    CHECK_FALSE(trigger.is_error); // flight.trigger needs record, which the profile grants
+    const ToolReply caps = reply_of(all.substr(eol + 1U));
+    REQUIRE(caps.parsed);
+    CHECK(has(caps.text, R"("name":"flight-recorder","compiled":true,"enabled":true,"usable":true)"));
+    CHECK(fs::is_directory(crashes)); // the crash handler was installed into the profile's directory
+
+    // The capture pending at the end of the session was delivered at stop and written as the first bundle.
+    const fs::Path bundle(StringView("ceridc_host_captures/flight-0.cdb"));
+    REQUIRE(fs::is_file(bundle));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" diag --command bundle.inspect --path ceridc_host_captures/flight-0.cdb --root . > "
+                        "ceridc_host_out.json",
+                        exe);
+    REQUIRE(std::system(cmd) == 0);
+    String inspected(&g_alloc);
+    REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_host_out.json")), inspected));
+    CHECK(has(inspected, "\"ok\":true"));
+    CHECK(has(inspected, R"("tag_name":"flight-record","absent":false)"));
+    CHECK(has(inspected, R"("same_as_host":true)")); // written by this build
+    CHECK(has(inspected, R"("kind":"symbol","name":"ceridc)")); // and naming the binary that wrote it
+
+    // Refusals: a profile that breaks a rule, and a grant override the profile does not allow.
+    REQUIRE(fs::write_file_text(fs::Path(StringView("ceridc_host_bad.host.toml")),
+                                StringView("kind = \"diagnostic-host\"\nschema_version = 1\nmax_bundles = 0\n")));
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" mcp --diag-host ceridc_host_bad.host.toml < ceridc_host_in.jsonl > "
+                        "ceridc_host_out.jsonl",
+                        exe);
+    CHECK(std::system(cmd) != 0);
+    (void)std::snprintf(cmd, sizeof(cmd),
+                        "\"%s\" mcp --diag-host ceridc_host.host.toml --diag-grant read,remote-enable < "
+                        "ceridc_host_in.jsonl > ceridc_host_out.jsonl",
+                        exe);
+    CHECK(std::system(cmd) != 0);
+
+    (void)fs::remove_file(fs::Path(StringView("ceridc_host.host.toml")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_host_bad.host.toml")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_host_in.jsonl")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_host_out.jsonl")));
+    (void)fs::remove_file(fs::Path(StringView("ceridc_host_out.json")));
+    (void)fs::remove_all(captures);
+    (void)fs::remove_all(crashes);
+}

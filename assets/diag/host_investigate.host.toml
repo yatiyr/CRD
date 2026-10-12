@@ -1,0 +1,22 @@
+# An investigation diagnostic-host profile (DIAG.11a), authored: the default profile plus seeded fault injection and
+# a service that may record and inject. Use it on a developer build to reproduce a failure; a shipping build compiles
+# the fault seams out, so there fault injection is reported unavailable and the run continues ("on", not
+# "required"). Still local: no remote debugger, nothing leaves the machine.
+
+kind           = "diagnostic-host"
+schema_version = 1
+
+crash_handler = "on"
+crash_dir     = "crashes"
+
+flight        = "required" # an investigation without the flight recorder is refused
+flight_policy = ""
+capture_dir   = ""
+max_bundles   = 10
+
+fault_injection = "on"
+
+command_grant = ["read", "record", "inject"]
+allow_remote  = false
+
+watchdog_period_ms = 250

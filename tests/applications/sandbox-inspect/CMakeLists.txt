@@ -6,20 +6,19 @@
 # The engine asset root is a compiled path (a ctest ENVIRONMENT carries one variable; see the scene-render tests).
 # It also compiles `sandbox/src/asset_root.cpp`, the sandbox's choice of that root, which is tested without a window,
 # and (DIAG.9a) the sandbox's record sources: the frame-loop hand-over (device and host runs), the GPU device executor
-# and the dialects the sandbox's diagnostic commands load programs with, and (DIAG.9b) the sandbox's flight host.
+# and the dialects the sandbox's diagnostic commands load programs with. (The DIAG.9b flight host it compiled became
+# the engine's DiagnosticHost in DIAG.11a; its cases moved to crd-perf-tests.)
 
 add_executable(crd-sandbox-inspect-tests
     test_inspect_panel.cpp
     test_asset_root.cpp         # the sandbox's engine asset root choice (CRD_ASSETS_DIR, else the source tree)
     test_frame_thread_calls.cpp # DIAG.9a: device records through the diagnostic panel, run on the frame-loop thread
     test_frame_thread_host.cpp  # DIAG.9a: host records through the diagnostic panel, run on the frame-loop thread
-    test_flight_host.cpp        # DIAG.9b: the flight recorder, its triggers, its bundle writer and the fault injector
     "${CMAKE_SOURCE_DIR}/sandbox/src/inspect_panel.cpp"
     "${CMAKE_SOURCE_DIR}/sandbox/src/asset_root.cpp"
     "${CMAKE_SOURCE_DIR}/sandbox/src/frame_thread_calls.cpp"
     "${CMAKE_SOURCE_DIR}/sandbox/src/gpu_device_executor.cpp"
     "${CMAKE_SOURCE_DIR}/sandbox/src/sandbox_dialects.cpp"
-    "${CMAKE_SOURCE_DIR}/sandbox/src/flight_host.cpp"
 )
 
 target_include_directories(crd-sandbox-inspect-tests PRIVATE "${CMAKE_SOURCE_DIR}/sandbox/src")

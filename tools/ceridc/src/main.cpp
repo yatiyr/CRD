@@ -7,7 +7,9 @@
 #include <crd/cooker/cook_handler.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diag_commands.hpp>
+#include <crd/perf/diagnostic_host.hpp>
 
 #include <cstdio>
 #include <cstdlib>
@@ -85,11 +87,13 @@ void print_usage()
         "              [--page-items <n>] [--page-bytes <n>] [--schema <n>] [--grant <list>] [--root <dir>]\n"
         "              (grant defaults to read; program.inspect needs execute; replay.record needs execute,record\n"
         "              and runs on the host provider with --param executor=host)\n"
-        "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>]\n"
-        "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read)\n");
+        "  ceridc mcp [--diag-grant <list>] [--diag-root <dir>] [--diag-host <profile.host.toml>]\n"
+        "             (JSON-RPC 2.0 over stdio, one message per line; the diag tool serves the grant, default read;\n"
+        "             with --diag-host the engine's diagnostic host starts from the authored profile first: its crash\n"
+        "             handler, its flight recorder (flight.* served, bundles to its capture_dir) and its grant)\n");
 }
 
-int run_mcp_loop(crd::perf::DiagCommandService& diag)
+int run_mcp_loop(crd::perf::DiagCommandService& diag, crd::perf::DiagnosticHost& host)
 {
     // newline-delimited JSON-RPC: read a line, handle, answer (a growing buffer — requests can be long)
     constexpr crd::usize k_cap = 1U << 20U;
@@ -104,6 +108,7 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag)
         const crd::containers::String response = crd::ceridc::mcp_handle(
             {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc, &diag);
         crd::jobs::frame_reset(); // every job the request ran was joined before it answered
+        (void)host.poll();        // DIAG.11a: a capture whose post window closed is delivered (and written) here
         if (!response.empty())
         {
             std::printf("%s\n", response.c_str());
@@ -121,7 +126,9 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag)
 class ScopedJobPool
 {
 public:
-    ScopedJobPool() { crd::jobs::init(crd::jobs::Config{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U}); }
+    static constexpr crd::jobs::Config kConfig{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U};
+
+    explicit ScopedJobPool(const crd::jobs::Config& config = kConfig) { crd::jobs::init(config); }
     ~ScopedJobPool() { crd::jobs::shutdown(); }
     ScopedJobPool(const ScopedJobPool&)            = delete;
     ScopedJobPool& operator=(const ScopedJobPool&) = delete;
@@ -143,27 +150,60 @@ int main(int argc, char* argv[])
     const char* verb = argv[1];
     if (std::strcmp(verb, "mcp") == 0)
     {
-        const ScopedJobPool pool;
+        // DIAG.11a: with --diag-host the engine's diagnostic host starts from the authored profile before the pool and
+        // the service; it outlives both (declared first). --diag-grant, when given, overrides the profile's grant and
+        // is held to the profile's rules. Without --diag-host nothing is installed, as before.
+        crd::perf::DiagnosticHost   host;
+        const char*                 host_asset = flag_of(argc, argv, "--diag-host", nullptr);
+        const char*                 grant_flag = flag_of(argc, argv, "--diag-grant", nullptr);
+        crd::perf::DiagAuthoritySet grant      = 0U;
+        if (host_asset != nullptr)
+        {
+            crd::perf::DiagnosticHostProfile profile;
+            crd::containers::String          reason;
+            if (!crd::perf::load_diagnostic_host_profile(host_asset, profile, reason))
+            {
+                std::fprintf(stderr, "ceridc mcp: --diag-host: %s\n", reason.c_str());
+                return 2;
+            }
+            if (grant_flag != nullptr && !crd::perf::parse_authority_list(grant_flag, profile.command_grant))
+            {
+                std::fprintf(stderr, "ceridc mcp: --diag-grant must be 'none' or a comma-separated authority list\n");
+                return 2;
+            }
+            const crd::perf::DiagHostStart start = host.start(profile, reason);
+            if (start != crd::perf::DiagHostStart::Started)
+            {
+                const crd::containers::StringView name = crd::perf::diag_host_start_name(start);
+                std::fprintf(stderr, "ceridc mcp: the diagnostic host refused to start: %.*s (%s)\n",
+                             static_cast<int>(name.size()), name.data(), reason.c_str());
+                return 2;
+            }
+            grant = host.profile().command_grant;
+        }
         // The diag tool's authority is this process's start-up decision; no request can change it.
-        crd::perf::DiagAuthoritySet grant = 0U;
-        if (!crd::perf::parse_authority_list(flag_of(argc, argv, "--diag-grant", "read"), grant))
+        else if (!crd::perf::parse_authority_list(grant_flag != nullptr ? grant_flag : "read", grant))
         {
             std::fprintf(stderr, "ceridc mcp: --diag-grant must be 'none' or a comma-separated authority list\n");
             return 2;
         }
+        crd::jobs::Config pool_config = ScopedJobPool::kConfig;
+        host.configure_jobs(pool_config); // the watchdog window the host's starvation and hang triggers need
+        const ScopedJobPool          pool(pool_config);
         crd::perf::DiagServiceConfig config;
         const char*                  root = flag_of(argc, argv, "--diag-root", nullptr);
         if (root != nullptr)
         {
             config.root = root;
         }
+        host.configure_service(config);
         crd::perf::DiagCommandService diag(grant, config, &g_alloc);
-        if (!crd::ceridc::bind_diag_commands(diag))
+        if (!crd::ceridc::bind_diag_commands(diag) || !host.serve(diag))
         {
             std::fprintf(stderr, "ceridc mcp: the diagnostic commands could not be registered\n");
             return 2;
         }
-        return run_mcp_loop(diag);
+        return run_mcp_loop(diag, host);
     }
     if (std::strcmp(verb, "diag") == 0)
     {

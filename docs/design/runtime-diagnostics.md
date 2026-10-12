@@ -761,7 +761,8 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8c-gui-consumer.md)):
   skipped with their escapes), never re-serialized.
 - Because the worker calls the service, a host must not register state that only one thread may read with a service
   it gives the panel: crd-sandbox registers its GPU context with `gpu.resources` (immutable reads) but no frame graph.
-  crd-sandbox builds the service from start-up flags only (`--diag-grant`, default `read`; `--diag-root`), serves the
+  crd-sandbox builds the service from start-up flags only (`--diag-grant`, default `read`; `--diag-root`; amended
+  2026-10-12 by DIAG.11a: the default grant is now the diagnostic-host profile's `command_grant`), serves the
   ceridc set (the built-ins, `program.provenance`, `program.inspect`, `replay.prepare`, `gpu.resources`), draws the
   panel next to the profiler, and `--diag <command>` (with `--diag-path`, `--diag-param`) sends one request at start
   and logs every page; an unknown command refuses to run.
@@ -1494,6 +1495,14 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-sandbox-flight-hos
 - `flight.status` on a capture whose trigger message and recipe are both at their bounds keeps every field; the two
   strings are cut at the 160-byte field bound (which alone marks the summary clipped) and the one-hit plan that
   reproduces the fault survives the cut whole, so no field order changed.
+- Amended 2026-10-12 (DIAG.11a, [session](../sessions/2026-10-12-diag-11a-reusable-diagnostic-host.md)): the sandbox's
+  `FlightHost` became the engine's `crd::perf::DiagnosticHost` (`crd/perf/diagnostic_host.hpp`) and
+  `sandbox/src/flight_host.*` is deleted; its cases run in crd-perf-tests. The sandbox now starts it from a
+  diagnostic-host profile (`--diag-host`, default `assets/diag/host_default.host.toml`), which also owns the crash
+  handler; frames are fed by `Application::tick`. `fault.*` and the seams' hooks are served only when the profile turns
+  fault injection on (`host_investigate.host.toml` does) and the build has the seams; a shipping build reports
+  injection Unavailable and serves no `fault.*`. `--flight-policy`, `--flight-dir` and `--diag-grant` remain as
+  overrides of the profile, held to its rules. See [DIAG.11a](#diag-11a).
 - With this every local clause of the row is shown; it waits only for its hosted run.
 
 <a id="diag-9c"></a>
@@ -2564,6 +2573,52 @@ dynamic policy changes say when restart is required. Use normal authorable confi
 Acceptance: a small application runs, deliberately fails, emits an attributable bundle and is investigated without
 editing engine source. Add examples for allocator selection, jobs, reload and capture. Verify profiling disabled,
 optimized profiling and diagnostic binaries; package symbols/policies intentionally and test clean-machine consumption.
+
+Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-reusable-diagnostic-host.md)):
+- One lifecycle for every host: `crd::perf::DiagnosticHost` (`crd/perf/diagnostic_host.hpp`, crd-perf). It is the
+  sandbox's DIAG.9b flight host moved into the engine and widened: it owns the crash handler, the flight recorder and
+  its triggers (assertion, fatal invariant, jobs starvation and hang, frame hitch, allocation failure at a wrapped
+  allocator), the flight bundle writer, the fault injector with the I/O and GPU seams' hooks, and the flight.* and
+  fault.* commands. `sandbox/src/flight_host.*` is deleted; its cases moved to crd-perf-tests against the engine class.
+- The modes are an authored asset, kind `diagnostic-host` (`*.host.toml`), parsed like the other diagnostic assets
+  (header first, every other key optional, an unknown key or a bad value refused by name, a refusal leaves the profile
+  untouched): `crash_handler`, `flight` and `fault_injection` take `"off"`, `"on"` (used when this build can, reported
+  Unavailable otherwise and the run continues) or `"required"` (the run is refused); `crash_dir`, `flight_policy`,
+  `capture_dir`, `max_bundles` (1 to 1000), `command_grant`, `allow_remote`, `watchdog_period_ms` (0 to 60000).
+  Relative paths are relative to the working directory, as command-line paths are. `assets/diag/host_default.host.toml`
+  is held equal to `DiagnosticHostProfile{}`; `host_investigate.host.toml` adds injection and a record/inject grant.
+- The default policy is local and bounded: crash dumps and bundles stay on the machine, the service may only read, no
+  fault is injected, and a grant naming remote-enable, upload or process-memory is refused unless `allow_remote = true`.
+  Further rules: inject in the grant needs injection on or required; injection, a policy and a capture directory need
+  the recorder; `crash_dir` is not empty while the crash handler is asked for.
+- Startup chooses the modes before what depends on them exists: `start()` decides every mode before installing
+  anything (a refusal leaves nothing behind), refuses once the jobs pool runs (LateStart: the watchdog window and the
+  pool's handlers are part of the choice), and the host starts before devices and tools. Fault injection is available
+  exactly where the seams are compiled (`fault_seams_compiled()`); the crash handler where the platform has a backend
+  and its install succeeds. flight.* is served while the recorder runs and fault.* while injection runs, so a shipping
+  build reports injection Unavailable (the doctor says "compiled out") and serves no fault.* command.
+- Dynamic changes say when a restart is required: `classify_diagnostic_host_change` names the differing fields;
+  `capture_dir`, `max_bundles` and `flight_policy` apply live, every other field at the next start. `apply()` answers
+  Applied, Unchanged, RestartRequired (nothing applied, the fields named), Busy (a capture is pending, so the policy
+  cannot change; nothing applied), Refused or NotStarted. Everything that can refuse is checked before anything
+  changes, and the policy file is re-read, so an edited file at the same path is a live change.
+- The hosts: `Application` takes the host in `ApplicationDesc::diagnostics` (a started host owns the crash handler and
+  `install_crash_handler`/`crash_dir` are ignored; every `tick()` is one of its frames, start to start, and delivers a
+  capture whose window closed; `run()` gives the pool the host's watchdog window; an unstarted host makes the
+  Application invalid). The sandbox starts it from `--diag-host <asset>` or the default profile, with `--flight-policy`,
+  `--flight-dir` and `--diag-grant` as overrides held to the same rules, and passes it to its Application. ceridc,
+  the headless host, starts it with `ceridc mcp --diag-host <asset>` before its pool and service and polls it after
+  every request; without the flag nothing is installed, as before.
+- The deliberate failure: `crd-diag-host-specimen` is a small application that starts the host from an authored
+  profile file and fails a fatal invariant or a headless assertion; the profile's capture directory receives a bundle
+  naming the trigger, the forty events before it, the replay recipe, this build and the specimen's own module identity
+  (checked against the file on disk). Through ceridc, a capture pending when an MCP session ends is written at stop and
+  `ceridc diag --command bundle.inspect` reads it back (its flight-record section, `same_as_host`, the ceridc module).
+- Not settled here (the row's remaining clauses): the installed external consumer (only `Cerid::core` is packaged, so
+  the host's family must be exported, symbols and the diagnostic assets installed intentionally, and a clean-machine
+  consumer built); the examples for allocator selection, jobs, reload and capture on that consumer; the three binaries
+  (profiling disabled, optimized profiling, diagnostic) shown for it; and an investigation route that reads a flight
+  record's trigger and events, which `bundle.inspect` does not decode yet (it lists the section).
 
 <a id="diag-11b"></a>
 ## DIAG.11b — cost, CI and fast investigation workflow

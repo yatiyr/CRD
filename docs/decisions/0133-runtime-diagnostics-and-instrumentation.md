@@ -107,6 +107,13 @@ diagnostics-facing foundation module); each owning module contributes its mode s
 hook and hosts compose the report — no module gains a private profiler or a second crash path. The exact header home
 of the doctor interface is settled in DIAG.0 increment two with the harness.
 
+Amended 2026-10-12 (DIAG.11a, [session](../sessions/2026-10-12-diag-11a-reusable-diagnostic-host.md)): the reusable
+per-host diagnostics lifecycle object, `crd::perf::DiagnosticHost`, lives in **crd-perf**, not crd-app. It owns the
+flight recorder, the fault injector and their commands, which are crd-perf's, and a headless host such as ceridc links
+neither crd-app nor crd-platform. crd-app composes it: `ApplicationDesc::diagnostics` hands a started host to the
+Application, which then leaves the crash handler to it and feeds it frames. The crash path itself stays in crd-core;
+the host only installs and uninstalls it.
+
 ### ID-4 (2026-09-14, DIAG.0) — provider choices within authorized scope
 
 No external, paid or newly-installed crash/telemetry backend is selected; none is authorized by this ADR. The
