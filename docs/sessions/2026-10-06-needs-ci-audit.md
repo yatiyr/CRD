@@ -2,7 +2,7 @@
 
 <!-- doc-role: historical -->
 > Dated evidence. Live owners: [REPO.DEV](../ROADMAP.md#slice-repo.dev) and its children,
-> [DIAG.3a](../ROADMAP.md#slice-diag.3a) through [DIAG.7a](../ROADMAP.md#slice-diag.7a).
+> [DIAG.3a](../ROADMAP.md#slice-diag.3a) through [DIAG.11a](../ROADMAP.md#slice-diag.11a).
 > Rules: [AGENTS](../../AGENTS.md).
 
 ## Why this audit
@@ -227,3 +227,82 @@ on `linux-gcc-asan` (the mikktspace oracle). Both lanes' register gates passed.
 
 DIAG.7a had no local or user item left (the DX12 hardware pass-to-fault route is unqualified by user decision), so it
 moved from Partial to Needs CI. The first unfinished row is now DIAG.4b.
+
+## CI read, 2026-10-12: `7a958b88`
+
+`7a958b88` repaired the failures of complete run 38209499793. Its push run,
+[38236026326](https://github.com/yatiyr/CRD/actions/runs/38236026326), resolved to the complete tier, and all 26 jobs
+passed: preflight, both repository jobs, the 21 build and test lanes, `win-tidy` and `required`. It is the only run on
+that commit.
+
+What was read:
+- **Every job log**, for each test lane's register gate and per-test CTest status.
+- **The evidence bundles** of `win-debug`, `win-asan`, `win-shipping`, `linux-gcc-debug`, `linux-gcc-asan`,
+  `linux-clang-tsan`, `win-public-checks` and `linux-gcc-public-checks`. From each, `LastTest.log` gave every named
+  case's Catch2 assertion summary and output, and the JUnit of `win-debug` and `linux-gcc-debug` was read as well.
+- **The repository jobs' step results.**
+
+Unexpected failures: none.
+- `win-asan` failed exactly its five registered TP-1 DX12 ray-tracing tests.
+- `linux-gcc-asan` failed exactly its registered TP-5 mikktspace oracle.
+- Every other lane reports zero failures, and every register gate passed.
+
+Row evidence:
+- **GenMC (DIAG.4b).** The `linux-clang-tsan` job missed its GenMC cache, so it built the pinned GenMC 0.19.0 against
+  LLVM 20.1.2 in 177 s. `check-genmc-models.py` then printed the three recorded verdicts:
+  - `repaired`: no error in 6 complete executions (2 blocked), exit 0;
+  - `handshake`: the generation assertion, exit 42;
+  - `early-drained`: freed memory, exit 42.
+- **Script suites (DIAG.6c).** "CPU sampling runbook verdicts" ran 15 tests, "Counter capability verdicts" 11 and
+  "Debugger recipe verdicts" 6, all OK, in both `Repository checks (windows-2025-vs2026)` and
+  `Repository checks (ubuntu-24.04)`. `crd-diag-cpu-sampling-runbook`, `crd-diag-counters-capability` and
+  `crd-diag-debugger-recipes` passed on all 20 test lanes.
+- **DRED (DIAG.7b).** The seven `[dred]` cases pass with assertions on every Windows lane. The (h1) WARP child printed
+  `WARP: no device fault (software-provider limit)` and wrote no bundle, its declared software outcome. The pass
+  resolver passed with 34 assertions.
+- **Vulkan validation and loss (DIAG.7a, 7c).** On lavapipe, every Linux lane passes all eight 7a and eight 7c cases,
+  with assertions in each of the four Linux bundles read. On the hosted Windows lanes, which have no Vulkan device,
+  the 7a Vulkan and 7c cases now report skipped. The earlier warn-and-return pattern remains in other Vulkan cases
+  there, such as `diag 8a`'s, which pass with no assertions.
+- **Fuzz replay (DIAG.10a).** Every fuzz corpus replays its stated input count on all eight lanes read, with 0 rejected:
+  ceir text 27, ceir binary 30, ckir text 13, ckir binary 30, memory allocators 37, perf bundle 12, flight 30,
+  assets 41, capture 33, ceir record 57, ceridc diag 52, resources reload 34 and ceir differential 35.
+- **Seeded detectors (DIAG.10b).** `Seeded detector failures` reports DETECTED for every applicable seed, with no
+  `REGISTRY_STALE`: win-debug 3, win-asan 5, linux-gcc-debug 3, linux-gcc-asan 6, linux-clang-tsan 6.
+- **Packaged consumer (DIAG.11a).** `crd-package-consumer` passes on both public-check lanes (`pdb`, `dwarf`). The
+  deliberate failure leaves `flight-0.cdb`, and `bundle.inspect` names the fatal invariant at `main.cpp:87` and the 40
+  orders before it. All five examples show what they must; the capture example keeps `flight-1.cdb` and
+  `flight-2.cdb`.
+
+## Rows closed on 7a958b88 (2026-10-12)
+
+The "six lanes" below are `win-debug`, `win-asan`, `win-shipping`, `linux-gcc-debug`, `linux-gcc-asan` and
+`linux-clang-tsan`. The public-check lanes were read too and agree.
+
+| Row | What the logs show | New state |
+|---|---|---|
+| DIAG.4b | GenMC's three verdicts as recorded; the jobs and schedule-check cases green on every lane | Done |
+| DIAG.4c to 6b | each row's cases green on every lane again; the bundle corpus replays 12 inputs everywhere | Done |
+| DIAG.6c | the three steps green on both runners; the three `crd-diag-*` CTests passed on all 20 test lanes | Done |
+| DIAG.7a | DX12 cases with assertions on every Windows lane; Vulkan cases with assertions on lavapipe | Done |
+| DIAG.7b | `[dred]` green on every Windows lane, both (h1) cases passing on WARP; (h2) unqualified by decision | Done |
+| DIAG.7c | (e), (f), (g) and 7a(g-3) with assertions on lavapipe, (g) checking `Unsupported`; (h) unqualified | Done |
+| DIAG.8a to 8c | every named suite green on the six lanes with its `diag 8a/8b` or diag-command cases | Done |
+| DIAG.9a | the named suites green; the Vulkan device record on lavapipe; `crd-ceir-opgen-drift` everywhere | Done |
+| DIAG.9b | `[diag9b]`, fault, asset, doctor, identity and diag-host cases green; device loss on WARP and lavapipe | Done |
+| DIAG.9c | hosted clause shown; the TTD recording (user) and rr on a host with hardware counters remain | Partial |
+| DIAG.10a | hosted clause shown; the run separating the host from the software (user) remains | Partial |
+| DIAG.10b, 10c, 11a | hosted clause shown; no local or user item left | Needs CI, waits on DIAG.9c and 10a |
+
+Notes:
+- **Case counts have grown since the rows were written.** For example, `crd-ceir-tests` now has 576 cases,
+  `crd-ceir-cook-tests` 115, `crd-ceir-host-tests` 55 and `crd-ceridc-tests` 22, and the diag-command cases are 12
+  with profiling and 11 without. Each row's own cases were checked by name.
+- **Registered TP-1 failures on win-asan.** They include `DX12 cached DXR pipelines mint one Program identity each`
+  (DIAG.7a) and two `crd-scene-render-tests` gates. Each passes on every other Windows lane.
+- **Headless skips.** The three `crd-app-tests` DIAG.11a window cases skip on the headless runners. The row asks only
+  that `crd-app-tests` builds there.
+
+The first unfinished row is now DIAG.9c. Its remaining items are the user's:
+- one elevated TTD recording (an administrator shell; unelevated, the recipe reports `PERMISSION_DENIED`);
+- rr qualification on a host whose CPU exposes hardware performance counters (WSL2 here has none).
