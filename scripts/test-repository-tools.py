@@ -1380,6 +1380,142 @@ class PublicConsumption(unittest.TestCase):
                                                                                 'compiled': False})
         self.assertIsNone(package_consumer.capability(caps, 'basic-recording'))
 
+    def test_package_consumer_judges_the_diagnostic_applications_examples(self):
+        pc = package_consumer
+        # The script's codes are the application's: a drift between the two would judge the wrong events.
+        header = (pc.DIAG_CONSUMER / 'consumer_support.hpp').read_text(encoding='utf-8')
+        codes = {name: int(value, 16) for name, value in re.findall(r'(k\w+)\s*=\s*(0x[0-9A-Fa-f]+)U;', header)}
+        self.assertEqual((codes['kOrderReserved'], codes['kOrderReleased'], codes['kHeapViolation'],
+                          codes['kSliceSummed'], codes['kLimitsKept'], codes['kFrameWork']),
+                         (pc.CODE_ORDER_RESERVED, pc.CODE_ORDER_RELEASED, pc.CODE_HEAP_VIOLATION,
+                          pc.CODE_SLICE_SUMMED, pc.CODE_LIMITS_KEPT, pc.CODE_FRAME_WORK))
+        sources = {path.name for path in pc.DIAG_CONSUMER.glob('example_*.cpp')}
+        self.assertEqual(sources, {'example_allocator.cpp', 'example_jobs.cpp', 'example_reload.cpp',
+                                   'example_capture.cpp'})
+        self.assertEqual({name.partition('-')[0] for name in pc.EXAMPLES}, {'allocator', 'jobs', 'reload', 'capture'})
+        self.assertEqual(pc.author_assignments('a = 1\nb = "x"\n', {'b': '"y"'}, 'asset'), 'a = 1\nb = "y"\n')
+        with self.assertRaises(pc.ConsumerError):
+            pc.author_assignments('a = 1\n', {'b': '2'}, 'asset')
+        self.assertEqual(pc.marker_fields('CONSUMER_X a=1 reason="two words" b=c\nCONSUMER_XY a=2\n', 'CONSUMER_X'),
+                         [{'a': '1', 'reason': 'two words', 'b': 'c'}])
+
+        def page(items):
+            return [{'status': 'ok', 'items': items}]
+
+        def event(index, side, code, a=0, b=0, message=''):
+            return {'kind': 'event', 'index': index, 'side': side, 'code': code, 'value_a': a, 'value_b': b,
+                    'message': message}
+
+        # Allocator selection: the diagnostic choice, as the application prints and bundles it.
+        booked = 6
+        output = '\n'.join([
+            'CONSUMER_ALLOCATOR chosen=orders-diagnostic heap_bytes=65536 order_bytes=1024',
+            'CONSUMER_ALLOC_CHECKED violations=1',
+            f'CONSUMER_ALLOC_EXHAUSTED booked={booked} exhausted=1',
+            'CONSUMER_BUNDLE label=allocation-failure name=flight-0.cdb written=1 failures=0',
+            'CONSUMER_ALLOC_DIAGNOSTIC violations=3 first=redzone-overrun offset=1024 leaks=0 quarantined_bytes=4096'])
+        trigger = {'kind': 'trigger', 'trigger': 'allocation-failure', 'value_a': 1024,
+                   'message': 'allocator orders-diagnostic failed to allocate 1024 bytes (alignment 16)'}
+        flight = {'kind': 'flight', 'end': 'post-events-full'}
+        before = [event(i, 'before', pc.CODE_ORDER_RESERVED, i, 1024) for i in range(3)]
+        before += [event(3, 'before', pc.CODE_HEAP_VIOLATION, 1, 1024)]
+        before += [event(4 + i, 'before', pc.CODE_ORDER_RESERVED, 3 + i, 1024) for i in range(booked - 3)]
+        after = [event(10, 'after', pc.CODE_ORDER_RELEASED, 0), event(11, 'after', pc.CODE_ORDER_RELEASED, 1)]
+        pages = page([trigger, flight] + before + after)
+        self.assertEqual(pc.allocator_problems(output, pages, 'diagnostic'), [])
+        problems = pc.allocator_problems(output, pages, 'tlsf')
+        self.assertIn("CONSUMER_ALLOCATOR chosen: expected 'orders-tlsf', got 'orders-diagnostic'", problems)
+        self.assertIn('the tlsf choice reported diagnostic-allocator results', problems)
+        self.assertIn('the tlsf choice recorded heap violations', problems)
+        moved = [before[0], before[1], before[3], before[2]] + before[4:]
+        self.assertIn('the overrun is not recorded right after order 2 was reserved',
+                      pc.allocator_problems(output, page([trigger, flight] + moved + after), 'diagnostic'))
+        leaked = output.replace('leaks=0', 'leaks=1')
+        self.assertEqual(pc.allocator_problems(leaked, pages, 'diagnostic'),
+                         ["CONSUMER_ALLOC_DIAGNOSTIC leaks: expected '0', got '1'"])
+        self.assertIn('the bundle does not hold the releases after the failure: []',
+                      pc.allocator_problems(output, page([trigger, flight] + before), 'diagnostic'))
+
+        # Jobs: the known total, the hang, the slices before it.
+        n = pc.SLICES * pc.SLICE_LENGTH
+        output = '\n'.join([
+            'CONSUMER_JOBS_POOL threads=4 watchdog_ms=50',
+            f'CONSUMER_JOBS_SUM slices=64 total={n * (n + 1) // 2} expected={n * (n + 1) // 2}',
+            'CONSUMER_JOBS_STALL captured=1 late_job_ran_before_pump=0',
+            'CONSUMER_BUNDLE label=hang name=flight-0.cdb written=1 failures=0',
+            'CONSUMER_JOBS_RECOVERED late_job_ran=1'])
+        slices = [event(i, 'before', pc.CODE_SLICE_SUMMED, i,
+                        sum(range(i * pc.SLICE_LENGTH + 1, (i + 1) * pc.SLICE_LENGTH + 1))) for i in range(pc.SLICES)]
+        hang = {'kind': 'trigger', 'trigger': 'hang', 'value_a': 0, 'value_b': 1}
+        self.assertEqual(pc.jobs_problems(output, page([hang] + slices[::-1]), 50), [])
+        self.assertEqual(pc.jobs_problems(output, page([hang] + slices[1:]), 50),
+                         ['the bundle does not hold the 64 summed slices before the hang'])
+        self.assertEqual(pc.jobs_problems(output.replace('before_pump=0', 'before_pump=1'), page([hang] + slices), 50),
+                         ["CONSUMER_JOBS_STALL late_job_ran_before_pump: expected '0', got '1'"])
+        self.assertEqual(pc.jobs_problems(output, page([dict(hang, value_a=2)] + slices), 50),
+                         ['trigger value_a: expected 0, got 2'])
+
+        # Reload, with fault seams and without.
+        common = [
+            'CONSUMER_RELOAD_DATA attempt=1 result=loaded why=none generation=1 max_order=500',
+            'CONSUMER_RELOAD_APPLY step=unchanged answer=unchanged policy_generation=1 watchdog_ms=50 reason=""',
+            'CONSUMER_RELOAD_APPLY step=policy-edited answer=applied policy_generation=2 watchdog_ms=50 reason=""',
+            f'CONSUMER_RELOAD_POLICY hitch_threshold_ns={2 * pc.EXAMPLE_HITCH_NS}',
+            'CONSUMER_RELOAD_APPLY step=watchdog-changed answer=restart-required policy_generation=2 watchdog_ms=50 '
+            'reason="these fields take effect at the next start: watchdog_period_ms"',
+            'CONSUMER_RELOAD_APPLY step=capture-dir-changed answer=applied policy_generation=2 watchdog_ms=50 '
+            'reason=""']
+        seams = '\n'.join(common + [
+            'CONSUMER_COMMAND command=fault.arm status=ok {"plan":"seed=1;failed-read@0+1%1000000"}',
+            'CONSUMER_RELOAD_DATA attempt=2 result=kept why=read-failed generation=1 max_order=500',
+            'CONSUMER_BUNDLE label=injected-fault name=flight-0.cdb written=1 failures=0',
+            'CONSUMER_COMMAND command=fault.disarm status=ok {}',
+            'CONSUMER_RELOAD_DATA attempt=3 result=loaded why=none generation=2 max_order=750'])
+        injected = {'kind': 'trigger', 'trigger': 'injected-fault',
+                    'message': 'fault-plan/1 fired=failed-read#0 minimal=seed=1;failed-read@0+1%1000000'}
+        fault_events = [event(0, 'before', pc.CODE_FAULT_INJECTED, 1, 0,
+                              'injected failed-read at hit 0 (seed 1) on limits.toml'),
+                        event(1, 'after', pc.CODE_LIMITS_KEPT, 1, 500)]
+        self.assertEqual(pc.reload_problems(seams, page([injected] + fault_events), True, 50), [])
+        self.assertIn('no event after the trigger says generation 1 (max_order 500) was kept',
+                      pc.reload_problems(seams, page([injected] + fault_events[:1]), True, 50))
+        unchanged_generation = seams.replace('policy_generation=2 watchdog_ms=50 reason=""\nCONSUMER_RELOAD_POLICY',
+                                             'policy_generation=1 watchdog_ms=50 reason=""\nCONSUMER_RELOAD_POLICY')
+        self.assertIn('the edited policy did not take a new generation (1 -> 1)',
+                      pc.reload_problems(unchanged_generation, page([injected] + fault_events), True, 50))
+        self.assertIn("reload 2 result: expected 'kept', got 'loaded'",
+                      pc.reload_problems(seams.replace('result=kept why=read-failed', 'result=loaded why=none'),
+                                         page([injected] + fault_events), True, 50))
+        none = '\n'.join(common + [
+            'CONSUMER_COMMAND command=fault.arm status=unknown-command {}',
+            'CONSUMER_RELOAD_DATA attempt=2 result=loaded why=none generation=2 max_order=750',
+            'CONSUMER_RELOAD_DATA attempt=3 result=loaded why=none generation=3 max_order=750'])
+        self.assertEqual(pc.reload_problems(none, None, False, 50), [])
+        self.assertIn("fault.arm answered ['unknown-command']", pc.reload_problems(none, None, True, 50))
+        self.assertIn('a build without fault seams captured an injected fault',
+                      pc.reload_problems(none, page([injected]), False, 50))
+
+        # Capture: three requests, two bundles kept, the frames around the last request.
+        output = '\n'.join(['CONSUMER_COMMAND command=flight.trigger status=ok {}'] * 3 + [
+            'CONSUMER_COMMAND command=flight.status status=ok {}',
+            'CONSUMER_CAPTURE requested=3 written=3 all_written=1 frames=140 hitches=0 max_bundles=2',
+            'CONSUMER_BUNDLE label=manual name=flight-2.cdb written=3 failures=0'])
+        manual = {'kind': 'trigger', 'trigger': 'manual', 'message': 'capture requested at frame 100'}
+        window = {'kind': 'flight', 'end': 'post-events-full', 'post_retained': 16}
+        frames = [event(i, 'before', pc.CODE_FRAME_WORK, 98 + i) for i in range(3)]
+        frames += [event(3 + i, 'after', pc.CODE_FRAME_WORK, 101 + i) for i in range(4)]
+        kept = ['flight-1.cdb', 'flight-2.cdb']
+        self.assertEqual(pc.capture_problems(output, page([manual, window] + frames), kept), [])
+        self.assertIn("the capture directory keeps ['flight-0.cdb', 'flight-1.cdb', 'flight-2.cdb']; the newest 2 "
+                      "are ['flight-1.cdb', 'flight-2.cdb']",
+                      pc.capture_problems(output, page([manual, window] + frames), ['flight-0.cdb'] + kept))
+        gap = frames[:3] + frames[4:]
+        self.assertEqual(pc.capture_problems(output, page([manual, window] + gap), kept),
+                         ['the frames after the request do not follow frame 100: [102, 103, 104]'])
+        one_fewer = output.replace('CONSUMER_COMMAND command=flight.trigger status=ok {}\n', '', 1)
+        self.assertIn("flight.trigger answered ['ok', 'ok']",
+                      pc.capture_problems(one_fewer, page([manual, window] + frames), kept))
+
     def test_header_check_commands_write_only_into_the_scratch_directory(self):
         build = 'D:/repo/build' if os.name == 'nt' else '/repo/build'
         scratch = Path('D:/scratch' if os.name == 'nt' else '/scratch')

@@ -2619,7 +2619,8 @@ Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-reusable-diagnost
   consumer built); the examples for allocator selection, jobs, reload and capture on that consumer; the three binaries
   (profiling disabled, optimized profiling, diagnostic) shown for it; and an investigation route that reads a flight
   record's trigger and events, which `bundle.inspect` does not decode yet (it lists the section). (Amended 2026-10-12:
-  all of these but the four examples are settled below.)
+  all of these but the four examples are settled below; amended again 2026-10-12: the examples too, in the last
+  block.)
 
 Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-installed-consumer.md)):
 - The installed family: the package exports the diagnostic host and its closure (`Cerid::core`, `units`, `time`,
@@ -2654,7 +2655,40 @@ Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-installed-consume
   has no such preset). The application's own build line and `diag.capabilities` (`basic-recording` and
   `fault-injection` compiled or not) are held to the profile. Only the Debug public-check presets run the CTest
   hosted; the shipping profiles are local evidence.
-- Not settled here: the examples for allocator selection, jobs, reload and capture on the consumer.
+- Not settled here: the examples for allocator selection, jobs, reload and capture on the consumer. (Amended
+  2026-10-12: settled below.)
+
+Settled (2026-10-12, [session](../sessions/2026-10-12-diag-11a-examples.md)):
+- The examples are routes of the same thin application, each in its own `example_*.cpp`, each a fresh process with a
+  fresh `DiagnosticHost` started from a profile the package test authors from the installed investigation profile
+  (watchdog window 50 ms) and policy (16 post events, a 1 s post window, a hitch threshold no frame reaches). Each is
+  judged on every packaged binary and its bundles are read back through the application's own `inspect` route.
+  Separate processes, because `watch_allocator` is one per host, `start()` is refused once the pool runs and the
+  deliberate failure ends its process.
+  The application now links `Cerid::memory`, `Cerid::jobs` and `Cerid::toml` besides `Cerid::perf`, the modules the
+  examples name (the block above says `Cerid::perf`; that held before the examples).
+- Allocator selection (`allocator <profile> <tlsf|diagnostic>`): the application chooses the allocator its owner gets,
+  a TLSF heap over an arena it owns or crd-memory's `DiagnosticAllocator` over that heap (its records in a second,
+  independent arena), and hands the owner `watch_allocator(chosen)`. Exhausting it captures an allocation-failure
+  bundle whose trigger names the chosen allocator; the diagnostic choice also reports an overrun of one byte past an
+  order (`redzone-overrun` at byte 1024), recorded by the application and kept in the bundle before the failure. The
+  host is stopped before the allocator it watches is destroyed.
+- Jobs (`jobs <profile>`): the host starts before the pool and gives it the profile's watchdog window
+  (`configure_jobs`); the pool's work is checked against its known total and recorded from the workers; a job pinned to
+  a main thread that neither pumps nor waits is reported as a hang (executor starved) and captured; the pool is shut
+  down, joining the watchdog, before the host stops.
+- Reload (`reload <profile> <limits.toml> <dir>`): the package has no resource manager, so the examples reload what an
+  application of this family reloads. The diagnostic configuration through `apply()`: unchanged, an edited policy file
+  applied live at a new generation, a changed watchdog window refused as RestartRequired with the field named, a new
+  capture directory applied live. The application's own authored data (an order-limits table read with crd-toml)
+  through its own reader, which consults the engine's I/O fault seam (`crd::consult_io_fault`, public in crd-core), so
+  a seeded `failed-read` plan armed through `fault.arm` fails the reload, the last good generation is kept and the
+  injected-fault capture lands in the new directory. Without fault seams `fault.*` is not served and every reload loads.
+- Capture (`capture <profile>`): a frame loop feeds `host.frame()`; captures requested through the host's own service
+  (`flight.trigger`, record authority) are written while the application runs, each with the frames before and after
+  the request, and the directory keeps the newest `max_bundles`.
+- What is shown where: the five example runs passed on `win-debug`, `win-shipping`, `win-shipping-profile`,
+  `linux-gcc-debug` and `linux-gcc-shipping`; hosted, the Debug public-check presets run them in `crd-package-consumer`.
 
 <a id="diag-11b"></a>
 ## DIAG.11b — cost, CI and fast investigation workflow

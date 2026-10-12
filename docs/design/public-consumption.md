@@ -132,6 +132,10 @@ floating-point options every consumer of the math headers must compile with). Ev
   program (a member of a type defined only inside an engine source must appear in the program's PDB or DWARF;
   CMake's MSVC link step prints `LNK4099` only for a failing link, so its output cannot tell), and runs the
   application's deliberate failure and its investigation (the [DIAG.11a](runtime-diagnostics.md#diag-11a) contract).
+- Amended 2026-10-12 ([session](../sessions/2026-10-12-diag-11a-examples.md)): the application also carries the
+  family's examples, allocator selection, jobs, reload and capture, one `example_*.cpp` each, and links `Cerid::memory`,
+  `Cerid::jobs` and `Cerid::toml` besides `Cerid::perf`, the modules they name. The proof runs each in its own process
+  from a profile authored from the installed assets and judges what it prints and the bundles it leaves.
 
 ## Not in scope
 

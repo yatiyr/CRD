@@ -21,6 +21,14 @@ installed external consumer). One run proves, for one profile (generator, compil
   (profiling compiled in or out, fault injection compiled out of a shipping build), fails a fatal invariant on
   purpose and leaves a flight bundle, which its own `inspect` route (bundle.inspect) decodes into the trigger at the
   failing line, the forty events before it, this build and its own module identity;
+- the application's examples, each a fresh process started from a profile authored from the installed assets, show
+  what they must: allocator selection (a TLSF heap or the diagnostic allocator over it, watched by the host, exhausted
+  into an allocation-failure bundle; the diagnostic choice also reports a redzone overrun before the failure), jobs
+  (the pool configured by the host computes its known total, and a starved main-thread job is captured as a hang),
+  reload (live and restart-required profile changes, an edited policy file applied live, and the application's own
+  table kept at its last good generation when a seeded read failure is injected through the engine's I/O fault seam;
+  no injection without fault seams) and capture (three requests through flight.trigger, each written with the frames
+  before and after it, the directory keeping the newest two);
 - `CeridConfig.cmake` refuses a consumer configured for another build type, and the engine refuses
   `BUILD_SHARED_LIBS=ON`.
 
@@ -75,6 +83,31 @@ RUN_TIMEOUT = 120
 # A member of crd::perf::FlightRecorder::Impl, a type defined only in engine/foundation/perf/src/flight_recorder.cpp:
 # an application's debug information names it only when the archives' debug information was linked.
 ENGINE_ONLY_NAME = b'trigger_replay_length'
+# The application's examples (tests/support/package/diag-consumer/example_*.cpp, codes in consumer_support.hpp).
+EXAMPLES = ('allocator-tlsf', 'allocator-diagnostic', 'jobs', 'reload', 'capture')
+CODE_ORDER_RESERVED = 0x00A10010
+CODE_ORDER_RELEASED = 0x00A10011
+CODE_HEAP_VIOLATION = 0x00A10012
+CODE_SLICE_SUMMED = 0x00A10020
+CODE_LIMITS_KEPT = 0x00A10031
+CODE_FRAME_WORK = 0x00A10040
+CODE_FAULT_INJECTED = 0x0908  # kFlightCodeFaultInjected
+# The examples' profile is the installed investigation profile with a short watchdog window; their flight policy is
+# the installed default with sixteen post events, a one-second post window (a capture with no later events closes
+# by time; a busy one closes by its events long before) and a hitch threshold no frame reaches, so only the example's
+# own trigger fires.
+EXAMPLE_PROFILE = {'watchdog_period_ms': '50'}
+EXAMPLE_POLICY = {'post_events': '16', 'post_window_ns': '1000000000', 'hitch_threshold_ns': '10000000000'}
+EXAMPLE_HITCH_NS = 10000000000
+CAPTURE_MAX_BUNDLES = 2
+CAPTURE_REQUEST_FRAMES = (20, 60, 100)
+ORDER_BYTES = 1024
+OVERRUN_ORDER = 2
+REDZONE_OVERRUN = 1  # crd::memory::ViolationKind::RedzoneOverrun
+SLICES = 64
+SLICE_LENGTH = 1000
+LIMITS = 'kind = "order-limits"\nmax_order = 500\n'
+FIELD = re.compile(r'(\w+)=("([^"]*)"|\S+)')
 
 CONSUMER_CMAKE = '''cmake_minimum_required(VERSION 3.25)
 project(cerid_consumer LANGUAGES CXX)
@@ -412,6 +445,218 @@ def investigation_problems(pages, failure_line, executable_name, fault_seams):
     return problems
 
 
+def author_assignments(text, values, what):
+    """`text` (a TOML asset) with each `key = ...` line of `values` replaced by `key = <value>` (a TOML literal)."""
+    for key, value in values.items():
+        text, count = re.subn(rf'^{key}\s*=.*$', f'{key} = {value}', text, flags=re.M)
+        if count != 1:
+            raise ConsumerError(f'the installed {what} has no single {key} line')
+    return text
+
+
+def marker_fields(output, marker):
+    """The key=value fields of every line that starts with `marker` (a value may be "quoted"), in order."""
+    found = []
+    for line in output.splitlines():
+        if line.startswith(marker + ' '):
+            fields = {}
+            for match in FIELD.finditer(line[len(marker) + 1:]):
+                fields.setdefault(match.group(1), match.group(3) if match.group(3) is not None else match.group(2))
+            found.append(fields)
+    return found
+
+
+def command_statuses(output, command):
+    """The statuses the application printed for each run of `command` (CONSUMER_COMMAND lines), in order."""
+    return [fields.get('status') for fields in marker_fields(output, 'CONSUMER_COMMAND')
+            if fields.get('command') == command]
+
+
+def bundle_items(pages):
+    """The trigger item, the flight item and the event items of a bundle.inspect answer."""
+    items = [item for page in pages or [] for item in page.get('items', [])]
+    trigger = next((item for item in items if item.get('kind') == 'trigger'), None)
+    flight = next((item for item in items if item.get('kind') == 'flight'), None)
+    return trigger, flight, [item for item in items if item.get('kind') == 'event']
+
+
+def field_problems(what, fields, wanted):
+    """Problems of one printed line against the values it must carry (None: the line is missing)."""
+    if fields is None:
+        return [f'{what}: line missing']
+    return [f'{what} {key}: expected {value!r}, got {fields.get(key)!r}' for key, value in wanted.items()
+            if fields.get(key) != value]
+
+
+def single(output, marker):
+    lines = marker_fields(output, marker)
+    return lines[0] if len(lines) == 1 else None
+
+
+def allocator_problems(output, pages, choice):
+    """What the allocator-selection example must show for `choice` ('tlsf' or 'diagnostic'), as problems."""
+    chosen = f'orders-{choice}'
+    problems = field_problems('CONSUMER_ALLOCATOR', single(output, 'CONSUMER_ALLOCATOR'),
+                              {'chosen': chosen, 'order_bytes': str(ORDER_BYTES)})
+    exhausted = single(output, 'CONSUMER_ALLOC_EXHAUSTED')
+    problems += field_problems('CONSUMER_ALLOC_EXHAUSTED', exhausted, {'exhausted': '1'})
+    booked = int(exhausted.get('booked', '0')) if exhausted else 0
+    if booked <= OVERRUN_ORDER:
+        problems.append(f'only {booked} orders were booked before the heap was exhausted')
+    problems += field_problems('CONSUMER_BUNDLE', single(output, 'CONSUMER_BUNDLE'),
+                               {'label': 'allocation-failure', 'name': 'flight-0.cdb', 'failures': '0'})
+    diagnostic = marker_fields(output, 'CONSUMER_ALLOC_DIAGNOSTIC')
+    if choice == 'diagnostic':
+        problems += field_problems('CONSUMER_ALLOC_CHECKED', single(output, 'CONSUMER_ALLOC_CHECKED'),
+                                   {'violations': '1'})
+        summary = diagnostic[0] if len(diagnostic) == 1 else None
+        problems += field_problems('CONSUMER_ALLOC_DIAGNOSTIC', summary,
+                                   {'first': 'redzone-overrun', 'offset': str(ORDER_BYTES), 'leaks': '0'})
+    elif diagnostic or marker_fields(output, 'CONSUMER_ALLOC_CHECKED'):
+        problems.append('the tlsf choice reported diagnostic-allocator results')
+
+    trigger, flight, events = bundle_items(pages)
+    problems += field_problems('trigger', trigger, {
+        'trigger': 'allocation-failure', 'value_a': ORDER_BYTES,
+        'message': f'allocator {chosen} failed to allocate {ORDER_BYTES} bytes (alignment 16)'})
+    problems += field_problems('flight', flight, {'end': 'post-events-full'})
+    before = [event for event in events if event.get('side') == 'before']
+    reserved = [event.get('value_a') for event in before if event.get('code') == CODE_ORDER_RESERVED]
+    if reserved != list(range(booked)):
+        problems.append(f'the bundle does not hold the {booked} bookings before the failure in order: {reserved}')
+    released = [event.get('value_a') for event in events
+                if event.get('side') == 'after' and event.get('code') == CODE_ORDER_RELEASED]
+    if not released or released[0] != 0:
+        problems.append(f'the bundle does not hold the releases after the failure: {released}')
+    violations = [event for event in before if event.get('code') == CODE_HEAP_VIOLATION]
+    if choice == 'diagnostic':
+        codes = [(event.get('code'), event.get('value_a')) for event in before]
+        at = codes.index((CODE_HEAP_VIOLATION, REDZONE_OVERRUN)) if (CODE_HEAP_VIOLATION, REDZONE_OVERRUN) in codes \
+            else -1
+        if len(violations) != 1 or violations[0].get('value_b') != ORDER_BYTES:
+            problems.append(f'expected one redzone overrun at byte {ORDER_BYTES} before the failure: {violations}')
+        elif at < 1 or codes[at - 1] != (CODE_ORDER_RESERVED, OVERRUN_ORDER):
+            problems.append(f'the overrun is not recorded right after order {OVERRUN_ORDER} was reserved')
+    elif violations:
+        problems.append('the tlsf choice recorded heap violations')
+    return problems
+
+
+def jobs_problems(output, pages, watchdog_ms):
+    """What the jobs example must show, as problems."""
+    n = SLICES * SLICE_LENGTH
+    problems = field_problems('CONSUMER_JOBS_POOL', single(output, 'CONSUMER_JOBS_POOL'),
+                              {'threads': '4', 'watchdog_ms': str(watchdog_ms)})
+    problems += field_problems('CONSUMER_JOBS_SUM', single(output, 'CONSUMER_JOBS_SUM'),
+                               {'slices': str(SLICES), 'total': str(n * (n + 1) // 2),
+                                'expected': str(n * (n + 1) // 2)})
+    problems += field_problems('CONSUMER_JOBS_STALL', single(output, 'CONSUMER_JOBS_STALL'),
+                               {'captured': '1', 'late_job_ran_before_pump': '0'})
+    problems += field_problems('CONSUMER_BUNDLE', single(output, 'CONSUMER_BUNDLE'),
+                               {'label': 'hang', 'name': 'flight-0.cdb', 'failures': '0'})
+    problems += field_problems('CONSUMER_JOBS_RECOVERED', single(output, 'CONSUMER_JOBS_RECOVERED'),
+                               {'late_job_ran': '1'})
+    trigger, _flight, events = bundle_items(pages)
+    problems += field_problems('trigger', trigger, {'trigger': 'hang', 'value_a': 0})  # HangKind::ExecutorStarved
+    if trigger is not None and not trigger.get('value_b', 0) >= 1:
+        problems.append(f'the hang names no outstanding counter: {trigger}')
+    slices = sorted((event.get('value_a'), event.get('value_b')) for event in events
+                    if event.get('code') == CODE_SLICE_SUMMED and event.get('side') == 'before')
+    wanted = [(i, sum(range(i * SLICE_LENGTH + 1, (i + 1) * SLICE_LENGTH + 1))) for i in range(SLICES)]
+    if slices != wanted:
+        problems.append(f'the bundle does not hold the {SLICES} summed slices before the hang')
+    return problems
+
+
+def reload_problems(output, pages, fault_seams, watchdog_ms):
+    """What the reload example must show, as problems. Without fault seams fault.* is not served, nothing is injected
+    and every reload loads."""
+    problems = []
+    data = marker_fields(output, 'CONSUMER_RELOAD_DATA')
+    loaded = {'result': 'loaded', 'why': 'none'}
+    wanted = [{**loaded, 'attempt': '1', 'generation': '1', 'max_order': '500'}]
+    if fault_seams:
+        wanted += [{'attempt': '2', 'result': 'kept', 'why': 'read-failed', 'generation': '1', 'max_order': '500'},
+                   {**loaded, 'attempt': '3', 'generation': '2', 'max_order': '750'}]
+    else:
+        wanted += [{**loaded, 'attempt': '2', 'generation': '2', 'max_order': '750'},
+                   {**loaded, 'attempt': '3', 'generation': '3', 'max_order': '750'}]
+    if len(data) != len(wanted):
+        problems.append(f'expected {len(wanted)} reloads of the limits table, got {len(data)}')
+    for index, (got, want) in enumerate(zip(data, wanted)):
+        problems += field_problems(f'reload {index + 1}', got, want)
+
+    applies = {fields.get('step'): fields for fields in marker_fields(output, 'CONSUMER_RELOAD_APPLY')}
+    for step, answer in (('unchanged', 'unchanged'), ('policy-edited', 'applied'),
+                         ('watchdog-changed', 'restart-required'), ('capture-dir-changed', 'applied')):
+        problems += field_problems(f'apply {step}', applies.get(step),
+                                   {'answer': answer, 'watchdog_ms': str(watchdog_ms)})
+    if 'unchanged' in applies and 'policy-edited' in applies:
+        before, after = applies['unchanged'].get('policy_generation'), applies['policy-edited'].get('policy_generation')
+        if not (before or '').isdigit() or after != str(int(before) + 1):
+            problems.append(f'the edited policy did not take a new generation ({before} -> {after})')
+    if 'watchdog_period_ms' not in applies.get('watchdog-changed', {}).get('reason', ''):
+        problems.append('the restart-required answer does not name watchdog_period_ms')
+    problems += field_problems('CONSUMER_RELOAD_POLICY', single(output, 'CONSUMER_RELOAD_POLICY'),
+                               {'hitch_threshold_ns': str(2 * EXAMPLE_HITCH_NS)})
+
+    if command_statuses(output, 'fault.arm') != ['ok' if fault_seams else 'unknown-command']:
+        problems.append(f'fault.arm answered {command_statuses(output, "fault.arm")}')
+    bundles = marker_fields(output, 'CONSUMER_BUNDLE')
+    if not fault_seams:
+        if bundles or pages:
+            problems.append('a build without fault seams captured an injected fault')
+        return problems
+    if command_statuses(output, 'fault.disarm') != ['ok']:
+        problems.append(f'fault.disarm answered {command_statuses(output, "fault.disarm")}')
+    problems += field_problems('CONSUMER_BUNDLE', bundles[0] if len(bundles) == 1 else None,
+                               {'label': 'injected-fault', 'name': 'flight-0.cdb', 'failures': '0'})
+    trigger, _flight, events = bundle_items(pages)
+    problems += field_problems('trigger', trigger, {'trigger': 'injected-fault'})
+    if trigger is not None and not trigger.get('message', '').startswith('fault-plan/1 fired=failed-read#0'):
+        problems.append(f'the trigger does not name the fired read: {trigger.get("message")!r}')
+    if not any(event.get('side') == 'before' and event.get('code') == CODE_FAULT_INJECTED and
+               event.get('message', '').endswith('on limits.toml') for event in events):
+        problems.append('no event before the trigger names the injected read of limits.toml')
+    if not any(event.get('side') == 'after' and event.get('code') == CODE_LIMITS_KEPT and
+               (event.get('value_a'), event.get('value_b')) == (1, 500) for event in events):
+        problems.append('no event after the trigger says generation 1 (max_order 500) was kept')
+    return problems
+
+
+def capture_problems(output, pages, bundles):
+    """What the capture example must show, as problems; `bundles` are the file names left in its capture directory."""
+    requests = len(CAPTURE_REQUEST_FRAMES)
+    problems = []
+    if command_statuses(output, 'flight.trigger') != ['ok'] * requests:
+        problems.append(f'flight.trigger answered {command_statuses(output, "flight.trigger")}')
+    if command_statuses(output, 'flight.status') != ['ok']:
+        problems.append(f'flight.status answered {command_statuses(output, "flight.status")}')
+    problems += field_problems('CONSUMER_CAPTURE', single(output, 'CONSUMER_CAPTURE'),
+                               {'requested': str(requests), 'written': str(requests), 'all_written': '1',
+                                'max_bundles': str(CAPTURE_MAX_BUNDLES)})
+    last = f'flight-{requests - 1}.cdb'
+    problems += field_problems('CONSUMER_BUNDLE', single(output, 'CONSUMER_BUNDLE'),
+                               {'label': 'manual', 'name': last, 'failures': '0'})
+    kept = [f'flight-{i}.cdb' for i in range(requests - CAPTURE_MAX_BUNDLES, requests)]
+    if sorted(bundles) != kept:
+        problems.append(f'the capture directory keeps {sorted(bundles)}; the newest {CAPTURE_MAX_BUNDLES} are {kept}')
+    frame = CAPTURE_REQUEST_FRAMES[-1]
+    trigger, flight, events = bundle_items(pages)
+    problems += field_problems('trigger', trigger,
+                               {'trigger': 'manual', 'message': f'capture requested at frame {frame}'})
+    problems += field_problems('flight', flight, {'end': 'post-events-full', 'post_retained': 16})
+    before = [event.get('value_a') for event in events
+              if event.get('side') == 'before' and event.get('code') == CODE_FRAME_WORK]
+    after = [event.get('value_a') for event in events
+             if event.get('side') == 'after' and event.get('code') == CODE_FRAME_WORK]
+    if not before or before[-1] != frame:
+        problems.append(f'the frames before the request do not end at frame {frame}: {before[-3:]}')
+    if not after or after[0] != frame + 1 or after != list(range(frame + 1, frame + 1 + len(after))):
+        problems.append(f'the frames after the request do not follow frame {frame}: {after}')
+    return problems
+
+
 def relocatability_problems(prefix, forbidden):
     needles = [normalized(str(path)) for path in forbidden]
     problems = []
@@ -615,12 +860,9 @@ class Session:
         captures = run_dir / 'captures'
         captures.mkdir(parents=True)
         text = (asset_dir / 'diag/host_investigate.host.toml').read_text(encoding='utf-8')
-        replacements = {'crash_dir': (run_dir / 'crashes').as_posix(), 'capture_dir': captures.as_posix(),
-                        'flight_policy': (asset_dir / 'diag/flight_default.flight.toml').as_posix()}
-        for key, value in replacements.items():
-            text, count = re.subn(rf'^{key}\s*=.*$', f'{key} = "{value}"', text, flags=re.M)
-            if count != 1:
-                raise ConsumerError(f'the installed investigation profile has no single {key} line')
+        replacements = {'crash_dir': f'"{(run_dir / "crashes").as_posix()}"', 'capture_dir': f'"{captures.as_posix()}"',
+                        'flight_policy': f'"{(asset_dir / "diag/flight_default.flight.toml").as_posix()}"'}
+        text = author_assignments(text, replacements, 'investigation profile')
         profile_path = run_dir / 'application.host.toml'
         profile_path.write_text(text, encoding='utf-8')
 
@@ -673,6 +915,65 @@ class Session:
             raise ConsumerError('the investigation did not find the failure:\n  ' + '\n  '.join(problems))
         print(f'[package-consumer] bundle.inspect named the fatal invariant at main.cpp:{failure_line}, the {ORDERS} '
               "orders before it, this build and the application's own module", flush=True)
+        self.examples(executable, asset_dir, fault_seams)
+
+    def examples(self, executable, asset_dir, fault_seams):
+        """Run the application's examples (allocator selection, jobs, reload, capture), each in a fresh process from a
+        profile authored from the installed assets, and judge what each prints and leaves, reading every bundle back
+        through the application's own inspect route."""
+        policy_text = author_assignments((asset_dir / 'diag/flight_default.flight.toml').read_text(encoding='utf-8'),
+                                         EXAMPLE_POLICY, 'flight policy')
+        investigate = (asset_dir / 'diag/host_investigate.host.toml').read_text(encoding='utf-8')
+        watchdog_ms = int(EXAMPLE_PROFILE['watchdog_period_ms'])
+        self.report['examples'] = {}
+        for name in EXAMPLES:
+            run_dir = self.scratch / 'examples' / name
+            captures = run_dir / 'captures'
+            captures.mkdir(parents=True)
+            policy = run_dir / 'example.flight.toml'
+            policy.write_text(policy_text, encoding='utf-8')
+            values = {**EXAMPLE_PROFILE, 'crash_dir': f'"{(run_dir / "crashes").as_posix()}"',
+                      'capture_dir': f'"{captures.as_posix()}"', 'flight_policy': f'"{policy.as_posix()}"'}
+            if name == 'capture':
+                values['max_bundles'] = str(CAPTURE_MAX_BUNDLES)
+            profile = run_dir / 'example.host.toml'
+            profile.write_text(author_assignments(investigate, values, 'investigation profile'), encoding='utf-8')
+            route, _, choice = name.partition('-')
+            arguments = [route, profile, *([choice] if choice else [])]
+            second = run_dir / 'captures-after-apply'
+            if route == 'reload':
+                second.mkdir()
+                (run_dir / 'limits.toml').write_text(LIMITS, encoding='utf-8')
+                arguments = [route, profile, run_dir / 'limits.toml', second]
+            try:
+                result = self.step(f'run the {name} example', [executable, *arguments], run_dir, timeout=RUN_TIMEOUT)
+            except subprocess.TimeoutExpired as error:
+                raise ConsumerError(f'the {name} example did not end within {RUN_TIMEOUT} s') from error
+            output = result.stdout + result.stderr
+            self.report['examples'][name] = output.splitlines()[-40:]
+            written = second if route == 'reload' else captures
+            bundles = sorted(path.name for path in written.glob('flight-*.cdb'))
+            pages = None
+            if bundles:
+                inspected = self.step(f'inspect the {name} example\'s last bundle',
+                                      [executable, 'inspect', written, bundles[-1]], run_dir, timeout=RUN_TIMEOUT)
+                pages = inspect_pages(inspected.stdout)
+            if route == 'allocator':
+                problems = allocator_problems(output, pages, choice)
+            elif route == 'jobs':
+                problems = jobs_problems(output, pages, watchdog_ms)
+            elif route == 'reload':
+                problems = reload_problems(output, pages, fault_seams, watchdog_ms)
+                left = sorted(path.name for path in captures.glob('flight-*.cdb'))
+                if left:
+                    problems.append(f'a bundle was written to the capture directory the apply replaced: {left}')
+            else:
+                problems = capture_problems(output, pages, bundles)
+            if problems:
+                raise ConsumerError(f'the {name} example did not show what it must:\n  ' + '\n  '.join(problems) +
+                                    f'\n{output_tail(result)}')
+            print(f'[package-consumer] the {name} example showed what it must ({", ".join(bundles) or "no bundle"})',
+                  flush=True)
 
     def finish(self, failed):
         (self.scratch / 'report.json').write_text(json.dumps(self.report, indent=2), encoding='utf-8')
