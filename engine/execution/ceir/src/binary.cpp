@@ -952,6 +952,11 @@ private:
                     fail(m_type_off + c.pos, "Extern class name must be 'dialect.class'");
                     return false;
                 }
+                if (cn.size() >= Context::kMaxClassNameBytes) // DIAG.10a host-check finding: reject, never assert
+                {
+                    fail(m_type_off + c.pos, "Extern class name too long");
+                    return false;
+                }
                 ext_class = m_ctx.intern_type_class(containers::StringView(cn.data(), dot),
                                                     containers::StringView(cn.data() + dot + 1U, cn.size() - dot - 1U));
             }
@@ -1308,6 +1313,11 @@ private:
                 if (!found || dot == 0U || dot + 1U >= cn.size() || !is_bare_name(cn))
                 {
                     fail(m_attr_off + c.pos, "ATTR extern class name must be 'dialect.attr'");
+                    return false;
+                }
+                if (cn.size() >= Context::kMaxClassNameBytes) // DIAG.10a host-check finding: reject, never assert
+                {
+                    fail(m_attr_off + c.pos, "ATTR extern class name too long");
                     return false;
                 }
                 const AttrClassId cls = m_ctx.intern_attr_class(containers::StringView(cn.data(), dot),

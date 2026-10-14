@@ -2,7 +2,8 @@
 // docs/design/test-instruments.md). Oracle: a rejected input leaves no module; an accepted input prints, re-parses
 // and prints byte-identically, the CEIR-1e round-trip contract the unit tests hold, and (DIAG.10a) serializes to a
 // blob that deserializes and prints to the same text, the cross-format contract of binary.hpp. Seeds: the rich graph
-// the round-trip tests use plus the hand malformed table of test_malformed.cpp, so the corpus starts on both sides.
+// the round-trip tests use, the hand malformed table of test_malformed.cpp and the class-name length boundary, so the
+// corpus starts on both sides.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/ceir/binary.hpp>
@@ -14,6 +15,7 @@
 
 #include <cstdio>
 
+#include "../long_class_name.hpp" // crd::ceir::test::build_longest_class, lengthen_class_text
 #include "../rich_graph.hpp" // crd::ceir::test::build_rich
 
 namespace
@@ -48,6 +50,34 @@ const char* const kMalformed[] = {
     "module { ^bb0: t.x() : !fn<(!i32)-> }",
     "module { ^bb0: t.x() : !buffer<bogus> }",
 };
+
+[[nodiscard]] bool text_loads(const u8* data, crd::usize size)
+{
+    crd::fuzz::BudgetAllocator   root;
+    crd::ceir::Context           ctx(&root);
+    const crd::ceir::ParseResult result = crd::ceir::parse(ctx, StringView(reinterpret_cast<const char*>(data), size));
+    return result.ok;
+}
+
+// DIAG.10a host-check finding: the parser handed a type- or attribute-class name of kMaxClassNameBytes bytes or more
+// to the intern call, which asserted. Per class kind, the longest name the intern buffer takes (accepted) and the same
+// text one byte longer (refused); the sink checks each verdict as it is written.
+void add_long_class_seeds(crd::fuzz::SeedSink& out)
+{
+    const char* const      accepted[2] = {"longest-type-class", "longest-attr-class"};
+    crd::fuzz::VerdictSink sink(out, &text_loads, accepted, 2U);
+    for (const bool attr_class : {false, true})
+    {
+        crd::fuzz::BudgetAllocator root;
+        crd::ceir::Context         ctx(&root);
+        crd::ceir::Module* const   m      = crd::ceir::test::build_longest_class(ctx, attr_class);
+        const String               text   = crd::ceir::print(ctx, *m, &root);
+        const String               longer = crd::ceir::test::lengthen_class_text(text, &root);
+        CRD_FUZZ_REQUIRE(longer.size() == text.size() + 1U);
+        sink.add(accepted[attr_class ? 1 : 0], bytes_of(text), text.size());
+        sink.add(attr_class ? "attr-class-too-long" : "type-class-too-long", bytes_of(longer), longer.size());
+    }
+}
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -107,4 +137,5 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     {
         sink.add_text("malformed", source);
     }
+    add_long_class_seeds(sink);
 }

@@ -85,10 +85,11 @@ containers::StringView Context::op_name(OpId id) const noexcept
 // ── CEIR-8a open-world type classes (ADR-0111) — intern/reverse-lookup mirroring intern_op/op_name exactly ──
 TypeClassId Context::intern_type_class(containers::StringView dialect, containers::StringView cls)
 {
-    char        buf[256]; // "dialect.class" on the stack for hashing; class names are short (matches intern_op)
+    char        buf[kMaxClassNameBytes]; // "dialect.class" on the stack for hashing (matches intern_op)
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
-    CRD_ASSERT_MSG(n < sizeof(buf), "intern_type_class: dialect.class too long");
+    CRD_ASSERT_MSG(n < sizeof(buf), "intern_type_class: dialect.class too long (the loaders reject such a name before "
+                                    "interning)");
     for (usize i = 0; i < dialect.size(); ++i)
     {
         buf[k++] = dialect[i];
@@ -273,10 +274,11 @@ AttrId Context::attr_extern(AttrClassId cls, AttrId value)
 // ── CEIR-8b open-world attribute classes (ADR-0112) — intern/reverse-lookup/descriptor, mirroring the type-class set ──
 AttrClassId Context::intern_attr_class(containers::StringView dialect, containers::StringView cls)
 {
-    char        buf[256];
+    char        buf[kMaxClassNameBytes];
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
-    CRD_ASSERT_MSG(n < sizeof(buf), "intern_attr_class: dialect.attr too long");
+    CRD_ASSERT_MSG(n < sizeof(buf), "intern_attr_class: dialect.attr too long (the loaders reject such a name before "
+                                    "interning)");
     for (usize i = 0; i < dialect.size(); ++i)
     {
         buf[k++] = dialect[i];
@@ -349,7 +351,7 @@ bool Context::verify_attr_extern(const AttrValue& v) const noexcept
 // set; plus the effective-resource-class rule the hazard analysis consults ──
 LocationClassId Context::intern_location_class(containers::StringView dialect, containers::StringView cls)
 {
-    char        buf[256];
+    char        buf[kMaxClassNameBytes];
     usize       k = 0;
     const usize n = dialect.size() + 1U + cls.size();
     CRD_ASSERT_MSG(n < sizeof(buf), "intern_location_class: dialect.location too long");

@@ -7,6 +7,7 @@
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/binary.hpp>
 #include <crd/ceir/func.hpp>
+#include <crd/ceir/parse.hpp>
 #include <crd/ceir/print.hpp>
 
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -15,6 +16,7 @@
 
 #include <cstring> // std::memcmp / std::strcmp
 
+#include "long_class_name.hpp" // crd::ceir::test::build_longest_class and the lengthening helpers
 #include "rich_graph.hpp" // crd::ceir::test::build_rich
 
 using namespace crd::ceir;
@@ -454,4 +456,53 @@ TEST_CASE("ceir binary: a NON-CANONICAL TYPE record (a name on an Int) is reject
     Context           c2(&root);
     const ParseResult pr = deserialize(c2, span(bad));
     CHECK_FALSE(pr.ok); // non-canonical Int rejected
+}
+
+TEST_CASE("ceir binary: a class name past the intern buffer is refused by both loaders", "[ceir][binary][diag10a]")
+{
+    // DIAG.10a host-check finding: both loaders handed a type- or attribute-class name of kMaxClassNameBytes bytes or
+    // more to the intern call, whose fixed buffer asserts. The longest name the buffer takes still loads in both forms;
+    // one byte more is a refusal with its reason, never an assertion.
+    struct Kind
+    {
+        bool        attr_class;
+        const char* text_error;
+        const char* blob_error;
+    };
+    const Kind kinds[2] = {{false, "type-class name too long", "Extern class name too long"},
+                           {true, "attribute-class name too long", "ATTR extern class name too long"}};
+    for (const Kind& kind : kinds)
+    {
+        INFO("attribute class: " << kind.attr_class);
+        crd::memory::GrowableTlsfAllocator root;
+        Context                            ctx(&root);
+        Module* const                      m    = crd::ceir::test::build_longest_class(ctx, kind.attr_class);
+        const String                       text = print(ctx, *m, &root);
+        const ByteArray                    blob = serialize(ctx, *m, &root);
+
+        Context           text_ctx(&root);
+        const ParseResult longest_text = parse(text_ctx, text);
+        REQUIRE(longest_text.ok);
+        CHECK(text_equal(print(text_ctx, *longest_text.module, &root), text));
+        Context           blob_ctx(&root);
+        const ParseResult longest_blob = deserialize(blob_ctx, span(blob));
+        REQUIRE(longest_blob.ok);
+        CHECK(blob_equal(serialize(blob_ctx, *longest_blob.module, &root), blob));
+
+        const String longer_text = crd::ceir::test::lengthen_class_text(text, &root);
+        REQUIRE(longer_text.size() == text.size() + 1U);
+        Context           refused_text_ctx(&root);
+        const ParseResult refused_text = parse(refused_text_ctx, longer_text);
+        CHECK_FALSE(refused_text.ok);
+        CHECK(refused_text.module == nullptr);
+        CHECK(std::strcmp(refused_text.error, kind.text_error) == 0);
+
+        const ByteArray longer_blob = crd::ceir::test::lengthen_class_blob(blob, &root);
+        REQUIRE(longer_blob.size() == blob.size() + 1U);
+        Context           refused_blob_ctx(&root);
+        const ParseResult refused_blob = deserialize(refused_blob_ctx, span(longer_blob));
+        CHECK_FALSE(refused_blob.ok);
+        CHECK(refused_blob.module == nullptr);
+        CHECK(std::strcmp(refused_blob.error, kind.blob_error) == 0);
+    }
 }

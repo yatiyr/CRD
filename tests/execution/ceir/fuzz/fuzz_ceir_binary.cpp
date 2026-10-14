@@ -2,7 +2,8 @@
 // docs/design/test-instruments.md). Oracle: a rejected blob leaves no module; an accepted blob serializes,
 // deserializes and serializes byte-identically, the CEIR-1f round-trip contract the unit tests hold, and (DIAG.10a)
 // prints to text that the text loader accepts and prints identically, so every module the binary loader accepts has
-// a text form. Seeds: the rich graph's blob, its truncations, a flipped byte, a corrupt count and plain garbage.
+// a text form. Seeds: the rich graph's blob, its truncations, a flipped byte, a corrupt count, plain garbage, the
+// unprintable names and the class-name length boundary.
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/ceir/binary.hpp>
@@ -14,6 +15,7 @@
 
 #include <cstdio>
 
+#include "../long_class_name.hpp" // crd::ceir::test::build_longest_class, lengthen_class_blob
 #include "../rich_graph.hpp" // crd::ceir::test::build_rich
 
 namespace
@@ -118,6 +120,26 @@ void add_unprintable_name_seeds(crd::fuzz::SeedSink& out)
         add_one_op_blob(sink, "empty-symbol-ref", ctx, "test", "x", ctx.attr_symbol(""));
     }
 }
+
+// DIAG.10a host-check finding: the loader handed a type- or attribute-class name of kMaxClassNameBytes bytes or more
+// to the intern call, which asserted. Per class kind, the blob naming the longest class the intern buffer takes
+// (accepted) and the same blob with that STRP entry one byte longer (refused); the sink checks each verdict.
+void add_long_class_seeds(crd::fuzz::SeedSink& out)
+{
+    const char* const      accepted[2] = {"longest-type-class", "longest-attr-class"};
+    crd::fuzz::VerdictSink sink(out, &blob_loads, accepted, 2U);
+    for (const bool attr_class : {false, true})
+    {
+        crd::fuzz::BudgetAllocator root;
+        crd::ceir::Context         ctx(&root);
+        crd::ceir::Module* const   m      = crd::ceir::test::build_longest_class(ctx, attr_class);
+        const Array<u8>            blob   = crd::ceir::serialize(ctx, *m, &root);
+        const Array<u8>            longer = crd::ceir::test::lengthen_class_blob(blob, &root);
+        CRD_FUZZ_REQUIRE(longer.size() == blob.size() + 1U);
+        sink.add(accepted[attr_class ? 1 : 0], blob.data(), blob.size());
+        sink.add(attr_class ? "attr-class-too-long" : "type-class-too-long", longer.data(), longer.size());
+    }
+}
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data, std::size_t size)
@@ -187,4 +209,5 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& sink)
     sink.add_text("garbage", "CEIR but not a blob");
     sink.add_text("empty", "");
     add_unprintable_name_seeds(sink);
+    add_long_class_seeds(sink);
 }

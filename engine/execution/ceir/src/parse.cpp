@@ -746,6 +746,11 @@ private:
             fail("type-class name must be 'dialect.class'");
             return {};
         }
+        if (full.size() >= Context::kMaxClassNameBytes) // DIAG.10a host-check finding: reject, never assert
+        {
+            fail("type-class name too long");
+            return {};
+        }
         return m_ctx.intern_type_class(containers::StringView(full.data(), dot),
                                        containers::StringView(full.data() + dot + 1U, full.size() - dot - 1U));
     }
@@ -1408,6 +1413,11 @@ private:
         if (!found || dot == 0U || dot + 1U >= full.size())
         {
             fail("attribute-class name must be 'dialect.attr'");
+            return {};
+        }
+        if (full.size() >= Context::kMaxClassNameBytes) // DIAG.10a host-check finding: reject, never assert
+        {
+            fail("attribute-class name too long");
             return {};
         }
         return m_ctx.intern_attr_class(containers::StringView(full.data(), dot),

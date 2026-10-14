@@ -468,6 +468,10 @@ public:
     // ── CEIR-8a open-world TYPE classes (ADR-0111) ── intern a type-class identity (FNV of "dialect.class", mirroring
     // intern_op) + its reverse lookup. An `Extern` Type stores the id; the string survives serialization via STRP so an
     // unregistered decoder round-trips it. `Dialect::register_type_class` attaches the verify hook + version.
+    // A type-, attribute- or location-class "dialect.class" is interned through a fixed buffer of this many bytes
+    // (the NUL included); a loader rejects a longer name before interning (DIAG.10a host-check finding), so the
+    // intern functions only assert on a registration mistake.
+    static constexpr usize kMaxClassNameBytes = 256U;
     [[nodiscard]] TypeClassId          intern_type_class(containers::StringView dialect, containers::StringView cls);
     [[nodiscard]] containers::StringView type_class_name(TypeClassId id) const noexcept;
     // The registered descriptor for `id`, or nullptr if the class is not registered in THIS Context (⇒ preserve opaquely
