@@ -210,8 +210,9 @@ committed seed failed in-process, and an input handled correctly thousands of ti
 Until a run on another machine settles whether the host is the cause, findings from this host that do not replay
 alone are counted and recorded in the session, not adopted: such an input carries no regression value. The
 [host check](#host-separation-diag10a) settled it on 2026-10-14
-([session](../sessions/2026-10-14-diag-10a-host-check.md)): about 69.7 M executions of the same targets on four hosted
-CPU models gave no event that does not replay, so the rule stands for findings from this development host.
+([session](../sessions/2026-10-14-diag-10a-host-check.md)): about 140.6 M executions of the same targets in two runs
+on five hosted CPU models gave no event that does not replay, so the rule stands for findings from this development
+host.
 
 Every adopted artifact replays clean on MSVC 19.51 (`win-debug`), clang 18 (ASan+UBSan) and GCC 13.3
 (`linux-gcc-asan`, UBSan without recovery, `-Werror`), and the CEIR and CKIR unit suites (534 and 311 cases) pass

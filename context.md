@@ -3,12 +3,13 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.10a -->
-**Current work:** [DIAG.10a](docs/ROADMAP.md#slice-diag.10a), first unfinished row: the hosted host check found one
-loader defect, now fixed, and no host fault ([session](docs/sessions/2026-10-14-diag-10a-host-check.md)); it waits
-on a clean rerun and the next hosted run. Complete run 38236026326 at `7a958b88` closed DIAG.4b to 9b
+<!-- current-slice: DIAG.11b -->
+**Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b), first unfinished row. DIAG.10a's hosted host check
+found one loader defect, fixed, and no host fault; a clean rerun showed its last clause
+([session](docs/sessions/2026-10-14-diag-10a-host-check.md)), so it waits on CI. Complete run 38236026326 at
+`7a958b88` closed DIAG.4b to 9b
 ([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-7a958b88-2026-10-12)). 9c's TTD recording is
-done and waits on CI; 10b, 10c and 11a wait in order. [Implementation contract](docs/design/runtime-diagnostics.md).
+done and waits on CI; 10a to 11a wait on CI in order. [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction

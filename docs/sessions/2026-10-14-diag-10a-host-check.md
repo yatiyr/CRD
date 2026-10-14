@@ -110,11 +110,29 @@ corpus stays clean.
   hand alignment and include grouping. The Allman check, `check-ci-tiers.py`, `check-pins.py`, the pinned actionlint
   1.7.12, `test-repository-tools.py`, `test-dev-workflow.py`, `check-master-plan.py` and `check-repository.py` pass.
 
+## Rerun 38605464765 at 777e8b70, on the fixed source
+
+[Run 38605464765](https://github.com/yatiyr/CRD/actions/runs/38605464765), the same seven legs and seeds:
+
+| Leg | CPU | Default ASan | Container-overflow control |
+|---|---|---|---|
+| ceir-binary 7101 | Intel Xeon Platinum 8573C | 4,689,342, 0 events | 4,759,322, 0 events |
+| ceir-binary 7102 | AMD EPYC 9V74 | 5,064,614, 0 events | 5,083,567, 0 events |
+| ceir-binary 7103 | AMD EPYC 9V74 | 4,281,007, 0 events | 3,976,062, 0 events |
+| ceir-text 7201 | AMD EPYC 7763 | 1,664,858, 0 events; 30,000 repetitions clean | 1,880,707, 0 events; 30,000 repetitions clean |
+| ckir-binary 7301 | AMD EPYC 9V74 | 5,864,216, 0 events; 30,000 repetitions clean | 6,218,950, 0 events; 30,000 repetitions clean |
+| ckir-binary 7302 | Intel Xeon 6973P-C | 9,106,595, 0 events | 8,188,614, 0 events |
+| ckir-binary 7303 | AMD EPYC 7763 | 5,254,945, 0 events | 4,828,118, 0 events |
+
+In all 27.85 M `ceir-binary`, 39.46 M `ckir-binary` and 3.55 M `ceir-text` executions (70.86 M) and 120,000
+repetitions, every process finishing its budget: **no event of any kind**, no artifact, every leg green. At this host's
+lowest `ceir-text` rate alone (one event per 400 k executions) about nine events were expected in that leg.
+
 ## What this settles
 
-The host question, for the corruption of unknown origin: on four hosted CPU models, about 69.7 M executions of the
-three targets that faulted locally, in both arms, and 120,000 repetitions of the two units adopted from it produced
-no event that does not replay. At this host's lowest rate (one event per 400 k `ceir-text` executions; `ceir-binary`
+The host question, for the corruption of unknown origin: on five hosted CPU models over the two runs, about
+140.6 M executions of the three targets that faulted locally, in both arms, and 240,000 repetitions of the two units
+adopted from it produced no event that does not replay, and the rerun on the fixed source produced no event at all. At this host's lowest rate (one event per 400 k `ceir-text` executions; `ceir-binary`
 and `ckir-binary` faulted at about one per 1 M to 2 M) the hosted exposure would have shown dozens. The faults follow
 the development host, not the software. What the hosted run cannot say is whether this host's CPU or its WSL2 guest
 is at fault; only this machine booted into native Linux separates those, and nothing in the roadmap waits on it.
