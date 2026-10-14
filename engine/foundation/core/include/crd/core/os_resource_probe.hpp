@@ -17,8 +17,10 @@
 //   the thread (os_current_thread_identity) and is the OS id plus the thread's start time, so an id the OS has handed
 //   to a later thread is not mistaken for the recorded one. Windows opens the id (OpenThread), requires it to belong
 //   to this process, compares its creation time (GetThreadTimes) and asks whether it has exited; Linux reads
-//   /proc/self/task/<tid>/stat, compares its start time and treats a zombie as ended. A count of the process's threads
-//   is no oracle: the OS loader and thread pool start and retire threads of their own at any time.
+//   /proc/self/task/<tid>/stat, compares its start time and treats a zombie, or a task whose kernel flags carry
+//   PF_EXITING, as ended: that flag is set before a join of the thread can return, while the task stays listed as
+//   running until the kernel finishes its exit. A count of the process's threads is no oracle: the OS loader and
+//   thread pool start and retire threads of their own at any time.
 //
 // Both are diagnostics for tests and investigations, not hot paths: they make system calls and read the process
 // tables, allocate no heap memory (the handle table is read into pages from the OS), and judge one moment.

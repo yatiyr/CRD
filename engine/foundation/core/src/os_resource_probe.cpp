@@ -465,15 +465,19 @@ TaskStat read_task_stat(crd::u64 tid) noexcept
         return out;
     }
     const char state = text[close_at + 2U];
-    out.ended        = state == 'Z' || state == 'X' || state == 'x';
-    // The state is field 3 and starttime field 22, each after one space.
-    crd::usize field = 3U;
-    crd::usize i     = close_at + 2U;
+    // The state is field 3, the kernel flags word field 9 and starttime field 22, each after one space.
+    crd::usize field    = 3U;
+    crd::usize i        = close_at + 2U;
+    crd::usize flags_at = length;
     while (i < length && field < 22U)
     {
         if (text[i] == ' ')
         {
             ++field;
+            if (field == 9U)
+            {
+                flags_at = i + 1U;
+            }
         }
         ++i;
     }
@@ -481,14 +485,24 @@ TaskStat read_task_stat(crd::u64 tid) noexcept
     {
         return out;
     }
-    crd::u64 value = 0U;
-    while (i < length && text[i] >= '0' && text[i] <= '9')
+    const auto number_at = [&](crd::usize at) noexcept
     {
-        value = (value * 10U) + static_cast<crd::u64>(text[i] - '0');
-        ++i;
-    }
-    out.start    = value;
-    out.readable = true;
+        crd::u64 value = 0U;
+        while (at < length && text[at] >= '0' && text[at] <= '9')
+        {
+            value = (value * 10U) + static_cast<crd::u64>(text[at] - '0');
+            ++at;
+        }
+        return value;
+    };
+    // PF_EXITING (include/linux/sched.h) is set when the thread enters do_exit, before the kernel clears its
+    // CLONE_CHILD_CLEARTID word and so before pthread_join returns; the task stays listed and running ('R') until
+    // its exit is complete. A task with the flag set has ended its code even while it still reads as running.
+    constexpr crd::u64 pf_exiting = 0x00000004U;
+    const bool         exiting    = flags_at < length && (number_at(flags_at) & pf_exiting) != 0U;
+    out.ended                     = state == 'Z' || state == 'X' || state == 'x' || exiting;
+    out.start                     = number_at(i);
+    out.readable                  = true;
     return out;
 }
 #endif
