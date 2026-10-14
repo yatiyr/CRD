@@ -39,6 +39,7 @@ REPORT = re.compile(r'ERROR: (?:AddressSanitizer|LeakSanitizer|UndefinedBehavior
                     r'|libFuzzer: (?:timeout|out-of-memory|fuzz target exited|run interrupted)'
                     r'|Assertion|assert(?:ion)? failed|CRD_FATAL|fatal invariant|Segmentation fault|Aborted')
 FRAME = re.compile(r'^\s*#\d+ 0x[0-9a-f]+ ')
+DETAIL = re.compile(r'^\s*(?:expr|file|line|message): ')
 EXECUTED = re.compile(r'^#(\d+)\s', re.M)
 
 
@@ -47,7 +48,7 @@ def options(base, arm_flag):
 
 
 def reports_in(text, frames=8):
-    """Every report line in a log with the first `frames` stack frames that follow it."""
+    """Every report line in a log with an assertion's details and the first `frames` stack frames after it."""
     lines = text.splitlines()
     found = []
     index = 0
@@ -57,7 +58,9 @@ def reports_in(text, frames=8):
             cursor = index + 1
             taken = 0
             while cursor < len(lines) and cursor < index + 60 and taken < frames:
-                if FRAME.match(lines[cursor]):
+                if not taken and DETAIL.match(lines[cursor]):
+                    head.append(lines[cursor].strip())  # the assertion's expression, place and message
+                elif FRAME.match(lines[cursor]):
                     head.append(lines[cursor].strip())
                     taken += 1
                 elif taken and not lines[cursor].strip():
@@ -193,13 +196,14 @@ def markdown(target, seed, host, records):
              f'CPU **{host["cpu"]}** (microcode {host["microcode"]}, hypervisor {host["hypervisor"]}, '
              f'{host["logical_cpus"]} logical CPUs), kernel {host["kernel"]}, '
              f'vm.mmap_rnd_bits {host["mmap_rnd_bits"]}, {host["compiler"]}.', '',
-             '| Arm | Kind | Seed or unit | Seconds | Executions | Exit | Event |', '|---|---|---|---|---|---|---|']
+             '| Arm | Kind | Seed or unit | Budget s | Wall s | Executions | Exit | Event |',
+             '|---|---|---|---|---|---|---|---|']
     for record in records:
         what = record.get('seed', record.get('unit', '')[:8])
         executions = f'{record["executions"]:,}' + ('' if record['executions_counted'] else ' (at least)')
-        seconds = record.get('seconds', record['wall_seconds'])
-        lines.append(f'| {record["arm"]} | {record["kind"]} | {what} | {seconds} | {executions} | '
-                     f'{record["exit_code"]} | {"yes" if record["event"] else "no"} |')
+        budget = record.get('seconds', '')
+        lines.append(f'| {record["arm"]} | {record["kind"]} | {what} | {budget} | {record["wall_seconds"]} | '
+                     f'{executions} | {record["exit_code"]} | {"yes" if record["event"] else "no"} |')
     for arm, _ in ARMS:
         rounds = [r for r in records if r['arm'] == arm and r['kind'] == 'round']
         repeats = [r for r in records if r['arm'] == arm and r['kind'] == 'repeat']
