@@ -154,7 +154,8 @@ the round-four CKIR text inputs, before their fix, ended `crd-fuzz-ckir-text.exe
 second); the CEIR text and
 CKIR text targets print the parser's reason and offset before the abort when the printer's own output is rejected.
 
-The fuzz configuration is `linux-clang-fuzz` (diagnostic tier, never hosted): clang++ with ASan and UBSan,
+The fuzz configuration is `linux-clang-fuzz` (diagnostic tier, in no CI tier; hosted only by the dispatched
+[host check](#host-separation-diag10a)): clang++ with ASan and UBSan,
 `CRD_ENABLE_FUZZER` adding `-fsanitize=fuzzer-no-link` to the tree, and `CRD_WARNINGS_AS_ERRORS=OFF`, because
 clang++ 18 under the GCC warning set fails 139 translation units of the ceir and kir closure (323
 `-Wsign-conversion` sites, almost all in `ckir_kernel_eval.hpp`, `ckir_glsl.hpp`, `ckir_hlsl.hpp` and `ckir_rt.hpp`;
@@ -215,6 +216,23 @@ with the fixes on all three; one whole-suite GCC ASan run ended in an unrelated 
 runs did not repeat, recorded in the session record and closed by the
 [REPO.DEV.11 audit](../sessions/2026-09-14-infrastructure-audit.md) as not reproduced (one observation, five
 clean whole-suite runs, no defect established; the hosted ASan lane runs every case in its own process).
+
+## Host separation (DIAG.10a)
+
+The exception above waits on one question: is the development host the cause? The
+[host check](../../.github/workflows/host-check.yml) answers it on hosted machines. It is a workflow of its own,
+triggered only by `workflow_dispatch`, so it never joins a CI tier ([CI tiers](ci-tiers.md)); `check-ci-tiers.py`
+holds every workflow file besides `ci.yml` to that and `check-pins.py` holds it to the same pinned inputs. Each of
+its seven legs (`ubuntu-24.04`) configures `linux-clang-fuzz`, builds one libFuzzer target and runs
+[fuzz-host-check.py](../../scripts/fuzz-host-check.py): the rounds of the
+[unknown-origin session](../sessions/2026-10-11-diag-10a-unknown-origin-artifacts.md) (three of ceir-binary, one
+of ceir-text, three of ckir-binary, 540 s each, one process, a fixed seed per leg), each
+under the default ASan options and then under the container-overflow control (`detect_container_overflow=0`) for
+the same time, plus three 10,000-repetition replays of the two adopted units `cd301be8` (ceir-text) and `ace35b97`
+(ckir-binary) per arm. A round fuzzes a scratch copy of the committed corpus, which is only read, and restarts with
+the next seed after an event until its time is spent. An event is an artifact, a nonzero exit, or a sanitizer,
+assertion or libFuzzer report in a log; the step summary names the CPU from `/proc/cpuinfo`, the executions of every
+process and the stack head of every report, the logs and crash files are uploaded, and a leg with an event fails.
 
 ## The sanitizer audit
 

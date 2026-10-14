@@ -2,10 +2,10 @@
 """Validate the pin registry and the files that must agree with it.
 
 Contract: docs/design/pinned-inputs.md. `cmake/pins.json` is the only place a version, URL or digest is written.
-This guard fails when an entry is incomplete, when the workflow references an action by anything but its pinned
-commit, runs on an unpinned runner label, checks out with persisted credentials, or names a tool version the
-registry does not, when the root build file acquires a package outside the registry, when a helper carries a
-literal digest, or when a declared patch spec is missing.
+This guard fails when an entry is incomplete, when a workflow file references an action by anything but its pinned
+commit, runs on an unpinned runner label, checks out with persisted credentials or acquires a tool directly, when the
+CI workflow names a tool version the registry does not, when the root build file acquires a package outside the
+registry, when a helper carries a literal digest, or when a declared patch spec is missing.
 """
 from pathlib import Path
 import argparse
@@ -82,7 +82,9 @@ def validate_registry(pins):
     return problems
 
 
-def validate_workflow(pins, text):
+def validate_workflow_inputs(pins, text):
+    """The rules every workflow file keeps: pinned actions and runners, no persisted credentials, no direct
+    acquisition and no literal digest."""
     problems = []
     actions = pins.get('actions', {})
     for match in re.finditer(r'^\s*(?:- )?uses:\s*(\S+)@(\S+)(.*)$', text, re.M):
@@ -109,6 +111,17 @@ def validate_workflow(pins, text):
     persisted = len(re.findall(r'persist-credentials:\s*false', text))
     if checkouts != persisted:
         problems.append('%d checkouts but %d persist-credentials: false' % (checkouts, persisted))
+    for literal in ('sdk.lunarg.com', 'raw.githubusercontent.com', 'git clone', 'mozilla/sccache/releases'):
+        if literal in text:
+            problems.append('workflow acquires %s directly; use the pinned helper' % literal)
+    if LITERAL_DIGEST.search(text):
+        problems.append('workflow carries a literal digest; digests live only in cmake/pins.json')
+    return problems
+
+
+def validate_workflow(pins, text):
+    """The CI workflow: the common rules plus the tool versions it must install from the registry."""
+    problems = validate_workflow_inputs(pins, text)
     tools = pins.get('tools', {})
     llvm = tools.get('llvm', {}).get('version')
     if llvm and ("version: '%s'" % llvm) not in text:
@@ -124,11 +137,17 @@ def validate_workflow(pins, text):
         for other in re.findall(r'VulkanSDK\\(\d+\.\d+\.\d+\.\d+)', text):
             if other != version:
                 problems.append('workflow names Vulkan SDK %s, registry pins %s' % (other, version))
-    for literal in ('sdk.lunarg.com', 'raw.githubusercontent.com', 'git clone', 'mozilla/sccache/releases'):
-        if literal in text:
-            problems.append('workflow acquires %s directly; use the pinned helper' % literal)
-    if LITERAL_DIGEST.search(text):
-        problems.append('workflow carries a literal digest; digests live only in cmake/pins.json')
+    return problems
+
+
+def validate_other_workflows(pins, workflow_dir, main_workflow):
+    """Every other workflow file (the dispatch-only experiments) keeps the common rules."""
+    problems = []
+    for path in sorted(Path(workflow_dir).glob('*.y*ml')):
+        if path.resolve() == Path(main_workflow).resolve():
+            continue
+        for problem in validate_workflow_inputs(pins, path.read_text(encoding='utf-8')):
+            problems.append('%s: %s' % (path.name, problem))
     return problems
 
 
@@ -175,10 +194,13 @@ def main(argv=None):
     parser.add_argument('--workflow', default=str(DEFAULT_WORKFLOW))
     parser.add_argument('--cmake', default=str(DEFAULT_CMAKE))
     parser.add_argument('--tiers', default=str(DEFAULT_TIERS))
+    parser.add_argument('--workflow-dir', default=str(DEFAULT_WORKFLOW.parent),
+                        help='the directory whose other workflow files keep the common rules')
     args = parser.parse_args(argv)
     pins = load(args.pins)
     problems = validate(pins, Path(args.workflow).read_text(encoding='utf-8'),
                         Path(args.cmake).read_text(encoding='utf-8-sig'), load(args.tiers))
+    problems += validate_other_workflows(pins, args.workflow_dir, args.workflow)
     for problem in problems:
         print('FAIL: ' + problem)
     if problems:

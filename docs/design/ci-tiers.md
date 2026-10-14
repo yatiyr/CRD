@@ -18,13 +18,14 @@ evidence for the exact revision every lane built.
 | preflight | every run | none; the `preflight` and `repository` jobs (workflow syntax, mapping, hygiene, documentation, tooling fixtures, generated artifacts) |
 | change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping` |
 | complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution, the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) and the clang ThreadSanitizer preset `linux-clang-tsan` ([test instruments](test-instruments.md)) |
-| diagnostic | never hosted | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)), `linux-clang-coverage` ([DIAG.10b](runtime-diagnostics.md#diag-10b)) |
+| diagnostic | never in a tier | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)), `linux-clang-coverage` ([DIAG.10b](runtime-diagnostics.md#diag-10b)) |
 
 The change tier is the lane set the repository ran on every push before this contract, so a source change keeps
 every obligation it had; only a documentation-only push stops after preflight, by design. The complete tier adds the
 five presets that had never run hosted and, since REPO.DEV.8, the two public-check presets. The first complete run is
 their first hosted exercise and may surface real defects: that is the tier's purpose, not a regression of the push
-signal. The diagnostic presets stay local. clang++ on Linux became a hosted compiler with the `linux-clang-tsan` lane
+signal. The diagnostic presets stay out of every tier; one runs hosted only in a dispatch-only experiment (below).
+clang++ on Linux became a hosted compiler with the `linux-clang-tsan` lane
 (user decision 2026-10-05): the tree builds under its `-Werror` set once clang's `-Wconversion` drops sign conversions,
 which GCC's never included ([inventory and triage](../sessions/2026-10-05-clang-werror-and-tsan-inventory.md)). The
 lane runs the whole suite under ThreadSanitizer, four tests at a time, with
@@ -48,6 +49,12 @@ is missing from the required aggregate or runs on another runner than declared, 
 a listed preset's job, is not gated on that preset, is gated on a preset the mapping does not list, rides on a
 diagnostic preset or declares another tier, when a diagnostic preset is invoked, when the class table lacks a
 catch-all, when a trigger is missing, or when cancellation is not limited to pull requests.
+
+Every other workflow file is an *experiment*: `check-ci-tiers.py` requires it to be triggered only by
+`workflow_dispatch` and never to cancel a run in progress, so it cannot join a tier or the required result, and
+`check-pins.py` holds it to the same pinned actions, runners and credentials as `ci.yml`. Only an experiment may run a
+diagnostic preset on a hosted machine. The one experiment is the DIAG.10a
+[host check](test-instruments.md#host-separation-diag10a) (`host-check.yml`, `linux-clang-fuzz`).
 
 ## Resolution
 

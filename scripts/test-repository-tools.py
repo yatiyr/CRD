@@ -54,6 +54,9 @@ headers_spec.loader.exec_module(check_headers)
 fuzz_spec = importlib.util.spec_from_file_location('fuzz_driver', ROOT / 'scripts/fuzz.py')
 fuzz_driver = importlib.util.module_from_spec(fuzz_spec)
 fuzz_spec.loader.exec_module(fuzz_driver)
+host_check_spec = importlib.util.spec_from_file_location('fuzz_host_check', ROOT / 'scripts/fuzz-host-check.py')
+fuzz_host_check = importlib.util.module_from_spec(host_check_spec)
+host_check_spec.loader.exec_module(fuzz_host_check)
 provenance_spec = importlib.util.spec_from_file_location('check_generated', ROOT / 'scripts/check-generated.py')
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
@@ -512,6 +515,22 @@ class CiTiers(unittest.TestCase):
         problems = ci_tiers.validate(self.mutated(classes=classes), self.presets, self.workflow)
         self.assertTrue(any('catch-all' in p for p in problems), problems)
 
+    def test_other_workflows_are_dispatch_only_experiments(self):
+        # A diagnostic preset may run hosted only in a workflow that never joins a tier: one triggered only by
+        # workflow_dispatch (the DIAG.10a host check), which never cancels a running experiment.
+        workflows = ROOT / '.github/workflows'
+        self.assertEqual(ci_tiers.validate_experiments(workflows, workflows / 'ci.yml'), [])
+        experiment = (workflows / 'host-check.yml').read_text(encoding='utf-8')
+        self.assertIn('cmake --preset linux-clang-fuzz', experiment)
+        self.assertEqual(ci_tiers.validate_experiment('host-check.yml', experiment), [])
+        for trigger in ('  push:\n    branches: [main]\n', "  schedule:\n    - cron: '0 3 * * *'\n",
+                        '  pull_request:\n'):
+            problems = ci_tiers.validate_experiment('host-check.yml', experiment.replace('on:\n', 'on:\n' + trigger, 1))
+            self.assertTrue(any('only by workflow_dispatch' in p for p in problems), (trigger, problems))
+        cancelling = experiment.replace('cancel-in-progress: false', 'cancel-in-progress: true')
+        problems = ci_tiers.validate_experiment('host-check.yml', cancelling)
+        self.assertTrue(any('must not cancel' in p for p in problems), problems)
+
     def test_paths_resolve_to_the_highest_tier_and_unknown_bases_are_conservative(self):
         classified = dict((p, (c, t)) for p, c, t in ci_tier.classify(
             ['docs/ROADMAP.md', 'scripts/README.md', 'docs/third-party-defects.md', '.github/workflows/ci.yml',
@@ -748,6 +767,18 @@ class PinnedInputs(unittest.TestCase):
         self.assertTrue(any('persist-credentials' in p for p in problems), problems)
         problems = check_pins.validate_workflow(self.pins, self.workflow + '\n      - run: curl https://sdk.lunarg.com/x\n')
         self.assertTrue(any('sdk.lunarg.com' in p for p in problems), problems)
+        # The dispatch-only experiment workflows keep the same input rules as the CI workflow.
+        workflows = ROOT / '.github/workflows'
+        self.assertEqual(check_pins.validate_other_workflows(self.pins, workflows, workflows / 'ci.yml'), [])
+        with tempfile.TemporaryDirectory() as temp:
+            experiment = (workflows / 'host-check.yml').read_text(encoding='utf-8')
+            (Path(temp) / 'host-check.yml').write_text(experiment.replace(pinned, 'actions/checkout@v4', 1)
+                                                       .replace('runs-on: ubuntu-24.04', 'runs-on: ubuntu-latest'),
+                                                       encoding='utf-8')
+            problems = check_pins.validate_other_workflows(self.pins, temp, workflows / 'ci.yml')
+            self.assertTrue(any(p.startswith('host-check.yml: workflow uses actions/checkout@v4') for p in problems),
+                            problems)
+            self.assertTrue(any('ubuntu-latest' in p for p in problems), problems)
         unpinned, replaced = re.subn(r'crd_add_pinned_package\(glfw[^)]*\)', 'CPMAddPackage("gh:glfw/glfw#3.4")', self.cmake, count=1)
         self.assertEqual(replaced, 1)  # the call carries SYSTEM/EXCLUDE_FROM_ALL since the first complete-tier run
         problems = check_pins.validate_cmake(self.pins, unpinned)
@@ -1628,6 +1659,36 @@ class TestInstruments(unittest.TestCase):
             with self.assertRaises(fuzz_driver.FuzzError):
                 fuzz_driver.targets_of('nope')
         self.assertEqual(fuzz_driver.targets_of('all'), list(fuzz_driver.TARGETS))
+
+    def test_host_check_counts_every_report_and_unfinished_process(self):
+        # DIAG.10a host separation: an event is any report line (with its stack head), and a process that died before
+        # its final statistics still counts the executions its last status line shows, marked as a lower bound.
+        log = ('INFO: Seed: 7101\n#2\tINITED cov: 10\n#262144\tpulse  cov: 10\n'
+               '==12==ERROR: AddressSanitizer: SEGV on unknown address 0x000000000004\n'
+               '    #0 0x55d1 in asan_annotate_live_range array.hpp:126:1\n'
+               '    #1 0x55d2 in crd::containers::Array<unsigned char>::push_back(unsigned char) array.hpp:342\n\n'
+               'SUMMARY: AddressSanitizer: SEGV\n')
+        reports = fuzz_host_check.reports_in(log)
+        self.assertEqual(len(reports), 1, reports)
+        self.assertIn('AddressSanitizer: SEGV', reports[0][0])
+        self.assertEqual(len(reports[0]), 3)
+        self.assertEqual(fuzz_host_check.executions_of(log, {}), (262144, False))
+        finished = log + 'stat::number_of_executed_units: 300000\n'
+        self.assertEqual(fuzz_host_check.executions_of(finished, fuzz_driver.parse_stats(finished)), (300000, True))
+        ubsan = 'array.hpp:618:5: runtime error: member call on address 0x1 with insufficient space\n'
+        self.assertEqual(len(fuzz_host_check.reports_in(ubsan)), 1)
+        clean = 'INFO: Seed: 1\nDone 300000 runs in 540 second(s)\nstat::number_of_executed_units: 300000\n'
+        self.assertEqual(fuzz_host_check.reports_in(clean), [])
+        repeat = 'Running: unit\nExecuted unit in 3 ms\n*** NOTE: fuzzing was not performed\n'
+        self.assertEqual(fuzz_host_check.reports_in(repeat), [])
+        self.assertEqual([arm for arm, _ in fuzz_host_check.ARMS], ['default', 'container-overflow-off'])
+        self.assertEqual(fuzz_host_check.options('', 'detect_container_overflow=0'), 'detect_container_overflow=0')
+        self.assertTrue(fuzz_host_check.options(fuzz_host_check.REPEAT_ASAN_OPTIONS, 'detect_container_overflow=0')
+                        .endswith(':halt_on_error=1:detect_container_overflow=0'))
+        self.assertTrue(fuzz_host_check.find_unit('ceir-text', 'cd301be8').is_file())
+        self.assertTrue(fuzz_host_check.find_unit('ckir-binary', 'ace35b97').is_file())
+        with self.assertRaises(fuzz_host_check.fuzz.FuzzError):  # its own import of fuzz.py
+            fuzz_host_check.find_unit('ceir-text', 'seed-')
 
     def test_instrument_options_fail_the_configure_instead_of_warning(self):
         text = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')

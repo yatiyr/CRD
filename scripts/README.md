@@ -41,6 +41,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
   the bounded libFuzzer targets of a `linux-clang-fuzz` build (time, length, RSS and allocation limits; artifacts
   in scratch; a finding enters a committed corpus only after its fix, `adopt`; an unfixed one is kept as bytes
   under `fuzz/pending/`) and replays the corpora any lane runs as the `crd-fuzz-*-corpus` CTests.
+  `fuzz-host-check.py --build <dir> --target <name> --seed <n> [--repeat <unit>]` runs the DIAG.10a host
+  separation on one machine (a round under the default ASan options and the container-overflow control, the
+  repetitions of an adopted unit; every event with its stack head); the dispatch-only `host-check.yml` runs it.
 - Provenance and licenses ([routes](../docs/CONTRIBUTING.md#generated-sources-and-provenance)): `check-generated.py`
   holds every generated file to [generated-sources.json](generated-sources.json) (generator, status, SHA-256;
   `--scan` lists unlisted markers, `--regenerate` reruns the stdout generators on the current host and applies the

@@ -7,7 +7,8 @@ list, and is a dependency of the required aggregate; a preset step (a non-CMake 
 entries, such as the GenMC model on linux-clang-tsan or the seeded detector failures on the five lanes they were
 qualified on) exists in each listed preset's job, is gated on exactly the listed presets and inherits each one's
 tier; the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited to
-superseded pull-request runs.
+superseded pull-request runs. Every other workflow file is an experiment triggered only by workflow_dispatch, so it
+never joins a tier; only there may a diagnostic preset run hosted.
 """
 from pathlib import Path
 import argparse
@@ -196,16 +197,40 @@ def validate(tiers, presets_document, workflow_text):
     return problems
 
 
+def validate_experiment(name, text):
+    """Any workflow file besides the CI workflow is an experiment: it runs only when dispatched, so it can never join
+    a tier, and only there may a diagnostic preset run on a hosted machine."""
+    problems = []
+    triggers = re.search(r'^on:\n((?:  .*\n|\n)+)', text, re.M)
+    names = re.findall(r'^  ([\w-]+):', triggers.group(1), re.M) if triggers else []
+    if names != ['workflow_dispatch']:
+        problems.append('%s must be triggered only by workflow_dispatch (found %s)'
+                        % (name, ', '.join(names) or 'none'))
+    if re.search(r'^\s+cancel-in-progress:\s*true\s*$', text, re.M):
+        problems.append('%s must not cancel a running experiment' % name)
+    return problems
+
+
+def validate_experiments(workflow_dir, main_workflow):
+    problems = []
+    for path in sorted(Path(workflow_dir).glob('*.y*ml')):
+        if path.resolve() != Path(main_workflow).resolve():
+            problems += validate_experiment(path.name, path.read_text(encoding='utf-8'))
+    return problems
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--tiers', default=str(DEFAULT_TIERS))
     parser.add_argument('--presets', default=str(DEFAULT_PRESETS))
     parser.add_argument('--workflow', default=str(DEFAULT_WORKFLOW))
+    parser.add_argument('--workflow-dir', default=str(DEFAULT_WORKFLOW.parent),
+                        help='the directory whose other workflow files must be dispatch-only experiments')
     args = parser.parse_args(argv)
     tiers = load_json(args.tiers)
     presets = load_json(args.presets)
     workflow = Path(args.workflow).read_text(encoding='utf-8')
-    problems = validate(tiers, presets, workflow)
+    problems = validate(tiers, presets, workflow) + validate_experiments(args.workflow_dir, args.workflow)
     for problem in problems:
         print('FAIL: ' + problem)
     if problems:

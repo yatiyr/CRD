@@ -1,0 +1,143 @@
+name: Host check
+
+# DIAG.10a host separation (docs/design/test-instruments.md#host-separation-diag10a): the libFuzzer rounds and
+# repetition replays that faulted on the development host, run on hosted machines. A diagnostic experiment, never part
+# of a CI tier (docs/design/ci-tiers.md): it runs only when dispatched, builds only one libFuzzer target of the
+# diagnostic linux-clang-fuzz preset per leg and never writes to the committed corpora. Each leg runs its round under
+# the default ASan options and then under the container-overflow control for the same time; a leg fails on any event.
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'libFuzzer seconds per round and arm'
+        type: number
+        default: 540
+      repetitions:
+        description: 'executions of an adopted unit per repetition process'
+        type: number
+        default: 10000
+
+permissions:
+  contents: read
+
+# Every dispatch owns its group: an experiment is never cancelled by another.
+concurrency:
+  group: host-check-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Host check (${{ matrix.target }}, seed ${{ matrix.seed }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        # The rounds of docs/sessions/2026-10-11-diag-10a-unknown-origin-artifacts.md: three of ceir-binary, one of
+        # ceir-text and three of ckir-binary, with the repetitions of the two adopted units cd301be8 and ace35b97.
+        include:
+          - {target: ceir-binary, seed: 7101, repeat: ''}
+          - {target: ceir-binary, seed: 7102, repeat: ''}
+          - {target: ceir-binary, seed: 7103, repeat: ''}
+          - {target: ceir-text, seed: 7201, repeat: cd301be8}
+          - {target: ckir-binary, seed: 7301, repeat: ace35b97}
+          - {target: ckir-binary, seed: 7302, repeat: ''}
+          - {target: ckir-binary, seed: 7303, repeat: ''}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libvulkan-dev \
+            glslang-tools \
+            libshaderc-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            mesa-common-dev \
+            libclang-rt-18-dev
+          clang++ --version
+
+      - name: Install pinned Vulkan headers and SPIRV-Reflect
+        run: |
+          python3 scripts/install-vulkan-headers.py --destination /tmp/vulkan-sdk --download-dir "$RUNNER_TEMP/vulkan-headers"
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> "$GITHUB_ENV"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-linux-clang-fuzz-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-linux-clang-fuzz-
+            cpm-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset linux-clang-fuzz
+
+      - name: Build the libFuzzer target
+        run: cmake --build --preset linux-clang-fuzz --target crd-fuzz-${{ matrix.target }}-libfuzzer
+
+      - name: Rounds and repetitions
+        env:
+          SECONDS_PER_ARM: ${{ inputs.seconds }}
+          REPETITIONS: ${{ inputs.repetitions }}
+          TARGET: ${{ matrix.target }}
+          SEED: ${{ matrix.seed }}
+          REPEAT: ${{ matrix.repeat }}
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          repeat=()
+          if [ -n "$REPEAT" ]; then
+            repeat=(--repeat "$REPEAT" --repetitions "$REPETITIONS" --repeat-runs 3)
+          fi
+          python3 scripts/fuzz-host-check.py --build build/linux-clang-fuzz --target "$TARGET" --seed "$SEED" \
+            --seconds "$SECONDS_PER_ARM" "${repeat[@]}" --scratch "$RUNNER_TEMP/host-check/work" \
+            --json "$evidence/host-check-$TARGET-$SEED.json" --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs and artifacts
+        if: always()
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          if [ -d "$RUNNER_TEMP/host-check/work" ]; then
+            cd "$RUNNER_TEMP/host-check/work"
+            find . -path '*/corpus' -prune -o -type f -print | while read -r file; do
+              mkdir -p "$evidence/$(dirname "$file")"
+              cp "$file" "$evidence/$file"
+            done
+          fi
+          cp /proc/cpuinfo "$evidence/cpuinfo.txt"
+
+      - name: Preserve logs and artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: host-check-${{ matrix.target }}-${{ matrix.seed }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
