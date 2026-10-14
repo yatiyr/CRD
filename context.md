@@ -3,12 +3,11 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.9c -->
-**Current work:** [DIAG.9c](docs/ROADMAP.md#slice-diag.9c), first unfinished row. Complete run 38236026326 at
-`7a958b88` closed DIAG.4b to 9b and showed the hosted clauses of 9c to 11a
-([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-7a958b88-2026-10-12)). 9c waits on the user: one
-elevated TTD recording, and rr on a host with hardware counters. 10a waits on the user's native-Linux run; 10b, 10c
-and 11a wait in order. [Implementation contract](docs/design/runtime-diagnostics.md).
+<!-- current-slice: DIAG.10a -->
+**Current work:** [DIAG.10a](docs/ROADMAP.md#slice-diag.10a), first unfinished row: its host-separation run moves to a
+hosted Linux runner (user, 2026-10-14). Complete run 38236026326 at `7a958b88` closed DIAG.4b to 9b
+([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-7a958b88-2026-10-12)). 9c's TTD recording is
+done and waits on CI; 10b, 10c and 11a wait in order. [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 
 ## Product direction

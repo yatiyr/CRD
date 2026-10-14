@@ -31,6 +31,8 @@ Usage
   python scripts/reverse-debug-recipes.py --probe
   python scripts/reverse-debug-recipes.py --route gdb-record --mode corrupt --specimen <exe> --source <cpp>
       --trace-dir <dir> [--insn-max N] [--trace-max-bytes N] [--expect FOUND] [--json <file>]
+  python scripts/reverse-debug-recipes.py --route ttd ... --replay-trace <trace.run>
+      (judge a recorded TTD trace again without recording; only recording needs an elevated shell)
 """
 import argparse
 import ctypes
@@ -682,8 +684,12 @@ def cdb_command(specimen, reverse):
     # MSVC's AddressSanitizer commits its shadow memory through first-chance access violations, so the route does not
     # stop on those; an access violation nothing handles still stops at its second chance.
     if reverse:
-        return ("sxd av; bp%d %s; g; .echo CRD_RD_STOP1; kn 3; dq %s L1; bc %d; ba%d w8 %s; g-; .echo CRD_RD_STOP2; "
-                "kn 3; dq %s L1; q" % (CDB_END_ID, end, sentinel, CDB_END_ID, CDB_WATCH_ID, sentinel, sentinel))
+        # A data breakpoint reports the instruction after the write, so a backward run stops just past the store
+        # (measured 2026-10-14: crd_diag_corrupt_neighbour+0x53, the loop's closing line 79, not the store's line 78).
+        # `t-` steps back over that one instruction to the store itself before the frame is read.
+        return ("sxd av; bp%d %s; g; .echo CRD_RD_STOP1; kn 3; dq %s L1; bc %d; ba%d w8 %s; g-; t-; "
+                ".echo CRD_RD_STOP2; kn 3; dq %s L1; q" % (CDB_END_ID, end, sentinel, CDB_END_ID, CDB_WATCH_ID,
+                                                           sentinel, sentinel))
     # A hardware breakpoint set at the initial process breakpoint is lost when the loader resets the thread
     # context, so the route first runs to the image entry point.
     return ("sxd av; g @$exentry; ba%d w8 %s; bp%d %s; g; .echo CRD_RD_STOP1; kn 3; dq %s L1; g; "
@@ -706,9 +712,15 @@ def route_cdb_watch(args, report):
     return decide_cdb(args.mode, report["natural"], text, report["location"], args.source.name)
 
 
-def launch_refusal(error):
+def launch_refusal(error, tool=None):
     """Classify an OSError from launching a tool: PERMISSION_DENIED for access denied or elevation required."""
     if getattr(error, "winerror", None) in WINDOWS_PERMISSION_ERRORS or isinstance(error, PermissionError):
+        if tool is not None and "windowsapps" in str(tool).lower() and is_elevated():
+            # Measured 2026-10-14: the TTD.exe inside the WinDbg Store package is refused even in an elevated shell;
+            # files inside an app package are not launchable directly. The standalone package adds a ttd.exe alias.
+            return "PERMISSION_DENIED", ("%s: %s is inside an app package and cannot be launched directly; install "
+                                         "the standalone TTD (winget install --id Microsoft.TimeTravelDebugging -e)"
+                                         % (error, tool))
         return "PERMISSION_DENIED", "%s (an elevated shell is required)" % error
     return "TOOL_MISSING", "the tool did not start: %s" % error
 
@@ -729,6 +741,13 @@ def route_ttd(args, report):
                       "elevated": is_elevated()}
     if ttd is None or cdb is None:
         return "TOOL_MISSING", "TTD.exe or cdb.exe is missing (install the WinDbg package)"
+    if getattr(args, "replay_trace", None):
+        # Recording needs an elevated shell; replaying a recorded trace does not.
+        trace = Path(args.replay_trace)
+        if not trace.is_file():
+            return "INCOMPLETE_RECORDING", "no such trace: %s" % trace
+        report["trace"] = {"path": str(trace), "bytes": trace.stat().st_size, "replayed_only": True}
+        return replay_ttd(args, report, cdb, trace)
     trace_dir = args.trace_dir / "ttd"
     if trace_dir.exists():
         shutil.rmtree(trace_dir)
@@ -739,7 +758,7 @@ def route_ttd(args, report):
                                    "-launch", str(args.specimen), args.mode], capture_output=True, text=True,
                                   timeout=args.timeout)
     except OSError as error:
-        return launch_refusal(error)
+        return launch_refusal(error, ttd)
     report["ttd_record_exit"] = recorded.returncode
     runs = sorted(trace_dir.glob("*.run"))
     if not runs:
@@ -750,7 +769,11 @@ def route_ttd(args, report):
     if trace_bytes > args.trace_max_bytes:
         return "INCOMPLETE_RECORDING", "the TTD trace is %d bytes, over its %d byte bound" % (trace_bytes,
                                                                                              args.trace_max_bytes)
-    replay = subprocess.run([str(cdb), "-lines", "-y", str(Path(args.specimen).parent), "-z", str(runs[0]), "-c",
+    return replay_ttd(args, report, cdb, runs[0])
+
+
+def replay_ttd(args, report, cdb, trace):
+    replay = subprocess.run([str(cdb), "-lines", "-y", str(Path(args.specimen).parent), "-z", str(trace), "-c",
                              cdb_command(args.specimen, True)], capture_output=True, text=True, timeout=args.timeout)
     text = (replay.stdout or "") + "\n" + (replay.stderr or "")
     (args.trace_dir / "ttd_replay.log").write_text(text, encoding="utf-8")
@@ -818,6 +841,8 @@ def main(argv):
     parser.add_argument("--expect", choices=sorted(VERDICTS))
     parser.add_argument("--expect-reason", help="with --expect: text the verdict's reason must contain")
     parser.add_argument("--json", type=Path, help="verdict record (default: <trace-dir>/verdict.json)")
+    parser.add_argument("--replay-trace", type=Path,
+                        help="ttd only: judge this recorded .run trace instead of recording (no elevation needed)")
     args = parser.parse_args(argv)
     if args.probe:
         return probe()

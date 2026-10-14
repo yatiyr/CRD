@@ -268,7 +268,12 @@ class CdbVerdictTests(unittest.TestCase):
         self.assertIn("ba7 w8 crd_diag_corruption_specimen!crd_diag_corruption_block+0x20", forward)
         self.assertIn("bp8 crd_diag_corruption_specimen!crd_diag_corruption_window_end", forward)
         self.assertTrue(forward.startswith("sxd av; g @$exentry"))
-        self.assertIn("g-", mod.cdb_command("C:/b/crd-diag-corruption-specimen.exe", True))
+        reverse = mod.cdb_command("C:/b/crd-diag-corruption-specimen.exe", True)
+        self.assertIn("g-", reverse)
+        # The backward stop lands just past the writing instruction; one step back reads the store's own frame
+        # (2026-10-14: line 79 without it, the store's line 78 with it).
+        self.assertLess(reverse.index("g-; t-;"), reverse.index("CRD_RD_STOP2"))
+        self.assertNotIn("t-", forward)
 
 
 class EligibilityTests(unittest.TestCase):
@@ -287,6 +292,31 @@ class EligibilityTests(unittest.TestCase):
         elevation.winerror = 740
         self.assertEqual(mod.launch_refusal(elevation)[0], "PERMISSION_DENIED")
         self.assertEqual(mod.launch_refusal(FileNotFoundError(2, "missing"))[0], "TOOL_MISSING")
+        # Elevated, the packaged TTD inside the WinDbg app is still refused: say what to install, not "elevate".
+        packaged = r"C:\Program Files\WindowsApps\Microsoft.WinDbg_1_x64__8wekyb3d8bbwe\amd64\ttd\TTD.exe"
+        with mock.patch.object(mod, "is_elevated", return_value=True):
+            verdict, reason = mod.launch_refusal(denied, packaged)
+        self.assertEqual(verdict, "PERMISSION_DENIED")
+        self.assertIn("Microsoft.TimeTravelDebugging", reason)
+        self.assertNotIn("elevated shell is required", reason)
+        with mock.patch.object(mod, "is_elevated", return_value=False):
+            self.assertIn("elevated shell is required", mod.launch_refusal(denied, packaged)[1])
+
+    def test_replay_trace_judges_a_recording_without_recording(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            args = mock.Mock(replay_trace=Path(scratch) / "missing.run")
+            with mock.patch.object(mod, "find_windows_tool", return_value=Path("tool.exe")):
+                self.assertEqual(mod.route_ttd(args, {})[0], "INCOMPLETE_RECORDING")
+                trace = Path(scratch) / "t.run"
+                trace.write_bytes(b"trace")
+                args = mock.Mock(replay_trace=trace)
+                with mock.patch.object(mod, "replay_ttd", return_value=("FOUND", "x")) as replay, \
+                        mock.patch.object(mod.subprocess, "run") as run:
+                    report = {}
+                    self.assertEqual(mod.route_ttd(args, report)[0], "FOUND")
+                    run.assert_not_called()  # nothing recorded: no TTD launch
+                    self.assertEqual(replay.call_args[0][3], trace)
+                    self.assertTrue(report["trace"]["replayed_only"])
 
     def test_missing_gdb_is_an_instrument_failure(self):
         with mock.patch.object(mod.shutil, "which", return_value=None):
