@@ -306,3 +306,54 @@ Notes:
 The first unfinished row is now DIAG.9c. Its remaining items are the user's:
 - one elevated TTD recording (an administrator shell; unelevated, the recipe reports `PERMISSION_DENIED`);
 - rr qualification on a host whose CPU exposes hardware performance counters (WSL2 here has none).
+
+## CI read, 2026-10-15: `56748127`
+
+origin/main is `56748127`. Two CI runs cover it, and both passed every job:
+- push run [38617389637](https://github.com/yatiyr/CRD/actions/runs/38617389637), which resolved to the preflight
+  tier (preflight, both repository jobs and `required`);
+- complete-tier dispatch run [38640651640](https://github.com/yatiyr/CRD/actions/runs/38640651640): preflight, both
+  repository jobs, the 21 build and test lanes, `win-tidy` and `required`, 26 jobs.
+
+The host check runs before it ([38590995552](https://github.com/yatiyr/CRD/actions/runs/38590995552) and
+[38605464765](https://github.com/yatiyr/CRD/actions/runs/38605464765)) are recorded in the
+[DIAG.10a host check session](2026-10-14-diag-10a-host-check.md).
+
+What was read:
+- **The job logs** of the six lanes, `linux-gcc-shipping`, `win-clang-cl-shipping`, both public-check lanes and both
+  repository jobs: per-test CTest status and each register gate.
+- **The evidence bundles** of `win-debug`, `win-asan`, `win-shipping`, `linux-gcc-debug`, `linux-gcc-asan` and
+  `linux-clang-tsan`. The JUnit gave each named case's status; `LastTest.log` gave the fuzz replay lines and the
+  Catch2 assertion summaries; `diag-seeded-faults/report.json` gave the seeded verdicts.
+
+Unexpected failures: none.
+- `win-asan` failed exactly its five registered TP-1 DX12 ray-tracing tests.
+- `linux-gcc-asan` failed exactly its registered TP-5 mikktspace oracle.
+- Both register gates passed. Every other lane read reports zero failures.
+
+## Rows closed on 56748127 (2026-10-15)
+
+The "six lanes" are `win-debug`, `win-asan`, `win-shipping`, `linux-gcc-debug`, `linux-gcc-asan` and
+`linux-clang-tsan`.
+
+| Row | What run 38640651640 shows | New state |
+|---|---|---|
+| DIAG.9c | the "Reverse debugging verdicts" step ran 35 tests OK on both runners (the TTD recipe change); `crd-diag-reverse-debug-recipes` on the six lanes; gdb watch on every Linux lane, gdb record on gcc debug and shipping | Done |
+| DIAG.10a | ceir text corpus 33 inputs and ceir binary 34, 0 rejected; the ten `[diag10a]` cases of `crd-ceir-tests` (577 cases) with assertions, on the six lanes | Done |
+| DIAG.10b | `Seeded detector failures` DETECTED 3, 5, 3, 6 and 6, no `REGISTRY_STALE`; `[diag10b]` 7 with asserts, 4 on win-shipping | Done |
+| DIAG.10c | `[diag10c]` green again on `linux-clang-tsan` (121, the logger case 7 assertions, the thread probe 11); 129 per Windows lane (four Vulkan cases skip there), 121 per Linux lane (no DX12) | Done |
+| DIAG.11a | 15 `[diag-host]` and 18 of 21 `[diag11a]` cases on the six lanes (three headless window skips); `crd-package-consumer` on both public-check lanes | Done |
+
+Notes:
+- **The rest of each clause was read on `7a958b88`.** DIAG.10b, 10c and 11a had shown their full hosted clauses in
+  run 38236026326 and waited only on DIAG.9c and 10a in table order. This run was read for what changed since then.
+  The packaged application's outputs (`flight-0.cdb`, `main.cpp:87`, the five examples) were not reread here; the
+  `crd-package-consumer` CTest that checks them passed.
+- **rr is not a claimed route.** DIAG.9c's acceptance accepts an explicit capability limit where no reverse debugger
+  can run. rr reports `HOST_INELIGIBLE` on WSL2, which has no hardware performance counters. It stays a capability
+  limit until an eligible host exists.
+- **Skips.** The four Vulkan `[diag10c]` cases skip on the hosted Windows lanes, which have no Vulkan device; they
+  pass with assertions on lavapipe. The three `crd-app-tests` window cases skip on the headless runners.
+
+No row is left in Needs CI. The first unfinished row is now [DIAG.11b](../ROADMAP.md#slice-diag.11b), which has
+local work to do.

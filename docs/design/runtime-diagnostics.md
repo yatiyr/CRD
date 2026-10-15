@@ -1548,7 +1548,10 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-reverse-debug-rout
     Windows job installs a debugger.
   - `ttd` (Windows): TTD.exe from the WinDbg package records, and cdb replays the trace stepping backwards (`g-`) to
     the data breakpoint. Recording needs an elevated shell; unelevated the launch is refused and reported
-    `PERMISSION_DENIED`. Unverified until an elevated recording runs.
+    `PERMISSION_DENIED`. Verified 2026-10-14 ([session](../sessions/2026-10-14-diag-9c-ttd-recording.md)): the
+    elevated recordings answer `FOUND` at the corrupting store (the replay steps back one instruction past the data
+    breakpoint's stop) and `CLEAN`; the standalone TTD package records, the one inside the WinDbg app cannot be
+    launched, and `--replay-trace` re-judges a recording unelevated.
   - `rr` (Linux): needs hardware performance counters and `perf_event_paranoid <= 1`. WSL2 exposes no `cpu` PMU
     (rr 5.7.0: "Unable to open performance counter") and has paranoid 2; the route reports `HOST_INELIGIBLE` and never
     lowers the setting. The replay leg reuses the gdb-record driver and is unverified until an eligible host exists.
