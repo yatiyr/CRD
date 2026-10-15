@@ -12,6 +12,8 @@
 // bounds; the inspect host, run to a script with a seeded source, recording exactly the unobserved run's draws, with
 // no source recording the failed draw, and past the bound storing random missing. ASCII test names (ctest by-name).
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/inspect_script.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -113,7 +115,7 @@ void registrar(Context& ctx, void* /*user*/)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -125,7 +127,7 @@ String slurp(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, StringView text)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(f.good());
@@ -133,7 +135,7 @@ void spill(const char* path, StringView text)
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 StringView view(const String& s)
@@ -270,7 +272,7 @@ constexpr crd::perf::DiagAuthoritySet kAll = crd::perf::authority_bit(DiagAuthor
 DiagServiceConfig here()
 {
     DiagServiceConfig c;
-    c.root = StringView{"."};
+    c.root = crd::test::scratch_root();
     return c;
 }
 
@@ -857,7 +859,7 @@ TEST_CASE("diag 9a input: a seeded run inspected on the inspect host records the
     CHECK(fed.d.kind == ck::DivergenceKind::None);
 
     // From the file, in a fresh service: reproduced; against the edited file, the edited draw is named.
-    REQUIRE(ck::write_record_file(StringView{host_at}, rec) == ck::RecordWrite::Ok);
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(host_at).view(), rec) == ck::RecordWrite::Ok);
     const String edit = replaced(view(text), kDrawLine, kDrawEdited, &alloc);
     spill(program, view(edit));
     {

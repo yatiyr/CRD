@@ -11,6 +11,7 @@ target_link_libraries(crd-chir-tests PRIVATE
     crd-ceir      # CEIR-32d: the lowering target — print/parse/find_structure_error over the lowered module
     crd-ceir-cook # DIAG.8a: cook a lowered program and run it through the hot-reload supervisor
     crd-perf      # DIAG.8c: the diagnostic command service program.provenance registers into
+    crd-platform  # tests/execution/ceir-cook/scratch_dir.hpp: the diag 8c case writes its blob under the temp directory
     Catch2::Catch2WithMain
 )
 

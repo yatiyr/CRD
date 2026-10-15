@@ -11,6 +11,8 @@
 // way here, a run budget too small to finish (the record it makes still fails the recorded way) and a raised cancel.
 // ASCII test names (ctest by-name).
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_minimize.hpp>
@@ -121,7 +123,7 @@ String two_switch_program(crd::memory::IAllocator* a)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -133,7 +135,7 @@ String slurp(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, StringView text)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(f.good());
@@ -141,7 +143,7 @@ void spill(const char* path, StringView text)
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 StringView view(const String& s)
@@ -218,7 +220,7 @@ constexpr crd::perf::DiagAuthoritySet kAll = crd::perf::authority_bit(DiagAuthor
 DiagServiceConfig here()
 {
     DiagServiceConfig c;
-    c.root = StringView{"."};
+    c.root = crd::test::scratch_root();
     return c;
 }
 
@@ -300,7 +302,7 @@ Ending run_inputs(const ReplayRecord& rec, const Array<i64>& args, const Array<c
 u32 reproduced_line(Host& h, const ReplayRecord& rec, const char* path, crd::memory::IAllocator* a)
 {
     forget(path);
-    REQUIRE(ck::write_record_file(StringView{path}, rec) == ck::RecordWrite::Ok);
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(path).view(), rec) == ck::RecordWrite::Ok);
     const DiagResult r = replay(h, path);
     INFO(r.json.c_str());
     REQUIRE(r.status == DiagStatus::Ok);

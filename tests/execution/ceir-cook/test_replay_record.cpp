@@ -10,6 +10,8 @@
 // another schema or a program that is not the recorded hash is refused with nothing run. Expected lines and columns
 // come from scanning the text, never from the parser. ASCII test names (ctest by-name).
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
@@ -88,7 +90,7 @@ constexpr const char* kBiasRead = "%9 = xio.read() : !i32";
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -111,7 +113,7 @@ Array<u8> slurp_bytes(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, const void* data, usize size)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     REQUIRE(f.good());
@@ -119,7 +121,7 @@ void spill(const char* path, const void* data, usize size)
 
 bool exists(const char* path)
 {
-    const std::ifstream f(path, std::ios::binary);
+    const std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary);
     return f.good();
 }
 
@@ -219,7 +221,7 @@ constexpr crd::perf::DiagAuthoritySet kAll = crd::perf::authority_bit(DiagAuthor
 DiagServiceConfig here()
 {
     DiagServiceConfig c;
-    c.root = StringView{"."};
+    c.root = crd::test::scratch_root();
     return c;
 }
 
@@ -280,7 +282,7 @@ DiagResult replay(Host& h, const char* path, const char* program = nullptr, cons
     return h.svc.execute(r);
 }
 
-// Write the committed asset (or its edit) as a scratch program in the working directory.
+// Write the committed asset (or its edit) as a scratch program under the scratch root.
 void write_program(const char* path, StringView text)
 {
     spill(path, text.data(), text.size());
@@ -299,7 +301,7 @@ String edited(StringView text, crd::memory::IAllocator* a, const char* replaceme
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 ReplayRecord decode_file(const char* path, crd::memory::IAllocator* a)

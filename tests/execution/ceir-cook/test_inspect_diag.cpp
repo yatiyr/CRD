@@ -14,6 +14,8 @@
 // finish on their values, an empty list reads none events, and without it the first read fails where it is authored.
 // DIAG.10b: a run that outlasts the host's wait bound fails unfinished. ASCII test names (ctest by-name).
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/inspect_diag.hpp>
 
 #include <crd/ceir/context.hpp>
@@ -66,7 +68,7 @@ constexpr const char* kClockAsset  = CRD_REPO_DIR "/assets/ceir/clock_demo.ceir"
 constexpr const char* kEventFile   = "ceir/event_demo.ceir"; // DIAG.9a
 constexpr const char* kEventAsset  = CRD_REPO_DIR "/assets/ceir/event_demo.ceir";
 
-// This case's own scratch file in the working directory (the file root ".").
+// This case's own scratch file under the process scratch folder (the file root crd::test::scratch_root()).
 constexpr const char* kBrokenFile = "diag8c_inspect_broken.ceir";
 
 void registrar(Context& ctx, void* /*user*/)
@@ -79,7 +81,7 @@ void registrar(Context& ctx, void* /*user*/)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -91,7 +93,7 @@ String slurp(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, const String& text)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(f.good());
@@ -256,10 +258,10 @@ DiagRequest inspect_request(const char* path, crd::containers::ConstSpan<DiagArg
     return r;
 }
 
-DiagServiceConfig rooted(const char* root)
+DiagServiceConfig rooted(StringView root)
 {
     DiagServiceConfig c;
-    c.root = StringView{root};
+    c.root = root;
     return c;
 }
 
@@ -520,7 +522,7 @@ TEST_CASE("diag 8c: program.inspect refuses before any work and names where a so
 
         ProgramInspectCommand cmd;
         cmd.registrar = &registrar;
-        DiagCommandService svc(kExecute, rooted("."), &root);
+        DiagCommandService svc(kExecute, rooted(crd::test::scratch_root()), &root);
         REQUIRE(crd::ceir::cook::register_program_inspect(svc, cmd));
         const DiagResult r = svc.execute(inspect_request(kBrokenFile, {}));
         INFO(r.json.c_str());
@@ -532,7 +534,7 @@ TEST_CASE("diag 8c: program.inspect refuses before any work and names where a so
         CHECK(has(view(r.json), "the program did not load: cook-failed ("));
         CHECK(has(view(r.json), view(where)));
         CHECK(cmd.starts.load() == 0U);
-        (void)std::remove(kBrokenFile);
+        (void)std::remove(crd::test::scratch_path(kBrokenFile).c_str());
 
         DiagCommandService assets(kExecute, rooted(kAssets), &root);
         REQUIRE(crd::ceir::cook::register_program_inspect(assets, cmd));

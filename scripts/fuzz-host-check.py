@@ -175,6 +175,30 @@ def command_line(command):
     return (result.stdout or result.stderr).strip().splitlines()[0] if (result.stdout or result.stderr) else ''
 
 
+MMAP_RND_BITS_FILE = '/proc/sys/vm/mmap_rnd_bits'
+# The file is readable by root only on Ubuntu, hosted runners included, and sysctl reads the same file, so the last
+# route asks sudo without a prompt (-n): a hosted runner's user has it without a password; elsewhere it fails at once.
+MMAP_RND_BITS_COMMANDS = (('sysctl', '-n', 'vm.mmap_rnd_bits'), ('sudo', '-n', 'sysctl', '-n', 'vm.mmap_rnd_bits'))
+
+
+def mmap_rnd_bits(read=read_text, run=subprocess.run):
+    """vm.mmap_rnd_bits from the first route that answers with a number, else 'unknown'. A route's error text is never
+    taken as the value: only a zero exit with digits on stdout counts."""
+    value = read(MMAP_RND_BITS_FILE).strip()
+    if value.isdigit():
+        return value
+    for command in MMAP_RND_BITS_COMMANDS:
+        try:
+            result = run(list(command), capture_output=True, text=True, encoding='utf-8', errors='replace',
+                         timeout=10, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        value = (result.stdout or '').strip()
+        if result.returncode == 0 and value.isdigit():
+            return value
+    return 'unknown'
+
+
 def host_identity():
     cpuinfo = read_text('/proc/cpuinfo')
     fields = {}
@@ -187,7 +211,7 @@ def host_identity():
             'microcode': fields.get('microcode', 'unknown'),
             'hypervisor': 'yes' if ' hypervisor' in (' ' + fields.get('flags', '')) else 'no',
             'logical_cpus': os.cpu_count(), 'kernel': platform.release(),
-            'mmap_rnd_bits': read_text('/proc/sys/vm/mmap_rnd_bits').strip() or 'unknown',
+            'mmap_rnd_bits': mmap_rnd_bits(),
             'compiler': command_line(['clang++', '--version'])}
 
 

@@ -18,6 +18,7 @@ target_link_libraries(crd-ceir-host-tests PRIVATE
     crd-ceir-cook       # DIAG.9a: cook the authored program and read its run record
     crd-jobs            # the test binary owns the jobs pool lifecycle (init/shutdown via a Catch listener)
     crd-perf            # CEIR-11c: read back the published counters (perf-ON builds)
+    crd-platform        # tests/execution/ceir-cook/scratch_dir.hpp: record files are written under the temp directory
     Catch2::Catch2WithMain
 )
 

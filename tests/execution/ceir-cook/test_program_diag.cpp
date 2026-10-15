@@ -6,6 +6,8 @@
 // that does not parse is refused with its file, line and column. Expected positions come from scanning the text, never
 // from the parser. ASCII test names (ctest by-name).
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/program_diag.hpp>
 
@@ -52,7 +54,7 @@ constexpr const char* kFile   = "ceir/inspect_demo.ceir";
 constexpr const char* kAssets = CRD_REPO_DIR "/assets";
 constexpr const char* kAsset  = CRD_REPO_DIR "/assets/ceir/inspect_demo.ceir";
 
-// Each case owns its scratch files in the working directory (the file root ".").
+// Each case owns its scratch files under the process scratch folder (the file root crd::test::scratch_root()).
 constexpr const char* kBinaryFile = "diag8c_program_demo.ceirb";
 constexpr const char* kCookedFile = "diag8c_program_demo.crdr";
 constexpr const char* kBrokenFile = "diag8c_program_broken.ceir";
@@ -70,7 +72,7 @@ void registrar(Context& ctx, void* /*user*/)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -82,7 +84,7 @@ String slurp(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, const void* data, usize size)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     REQUIRE(f.good());
@@ -206,10 +208,10 @@ DiagResult run(DiagCommandService& svc, const char* path, u32 page_items = 256U)
     return svc.execute(r);
 }
 
-DiagServiceConfig rooted(const char* root)
+DiagServiceConfig rooted(StringView root)
 {
     DiagServiceConfig c;
-    c.root = StringView{root};
+    c.root = root;
     return c;
 }
 } // namespace
@@ -314,7 +316,7 @@ TEST_CASE("diag 8c: program.provenance answers each authored op at its file, lin
         ProgramProvenanceCommand cmd;
         cmd.registrar = &registrar;
         DiagCommandService text_svc(read, rooted(kAssets), &root);
-        DiagCommandService file_svc(read, rooted("."), &root);
+        DiagCommandService file_svc(read, rooted(crd::test::scratch_root()), &root);
         REQUIRE(crd::ceir::cook::register_program_provenance(text_svc, cmd));
         REQUIRE(crd::ceir::cook::register_program_provenance(file_svc, cmd));
 
@@ -352,8 +354,8 @@ TEST_CASE("diag 8c: program.provenance answers each authored op at its file, lin
             CHECK(view(b[i]) == view(t[i]));
             CHECK(view(c[i]) == view(t[i]));
         }
-        (void)std::remove(kBinaryFile);
-        (void)std::remove(kCookedFile);
+        (void)std::remove(crd::test::scratch_path(kBinaryFile).c_str());
+        (void)std::remove(crd::test::scratch_path(kCookedFile).c_str());
     }
 }
 
@@ -420,7 +422,7 @@ TEST_CASE("diag 8c: program.provenance refuses before reading, and names where a
 
         ProgramProvenanceCommand cmd;
         cmd.registrar = &registrar;
-        DiagCommandService svc(read, rooted("."), &root);
+        DiagCommandService svc(read, rooted(crd::test::scratch_root()), &root);
         REQUIRE(crd::ceir::cook::register_program_provenance(svc, cmd));
         const DiagResult r = run(svc, kBrokenFile);
         INFO(r.json.c_str());
@@ -434,6 +436,6 @@ TEST_CASE("diag 8c: program.provenance refuses before reading, and names where a
         CHECK(has(view(r.json), view(where)));
         CHECK(r.items == 0U);
         CHECK(cmd.bytes_read.load() == bad.size());
-        (void)std::remove(kBrokenFile);
+        (void)std::remove(crd::test::scratch_path(kBrokenFile).c_str());
     }
 }

@@ -10,6 +10,8 @@
 // that finds the run still going after its script cancels it (the backstop) and records that, so a broken path fails
 // instead of hanging. The jobs pool is owned by the listener in test_host_provider.cpp (same binary). ASCII test names.
 
+#include "../ceir-cook/scratch_dir.hpp"
+
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_record.hpp>
@@ -348,7 +350,7 @@ ck::ReplayRecord unobserved(const Authored& a, i64 arg, memory::IAllocator* allo
 
 Array<u8> slurp_bytes(const char* path, memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -361,7 +363,7 @@ Array<u8> slurp_bytes(const char* path, memory::IAllocator* a)
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 bool wait_flag(const std::atomic<bool>& flag, u32 timeout_ms)
@@ -584,7 +586,7 @@ TEST_CASE("diag 9a: a host run stopped, stepped and read under a session records
         // Written, read back and replayed in a fresh Context, it reproduces; main(0)'s fault is at its line.
         const char* const path = arg == 0 ? "diag9a_host_session_fail.crpl" : "diag9a_host_session_ok.crpl";
         forget(path);
-        REQUIRE(ck::write_record_file(StringView{path}, rec) == ck::RecordWrite::Ok);
+        REQUIRE(ck::write_record_file(crd::test::scratch_path(path).view(), rec) == ck::RecordWrite::Ok);
         const Array<u8> bytes = slurp_bytes(path, &alloc);
         forget(path);
         ck::ReplayRecord from_file(&alloc);

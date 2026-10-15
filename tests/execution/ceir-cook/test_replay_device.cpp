@@ -7,6 +7,7 @@
 // program is reported as such. The GPU legs are in the ceir-gpu Vulkan and DX12 device tests. ASCII test names.
 
 #include "device_replay_fixture.hpp"
+#include "scratch_dir.hpp"
 
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/device_replay.hpp>
@@ -168,7 +169,7 @@ ReplayRecord copy_of(const ReplayRecord& r, crd::memory::IAllocator* a)
 
 Array<u8> slurp_bytes(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -265,9 +266,9 @@ TEST_CASE("diag 9a: a device run on the CPU reference is recorded and reproduces
 
     // The encoding is deterministic, and the file decodes to the same bytes.
     const Array<u8> bytes = encode(rec, &alloc);
-    REQUIRE(ck::write_record_file(StringView{kRecordFile}, rec) == ck::RecordWrite::Ok);
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(kRecordFile).view(), rec) == ck::RecordWrite::Ok);
     const Array<u8> file = slurp_bytes(kRecordFile, &alloc);
-    (void)std::remove(kRecordFile);
+    (void)std::remove(crd::test::scratch_path(kRecordFile).c_str());
     REQUIRE(file.size() == bytes.size());
     CHECK(StringView{reinterpret_cast<const char*>(file.data()), file.size()} ==
           StringView{reinterpret_cast<const char*>(bytes.data()), bytes.size()});
@@ -704,12 +705,12 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     // Its own file: CTest runs each case as its own process in one directory, in parallel, and the first case's file
     // was removed under it.
     constexpr const char* unbound_file = "diag9a_device_record_unbound.crpl";
-    (void)std::remove(unbound_file);
-    REQUIRE(ck::write_record_file(StringView{unbound_file}, rec) == ck::RecordWrite::Ok);
+    (void)std::remove(crd::test::scratch_path(unbound_file).c_str());
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(unbound_file).view(), rec) == ck::RecordWrite::Ok);
 
     namespace perf = crd::perf;
     perf::DiagServiceConfig config;
-    config.root = StringView{"."};
+    config.root = crd::test::scratch_root();
     perf::DiagCommandService svc(perf::authority_bit(perf::DiagAuthority::Read) |
                                      perf::authority_bit(perf::DiagAuthority::Execute) |
                                      perf::authority_bit(perf::DiagAuthority::Record),
@@ -734,7 +735,7 @@ TEST_CASE("diag 9a: replay.run refuses a device record on a host with no device 
     REQUIRE(ck::register_replay_prepare(svc, prepare));
     r.command = ck::kReplayPrepareCommand;
     const perf::DiagResult prepared = svc.execute(r);
-    (void)std::remove(unbound_file);
+    (void)std::remove(crd::test::scratch_path(unbound_file).c_str());
     INFO(prepared.json.c_str());
     CHECK(prepared.status == perf::DiagStatus::Ok);
     CHECK(has(view(prepared.json), R"("input":"device-tolerance")"));

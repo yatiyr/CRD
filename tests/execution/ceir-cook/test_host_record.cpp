@@ -13,6 +13,8 @@
 // an asset are refused; and an observer's Cancel ends a session's run. Expected lines and columns come from scanning
 // the text, never from the parser. ASCII test names.
 
+#include "scratch_dir.hpp"
+
 #include <crd/ceir/cook/inspect_host.hpp>
 #include <crd/ceir/cook/inspect_script.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -83,7 +85,7 @@ void registrar(Context& ctx, void* /*user*/)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -106,7 +108,7 @@ Array<u8> slurp_bytes(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, StringView text)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(text.data(), static_cast<std::streamsize>(text.size()));
     REQUIRE(f.good());
@@ -114,7 +116,7 @@ void spill(const char* path, StringView text)
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 StringView view(const String& s)
@@ -211,7 +213,7 @@ constexpr crd::perf::DiagAuthoritySet kAll = crd::perf::authority_bit(DiagAuthor
 DiagServiceConfig here()
 {
     DiagServiceConfig c;
-    c.root = StringView{"."};
+    c.root = crd::test::scratch_root();
     return c;
 }
 
@@ -411,7 +413,7 @@ TEST_CASE("diag 9a: a run inspected on the inspect host records the trace of the
     }
 
     // The replay.run command reproduces it from the file, naming the asset and the generation.
-    REQUIRE(ck::write_record_file(StringView{host_out}, rec) == ck::RecordWrite::Ok);
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(host_out).view(), rec) == ck::RecordWrite::Ok);
     const DiagResult r = replay(c, host_out);
     REQUIRE(r.status == DiagStatus::Ok);
     const StringView j = view(r.json);
@@ -425,7 +427,7 @@ TEST_CASE("diag 9a: a run inspected on the inspect host records the trace of the
     // A record is never overwritten.
     const Array<u8> before = slurp_bytes(host_out, &alloc);
     ReplayRecord    other  = decode_file(plain_out, &alloc);
-    CHECK(ck::write_record_file(StringView{host_out}, other) == ck::RecordWrite::Exists);
+    CHECK(ck::write_record_file(crd::test::scratch_path(host_out).view(), other) == ck::RecordWrite::Exists);
     const Array<u8> after = slurp_bytes(host_out, &alloc);
     REQUIRE(after.size() == before.size());
     bool unchanged = true;
@@ -438,13 +440,13 @@ TEST_CASE("diag 9a: a run inspected on the inspect host records the trace of the
     // DIAG.10b: a path that cannot be created fails, and leaves nothing behind. An existing file used as a directory
     // cannot be written on either platform; neither can a file in a directory that does not exist.
     String under_file(&alloc);
-    under_file.append(host_out);
+    under_file.append(crd::test::scratch_path(host_out).view());
     under_file.append("/record.crpl");
     CHECK(ck::write_record_file(view(under_file), other) == ck::RecordWrite::Failed);
     CHECK(slurp_bytes(host_out, &alloc).size() == before.size());
     const char* const no_dir = "diag10b_no_such_dir/record.crpl";
-    CHECK(ck::write_record_file(StringView{no_dir}, other) == ck::RecordWrite::Failed);
-    CHECK_FALSE(std::ifstream(no_dir, std::ios::binary).good());
+    CHECK(ck::write_record_file(crd::test::scratch_path(no_dir).view(), other) == ck::RecordWrite::Failed);
+    CHECK_FALSE(std::ifstream(crd::test::scratch_path(no_dir).c_str(), std::ios::binary).good());
 
     forget(plain_out);
     forget(host_out);
@@ -491,7 +493,7 @@ TEST_CASE("diag 9a: a host record holds the generation that ran, after the host 
     CHECK(replay_blob(rec, &alloc).kind == ck::DivergenceKind::None);
 
     // Replaying its inputs against the edited program names the edited constant first.
-    REQUIRE(ck::write_record_file(StringView{out}, rec) == ck::RecordWrite::Ok);
+    REQUIRE(ck::write_record_file(crd::test::scratch_path(out).view(), rec) == ck::RecordWrite::Ok);
     Commands         c;
     const DiagResult r = replay(c, out, edited_program);
     REQUIRE(r.status == DiagStatus::Ok);

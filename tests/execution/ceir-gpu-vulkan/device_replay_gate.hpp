@@ -9,6 +9,7 @@
 // commands bound to that executor. Soft-skips are the callers'.
 
 #include "../ceir-cook/device_replay_fixture.hpp"
+#include "../ceir-cook/scratch_dir.hpp"
 
 #include <crd/ceir/cook/device_replay.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -176,7 +177,8 @@ inline ck::ReplayRecord record_on_device(const fx::Authored& a, const ck::Device
     return rec;
 }
 
-// The gate. `backend` is the name the context must report ("vulkan", "dx12"); `record_path` a scratch file.
+// The gate. `backend` is the name the context must report ("vulkan", "dx12"); `record_path` a scratch file name, under
+// the process scratch folder.
 inline void device_replay_gate(crd::gpu::IComputeContext& device, CompileFn compile, void* compile_user,
                                const char* backend, const char* record_path, crd::memory::IAllocator* alloc)
 {
@@ -217,18 +219,19 @@ inline void device_replay_gate(crd::gpu::IComputeContext& device, CompileFn comp
     }
 
     // 2. Through a file, replayed in fresh Contexts on the same adapter and build: bit-identical.
-    (void)std::remove(record_path);
-    REQUIRE(ck::write_record_file(StringView{record_path}, rec) == ck::RecordWrite::Ok);
+    const crd::test::ScratchPath record_file = crd::test::scratch_path(record_path);
+    (void)std::remove(record_file.c_str());
+    REQUIRE(ck::write_record_file(record_file.view(), rec) == ck::RecordWrite::Ok);
     Array<u8> bytes(alloc);
     {
-        std::ifstream f(record_path, std::ios::binary | std::ios::ate);
+        std::ifstream f(record_file.c_str(), std::ios::binary | std::ios::ate);
         REQUIRE(f.good());
         const std::streamsize sz = f.tellg();
         f.seekg(0);
         bytes.resize(static_cast<usize>(sz));
         f.read(reinterpret_cast<char*>(bytes.data()), sz);
     }
-    (void)std::remove(record_path);
+    (void)std::remove(record_file.c_str());
     ck::ReplayRecord back(alloc);
     REQUIRE(ck::decode_record({bytes.data(), bytes.size()}, back) == ck::RecordError::Ok);
     ck::DeviceReplay r(alloc);

@@ -7,6 +7,8 @@
 // DIAG.8c: the program.provenance diagnostic command, given only the cooked blob, names the same CHIR nodes.
 // Expected positions come from scanning the CHIR text, never from the parser. ASCII test names (ctest by-name).
 
+#include "../ceir-cook/scratch_dir.hpp"
+
 #include <crd/chir/lower.hpp>
 #include <crd/chir/node.hpp>
 #include <crd/chir/text.hpp>
@@ -352,7 +354,7 @@ TEST_CASE("diag 8c: program.provenance names the CHIR nodes a cooked CHIR progra
     REQUIRE(crd::chir::parse_chir(sv(text), 0U, model).ok);
     {
         const Array<u8> blob = lower_and_cook(sv(text), kFile, 5300U, &root);
-        std::ofstream   out(kCooked, std::ios::binary | std::ios::trunc);
+        std::ofstream   out(crd::test::scratch_path(kCooked).c_str(), std::ios::binary | std::ios::trunc);
         REQUIRE(out.good());
         out.write(reinterpret_cast<const char*>(blob.data()), static_cast<std::streamsize>(blob.size()));
         REQUIRE(out.good());
@@ -361,7 +363,7 @@ TEST_CASE("diag 8c: program.provenance names the CHIR nodes a cooked CHIR progra
     crd::ceir::cook::ProgramProvenanceCommand cmd;
     cmd.registrar = &registrar;
     crd::perf::DiagServiceConfig config;
-    config.root = StringView(".");
+    config.root = crd::test::scratch_root();
     crd::perf::DiagCommandService svc(crd::perf::authority_bit(crd::perf::DiagAuthority::Read), config, &root);
     REQUIRE(crd::ceir::cook::register_program_provenance(svc, cmd));
     crd::perf::DiagRequest request;
@@ -422,5 +424,5 @@ TEST_CASE("diag 8c: program.provenance names the CHIR nodes a cooked CHIR progra
     char summary[48];
     (void)std::snprintf(summary, sizeof(summary), "\"chir_origins\":%llu,", static_cast<unsigned long long>(named));
     CHECK(contains(r.json, StringView(summary)));
-    (void)std::remove(kCooked);
+    (void)std::remove(crd::test::scratch_path(kCooked).c_str());
 }

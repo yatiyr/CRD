@@ -1690,6 +1690,42 @@ class TestInstruments(unittest.TestCase):
         with self.assertRaises(fuzz_host_check.fuzz.FuzzError):  # its own import of fuzz.py
             fuzz_host_check.find_unit('ceir-text', 'seed-')
 
+    def test_host_check_reads_mmap_rnd_bits_through_each_route(self):
+        # The /proc file is root-only on hosted runners and sysctl reads the same file: each route is tried in turn,
+        # only a zero exit with a number counts, and 'unknown' is left only when every route fails.
+        def result(code, out='', err=''):
+            return subprocess.CompletedProcess([], code, stdout=out, stderr=err)
+
+        def runner(answers):
+            calls = []
+
+            def run(command, **kwargs):
+                calls.append(command[0])
+                self.assertEqual(kwargs.get('timeout'), 10)
+                answer = answers[len(calls) - 1]
+                if isinstance(answer, BaseException):
+                    raise answer
+                return answer
+            return run, calls
+
+        denied = result(255, err="sysctl: permission denied on key 'vm.mmap_rnd_bits'\n")
+        run, calls = runner([])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: '28\n', run=run), '28')
+        self.assertEqual(calls, [])
+        run, calls = runner([result(0, '32\n')])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: '', run=run), '32')
+        self.assertEqual(calls, ['sysctl'])
+        run, calls = runner([denied, result(0, '28\n')])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: '', run=run), '28')
+        self.assertEqual(calls, ['sysctl', 'sudo'])
+        run, calls = runner([FileNotFoundError('sysctl'), result(0, '30\n')])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: '', run=run), '30')
+        run, calls = runner([denied, result(1, err='sudo: a password is required\n')])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: '', run=run), 'unknown')
+        self.assertEqual(calls, ['sysctl', 'sudo'])
+        run, calls = runner([result(0, 'not a number\n'), subprocess.TimeoutExpired('sudo', 10)])
+        self.assertEqual(fuzz_host_check.mmap_rnd_bits(read=lambda path: 'garbage', run=run), 'unknown')
+
     def test_instrument_options_fail_the_configure_instead_of_warning(self):
         text = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
         self.assertNotIn('UBSan not supported on MSVC, ignoring', text)

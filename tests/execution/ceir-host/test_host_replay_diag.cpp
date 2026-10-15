@@ -13,6 +13,8 @@
 // parser.
 // ⛔ The jobs pool is owned by the listener in test_host_provider.cpp (same binary). ASCII test names.
 
+#include "../ceir-cook/scratch_dir.hpp"
+
 #include <crd/ceir/context.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
 #include <crd/ceir/cook/replay_diag.hpp>
@@ -76,7 +78,7 @@ void registrar(Context& ctx, void* /*user*/)
 
 String slurp(const char* path, crd::memory::IAllocator* a)
 {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::ate);
     REQUIRE(f.good());
     const std::streamsize sz = f.tellg();
     f.seekg(0);
@@ -99,7 +101,7 @@ Array<u8> slurp_bytes(const char* path, crd::memory::IAllocator* a)
 
 void spill(const char* path, const void* data, usize size)
 {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    std::ofstream f(crd::test::resolve(path).c_str(), std::ios::binary | std::ios::trunc);
     REQUIRE(f.good());
     f.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     REQUIRE(f.good());
@@ -107,13 +109,13 @@ void spill(const char* path, const void* data, usize size)
 
 bool exists(const char* path)
 {
-    const std::ifstream f(path, std::ios::binary);
+    const std::ifstream f(crd::test::resolve(path).c_str(), std::ios::binary);
     return f.good();
 }
 
 void forget(const char* path)
 {
-    (void)std::remove(path);
+    (void)std::remove(crd::test::resolve(path).c_str());
 }
 
 StringView view(const String& s)
@@ -240,7 +242,7 @@ constexpr crd::perf::DiagAuthoritySet kAll = crd::perf::authority_bit(DiagAuthor
 DiagServiceConfig here()
 {
     DiagServiceConfig c;
-    c.root = StringView{"."};
+    c.root = crd::test::scratch_root();
     return c;
 }
 
