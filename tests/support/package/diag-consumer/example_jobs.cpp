@@ -16,6 +16,7 @@
 #include "examples.hpp"
 
 #include <crd/jobs/jobs.hpp>
+#include <crd/perf/flight_recorder.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -23,8 +24,6 @@
 
 namespace diag_consumer
 {
-
-namespace containers = crd::containers;
 
 namespace
 {
@@ -55,8 +54,9 @@ void sum_slice(void* data)
     }
     slice->sum = sum;
     char text[48];
-    (void)std::snprintf(text, sizeof(text), "slice %u summed", static_cast<unsigned>(slice->index));
-    slice->recorder->record(kSliceSummed, cp::Severity::Info, containers::StringView{text}, slice->index, sum);
+    CRD_FLIGHT_RECORD(slice->recorder, kSliceSummed, cp::Severity::Info,
+                      site_text(text, sizeof(text), "slice %u summed", static_cast<unsigned>(slice->index)),
+                      slice->index, sum);
 }
 
 bool g_late_job_ran = false;

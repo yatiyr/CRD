@@ -22,6 +22,7 @@
 
 #include <crd/core/fault_seam.hpp>
 #include <crd/perf/diag_assets.hpp>
+#include <crd/perf/flight_recorder.hpp>
 #include <crd/toml/toml.hpp>
 
 #include <chrono>
@@ -128,10 +129,11 @@ void reload_limits(cp::DiagnosticHost& host, const char* path, Limits& limits, c
     const char* why    = "";
     const bool  loaded = load_limits(path, limits, why);
     char        text[64];
-    (void)std::snprintf(text, sizeof(text), "limits %s at generation %llu", loaded ? "loaded" : "kept",
-                        static_cast<unsigned long long>(limits.generation));
-    host.recorder().record(loaded ? kLimitsLoaded : kLimitsKept, loaded ? cp::Severity::Info : cp::Severity::Warning,
-                           containers::StringView{text}, limits.generation, static_cast<crd::u64>(limits.max_order));
+    CRD_FLIGHT_RECORD(&host.recorder(), loaded ? kLimitsLoaded : kLimitsKept,
+                      loaded ? cp::Severity::Info : cp::Severity::Warning,
+                      site_text(text, sizeof(text), "limits %s at generation %llu", loaded ? "loaded" : "kept",
+                                static_cast<unsigned long long>(limits.generation)),
+                      limits.generation, static_cast<crd::u64>(limits.max_order));
     std::printf("CONSUMER_RELOAD_DATA attempt=%u result=%s why=%s generation=%llu max_order=%lld\n",
                 static_cast<unsigned>(attempt), loaded ? "loaded" : "kept", loaded ? "none" : why,
                 static_cast<unsigned long long>(limits.generation), static_cast<long long>(limits.max_order));

@@ -1377,10 +1377,11 @@ class PublicConsumption(unittest.TestCase):
         trigger = {'kind': 'trigger', 'trigger': 'fatal-invariant', 'code': package_consumer.FAILURE_CODE,
                    'file': 'C:\\scratch\\diag-consumer\\main.cpp', 'line': 122,
                    'message': package_consumer.FAILURE_MESSAGE}
-        flight = {'kind': 'flight', 'end': 'fatal', 'recorded_before_trigger': 40, 'pre_retained': 40, 'events': 40,
-                  'replay_available': True, 'replay': 'diag-consumer fail <profile.host.toml>'}
+        flight = {'kind': 'flight', 'end': 'fatal', 'detail': 'full', 'recorded_before_trigger': 40,
+                  'pre_retained': 40, 'events': 40, 'replay_available': True,
+                  'replay': 'diag-consumer fail <profile.host.toml>'}
         events = [{'kind': 'event', 'index': i, 'side': 'before', 'code': 0x00A10001, 'value_a': i,
-                   'message': f'order {i} booked {-900 if i % 7 == 6 else 25}',
+                   'value_b': 1 if i % 7 == 6 else 0, 'message': f'order {i} booked {-900 if i % 7 == 6 else 25}',
                    'severity': 'warning' if i % 7 == 6 else 'info'} for i in range(40)]
         build = {'kind': 'build', 'same_as_host': True, 'fault_seams': True}
         symbol = {'kind': 'symbol', 'name': 'diag-consumer.exe'}
@@ -1404,6 +1405,42 @@ class PublicConsumption(unittest.TestCase):
         self.assertIn("summary flight_record: expected True, got False", problems)
         self.assertIn('no trigger item', problems)
         self.assertEqual(judge([], 122, 'diag-consumer.exe', True), ['inspect printed no page'])
+        refund = [dict(event, value_b=0) if event['index'] == 6 else event for event in events]
+        problems = judge([page([trigger, flight] + refund + [build, symbol], summary)], 122, 'diag-consumer.exe', True)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertTrue(problems[0].startswith('event 6:'), problems)
+
+        # The same failure at the basic detail: only the five refunds (orders 6, 13, 20, 27, 34) are kept, renumbered.
+        self.assertEqual(package_consumer.REFUNDS, (6, 13, 20, 27, 34))
+        basic_flight = dict(flight, detail='basic', recorded_before_trigger=5, pre_retained=5, events=5)
+        basic_events = [dict(events[order], index=index) for index, order in enumerate(package_consumer.REFUNDS)]
+        basic = [page([trigger, basic_flight] + basic_events + [build, symbol], summary)]
+        self.assertEqual(judge(basic, 122, 'diag-consumer.exe', True, 'basic'), [])
+        self.assertEqual(judge(basic, 122, 'diag-consumer.exe', True),
+                         ["flight detail: expected 'full', got 'basic'",
+                          'flight recorded_before_trigger: expected 40, got 5',
+                          'flight pre_retained: expected 40, got 5', 'flight events: expected 40, got 5',
+                          'expected 40 events, got 5'])
+        self.assertIn('flight detail: expected \'basic\', got \'full\'',
+                      judge(pages, 122, 'diag-consumer.exe', True, 'basic'))
+        informational = [page([trigger, basic_flight] + [dict(events[0], index=0)] + basic_events[1:] + [build, symbol],
+                              summary)]
+        problems = judge(informational, 122, 'diag-consumer.exe', True, 'basic')
+        self.assertEqual(len(problems), 1, problems)
+        self.assertTrue(problems[0].startswith('event 0:'), problems)
+
+        # The application's sites formatted exactly the messages the recorder kept: an eager site formats all forty.
+        sites = package_consumer.sites_problems
+        self.assertEqual(sites('CONSUMER_SITES detail=full formatted=40 recorded=40 filtered=0\n', 'full'), [])
+        self.assertEqual(sites('CONSUMER_SITES detail=basic formatted=5 recorded=5 filtered=35\n', 'basic'), [])
+        self.assertEqual(sites('CONSUMER_SITES detail=basic formatted=40 recorded=5 filtered=35\n', 'basic'),
+                         ["CONSUMER_SITES formatted: expected '5', got '40'"])
+        self.assertEqual(sites('CONSUMER_SITES detail=full formatted=40 recorded=40 filtered=0\n', 'basic'),
+                         ["CONSUMER_SITES detail: expected 'basic', got 'full'",
+                          "CONSUMER_SITES formatted: expected '5', got '40'",
+                          "CONSUMER_SITES recorded: expected '5', got '40'",
+                          "CONSUMER_SITES filtered: expected '35', got '0'"])
+        self.assertEqual(sites('no sites line\n', 'full'), ['CONSUMER_SITES: line missing'])
         self.assertEqual(package_consumer.inspect_pages('noise\nCONSUMER_INSPECT_PAGE {"status":"ok"}\n'),
                          [{'status': 'ok'}])
         caps = {'items': [{'name': 'fault-injection', 'compiled': False}]}

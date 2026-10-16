@@ -2714,6 +2714,11 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   This is the modes contract's "disabled event sites must not evaluate expensive payload expressions", held by
   side-effect controls, and a Basic recorder no longer serializes informational sites on its ring (a no-wait case with
   the ring held). Application sites use the macro; a direct `record()` stays for code that already holds its payload.
+  The installed application (`tests/support/package/diag-consumer`) writes every site in this form, formatting its
+  message inside the message argument (`site_text`, which counts); `crd-package-consumer` runs its failure at the
+  full and the basic detail and holds the messages formatted to the events kept (all forty orders at full; at basic
+  the five refunds, with the other thirty-five left out unformatted and the bundle holding only the five).
+  ([session](../sessions/2026-10-16-diag-11b-installed-sites.md))
 - The modes as measured: off (no host, no recorder, profiler not started: runtime-disabled; in a binary built without
   profiling also compiled-out), basic (the `DiagnosticHost` with `assets/diag/overhead_basic.flight.toml`, Warning and
   above), full (`overhead_full.flight.toml`, every event, plus the profiler, the jobs adapter and the CEIR profiling

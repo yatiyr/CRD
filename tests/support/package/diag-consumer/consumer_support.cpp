@@ -5,7 +5,9 @@
 #include <crd/core/build_config.hpp>
 #include <crd/core/fault_seam.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <thread>
 
@@ -19,6 +21,38 @@ namespace diag_consumer
 {
 
 namespace containers = crd::containers;
+
+namespace
+{
+
+std::atomic<crd::u64> g_site_texts{0U}; // the messages site_text formatted
+
+} // namespace
+
+containers::StringView site_text(char* buffer, crd::usize capacity, const char* format, ...)
+{
+    g_site_texts.fetch_add(1U, std::memory_order_relaxed);
+    if (capacity == 0U)
+    {
+        return containers::StringView{};
+    }
+    std::va_list args;
+    va_start(args, format);
+    const int written = std::vsnprintf(buffer, capacity, format, args);
+    va_end(args);
+    const crd::usize length = written < 0 ? 0U : static_cast<crd::usize>(written);
+    return containers::StringView{buffer, length < capacity ? length : capacity - 1U};
+}
+
+void print_sites(const cp::FlightRecorder& recorder)
+{
+    std::printf("CONSUMER_SITES detail=%s formatted=%llu recorded=%llu filtered=%llu\n",
+                cp::flight_detail_name(recorder.policy().detail).data(),
+                static_cast<unsigned long long>(g_site_texts.load(std::memory_order_relaxed)),
+                static_cast<unsigned long long>(recorder.total_recorded()),
+                static_cast<unsigned long long>(recorder.total_filtered()));
+    (void)std::fflush(stdout);
+}
 
 void run_headless()
 {

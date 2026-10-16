@@ -20,7 +20,9 @@ installed external consumer). One run proves, for one profile (generator, compil
   the engine's DiagnosticHost from a profile authored from the installed assets, reports this binary's capabilities
   (profiling compiled in or out, fault injection compiled out of a shipping build), fails a fatal invariant on
   purpose and leaves a flight bundle, which its own `inspect` route (bundle.inspect) decodes into the trigger at the
-  failing line, the forty events before it, this build and its own module identity;
+  failing line, the forty events before it, this build and its own module identity; the failure runs again with the
+  flight policy at the basic detail, where the bundle holds only the five refunds (Warning), and at both details the
+  application's event sites (CRD_FLIGHT_RECORD) formatted exactly the messages the recorder kept;
 - the application's examples, each a fresh process started from a profile authored from the installed assets, show
   what they must: allocator selection (a TLSF heap or the diagnostic allocator over it, watched by the host, exhausted
   into an allocation-failure bundle; the diagnostic choice also reports a redzone overrun before the failure), jobs
@@ -79,6 +81,10 @@ FAILURE_CODE = 0x00A10002
 FAILURE_MESSAGE = 'the order total went negative'
 FAILURE_SOURCE = 'CRD_DIAG_INVARIANT(total >= 0'
 ORDERS = 40
+# The failure runs at both flight details (DIAG.11b's event-site form, CRD_FLIGHT_RECORD). At full every order is
+# recorded; at basic only the refunds (Warning) are, and the other orders' sites format no message.
+FAILURE_DETAILS = ('full', 'basic')
+REFUNDS = tuple(order for order in range(ORDERS) if order % 7 == 6)
 RUN_TIMEOUT = 120
 # A member of crd::perf::FlightRecorder::Impl, a type defined only in engine/foundation/perf/src/flight_recorder.cpp:
 # an application's debug information names it only when the archives' debug information was linked.
@@ -388,8 +394,14 @@ def capability(document, name):
     return next((item for item in document.get('items', []) if item.get('name') == name), None)
 
 
-def investigation_problems(pages, failure_line, executable_name, fault_seams):
-    """What a bundle.inspect of the consumer's flight bundle must show, as problems."""
+def kept_orders(detail):
+    """The orders the failure's flight recorder keeps at `detail`: every one at full, the refunds at basic."""
+    return tuple(range(ORDERS)) if detail == 'full' else REFUNDS
+
+
+def investigation_problems(pages, failure_line, executable_name, fault_seams, detail='full'):
+    """What a bundle.inspect of the consumer's flight bundle, recorded at `detail`, must show, as problems."""
+    kept = kept_orders(detail)
     problems = []
     if not pages:
         return ['inspect printed no page']
@@ -416,19 +428,19 @@ def investigation_problems(pages, failure_line, executable_name, fault_seams):
     if flight is None:
         problems.append('no flight item')
     else:
-        for key, value in (('end', 'fatal'), ('recorded_before_trigger', ORDERS), ('pre_retained', ORDERS),
-                           ('events', ORDERS), ('replay_available', True),
+        for key, value in (('end', 'fatal'), ('detail', detail), ('recorded_before_trigger', len(kept)),
+                           ('pre_retained', len(kept)), ('events', len(kept)), ('replay_available', True),
                            ('replay', 'diag-consumer fail <profile.host.toml>')):
             if flight.get(key) != value:
                 problems.append(f'flight {key}: expected {value!r}, got {flight.get(key)!r}')
     events = [item for item in items if item.get('kind') == 'event']
-    if len(events) != ORDERS:
-        problems.append(f'expected {ORDERS} events, got {len(events)}')
+    if len(events) != len(kept):
+        problems.append(f'expected {len(kept)} events, got {len(events)}')
     else:
-        for index, event in enumerate(events):
-            amount = -900 if index % 7 == 6 else 25
-            wanted = {'index': index, 'side': 'before', 'code': 0x00A10001, 'value_a': index,
-                      'message': f'order {index} booked {amount}',
+        for index, (event, order) in enumerate(zip(events, kept)):
+            amount = -900 if order % 7 == 6 else 25
+            wanted = {'index': index, 'side': 'before', 'code': 0x00A10001, 'value_a': order,
+                      'value_b': 1 if amount < 0 else 0, 'message': f'order {order} booked {amount}',
                       'severity': 'warning' if amount < 0 else 'info'}
             wrong = {key: event.get(key) for key, value in wanted.items() if event.get(key) != value}
             if wrong:
@@ -443,6 +455,15 @@ def investigation_problems(pages, failure_line, executable_name, fault_seams):
     if executable_name.lower() not in names:
         problems.append(f'no module identity names {executable_name}: {names}')
     return problems
+
+
+def sites_problems(output, detail):
+    """What the failure's CONSUMER_SITES line must say at `detail`, as problems: the application's sites formatted the
+    message of exactly the orders the recorder kept, and the recorder left the others out unformatted."""
+    kept = len(kept_orders(detail))
+    return field_problems('CONSUMER_SITES', single(output, 'CONSUMER_SITES'),
+                          {'detail': detail, 'formatted': str(kept), 'recorded': str(kept),
+                           'filtered': str(ORDERS - kept)})
 
 
 def author_assignments(text, values, what):
@@ -817,8 +838,8 @@ class Session:
         self.report['outcome'] = 'pass'
 
     def diagnostic_application(self, moved, version, debug_information):
-        """Build the thin diagnostic application against the moved prefix, let it fail on purpose, and investigate
-        the bundle it leaves with its own inspect route."""
+        """Build the thin diagnostic application against the moved prefix, let it fail on purpose at each flight
+        detail, investigate the bundle it leaves with its own inspect route, and run its examples."""
         profile = self.profile
         source = self.scratch / 'diag-consumer'
         build = self.scratch / 'diag-consumer-build'
@@ -854,27 +875,41 @@ class Session:
         print(f'[package-consumer] the diagnostic application built against the moved prefix; the engine\'s debug '
               f'information ({debug_information}) reached its symbols', flush=True)
 
-        # The application's profile, authored from the installed investigation profile: the installed flight policy,
-        # crash dumps and flight bundles kept in this run's directory.
-        run_dir = self.scratch / 'diag-run'
+        fault_seams = not on(profile['defines'].get('CRD_SHIPPING', 'OFF'))
+        self.report['diagnostic_application'] = {}
+        for detail in FAILURE_DETAILS:
+            self.failure(executable, asset_dir, detail, fault_seams)
+        self.examples(executable, asset_dir, fault_seams)
+
+    def failure(self, executable, asset_dir, detail, fault_seams):
+        """Run the application to its deliberate failure with its flight recorder at `detail`, and investigate the
+        bundle it leaves with its own inspect route."""
+        profile = self.profile
+        # The application's profile, authored from the installed investigation profile: crash dumps and flight bundles
+        # kept in this run's directory, and the installed flight policy (at basic, a copy recording at that detail).
+        run_dir = self.scratch / ('diag-run' if detail == 'full' else f'diag-run-{detail}')
         captures = run_dir / 'captures'
         captures.mkdir(parents=True)
+        policy = asset_dir / 'diag/flight_default.flight.toml'
+        if detail != 'full':
+            text = author_assignments(policy.read_text(encoding='utf-8'), {'detail': f'"{detail}"'}, 'flight policy')
+            policy = run_dir / 'application.flight.toml'
+            policy.write_text(text, encoding='utf-8')
         text = (asset_dir / 'diag/host_investigate.host.toml').read_text(encoding='utf-8')
         replacements = {'crash_dir': f'"{(run_dir / "crashes").as_posix()}"', 'capture_dir': f'"{captures.as_posix()}"',
-                        'flight_policy': f'"{(asset_dir / "diag/flight_default.flight.toml").as_posix()}"'}
+                        'flight_policy': f'"{policy.as_posix()}"'}
         text = author_assignments(text, replacements, 'investigation profile')
         profile_path = run_dir / 'application.host.toml'
         profile_path.write_text(text, encoding='utf-8')
 
-        shipping = on(profile['defines'].get('CRD_SHIPPING', 'OFF'))
-        fault_seams = not shipping
         try:
-            result = self.step('run the diagnostic application to its deliberate failure',
+            result = self.step(f'run the diagnostic application to its deliberate failure (flight detail {detail})',
                                [executable, 'fail', profile_path], run_dir, expect_failure=True, timeout=RUN_TIMEOUT)
         except subprocess.TimeoutExpired as error:
             raise ConsumerError(f'the diagnostic application did not end within {RUN_TIMEOUT} s') from error
         output = result.stdout + result.stderr
-        self.report['diagnostic_application'] = {'exit_code': result.returncode, 'output': output.splitlines()[-40:]}
+        self.report['diagnostic_application'][detail] = {'exit_code': result.returncode,
+                                                         'output': output.splitlines()[-40:]}
         expected = expected_values(profile)
         values = parse_output(next((line for line in output.splitlines() if line.startswith('CONSUMER_BUILD ')), ''))
         build_expected = {'asserts': str(expected['asserts']), 'profiling': str(expected['profiling']),
@@ -899,23 +934,30 @@ class Session:
                 raise ConsumerError(f'diag.capabilities {name}: expected compiled={compiled}, got {item}')
         if capability(caps, 'flight-recorder').get('usable') is not True:
             raise ConsumerError('the live flight recorder is not usable')
+        problems = sites_problems(output, detail)
+        if problems:
+            raise ConsumerError(f'the application\'s event sites at the {detail} detail:\n  ' + '\n  '.join(problems) +
+                                f'\n{output_tail(result)}')
         bundles = sorted(path.name for path in captures.glob('flight-*.cdb'))
         if bundles != ['flight-0.cdb']:
             raise ConsumerError(f'expected one flight bundle in the capture directory, found {bundles}')
+        kept = len(kept_orders(detail))
         print(f'[package-consumer] the application failed on purpose (exit {result.returncode}) and left '
-              f'{bundles[0]}; profiling compiled={bool(expected["profiling"])}, fault injection {faults}', flush=True)
+              f'{bundles[0]}; profiling compiled={bool(expected["profiling"])}, fault injection {faults}; at the '
+              f'{detail} detail its sites formatted {kept} of {ORDERS} messages', flush=True)
 
-        result = self.step("investigate the bundle with the application's inspect route",
+        result = self.step(f"investigate the {detail} bundle with the application's inspect route",
                            [executable, 'inspect', captures, bundles[0]], run_dir, timeout=RUN_TIMEOUT)
         failure_line = next(number for number, line in
                             enumerate((DIAG_CONSUMER / 'main.cpp').read_text(encoding='utf-8').splitlines(), 1)
                             if FAILURE_SOURCE in line)
-        problems = investigation_problems(inspect_pages(result.stdout), failure_line, executable.name, fault_seams)
+        problems = investigation_problems(inspect_pages(result.stdout), failure_line, executable.name, fault_seams,
+                                          detail)
         if problems:
-            raise ConsumerError('the investigation did not find the failure:\n  ' + '\n  '.join(problems))
-        print(f'[package-consumer] bundle.inspect named the fatal invariant at main.cpp:{failure_line}, the {ORDERS} '
-              "orders before it, this build and the application's own module", flush=True)
-        self.examples(executable, asset_dir, fault_seams)
+            raise ConsumerError(f'the investigation at the {detail} detail did not find the failure:\n  ' +
+                                '\n  '.join(problems))
+        print(f'[package-consumer] bundle.inspect named the fatal invariant at main.cpp:{failure_line}, the {kept} '
+              f"orders the {detail} detail kept before it, this build and the application's own module", flush=True)
 
     def examples(self, executable, asset_dir, fault_seams):
         """Run the application's examples (allocator selection, jobs, reload, capture), each in a fresh process from a

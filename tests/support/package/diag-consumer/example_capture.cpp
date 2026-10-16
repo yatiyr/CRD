@@ -13,14 +13,14 @@
 #include "consumer_support.hpp"
 #include "examples.hpp"
 
+#include <crd/perf/flight_recorder.hpp>
+
 #include <chrono>
 #include <cstdio>
 #include <thread>
 
 namespace diag_consumer
 {
-
-namespace containers = crd::containers;
 
 namespace
 {
@@ -53,13 +53,15 @@ int example_capture(const char* profile_path)
     for (crd::u32 frame = 0U; frame < kFrames; ++frame)
     {
         const crd::u64 begin = cp::diagnostic_now_ns();
-        (void)std::snprintf(text, sizeof(text), "frame %u simulated", static_cast<unsigned>(frame));
-        host.recorder().record(kFrameWork, cp::Severity::Info, containers::StringView{text}, frame, 8U);
+        CRD_FLIGHT_RECORD(&host.recorder(), kFrameWork, cp::Severity::Info,
+                          site_text(text, sizeof(text), "frame %u simulated", static_cast<unsigned>(frame)), frame, 8U);
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
         if (requested < kRequests && frame == kFirstRequestFrame + (requested * kRequestInterval))
         {
-            (void)std::snprintf(text, sizeof(text), "capture requested at frame %u", static_cast<unsigned>(frame));
-            (void)run_command(service, "flight.trigger", "message", text);
+            char request[64];
+            (void)std::snprintf(request, sizeof(request), "capture requested at frame %u",
+                                static_cast<unsigned>(frame));
+            (void)run_command(service, "flight.trigger", "message", request);
             ++requested;
         }
         (void)host.frame(begin, cp::diagnostic_now_ns());

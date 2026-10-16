@@ -136,6 +136,10 @@ floating-point options every consumer of the math headers must compile with). Ev
   family's examples, allocator selection, jobs, reload and capture, one `example_*.cpp` each, and links `Cerid::memory`,
   `Cerid::jobs` and `Cerid::toml` besides `Cerid::perf`, the modules they name. The proof runs each in its own process
   from a profile authored from the installed assets and judges what it prints and the bundles it leaves.
+- Amended 2026-10-16 ([session](../sessions/2026-10-16-diag-11b-installed-sites.md)): the application's event sites
+  use the installed site form (`CRD_FLIGHT_RECORD`), and the proof runs the deliberate failure twice, at the installed
+  flight policy's full detail and at a basic copy of it, holding the messages the sites formatted to the events the
+  recorder kept ([DIAG.11b](runtime-diagnostics.md#diag-11b)).
 
 ## Not in scope
 

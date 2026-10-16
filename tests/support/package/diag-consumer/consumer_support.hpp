@@ -1,16 +1,19 @@
 #pragma once
 
 // What every route of the diagnostic application shares (DIAG.11a): the headless setup, the build line, the
-// application's event codes, starting the engine's DiagnosticHost from an authored profile, running one diagnostic
-// command through the host's own service, and waiting for the host to write a capture.
+// application's event codes, how its event sites format their messages, starting the engine's DiagnosticHost from an
+// authored profile, running one diagnostic command through the host's own service, and waiting for the host to write
+// a capture.
 //
 // Every line the application prints starts with CONSUMER_ and carries key=value fields, so
 // scripts/test-package-consumer.py can judge it.
 
+#include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/flight_recorder.hpp>
 
 namespace diag_consumer
 {
@@ -29,6 +32,24 @@ inline constexpr cp::EventCode kSliceSummed    = 0x00A10020U; // jobs example: a
 inline constexpr cp::EventCode kLimitsLoaded   = 0x00A10030U; // reload example: a = generation, b = max_order
 inline constexpr cp::EventCode kLimitsKept     = 0x00A10031U; // reload example: a = generation kept
 inline constexpr cp::EventCode kFrameWork      = 0x00A10040U; // capture example: a = frame, b = items
+
+// The application's event sites are written in the engine's site form, CRD_FLIGHT_RECORD
+// (crd/perf/flight_recorder.hpp), with the message formatted by site_text inside the macro's message argument. The
+// macro evaluates that argument only when the flight recorder keeps the event, so at the basic detail, which keeps
+// Warning and above, an informational site formats nothing, and with the flight recorder off no site does.
+//
+// site_text formats one message into `buffer` (clipped to `capacity` - 1 bytes, as the recorder clips a message to its
+// field) and counts it; it is thread-safe, as sites run on the jobs pool's workers too.
+#if defined(__GNUC__) || defined(__clang__)
+[[nodiscard]] crd::containers::StringView site_text(char* buffer, crd::usize capacity, const char* format, ...)
+    __attribute__((format(printf, 3, 4)));
+#else
+[[nodiscard]] crd::containers::StringView site_text(char* buffer, crd::usize capacity, const char* format, ...);
+#endif
+
+// CONSUMER_SITES: how many messages site_text formatted in this process, beside what `recorder` recorded and left out
+// (FlightRecorder::total_recorded and total_filtered) and the detail it records at.
+void print_sites(const cp::FlightRecorder& recorder);
 
 // A failing check must end the process with its evidence, never wait on a dialog nobody will click.
 void run_headless();

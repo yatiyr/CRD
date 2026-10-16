@@ -5,9 +5,11 @@
 // diagnostic family.
 //
 //   diag-consumer fail <profile.host.toml>              start the host from the profile, record forty orders into the
-//                                                       flight recorder, then fail a fatal invariant; the profile's
-//                                                       capture directory receives the flight bundle before the
-//                                                       process dies (exit 0 means the fatal path returned: a defect)
+//                                                       flight recorder (all forty at the policy's full detail, the
+//                                                       five refunds at basic), then fail a fatal invariant; the
+//                                                       profile's capture directory receives the flight bundle before
+//                                                       the process dies (exit 0 means the fatal path returned: a
+//                                                       defect)
 //   diag-consumer inspect <directory> <bundle name>     read that bundle through bundle.inspect (the bounded,
 //                                                       non-executing importer) and print every page's JSON
 //   diag-consumer allocator <profile> <tlsf|diagnostic> allocator selection: the owner's allocator, watched by the
@@ -22,7 +24,8 @@
 //
 // scripts/test-package-consumer.py builds it against the moved prefix of every profile it packages and judges the
 // output: the host's modes, the bundles, the trigger at this file's failing line, the events before it, this build,
-// this executable's own module identity, and what each example must show.
+// this executable's own module identity, and what each example must show. It runs the failure at both details and
+// holds the messages the sites formatted (CONSUMER_SITES) to the events the recorder kept.
 #include "consumer_support.hpp"
 #include "examples.hpp"
 
@@ -31,6 +34,7 @@
 #include <crd/perf/diag_commands.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
+#include <crd/perf/flight_recorder.hpp>
 
 #include <cstdio>
 #include <cstring>
@@ -70,18 +74,21 @@ int fail(const char* profile_path)
     std::printf("CONSUMER_CAPABILITIES %s\n", caps.json.c_str());
     (void)std::fflush(stdout);
 
-    // The application's work: forty orders, recorded as they are booked (a refund as a warning, value_b = 1).
+    // The application's work: forty orders, recorded as they are booked (a refund as a warning, value_b = 1). A
+    // site's message is formatted only when the recorder keeps the event: at the full detail every order's, at the
+    // basic detail only the refunds'.
     crd::i64 total = 0;
     char     text[48];
     for (crd::u32 i = 0U; i < 40U; ++i)
     {
         const crd::i64 amount = (i % 7U == 6U) ? -900 : 25;
         total += amount;
-        (void)std::snprintf(text, sizeof(text), "order %u booked %lld", static_cast<unsigned>(i),
-                            static_cast<long long>(amount));
-        host.recorder().record(kOrderRecorded, amount < 0 ? cp::Severity::Warning : cp::Severity::Info,
-                               containers::StringView{text}, i, amount < 0 ? 1U : 0U);
+        CRD_FLIGHT_RECORD(&host.recorder(), kOrderRecorded, amount < 0 ? cp::Severity::Warning : cp::Severity::Info,
+                          site_text(text, sizeof(text), "order %u booked %lld", static_cast<unsigned>(i),
+                                    static_cast<long long>(amount)),
+                          i, amount < 0 ? 1U : 0U);
     }
+    print_sites(host.recorder());
 
     // The deliberate failure: refunds outran the bookings.
     CRD_DIAG_INVARIANT(total >= 0, kTotalNegative, "the order total went negative");

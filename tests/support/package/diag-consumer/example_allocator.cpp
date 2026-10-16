@@ -25,14 +25,13 @@
 
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
+#include <crd/perf/flight_recorder.hpp>
 
 #include <cstdio>
 #include <cstring>
 
 namespace diag_consumer
 {
-
-namespace containers = crd::containers;
 
 namespace
 {
@@ -79,13 +78,10 @@ void on_violation(const crd::memory::Violation& v, void* user)
     }
     ++log->count;
     char text[96];
-    (void)std::snprintf(text, sizeof(text), "heap violation %s at byte %llu", violation_name(v.kind),
-                        static_cast<unsigned long long>(v.byte_offset));
-    if (log->recorder != nullptr)
-    {
-        log->recorder->record(kHeapViolation, cp::Severity::RecoverableError, containers::StringView{text},
-                              static_cast<crd::u64>(v.kind), v.byte_offset);
-    }
+    CRD_FLIGHT_RECORD(log->recorder, kHeapViolation, cp::Severity::RecoverableError,
+                      site_text(text, sizeof(text), "heap violation %s at byte %llu", violation_name(v.kind),
+                                static_cast<unsigned long long>(v.byte_offset)),
+                      static_cast<crd::u64>(v.kind), v.byte_offset);
 }
 
 // Book orders from the owner's allocator until it is exhausted, then release them. `diagnostic` is the chosen
@@ -113,8 +109,9 @@ int book_orders(cp::DiagnosticHost& host, crd::memory::IAllocator& chosen, crd::
         }
         std::memset(block, 0x11, kOrderBytes);
         blocks[booked] = block;
-        (void)std::snprintf(text, sizeof(text), "order %u reserved", static_cast<unsigned>(booked));
-        host.recorder().record(kOrderReserved, cp::Severity::Info, containers::StringView{text}, booked, kOrderBytes);
+        CRD_FLIGHT_RECORD(&host.recorder(), kOrderReserved, cp::Severity::Info,
+                          site_text(text, sizeof(text), "order %u reserved", static_cast<unsigned>(booked)), booked,
+                          kOrderBytes);
         if (diagnostic != nullptr && booked == kOverrunOrder)
         {
             // The application's defect: one byte written past the order it owns, then caught by a redzone check.
@@ -129,8 +126,8 @@ int book_orders(cp::DiagnosticHost& host, crd::memory::IAllocator& chosen, crd::
     for (crd::u32 i = 0U; i < booked; ++i)
     {
         orders->deallocate(blocks[i]); // the overrun order is reported again by the check its release runs
-        (void)std::snprintf(text, sizeof(text), "order %u released", static_cast<unsigned>(i));
-        host.recorder().record(kOrderReleased, cp::Severity::Info, containers::StringView{text}, i, 0U);
+        CRD_FLIGHT_RECORD(&host.recorder(), kOrderReleased, cp::Severity::Info,
+                          site_text(text, sizeof(text), "order %u released", static_cast<unsigned>(i)), i, 0U);
     }
     if (!wait_for_bundles(host, 1U, 10000U))
     {
