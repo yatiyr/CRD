@@ -316,11 +316,14 @@ bool DiagCommandPanel::set_path(cont::StringView path)
     {
         return false;
     }
+    // Clear the whole field, then copy: the terminator is the field's own zero, so no store indexed by the view's
+    // size remains for GCC's link-time ranges to flag (-Wstringop-overflow after the refusal above), and no stale
+    // bytes of a longer earlier path stay behind the terminator.
+    std::memset(m_path, 0, sizeof(m_path));
     if (!path.empty()) // an empty view may have no data, and memcpy's source must never be null
     {
         std::memcpy(m_path, path.data(), path.size());
     }
-    m_path[path.size()] = '\0';
     return true;
 }
 

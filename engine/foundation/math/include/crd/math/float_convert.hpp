@@ -549,16 +549,20 @@ inline void store8_bytes(__m256i v, crd::u8* dst) noexcept
 inline void convert_f32_to_f16(std::span<const crd::f32> src, std::span<crd::u16> dst) noexcept
 {
     CRD_ASSERT_MSG(src.size() == dst.size(), "convert_f32_to_f16: size mismatch");
+    const crd::usize n = src.size();
     crd::usize i = 0;
 #if CRD_MATH_HAS_F16C
-    for (; i + 8U <= src.size(); i += 8U)
+    // The vector part ends at a closed-form index, so the scalar tail provably runs fewer than eight times (GCC's
+    // link-time ranges otherwise report -Waggressive-loop-optimizations on the tail of a constant-size call).
+    const crd::usize vector_end = n - (n % 8U);
+    for (; i < vector_end; i += 8U)
     {
         const __m256 v = _mm256_loadu_ps(src.data() + i);
         const __m128i h = _mm256_cvtps_ph(v, _MM_FROUND_TO_NEAREST_INT); // explicit RNE imm
         _mm_storeu_si128(reinterpret_cast<__m128i*>(dst.data() + i), h);
     }
 #endif
-    for (; i < src.size(); ++i)
+    for (; i < n; ++i)
     {
         dst[i] = f32_to_f16_bits(src[i]);
     }

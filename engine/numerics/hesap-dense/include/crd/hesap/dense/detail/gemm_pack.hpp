@@ -157,9 +157,12 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
         // 4-way p-INTERLEAVE — for the hot effective-row-major cases (RowMajor/None, ColMajor/adjoint:
         // the supernodal panels) each effective row p is a contiguous source run; reading rows one at a
         // time is a single DRAM stream, four interleaved rows are four (the measured 22.7 → 36.9 GB/s
-        // mechanism). Pure copy reordering ⇒ bit-identical packed bytes.
+        // mechanism). Pure copy reordering ⇒ bit-identical packed bytes. The interleaved rows end at a closed-form
+        // row, so the remainder provably runs fewer than four times (GCC's link-time ranges otherwise lose that and
+        // report -Waggressive-loop-optimizations on the remainder rows).
+        const crd::usize interleaved_end = kc - (kc % 4);
         crd::usize p = 0;
-        for (; p + 4 <= kc; p += 4)
+        for (; p < interleaved_end; p += 4)
         {
             for (crd::usize j_local = 0; j_local < GemmTraits<T>::NR; ++j_local)
             {

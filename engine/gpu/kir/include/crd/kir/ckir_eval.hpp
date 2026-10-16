@@ -130,8 +130,11 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
 {
     using namespace eval_detail;
     const int                        nn = g.size();
+    // The node count as a size. A graph never holds a negative count; spelling that out keeps GCC's link-time ranges
+    // from reading a negative `int` cast to a near-2^64 resize (-Wstringop-overflow on the fills below).
+    const crd::usize node_count = nn > 0 ? static_cast<crd::usize>(nn) : 0U;
     crd::containers::Array<crd::i64>  off(scratch);
-    off.reserve(static_cast<crd::usize>(nn));
+    off.reserve(node_count);
     crd::i64 total = 0;
     for (int i = 0; i < nn; ++i) // vecN: comps values/element
     {
@@ -145,7 +148,7 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
     // A4 tier-2: mark body-scoped (loop-varying) nodes — LoopIndex/LoopAcc + their consumers; a For is a barrier (its
     // result is loop-invariant). body_of[i] = the For that owns varying node i (single-level; no nesting yet).
     crd::containers::Array<crd::u8> varying(scratch);
-    varying.resize(static_cast<crd::usize>(nn), 0);
+    varying.resize(node_count, 0);
     for (int i = 0; i < nn; ++i)
     {
         const KNode& v = g.node(i);
@@ -168,7 +171,7 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
         }
     }
     crd::containers::Array<int> body_of(scratch);
-    body_of.resize(static_cast<crd::usize>(nn), -1);
+    body_of.resize(node_count, -1);
     crd::containers::Array<int> rstk(scratch);
     for (int fi = 0; fi < nn; ++fi)
     {

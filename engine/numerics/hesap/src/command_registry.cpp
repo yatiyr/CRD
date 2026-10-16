@@ -185,8 +185,8 @@ bool CommandRegistry::register_command(CommandSchema schema, CommandImpl impl) n
 
 const CommandRecord* CommandRegistry::find(crd::containers::StringView name) const noexcept
 {
-    crd::containers::String key{name, m_index.allocator()};
-    const auto* idx = m_index.find(key);
+    // Heterogeneous lookup: the index hashes and compares a view against its String keys, so no key is copied.
+    const auto* idx = m_index.find(name);
     if (idx == nullptr)
     {
         return nullptr;

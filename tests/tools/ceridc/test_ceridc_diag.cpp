@@ -547,7 +547,7 @@ TEST_CASE("diag: the real ceridc binary answers the same bytes from the command 
         REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_out.json")), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         CHECK(view(out) == view(expected.json));
     }
@@ -691,7 +691,7 @@ TEST_CASE("diag: the real ceridc binary runs program.inspect only under its exec
     REQUIRE(fs::read_file_text(fs::Path(StringView("ceridc_diag_inspect_out.json")), out));
     while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
     {
-        out.resize(out.size() - 1U);
+        out.pop_back();
     }
     CHECK(view(out) == view(expected.json));
 
@@ -758,7 +758,7 @@ TEST_CASE("diag: a run record made by one ceridc process reproduces in another a
         REQUIRE(fs::read_file_text(fs::Path(StringView(kReplayOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };
@@ -904,7 +904,7 @@ TEST_CASE("diag: a seeded random failure recorded by one ceridc process reproduc
         REQUIRE(fs::read_file_text(fs::Path(StringView(kRandomOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };
@@ -1049,7 +1049,7 @@ TEST_CASE("diag: a host record made by one ceridc process reproduces in another 
         REQUIRE(fs::read_file_text(fs::Path(StringView(kHostOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };
@@ -1203,7 +1203,7 @@ TEST_CASE("diag: a time-step failure recorded by one ceridc process reproduces i
         REQUIRE(fs::read_file_text(fs::Path(StringView(kClockOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };
@@ -1378,7 +1378,7 @@ TEST_CASE("diag: an unhandled event recorded by one ceridc process reproduces in
         REQUIRE(fs::read_file_text(fs::Path(StringView(kEventOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };
@@ -1538,7 +1538,7 @@ TEST_CASE("diag: a device record made by one ceridc process reproduces in anothe
         REQUIRE(fs::read_file_text(fs::Path(StringView(kDeviceOut)), out));
         while (!out.empty() && (out.data()[out.size() - 1U] == '\n' || out.data()[out.size() - 1U] == '\r'))
         {
-            out.resize(out.size() - 1U);
+            out.pop_back();
         }
         return out;
     };

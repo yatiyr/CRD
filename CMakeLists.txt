@@ -661,6 +661,10 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
             "ZSTD_BUILD_TESTS OFF"
             "ZSTD_BUILD_SHARED OFF"
             "ZSTD_BUILD_STATIC ON"
+            # Cerid decodes only frames its own cooker wrote with this zstd (`crdr.cpp` and the resources fuzz target;
+            # no tracked file holds a v0.1-v0.7 frame magic), so the legacy v0.1-v0.7 decoders are unused surface.
+            # Without IPO (below) GCC compiles them optimized and reports -Wmaybe-uninitialized in zstd_v01.c.
+            "ZSTD_LEGACY_SUPPORT OFF"
     )
     unset(CMAKE_POLICY_VERSION_MINIMUM)
 
@@ -675,8 +679,12 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     # Cerid's own code but skips the un-tagged zstd objects — no link-
     # time codegen happens for zstd, breaking the ICE chain. Cerid's own
     # LTCG benefits (cross-TU inlining in the engine) are unaffected.
-    if(TARGET zstd_static)
-        set_target_properties(zstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    # zstd's CMake target is `libzstd_static` (`zstd_static` is only its output base name), so a guard naming
+    # `zstd_static` never applied: until 2026-10-17 zstd's objects were /GL- and -flto-compiled on every IPO lane, and
+    # GCC's lto-wrapper warned on each link that it dropped zstd's `-Wa,--noexecstack`. Without IPO zstd's objects are
+    # ordinary objects, assembled with their own options.
+    if(TARGET libzstd_static)
+        set_target_properties(libzstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
     endif()
 endif()
 

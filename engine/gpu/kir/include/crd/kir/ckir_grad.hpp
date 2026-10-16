@@ -17,17 +17,19 @@ namespace crd::kir
 namespace grad_detail
 {
 // permutation that swaps the last two axes (the matmul transpose).
-// NOLINTNEXTLINE(readability-non-const-parameter) -- perm is written (perm[k]=...); the check misfires on header-only fns
-inline void swap_last2(const Shape& sh, crd::u8* perm) noexcept
+inline void swap_last2(const Shape& sh, crd::u8 (&perm)[kMaxRank]) noexcept
 {
-    for (int k = 0; k < sh.rank; ++k)
+    // A shape holds at most kMaxRank axes. Bounding the writes by the array as well keeps them inside `perm` for any
+    // rank value; without it GCC's link-time ranges see `sh.rank` unbounded and report -Wstringop-overflow here.
+    const int rank = sh.rank < kMaxRank ? sh.rank : kMaxRank;
+    for (int k = 0; k < rank; ++k)
     {
         perm[k] = static_cast<crd::u8>(k);
     }
-    if (sh.rank >= 2)
+    if (rank >= 2)
     {
-        perm[sh.rank - 1] = static_cast<crd::u8>(sh.rank - 2);
-        perm[sh.rank - 2] = static_cast<crd::u8>(sh.rank - 1);
+        perm[rank - 1] = static_cast<crd::u8>(rank - 2);
+        perm[rank - 2] = static_cast<crd::u8>(rank - 1);
     }
 }
 } // namespace grad_detail

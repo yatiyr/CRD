@@ -256,10 +256,15 @@ public:
             return;
         }
         const usize old = size();
-        reserve(old + n);
+        const usize new_size = old + n;
+        reserve(new_size);
+        CRD_ASSERT(!sso_state() || new_size <= kSsoCapacity);
+        if (sso_state() && new_size > kSsoCapacity) // unreachable: reserve() moved a longer string to the heap;
+        {                                           // without it GCC follows data()'s inline branch with a heap-sized
+            return;                                 // `old` and reports -Wstringop-overflow on the copy below.
+        }
         char* p = data();
         std::memcpy(p + old, s, n);
-        const usize new_size = old + n;
         if (!sso_state() || new_size < kSsoCapacity)
         {
             p[new_size] = '\0';
