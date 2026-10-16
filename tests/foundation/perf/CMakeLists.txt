@@ -49,6 +49,7 @@ add_executable(crd-perf-tests
     test_diag_fault_minimize.cpp # DIAG.9c: minimizing a fault plan that reproduces a failure
     test_diag_observer_effect.cpp # DIAG.9c: flight-recorder detail levels and observer-effect experiments
     test_diag_host.cpp # DIAG.9b/11a: the reusable diagnostic host, its authored profile and its change rules
+    test_diag_flight_sites.cpp # DIAG.11b: a disabled event site evaluates no payload; a filtered event never waits
 )
 
 target_link_libraries(crd-perf-tests PRIVATE

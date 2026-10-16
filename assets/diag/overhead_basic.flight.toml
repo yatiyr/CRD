@@ -1,0 +1,18 @@
+# The flight policy of the basic diagnostic mode the DIAG.11b overhead board measures (crd-diag-overhead, mode basic).
+# It is the default policy at the basic detail: Warning and above are recorded, informational events are counted and
+# left out. Two bounds differ from the default, and only so that a measurement sees the steady state: no frame of a
+# measured workload is a hitch (10 s), and a capture asked for after the frames closes after 100 ms instead of 2 s.
+
+kind           = "flight-policy"
+schema_version = 1
+
+capacity    = 1024 # ring events, 152 bytes each (152 KiB)
+pre_events  = 768  # kept from before the trigger
+post_events = 256  # recorded after it at most; pre_events + post_events <= capacity
+
+post_window_ns     = 100000000   # the post window closes after 100 ms when nothing the policy keeps arrives
+hitch_threshold_ns = 10000000000 # a frame interval above 10 s is a hitch: never, for the measured workloads
+
+detail = "basic" # Warning and above
+
+triggers = ["all"]

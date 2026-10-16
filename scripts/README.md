@@ -79,6 +79,12 @@ Run commands from the repository root. Build/test rules and exact quality requir
   covers every verdict without a build, and holds `tests/support/diag/nonreproduced-failures.json` (flaky and
   nonreproduced failures, evidence only) complete and unread by any build or test step; it is a CTest and repository
   CI step.
+- Diagnostic overhead ([contract](../docs/design/runtime-diagnostics.md#diag-11b)): `diag-overhead.py run --exe
+  <crd-diag-overhead> [--baseline-exe <compiled-out build>] --scratch <dir> --label <lane> --output <board.json>`
+  runs the harness (`tests/support/diag-overhead`) once per process for every workload and arm, interleaved, and
+  judges ADR-0133 ID-5's budgets (within, over, or unresolved when the host's noise is wider than the claim);
+  `render` writes the markdown of a board for docs/bench. `test-diag-overhead.py` covers every statistic and verdict
+  with fake processes and is a CTest and repository CI step.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

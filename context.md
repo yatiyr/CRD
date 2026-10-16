@@ -4,9 +4,9 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: DIAG.11b -->
-**Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b), first unfinished row: measured overhead, focused
-local routes, tiered sanitizer/race/fuzz CI and runbooks. Complete run 38640651640 at `56748127` closed DIAG.9c to
-11a ([audit](docs/sessions/2026-10-06-needs-ci-audit.md#rows-closed-on-56748127-2026-10-15)); no row waits on CI.
+**Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (Partial), first unfinished row: measured overhead,
+focused local routes, tiered sanitizer/race/fuzz CI and runbooks. The overhead harness and first boards landed locally
+([board](docs/bench/2026-10-16-diag-11b-overhead.md)); next: repair the measured budget losses the row lists.
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 

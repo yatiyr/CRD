@@ -169,7 +169,10 @@ struct FlightRecorder::Impl
     FlightEnd                end                    = FlightEnd::None;
     crd::u64                 end_ns                 = 0U;
     crd::u64                 dropped_while_complete = 0U;
-    crd::u64                 filtered               = 0U; // events a Basic policy did not record
+    // The lowest severity the active detail keeps, as its u8 value, and the events the detail left out. Both are read
+    // and counted without the ring mutex (DIAG.11b): an event the detail leaves out never waits on the ring.
+    std::atomic<crd::u8>     keep_from{0U};
+    std::atomic<crd::u64>    filtered{0U};
     // The post window starts at the first event recorded after a trigger became visible (or, when none was, at the
     // total when the window closes). It is fixed under the ring mutex: trigger() cannot take it, and a total read
     // there could be passed by events recorded before the trigger's state store, which would then be miscounted.
@@ -204,6 +207,13 @@ struct FlightRecorder::Impl
 namespace
 {
 using Impl = FlightRecorder::Impl;
+
+// The lowest severity `detail` keeps: Full keeps every event, Basic Warning and above.
+crd::u8 keep_from_of(FlightDetail detail) noexcept
+{
+    const Severity lowest = (detail == FlightDetail::Basic) ? Severity::Warning : Severity::Info;
+    return static_cast<crd::u8>(lowest);
+}
 
 bool allocate_ring(cont::Array<FlightEvent>& ring, crd::u32 capacity) noexcept
 {
@@ -336,6 +346,7 @@ FlightPolicyStatus FlightRecorder::init(const FlightPolicy& policy) noexcept
         return FlightPolicyStatus::RejectedOutOfMemory;
     }
     impl->policy = policy;
+    impl->keep_from.store(keep_from_of(policy.detail), std::memory_order_release);
     if (!allocate_ring(impl->ring, policy.capacity))
     {
         delete impl;
@@ -395,6 +406,7 @@ FlightPolicyStatus FlightRecorder::reload_policy(const FlightPolicy& candidate) 
     impl->head   = 0U;
     impl->live   = 0U;
     impl->policy = candidate;
+    impl->keep_from.store(keep_from_of(candidate.detail), std::memory_order_release);
     ++impl->policy_generation;
     return FlightPolicyStatus::Committed;
 }
@@ -465,14 +477,16 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
     {
         return;
     }
+    // Outside the active detail's scope: not recorded, not in the sequence, counted, and decided before the clock is
+    // read or the ring mutex taken, so a Basic policy never blocks an informational site.
+    if (static_cast<crd::u8>(severity) < impl->keep_from.load(std::memory_order_acquire))
+    {
+        impl->filtered.fetch_add(1U, std::memory_order_relaxed);
+        return;
+    }
     const crd::u64 now = diagnostic_now_ns();
 
     std::lock_guard<std::mutex> guard(impl->ring_mutex);
-    if (impl->policy.detail == FlightDetail::Basic && severity < Severity::Warning)
-    {
-        ++impl->filtered; // outside a Basic policy's scope: not recorded, not in the sequence, counted
-        return;
-    }
     const crd::u32 state = impl->state.load(std::memory_order_acquire);
     if (state == kStateComplete || state == kStateFatalEntered)
     {
@@ -515,6 +529,21 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
 void FlightRecorder::record(const DiagnosticEvent& e) noexcept
 {
     record(e.code, e.severity, cont::StringView{e.message.c_str(), e.message.size()}, 0U, 0U);
+}
+
+bool FlightRecorder::admit(Severity severity) noexcept
+{
+    Impl* impl = m_impl;
+    if (impl == nullptr)
+    {
+        return false;
+    }
+    if (static_cast<crd::u8>(severity) < impl->keep_from.load(std::memory_order_acquire))
+    {
+        impl->filtered.fetch_add(1U, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
 }
 
 FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noexcept
@@ -682,12 +711,7 @@ crd::u64 FlightRecorder::total_recorded() const noexcept
 crd::u64 FlightRecorder::total_filtered() const noexcept
 {
     Impl* impl = m_impl;
-    if (impl == nullptr)
-    {
-        return 0U;
-    }
-    std::lock_guard<std::mutex> guard(impl->ring_mutex);
-    return impl->filtered;
+    return (impl != nullptr) ? impl->filtered.load(std::memory_order_relaxed) : 0U;
 }
 
 bool FlightRecorder::capture_pending() const noexcept

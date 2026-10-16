@@ -1,0 +1,17 @@
+# The flight policy of the full diagnostic mode the DIAG.11b overhead board measures (crd-diag-overhead, mode full).
+# Every event is recorded. The bounds are those of overhead_basic.flight.toml (no measured frame is a hitch, a capture
+# closes after 100 ms), so the two modes differ only in their detail.
+
+kind           = "flight-policy"
+schema_version = 1
+
+capacity    = 1024 # ring events, 152 bytes each (152 KiB)
+pre_events  = 768  # kept from before the trigger
+post_events = 256  # recorded after it at most; pre_events + post_events <= capacity
+
+post_window_ns     = 100000000   # the post window closes after 100 ms when nothing arrives
+hitch_threshold_ns = 10000000000 # a frame interval above 10 s is a hitch: never, for the measured workloads
+
+detail = "full" # every event
+
+triggers = ["all"]

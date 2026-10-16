@@ -329,7 +329,7 @@ crd_module(engine/foundation/units engine/units DEPENDS containers core memory T
 crd_module(engine/execution/ceir engine/ceir DEPENDS containers core log memory units TESTS execution/ceir support/fuzz)
 # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
 crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir ceir-cook containers core jobs memory perf time
-    TESTS execution/ceir-host)
+    TESTS execution/ceir-host support/diag-overhead)
 # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
 crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core kir memory perf
     render-asset-core resources time TESTS execution/ceir-cook support/fuzz)

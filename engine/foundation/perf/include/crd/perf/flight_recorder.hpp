@@ -14,7 +14,10 @@
 // when `post_window_ns` elapsed (checked by poll()), at shutdown, or on the fatal path. Shutdown and the fatal path
 // end it early; the capture then says which, and that the post window is truncated.
 //
-// Recording and triggering never allocate. record() copies into a ring slot under the ring mutex. trigger() takes only
+// Recording and triggering never allocate. record() copies into a ring slot under the ring mutex; an event the policy's
+// detail leaves out is counted and dropped before the clock is read or the mutex taken (DIAG.11b), so a Basic recorder
+// never blocks an informational site. CRD_FLIGHT_RECORD (below) is the site form: its message and scalars are not
+// evaluated when no recorder runs or the detail leaves the event out. trigger() takes only
 // its own mutex, never the ring mutex, so a trigger fired on a thread that something else is blocking (or from a
 // handler that runs while another thread records) still lands. While a capture is pending (the post window is open,
 // or it is complete and not yet collected), a further trigger is suppressed and counted, with its kind; it never
@@ -285,6 +288,12 @@ public:
                 crd::u64 value_b = 0U) noexcept;
     void record(const DiagnosticEvent& e) noexcept;
 
+    // Whether record() keeps an event of `severity` under the active detail (DIAG.11b). Lock-free: one atomic load, no
+    // clock read. Before init it answers false and counts nothing; when the detail leaves the event out it counts it in
+    // total_filtered(), as record() would have, and answers false. An answer racing a policy reload may follow either
+    // policy. CRD_FLIGHT_RECORD asks it before it evaluates a payload.
+    [[nodiscard]] bool admit(Severity severity) noexcept;
+
     // Fire a trigger (thread-safe, no allocation, never takes the ring mutex).
     FlightTriggerResult trigger(const FlightTriggerInput& input) noexcept;
 
@@ -328,6 +337,22 @@ public:
 private:
     Impl* m_impl = nullptr; // pimpl keeps std::mutex out of the public header
 };
+
+// The event-site form (DIAG.11b). `recorder` is a FlightRecorder* (may be null: no recorder runs) and is evaluated
+// once, as is `severity`. `message`, `value_a` and `value_b` are evaluated only when the recorder admits the event, so
+// a site whose payload formats text or walks a structure costs one branch when diagnostics are off and one atomic load
+// at a detail that leaves it out: a disabled site neither evaluates its payload nor changes what the program does.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): only a macro leaves its arguments unevaluated when the site is off.
+#define CRD_FLIGHT_RECORD(recorder, code, severity, message, value_a, value_b)                                         \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        ::crd::perf::FlightRecorder* const crd_flight_site_recorder_ = (recorder);                                     \
+        const ::crd::perf::Severity crd_flight_site_severity_ = (severity);                                            \
+        if (crd_flight_site_recorder_ != nullptr && crd_flight_site_recorder_->admit(crd_flight_site_severity_))       \
+        {                                                                                                              \
+            crd_flight_site_recorder_->record((code), crd_flight_site_severity_, (message), (value_a), (value_b));     \
+        }                                                                                                              \
+    } while (false)
 
 // ---------------------------------------------------------------------------
 // Serialization -- the FlightRecord bundle section (BundleSectionTag::FlightRecord) and a JSON summary.

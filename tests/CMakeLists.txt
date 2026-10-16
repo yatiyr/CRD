@@ -34,6 +34,9 @@ add_test(NAME crd-diag-seeded-faults
 # DIAG.10b: every coverage verdict, the coverage registry and the nonreproduced-failure register, without a build
 add_test(NAME crd-diag-coverage
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-coverage.py")
+# DIAG.11b: every overhead-board statistic and verdict, with fake measurement processes
+add_test(NAME crd-diag-overhead-verdicts
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-overhead.py")
 add_test(NAME crd-ci-tiers
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
 add_test(NAME crd-pins
@@ -54,7 +57,7 @@ set_tests_properties(crd-ci-tiers crd-pins crd-license-manifest PROPERTIES TIMEO
 set_tests_properties(crd-generated-sources PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1") # hashes 14 MB of codelets
 set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
-    crd-diag-reverse-debug-recipes PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+    crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
 set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
@@ -80,6 +83,7 @@ crd_tests(foundation/units units)
 crd_tests(execution/ceir ceir)  # D-007 CEIR-1a: Cerid Execution IR core (arena + intrusive def-use)
 crd_tests(execution/chir chir)  # D-007 CEIR-32b: CHIR source model + CR-D007 graph-schema projection (ADR-0128)
 crd_tests(execution/ceir-host ceir-host)  # D-007 CEIR-6b: the crd-jobs execution-provider bridge
+crd_tests(support/diag-overhead diag-overhead)  # DIAG.11b: the diagnostic overhead harness and its structural checks
 crd_tests(execution/ceir-cook ceir-cook)  # D-007 CEIR-7a: the CEIR asset cook bridge
 crd_tests(execution/ceir-gpu ceir-gpu)  # D-007 CEIR-13d: the GPU lowering bridge
 crd_tests(rendering/render-asset-core render-asset-core)  # RAF-1 (D-007 "RAF band"): identity/namespaces/diagnostics/deps Gate 1

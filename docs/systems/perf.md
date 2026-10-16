@@ -12,3 +12,4 @@ Diagnostic commands: the typed service
 ([diag_commands.hpp](../../engine/foundation/perf/include/crd/perf/diag_commands.hpp)) and its GUI panel
 ([diag_panel.hpp](../../engine/ui/perf-ui/include/crd/perf/ui/diag_panel.hpp)); contract in
 [runtime diagnostics](../design/runtime-diagnostics.md#diag-8c).
+Mode costs: [DIAG.11b](../design/runtime-diagnostics.md#diag-11b).

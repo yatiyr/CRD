@@ -143,3 +143,16 @@ variance and tails, recording the exact host tuple):
 
 Applications may author stricter budgets. Full dumps and GPU-assisted validation account their cost separately and are
 not held to the basic-recorder budget. Evidence for these frozen numbers: the [capability census](../sessions/2026-09-14-diag-0-capability-census.md).
+
+Amended 2026-10-16 (DIAG.11b, [session](../sessions/2026-10-16-diag-11b-overhead-harness.md),
+[board](../bench/2026-10-16-diag-11b-overhead.md)): the budgets are unchanged and now measured by the overhead harness
+(`tests/support/diag-overhead`) and `scripts/diag-overhead.py`. Its workloads deviate from the table above, on purpose:
+the basic row's jobs scheduler is the harness's `jobs` workload (the crd-jobs pool configured by the diagnostic host);
+its "CEIR corpus replay" is replaced by `offline`, which cooks, loads, compiles and runs an authored program, because
+the corpora are mostly refused inputs and would measure the rejection path; allocation-heavy frames (`alloc`, a TLSF
+heap behind the host's allocator watch) are the DIAG.11b contract's own workload with no row here; the disabled row's
+zero-overhead gate and the hot-recording row's KIR eval and asset cook are not harness workloads, and a site
+microbenchmark (`events`) reports each mode's per-site cost instead. The disabled budget is measured as the measured
+binary's off mode against a binary built with profiling compiled out (`win-shipping-profile` against `win-shipping`);
+Linux has no such preset pair yet. The first boards violate the disabled and basic budgets on allocation-heavy frames;
+the repairs are open on DIAG.11b.

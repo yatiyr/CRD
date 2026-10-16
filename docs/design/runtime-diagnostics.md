@@ -2705,6 +2705,44 @@ Acceptance: focused local plan selects affected tests and the relevant risk rout
 race and short corpus/negative-control jobs have nonzero execution and usable artifacts. Longer fuzz/soak runs use
 nightly/manual cadence. No blanket local sweep. Document symptom→command→artifact→next discriminating test and human-only publication.
 
+Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.md),
+[board](../bench/2026-10-16-diag-11b-overhead.md)):
+- The event-site form: `CRD_FLIGHT_RECORD(recorder, code, severity, message, a, b)` (`crd/perf/flight_recorder.hpp`)
+  evaluates its message and scalars only when a recorder runs and its detail keeps the event
+  (`FlightRecorder::admit`, one atomic load, which counts a left-out event in `total_filtered()`); the recorder and
+  severity expressions once. `record()` decides a left-out event before it reads the clock or takes the ring mutex.
+  This is the modes contract's "disabled event sites must not evaluate expensive payload expressions", held by
+  side-effect controls, and a Basic recorder no longer serializes informational sites on its ring (a no-wait case with
+  the ring held). Application sites use the macro; a direct `record()` stays for code that already holds its payload.
+- The modes as measured: off (no host, no recorder, profiler not started: runtime-disabled; in a binary built without
+  profiling also compiled-out), basic (the `DiagnosticHost` with `assets/diag/overhead_basic.flight.toml`, Warning and
+  above), full (`overhead_full.flight.toml`, every event, plus the profiler, the jobs adapter and the CEIR profiling
+  bridge). The harness is `tests/support/diag-overhead` (`crd-diag-overhead`, one workload and mode per process, record
+  `cerid-diag-overhead/1`); workloads `alloc` (TLSF heap behind the allocator watch), `jobs` (2048 tiny jobs on an
+  8-thread pool), `offline` (cook, load, compile and run an authored CEIR program) and `events` (a site
+  microbenchmark, reported per site, never judged). Every frame has a known answer.
+- What holds on every lane: the 12 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
+  evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
+  records none; full records every one and evaluates each payload once; every requested capture is delivered and
+  written; the lifetime ledger balances.
+- How a budget is judged: `scripts/diag-overhead.py` interleaves the arms across processes, pools nearest-rank
+  percentiles, pairs per-repetition median ratios and takes a seeded bootstrap 95% interval; within (upper end at or
+  below the budget), over (lower end above it) or unresolved (a loss, never a pass). Storage: the recorder's ring and
+  the resident growth over off, against 32 MiB.
+- The first boards (Windows win-shipping-profile against win-shipping; Linux linux-gcc-shipping and
+  linux-gcc-relwithdebinfo under WSL2): storage within everywhere (152 KiB ring, at most 0.60 MiB growth); basic within
+  on offline where resolved. Violated and open: the disabled mode on allocation-heavy frames (+37.7%, the allocator
+  statistics `memory_stats.hpp` tracks in every profiling build, shown by experiment) and on offline (+6.6%; +4.6%
+  without the statistics, unattributed); the basic mode on allocation-heavy frames (+4.0% to +5.7%, the allocator
+  watch's forwarding call the remaining candidate). Unresolved: jobs on every tuple (wall time of the main thread's
+  frame against a CPU-per-frame budget). Not measured: the Linux disabled arm (no preset differs from a profiling build
+  only in profiling). Reported: full mode, with two open mechanisms against "no blocking or global locking", the
+  recorder-wide ring mutex per kept event and the CEIR bridge's per-instruction timing.
+- Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
+  independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
+  specimens and mode activation; the focused local plan's risk route; the hosted sanitizer, race, corpus and
+  negative-control audit and the fuzz and soak cadence; the investigation runbooks.
+
 <a id="diag-11c"></a>
 ## DIAG.11c — native qualification and portable capability boundary
 
