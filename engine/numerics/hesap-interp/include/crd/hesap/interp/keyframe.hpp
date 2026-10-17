@@ -50,11 +50,13 @@ template <Real T>
         return static_cast<T>(0);
     }
     const crd::usize span = static_cast<crd::usize>(key_elements(interp)) * components;
+    // where a key's value sits in its span: CubicHermite stores [in, value, out], so the middle element
+    const crd::usize value_at = (interp == KeyInterp::CubicHermite ? components : 0U) + lane;
 
-    // the value of key k (CubicHermite: the middle element of the [in, value, out] triple)
-    const auto key_value = [&](crd::usize k) -> T {
-        const crd::usize base = k * span;
-        return interp == KeyInterp::CubicHermite ? values[base + components + lane] : values[base + lane];
+    // the value of key k
+    const auto key_value = [&](crd::usize k) -> T
+    {
+        return values[k * span + value_at];
     };
 
     if (n == 1U || t <= times[0])

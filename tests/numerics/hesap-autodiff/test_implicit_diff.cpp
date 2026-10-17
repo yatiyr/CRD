@@ -72,10 +72,7 @@ void newton_solve(const F& Ffn, const f64* theta, f64* x, int n, int np)
             Ffn(xd, thd, out, n, np);
             for (int i = 0; i < n; ++i)
             {
-                if (col == 0)
-                {
-                    fx[i] = out[i].v;
-                }
+                fx[i] = out[i].v; // F(x): the value part is the same whichever column is seeded
                 jac[i * n + col] = out[i].d;
             }
         }

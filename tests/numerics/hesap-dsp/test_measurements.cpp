@@ -34,7 +34,7 @@ cont::Array<f64> sig(crd::memory::IAllocator* a, usize n)
     return x;
 }
 
-template <usize N> void check_idx(const unsigned long (&ref)[N], usize ref_n, const cont::Array<usize>& got)
+void check_idx(const unsigned long* ref, usize ref_n, const cont::Array<usize>& got)
 {
     REQUIRE(got.size() == ref_n);
     for (usize i = 0; i < ref_n; ++i)

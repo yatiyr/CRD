@@ -2060,7 +2060,7 @@ int dlaexc(T* td, crd::usize ld, T* qd, crd::usize qld, crd::usize n, crd::usize
 
     const int nd = n1 + n2;
     const crd::usize ldd = static_cast<crd::usize>(nd);
-    T dloc[16];
+    T dloc[16]{}; // the nd × nd block (nd ≤ 4) at stride nd; the tail past nd² is never read but stays defined
     for (int i = 0; i < nd; ++i)
     {
         for (int j = 0; j < nd; ++j)

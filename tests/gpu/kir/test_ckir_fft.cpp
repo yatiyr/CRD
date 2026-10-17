@@ -280,8 +280,8 @@ void dft2_ref(int rows, int cols, const crd::f64* xr, const crd::f64* xi, crd::f
     {
         dft_ref(cols, xr + r * cols, xi + r * cols, tr.data() + r * cols, ti.data() + r * cols);
     }
-    crd::f64 cr[2048];
-    crd::f64 ci[2048];
+    crd::f64 cr[2048]{}; // one column at a time; the reference DFT reads its first `rows` values
+    crd::f64 ci[2048]{};
     crd::f64 orr[2048];
     crd::f64 oi[2048];
     for (int c = 0; c < cols; ++c) // column DFTs (gather stride cols → dft → scatter)

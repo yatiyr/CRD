@@ -342,9 +342,11 @@ void TlsfAllocator::init_pool(void* buffer, usize capacity) noexcept
     // placing the sentinel 16 B too early — block_next then overshot it into the uninitialised tail slack, whose
     // low bits read as kFreeBit, so coalescing a block that reached the chunk's end merged that garbage → a
     // free-list smash. Benign until a chunk filled to its tail; surfaced as the multi-chunk GrowableTlsf flaky AV.)
+    // It is the pool's last 16 bytes: a used block's two header words, with no room for the free-list links a whole
+    // BlockHeader would extend past the buffer to. So it is written word by word, as every header is after this.
     BlockHeader* end_sentinel = reinterpret_cast<BlockHeader*>(base + 2U * kBlockHeaderOverhead + free_block_size);
-    end_sentinel->prev_phys_block = free_block;
-    end_sentinel->size_and_flags = 0 | kPrevFreeBit; // size=0 (last), in-use, prev_free=true
+    block_set_prev(end_sentinel, free_block);
+    block_set_flags_word(end_sentinel, kPrevFreeBit); // size=0 (last), in-use, prev_free=true
 
     m_pool = free_block; // user pool conceptually starts here
     m_pool_capacity = capacity;

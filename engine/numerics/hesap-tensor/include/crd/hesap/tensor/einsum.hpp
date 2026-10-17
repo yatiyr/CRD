@@ -497,6 +497,7 @@ inline void optimal_iterate(OptimalCtx& c, crd::u64 alive_mask, crd::u32 n_ssa, 
                                                     EinsumOptimize opt, EinsumPlan& plan) noexcept
 {
     plan.expr = expr;
+    plan.n_steps = 0; // every branch below sets it; a caller's plan is never read with it unset
     for (crd::u32 i = 0; i < kEinsumMaxIndices; ++i)
     {
         plan.idx_size[i] = idx_size[i];
@@ -567,7 +568,8 @@ inline void optimal_iterate(OptimalCtx& c, crd::u64 alive_mask, crd::u32 n_ssa, 
         for (crd::u32 h = 0; h < 3U; ++h)
         {
             const crd::u64 f = detail::greedy_path_h(expr, idx_size, h, cand, cand_n);
-            if (f < best)
+            // the first sweep always fills the plan, so a cost that saturates at ~0 still leaves its steps
+            if (h == 0U || f < best)
             {
                 best = f;
                 plan.n_steps = cand_n;

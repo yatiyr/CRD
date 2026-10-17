@@ -38,11 +38,29 @@ struct ScanPlan
     bool     single_pass     = false; // n ≤ one block ⇒ pass 0 alone is the whole scan (no blocksum/offset)
 };
 
+// A block scan's thread freezes its chunk of elems / threads values into registers, at most this many.
+inline constexpr int kScanMaxPerThread = 64;
+
+namespace detail
+{
+// The per-thread chunk of a block scan. An empty chunk has no value to start the scan from and a longer one would write
+// past the register array, so a shape outside 1..kScanMaxPerThread is refused in every build.
+[[nodiscard]] inline int scan_per_thread(int elems, int threads)
+{
+    const int pt = threads > 0 ? elems / threads : 0;
+    if (pt < 1 || pt > kScanMaxPerThread)
+    {
+        CRD_FATAL("ckir scan: elems / threads must be 1..64");
+    }
+    return pt;
+}
+} // namespace detail
+
 // Block scan: workgroup w scans its contiguous span [w·elems, (w+1)·elems) → out_scan (same positions) + out_blocksum[w]
 // (the span total). Coalesced striped I/O, blocked shared scan.
 [[nodiscard]] inline KEntry build_scan_block(KGraph& g, int elems, int threads, bool inclusive, bool write_blocksum)
 {
-    const int   pt  = elems / threads;
+    const int   pt  = detail::scan_per_thread(elems, threads);
     const Shape sh1 = make_shape({1});
     const auto  ku  = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
     const auto  add = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
@@ -73,8 +91,10 @@ struct ScanPlan
     // ⛔ CKIR re-reads shared LAZILY, so a running accumulator that reads-then-writes the SAME array corrupts on re-eval
     // (the FFT ping-pong scar). FREEZE the pt originals into registers (Materialize) FIRST, scan in registers, then write.
     const int c0 = mul(tid, ku(static_cast<crd::u32>(pt)));
-    int       rr[64];
-    for (int k = 0; k < pt; ++k)
+    int       rr[kScanMaxPerThread];
+    rr[0] = g.shared_load(data, add(c0, ku(0U))); // pt >= 1: the chunk's first value starts the scan
+    g.stmt_materialize(rr[0]);
+    for (int k = 1; k < pt; ++k)
     {
         rr[k] = g.shared_load(data, add(c0, ku(static_cast<crd::u32>(k))));
         g.stmt_materialize(rr[k]);
@@ -153,7 +173,7 @@ struct ScanPlan
 // (coherent f32), flag=3 (coherent u32, ZERO-initialized). `flag` must be cleared to 0 before the dispatch.
 [[nodiscard]] inline KEntry build_scan_single_pass(KGraph& g, int elems, int threads, bool inclusive)
 {
-    const int   pt  = elems / threads;
+    const int   pt  = detail::scan_per_thread(elems, threads);
     const Shape sh1 = make_shape({1});
     const auto  ku  = [&](crd::u32 v) { return g.constant(static_cast<crd::f64>(v), sh1, DType::U32); };
     const auto  add = [&](int a, int b) { return g.binary(KOp::Add, a, b); };
@@ -185,8 +205,10 @@ struct ScanPlan
 
     // phase 1: blocked local inclusive scan (freeze originals first — CKIR lazy shared re-read)
     const int c0 = mul(tid, ku(static_cast<crd::u32>(pt)));
-    int       rr[64];
-    for (int k = 0; k < pt; ++k)
+    int       rr[kScanMaxPerThread];
+    rr[0] = g.shared_load(data, add(c0, ku(0U))); // pt >= 1: the chunk's first value starts the scan
+    g.stmt_materialize(rr[0]);
+    for (int k = 1; k < pt; ++k)
     {
         rr[k] = g.shared_load(data, add(c0, ku(static_cast<crd::u32>(k))));
         g.stmt_materialize(rr[k]);

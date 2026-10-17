@@ -173,6 +173,10 @@ public:
     // grad.size() must equal dim(). Pure raw f64 hot path (ADR-0078).
     void dlogpdf_dx(crd::containers::Span<const T> x, crd::containers::Span<T> grad) const noexcept
     {
+        if (m_k == 0U)
+        {
+            return; // no coordinates: the gradient is empty, and b below would reach the solve unwritten
+        }
         T b[detail::kMvMaxDim];
         T scratch[detail::kMvMaxDim];
         for (crd::usize i = 0; i < m_k; ++i)
@@ -265,6 +269,10 @@ public:
     // v12-l: ∇_x log p = −(ν+k)/(ν+q)·Σ⁻¹(x−μ),  q = (x−μ)ᵀΣ⁻¹(x−μ) — the HMC gradient for the heavy-tailed prior.
     void dlogpdf_dx(crd::containers::Span<const T> x, crd::containers::Span<T> grad) const noexcept
     {
+        if (m_k == 0U)
+        {
+            return; // no coordinates: the gradient is empty, and b below would reach the solve unwritten
+        }
         T b[detail::kMvMaxDim];
         T scratch[detail::kMvMaxDim];
         for (crd::usize i = 0; i < m_k; ++i)

@@ -320,6 +320,24 @@ else()
     target_link_options(crd-warnings INTERFACE
         $<$<AND:$<LINK_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:-Werror>
     )
+    # GCC's link-time compile (lto1) takes no warning option from the objects, only from the link line, and lto-wrapper
+    # passes on only the options lto1 knows: -Wall, -Wformat=2, -Wconversion, -Wdouble-promotion and the C++-only ones
+    # never reach it. So the GCC link line names what the compile set turns on that lto1 can read, -Wall's members one
+    # by one. -Wrestrict, -Wdangling-pointer, -Wmismatched-new-delete/-dealloc, -Wformat-overflow/-truncation and
+    # -Wclobbered are C-family options lto-wrapper drops even when named, so a defect of those classes that only
+    # cross-file inlining exposes is not judged at all (GCC 13.3; the 2026-10-17 warning-set session note). Clang lanes
+    # here link without link-time optimization, and lld's own link-time step reads no -W option. -Wnull-dereference is
+    # left off for now, not forgotten: at the link it reported 70 sites (1,974 lines) on linux-gcc-shipping, mostly
+    # paths through the scene and CEIR containers' lookups, and those are a batch of their own (DIAG.11b).
+    set(_crd_lto1_warnings
+        -Wextra -Wpedantic -Wshadow
+        # -Wall's members that lto1 reads
+        -Warray-bounds=1 -Wuninitialized -Wmaybe-uninitialized -Wstringop-truncation -Wuse-after-free=2 -Wunused
+        -Wstrict-aliasing=3 -Wstrict-overflow=1 -Winfinite-recursion -Wmisleading-indentation
+    )
+    target_link_options(crd-warnings INTERFACE
+        "$<$<AND:$<LINK_LANGUAGE:CXX,C>,$<CXX_COMPILER_ID:GNU>>:${_crd_lto1_warnings}>"
+    )
 endif()
 
 # ----- Module registry (REPO.DEV.4) ----------------------------------------------
@@ -655,6 +673,14 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
         set(GLFW_BUILD_WAYLAND ON  CACHE BOOL "" FORCE)
     endif()
     crd_add_pinned_package(glfw SYSTEM YES EXCLUDE_FROM_ALL YES) # the shorthand's implied options, see Catch2
+    # GCC compiles an LTO object again inside each executable's link, under that link line's warning options (the
+    # crd-warnings link options above), so GLFW's code would meet the engine's warning set there although its compile
+    # never does: -Wstringop-truncation in input.c on linux-gcc-shipping (2026-10-17). Without IPO its objects are
+    # ordinary objects, as zstd's are below; windowing and input gain nothing from cross-file inlining. The test names
+    # the C++ compiler, whose link line it is (C is enabled only inside GLFW's own directory).
+    if(TARGET glfw AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set_target_properties(glfw PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    endif()
 endif()
 
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)

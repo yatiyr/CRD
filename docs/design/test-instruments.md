@@ -164,10 +164,14 @@ build shows those warnings instead of failing on them, the way `win-tidy-local` 
 configuration keeps warnings as errors, and the default graphs are unchanged (the flag is the same string). Since
 2026-10-17 the same switch puts `-Werror` on GCC and Clang link lines too: GCC judges link-time optimization's
 diagnostics by the link line alone, so a compile line's `-Werror` never reached them, and `lto-wrapper`'s own notices
-ignore `-Werror` either way ([session](../sessions/2026-10-17-diag-11b-warning-gates.md)). clang++
-on Linux is not a qualified compiler of this tree; that audit belongs to the platform/preset matrix row
-(REPO.DEV.11). clang-cl on Windows was tried first and dropped: its ASan has no debug-CRT runtime and, linked
-through lld-link, its objects and runtime disagree on the runtime library.
+ignore `-Werror` either way ([session](../sessions/2026-10-17-diag-11b-warning-gates.md)). The GCC link line also
+names the compile set's warnings that the link-time compiler reads: `lto-wrapper` passes on no C-family option, `-Wall`
+included, so `-Wall`'s members (`-Warray-bounds`, `-Wmaybe-uninitialized`, ...) are named one by one, and GLFW builds
+without link-time optimization so that its code never meets them; `-Wnull-dereference` is not among them yet
+([session](../sessions/2026-10-17-diag-11b-link-time-warning-set.md)). clang++ on Linux is not a qualified compiler of
+this tree; that audit belongs to the platform/preset matrix row (REPO.DEV.11). clang-cl on Windows was tried first and
+dropped: its ASan has no debug-CRT runtime and, linked through lld-link, its objects and runtime disagree on the runtime
+library.
 
 ## What the first bounded runs found
 

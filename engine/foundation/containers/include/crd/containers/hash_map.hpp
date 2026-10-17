@@ -150,11 +150,11 @@ public:
 
     // ---- Capacity --------------------------------------------------
 
-    usize size() const noexcept { return m_size; }
-    usize capacity() const noexcept { return m_capacity; }
-    bool empty() const noexcept { return m_size == 0; }
+    [[nodiscard]] usize size() const noexcept { return m_size; }
+    [[nodiscard]] usize capacity() const noexcept { return m_capacity; }
+    [[nodiscard]] bool empty() const noexcept { return m_size == 0; }
 
-    f32 load_factor() const noexcept
+    [[nodiscard]] f32 load_factor() const noexcept
     {
         return m_capacity == 0 ? 0.0F : static_cast<f32>(m_size) / static_cast<f32>(m_capacity);
     }
@@ -277,10 +277,13 @@ public:
         }
         (void)emplace_no_grow(key);
         // After insertion, find again to get the (possibly relocated)
-        // slot due to Robin Hood swaps during placement.
-        const bool ok = find_index(key, idx);
-        CRD_ASSERT(ok);
-        (void)ok;
+        // slot due to Robin Hood swaps during placement. The key was just
+        // placed, so a miss is a corrupt table: fatal in every build, and
+        // the slot index is never read unset.
+        if (!find_index(key, idx))
+        {
+            CRD_FATAL("HashMap::operator[]: the key just inserted is missing");
+        }
         return m_vals[idx];
     }
 
@@ -289,12 +292,12 @@ public:
     // Iterators skip empty slots automatically. Pair-like access via
     // ::key() and ::value() to avoid forcing a `std::pair` copy.
 
-    class const_iterator
+    class ConstIterator
     {
     public:
-        const_iterator(const HashMap* m, usize idx) noexcept : m_owner(m), m_idx(idx) { advance_to_live(); }
+        ConstIterator(const HashMap* m, usize idx) noexcept : m_owner(m), m_idx(idx) { advance_to_live(); }
 
-        const_iterator& operator++() noexcept
+        ConstIterator& operator++() noexcept
         {
             ++m_idx;
             advance_to_live();
@@ -304,8 +307,8 @@ public:
         const K& key() const noexcept { return m_owner->m_keys[m_idx]; }
         const V& value() const noexcept { return m_owner->m_vals[m_idx]; }
 
-        bool operator==(const const_iterator& o) const noexcept { return m_owner == o.m_owner && m_idx == o.m_idx; }
-        bool operator!=(const const_iterator& o) const noexcept { return !(*this == o); }
+        bool operator==(const ConstIterator& o) const noexcept { return m_owner == o.m_owner && m_idx == o.m_idx; }
+        bool operator!=(const ConstIterator& o) const noexcept { return !(*this == o); }
 
     private:
         void advance_to_live() noexcept
@@ -320,12 +323,14 @@ public:
         usize m_idx;
     };
 
+    using const_iterator = ConstIterator; // the standard name, for range-for and generic code
+
     const_iterator begin() const noexcept { return const_iterator{this, 0}; }
     const_iterator end() const noexcept { return const_iterator{this, m_capacity}; }
 
     // ---- Misc ------------------------------------------------------
 
-    memory::IAllocator* allocator() const noexcept { return m_alloc; }
+    [[nodiscard]] memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
 private:
     static constexpr f32 kMaxLoadFactor = 0.875F;
@@ -355,7 +360,7 @@ private:
         return round_up_pow2(needed < kInitialCapacity ? kInitialCapacity : needed);
     }
 
-    usize ideal_slot_for_hash(u64 h) const noexcept
+    [[nodiscard]] usize ideal_slot_for_hash(u64 h) const noexcept
     {
         // Use the upper bits as the slot index. Helps when the hasher's
         // low bits are weak (splitmix64 mixes everything; this is

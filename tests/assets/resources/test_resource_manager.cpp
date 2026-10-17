@@ -349,7 +349,7 @@ struct ChainedLoader final : public ILoader
 struct TestArtifact
 {
     ResourceId                      id;
-    crd::u32                        type_fourcc;
+    crd::u32                        type_fourcc = 0;
     crd::containers::Array<crd::u8> crdr_bytes;
     crd::containers::String         name;
 

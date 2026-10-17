@@ -37,7 +37,7 @@ namespace detail
 // Evaluate the Genz-Malik degree-7 rule + embedded degree-5 rule on the box [a,b]^d. Returns the degree-7 value `ih`,
 // the error estimate |ih−il|, and per-axis 4th-difference split measures `diffs`. Allocation-free (stack scratch).
 template <typename T, typename F>
-void gm_estimate(F&& f, const T* a, const T* b, int d, T& ih, T& err, T* diffs, crd::u32& neval)
+void gm_estimate(F& f, const T* a, const T* b, int d, T& ih, T& err, T* diffs, crd::u32& neval)
 {
     const T l2 = crd::math::sqrt(static_cast<T>(9) / static_cast<T>(70));
     const T l3 = crd::math::sqrt(static_cast<T>(9) / static_cast<T>(10));
@@ -60,7 +60,7 @@ void gm_estimate(F&& f, const T* a, const T* b, int d, T& ih, T& err, T* diffs, 
 
     T mid[kCubMaxDim];
     T half[kCubMaxDim];
-    T pt[kCubMaxDim];
+    T pt[kCubMaxDim]{}; // the integrand's point: its first d coordinates are set below, and the rest is defined too
     T vol = T{1};
     for (int i = 0; i < d; ++i)
     {
@@ -130,14 +130,15 @@ void gm_estimate(F&& f, const T* a, const T* b, int d, T& ih, T& err, T* diffs, 
 
 // gm_estimate on region slot `slot` (reads ra/rb[slot*d..], writes rval/rerr[slot] + rdiffs[slot*d..]).
 template <typename T, typename F>
-void gm_estimate_impl(F&& f, crd::u32 slot, int d, const crd::containers::Array<T>& ra,
+void gm_estimate_impl(F& f, crd::u32 slot, int d, const crd::containers::Array<T>& ra,
                       const crd::containers::Array<T>& rb, crd::containers::Array<T>& rval,
                       crd::containers::Array<T>& rerr, crd::containers::Array<T>& rdiffs, crd::u32& neval)
 {
     const crd::usize off = static_cast<crd::usize>(slot) * static_cast<crd::usize>(d);
-    T ih, err;
+    T ih;
+    T err;
     T diffs[kCubMaxDim];
-    gm_estimate<T>(std::forward<F>(f), ra.data() + off, rb.data() + off, d, ih, err, diffs, neval);
+    gm_estimate<T>(f, ra.data() + off, rb.data() + off, d, ih, err, diffs, neval);
     rval[slot] = ih;
     rerr[slot] = err;
     for (int i = 0; i < d; ++i)
@@ -150,7 +151,7 @@ void gm_estimate_impl(F&& f, crd::u32 slot, int d, const crd::containers::Array<
 // Tensor-product Gauss-Legendre over the box [a,b]^d: n_per_dim points per axis ⇒ n^d evaluations. Exact for
 // per-axis polynomial degree ≤ 2·n_per_dim − 1. Best for low d (≲4) and smooth integrands. f: callable (const T*)→T.
 template <typename T, typename F>
-[[nodiscard]] QuadResult<T> integrate_tensor_gauss(crd::memory::IAllocator* alloc, F&& f, crd::containers::ConstSpan<T> a,
+[[nodiscard]] QuadResult<T> integrate_tensor_gauss(crd::memory::IAllocator* alloc, F f, crd::containers::ConstSpan<T> a,
                                                    crd::containers::ConstSpan<T> b, int n_per_dim)
 {
     const int d = static_cast<int>(a.size());
@@ -208,7 +209,7 @@ template <typename T, typename F>
 // 4th-difference axis until the summed error ≤ max(epsabs, epsrel·|result|) or the box budget max_subdiv is hit
 // (→ MaxSubdivisions). The region list is the bounded work-stack (allocated once = the WCET knob; NOT recursion).
 template <typename T, typename F>
-[[nodiscard]] QuadResult<T> integrate_cubature(crd::memory::IAllocator* alloc, F&& f, crd::containers::ConstSpan<T> a,
+[[nodiscard]] QuadResult<T> integrate_cubature(crd::memory::IAllocator* alloc, F f, crd::containers::ConstSpan<T> a,
                                                crd::containers::ConstSpan<T> b, T epsabs, T epsrel, int max_subdiv = 1000)
 {
     const int d = static_cast<int>(a.size());
@@ -219,7 +220,11 @@ template <typename T, typename F>
     }
     const crd::usize cap = static_cast<crd::usize>(max_subdiv);
     const crd::usize dd  = static_cast<crd::usize>(d);
-    crd::containers::Array<T> ra(alloc), rb(alloc), rdiffs(alloc), rval(alloc), rerr(alloc);
+    crd::containers::Array<T> ra(alloc);
+    crd::containers::Array<T> rb(alloc);
+    crd::containers::Array<T> rdiffs(alloc);
+    crd::containers::Array<T> rval(alloc);
+    crd::containers::Array<T> rerr(alloc);
     ra.resize(cap * dd);
     rb.resize(cap * dd);
     rdiffs.resize(cap * dd);
@@ -232,7 +237,7 @@ template <typename T, typename F>
         rb[static_cast<crd::usize>(i)] = b[static_cast<crd::usize>(i)];
     }
     crd::u32 ne = 0;
-    detail::gm_estimate_impl(f, 0u, d, ra, rb, rval, rerr, rdiffs, ne);
+    detail::gm_estimate_impl(f, 0U, d, ra, rb, rval, rerr, rdiffs, ne);
     crd::u32 nreg  = 1;
     crd::u32 neval = ne;
     T        total = rval[0];
@@ -277,7 +282,8 @@ template <typename T, typename F>
         rb[wb + static_cast<crd::usize>(axis)] = amid;            // child 1 upper bound
         total -= rval[wi];
         toterr -= rerr[wi];
-        crd::u32 ne1 = 0, ne2 = 0;
+        crd::u32 ne1 = 0;
+        crd::u32 ne2 = 0;
         detail::gm_estimate_impl(f, wi, d, ra, rb, rval, rerr, rdiffs, ne1);   // child 1 in slot wi
         detail::gm_estimate_impl(f, nreg, d, ra, rb, rval, rerr, rdiffs, ne2); // child 2 in slot nreg
         total += rval[wi] + rval[nreg];

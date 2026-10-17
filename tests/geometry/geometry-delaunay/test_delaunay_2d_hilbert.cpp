@@ -96,12 +96,25 @@ canonicalize(const crd::containers::Array<Vec2<T>>& pts,
     auto vec_less = [](const Vec2<T>& l, const Vec2<T>& r) {
         return l.x < r.x || (l.x == r.x && l.y < r.y);
     };
+    // three corners in order by three compare-exchanges (std::sort's insertion stage addresses 16 elements past the
+    // first on a branch three elements never take, and an optimizing link cannot always prove it untaken)
+    const auto order = [&](crd::containers::FixedArray<Vec2<T>, 3>& tp, crd::usize i, crd::usize j)
+    {
+        if (vec_less(tp[j], tp[i]))
+        {
+            const Vec2<T> s = tp[i];
+            tp[i] = tp[j];
+            tp[j] = s;
+        }
+    };
     for (u32 t = 0; t < tri_count; ++t)
     {
         crd::containers::FixedArray<Vec2<T>, 3> tp = {pts[tris[3U * t + 0]],
                                       pts[tris[3U * t + 1]],
                                       pts[tris[3U * t + 2]]};
-        std::sort(tp.begin(), tp.end(), vec_less);
+        order(tp, 0U, 1U);
+        order(tp, 1U, 2U);
+        order(tp, 0U, 1U);
         out.push_back(tp);
     }
     std::sort(out.begin(), out.end(),

@@ -9535,15 +9535,15 @@ public:
     [[nodiscard]] crd::u32 transient_logical_bytes() const noexcept override { return m_logical_bytes; }
 
     // ── REN-8: GPU timing ──
+    // A resolved pass index. resolve_timestamps() never counts more than kMaxTimedPasses (only passes below it are
+    // stamped), and the second bound says so where the per-pass arrays are read.
+    [[nodiscard]] bool is_timed(crd::u32 i) const noexcept { return i < m_timed_passes && i < kMaxTimedPasses; }
     [[nodiscard]] crd::u32 pass_count() const noexcept override { return m_timed_passes; }
     [[nodiscard]] const char* pass_name(crd::u32 i) const noexcept override
     {
-        return i < m_timed_passes ? m_pass_names[i] : nullptr;
+        return is_timed(i) ? m_pass_names[i] : nullptr;
     }
-    [[nodiscard]] double pass_gpu_ms(crd::u32 i) const noexcept override
-    {
-        return i < m_timed_passes ? m_pass_ms[i] : 0.0;
-    }
+    [[nodiscard]] double pass_gpu_ms(crd::u32 i) const noexcept override { return is_timed(i) ? m_pass_ms[i] : 0.0; }
     [[nodiscard]] double gpu_ms_total() const noexcept override { return m_gpu_ms_total; }
     [[nodiscard]] bool   gpu_timing_available() const noexcept override { return m_ts_pool != VK_NULL_HANDLE; }
 
@@ -9555,7 +9555,7 @@ public:
         // Report async passes as unavailable-for-placement rather than emit a graphics-timeline span for compute work
         // (the consumer then counts them unavailable); a true per-queue timing needs a compute-queue query pool
         // (future work). Graphics-queue passes are real.
-        if (i >= m_timed_passes || m_pass_async[i])
+        if (!is_timed(i) || m_pass_async[i])
         {
             return false;
         }
@@ -9567,12 +9567,12 @@ public:
     [[nodiscard]] crd::u32 gpu_timestamp_valid_bits() const noexcept override { return m_ts_valid_bits; }
     [[nodiscard]] FgPassKind pass_kind(crd::u32 i) const noexcept override
     {
-        return i < m_timed_passes ? m_pass_kinds[i] : FgPassKind::Raster;
+        return is_timed(i) ? m_pass_kinds[i] : FgPassKind::Raster;
     }
     // The ACTUAL queue pass i ran on (on_async is the graph's verdict, not the request).
     [[nodiscard]] FgQueue pass_queue(crd::u32 i) const noexcept override
     {
-        return (i < m_timed_passes && m_pass_async[i]) ? FgQueue::Async : FgQueue::Graphics;
+        return (is_timed(i) && m_pass_async[i]) ? FgQueue::Async : FgQueue::Graphics;
     }
     void                 set_readback_enabled(bool on) noexcept override { m_readback = on; }
 
