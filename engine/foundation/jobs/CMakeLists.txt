@@ -10,6 +10,12 @@ endif()
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
+# On MSVC the two context-switch-adjacent TUs compile in unoptimized/ (the /Od pin below), not with the other sources.
+set(CRD_JOBS_UNOPTIMIZED_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/worker_pool.cpp"
+                                 "${CMAKE_CURRENT_SOURCE_DIR}/src/fiber_init.cpp")
+if(MSVC)
+    list(REMOVE_ITEM SOURCES ${CRD_JOBS_UNOPTIMIZED_SOURCES})
+endif()
 
 add_library(crd-jobs STATIC ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
 
@@ -60,13 +66,8 @@ set_target_properties(crd-jobs PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 # back, and load-bearing again — do not remove it without a clean CI run on the
 # *exact* runner toolset, not just the dev box. (INTERPROCEDURAL_OPTIMIZATION OFF
 # above is separate — the asm context switch is also incompatible with LTO.)
-if(MSVC)
-    set_source_files_properties(
-        src/worker_pool.cpp
-        src/fiber_init.cpp
-        PROPERTIES COMPILE_FLAGS "/Od /Y-"
-    )
-endif()
+# The pin is applied in unoptimized/ (at the end of this file): a per-source /Od here came after the configuration's
+# own /O2, and cl.exe reported D9025 for both TUs on every optimized lane.
 
 crd_enable_default_pch(crd-jobs)
 
@@ -75,7 +76,7 @@ crd_enable_default_pch(crd-jobs)
 # yield points ACTIVE (CRD_JOBS_SCHED_CHECK=1). Same sources; the only difference is the gate. Never in
 # a shipping build (EXCLUDE_FROM_ALL); only the 4b controlled-interleaving tests link it. It must mirror
 # every crd-jobs build property that is load-bearing for correctness (the LTO-off pin and the MSVC
-# /Od /Y- per-source flags on the context-switch-adjacent TUs), or it SEGFAULTs like crd-jobs would.
+# /Od pin on the context-switch-adjacent TUs), or it SEGFAULTs like crd-jobs would.
 # ---------------------------------------------------------------------------
 add_library(crd-jobs-schedcheck STATIC EXCLUDE_FROM_ALL ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
 target_include_directories(crd-jobs-schedcheck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -86,13 +87,13 @@ endif()
 target_compile_features(crd-jobs-schedcheck PUBLIC cxx_std_20)
 target_compile_definitions(crd-jobs-schedcheck PUBLIC CRD_JOBS_SCHED_CHECK=1)
 set_target_properties(crd-jobs-schedcheck PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+# The MSVC /Od pin: unoptimized/ compiles the two TUs once per archive, as object libraries, and each archive takes
+# its objects.
 if(MSVC)
-    set_source_files_properties(
-        src/worker_pool.cpp
-        src/fiber_init.cpp
-        PROPERTIES COMPILE_FLAGS "/Od /Y-"
-        TARGET_DIRECTORY crd-jobs-schedcheck
-    )
+    add_subdirectory(unoptimized)
+    target_sources(crd-jobs PRIVATE $<TARGET_OBJECTS:crd-jobs-unoptimized>)
+    target_sources(crd-jobs-schedcheck PRIVATE $<TARGET_OBJECTS:crd-jobs-schedcheck-unoptimized>)
 endif()
 
 # Cerid::jobs of the relocatable package (the schedule-check twin above is test-only and stays out).

@@ -75,6 +75,10 @@ genmc_install_spec.loader.exec_module(install_genmc)
 genmc_models_spec = importlib.util.spec_from_file_location('check_genmc_models', ROOT / 'scripts/check-genmc-models.py')
 genmc_models = importlib.util.module_from_spec(genmc_models_spec)
 genmc_models_spec.loader.exec_module(genmc_models)
+compile_commands_spec = importlib.util.spec_from_file_location('check_compile_commands',
+                                                               ROOT / 'scripts/check-compile-commands.py')
+compile_commands = importlib.util.module_from_spec(compile_commands_spec)
+compile_commands_spec.loader.exec_module(compile_commands)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -1905,6 +1909,56 @@ class Provenance(unittest.TestCase):
         self.assertIn('| Catch2 | 3.7.1 | MIT |', license_manifest.render(changed))
         for entry in changed['tools'].values():
             self.assertTrue(entry.get('license'), entry)
+
+
+class CompileCommands(unittest.TestCase):
+    CL = r'C:\PROGRA~1\MICROS~1\18\COMMUN~1\VC\Tools\MSVC\14.51\bin\Hostx64\x64\cl.exe'
+
+    def entry(self, command, name='a.cpp'):
+        return {'directory': 'D:/build', 'command': command, 'file': 'D:/src/' + name}
+
+    def test_a_second_level_is_reported_with_its_file(self):
+        checked, problems = compile_commands.check([
+            self.entry(self.CL + ' /nologo /TP /O2 /Ob2 /DNDEBUG /Zi /W4 /WX /Od /Y- -c a.cpp', 'worker_pool.cpp'),
+            self.entry(self.CL + ' /nologo /TP /O2 /Ob2 /DNDEBUG -c b.cpp', 'b.cpp')])
+        self.assertEqual(2, checked)
+        self.assertEqual(['D:/src/worker_pool.cpp: optimization levels /O2 then /Od on one command '
+                          '(cl.exe D9025; the last one wins)'], problems)
+
+    def test_one_level_a_repeat_and_inline_expansion_pass(self):
+        checked, problems = compile_commands.check([
+            self.entry(self.CL + ' /TP /Ob2 /DNDEBUG /Od -c a.cpp'),
+            self.entry(self.CL + ' /TP /O2 /Ob2 /O2 -c b.cpp'),
+            self.entry(self.CL + ' /TP /Ob0 /Od /RTC1 -c c.cpp')])
+        self.assertEqual((3, []), (checked, problems))
+
+    def test_clang_cl_a_launcher_quotes_and_the_dash_form(self):
+        quoted = '"C:\\Program Files\\LLVM\\bin\\clang-cl.exe" /nologo -TP -O2 /Od -c -- a.cpp'
+        launched = {'file': 'D:/src/b.cpp', 'arguments': ['sccache.exe', self.CL, '/O1', '/Ox', '-c', 'b.cpp']}
+        checked, problems = compile_commands.check([self.entry(quoted), launched])
+        self.assertEqual(2, checked)
+        self.assertEqual(['D:/src/a.cpp: optimization levels /O2 then /Od on one command '
+                          '(cl.exe D9025; the last one wins)',
+                          'D:/src/b.cpp: optimization levels /O1 then /Ox on one command '
+                          '(cl.exe D9025; the last one wins)'], problems)
+
+    def test_other_compilers_are_not_judged_and_an_empty_check_fails(self):
+        gcc = [self.entry('/usr/bin/g++ -O2 -g -O0 -c a.cpp'), self.entry('/usr/bin/clang++ -O1 -O3 -c b.cpp')]
+        self.assertEqual((0, []), compile_commands.check(gcc))
+        with tempfile.TemporaryDirectory() as scratch:
+            path = Path(scratch) / 'compile_commands.json'
+            path.write_text(json.dumps(gcc), encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, compile_commands.main(['check', str(path)]))
+            self.assertIn('holds no cl.exe or clang-cl compile command; nothing was checked', out.getvalue())
+            path.write_text(json.dumps(gcc + [self.entry(self.CL + ' /O2 -c c.cpp', 'c.cpp')]), encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, compile_commands.main(['check', str(path)]))
+            self.assertIn('Checked 1 MSVC-style compile commands', out.getvalue())
+            path.write_text(json.dumps([self.entry(self.CL + ' /O2 /Od -c d.cpp', 'd.cpp')]), encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, compile_commands.main(['check', str(path)]))
+            self.assertIn('ERROR: D:/src/d.cpp: optimization levels /O2 then /Od', out.getvalue())
 
 
 class AllmanBraces(unittest.TestCase):

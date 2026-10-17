@@ -70,6 +70,14 @@ if(CMAKE_GENERATOR MATCHES "^Visual Studio")
                 --generator "${CMAKE_GENERATOR}")
     set_tests_properties(crd-native-build-profiles PROPERTIES TIMEOUT 240 ENVIRONMENT "PYTHONUTF8=1")
 endif()
+# One optimization level per cl.exe/clang-cl command: cl.exe reports a second one as D9025, which /WX does not fail.
+# The generators that write compile_commands.json; Visual Studio keeps per-file settings in its projects instead.
+if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")
+    add_test(NAME crd-check-compile-commands
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-compile-commands.py"
+                "${CMAKE_BINARY_DIR}/compile_commands.json")
+    set_tests_properties(crd-check-compile-commands PROPERTIES TIMEOUT 60 ENVIRONMENT "PYTHONUTF8=1")
+endif()
 
 # Header-only test utilities (ULP compare, GPU determinism check) — must
 # come BEFORE any test target that links it.

@@ -313,6 +313,13 @@ else()
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wnull-dereference>
         $<$<COMPILE_LANGUAGE:CXX,C>:-Wformat=2>
     )
+    # Link-time optimization compiles again at the link, and GCC judges those diagnostics by the link line alone: a
+    # compile line's -Werror does not reach them, so without this a link-time warning lands green (the hosted
+    # linux-gcc-shipping lane printed 44 before 2026-10-17). lto-wrapper's own notices ignore -Werror either way.
+    # Gated on the link language like the compile options above: nvcc reads a bare -Werror differently.
+    target_link_options(crd-warnings INTERFACE
+        $<$<AND:$<LINK_LANGUAGE:CXX,C>,$<BOOL:${CRD_WARNINGS_AS_ERRORS}>>:-Werror>
+    )
 endif()
 
 # ----- Module registry (REPO.DEV.4) ----------------------------------------------

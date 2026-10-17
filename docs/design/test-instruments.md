@@ -161,7 +161,10 @@ clang++ 18 under the GCC warning set fails 139 translation units of the ceir and
 `-Wsign-conversion` sites, almost all in `ckir_kernel_eval.hpp`, `ckir_glsl.hpp`, `ckir_hlsl.hpp` and `ckir_rt.hpp`;
 `-Wnested-anon-types` on the `String` small-buffer union in every unit; 13 `-Wdouble-promotion`). The diagnostic
 build shows those warnings instead of failing on them, the way `win-tidy-local` previews clang-tidy; every qualified
-configuration keeps warnings as errors, and the default graphs are unchanged (the flag is the same string). clang++
+configuration keeps warnings as errors, and the default graphs are unchanged (the flag is the same string). Since
+2026-10-17 the same switch puts `-Werror` on GCC and Clang link lines too: GCC judges link-time optimization's
+diagnostics by the link line alone, so a compile line's `-Werror` never reached them, and `lto-wrapper`'s own notices
+ignore `-Werror` either way ([session](../sessions/2026-10-17-diag-11b-warning-gates.md)). clang++
 on Linux is not a qualified compiler of this tree; that audit belongs to the platform/preset matrix row
 (REPO.DEV.11). clang-cl on Windows was tried first and dropped: its ASan has no debug-CRT runtime and, linked
 through lld-link, its objects and runtime disagree on the runtime library.

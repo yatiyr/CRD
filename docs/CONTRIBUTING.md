@@ -54,7 +54,10 @@ license, then two steps: `gen_license_manifest.py` re-renders the [license manif
 and `check-generated.py --refresh docs/generated/dependency-licenses.md` records its bytes),
 `check-generated.py` (below), `test-module-selection.py`, `test-native-build-profiles.py` and the
 [project-structure synchronizer](design/project-structure-sync.md) for moved sources. A push that touches these
-paths resolves to the complete tier, so every owned preset runs hosted.
+paths resolves to the complete tier, so every owned preset runs hosted. Each Windows Ninja lane also runs
+`check-compile-commands.py` (`crd-check-compile-commands`) over its compile commands: a per-source optimization option
+that follows the configuration's own is two levels on one cl.exe command (D9025, not an error under `/WX`); compile
+such files in their own directory, as `engine/foundation/jobs/unoptimized/` does.
 
 Every C/C++ control statement uses Allman braces, even around one statement: no `if (x) { y; }` one-liners, no
 brace-less bodies, no `if (x) {` and no `} else`. The strict tidy gate does not see this, so
