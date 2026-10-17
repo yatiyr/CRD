@@ -10,6 +10,12 @@
 // A storage whose allocator refuses (a sub-budget allocator returns nullptr) is out of memory, fatal in every build,
 // never a component pool built on null:
 //   sparse-pool-refused            SparseSetStorage::insert needs a new pool once the allocator refuses
+//   sparse-dense-refused           SparseSetStorage::insert grows a full pool's dense array once the allocator refuses
+//   shared-pool-refused            SparseSetStorage::insert_shared creates a pool's shared pool once it refuses
+//   shared-grow-refused            SharedComponentPool::acquire grows its entries once the allocator refuses
+//   relation-index-refused         World::register_relation with ReverseIndex builds the index once it refuses
+//   archetype-pool-refused         ArchetypeGraph::archetype_for needs an archetype slot the pool cannot get a page for
+//   chunk-pool-refused             ChunkAllocator::allocate needs a chunk the pool cannot get a page for
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
@@ -18,7 +24,12 @@
 
 #include <crd/memory/allocator.hpp>
 #include <crd/scene/archetype.hpp>
+#include <crd/scene/archetype_chunk.hpp>
+#include <crd/scene/archetype_graph.hpp>
+#include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
+#include <crd/scene/relation.hpp>
+#include <crd/scene/shared_component_pool.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/transform.hpp>
 #include <crd/scene/world.hpp>
@@ -37,6 +48,15 @@ struct NeverRegistered
 struct SparseOnly
 {
     crd::u32 v = 0;
+};
+
+struct SharedOnly
+{
+    crd::u32 v = 0;
+};
+
+struct IndexedTag
+{
 };
 
 // An allocator that grants from the default allocator until refuse() and returns nullptr from then on, as an
@@ -63,6 +83,85 @@ private:
 [[nodiscard]] bool is(const char* mode, const char* name)
 {
     return std::strcmp(mode, name) == 0;
+}
+
+// The growth modes: each grants what the setup needs, then refuses the allocation the mode is about, which is the first
+// one the violating call makes. Returns false for an unknown mode.
+[[nodiscard]] bool run_growth_mode(const char* mode)
+{
+    if (is(mode, "sparse-dense-refused"))
+    {
+        crd_diag_fatal::arm(mode, "SparseSetStorage: out of memory for a component pool's dense array");
+        SwitchableAllocator alloc;
+        sc::ComponentRegistry registry;
+        const sc::ComponentId id = registry.register_type<SparseOnly>(sc::StorageHint::SparseSet);
+        sc::SparseSetStorage storage{&alloc, registry};
+        SparseOnly value{4U};
+        constexpr crd::u32 first_capacity = 8U; // grow_dense's first capacity
+        for (crd::u32 i = 1U; i <= first_capacity; ++i)
+        {
+            storage.insert(sc::EntityId::make(i, 1U), id, &value);
+        }
+        alloc.refuse(); // the ninth insert grows the dense array before it touches anything else
+        storage.insert(sc::EntityId::make(first_capacity + 1U, 1U), id, &value);
+        return storage.has(sc::EntityId::make(first_capacity + 1U, 1U), id);
+    }
+    if (is(mode, "shared-pool-refused"))
+    {
+        crd_diag_fatal::arm(mode, "SparseSetStorage: out of memory for a shared component pool");
+        SwitchableAllocator alloc;
+        sc::ComponentRegistry registry;
+        const sc::ComponentId id =
+            registry.register_type<SharedOnly>(sc::InheritPolicy::Inherit, sc::StorageHint::SparseSet);
+        sc::SparseSetStorage storage{&alloc, registry};
+        SharedOnly value{5U};
+        storage.insert(sc::EntityId::make(1U, 1U), id, &value); // the component's pool, with no shared pool yet
+        alloc.refuse();
+        storage.insert_shared(sc::EntityId::make(2U, 1U), id, &value);
+        return storage.has(sc::EntityId::make(2U, 1U), id);
+    }
+    if (is(mode, "shared-grow-refused"))
+    {
+        crd_diag_fatal::arm(mode, "SharedComponentPool: out of memory for its entries");
+        SwitchableAllocator alloc;
+        sc::SharedComponentPool pool{&alloc, sizeof(crd::u32), alignof(crd::u32)};
+        alloc.refuse(); // the first acquire grows the entry array first
+        const crd::u32 value = 6U;
+        return pool.acquire(&value) != sc::SharedComponentPool::kInvalidIdx;
+    }
+    if (is(mode, "relation-index-refused"))
+    {
+        crd_diag_fatal::arm(mode, "World: out of memory for a relation's reverse index");
+        SwitchableAllocator alloc;
+        sc::World w{&alloc};
+        // A first registration gives the registry's tables their first buckets (room for several types), so the
+        // relation's own registration allocates nothing before its reverse index.
+        (void)w.register_component<SparseOnly>(sc::StorageHint::SparseSet);
+        alloc.refuse();
+        return !w.register_relation<IndexedTag>(sc::StorageHint::SparseSet, sc::ReverseIndex{}).is_null();
+    }
+    if (is(mode, "archetype-pool-refused"))
+    {
+        crd_diag_fatal::arm(mode, "ArchetypeGraph: out of memory for an archetype");
+        SwitchableAllocator alloc;
+        const sc::ComponentRegistry registry;
+        sc::ChunkAllocator chunks{&alloc};
+        sc::ArchetypeGraph graph{&alloc, chunks, registry};
+        alloc.refuse(); // the first archetype needs the pool's first page
+        return graph.archetype_for(sc::ComponentMask{}).id.raw != 0U;
+    }
+    if (is(mode, "chunk-pool-refused"))
+    {
+        crd_diag_fatal::arm(mode, "ChunkAllocator: out of memory for a chunk");
+        SwitchableAllocator alloc;
+        sc::ChunkAllocator chunks{&alloc};
+        alloc.refuse(); // the first chunk needs the pool's first page
+        sc::Chunk chunk = chunks.allocate();
+        const bool built = chunk.memory != nullptr;
+        chunks.free(chunk);
+        return built;
+    }
+    return false;
 }
 
 // Runs one mode. Returns false for an unknown mode; returning at all for a known mode means the fatal did not fire.
@@ -122,7 +221,7 @@ private:
         storage.insert(sc::EntityId::make(1U, 1U), id, &value);
         return storage.has(sc::EntityId::make(1U, 1U), id);
     }
-    return false;
+    return run_growth_mode(mode);
 }
 } // namespace
 

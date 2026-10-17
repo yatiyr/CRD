@@ -1049,14 +1049,15 @@ TEST_CASE("allocator consumers: the or_fatal helpers pass a grant through and re
     CHECK(mem::construct_array_or_fatal<crd::u64>(a, 0U, message) == nullptr);
 }
 
-TEST_CASE("allocator ownership: an arena whose parent refuses its backing memory reaches its out-of-memory fatal",
+TEST_CASE("allocator ownership: an arena refused its backing memory or handed an unusable buffer reaches its fatal",
           "[memory][contract][diag][harness]")
 {
     namespace cd = crd::diag;
     namespace cont = crd::containers;
     const char* const modes[] = {"linear-parent-refuses", "stack-parent-refuses", "pool-parent-refuses",
                                  "tlsf-parent-refuses",   "ring-parent-refuses",  "offset-parent-refuses",
-                                 "gpool-parent-refuses",  "tlsf-borrowed-null"};
+                                 "gpool-parent-refuses",  "tlsf-borrowed-null",   "linear-borrowed-null",
+                                 "stack-borrowed-null",   "pool-borrowed-null",   "pool-borrowed-overflow"};
     for (const char* mode : modes)
     {
         cd::Expectation e;
@@ -1066,8 +1067,9 @@ TEST_CASE("allocator ownership: an arena whose parent refuses its backing memory
         const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " reason=" << o.reason.c_str());
-        // 42 = the arena's own fatal fired; 97 = another assert fired first; 0 = the arena was built on null and
-        // returned; 96 = unknown mode. A crash on the null buffer is none of these.
+        // 42 = the arena's own fatal fired; 97 = another assert fired first (an ignorable assert where the fatal
+        // belongs); 0 = the arena was built on null and returned; 96 = unknown mode. A crash on the null buffer is
+        // none of these.
         CHECK(o.exit_code == 42);
     }
 }

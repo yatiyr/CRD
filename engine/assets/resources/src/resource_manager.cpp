@@ -79,16 +79,34 @@ crd::containers::StringView strp_get(
     return crd::containers::StringView(begin, static_cast<crd::usize>(end - begin));
 }
 
+// One control block in `state`, holding the caller's ref. Every block the manager hands out comes from here. The
+// manager's bookkeeping allocator may be a sub-budget one that refuses by returning nullptr; a block is what the
+// manager reports through (a failed load is a Failed block too), so a refusal leaves it out of memory, fatal in every
+// build, never a block built on null.
+ResourceControlBlock* new_control_block(crd::memory::IAllocator* alloc, ResourceId id, crd::u32 type_fourcc,
+                                        ILoader* loader, LoadState state)
+{
+    auto* const block = crd::memory::construct_or_fatal<ResourceControlBlock>(
+        *alloc, "ResourceManager: out of memory for a resource control block");
+    block->id = id;
+    block->type_fourcc = type_fourcc;
+    block->alloc = alloc;
+    block->loader = loader;
+    block->state.store(state, std::memory_order_release);
+    return block;
+}
+
 // Allocate a non-permanent Failed block owned by the caller's handle.
 // Used for all error paths where no cached block exists.
 ResourceControlBlock* make_failed_block(crd::memory::IAllocator* alloc, ResourceId id)
 {
-    void* raw = alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-    auto* block = new (raw) ResourceControlBlock();
-    block->id    = id;
-    block->alloc = alloc;
-    block->state.store(LoadState::Failed, std::memory_order_release);
-    return block;
+    return new_control_block(alloc, id, 0U, nullptr, LoadState::Failed);
+}
+
+// A load job's context, from the manager's bookkeeping allocator: out of memory when it refuses, as for a block.
+template <typename Ctx> [[nodiscard]] void* allocate_load_context(crd::memory::IAllocator* alloc, const char* oom)
+{
+    return crd::memory::allocate_or_fatal(*alloc, sizeof(Ctx), alignof(Ctx), oom);
 }
 
 // Why a pack was refused by read_pack (mount and both reload paths share it).
@@ -864,13 +882,7 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
             else
             {
                 // First-ever load: allocate a new block.
-                void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-                block = new (raw) ResourceControlBlock();
-                block->id          = id;
-                block->type_fourcc = type_fourcc;
-                block->alloc       = m_alloc;
-                block->loader      = loader;
-                block->state.store(LoadState::Loading, std::memory_order_release);
+                block = new_control_block(m_alloc, id, type_fourcc, loader, LoadState::Loading);
             }
 
             m_in_flight.insert(id, block);
@@ -1071,13 +1083,7 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
         {
             // Allocate block (state=Queued). Ref=1 (initial, becomes caller's);
             // manager adds one more for the in-flight period.
-            void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-            block = new (raw) ResourceControlBlock();
-            block->id          = id;
-            block->type_fourcc = type_fourcc;
-            block->alloc       = m_alloc;
-            block->loader      = loader;
-            block->state.store(LoadState::Queued, std::memory_order_release);
+            block = new_control_block(m_alloc, id, type_fourcc, loader, LoadState::Queued);
             block->add_ref(); // manager's in-flight ref
         }
 
@@ -1085,7 +1091,8 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
     } // lock released
 
     // Heap-allocate the context so only the 8-byte pointer lives in the SBO closure.
-    void* ctx_raw = m_alloc->allocate(sizeof(AsyncLoadCtx), alignof(AsyncLoadCtx));
+    void* ctx_raw =
+        allocate_load_context<AsyncLoadCtx>(m_alloc, "ResourceManager: out of memory for an async load context");
     auto* ctx = new (ctx_raw) AsyncLoadCtx{
         this,
         block,
@@ -1310,13 +1317,7 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
         }
         else
         {
-            void* raw = m_alloc->allocate(sizeof(ResourceControlBlock), alignof(ResourceControlBlock));
-            block = new (raw) ResourceControlBlock();
-            block->id          = id;
-            block->type_fourcc = type_fourcc;
-            block->alloc       = m_alloc;
-            block->loader      = loader;
-            block->state.store(LoadState::Queued, std::memory_order_release);
+            block = new_control_block(m_alloc, id, type_fourcc, loader, LoadState::Queued);
             block->add_ref(); // manager's in-flight ref
         }
 
@@ -1324,7 +1325,8 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
     }
 
     // Heap-allocate the context.
-    void* ctx_raw = m_alloc->allocate(sizeof(StreamLoadCtx), alignof(StreamLoadCtx));
+    void* ctx_raw =
+        allocate_load_context<StreamLoadCtx>(m_alloc, "ResourceManager: out of memory for a streamed load context");
     auto* ctx = new (ctx_raw) StreamLoadCtx{
         this,
         block,

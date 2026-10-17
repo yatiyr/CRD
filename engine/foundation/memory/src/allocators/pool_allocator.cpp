@@ -70,10 +70,20 @@ PoolAllocator::PoolAllocator(void* buffer, usize slot_size, usize slot_count, us
     CRD_ASSERT(is_pow2(slot_alignment));
     CRD_ASSERT(slot_count > 0);
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
-    CRD_ASSERT(buffer != nullptr);
 
     m_name = name;
-    m_slot_size = align_up(slot_size, slot_alignment);
+    // build_free_list links the slots through the buffer at once, so a null one is fatal in every build, never an
+    // ignorable assert that goes on to write through it. The stride and the span get the owning constructor's checked
+    // arithmetic: the destructor unpoisons slot_size * slot_count bytes of the caller's buffer.
+    if (buffer == nullptr)
+    {
+        CRD_FATAL("PoolAllocator: the borrowed buffer is null");
+    }
+    usize total = 0U;
+    if (!checked_align_up(slot_size, slot_alignment, &m_slot_size) || !checked_mul(m_slot_size, m_slot_count, &total))
+    {
+        CRD_FATAL("PoolAllocator: slot_size padded * slot_count overflows usize");
+    }
     build_free_list();
 }
 

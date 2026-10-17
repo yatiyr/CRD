@@ -3,7 +3,6 @@
 #include <crd/scene/sparse_set_storage.hpp>
 
 #include <cstring>
-#include <new>
 
 namespace crd::scene
 {
@@ -72,9 +71,15 @@ void SparseSetStorage::Pool::grow_dense(crd::u32 min_capacity)
         new_cap = min_capacity;
     }
 
-    const crd::usize byte_size = static_cast<crd::usize>(new_cap) * info->size;
-    void* new_dense = alloc->allocate(byte_size, info->alignment);
-    CRD_ASSERT(new_dense != nullptr);
+    // The storage's allocator may be a sub-budget one that refuses by returning nullptr: out of memory for this
+    // storage, never live slots moved into null. The byte size is checked, since a wrapped one would be too small.
+    crd::usize byte_size = 0U;
+    if (!crd::memory::checked_mul(static_cast<crd::usize>(new_cap), info->size, &byte_size))
+    {
+        CRD_FATAL("SparseSetStorage: a component pool's dense array size overflows usize");
+    }
+    void* const new_dense = crd::memory::allocate_or_fatal(
+        *alloc, byte_size, info->alignment, "SparseSetStorage: out of memory for a component pool's dense array");
 
     if (count > 0 && dense != nullptr)
     {
@@ -296,13 +301,12 @@ void SparseSetStorage::insert_shared(EntityId e, ComponentId c, const void* data
                && "insert_shared: entity already has this component (UPSERT path NYI for shared)");
     (void)existing; // Used only by CRD_ASSERT in debug; silence release-mode unused-var warning.
 
-    // Lazy-create the shared pool on first shared insert.
+    // Lazy-create the shared pool on first shared insert (out of memory for this storage when the allocator refuses).
     if (pool.shared_pool == nullptr)
     {
-        void* mem = m_alloc->allocate(sizeof(SharedComponentPool), alignof(SharedComponentPool));
-        CRD_ASSERT(mem != nullptr);
-        pool.shared_pool = ::new (mem)
-            SharedComponentPool(m_alloc, pool.info->size, pool.info->alignment);
+        pool.shared_pool = crd::memory::construct_or_fatal<SharedComponentPool>(
+            *m_alloc, "SparseSetStorage: out of memory for a shared component pool", m_alloc, pool.info->size,
+            pool.info->alignment);
     }
 
     // v1m4b3: content-hash dedup. Byte-identical inserts (cross-call too)

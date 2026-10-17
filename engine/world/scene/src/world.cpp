@@ -3,6 +3,7 @@
 // v1j: transform writers + dirty subtree marking
 // v1k: serialize traits attached to built-in relations
 #include <crd/core/assert.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/scene/serialize.hpp>
 #include <crd/scene/world.hpp>
 
@@ -417,13 +418,13 @@ void World::on_relation_registered(ComponentId id)
     }
 
     // Lazy-allocate RelationInfo only when ReverseIndex is set. Relations
-    // without it pay zero memory tax for the unused HashMap.
+    // without it pay zero memory tax for the unused HashMap. The World's allocator may be a sub-budget one that
+    // refuses by returning nullptr: out of memory for this world, never a reverse index built on null.
     if (info.has_reverse_index && m_relations[id.raw] == nullptr)
     {
         crd::memory::IAllocator* alloc = m_pending_destroy.allocator();
-        void* mem = alloc->allocate(sizeof(RelationInfo), alignof(RelationInfo));
-        CRD_ASSERT(mem != nullptr);
-        m_relations[id.raw] = ::new (mem) RelationInfo(alloc);
+        m_relations[id.raw] = crd::memory::construct_or_fatal<RelationInfo>(
+            *alloc, "World: out of memory for a relation's reverse index", alloc);
     }
 }
 

@@ -95,9 +95,13 @@ Archetype& ArchetypeGraph::archetype_for(const ComponentMask& mask)
     }
 
     // Allocate the Archetype struct from the pool — flows through the World's
-    // allocator chain (pool's parent = m_alloc).
-    void* mem = m_archetype_pool.allocate(sizeof(Archetype), alignof(Archetype));
-    CRD_ASSERT(mem != nullptr);
+    // allocator chain (pool's parent = m_alloc). A parent that refuses the pool a page leaves the graph out of memory,
+    // fatal in every build and named for the graph, never an archetype built on null.
+    void* const mem = m_archetype_pool.try_allocate(sizeof(Archetype), alignof(Archetype));
+    if (mem == nullptr)
+    {
+        CRD_FATAL("ArchetypeGraph: out of memory for an archetype");
+    }
     Archetype* archetype = ::new (mem) Archetype(m_alloc);
 
     archetype->id = ArchetypeId{static_cast<crd::u32>(m_archetypes.size())};

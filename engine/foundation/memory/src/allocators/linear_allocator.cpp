@@ -24,9 +24,14 @@ LinearAllocator::LinearAllocator(usize capacity, IAllocator* parent, const char*
 LinearAllocator::LinearAllocator(void* buffer, usize capacity, const char* name) noexcept
     : m_buffer(static_cast<u8*>(buffer)), m_capacity(capacity)
 {
-    CRD_ASSERT(buffer != nullptr);
-    CRD_ASSERT(capacity > 0);
     m_name = name;
+    // allocate hands out offsets into the buffer at once, so a null one is fatal in every build, never an ignorable
+    // assert that goes on to hand out pointers near null.
+    if (buffer == nullptr)
+    {
+        CRD_FATAL("LinearAllocator: the borrowed buffer is null");
+    }
+    CRD_ASSERT(capacity > 0);
     asan_poison(m_buffer, m_capacity);
 }
 

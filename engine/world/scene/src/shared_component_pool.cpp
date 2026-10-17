@@ -7,6 +7,7 @@
 // out the high-water idx and bumps it.
 
 #include <crd/core/assert.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/scene/shared_component_pool.hpp>
 
 #include <cstring>
@@ -89,9 +90,15 @@ void SharedComponentPool::grow(crd::u32 min_capacity)
     {
         new_capacity *= 2U;
     }
-    crd::u8* new_bytes = static_cast<crd::u8*>(
-        m_alloc->allocate(static_cast<crd::usize>(new_capacity) * m_entry_size, m_entry_alignment));
-    CRD_ASSERT(new_bytes != nullptr);
+    // The pool's allocator may be a sub-budget one that refuses by returning nullptr: out of memory for this pool,
+    // never entries copied into null. The byte size is checked, since a wrapped one would be too small.
+    crd::usize new_size = 0U;
+    if (!crd::memory::checked_mul(static_cast<crd::usize>(new_capacity), m_entry_size, &new_size))
+    {
+        CRD_FATAL("SharedComponentPool: the entry array size overflows usize");
+    }
+    auto* const new_bytes = static_cast<crd::u8*>(crd::memory::allocate_or_fatal(
+        *m_alloc, new_size, m_entry_alignment, "SharedComponentPool: out of memory for its entries"));
     if (m_bytes != nullptr)
     {
         std::memcpy(new_bytes, m_bytes, static_cast<crd::usize>(m_capacity) * m_entry_size);

@@ -13,6 +13,9 @@
 //   offset-parent-refuses  the node array is granted and the free-node array is refused
 //   gpool-parent-refuses   GrowablePoolAllocator::allocate when the parent refuses the first page
 //   tlsf-borrowed-null     the borrowing TlsfAllocator constructor is handed a null buffer
+//   linear-borrowed-null, stack-borrowed-null, pool-borrowed-null
+//                          the borrowing LinearAllocator, StackAllocator and PoolAllocator constructors likewise
+//   pool-borrowed-overflow the borrowing PoolAllocator's slot_size * slot_count overflows usize
 //
 // The consumer helpers (construct.hpp): a caller that cannot continue without the memory turns a refusal into its own
 // named out-of-memory fatal, never a null pointer it would follow:
@@ -79,6 +82,44 @@ private:
     int m_allowance;
 };
 
+// The borrowed-buffer modes: an arena adopts the caller's buffer at once, so a null one is fatal in every build, never
+// an ignorable assert that goes on to write through it. Returns false for an unknown mode.
+[[nodiscard]] bool run_borrowed_mode(const char* mode)
+{
+    namespace mem = crd::memory;
+    constexpr crd::usize bytes = crd::usize{64} * 1024U;
+    if (std::strcmp(mode, "linear-borrowed-null") == 0)
+    {
+        g_expected_fatal = "LinearAllocator: the borrowed buffer is null";
+        mem::LinearAllocator a(static_cast<void*>(nullptr), bytes, "alloc-fatal-linear");
+        (void)a.allocate(64U, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "stack-borrowed-null") == 0)
+    {
+        g_expected_fatal = "StackAllocator: the borrowed buffer is null";
+        mem::StackAllocator a(static_cast<void*>(nullptr), bytes, "alloc-fatal-stack");
+        (void)a.allocate(64U, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "pool-borrowed-null") == 0)
+    {
+        g_expected_fatal = "PoolAllocator: the borrowed buffer is null";
+        mem::PoolAllocator a(static_cast<void*>(nullptr), 64U, 16U, 16U, "alloc-fatal-pool");
+        (void)a.allocate(64U, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "pool-borrowed-overflow") == 0)
+    {
+        g_expected_fatal = "PoolAllocator: slot_size padded * slot_count overflows usize";
+        alignas(16) static unsigned char buffer[256];
+        mem::PoolAllocator a(buffer, 64U, SIZE_MAX / 32U, 16U, "alloc-fatal-pool");
+        (void)a.allocate(64U, 16U);
+        return true;
+    }
+    return false;
+}
+
 // The parent-refuses modes. Returns false for an unknown mode.
 [[nodiscard]] bool run_parent_refuses_mode(const char* mode)
 {
@@ -142,7 +183,7 @@ private:
         (void)a.allocate(64U, 16U);
         return true;
     }
-    return false;
+    return run_borrowed_mode(mode);
 }
 
 // The consumer-helper modes. Returns false for an unknown mode.

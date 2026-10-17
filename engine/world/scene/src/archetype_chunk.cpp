@@ -152,8 +152,13 @@ ChunkAllocator::ChunkAllocator(crd::memory::IAllocator* alloc)
 
 Chunk ChunkAllocator::allocate()
 {
-    void* mem = m_pool.allocate(kChunkSize, kChunkAlignment);
-    CRD_ASSERT(mem != nullptr);
+    // A parent that refuses the pool a page leaves the storage out of memory, fatal in every build and named for the
+    // chunk allocator, never a chunk header written through null.
+    void* const mem = m_pool.try_allocate(kChunkSize, kChunkAlignment);
+    if (mem == nullptr)
+    {
+        CRD_FATAL("ChunkAllocator: out of memory for a chunk");
+    }
 
     // Zero header so consumers can rely on entity_count == 0 and version
     // counters == 0 from day one. SoA bytes stay uninitialised until populated.
