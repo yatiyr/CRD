@@ -9,8 +9,12 @@
 //
 // Determinism: every walk is registry-order or entity-table-order; chunk
 // order is FourCC-sorted by CrdrWriter. Same World → same bytes.
-// Forward-compat: unknown FourCCs skip; known FourCC + size/version
-// mismatch is a hard fail.
+// Forward-compat: unknown FourCCs skip. The loader refuses a pack whose
+// records do not lie inside it; instantiation refuses one this World cannot
+// take (a known FourCC with another size, alignment or version, or a cycle in
+// an Acyclic relation) before it spawns anything (pack_validation.hpp).
+
+#include "pack_validation.hpp"
 
 #include <crd/core/assert.hpp>
 #include <crd/resources/crdr.hpp>
@@ -66,13 +70,89 @@ inline void pad_to_align(crd::containers::Array<crd::u8>& dst, crd::usize a)
     return static_cast<crd::u32>(offset);
 }
 
-// Parse a const span of N-byte structs out of a CRDR chunk's payload.
-template <typename T>
-[[nodiscard]] crd::containers::ConstSpan<T> chunk_as_array(const crd::resources::CrdrChunk& chunk) noexcept
+// Parses `bytes` (the loader's copy of the artifact, `res.owned_bytes`) into `res`'s views. False when the pack is
+// refused: a chunk that does not hold exactly its records, or a record that does not lie inside the pack
+// (SceneResource's rules).
+[[nodiscard]] bool parse_scene(SceneResource& res, crd::containers::ConstSpan<crd::u8> bytes,
+                               crd::memory::IAllocator* alloc)
 {
-    const auto bytes = chunk.payload;
-    const auto count = bytes.size() / sizeof(T);
-    return crd::containers::ConstSpan<T>{reinterpret_cast<const T*>(bytes.data()), count};
+    namespace pd = pack_detail;
+    if (crd::resources::crdr_read(bytes, res.parsed_file, alloc) != crd::resources::CrdrError::Ok ||
+        res.parsed_file.type_fourcc != kFourCC_SCEN)
+    {
+        return false;
+    }
+    const crd::resources::CrdrFile& file = res.parsed_file;
+
+    // INFO chunk — required.
+    const crd::resources::CrdrChunk* info_chunk = crd::resources::crdr_find_chunk(file, kFourCC_SceneINFO);
+    if (info_chunk == nullptr || info_chunk->payload.size() != sizeof(SceneInfo))
+    {
+        return false;
+    }
+    std::memcpy(&res.info, info_chunk->payload.data(), sizeof(SceneInfo));
+    if (res.info.schema_version != kSceneSchemaVersion || res.info.component_count > kMaxComponents)
+    {
+        return false;
+    }
+
+    // Optional STRP chunk.
+    if (const auto* strp = crd::resources::crdr_find_chunk(file, kFourCC_SceneSTRP); strp != nullptr)
+    {
+        res.string_pool = strp->payload;
+    }
+
+    // CMPS chunk — required if component_count > 0; every descriptor valid before its payload chunk is read.
+    if (res.info.component_count > 0U)
+    {
+        const auto* cmps = crd::resources::crdr_find_chunk(file, kFourCC_SceneCMPS);
+        if (cmps == nullptr || !pd::copy_records(*cmps, res.info.component_count, res.descriptor_records))
+        {
+            return false;
+        }
+        for (const SceneComponentDescriptor& d : res.descriptor_records)
+        {
+            if (!pd::descriptor_is_valid(d))
+            {
+                return false;
+            }
+        }
+    }
+    res.component_descriptors = crd::containers::as_const_span(res.descriptor_records);
+
+    // ETBL chunk — required if entity_count > 0.
+    if (res.info.entity_count > 0U)
+    {
+        const auto* etbl = crd::resources::crdr_find_chunk(file, kFourCC_SceneETBL);
+        if (etbl == nullptr || !pd::copy_records(*etbl, res.info.entity_count, res.entity_records))
+        {
+            return false;
+        }
+    }
+    res.entity_table = crd::containers::as_const_span(res.entity_records);
+
+    // RELS chunk — present exactly when relation_count > 0.
+    const auto* rels = crd::resources::crdr_find_chunk(file, kFourCC_SceneRELS);
+    if (rels != nullptr ? !pd::copy_records(*rels, res.info.relation_count, res.relation_records)
+                        : res.info.relation_count != 0U)
+    {
+        return false;
+    }
+    res.relations = crd::containers::as_const_span(res.relation_records);
+
+    // Per-component payload chunks (C000, C001, ...), present exactly when the descriptor has records.
+    auto chunk_for = [&file](crd::u32 ci)
+    {
+        return crd::resources::crdr_find_chunk(file, make_scene_component_chunk_fourcc(ci));
+    };
+    if (!pd::read_payload_chunks(res.component_descriptors, chunk_for, res.component_payloads, res.index_records))
+    {
+        return false;
+    }
+
+    return pd::components_are_consistent(res.info.entity_count, res.component_descriptors,
+                                         crd::containers::as_const_span(res.component_payloads)) &&
+           pd::relations_are_consistent(res.info.entity_count, res.relations);
 }
 
 } // namespace
@@ -332,16 +412,6 @@ crd::containers::Array<crd::u8> SceneArtifactBuilder::build(const World& world)
 
 void* SceneLoader::load(const crd::resources::LoadContext& ctx)
 {
-    crd::resources::CrdrFile file{ctx.allocator};
-    if (crd::resources::crdr_read(ctx.bytes, file, ctx.allocator) != crd::resources::CrdrError::Ok)
-    {
-        return nullptr;
-    }
-    if (file.type_fourcc != kFourCC_SCEN)
-    {
-        return nullptr;
-    }
-
     auto* res = static_cast<SceneResource*>(
         ctx.allocator->allocate(sizeof(SceneResource), alignof(SceneResource)));
     if (res == nullptr)
@@ -350,119 +420,19 @@ void* SceneLoader::load(const crd::resources::LoadContext& ctx)
     }
     ::new (res) SceneResource(ctx.allocator);
 
-    // INFO chunk — required.
-    const crd::resources::CrdrChunk* info_chunk = crd::resources::crdr_find_chunk(file, kFourCC_SceneINFO);
-    if (info_chunk == nullptr || info_chunk->payload.size() != sizeof(SceneInfo))
+    // The views must not point into `ctx.bytes`: ResourceManager frees an artifact's bytes as soon as load()
+    // returns. Copy them first and parse the copy (as ObekLoader does).
+    res->owned_bytes.resize(ctx.bytes.size());
+    if (ctx.bytes.size() > 0U)
+    {
+        std::memcpy(res->owned_bytes.data(), ctx.bytes.data(), ctx.bytes.size());
+    }
+    if (!parse_scene(*res, crd::containers::as_const_span(res->owned_bytes), ctx.allocator))
     {
         res->~SceneResource();
         ctx.allocator->deallocate(res);
         return nullptr;
     }
-    std::memcpy(&res->info, info_chunk->payload.data(), sizeof(SceneInfo));
-    if (res->info.schema_version != kSceneSchemaVersion)
-    {
-        res->~SceneResource();
-        ctx.allocator->deallocate(res);
-        return nullptr;
-    }
-
-    // Optional STRP chunk.
-    if (const auto* strp = crd::resources::crdr_find_chunk(file, kFourCC_SceneSTRP); strp != nullptr)
-    {
-        res->string_pool = strp->payload;
-    }
-
-    // CMPS chunk — required if component_count > 0.
-    if (res->info.component_count > 0U)
-    {
-        const auto* cmps = crd::resources::crdr_find_chunk(file, kFourCC_SceneCMPS);
-        if (cmps == nullptr || cmps->payload.size() != res->info.component_count * sizeof(SceneComponentDescriptor))
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->component_descriptors = chunk_as_array<SceneComponentDescriptor>(*cmps);
-    }
-
-    // ETBL chunk — required if entity_count > 0.
-    if (res->info.entity_count > 0U)
-    {
-        const auto* etbl = crd::resources::crdr_find_chunk(file, kFourCC_SceneETBL);
-        if (etbl == nullptr || etbl->payload.size() != res->info.entity_count * sizeof(crd::u32))
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->entity_table = chunk_as_array<crd::u32>(*etbl);
-    }
-
-    // RELS chunk — optional.
-    if (const auto* rels = crd::resources::crdr_find_chunk(file, kFourCC_SceneRELS); rels != nullptr)
-    {
-        if (rels->payload.size() != res->info.relation_count * sizeof(SceneRelationRecord))
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->relations = chunk_as_array<SceneRelationRecord>(*rels);
-    }
-
-    // Per-component payload chunks (C000, C001, ...).
-    res->component_payloads.resize(res->info.component_count);
-    for (crd::u32 ci = 0; ci < res->info.component_count; ++ci)
-    {
-        const SceneComponentDescriptor& d = res->component_descriptors[ci];
-        const auto* chunk = crd::resources::crdr_find_chunk(file, make_scene_component_chunk_fourcc(ci));
-        if (chunk == nullptr)
-        {
-            // No payloads for this descriptor → record_count must be 0.
-            if (d.record_count != 0U)
-            {
-                res->~SceneResource();
-                ctx.allocator->deallocate(res);
-                return nullptr;
-            }
-            continue;
-        }
-        const auto bytes = chunk->payload;
-        if (bytes.size() < 8U) // u32 record_count + u32 reserved
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        crd::u32 record_count = 0;
-        std::memcpy(&record_count, bytes.data(), sizeof(crd::u32));
-        if (record_count != d.record_count)
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        const crd::usize indices_offset = 8U;
-        const crd::usize indices_size   = record_count * sizeof(crd::u32);
-        const crd::usize payloads_start = align_up(indices_offset + indices_size,
-                                                   d.alignment > 0 ? d.alignment : 1U);
-        const crd::usize payloads_size  = record_count * d.size;
-        if (payloads_start + payloads_size > bytes.size())
-        {
-            res->~SceneResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->component_payloads[ci].indices  = crd::containers::ConstSpan<crd::u32>{
-            reinterpret_cast<const crd::u32*>(bytes.data() + indices_offset), record_count};
-        res->component_payloads[ci].payloads = crd::containers::ConstSpan<crd::u8>{
-            bytes.data() + payloads_start, payloads_size};
-    }
-
-    // CRDR chunks borrow `ctx.bytes` directly (no compression in v1k SCEN
-    // emit path). The SceneResource holds spans into those bytes; the
-    // resource handle keeps the bytes alive. ResourceManager guarantees
-    // both stay together.
     return res;
 }
 
@@ -482,37 +452,42 @@ void SceneLoader::unload(void* payload) noexcept
 
 SceneInstantiation World::instantiate_scene(const SceneResource& res)
 {
+    namespace pd = pack_detail;
     SceneInstantiation result{allocator()};
-    result.entities.reserve(res.info.entity_count);
 
-    // Step A: spawn one entity per file_idx.
+    // Step A: every check before the first spawn; a refused pack spawns nothing.
+    if (res.component_descriptors.size() != res.info.component_count ||
+        !pd::components_are_consistent(res.info.entity_count, res.component_descriptors,
+                                       crd::containers::as_const_span(res.component_payloads)) ||
+        !pd::relations_are_consistent(res.info.entity_count, res.relations))
+    {
+        result.refusal = PackRefusal::MalformedPack;
+        return result;
+    }
+    result.refusal = pd::check_layouts(m_components, res.component_descriptors, false, &result.refused_fourcc);
+    if (result.refusal == PackRefusal::None)
+    {
+        result.refusal =
+            pd::check_cycles(m_components, res.info.entity_count, res.relations, allocator(), &result.refused_fourcc);
+    }
+    if (result.refused())
+    {
+        return result;
+    }
+
+    // Step B: spawn one entity per file_idx.
+    result.entities.reserve(res.info.entity_count);
     for (crd::u32 i = 0; i < res.info.entity_count; ++i)
     {
         result.entities.push_back(spawn());
     }
 
-    // Step B: build a fourcc → ComponentId map for the registered
-    // components in this World. O(N) over the registry — kMaxComponents
-    // = 256, fine.
-    auto find_component_by_fourcc = [&](crd::u32 fourcc) -> ComponentId
-    {
-        for (crd::u32 i = 0; i < m_components.size(); ++i)
-        {
-            const ComponentId cid{static_cast<crd::u16>(i)};
-            const ComponentInfo* info = m_components.info(cid);
-            if (info != nullptr && info->serialize.fourcc == fourcc)
-            {
-                return cid;
-            }
-        }
-        return ComponentId{};
-    };
-
-    // Step C: restore components.
+    // Step C: restore components. Relation components are restored from the RELS records in step D: their payload
+    // records hold source-World entity ids.
     for (crd::u32 ci = 0; ci < res.info.component_count; ++ci)
     {
         const SceneComponentDescriptor& d = res.component_descriptors[ci];
-        const ComponentId               registered_id = find_component_by_fourcc(d.fourcc);
+        const ComponentId registered_id = pd::find_by_fourcc(m_components, d.fourcc);
         if (registered_id.is_null())
         {
             // Unknown FourCC — forward-compat skip (advisor pin #1).
@@ -520,55 +495,33 @@ SceneInstantiation World::instantiate_scene(const SceneResource& res)
             continue;
         }
         const ComponentInfo& info = m_components.require_info(registered_id); // found by FourCC: registered
-        // Hard-fail rejects (advisor pin #5).
-        CRD_ASSERT(static_cast<crd::u32>(info.size) == d.size &&
-                   "instantiate_scene: component size mismatch — registered type changed layout");
-        CRD_ASSERT(static_cast<crd::u32>(info.alignment) == d.alignment &&
-                   "instantiate_scene: component alignment mismatch");
-        CRD_ASSERT(info.serialize.version == d.version &&
-                   "instantiate_scene: component version mismatch — explicit migration required");
+        if (info.is_relation || d.record_count == 0U)
+        {
+            continue;
+        }
 
+        // The storage backends take a mutable pointer and move from it, so each record is staged at the type's
+        // alignment: read_blob deserializes into the staging (then the staged object is destroyed after the move),
+        // a trivially copyable type is copied into it.
+        pd::ComponentStaging staging{*allocator(), info.size, info.alignment};
         const auto& pp = res.component_payloads[ci];
         for (crd::u32 r = 0; r < d.record_count; ++r)
         {
-            const crd::u32 file_idx = pp.indices[r];
-            CRD_ASSERT(file_idx < result.entities.size());
-            const EntityId e = result.entities[file_idx];
-            const crd::u8* src = pp.payloads.data() + r * static_cast<crd::usize>(d.size);
-
-            // Use the component's serialize.read_blob hook when present;
-            // otherwise the storage backend's insert path will memcpy via
-            // move_construct.
+            const EntityId e = result.entities[pp.indices[r]];
+            const crd::u8* src = pp.payloads.data() + static_cast<crd::usize>(r) * d.size;
             if (info.serialize.read_blob != nullptr)
             {
-                // Allocate a temporary stack-aligned buffer, deserialize
-                // into it, then insert. Trivially-copyable types skip
-                // this — they go through the memcpy fallback below.
-                alignas(16) crd::u8 staging[1024];
-                CRD_ASSERT(d.size <= sizeof(staging) &&
-                           "instantiate_scene: component size exceeds staging buffer (1024 bytes)");
-                info.serialize.read_blob(staging, src, d.size);
-                backend_for(registered_id).insert(e, registered_id, staging);
+                info.serialize.read_blob(staging.data(), src, d.size);
+                backend_for(registered_id).insert(e, registered_id, staging.data());
                 if (info.destruct != nullptr)
                 {
-                    info.destruct(staging);
+                    info.destruct(staging.data());
                 }
             }
             else
             {
-                // Trivially-copyable: hand the storage backend the bytes
-                // directly. backend.insert's move_construct callback
-                // memcpys (info->move_construct is captured for trivially
-                // movable types in component_registry's lifecycle hook).
-                // Stage into an aligned buffer to give the backend a
-                // mutable pointer (its API takes void* because some
-                // backends move-from); for trivially-copyable types this
-                // is just two memcpys (src→staging→storage).
-                alignas(16) crd::u8 staging[1024];
-                CRD_ASSERT(d.size <= sizeof(staging) &&
-                           "instantiate_scene: component size exceeds staging buffer (1024 bytes)");
-                std::memcpy(staging, src, d.size);
-                backend_for(registered_id).insert(e, registered_id, staging);
+                std::memcpy(staging.data(), src, d.size);
+                backend_for(registered_id).insert(e, registered_id, staging.data());
             }
         }
     }
@@ -576,26 +529,15 @@ SceneInstantiation World::instantiate_scene(const SceneResource& res)
     // Step D: restore relations.
     for (const SceneRelationRecord& rec : res.relations)
     {
-        const ComponentId registered_id = find_component_by_fourcc(rec.relation_fourcc);
-        if (registered_id.is_null())
+        const ComponentId registered_id = pd::find_by_fourcc(m_components, rec.relation_fourcc);
+        if (registered_id.is_null() || !m_components.require_info(registered_id).is_relation)
         {
             ++result.relations_skipped;
             continue;
         }
-        const ComponentInfo* info = m_components.info(registered_id);
-        if (info == nullptr || !info->is_relation)
-        {
-            ++result.relations_skipped;
-            continue;
-        }
-        CRD_ASSERT(rec.src_file_idx < result.entities.size());
         const EntityId src = result.entities[rec.src_file_idx];
-        EntityId       tgt = EntityId::null();
-        if (rec.target_file_idx != kSceneNullTargetIdx)
-        {
-            CRD_ASSERT(rec.target_file_idx < result.entities.size());
-            tgt = result.entities[rec.target_file_idx];
-        }
+        const EntityId tgt =
+            rec.target_file_idx == kSceneNullTargetIdx ? EntityId::null() : result.entities[rec.target_file_idx];
         add_relation_via_id(registered_id, src, tgt);
     }
 

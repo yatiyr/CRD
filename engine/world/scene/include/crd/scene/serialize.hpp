@@ -168,4 +168,27 @@ inline constexpr crd::u32 kFourCC_ObekOLNK = make_serialize_fourcc('O', 'L', 'N'
 }
 // NOLINTEND(readability-identifier-naming)
 
+// Why `World::instantiate_scene` or `World::instantiate_obek` refused a pack (ADR-0055 §5: an incompatible pack fails
+// the load, it never crashes it and is never restored best-effort). A refused instantiation spawns nothing; its result
+// names the reason and, for a component or relation, the record's FourCC.
+//   MalformedPack               the resource's views contradict its own structure: a record index past the entity
+//                               table, a payload that does not hold its records, an alignment that is not a power of
+//                               two. The loaders refuse such bytes, so only a resource built by hand reaches it.
+//   ComponentSizeMismatch       a component the World registers under the record's FourCC has another size,
+//   ComponentAlignmentMismatch  or another alignment (its layout changed since the cook),
+//   ComponentVersionMismatch    or another ComponentSerialize::version (no migration hook exists yet).
+//   RelationCycle               the records of an Acyclic relation form a cycle.
+enum class PackRefusal : crd::u8
+{
+    None = 0,
+    MalformedPack,
+    ComponentSizeMismatch,
+    ComponentAlignmentMismatch,
+    ComponentVersionMismatch,
+    RelationCycle,
+};
+
+// The refusal's name, as the enumerator spells it ("None" for None).
+[[nodiscard]] const char* pack_refusal_name(PackRefusal refusal) noexcept;
+
 } // namespace crd::scene

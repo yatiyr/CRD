@@ -182,10 +182,13 @@ Settled policies (2026-10-06, [session](../sessions/2026-10-06-diag-3a-allocator
   shared component pools and their entries, relation reverse indexes, and the resource manager's control blocks
   (a failed load's block included) and async and streamed load contexts, which followed a refused allocation through
   null in a build without asserts, and the archetype graph and chunk allocator, whose pools' generic fatal now names
-  them ([session](../sessions/2026-10-17-diag-11b-unchecked-allocations.md)); each has a child-process mode
+  them ([session](../sessions/2026-10-17-diag-11b-unchecked-allocations.md)), and the scene's instantiation staging
+  block for a component past 1024 bytes or 16-byte alignment, which before was a 1024-byte stack buffer at 16-byte
+  alignment ([session](../sessions/2026-10-17-diag-11b-scene-pack-trust.md)); each has a child-process mode
   (`crd-containers-fatal-*`, `crd-ceir-fatal-*`, `crd-scene-fatal-*`, `crd-resources-fatal-*`, the alloc-fatal
   specimen). A borrowed linear, stack, pool or TLSF buffer that is null, or a borrowed pool span that overflows, is
-  fatal in every build as well.
+  fatal in every build as well, and so is a shared component pool past its index range or an entry refcount past u32
+  (its doubling ran through u32 and wrapped to an endless loop past 2^31 entries).
 - **Parent/child and external buffers.** A child is destroyed before its parent and returns exactly the blocks it took.
   An arena never frees an external buffer, stays inside it, and returns it unpoisoned.
 

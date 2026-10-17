@@ -83,13 +83,33 @@ SharedComponentPool& SharedComponentPool::operator=(SharedComponentPool&& other)
     return *this;
 }
 
-void SharedComponentPool::grow(crd::u32 min_capacity)
+crd::u32 SharedComponentPool::grown_capacity(crd::u32 capacity, crd::u64 min_capacity)
 {
-    crd::u32 new_capacity = (m_capacity == 0) ? 8U : m_capacity * 2U;
-    while (new_capacity < min_capacity)
+    if (min_capacity > kMaxEntries)
     {
-        new_capacity *= 2U;
+        CRD_FATAL("SharedComponentPool: every entry index is in use");
     }
+    // In u64: doubling a u32 capacity past 2^31 wraps to 0, and the loop would never end.
+    crd::u64 grown = (capacity == 0U) ? 8U : static_cast<crd::u64>(capacity) * 2U;
+    while (grown < min_capacity)
+    {
+        grown *= 2U;
+    }
+    return static_cast<crd::u32>(grown < kMaxEntries ? grown : kMaxEntries);
+}
+
+crd::u32 SharedComponentPool::incremented_refcount(crd::u32 refcount)
+{
+    if (refcount == 0xFFFFFFFFU)
+    {
+        CRD_FATAL("SharedComponentPool: an entry's refcount overflows u32");
+    }
+    return refcount + 1U;
+}
+
+void SharedComponentPool::grow(crd::u64 min_capacity)
+{
+    const crd::u32 new_capacity = grown_capacity(m_capacity, min_capacity);
     // The pool's allocator may be a sub-budget one that refuses by returning nullptr: out of memory for this pool,
     // never entries copied into null. The byte size is checked, since a wrapped one would be too small.
     crd::usize new_size = 0U;
@@ -123,7 +143,7 @@ crd::u32 SharedComponentPool::acquire(const void* src)
     {
         if (m_high_water >= m_capacity)
         {
-            grow(m_high_water + 1U);
+            grow(static_cast<crd::u64>(m_high_water) + 1U);
         }
         idx = m_high_water;
         ++m_high_water;
@@ -144,7 +164,7 @@ crd::u32 SharedComponentPool::acquire_or_retain(const void* src, crd::u64 conten
         CRD_ASSERT(idx < m_capacity);
         CRD_ASSERT(m_refcounts[idx] > 0
                    && "SharedComponentPool::acquire_or_retain hit a stale hash_to_idx entry");
-        ++m_refcounts[idx];
+        m_refcounts[idx] = incremented_refcount(m_refcounts[idx]);
         return idx;
     }
     const crd::u32 idx = acquire(src);
@@ -157,7 +177,7 @@ void SharedComponentPool::retain(crd::u32 idx)
 {
     CRD_ASSERT(idx < m_capacity);
     CRD_ASSERT(m_refcounts[idx] > 0 && "SharedComponentPool::retain on freed entry");
-    ++m_refcounts[idx];
+    m_refcounts[idx] = incremented_refcount(m_refcounts[idx]);
 }
 
 void SharedComponentPool::release(crd::u32 idx)

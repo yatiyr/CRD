@@ -16,19 +16,29 @@
 //   relation-index-refused         World::register_relation with ReverseIndex builds the index once it refuses
 //   archetype-pool-refused         ArchetypeGraph::archetype_for needs an archetype slot the pool cannot get a page for
 //   chunk-pool-refused             ChunkAllocator::allocate needs a chunk the pool cannot get a page for
+//   staging-refused                World::instantiate_scene stages a record wider than the in-place staging in a block
+//                                  the world's allocator refuses
+// A shared pool past its ranges is fatal in every build, never a wrapped capacity or count:
+//   shared-index-exhausted         SharedComponentPool::grown_capacity for more entries than the index range holds
+//   shared-refcount-overflow       SharedComponentPool::incremented_refcount of a count at the u32 maximum
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
 #include "expected_fatal.hpp"
 #include "specimen_common.hpp"
 
+#include <crd/containers/array.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/resources/loader.hpp>
+#include <crd/resources/resource_id.hpp>
 #include <crd/scene/archetype.hpp>
 #include <crd/scene/archetype_chunk.hpp>
 #include <crd/scene/archetype_graph.hpp>
 #include <crd/scene/component.hpp>
 #include <crd/scene/component_registry.hpp>
 #include <crd/scene/relation.hpp>
+#include <crd/scene/scene_resource.hpp>
+#include <crd/scene/serialize.hpp>
 #include <crd/scene/shared_component_pool.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 #include <crd/scene/transform.hpp>
@@ -78,6 +88,37 @@ public:
 
 private:
     bool m_refusing = false;
+};
+
+// Wider than instantiation's in-place staging (1024 bytes), so each record is staged in a block of exactly this size
+// and alignment.
+struct alignas(64) Wide
+{
+    crd::u8 bytes[1536];
+};
+
+// An allocator that grants from the default allocator every request but one shape (size and alignment), which it
+// refuses as an exhausted sub-budget allocator does.
+class ShapeRefusingAllocator final : public crd::memory::IAllocator
+{
+public:
+    ShapeRefusingAllocator(crd::usize size, crd::usize alignment) noexcept : m_size(size), m_alignment(alignment)
+    {
+        m_name = "scene-fatal-shape-refusing";
+    }
+
+    void* allocate(crd::usize size, crd::usize alignment) override { return try_allocate(size, alignment); }
+    [[nodiscard]] void* try_allocate(crd::usize size, crd::usize alignment) override
+    {
+        const bool refused = size == m_size && alignment == m_alignment;
+        return refused ? nullptr : crd::memory::default_allocator()->try_allocate(size, alignment);
+    }
+    void deallocate(void* p) noexcept override { crd::memory::default_allocator()->deallocate(p); }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return p != nullptr; }
+
+private:
+    crd::usize m_size;
+    crd::usize m_alignment;
 };
 
 [[nodiscard]] bool is(const char* mode, const char* name)
@@ -160,6 +201,42 @@ private:
         const bool built = chunk.memory != nullptr;
         chunks.free(chunk);
         return built;
+    }
+    if (is(mode, "staging-refused"))
+    {
+        crd_diag_fatal::arm(mode, "World: out of memory for a component's instantiation staging");
+        constexpr crd::u32 wide_fourcc = sc::make_serialize_fourcc('W', 'I', 'D', 'E');
+        sc::World source;
+        source.register_component<Wide>(sc::default_serialize_trait<Wide>(wide_fourcc));
+        source.add_component<Wide>(source.spawn(), Wide{});
+        sc::SceneArtifactBuilder builder{crd::memory::default_allocator(), crd::resources::ResourceId{1ULL, 2ULL}};
+        const crd::containers::Array<crd::u8> bytes = builder.build(source);
+        crd::resources::LoadContext ctx{};
+        ctx.bytes = crd::containers::ConstSpan<crd::u8>{bytes.data(), bytes.size()};
+        ctx.allocator = crd::memory::default_allocator();
+        sc::SceneLoader loader;
+        auto* const scene = static_cast<sc::SceneResource*>(loader.load(ctx));
+        if (scene == nullptr)
+        {
+            return false; // no fatal reached: the CTest's marker fails the run
+        }
+        ShapeRefusingAllocator alloc{sizeof(Wide), alignof(Wide)}; // only the staging asks for exactly this
+        sc::World target{&alloc};
+        target.register_component<Wide>(sc::default_serialize_trait<Wide>(wide_fourcc));
+        const bool spawned = target.instantiate_scene(*scene).entities.size() == 1U;
+        loader.unload(scene);
+        return spawned;
+    }
+    if (is(mode, "shared-index-exhausted"))
+    {
+        crd_diag_fatal::arm(mode, "SharedComponentPool: every entry index is in use");
+        using Pool = sc::SharedComponentPool;
+        return Pool::grown_capacity(Pool::kMaxEntries, static_cast<crd::u64>(Pool::kMaxEntries) + 1U) != 0U;
+    }
+    if (is(mode, "shared-refcount-overflow"))
+    {
+        crd_diag_fatal::arm(mode, "SharedComponentPool: an entry's refcount overflows u32");
+        return sc::SharedComponentPool::incremented_refcount(0xFFFFFFFFU) == 0U;
     }
     return false;
 }

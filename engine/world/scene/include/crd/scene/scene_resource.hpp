@@ -4,6 +4,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/resources/crdr.hpp>
 #include <crd/resources/loader.hpp>
 #include <crd/resources/resource_id.hpp>
 #include <crd/scene/entity.hpp>
@@ -90,9 +91,17 @@ static_assert(sizeof(SceneRelationRecord) == 16, "SceneRelationRecord size pinne
 
 inline constexpr crd::u32 kSceneNullTargetIdx = 0xFFFFFFFFU;
 
-// SceneResource — payload owned by ResourceManager after a load. Borrows
-// views into the loaded CRDR bytes. Lifetime: valid until the resource
-// handle is released.
+// SceneResource — payload owned by ResourceManager after a load. Its views
+// point into storage it owns (its copy of the CRDR bytes and typed copies of
+// the record tables): ResourceManager frees an artifact's bytes as soon as
+// load() returns. Lifetime: valid until the resource handle is released.
+//
+// SceneLoader publishes only a pack whose records lie inside it: at most
+// kMaxComponents descriptors, each with a non-zero FourCC unique in the pack,
+// a non-zero size that is a multiple of its power-of-two alignment and a
+// known storage hint; each payload chunk holding exactly its records, their
+// entity indices strictly ascending below `entity_count`; each relation's
+// source below `entity_count` and its target null or below it.
 struct SceneResource
 {
     SceneInfo info{};
@@ -122,7 +131,22 @@ struct SceneResource
     };
     crd::containers::Array<PerComponentPayload> component_payloads;
 
-    explicit SceneResource(crd::memory::IAllocator* alloc) : component_payloads(alloc) {}
+    // The loader's copy of the artifact and its parsed chunk table (the
+    // string pool and the payload records view these), and typed copies of
+    // every record table the views above read: a CRDR payload, a compressed
+    // chunk's decoded bytes included, can sit at any alignment.
+    crd::containers::Array<crd::u8> owned_bytes;
+    crd::resources::CrdrFile parsed_file;
+    crd::containers::Array<SceneComponentDescriptor> descriptor_records;
+    crd::containers::Array<crd::u32> entity_records;
+    crd::containers::Array<SceneRelationRecord> relation_records;
+    crd::containers::Array<crd::u32> index_records;
+
+    explicit SceneResource(crd::memory::IAllocator* alloc)
+        : component_payloads(alloc), owned_bytes(alloc), parsed_file(alloc), descriptor_records(alloc),
+          entity_records(alloc), relation_records(alloc), index_records(alloc)
+    {
+    }
 };
 
 // SceneLoader — ILoader for the 'SCEN' container. Validates and parses
@@ -144,6 +168,9 @@ public:
 //     FourCC was not registered in the target World (forward-compat).
 //   - `relations_skipped` = # of relation records whose FourCC was not
 //     registered (forward-compat).
+//   - `refusal` != None: the pack was refused before anything was spawned
+//     (`entities` is empty); `refused_fourcc` names the component or
+//     relation record that decided it (0 for MalformedPack). See PackRefusal.
 //
 // Move-only (advisor pin #3): copying duplicates the entity-id array
 // for no caller benefit.
@@ -152,6 +179,10 @@ struct SceneInstantiation
     crd::containers::Array<EntityId> entities;
     crd::u32 components_skipped = 0;
     crd::u32 relations_skipped  = 0;
+    PackRefusal refusal = PackRefusal::None;
+    crd::u32 refused_fourcc = 0;
+
+    [[nodiscard]] bool refused() const noexcept { return refusal != PackRefusal::None; }
 
     explicit SceneInstantiation(crd::memory::IAllocator* alloc) : entities(alloc) {}
     SceneInstantiation(const SceneInstantiation&)            = delete;

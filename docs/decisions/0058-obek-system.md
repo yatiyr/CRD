@@ -160,6 +160,16 @@ OBAT — (reserved, Phase 3.5+) batch-instancing hint: { gpu_instanced, static_b
 
 CRDR sorts chunks by FourCC → deterministic byte order. Same source files + same overrides + same registration = bit-exact bytes (FNV-hash-verified, same pattern as v1l).
 
+Amended 2026-10-17 (DIAG.11b, [session](../sessions/2026-10-17-diag-11b-scene-pack-trust.md); appended): the loader is
+the trust boundary for these chunks. `ObekLoader` publishes only a pack whose records lie inside it (the SCEN rules of
+ADR-0055 §5, plus each `OETB` record's `file_idx` equal to its position and its parent hint in range, each `OOVR`
+record naming an entity of the öbek and a payload range inside its pool, each `OCHN` path offset inside its pool with
+a known kind), and copies every record table into typed storage. `World::instantiate_obek` and
+`instantiate_obek_batch` refuse an öbek the World cannot take before the first spawn (a `DontInherit` component is
+never restored, so never compared); a cook-time or caller patch, and a revert, never write a relation component's
+bytes (only `add_relation` changes a target, so its reverse index follows). The batch counter is per World, as
+§15 reserved it.
+
 ### 10. Cooker pipeline — riding the v1l SceneCooker substrate
 
 ```

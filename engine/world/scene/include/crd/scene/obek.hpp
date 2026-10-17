@@ -144,8 +144,8 @@ inline constexpr crd::u32 kObekNullParentIdx = 0xFFFFFFFFU;
 inline constexpr crd::u32 kObekNullTargetIdx = 0xFFFFFFFFU;
 
 // Per-entity flag bits (see ObekEntityRecord doc above).
-inline constexpr crd::u32 kObekEntityFlag_InstanceOnly = 1U << 0U;
-inline constexpr crd::u32 kObekEntityFlag_Disabled     = 1U << 1U;
+inline constexpr crd::u32 kObekEntityFlagInstanceOnly = 1U << 0U;
+inline constexpr crd::u32 kObekEntityFlagDisabled = 1U << 1U;
 
 // ObekEntityGuid — stable cross-machine 64-bit identity for entities-in-an-öbek.
 // Hash of (obek_root_id, file_idx). Survives serialization, replay,
@@ -207,6 +207,7 @@ struct BatchInstanceTag
 };
 
 // FourCC for the BatchInstanceTag component (ADR-0058 pillar 15a).
+// NOLINTNEXTLINE(readability-identifier-naming) — the repo-wide kFourCC_ table convention (serialize.hpp, crdr.hpp).
 inline constexpr crd::u32 kFourCC_BatchInstanceTag =
     make_serialize_fourcc('B', 'I', 'T', 'G');
 
@@ -275,12 +276,20 @@ struct ObekOverrideRecord
 static_assert(sizeof(ObekOverrideRecord) == 24, "ObekOverrideRecord size pinned at 24 bytes");
 
 // ObekResource — payload owned by ResourceManager after a load. Same
-// shape as SceneResource (ADR-0055): borrows views into the loaded CRDR
-// bytes, holds an owned `component_payloads` array of view pairs.
+// shape as SceneResource (ADR-0055): views into storage it owns (its copy
+// of the CRDR bytes and typed copies of the record tables), and an owned
+// `component_payloads` array of view pairs.
 //
 // `obek_root_id` is the FNV-1a 64 hash of the source öbek's canonical
 // path + content version, computed by the cooker and stored in OINF.
 // v1m1 stores 0; v1m2 populates it from the cooker.
+//
+// ObekLoader publishes only a pack whose records lie inside it: the SCEN
+// rules for descriptors, payload chunks and relations (see SceneResource),
+// and in addition each entity record's `file_idx` equal to its position and
+// its `parent_file_idx` null or below `entity_count`, each cook-time override
+// naming an entity below `entity_count` and a payload range inside its pool,
+// and each chain entry's path offset inside its pool with a known kind.
 struct ObekResource
 {
     ObekInfo info{};
@@ -314,8 +323,21 @@ struct ObekResource
     crd::containers::Array<crd::u8> owned_bytes;
     crd::resources::CrdrFile        parsed_file;
 
+    // Typed copies of every record table the views above read (the string
+    // and payload pools and the payload records stay views into the bytes):
+    // a CRDR payload, a compressed chunk's decoded bytes included, can sit at
+    // any alignment.
+    crd::containers::Array<ObekComponentDescriptor> descriptor_records;
+    crd::containers::Array<ObekEntityRecord> entity_records;
+    crd::containers::Array<ObekRelationRecord> relation_records;
+    crd::containers::Array<ObekChainEntryRecord> chain_records;
+    crd::containers::Array<ObekOverrideRecord> override_records;
+    crd::containers::Array<crd::u32> index_records;
+
     explicit ObekResource(crd::memory::IAllocator* alloc)
-        : component_payloads(alloc), owned_bytes(alloc), parsed_file(alloc)
+        : component_payloads(alloc), owned_bytes(alloc), parsed_file(alloc), descriptor_records(alloc),
+          entity_records(alloc), relation_records(alloc), chain_records(alloc), override_records(alloc),
+          index_records(alloc)
     {
     }
 };
@@ -388,6 +410,10 @@ struct ObekOverride
 // kept here so callers can compute ObekEntityGuids without re-fetching
 // the resource.
 //
+// `refusal` != None: the öbek was refused before anything was spawned
+// (`entities` is empty, `source` null); `refused_fourcc` names the record
+// that decided it (0 for MalformedPack). See PackRefusal.
+//
 // Move-only (ADR-0058 pillar matches v1k's Query / SceneInstantiation).
 struct ObekInstantiation
 {
@@ -398,6 +424,10 @@ struct ObekInstantiation
     crd::u32 relations_skipped  = 0U;
     crd::u32 overrides_applied  = 0U;
     crd::u32 overrides_skipped  = 0U;
+    PackRefusal refusal = PackRefusal::None;
+    crd::u32 refused_fourcc = 0U;
+
+    [[nodiscard]] bool refused() const noexcept { return refusal != PackRefusal::None; }
 
     // v1m5a — link back to the ObekResource the instance was built from.
     // Used by revert / enumerate / unpack APIs. Caller is responsible for
@@ -471,13 +501,12 @@ private:
 
     struct PendingOverride
     {
-        crd::u32                        file_idx;
-        crd::u32                        component_fourcc;
-        crd::u32                        field_offset;
+        crd::u32 file_idx = 0U;
+        crd::u32 component_fourcc = 0U;
+        crd::u32 field_offset = 0U;
         crd::containers::Array<crd::u8> payload;
 
-        explicit PendingOverride(crd::memory::IAllocator* a)
-            : file_idx(0U), component_fourcc(0U), field_offset(0U), payload(a) {}
+        explicit PendingOverride(crd::memory::IAllocator* a) : payload(a) {}
         PendingOverride(PendingOverride&&)            = default;
         PendingOverride& operator=(PendingOverride&&) = default;
     };

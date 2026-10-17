@@ -389,12 +389,25 @@ public:
     //   - Unknown FourCC on a component-or-relation → skipped (counted
     //     in `components_skipped` / `relations_skipped`); the entity
     //     itself is still spawned with whatever known components it has.
-    //   - Known FourCC + size or alignment mismatch with the registered
-    //     type → CRD_FATAL during instantiation. Silent best-effort
-    //     would corrupt downstream state; loaders sit at the trust
-    //     boundary, fail loudly.
-    //   - Known FourCC + version mismatch with registered ComponentSerialize
-    //     → CRD_FATAL. Versions are explicit migration opt-ins.
+    //
+    // Refusal (ADR-0055 §5: an incompatible pack fails the load, never
+    // crashes it and is never restored best-effort). Every check runs
+    // before the first spawn, and a refused pack spawns nothing; the result
+    // carries the PackRefusal and the deciding record's FourCC:
+    //   - views that contradict the resource's own structure (a hand-built
+    //     resource; SceneLoader refuses such bytes) → MalformedPack;
+    //   - known FourCC + size, alignment or ComponentSerialize::version
+    //     different from the registered type → the matching mismatch
+    //     (no migration hook exists, so any version difference refuses);
+    //   - an Acyclic relation's records forming a cycle → RelationCycle.
+    //
+    // Relations are restored from the RELS records alone; a relation
+    // component's C### payload holds source-World entity ids and is not
+    // read (inserting it would hand the relation a stale target, and when
+    // that id equals the new target the reverse index never got its edge).
+    // A record is staged in place when it fits 1024 bytes at 16-byte
+    // alignment, otherwise in one block from this World's allocator per
+    // component (out of memory there is fatal).
     //
     // Result: a SceneInstantiation move-only struct mapping file-local
     // index → live EntityId. Caller code uses this to find spawned
@@ -410,10 +423,14 @@ public:
     // instantiation. Pass EntityId::null() to disable reparenting (the
     // öbek roots become top-level entities in this World).
     //
-    // Forward-compat + hard-fail rules match instantiate_scene:
+    // Forward-compat and refusal rules match instantiate_scene:
     //   - Unknown FourCC → skipped (counted in components_skipped /
     //     relations_skipped); entity still spawned.
-    //   - Known FourCC + size/alignment/version mismatch → CRD_FATAL.
+    //   - Malformed views, a known FourCC whose size, alignment or version
+    //     differs from the registered type (a DontInherit component, which
+    //     is never restored, excepted), or a cycle in an Acyclic relation's
+    //     records → refused before the first spawn, nothing spawned,
+    //     `source` left null. Relations are restored from ORLS alone.
     //
     // v1m1 ships the basic restore + reparent path; v1m2 layers override
     // patches; v1m3 lights up nested öbek sub-instance tracking; v1m5
@@ -480,8 +497,10 @@ public:
     // instances — the renderer's instanced-draw feed). Fewer transforms than slots: the tail spawns unplaced
     // (source-authored transforms). Empty span = the v1m5b behavior, unchanged.
     //
-    // Each call returns a unique `ObekBatchHandle`. v1m5b uses a monotonic
-    // per-World counter; no persistence concerns.
+    // Each call returns a unique `ObekBatchHandle`: a monotonic per-World
+    // counter that never issues 0; no persistence concerns. An öbek
+    // instantiate_obek would refuse spawns nothing and returns the null
+    // handle (value 0) without consuming a number.
     [[nodiscard]] ObekBatchHandle instantiate_obek_batch(const ObekResource& res, crd::u32 count,
                                                          EntityId parent = EntityId::null(), BatchHints hints = {},
                                                          crd::containers::ConstSpan<Transform> transforms = {});
@@ -915,6 +934,10 @@ private:
     // new entities onto the worklist; loop terminates when worklist empties.
     void drain_destruction_worklist(crd::containers::Array<EntityId>& worklist);
 
+    // instantiate_obek once the pack passed its checks (instantiate_obek_batch checks once for all of its slots).
+    [[nodiscard]] ObekInstantiation instantiate_checked_obek(const ObekResource& res, EntityId parent,
+                                                             crd::containers::ConstSpan<ObekOverride> overrides);
+
     SlotMap m_slots;
     crd::containers::Array<EntityId> m_pending_destroy;
     ComponentRegistry m_components;
@@ -984,6 +1007,9 @@ private:
     // Per-frame counter incremented at start of step() / step_fixed().
     // Drives ChangeDetectIndex's "modified during current frame" semantic.
     crd::u32 m_frame_index = 0;
+
+    // The next ObekBatchHandle this World issues (never 0, the null handle).
+    crd::u32 m_next_obek_batch = 1U;
 
     // Frame lifecycle dispatch — fired before / after the 7-phase loop.
     void notify_frame_begin();

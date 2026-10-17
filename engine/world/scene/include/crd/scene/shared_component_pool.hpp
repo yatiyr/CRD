@@ -19,9 +19,10 @@ namespace crd::scene
 //
 // Memory model:
 //   - Pool storage grows monotonically; freed entries are reused via freelist.
-//   - Capacity grows exponentially × 2 starting at 8 slots.
-//   - Refcount overflow guarded by CRD_ASSERT. 32-bit refcount handles 4B+
-//     instances — adequate for any conceivable Cerid workload.
+//   - Capacity grows exponentially × 2 starting at 8 slots, clamped to the
+//     index range (grown_capacity); a pool with every index in use is fatal.
+//   - A refcount that would overflow u32 is fatal in every build
+//     (incremented_refcount): a wrapped count would free an entry still shared.
 //
 // Move-only — destructor releases the byte buffer through `m_alloc`.
 //
@@ -32,6 +33,16 @@ class SharedComponentPool
 {
 public:
     static constexpr crd::u32 kInvalidIdx = 0xFFFFFFFFU;
+
+    // Entries a pool can index: every u32 below kInvalidIdx.
+    static constexpr crd::u32 kMaxEntries = kInvalidIdx;
+
+    // The capacity a pool of `capacity` entries grows to so that it holds `min_capacity`: doubled from 8 until it
+    // does, clamped to kMaxEntries. Fatal when `min_capacity` exceeds kMaxEntries (every index is in use).
+    [[nodiscard]] static crd::u32 grown_capacity(crd::u32 capacity, crd::u64 min_capacity);
+
+    // `refcount` + 1. Fatal when that overflows u32: a wrapped count would free an entry that is still shared.
+    [[nodiscard]] static crd::u32 incremented_refcount(crd::u32 refcount);
 
     SharedComponentPool(crd::memory::IAllocator* alloc,
                         crd::usize               entry_size,
@@ -85,7 +96,7 @@ public:
     [[nodiscard]] crd::usize entry_size() const noexcept { return m_entry_size; }
 
 private:
-    void grow(crd::u32 min_capacity);
+    void grow(crd::u64 min_capacity);
 
     crd::memory::IAllocator*              m_alloc;
     crd::usize                            m_entry_size;

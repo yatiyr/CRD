@@ -136,6 +136,16 @@ Each component's `ComponentSerialize::version` is stored in the `CMPS` schema ch
 
 Failed migrations log a clear diagnostic and the entity is skipped rather than crashing the load. Editor tools recook from TOML to upgrade.
 
+Amended 2026-10-17 (DIAG.11b, [session](../sessions/2026-10-17-diag-11b-scene-pack-trust.md); appended, the text
+above unchanged): no migration hook exists, so any version difference fails the load, and "fails the load" is
+implemented in two places. `SceneLoader` (and `ObekLoader`, ADR-0058) refuse a pack whose records do not lie inside it
+(the resource is never published). `World::instantiate_scene` / `instantiate_obek` check, before the first spawn, the
+records against the World's registry: a known FourCC whose size, alignment or version differs, or a cycle in an
+Acyclic relation, refuses the whole pack (`PackRefusal`, nothing spawned, the deciding FourCC reported), never a crash
+and never a best-effort restore. The `world.hpp` comment that called this `CRD_FATAL` while the code only asserted is
+replaced by that contract. Relations are restored from `RELS` alone; a relation component's payload records hold
+source-World ids and are not read.
+
 ### 6. Relations in SCEN
 
 The `RELS` chunk encodes:

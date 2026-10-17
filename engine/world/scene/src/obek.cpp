@@ -10,8 +10,11 @@
 //
 // Determinism: every walk is registry-order or entity-table-order; chunk
 // order is FourCC-sorted by CrdrWriter. Same World → same bytes.
-// Forward-compat: unknown FourCCs skip; known FourCC + size/version
-// mismatch is a hard fail.
+// Forward-compat: unknown FourCCs skip. The loader refuses a pack whose
+// records do not lie inside it; instantiation refuses one this World cannot
+// take before it spawns anything (pack_validation.hpp, the SCEN rules).
+
+#include "pack_validation.hpp"
 
 #include <crd/containers/hash_map.hpp>
 #include <crd/core/assert.hpp>
@@ -21,6 +24,7 @@
 #include <crd/scene/world.hpp>
 
 #include <cstring>
+#include <type_traits>
 
 namespace crd::scene
 {
@@ -64,12 +68,203 @@ inline void pad_to_align(crd::containers::Array<crd::u8>& dst, crd::usize a)
     return static_cast<crd::u32>(offset);
 }
 
+// Reads a self-pooled chunk (OOVR, OCHN): u32 record_count, u32 pool_size, record_count records of T, then pool_size
+// bytes, and nothing after them. The records are copied into typed storage (pack_detail::copy_records), the pool stays
+// a view. False when the chunk is not exactly that.
 template <typename T>
-[[nodiscard]] crd::containers::ConstSpan<T> chunk_as_array(const crd::resources::CrdrChunk& chunk) noexcept
+[[nodiscard]] bool read_pooled_chunk(const crd::resources::CrdrChunk& chunk, crd::containers::Array<T>& records,
+                                     crd::containers::ConstSpan<crd::u8>* pool)
 {
+    static_assert(std::is_trivially_copyable_v<T>, "pack records are copied as bytes");
+    constexpr crd::usize header = 2U * sizeof(crd::u32);
     const auto bytes = chunk.payload;
-    const auto count = bytes.size() / sizeof(T);
-    return crd::containers::ConstSpan<T>{reinterpret_cast<const T*>(bytes.data()), count};
+    if (bytes.size() < header)
+    {
+        return false;
+    }
+    crd::u32 record_count = 0U;
+    crd::u32 pool_size = 0U;
+    std::memcpy(&record_count, bytes.data(), sizeof(crd::u32));
+    std::memcpy(&pool_size, bytes.data() + sizeof(crd::u32), sizeof(crd::u32));
+    crd::usize records_bytes = 0U;
+    crd::usize pool_start = 0U;
+    crd::usize end = 0U;
+    const bool fits = crd::memory::checked_mul(record_count, sizeof(T), &records_bytes) &&
+                      crd::memory::checked_add(header, records_bytes, &pool_start) &&
+                      crd::memory::checked_add(pool_start, pool_size, &end);
+    if (!fits || end != bytes.size())
+    {
+        return false;
+    }
+    records.resize(record_count);
+    if (records_bytes > 0U)
+    {
+        std::memcpy(records.data(), bytes.data() + header, records_bytes);
+    }
+    *pool = crd::containers::ConstSpan<crd::u8>{bytes.data() + pool_start, pool_size};
+    return true;
+}
+
+// Parses the copy of the artifact in `res.owned_bytes` into `res`'s views. False when the pack is refused: a chunk
+// that does not hold exactly its records, or a record that does not lie inside the pack (ObekResource's rules).
+[[nodiscard]] bool parse_obek(ObekResource& res, crd::memory::IAllocator* alloc)
+{
+    namespace pd = pack_detail;
+    if (crd::resources::crdr_read(crd::containers::as_const_span(res.owned_bytes), res.parsed_file, alloc) !=
+            crd::resources::CrdrError::Ok ||
+        res.parsed_file.type_fourcc != kFourCC_OBEK)
+    {
+        return false;
+    }
+    const crd::resources::CrdrFile& file = res.parsed_file;
+
+    // OINF chunk — required.
+    const crd::resources::CrdrChunk* info_chunk = crd::resources::crdr_find_chunk(file, kFourCC_ObekOINF);
+    if (info_chunk == nullptr || info_chunk->payload.size() != sizeof(ObekInfo))
+    {
+        return false;
+    }
+    std::memcpy(&res.info, info_chunk->payload.data(), sizeof(ObekInfo));
+    if (res.info.schema_version != kObekSchemaVersion || res.info.component_count > kMaxComponents)
+    {
+        return false;
+    }
+    res.obek_root_id = res.info.obek_root_id;
+
+    // OSTR chunk — optional.
+    if (const auto* strp = crd::resources::crdr_find_chunk(file, kFourCC_ObekSTRP); strp != nullptr)
+    {
+        res.string_pool = strp->payload;
+    }
+
+    // OCMP chunk — required if component_count > 0; every descriptor valid before its payload chunk is read.
+    if (res.info.component_count > 0U)
+    {
+        const auto* cmps = crd::resources::crdr_find_chunk(file, kFourCC_ObekOCMP);
+        if (cmps == nullptr || !pd::copy_records(*cmps, res.info.component_count, res.descriptor_records))
+        {
+            return false;
+        }
+        for (const ObekComponentDescriptor& d : res.descriptor_records)
+        {
+            if (!pd::descriptor_is_valid(d))
+            {
+                return false;
+            }
+        }
+    }
+    res.component_descriptors = crd::containers::as_const_span(res.descriptor_records);
+
+    // OETB chunk — required if entity_count > 0; each record names its own position, and its parent hint is null or
+    // an entity of the öbek.
+    if (res.info.entity_count > 0U)
+    {
+        const auto* etbl = crd::resources::crdr_find_chunk(file, kFourCC_ObekOETB);
+        if (etbl == nullptr || !pd::copy_records(*etbl, res.info.entity_count, res.entity_records))
+        {
+            return false;
+        }
+        for (crd::u32 i = 0U; i < res.info.entity_count; ++i)
+        {
+            const ObekEntityRecord& rec = res.entity_records[i];
+            if (rec.file_idx != i ||
+                (rec.parent_file_idx != kObekNullParentIdx && rec.parent_file_idx >= res.info.entity_count))
+            {
+                return false;
+            }
+        }
+    }
+
+    res.entity_table = crd::containers::as_const_span(res.entity_records);
+
+    // ORLS chunk — present exactly when relation_count > 0.
+    const auto* rels = crd::resources::crdr_find_chunk(file, kFourCC_ObekORLS);
+    if (rels != nullptr ? !pd::copy_records(*rels, res.info.relation_count, res.relation_records)
+                        : res.info.relation_count != 0U)
+    {
+        return false;
+    }
+    res.relations = crd::containers::as_const_span(res.relation_records);
+
+    // OOVR chunk — optional, present when the cooker baked override patches from `overrides = [...]`; every record
+    // names an entity of the öbek and a payload range inside the pool (ADR-0058: invalid patches fail the cook).
+    if (const auto* oovr = crd::resources::crdr_find_chunk(file, kFourCC_ObekOOVR); oovr != nullptr)
+    {
+        if (!read_pooled_chunk(*oovr, res.override_records, &res.cook_override_payload_pool))
+        {
+            return false;
+        }
+        res.cook_override_records = crd::containers::as_const_span(res.override_records);
+        for (const ObekOverrideRecord& rec : res.cook_override_records)
+        {
+            if (rec.file_idx >= res.info.entity_count ||
+                static_cast<crd::usize>(rec.payload_offset) + rec.payload_size > res.cook_override_payload_pool.size())
+            {
+                return false;
+            }
+        }
+    }
+
+    // OCHN chunk — optional, present when the cooker recorded chain dependencies (extends parent + nested öbek
+    // refs). The path pool is not kept (no reader yet); each entry's path offset must lie inside it, the pool must end
+    // in its strings' terminator, and the kind must be known.
+    if (const auto* chn = crd::resources::crdr_find_chunk(file, kFourCC_ObekOCHN); chn != nullptr)
+    {
+        crd::containers::ConstSpan<crd::u8> path_pool{};
+        if (!read_pooled_chunk(*chn, res.chain_records, &path_pool))
+        {
+            return false;
+        }
+        res.chain_dependencies = crd::containers::as_const_span(res.chain_records);
+        if (res.chain_dependencies.size() > 0U && (path_pool.size() == 0U || path_pool[path_pool.size() - 1U] != 0U))
+        {
+            return false;
+        }
+        for (const ObekChainEntryRecord& entry : res.chain_dependencies)
+        {
+            if (entry.path_strp_offset >= path_pool.size() || entry.kind > static_cast<crd::u8>(ObekChainKind::Nested))
+            {
+                return false;
+            }
+        }
+    }
+
+    // Per-component payload chunks (D000, D001, ...), present exactly when the descriptor has records.
+    auto chunk_for = [&file](crd::u32 ci)
+    {
+        return crd::resources::crdr_find_chunk(file, make_obek_component_chunk_fourcc(ci));
+    };
+    if (!pd::read_payload_chunks(res.component_descriptors, chunk_for, res.component_payloads, res.index_records))
+    {
+        return false;
+    }
+
+    return pd::components_are_consistent(res.info.entity_count, res.component_descriptors,
+                                         crd::containers::as_const_span(res.component_payloads)) &&
+           pd::relations_are_consistent(res.info.entity_count, res.relations);
+}
+
+// Every instantiation check of an öbek, before its first spawn: its views (MalformedPack), the layouts of the
+// components it restores against `registry` (a DontInherit component is never restored, so never compared), then the
+// cycles of its Acyclic relations.
+[[nodiscard]] PackRefusal check_obek(const ObekResource& res, const ComponentRegistry& registry,
+                                     crd::memory::IAllocator* alloc, crd::u32* refused_fourcc)
+{
+    namespace pd = pack_detail;
+    if (res.component_descriptors.size() != res.info.component_count ||
+        res.entity_table.size() != res.info.entity_count ||
+        !pd::components_are_consistent(res.info.entity_count, res.component_descriptors,
+                                       crd::containers::as_const_span(res.component_payloads)) ||
+        !pd::relations_are_consistent(res.info.entity_count, res.relations))
+    {
+        return PackRefusal::MalformedPack;
+    }
+    const PackRefusal layouts = pd::check_layouts(registry, res.component_descriptors, true, refused_fourcc);
+    if (layouts != PackRefusal::None)
+    {
+        return layouts;
+    }
+    return pd::check_cycles(registry, res.info.entity_count, res.relations, alloc, refused_fourcc);
 }
 
 // FNV-1a 64 mixing — same family as the rest of Cerid's content hashes
@@ -488,195 +683,12 @@ void* ObekLoader::load(const crd::resources::LoadContext& ctx)
         std::memcpy(res->owned_bytes.data(), ctx.bytes.data(), ctx.bytes.size());
     }
 
-    if (crd::resources::crdr_read(
-            crd::containers::ConstSpan<crd::u8>{
-                res->owned_bytes.data(), res->owned_bytes.size()},
-            res->parsed_file, ctx.allocator) != crd::resources::CrdrError::Ok)
+    if (!parse_obek(*res, ctx.allocator))
     {
         res->~ObekResource();
         ctx.allocator->deallocate(res);
         return nullptr;
     }
-    if (res->parsed_file.type_fourcc != kFourCC_OBEK)
-    {
-        res->~ObekResource();
-        ctx.allocator->deallocate(res);
-        return nullptr;
-    }
-    crd::resources::CrdrFile& file = res->parsed_file;
-
-    // OINF chunk — required.
-    const crd::resources::CrdrChunk* info_chunk = crd::resources::crdr_find_chunk(file, kFourCC_ObekOINF);
-    if (info_chunk == nullptr || info_chunk->payload.size() != sizeof(ObekInfo))
-    {
-        res->~ObekResource();
-        ctx.allocator->deallocate(res);
-        return nullptr;
-    }
-    std::memcpy(&res->info, info_chunk->payload.data(), sizeof(ObekInfo));
-    if (res->info.schema_version != kObekSchemaVersion)
-    {
-        res->~ObekResource();
-        ctx.allocator->deallocate(res);
-        return nullptr;
-    }
-    res->obek_root_id = res->info.obek_root_id;
-
-    // OSTR chunk — optional.
-    if (const auto* strp = crd::resources::crdr_find_chunk(file, kFourCC_ObekSTRP); strp != nullptr)
-    {
-        res->string_pool = strp->payload;
-    }
-
-    // OCMP chunk — required if component_count > 0.
-    if (res->info.component_count > 0U)
-    {
-        const auto* cmps = crd::resources::crdr_find_chunk(file, kFourCC_ObekOCMP);
-        if (cmps == nullptr
-            || cmps->payload.size() != res->info.component_count * sizeof(ObekComponentDescriptor))
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->component_descriptors = chunk_as_array<ObekComponentDescriptor>(*cmps);
-    }
-
-    // OETB chunk — required if entity_count > 0.
-    if (res->info.entity_count > 0U)
-    {
-        const auto* etbl = crd::resources::crdr_find_chunk(file, kFourCC_ObekOETB);
-        if (etbl == nullptr || etbl->payload.size() != res->info.entity_count * sizeof(ObekEntityRecord))
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->entity_table = chunk_as_array<ObekEntityRecord>(*etbl);
-    }
-
-    // ORLS chunk — optional.
-    if (const auto* rels = crd::resources::crdr_find_chunk(file, kFourCC_ObekORLS); rels != nullptr)
-    {
-        if (rels->payload.size() != res->info.relation_count * sizeof(ObekRelationRecord))
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->relations = chunk_as_array<ObekRelationRecord>(*rels);
-    }
-
-    // OOVR chunk — optional, present when the cooker baked override
-    // patches from `overrides = [...]`. Layout:
-    //   u32 record_count + u32 payload_pool_size + ObekOverrideRecord[] + u8 payload_pool[]
-    if (const auto* oovr = crd::resources::crdr_find_chunk(file, kFourCC_ObekOOVR); oovr != nullptr)
-    {
-        const auto bytes = oovr->payload;
-        if (bytes.size() < 8U)
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        crd::u32 record_count = 0;
-        crd::u32 pool_size    = 0;
-        std::memcpy(&record_count, bytes.data(), sizeof(crd::u32));
-        std::memcpy(&pool_size, bytes.data() + 4U, sizeof(crd::u32));
-        const crd::usize records_size = record_count * sizeof(ObekOverrideRecord);
-        const crd::usize required     = 8U + records_size + pool_size;
-        if (required > bytes.size())
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->cook_override_records = crd::containers::ConstSpan<ObekOverrideRecord>{
-            reinterpret_cast<const ObekOverrideRecord*>(bytes.data() + 8U), record_count};
-        res->cook_override_payload_pool = crd::containers::ConstSpan<crd::u8>{
-            bytes.data() + 8U + records_size, pool_size};
-    }
-
-    // OCHN chunk — optional, present when the cooker recorded chain
-    // dependencies (extends parent + nested öbek refs). Layout:
-    //   u32 dep_count + u32 path_pool_size + ObekChainEntryRecord[] + u8 path_pool[]
-    if (const auto* chn = crd::resources::crdr_find_chunk(file, kFourCC_ObekOCHN); chn != nullptr)
-    {
-        const auto bytes = chn->payload;
-        if (bytes.size() < 8U)
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        crd::u32 dep_count = 0;
-        crd::u32 pool_size = 0;
-        std::memcpy(&dep_count, bytes.data(), sizeof(crd::u32));
-        std::memcpy(&pool_size, bytes.data() + 4U, sizeof(crd::u32));
-        const crd::usize entries_size = dep_count * sizeof(ObekChainEntryRecord);
-        const crd::usize required     = 8U + entries_size + pool_size;
-        if (required > bytes.size())
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->chain_dependencies = crd::containers::ConstSpan<ObekChainEntryRecord>{
-            reinterpret_cast<const ObekChainEntryRecord*>(bytes.data() + 8U), dep_count};
-        // Path pool: spans `pool_size` bytes immediately after the entry array.
-        // Currently exposed only via chain_dependencies' path_strp_offset; a
-        // helper accessor lands in v1m5 hot-reload watcher integration.
-    }
-
-    // Per-component payload chunks (D000, D001, ...).
-    res->component_payloads.resize(res->info.component_count);
-    for (crd::u32 ci = 0; ci < res->info.component_count; ++ci)
-    {
-        const ObekComponentDescriptor& d     = res->component_descriptors[ci];
-        const auto*                    chunk = crd::resources::crdr_find_chunk(
-                                file, make_obek_component_chunk_fourcc(ci));
-        if (chunk == nullptr)
-        {
-            if (d.record_count != 0U)
-            {
-                res->~ObekResource();
-                ctx.allocator->deallocate(res);
-                return nullptr;
-            }
-            continue;
-        }
-        const auto bytes = chunk->payload;
-        if (bytes.size() < 8U)
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        crd::u32 record_count = 0;
-        std::memcpy(&record_count, bytes.data(), sizeof(crd::u32));
-        if (record_count != d.record_count)
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        const crd::usize indices_offset = 8U;
-        const crd::usize indices_size   = record_count * sizeof(crd::u32);
-        const crd::usize payloads_start = align_up(indices_offset + indices_size,
-                                                   d.alignment > 0 ? d.alignment : 1U);
-        const crd::usize payloads_size  = record_count * d.size;
-        if (payloads_start + payloads_size > bytes.size())
-        {
-            res->~ObekResource();
-            ctx.allocator->deallocate(res);
-            return nullptr;
-        }
-        res->component_payloads[ci].indices  = crd::containers::ConstSpan<crd::u32>{
-            reinterpret_cast<const crd::u32*>(bytes.data() + indices_offset), record_count};
-        res->component_payloads[ci].payloads = crd::containers::ConstSpan<crd::u8>{
-            bytes.data() + payloads_start, payloads_size};
-    }
-
     return res;
 }
 
@@ -699,6 +711,21 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
                                           crd::containers::ConstSpan<ObekOverride> overrides)
 {
     ObekInstantiation result{allocator()};
+    result.parent = parent;
+    result.obek_root_id = res.obek_root_id;
+    result.refusal = check_obek(res, m_components, allocator(), &result.refused_fourcc);
+    if (result.refused())
+    {
+        return result; // nothing spawned, `source` left null
+    }
+    return instantiate_checked_obek(res, parent, overrides);
+}
+
+ObekInstantiation World::instantiate_checked_obek(const ObekResource& res, EntityId parent,
+                                                  crd::containers::ConstSpan<ObekOverride> overrides)
+{
+    namespace pd = pack_detail;
+    ObekInstantiation result{allocator()};
     result.entities.reserve(res.info.entity_count);
     result.parent        = parent;
     result.obek_root_id  = res.obek_root_id;
@@ -710,91 +737,63 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
         result.entities.push_back(spawn());
     }
 
-    // Step B: fourcc → ComponentId resolution (registry walk; kMaxComponents = 256).
-    auto find_component_by_fourcc = [&](crd::u32 fourcc) -> ComponentId
-    {
-        for (crd::u32 i = 0; i < m_components.size(); ++i)
-        {
-            const ComponentId cid{static_cast<crd::u16>(i)};
-            const ComponentInfo* info = m_components.info(cid);
-            if (info != nullptr && info->serialize.fourcc == fourcc)
-            {
-                return cid;
-            }
-        }
-        return ComponentId{};
-    };
-
-    // Step C: restore components.
+    // Step C: restore components. Relation components are restored from the ORLS records in step D: their payload
+    // records hold source-World entity ids.
     for (crd::u32 ci = 0; ci < res.info.component_count; ++ci)
     {
         const ObekComponentDescriptor& d = res.component_descriptors[ci];
-        const ComponentId registered_id = find_component_by_fourcc(d.fourcc);
+        const ComponentId registered_id = pd::find_by_fourcc(m_components, d.fourcc);
         if (registered_id.is_null())
         {
             result.components_skipped += d.record_count;
             continue;
         }
-        const ComponentInfo* const info = &m_components.require_info(registered_id); // a registered id, found above
-        CRD_ASSERT(static_cast<crd::u32>(info->size) == d.size
-                   && "instantiate_obek: component size mismatch — registered type changed layout");
-        CRD_ASSERT(static_cast<crd::u32>(info->alignment) == d.alignment
-                   && "instantiate_obek: component alignment mismatch");
-        CRD_ASSERT(info->serialize.version == d.version
-                   && "instantiate_obek: component version mismatch — explicit migration required");
+        const ComponentInfo& info = m_components.require_info(registered_id); // a registered id, found above
 
         // ADR-0058 pillar 5: DontInherit components are skipped entirely.
         // The entity is still spawned (in step A) but never receives this
         // component — typical for runtime-only state (NetworkId, LoadState,
         // EditorSelectionFlag) authored on the source but undesired on
         // cooked-instance restore.
-        if (info->inherit_policy == InheritPolicy::DontInherit)
+        if (info.inherit_policy == InheritPolicy::DontInherit)
         {
             result.components_skipped += d.record_count;
             continue;
         }
+        if (info.is_relation || d.record_count == 0U)
+        {
+            continue;
+        }
 
+        // Staged at the type's alignment (the backends move from a mutable pointer); see instantiate_scene.
+        pd::ComponentStaging staging{*allocator(), info.size, info.alignment};
         const auto& pp = res.component_payloads[ci];
         for (crd::u32 r = 0; r < d.record_count; ++r)
         {
-            const crd::u32 file_idx = pp.indices[r];
-            CRD_ASSERT(file_idx < result.entities.size());
-            const EntityId e   = result.entities[file_idx];
-            const crd::u8* src = pp.payloads.data() + r * static_cast<crd::usize>(d.size);
-
-            alignas(16) crd::u8 staging[1024];
-            CRD_ASSERT(d.size <= sizeof(staging)
-                       && "instantiate_obek: component size exceeds staging buffer (1024 bytes)");
-            if (info->serialize.read_blob != nullptr)
+            const EntityId e = result.entities[pp.indices[r]];
+            const crd::u8* src = pp.payloads.data() + static_cast<crd::usize>(r) * d.size;
+            if (info.serialize.read_blob != nullptr)
             {
-                info->serialize.read_blob(staging, src, d.size);
-                // v1m4b2: Inherit components share via the SparseSetStorage
-                // shared-pool path (force-SparseSet at registration ensures
-                // the backend is SparseSet here).
-                if (info->inherit_policy == InheritPolicy::Inherit)
-                {
-                    m_sparse_storage.insert_shared(e, registered_id, staging);
-                }
-                else
-                {
-                    backend_for(registered_id).insert(e, registered_id, staging);
-                }
-                if (info->destruct != nullptr)
-                {
-                    info->destruct(staging);
-                }
+                info.serialize.read_blob(staging.data(), src, d.size);
             }
             else
             {
-                std::memcpy(staging, src, d.size);
-                if (info->inherit_policy == InheritPolicy::Inherit)
-                {
-                    m_sparse_storage.insert_shared(e, registered_id, staging);
-                }
-                else
-                {
-                    backend_for(registered_id).insert(e, registered_id, staging);
-                }
+                std::memcpy(staging.data(), src, d.size);
+            }
+            // v1m4b2: Inherit components share via the SparseSetStorage
+            // shared-pool path (force-SparseSet at registration ensures
+            // the backend is SparseSet here).
+            if (info.inherit_policy == InheritPolicy::Inherit)
+            {
+                m_sparse_storage.insert_shared(e, registered_id, staging.data());
+            }
+            else
+            {
+                backend_for(registered_id).insert(e, registered_id, staging.data());
+            }
+            if (info.serialize.read_blob != nullptr && info.destruct != nullptr)
+            {
+                info.destruct(staging.data());
             }
         }
     }
@@ -806,26 +805,15 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
 
     for (const ObekRelationRecord& rec : res.relations)
     {
-        const ComponentId registered_id = find_component_by_fourcc(rec.relation_fourcc);
-        if (registered_id.is_null())
+        const ComponentId registered_id = pd::find_by_fourcc(m_components, rec.relation_fourcc);
+        if (registered_id.is_null() || !m_components.require_info(registered_id).is_relation)
         {
             ++result.relations_skipped;
             continue;
         }
-        const ComponentInfo* info = m_components.info(registered_id);
-        if (info == nullptr || !info->is_relation)
-        {
-            ++result.relations_skipped;
-            continue;
-        }
-        CRD_ASSERT(rec.src_file_idx < result.entities.size());
         const EntityId src = result.entities[rec.src_file_idx];
-        EntityId       tgt = EntityId::null();
-        if (rec.target_file_idx != kObekNullTargetIdx)
-        {
-            CRD_ASSERT(rec.target_file_idx < result.entities.size());
-            tgt = result.entities[rec.target_file_idx];
-        }
+        const EntityId tgt =
+            rec.target_file_idx == kObekNullTargetIdx ? EntityId::null() : result.entities[rec.target_file_idx];
         add_relation_via_id(registered_id, src, tgt);
 
         if (rec.relation_fourcc == kFourCC_RelChildOf)
@@ -834,9 +822,19 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
         }
     }
 
+    // A patch writes component bytes; a relation's are its target, which only add_relation may change (its reverse
+    // index follows), so a patch naming a relation component is skipped like an unknown one.
+    auto patchable = [&](crd::u32 fourcc) -> ComponentId
+    {
+        const ComponentId id = pd::find_by_fourcc(m_components, fourcc);
+        return (id.is_null() || m_components.require_info(id).is_relation) ? ComponentId{} : id;
+    };
+
     // Step D2: apply COOK-TIME override patches from OOVR chunk first
     // (ADR-0058 pillar 3 cook-time half). Caller-supplied patches in
     // step E run AFTER and therefore win on overlap — caller is deepest.
+    // ObekLoader refuses a record whose entity or payload range lies outside
+    // the öbek; the checks below hold a hand-built resource to the same.
     for (const ObekOverrideRecord& rec : res.cook_override_records)
     {
         if (rec.file_idx >= res.info.entity_count)
@@ -844,25 +842,16 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
             ++result.overrides_skipped;
             continue;
         }
-        const ComponentId target_cid = find_component_by_fourcc(rec.component_fourcc);
+        const ComponentId target_cid = patchable(rec.component_fourcc);
         if (target_cid.is_null())
         {
             ++result.overrides_skipped;
             continue;
         }
-        const ComponentInfo* info = m_components.info(target_cid);
-        if (info == nullptr)
-        {
-            ++result.overrides_skipped;
-            continue;
-        }
+        const ComponentInfo& info = m_components.require_info(target_cid);
         const crd::usize end = static_cast<crd::usize>(rec.field_offset) + rec.payload_size;
-        if (end > info->size)
-        {
-            ++result.overrides_skipped;
-            continue;
-        }
-        if (rec.payload_offset + rec.payload_size > res.cook_override_payload_pool.size())
+        if (end > info.size ||
+            static_cast<crd::usize>(rec.payload_offset) + rec.payload_size > res.cook_override_payload_pool.size())
         {
             ++result.overrides_skipped;
             continue;
@@ -931,23 +920,18 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
             ++result.overrides_skipped;
             continue;
         }
-        const ComponentId target_cid = find_component_by_fourcc(patch.component_fourcc);
+        const ComponentId target_cid = patchable(patch.component_fourcc);
         if (target_cid.is_null())
         {
             ++result.overrides_skipped;
             continue;
         }
-        const ComponentInfo* info = m_components.info(target_cid);
-        if (info == nullptr)
-        {
-            ++result.overrides_skipped;
-            continue;
-        }
+        const ComponentInfo& info = m_components.require_info(target_cid);
         // Bounds-check: field_offset + payload.size() must fit inside the
         // component layout. Out-of-range is a programming error in
         // calling code; debug assert in debug, count + skip in release.
         const crd::usize end = static_cast<crd::usize>(patch.field_offset) + patch.payload.size();
-        if (end > info->size)
+        if (end > info.size)
         {
             CRD_ASSERT_UNREACHABLE("ObekOverride: field_offset + payload.size() exceeds component size");
             ++result.overrides_skipped;
@@ -974,7 +958,7 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
     // skip silently (matches the relation-skip semantics for forward-compat).
     if (!parent.is_null() && is_alive(parent))
     {
-        const ComponentId childof_id = find_component_by_fourcc(kFourCC_RelChildOf);
+        const ComponentId childof_id = pd::find_by_fourcc(m_components, kFourCC_RelChildOf);
         if (!childof_id.is_null())
         {
             for (crd::u32 i = 0; i < res.info.entity_count; ++i)
@@ -998,28 +982,25 @@ ObekBatchHandle World::instantiate_obek_batch(const ObekResource& res, crd::u32 
 {
     (void)hints; // reserved for Phase 3.5+ renderer integration
 
-    static crd::u32 s_next_batch = 1U;
+    // One check for every slot; a refused öbek spawns nothing and gets the null handle.
+    crd::u32 refused_fourcc = 0U;
+    if (check_obek(res, m_components, allocator(), &refused_fourcc) != PackRefusal::None)
+    {
+        return ObekBatchHandle{};
+    }
+
     ObekBatchHandle batch{};
-    batch.value = s_next_batch++;
+    batch.value = m_next_obek_batch;
+    m_next_obek_batch = (m_next_obek_batch == 0xFFFFFFFFU) ? 1U : m_next_obek_batch + 1U;
 
     // Look up BatchInstanceTag's ComponentId — present only if the user
     // registered it on this World. v1m5b's tag-add path is opt-in; absent
     // registration = no tagging (entities still spawn correctly).
-    ComponentId tag_cid{};
-    for (crd::u32 i = 0; i < m_components.size(); ++i)
-    {
-        const ComponentId cid{static_cast<crd::u16>(i)};
-        const ComponentInfo* info = m_components.info(cid);
-        if (info != nullptr && info->serialize.fourcc == kFourCC_BatchInstanceTag)
-        {
-            tag_cid = cid;
-            break;
-        }
-    }
+    const ComponentId tag_cid = pack_detail::find_by_fourcc(m_components, kFourCC_BatchInstanceTag);
 
     for (crd::u32 slot = 0; slot < count; ++slot)
     {
-        ObekInstantiation inst = instantiate_obek(res, parent);
+        ObekInstantiation inst = instantiate_checked_obek(res, parent, {});
         if (!tag_cid.is_null())
         {
             BatchInstanceTag tag{};
@@ -1118,19 +1099,11 @@ void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
         return;
     }
 
-    // Find the registered ComponentId for this fourcc in the target World.
-    ComponentId target_cid{};
-    for (crd::u32 i = 0; i < m_components.size(); ++i)
-    {
-        const ComponentId cid{static_cast<crd::u16>(i)};
-        const ComponentInfo* info = m_components.info(cid);
-        if (info != nullptr && info->serialize.fourcc == component_fourcc)
-        {
-            target_cid = cid;
-            break;
-        }
-    }
-    if (target_cid.is_null())
+    // The registered component this record restored: not a relation (only add_relation may change a target) and not
+    // a DontInherit component (its bytes never came from the öbek).
+    const ComponentId target_cid = pack_detail::restored_component(m_components, component_fourcc, true);
+    if (target_cid.is_null() ||
+        static_cast<crd::usize>(field_offset) + field_size > m_components.require_info(target_cid).size)
     {
         return;
     }
@@ -1146,30 +1119,31 @@ void World::revert_field(ObekInstantiation& inst, crd::u32 file_idx,
     const crd::u8* src_bytes = pp.payloads.data() + static_cast<crd::usize>(r) * d.size;
     std::memcpy(static_cast<crd::u8*>(dst) + field_offset, src_bytes + field_offset, field_size);
 
-    // 2. Re-apply any cook-time overrides that overlap this field range.
+    // 2. Re-apply any cook-time overrides that overlap this field range (in usize: a record's u32 offset plus its
+    //    size can pass 2^32).
+    const crd::usize fld_start = field_offset;
+    const crd::usize fld_end = fld_start + field_size;
     for (const ObekOverrideRecord& rec : res.cook_override_records)
     {
         if (rec.file_idx != file_idx || rec.component_fourcc != component_fourcc)
         {
             continue;
         }
-        const crd::u32 ov_start = rec.field_offset;
-        const crd::u32 ov_end   = rec.field_offset + rec.payload_size;
-        const crd::u32 fld_end  = field_offset + field_size;
-        if (ov_start < fld_end && ov_end > field_offset)
+        const crd::usize ov_start = rec.field_offset;
+        const crd::usize ov_end = ov_start + rec.payload_size;
+        if (ov_start < fld_end && ov_end > fld_start)
         {
-            const crd::u32 effective_start = (ov_start > field_offset) ? ov_start : field_offset;
-            const crd::u32 effective_end   = (ov_end < fld_end) ? ov_end : fld_end;
-            const crd::u32 ov_payload_offset = effective_start - ov_start;
-            const crd::u32 ov_payload_size   = effective_end - effective_start;
-            if (rec.payload_offset + ov_payload_offset + ov_payload_size
-                > res.cook_override_payload_pool.size())
+            const crd::usize effective_start = (ov_start > fld_start) ? ov_start : fld_start;
+            const crd::usize effective_end = (ov_end < fld_end) ? ov_end : fld_end;
+            const crd::usize ov_payload_offset =
+                static_cast<crd::usize>(rec.payload_offset) + (effective_start - ov_start);
+            const crd::usize ov_payload_size = effective_end - effective_start;
+            if (ov_payload_offset + ov_payload_size > res.cook_override_payload_pool.size())
             {
                 continue;
             }
-            const crd::u8* ov_src = res.cook_override_payload_pool.data()
-                                    + rec.payload_offset + ov_payload_offset;
-            std::memcpy(static_cast<crd::u8*>(dst) + effective_start, ov_src, ov_payload_size);
+            std::memcpy(static_cast<crd::u8*>(dst) + effective_start,
+                        res.cook_override_payload_pool.data() + ov_payload_offset, ov_payload_size);
         }
     }
 }
