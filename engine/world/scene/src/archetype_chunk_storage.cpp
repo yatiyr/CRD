@@ -123,12 +123,11 @@ void ArchetypeChunkStorage::release_slot(Archetype& src, crd::u32 chunk_index, c
     // (event sinks) has been called earlier in the mutation path.
     for (crd::u32 li = 0; li < src.layout.component_count(); ++li)
     {
-        const ComponentInfo* info = m_registry->info(src.layout.components_sorted[li]);
-        CRD_ASSERT(info != nullptr);
+        const ComponentInfo& info = m_registry->require_info(src.layout.components_sorted[li]);
         crd::u8* slot_bytes = component_slot(chunk, src.layout, li, slot_in_chunk);
-        if (info->destruct != nullptr)
+        if (info.destruct != nullptr)
         {
-            info->destruct(slot_bytes);
+            info.destruct(slot_bytes);
         }
     }
 
@@ -145,13 +144,12 @@ void ArchetypeChunkStorage::release_slot(Archetype& src, crd::u32 chunk_index, c
         // placement-new but worth pinning given the byte-level interface.
         for (crd::u32 li = 0; li < src.layout.component_count(); ++li)
         {
-            const ComponentInfo* info = m_registry->info(src.layout.components_sorted[li]);
-            CRD_ASSERT(info != nullptr);
+            const ComponentInfo& info = m_registry->require_info(src.layout.components_sorted[li]);
             crd::u8* dst_bytes = component_slot(chunk, src.layout, li, slot_in_chunk);
             crd::u8* last_bytes = component_slot(chunk, src.layout, li, last_slot);
-            if (info->move_construct != nullptr)
+            if (info.move_construct != nullptr)
             {
-                info->move_construct(dst_bytes, last_bytes);
+                info.move_construct(dst_bytes, last_bytes);
             }
             else
             {
@@ -159,11 +157,11 @@ void ArchetypeChunkStorage::release_slot(Archetype& src, crd::u32 chunk_index, c
                 // for trivially-movable types where the registry chose not to
                 // capture an op (shouldn't happen in v1c2 since we capture
                 // unconditionally for movable types, but keep the fallback safe).
-                std::memcpy(dst_bytes, last_bytes, info->size);
+                std::memcpy(dst_bytes, last_bytes, info.size);
             }
-            if (info->destruct != nullptr)
+            if (info.destruct != nullptr)
             {
-                info->destruct(last_bytes);
+                info.destruct(last_bytes);
             }
         }
 
@@ -214,17 +212,16 @@ void ArchetypeChunkStorage::move_shared_components(Archetype& src, Chunk& src_ch
         else
         {
             // Shared component — move-construct from src slot into dst slot.
-            const ComponentInfo* info = m_registry->info(src_c);
-            CRD_ASSERT(info != nullptr);
+            const ComponentInfo& info = m_registry->require_info(src_c);
             crd::u8* src_bytes = component_slot(src_chunk, src.layout, i_src, src_slot);
             crd::u8* dst_bytes = component_slot(dst_chunk, dst.layout, i_dst, dst_slot);
-            if (info->move_construct != nullptr)
+            if (info.move_construct != nullptr)
             {
-                info->move_construct(dst_bytes, src_bytes);
+                info.move_construct(dst_bytes, src_bytes);
             }
             else
             {
-                std::memcpy(dst_bytes, src_bytes, info->size);
+                std::memcpy(dst_bytes, src_bytes, info.size);
             }
             // Source slot is destructed by release_slot; do not read its bytes
             // after this point.
@@ -243,15 +240,14 @@ void ArchetypeChunkStorage::move_shared_components(Archetype& src, Chunk& src_ch
 void ArchetypeChunkStorage::insert(EntityId e, ComponentId c, void* data)
 {
     CRD_ASSERT(data != nullptr);
-    const ComponentInfo* info = m_registry->info(c);
-    CRD_ASSERT(info != nullptr);
+    const ComponentInfo& info = m_registry->require_info(c);
 
     EntityLocation& loc = ensure_location(e);
 
     // Path 1: entity already has c — UPSERT in place, destruct old + move new.
     if (!loc.archetype.is_null())
     {
-        Archetype& arch = *m_graph.by_id(loc.archetype);
+        Archetype& arch = m_graph.require(loc.archetype);
         if (arch.mask.test(c))
         {
             const crd::u32 li = layout_index(arch, c);
@@ -259,20 +255,20 @@ void ArchetypeChunkStorage::insert(EntityId e, ComponentId c, void* data)
             Chunk& chunk = arch.chunks[loc.chunk_index];
             crd::u8* slot_b = component_slot(chunk, arch.layout, li, loc.slot_in_chunk);
 
-            if (info->destruct != nullptr)
+            if (info.destruct != nullptr)
             {
-                info->destruct(slot_b);
+                info.destruct(slot_b);
             }
-            if (info->move_construct != nullptr)
+            if (info.move_construct != nullptr)
             {
                 // `data` is caller-owned; we move from a non-const view of it.
                 // Since storage receives `const void*`, cast away — caller
                 // contract: data is owned and may be moved-from.
-                info->move_construct(slot_b, data);
+                info.move_construct(slot_b, data);
             }
             else
             {
-                std::memcpy(slot_b, data, info->size);
+                std::memcpy(slot_b, data, info.size);
             }
 
             chunk.header()->version_counter[li] += 1;
@@ -303,13 +299,13 @@ void ArchetypeChunkStorage::insert(EntityId e, ComponentId c, void* data)
         CRD_ASSERT(dst_li != kMaxComponents);
         Chunk& dst_chunk = dst_arch.chunks[new_loc.chunk_index];
         crd::u8* slot_b = component_slot(dst_chunk, dst_arch.layout, dst_li, new_loc.slot_in_chunk);
-        if (info->move_construct != nullptr)
+        if (info.move_construct != nullptr)
         {
-            info->move_construct(slot_b, data);
+            info.move_construct(slot_b, data);
         }
         else
         {
-            std::memcpy(slot_b, data, info->size);
+            std::memcpy(slot_b, data, info.size);
         }
         dst_chunk.header()->version_counter[dst_li] += 1;
         m_sink->on_insert(e, c, slot_b);
@@ -334,7 +330,7 @@ void ArchetypeChunkStorage::remove(EntityId e, ComponentId c)
     {
         return; // entity has no archetype-stored components — nothing to do
     }
-    Archetype& src_arch = *m_graph.by_id(loc.archetype);
+    Archetype& src_arch = m_graph.require(loc.archetype);
     if (!src_arch.mask.test(c))
     {
         return; // entity lacks c — no-op
@@ -436,30 +432,29 @@ void ArchetypeChunkStorage::for_each_chunk(ComponentMask required, ChunkVisitor 
     }
     for (crd::u32 i = 0; i < m_graph.archetype_count(); ++i)
     {
-        Archetype* arch = m_graph.by_id(ArchetypeId{i});
-        CRD_ASSERT(arch != nullptr);
+        Archetype& arch = m_graph.require(ArchetypeId{i});
         // Superset match: archetype.mask & required == required
-        if (((arch->mask & required).bits[0] != required.bits[0]) ||
-            ((arch->mask & required).bits[1] != required.bits[1]) ||
-            ((arch->mask & required).bits[2] != required.bits[2]) ||
-            ((arch->mask & required).bits[3] != required.bits[3]))
+        if (((arch.mask & required).bits[0] != required.bits[0]) ||
+            ((arch.mask & required).bits[1] != required.bits[1]) ||
+            ((arch.mask & required).bits[2] != required.bits[2]) ||
+            ((arch.mask & required).bits[3] != required.bits[3]))
         {
             continue;
         }
-        for (Chunk& chunk : arch->chunks)
+        for (Chunk& chunk : arch.chunks)
         {
             ChunkHeader* hdr = chunk.header();
             ChunkView view{};
-            view.entities = chunk.entity_id_array(arch->layout);
+            view.entities = chunk.entity_id_array(arch.layout);
             view.entity_count = hdr->entity_count;
-            view.present_mask = arch->mask;
+            view.present_mask = arch.mask;
             // GEO-7: the SoA table — one pointer + version per layout component, direct chunk-array access
-            const crd::u32 k = arch->layout.component_count();
+            const crd::u32 k = arch.layout.component_count();
             view.component_count = k <= kMaxChunkViewComponents ? k : kMaxChunkViewComponents;
             for (crd::u32 li = 0; li < view.component_count; ++li)
             {
-                view.component_ids[li]      = arch->layout.components_sorted[li];
-                view.component_arrays[li]   = chunk.component_array(arch->layout, li);
+                view.component_ids[li] = arch.layout.components_sorted[li];
+                view.component_arrays[li] = chunk.component_array(arch.layout, li);
                 view.component_versions[li] = hdr->version_counter[li];
             }
             fn(view, user_data);
@@ -477,7 +472,7 @@ void ArchetypeChunkStorage::on_entity_destroyed(EntityId e)
     {
         return;
     }
-    Archetype& arch = *m_graph.by_id(loc.archetype);
+    Archetype& arch = m_graph.require(loc.archetype);
 
     // Fire per-component on_remove events (in mask order) before destruction.
     for (crd::u32 li = 0; li < arch.layout.component_count(); ++li)

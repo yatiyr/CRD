@@ -99,7 +99,7 @@ Operation* main_declare(const Context& ctx, Module& m)
     {
         return nullptr;
     }
-    for (Operation* op = func::func_body_block(fn)->first_op(); op != nullptr; op = op->next_in_block())
+    for (Operation* op = func::func_body(*fn).first_op(); op != nullptr; op = op->next_in_block())
     {
         if (ctx.op_name(op->kind()) == containers::StringView("resource.declare"))
         {

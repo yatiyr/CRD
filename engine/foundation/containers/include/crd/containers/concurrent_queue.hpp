@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <atomic>
 #include <new>
@@ -62,7 +63,8 @@ public:
 
         m_capacity = capacity_pow2;
         m_mask = capacity_pow2 - 1U;
-        m_cells = static_cast<Cell*>(m_alloc->allocate(sizeof(Cell) * m_capacity, alignof(Cell)));
+        // A refused buffer (a sub-budget allocator returns nullptr) is out of memory: fatal in every build.
+        m_cells = memory::allocate_array_or_fatal<Cell>(*m_alloc, m_capacity, "ConcurrentQueue: out of memory");
 
         // sequence[i] = i means "slot i is free for the very first producer lap".
         // After a consumer frees a slot it stores sequence = pos + capacity.

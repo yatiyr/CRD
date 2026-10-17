@@ -447,6 +447,14 @@ struct FrameMisuse
     FrameMisuseKind kind  = FrameMisuseKind::None;
 };
 
+namespace detail
+{
+// The context's IR arena grows from the parent allocator and refuses only when the parent does: the context is then out
+// of memory, fatal in every build (DIAG.3a's policy for an owning arena) through memory's *_or_fatal helpers, never a
+// null node, string or table written through.
+inline constexpr const char* kContextArenaOutOfMemory = "ceir::Context: the IR arena is out of memory";
+} // namespace detail
+
 class Context
 {
 public:

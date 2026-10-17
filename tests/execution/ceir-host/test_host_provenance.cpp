@@ -82,8 +82,9 @@ void guarded_for(Context& ctx, Block* b, Value* step)
 Block* add_func(Context& ctx, Module& m, const char* name)
 {
     Operation* const fn = func::create_func(ctx, m, name, Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m.body()->first_block()->append(fn);
-    return func::func_body_block(fn);
+    return &func::func_body(*fn);
 }
 
 // Four entries, one fault each. core.for occurrences in text order: 0 = loop A, 1 = loop B (parallel body), 2 = the

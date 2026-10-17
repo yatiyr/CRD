@@ -45,8 +45,9 @@ Module* build_chain(Context& ctx, bool mistyped)
     Module* const m = ctx.create_module();
     m->body()->append(ctx.create_block(0U));
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, scene::type_draw(ctx));
+    REQUIRE(fn != nullptr);
     m->body()->first_block()->append(fn);
-    Block* const     b    = func::func_body_block(fn);
+    Block* const b = &func::func_body(*fn);
     Value* const     draw = b->arg(0U);
     Operation* const mat  = scene::build_resolve_material(ctx, draw, scene::type_material(ctx));
     b->append(mat);
@@ -136,7 +137,9 @@ Loaded author_and_reload(Context& loaded, bool mistyped, memory::IAllocator* all
     out.module           = lr.module;
     Operation* const top = lr.module->body()->first_block()->first_op(); // @main
     REQUIRE(top != nullptr);
-    out.draw = func::func_body_block(top)->arg(0U);
+    Block* const body = func::func_body_block(top);
+    REQUIRE(body != nullptr);
+    out.draw = body->arg(0U);
     return out;
 }
 
@@ -150,10 +153,11 @@ void check_blamed(const Context& ctx, const Operation* op, const char* name, Tex
     CHECK(nb.provider == StringView("host"));
     Array<Origin>    storage(alloc);
     const Provenance p = resolve_provenance(ctx, op, storage);
-    REQUIRE(p.primary() != nullptr);
-    CHECK(p.primary()->loc.line == at.line);
-    CHECK(p.primary()->loc.col == at.col);
-    CHECK(ctx.file_path(p.primary()->loc.file_id) == StringView(kFile));
+    const Origin* const primary = p.primary();
+    REQUIRE(primary != nullptr);
+    CHECK(primary->loc.line == at.line);
+    CHECK(primary->loc.col == at.col);
+    CHECK(ctx.file_path(primary->loc.file_id) == StringView(kFile));
     const String site = render_op_site(ctx, op, alloc);
     String       expect(alloc);
     expect.append(name);

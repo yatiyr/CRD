@@ -4,11 +4,14 @@
 //   1. Collect dirty entity set: query<Transform>().with<TransformDirtyFlag>().
 //      Materialised as Array<EntityId>.
 //   2. Find dirty roots: dirty entities whose ChildOf parent is either
-//      (a) absent / null, or (b) NOT dirty.
+//      (a) absent / null, (b) NOT dirty, or (c) without a Transform.
 //   3. For each dirty root, DFS pre-order via traverse_relation<ChildOf>.
 //      At each visited entity:
 //        - Recompute world = parent.world * local (or just local if no
-//          parent or parent has no Transform).
+//          parent or parent has no Transform). A visited entity without a
+//          Transform (an organisation node) has no matrix and ends the
+//          chain: the walk does not descend through it, since its children
+//          compose as roots (2c).
 //        - Write transform.world via get_component_mut<Transform>(e)
 //          — this fires ChangeDetect on_update so downstream queries
 //          (renderer's `query<Transform>().changed<Transform>()`) see
@@ -58,17 +61,22 @@ struct PropagationCtx
 }
 
 // Recompute one entity's world matrix from its parent's already-current
-// world (or pure local if no parent / parent missing Transform).
-void recompute_world_for(World& w, EntityId e)
+// world (or pure local if no parent / parent missing Transform). False when
+// `e` has no Transform: the walk reaches every ChildOf child, and only the
+// dirty roots themselves come from query<Transform>.
+[[nodiscard]] bool recompute_world_for(World& w, EntityId e)
 {
     Transform* t = w.get_component_mut<Transform>(e);
-    CRD_ASSERT(t != nullptr); // dirty set was filtered by query<Transform>
+    if (t == nullptr)
+    {
+        return false;
+    }
     const crd::math::Mat4f local = t->local();
     const EntityId parent = parent_of(w, e);
     if (parent.is_null())
     {
         t->world = local;
-        return;
+        return true;
     }
     const Transform* parent_t = w.get_component<Transform>(parent);
     if (parent_t == nullptr)
@@ -77,9 +85,10 @@ void recompute_world_for(World& w, EntityId e)
         // case for hierarchical organisation entities (e.g. "scene root"
         // with no transform of its own that just owns ChildOf children).
         t->world = local;
-        return;
+        return true;
     }
     t->world = parent_t->world * local;
+    return true;
 }
 
 // Iterative DFS pre-order via the index reverse-sources accessor. We
@@ -96,8 +105,15 @@ void dfs_recompute(World& w, EntityId root)
         const EntityId current = stack.back();
         stack.pop_back();
 
-        recompute_world_for(w, current);
+        const bool has_transform = recompute_world_for(w, current);
         w.commands().remove_component<TransformDirtyFlag>(current);
+        if (!has_transform)
+        {
+            // An organisation node ends the chain: its children compose as
+            // roots, so a dirty one is a root of its own in run() and a
+            // clean one does not depend on this subtree.
+            continue;
+        }
 
         // Children — reverse-index lookup. v1f exposes traverse_relation
         // as the canonical API; we re-use it here for the children-only
@@ -150,10 +166,13 @@ void TransformPropagation::run(World& world)
             continue;
         }
         const EntityId parent = parent_of(world, e);
-        if (!parent.is_null() && is_dirty(world, parent))
+        if (!parent.is_null() && is_dirty(world, parent) && world.has_component<Transform>(parent))
         {
-            // Parent is dirty → it's a higher-up root or sibling-deep
-            // chain. Skip; the DFS from the higher root will visit `e`.
+            // Parent is dirty and carries a Transform → it's a higher-up
+            // root or sibling-deep chain of Transform-carrying entities.
+            // Skip; the DFS from the higher root will visit `e`. A parent
+            // without a Transform ends the chain (the DFS stops there), so
+            // `e` is a root of its own.
             continue;
         }
         // Dirty root — DFS its subtree.

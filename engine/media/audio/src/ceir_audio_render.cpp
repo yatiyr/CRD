@@ -180,7 +180,7 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
     // cutoff/q/gain_db as f32, so the coefficients must be computed from the f32-narrowed value).
     for (Operation* op = body->first_op(); op != nullptr; op = op->next_in_block())
     {
-        const crd::u32  my   = *slot.find(op);
+        const crd::u32 my = slot.at(op); // PASS 1 numbered every op of this body
         crd::f32* const mine = bus.data() + static_cast<crd::usize>(my) * span;
         for (crd::u32 i = 0; i < op->num_operands(); ++i)
         {
@@ -321,7 +321,7 @@ crd::i64 execute_audio_graph_ceir(const crd::ceir::Context& ctx, const crd::ceir
     }
 
     out.resize(span, 0.0F);
-    const crd::f32* const fb = bus.data() + static_cast<crd::usize>(*slot.find(sink)) * span;
+    const crd::f32* const fb = bus.data() + static_cast<crd::usize>(slot.at(sink)) * span; // a body op, numbered
     for (crd::usize k = 0; k < span; ++k)
     {
         out[k] = fb[k];

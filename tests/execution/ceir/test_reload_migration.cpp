@@ -71,8 +71,9 @@ Operation* state_cell(Context& c, const Reg& r, Block* b, Value* init, Value* ne
 Operation* mkfunc_counter(Context& c, const Reg& r, Module& m, StringView name, i64 nextval, u32 depth = 1U)
 {
     Operation* const f = func::create_func(c, m, name, Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     m.body()->first_block()->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     Value* const init = konst(c, r, b, 0, c.type_i32())->result(0U);
     Value* const nxt  = konst(c, r, b, nextval, c.type_i32())->result(0U);
     Operation* const s = state_cell(c, r, b, init, nxt, c.type_i32(), depth);
@@ -141,11 +142,13 @@ TEST_CASE("ceir 10a: a signature edit changes BOTH interface_hash and contract_h
     // @f() -> i32 vs @f() -> i64 : the caller-visible result type changed -- callers break, a migration fn cannot help.
     Context a(&root); const Reg ra(a); Module* ma = a.create_module(); (void)module_block(a, *ma);
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
+    REQUIRE(fa != nullptr);
     ma->body()->first_block()->append(fa);
     ret(a, func::func_body_block(fa), konst(a, ra, func::func_body_block(fa), 0, a.type_i32())->result(0U));
 
     Context b(&root); const Reg rb(b); Module* mb = b.create_module(); (void)module_block(b, *mb);
     Operation* const fb = func::create_func(b, *mb, "f", Visibility::Public, 0U, b.type_i64());
+    REQUIRE(fb != nullptr);
     mb->body()->first_block()->append(fb);
     ret(b, func::func_body_block(fb), konst(b, rb, func::func_body_block(fb), 0, b.type_i64())->result(0U));
 

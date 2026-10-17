@@ -11,6 +11,21 @@ namespace
 {
 namespace ct = crd::toml;
 namespace cont = crd::containers;
+
+// The child a test expects: a missing key or element fails the test (REQUIRE) instead of following a null pointer.
+[[nodiscard]] const ct::node& child(const ct::node& n, const char* key)
+{
+    const ct::node* const c = n.get(cont::StringView{key});
+    REQUIRE(c != nullptr);
+    return *c;
+}
+
+[[nodiscard]] const ct::node& element(const ct::node& n, crd::usize index)
+{
+    const ct::node* const c = n.get(index);
+    REQUIRE(c != nullptr);
+    return *c;
+}
 } // namespace
 
 TEST_CASE("toml: scalars parse with the right kinds", "[toml]")
@@ -19,19 +34,18 @@ TEST_CASE("toml: scalars parse with the right kinds", "[toml]")
     REQUIRE(r);
     const ct::node& t = r.table();
 
-    REQUIRE(t.get(cont::StringView{"i"}) != nullptr);
-    CHECK(t.get(cont::StringView{"i"})->value<crd::i64>() == 42);
-    CHECK(t.get(cont::StringView{"f"})->value<double>() == 1.5);
-    CHECK(t.get(cont::StringView{"b"})->value<bool>() == true);
-    CHECK(t.get(cont::StringView{"n"})->value<crd::i64>() == -7);
+    CHECK(child(t, "i").value<crd::i64>() == 42);
+    CHECK(child(t, "f").value<double>() == 1.5);
+    CHECK(child(t, "b").value<bool>() == true);
+    CHECK(child(t, "n").value<crd::i64>() == -7);
 
-    const auto s = t.get(cont::StringView{"s"})->value<std::string_view>();
+    const auto s = child(t, "s").value<std::string_view>();
     REQUIRE(s.has_value());
     CHECK(*s == "hi");
 
     // A float is not an integer (strict), but an integer widens to double (toml++).
-    CHECK_FALSE(t.get(cont::StringView{"f"})->value<crd::i64>().has_value());
-    CHECK(t.get(cont::StringView{"i"})->value<double>() == 42.0);
+    CHECK_FALSE(child(t, "f").value<crd::i64>().has_value());
+    CHECK(child(t, "i").value<double>() == 42.0);
 }
 
 TEST_CASE("toml: tables, dotted headers and get()", "[toml]")
@@ -40,13 +54,13 @@ TEST_CASE("toml: tables, dotted headers and get()", "[toml]")
     REQUIRE(r);
     const ct::node& t = r.table();
 
-    const auto* a = t.get(cont::StringView{"a"})->as_table();
+    const auto* a = child(t, "a").as_table();
     REQUIRE(a != nullptr);
-    CHECK(a->get(cont::StringView{"x"})->value<crd::i64>() == 1);
+    CHECK(child(*a, "x").value<crd::i64>() == 1);
 
-    const auto* b = a->get(cont::StringView{"b"})->as_table();
+    const auto* b = child(*a, "b").as_table();
     REQUIRE(b != nullptr);
-    CHECK(b->get(cont::StringView{"y"})->value<crd::i64>() == 2);
+    CHECK(child(*b, "y").value<crd::i64>() == 2);
 }
 
 TEST_CASE("toml: inline arrays and array-of-tables", "[toml]")
@@ -58,27 +72,31 @@ TEST_CASE("toml: inline arrays and array-of-tables", "[toml]")
     REQUIRE(r);
     const ct::node& t = r.table();
 
-    const auto* arr = t.get(cont::StringView{"list"})->as_array();
+    const auto* arr = child(t, "list").as_array();
     REQUIRE(arr != nullptr);
     REQUIRE(arr->size() == 2U);
-    CHECK(*arr->get(0)->value<std::string_view>() == "MeshRenderer");
-    CHECK(*arr->get(1)->value<std::string_view>() == "Transform");
+    CHECK(element(*arr, 0).value<std::string_view>() == std::string_view{"MeshRenderer"});
+    CHECK(element(*arr, 1).value<std::string_view>() == std::string_view{"Transform"});
 
-    const auto* res = t.get(cont::StringView{"resource"})->as_array();
+    const auto* res = child(t, "resource").as_array();
     REQUIRE(res != nullptr);
     REQUIRE(res->size() == 2U);
-    CHECK(*res->get(0)->as_table()->get(cont::StringView{"name"})->value<std::string_view>() == "a");
-    CHECK(res->get(1)->as_table()->get(cont::StringView{"scale"})->value<double>() == 2.0);
+    const auto* first = element(*res, 0).as_table();
+    const auto* second = element(*res, 1).as_table();
+    REQUIRE(first != nullptr);
+    REQUIRE(second != nullptr);
+    CHECK(child(*first, "name").value<std::string_view>() == std::string_view{"a"});
+    CHECK(child(*second, "scale").value<double>() == 2.0);
 }
 
 TEST_CASE("toml: inline tables and comments", "[toml]")
 {
     const auto r = ct::parse("# a comment\npoint = { x = 1, y = 2 }  # trailing\n");
     REQUIRE(r);
-    const auto* p = r.table().get(cont::StringView{"point"})->as_table();
+    const auto* p = child(r.table(), "point").as_table();
     REQUIRE(p != nullptr);
-    CHECK(p->get(cont::StringView{"x"})->value<crd::i64>() == 1);
-    CHECK(p->get(cont::StringView{"y"})->value<crd::i64>() == 2);
+    CHECK(child(*p, "x").value<crd::i64>() == 1);
+    CHECK(child(*p, "y").value<crd::i64>() == 2);
 }
 
 TEST_CASE("toml: malformed input reports a failure, not a crash", "[toml]")
@@ -195,7 +213,7 @@ TEST_CASE("toml: an out-of-range or over-long number is refused, never clamped o
 {
     const auto integer = [](const char* text) {
         const auto r = ct::parse(text);
-        return r ? r.table().get(cont::StringView{"n"})->value<crd::i64>() : std::optional<crd::i64>{};
+        return r ? child(r.table(), "n").value<crd::i64>() : std::optional<crd::i64>{};
     };
     CHECK(integer("n = 9223372036854775807\n") == crd::i64{9223372036854775807});
     CHECK(integer("n = -9223372036854775808\n") == (-crd::i64{9223372036854775807} - 1));
@@ -240,10 +258,10 @@ TEST_CASE("toml: build and serialize round-trips", "[toml]")
     const auto reparsed = ct::parse(std::string_view{text});
     REQUIRE(reparsed);
     const ct::node& t = reparsed.table();
-    CHECK(*t.get(cont::StringView{"name"})->value<std::string_view>() == "engine://frame/x");
-    CHECK(t.get(cont::StringView{"schema"})->value<crd::i64>() == 1);
-    const auto* s = t.get(cont::StringView{"scale"})->as_array();
+    CHECK(child(t, "name").value<std::string_view>() == std::string_view{"engine://frame/x"});
+    CHECK(child(t, "schema").value<crd::i64>() == 1);
+    const auto* s = child(t, "scale").as_array();
     REQUIRE(s != nullptr);
     REQUIRE(s->size() == 2U);
-    CHECK(s->get(1)->value<double>() == 2.0);
+    CHECK(element(*s, 1).value<double>() == 2.0);
 }

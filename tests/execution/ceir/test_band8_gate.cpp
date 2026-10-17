@@ -79,8 +79,9 @@ Module* build_gate_module(Context& ctx, const GateReg& g)
     Block* const  top = ctx.create_block(0U);
     m->body()->append(top);
     Operation* const f = fn::create_func(ctx, *m, "f", Visibility::Public, 1U, shape_of(ctx, g.shape, ctx.type_f32()));
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const     body = fn::func_body_block(f);
+    Block* const body = &fn::func_body(*f);
     Operation* const p    = ctx.create_operation(g.process, {}, 0U);
     body->append(p);
     ctx.set_attr(p, "cfg", ctx.attr_extern(g.meta, ctx.attr_int(7)));      // a custom Extern attr (8b) -> content hash

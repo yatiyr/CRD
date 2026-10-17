@@ -1465,7 +1465,11 @@ TEST_CASE("raf7 resize recompiles only the size, not the topology")
         REQUIRE(small.schedule()[i] == large.schedule()[i]);
     }
     REQUIRE(small.physical_slot_count() == large.physical_slot_count());
-    REQUIRE(small.find(r1)->physical_slot == large.find(r1)->physical_slot);
+    const auto* const small_r1 = small.find(r1);
+    const auto* const large_r1 = large.find(r1);
+    REQUIRE(small_r1 != nullptr);
+    REQUIRE(large_r1 != nullptr);
+    REQUIRE(small_r1->physical_slot == large_r1->physical_slot);
     // Only the size differs.
     REQUIRE(small.width() == 100U);
     REQUIRE(large.width() == 400U);

@@ -3547,9 +3547,12 @@ struct SceneRenderer::Impl
             if (!bc.is_null())
             {
                 auto th = rm->load_sync<crd::resources::TextureResource>(bc);
-                if (th.state() == crd::resources::LoadState::Ready && th.get() != nullptr && th.get()->mip_count > 0U)
+                // One read of the handle's payload: get() reloads the block's state each time.
+                const crd::resources::TextureResource* const loaded =
+                    th.state() == crd::resources::LoadState::Ready ? th.get() : nullptr;
+                if (loaded != nullptr && loaded->mip_count > 0U)
                 {
-                    const crd::resources::TextureResource& t = *th.get();
+                    const crd::resources::TextureResource& t = *loaded;
                     crd::containers::Array<const void*>     mip_ptrs(alloc);
                     for (crd::u32 i = 0; i < t.mip_count; ++i)
                     {
@@ -5683,6 +5686,19 @@ void upload_bounds_range(SceneRenderer::Impl& impl, MeshGroup& group, crd::u32 f
     return static_cast<crd::i64>(gi);
 }
 
+// A group's mesh. group_for_mesh creates a group only from a Ready mesh and the group holds its handle, and the
+// resource manager never evicts a block with a live handle, so the payload stays readable: a null one is a broken
+// invariant, fatal in every build rather than a null mesh followed.
+[[nodiscard]] const crd::resources::MeshResource& group_mesh(const MeshGroup& group)
+{
+    const crd::resources::MeshResource* const mesh = group.mesh.get();
+    if (mesh == nullptr)
+    {
+        CRD_FATAL("SceneRenderer: a mesh group's held mesh is not readable");
+    }
+    return *mesh;
+}
+
 // write one instance record + world AABB into a group slot
 void write_slot(MeshGroup& group, crd::u32 slot, const crd::scene::Transform& t, const crd::math::Vec4f& color,
                 const crd::scene::MeshLodOverride* ovr)
@@ -5741,10 +5757,10 @@ void write_slot(MeshGroup& group, crd::u32 slot, const crd::scene::Transform& t,
     rec.color[2] = color.z;
     rec.color[3] = color.w;
 
-    const crd::resources::MeshResource* mesh = group.mesh.get();
+    const crd::resources::MeshResource& mesh = group_mesh(group);
     crd::geometry::primitives::AABB3<crd::f32> local;
-    local.min = {mesh->bounds_min[0], mesh->bounds_min[1], mesh->bounds_min[2]};
-    local.max = {mesh->bounds_max[0], mesh->bounds_max[1], mesh->bounds_max[2]};
+    local.min = {mesh.bounds_min[0], mesh.bounds_min[1], mesh.bounds_min[2]};
+    local.max = {mesh.bounds_max[0], mesh.bounds_max[1], mesh.bounds_max[2]};
     group.world_bounds[slot] = crd::geometry::primitives::transform_aabb(t.world, local);
 }
 
@@ -6091,7 +6107,7 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             continue;
         }
 
-        const crd::resources::MeshResource* mesh = group.mesh.get();
+        const crd::resources::MeshResource* mesh = &group_mesh(group);
         const auto vertex_words = static_cast<crd::u32>(mesh->vertices.size() / 4U);
         const auto vcount       = static_cast<crd::u32>(mesh->vertices.size() / 48U);
         const crd::u32 needed_capacity = count;
@@ -6334,9 +6350,11 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                         impl.rm->load_sync<crd::anim::SkeletonResource>(group.slot_skeleton[slot]));
                     cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
                 }
-                if (cached != nullptr && cached->get() != nullptr && cached->get()->joint_count() == jc)
+                // One read of the handle's payload: get() reloads the block's state each time.
+                const crd::anim::SkeletonResource* const loaded = cached != nullptr ? cached->get() : nullptr;
+                if (loaded != nullptr && loaded->joint_count() == jc)
                 {
-                    skel = cached->get();
+                    skel = loaded;
                 }
             }
             if (skel == nullptr)
@@ -6514,9 +6532,11 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
                             impl.rm->load_sync<crd::anim::SkeletonResource>(group.slot_skeleton[slot]));
                         cached = impl.skeleton_cache.find(group.slot_skeleton[slot]);
                     }
-                    if (cached != nullptr && cached->get() != nullptr && cached->get()->joint_count() == jc)
+                    // One read of the handle's payload: get() reloads the block's state each time.
+                    const crd::anim::SkeletonResource* const loaded = cached != nullptr ? cached->get() : nullptr;
+                    if (loaded != nullptr && loaded->joint_count() == jc)
                     {
-                        skel = cached->get();
+                        skel = loaded;
                     }
                 }
                 if (skel == nullptr)

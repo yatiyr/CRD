@@ -735,8 +735,7 @@ ObekInstantiation World::instantiate_obek(const ObekResource& res,
             result.components_skipped += d.record_count;
             continue;
         }
-        const ComponentInfo* info = m_components.info(registered_id);
-        CRD_ASSERT(info != nullptr);
+        const ComponentInfo* const info = &m_components.require_info(registered_id); // a registered id, found above
         CRD_ASSERT(static_cast<crd::u32>(info->size) == d.size
                    && "instantiate_obek: component size mismatch — registered type changed layout");
         CRD_ASSERT(static_cast<crd::u32>(info->alignment) == d.alignment

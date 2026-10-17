@@ -167,8 +167,9 @@ TEST_CASE("ceir 8f: a capability required by an op INSIDE a func body reaches th
     Block* const     top = ctx.create_block(0U);
     m->body()->append(top);
     Operation* const f = fn::create_func(ctx, *m, "f", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    fn::func_body_block(f)->append(ctx.create_operation(k, {}, 0U)); // the cap-op is INSIDE @f's body region
+    fn::func_body(*f).append(ctx.create_operation(k, {}, 0U)); // the cap-op is INSIDE @f's body region
 
     Array<CapabilityId> prog(&root);
     ctx.program_capabilities(*m, prog);

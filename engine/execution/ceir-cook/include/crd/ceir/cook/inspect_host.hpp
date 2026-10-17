@@ -154,6 +154,9 @@ public:
 
 private:
     void stop_execution(); // cancel (if attached) and join the executing thread
+    // The loaded asset's current generation. load() installed it and the set keeps one while the host lives, so a miss
+    // is a broken invariant, fatal in every build rather than a null generation followed. Call only when m_loaded.
+    [[nodiscard]] const Generation& loaded_generation() const noexcept;
 
     memory::IAllocator*                    m_alloc;
     memory::GrowableTlsfAllocator          m_session_alloc; // the session's own (it allocates under its lock)

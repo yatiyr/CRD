@@ -29,6 +29,11 @@ namespace crd::ceir::func
 // `func_op` has no body region.
 [[nodiscard]] Block* func_body_block(Operation* func_op) noexcept;
 
+// The entry Block of a func.func that has one, as every create_func op does: for a caller holding such an op, a
+// missing body is a broken invariant, fatal in every build rather than a null block followed. func_body_block is the
+// lookup that may miss.
+[[nodiscard]] Block& func_body(Operation& func_op) noexcept;
+
 // A `func.return` terminator carrying `values` as operands.
 [[nodiscard]] Operation* create_return(Context& ctx, containers::ConstSpan<Value*> values);
 

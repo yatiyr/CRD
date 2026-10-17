@@ -1064,7 +1064,8 @@ public:
         for (u32 i = 0U; i < m_service.command_count(); ++i)
         {
             const perf::DiagCommandSpec* spec = m_service.command_at(i);
-            Spec                         s;
+            CRD_FUZZ_REQUIRE(spec != nullptr); // below command_count()
+            Spec s;
             s.name       = spec->name;
             s.authority  = spec->authority;
             s.also       = spec->also;

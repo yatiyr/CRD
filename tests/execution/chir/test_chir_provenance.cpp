@@ -406,9 +406,10 @@ TEST_CASE("diag 8a: a self-contained CHIR program compiles and every plan instr 
         for (u32 k = 0; k < static_cast<u32>(cr.plan.seqs[s].instrs.size()); ++k)
         {
             const Provenance p = crd::ceir::plan::instr_provenance(cr.plan, crd::ceir::plan::InstrRef{s, k});
-            REQUIRE(p.primary() != nullptr);
-            CHECK(p.primary()->space == OriginSpace::ChirNode);
-            CHECK(loaded.file_path(p.primary()->loc.file_id) == StringView(kFile));
+            const Origin* const primary = p.primary();
+            REQUIRE(primary != nullptr);
+            CHECK(primary->space == OriginSpace::ChirNode);
+            CHECK(loaded.file_path(primary->loc.file_id) == StringView(kFile));
             ++instrs;
         }
     }

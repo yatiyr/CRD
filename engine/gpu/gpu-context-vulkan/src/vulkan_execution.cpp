@@ -420,7 +420,7 @@ VkResult vk_wait_complete(VkDevice device, VkFence fence, crd::u64 report_after_
             {
                 FailureStore&         s = store();
                 const std::lock_guard lock(s.mutex);
-                ++slot(s, device, true)->slow_waits;
+                ++s.records[slot_index(s, device, true)].slow_waits; // creating: always a slot, as in record_locked
             }
             result = vkWaitForFences(device, 1U, &fence, VK_TRUE, UINT64_MAX); // completion or loss, never abandonment
         }

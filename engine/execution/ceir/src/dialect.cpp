@@ -6,6 +6,11 @@
 
 namespace crd::ceir
 {
+namespace
+{
+constexpr const char* kArenaOutOfMemory = detail::kContextArenaOutOfMemory;
+} // namespace
+
 OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
 {
     // ⛔ Pure ⇒ zero effects (§26): a Pure op is CSE/DCE-safe, which ANY declared effect (even a read) disqualifies. The
@@ -37,7 +42,7 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
     {
         return kind;
     }
-    OpInfo* const info = memory::construct<OpInfo>(m_ctx->m_arena);
+    OpInfo* const info = memory::construct_or_fatal<OpInfo>(m_ctx->m_arena, kArenaOutOfMemory);
     info->kind    = kind;
     info->name    = m_ctx->op_name(kind); // the interned "dialect.op"
     info->dialect = this;
@@ -47,7 +52,8 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
     // not outlive this call (the alloc-outlives-borrowers rule; records are trivially-copyable PODs).
     if (const auto n = static_cast<u32>(spec.effects.size()); n > 0U)
     {
-        EffectRecord* const owned = memory::construct_array<EffectRecord>(m_ctx->m_arena, n);
+        EffectRecord* const owned =
+            memory::construct_array_or_fatal<EffectRecord>(m_ctx->m_arena, n, kArenaOutOfMemory);
         for (u32 i = 0; i < n; ++i)
         {
             owned[i] = spec.effects[i];
@@ -73,7 +79,8 @@ OpId Dialect::register_op(containers::StringView op, const OpSpec& spec)
     // precedent — the borrowed name span need not outlive the call). The program's required set is the module-wide union.
     if (const auto n = static_cast<u32>(spec.capabilities.size()); n > 0U)
     {
-        CapabilityId* const owned = memory::construct_array<CapabilityId>(m_ctx->m_arena, n);
+        CapabilityId* const owned =
+            memory::construct_array_or_fatal<CapabilityId>(m_ctx->m_arena, n, kArenaOutOfMemory);
         for (u32 i = 0; i < n; ++i)
         {
             // ⛔ declared-words-validated (the intrinsic-must-name-provider parallel): an EMPTY capability name hashes
@@ -105,7 +112,7 @@ TypeClassId Dialect::register_type_class(containers::StringView cls, const TypeC
     {
         return id;
     }
-    TypeClassInfo* const info = memory::construct<TypeClassInfo>(m_ctx->m_arena);
+    TypeClassInfo* const info = memory::construct_or_fatal<TypeClassInfo>(m_ctx->m_arena, kArenaOutOfMemory);
     info->id      = id;
     info->name    = m_ctx->type_class_name(id); // the interned "dialect.class"
     info->dialect = this;
@@ -122,7 +129,7 @@ AttrClassId Dialect::register_attr_class(containers::StringView cls, const AttrC
     {
         return id;
     }
-    AttrClassInfo* const info = memory::construct<AttrClassInfo>(m_ctx->m_arena);
+    AttrClassInfo* const info = memory::construct_or_fatal<AttrClassInfo>(m_ctx->m_arena, kArenaOutOfMemory);
     info->id      = id;
     info->name    = m_ctx->attr_class_name(id); // the interned "dialect.attr"
     info->dialect = this;
@@ -139,7 +146,7 @@ LocationClassId Dialect::register_location_class(containers::StringView cls, con
     {
         return id;
     }
-    LocationClassInfo* const info = memory::construct<LocationClassInfo>(m_ctx->m_arena);
+    LocationClassInfo* const info = memory::construct_or_fatal<LocationClassInfo>(m_ctx->m_arena, kArenaOutOfMemory);
     info->id             = id;
     info->name           = m_ctx->location_class_name(id); // the interned "dialect.location"
     info->dialect        = this;
@@ -157,7 +164,7 @@ Dialect* Context::register_dialect(containers::StringView name)
         return *existing;
     }
     const containers::StringView interned = intern_symbol(name);          // arena-stable map key
-    Dialect* const d = memory::construct<Dialect>(m_arena, this, interned);
+    Dialect* const d = memory::construct_or_fatal<Dialect>(m_arena, kArenaOutOfMemory, this, interned);
     m_dialects.insert(interned, d);
     return d;
 }
@@ -270,7 +277,7 @@ void Context::register_interface(OpId kind, InterfaceId iface, const void* impl)
         }
     }
     const u32          n     = info->num_ifaces; // grow by rebuild (old slice leaks into the arena)
-    OpInterface* const grown = memory::construct_array<OpInterface>(m_arena, n + 1U);
+    OpInterface* const grown = memory::construct_array_or_fatal<OpInterface>(m_arena, n + 1U, kArenaOutOfMemory);
     for (u32 k = 0; k < n; ++k)
     {
         grown[k] = info->ifaces[k];

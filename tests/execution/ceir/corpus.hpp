@@ -15,6 +15,7 @@
 #include <crd/ceir/gen/async_ops.hpp>
 #include <crd/ceir/gen/core_ops.hpp>
 #include <crd/ceir/gen/task_ops.hpp>
+#include <crd/core/assert.hpp>
 
 namespace crd::ceir::corpus
 {
@@ -47,10 +48,10 @@ struct Kit
 // a program + the state / data-parallel op handles IN COMPILE ORDER (for the reference cell_value/map_output inspection).
 struct Built
 {
-    Module*                             m;
+    Module* m = nullptr;
     containers::Array<Operation*>       cells; // §20 state ops, dense-cell order
     containers::Array<Operation*>       maps;  // parallel_for / map_reduce ops, dense-map order
-    explicit Built(memory::IAllocator* a) : m(nullptr), cells(a), maps(a) {}
+    explicit Built(memory::IAllocator* a) : cells(a), maps(a) {}
 };
 
 // ── shared builder helpers ──
@@ -95,6 +96,10 @@ inline void yield1(Context& ctx, const Kit& k, Block* b, Value* v)
 inline Operation* mkfunc(Context& ctx, Module& m, containers::StringView name, crd::u32 nparams, Block*& body_out)
 {
     Operation* const f = func::create_func(ctx, m, name, Visibility::Public, nparams, ctx.type_i32());
+    if (f == nullptr) // a corpus program names each function once; a refusal is a broken corpus, not an input
+    {
+        CRD_FATAL("corpus::mkfunc: the module already defines this function name");
+    }
     Block*           mb = m.body()->first_block();
     if (mb == nullptr)
     {
@@ -102,7 +107,7 @@ inline Operation* mkfunc(Context& ctx, Module& m, containers::StringView name, c
         m.body()->append(mb);
     }
     mb->append(f);
-    body_out = func::func_body_block(f);
+    body_out = &func::func_body(*f);
     return f;
 }
 // a `<dialect>.<name> { yield const v }` token op (launch/spawn/...): result(0) is the token handle.

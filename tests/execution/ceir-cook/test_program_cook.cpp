@@ -67,8 +67,9 @@ Operation* konst(Context& c, const Reg& r, Block* b, i64 v)
 Operation* mkfunc_sq(Context& c, const Reg& r, Module& m, StringView name)
 {
     Operation* const f = func::create_func(c, m, name, Visibility::Public, 1U, c.type_i32());
+    REQUIRE(f != nullptr);
     module_block(c, m)->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     Value*       ops[2] = {b->arg(0U), b->arg(0U)};
     Operation* const mul = c.create_operation(r.muli, ConstSpan<Value*>(ops, 2U), 1U, c.type_i32());
     b->append(mul);
@@ -82,8 +83,9 @@ Module* build_const_fn(Context& c, const Reg& r, i64 k)
     Module* const m = c.create_module();
     (void)module_block(c, *m);
     Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     module_block(c, *m)->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     Value* rv[1] = {konst(c, r, b, k)->result(0U)};
     b->append(func::create_return(c, ConstSpan<Value*>(rv, 1U)));
     return m;
@@ -139,8 +141,9 @@ Operation* add_dispatch(Context& c, const CReg& r, Block* bm, const char* kernel
 Block* main_block(Context& c, Module& m)
 {
     Operation* const f = func::create_func(c, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     module_block(c, m)->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 Module* build_dispatch(Context& c, const CReg& r, const char* kernel_name, i64 pin, bool pinned)
 {
@@ -282,8 +285,9 @@ TEST_CASE("ceir cook 7a: the dependency record survives the round-trip", "[ceir]
     (void)module_block(a, *m);
     // @main() { call ext(); test.dummy; return }  (ext is unresolved -> an import dependency; dummy is an intrinsic)
     Operation* const fm = func::create_func(a, *m, "main", Visibility::Public, 0U, a.type_i32());
+    REQUIRE(fm != nullptr);
     module_block(a, *m)->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     mb->append(func::create_call(a, "ext", {}, 0U, {}));
     mb->append(a.create_operation(ra.dummy, {}, 0U, {}, 0U));
     mb->append(func::create_return(a, {}));
@@ -324,8 +328,9 @@ TEST_CASE("ceir cook 7a: cooking REJECTS a structurally-invalid module (source m
     Module*   m = c.create_module();
     (void)module_block(c, *m);
     Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     module_block(c, *m)->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     // %late defined AFTER its use -> a def-before-use structural defect (not a state feedback).
     Operation* const late = c.create_operation(r.cst, {}, 1U, c.type_i32());
     c.set_attr(late, "value", c.attr_int(3));
@@ -378,9 +383,10 @@ TEST_CASE("ceir cook 7a: cooking REJECTS a None-declared function that recurses 
     Module*   m = c.create_module();
     (void)module_block(c, *m);
     Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     module_block(c, *m)->append(f);
     func::set_recursion_policy(c, f, func::RecursionPolicy::None); // DECLARES non-recursive...
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     b->append(func::create_call(c, "f", {}, 0U, {})); // ...but calls itself -> DeclaredNoneRecurses
     b->append(func::create_return(c, {}));
 

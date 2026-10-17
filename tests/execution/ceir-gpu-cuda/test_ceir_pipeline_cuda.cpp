@@ -402,8 +402,9 @@ ceg::TensorPipelinePlan build_mlp_plan(ce::Context& ctx, ce::Module& m, crd::mem
         m.body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     x_val  = mkd(tf(ctx, sh2(ctx, mrows, d0)));
@@ -679,8 +680,9 @@ ceg::TensorPipelinePlan build_two_class_plan(ce::Context& ctx, ce::Module& m, cr
         m.body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     // a plain f32 gemm(a[mm,kk], bb[kk,nn]) -> [mm,nn], alpha=1/beta=0 (the C accumulator is structurally required but unread — the

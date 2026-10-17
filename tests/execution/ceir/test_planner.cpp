@@ -78,6 +78,13 @@ const SlotAssignment* assign_of(const MemoryPlan& p, const Operation* d)
     }
     return nullptr;
 }
+// The assignment a test expects to exist: a missing one fails the test (REQUIRE) instead of following a null pointer.
+const SlotAssignment& assigned(const MemoryPlan& p, const Operation* d)
+{
+    const SlotAssignment* const a = assign_of(p, d);
+    REQUIRE(a != nullptr);
+    return *a;
+}
 } // namespace
 
 TEST_CASE("ceir 12d: aliasing saves memory -- transient_physical < transient_logical (the REN-1 proof, IR edition)",
@@ -140,7 +147,7 @@ TEST_CASE("ceir 12d: interval-coloring is minimal and the plan is consistent wit
     REQUIRE(ac != nullptr);
     CHECK(ac->reason == SlotReason::Pooled);
     CHECK(ac->prior == b->result(0U));               // %c reused %b's slot, not %a's (%a is still live)
-    CHECK(assign_of(plan, a)->slot != assign_of(plan, b)->slot); // %a and %b overlap -> distinct slots
+    CHECK(assigned(plan, a).slot != assigned(plan, b).slot); // %a and %b overlap -> distinct slots
 
     // consistency invariant: any two resources sharing a slot must satisfy resources_may_alias.
     Array<ResourceLifetime> lts(&root);
@@ -259,9 +266,9 @@ TEST_CASE("ceir 12d: the Latency profile disables pooling (physical == logical =
     CHECK(lat.transient_physical == lat.transient_logical);   // ⭐ Latency never pools
     CHECK(lat.transient_physical == mem.transient_logical);   // ...so it equals the un-aliased baseline
     CHECK(lat.transient_physical == 2U);
-    CHECK(assign_of(lat, a)->reason == SlotReason::DedicatedProfile);
-    CHECK(assign_of(lat, b)->reason == SlotReason::DedicatedProfile);
-    CHECK(assign_of(lat, a)->slot != assign_of(lat, b)->slot); // distinct dedicated slots
+    CHECK(assigned(lat, a).reason == SlotReason::DedicatedProfile);
+    CHECK(assigned(lat, b).reason == SlotReason::DedicatedProfile);
+    CHECK(assigned(lat, a).slot != assigned(lat, b).slot); // distinct dedicated slots
 }
 
 TEST_CASE("ceir 12d: every dedicated SlotReason and the history ring depth are recorded (sec 162)", "[ceir][planner]")
@@ -289,10 +296,10 @@ TEST_CASE("ceir 12d: every dedicated SlotReason and the history ring depth are r
 
     MemoryPlan plan(&root);
     ctx.plan_block_memory(*bm, PlanProfile::Memory, plan);
-    CHECK(assign_of(plan, pers)->reason == SlotReason::DedicatedLifetime);
-    CHECK(assign_of(plan, hist)->reason == SlotReason::DedicatedLifetime);
-    CHECK(assign_of(plan, exp)->reason == SlotReason::DedicatedExported);
-    CHECK(assign_of(plan, unsz)->reason == SlotReason::DedicatedUnsized);
+    CHECK(assigned(plan, pers).reason == SlotReason::DedicatedLifetime);
+    CHECK(assigned(plan, hist).reason == SlotReason::DedicatedLifetime);
+    CHECK(assigned(plan, exp).reason == SlotReason::DedicatedExported);
+    CHECK(assigned(plan, unsz).reason == SlotReason::DedicatedUnsized);
     // §162: the history<T> ring depth is recorded on its slot (a depth-2 ring is 2x the memory).
     const SlotAssignment* ah = assign_of(plan, hist);
     REQUIRE(ah != nullptr);
@@ -325,7 +332,7 @@ TEST_CASE("ceir 12d: different size_class buckets never share; the plan is deter
     ctx.plan_block_memory(*bm, PlanProfile::Memory, p1);
     CHECK(p1.transient_logical == 2U);
     CHECK(p1.transient_physical == 2U);                             // ⭐ different buckets -> no pooling
-    CHECK(assign_of(p1, a)->slot != assign_of(p1, b)->slot);
+    CHECK(assigned(p1, a).slot != assigned(p1, b).slot);
 
     // determinism: planning the same block again yields byte-identical assignments (pins the Deterministic profile too).
     MemoryPlan p2(&root);

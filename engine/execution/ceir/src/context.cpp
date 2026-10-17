@@ -24,6 +24,8 @@ namespace
     }
     return a.size() < b.size();
 }
+
+constexpr const char* kArenaOutOfMemory = detail::kContextArenaOutOfMemory;
 } // namespace
 
 Context::Context(memory::IAllocator* alloc, usize arena_chunk_bytes)
@@ -61,7 +63,7 @@ OpId Context::intern_op(containers::StringView dialect, containers::StringView n
         }
     }
     // New kind: copy the name into the arena and record it (reverse lookup for diagnostics).
-    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    char* const stored = static_cast<char*>(memory::allocate_or_fatal(m_arena, n + 1U, 1U, kArenaOutOfMemory));
     for (usize i = 0; i <= n; ++i)
     {
         stored[i] = buf[i];
@@ -109,7 +111,7 @@ TypeClassId Context::intern_type_class(containers::StringView dialect, container
             return TypeClassId{h};
         }
     }
-    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    char* const stored = static_cast<char*>(memory::allocate_or_fatal(m_arena, n + 1U, 1U, kArenaOutOfMemory));
     for (usize i = 0; i <= n; ++i)
     {
         stored[i] = buf[i];
@@ -164,9 +166,10 @@ TypeId Context::type_extern(TypeClassId cls, const Type& params)
 
 Module* Context::create_module(RegionKind body_kind)
 {
-    Module* const m = memory::construct<Module>(m_arena);
+    Module* const m = memory::construct_or_fatal<Module>(m_arena, kArenaOutOfMemory);
     m->m_body       = create_region(body_kind);
-    m->m_symbols    = memory::construct<SymbolTable>(m_arena, &m_arena); // arena-backed name→def index (§34)
+    // The arena-backed name→def index (§34).
+    m->m_symbols = memory::construct_or_fatal<SymbolTable>(m_arena, kArenaOutOfMemory, &m_arena);
     return m;
 }
 
@@ -176,7 +179,7 @@ containers::StringView Context::intern_symbol(containers::StringView name)
     {
         return {};
     }
-    char* const stored = static_cast<char*>(m_arena.allocate(name.size(), 1U));
+    char* const stored = static_cast<char*>(memory::allocate_or_fatal(m_arena, name.size(), 1U, kArenaOutOfMemory));
     for (usize i = 0; i < name.size(); ++i)
     {
         stored[i] = name[i];
@@ -201,7 +204,8 @@ AttrId Context::intern_attr(const AttrValue& v)
     // no span. Keys are interned so their StringViews are arena-stable.
     if (v.elems.size() > 0U)
     {
-        auto* const e = static_cast<AttrId*>(m_arena.allocate(v.elems.size() * sizeof(AttrId), alignof(AttrId)));
+        auto* const e = static_cast<AttrId*>(
+            memory::allocate_or_fatal(m_arena, v.elems.size() * sizeof(AttrId), alignof(AttrId), kArenaOutOfMemory));
         for (usize i = 0; i < v.elems.size(); ++i)
         {
             e[i] = v.elems[i];
@@ -211,7 +215,8 @@ AttrId Context::intern_attr(const AttrValue& v)
     if (v.keys.size() > 0U)
     {
         auto* const k = static_cast<containers::StringView*>(
-            m_arena.allocate(v.keys.size() * sizeof(containers::StringView), alignof(containers::StringView)));
+            memory::allocate_or_fatal(m_arena, v.keys.size() * sizeof(containers::StringView),
+                                      alignof(containers::StringView), kArenaOutOfMemory));
         for (usize i = 0; i < v.keys.size(); ++i)
         {
             k[i] = intern_symbol(v.keys[i]);
@@ -297,7 +302,7 @@ AttrClassId Context::intern_attr_class(containers::StringView dialect, container
             return AttrClassId{h};
         }
     }
-    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    char* const stored = static_cast<char*>(memory::allocate_or_fatal(m_arena, n + 1U, 1U, kArenaOutOfMemory));
     for (usize i = 0; i <= n; ++i)
     {
         stored[i] = buf[i];
@@ -373,7 +378,7 @@ LocationClassId Context::intern_location_class(containers::StringView dialect, c
             return LocationClassId{h};
         }
     }
-    char* const stored = static_cast<char*>(m_arena.allocate(n + 1U, 1U));
+    char* const stored = static_cast<char*>(memory::allocate_or_fatal(m_arena, n + 1U, 1U, kArenaOutOfMemory));
     for (usize i = 0; i <= n; ++i)
     {
         stored[i] = buf[i];
@@ -648,8 +653,9 @@ bool Context::resync_symbols(Module& m, const Operation*& first_dup)
 {
     first_dup                   = nullptr;
     SymbolTable* const old_table = m.m_symbols;
-    SymbolTable* const fresh      = memory::construct<SymbolTable>(m_arena, &m_arena); // old table leaks (arena policy)
-    m.m_symbols                  = fresh; // register_symbol registers into m.symbols() == fresh
+    SymbolTable* const fresh = memory::construct_or_fatal<SymbolTable>(m_arena, kArenaOutOfMemory, &m_arena);
+    // The old table leaks (arena policy); register_symbol registers into m.symbols() == fresh.
+    m.m_symbols = fresh;
     if (const Operation* const dup = resync_walk(m.body(), *this, m))
     {
         m.m_symbols = old_table; // atomic-on-failure: discard the fresh table, the old (pre-tx-correct) index is untouched
@@ -819,7 +825,7 @@ void Context::set_attr(Operation* op, containers::StringView name, AttrId value)
         }
     }
     const u32        n     = op->m_num_attrs; // grow by rebuild (old slice leaks into the arena — operand-grow policy)
-    NamedAttr* const grown = memory::construct_array<NamedAttr>(m_arena, n + 1U);
+    NamedAttr* const grown = memory::construct_array_or_fatal<NamedAttr>(m_arena, n + 1U, kArenaOutOfMemory);
     for (u32 k = 0; k < n; ++k)
     {
         grown[k] = op->m_attrs[k];
@@ -850,7 +856,7 @@ TypeId Context::intern_type(const Type& t)
     stored.name = intern_symbol(t.name); // arena-stable name (empty stays empty)
     if (!t.members.empty())
     {
-        TypeId* const dst = memory::construct_array<TypeId>(m_arena, static_cast<u32>(t.members.size()));
+        TypeId* const dst = memory::construct_array_or_fatal<TypeId>(m_arena, t.members.size(), kArenaOutOfMemory);
         for (usize i = 0; i < t.members.size(); ++i)
         {
             dst[i] = t.members[i];
@@ -860,7 +866,7 @@ TypeId Context::intern_type(const Type& t)
     if (!t.labels.empty())
     {
         containers::StringView* const dst =
-            memory::construct_array<containers::StringView>(m_arena, static_cast<u32>(t.labels.size()));
+            memory::construct_array_or_fatal<containers::StringView>(m_arena, t.labels.size(), kArenaOutOfMemory);
         for (usize i = 0; i < t.labels.size(); ++i)
         {
             dst[i] = intern_symbol(t.labels[i]);
@@ -4320,7 +4326,8 @@ void Context::set_origins(const Operation* op, containers::ConstSpan<Origin> ori
     OriginList list;
     if (origins.size() != 0U)
     {
-        auto* const arr = static_cast<Origin*>(m_arena.allocate(origins.size() * sizeof(Origin), alignof(Origin)));
+        auto* const arr = static_cast<Origin*>(
+            memory::allocate_or_fatal(m_arena, origins.size() * sizeof(Origin), alignof(Origin), kArenaOutOfMemory));
         for (usize i = 0; i < origins.size(); ++i)
         {
             arr[i] = origins[i];
@@ -4607,7 +4614,7 @@ containers::String render_op_site(const Context& ctx, const Operation* op, memor
 
 Region* Context::create_region(RegionKind kind)
 {
-    Region* const r = memory::construct<Region>(m_arena);
+    Region* const r = memory::construct_or_fatal<Region>(m_arena, kArenaOutOfMemory);
     r->m_kind       = kind;
     return r;
 }
@@ -4622,9 +4629,9 @@ void Context::set_region_kind(Region* r, RegionKind kind) noexcept
 
 Block* Context::create_block(u32 num_args, TypeId arg_type)
 {
-    Block* const b = memory::construct<Block>(m_arena);
+    Block* const b = memory::construct_or_fatal<Block>(m_arena, kArenaOutOfMemory);
     b->m_num_args  = num_args;
-    b->m_args      = memory::construct_array<Value>(m_arena, num_args);
+    b->m_args = memory::construct_array_or_fatal<Value>(m_arena, num_args, kArenaOutOfMemory);
     for (u32 i = 0; i < num_args; ++i)
     {
         b->m_args[i].init(arg_type, ValueKind::BlockArg, i, b);
@@ -4635,18 +4642,19 @@ Block* Context::create_block(u32 num_args, TypeId arg_type)
 Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> operands, u32 num_results,
                                      TypeId result_type, u32 num_regions)
 {
-    Operation* const op = memory::construct<Operation>(m_arena);
+    Operation* const op = memory::construct_or_fatal<Operation>(m_arena, kArenaOutOfMemory);
     op->m_kind          = kind;
 
     op->m_num_results = num_results;
-    op->m_results     = memory::construct_array<Value>(m_arena, num_results);
+    op->m_results = memory::construct_array_or_fatal<Value>(m_arena, num_results, kArenaOutOfMemory);
     for (u32 i = 0; i < num_results; ++i)
     {
         op->m_results[i].init(result_type, ValueKind::OpResult, i, op);
     }
 
+    // The region slots are trivially initialized; the loop below overwrites each.
     op->m_num_regions = num_regions;
-    op->m_regions     = memory::construct_array<Region*>(m_arena, num_regions); // trivially-init; overwritten below
+    op->m_regions = memory::construct_array_or_fatal<Region*>(m_arena, num_regions, kArenaOutOfMemory);
     for (u32 i = 0; i < num_regions; ++i)
     {
         op->m_regions[i]           = create_region();
@@ -4655,7 +4663,7 @@ Operation* Context::create_operation(OpId kind, containers::ConstSpan<Value*> op
 
     const auto num_operands = static_cast<u32>(operands.size());
     op->m_num_operands      = num_operands;
-    op->m_operands          = memory::construct_array<Use>(m_arena, num_operands);
+    op->m_operands = memory::construct_array_or_fatal<Use>(m_arena, num_operands, kArenaOutOfMemory);
     for (u32 i = 0; i < num_operands; ++i) // wires the def-use lists
     {
         op->set_operand(i, operands[i]);

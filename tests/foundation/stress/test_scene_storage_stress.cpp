@@ -29,6 +29,7 @@
 #include <crd/scene/query.hpp>
 #include <crd/scene/world.hpp>
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
 
 namespace
@@ -70,6 +71,15 @@ u64 entity_key(EntityId e) noexcept
 u64 expected_value(EntityId e, u32 round) noexcept
 {
     return mix64(entity_key(e) ^ (static_cast<u64>(round) << 48) ^ 0x5CE2EULL);
+}
+
+// The component build_world gave every entity, read on the test thread: a missing one fails the test (REQUIRE)
+// instead of following a null pointer. The workers count misses instead (Catch2 assertions are not thread-safe).
+template <typename T> [[nodiscard]] const T& component(const World& w, EntityId e)
+{
+    const T* const c = w.get_component<T>(e);
+    REQUIRE(c != nullptr);
+    return *c;
 }
 
 // --- per-chunk entity-ID collection (runs during the single-threaded walk) ---
@@ -139,28 +149,37 @@ TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
     u64 serial_xor = 0;
     for (const EntityId e : entities)
     {
-        serial_xor ^= w.get_component<ArchComp>(e)->v;
+        serial_xor ^= component<ArchComp>(w, e).v;
     }
 
     crd::containers::Array<u64> partials(&alloc);
     partials.resize(num_chunks, 0ULL);
+    std::atomic<u32> misses{0U};
     for (u32 round = 0; round < 4U; ++round)
     {
-        crd::jobs::Counter* const c = crd::jobs::parallel_for(
-            num_chunks, num_chunks,
-            [&w, &chunks, &partials](u32 begin, u32 end)
-            {
-                for (u32 ci = begin; ci < end; ++ci)
-                {
-                    u64 acc = 0;
-                    for (const EntityId e : chunks[ci])
-                    {
-                        acc ^= w.get_component<ArchComp>(e)->v; // const access — no version bump, race-free
-                    }
-                    partials[ci] = acc;
-                }
-            });
+        crd::jobs::Counter* const c =
+            crd::jobs::parallel_for(num_chunks, num_chunks,
+                                    [&w, &chunks, &partials, &misses](u32 begin, u32 end)
+                                    {
+                                        for (u32 ci = begin; ci < end; ++ci)
+                                        {
+                                            u64 acc = 0;
+                                            for (const EntityId e : chunks[ci])
+                                            {
+                                                const ArchComp* const a =
+                                                    w.get_component<ArchComp>(e); // const access: no version bump
+                                                if (a == nullptr)
+                                                {
+                                                    misses.fetch_add(1U);
+                                                    continue;
+                                                }
+                                                acc ^= a->v;
+                                            }
+                                            partials[ci] = acc;
+                                        }
+                                    });
         crd::jobs::wait(c);
+        CHECK(misses.load() == 0U);
 
         u64 par_xor = 0;
         for (u32 ci = 0; ci < num_chunks; ++ci)
@@ -171,7 +190,7 @@ TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
         // The world must be untouched by the readers.
         for (const EntityId e : entities)
         {
-            CHECK(w.get_component<ArchComp>(e)->v == expected_value(e, 0));
+            CHECK(component<ArchComp>(w, e).v == expected_value(e, 0));
         }
     }
     crd::jobs::frame_reset();
@@ -192,20 +211,27 @@ TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", 
     REQUIRE(arch_chunks.size() > 1U);
     REQUIRE(sparse_chunks.size() >= 1U);
 
+    std::atomic<u32> misses{0U};
     for (u32 round = 1U; round <= 4U; ++round)
     {
         // Archetype: one job per chunk, each writes its entities' ArchComp.
         {
             const u32 nc = static_cast<u32>(arch_chunks.size());
             crd::jobs::Counter* const c = crd::jobs::parallel_for(nc, nc,
-                                                                  [&w, &arch_chunks, round](u32 begin, u32 end)
+                                                                  [&w, &arch_chunks, round, &misses](u32 begin, u32 end)
                                                                   {
                                                                       for (u32 ci = begin; ci < end; ++ci)
                                                                       {
                                                                           for (const EntityId e : arch_chunks[ci])
                                                                           {
-                                                                              w.get_component_mut<ArchComp>(e)->v =
-                                                                                  expected_value(e, round);
+                                                                              ArchComp* const a =
+                                                                                  w.get_component_mut<ArchComp>(e);
+                                                                              if (a == nullptr)
+                                                                              {
+                                                                                  misses.fetch_add(1U);
+                                                                                  continue;
+                                                                              }
+                                                                              a->v = expected_value(e, round);
                                                                           }
                                                                       }
                                                                   });
@@ -214,25 +240,32 @@ TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", 
         // SparseSet: same shape on the other backend.
         {
             const u32 nc = static_cast<u32>(sparse_chunks.size());
-            crd::jobs::Counter* const c = crd::jobs::parallel_for(nc, nc,
-                                                                  [&w, &sparse_chunks, round](u32 begin, u32 end)
-                                                                  {
-                                                                      for (u32 ci = begin; ci < end; ++ci)
-                                                                      {
-                                                                          for (const EntityId e : sparse_chunks[ci])
-                                                                          {
-                                                                              w.get_component_mut<SparseComp>(e)->v =
-                                                                                  expected_value(e, round);
-                                                                          }
-                                                                      }
-                                                                  });
+            crd::jobs::Counter* const c =
+                crd::jobs::parallel_for(nc, nc,
+                                        [&w, &sparse_chunks, round, &misses](u32 begin, u32 end)
+                                        {
+                                            for (u32 ci = begin; ci < end; ++ci)
+                                            {
+                                                for (const EntityId e : sparse_chunks[ci])
+                                                {
+                                                    SparseComp* const sc = w.get_component_mut<SparseComp>(e);
+                                                    if (sc == nullptr)
+                                                    {
+                                                        misses.fetch_add(1U);
+                                                        continue;
+                                                    }
+                                                    sc->v = expected_value(e, round);
+                                                }
+                                            }
+                                        });
             crd::jobs::wait(c);
         }
+        CHECK(misses.load() == 0U);
 
         for (const EntityId e : entities)
         {
-            CHECK(w.get_component<ArchComp>(e)->v == expected_value(e, round));
-            CHECK(w.get_component<SparseComp>(e)->v == expected_value(e, round));
+            CHECK(component<ArchComp>(w, e).v == expected_value(e, round));
+            CHECK(component<SparseComp>(w, e).v == expected_value(e, round));
         }
     }
     crd::jobs::frame_reset();
@@ -281,7 +314,7 @@ TEST_CASE("scene stress -- concurrent reads of frozen scene state", "[stress][sc
         for (const EntityId e : entities)
         {
             CHECK(w.is_alive(e));
-            CHECK(w.get_component<ArchComp>(e)->v == expected_value(e, 0));
+            CHECK(component<ArchComp>(w, e).v == expected_value(e, 0));
         }
     };
 

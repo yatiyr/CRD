@@ -181,9 +181,7 @@ void repair_non_manifold_edges_phase(crd::containers::Array<crd::math::Vec3<T>>&
     }
     for (crd::u32 ki = 0; ki < non_manifold_keys.size(); ++ki)
     {
-        auto* hes_ptr = edge_to_hes.find(non_manifold_keys[ki]);
-        CRD_ASSERT(hes_ptr != nullptr);
-        auto& hes = *hes_ptr;
+        auto& hes = edge_to_hes.at(non_manifold_keys[ki]); // a key collected from this map above
         if (hes.size() <= 2U)
         {
             continue;

@@ -36,7 +36,10 @@ __attribute__((no_sanitize("null")))
 #endif
 void fault_on_null_write()
 {
-    volatile int* p = nullptr;
+    // The pointer itself is volatile, so its null value is read at run time and the optimizer cannot prove the store
+    // faults: the program's own store reaches the hardware as written (GCC otherwise rewrites the path it proved
+    // erroneous into a store of 0 to address 0 followed by a trap instruction).
+    volatile int* volatile p = nullptr;
     *p = 42; // access violation / SIGSEGV
 }
 } // namespace

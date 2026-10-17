@@ -474,8 +474,15 @@ TEST_CASE("ceir 13z-4: a compute+resource CEIR asset hot-reloads through the 10a
         return cmds.size();
     };
     REQUIRE(lower_current("initial") == 1U);
-    const crd::u64 content0   = rs.program(id)->content_hash;
-    const crd::u64 interface0 = rs.program(id)->interface_hash;
+    // The program the ReloadSet installed: a missing one fails the test (REQUIRE) instead of following a null pointer.
+    const auto installed = [&]() -> const cook::RuntimeProgram&
+    {
+        const cook::RuntimeProgram* const p = rs.program(id);
+        REQUIRE(p != nullptr);
+        return *p;
+    };
+    const crd::u64 content0 = installed().content_hash;
+    const crd::u64 interface0 = installed().interface_hash;
 
     // (2) THE HOTSWAP — the kernel symbol @radd → @rmax: content moves, contract holds.
     const cook::ReloadResult rr = rs.reload_source(id, crd::containers::StringView(kReduceRmax));
@@ -484,8 +491,8 @@ TEST_CASE("ceir 13z-4: a compute+resource CEIR asset hot-reloads through the 10a
     REQUIRE(rr.load_ok);
     CHECK(rr.decision == cook::ReloadDecision::HotSwap); // symbol feeds content, not interface (a func-less contract is empty)
     CHECK(rr.installed);
-    CHECK(rs.program(id)->content_hash != content0);    // the reloaded content differs...
-    CHECK(rs.program(id)->interface_hash == interface0); // ...but the caller contract is unchanged
+    CHECK(installed().content_hash != content0);     // the reloaded content differs...
+    CHECK(installed().interface_hash == interface0); // ...but the caller contract is unchanged
     REQUIRE(lower_current("after-hotswap") == 1U);       // the RELOADED module is a functional replacement
 
     // (3) THE NoChange SEAL — identical text cooks to the identical blob (determinism), so reload is a no-op.

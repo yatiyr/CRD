@@ -23,6 +23,9 @@ namespace crd::toml
 {
 namespace cont = crd::containers;
 
+// NOLINTBEGIN(readability-identifier-naming): the surface keeps toml++'s spellings (node, node_view, table_range,
+// key_value, source_region, ...) so call sites moved over with an include swap; see the header comment.
+
 enum class Kind : crd::u8
 {
     None,
@@ -117,6 +120,10 @@ public:
     // Array element by index (nullptr when out of range or not an array).
     node*       get(crd::usize index) noexcept;
     const node* get(crd::usize index) const noexcept;
+
+    // Child by index for a caller that walks below size() (table_range): out of range is a broken invariant, fatal in
+    // every build, never a null reference. get() is the lookup that may miss.
+    const node& child_at(crd::usize index) const noexcept;
 
     // toml++-style keyed access: `node["key"].value<T>()`, chainable. A missing
     // key yields an empty view (falsy), never a crash.
@@ -260,7 +267,7 @@ public:
     explicit node_view(const node* n) noexcept : m_node(n) {}
 
     explicit operator bool() const noexcept { return m_node != nullptr && m_node->kind() != Kind::None; }
-    bool     has_value() const noexcept { return static_cast<bool>(*this); }
+    [[nodiscard]] bool has_value() const noexcept { return static_cast<bool>(*this); }
 
     template <typename T> std::optional<T> value() const noexcept
     {
@@ -272,23 +279,23 @@ public:
         return v.has_value() ? *v : fallback;
     }
 
-    const node* as_table() const noexcept { return m_node != nullptr ? m_node->as_table() : nullptr; }
-    const node* as_array() const noexcept { return m_node != nullptr ? m_node->as_array() : nullptr; }
-    const node* as_string() const noexcept { return m_node != nullptr ? m_node->as_string() : nullptr; }
+    [[nodiscard]] const node* as_table() const noexcept { return m_node != nullptr ? m_node->as_table() : nullptr; }
+    [[nodiscard]] const node* as_array() const noexcept { return m_node != nullptr ? m_node->as_array() : nullptr; }
+    [[nodiscard]] const node* as_string() const noexcept { return m_node != nullptr ? m_node->as_string() : nullptr; }
 
-    bool is_table() const noexcept { return m_node != nullptr && m_node->is_table(); }
-    bool is_array() const noexcept { return m_node != nullptr && m_node->is_array(); }
-    bool is_string() const noexcept { return m_node != nullptr && m_node->is_string(); }
-    bool is_integer() const noexcept { return m_node != nullptr && m_node->is_integer(); }
-    bool is_boolean() const noexcept { return m_node != nullptr && m_node->is_boolean(); }
-    bool is_number() const noexcept { return m_node != nullptr && m_node->is_number(); }
+    [[nodiscard]] bool is_table() const noexcept { return m_node != nullptr && m_node->is_table(); }
+    [[nodiscard]] bool is_array() const noexcept { return m_node != nullptr && m_node->is_array(); }
+    [[nodiscard]] bool is_string() const noexcept { return m_node != nullptr && m_node->is_string(); }
+    [[nodiscard]] bool is_integer() const noexcept { return m_node != nullptr && m_node->is_integer(); }
+    [[nodiscard]] bool is_boolean() const noexcept { return m_node != nullptr && m_node->is_boolean(); }
+    [[nodiscard]] bool is_number() const noexcept { return m_node != nullptr && m_node->is_number(); }
 
     node_view operator[](cont::StringView key) const noexcept
     {
         return node_view{m_node != nullptr ? m_node->get(key) : nullptr};
     }
 
-    const node* node_ptr() const noexcept { return m_node; }
+    [[nodiscard]] const node* node_ptr() const noexcept { return m_node; }
 
 private:
     const node* m_node = nullptr;
@@ -314,7 +321,7 @@ public:
     {
     public:
         const_iterator(const node* tbl, crd::usize index) noexcept : m_tbl(tbl), m_index(index) {}
-        key_value       operator*() const noexcept { return key_value{m_tbl->key_at(m_index), *m_tbl->get(m_index)}; }
+        key_value operator*() const noexcept { return key_value{m_tbl->key_at(m_index), m_tbl->child_at(m_index)}; }
         const_iterator& operator++() noexcept
         {
             ++m_index;
@@ -328,8 +335,11 @@ public:
     };
 
     explicit table_range(const node* tbl) noexcept : m_tbl(tbl) {}
-    const_iterator begin() const noexcept { return const_iterator{m_tbl, 0}; }
-    const_iterator end() const noexcept { return const_iterator{m_tbl, m_tbl != nullptr ? m_tbl->size() : 0}; }
+    [[nodiscard]] const_iterator begin() const noexcept { return const_iterator{m_tbl, 0}; }
+    [[nodiscard]] const_iterator end() const noexcept
+    {
+        return const_iterator{m_tbl, m_tbl != nullptr ? m_tbl->size() : 0};
+    }
 
 private:
     const node* m_tbl;
@@ -361,10 +371,13 @@ public:
     {
     }
 
-    cont::StringView description() const noexcept { return m_message; }
-    crd::u32         line() const noexcept { return m_line; }
-    crd::u32         column() const noexcept { return m_column; }
-    source_region    source() const noexcept { return source_region{{m_line, m_column}, {m_line, m_column}}; }
+    [[nodiscard]] cont::StringView description() const noexcept { return m_message; }
+    [[nodiscard]] crd::u32 line() const noexcept { return m_line; }
+    [[nodiscard]] crd::u32 column() const noexcept { return m_column; }
+    [[nodiscard]] source_region source() const noexcept
+    {
+        return source_region{{m_line, m_column}, {m_line, m_column}};
+    }
 
 private:
     cont::String m_message;
@@ -377,11 +390,11 @@ class parse_result
 {
 public:
     explicit operator bool() const noexcept { return m_ok; }
-    bool                succeeded() const noexcept { return m_ok; }
-    const parse_error&  error() const noexcept { return m_error; }
-    node&               table() noexcept { return m_root; }
-    const node&         table() const noexcept { return m_root; }
-    node_view           operator[](cont::StringView key) const noexcept { return node_view{m_root.get(key)}; }
+    [[nodiscard]] bool succeeded() const noexcept { return m_ok; }
+    [[nodiscard]] const parse_error& error() const noexcept { return m_error; }
+    [[nodiscard]] node& table() noexcept { return m_root; }
+    [[nodiscard]] const node& table() const noexcept { return m_root; }
+    [[nodiscard]] node_view operator[](cont::StringView key) const noexcept { return node_view{m_root.get(key)}; }
 
     static parse_result success(node root)
     {
@@ -407,4 +420,5 @@ private:
 // Parse a TOML document. `name` is used only in error messages.
 parse_result parse(std::string_view text, std::string_view name = {});
 
+// NOLINTEND(readability-identifier-naming)
 } // namespace crd::toml

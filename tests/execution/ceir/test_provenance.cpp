@@ -73,9 +73,10 @@ Module* build_main(Context& ctx)
 {
     Module* const    m  = ctx.create_module();
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fn);
-    Block* const     body = func::func_body_block(fn);
+    Block* const body = &func::func_body(*fn);
     Operation* const lo   = konst(ctx, body, 0);
     Operation* const hi   = konst(ctx, body, 3);
     Operation* const a    = addi(ctx, body, hi->result(0U), hi->result(0U));
@@ -358,9 +359,10 @@ TEST_CASE("diag 8a: invalid text navigates to its line and a compile error to it
         register_dialects(bctx);
         Module* const    bm = bctx.create_module();
         Operation* const fn = func::create_func(bctx, *bm, "main", Visibility::Public, 0U, bctx.type_i32());
+        REQUIRE(fn != nullptr);
         bm->body()->append(bctx.create_block(0U));
         bm->body()->first_block()->append(fn);
-        Block* const     body = func::func_body_block(fn);
+        Block* const body = &func::func_body(*fn);
         Operation* const c    = konst(bctx, body, 1);
         Value*           in[1] = {c->result(0U)};
         Operation* const each =
@@ -426,11 +428,13 @@ TEST_CASE("diag 8a: reformatting moves every origin but no content or interface 
     REQUIRE(rb.ok());
     const Provenance fa = plan::instr_provenance(ra.plan, find_instr(ra.plan, plan::Op::For, 0U));
     const Provenance fb = plan::instr_provenance(rb.plan, find_instr(rb.plan, plan::Op::For, 0U));
-    REQUIRE(fa.primary() != nullptr);
-    REQUIRE(fb.primary() != nullptr);
-    CHECK(fa.primary()->loc.line == find_op(src_a, "core.for", 0U).line);
-    CHECK(fb.primary()->loc.line == find_op(src_b, "core.for", 0U).line);
-    CHECK(fa.primary()->loc.line != fb.primary()->loc.line);
+    const Origin* const oa = fa.primary();
+    const Origin* const ob = fb.primary();
+    REQUIRE(oa != nullptr);
+    REQUIRE(ob != nullptr);
+    CHECK(oa->loc.line == find_op(src_a, "core.for", 0U).line);
+    CHECK(ob->loc.line == find_op(src_b, "core.for", 0U).line);
+    CHECK(oa->loc.line != ob->loc.line);
 }
 
 TEST_CASE("diag 8a: unknown attribution is an explicit gap, never a zero location", "[ceir][diag]")
@@ -620,8 +624,9 @@ void register_scene_dialects(Context& ctx)
 Block* add_entry(Context& ctx, Module& m, const char* name, u32 num_params, TypeId param_type)
 {
     Operation* const fn = func::create_func(ctx, m, name, Visibility::Public, num_params, param_type);
+    REQUIRE(fn != nullptr);
     m.body()->first_block()->append(fn);
-    return func::func_body_block(fn);
+    return &func::func_body(*fn);
 }
 
 // @main(%d: scene.draw) { %m = scene.resolve_material(%d); %t = scene.resolve_technique(%m) {phase = "opaque"};

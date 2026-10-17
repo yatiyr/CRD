@@ -71,8 +71,9 @@ void build_band24(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
 
     // ── ml.mlp: x[4,8] · W1[8,8] · W2[8,8] · W3[8,2] {relu} -> y[4,2] (3 weights = a variadic tail > the 2-weight proof; uniform hidden=8) ──
     Value* const x   = mkval(ctx, decl, b, tf(ctx, sh2(ctx, 4U, 8U)));
@@ -195,8 +196,9 @@ void build_two_mlps(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     // ALL six inputs declared UP FRONT so the two mlps are adjacent (a declare between them would split the run).
     Value* const x1 = mkval(ctx, decl, b, tf(ctx, sh2(ctx, 4U, 8U)));
     Value* const a1 = mkval(ctx, decl, b, tf(ctx, sh2(ctx, 8U, 8U)));
@@ -227,8 +229,9 @@ void build_two_blocks(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const fa = func::create_func(ctx, m, "fa", Visibility::Public, 0U);
+    REQUIRE(fa != nullptr);
     top->append(fa);
-    Block* const ba = func::func_body_block(fa);
+    Block* const ba = &func::func_body(*fa);
     Value* const xa = mkval(ctx, decl, ba, tf(ctx, sh2(ctx, 4U, 8U)));
     Value* const aa = mkval(ctx, decl, ba, tf(ctx, sh2(ctx, 8U, 8U)));
     Value* const ab = mkval(ctx, decl, ba, tf(ctx, sh2(ctx, 8U, 2U)));
@@ -237,8 +240,9 @@ void build_two_blocks(Context& ctx, Module& m)
     ctx.set_attr(ma, StringView("activation"), ctx.attr_string(StringView("relu")));
     ba->append(ma);
     Operation* const fb = func::create_func(ctx, m, "fb", Visibility::Public, 0U);
+    REQUIRE(fb != nullptr);
     top->append(fb);
-    Block* const bb = func::func_body_block(fb);
+    Block* const bb = &func::func_body(*fb);
     Value* const xb = mkval(ctx, decl, bb, tf(ctx, sh2(ctx, 4U, 8U)));
     Value* const ca = mkval(ctx, decl, bb, tf(ctx, sh2(ctx, 8U, 8U)));
     Value* const cb = mkval(ctx, decl, bb, tf(ctx, sh2(ctx, 8U, 2U)));
@@ -652,8 +656,9 @@ TEST_CASE("ceir 29a-3b: transform.assign_provider resolves a provider name to a 
         Block* const     top = ctx.create_block(0U);
         tm->body()->append(top);
         Operation* const f = func::create_func(ctx, *tm, "main", Visibility::Public, 0U);
+        REQUIRE(f != nullptr);
         top->append(f);
-        func::func_body_block(f)->append(transform::build_assign_provider(ctx, ctx.attr_string(StringView("coopvec"))));
+        func::func_body(*f).append(transform::build_assign_provider(ctx, ctx.attr_string(StringView("coopvec"))));
         const gpu::ProviderPin pin = gpu::provider_from_transform(ctx, *tm, ConstSpan<gpu::MlProvider>(provs, 2U));
         CHECK(pin.kind == gpu::ProviderPinKind::Resolved); // found nested (recursive), not missed (which a top-level walk would)
         CHECK(pin.index == 1);

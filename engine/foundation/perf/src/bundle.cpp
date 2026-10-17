@@ -223,12 +223,11 @@ cont::Array<crd::u8> BundleWriter::finish(crd::u64 created_at_ns) noexcept
     hdr.section_count   = m_section_count;
     hdr.header_crc32    = crc32_bytes(reinterpret_cast<const crd::u8*>(&hdr), offsetof(BundleHeader, header_crc32));
 
-    out.resize_uninitialized(sizeof(BundleHeader) + m_sections.size());
-    std::memcpy(out.data(), &hdr, sizeof(BundleHeader));
-    if (!m_sections.empty())
-    {
-        std::memcpy(out.data() + sizeof(BundleHeader), m_sections.data(), m_sections.size());
-    }
+    // One buffer, filled through the same appends as the sections: the header write never sees the empty buffer a
+    // wrapped total length would leave.
+    out.reserve(sizeof(BundleHeader) + m_sections.size());
+    append_bytes(out, &hdr, sizeof(BundleHeader));
+    append_bytes(out, m_sections.data(), m_sections.size());
     return out;
 }
 

@@ -1,4 +1,3 @@
-#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
@@ -12,6 +11,21 @@
 
 namespace fs = crd::platform::fs;
 using namespace crd::resources;
+
+namespace
+{
+// One smoke check: a failure is reported and counted in every build (CRD_VERIFY reports only where asserts are
+// compiled in, so a release run could never fail).
+bool expect(bool ok, const char* what, int& failures)
+{
+    if (!ok)
+    {
+        std::fprintf(stderr, "smoke_mesh: FAIL - %s\n", what);
+        ++failures;
+    }
+    return ok;
+}
+} // namespace
 
 int main()
 {
@@ -123,34 +137,47 @@ int main()
         pack_bytes.push_back(b);
     }
 
+    int failures = 0;
     const fs::Path pack_path("smoke_mesh_tmp.crdr");
-    CRD_VERIFY(fs::write_file_binary(pack_path, crd::containers::as_const_span(pack_bytes)));
+    if (!expect(fs::write_file_binary(pack_path, crd::containers::as_const_span(pack_bytes)), "write the pack",
+                failures))
+    {
+        return 1;
+    }
 
     // ── Load ───────────────────────────────────────────────────────────────
 
     ResourceManager rm(&alloc);
     crd::resources::register_mesh_loader(&rm);
-    CRD_VERIFY(rm.mount_manifest(pack_path.generic()).is_valid());
+    (void)expect(rm.mount_manifest(pack_path.generic()).is_valid(), "mount the manifest", failures);
 
     auto handle = rm.load_sync<crd::resources::MeshResource>(mesh_id);
-    CRD_VERIFY(handle.is_ready());
+    (void)expect(handle.is_ready(), "the mesh handle is ready", failures);
 
     const crd::resources::MeshResource* mesh = handle.get();
-    CRD_VERIFY(mesh != nullptr);
-    CRD_VERIFY(mesh->primitives.size() == num_prims);
-    CRD_VERIFY(mesh->primitives[0].vertex_count == vc);
-    CRD_VERIFY(mesh->primitives[0].index_count  == ic);
-    CRD_VERIFY(mesh->primitives[1].vertex_count == vc);
-    CRD_VERIFY(mesh->primitives[1].index_count  == ic);
-    CRD_VERIFY(mesh->vertices.size() == num_prims * vc * stride);
-    CRD_VERIFY(mesh->indices.size()  == num_prims * ic * sizeof(crd::u32));
+    if (!expect(mesh != nullptr, "the mesh loaded", failures) ||
+        !expect(mesh->primitives.size() == num_prims, "two primitives", failures))
+    {
+        (void)fs::remove_file(pack_path);
+        return 1;
+    }
+    (void)expect(mesh->primitives[0].vertex_count == vc, "primitive 0 vertex count", failures);
+    (void)expect(mesh->primitives[0].index_count == ic, "primitive 0 index count", failures);
+    (void)expect(mesh->primitives[1].vertex_count == vc, "primitive 1 vertex count", failures);
+    (void)expect(mesh->primitives[1].index_count == ic, "primitive 1 index count", failures);
+    (void)expect(mesh->vertices.size() == num_prims * vc * stride, "vertex buffer size", failures);
+    (void)expect(mesh->indices.size() == num_prims * ic * sizeof(crd::u32), "index buffer size", failures);
 
     // Verify null material UUIDs.
-    CRD_VERIFY(mesh->primitives[0].material_id.is_null());
-    CRD_VERIFY(mesh->primitives[1].material_id.is_null());
+    (void)expect(mesh->primitives[0].material_id.is_null(), "primitive 0 has no material", failures);
+    (void)expect(mesh->primitives[1].material_id.is_null(), "primitive 1 has no material", failures);
 
     (void)fs::remove_file(pack_path);
 
+    if (failures != 0)
+    {
+        return 1;
+    }
     std::printf("smoke_mesh: OK — 2 primitives loaded, vertex/index buffers correct\n");
     return 0;
 }

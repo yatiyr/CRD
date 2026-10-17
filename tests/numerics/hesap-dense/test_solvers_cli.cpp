@@ -33,11 +33,11 @@ const crd::hesap::cli::CommandRecord* find(const char* name)
     return CommandRegistry::global().find(name);
 }
 
-crd::containers::ConstSpan<crd::f64> as_f64_array(const ResultBinaryBlob& blob)
+crd::containers::ConstSpan<crd::f64> as_f64_array(const ResultBinaryBlob* blob)
 {
-    return crd::containers::ConstSpan<crd::f64>{
-        reinterpret_cast<const crd::f64*>(blob.bytes.data()),
-        blob.bytes.size() / sizeof(crd::f64)};
+    REQUIRE(blob != nullptr); // the command answered with a binary blob
+    return crd::containers::ConstSpan<crd::f64>{reinterpret_cast<const crd::f64*>(blob->bytes.data()),
+                                                blob->bytes.size() / sizeof(crd::f64)};
 }
 } // namespace
 
@@ -93,7 +93,7 @@ TEST_CASE("CLI: hesap.dense.solver.lu.f64 solves A*x = b at N=4",
     REQUIRE(r.ok);
     const auto* blob = std::get_if<ResultBinaryBlob>(&r.value);
     REQUIRE(blob != nullptr);
-    const auto x = as_f64_array(*blob);
+    const auto x = as_f64_array(blob);
     REQUIRE(x.size() == 4U);
     for (crd::usize i = 0; i < 4; ++i)
     {
@@ -130,7 +130,7 @@ TEST_CASE("CLI: hesap.dense.solver.cholesky.f64 solves SPD A*x = b at N=3",
     REQUIRE(rec != nullptr);
     const auto r = rec->impl(args);
     REQUIRE(r.ok);
-    const auto x = as_f64_array(*std::get_if<ResultBinaryBlob>(&r.value));
+    const auto x = as_f64_array(std::get_if<ResultBinaryBlob>(&r.value));
     for (crd::usize i = 0; i < 3; ++i)
     {
         CHECK(std::abs(x[i] - x_true[i]) < 1e-12);
@@ -153,7 +153,7 @@ TEST_CASE("CLI: hesap.dense.solver.ldlt.f64 solves indefinite at N=2",
     REQUIRE(rec != nullptr);
     const auto r = rec->impl(args);
     REQUIRE(r.ok);
-    const auto x = as_f64_array(*std::get_if<ResultBinaryBlob>(&r.value));
+    const auto x = as_f64_array(std::get_if<ResultBinaryBlob>(&r.value));
     CHECK(std::abs(x[0] - 1.0) < 1e-12);
     CHECK(std::abs(x[1] - 2.0) < 1e-12);
 }
@@ -180,7 +180,7 @@ TEST_CASE("CLI: hesap.dense.solver.qr.f64 solves LS over-determined 4x2",
     REQUIRE(rec != nullptr);
     const auto r = rec->impl(args);
     REQUIRE(r.ok);
-    const auto x = as_f64_array(*std::get_if<ResultBinaryBlob>(&r.value));
+    const auto x = as_f64_array(std::get_if<ResultBinaryBlob>(&r.value));
     REQUIRE(x.size() == 2U);
     CHECK(std::abs(x[0] - 2.5) < 1e-10);
     CHECK(std::abs(x[1] - (-1.5)) < 1e-10);

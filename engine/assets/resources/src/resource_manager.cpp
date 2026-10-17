@@ -759,6 +759,8 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
     ResourceControlBlock*   block       = nullptr;
     bool                    coalescing  = false;
     bool                    re_issue    = false;
+    // The Unloaded block step 1 found; a re-issue reuses it.
+    ResourceControlBlock* evicted = nullptr;
 
     {
         std::lock_guard<std::mutex> lk(m_mutex);
@@ -784,6 +786,7 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
             {
                 // Block was evicted — re-issue the load using the existing block.
                 re_issue = true;
+                evicted = b;
                 // Fall through to resolve loader/manifest below.
             }
             // s == Loading or Queued: fall through to in-flight coalescing.
@@ -852,8 +855,8 @@ ResourceControlBlock* ResourceManager::load_sync_impl(ResourceId id)
 
             if (re_issue)
             {
-                // Reuse the evicted block. Give the caller their ref.
-                block         = *m_handles.find(id);
+                // Reuse the evicted block (m_handles is unchanged under this lock). Give the caller their ref.
+                block = evicted;
                 block->loader = loader;
                 block->add_ref(); // caller's ref
                 block->state.store(LoadState::Loading, std::memory_order_release);
@@ -979,6 +982,8 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
     crd::containers::String pack_path(m_alloc);
     ResourceControlBlock*   block       = nullptr;
     bool                    re_issue    = false;
+    // The Unloaded block step 1 found; a re-issue reuses it.
+    ResourceControlBlock* evicted = nullptr;
 
     {
         std::lock_guard<std::mutex> lk(m_mutex);
@@ -1002,6 +1007,7 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
             if (s == LoadState::Unloaded)
             {
                 re_issue = true;
+                evicted = b;
             }
             // Loading/Queued: fall through to in-flight coalescing.
         }
@@ -1054,8 +1060,8 @@ ResourceControlBlock* ResourceManager::load_async_impl(ResourceId id)
 
         if (re_issue)
         {
-            // Reuse the evicted block.
-            block         = *m_handles.find(id);
+            // Reuse the evicted block (m_handles is unchanged under this lock).
+            block = evicted;
             block->loader = loader;
             block->add_ref(); // caller's ref
             block->add_ref(); // manager's in-flight ref
@@ -1229,6 +1235,8 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
     crd::containers::String pack_path(m_alloc);
     ResourceControlBlock*   block       = nullptr;
     bool                    re_issue    = false;
+    // The Unloaded block step 1 found; a re-issue reuses it.
+    ResourceControlBlock* evicted = nullptr;
 
     {
         std::lock_guard<std::mutex> lk(m_mutex);
@@ -1252,6 +1260,7 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
             if (s == LoadState::Unloaded)
             {
                 re_issue = true;
+                evicted = b;
             }
         }
 
@@ -1293,7 +1302,7 @@ ResourceControlBlock* ResourceManager::load_streamed_impl(ResourceId id)
 
         if (re_issue)
         {
-            block         = *m_handles.find(id);
+            block = evicted; // m_handles is unchanged under this lock
             block->loader = loader;
             block->add_ref(); // caller's ref
             block->add_ref(); // manager's in-flight ref

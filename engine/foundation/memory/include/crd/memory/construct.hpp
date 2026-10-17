@@ -1,10 +1,12 @@
 #pragma once
 
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/memory/checked_math.hpp>
 
-#include <new> // placement new
+#include <cstdint> // PTRDIFF_MAX
+#include <new>     // placement new
 #include <type_traits>
 #include <utility> // std::forward
 
@@ -68,9 +70,11 @@ template <typename T> void destroy(IAllocator& alloc, T* p) noexcept
 template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize count)
 {
     usize bytes = 0;
-    if (count == 0 || !checked_mul(sizeof(T), count, &bytes))
+    // A count whose byte size wraps would allocate too little for `count` objects, and no object may span more than
+    // PTRDIFF_MAX bytes (a pointer difference across it must be representable).
+    if (count == 0 || !checked_mul(sizeof(T), count, &bytes) || bytes > static_cast<usize>(PTRDIFF_MAX))
     {
-        return nullptr; // a count whose byte size wraps would allocate too little for `count` objects
+        return nullptr;
     }
     void* raw = alloc.allocate(bytes, alignof(T));
     return static_cast<T*>(raw);
@@ -136,6 +140,52 @@ template <typename T, typename... Args>
 #else
         detail::construct_each(p, count, built, args...);
 #endif
+    }
+    return p;
+}
+
+// The _or_fatal forms are for a caller that cannot continue without the memory (an IR arena, an ECS table): a refused
+// allocation leaves it out of memory, CRD_FATAL(oom_message) in every build, never a null pointer it would follow.
+// oom_message names the allocator (DIAG.3a: an owning arena's out-of-memory fatal names the arena). A zero count is
+// still the empty array, nullptr, not a refusal.
+[[nodiscard]] inline void* allocate_or_fatal(IAllocator& alloc, usize bytes, usize alignment, const char* oom_message)
+{
+    void* const p = alloc.allocate(bytes, alignment);
+    if (p == nullptr)
+    {
+        CRD_FATAL(oom_message);
+    }
+    return p;
+}
+
+template <typename T> [[nodiscard]] T* allocate_array_or_fatal(IAllocator& alloc, usize count, const char* oom_message)
+{
+    T* const p = allocate_array<T>(alloc, count);
+    if (p == nullptr && count != 0U)
+    {
+        CRD_FATAL(oom_message);
+    }
+    return p;
+}
+
+template <typename T, typename... Args>
+[[nodiscard]] T* construct_or_fatal(IAllocator& alloc, const char* oom_message, Args&&... args)
+{
+    T* const p = construct<T>(alloc, std::forward<Args>(args)...);
+    if (p == nullptr)
+    {
+        CRD_FATAL(oom_message);
+    }
+    return p;
+}
+
+template <typename T, typename... Args>
+[[nodiscard]] T* construct_array_or_fatal(IAllocator& alloc, usize count, const char* oom_message, const Args&... args)
+{
+    T* const p = construct_array<T>(alloc, count, args...);
+    if (p == nullptr && count != 0U)
+    {
+        CRD_FATAL(oom_message);
     }
     return p;
 }

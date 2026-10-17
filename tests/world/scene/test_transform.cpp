@@ -454,3 +454,96 @@ TEST_CASE("Deep chain (30-deep): precision within documented f32 tolerance",
     CHECK(approx(tip->world.c3.y, 0.0F, 1e-5F));
     CHECK(approx(tip->world.c3.z, 0.0F, 1e-5F));
 }
+
+// ---------------------------------------------------------------------------
+// Organisation nodes: a ChildOf entity without a Transform ends the chain
+// ---------------------------------------------------------------------------
+
+namespace
+{
+[[nodiscard]] const Transform& transform_of(const World& w, EntityId e)
+{
+    const Transform* const t = w.get_component<Transform>(e);
+    REQUIRE(t != nullptr);
+    return *t;
+}
+
+[[nodiscard]] bool dirty(const World& w, EntityId e)
+{
+    return w.has_component<crd::scene::TransformDirtyFlag>(e);
+}
+} // namespace
+
+TEST_CASE("A write above an organisation node walks past it to the Transform beneath",
+          "[scene][transform][hierarchy][organisation]")
+{
+    World w;
+    setup_test_world(w);
+    const EntityId root = spawn_with_transform(w, Vec3f{10, 0, 0});
+    const EntityId group = w.spawn(); // ChildOf root, no Transform of its own
+    const EntityId leaf = spawn_with_transform(w, Vec3f{1, 0, 0});
+    w.add_relation<ChildOf>(group, root);
+    w.add_relation<ChildOf>(leaf, group);
+
+    // The root's subtree walk reaches the group, which has no matrix: the walk stops there instead of following a
+    // null Transform, and the leaf composes as a root (its parent has no Transform).
+    w.step(1.0 / 60.0);
+    CHECK(approx(transform_of(w, root).world.c3.x, 10.0F));
+    CHECK(approx(transform_of(w, leaf).world.c3.x, 1.0F));
+    CHECK_FALSE(dirty(w, root));
+    CHECK_FALSE(dirty(w, group));
+    CHECK_FALSE(dirty(w, leaf));
+
+    // A write marks the subtree: the group has no matrix to go stale and is passed over, the leaf is marked.
+    w.set_translation(root, Vec3f{20, 0, 0});
+    CHECK(dirty(w, root));
+    CHECK_FALSE(dirty(w, group));
+    CHECK(dirty(w, leaf));
+    w.step(1.0 / 60.0);
+    CHECK(approx(transform_of(w, root).world.c3.x, 20.0F));
+    CHECK(approx(transform_of(w, leaf).world.c3.x, 1.0F));
+    CHECK_FALSE(dirty(w, root));
+    CHECK_FALSE(dirty(w, leaf));
+}
+
+TEST_CASE("Marking an organisation node's subtree recomputes the Transform beneath it",
+          "[scene][transform][hierarchy][organisation]")
+{
+    World w;
+    setup_test_world(w);
+    const EntityId group = w.spawn(); // a top-level organisation node
+    const EntityId leaf = spawn_with_transform(w, Vec3f{1, 0, 0});
+    w.add_relation<ChildOf>(leaf, group);
+    w.step(1.0 / 60.0);
+    CHECK(approx(transform_of(w, leaf).world.c3.x, 1.0F));
+
+    // A raw write (no setter) followed by marking the subtree from the group, as a re-parenting system does.
+    Transform* const t = w.get_component_mut<Transform>(leaf);
+    REQUIRE(t != nullptr);
+    t->translation = crd::math::from_raw_vec<crd::units::dim::Length>(Vec3f{5, 0, 0});
+    w.mark_transform_subtree_dirty(group);
+    CHECK_FALSE(dirty(w, group));
+    CHECK(dirty(w, leaf));
+    w.step(1.0 / 60.0);
+    CHECK(approx(transform_of(w, leaf).world.c3.x, 5.0F));
+    CHECK_FALSE(dirty(w, leaf));
+}
+
+TEST_CASE("A dirty organisation node does not hold back the Transform beneath it",
+          "[scene][transform][hierarchy][organisation]")
+{
+    World w;
+    setup_test_world(w);
+    const EntityId group = w.spawn();
+    const EntityId leaf = spawn_with_transform(w, Vec3f{1, 0, 0});
+    w.add_relation<ChildOf>(leaf, group);
+    w.step(1.0 / 60.0);
+
+    // A flag placed on the group directly (not through the writers) leaves the leaf a root: the DFS that would
+    // otherwise reach the leaf never starts at a node without a Transform.
+    w.add_component<crd::scene::TransformDirtyFlag>(group, crd::scene::TransformDirtyFlag{});
+    w.set_translation(leaf, Vec3f{7, 0, 0});
+    w.step(1.0 / 60.0);
+    CHECK(approx(transform_of(w, leaf).world.c3.x, 7.0F));
+    CHECK_FALSE(dirty(w, leaf));
+}

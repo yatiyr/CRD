@@ -63,6 +63,7 @@ Block* body_block(Context& ctx, Module& m)
 Operation* make_func(Context& ctx, Module& m, containers::StringView name)
 {
     Operation* const f = fn::create_func(ctx, m, name, Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     body_block(ctx, m)->append(f);
     return f;
 }
@@ -70,7 +71,7 @@ Operation* make_func(Context& ctx, Module& m, containers::StringView name)
 Operation* in_body(Context& ctx, Operation* f, Operation* op)
 {
     (void)ctx;
-    fn::func_body_block(f)->append(op);
+    fn::func_body(*f).append(op);
     return op;
 }
 // The single effective effect family of `op` (asserts exactly one). Helper for the "exact family set" checks.

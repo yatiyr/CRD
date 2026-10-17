@@ -19,3 +19,25 @@ function(crd_diag_specimen name)
     # need it depend on it explicitly and receive its path as a compile definition.
     set_target_properties("${name}" PROPERTIES EXCLUDE_FROM_ALL TRUE)
 endfunction()
+
+# crd_diag_fatal_tests(<specimen> PREFIX <test-prefix> OWNER <test-executable> MODES <mode>...) registers one CTest
+# per mode of a contract-fatal specimen (tests/support/diag/specimens/expected_fatal.hpp): `<prefix>-<mode>` runs the
+# specimen with the mode and passes only on its `CRD_DIAG_FATAL_OK <mode>` line, which the specimen prints when the
+# armed CRD_FATAL fired. Another assert, a crash, a hang or a clean return lacks that line and fails. The specimen gets
+# the shared specimen headers and is built with the owning test executable, so every lane that builds the tests runs
+# the modes.
+function(crd_diag_fatal_tests specimen)
+    cmake_parse_arguments(ARG "" "PREFIX;OWNER" "MODES" ${ARGN})
+    if(NOT ARG_PREFIX OR NOT ARG_OWNER OR NOT ARG_MODES)
+        message(FATAL_ERROR "crd_diag_fatal_tests(${specimen}) needs PREFIX, OWNER and MODES")
+    endif()
+    target_include_directories("${specimen}" PRIVATE "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens")
+    add_dependencies("${ARG_OWNER}" "${specimen}")
+    foreach(mode IN LISTS ARG_MODES)
+        add_test(NAME "${ARG_PREFIX}-${mode}" COMMAND "$<TARGET_FILE:${specimen}>" "${mode}")
+        set_tests_properties("${ARG_PREFIX}-${mode}" PROPERTIES
+            PASS_REGULAR_EXPRESSION "CRD_DIAG_FATAL_OK ${mode}"
+            FAIL_REGULAR_EXPRESSION "CRD_DIAG_FATAL_OTHER"
+            TIMEOUT 60)
+    endforeach()
+endfunction()

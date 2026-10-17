@@ -240,8 +240,9 @@ public:
             Operation* const fn = crd::ceir::func::create_func(m_ctx, *module, StringView(name, 2U),
                                                                crd::ceir::Visibility::Public, m_h.params[f],
                                                                m_ctx.type_i32());
+            CRD_FUZZ_REQUIRE(fn != nullptr); // the names f0, f1, ... are distinct in a fresh module
             top->append(fn);
-            bodies[f] = crd::ceir::func::func_body_block(fn);
+            bodies[f] = &crd::ceir::func::func_body(*fn);
         }
         for (u32 f = 0U; f < m_h.functions; ++f)
         {

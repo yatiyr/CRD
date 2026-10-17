@@ -102,6 +102,17 @@ crd_enable_default_pch(crd-ceir-tests)
 
 crd_discover_tests(crd-ceir-tests)
 
+# The context's arena fatal, one child process per mode (a fatal cannot run in-process): a parent that refuses the IR
+# arena's next chunk leaves the context out of memory, fatal in every build, never a null node written through.
+# Source and protocol: tests/support/diag/specimens/ceir_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-ceir-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/ceir_fatal_specimen.cpp")
+target_link_libraries(crd-ceir-fatal-specimen PRIVATE crd-core crd-memory crd-ceir)
+crd_diag_fatal_tests(crd-ceir-fatal-specimen PREFIX crd-ceir-fatal OWNER crd-ceir-tests
+    MODES create-operation-arena-refused create-block-arena-refused intern-symbol-arena-refused func-body-missing
+          rewrite-inner-op-missing)
+
 # REPO.DEV.9: the bounded ingestion fuzz targets and their corpus replay tests.
 add_subdirectory(fuzz)
 

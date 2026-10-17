@@ -177,6 +177,26 @@ const Archetype* ArchetypeGraph::by_id(ArchetypeId id) const noexcept
     return m_archetypes[id.raw];
 }
 
+Archetype& ArchetypeGraph::require(ArchetypeId id) noexcept
+{
+    Archetype* const arch = by_id(id);
+    if (arch == nullptr)
+    {
+        CRD_FATAL("ArchetypeGraph::require: the archetype id was not issued by this graph");
+    }
+    return *arch;
+}
+
+const Archetype& ArchetypeGraph::require(ArchetypeId id) const noexcept
+{
+    const Archetype* const arch = by_id(id);
+    if (arch == nullptr)
+    {
+        CRD_FATAL("ArchetypeGraph::require: the archetype id was not issued by this graph");
+    }
+    return *arch;
+}
+
 crd::u32 ArchetypeGraph::archetype_count() const noexcept
 {
     return static_cast<crd::u32>(m_archetypes.size());

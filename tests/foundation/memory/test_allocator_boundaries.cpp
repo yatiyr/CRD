@@ -919,6 +919,9 @@ TEST_CASE("allocator ownership: partial construction leaks neither objects nor m
     {
         CHECK(mem::allocate_array<crd::u64>(parent.diag, SIZE_MAX / 4U) == nullptr);
         CHECK(mem::construct_array<Widget>(parent.diag, SIZE_MAX / 2U) == nullptr);
+        // A byte size that fits a usize but exceeds PTRDIFF_MAX is no object either.
+        constexpr auto past_ptrdiff = static_cast<crd::usize>(PTRDIFF_MAX) / sizeof(crd::u64) + 1U;
+        CHECK(mem::allocate_array<crd::u64>(parent.diag, past_ptrdiff) == nullptr);
         CHECK(parent.diag.sampling_report().total_count == 0U);
     }
     SECTION("a constructor that throws midway through an array")
@@ -1005,6 +1008,47 @@ TEST_CASE("allocator ownership: a growable pool whose parent refuses a page stay
     parent.check_clean();
 }
 
+TEST_CASE("allocator consumers: the or_fatal helpers turn a refusal into the caller's out-of-memory fatal",
+          "[memory][contract][diag][harness]")
+{
+    namespace cd = crd::diag;
+    namespace cont = crd::containers;
+    const char* const modes[] = {"allocate-or-fatal", "allocate-array-or-fatal", "construct-or-fatal",
+                                 "construct-array-or-fatal"};
+    for (const char* mode : modes)
+    {
+        cd::Expectation e;
+        e.want = cd::Expectation::Want::CleanExit; // exit_code is the oracle here, not the verdict
+        cont::Array<cont::String> args;
+        args.push_back(cont::String{mode});
+        const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
+        INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
+                     << " reason=" << o.reason.c_str());
+        // 42 = the helper's named fatal fired; 97 = another assert fired first; 0 = the helper returned the refusal
+        // (the null pointer this test exists to keep from callers); 96 = unknown mode.
+        CHECK(o.exit_code == 42);
+    }
+}
+
+TEST_CASE("allocator consumers: the or_fatal helpers pass a grant through and read a zero count as the empty array",
+          "[memory][contract][diag]")
+{
+    mem::LinearAllocator a(64U * 1024U, nullptr, "or-fatal-linear");
+    constexpr const char* message = "or-fatal test: unexpected refusal";
+    void* const raw = mem::allocate_or_fatal(a, 64U, 16U, message);
+    CHECK(raw != nullptr);
+    crd::u64* const one = mem::construct_or_fatal<crd::u64>(a, message, crd::u64{9});
+    REQUIRE(one != nullptr);
+    CHECK(*one == 9U);
+    crd::u64* const four = mem::construct_array_or_fatal<crd::u64>(a, 4U, message, crd::u64{3});
+    REQUIRE(four != nullptr);
+    CHECK(four[3] == 3U);
+    CHECK(mem::allocate_array_or_fatal<crd::u64>(a, 2U, message) != nullptr);
+    // A zero count is the empty array, nullptr without a fatal: the process is still here to check it.
+    CHECK(mem::allocate_array_or_fatal<crd::u64>(a, 0U, message) == nullptr);
+    CHECK(mem::construct_array_or_fatal<crd::u64>(a, 0U, message) == nullptr);
+}
+
 TEST_CASE("allocator ownership: an arena whose parent refuses its backing memory reaches its out-of-memory fatal",
           "[memory][contract][diag][harness]")
 {
@@ -1012,7 +1056,7 @@ TEST_CASE("allocator ownership: an arena whose parent refuses its backing memory
     namespace cont = crd::containers;
     const char* const modes[] = {"linear-parent-refuses", "stack-parent-refuses", "pool-parent-refuses",
                                  "tlsf-parent-refuses",   "ring-parent-refuses",  "offset-parent-refuses",
-                                 "gpool-parent-refuses"};
+                                 "gpool-parent-refuses",  "tlsf-borrowed-null"};
     for (const char* mode : modes)
     {
         cd::Expectation e;

@@ -37,3 +37,14 @@ target_link_libraries(crd-scene-tests PRIVATE
 crd_enable_default_pch(crd-scene-tests)
 
 crd_discover_tests(crd-scene-tests)
+
+# The scene's contract fatals, one child process per mode (a fatal cannot run in-process): a lookup a stored id or a
+# writer's contract makes certain is fatal on a miss in every build. Source and protocol:
+# tests/support/diag/specimens/scene_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-scene-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/scene_fatal_specimen.cpp")
+target_link_libraries(crd-scene-fatal-specimen PRIVATE crd-core crd-math crd-scene)
+crd_diag_fatal_tests(crd-scene-fatal-specimen PREFIX crd-scene-fatal OWNER crd-scene-tests
+    MODES registry-require-unregistered archetype-require-unissued transform-writer-without-transform
+          transform-writer-dead-entity commands-add-unregistered sparse-pool-refused)

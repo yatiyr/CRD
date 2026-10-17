@@ -107,17 +107,24 @@ u64 live_resolve(AssetId a, void* user)
     const RuntimeProgram* const p = static_cast<ReloadSet*>(user)->program(a);
     return p != nullptr ? p->interface_hash : 0U;
 }
+// The installed program a test just loaded: a missing one fails the test (REQUIRE) instead of following a null pointer.
+const RuntimeProgram& installed(const ReloadSet& set, AssetId id)
+{
+    const RuntimeProgram* const p = set.program(id);
+    REQUIRE(p != nullptr);
+    return *p;
+}
 // cache `owner`'s plan (opaque 1-byte artifact) at its current content, recording `deps`.
 void cache_plan(PlanCache& cache, ReloadSet& set, u64 target, AssetId owner, ConstSpan<PlanDep> deps)
 {
     const u8      art[1] = {0xABU};
-    const PlanKey key{set.program(owner)->content_hash, target, 1U};
+    const PlanKey key{installed(set, owner).content_hash, target, 1U};
     cache.put(owner, key, ConstSpan<u8>(art, 1U), deps);
 }
 // look up `owner`'s plan at its CURRENT content (a self-change would miss by construction — a new key).
 PlanStatus plan_of(PlanCache& cache, ReloadSet& set, u64 target, AssetId owner)
 {
-    return cache.get(PlanKey{set.program(owner)->content_hash, target, 1U}).status;
+    return cache.get(PlanKey{installed(set, owner).content_hash, target, 1U}).status;
 }
 } // namespace
 
@@ -141,7 +148,7 @@ TEST_CASE("ceir 10z: BAND-10 GATE - lifecycle + plan cache compose live across t
     PlanCache cache(&root, &live_resolve, &set);
     const u64 tgt = plan_target(StringView("host"));
     // cache all three plans; A records a dep on B at B's CURRENT interface.
-    const PlanDep dep_a[1] = {{id_b, set.program(id_b)->interface_hash}};
+    const PlanDep dep_a[1] = {{id_b, installed(set, id_b).interface_hash}};
     cache_plan(cache, set, tgt, id_a, ConstSpan<PlanDep>(dep_a, 1U));
     cache_plan(cache, set, tgt, id_b, ConstSpan<PlanDep>());
     cache_plan(cache, set, tgt, id_c, ConstSpan<PlanDep>());
@@ -166,11 +173,11 @@ TEST_CASE("ceir 10z: BAND-10 GATE - lifecycle + plan cache compose live across t
     CHECK(cache.misses() == 1U); // +B self-miss (new content = new key)
 
     // ── (2) SIGNATURE-edit B → ContractChange REJECT + last-good; B's LIVE interface UNCHANGED → A's plan STILL HITS ──
-    const crd::u64 b_iface = set.program(id_b)->interface_hash;
+    const crd::u64 b_iface = installed(set, id_b).interface_hash;
     const ReloadResult r2 = set.reload(id_b, span_of(cook_leaf(root, 2U, "bar", 0, /*i64_result=*/true))); // bar()->i64
     CHECK(r2.decision == ReloadDecision::ContractChange);
     CHECK_FALSE(r2.installed);
-    CHECK(set.program(id_b)->interface_hash == b_iface);       // last-good: B's live interface is unchanged
+    CHECK(installed(set, id_b).interface_hash == b_iface);    // last-good: B's live interface is unchanged
     CHECK(plan_of(cache, set, tgt, id_a) == PlanStatus::Hit);  // ...so A's plan stays valid
     CHECK(plan_of(cache, set, tgt, id_b) == PlanStatus::Hit);
     CHECK(cache.hits() == 8U);   // +A, +B — a REJECT leaves the cache fully valid (nothing drifted)

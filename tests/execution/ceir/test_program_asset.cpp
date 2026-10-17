@@ -62,8 +62,9 @@ void ret(Context& c, Block* b, crd::ceir::Value* v)
 Operation* mkfunc_sq(Context& c, const Reg& r, Module& m, StringView name, TypeId param_ty)
 {
     Operation* const f = func::create_func(c, m, name, Visibility::Public, 1U, param_ty);
+    REQUIRE(f != nullptr);
     m.body()->first_block()->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     ret(c, b, mul(c, r, b, b->arg(0U), b->arg(0U))->result(0U));
     return f;
 }
@@ -90,6 +91,7 @@ TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interf
     Module*   ma = a.create_module();
     (void)module_block(a, *ma);
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
+    REQUIRE(fa != nullptr);
     ma->body()->first_block()->append(fa);
     ret(a, func::func_body_block(fa), konst(a, ra, func::func_body_block(fa), 5, a.type_i32())->result(0U));
 
@@ -98,6 +100,7 @@ TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interf
     Module*   mb = b.create_module();
     (void)module_block(b, *mb);
     Operation* const fb = func::create_func(b, *mb, "f", Visibility::Public, 0U, b.type_i32());
+    REQUIRE(fb != nullptr);
     mb->body()->first_block()->append(fb);
     ret(b, func::func_body_block(fb), konst(b, rb, func::func_body_block(fb), 6, b.type_i32())->result(0U)); // 6, not 5
 
@@ -153,8 +156,9 @@ TEST_CASE("ceir 7a: adding a state cell changes the interface hash (the migratio
     Module*   ma = a.create_module();
     (void)module_block(a, *ma);
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
+    REQUIRE(fa != nullptr);
     ma->body()->first_block()->append(fa);
-    Block* const ba = func::func_body_block(fa);
+    Block* const ba = &func::func_body(*fa);
     ret(a, ba, konst(a, ra, ba, 0, a.type_i32())->result(0U));
 
     Context   b(&root);
@@ -162,8 +166,9 @@ TEST_CASE("ceir 7a: adding a state cell changes the interface hash (the migratio
     Module*   mb = b.create_module();
     (void)module_block(b, *mb);
     Operation* const fb = func::create_func(b, *mb, "f", Visibility::Public, 0U, b.type_i32());
+    REQUIRE(fb != nullptr);
     mb->body()->first_block()->append(fb);
-    Block* const bb = func::func_body_block(fb);
+    Block* const bb = &func::func_body(*fb);
     crd::ceir::Value* seed[2] = {konst(b, rb, bb, 0, b.type_i32())->result(0U), konst(b, rb, bb, 0, b.type_i32())->result(0U)};
     Operation* const cell = b.create_operation(rb.state, ConstSpan<crd::ceir::Value*>(seed, 2U), 1U, b.type_i32());
     bb->append(cell);
@@ -207,12 +212,14 @@ TEST_CASE("ceir 7a: dependency records list EXTERNAL calls, intrinsics, and prov
     (void)module_block(c, *m);
     // @local() -> i32 { return 0 }  (an INTERNAL callee -- must NOT appear as a dependency)
     Operation* const fl = func::create_func(c, *m, "local", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(fl != nullptr);
     m->body()->first_block()->append(fl);
     ret(c, func::func_body_block(fl), konst(c, r, func::func_body_block(fl), 0, c.type_i32())->result(0U));
     // @main() { call local(); call external(); test.dummy; return }
     Operation* const fm = func::create_func(c, *m, "main", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     mb->append(func::create_call(c, "local", {}, 0U, {}));    // internal
     mb->append(func::create_call(c, "external", {}, 0U, {})); // an unresolved IMPORT -> a dependency
     mb->append(c.create_operation(r.dummy, {}, 0U, {}, 0U));  // the intrinsic op (native_provider = "host")
@@ -240,6 +247,7 @@ TEST_CASE("ceir 7a: find_unregistered_op catches an op of an UNregistered dialec
     SECTION("all registered -> nullptr")
     {
         Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+        REQUIRE(f != nullptr);
         top->append(f);
         ret(c, func::func_body_block(f), konst(c, r, func::func_body_block(f), 0, c.type_i32())->result(0U));
         CHECK(find_unregistered_op(c, *m) == nullptr);

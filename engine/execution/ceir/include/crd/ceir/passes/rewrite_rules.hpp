@@ -24,6 +24,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::ceir::rewrite
@@ -262,12 +263,19 @@ inline void rule_apply(Context& ctx, const rewrite::RewriteRule& rule, Operation
     {
         // build ONE root-kind op over the inner operand (reshape(reshape(x)) -> reshape(x)); insert BEFORE the RAUW (canon.hpp:62 --
         // a floating op is invisible to plan + re-collect), then RAUW result -> the new op's result; the two dead ops go to DCE.
-        Value* const     x     = op.operand(rule.operand_idx)->defining_op()->operand(rule.inner_operand_idx);
+        Operation* const inner = op.operand(rule.operand_idx)->defining_op();
+        // The path is proven by OperandDefinedByRoot, the only constraint find_rewrite_misuse lets this action pair
+        // with: a rule that reaches here without it is a driver-contract violation, fatal, never a null op followed.
+        if (inner == nullptr)
+        {
+            CRD_FATAL("greedy_rewrite_rules: an inner-operand rule met an operand without a defining op");
+        }
+        Value* const x = inner->operand(rule.inner_operand_idx);
         Value*           ins[1] = {x};
         Operation* const built = ctx.create_operation(rule.root_kind, containers::ConstSpan<Value*>(ins, 1U), 1U,
                                                        op.result(rule.result_idx)->type(), 0U);
         op.parent_block()->insert_before(built, &op);
-        const Operation* const replaced[2] = {&op, op.operand(rule.operand_idx)->defining_op()}; // DIAG.8a provenance
+        const Operation* const replaced[2] = {&op, inner}; // DIAG.8a provenance
         ctx.derive_origins(built, containers::ConstSpan<const Operation*>(replaced, 2U));
         op.result(rule.result_idx)->replace_all_uses_with(built->result(0));
     }

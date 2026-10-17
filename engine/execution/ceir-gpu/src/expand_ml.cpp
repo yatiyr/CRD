@@ -280,10 +280,13 @@ MlExpandError expand_ml_op(Context& ctx, Operation* op)
 
 namespace
 {
-// The shared driver: expand every ml op in pre-order; when `lineage != nullptr`, record each newly-created op → the 0-based
-// pre-order index of its source ml op (the created ops of one expansion are exactly the ops inserted between `before` and
-// `after` — every mk_* does insert_before(new, ml_op), then the ml op is erased). The index aligns with MlPartition::assignments.
-[[nodiscard]] MlExpandResult expand_ml_ops_impl(Context& ctx, Module& m, containers::HashMap<const Operation*, crd::i32>* lineage)
+// The shared driver: expand every ml op in pre-order and hand `record` each newly-created op with the 0-based pre-order
+// index of its source ml op (the created ops of one expansion are exactly the ops inserted between `before` and
+// `after`: every mk_* does insert_before(new, ml_op), then the ml op is erased). The index aligns with
+// MlPartition::assignments. The recorder is a callable, not a nullable map: the plain expand passes one that keeps
+// nothing, so no path (and no specialised copy of the map's insert) ever holds a null map.
+template <typename Record>
+[[nodiscard]] MlExpandResult expand_ml_ops_impl(Context& ctx, Module& m, const Record& record)
 {
     MlExpandResult res;
     crd::i32       ml_idx = 0;
@@ -304,12 +307,12 @@ namespace
             res.error_op = op;
             return res; // ⛔ stop on the first error — the un-expanded op would otherwise loop forever.
         }
-        if (lineage != nullptr && blk != nullptr)
+        if (blk != nullptr)
         {
             Operation* const start = (before != nullptr) ? before->next_in_block() : blk->first_op();
             for (Operation* c = start; c != nullptr && c != after; c = c->next_in_block())
             {
-                (void)lineage->insert(c, ml_idx);
+                record(c, ml_idx);
             }
         }
         ++ml_idx;
@@ -319,11 +322,15 @@ namespace
 }
 } // namespace
 
-MlExpandResult expand_ml_ops(Context& ctx, Module& m) { return expand_ml_ops_impl(ctx, m, nullptr); }
+MlExpandResult expand_ml_ops(Context& ctx, Module& m)
+{
+    return expand_ml_ops_impl(ctx, m, [](const Operation* /*created*/, crd::i32 /*source_index*/) {});
+}
 
 MlExpandResult expand_ml_ops(Context& ctx, Module& m, containers::HashMap<const Operation*, crd::i32>& lineage)
 {
     lineage.clear(); // documented: cleared first, so a reused map never carries a stale (op → index) from a prior expand
-    return expand_ml_ops_impl(ctx, m, &lineage);
+    return expand_ml_ops_impl(ctx, m, [&lineage](const Operation* created, crd::i32 source_index)
+                              { (void)lineage.insert(created, source_index); });
 }
 } // namespace crd::ceir::gpu

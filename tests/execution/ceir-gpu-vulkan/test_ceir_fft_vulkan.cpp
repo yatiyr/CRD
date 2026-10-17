@@ -55,8 +55,9 @@ ce::Operation* build_fft_op(ce::Context& ctx, ce::Module& m, const char* dir)
         m.body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const     b  = ce::func::func_body_block(f);
+    ce::Block* const b = &ce::func::func_body(*f);
     const ce::TypeId     ef = ctx.type_f32();
     const ce::TypeId     sh = sh1(ctx, kN);
     ce::Operation* const re = ctx.create_operation(decl, {}, 1U, ctx.type_tensor(ef, sh));

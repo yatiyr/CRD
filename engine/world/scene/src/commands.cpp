@@ -43,36 +43,35 @@ void Commands::enqueue(Command cmd)
     m_commands.push_back(cmd);
 }
 
-void Commands::enqueue_with_payload(Command cmd, void* src_value, const ComponentInfo* info)
+void Commands::enqueue_with_payload(Command cmd, void* src_value, const ComponentInfo& info)
 {
-    CRD_ASSERT(info != nullptr);
     CRD_ASSERT(src_value != nullptr);
 
-    // Reserve `info->size` bytes in m_payloads at the right alignment.
+    // Reserve `info.size` bytes in m_payloads at the right alignment.
     // m_payloads grows by single bytes; we round up to alignment manually.
     crd::usize offset = m_payloads.size();
-    const crd::usize misalign = offset % info->alignment;
+    const crd::usize misalign = offset % info.alignment;
     if (misalign != 0)
     {
-        offset += info->alignment - misalign;
+        offset += info.alignment - misalign;
     }
-    m_payloads.resize(offset + info->size);
+    m_payloads.resize(offset + info.size);
 
     // Move-construct the value into the reserved bytes. Fall back to
     // memcpy for trivially-movable types where move_construct wasn't
     // captured at registration.
     crd::u8* dst = &m_payloads[offset];
-    if (info->move_construct != nullptr)
+    if (info.move_construct != nullptr)
     {
-        info->move_construct(dst, src_value);
+        info.move_construct(dst, src_value);
     }
     else
     {
-        std::memcpy(dst, src_value, info->size);
+        std::memcpy(dst, src_value, info.size);
     }
 
     cmd.payload_offset = static_cast<crd::u32>(offset);
-    cmd.payload_size   = static_cast<crd::u32>(info->size);
+    cmd.payload_size = static_cast<crd::u32>(info.size);
     m_commands.push_back(cmd);
 }
 

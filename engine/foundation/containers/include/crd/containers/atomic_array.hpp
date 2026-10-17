@@ -4,6 +4,7 @@
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <atomic>
 #include <new>
@@ -60,7 +61,7 @@ template <typename T> struct alignas(64) CacheLinePadded
 // The canonical use is "collect up to N results from a parallel pass": size N
 // up front (you know it), have each fiber push() its result, then read the
 // array back on the calling thread after the pass. Overflow (more pushes than
-// capacity) is a sizing bug — push() returns `npos` and asserts in debug; the
+// capacity) is a sizing bug — push() returns `kNpos` and asserts in debug; the
 // extra elements are simply not stored.
 //
 // Thread-safety:
@@ -77,14 +78,15 @@ template <typename T> struct alignas(64) CacheLinePadded
 template <typename T> class AtomicArray
 {
 public:
-    static constexpr usize npos = static_cast<usize>(-1);
+    static constexpr usize kNpos = static_cast<usize>(-1);
 
     explicit AtomicArray(usize capacity, memory::IAllocator* alloc = memory::default_allocator())
         : m_alloc(alloc), m_capacity(capacity)
     {
         CRD_ASSERT(m_alloc != nullptr);
         CRD_ASSERT_MSG(capacity > 0U, "AtomicArray: capacity must be > 0");
-        m_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * m_capacity, alignof(T)));
+        // A refused buffer (a sub-budget allocator returns nullptr) is out of memory: fatal in every build.
+        m_data = memory::allocate_array_or_fatal<T>(*m_alloc, m_capacity, "AtomicArray: out of memory for the buffer");
     }
 
     ~AtomicArray()
@@ -104,7 +106,7 @@ public:
 
     // ---- Append (any number of threads) --------------------------------
 
-    /// Claim the next slot, construct `v` there, return its index — or `npos`
+    /// Claim the next slot, construct `v` there, return its index — or `kNpos`
     /// if the array is full (a sizing bug; asserted in debug).
     [[nodiscard]] usize push(const T& v) { return emplace(v); }
     [[nodiscard]] usize push(T&& v) { return emplace(std::move(v)); }
@@ -115,7 +117,7 @@ public:
         if (idx >= m_capacity)
         {
             CRD_ASSERT_MSG(false, "AtomicArray overflow — capacity exceeded; size the array correctly");
-            return npos;
+            return kNpos;
         }
         ::new (static_cast<void*>(m_data + idx)) T(std::forward<Args>(args)...);
         // No publish fence here: readers are expected to read after the parallel

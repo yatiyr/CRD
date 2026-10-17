@@ -40,6 +40,14 @@ bool operator==(const Velocity& a, const Velocity& b)
 {
     return a.dx == b.dx && a.dy == b.dy && a.dz == b.dz;
 }
+
+// The component a test just stored: a missing one fails the test (REQUIRE) instead of following a null pointer.
+template <typename T> [[nodiscard]] const T& stored(const World& w, EntityId e)
+{
+    const T* const c = w.get_component<T>(e);
+    REQUIRE(c != nullptr);
+    return *c;
+}
 } // namespace
 
 TEST_CASE("Empty World has no archetypes and storage location is invalid for any entity", "[scene][storage][world]")
@@ -127,8 +135,8 @@ TEST_CASE("Adding a second component moves entity to a new archetype", "[scene][
     // Both components survive the move.
     CHECK(w.has_component<Position>(e));
     CHECK(w.has_component<Velocity>(e));
-    CHECK(*w.get_component<Position>(e) == Position{1, 2, 3});
-    CHECK(*w.get_component<Velocity>(e) == Velocity{10, 20, 30});
+    CHECK(stored<Position>(w, e) == Position{1, 2, 3});
+    CHECK(stored<Velocity>(w, e) == Velocity{10, 20, 30});
 }
 
 TEST_CASE("remove_component moves entity to (mask & ~T) archetype", "[scene][storage][world]")
@@ -144,7 +152,7 @@ TEST_CASE("remove_component moves entity to (mask & ~T) archetype", "[scene][sto
 
     CHECK_FALSE(w.has_component<Position>(e));
     CHECK(w.has_component<Velocity>(e));
-    CHECK(*w.get_component<Velocity>(e) == Velocity{4, 5, 6});
+    CHECK(stored<Velocity>(w, e) == Velocity{4, 5, 6});
 }
 
 TEST_CASE("Removing the last component clears the entity's storage location", "[scene][storage][world]")
@@ -177,8 +185,8 @@ TEST_CASE("Two entities in the same archetype get distinct slots", "[scene][stor
     CHECK(l1.chunk_index == l2.chunk_index);
     CHECK(l1.slot_in_chunk != l2.slot_in_chunk);
 
-    CHECK(*w.get_component<Position>(e1) == Position{1, 0, 0});
-    CHECK(*w.get_component<Position>(e2) == Position{0, 2, 0});
+    CHECK(stored<Position>(w, e1) == Position{1, 0, 0});
+    CHECK(stored<Position>(w, e2) == Position{0, 2, 0});
 }
 
 TEST_CASE("swap_remove updates the trailing entity's location", "[scene][storage]")

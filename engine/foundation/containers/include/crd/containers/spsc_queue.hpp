@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <atomic>
 #include <new>
@@ -46,7 +47,8 @@ public:
         CRD_ASSERT(memory::is_pow2(capacity_pow2));
         m_capacity = capacity_pow2;
         m_mask = capacity_pow2 - 1U;
-        m_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * m_capacity, alignof(T)));
+        // A refused buffer (a sub-budget allocator returns nullptr) is out of memory: fatal in every build.
+        m_data = memory::allocate_array_or_fatal<T>(*m_alloc, m_capacity, "SpscQueue: out of memory for the buffer");
     }
 
     ~SpscQueue()

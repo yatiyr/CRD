@@ -494,8 +494,12 @@ ce::Module* to_ceir_frame(const FrameGraphDesc& desc, ce::Context& ctx)
         m->body()->append(top);
     }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    if (fn == nullptr) // create_func refuses only a name the module defines; this module is fresh, so it never does
+    {
+        return nullptr;
+    }
     top->append(fn);
-    ce::Block* const body = ce::func::func_body_block(fn);
+    ce::Block* const body = &ce::func::func_body(*fn);
 
     // the frame.graph container.
     ce::Operation* const g = ctx.create_operation(graph_id, {}, 0U, {}, 1U);

@@ -40,8 +40,9 @@ Module* func_with_body_op(Context& ctx, OpId body_kind)
     Block* const     top = ctx.create_block(0U);
     m->body()->append(top);
     Operation* const f = fn::create_func(ctx, *m, "f", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    fn::func_body_block(f)->append(ctx.create_operation(body_kind, {}, 0U));
+    fn::func_body(*f).append(ctx.create_operation(body_kind, {}, 0U));
     return m;
 }
 // An ambient (whole-op, 0-operand) instance of `kind`.
@@ -105,14 +106,16 @@ TEST_CASE("ceir 8c: a >=bit-32 callee family lifts transitively into the caller'
         Block* const       top      = ctx.create_block(0U);
         m->body()->append(top);
         Operation* const callee = fn::create_func(ctx, *m, "callee", Visibility::Private, 0U); // NOT exported
+        REQUIRE(callee != nullptr);
         top->append(callee);
         if (callee_has_agent)
         {
-            fn::func_body_block(callee)->append(ctx.create_operation(a, {}, 0U));
+            fn::func_body(*callee).append(ctx.create_operation(a, {}, 0U));
         }
         Operation* const caller = fn::create_func(ctx, *m, "caller", Visibility::Public, 0U);
+        REQUIRE(caller != nullptr);
         top->append(caller);
-        fn::func_body_block(caller)->append(fn::create_call(ctx, "callee", ConstSpan<Value*>{}, 0U));
+        fn::func_body(*caller).append(fn::create_call(ctx, "callee", ConstSpan<Value*>{}, 0U));
         return m;
     };
     crd::memory::GrowableTlsfAllocator root;

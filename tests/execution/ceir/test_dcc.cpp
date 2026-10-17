@@ -72,13 +72,20 @@ struct DccGraph
         b->append(o);
         return o;
     }
+    // The value of the node an operand comes from: every operand of this graph is an earlier node's result.
+    [[nodiscard]] i64 input_value(const Operation& op, u32 i) const
+    {
+        const Operation* const def = op.operand(i)->defining_op();
+        REQUIRE(def != nullptr);
+        return value[def->stable_id().value - 1U];
+    }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
         if (op.kind() == base)
         {
             return ctx.attr_value(op.attr("poly")).i;
         }
-        const i64 in0 = value[op.operand(0)->defining_op()->stable_id().value - 1U];
+        const i64 in0 = input_value(op, 0U);
         if (op.kind() == subdiv)
         {
             return in0 * ctx.attr_value(op.attr("level")).i;
@@ -89,7 +96,7 @@ struct DccGraph
         }
         if (op.kind() == boolean_op)
         {
-            return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U];
+            return in0 + input_value(op, 1U);
         }
         return in0; // deform / output preserve the poly count (a deform's `strength` does NOT change topology)
     }

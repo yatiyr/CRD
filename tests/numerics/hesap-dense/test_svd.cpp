@@ -1299,6 +1299,26 @@ TEST_CASE("dlasd1: merge runs + non-negative singular values (smoke)", "[hesap][
     }
 }
 
+// dlasd1.f's argument checks: an empty sub-problem or an SQRE outside {0, 1} is refused before any work (INFO -1, -2,
+// -3), so no size below is formed from a negative count.
+TEST_CASE("dlasd1: refuses LAPACK's invalid arguments", "[hesap][svd][dc]")
+{
+    using crd::hesap::dense::detail::dlasd1;
+    crd::memory::TlsfAllocator alloc(1024U * 1024U);
+    double d[3] = {2.0, 0.0, 3.0};
+    double u[9] = {};
+    double vt[9] = {};
+    int idxq[3] = {1, 1, 1};
+    double alpha = 1.5;
+    double beta = 0.7;
+    CHECK(dlasd1<double>(0, 1, 0, d, alpha, beta, u, 3, vt, 3, idxq, &alloc) == -1);
+    CHECK(dlasd1<double>(1, 0, 0, d, alpha, beta, u, 3, vt, 3, idxq, &alloc) == -2);
+    CHECK(dlasd1<double>(1, 1, 2, d, alpha, beta, u, 3, vt, 3, idxq, &alloc) == -3);
+    CHECK(dlasd1<double>(1, 1, -1, d, alpha, beta, u, 3, vt, 3, idxq, &alloc) == -3);
+    CHECK(d[0] == 2.0); // refused before any work: the inputs are untouched
+    CHECK(alpha == 1.5);
+}
+
 // v3b-2.1: dlasd4 — the general SVD secular root solver. Each sigma_i must
 // satisfy f(sigma)=1+rho*sum z_j^2/(d_j^2-sigma^2)=0 (cancellation-free via
 // delta_j*work_j = d_j^2-sigma^2) and interlace the poles. Sizes span

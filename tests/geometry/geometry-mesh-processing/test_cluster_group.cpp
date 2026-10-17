@@ -199,7 +199,7 @@ TEST_CASE("REN-40-I2: boundary vertices are correct",
         }
     }
     crd::containers::Array<crd::u32> vtm_off(&alloc);
-    vtm_off.resize(vc + 1U);
+    vtm_off.resize(static_cast<crd::usize>(vc) + 1U); // never 0: a u32 count + 1 cannot wrap in usize
     vtm_off[0] = 0U;
     for (crd::u32 i = 0; i < vc; ++i)
     {

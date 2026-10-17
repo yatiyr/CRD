@@ -66,10 +66,11 @@ Module* func_module_with_body_attr(Context& ctx, AttrId v)
     Block* const     top = ctx.create_block(0U);
     m->body()->append(top);
     Operation* const f = fn::create_func(ctx, *m, "f", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f); // create_func does NOT auto-append the op to the module body (8a precedent) - attach it here
     Operation* const op = ctx.create_operation(ctx.intern_op("test", "op"), {}, 0U);
     ctx.set_attr(op, "a", v);
-    fn::func_body_block(f)->append(op);
+    fn::func_body(*f).append(op);
     return m;
 }
 [[nodiscard]] bool blob_eq(const ByteArray& a, const ByteArray& b) noexcept

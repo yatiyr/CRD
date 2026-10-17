@@ -346,7 +346,8 @@ struct SandboxDiagCommands
 {
     for (crd::u32 i = 0U; i < service.command_count(); ++i)
     {
-        if (service.command_at(i)->name == std::string_view(name))
+        const crd::perf::DiagCommandSpec* const spec = service.command_at(i);
+        if (spec != nullptr && spec->name == std::string_view(name))
         {
             return true;
         }

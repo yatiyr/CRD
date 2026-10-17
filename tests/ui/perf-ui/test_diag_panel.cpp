@@ -239,8 +239,10 @@ TEST_CASE("diag panel: lists the host's commands and shows the service's own byt
     bool listed = false;
     for (crd::u32 i = 0U; i < panel.command_count(); ++i)
     {
-        CHECK(panel.command(i).name == host.service.command_at(i)->name);
-        CHECK(panel.command(i).authority == host.service.command_at(i)->authority);
+        const crd::perf::DiagCommandSpec* const spec = host.service.command_at(i);
+        REQUIRE(spec != nullptr);
+        CHECK(panel.command(i).name == spec->name);
+        CHECK(panel.command(i).authority == spec->authority);
         listed = listed || panel.command(i).name == "test.items";
     }
     CHECK(listed);

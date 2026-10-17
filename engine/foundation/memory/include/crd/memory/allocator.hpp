@@ -16,8 +16,12 @@ namespace crd::memory
 //  - `reallocate` and `allocation_size` have default implementations so a
 //    later TLSF / streaming allocator can override them without breaking
 //    interface compatibility for existing allocators.
-//  - Out-of-memory is fatal. The interface returns nullptr only if the
-//    caller asked for size == 0, which is itself an assert in debug builds.
+//  - Out-of-memory: the heap allocators (malloc, TLSF, virtual memory,
+//    growable TLSF) are fatal on their own. The sub-budget ones (linear,
+//    stack, pool, growable linear) return nullptr from allocate when
+//    exhausted, so a consumer that cannot continue turns that into its own
+//    fatal (construct.hpp's *_or_fatal helpers; the containers do). A
+//    size == 0 request is itself an assert in debug builds.
 //  - Allocators are NOT thread-safe by default. Hand them out per-thread
 //    or wrap them yourself. (One reason: the hot path stays branch-free.)
 class IAllocator
@@ -29,7 +33,8 @@ public:
 
     // Allocate `size` bytes with at least `alignment` byte alignment.
     // alignment must be a power of two.
-    // Returns a non-null pointer; allocator triggers CRD_FATAL on OOM.
+    // A heap allocator returns a non-null pointer and triggers CRD_FATAL on OOM; a sub-budget allocator returns
+    // nullptr when exhausted (see the design notes above).
     virtual void* allocate(usize size, usize alignment = kDefaultAlignment) = 0;
 
     // Free a pointer previously returned by `allocate` or `reallocate`.

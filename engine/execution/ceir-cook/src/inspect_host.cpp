@@ -143,7 +143,7 @@ HostLoadResult InspectHost::load(AssetId id, containers::StringView source, cont
     }
     // Installed (added, hot-swapped, or unchanged with refreshed positions): compile the entry in the generation the
     // set holds now and bind the session to it, so requests naming the previous generation are refused from here on.
-    Generation* const g = m_set.generation(m_asset);
+    const Generation* const g = &loaded_generation();
     m_generation        = m_set.handle(m_asset).generation.value;
     out.generation      = m_generation;
     m_compiled          = plan::compile(*g->ctx, *g->program.module, entry, m_alloc);
@@ -183,7 +183,7 @@ inspect::Refusal InspectHost::start(containers::ConstSpan<crd::i64> args, HostRe
     }
     // Rebinding resolves breakpoints added since the last bind and resets a finished session to idle, so the
     // controller's next wait sees this execution rather than the previous one's end.
-    const Generation* const g = m_set.generation(m_asset);
+    const Generation* const g = &loaded_generation();
     if (const inspect::Refusal r = m_session.bind(m_compiled.plan, *g->ctx, m_generation, m_binds);
         r != inspect::Refusal::None)
     {
@@ -351,7 +351,7 @@ StableId InspectHost::op_at_line(containers::StringView file, crd::u32 line) con
     {
         return StableId{};
     }
-    return inspect::op_at_line(m_compiled.plan, *m_set.generation(m_asset)->ctx, file, line);
+    return inspect::op_at_line(m_compiled.plan, *loaded_generation().ctx, file, line);
 }
 
 const Origin* InspectHost::stop_origin(const inspect::StopRecord& stop) const noexcept
@@ -369,6 +369,16 @@ containers::StringView InspectHost::file_path(crd::u32 file_id) const noexcept
     {
         return {};
     }
-    return m_set.generation(m_asset)->ctx->file_path(file_id);
+    return loaded_generation().ctx->file_path(file_id);
+}
+
+const Generation& InspectHost::loaded_generation() const noexcept
+{
+    const Generation* const g = m_set.generation(m_asset);
+    if (g == nullptr || g->ctx == nullptr)
+    {
+        CRD_FATAL("InspectHost: the loaded asset has no current generation");
+    }
+    return *g;
 }
 } // namespace crd::ceir::cook

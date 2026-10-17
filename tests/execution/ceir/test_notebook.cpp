@@ -70,14 +70,21 @@ struct Notebook
         b->append(o);
         return o;
     }
+    // The value of the node an operand comes from: every operand of this graph is an earlier node's result.
+    [[nodiscard]] i64 input_value(const Operation& op, u32 i) const
+    {
+        const Operation* const def = op.operand(i)->defining_op();
+        REQUIRE(def != nullptr);
+        return value[def->stable_id().value - 1U];
+    }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
         if (op.kind() == cst)
         {
             return ctx.attr_value(op.attr("value")).i;
         }
-        const i64 a = value[op.operand(0)->defining_op()->stable_id().value - 1U];
-        const i64 b = value[op.operand(1)->defining_op()->stable_id().value - 1U];
+        const i64 a = input_value(op, 0U);
+        const i64 b = input_value(op, 1U);
         return op.kind() == addi ? a + b : a * b;
     }
     [[nodiscard]] u32 count(const Operation* op) const { return recomputes[op->stable_id().value - 1U]; }

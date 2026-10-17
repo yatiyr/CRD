@@ -223,7 +223,7 @@ public:
                     m_pending_readers.emplace(dep.tile.idx,
                                               crd::containers::Array<crd::u32>{m_alloc});
                 }
-                m_pending_readers.find(dep.tile.idx)->push_back(task_idx);
+                m_pending_readers.at(dep.tile.idx).push_back(task_idx); // present: emplaced just above
             }
             else // Write or ReadWrite
             {

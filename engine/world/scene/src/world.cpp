@@ -299,16 +299,15 @@ void World::for_each_chunk(ComponentMask required, ChunkVisitor fn, void* user_d
     // matching archetype is a future profile-driven optimisation.
     for (crd::u32 ai = 0; ai < m_storage.graph().archetype_count(); ++ai)
     {
-        const Archetype* arch = m_storage.graph().by_id(ArchetypeId{ai});
-        CRD_ASSERT(arch != nullptr);
-        if (!mask_subset_of(archetype_bits, arch->mask))
+        const Archetype& arch = m_storage.graph().require(ArchetypeId{ai});
+        if (!mask_subset_of(archetype_bits, arch.mask))
         {
             continue;
         }
-        for (const Chunk& chunk : arch->chunks)
+        for (const Chunk& chunk : arch.chunks)
         {
             const ChunkHeader* hdr = chunk.header();
-            const EntityId* chunk_entities = chunk.entity_id_array(arch->layout);
+            const EntityId* chunk_entities = chunk.entity_id_array(arch.layout);
             scratch.clear();
             for (crd::u16 slot = 0; slot < hdr->entity_count; ++slot)
             {
@@ -355,8 +354,7 @@ void World::RelationInfo::add_reverse(EntityId target, EntityId src)
         // would default-construct with default_allocator — wrong for memory
         // budgeting. Emplace explicitly with `alloc`.
         reverse_sources.emplace(target, alloc);
-        arr = reverse_sources.find(target);
-        CRD_ASSERT(arr != nullptr);
+        arr = &reverse_sources.at(target);
     }
     arr->push_back(src);
 }
@@ -407,21 +405,20 @@ crd::containers::Array<EntityId> World::RelationInfo::take_sources(EntityId targ
 void World::on_relation_registered(ComponentId id)
 {
     CRD_ASSERT(!id.is_null() && id.raw < m_relations.size());
-    const ComponentInfo* info = m_components.info(id);
-    CRD_ASSERT(info != nullptr && info->is_relation);
+    const ComponentInfo& info = m_components.require_info(id);
+    CRD_ASSERT(info.is_relation);
 
     // v1f invariant: OnTargetDestroyed requires ReverseIndex. Without the
     // reverse index, "find every source pointing at the dying target" is
     // an O(N) scan of every entity — out of scope for v1f. v1g+ may relax.
-    if (info->has_on_target_destroyed)
+    if (info.has_on_target_destroyed)
     {
-        CRD_ASSERT(info->has_reverse_index &&
-                   "OnTargetDestroyed policy requires ReverseIndex on the same relation");
+        CRD_ASSERT(info.has_reverse_index && "OnTargetDestroyed policy requires ReverseIndex on the same relation");
     }
 
     // Lazy-allocate RelationInfo only when ReverseIndex is set. Relations
     // without it pay zero memory tax for the unused HashMap.
-    if (info->has_reverse_index && m_relations[id.raw] == nullptr)
+    if (info.has_reverse_index && m_relations[id.raw] == nullptr)
     {
         crd::memory::IAllocator* alloc = m_pending_destroy.allocator();
         void* mem = alloc->allocate(sizeof(RelationInfo), alignof(RelationInfo));
@@ -432,9 +429,8 @@ void World::on_relation_registered(ComponentId id)
 
 void World::add_relation_impl(ComponentId id, EntityId src, EntityId target)
 {
-    CRD_ASSERT(!id.is_null());
-    const ComponentInfo* info = m_components.info(id);
-    CRD_ASSERT(info != nullptr && info->is_relation);
+    const ComponentInfo& info = m_components.require_info(id);
+    CRD_ASSERT(info.is_relation);
 
     // Read the prior target (if any) before the storage UPSERT.
     EntityId old_target = EntityId::null();
@@ -455,7 +451,7 @@ void World::add_relation_impl(ComponentId id, EntityId src, EntityId target)
     // trust the caller. The public `would_form_cycle<Tag>(src, target)`
     // predicate is the testability lever for callers that want to verify
     // before attempting the add.
-    if (info->acyclic)
+    if (info.acyclic)
     {
         CRD_ASSERT(!would_form_cycle_impl(id, src, target) &&
                    "add_relation: would form a cycle on an Acyclic relation");
@@ -908,13 +904,30 @@ namespace
 {
 // Mark dirty by adding a TransformDirtyFlag (SparseSet) component if the
 // entity doesn't already carry one. add_component on a SparseSet pool is
-// O(1) and idempotent on UPSERT (replaces with the same payload).
+// O(1) and idempotent on UPSERT (replaces with the same payload). Only an
+// entity carrying a Transform has a world matrix to go stale: a ChildOf
+// organisation node without one is passed over (TransformPropagation never
+// collects it, so its flag would never be cleared), and its descendants are
+// still marked.
 void mark_one_dirty(World& w, EntityId e)
 {
-    if (!w.has_component<TransformDirtyFlag>(e))
+    if (w.has_component<Transform>(e) && !w.has_component<TransformDirtyFlag>(e))
     {
         w.add_component<TransformDirtyFlag>(e, TransformDirtyFlag{});
     }
+}
+
+// The Transform a writer mutates. The writers' contract is a live entity
+// carrying a Transform (the robustness pin in world.hpp): a dead entity or a
+// missing Transform is fatal in every build, never a write through null.
+[[nodiscard]] Transform& transform_for_write(World& w, EntityId e)
+{
+    Transform* const tr = w.get_component_mut<Transform>(e);
+    if (tr == nullptr)
+    {
+        CRD_FATAL("World transform writer: the entity is dead or has no Transform component");
+    }
+    return *tr;
 }
 
 // DFS subtree marking via traverse_relation<ChildOf>. CRD_ASSERTs depth
@@ -947,65 +960,51 @@ void World::mark_transform_subtree_dirty(EntityId e)
 
 void World::set_translation(EntityId e, crd::math::Vec3f t)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr && "set_translation: entity has no Transform component");
+    Transform& tr = transform_for_write(*this, e);
     // v0b-3: raw Vec3f from public API tagged as Length at the assignment boundary.
-    tr->translation = crd::math::from_raw_vec<crd::units::dim::Length>(t);
+    tr.translation = crd::math::from_raw_vec<crd::units::dim::Length>(t);
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_quat(EntityId e, crd::math::Quatf q)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
+    Transform& tr = transform_for_write(*this, e);
     (void)crd::math::try_normalize(q);
-    tr->rotation = q;
+    tr.rotation = q;
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_quat_unnormalized(EntityId e, crd::math::Quatf q)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
-    tr->rotation = q;
+    Transform& tr = transform_for_write(*this, e);
+    tr.rotation = q;
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_axis_angle(EntityId e, crd::math::Vec3f axis, crd::f32 radians)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
-    tr->rotation = crd::math::from_axis_angle(axis, radians);
+    Transform& tr = transform_for_write(*this, e);
+    tr.rotation = crd::math::from_axis_angle(axis, radians);
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_euler(EntityId e, crd::f32 x, crd::f32 y, crd::f32 z, crd::math::EulerOrder order)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
-    tr->rotation = crd::math::from_euler(x, y, z, order);
+    Transform& tr = transform_for_write(*this, e);
+    tr.rotation = crd::math::from_euler(x, y, z, order);
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_from_to(EntityId e, crd::math::Vec3f from_dir, crd::math::Vec3f to_dir)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
-    tr->rotation = crd::math::from_to_rotation(from_dir, to_dir);
+    Transform& tr = transform_for_write(*this, e);
+    tr.rotation = crd::math::from_to_rotation(from_dir, to_dir);
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_rotation_look_at(EntityId e, crd::math::Vec3f forward, crd::math::Vec3f up)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
+    Transform& tr = transform_for_write(*this, e);
     // Convert look_at view-matrix orientation back to a quat. The view
     // matrix's upper-left 3x3 is the inverse rotation; we pull it out via
     // from_mat3 of the transposed columns. Cleaner: recompose directly.
@@ -1016,32 +1015,28 @@ void World::set_rotation_look_at(EntityId e, crd::math::Vec3f forward, crd::math
     // the right-handed convention. f points OUT of the camera/object so
     // we negate it for the Z column to make it the FORWARD-FACING axis.
     const crd::math::Mat3f rot_mat(r, u, -f);
-    tr->rotation = crd::math::from_mat3(rot_mat);
+    tr.rotation = crd::math::from_mat3(rot_mat);
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_scale(EntityId e, crd::math::Vec3f s)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
-    tr->scale = s;
+    Transform& tr = transform_for_write(*this, e);
+    tr.scale = s;
     mark_transform_subtree_dirty(e);
 }
 
 void World::set_local(EntityId e, const crd::math::Vec3f& translation, const crd::math::Quatf& rotation,
                       const crd::math::Vec3f& scale)
 {
-    CRD_ASSERT(is_alive(e));
-    Transform* tr = get_component_mut<Transform>(e);
-    CRD_ASSERT(tr != nullptr);
+    Transform& tr = transform_for_write(*this, e);
     // Boundary: raw Vec3f from the public API is tagged as Length at the
     // assignment site (Phase 3.1.7.5 v0b-3). Callers that pass typed
     // Vec3<Length32> can use a future `set_local` overload (v0c+).
-    tr->translation = crd::math::from_raw_vec<crd::units::dim::Length>(translation);
-    tr->rotation    = rotation;
-    (void)crd::math::try_normalize(tr->rotation);
-    tr->scale = scale;
+    tr.translation = crd::math::from_raw_vec<crd::units::dim::Length>(translation);
+    tr.rotation = rotation;
+    (void)crd::math::try_normalize(tr.rotation);
+    tr.scale = scale;
     mark_transform_subtree_dirty(e);
 }
 

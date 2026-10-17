@@ -62,8 +62,9 @@ Module* build_const_fn(Context& c, const Reg& r, i64 k)
     Module* const m = c.create_module();
     (void)module_block(c, *m);
     Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     module_block(c, *m)->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     Value* rv[1] = {konst(c, r, b, k)->result(0U)};
     b->append(func::create_return(c, ConstSpan<Value*>(rv, 1U)));
     return m;

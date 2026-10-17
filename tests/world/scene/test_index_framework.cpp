@@ -438,7 +438,9 @@ TEST_CASE("Reserved no-op indexes accept all events without crashing",
 
     EntityId e = w.spawn();
     w.add_component<Position>(e, Position{1, 2, 3});
-    *w.get_component_mut<Position>(e) = Position{4, 5, 6};
+    Position* const p = w.get_component_mut<Position>(e);
+    REQUIRE(p != nullptr);
+    *p = Position{4, 5, 6};
     w.remove_component<Position>(e);
     w.destroy_immediate(e);
 

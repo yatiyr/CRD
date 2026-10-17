@@ -199,6 +199,13 @@ u64 reloadset_resolve(AssetId a, void* user)
     const RuntimeProgram* const p = static_cast<ReloadSet*>(user)->program(a);
     return p != nullptr ? p->interface_hash : 0U;
 }
+// The installed program a test just loaded: a missing one fails the test (REQUIRE) instead of following a null pointer.
+const RuntimeProgram& installed_program(const ReloadSet& set, AssetId id)
+{
+    const RuntimeProgram* const p = set.program(id);
+    REQUIRE(p != nullptr);
+    return *p;
+}
 } // namespace
 
 TEST_CASE("ceir 10a: a body-only edit HOT-SWAPS and the old handle goes stale", "[ceir][reload]")
@@ -210,15 +217,15 @@ TEST_CASE("ceir 10a: a body-only edit HOT-SWAPS and the old handle goes stale", 
     REQUIRE(set.size() == 1U);
     const ProgramHandle h1 = set.handle(AssetId{100U});
     CHECK(set.is_current(AssetId{100U}, h1));
-    const u64 iface0 = set.program(AssetId{100U})->interface_hash;
+    const u64 iface0 = installed_program(set, AssetId{100U}).interface_hash;
 
     const Array<u8>    b1 = cook_leaf(root, 100U, "foo", 6, false); // same signature, different body constant
     const ReloadResult rr = set.reload(AssetId{100U}, span_of(b1));
     CHECK(rr.decision == ReloadDecision::HotSwap);
     CHECK(rr.installed);
-    CHECK_FALSE(set.is_current(AssetId{100U}, h1));                 // the pre-reload handle is now stale
-    CHECK(set.is_current(AssetId{100U}, set.handle(AssetId{100U}))); // the fresh handle is current
-    CHECK(set.program(AssetId{100U})->interface_hash == iface0);    // interface unchanged
+    CHECK_FALSE(set.is_current(AssetId{100U}, h1));                        // the pre-reload handle is now stale
+    CHECK(set.is_current(AssetId{100U}, set.handle(AssetId{100U})));       // the fresh handle is current
+    CHECK(installed_program(set, AssetId{100U}).interface_hash == iface0); // interface unchanged
 }
 
 TEST_CASE("ceir 10a: a signature edit is a CONTRACT CHANGE - rejected, last-good kept", "[ceir][reload]")
@@ -227,15 +234,15 @@ TEST_CASE("ceir 10a: a signature edit is a CONTRACT CHANGE - rejected, last-good
     ReloadSet set(&root, &registrar, nullptr);
     const Array<u8> b0 = cook_leaf(root, 200U, "foo", 5, false); // -> i32
     REQUIRE(set.add(AssetId{200U}, span_of(b0)).ok());
-    const u64           content0 = set.program(AssetId{200U})->content_hash;
-    const ProgramHandle h1       = set.handle(AssetId{200U});
+    const u64 content0 = installed_program(set, AssetId{200U}).content_hash;
+    const ProgramHandle h1 = set.handle(AssetId{200U});
 
     const Array<u8>    b_sig = cook_leaf(root, 200U, "foo", 5, true); // -> i64 : the caller contract changed
     const ReloadResult rr   = set.reload(AssetId{200U}, span_of(b_sig));
     CHECK(rr.decision == ReloadDecision::ContractChange);
     CHECK_FALSE(rr.installed);
-    CHECK(set.is_current(AssetId{200U}, h1));                       // last-good: the old handle is STILL current
-    CHECK(set.program(AssetId{200U})->content_hash == content0);   // ...and the installed program is unchanged
+    CHECK(set.is_current(AssetId{200U}, h1));                              // last-good: the old handle is STILL current
+    CHECK(installed_program(set, AssetId{200U}).content_hash == content0); // ...and the installed program is unchanged
 }
 
 TEST_CASE("ceir 10a: a state-schema-only edit is NEEDS-MIGRATION - rejected in stage 2", "[ceir][reload]")
@@ -412,15 +419,15 @@ TEST_CASE("ceir 10a: a BAD source edit is CookFailed - last-good keeps running",
     ReloadSet    set(&root, &registrar, nullptr);
     const String s0 = source_leaf(root, "foo", 5, false);
     REQUIRE(set.add_source(AssetId{1100U}, sv(s0)).ok());
-    const crd::u64      content0 = set.program(AssetId{1100U})->content_hash;
-    const ProgramHandle h1       = set.handle(AssetId{1100U});
+    const crd::u64 content0 = installed_program(set, AssetId{1100U}).content_hash;
+    const ProgramHandle h1 = set.handle(AssetId{1100U});
 
     // a syntactically broken source: the cook must fail and NOTHING may change.
     const ReloadResult rr = set.reload_source(AssetId{1100U}, StringView("this is not valid ceir {{{"));
     CHECK(rr.cook_error != CookError::Ok);   // ParseFailed (a cook failure, distinct from a load failure)
     CHECK_FALSE(rr.installed);
     CHECK(set.is_current(AssetId{1100U}, h1));                    // last-good is STILL current
-    CHECK(set.program(AssetId{1100U})->content_hash == content0); // ...and unchanged
+    CHECK(installed_program(set, AssetId{1100U}).content_hash == content0); // ...and unchanged
 
     // add_source of bad text is CookFailed and adds nothing.
     const AddResult ar = set.add_source(AssetId{1200U}, StringView("garbage"));
@@ -579,12 +586,12 @@ TEST_CASE("ceir 10b: a callee interface change stales exactly the ReloadSet affe
     const u64      tgt = plan_target(StringView("host"));
     const u8       plan[1] = {1U};
     // cache each program's plan; A records a dep on B at B's CURRENT interface hash.
-    const PlanKey  ka{set.program(AssetId{2000U})->content_hash, tgt, 1U};
-    const PlanDep  dep_a[1] = {{AssetId{2100U}, set.program(AssetId{2100U})->interface_hash}};
+    const PlanKey ka{installed_program(set, AssetId{2000U}).content_hash, tgt, 1U};
+    const PlanDep dep_a[1] = {{AssetId{2100U}, installed_program(set, AssetId{2100U}).interface_hash}};
     cache.put(AssetId{2000U}, ka, ConstSpan<u8>(plan, 1U), ConstSpan<PlanDep>(dep_a, 1U));
-    const PlanKey kb{set.program(AssetId{2100U})->content_hash, tgt, 1U};
+    const PlanKey kb{installed_program(set, AssetId{2100U}).content_hash, tgt, 1U};
     cache.put(AssetId{2100U}, kb, ConstSpan<u8>(plan, 1U), ConstSpan<PlanDep>());
-    const PlanKey kc{set.program(AssetId{2200U})->content_hash, tgt, 1U};
+    const PlanKey kc{installed_program(set, AssetId{2200U}).content_hash, tgt, 1U};
     cache.put(AssetId{2200U}, kc, ConstSpan<u8>(plan, 1U), ConstSpan<PlanDep>());
     REQUIRE(cache.get(ka).hit());
     REQUIRE(cache.get(kb).hit());
@@ -598,7 +605,7 @@ TEST_CASE("ceir 10b: a callee interface change stales exactly the ReloadSet affe
     // A's plan: its recorded dep on B drifted → StaleDeps (A must recompile).
     CHECK(cache.get(ka).status == PlanStatus::StaleDeps);
     // B's plan: B's new content → a new key → Miss by construction (B must recompile).
-    const PlanKey kb2{set.program(AssetId{2100U})->content_hash, tgt, 1U};
+    const PlanKey kb2{installed_program(set, AssetId{2100U}).content_hash, tgt, 1U};
     CHECK(cache.get(kb2).status == PlanStatus::Miss);
     // C's plan: unaffected → still a HIT (NOT in affected(B)).
     CHECK(cache.get(kc).hit());

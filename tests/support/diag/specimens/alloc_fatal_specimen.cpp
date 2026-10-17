@@ -12,6 +12,11 @@
 //                          the owning constructor's single backing buffer is refused
 //   offset-parent-refuses  the node array is granted and the free-node array is refused
 //   gpool-parent-refuses   GrowablePoolAllocator::allocate when the parent refuses the first page
+//   tlsf-borrowed-null     the borrowing TlsfAllocator constructor is handed a null buffer
+//
+// The consumer helpers (construct.hpp): a caller that cannot continue without the memory turns a refusal into its own
+// named out-of-memory fatal, never a null pointer it would follow:
+//   allocate-or-fatal, allocate-array-or-fatal, construct-or-fatal, construct-array-or-fatal
 //
 // The assert platform handler turns the expected fatal into exit 42 and any other assert into 97 (as in the
 // observer-swap specimen). If reallocate returns at all, the specimen exits 0, which the consuming test rejects, so a
@@ -30,6 +35,7 @@
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <cstdint>
 #include <cstdlib>
@@ -107,6 +113,13 @@ private:
         (void)a.try_allocate(64U, 16U);
         return true;
     }
+    if (std::strcmp(mode, "tlsf-borrowed-null") == 0)
+    {
+        g_expected_fatal = "TlsfAllocator: the borrowed buffer is null";
+        mem::TlsfAllocator a(static_cast<void*>(nullptr), bytes, "alloc-fatal-tlsf");
+        (void)a.try_allocate(64U, 16U);
+        return true;
+    }
     if (std::strcmp(mode, "ring-parent-refuses") == 0)
     {
         g_expected_fatal = "RingAllocator: parent refused the backing buffer";
@@ -130,6 +143,39 @@ private:
         return true;
     }
     return false;
+}
+
+// The consumer-helper modes. Returns false for an unknown mode.
+[[nodiscard]] bool run_or_fatal_mode(const char* mode)
+{
+    namespace mem = crd::memory;
+    constexpr const char* message = "alloc-fatal: the helper's out-of-memory fatal";
+    RefusingParent none(0);
+    if (std::strcmp(mode, "allocate-or-fatal") == 0)
+    {
+        g_expected_fatal = message;
+        (void)mem::allocate_or_fatal(none, 64U, 16U, message);
+        return true;
+    }
+    if (std::strcmp(mode, "allocate-array-or-fatal") == 0)
+    {
+        g_expected_fatal = message;
+        (void)mem::allocate_array_or_fatal<crd::u64>(none, 8U, message);
+        return true;
+    }
+    if (std::strcmp(mode, "construct-or-fatal") == 0)
+    {
+        g_expected_fatal = message;
+        (void)mem::construct_or_fatal<crd::u64>(none, message, crd::u64{7});
+        return true;
+    }
+    if (std::strcmp(mode, "construct-array-or-fatal") == 0)
+    {
+        g_expected_fatal = message;
+        (void)mem::construct_array_or_fatal<crd::u64>(none, 8U, message, crd::u64{7});
+        return true;
+    }
+    return run_parent_refuses_mode(mode);
 }
 
 // Runs one mode. Returns false for an unknown mode; returning at all for a known mode means the fatal did not fire.
@@ -160,7 +206,7 @@ private:
         (void)a.reallocate(p, 64U, SIZE_MAX, 16U);
         return true;
     }
-    return run_parent_refuses_mode(mode);
+    return run_or_fatal_mode(mode);
 }
 } // namespace
 

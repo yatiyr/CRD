@@ -280,12 +280,13 @@ GradResult build_gradient(Context& ctx, Module& m, const VjpRegistry& reg, Value
 {
     (void)m;
     GradResult res;
-    if (loss == nullptr || loss->defining_op() == nullptr || !is_tensor(ctx, loss))
+    Operation* const loss_op = (loss != nullptr) ? loss->defining_op() : nullptr; // read once, checked once
+    if (loss_op == nullptr || !is_tensor(ctx, loss))
     {
         res.error = GradError::OperandNotTensor;
         return res;
     }
-    Block* const blk = loss->defining_op()->parent_block();
+    Block* const blk = loss_op->parent_block();
     if (blk == nullptr)
     {
         res.error = GradError::OperandNotTensor;

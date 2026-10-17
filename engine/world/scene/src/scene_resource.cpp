@@ -519,14 +519,13 @@ SceneInstantiation World::instantiate_scene(const SceneResource& res)
             result.components_skipped += d.record_count;
             continue;
         }
-        const ComponentInfo* info = m_components.info(registered_id);
-        CRD_ASSERT(info != nullptr);
+        const ComponentInfo& info = m_components.require_info(registered_id); // found by FourCC: registered
         // Hard-fail rejects (advisor pin #5).
-        CRD_ASSERT(static_cast<crd::u32>(info->size) == d.size &&
+        CRD_ASSERT(static_cast<crd::u32>(info.size) == d.size &&
                    "instantiate_scene: component size mismatch — registered type changed layout");
-        CRD_ASSERT(static_cast<crd::u32>(info->alignment) == d.alignment &&
+        CRD_ASSERT(static_cast<crd::u32>(info.alignment) == d.alignment &&
                    "instantiate_scene: component alignment mismatch");
-        CRD_ASSERT(info->serialize.version == d.version &&
+        CRD_ASSERT(info.serialize.version == d.version &&
                    "instantiate_scene: component version mismatch — explicit migration required");
 
         const auto& pp = res.component_payloads[ci];
@@ -540,7 +539,7 @@ SceneInstantiation World::instantiate_scene(const SceneResource& res)
             // Use the component's serialize.read_blob hook when present;
             // otherwise the storage backend's insert path will memcpy via
             // move_construct.
-            if (info->serialize.read_blob != nullptr)
+            if (info.serialize.read_blob != nullptr)
             {
                 // Allocate a temporary stack-aligned buffer, deserialize
                 // into it, then insert. Trivially-copyable types skip
@@ -548,11 +547,11 @@ SceneInstantiation World::instantiate_scene(const SceneResource& res)
                 alignas(16) crd::u8 staging[1024];
                 CRD_ASSERT(d.size <= sizeof(staging) &&
                            "instantiate_scene: component size exceeds staging buffer (1024 bytes)");
-                info->serialize.read_blob(staging, src, d.size);
+                info.serialize.read_blob(staging, src, d.size);
                 backend_for(registered_id).insert(e, registered_id, staging);
-                if (info->destruct != nullptr)
+                if (info.destruct != nullptr)
                 {
-                    info->destruct(staging);
+                    info.destruct(staging);
                 }
             }
             else

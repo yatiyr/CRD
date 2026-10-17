@@ -251,7 +251,8 @@ bool Transaction::erase(Operation* op)
     Value**   snap = nullptr;
     if (n > 0U)
     {
-        snap = memory::construct_array<Value*>(m_ctx.arena(), n); // Context-arena (read only at rollback, before tx death)
+        // Context-arena (read only at rollback, before tx death)
+        snap = memory::construct_array_or_fatal<Value*>(m_ctx.arena(), n, detail::kContextArenaOutOfMemory);
         for (u32 i = 0; i < n; ++i)
         {
             snap[i] = op->operand(i);
@@ -344,7 +345,7 @@ bool Transaction::set_attr(Operation* op, containers::StringView name, AttrId va
     NamedAttr* snap = nullptr;
     if (pc > 0U)
     {
-        snap = memory::construct_array<NamedAttr>(m_ctx.arena(), pc);
+        snap = memory::construct_array_or_fatal<NamedAttr>(m_ctx.arena(), pc, detail::kContextArenaOutOfMemory);
         for (u32 i = 0; i < pc; ++i)
         {
             snap[i] = NamedAttr{op->attr_name(i), op->attr_id_at(i)};

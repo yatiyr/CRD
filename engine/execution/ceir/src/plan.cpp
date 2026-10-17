@@ -1371,8 +1371,8 @@ CompileResult compile(Context& ctx, const Module& module, containers::StringView
             res.op    = cc.err_op;
             return res;
         }
-        const crd::u32* const idx = fn_index.find(fn_op); // stable — assigned before this function was dequeued
-        CompiledFn&           cf  = res.plan.funcs[*idx];
+        // Stable: assigned before this function was dequeued, so a miss is a broken worklist (fatal, never null).
+        CompiledFn& cf = res.plan.funcs[fn_index.at(fn_op)];
         cf.entry_seq   = eseq;
         cf.num_slots   = next;
         cf.param_slots = std::move(params);

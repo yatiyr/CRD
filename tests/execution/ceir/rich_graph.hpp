@@ -8,6 +8,7 @@
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/func.hpp>
+#include <crd/core/assert.hpp>
 
 namespace crd::ceir::test
 {
@@ -116,8 +117,12 @@ inline Module* build_rich(Context& ctx)
 
     // func.func + return (a nested function) and a func.call to it (a SymbolRef attr).
     Operation* const fn = func::create_func(ctx, *m, "callee_fn", Visibility::Public, 1U, i32);
+    if (fn == nullptr) // the fixture defines the name once in a fresh module; a refusal is a broken fixture
+    {
+        CRD_FATAL("build_rich: the module already defines callee_fn");
+    }
     top->append(fn);
-    Block* const     fb         = func::func_body_block(fn);
+    Block* const fb = &func::func_body(*fn);
     Value*           ret_ops[1] = {fb->arg(0U)};
     fb->append(func::create_return(ctx, ConstSpan<Value*>(ret_ops, 1U)));
 

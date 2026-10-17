@@ -167,8 +167,12 @@ diagnostics by the link line alone, so a compile line's `-Werror` never reached 
 ignore `-Werror` either way ([session](../sessions/2026-10-17-diag-11b-warning-gates.md)). The GCC link line also
 names the compile set's warnings that the link-time compiler reads: `lto-wrapper` passes on no C-family option, `-Wall`
 included, so `-Wall`'s members (`-Warray-bounds`, `-Wmaybe-uninitialized`, ...) are named one by one, and GLFW builds
-without link-time optimization so that its code never meets them; `-Wnull-dereference` is not among them yet
-([session](../sessions/2026-10-17-diag-11b-link-time-warning-set.md)). clang++ on Linux is not a qualified compiler of
+without link-time optimization so that its code never meets them
+([session](../sessions/2026-10-17-diag-11b-link-time-warning-set.md)); `-Wnull-dereference` is among them since its
+link-time locations were repaired, 80 on linux-gcc-shipping and 42 more with asserts compiled in
+([session](../sessions/2026-10-17-diag-11b-link-time-null-dereference.md)). A link stops at its first failing
+link-time partition, so `-flto-partition=one` on a failed link command lists all of a program's link-time diagnostics
+at once (diagnostic use only). clang++ on Linux is not a qualified compiler of
 this tree; that audit belongs to the platform/preset matrix row (REPO.DEV.11). clang-cl on Windows was tried first and
 dropped: its ASan has no debug-CRT runtime and, linked through lld-link, its objects and runtime disagree on the runtime
 library.

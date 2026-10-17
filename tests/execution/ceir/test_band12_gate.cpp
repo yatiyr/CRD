@@ -96,6 +96,13 @@ const SlotAssignment* assign_of(const MemoryPlan& p, const Operation* d)
     }
     return nullptr;
 }
+// The assignment a test expects to exist: a missing one fails the test (REQUIRE) instead of following a null pointer.
+const SlotAssignment& assigned(const MemoryPlan& p, const Operation* d)
+{
+    const SlotAssignment* const a = assign_of(p, d);
+    REQUIRE(a != nullptr);
+    return *a;
+}
 const ResourceLifetime* lt_of(const Array<ResourceLifetime>& lts, const Operation* d)
 {
     for (usize i = 0; i < lts.size(); ++i)
@@ -207,25 +214,25 @@ TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasi
     CHECK(plan.transient_physical == 2U);    // ⛔ 15d-3b: 5 logical -> 2 physical ({%a,%b,%c,%war} collapse + %big); was 3 under the over-conservative declare-pos `first`
     CHECK(plan.transient_physical < plan.transient_logical);
     // the {%a,%b,%c} pool + their §162 reasons.
-    CHECK(assign_of(plan, r.a)->slot == assign_of(plan, r.b)->slot);
-    CHECK(assign_of(plan, r.b)->slot == assign_of(plan, r.c)->slot);
-    CHECK(assign_of(plan, r.a)->reason == SlotReason::NewPoolSlot);
-    CHECK(assign_of(plan, r.b)->reason == SlotReason::Pooled);
-    CHECK(assign_of(plan, r.b)->prior == r.a->result(0U));
-    CHECK(assign_of(plan, r.c)->reason == SlotReason::Pooled);
-    CHECK(assign_of(plan, r.c)->prior == r.b->result(0U));
+    CHECK(assigned(plan, r.a).slot == assigned(plan, r.b).slot);
+    CHECK(assigned(plan, r.b).slot == assigned(plan, r.c).slot);
+    CHECK(assigned(plan, r.a).reason == SlotReason::NewPoolSlot);
+    CHECK(assigned(plan, r.b).reason == SlotReason::Pooled);
+    CHECK(assigned(plan, r.b).prior == r.a->result(0U));
+    CHECK(assigned(plan, r.c).reason == SlotReason::Pooled);
+    CHECK(assigned(plan, r.c).prior == r.b->result(0U));
     // 15d-3b: %war's memory-live range [17,19] is DISJOINT from the early transients, so it CORRECTLY pools into their slot
     // (the first-use gain; the old declare-pos `first`=0 forced war=[0,19] and blocked this). The differently-SIZED transient
     // still never shares (the slot-SIZE scar is intact).
-    CHECK(assign_of(plan, r.war)->slot == assign_of(plan, r.a)->slot); // ⛔ 15d-3b: war [17,19] disjoint from a [2,2] -> POOLED (was != under declare-pos)
-    CHECK(assign_of(plan, r.big)->slot != assign_of(plan, r.a)->slot); // ⭐ slot-SIZE: different bucket -> own slot
+    CHECK(assigned(plan, r.war).slot == assigned(plan, r.a).slot); // ⛔ 15d-3b: war [17,19], a [2,2]: pooled (was !=)
+    CHECK(assigned(plan, r.big).slot != assigned(plan, r.a).slot); // ⭐ slot-SIZE: different bucket -> own slot
     // the dedicated resources + the §162 ring depth.
-    CHECK(assign_of(plan, r.hist)->reason == SlotReason::DedicatedLifetime);
-    CHECK(plan.slots[assign_of(plan, r.hist)->slot].history_length == 2);
-    CHECK(plan.slots[assign_of(plan, r.hist)->slot].dedicated);
-    CHECK(assign_of(plan, r.persist)->reason == SlotReason::DedicatedLifetime);
-    CHECK(assign_of(plan, r.out)->reason == SlotReason::DedicatedExported);
-    CHECK(assign_of(plan, r.out)->slot != assign_of(plan, r.war)->slot);
+    CHECK(assigned(plan, r.hist).reason == SlotReason::DedicatedLifetime);
+    CHECK(plan.slots[assigned(plan, r.hist).slot].history_length == 2);
+    CHECK(plan.slots[assigned(plan, r.hist).slot].dedicated);
+    CHECK(assigned(plan, r.persist).reason == SlotReason::DedicatedLifetime);
+    CHECK(assigned(plan, r.out).reason == SlotReason::DedicatedExported);
+    CHECK(assigned(plan, r.out).slot != assigned(plan, r.war).slot);
 
     // the consistency invariant: every co-slotted pair is provably aliasable.
     for (usize i = 0; i < plan.assignments.size(); ++i)

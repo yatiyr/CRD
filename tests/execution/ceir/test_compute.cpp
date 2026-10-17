@@ -89,7 +89,7 @@ Operation* find_op(const Context& ctx, Module& m, containers::StringView qual)
     Block* const top = m.body()->first_block();
     for (Operation* fn = top->first_op(); fn != nullptr; fn = fn->next_in_block())
     {
-        for (Operation* op = func::func_body_block(fn)->first_op(); op != nullptr; op = op->next_in_block())
+        for (Operation* op = func::func_body(*fn).first_op(); op != nullptr; op = op->next_in_block())
         {
             if (ctx.op_name(op->kind()) == qual)
             {

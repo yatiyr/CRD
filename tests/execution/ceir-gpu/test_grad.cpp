@@ -477,10 +477,12 @@ TEST_CASE("ceir 25c-1: vjp_mlp differentiates a 2-layer ml.mlp - backward graph 
     // ── STRUCTURAL: grads are the two backward gemms; dW1==W1's type [4,4], dW2==W2's type [4,4]. ──
     CHECK(grads[0]->type() == w1->type());
     CHECK(grads[1]->type() == w2->type());
-    REQUIRE(grads[0]->defining_op() != nullptr);
-    REQUIRE(grads[1]->defining_op() != nullptr);
-    CHECK(ctx.op_name(grads[0]->defining_op()->kind()) == StringView("linalg.gemm"));
-    CHECK(ctx.op_name(grads[1]->defining_op()->kind()) == StringView("linalg.gemm"));
+    const Operation* const dw1_def = grads[0]->defining_op();
+    const Operation* const dw2_def = grads[1]->defining_op();
+    REQUIRE(dw1_def != nullptr);
+    REQUIRE(dw2_def != nullptr);
+    CHECK(ctx.op_name(dw1_def->kind()) == StringView("linalg.gemm"));
+    CHECK(ctx.op_name(dw2_def->kind()) == StringView("linalg.gemm"));
 
     // op counts: ml.mlp stays (unexpanded); recompute = 1 gemm (z1) + 1 @relu dispatch (h1); backward = 4 gemm (dh1,dW2,dx,dW1)
     // + 4 transpose (W2ᵀ,h1ᵀ,W1ᵀ,xᵀ) + 1 @relu_vjp dispatch. So gemm=5, dispatch=2, transpose=4, ml.mlp=1.

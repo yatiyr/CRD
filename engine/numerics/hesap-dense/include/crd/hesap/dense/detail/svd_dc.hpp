@@ -815,6 +815,20 @@ inline int dlasd1(int nl, int nr, int sqre, R* d, R& alpha, R& beta, R* u, int l
 {
     const R one = R{1};
     const R zero = R{0};
+    // dlasd1.f's argument checks: each sub-problem has at least one row and SQRE is 0 or 1 (INFO = -1, -2, -3), so
+    // the merged sizes below are positive.
+    if (nl < 1)
+    {
+        return -1;
+    }
+    if (nr < 1)
+    {
+        return -2;
+    }
+    if (sqre < 0 || sqre > 1)
+    {
+        return -3;
+    }
     const int n = nl + nr + 1;
     const int m = n + sqre;
     const int ldu2 = n;

@@ -123,7 +123,8 @@ TEST_CASE("slot_map: many live handles stay independently valid", "[containers][
         }
         else
         {
-            CHECK((m.get(hs[i]) != nullptr && *m.get(hs[i]) == i * 10));
+            const int* const v = m.get(hs[i]);
+            CHECK((v != nullptr && *v == i * 10));
         }
     }
 }

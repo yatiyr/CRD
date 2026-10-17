@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <cstring>
 #include <functional> // std::equal_to
@@ -265,6 +266,29 @@ public:
         return find_index(key, idx);
     }
 
+    // at: the value of a key the caller's invariant says is present (a key just emplaced, a numbering filled for
+    // every value it is asked about). A miss is fatal in every build, never a null pointer the caller follows;
+    // find() is the lookup that may miss.
+    template <typename Q> [[nodiscard]] V& at(const Q& key) noexcept
+    {
+        usize idx = 0;
+        if (!find_index(key, idx))
+        {
+            CRD_FATAL("HashMap::at: the key is not present");
+        }
+        return m_vals[idx];
+    }
+
+    template <typename Q> [[nodiscard]] const V& at(const Q& key) const noexcept
+    {
+        usize idx = 0;
+        if (!find_index(key, idx))
+        {
+            CRD_FATAL("HashMap::at: the key is not present");
+        }
+        return m_vals[idx];
+    }
+
     // operator[]: returns a reference to the value for `key`. Inserts
     // a default-constructed V if the key is missing.
     V& operator[](const K& key)
@@ -518,10 +542,12 @@ private:
         u8* old_dist = m_dist;
         usize old_cap = m_capacity;
 
-        // Allocate new buffers.
-        m_keys = static_cast<K*>(m_alloc->allocate(sizeof(K) * new_capacity, alignof(K)));
-        m_vals = static_cast<V*>(m_alloc->allocate(sizeof(V) * new_capacity, alignof(V)));
-        m_dist = static_cast<u8*>(m_alloc->allocate(new_capacity, alignof(u8)));
+        // Allocate new buffers. A sub-budget allocator returns nullptr when exhausted (and a byte size can overflow):
+        // out of memory for this map, fatal in every build, never a null table adopted with a capacity.
+        constexpr const char* out_of_memory = "HashMap: out of memory growing the table";
+        m_keys = memory::allocate_array_or_fatal<K>(*m_alloc, new_capacity, out_of_memory);
+        m_vals = memory::allocate_array_or_fatal<V>(*m_alloc, new_capacity, out_of_memory);
+        m_dist = memory::allocate_array_or_fatal<u8>(*m_alloc, new_capacity, out_of_memory);
         std::memset(m_dist, detail::kEmptyDistance, new_capacity);
         m_capacity = new_capacity;
         m_mask = new_capacity - 1;

@@ -51,6 +51,15 @@ struct NonDefaultCtor
 {
     explicit NonDefaultCtor(int) {}
 };
+
+// The info of an id the test just registered: a missing one fails the test (REQUIRE) instead of following a null
+// pointer.
+const ComponentInfo& registered(const ComponentRegistry& r, ComponentId id)
+{
+    const ComponentInfo* const info = r.info(id);
+    REQUIRE(info != nullptr);
+    return *info;
+}
 } // namespace
 
 TEST_CASE("ComponentId default-constructs to null", "[scene][registry]")
@@ -106,8 +115,8 @@ TEST_CASE("Idempotent re-registration returns the same ComponentId", "[scene][re
     // Even if the second call has different traits, the first registration wins.
     ComponentId third = r.register_type<Position>(StorageHint::SparseSet, AsyncAware{});
     CHECK(third == first);
-    CHECK(r.info(third)->storage_hint == StorageHint::Archetype); // first call had no hint -> default
-    CHECK_FALSE(r.info(third)->async_aware);                      // second-call traits ignored
+    CHECK(registered(r, third).storage_hint == StorageHint::Archetype); // first call had no hint -> default
+    CHECK_FALSE(registered(r, third).async_aware);                      // second-call traits ignored
     CHECK(r.size() == 1U);
 }
 
@@ -138,7 +147,7 @@ TEST_CASE("Default StorageHint is Archetype when no traits passed", "[scene][reg
     ComponentRegistry r;
     ComponentId id = r.register_type<Position>();
     REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->storage_hint == StorageHint::Archetype);
+    CHECK(registered(r, id).storage_hint == StorageHint::Archetype);
 }
 
 TEST_CASE("Explicit StorageHint::SparseSet is stored", "[scene][registry]")
@@ -146,7 +155,7 @@ TEST_CASE("Explicit StorageHint::SparseSet is stored", "[scene][registry]")
     ComponentRegistry r;
     ComponentId id = r.register_type<DialogTrigger>(StorageHint::SparseSet);
     REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->storage_hint == StorageHint::SparseSet);
+    CHECK(registered(r, id).storage_hint == StorageHint::SparseSet);
 }
 
 TEST_CASE("Index trait flags are stored", "[scene][registry]")
@@ -166,16 +175,17 @@ TEST_CASE("History trait stores window value", "[scene][registry]")
     ComponentRegistry r;
     ComponentId id = r.register_type<Position>(History{60});
     REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->history_window == 60);
+    CHECK(registered(r, id).history_window == 60);
 }
 
 TEST_CASE("Replication policy is stored", "[scene][registry]")
 {
     ComponentRegistry r;
-    CHECK(r.info(r.register_type<Position>(Replication::ServerAuthoritative))->replication ==
+    CHECK(registered(r, r.register_type<Position>(Replication::ServerAuthoritative)).replication ==
           Replication::ServerAuthoritative);
-    CHECK(r.info(r.register_type<Velocity>(Replication::ClientPredicted))->replication == Replication::ClientPredicted);
-    CHECK(r.info(r.register_type<Health>())->replication == Replication::Local); // default
+    CHECK(registered(r, r.register_type<Velocity>(Replication::ClientPredicted)).replication ==
+          Replication::ClientPredicted);
+    CHECK(registered(r, r.register_type<Health>()).replication == Replication::Local); // default
 }
 
 TEST_CASE("Reserved trait records (Reflection) round-trip", "[scene][registry]")
@@ -185,8 +195,7 @@ TEST_CASE("Reserved trait records (Reflection) round-trip", "[scene][registry]")
 
     ComponentRegistry r;
     ComponentId id = r.register_type<Position>(refl);
-    REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->reflection.display_name == refl.display_name);
+    CHECK(registered(r, id).reflection.display_name == refl.display_name);
 }
 
 TEST_CASE("Lifecycle ops captured for default-constructible type", "[scene][registry]")
@@ -214,9 +223,9 @@ TEST_CASE("Tag-only component registers without lifecycle issues", "[scene][regi
     ComponentRegistry r;
     ComponentId id = r.register_type<EditorSelected>(StorageHint::SparseSet);
     REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->size == sizeof(EditorSelected));
-    CHECK(r.info(id)->storage_hint == StorageHint::SparseSet);
-    CHECK(r.info(id)->default_construct != nullptr); // empty struct is default-constructible
+    CHECK(registered(r, id).size == sizeof(EditorSelected));
+    CHECK(registered(r, id).storage_hint == StorageHint::SparseSet);
+    CHECK(registered(r, id).default_construct != nullptr); // empty struct is default-constructible
 }
 
 TEST_CASE("Non-default-constructible type leaves default_construct null", "[scene][registry]")
@@ -224,8 +233,8 @@ TEST_CASE("Non-default-constructible type leaves default_construct null", "[scen
     ComponentRegistry r;
     ComponentId id = r.register_type<NonDefaultCtor>();
     REQUIRE(r.info(id) != nullptr);
-    CHECK(r.info(id)->default_construct == nullptr);
-    CHECK(r.info(id)->destruct != nullptr); // destructible
+    CHECK(registered(r, id).default_construct == nullptr);
+    CHECK(registered(r, id).destruct != nullptr); // destructible
 }
 
 // ---- ComponentMask ------------------------------------------------------

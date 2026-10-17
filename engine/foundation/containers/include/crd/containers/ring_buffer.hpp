@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/memory/alignment.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <new> // placement new
 #include <type_traits>
@@ -38,7 +39,8 @@ public:
         CRD_ASSERT(memory::is_pow2(capacity_pow2));
         m_capacity = capacity_pow2;
         m_mask = capacity_pow2 - 1;
-        m_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * m_capacity, alignof(T)));
+        // A refused buffer (a sub-budget allocator returns nullptr) is out of memory: fatal in every build.
+        m_data = memory::allocate_array_or_fatal<T>(*m_alloc, m_capacity, "RingBuffer: out of memory for the buffer");
     }
 
     ~RingBuffer()
@@ -161,10 +163,10 @@ public:
 
     // ---- Capacity / state -----------------------------------------
 
-    usize size() const noexcept { return m_size; }
-    usize capacity() const noexcept { return m_capacity; }
-    bool empty() const noexcept { return m_size == 0; }
-    bool full() const noexcept { return m_size == m_capacity; }
+    [[nodiscard]] usize size() const noexcept { return m_size; }
+    [[nodiscard]] usize capacity() const noexcept { return m_capacity; }
+    [[nodiscard]] bool empty() const noexcept { return m_size == 0; }
+    [[nodiscard]] bool full() const noexcept { return m_size == m_capacity; }
 
     void clear() noexcept
     {
@@ -174,7 +176,7 @@ public:
         m_size = 0;
     }
 
-    memory::IAllocator* allocator() const noexcept { return m_alloc; }
+    [[nodiscard]] memory::IAllocator* allocator() const noexcept { return m_alloc; }
 
 private:
     T* slot(usize i) noexcept { return reinterpret_cast<T*>(reinterpret_cast<u8*>(m_data) + i * sizeof(T)); }

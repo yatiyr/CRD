@@ -2,6 +2,8 @@
 
 #include <crd/toml/toml.hpp>
 
+#include <crd/core/assert.hpp>
+
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -136,6 +138,15 @@ const node* node::get(crd::usize index) const noexcept
         return nullptr;
     }
     return &m_children[index];
+}
+
+const node& node::child_at(crd::usize index) const noexcept
+{
+    if (index >= m_children.size())
+    {
+        CRD_FATAL("toml::node::child_at: the index is past the last child");
+    }
+    return m_children[index];
 }
 
 crd::usize node::size() const noexcept

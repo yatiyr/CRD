@@ -70,7 +70,10 @@ TEST_CASE("v12-q: samplers recover N(0,1) + leapfrog + determinism moat", "[v12-
     };
     const auto grad = [](ConstSpan<double> x, crd::containers::Span<double> g)
     {
-        g[0] = -x[0];
+        for (crd::usize i = 0; i < g.size(); ++i) // the gradient of -x^2/2 in every dimension the sampler passes
+        {
+            g[i] = -x[i];
+        }
     };
     constexpr double x0v[] = {0.0};
     const auto x0 = ConstSpan<double>{x0v, 1};

@@ -5,6 +5,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <compare>
 #include <cstring>
@@ -297,6 +298,10 @@ public:
         if (n < heap_capacity_internal()) // n usable chars needed; cap > n means wasted space
         {
             char* new_buf = static_cast<char*>(m_alloc->allocate(n + 1, alignof(char)));
+            if (new_buf == nullptr)
+            {
+                return; // best effort: a refused allocation keeps the current buffer
+            }
             std::memcpy(new_buf, m_heap.data, n + 1);
             m_alloc->deallocate(m_heap.data);
             m_heap.data = new_buf;
@@ -362,6 +367,7 @@ private:
     // 24th byte (size_or_flag) is the discriminant.
     static constexpr usize kSsoCapacity = 23;
     static constexpr u8 kHeapFlag = 0xFFU;
+    static constexpr const char* kOutOfMemory = "String: out of memory (the allocator refused the buffer)";
 
     // Named outside the union: a type declared inside an anonymous union is a compiler extension.
     struct SmallRep
@@ -444,7 +450,8 @@ private:
         }
         // Heap.
         const usize cap = n + 1;
-        char* p = static_cast<char*>(m_alloc->allocate(cap, alignof(char)));
+        // A sub-budget allocator returns nullptr when exhausted: out of memory for this string, fatal in every build.
+        char* p = static_cast<char*>(memory::allocate_or_fatal(*m_alloc, cap, alignof(char), kOutOfMemory));
         std::memcpy(p, s, n);
         p[n] = '\0';
         m_heap.data = p;
@@ -480,7 +487,8 @@ private:
     {
         const usize new_cap_chars = next_capacity(target);
         const usize old_size = size();
-        char* new_buf = static_cast<char*>(m_alloc->allocate(new_cap_chars + 1, alignof(char)));
+        char* new_buf =
+            static_cast<char*>(memory::allocate_or_fatal(*m_alloc, new_cap_chars + 1, alignof(char), kOutOfMemory));
         if (old_size > 0)
         {
             std::memcpy(new_buf, data(), old_size);

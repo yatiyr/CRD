@@ -74,8 +74,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 TypeId sh2(Context& ctx, u32 a, u32 c)
 {
@@ -135,9 +136,10 @@ Module* build_audio_full_chain_module(Context& ctx)
         m->body()->append(top);
     }
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
     ctx.set_attr(fn, "sample_rate", ctx.attr_int(48000)); // the graph-global rate the compressor's ms->coeff needs
-    Block* const     b   = func::func_body_block(fn);
+    Block* const b = &func::func_body(*fn);
     const TypeId     tt  = tensor_audio(ctx);
     Operation* const s1  = mk_source(ctx, b, "a", tt);
     Operation* const gn  = audio::build_gain(ctx, s1->result(0U), ctx.attr_float(-6.0), tt);
@@ -604,9 +606,10 @@ TEST_CASE("ceir 31a-2b-ii: the sample_rate func attr round-trips through text an
             m->body()->append(top);
         }
         Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+        REQUIRE(fn != nullptr);
         top->append(fn);
         ctx.set_attr(fn, "sample_rate", sr);
-        Block* const     b = func::func_body_block(fn);
+        Block* const b = &func::func_body(*fn);
         Operation* const s = mk_source(ctx, b, "s", tt);
         b->append(audio::build_compressor(ctx, s->result(0U), ctx.attr_float(-20.0), ctx.attr_float(4.0),
                                           ctx.attr_float(10.0), ctx.attr_float(100.0), tt));

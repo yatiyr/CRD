@@ -109,9 +109,9 @@ private:
     void enqueue(Command cmd);
 
     // Push an AddComponent record with a move-constructed payload of size
-    // `info->size`. ComponentInfo is looked up from the registry at queue
+    // `info.size`. ComponentInfo is looked up from the registry at queue
     // time and re-resolved at flush; the ID is the bridge.
-    void enqueue_with_payload(Command cmd, void* src_value, const ComponentInfo* info);
+    void enqueue_with_payload(Command cmd, void* src_value, const ComponentInfo& info);
 
     // Run any registered destructors on remaining command payloads. Called
     // from ~Commands and at the end of flush() so the buffer can be

@@ -1,4 +1,5 @@
 #include <crd/core/assert.hpp>
+#include <crd/memory/construct.hpp>
 #include <crd/scene/sparse_set_storage.hpp>
 
 #include <cstring>
@@ -200,15 +201,15 @@ SparseSetStorage::Pool& SparseSetStorage::ensure_pool(ComponentId c)
         return *m_pools[c.raw];
     }
 
-    const ComponentInfo* info = m_registry->info(c);
-    CRD_ASSERT(info != nullptr);
-    CRD_ASSERT(info->size > 0); // SparseSet pools cannot store zero-sized tags;
-                                 // marker components flow through Archetype.
-    CRD_ASSERT(info->storage_hint == StorageHint::SparseSet);
+    // An unregistered id is a caller bug, fatal in every build (the registry's invariant accessor).
+    const ComponentInfo& info = m_registry->require_info(c);
+    CRD_ASSERT(info.size > 0); // SparseSet pools cannot store zero-sized tags;
+                               // marker components flow through Archetype.
+    CRD_ASSERT(info.storage_hint == StorageHint::SparseSet);
 
-    void* mem = m_alloc->allocate(sizeof(Pool), alignof(Pool));
-    CRD_ASSERT(mem != nullptr);
-    Pool* pool = ::new (mem) Pool(*info, m_alloc);
+    // A sub-budget allocator refuses by returning nullptr: out of memory for this storage, never a pool built on null.
+    Pool* pool = crd::memory::construct_or_fatal<Pool>(*m_alloc, "SparseSetStorage: out of memory for a component pool",
+                                                       info, m_alloc);
     m_pools[c.raw] = pool;
     return *pool;
 }

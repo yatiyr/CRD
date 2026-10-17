@@ -206,6 +206,7 @@ TEST_CASE("diag10c: a hot-swapped generation's wrong result is caught by a refer
     REQUIRE(set.add_source(id, sv(good), StringView(kFileA)).ok());
     const ProgramHandle h1 = set.handle(id);
     Generation* const   g1 = set.generation(id);
+    REQUIRE(g1 != nullptr);
 
     // Generation 1 meets the specification on every input: nothing is blamed.
     for (const i64 x : kInputs)
@@ -230,6 +231,7 @@ TEST_CASE("diag10c: a hot-swapped generation's wrong result is caught by a refer
     REQUIRE(rr.installed);
     const ProgramHandle h2 = set.handle(id);
     Generation* const   g2 = set.generation(id);
+    REQUIRE(g2 != nullptr);
     REQUIRE(h2.generation.value == 2U);
     const String addi_b = position_of(sv(wrong), "arith.addi", kFileB, &root);
 
@@ -271,6 +273,7 @@ TEST_CASE("diag10c: a plan built from a wrong generation is blamed on that gener
     REQUIRE(set.add_source(id, sv(wrong), StringView(kFileA)).ok());
     const ProgramHandle h1     = set.handle(id);
     Generation* const   g1     = set.generation(id);
+    REQUIRE(g1 != nullptr);
     const u64           hash_1 = g1->program.content_hash;
     const String        muli_a = position_of(sv(wrong), "arith.muli", kFileA, &root);
     const plan::CompileResult p1 = plan::compile(*g1->ctx, *g1->program.module, "main", &root);
@@ -280,6 +283,7 @@ TEST_CASE("diag10c: a plan built from a wrong generation is blamed on that gener
     REQUIRE(rr.installed);
     const ProgramHandle h2 = set.handle(id);
     Generation* const   g2 = set.generation(id);
+    REQUIRE(g2 != nullptr);
 
     // The fixed generation agrees on every input, on both executors.
     for (const i64 x : kInputs)
@@ -337,6 +341,7 @@ TEST_CASE("diag10c: an invariant catches a wrapped result without any reference"
     REQUIRE(set.add_source(id, sv(text), StringView(kFileA)).ok());
     const ProgramHandle h    = set.handle(id);
     Generation* const   g    = set.generation(id);
+    REQUIRE(g != nullptr);
     const String        muli = position_of(sv(text), "arith.muli", kFileA, &root);
 
     // For x >= 0 both results are non-negative: x + 1 and x * x. Large x wraps x * x past 2^63 to a negative value.
@@ -397,6 +402,7 @@ TEST_CASE("diag10c: count mismatches, invalid domains and results no op defines"
     REQUIRE(set.add_source(id, sv(text), StringView(kFileA)).ok());
     const ProgramHandle h      = set.handle(id);
     Generation* const   g      = set.generation(id);
+    REQUIRE(g != nullptr);
     const String        ret_at = position_of(sv(text), "func.return", kFileA, &root);
     const auto          values = interpret(*g, 3, &root); // (4, 9, 3)
     REQUIRE(values.size() == 3U);

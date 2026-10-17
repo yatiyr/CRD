@@ -64,9 +64,10 @@ Module* build_main(Context& c, i64 hi_value, const char* stray_dialect)
 {
     Module* const    m  = c.create_module();
     Operation* const fn = func::create_func(c, *m, "main", Visibility::Public, 1U, c.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->append(c.create_block(0U));
     m->body()->first_block()->append(fn);
-    Block* const     body = func::func_body_block(fn);
+    Block* const body = &func::func_body(*fn);
     Operation* const lo   = konst(c, body, 0);
     Operation* const hi   = konst(c, body, hi_value);
     Value*           ab[2] = {hi->result(0U), hi->result(0U)};
@@ -215,6 +216,13 @@ void check_fault_at(const FaultSite& f, const char* file, TextPos at)
     CHECK(f.col == at.col);
     CHECK(f.node);
 }
+// The installed program a test just loaded: a missing one fails the test (REQUIRE) instead of following a null pointer.
+const RuntimeProgram& installed_program(const ReloadSet& set, AssetId id)
+{
+    const RuntimeProgram* const p = set.program(id);
+    REQUIRE(p != nullptr);
+    return *p;
+}
 } // namespace
 
 TEST_CASE("diag 8a: a text cook names its file in the blob and a failed cook names its authored line", "[ceir][diag]")
@@ -348,7 +356,7 @@ TEST_CASE("diag 8a: a reformat-only reload keeps the generation and moves its au
     REQUIRE(set.add_source(id, sv(text), StringView(kFileA)).ok());
     Generation* const   installed = set.generation(id);
     const ProgramHandle h         = set.handle(id);
-    const u64           content   = set.program(id)->content_hash;
+    const u64 content = installed_program(set, id).content_hash;
 
     const String  moved    = reformat(sv(text), &root);
     const TextPos at_moved = find_op(sv(moved), "core.for");
@@ -359,7 +367,7 @@ TEST_CASE("diag 8a: a reformat-only reload keeps the generation and moves its au
     CHECK_FALSE(rr.installed);
     CHECK(set.generation(id) == installed);
     CHECK(set.is_current(id, h));
-    CHECK(set.program(id)->content_hash == content);
+    CHECK(installed_program(set, id).content_hash == content);
     check_fault_at(fault_site(*installed->ctx, *installed->program.module, &root), kFileC, at_moved);
 
     SECTION("an origin-free candidate with the same content leaves the positions alone")

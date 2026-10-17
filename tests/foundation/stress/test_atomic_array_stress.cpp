@@ -55,7 +55,7 @@ void drive_append(crd::stress::RunMode mode)
         for (u64 seq = 0; seq < per_worker; ++seq)
         {
             const usize idx = arr.push(make_token(worker, seq));
-            CRD_ASSERT(idx != crd::containers::AtomicArray<u64>::npos);
+            CRD_ASSERT(idx != crd::containers::AtomicArray<u64>::kNpos);
             (void)idx;
         }
     };

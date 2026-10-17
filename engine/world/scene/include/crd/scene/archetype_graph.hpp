@@ -75,6 +75,12 @@ public:
     [[nodiscard]] Archetype* by_id(ArchetypeId id) noexcept;
     [[nodiscard]] const Archetype* by_id(ArchetypeId id) const noexcept;
 
+    // The archetype of an id this graph issued (an entity's stored location, an index below archetype_count()): a
+    // miss there is a broken invariant, fatal in every build rather than a null pointer the caller follows. by_id()
+    // is the lookup that may miss.
+    [[nodiscard]] Archetype& require(ArchetypeId id) noexcept;
+    [[nodiscard]] const Archetype& require(ArchetypeId id) const noexcept;
+
     [[nodiscard]] crd::u32 archetype_count() const noexcept;
 
     [[nodiscard]] ChunkAllocator& chunks() noexcept { return *m_chunks; }

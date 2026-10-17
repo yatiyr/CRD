@@ -1575,7 +1575,9 @@ TEST_CASE("ceir 16-mesh-1: build_mesh_indirect_ceir emits a verified, lowerable 
     CHECK(p.geometry.args_offset == 128U);
     CHECK(p.bindings.size() == 0U); // record_mesh_indirect binds NO descriptors
     // ⭐ advisor constraint #2: the %args operand carries its SOURCE-param identity (resolver → RecordContext.storage).
-    const AttrId s = draw->operand(0U)->defining_op()->attr(StringView("source"));
+    const Operation* const args_def = draw->operand(0U)->defining_op();
+    REQUIRE(args_def != nullptr);
+    const AttrId s = args_def->attr(StringView("source"));
     REQUIRE(s.valid());
     CHECK(ctx.attr_value(s).i == 222);
 }

@@ -279,7 +279,12 @@ TlsfAllocator::TlsfAllocator(void* buffer, usize capacity, const char* name) noe
     : m_parent(nullptr), m_pool(nullptr), m_pool_capacity(0), m_fl_bitmap(0), m_sl_bitmap{}, m_free_lists{}
 {
     m_name = name;
-    CRD_ASSERT(buffer != nullptr);
+    // init_pool writes the sentinels into the buffer at once, so a null one is fatal in every build, never an
+    // ignorable assert that goes on to write through it.
+    if (buffer == nullptr)
+    {
+        CRD_FATAL("TlsfAllocator: the borrowed buffer is null");
+    }
     CRD_ASSERT(capacity >= min_pool_size());
     CRD_ASSERT(is_aligned(buffer, kAlignSize));
     init_pool(buffer, capacity);

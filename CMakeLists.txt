@@ -326,11 +326,9 @@ else()
     # by one. -Wrestrict, -Wdangling-pointer, -Wmismatched-new-delete/-dealloc, -Wformat-overflow/-truncation and
     # -Wclobbered are C-family options lto-wrapper drops even when named, so a defect of those classes that only
     # cross-file inlining exposes is not judged at all (GCC 13.3; the 2026-10-17 warning-set session note). Clang lanes
-    # here link without link-time optimization, and lld's own link-time step reads no -W option. -Wnull-dereference is
-    # left off for now, not forgotten: at the link it reported 70 sites (1,974 lines) on linux-gcc-shipping, mostly
-    # paths through the scene and CEIR containers' lookups, and those are a batch of their own (DIAG.11b).
+    # here link without link-time optimization, and lld's own link-time step reads no -W option.
     set(_crd_lto1_warnings
-        -Wextra -Wpedantic -Wshadow
+        -Wextra -Wpedantic -Wshadow -Wnull-dereference
         # -Wall's members that lto1 reads
         -Warray-bounds=1 -Wuninitialized -Wmaybe-uninitialized -Wstringop-truncation -Wuse-after-free=2 -Wunused
         -Wstrict-aliasing=3 -Wstrict-overflow=1 -Winfinite-recursion -Wmisleading-indentation

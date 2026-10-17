@@ -113,7 +113,11 @@ bool match_reshape_of_reshape(const Context&, const Operation& op) noexcept
 }
 void rewrite_fold_reshape(Context& ctx, Operation& op)
 {
-    Operation* const inner       = op.operand(0)->defining_op(); // the input reshape
+    Operation* const inner = op.operand(0)->defining_op(); // the input reshape
+    if (inner == nullptr) // the match established it; a miss leaves the IR unrewritten, which the checks reject
+    {
+        return;
+    }
     Value* const     inner_input = inner->operand(0);            // the value BEFORE both reshapes
     Value* const     ops_in[1]   = {inner_input};
     Operation* const folded      = ctx.create_operation(kReshape, ConstSpan<Value*>(ops_in, 1U), 1U);

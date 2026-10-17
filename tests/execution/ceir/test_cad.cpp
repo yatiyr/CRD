@@ -112,13 +112,20 @@ struct CadGraph
         b->append(o);
         return o;
     }
+    // The value of the feature an operand comes from: every operand of this model is an earlier feature's result.
+    [[nodiscard]] i64 input_value(const Operation& op, u32 i) const
+    {
+        const Operation* const def = op.operand(i)->defining_op();
+        REQUIRE(def != nullptr);
+        return value[def->stable_id().value - 1U];
+    }
     [[nodiscard]] i64 eval(const Operation& op) const
     {
         if (op.kind() == sketch)
         {
             return ctx.attr_value(op.attr("width")).i * ctx.attr_value(op.attr("height")).i;
         }
-        const i64 in0 = value[op.operand(0)->defining_op()->stable_id().value - 1U];
+        const i64 in0 = input_value(op, 0U);
         if (op.kind() == extrude)
         {
             return in0 * ctx.attr_value(op.attr("depth")).i;
@@ -129,7 +136,7 @@ struct CadGraph
         }
         if (op.kind() == assembly)
         {
-            return in0 + value[op.operand(1)->defining_op()->stable_id().value - 1U];
+            return in0 + input_value(op, 1U);
         }
         return in0; // body
     }

@@ -96,6 +96,10 @@ bool match_ab(const Context& ctx, const Operation& op) noexcept
 void rewrite_ab_to_c(Context& ctx, Operation& op)
 {
     Operation* const inner = op.operand(0)->defining_op(); // B
+    if (inner == nullptr) // the match established B; a miss leaves the IR unrewritten, which the checks reject
+    {
+        return;
+    }
     Value* const     x     = inner->operand(0);            // B's input, wired into C BEFORE any erase
     Value* const     c_in[1] = {x};
     Operation* const c = ctx.create_operation(ctx.intern_op("plugin", "c"), ConstSpan<Value*>(c_in, 1U), 1U, op.result(0)->type());

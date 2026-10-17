@@ -21,8 +21,9 @@ namespace crd::containers
 // Think of this as our std::vector. Differences:
 //   - Allocator is an IAllocator* CONSTRUCTOR ARGUMENT, not a template
 //     parameter. The type does not change when the allocator changes.
-//   - No exceptions. push_back / reserve trigger CRD_FATAL on OOM via
-//     the allocator. try_push_back / try_reserve return false instead.
+//   - No exceptions. push_back / reserve are fatal on OOM: the heap
+//     allocators' own fatal, or the array's when a sub-budget allocator
+//     returns nullptr. try_push_back / try_reserve return false instead.
 //   - Growth strategy is 1.5x (Folly/EA), starting at 8 elements.
 //   - Iterators are raw pointers (std-compatible, range-for + <algorithm>).
 //   - swap_remove(i) is O(1) — fast for unordered collections.
@@ -229,7 +230,13 @@ public:
             free_buffer();
             return;
         }
+        // Best effort: a refused allocation keeps the current buffer (m_size elements cannot overflow a size the
+        // capacity already holds).
         T* new_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * m_size, alignof(T)));
+        if (new_data == nullptr)
+        {
+            return;
+        }
         relocate(new_data, m_data, m_size);
         free_buffer();
         adopt_buffer(new_data, m_size);
@@ -545,11 +552,13 @@ private:
         return required > grown ? required : grown;
     }
 
-    // Grow the buffer; OOM is fatal (allocator decides).
+    // Grow the buffer. Heap allocators are fatal on their own when out of memory, but a sub-budget allocator (an
+    // arena, a TLSF pool) returns nullptr: that, or a capacity whose byte size overflows, is out of memory for this
+    // array, fatal in every build, never a null buffer adopted with a capacity. try_reserve reports it instead.
     void grow_to_at_least(usize required)
     {
         const usize new_cap = next_capacity(required);
-        T* new_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * new_cap, alignof(T)));
+        T* new_data = memory::allocate_array_or_fatal<T>(*m_alloc, new_cap, "Array: out of memory growing the buffer");
         relocate(new_data, m_data, m_size);
         free_buffer();
         adopt_buffer(new_data, new_cap);
@@ -565,7 +574,7 @@ private:
         // for sub-budgets (returns nullptr) but heap allocators FATAL on OOM.
         // For try_*, the caller has explicitly opted into "no fatal", so this
         // is the right shape.
-        T* new_data = static_cast<T*>(m_alloc->allocate(sizeof(T) * new_cap, alignof(T)));
+        T* new_data = memory::allocate_array<T>(*m_alloc, new_cap); // nullptr when refused or its size overflows
         if (!new_data)
         {
             return false;

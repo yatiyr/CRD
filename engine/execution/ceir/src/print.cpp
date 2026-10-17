@@ -142,7 +142,7 @@ private:
                     m_out.append(", ");
                 }
                 m_out.push_back('%');
-                emit_u32(*m_ids.find(op->result(i)));
+                emit_u32(m_ids.at(op->result(i))); // numbered by pass 1's identical walk
             }
             m_out.append(" = ");
         }
@@ -175,7 +175,7 @@ private:
     void emit_value_def(Value* v)
     {
         m_out.push_back('%');
-        emit_u32(*m_ids.find(v));
+        emit_u32(m_ids.at(v)); // a definition: numbered by pass 1's identical walk
         if (v->type().valid())
         {
             m_out.append(" : ");

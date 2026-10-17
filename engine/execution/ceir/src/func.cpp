@@ -58,6 +58,16 @@ Block* func_body_block(Operation* func_op) noexcept
     return body != nullptr ? body->first_block() : nullptr;
 }
 
+Block& func_body(Operation& func_op) noexcept
+{
+    Block* const body = func_body_block(&func_op);
+    if (body == nullptr)
+    {
+        CRD_FATAL("func::func_body: the op has no body block");
+    }
+    return *body;
+}
+
 Operation* create_return(Context& ctx, containers::ConstSpan<Value*> values)
 {
     return ctx.create_operation(return_kind(ctx), values, 0U, {}, 0U);

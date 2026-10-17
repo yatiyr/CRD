@@ -174,6 +174,13 @@ Settled policies (2026-10-06, [session](../sessions/2026-10-06-diag-3a-allocator
   naming the arena, in every build. A growable pool whose parent refuses a page returns nullptr from `try_allocate`
   and stays usable; its `allocate` is fatal. `construct`/`construct_array` return nullptr for a refused allocation or
   an overflowing count, and undo a throwing constructor (built objects destroyed in reverse, storage returned).
+  A consumer that cannot continue without the memory turns a refusal into its own named out-of-memory fatal through
+  `allocate_or_fatal`, `allocate_array_or_fatal`, `construct_or_fatal` and `construct_array_or_fatal` (a zero count
+  stays the empty array): the containers' growth and fixed buffers (a refused `Array` growth was relocated into null
+  and kept its capacity), the CEIR context's IR arena and the sparse-set storage's pools, since 2026-10-17
+  ([session](../sessions/2026-10-17-diag-11b-link-time-null-dereference.md)); each has a child-process mode
+  (`crd-containers-fatal-*`, `crd-ceir-fatal-*`, `crd-scene-fatal-*`, the alloc-fatal specimen). A borrowed TLSF
+  buffer that is null is fatal in every build as well.
 - **Parent/child and external buffers.** A child is destroyed before its parent and returns exactly the blocks it took.
   An arena never frees an external buffer, stays inside it, and returns it unpoisoned.
 

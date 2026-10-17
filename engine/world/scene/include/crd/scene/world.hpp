@@ -292,9 +292,7 @@ public:
         {
             return nullptr;
         }
-        const ComponentInfo* info = m_components.info(id);
-        CRD_ASSERT(info != nullptr);
-        if (info->storage_hint == StorageHint::SparseSet)
+        if (m_components.require_info(id).storage_hint == StorageHint::SparseSet)
         {
             return static_cast<const T*>(m_sparse_storage.get_const(e, id));
         }
@@ -858,18 +856,16 @@ public:
 private:
     [[nodiscard]] IStorageBackend& backend_for(ComponentId id) noexcept
     {
-        const ComponentInfo* info = m_components.info(id);
-        CRD_ASSERT(info != nullptr);
-        return (info->storage_hint == StorageHint::SparseSet) ? static_cast<IStorageBackend&>(m_sparse_storage)
-                                                              : static_cast<IStorageBackend&>(m_storage);
+        return (m_components.require_info(id).storage_hint == StorageHint::SparseSet)
+                   ? static_cast<IStorageBackend&>(m_sparse_storage)
+                   : static_cast<IStorageBackend&>(m_storage);
     }
 
     [[nodiscard]] const IStorageBackend& backend_for_const(ComponentId id) const noexcept
     {
-        const ComponentInfo* info = m_components.info(id);
-        CRD_ASSERT(info != nullptr);
-        return (info->storage_hint == StorageHint::SparseSet) ? static_cast<const IStorageBackend&>(m_sparse_storage)
-                                                              : static_cast<const IStorageBackend&>(m_storage);
+        return (m_components.require_info(id).storage_hint == StorageHint::SparseSet)
+                   ? static_cast<const IStorageBackend&>(m_sparse_storage)
+                   : static_cast<const IStorageBackend&>(m_storage);
     }
 
     // Per-relation reverse-index payload. Lazy-allocated by
@@ -1264,8 +1260,8 @@ template <typename Set> ComponentMask World::component_set_mask() const noexcept
 template <typename T> void Commands::add_component(EntityId e, T value)
 {
     const ComponentId id = m_world->components().template id_of<T>();
-    CRD_ASSERT(!id.is_null() && "Commands::add_component<T>: T must be registered");
-    const ComponentInfo* info = m_world->components().info(id);
+    // T must be registered: an unregistered T is fatal in require_info, in every build.
+    const ComponentInfo& info = m_world->components().require_info(id);
     Command cmd{};
     cmd.kind = CommandKind::AddComponent;
     cmd.component = id;

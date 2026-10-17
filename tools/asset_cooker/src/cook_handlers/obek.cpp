@@ -107,15 +107,12 @@ void setup_temp_world(crd::scene::World& w)
     return crd::scene::ComponentId{};
 }
 
-void apply_component_bytes(crd::scene::World&             w,
-                           crd::scene::EntityId           e,
-                           crd::scene::ComponentId        cid,
-                           const crd::scene::ComponentInfo* info,
-                           const void*                    bytes)
+void apply_component_bytes(crd::scene::World& w, crd::scene::EntityId e, crd::scene::ComponentId cid,
+                           const crd::scene::ComponentInfo& info, const void* bytes)
 {
     alignas(16) crd::u8 staging[1024];
-    CRD_ASSERT(info->size <= sizeof(staging) && "obek_cooker: component size exceeds staging (1024)");
-    std::memcpy(staging, bytes, info->size);
+    CRD_ASSERT(info.size <= sizeof(staging) && "obek_cooker: component size exceeds staging (1024)");
+    std::memcpy(staging, bytes, info.size);
     w.backend_for_public(cid).insert(e, cid, staging);
 }
 
@@ -428,18 +425,17 @@ crd::containers::Array<crd::u8> ObekCooker::cook_inline(
                                    line_of(elt));
                         continue;
                     }
-                    const crd::scene::ComponentInfo* info = world.components().info(cid);
-                    CRD_ASSERT(info != nullptr);
+                    const crd::scene::ComponentInfo& info = world.components().require_info(cid);
 
                     alignas(16) crd::u8 staging[1024];
-                    CRD_ASSERT(info->size <= sizeof(staging) && "obek_cooker: override too large");
-                    std::memset(staging, 0, info->size);
-                    if (!reader->reader(value_node, staging, info->size, line_of(*value_node), &errors))
+                    CRD_ASSERT(info.size <= sizeof(staging) && "obek_cooker: override too large");
+                    std::memset(staging, 0, info.size);
+                    if (!reader->reader(value_node, staging, info.size, line_of(*value_node), &errors))
                     {
                         continue;
                     }
                     builder.add_override(file_idx, reader->serialize.fourcc, /*field_offset=*/0U,
-                                         crd::containers::ConstSpan<crd::u8>{staging, info->size});
+                                         crd::containers::ConstSpan<crd::u8>{staging, info.size});
                 }
             }
         }
@@ -764,8 +760,8 @@ void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
                                     // has_relation<ChildOf> via component_id check —
                                     // backend lookup avoids template instantiation here.
                                     const void* existing_payload =
-                                        (rc.world.components().info(childof_id)->storage_hint
-                                                == crd::scene::StorageHint::SparseSet)
+                                        (rc.world.components().require_info(childof_id).storage_hint ==
+                                         crd::scene::StorageHint::SparseSet)
                                             ? rc.world.sparse_storage().get_const(nested_e, childof_id)
                                             : rc.world.storage().get_const(nested_e, childof_id);
                                     if (existing_payload == nullptr)
@@ -841,13 +837,12 @@ void apply_table_to_world(const crd::toml::node& root, RecCtx& rc)
                            line_of(*field_node));
                 continue;
             }
-            const crd::scene::ComponentInfo* info = rc.world.components().info(cid);
-            CRD_ASSERT(info != nullptr);
+            const crd::scene::ComponentInfo& info = rc.world.components().require_info(cid);
 
             alignas(16) crd::u8 staging[1024];
-            CRD_ASSERT(info->size <= sizeof(staging) && "obek_cooker: component too large for staging");
-            std::memset(staging, 0, info->size);
-            if (!reader->reader(field_node, staging, info->size, line_of(*field_node), &rc.errors))
+            CRD_ASSERT(info.size <= sizeof(staging) && "obek_cooker: component too large for staging");
+            std::memset(staging, 0, info.size);
+            if (!reader->reader(field_node, staging, info.size, line_of(*field_node), &rc.errors))
             {
                 continue;
             }

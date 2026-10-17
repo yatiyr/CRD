@@ -364,15 +364,15 @@ void setup_temp_world(crd::scene::World& w)
 // Apply a component reader's bytes to entity `e` via the registered
 // component's storage backend.
 void apply_component_bytes(crd::scene::World& w, crd::scene::EntityId e, crd::scene::ComponentId cid,
-                           const crd::scene::ComponentInfo* info, const void* bytes)
+                           const crd::scene::ComponentInfo& info, const void* bytes)
 {
     // The storage backend's insert path takes a void* (may move-from).
     // For the temporary World inside the cooker, we pass the bytes
     // through a stack-staging buffer to give the backend a mutable
     // pointer — same pattern as World::instantiate_scene's hot path.
     alignas(16) crd::u8 staging[1024];
-    CRD_ASSERT(info->size <= sizeof(staging) && "scene_cooker: component size exceeds staging (1024)");
-    std::memcpy(staging, bytes, info->size);
+    CRD_ASSERT(info.size <= sizeof(staging) && "scene_cooker: component size exceeds staging (1024)");
+    std::memcpy(staging, bytes, info.size);
     w.backend_for_public(cid).insert(e, cid, staging);
 }
 
@@ -527,13 +527,12 @@ crd::containers::Array<crd::u8> SceneCooker::cook_inline(
                            line_of(*field_node));
                 continue;
             }
-            const crd::scene::ComponentInfo* info = world.components().info(cid);
-            CRD_ASSERT(info != nullptr);
+            const crd::scene::ComponentInfo& info = world.components().require_info(cid);
 
             alignas(16) crd::u8 staging[1024];
-            CRD_ASSERT(info->size <= sizeof(staging) && "scene_cooker: component too large for staging");
-            std::memset(staging, 0, info->size);
-            if (!reader->reader(field_node, staging, info->size, line_of(*field_node), &errors))
+            CRD_ASSERT(info.size <= sizeof(staging) && "scene_cooker: component too large for staging");
+            std::memset(staging, 0, info.size);
+            if (!reader->reader(field_node, staging, info.size, line_of(*field_node), &errors))
             {
                 continue; // reader emitted its own error
             }

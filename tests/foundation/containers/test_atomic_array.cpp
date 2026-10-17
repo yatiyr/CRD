@@ -90,7 +90,7 @@ namespace
 int g_aa_assert_hits = 0;
 } // namespace
 
-TEST_CASE("AtomicArray overflow asserts and returns npos", "[containers][atomic_array]")
+TEST_CASE("AtomicArray overflow asserts and returns kNpos", "[containers][atomic_array]")
 {
     const crd::AssertHandler prev_h = crd::get_assert_handler();
     const crd::AssertPlatformHandler prev_ph = crd::get_assert_platform_handler();
@@ -102,7 +102,7 @@ TEST_CASE("AtomicArray overflow asserts and returns npos", "[containers][atomic_
     CHECK(a.push(1ULL) == 0U);
     CHECK(a.push(2ULL) == 1U);
     g_aa_assert_hits = 0;
-    CHECK(a.push(3ULL) == AtomicArray<u64>::npos);
+    CHECK(a.push(3ULL) == AtomicArray<u64>::kNpos);
     CHECK(g_aa_assert_hits >= 1);
 
     crd::set_assert_handler(prev_h);

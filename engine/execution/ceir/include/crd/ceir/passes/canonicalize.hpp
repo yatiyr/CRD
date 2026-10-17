@@ -36,6 +36,7 @@
 
 #include <crd/containers/span.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::ceir
@@ -69,6 +70,10 @@ namespace canon_detail
 inline void rewrite_reshape_of_reshape(Context& ctx, Operation& op)
 {
     Operation* const inner  = op.operand(0)->defining_op(); // the input reshape
+    if (inner == nullptr) // the driver rewrites only what match_reshape_of_reshape accepted, which requires it
+    {
+        CRD_FATAL("rewrite_reshape_of_reshape: applied to an op its match refused");
+    }
     Value* const     x      = inner->operand(0);            // the value BEFORE both reshapes
     Operation* const folded = tensor::build_reshape(ctx, x, op.result(0)->type()); // one hop, result type = the outer's
     op.parent_block()->insert_before(folded, &op); // ⛔ LINK before the RAUW — a floating op is invisible to plan + re-collect

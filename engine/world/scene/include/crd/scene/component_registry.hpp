@@ -23,7 +23,7 @@ namespace crd::scene
 // units. typeid().name() is still used for debug-only ComponentInfo::name.
 template <typename T> struct ComponentTypeTag
 {
-    static constexpr char value = 0;
+    static constexpr char value = 0; // NOLINT(readability-identifier-naming): the standard trait member name
 };
 
 template <typename T> [[nodiscard]] constexpr const void* component_type_key() noexcept
@@ -97,6 +97,7 @@ template <typename T> struct IsRelationInstance : std::false_type
 template <typename Tag> struct IsRelationInstance<Relation<Tag>> : std::true_type
 {
 };
+// NOLINTNEXTLINE(readability-identifier-naming): the standard `_v` trait spelling.
 template <typename T> inline constexpr bool is_relation_instance_v = IsRelationInstance<T>::value;
 
 template <typename T> void capture_lifecycle_ops(ComponentInfo& info) noexcept
@@ -208,6 +209,18 @@ public:
             return nullptr;
         }
         return &m_infos[id.raw];
+    }
+
+    // The info of an id the registry issued (a stored layout's component, a backend selection): an unregistered id
+    // there is a broken invariant, fatal in every build rather than a null pointer the caller follows. The same
+    // compare as info(); a lookup that may legitimately miss uses info().
+    [[nodiscard]] const ComponentInfo& require_info(ComponentId id) const noexcept
+    {
+        if (id.is_null() || id.raw >= m_infos.size())
+        {
+            CRD_FATAL("ComponentRegistry::require_info: the component id is not registered");
+        }
+        return m_infos[id.raw];
     }
 
     [[nodiscard]] crd::u16 size() const noexcept { return static_cast<crd::u16>(m_infos.size()); }

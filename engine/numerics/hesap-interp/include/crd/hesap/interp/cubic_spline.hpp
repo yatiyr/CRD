@@ -185,12 +185,12 @@ private:
         }
         else // NotAKnot
         {
-            const T hl = hh(n - 2); // h[n-2]
-            const T hr = hh(n - 3); // h[n-3]
-            const T d = hl + hr;
-            diag[n - 1] = hr;
+            const T h_last = hh(n - 2); // h[n-2]
+            const T h_prev = hh(n - 3); // h[n-3]
+            const T d = h_last + h_prev;
+            diag[n - 1] = h_prev;
             sub[n - 1] = d;
-            rhs[n - 1] = (hl * hl * sec(n - 3) + (static_cast<T>(2) * d + hl) * hr * sec(n - 2)) / d;
+            rhs[n - 1] = (h_last * h_last * sec(n - 3) + (static_cast<T>(2) * d + h_last) * h_prev * sec(n - 2)) / d;
         }
         detail::thomas_solve<T>({sub.data(), n}, {diag.data(), n}, {sup.data(), n}, {rhs.data(), n},
                                {m_d.data(), n}, {cp.data(), n});
@@ -237,6 +237,10 @@ private:
             m_d[1] = t;
             m_d[2] = t;
             return InterpStatus::Ok;
+        }
+        if (n < 4) // build() answers n == 2 itself; stated here so the condensed system below is never empty
+        {
+            return InterpStatus::BadInput;
         }
         const crd::usize m = n - 2; // condensed (n-2)×(n-2) tridiagonal
         crd::containers::Array<T> sub(m_alloc);
