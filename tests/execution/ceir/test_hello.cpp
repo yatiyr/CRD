@@ -52,7 +52,7 @@ Module* build_hello_hand(Context& ctx)
 
     Operation* const fn = func::create_func(ctx, *m, "add1", Visibility::Public, 1U, ctx.type_i32());
     top->append(fn);
-    Block* const fb = func::func_body_block(fn);
+    Block* const fb = &func::func_body(*fn);
 
     Operation* const c1 = ctx.create_operation(ctx.intern_op("arith", "const"), {}, 1U, ctx.type_i32());
     ctx.set_attr(c1, "value", ctx.attr_int(1));
@@ -83,7 +83,7 @@ Module* build_hello_builder(Context& ctx)
     Operation* const fn = mb.func("add1", Visibility::Public, 1U, ctx.type_i32());
     {
         InsertionGuard g(mb);
-        Block* const   fb = func::func_body_block(fn);
+        Block* const   fb = &func::func_body(*fn);
         mb.set_insertion(fb);
         Value* const one = mb.op("arith", "const").result(ctx.type_i32()).attr("value", ctx.attr_int(1)).build_result();
         Value* const sum = mb.op("math", "add").operand(fb->arg(0U)).operand(one).result(ctx.type_i32()).build_result();

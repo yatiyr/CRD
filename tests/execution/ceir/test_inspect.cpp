@@ -81,14 +81,14 @@ Module* build_program(Context& ctx)
 
     Operation* const helper = func::create_func(ctx, *m, "helper", Visibility::Public, 1U, ctx.type_i32());
     m->body()->first_block()->append(helper);
-    Block* const     hb = func::func_body_block(helper);
+    Block* const     hb = &func::func_body(*helper);
     Operation* const h  = binop(ctx, hb, "muli", hb->arg(0U), hb->arg(0U));
     Value*           hr[1] = {h->result(0U)};
     hb->append(func::create_return(ctx, ConstSpan<Value*>(hr, 1U)));
 
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
     m->body()->first_block()->append(fn);
-    Block* const      body = func::func_body_block(fn);
+    Block* const      body = &func::func_body(*fn);
     Operation* const  zero = konst(ctx, body, 0, ctx.type_i32());
     Operation* const  one  = konst(ctx, body, 1, ctx.type_i32());
     Operation* const  two  = konst(ctx, body, 2, ctx.type_i32());
@@ -307,13 +307,16 @@ private:
     std::thread       m_thread;
 };
 
-// Runs the bound plan through the session on a Worker with its own allocator; `join` returns its result.
+// Runs the bound plan through the session on a Worker with its own allocator; `join` returns its result. `observer`
+// (null: none) sees every safe point before the session decides.
 class PlanRunner
 {
 public:
-    PlanRunner(insp::Session& s, const plan::CompiledPlan& p, i64 n, u64 gen = kGen)
+    PlanRunner(insp::Session& s, const plan::CompiledPlan& p, i64 n, u64 gen = kGen,
+               const plan::RunControl* observer = nullptr)
         : m_result(&m_alloc), m_arg(n),
-          m_worker(s, gen, [this, &s, &p] { m_result = s.run(p, ConstSpan<i64>(&m_arg, 1U), &m_alloc); })
+          m_worker(s, gen,
+                   [this, &s, &p, observer] { m_result = s.run(p, ConstSpan<i64>(&m_arg, 1U), &m_alloc, observer); })
     {
     }
     const plan::RunResult& join()
@@ -343,6 +346,51 @@ insp::Refusal request_pause_when_running(insp::Session& s, u64 gen)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
+
+// The compiled instr whose own op is `op` (invalid when none compiles it).
+plan::InstrRef instr_of(const plan::CompiledPlan& p, StableId op)
+{
+    for (u32 s = 0; s < static_cast<u32>(p.seqs.size()); ++s)
+    {
+        for (u32 k = 0; k < static_cast<u32>(p.seqs[s].sites.size()); ++k)
+        {
+            if (p.sites[p.seqs[s].sites[k]].op == op)
+            {
+                return plan::InstrRef{s, k};
+            }
+        }
+    }
+    return plan::InstrRef{};
+}
+
+// A safe-point observer that holds the executing thread at its first arrival before `target` until the controller
+// has requested a pause. The session decides only after its observer returns (inspect.cpp `on_plan`), so the request
+// lands exactly at `target`, wherever a free-running request would have raced to.
+struct LandingGate
+{
+    plan::InstrRef target;
+    std::atomic<bool> arrived{false};
+    std::atomic<bool> requested{false};
+
+    static plan::SafePointAction at(const plan::CompiledPlan& /*plan*/, const plan::SafePoint& sp, void* user)
+    {
+        LandingGate& g = *static_cast<LandingGate*>(user);
+        if (sp.at.seq != g.target.seq || sp.at.instr != g.target.instr)
+        {
+            return plan::SafePointAction::Continue;
+        }
+        if (g.arrived.exchange(true)) // a later arrival (a loop iteration) runs through
+        {
+            return plan::SafePointAction::Continue;
+        }
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitMs);
+        while (!g.requested.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return plan::SafePointAction::Continue;
+    }
+};
 
 insp::ValueSnapshot read(insp::Session& s, StableId op, memory::IAllocator* alloc)
 {
@@ -527,7 +575,18 @@ TEST_CASE("diag 8b: a pause request and a cancel stop a long run safely", "[ceir
         REQUIRE(s.wait_for_stop(kGen, kWaitMs, stop) == insp::Refusal::None);
         CHECK(stop.reason == insp::StopReason::PauseRequest);
         CHECK(stop.breakpoint == insp::kNoBreakpoint);
-        CHECK(read(s, stop.op, &ctl).status == insp::ValueStatus::NotYetComputed); // the held op has not run
+        // The request lands at the next safe point, before whichever instr runs next in any frame: usually the loop
+        // body, but on a slow executing thread (a sanitizer lane) it can land before the loop is entered, on core.for.
+        // The held instr has not run, so its op reads NotYetComputed, or NoSuchValue when it defines no result. The
+        // pinned landings are the next case.
+        const plan::CompiledPlan& p = prog.compiled.plan;
+        REQUIRE(stop.at.valid());
+        REQUIRE(stop.at.seq < static_cast<u32>(p.seqs.size()));
+        REQUIRE(stop.at.instr < static_cast<u32>(p.seqs[stop.at.seq].sites.size()));
+        CHECK(p.sites[p.seqs[stop.at.seq].sites[stop.at.instr]].op == stop.op);
+        const bool defines = p.seqs[stop.at.seq].instrs[stop.at.instr].results_cnt > 0U;
+        const insp::ValueStatus held = defines ? insp::ValueStatus::NotYetComputed : insp::ValueStatus::NoSuchValue;
+        CHECK(read(s, stop.op, &ctl).status == held);
         REQUIRE(s.cancel(kGen) == insp::Refusal::None);
         const plan::RunResult& r = runner.join();
         CHECK(r.error == plan::RunError::Cancelled);
@@ -560,6 +619,114 @@ TEST_CASE("diag 8b: a pause request and a cancel stop a long run safely", "[ceir
         const i64             n = long_run;
         const plan::RunResult r = plan::run(prog.compiled.plan, ConstSpan<i64>(&n, 1U), &ctl);
         CHECK(r.error == plan::RunError::FuelExhausted);
+    }
+}
+
+namespace
+{
+// Hold the executing thread at the gate, request the pause once it has arrived there, then wait for the stop. False
+// when the thread never arrived or no stop followed; the gate is released either way.
+bool pause_at_gate(insp::Session& s, LandingGate& gate, insp::StopRecord& stop)
+{
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kWaitMs);
+    while (!gate.arrived.load() && std::chrono::steady_clock::now() < until)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool arrived = gate.arrived.load();
+    const insp::Refusal requested = arrived ? s.request_pause(kGen) : insp::Refusal::NotRunning;
+    gate.requested.store(true, std::memory_order_release);
+    return requested == insp::Refusal::None && s.wait_for_stop(kGen, kWaitMs, stop) == insp::Refusal::None;
+}
+
+// A run cancelled at its pause fails Cancelled, blamed on the held instr, which never ran.
+void cancel_at(insp::Session& s, PlanRunner& runner, plan::InstrRef held)
+{
+    REQUIRE(s.cancel(kGen) == insp::Refusal::None);
+    const plan::RunResult& r = runner.join();
+    CHECK(r.error == plan::RunError::Cancelled);
+    REQUIRE(r.fault.valid());
+    CHECK(r.fault.seq == held.seq);
+    CHECK(r.fault.instr == held.instr);
+}
+} // namespace
+
+TEST_CASE("diag 8b: a pause request lands at the next safe point whatever instr it holds", "[ceir][diag]")
+{
+    Program prog;
+    memory::GrowableTlsfAllocator ctl;
+    memory::GrowableTlsfAllocator sess_alloc;
+    constexpr i64 long_run = i64{1} << 40;
+    const plan::CompiledPlan& p = prog.compiled.plan;
+
+    SECTION("before core.for, which defines no result: its op reads NoSuchValue")
+    {
+        const plan::InstrRef target = instr_of(p, prog.id_for);
+        REQUIRE(target.valid());
+        REQUIRE(p.seqs[target.seq].instrs[target.instr].results_cnt == 0U); // authored with no result
+        insp::Session s(&sess_alloc);
+        bind_plan(s, prog);
+        LandingGate gate;
+        gate.target = target;
+        const plan::RunControl observer{&LandingGate::at, &gate, nullptr};
+        PlanRunner runner(s, p, long_run, kGen, &observer);
+        insp::StopRecord stop;
+        REQUIRE(pause_at_gate(s, gate, stop));
+        CHECK(stop.reason == insp::StopReason::PauseRequest);
+        CHECK(stop.at.seq == target.seq);
+        CHECK(stop.at.instr == target.instr);
+        CHECK(stop.op == prog.id_for);
+        CHECK(stop.depth == 0U);
+        CHECK(read(s, prog.id_for, &ctl).status == insp::ValueStatus::NoSuchValue);
+        const insp::ValueSnapshot t = read(s, prog.id_call, &ctl); // the call before the loop has run
+        CHECK(t.status == insp::ValueStatus::Available);
+        CHECK(t.bits == 36);
+        CHECK(read(s, prog.id_x, &ctl).status == insp::ValueStatus::OutOfScope); // the loop body is not entered
+        cancel_at(s, runner, target);
+    }
+
+    SECTION("before the loop body's first instr: its op reads NotYetComputed")
+    {
+        const plan::InstrRef target = instr_of(p, prog.id_x);
+        REQUIRE(target.valid());
+        insp::Session s(&sess_alloc);
+        bind_plan(s, prog);
+        LandingGate gate;
+        gate.target = target;
+        const plan::RunControl observer{&LandingGate::at, &gate, nullptr};
+        PlanRunner runner(s, p, long_run, kGen, &observer);
+        insp::StopRecord stop;
+        REQUIRE(pause_at_gate(s, gate, stop));
+        CHECK(stop.reason == insp::StopReason::PauseRequest);
+        CHECK(stop.at.seq == target.seq);
+        CHECK(stop.at.instr == target.instr);
+        CHECK(stop.op == prog.id_x);
+        CHECK(stop.depth == 0U);
+        CHECK(read(s, prog.id_x, &ctl).status == insp::ValueStatus::NotYetComputed);
+        CHECK(read(s, prog.id_s, &ctl).bits == 6); // an outer region of the same frame is on the path
+        cancel_at(s, runner, target);
+    }
+
+    SECTION("before the callee's instr: the caller's values are out of scope")
+    {
+        const plan::InstrRef target = instr_of(p, prog.id_h);
+        REQUIRE(target.valid());
+        insp::Session s(&sess_alloc);
+        bind_plan(s, prog);
+        LandingGate gate;
+        gate.target = target;
+        const plan::RunControl observer{&LandingGate::at, &gate, nullptr};
+        PlanRunner runner(s, p, long_run, kGen, &observer);
+        insp::StopRecord stop;
+        REQUIRE(pause_at_gate(s, gate, stop));
+        CHECK(stop.reason == insp::StopReason::PauseRequest);
+        CHECK(stop.at.seq == target.seq);
+        CHECK(stop.at.instr == target.instr);
+        CHECK(stop.op == prog.id_h);
+        CHECK(stop.depth == 1U);
+        CHECK(read(s, prog.id_h, &ctl).status == insp::ValueStatus::NotYetComputed);
+        CHECK(read(s, prog.id_s, &ctl).status == insp::ValueStatus::OutOfScope); // the caller's frame
+        cancel_at(s, runner, target);
     }
 }
 

@@ -30,7 +30,11 @@
       "url": "https://github.com/facebook/zstd/archive/63779c798237346c2b245c546c40b72a5a5913fe.tar.gz",
       "file": "zstd-63779c79.tar.gz",
       "sha256": "52f5e9fe50c75feda969686b29d28791ac430bc33e85c35bc9fb02d1a1b891e3",
-      "license": "BSD-3-Clause OR GPL-2.0-only"
+      "license": "BSD-3-Clause OR GPL-2.0-only",
+      "patches": [
+        "zstd-huf-is-sorted-unused",
+        "zstd-lazy-is-aligned-unused"
+      ]
     },
     "stb": {
       "version": "2c980bb",

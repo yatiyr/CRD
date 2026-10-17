@@ -682,9 +682,20 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
 endif()
 
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
-    # zstd 1.5.5 has cmake_minimum_required(VERSION 2.8.12.2) which modern CMake rejects.
-    # Setting CMAKE_POLICY_VERSION_MINIMUM tells CMake to treat it as 3.5.
-    set(CMAKE_POLICY_VERSION_MINIMUM "3.5")
+    # zstd 1.5.5 declares cmake_minimum_required(VERSION 2.8.12), which CMake 4 rejects below 3.5 and deprecates below
+    # 3.10 (a "Compatibility with CMake < 3.10" warning on every configure). CMAKE_POLICY_VERSION_MINIMUM raises that
+    # declaration to 3.10; zstd's next line sets cmake_policy(VERSION 3.13.0) itself, so no policy zstd runs under
+    # changes (zstd 1.5.7 declares 3.10).
+    set(CMAKE_POLICY_VERSION_MINIMUM "3.10")
+    # zstd's project() enables ASM on every platform, but under MSVC it assembles nothing (its CMake defines
+    # ZSTD_DISABLE_ASM and globs no .S file there). CMake 4.1+ asks through CMP0194 whether cl.exe may stand in as that
+    # unused assembler, warning on every MSVC configure while unset. OLD is the answer every configure before 4.1 gave:
+    # NEW drops cl.exe and lets enable_language(ASM) pick whatever assembler PATH offers, or fail. zstd's dev branch
+    # enables ASM only where it assembles; a pin that does so retires this setting. CMake 4.1 to 4.3 register the
+    # policy as `CMP194` (Source/cmPolicies.h; their warning prints that name) and read its default under that
+    # spelling; 4.4 corrected it to CMP0194. Both names are set so every CMake that knows the policy reads OLD.
+    set(CMAKE_POLICY_DEFAULT_CMP0194 OLD)
+    set(CMAKE_POLICY_DEFAULT_CMP194 OLD)
     crd_add_pinned_package(zstd
         SOURCE_SUBDIR build/cmake
         OPTIONS
@@ -698,6 +709,11 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
             "ZSTD_LEGACY_SUPPORT OFF"
     )
     unset(CMAKE_POLICY_VERSION_MINIMUM)
+    unset(CMAKE_POLICY_DEFAULT_CMP0194)
+    unset(CMAKE_POLICY_DEFAULT_CMP194)
+    if(NOT TARGET libzstd_static)
+        message(FATAL_ERROR "The pinned zstd's CMake no longer defines libzstd_static (cmake/pins.json)")
+    endif()
 
     # Phase 3.1.7.6 v0-close (2026-05-17) — disable IPO/LTCG on the
     # vendored zstd_static target. MSVC's LTCG link step recurrently
@@ -714,9 +730,36 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     # `zstd_static` never applied: until 2026-10-17 zstd's objects were /GL- and -flto-compiled on every IPO lane, and
     # GCC's lto-wrapper warned on each link that it dropped zstd's `-Wa,--noexecstack`. Without IPO zstd's objects are
     # ordinary objects, assembled with their own options.
-    if(TARGET libzstd_static)
-        set_target_properties(libzstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    set_target_properties(libzstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+
+    # Two zstd sources compile from build-owned patched copies (cmake/patches/zstd-*-unused.cmake). zstd marks its
+    # MEM_STATIC helpers __attribute__((unused)) only under __GNUC__, which clang-cl does not define, so HUF_isSorted
+    # and ZSTD_isAligned, used only inside assert(), drew -Wunused-function on every win-clang-cl-shipping build
+    # (1.5.5, 1.5.7 and the dev branch alike). Each patch gives its helper the attribute under clang without __GNUC__
+    # only; every other compiler preprocesses the copy to the upstream text. The copies live outside zstd's tree, so
+    # they also take zstd's lib/compress for their same-directory includes.
+    crd_patched_copy(_crd_zstd_huf zstd lib/compress/huf_compress.c zstd-huf-is-sorted-unused)
+    crd_patched_copy(_crd_zstd_lazy zstd lib/compress/zstd_lazy.c zstd-lazy-is-aligned-unused)
+    get_target_property(_crd_zstd_sources libzstd_static SOURCES)
+    set(_crd_zstd_kept ${_crd_zstd_sources})
+    list(FILTER _crd_zstd_kept EXCLUDE REGEX "/lib/compress/(huf_compress|zstd_lazy)\\.c$")
+    list(LENGTH _crd_zstd_sources _crd_zstd_count)
+    list(LENGTH _crd_zstd_kept _crd_zstd_kept_count)
+    math(EXPR _crd_zstd_replaced "${_crd_zstd_count} - ${_crd_zstd_kept_count}")
+    if(NOT _crd_zstd_replaced EQUAL 2)
+        message(FATAL_ERROR "zstd patches: libzstd_static lists ${_crd_zstd_replaced} of huf_compress.c and "
+                            "zstd_lazy.c, expected exactly 2")
     endif()
+    set_property(TARGET libzstd_static PROPERTY SOURCES ${_crd_zstd_kept} "${_crd_zstd_huf}" "${_crd_zstd_lazy}")
+    set_source_files_properties("${_crd_zstd_huf}" "${_crd_zstd_lazy}" TARGET_DIRECTORY libzstd_static
+                                PROPERTIES INCLUDE_DIRECTORIES "${zstd_SOURCE_DIR}/lib/compress")
+    unset(_crd_zstd_huf)
+    unset(_crd_zstd_lazy)
+    unset(_crd_zstd_sources)
+    unset(_crd_zstd_kept)
+    unset(_crd_zstd_count)
+    unset(_crd_zstd_kept_count)
+    unset(_crd_zstd_replaced)
 endif()
 
 if("stb" IN_LIST CRD_SELECTED_PACKAGES)

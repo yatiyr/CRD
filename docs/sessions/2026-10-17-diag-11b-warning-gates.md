@@ -108,6 +108,10 @@ Cerid's code or flags is involved, and the only repair that is not a suppression
 archive fetched and registered (with no evidence here that upstream changed this; no other zstd copy exists on this
 machine). That, or accepting the two lines as third-party diagnostics, is the user's decision; nothing was changed.
 
+Later the same day (pointer, the text above is unchanged): no zstd release changes the `__GNUC__` gate (v1.5.7 and
+the dev branch checked), and two registered patches on build-owned copies repaired both warnings with the objects'
+code unchanged; see [zstd's clang-cl and configure warnings](2026-10-17-diag-11b-zstd-configure-and-pause-landing.md).
+
 ## Verification
 
 | Lane | Built | Ran |

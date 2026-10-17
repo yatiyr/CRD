@@ -208,6 +208,8 @@ Also clean: `tidy-files.py` on every changed C++ file (LLVM 20.1.8),
 
 ## Follow-up for an extra batch
 
+(Pointer: (e) and (j) were taken by the [next batch](2026-10-17-diag-11b-zstd-configure-and-pause-landing.md).)
+
 (e) win-clang-cl-shipping's two zstd `-Wunused-function` (`HUF_isSorted`, `ZSTD_isAligned`), queued before this batch.
 
 (h) Allocation results the compiler cannot see as nullable, followed unchecked in the same shape as the CEIR arena:

@@ -582,6 +582,12 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-8b-safe-point-inspect
   the IR type, its canonical text and a quantity's dimension; the plan keeps each result's type for this.
 - Cancel and the fuel budget are preserved: a cancel at a pause ends the run with `Cancelled` blamed on the held instr
   or op before it runs (`RunError::Cancelled` is new); pausing consumes no fuel.
+- A pause request lands at the safe point the executing thread reaches next, before whichever instr runs next in any
+  frame, a call's callee or a loop's body included. The held instr has not run: its op reads `NotYetComputed`, or
+  `NoSuchValue` when it defines no result (`core.for`). A case pins landings on a resultless instr, a loop body and a
+  callee by holding the executing thread at a chosen safe point through the session's observer (2026-10-17,
+  [session](../sessions/2026-10-17-diag-11b-zstd-configure-and-pause-landing.md); a free-running request had landed on
+  `core.for` once under TSan against an oracle that expected `NotYetComputed` everywhere).
 - Scopes are typed: `Task` pauses one execution, `WholeHost` runs the host's freeze/thaw around the pause (refused
   without them) and `NonPausable` never waits (hits are counted).
 - A session is bound to one generation (the host's number, e.g. a ReloadSet handle's) and refuses requests naming

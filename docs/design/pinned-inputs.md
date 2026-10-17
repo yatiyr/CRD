@@ -88,8 +88,22 @@ A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patc
 `crd_patched_copy(<out> <package> <file> <name>)` reads the pristine file from the downloaded tree, applies the
 steps, and writes the result under `${CMAKE_BINARY_DIR}/patched/<package>/` only when its content changes; the
 target compiles that copy. An anchor that no longer matches upstream is a configure error naming the patch, where
-the former in-place `file(WRITE)` into the source tree silently did nothing on drift. The imgui Vulkan backend
-(`imgui-vulkan-whole-size`) is the one patch today.
+the former in-place `file(WRITE)` into the source tree silently did nothing on drift. Each patch is listed under its
+package's `patches` in the registry (check-pins fails a listed patch without its spec). Three exist: the imgui Vulkan
+backend (`imgui-vulkan-whole-size`), and zstd's `huf_compress.c` and `zstd_lazy.c` (`zstd-huf-is-sorted-unused`,
+`zstd-lazy-is-aligned-unused`), which give an assert-only `MEM_STATIC` helper the unused attribute upstream gives it
+under GCC but not under clang-cl, whose `-Wunused-function` was the one third-party warning win-clang-cl-shipping
+printed. zstd's CMake builds its library from a glob, so the root `CMakeLists.txt` swaps the two upstream paths in
+`libzstd_static`'s sources for the copies (exactly two, or the configure fails) and gives the copies zstd's
+`lib/compress` for their same-directory includes; the objects are the upstream objects (identical code; with asserts
+compiled, only the asserts' line numbers move) ([session](../sessions/2026-10-17-diag-11b-zstd-configure-and-pause-landing.md)).
+
+zstd 1.5.5's own CMake also drew configure warnings on every lane. Its `cmake_minimum_required(VERSION 2.8.12)` is
+raised to 3.10 through `CMAKE_POLICY_VERSION_MINIMUM` (zstd sets `cmake_policy(VERSION 3.13.0)` next, so its policies
+are unchanged); CMake before 4.0 has no such variable and still prints that deprecation, which the zstd 1.5.7 pin ends.
+Its unconditional `project(... ASM)` meets CMP0194 under MSVC, answered `OLD` for zstd's directory only (the
+behaviour of every earlier configure; zstd assembles nothing under MSVC), under both the `CMP0194` name and the
+`CMP194` spelling CMake 4.1 to 4.3 read the default under.
 
 The tooling suite proves the cache contract on a fixture: two consumers configured against one `CPM_SOURCE_CACHE`
 from a local archive leave the cache tree's content hash unchanged, the cached file keeps the upstream text while
