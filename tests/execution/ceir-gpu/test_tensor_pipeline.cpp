@@ -79,8 +79,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 // CEIR-27a: build a `ceir.transform` SCHEDULE module — the directive ops sit DIRECTLY in the module body block (a
 // directive is compile metadata, not runtime work, so no func wrapper). `n_dir` directives: always transform.fuse{fuse};

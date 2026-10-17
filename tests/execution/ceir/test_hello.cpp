@@ -51,6 +51,7 @@ Module* build_hello_hand(Context& ctx)
     m->body()->append(top);
 
     Operation* const fn = func::create_func(ctx, *m, "add1", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     top->append(fn);
     Block* const fb = &func::func_body(*fn);
 
@@ -81,6 +82,7 @@ Module* build_hello_builder(Context& ctx)
     (void)mb.add_block(0U);
 
     Operation* const fn = mb.func("add1", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     {
         InsertionGuard g(mb);
         Block* const   fb = &func::func_body(*fn);

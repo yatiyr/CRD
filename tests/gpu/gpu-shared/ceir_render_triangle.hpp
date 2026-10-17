@@ -20,6 +20,7 @@
 #include <crd/ceir/gpu/lower.hpp>            // lower_region / LoweredCommand
 #include <crd/ceir/gpu/render_materialize.hpp> // execute_render_lowered / ExecuteError / the resolver typedefs
 #include <crd/ceir/render.hpp>
+#include <crd/core/assert.hpp> // CRD_FATAL
 
 #include <crd/gpu/raster_context.hpp> // IRasterTarget / IRasterProgram / ICommandEncoder
 
@@ -52,9 +53,13 @@ inline ce::Block* ceir_fresh_render_module(ce::Context& ctx, ce::Module*& out_mo
         m->body()->append(top);
     }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    if (fn == nullptr) // a fresh module defines nothing yet, so a refusal is a broken fixture, not a device result
+    {
+        CRD_FATAL("ceir_fresh_render_module: create_func refused @main in a fresh module");
+    }
     top->append(fn);
     out_module = m;
-    return ce::func::func_body_block(fn);
+    return &ce::func::func_body(*fn);
 }
 
 // Append ONE `render.scope(color_attachment(new img){load=clear, clear=(cr,cg,cb,1)}) { render.draw(3,1) @tri }` to `b`

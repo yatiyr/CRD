@@ -170,7 +170,10 @@ included, so `-Wall`'s members (`-Warray-bounds`, `-Wmaybe-uninitialized`, ...) 
 without link-time optimization so that its code never meets them
 ([session](../sessions/2026-10-17-diag-11b-link-time-warning-set.md)); `-Wnull-dereference` is among them since its
 link-time locations were repaired, 80 on linux-gcc-shipping and 42 more with asserts compiled in
-([session](../sessions/2026-10-17-diag-11b-link-time-null-dereference.md)). A link stops at its first failing
+([session](../sessions/2026-10-17-diag-11b-link-time-null-dereference.md)). An unchecked lookup that may miss is such a
+location waiting for an inlining change, so `crd-ceir-invariants` (I7) holds every `func::func_body_block` caller to a
+nullptr test; callers with a body take `func::func_body`
+([session](../sessions/2026-10-17-diag-11b-func-body-lookups.md)). A link stops at its first failing
 link-time partition, so `-flto-partition=one` on a failed link command lists all of a program's link-time diagnostics
 at once (diagnostic use only). Third-party sources keep their own flags and are held to no warning as well: zstd's two
 clang-cl `-Wunused-function` take registered patches and its configure warnings are answered, except one deprecation

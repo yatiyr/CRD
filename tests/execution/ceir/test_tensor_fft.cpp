@@ -45,8 +45,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 Value* mkval(Context& ctx, const TensorKit& k, Block* b, TypeId t)
 {
@@ -166,8 +167,9 @@ TEST_CASE("ceir 22a: fft + gemm round-trip byte-clean through text AND binary (t
         m->body()->append(top);
     }
     Operation* const f = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b  = func::func_body_block(f);
+    Block* const b  = &func::func_body(*f);
     const TypeId ef = ctx.type_f32();
     const auto   mk = [&](TypeId t) { Operation* const d = ctx.create_operation(decl, {}, 1U, t); b->append(d); return d->result(0U); };
 

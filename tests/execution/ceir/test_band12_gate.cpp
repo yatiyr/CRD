@@ -56,8 +56,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 Operation* decl_res(Context& ctx, const Kit& k, Block* b, const char* lifetime, i64 size_class, TypeId ty)
 {
@@ -278,7 +279,7 @@ TEST_CASE("ceir 12z band gate: the resource->memory pipeline composes and aliasi
     REQUIRE(dr.module != nullptr);
     CHECK(ctx2.find_resource_misuse(*dr.module).kind == ResourceMisuseKind::None);
     CHECK(ctx2.find_resource_intent_misuse(*dr.module).kind == ResourceIntentMisuseKind::None);
-    Block* const twin_body = func::func_body_block(dr.module->body()->first_block()->first_op());
+    Block* const twin_body = &func::func_body(*dr.module->body()->first_block()->first_op());
     MemoryPlan   tplan(&root);
     ctx2.plan_block_memory(*twin_body, PlanProfile::Memory, tplan);
     CHECK(tplan.transient_logical == 5U);  // ⭐ lifetime + size_class attrs survived (else these would collapse to 0)

@@ -445,7 +445,7 @@ private:
         }
         attribute(fn, handler);
         mbody->append(fn);
-        Block* const fb = crd::ceir::func::func_body_block(fn);
+        Block* const fb = &crd::ceir::func::func_body(*fn);
         // ⛔ ADR-0128 D3 duplicate-pin guard: the program-scope state cells are emitted ONCE (in the FIRST handler's func).
         // Emitting them per-handler would pin the SAME source id onto two ops (a duplicate migration key = state
         // corruption). §143 has ONE handler; multi-handler SHARED program state is a named future (the cells live here).

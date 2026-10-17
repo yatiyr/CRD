@@ -263,7 +263,7 @@ TEST_CASE("chir 32d: the lowered CEIR is structure-verifier-clean, round-trips, 
         }
     }
     REQUIRE(fn != nullptr);
-    crd::ceir::Block* const fb = crd::ceir::func::func_body_block(fn);
+    crd::ceir::Block* const fb = &crd::ceir::func::func_body(*fn);
     REQUIRE(fb->num_args() == 2U); // the query view: Position + Velocity (the `components` attr, dot-joined)
     crd::ceir::Operation* pf = nullptr;
     for (crd::ceir::Operation* op = fb->first_op(); op != nullptr; op = op->next_in_block())

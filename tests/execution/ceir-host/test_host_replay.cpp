@@ -98,15 +98,17 @@ Module* build(Context& ctx, i64 launched)
     m->body()->append(ctx.create_block(0U));
     {
         Operation* const fn = func::create_func(ctx, *m, "square", Visibility::Public, 1U, ctx.type_i32());
+        REQUIRE(fn != nullptr);
         m->body()->first_block()->append(fn);
-        Block* const fb   = func::func_body_block(fn);
+        Block* const fb   = &func::func_body(*fn);
         Value* const v    = fb->arg(0U);
         Value*       r[1] = {bin(ctx, "muli", fb, v, v)};
         fb->append(func::create_return(ctx, ConstSpan<Value*>(r, 1U)));
     }
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->first_block()->append(fn);
-    Block* const fb = func::func_body_block(fn);
+    Block* const fb = &func::func_body(*fn);
     Value* const x  = fb->arg(0U);
 
     Operation* const launch = ctx.create_operation(ctx.intern_op("async", "launch"), {}, 1U, ctx.type_i32(), 1U);

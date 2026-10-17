@@ -56,8 +56,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 // a resource.declare producing a value of type `t` (the typed-value seed — the test_tensor mold).
 Value* mkval(Context& ctx, const DistKit& k, Block* b, TypeId t)

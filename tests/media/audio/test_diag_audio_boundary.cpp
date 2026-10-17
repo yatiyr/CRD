@@ -86,12 +86,13 @@ ceir::Module* source_gain_module(ceir::Context& ctx, i64 rate)
         m->body()->append(top);
     }
     ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
     if (rate > 0)
     {
         ctx.set_attr(fn, StringView("sample_rate"), ctx.attr_int(rate));
     }
-    ceir::Block* const body  = ceir::func::func_body_block(fn);
+    ceir::Block* const body  = &ceir::func::func_body(*fn);
     const ceir::TypeId dims[2] = {ctx.type_dim_dynamic(), ctx.type_dim_static(2U)};
     const ceir::TypeId tt      = ctx.type_tensor(ctx.type_f32(), ctx.type_shape(ConstSpan<ceir::TypeId>(dims, 2U)));
     ceir::Operation* const s =

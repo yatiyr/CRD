@@ -45,8 +45,9 @@ Operation* build_gemm_op(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b  = func::func_body_block(f);
+    Block* const b  = &func::func_body(*f);
     const TypeId ef = ctx.type_f32();
     const auto   mk = [&](TypeId t) { Operation* const d = ctx.create_operation(decl, {}, 1U, t); b->append(d); return d->result(0U); };
     Value* const a  = mk(ctx.type_tensor(ef, sh2(ctx, kM, kK)));

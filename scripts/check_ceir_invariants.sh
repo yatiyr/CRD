@@ -62,10 +62,50 @@ for pin in "include/crd/ceir/type.hpp:TypeKind:Extern" "include/crd/ceir/attr.hp
     fi
 done
 
+# ── I7 (DIAG.11b): `func::func_body_block` is the lookup that may miss; every caller tests its result against nullptr
+# (on the call's line, or the assigned variable within the next six lines). A caller holding a func.func that has a body
+# takes `func::func_body`, fatal in every build. An unchecked lookup is a null path the optimizer can inline into the
+# dereference, and GCC's link-time -Wnull-dereference then fails an unrelated edit's link (test_hello.cpp, 2026-10-17).
+i7_awk='
+{ line[NR] = $0 }
+END {
+    for (i = 1; i <= NR; i++) {
+        code = line[i]; sub(/\/\/.*/, "", code)
+        if (code !~ /func_body_block[ \t]*\(/) { continue }
+        if (code ~ /func_body_block[ \t]*\([^;]*\)[ \t]*[!=]=[ \t]*nullptr/) { continue }
+        var = ""
+        if (match(code, /[A-Za-z_][A-Za-z0-9_]*[ \t]*=[ \t]*[^= \t][^;]*func_body_block/)) {
+            lhs = substr(code, RSTART, RLENGTH)
+            if (match(lhs, /^[A-Za-z_][A-Za-z0-9_]*/)) { var = substr(lhs, RSTART, RLENGTH) }
+        }
+        ok = 0
+        if (var != "") {
+            for (j = i; j <= i + 6 && j <= NR; j++) {
+                c = line[j]; sub(/\/\/.*/, "", c)
+                if (c ~ ("(^|[^A-Za-z0-9_])" var "[ \t]*[!=]=[ \t]*nullptr") ||
+                    c ~ ("nullptr[ \t]*[!=]=[ \t]*" var "([^A-Za-z0-9_]|$)")) { ok = 1; break }
+            }
+        }
+        if (!ok) { t = line[i]; gsub(/^[ \t]+/, "", t); print FILENAME ":" i ": " t }
+    }
+}'
+i7_dirs=()
+for d in engine tests tools runtime sandbox; do
+    [[ -d "$root/$d" ]] && i7_dirs+=("$root/$d")
+done
+i7_own='engine/execution/ceir/(include/crd/ceir/func\.hpp|src/func\.cpp)$'
+i7_msg='I7 an unchecked func::func_body_block (test it against nullptr, or take func::func_body)'
+while IFS= read -r f; do
+    while IFS= read -r hit; do
+        [[ -n "$hit" ]] && violations+=("$i7_msg: $hit")
+    done < <(awk "$i7_awk" "$f")
+done < <(grep -rlE 'func_body_block[[:space:]]*\(' "${i7_dirs[@]}" --include='*.cpp' --include='*.hpp' --include='*.h' \
+             --include='*.inl' 2>/dev/null | grep -vE "$i7_own" || true)
+
 if [[ ${#violations[@]} -gt 0 ]]; then
-    echo "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins):"
+    echo "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins + I7 body lookups):"
     printf '  %s\n' "${violations[@]}"
     exit 1
 fi
-echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern)."
+echo "crd-ceir invariants OK (I3: no shader-lang/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern; I7: every func_body_block result tested)."
 exit 0

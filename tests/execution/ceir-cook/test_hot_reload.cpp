@@ -80,8 +80,9 @@ Array<u8> cook_leaf(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, Stri
     module_block(c, *m);
     const TypeId ty = i64_result ? c.type_i64() : c.type_i32();
     Operation* const f = func::create_func(c, *m, fname, Visibility::Public, 0U, ty);
+    REQUIRE(f != nullptr);
     m->body()->first_block()->append(f);
-    ret(c, func::func_body_block(f), konst(c, r, func::func_body_block(f), k, ty)->result(0U));
+    ret(c, &func::func_body(*f), konst(c, r, &func::func_body(*f), k, ty)->result(0U));
     CookResult cr = cook_program(c, *m, asset_id, &root, &root);
     REQUIRE(cr.ok());
     return std::move(cr.blob);
@@ -94,8 +95,9 @@ Array<u8> cook_counter(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, i
     Module*   m = c.create_module();
     module_block(c, *m);
     Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     m->body()->first_block()->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     Value* const init = konst(c, r, b, 0, c.type_i32())->result(0U);
     Value* const nxt  = konst(c, r, b, nextval, c.type_i32())->result(0U);
     Value* seed[2] = {init, nxt};
@@ -118,8 +120,9 @@ Array<u8> cook_caller(crd::memory::GrowableTlsfAllocator& root, u64 asset_id, St
     Module*   m = c.create_module();
     module_block(c, *m);
     Operation* const f = func::create_func(c, *m, fname, Visibility::Public, 0U, c.type_i32());
+    REQUIRE(f != nullptr);
     m->body()->first_block()->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
     b->append(func::create_call(c, callee, {}, 0U, {}));
     ret(c, b, konst(c, r, b, 0, c.type_i32())->result(0U));
     CookResult cr = cook_program(c, *m, asset_id, &root, &root);
@@ -164,8 +167,9 @@ String source_leaf(crd::memory::GrowableTlsfAllocator& root, StringView fname, i
     module_block(c, *m);
     const TypeId ty = i64_result ? c.type_i64() : c.type_i32();
     Operation* const f = func::create_func(c, *m, fname, Visibility::Public, 0U, ty);
+    REQUIRE(f != nullptr);
     m->body()->first_block()->append(f);
-    ret(c, func::func_body_block(f), konst(c, r, func::func_body_block(f), k, ty)->result(0U));
+    ret(c, &func::func_body(*f), konst(c, r, &func::func_body(*f), k, ty)->result(0U));
     return print(c, *m, &root);
 }
 

@@ -123,8 +123,9 @@ Value* await_token(Context& ctx, Block* b, Value* token)
 Block* add_func(Context& ctx, Module& m, const char* name)
 {
     Operation* const fn = func::create_func(ctx, m, name, Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m.body()->first_block()->append(fn);
-    return func::func_body_block(fn);
+    return &func::func_body(*fn);
 }
 
 // The markers are constants with distinctive values, so each breakpoint line is found by scanning the text.

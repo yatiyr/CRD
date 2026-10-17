@@ -65,6 +65,7 @@ Block* body_block(Context& ctx, Module& m)
 Operation* mkfunc(Context& ctx, Module& m, containers::StringView name, crd::u32 nparams)
 {
     Operation* const f = func::create_func(ctx, m, name, Visibility::Public, nparams, ctx.type_i32());
+    REQUIRE(f != nullptr);
     body_block(ctx, m)->append(f);
     return f;
 }
@@ -133,7 +134,7 @@ TEST_CASE("ceir host: parallel_for maps iv*iv on the pool, num_jobs-independent"
     // @main(): parallel_for(0,6,1){ iv: yield iv*iv }
     Module* const    m  = ctx.create_module();
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Block*           body = nullptr;
     Operation* const pf   = mk_pfor(ctx, o, mb, 6, body);
     yield1(ctx, o, body, bin(ctx, o.muli, body->arg(0U), body->arg(0U), body)->result(0U));
@@ -163,12 +164,12 @@ TEST_CASE("ceir host: a parallel_for body may CALL a self-contained func", "[cei
     // @sq(%x): return x*x. @main(): parallel_for(0,5,1){ iv: %r = call sq(iv); yield %r }
     Module* const    m  = ctx.create_module();
     Operation* const fs = mkfunc(ctx, *m, "sq", 1U);
-    Block* const     sb = func::func_body_block(fs);
+    Block* const     sb = &func::func_body(*fs);
     Value*           rv[1] = {bin(ctx, o.muli, sb->arg(0U), sb->arg(0U), sb)->result(0U)};
     sb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
 
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Block*           body = nullptr;
     Operation* const pf   = mk_pfor(ctx, o, mb, 5, body);
     Value*           ca[1] = {body->arg(0U)};
@@ -199,7 +200,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         Operation* const pf   = mk_pfor(ctx, o, mb, 0, body); // range [0,0) is empty
         yield1(ctx, o, body, konst(ctx, o, body, 7)->result(0U));
@@ -213,7 +214,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 5)->result(0U),
                              konst(ctx, o, mb, 0)->result(0U)}; // step 0
         Operation* const pf = ctx.create_operation(o.pfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);
@@ -230,7 +231,7 @@ TEST_CASE("ceir host: empty range yields an empty map; a non-positive step is Ba
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           mapb = nullptr;
         Block*           cb   = nullptr;
         Operation* const mr   = mk_map_reduce(ctx, o, mb, /*n*/ 0, /*init*/ 42, mapb, cb); // range [0,0) is empty
@@ -256,7 +257,7 @@ TEST_CASE("ceir host: a plain reference interpreter has no task semantics (NoSem
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     Block*                       body = nullptr;
     (void)mk_pfor(ctx, o, mb, 3, body);
     yield1(ctx, o, body, konst(ctx, o, body, 1)->result(0U));
@@ -279,7 +280,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         (void)mk_pfor(ctx, o, mb, 4, body);
         Value* sops[2] = {konst(ctx, o, body, 0)->result(0U), konst(ctx, o, body, 0)->result(0U)};
@@ -294,7 +295,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
     {
         Module* const    m  = ctx.create_module();
         Operation* const fc = mkfunc(ctx, *m, "counter", 1U);
-        Block* const     cb = func::func_body_block(fc);
+        Block* const     cb = &func::func_body(*fc);
         Value*           sops[2] = {konst(ctx, o, cb, 0)->result(0U), konst(ctx, o, cb, 0)->result(0U)};
         Operation* const cell = ctx.create_operation(o.state, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
         cb->append(cell);
@@ -302,7 +303,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
         Value* cr[1] = {cell->result(0U)};
         cb->append(func::create_return(ctx, ConstSpan<Value*>(cr, 1U)));
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         (void)mk_pfor(ctx, o, mb, 4, body);
         Value*           ca[1] = {body->arg(0U)};
@@ -316,7 +317,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         (void)mk_pfor(ctx, o, mb, 4, body);
         Value*           ca[1] = {body->arg(0U)};
@@ -329,7 +330,7 @@ TEST_CASE("ceir host: the parallel-purity pre-flight", "[ceir][host]")
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         (void)mk_pfor(ctx, o, mb, 4, body);
         (void)konst(ctx, o, body, 3); // no core.yield terminator at all -> yields 0, not 1
@@ -346,7 +347,7 @@ TEST_CASE("ceir host: a runaway parallel body is FuelExhausted, not a hang", "[c
     // body: for(0, 100000, 1) { } ; yield 0  -- burns fuel per iteration, exceeding a tiny sub-budget.
     Module* const    m  = ctx.create_module();
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Block*           body = nullptr;
     Operation* const pf   = mk_pfor(ctx, o, mb, 3, body);
     Value* lohilst[3] = {konst(ctx, o, body, 0)->result(0U), konst(ctx, o, body, 100000)->result(0U),
@@ -377,7 +378,7 @@ TEST_CASE("ceir host: num_jobs > count clamps; advertises; a captured body is Un
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           body = nullptr;
         Operation* const pf   = mk_pfor(ctx, o, mb, 3, body);
         yield1(ctx, o, body, bin(ctx, o.muli, body->arg(0U), body->arg(0U), body)->result(0U));
@@ -399,7 +400,7 @@ TEST_CASE("ceir host: num_jobs > count clamps; advertises; a captured body is Un
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Operation* const outer = konst(ctx, o, mb, 10); // defined OUTSIDE the parallel_for body
         Block*           body  = nullptr;
         (void)mk_pfor(ctx, o, mb, 4, body);
@@ -448,7 +449,7 @@ TEST_CASE("ceir host: request_cancel stops a running parallel_for (Cancelled, no
     // body: for(0, 1000000, 1) { } ; yield 0  -- a long spin; with HUGE sub-fuel only cancellation can stop it.
     Module* const    m  = ctx.create_module();
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Block*           body = nullptr;
     (void)mk_pfor(ctx, o, mb, 4, body);
     Value* lohilst[3] = {konst(ctx, o, body, 0)->result(0U), konst(ctx, o, body, 1000000)->result(0U),
@@ -480,7 +481,7 @@ TEST_CASE("ceir host: map_reduce fixed-order fold is bit-identical across num_jo
     // @main() -> i64: %s = async.scope { %r = map_reduce(0,elem_count,1, init=0) map{iv: iv*iv} combine{acc,elem: acc*31 + elem}; yield %r }; return %s
     Module* const    m  = ctx.create_module();
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Block*           sbody = nullptr;
     Operation* const sc    = mk_scope(ctx, o, mb, sbody);
     Block*           mapb = nullptr;
@@ -543,7 +544,7 @@ TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free an
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           mapb = nullptr;
         Block*           cb   = nullptr;
         (void)mk_map_reduce(ctx, o, mb, 5, 0, mapb, cb);
@@ -560,7 +561,7 @@ TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free an
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           mapb = nullptr;
         Block*           cb   = nullptr;
         (void)mk_map_reduce(ctx, o, mb, 5, 0, mapb, cb, /*combine_nargs*/ 1U); // 1 arg, not (acc, elem)
@@ -573,7 +574,7 @@ TEST_CASE("ceir host: map_reduce pre-flight -- the combine must be state-free an
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Block*           mapb = nullptr;
         Block*           cb   = nullptr;
         (void)mk_map_reduce(ctx, o, mb, 5, 0, mapb, cb);
@@ -593,7 +594,7 @@ TEST_CASE("ceir 11a: the sequential reference AGREES with the HostProvider byte-
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     // @main() -> i32 { %r = map_reduce(0,13,1, init=0) map{iv: yield iv*iv} combine{acc,elem: yield acc*31+elem}; ret %r }
     Block* mapb = nullptr;
     Block* cb   = nullptr;
@@ -648,7 +649,7 @@ TEST_CASE("ceir 11a: the sequential reference rejects a STATEFUL parallel body l
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     Block*                       body = nullptr;
     (void)mk_pfor(ctx, o, mb, 4, body);
     Value* sops[2] = {konst(ctx, o, body, 0)->result(0U), konst(ctx, o, body, 0)->result(0U)};
@@ -671,7 +672,7 @@ TEST_CASE("ceir 11a: an OUTER-CAPTURE parallel body is UndefinedValue in the seq
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     Value* const                 outer = konst(ctx, o, mb, 99)->result(0U); // defined OUTSIDE the parallel body
     Block*                       body  = nullptr;
     (void)mk_pfor(ctx, o, mb, 3, body);
@@ -719,7 +720,7 @@ TEST_CASE("ceir 11a: jobs-backed launch/await -- N pure launches byte-match the 
     const OpId                   awaitk = ctx.intern_op("async", "await");
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     // @main() -> i32 { %t1=launch{y 10}; %t2=launch{y 20}; %a=await %t1; %b=await %t2; ret a+b }  => 30
     Operation* const t1 = mk_launch(ctx, launch, o, mb, 10);
     Operation* const t2 = mk_launch(ctx, launch, o, mb, 20);
@@ -754,7 +755,7 @@ TEST_CASE("ceir 11a: a CAPTURING launch body falls back to sequential in-frame (
     const OpId                   awaitk = ctx.intern_op("async", "await");
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     Value* const                 outer = konst(ctx, o, mb, 99)->result(0U); // defined OUTSIDE the launch body
     Operation* const             l  = ctx.create_operation(launch, {}, 1U, ctx.type_i32(), 1U);
     Block* const                 lb = ctx.create_block(0U);
@@ -782,7 +783,7 @@ TEST_CASE("ceir 11a: a STATEFUL launch body falls back to sequential (correct, N
     const OpId                   awaitk = ctx.intern_op("async", "await");
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     Operation* const             l  = ctx.create_operation(launch, {}, 1U, ctx.type_i32(), 1U);
     Block* const                 lb = ctx.create_block(0U);
     l->region(0)->append(lb);
@@ -810,7 +811,7 @@ TEST_CASE("ceir 11a: a LEAKED pooled token is drained at execute() exit (no hang
     const OpId                   launch = ctx.intern_op("async", "launch");
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     (void)mk_launch(ctx, launch, o, mb, 5); // %t leaked -- never awaited / cancelled (an unverified program)
     mb->append(func::create_return(ctx, {}));
     crd::memory::GrowableTlsfAllocator palloc;
@@ -835,7 +836,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Operation* const t1 = mk_launch(ctx, launch, o, mb, 11);
         Operation* const t2 = mk_launch(ctx, launch, o, mb, 22);
         Value* jt[2] = {t1->result(0U), t2->result(0U)};
@@ -855,7 +856,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Operation* const t1 = mk_launch(ctx, launch, o, mb, 1);
         Operation* const t2 = mk_launch(ctx, launch, o, mb, 2);
         Value* rt[2] = {t1->result(0U), t2->result(0U)};
@@ -873,7 +874,7 @@ TEST_CASE("ceir 11a: join / race / cancel resolve POOLED tokens through the prov
     {
         Module* const    m  = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Operation* const t1 = mk_launch(ctx, launch, o, mb, 9);
         Value* ct[1] = {t1->result(0U)};
         mb->append(ctx.create_operation(cancelk, ConstSpan<Value*>(ct, 1U), 0U)); // cancel(%t) -- consume, no result
@@ -894,7 +895,7 @@ TEST_CASE("ceir 11a: a main_thread-pinned task pooled + awaited from main comple
     const OpId                   fiber_wait  = ctx.intern_op("task", "fiber_wait");
     Module* const                m  = ctx.create_module();
     Operation* const             fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 mb = func::func_body_block(fm);
+    Block* const                 mb = &func::func_body(*fm);
     // @main() -> i32 { %t = task.main_thread { yield 77 }; %r = task.fiber_wait(%t); ret %r }
     Operation* const l  = ctx.create_operation(main_thread, {}, 1U, ctx.type_i32(), 1U);
     Block* const     lb = ctx.create_block(0U);
@@ -928,7 +929,7 @@ TEST_CASE("ceir diag10c: two main_thread tasks in flight before either is awaite
     const OpId                         fiber_wait  = ctx.intern_op("task", "fiber_wait");
     Module* const                      m           = ctx.create_module();
     Operation* const                   fm          = mkfunc(ctx, *m, "main", 0U);
-    Block* const                       mb          = func::func_body_block(fm);
+    Block* const                       mb          = &func::func_body(*fm);
     // @main() -> i32 { %a = task.main_thread { yield 77 }; %b = task.main_thread { yield 5 };
     //                  %x = task.fiber_wait(%a); %y = task.fiber_wait(%b); ret %x + %y }
     Operation* launches[2] = {nullptr, nullptr};

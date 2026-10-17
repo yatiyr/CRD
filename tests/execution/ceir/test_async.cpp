@@ -369,8 +369,9 @@ TEST_CASE("ceir async: a call to an async helper flags Synchronization in an aud
     Module* const                m = ctx.create_module();
     // @helper(): launch + await (a blocking wait), consumed correctly.
     Operation* const helper = func::create_func(ctx, *m, "helper", Visibility::Public, 0U);
+    REQUIRE(helper != nullptr);
     body(ctx, *m)->append(helper);
-    Block* const     hb = func::func_body_block(helper);
+    Block* const     hb = &func::func_body(*helper);
     Operation* const l  = mklaunch(ctx, o, hb);
     (void)await1(ctx, o, l->result(0U), hb);
     hb->append(func::create_return(ctx, {}));
@@ -411,8 +412,9 @@ TEST_CASE("ceir async: async is a SEPARATE installer -- builtin semantics alone 
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     (void)mklaunch(ctx, o, mb);
     mb->append(func::create_return(ctx, {}));
     exec::Interpreter in(ctx);
@@ -427,8 +429,9 @@ TEST_CASE("ceir async: SEQUENTIAL-reference execution -- launch runs its body, a
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     // %t = async.launch { %c = const 42; core.yield %c }
     Operation* const l  = ctx.create_operation(o.launch, {}, 1U, ctx.type_i32(), 1U);
     Block* const     lb = ctx.create_block(0U);
@@ -458,8 +461,9 @@ TEST_CASE("ceir async: awaiting a FORGED token (not a live session handle) is Ba
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     // %c = const 99 (a plain integer, NOT a launch token); await(%c) is a forged handle -> a TYPED error, not silent empty.
     Value*           tk[1] = {konst(ctx, o, mb, 99)->result(0U)};
     Operation* const aw    = ctx.create_operation(o.awaitk, ConstSpan<Value*>(tk, 1U), 1U, ctx.type_i32());
@@ -480,8 +484,9 @@ TEST_CASE("ceir async: a structured scope runs sequentially and forwards its yie
     const OpId                   ascope = ctx.intern_op("async", "scope");
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     // %r = async.scope { %t = launch { yield 7 }; %v = await(%t); yield %v }
     Operation* const sc  = ctx.create_operation(ascope, {}, 1U, ctx.type_i32(), 1U);
     Block* const     scb = ctx.create_block(0U);
@@ -573,8 +578,9 @@ TEST_CASE("ceir async: cooperative cancellation is distinct from fuel exhaustion
     // @spin(): for(0, 1000000, 1) { } ; return -- a long loop.
     Module* const    m  = ctx.create_module();
     Operation* const f  = func::create_func(ctx, *m, "spin", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     body(ctx, *m)->append(f);
-    Block* const mb = func::func_body_block(f);
+    Block* const mb = &func::func_body(*f);
     Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 1000000)->result(0U),
                          konst(ctx, o, mb, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(o.cfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);

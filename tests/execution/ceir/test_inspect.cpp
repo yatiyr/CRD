@@ -80,6 +80,7 @@ Module* build_program(Context& ctx)
     m->body()->append(ctx.create_block(0U));
 
     Operation* const helper = func::create_func(ctx, *m, "helper", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(helper != nullptr);
     m->body()->first_block()->append(helper);
     Block* const     hb = &func::func_body(*helper);
     Operation* const h  = binop(ctx, hb, "muli", hb->arg(0U), hb->arg(0U));
@@ -87,6 +88,7 @@ Module* build_program(Context& ctx)
     hb->append(func::create_return(ctx, ConstSpan<Value*>(hr, 1U)));
 
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->first_block()->append(fn);
     Block* const      body = &func::func_body(*fn);
     Operation* const  zero = konst(ctx, body, 0, ctx.type_i32());

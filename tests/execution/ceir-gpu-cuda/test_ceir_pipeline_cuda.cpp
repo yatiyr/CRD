@@ -1787,8 +1787,9 @@ bool bench_one_dim(crd::gpu::CudaComputeContext& compute, crd::memory::IAllocato
         m->body()->append(top);
     }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    ce::Block* const b = ce::func::func_body_block(fn);
+    ce::Block* const b = &ce::func::func_body(*fn);
 
     // the §140 chain at [rows,cols]: mesh "2" + declare[rows,cols] -> shard(axis0) -> reduce(axis0,sum) -> export.
     const ce::TypeId trc  = tf(ctx, sh2(ctx, rows, cols));
@@ -2533,8 +2534,9 @@ TEST_CASE("ceir 30b-3b/30c-2b: the sec-140 reduction lowered [Host,Host,Gpu] run
         m->body()->append(top);
     }
     ce::Operation* const fn = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    ce::Block* const b = ce::func::func_body_block(fn);
+    ce::Block* const b = &ce::func::func_body(*fn);
 
     const ce::TypeId t84  = tf(ctx, sh2(ctx, 8U, 4U)); // [8,4], sharded along axis0 into two [4,4]
     const ce::TypeId dim4 = ctx.type_dim_static(4U);

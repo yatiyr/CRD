@@ -144,13 +144,13 @@ TEST_CASE("ceir 10a: a signature edit changes BOTH interface_hash and contract_h
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
     REQUIRE(fa != nullptr);
     ma->body()->first_block()->append(fa);
-    ret(a, func::func_body_block(fa), konst(a, ra, func::func_body_block(fa), 0, a.type_i32())->result(0U));
+    ret(a, &func::func_body(*fa), konst(a, ra, &func::func_body(*fa), 0, a.type_i32())->result(0U));
 
     Context b(&root); const Reg rb(b); Module* mb = b.create_module(); (void)module_block(b, *mb);
     Operation* const fb = func::create_func(b, *mb, "f", Visibility::Public, 0U, b.type_i64());
     REQUIRE(fb != nullptr);
     mb->body()->first_block()->append(fb);
-    ret(b, func::func_body_block(fb), konst(b, rb, func::func_body_block(fb), 0, b.type_i64())->result(0U));
+    ret(b, &func::func_body(*fb), konst(b, rb, &func::func_body(*fb), 0, b.type_i64())->result(0U));
 
     CHECK(interface_hash(a, *ma, &root) != interface_hash(b, *mb, &root));
     CHECK(contract_hash(a, *ma, &root) != contract_hash(b, *mb, &root));

@@ -49,8 +49,9 @@ Operation* build_ew_op(Context& ctx, Module& m, const char* fn)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const     b  = func::func_body_block(f);
+    Block* const     b  = &func::func_body(*f);
     const TypeId     ef = ctx.type_f32();
     const TypeId     s  = sh2(ctx, kRows, kCols);
     Operation* const a  = ctx.create_operation(decl, {}, 1U, ctx.type_tensor(ef, s));

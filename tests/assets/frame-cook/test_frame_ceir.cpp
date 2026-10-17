@@ -1888,8 +1888,9 @@ TEST_CASE("ceir 15c: KindLifetimeMismatch also catches an ABSENT lifetime", "[fr
         m->body()->append(top);
     }
     ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    ceir::Block* const   body = ceir::func::func_body_block(fn);
+    ceir::Block* const   body = &ceir::func::func_body(*fn);
     ceir::Operation* const g  = ctx.create_operation(graph_id, {}, 0U, {}, 1U);
     body->append(g);
     ceir::Block* const rb = ctx.create_block(0U);

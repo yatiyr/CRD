@@ -93,7 +93,7 @@ TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interf
     Operation* const fa = func::create_func(a, *ma, "f", Visibility::Public, 0U, a.type_i32());
     REQUIRE(fa != nullptr);
     ma->body()->first_block()->append(fa);
-    ret(a, func::func_body_block(fa), konst(a, ra, func::func_body_block(fa), 5, a.type_i32())->result(0U));
+    ret(a, &func::func_body(*fa), konst(a, ra, &func::func_body(*fa), 5, a.type_i32())->result(0U));
 
     Context   b(&root);
     const Reg rb(b);
@@ -102,7 +102,7 @@ TEST_CASE("ceir 7a: a body-only edit changes the content hash but NOT the interf
     Operation* const fb = func::create_func(b, *mb, "f", Visibility::Public, 0U, b.type_i32());
     REQUIRE(fb != nullptr);
     mb->body()->first_block()->append(fb);
-    ret(b, func::func_body_block(fb), konst(b, rb, func::func_body_block(fb), 6, b.type_i32())->result(0U)); // 6, not 5
+    ret(b, &func::func_body(*fb), konst(b, rb, &func::func_body(*fb), 6, b.type_i32())->result(0U)); // 6, not 5
 
     CHECK(interface_hash(a, *ma, &root) == interface_hash(b, *mb, &root)); // sec 107: impl-only edit -> SAME interface
     CHECK(stable_hash(a, *ma, &root) != stable_hash(b, *mb, &root));       // ...but a DIFFERENT content hash
@@ -214,7 +214,7 @@ TEST_CASE("ceir 7a: dependency records list EXTERNAL calls, intrinsics, and prov
     Operation* const fl = func::create_func(c, *m, "local", Visibility::Public, 0U, c.type_i32());
     REQUIRE(fl != nullptr);
     m->body()->first_block()->append(fl);
-    ret(c, func::func_body_block(fl), konst(c, r, func::func_body_block(fl), 0, c.type_i32())->result(0U));
+    ret(c, &func::func_body(*fl), konst(c, r, &func::func_body(*fl), 0, c.type_i32())->result(0U));
     // @main() { call local(); call external(); test.dummy; return }
     Operation* const fm = func::create_func(c, *m, "main", Visibility::Public, 0U, c.type_i32());
     REQUIRE(fm != nullptr);
@@ -249,7 +249,7 @@ TEST_CASE("ceir 7a: find_unregistered_op catches an op of an UNregistered dialec
         Operation* const f = func::create_func(c, *m, "f", Visibility::Public, 0U, c.type_i32());
         REQUIRE(f != nullptr);
         top->append(f);
-        ret(c, func::func_body_block(f), konst(c, r, func::func_body_block(f), 0, c.type_i32())->result(0U));
+        ret(c, &func::func_body(*f), konst(c, r, &func::func_body(*f), 0, c.type_i32())->result(0U));
         CHECK(find_unregistered_op(c, *m) == nullptr);
     }
     SECTION("an unregistered-dialect op is returned")

@@ -52,9 +52,10 @@ Module* build_via_builder(Context& ctx)
     }
 
     Operation* const fn = mb.func("helper", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     {
         InsertionGuard g(mb);
-        Block* const   fb         = func::func_body_block(fn);
+        Block* const   fb         = &func::func_body(*fn);
         mb.set_insertion(fb);
         Value* ret_ops[1] = {fb->arg(0U)};
         mb.ret(ConstSpan<Value*>(ret_ops, 1U));
@@ -89,8 +90,9 @@ Module* build_via_hand(Context& ctx)
     inner->append(ctx.create_operation(ctx.intern_op("test", "use"), ConstSpan<Value*>(use_ops, 2U), 0U));
 
     Operation* const fn = func::create_func(ctx, *m, "helper", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    Block* const fb         = func::func_body_block(fn);
+    Block* const fb         = &func::func_body(*fn);
     Value*       ret_ops[1] = {fb->arg(0U)};
     fb->append(func::create_return(ctx, ConstSpan<Value*>(ret_ops, 1U)));
 

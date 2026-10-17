@@ -270,8 +270,9 @@ TEST_CASE("ceir 31z-(1): a 3-input mix is ORDER-SENSITIVE -- CEIR matches render
         mperm->body()->append(top);
     }
     ceir::Operation* const fn = ceir::func::create_func(ctx, *mperm, "main", ceir::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    ceir::Block* const fb      = ceir::func::func_body_block(fn);
+    ceir::Block* const fb      = &ceir::func::func_body(*fn);
     const ceir::TypeId dims[2] = {ctx.type_dim_dynamic(), ctx.type_dim_static(2U)};
     const ceir::TypeId tt      = ctx.type_tensor(ctx.type_f32(), ctx.type_shape(ConstSpan<ceir::TypeId>(dims, 2U)));
     ceir::Operation* const sa =
@@ -324,8 +325,9 @@ TEST_CASE("ceir 31z-(2): the executor REFUSES a delay-headed feedback cycle (no 
             m->body()->append(top);
         }
         ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+        REQUIRE(fn != nullptr);
         top->append(fn);
-        return ceir::func::func_body_block(fn);
+        return &ceir::func::func_body(*fn);
     };
 
     // (a) a delay-headed feedback echo %s=source; %d=delay(%m); %m=mix(%s,%d). The 5d verifier ACCEPTS this (delay's
@@ -386,8 +388,9 @@ TEST_CASE("ceir 31z-(5): the executor validates `frames` against a PINNED (Stati
             m->body()->append(top);
         }
         ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+        REQUIRE(fn != nullptr);
         top->append(fn);
-        ceir::Block* const     fb = ceir::func::func_body_block(fn);
+        ceir::Block* const     fb = &ceir::func::func_body(*fn);
         ceir::Operation* const s =
             ceir::audio::build_source(ctx, ctx.attr_symbol(StringView("s")), ctx.attr_int(0), ctx.attr_int(0), tt);
         fb->append(s);
@@ -456,8 +459,9 @@ TEST_CASE("ceir 31a-2a: apply_delay shifts bit-exact and the executor dispatches
         m->body()->append(top);
     }
     ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+    REQUIRE(fn != nullptr);
     top->append(fn);
-    ceir::Block* const fb = ceir::func::func_body_block(fn);
+    ceir::Block* const fb = &ceir::func::func_body(*fn);
 
     const ceir::TypeId dims[2] = {ctx.type_dim_static(static_cast<crd::u32>(n)), ctx.type_dim_static(2U)};
     const ceir::TypeId tt      = ctx.type_tensor(ctx.type_f32(), ctx.type_shape(ConstSpan<ceir::TypeId>(dims, 2U)));
@@ -629,9 +633,10 @@ TEST_CASE("ceir 31a-2b-ii: the executor dispatches audio.compressor and reads th
             m->body()->append(top);
         }
         ceir::Operation* const fn = ceir::func::create_func(ctx, *m, "main", ceir::Visibility::Public, 0U);
+        REQUIRE(fn != nullptr);
         top->append(fn);
         ctx.set_attr(fn, "sample_rate", ctx.attr_int(sr));
-        ceir::Block* const fb      = ceir::func::func_body_block(fn);
+        ceir::Block* const fb      = &ceir::func::func_body(*fn);
         const ceir::TypeId dims[2] = {ctx.type_dim_static(static_cast<crd::u32>(n)), ctx.type_dim_static(2U)};
         const ceir::TypeId tt      = ctx.type_tensor(ctx.type_f32(), ctx.type_shape(ConstSpan<ceir::TypeId>(dims, 2U)));
         ceir::Operation* const s =

@@ -58,8 +58,9 @@ void build_band21(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
 
     // shapes
     const TypeId d4 = ctx.type_dim_static(4U);

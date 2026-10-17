@@ -14,7 +14,7 @@
 #include <crd/ceir/ceir.hpp>          // umbrella: context/ir/transaction/diagnostic/binary/parse/print
 #include <crd/ceir/binary.hpp>        // serialize / deserialize / stable_hash
 #include <crd/ceir/effect.hpp>        // EffectRecord / EffectFamily
-#include <crd/ceir/func.hpp>          // create_func / func_body_block
+#include <crd/ceir/func.hpp>          // create_func / func_body
 #include <crd/ceir/program_asset.hpp> // interface_hash
 #include <crd/ceir/semantics.hpp>     // DeterminismClass / EvalDomain
 
@@ -171,7 +171,7 @@ TEST_CASE("ceir 8z: re-registering unifies the preserved plugin type and the int
     const GateReg g2 = register_gate(ctx2);
     const ParseResult pr = deserialize(ctx2, span(b1));
     REQUIRE(pr.ok);
-    const TypeId param_ty = fn::func_body_block(pr.module->body()->first_block()->first_op())->arg(0U)->type();
+    const TypeId param_ty = fn::func_body(*pr.module->body()->first_block()->first_op()).arg(0U)->type();
     CHECK(param_ty == shape_of(ctx2, g2.shape, ctx2.type_f32())); // the preserved plugin type unifies after re-register
     CHECK(interface_hash(ctx2, *pr.module, &root) == ih);          // cross-Context interface-hash purity (caps + extern)
 }

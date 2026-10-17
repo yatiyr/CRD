@@ -72,10 +72,44 @@ foreach ($pin in @(, @("include/crd/ceir/type.hpp", "TypeKind", "Extern")) + @(,
     }
 }
 
+# ---- I7 (DIAG.11b): func::func_body_block is the lookup that may miss; every caller tests its result against nullptr
+# (on the call's line, or the assigned variable within the next six lines). A caller holding a func.func that has a body
+# takes func::func_body, fatal in every build. An unchecked lookup is a null path the optimizer can inline into the
+# dereference, and GCC's link-time -Wnull-dereference then fails an unrelated edit's link (test_hello.cpp, 2026-10-17).
+$i7Dirs = @("engine", "tests", "tools", "runtime", "sandbox") | ForEach-Object { Join-Path $Root $_ } |
+    Where-Object { Test-Path $_ }
+$i7Own = 'engine[\\/]execution[\\/]ceir[\\/](include[\\/]crd[\\/]ceir[\\/]func\.hpp|src[\\/]func\.cpp)$'
+$i7Files = Get-ChildItem -Path $i7Dirs -Recurse -Include *.cpp, *.hpp, *.h, *.inl -File |
+    Select-String -Pattern 'func_body_block\s*\(' -List | ForEach-Object { $_.Path } |
+    Where-Object { $_ -notmatch $i7Own }
+foreach ($path in $i7Files) {
+    $lines = @(Get-Content $path)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $code = $lines[$i] -replace '//.*$', ''
+        if ($code -notmatch 'func_body_block\s*\(') { continue }
+        if ($code -match 'func_body_block\s*\([^;]*\)\s*[!=]=\s*nullptr') { continue }
+        $var = ""
+        if ($code -match '([A-Za-z_][A-Za-z0-9_]*)\s*=\s*[^=\s][^;]*func_body_block') { $var = $Matches[1] }
+        $ok = $false
+        if ($var -ne "") {
+            $last = [Math]::Min($i + 6, $lines.Count - 1)
+            for ($j = $i; $j -le $last; $j++) {
+                $c = $lines[$j] -replace '//.*$', ''
+                if ($c -match ('(^|[^A-Za-z0-9_])' + $var + '\s*[!=]=\s*nullptr') -or
+                    $c -match ('nullptr\s*[!=]=\s*' + $var + '([^A-Za-z0-9_]|$)')) { $ok = $true; break }
+            }
+        }
+        if (-not $ok) {
+            $violations += ("I7 an unchecked func::func_body_block (test it against nullptr, or take " +
+                "func::func_body): {0}:{1}: {2}" -f $path, ($i + 1), $lines[$i].Trim())
+        }
+    }
+}
+
 if ($violations.Count -gt 0) {
-    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins):"
+    Write-Host "crd-ceir invariant violations (ADR-0109 I3/I5 + open-world I6 + U-116 enum-pins + I7 body lookups):"
     $violations | ForEach-Object { Write-Host "  $_" }
     exit 1
 }
-Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern)."
+Write-Host "crd-ceir invariants OK (I3: no shader-lang name/forbidden include; I5: host-only links; I6: no switch on op.kind; U-116: TypeKind/AttrKind end at Extern; I7: every func_body_block result tested)."
 exit 0

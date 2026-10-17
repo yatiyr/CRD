@@ -89,15 +89,17 @@ Module* build_program(Context& ctx)
     m->body()->append(ctx.create_block(0U));
 
     Operation* const scale = func::create_func(ctx, *m, "scale", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(scale != nullptr);
     m->body()->first_block()->append(scale);
-    Block* const     sb    = func::func_body_block(scale);
+    Block* const     sb    = &func::func_body(*scale);
     Operation* const h     = binop(ctx, sb, "muli", sb->arg(0U), sb->arg(0U));
     Value*           hr[1] = {h->result(0U)};
     sb->append(func::create_return(ctx, ConstSpan<Value*>(hr, 1U)));
 
     Operation* const fn = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->first_block()->append(fn);
-    Block* const     body = func::func_body_block(fn);
+    Block* const     body = &func::func_body(*fn);
     Operation* const zero = konst(ctx, body, 0, ctx.type_i32());
     Operation* const one  = konst(ctx, body, 1, ctx.type_i32());
     Operation* const two  = konst(ctx, body, 2, ctx.type_i32());

@@ -65,8 +65,9 @@ TEST_CASE("ceir 35d: a large ~8k-op arith graph cooks, loads, and executes to th
         m->body()->append(c.create_block(0U));
         const TypeId     ty = c.type_i64();
         Operation* const f  = func::create_func(c, *m, "f", Visibility::Public, 0U, ty);
+        REQUIRE(f != nullptr);
         m->body()->first_block()->append(f);
-        Block* const b = func::func_body_block(f);
+        Block* const b = &func::func_body(*f);
 
         const auto konst = [&](i64 v) -> Value* {
             Operation* const op = c.create_operation(cst, {}, 1U, ty);

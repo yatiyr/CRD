@@ -59,9 +59,10 @@ Module* build_main(Context& c, Variant v)
 {
     Module* const    m  = c.create_module();
     Operation* const fn = func::create_func(c, *m, "main", Visibility::Public, 1U, c.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->append(c.create_block(0U));
     m->body()->first_block()->append(fn);
-    Block* const     body = func::func_body_block(fn);
+    Block* const     body = &func::func_body(*fn);
     Operation* const k    = c.create_operation(c.intern_op("arith", "const"), {}, 1U, c.type_i32());
     c.set_attr(k, "value", c.attr_int(v.k));
     body->append(k);

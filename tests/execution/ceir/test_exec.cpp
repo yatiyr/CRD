@@ -48,6 +48,7 @@ Block* body_block(Context& ctx, Module& m)
 Operation* mkfunc(Context& ctx, Module& m, containers::StringView name, crd::u32 nparams)
 {
     Operation* const f = func::create_func(ctx, m, name, Visibility::Public, nparams, ctx.type_i32());
+    REQUIRE(f != nullptr);
     body_block(ctx, m)->append(f);
     return f;
 }
@@ -116,17 +117,17 @@ TEST_CASE("ceir exec: arith const/addi/muli/cmpi reference semantics", "[ceir][e
     Module* const                m = ctx.create_module();
 
     Operation* const fa = mkfunc(ctx, *m, "add", 0U);
-    Block* const     ba = func::func_body_block(fa);
+    Block* const     ba = &func::func_body(*fa);
     ret1(ctx, ba, bin(ctx, o.addi, konst(ctx, o, ba, 20)->result(0U), konst(ctx, o, ba, 22)->result(0U), ba)->result(0U));
     CHECK(run_ok(ctx, *m, "add", {}) == 42);
 
     Operation* const fm = mkfunc(ctx, *m, "mul", 0U);
-    Block* const     bm = func::func_body_block(fm);
+    Block* const     bm = &func::func_body(*fm);
     ret1(ctx, bm, bin(ctx, o.muli, konst(ctx, o, bm, 6)->result(0U), konst(ctx, o, bm, 7)->result(0U), bm)->result(0U));
     CHECK(run_ok(ctx, *m, "mul", {}) == 42);
 
     Operation* const fc = mkfunc(ctx, *m, "lt", 0U);
-    Block* const     bc = func::func_body_block(fc);
+    Block* const     bc = &func::func_body(*fc);
     Operation* const cm = bin(ctx, o.cmpi, konst(ctx, o, bc, 3)->result(0U), konst(ctx, o, bc, 5)->result(0U), bc);
     ctx.set_attr(cm, "predicate", ctx.attr_string("slt"));
     ret1(ctx, bc, cm->result(0U));
@@ -140,7 +141,7 @@ TEST_CASE("ceir exec: addi wraps two's-complement (u64 cast, no signed UB)", "[c
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             f  = mkfunc(ctx, *m, "wrap", 0U);
-    Block* const                 b  = func::func_body_block(f);
+    Block* const                 b  = &func::func_body(*f);
     Operation* const             s  = bin(ctx, o.addi, konst(ctx, o, b, static_cast<i64>(0x7FFFFFFFFFFFFFFFLL))->result(0U),
                               konst(ctx, o, b, 1)->result(0U), b);
     ret1(ctx, b, s->result(0U));
@@ -154,7 +155,7 @@ TEST_CASE("ceir exec: core.if selects the branch and forwards the yield to resul
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             f = mkfunc(ctx, *m, "pick", 1U);
-    Block* const                 b = func::func_body_block(f);
+    Block* const                 b = &func::func_body(*f);
     Operation* const             ifop = unary(ctx, o.cif, b->arg(0U), b, 1U, 2U);
     Block* const                 tb   = ctx.create_block(0U);
     ifop->region(0)->append(tb);
@@ -177,7 +178,7 @@ TEST_CASE("ceir exec: a for loop with a state accumulator sums 0..n-1", "[ceir][
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             f = mkfunc(ctx, *m, "main", 1U);
-    Block* const                 b = func::func_body_block(f);
+    Block* const                 b = &func::func_body(*f);
     Value*  lohilst[3] = {konst(ctx, o, b, 0)->result(0U), b->arg(0U), konst(ctx, o, b, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(o.cfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);
     b->append(forop);
@@ -209,7 +210,7 @@ TEST_CASE("ceir exec: the state ring (history(1) is a plain register; history(3)
         const Ops  oo(c);
         Module*    mm = c.create_module();
         Operation* f  = mkfunc(c, *mm, "main", 0U);
-        Block*     b  = func::func_body_block(f);
+        Block*     b  = &func::func_body(*f);
         Value* lh[3] = {konst(c, oo, b, 0)->result(0U), konst(c, oo, b, iters)->result(0U),
                         konst(c, oo, b, 1)->result(0U)};
         Operation* forop = c.create_operation(oo.cfor, ConstSpan<Value*>(lh, 3U), 0U, {}, 1U);
@@ -241,7 +242,7 @@ TEST_CASE("ceir exec: a func.call binds args, returns, and a state cell persists
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             fa = mkfunc(ctx, *m, "acc", 1U);
-    Block* const                 ba = func::func_body_block(fa);
+    Block* const                 ba = &func::func_body(*fa);
     Value*                       sops[2] = {konst(ctx, o, ba, 0)->result(0U), konst(ctx, o, ba, 0)->result(0U)};
     Operation* const             c  = ctx.create_operation(o.state, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
     ba->append(c);
@@ -250,7 +251,7 @@ TEST_CASE("ceir exec: a func.call binds args, returns, and a state cell persists
     ret1(ctx, ba, n->result(0U));
 
     Operation* const fmain = mkfunc(ctx, *m, "main", 0U);
-    Block* const     bmain = func::func_body_block(fmain);
+    Block* const     bmain = &func::func_body(*fmain);
     (void)calln(ctx, "acc", konst(ctx, o, bmain, 10)->result(0U), bmain);
     (void)calln(ctx, "acc", konst(ctx, o, bmain, 5)->result(0U), bmain);
     Operation* const last = calln(ctx, "acc", konst(ctx, o, bmain, 0)->result(0U), bmain);
@@ -265,7 +266,7 @@ TEST_CASE("ceir exec: switch selects a region; an out-of-range selector errors",
     const Ops                    o(ctx);
     Module* const                m  = ctx.create_module();
     Operation* const             f  = mkfunc(ctx, *m, "pick", 1U);
-    Block* const                 b  = func::func_body_block(f);
+    Block* const                 b  = &func::func_body(*f);
     Operation* const             sw = unary(ctx, o.cswitch, b->arg(0U), b, 0U, 2U);
     Block* const                 a0 = ctx.create_block(0U);
     sw->region(0)->append(a0);
@@ -306,7 +307,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
     SECTION("a for loop with step 0 is BadForStep")
     {
         Operation* const f = mkfunc(ctx, *m, "bad", 0U);
-        Block* const     b = func::func_body_block(f);
+        Block* const     b = &func::func_body(*f);
         Value* lh[3] = {konst(ctx, o, b, 0)->result(0U), konst(ctx, o, b, 5)->result(0U),
                         konst(ctx, o, b, 0)->result(0U)}; // step 0
         Operation* const forop = ctx.create_operation(o.cfor, ConstSpan<Value*>(lh, 3U), 0U, {}, 1U);
@@ -320,7 +321,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
     SECTION("an unresolved call is UnresolvedCall")
     {
         Operation* const f = mkfunc(ctx, *m, "u", 0U);
-        Block* const     b = func::func_body_block(f);
+        Block* const     b = &func::func_body(*f);
         b->append(func::create_call(ctx, "ghost", {}, 0U));
         ret0(ctx, b);
         exec::ExecError e = exec::ExecError::None;
@@ -330,7 +331,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
     SECTION("an unrecognized cmpi predicate is UnknownPredicate")
     {
         Operation* const f = mkfunc(ctx, *m, "p", 0U);
-        Block* const     b = func::func_body_block(f);
+        Block* const     b = &func::func_body(*f);
         Operation* const cm = bin(ctx, o.cmpi, konst(ctx, o, b, 1)->result(0U), konst(ctx, o, b, 2)->result(0U), b);
         ctx.set_attr(cm, "predicate", ctx.attr_string("bogus"));
         ret1(ctx, b, cm->result(0U));
@@ -341,7 +342,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
     SECTION("core.foreach has no installed semantics -> NoSemantics (named deferral)")
     {
         Operation* const f  = mkfunc(ctx, *m, "fe", 0U);
-        Block* const     b  = func::func_body_block(f);
+        Block* const     b  = &func::func_body(*f);
         Operation* const fe = unary(ctx, o.foreach, konst(ctx, o, b, 3)->result(0U), b, 0U, 1U);
         fe->region(0)->append(ctx.create_block(1U, ctx.type_i32()));
         ret0(ctx, b);
@@ -352,7 +353,7 @@ TEST_CASE("ceir exec: the typed error modes", "[ceir][exec]")
     SECTION("a runaway while is FuelExhausted, not a hang")
     {
         Operation* const f = mkfunc(ctx, *m, "spin", 0U);
-        Block* const     b = func::func_body_block(f);
+        Block* const     b = &func::func_body(*f);
         Operation* const w = ctx.create_operation(o.cwhile, {}, 0U, {}, 2U);
         b->append(w);
         Block* const cond = ctx.create_block(0U);
@@ -374,7 +375,7 @@ TEST_CASE("ceir exec: open-world -- a hand-registered dialect op evaluates via a
     const OpId                   dbl = ctx.register_dialect("hw")->register_op("dbl", {}); // custom "double" op
     Module* const                m   = ctx.create_module();
     Operation* const             f   = mkfunc(ctx, *m, "main", 0U);
-    Block* const                 b   = func::func_body_block(f);
+    Block* const                 b   = &func::func_body(*f);
     Operation* const             d   = unary(ctx, dbl, konst(ctx, o, b, 21)->result(0U), b, 1U, 0U);
     ret1(ctx, b, d->result(0U));
 
@@ -406,7 +407,7 @@ TEST_CASE("ceir exec: a prototype clone runs correctly with independent per-clon
     // @acc(%d): a cross-call state counter; @main(): acc(10); acc(5); return acc(0) == 15 on a FRESH session.
     Module* const    m  = ctx.create_module();
     Operation* const fa = mkfunc(ctx, *m, "acc", 1U);
-    Block* const     ba = func::func_body_block(fa);
+    Block* const     ba = &func::func_body(*fa);
     Value*           sops[2] = {konst(ctx, o, ba, 0)->result(0U), konst(ctx, o, ba, 0)->result(0U)};
     Operation* const c  = ctx.create_operation(o.state, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
     ba->append(c);
@@ -414,7 +415,7 @@ TEST_CASE("ceir exec: a prototype clone runs correctly with independent per-clon
     c->set_operand(1U, n->result(0U));
     ret1(ctx, ba, n->result(0U));
     Operation* const fmain = mkfunc(ctx, *m, "main", 0U);
-    Block* const     bmain = func::func_body_block(fmain);
+    Block* const     bmain = &func::func_body(*fmain);
     (void)calln(ctx, "acc", konst(ctx, o, bmain, 10)->result(0U), bmain);
     (void)calln(ctx, "acc", konst(ctx, o, bmain, 5)->result(0U), bmain);
     ret1(ctx, bmain, calln(ctx, "acc", konst(ctx, o, bmain, 0)->result(0U), bmain)->result(0U));

@@ -726,8 +726,9 @@ MlpPayload build_mlp_payload(ce::Context& ctx, crd::u32 mrows, crd::u32 d0, crd:
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const     x_val     = mkd(tf(ctx, sh2(ctx, mrows, d0)));
@@ -1590,8 +1591,9 @@ TEST_CASE("ceir 23b-2d: the FUSED QuantGemm collapse (dequant-inline gemm) runs 
             m->body()->append(top);
         }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+        REQUIRE(f != nullptr);
         top->append(f);
-        ce::Block* const b   = ce::func::func_body_block(f);
+        ce::Block* const b   = &ce::func::func_body(*f);
         const ce::OpId   dcl = ctx.intern_op("resource", "declare");
         const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
         const ce::TypeId i8  = ctx.type_int(8U, true);
@@ -1843,8 +1845,9 @@ TEST_CASE("ceir 24b-4: an expanded ml.attention runs device-resident on DX12 (tr
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -1962,8 +1965,9 @@ TEST_CASE("ceir 26d-3c: a GENERIC-dims ml.attention (Sq=3, Sk=5, D=4) runs devic
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2098,8 +2102,9 @@ TEST_CASE("ceir 26f-3b: buffer-aliasing is BIT-EXACT vs the un-shared plan on DX
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2223,8 +2228,9 @@ TEST_CASE("ceir 24b-4: an expanded ml.mlp runs device-resident on DX12 (gemm/rel
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2347,8 +2353,9 @@ TEST_CASE("ceir 26d-2d: a non-32-width ml.mlp runs device-resident on DX12 (relu
             m->body()->append(top);
         }
         ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+        REQUIRE(f != nullptr);
         top->append(f);
-        ce::Block* const b   = ce::func::func_body_block(f);
+        ce::Block* const b   = &ce::func::func_body(*f);
         const ce::OpId   dcl = ctx.intern_op("resource", "declare");
         const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2509,8 +2516,9 @@ TEST_CASE("ceir 26e-4: the gemm-relu fusion is BIT-EXACT vs the unfused program 
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2656,8 +2664,9 @@ TEST_CASE("ceir 27b: two AUTHORED .ceir transform schedules optimize one MLP pro
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const     x_val     = mkd(tf(ctx, sh2(ctx, mrows, d0)));
@@ -2810,8 +2819,9 @@ TEST_CASE("ceir 25b-4a: a transpose+broadcast+elementwise chain runs device-resi
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const     in0 = mkd(tf(ctx, sh2(ctx, 2U, 3U)));
@@ -2883,8 +2893,9 @@ TEST_CASE("ceir 25b-4b: the backward pass of sum(gemm(A,A)) runs device-resident
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -2991,8 +3002,9 @@ TEST_CASE("ceir 25c-1b: the authored relu_vjp compute kernel (readonly dropped t
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -3097,8 +3109,9 @@ TEST_CASE("ceir 25c-2: the vjp_mlp backward of a 2-layer MLP runs device-residen
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -3365,8 +3378,9 @@ TEST_CASE("ceir 26d-4c: the vjp_mlp backward at a NON-32 interior width (h1=64) 
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
 
@@ -3582,8 +3596,9 @@ TEST_CASE("ceir 26b-2: canonicalize reshape-fold is BIT-EXACT vs the RAW pipelin
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const a_in = mkd(tf(ctx, sh2(ctx, kSide, kSide)));
@@ -3862,8 +3877,9 @@ TEST_CASE("ceir 26c-2: CSE duplicate-gemm removal is BIT-EXACT vs the RAW pipeli
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const a_in = mkd(tf(ctx, sh2(ctx, kSide, kSide)));
@@ -4199,8 +4215,9 @@ TEST_CASE("ceir 28d: the sec-80 autotuner measures the 4-config PlanOptions spac
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const     x_val     = mkd(tf(ctx, sh2(ctx, mrows, d0)));
@@ -4353,8 +4370,9 @@ TEST_CASE("ceir 28z-2: the committed 3-row tune_cache.ceir anti-drifts the DX12 
         m->body()->append(top);
     }
     ce::Operation* const f = ce::func::create_func(ctx, *m, "main", ce::Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    ce::Block* const b   = ce::func::func_body_block(f);
+    ce::Block* const b   = &ce::func::func_body(*f);
     const ce::OpId   dcl = ctx.intern_op("resource", "declare");
     const auto       mkd = [&](ce::TypeId t) { ce::Operation* const d = ctx.create_operation(dcl, {}, 1U, t); b->append(d); return d->result(0U); };
     ce::Value* const     x_val     = mkd(tf(ctx, sh2(ctx, mrows, d0)));

@@ -62,8 +62,9 @@ void build_band23(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    Block* const b = func::func_body_block(f);
+    Block* const b = &func::func_body(*f);
 
     const TypeId f32 = ctx.type_f32();
     const TypeId i8  = ctx.type_int(8U, true);

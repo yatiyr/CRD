@@ -85,8 +85,9 @@ TEST_CASE("ceir task: spawn then fiber_wait round-trips a value (sequential refe
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     Operation* const s   = mkspawn(ctx, o, mb, 42);            // %t = task.spawn { yield 42 }
     Value*           tk[1] = {s->result(0U)};
     Operation* const fw  = ctx.create_operation(o.fiber_wait, ConstSpan<Value*>(tk, 1U), 1U, ctx.type_i32()); // fiber_wait(%t)
@@ -105,8 +106,9 @@ TEST_CASE("ceir task: a continuation runs after its antecedent, receiving its va
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     Operation* const s = mkspawn(ctx, o, mb, 10);              // %t = task.spawn { yield 10 }
     // %t2 = task.continuation(%t) { ^body(%v): %r = addi %v, 5; yield %r }
     Value*           tk[1] = {s->result(0U)};
@@ -137,8 +139,9 @@ TEST_CASE("ceir task: the 6a token verifier covers the new ops with ZERO edits (
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
 
     SECTION("a spawned token never consumed is Unconsumed")
     {
@@ -164,8 +167,9 @@ TEST_CASE("ceir task: a task op in an audio-real-time region is a domain violati
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     // core.scope { %t = task.spawn {...}; task.fiber_wait(%t) } tagged AudioRealTime -> spawn's Synchronization is illegal
     Operation* const sc = ctx.create_operation(ctx.intern_op("core", "scope"), {}, 0U, {}, 1U);
     Block* const     scb = ctx.create_block(0U);
@@ -200,8 +204,9 @@ TEST_CASE("ceir task: the sec 112 step hooks fire pre/post per dispatched op (ex
     const Ops                    o(ctx);
     Module* const                m = ctx.create_module();
     Operation* const             fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U);
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
     // @main() -> i32 { %c = const 42; return %c }  -- exactly TWO dispatched ops (const, return).
     Value* rv[1] = {konst(ctx, o, mb, 42)->result(0U)};
     mb->append(func::create_return(ctx, ConstSpan<Value*>(rv, 1U)));
@@ -254,8 +259,9 @@ TEST_CASE("ceir 11a: the full host subset composes in one reference program", "[
 
     // @sq(%x) -> i32 { %r = muli(%x,%x); return %r }   (func + arith)
     Operation* const fsq = func::create_func(ctx, *m, "sq", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fsq != nullptr);
     body(ctx, *m)->append(fsq);
-    Block* const sb = func::func_body_block(fsq);
+    Block* const sb = &func::func_body(*fsq);
     Value* mops[2] = {sb->arg(0U), sb->arg(0U)};
     Operation* const mul = ctx.create_operation(muli, ConstSpan<Value*>(mops, 2U), 1U, ctx.type_i32());
     sb->append(mul);
@@ -264,8 +270,9 @@ TEST_CASE("ceir 11a: the full host subset composes in one reference program", "[
 
     // @main() -> i32 { ...spans arith + core(for/if/state) + func(call) + async(launch/await) + task(spawn/fiber_wait)... }
     Operation* const fmain = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fmain != nullptr);
     body(ctx, *m)->append(fmain);
-    Block* const mb = func::func_body_block(fmain);
+    Block* const mb = &func::func_body(*fmain);
 
     // A: core.for(0,3,1) { iv: %acc = state(0, acc+iv) }  -- a state cell latching across the loop block.
     Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 3)->result(0U),

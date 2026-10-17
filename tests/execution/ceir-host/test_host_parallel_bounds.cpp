@@ -76,6 +76,7 @@ Value* call(Context& ctx, Block* b, const char* callee, Value* arg)
 Block* add_func(Context& ctx, Module& m, const char* name)
 {
     Operation* const f  = func::create_func(ctx, m, name, Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(f != nullptr);
     Block*           mb = m.body()->first_block();
     if (mb == nullptr)
     {
@@ -83,7 +84,7 @@ Block* add_func(Context& ctx, Module& m, const char* name)
         m.body()->append(mb);
     }
     mb->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 
 // In `b`: if (%n) { <then> } else { <else> }. Returns the two blocks for the caller to fill; each ends in a yield.
@@ -266,10 +267,11 @@ private:
 Operation* parallel_range(Context& ctx, const Kit& k, Module& m, i64 lo, i64 hi, i64 step)
 {
     Operation* const f  = func::create_func(ctx, m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(f != nullptr);
     Block* const     mb = ctx.create_block(0U);
     m.body()->append(mb);
     mb->append(f);
-    Block* const     b        = func::func_body_block(f);
+    Block* const     b        = &func::func_body(*f);
     Value*           range[3] = {konst(ctx, k, b, lo), konst(ctx, k, b, hi), konst(ctx, k, b, step)};
     Operation* const pf       = ctx.create_operation(k.pfor, ConstSpan<Value*>(range, 3U), 0U, {}, 1U);
     b->append(pf);
@@ -424,10 +426,11 @@ TEST_CASE("diag 10a: a host map_reduce fold runs on the run's budget, as in the 
     // does.
     Module* const    m  = ctx.create_module();
     Operation* const f  = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(f != nullptr);
     Block* const     mb = ctx.create_block(0U);
     m->body()->append(mb);
     mb->append(f);
-    Block* const     b        = func::func_body_block(f);
+    Block* const     b        = &func::func_body(*f);
     Value*           range[4] = {konst(ctx, k, b, 0), konst(ctx, k, b, 8), konst(ctx, k, b, 1), konst(ctx, k, b, 0)};
     Operation* const mr = ctx.create_operation(k.mreduce, ConstSpan<Value*>(range, 4U), 1U, ctx.type_i32(), 2U);
     b->append(mr);
@@ -488,10 +491,11 @@ TEST_CASE("diag 10a: the host provider's submitting thread spends what the refer
         else
         {
             Operation* const f  = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+            REQUIRE(f != nullptr);
             Block* const     mb = ctx.create_block(0U);
             m->body()->append(mb);
             mb->append(f);
-            Block* const b        = func::func_body_block(f);
+            Block* const b        = &func::func_body(*f);
             Value* range[4] = {konst(ctx, k, b, -150), konst(ctx, k, b, 150), konst(ctx, k, b, 1), konst(ctx, k, b, 0)};
             Operation* const mr = ctx.create_operation(k.mreduce, ConstSpan<Value*>(range, 4U), 1U, ctx.type_i32(), 2U);
             b->append(mr);

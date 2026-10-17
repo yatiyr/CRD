@@ -41,8 +41,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 // A seed VALUE of type `t` (a resource.declare op with that result type — the mkval pattern; the declare's own kind is
 // irrelevant to find_rt_misuse, only the value's TYPE matters for the chain check).

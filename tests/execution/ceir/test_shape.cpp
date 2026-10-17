@@ -41,8 +41,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 // A seed VALUE of type `t` (a resource.declare op with that result type — only the value's TYPE matters to find_shape_misuse).
 Value* mkval(Context& ctx, const ShapeKit& k, Block* b, TypeId t)

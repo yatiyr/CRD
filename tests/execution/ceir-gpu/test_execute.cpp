@@ -2097,8 +2097,9 @@ Block* scene_mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 // a seed VALUE of scene type `t` (a resource.declare with the Extern result type — the mkimage pattern).
 Value* scene_seed(Context& ctx, Block* b, TypeId t)

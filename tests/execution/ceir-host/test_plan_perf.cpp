@@ -48,9 +48,10 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a straight-line plan (exact d
     // @main() -> i32 { %a = const 5; %b = const 3; return addi(a, b) } -> 8; 3 DISPATCHED ops (return is a terminator).
     Module* const    m  = ctx.create_module();
     Operation* const fm = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const a  = konst(ctx, cst, mb, 5);
     Operation* const b  = konst(ctx, cst, mb, 3);
     Value* ops[2] = {a->result(0U), b->result(0U)};
@@ -104,9 +105,10 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a LOOP (nesting + granularity
     // @main(){ for(0,1000,1){ iv: muli(iv, iv) }; return const 0 } -- 1000 MulI dispatches nested under 1 For.
     Module* const    m  = ctx.create_module();
     Operation* const fm = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     Value* lohi[3] = {konst(ctx, cst, mb, 0)->result(0U), konst(ctx, cst, mb, 1000)->result(0U),
                       konst(ctx, cst, mb, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(cfor, ConstSpan<Value*>(lohi, 3U), 0U, {}, 1U);
@@ -155,9 +157,10 @@ TEST_CASE("ceir 11c host: the perf bridge survives an ERRORING run (adapter pare
     // adapter's parent-pause state (stack/mark/banking) must not crash or over-flow on the unbalanced stream.
     Module* const    m  = ctx.create_module();
     Operation* const fm = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     Value* aw[1] = {konst(ctx, cst, mb, 99)->result(0U)};
     Operation* const av = ctx.create_operation(ctx.intern_op("async", "await"), ConstSpan<Value*>(aw, 1U), 1U, ctx.type_i32());
     mb->append(av);

@@ -12,7 +12,7 @@
 //   Value* s   = mb.op("test","add").operand(top->arg(0)).operand(top->arg(0))
 //                  .result(TypeId{2U}).attr("k", ctx.attr_int(7)).build_result();
 //   Operation* fn = mb.func("f", Visibility::Public, 1U, TypeId{1U});
-//   { InsertionGuard g(mb); mb.set_insertion(func::func_body_block(fn)); mb.ret({fn body arg}); }
+//   { InsertionGuard g(mb); mb.set_insertion(&func::func_body(*fn)); mb.ret({fn body arg}); }
 
 #include <crd/ceir/attr.hpp>
 #include <crd/ceir/context.hpp>

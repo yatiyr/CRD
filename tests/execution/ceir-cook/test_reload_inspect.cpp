@@ -70,9 +70,10 @@ String source(crd::memory::IAllocator* alloc, i64 hi_value)
     register_dialects(c);
     Module* const    m  = c.create_module();
     Operation* const fn = func::create_func(c, *m, "main", Visibility::Public, 1U, c.type_i32());
+    REQUIRE(fn != nullptr);
     m->body()->append(c.create_block(0U));
     m->body()->first_block()->append(fn);
-    Block* const     body = func::func_body_block(fn);
+    Block* const     body = &func::func_body(*fn);
     Operation* const lo   = konst(c, body, 0);
     Operation* const hi   = konst(c, body, hi_value);
     Value*           ab[2] = {hi->result(0U), hi->result(0U)};

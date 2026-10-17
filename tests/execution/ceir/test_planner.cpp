@@ -44,8 +44,9 @@ Block* mkmain(Context& ctx, Module& m)
         m.body()->append(top);
     }
     Operation* const f = func::create_func(ctx, m, "main", Visibility::Public, 0U);
+    REQUIRE(f != nullptr);
     top->append(f);
-    return func::func_body_block(f);
+    return &func::func_body(*f);
 }
 Operation* decl_res(Context& ctx, const Kit& k, Block* b, const char* lifetime, i64 size_class, TypeId ty)
 {

@@ -95,9 +95,10 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on straight-li
     Module* const                m = ctx.create_module();
     // @main(%x) -> i32 { %sq = muli(%x,%x); %s = addi(%sq, const 3); return %s }
     Operation* const fm = func::create_func(ctx, *m, "main", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     Operation* const sq = bin(ctx, o.muli, mb->arg(0U), mb->arg(0U), mb);
     Operation* const s  = bin(ctx, o.addi, sq->result(0U), konst(ctx, o, mb, 3)->result(0U), mb);
     Value* rv[1] = {s->result(0U)};
@@ -117,9 +118,10 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on cmpi predic
     Module* const                m = ctx.create_module();
     // @cmp(%x) -> i32 { %c = cmpi(sgt, %x, const 10); return %c }
     Operation* const fm = func::create_func(ctx, *m, "cmp", Visibility::Public, 1U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     Operation* const c = bin(ctx, o.cmpi, mb->arg(0U), konst(ctx, o, mb, 10)->result(0U), mb);
     ctx.set_attr(c, "predicate", ctx.attr_string("sgt"));
     Value* rv[1] = {c->result(0U)};
@@ -141,9 +143,10 @@ TEST_CASE("ceir 11b: the compiler REJECTS a not-yet-supported op with a typed Co
     // value domain until types land, CEIR-6; the reference intentionally does not install it either) -> UnsupportedOp.
     const OpId feach = ctx.intern_op("core", "foreach");
     Operation* const fm = func::create_func(ctx, *m, "main", Visibility::Public, 0U, ctx.type_i32());
+    REQUIRE(fm != nullptr);
     m->body()->append(ctx.create_block(0U));
     m->body()->first_block()->append(fm);
-    Block* const mb = func::func_body_block(fm);
+    Block* const mb = &func::func_body(*fm);
     Operation* const l = ctx.create_operation(feach, {}, 0U, {}, 1U);
     l->region(0)->append(ctx.create_block(1U, ctx.type_i32()));
     mb->append(l);
@@ -165,6 +168,7 @@ namespace
 Operation* mkfunc(Context& ctx, Module& m, StringView name, crd::u32 nparams)
 {
     Operation* const f = func::create_func(ctx, m, name, Visibility::Public, nparams, ctx.type_i32());
+    REQUIRE(f != nullptr);
     if (m.body()->first_block() == nullptr)
     {
         m.body()->append(ctx.create_block(0U));
@@ -189,7 +193,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on core.if bra
     Module* const                m = ctx.create_module();
     // @sel(%x) -> i32 { %c = cmpi(sgt, %x, 5); %r = if(%c){ yield 100 } else { yield 200 }; return %r }
     Operation* const fm = mkfunc(ctx, *m, "sel", 1U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const c  = bin(ctx, o.cmpi, mb->arg(0U), konst(ctx, o, mb, 5)->result(0U), mb);
     ctx.set_attr(c, "predicate", ctx.attr_string("sgt"));
     Value* ic[1] = {c->result(0U)};
@@ -219,7 +223,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a bounded c
     Module* const                m = ctx.create_module();
     // @loop() -> i32 { for(0, 3, 1){ iv: <empty> }; return 42 }  (a for with a pure body is a no-op statement)
     Operation* const fm = mkfunc(ctx, *m, "loop", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 3)->result(0U),
                          konst(ctx, o, mb, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(cfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);
@@ -240,7 +244,7 @@ TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees
         const OpId    cfor = ctx.intern_op("core", "for");
         Module* const m    = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "bad", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Value* lhs[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 3)->result(0U),
                          konst(ctx, o, mb, 0)->result(0U)}; // step 0
         Operation* const forop = ctx.create_operation(cfor, ConstSpan<Value*>(lhs, 3U), 0U, {}, 1U);
@@ -260,7 +264,7 @@ TEST_CASE("ceir 11b: a runtime RunError (BadForStep / SelectorOutOfRange) agrees
         const OpId    csw = ctx.intern_op("core", "switch");
         Module* const m   = ctx.create_module();
         Operation* const fm = mkfunc(ctx, *m, "sw", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Value* sel[1] = {konst(ctx, o, mb, 5)->result(0U)}; // out of range (2 regions)
         Operation* const swop = ctx.create_operation(csw, ConstSpan<Value*>(sel, 1U), 0U, {}, 2U);
         swop->region(0)->append(ctx.create_block(0U));
@@ -288,7 +292,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a state cel
     Module* const                m = ctx.create_module();
     // @main() -> i32 { %s = state(7, 0); return %s }  -- a single cell_read returns the init (7).
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* sops[2] = {konst(ctx, o, mb, 7)->result(0U), konst(ctx, o, mb, 0)->result(0U)};
     Operation* const s = ctx.create_operation(statek, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
     mb->append(s);
@@ -307,7 +311,7 @@ TEST_CASE("ceir 11b: a for+state accumulator's LATCHED cell agrees with the refe
     Module* const                m = ctx.create_module();
     // @main() -> i32 { for(0,3,1){ iv: %acc = state(0, acc+iv) }; return 0 }  -- acc latches 0+1+2 = 3.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 3)->result(0U),
                          konst(ctx, o, mb, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(cfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);
@@ -353,7 +357,7 @@ TEST_CASE("ceir 11b: a depth-2 state ring wraps in lockstep with the reference (
     // A depth-2 WITNESS: the same program on a depth-1 cell would leave 3 (the last iv). So cells[0]==2 proves the ring
     // wraparound + the whole-ring init-fill, not just that a cell exists.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* lohilst[3] = {konst(ctx, o, mb, 0)->result(0U), konst(ctx, o, mb, 4)->result(0U),
                          konst(ctx, o, mb, 1)->result(0U)};
     Operation* const forop = ctx.create_operation(cfor, ConstSpan<Value*>(lohilst, 3U), 0U, {}, 1U);
@@ -396,7 +400,7 @@ TEST_CASE("ceir 11b: core.delay and core.history route to the same cell mechanis
     // The reference installs delay/history on the SAME eval_state; the compiler's classifier routes both to Op::State.
     // Two cells coexist (num_cells==2) -- a cell_read yields each init, and the two engines byte-agree on 7.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* dops[2] = {konst(ctx, o, mb, 3)->result(0U), konst(ctx, o, mb, 0)->result(0U)};
     Operation* const d = ctx.create_operation(delayk, ConstSpan<Value*>(dops, 2U), 1U, ctx.type_i32());
     mb->append(d);
@@ -418,11 +422,11 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a basic fun
     Module* const                m = ctx.create_module();
     // @add1(%x) { return x + 1 }   @main() { return call add1(41) } -> 42
     Operation* const fa = mkfunc(ctx, *m, "add1", 1U);
-    Block* const     ab = func::func_body_block(fa);
+    Block* const     ab = &func::func_body(*fa);
     Value* rva[1] = {bin(ctx, o.addi, ab->arg(0U), konst(ctx, o, ab, 1)->result(0U), ab)->result(0U)};
     ab->append(func::create_return(ctx, ConstSpan<Value*>(rva, 1U)));
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* cargs[1] = {konst(ctx, o, mb, 41)->result(0U)};
     Operation* const call = func::create_call(ctx, "add1", ConstSpan<Value*>(cargs, 1U), 1U, ctx.type_i32());
     mb->append(call);
@@ -439,11 +443,11 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a nested fu
     Module* const                m = ctx.create_module();
     // @inc(%x){ return x+1 }  @add2(%x){ return inc(inc(x)) }  @main(){ return add2(40) } -> 42 (two stacked frames)
     Operation* const fi = mkfunc(ctx, *m, "inc", 1U);
-    Block* const     ib = func::func_body_block(fi);
+    Block* const     ib = &func::func_body(*fi);
     Value* rvi[1] = {bin(ctx, o.addi, ib->arg(0U), konst(ctx, o, ib, 1)->result(0U), ib)->result(0U)};
     ib->append(func::create_return(ctx, ConstSpan<Value*>(rvi, 1U)));
     Operation* const f2 = mkfunc(ctx, *m, "add2", 1U);
-    Block* const     b2 = func::func_body_block(f2);
+    Block* const     b2 = &func::func_body(*f2);
     Value* c1a[1] = {b2->arg(0U)};
     Operation* const c1 = func::create_call(ctx, "inc", ConstSpan<Value*>(c1a, 1U), 1U, ctx.type_i32());
     b2->append(c1);
@@ -453,7 +457,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on a nested fu
     Value* rv2[1] = {c2->result(0U)};
     b2->append(func::create_return(ctx, ConstSpan<Value*>(rv2, 1U)));
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* ma[1] = {konst(ctx, o, mb, 40)->result(0U)};
     Operation* const cm = func::create_call(ctx, "add2", ConstSpan<Value*>(ma, 1U), 1U, ctx.type_i32());
     mb->append(cm);
@@ -472,7 +476,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on shallow REC
     // @sum(%n){ %c = cmpi(sle, n, 0); %r = if(c){ yield 0 } else { %s = call sum(n-1); yield n + s }; return r }
     // @main(){ return call sum(5) } -> 5+4+3+2+1 = 15 (recursion resolves via the pre-assigned fn index)
     Operation* const fs = mkfunc(ctx, *m, "sum", 1U);
-    Block* const     sb = func::func_body_block(fs);
+    Block* const     sb = &func::func_body(*fs);
     Operation* const c  = bin(ctx, o.cmpi, sb->arg(0U), konst(ctx, o, sb, 0)->result(0U), sb);
     ctx.set_attr(c, "predicate", ctx.attr_string("sle"));
     Value* ifops[1] = {c->result(0U)};
@@ -491,7 +495,7 @@ TEST_CASE("ceir 11b: the compiled plan byte-matches the reference on shallow REC
     Value* rvs[1] = {iff->result(0U)};
     sb->append(func::create_return(ctx, ConstSpan<Value*>(rvs, 1U)));
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* ma[1] = {konst(ctx, o, mb, 5)->result(0U)};
     Operation* const cm = func::create_call(ctx, "sum", ConstSpan<Value*>(ma, 1U), 1U, ctx.type_i32());
     mb->append(cm);
@@ -510,7 +514,7 @@ TEST_CASE("ceir 11b: a state cell in a callee called TWICE is GLOBAL per-op, agr
     // @tick(){ %s = state(0, s+1); return s }  @main(){ %a = tick(); %b = tick(); return a + b }
     // GLOBAL cell (keyed per-OP, like the reference m_cells): a=0, b=1 -> 1. A per-FRAME cell would give 0+0=0.
     Operation* const ft = mkfunc(ctx, *m, "tick", 0U);
-    Block* const     tb = func::func_body_block(ft);
+    Block* const     tb = &func::func_body(*ft);
     Value* sops[2] = {konst(ctx, o, tb, 0)->result(0U), konst(ctx, o, tb, 0)->result(0U)};
     Operation* const s = ctx.create_operation(statek, ConstSpan<Value*>(sops, 2U), 1U, ctx.type_i32());
     tb->append(s);
@@ -518,7 +522,7 @@ TEST_CASE("ceir 11b: a state cell in a callee called TWICE is GLOBAL per-op, agr
     Value* rvt[1] = {s->result(0U)};
     tb->append(func::create_return(ctx, ConstSpan<Value*>(rvt, 1U)));
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const ca = func::create_call(ctx, "tick", ConstSpan<Value*>(), 1U, ctx.type_i32());
     mb->append(ca);
     Operation* const cb = func::create_call(ctx, "tick", ConstSpan<Value*>(), 1U, ctx.type_i32());
@@ -552,7 +556,7 @@ TEST_CASE("ceir 11b: the compiler REJECTS an unresolved callee and a call/param 
     {
         Module* const    m  = ctx.create_module(); // @main(){ return call ghost() } -- ghost undefined
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Operation* const cg = func::create_call(ctx, "ghost", ConstSpan<Value*>(), 1U, ctx.type_i32());
         mb->append(cg);
         Value* rv[1] = {cg->result(0U)};
@@ -564,11 +568,11 @@ TEST_CASE("ceir 11b: the compiler REJECTS an unresolved callee and a call/param 
     {
         Module* const    m  = ctx.create_module(); // @one(%x){ return x }  @main(){ return call one(1, 2) } -- 2 args, 1 param
         Operation* const f1 = mkfunc(ctx, *m, "one", 1U);
-        Block* const     b1 = func::func_body_block(f1);
+        Block* const     b1 = &func::func_body(*f1);
         Value* rv1[1] = {b1->arg(0U)};
         b1->append(func::create_return(ctx, ConstSpan<Value*>(rv1, 1U)));
         Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-        Block* const     mb = func::func_body_block(fm);
+        Block* const     mb = &func::func_body(*fm);
         Value* ca[2] = {konst(ctx, o, mb, 1)->result(0U), konst(ctx, o, mb, 2)->result(0U)};
         Operation* const callop = func::create_call(ctx, "one", ConstSpan<Value*>(ca, 2U), 1U, ctx.type_i32());
         mb->append(callop);
@@ -603,7 +607,7 @@ TEST_CASE("ceir 11b: async.launch -> await round-trips a token's yields", "[ceir
     Module* const                m = ctx.create_module();
     // @main(){ %t = launch { yield 42 }; %r = await(t); return r } -> 42
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const l  = mktok(ctx, o, mb, "async", "launch", 42);
     Value* aw[1] = {l->result(0U)};
     Operation* const a = ctx.create_operation(ctx.intern_op("async", "await"), ConstSpan<Value*>(aw, 1U), 1U, ctx.type_i32());
@@ -623,11 +627,11 @@ TEST_CASE("ceir 11b: a token launched in a CALLEE is awaited in the CALLER (run-
     // â­ the launch runs in producer's frame (popped at return), but the TOKEN STORE is run-global, so the handle is
     // still live when the caller awaits it. A per-FRAME store would be discarded on the pop -> BadToken.
     Operation* const fp = mkfunc(ctx, *m, "producer", 0U);
-    Block* const     pb = func::func_body_block(fp);
+    Block* const     pb = &func::func_body(*fp);
     Value* rvp[1] = {mktok(ctx, o, pb, "async", "launch", 7)->result(0U)};
     pb->append(func::create_return(ctx, ConstSpan<Value*>(rvp, 1U)));
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const cp = func::create_call(ctx, "producer", ConstSpan<Value*>(), 1U, ctx.type_i32());
     mb->append(cp);
     Value* aw[1] = {cp->result(0U)};
@@ -646,7 +650,7 @@ TEST_CASE("ceir 11b: a task.continuation binds the antecedent yields as its body
     Module* const                m = ctx.create_module();
     // @main(){ %t = launch { yield 10 }; %c = continuation(t){ (x): yield x+5 }; return await(c) } -> 15
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const l  = mktok(ctx, o, mb, "async", "launch", 10);
     Value* ct[1] = {l->result(0U)};
     Operation* const cn = ctx.create_operation(ctx.intern_op("task", "continuation"), ConstSpan<Value*>(ct, 1U), 1U,
@@ -671,7 +675,7 @@ TEST_CASE("ceir 11b: async.join concatenates its input tokens' yields", "[ceir][
     Module* const                m = ctx.create_module();
     // @main(){ %a=launch{yield 3}; %b=launch{yield 4}; %j=join(a,b); %x,%y=await(j); return x+y } -> 3+4 = 7
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const la = mktok(ctx, o, mb, "async", "launch", 3);
     Operation* const lb = mktok(ctx, o, mb, "async", "launch", 4);
     Value* jt[2] = {la->result(0U), lb->result(0U)};
@@ -693,7 +697,7 @@ TEST_CASE("ceir 11b: async.race yields the deterministic winner index 0", "[ceir
     Module* const                m = ctx.create_module();
     // @main(){ %a=launch{yield 3}; %b=launch{yield 4}; %w=race(a,b); return w } -> 0 (sequential first-ready)
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* rt[2] = {mktok(ctx, o, mb, "async", "launch", 3)->result(0U), mktok(ctx, o, mb, "async", "launch", 4)->result(0U)};
     Operation* const w = ctx.create_operation(ctx.intern_op("async", "race"), ConstSpan<Value*>(rt, 2U), 1U, ctx.type_i32());
     mb->append(w);
@@ -710,7 +714,7 @@ TEST_CASE("ceir 11b: async.cancel consumes a token and no-ops (both engines)", "
     Module* const                m = ctx.create_module();
     // @main(){ %t=launch{yield 5}; cancel(t); return const 8 } -> 8 (cancel is a no-op at eval time)
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* ct[1] = {mktok(ctx, o, mb, "async", "launch", 5)->result(0U)};
     mb->append(ctx.create_operation(ctx.intern_op("async", "cancel"), ConstSpan<Value*>(ct, 1U), 0U));
     Value* rv[1] = {konst(ctx, o, mb, 8)->result(0U)};
@@ -726,7 +730,7 @@ TEST_CASE("ceir 11b: task.spawn -> fiber_wait routes to the same launch/await me
     Module* const                m = ctx.create_module();
     // @main(){ %t = task.spawn { yield 9 }; %r = task.fiber_wait(t); return r } -> 9 (task dialect -> Op::Launch/Await)
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const t  = mktok(ctx, o, mb, "task", "spawn", 9);
     Value* fw[1] = {t->result(0U)};
     Operation* const r = ctx.create_operation(ctx.intern_op("task", "fiber_wait"), ConstSpan<Value*>(fw, 1U), 1U, ctx.type_i32());
@@ -744,7 +748,7 @@ TEST_CASE("ceir 11b: await of an invalid token handle -> BadToken agrees with th
     Module* const                m = ctx.create_module();
     // @main(){ %bad = const 99; %r = await(bad); return r } -- 99 is not a live handle -> BadToken in BOTH engines
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* aw[1] = {konst(ctx, o, mb, 99)->result(0U)};
     Operation* const a = ctx.create_operation(ctx.intern_op("async", "await"), ConstSpan<Value*>(aw, 1U), 1U, ctx.type_i32());
     mb->append(a);
@@ -773,7 +777,7 @@ TEST_CASE("ceir 11b: a continuation body-arity mismatch -> ContinuationArity agr
     // @main(){ %t = launch { yield 10 }; %c = continuation(t){ (x, y): yield x }; return await(c) }
     // the antecedent yields ONE value but the body binds TWO args -> reference BadArity AND compiled ContinuationArity.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Operation* const l  = mktok(ctx, o, mb, "async", "launch", 10);
     Value* ct[1] = {l->result(0U)};
     Operation* const cn = ctx.create_operation(ctx.intern_op("task", "continuation"), ConstSpan<Value*>(ct, 1U), 1U,
@@ -829,7 +833,7 @@ TEST_CASE("ceir 11b: a task.parallel_for's per-index map agrees with the referen
     Module* const                m = ctx.create_module();
     // @main(){ parallel_for(0,4,1){ (iv): yield iv*iv }; return 0 } -- map = [0,1,4,9]
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     i64 rng[3] = {0, 4, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
     Block* const     body = ctx.create_block(1U, ctx.type_i32());
@@ -870,7 +874,7 @@ TEST_CASE("ceir 11b: a NON-ASSOCIATIVE map_reduce folds in index order, agreeing
     // @main(){ %r = map_reduce(0,4,1, init=0) map{(iv): yield iv} combine{(acc,elem): yield acc*2 + elem}; return r }
     // map = [0,1,2,3]; fold: 0 -> 0 -> 1 -> 4 -> 11. NON-associative (acc*2+elem) so ONLY index order gives 11.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     i64 rng[4] = {0, 4, 1, 0};
     Operation* const mr = mkdp(ctx, o, mb, "map_reduce", ConstSpan<i64>(rng, 4U), 1U, 2U);
     Block* const     mapb = ctx.create_block(1U, ctx.type_i32());
@@ -895,7 +899,7 @@ TEST_CASE("ceir 11b: an ISOLATED parallel_for body that reads an outer capture i
     // the body is an ISOLATED mini-function (fresh slot map), so `cap` fails slot_of at COMPILE (reference: runtime
     // UndefinedValue -- the sec-4 pattern). CapturedValue distinguishes it from an unsupported op.
     Operation* const fm  = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb  = func::func_body_block(fm);
+    Block* const     mb  = &func::func_body(*fm);
     Operation* const cap = konst(ctx, o, mb, 99);
     i64 rng[3] = {0, 2, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
@@ -919,7 +923,7 @@ TEST_CASE("ceir 11b: a STATEFUL parallel_for body rejects in both engines (compi
     // @main(){ parallel_for(0,2,1){ (iv): %s = state(iv, iv); yield s }; return 0 } -- a state cell makes the body NOT
     // state-free; the SHARED preflight rejects it: reference at RUNTIME (ParallelBodyStateful), compiled at COMPILE.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     i64 rng[3] = {0, 2, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
     Block* const     body = ctx.create_block(1U, ctx.type_i32());
@@ -951,7 +955,7 @@ TEST_CASE("ceir 11b: a parallel_for with step 0 -> BadForStep agrees with the re
     Module* const                m = ctx.create_module();
     // @main(){ parallel_for(0,4,0){ (iv): yield iv }; return 0 } -- step 0 is a dynamic value -> a RUNTIME differential.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     i64 rng[3] = {0, 4, 0};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
     Block* const     body = ctx.create_block(1U, ctx.type_i32());
@@ -981,7 +985,7 @@ TEST_CASE("ceir 11b: an empty-range parallel_for yields an empty map in both eng
     Module* const                m = ctx.create_module();
     // @main(){ parallel_for(4,0,1){ (iv): yield iv }; return 0 } -- lo > hi -> count 0 -> an empty map (both engines)
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     i64 rng[3] = {4, 0, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
     Block* const     body = ctx.create_block(1U, ctx.type_i32());
@@ -1018,7 +1022,7 @@ TEST_CASE("ceir 11b: a parallel_for body has a FRESH token store -> await of a p
     // BadToken in BOTH. â›” Without the token swap the compiled body would resolve the PARENT's handle (accept what the
     // reference rejects â€” the dangerous direction).
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     (void)mktok(ctx, o, mb, "async", "launch", 5); // parent handle 0 (unused otherwise)
     i64 rng[3] = {0, 2, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
@@ -1054,7 +1058,7 @@ TEST_CASE("ceir 11b: a parallel_for body's launched-token handles number from 0 
     // the parent holds handle 0; the body (fresh per-phase store) numbers ITS launches from 0 -> map = [0, 1] in BOTH.
     // â›” Without the swap the compiled body would number from the parent-global 1 -> [1, 2] (a value leak).
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     (void)mktok(ctx, o, mb, "async", "launch", 99); // parent handle 0
     i64 rng[3] = {0, 2, 1};
     Operation* const pf = mkdp(ctx, o, mb, "parallel_for", ConstSpan<i64>(rng, 3U), 0U, 1U);
@@ -1370,7 +1374,7 @@ TEST_CASE("ceir 11c: an erroring run leaves the seam UNBALANCED (pre > post)", "
     Module* const                m = ctx.create_module();
     // @main(){ %r = await(const 99); return r } -> BadToken: the Await case returns BEFORE post fires.
     Operation* const fm = mkfunc(ctx, *m, "main", 0U);
-    Block* const     mb = func::func_body_block(fm);
+    Block* const     mb = &func::func_body(*fm);
     Value* aw[1] = {konst(ctx, o, mb, 99)->result(0U)};
     Operation* const a = ctx.create_operation(ctx.intern_op("async", "await"), ConstSpan<Value*>(aw, 1U), 1U, ctx.type_i32());
     mb->append(a);
