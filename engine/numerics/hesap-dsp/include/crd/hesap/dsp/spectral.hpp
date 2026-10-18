@@ -22,11 +22,16 @@
 #include <crd/hesap/fft/real_fft.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
-
-#include <new>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 namespace crd::hesap::dsp
 {
+namespace detail
+{
+// DIAG.3a: a per-job segment plan that the allocator refuses (an exhausted sub-budget allocator) leaves the spectral
+// estimate out of memory, fatal in every build, never a null plan constructed into (crd-hesap-dsp-fatal-* modes).
+inline constexpr const char* kSegmentPlanOutOfMemory = "hesap::dsp: out of memory for a segment plan";
+} // namespace detail
 
 // The shared MULTI-THREADED parallel-batched-FFT core: computes the per-segment one-sided density periodograms
 // (nseg × nfreq, row-major) of `x`. Welch averages these; the spectrogram returns them. Each job owns a
@@ -67,10 +72,8 @@ template <typename T>
     specbuf.resize(static_cast<crd::usize>(npl) * nfreq);
     for (crd::u32 j = 0; j < npl; ++j)
     {
-        auto* p = static_cast<fft::RealFftPlan<T>*>(
-            alloc->allocate(sizeof(fft::RealFftPlan<T>), alignof(fft::RealFftPlan<T>)));
-        ::new (static_cast<void*>(p)) fft::RealFftPlan<T>(alloc, nperseg);
-        plans[j] = p;
+        plans[j] = crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, detail::kSegmentPlanOutOfMemory, alloc,
+                                                                        nperseg);
     }
 
     // one segment's periodogram: detrend (subtract mean) + window → rfft → scaled |·|² (one-sided doubling).
@@ -356,10 +359,8 @@ template <typename T>
     segbuf.resize(static_cast<crd::usize>(npl) * nperseg);
     for (crd::u32 j = 0; j < npl; ++j)
     {
-        auto* p = static_cast<fft::RealFftPlan<T>*>(
-            alloc->allocate(sizeof(fft::RealFftPlan<T>), alignof(fft::RealFftPlan<T>)));
-        ::new (static_cast<void*>(p)) fft::RealFftPlan<T>(alloc, nperseg);
-        plans[j] = p;
+        plans[j] = crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*alloc, detail::kSegmentPlanOutOfMemory, alloc,
+                                                                        nperseg);
     }
     auto do_frame = [&](crd::u32 jobidx, crd::usize frame)
     {

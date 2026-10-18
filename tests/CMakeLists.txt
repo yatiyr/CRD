@@ -60,6 +60,12 @@ set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability 
     crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
 set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# DIAG.3a: every allocation result in shipped code is checked before it is used (a sub-budget allocator refuses by
+# returning nullptr), passed up to a caller that checks it, or a named heap site; it reads every source under engine/,
+# tools/, runtime/ and sandbox/ through the checkout.
+add_test(NAME crd-check-allocation-results
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-allocation-results.py" "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_test(NAME crd-project-structure-native
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"

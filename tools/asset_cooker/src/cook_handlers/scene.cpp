@@ -25,6 +25,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 #include <crd/math/quat.hpp>
 #include <crd/math/vec.hpp>
 #include <crd/scene/relation.hpp>
@@ -254,7 +255,8 @@ struct SceneCooker::Impl
     }
 };
 
-SceneCooker::SceneCooker(crd::memory::IAllocator* alloc) : m_impl(new (alloc->allocate(sizeof(Impl), alignof(Impl))) Impl(alloc))
+SceneCooker::SceneCooker(crd::memory::IAllocator* alloc)
+    : m_impl(crd::memory::construct_or_fatal<Impl>(*alloc, detail::kSceneCookerOutOfMemory, alloc))
 {
 }
 

@@ -4,6 +4,7 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a)
 
 #include <cstring>
 #include <initializer_list>
@@ -12,6 +13,13 @@
 
 namespace crd::hesap::dense
 {
+namespace detail
+{
+// DIAG.3a: a refused allocation (an exhausted sub-budget allocator) and an element count whose byte size overflows
+// are the vector's out-of-memory fatal in every build, never a null or short buffer filled (crd-hesap-dense-fatal-*).
+inline constexpr const char* kVectorOutOfMemory = "hesap::dense::Vector: out of memory for its elements";
+} // namespace detail
+
 // -----------------------------------------------------------------------
 // Vector<T> — owning, allocator-aware dense vector.
 //
@@ -49,7 +57,8 @@ public:
     {
         if (n > 0)
         {
-            m_data = static_cast<T*>(m_alloc->allocate(n * sizeof(T), alignof(T) > 16 ? alignof(T) : 16));
+            m_data = crd::memory::allocate_array_or_fatal<T>(*m_alloc, n, alignof(T) > 16 ? alignof(T) : 16,
+                                                             detail::kVectorOutOfMemory);
             if constexpr (std::is_trivially_constructible_v<T>)
             {
                 std::memset(m_data, 0, n * sizeof(T));

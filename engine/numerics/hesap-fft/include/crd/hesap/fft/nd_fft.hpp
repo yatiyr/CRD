@@ -9,9 +9,16 @@
 #include <crd/hesap/fft/fft.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 namespace crd::hesap::fft
 {
+namespace detail
+{
+// DIAG.3a: a refused axis plan leaves the N-d plan out of memory, fatal in every build, never a null plan constructed
+// into (crd-hesap-fft-fatal-* modes).
+inline constexpr const char* kNdFftPlanOutOfMemory = "NdFftPlan: out of memory for an axis plan";
+} // namespace detail
 
 template <typename T> class NdFftPlan
 {
@@ -48,14 +55,13 @@ public:
             const crd::usize n = m_dims[i];
             if (n >= 2 && (n & (n - 1)) == 0) // power of two ⇒ the fast engine
             {
-                m_fft[i] = static_cast<FftPlan<T>*>(m_alloc->allocate(sizeof(FftPlan<T>), alignof(FftPlan<T>)));
-                ::new (static_cast<void*>(m_fft[i])) FftPlan<T>(m_alloc, n);
+                m_fft[i] =
+                    crd::memory::construct_or_fatal<FftPlan<T>>(*m_alloc, detail::kNdFftPlanOutOfMemory, m_alloc, n);
             }
             else if (n >= 2) // arbitrary size ⇒ Bluestein
             {
-                m_blue[i] =
-                    static_cast<BluesteinPlan<T>*>(m_alloc->allocate(sizeof(BluesteinPlan<T>), alignof(BluesteinPlan<T>)));
-                ::new (static_cast<void*>(m_blue[i])) BluesteinPlan<T>(m_alloc, n);
+                m_blue[i] = crd::memory::construct_or_fatal<BluesteinPlan<T>>(*m_alloc, detail::kNdFftPlanOutOfMemory,
+                                                                              m_alloc, n);
             }
             // n == 1: a degenerate axis, no transform needed.
         }

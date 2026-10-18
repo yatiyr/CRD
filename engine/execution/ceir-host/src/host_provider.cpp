@@ -3,9 +3,9 @@
 #include <crd/ceir/func.hpp> // resolve_call (pre-flight callee walk)
 #include <crd/jobs/jobs.hpp> // crd::jobs::parallel_for / wait / Counter — the PRIVATE backend (never in a public header)
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a: a refused pooled token is fatal)
 
 #include <cstdint> // UINT32_MAX
-#include <new>     // placement new
 #include <utility> // std::move
 
 namespace crd::ceir::host
@@ -44,6 +44,16 @@ struct PooledToken
     bool                         waited   = false;        // resolve waits the counter exactly once
     PooledToken() : scratch(kBodyScratchChunk), result(&scratch) {}
 };
+
+crd::usize detail::pooled_token_size() noexcept
+{
+    return sizeof(PooledToken);
+}
+
+crd::usize detail::pooled_token_alignment() noexcept
+{
+    return alignof(PooledToken);
+}
 
 namespace
 {
@@ -686,8 +696,8 @@ crd::i64 HostProvider::pool_launch(const exec::Interpreter& proto, const Module&
                                    const std::atomic<bool>* cancel, crd::u64 sub_fuel, crd::jobs::Priority prio,
                                    crd::i32 pin_thread, crd::u32 nesting)
 {
-    void* const  mem = m_alloc->allocate(sizeof(PooledToken), alignof(PooledToken));
-    auto* const  t   = new (mem) PooledToken(); // heap-owned (the table never moves it — the JobDecl captures &t)
+    // heap-owned (the table never moves it — the JobDecl captures &t)
+    auto* const t = memory::construct_or_fatal<PooledToken>(*m_alloc, detail::kPooledTokenOutOfMemory);
     t->proto = &proto;
     t->module = &module;
     t->body   = body;

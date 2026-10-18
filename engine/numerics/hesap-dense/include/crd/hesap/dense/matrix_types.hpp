@@ -5,6 +5,7 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal / checked_mul (DIAG.3a)
 
 #include <cstring>
 #include <type_traits>
@@ -32,15 +33,26 @@ namespace crd::hesap::dense
 
 namespace detail
 {
+// DIAG.3a: a structured matrix cannot exist without its storage, so a refused allocation and a storage size that
+// overflows are out of memory, fatal in every build, never a null or short buffer filled (crd-hesap-dense-fatal-*).
+inline constexpr const char* kStructuredStorageOutOfMemory =
+    "hesap::dense: out of memory for a structured matrix's storage";
+
+// Zero-initialised storage for rows * cols elements (nullptr when either is 0).
 template <typename T>
-T* allocate_zeroed(crd::memory::IAllocator* alloc, crd::usize n)
+T* allocate_zeroed(crd::memory::IAllocator* alloc, crd::usize rows, crd::usize cols)
 {
+    crd::usize n = 0;
+    if (!crd::memory::checked_mul(rows, cols, &n))
+    {
+        CRD_FATAL(kStructuredStorageOutOfMemory);
+    }
     if (n == 0)
     {
         return nullptr;
     }
     const crd::usize align = alignof(T) > 16 ? alignof(T) : 16;
-    T* p = static_cast<T*>(alloc->allocate(n * sizeof(T), align));
+    T* p = crd::memory::allocate_array_or_fatal<T>(*alloc, n, align, kStructuredStorageOutOfMemory);
     if constexpr (std::is_trivially_constructible_v<T>)
     {
         std::memset(p, 0, n * sizeof(T));
@@ -86,7 +98,7 @@ public:
 
     Symmetric(crd::memory::IAllocator* alloc, crd::usize n) : m_alloc(alloc), m_n(n)
     {
-        m_data = detail::allocate_zeroed<T>(m_alloc, n * n);
+        m_data = detail::allocate_zeroed<T>(m_alloc, n, n);
     }
 
     ~Symmetric() { detail::deallocate_storage(m_alloc, m_data, m_n * m_n); }
@@ -173,7 +185,7 @@ public:
 
     Hermitian(crd::memory::IAllocator* alloc, crd::usize n) : m_alloc(alloc), m_n(n)
     {
-        m_data = detail::allocate_zeroed<T>(m_alloc, n * n);
+        m_data = detail::allocate_zeroed<T>(m_alloc, n, n);
     }
 
     ~Hermitian() { detail::deallocate_storage(m_alloc, m_data, m_n * m_n); }
@@ -224,7 +236,7 @@ public:
         {
             return m_data[i * m_n + j];
         }
-        if constexpr (is_complex_value<T>::value)
+        if constexpr (IsComplexValue<T>::value)
         {
             return crd::hesap::conj(m_data[j * m_n + i]);
         }
@@ -249,11 +261,11 @@ private:
     // Local complex-detection trait (avoids pulling real_type.hpp; that
     // header includes dense headers and we want this to be standalone).
     template <typename U>
-    struct is_complex_value : std::false_type
+    struct IsComplexValue : std::false_type
     {
     };
     template <typename U>
-    struct is_complex_value<crd::hesap::Complex<U>> : std::true_type
+    struct IsComplexValue<crd::hesap::Complex<U>> : std::true_type
     {
     };
 
@@ -271,14 +283,14 @@ class Triangular
 {
 public:
     using value_type = T;
-    static constexpr TriangularSide side = Side;
-    static constexpr TriangularDiag diag = Diag;
+    static constexpr TriangularSide kSide = Side;
+    static constexpr TriangularDiag kDiag = Diag;
 
     explicit Triangular(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc) {}
 
     Triangular(crd::memory::IAllocator* alloc, crd::usize n) : m_alloc(alloc), m_n(n)
     {
-        m_data = detail::allocate_zeroed<T>(m_alloc, n * n);
+        m_data = detail::allocate_zeroed<T>(m_alloc, n, n);
     }
 
     ~Triangular() { detail::deallocate_storage(m_alloc, m_data, m_n * m_n); }
@@ -397,8 +409,13 @@ public:
     Banded(crd::memory::IAllocator* alloc, crd::usize rows, crd::usize cols, crd::usize kl, crd::usize ku)
         : m_alloc(alloc), m_rows(rows), m_cols(cols), m_kl(kl), m_ku(ku)
     {
-        m_band_height = kl + ku + 1;
-        m_data = detail::allocate_zeroed<T>(m_alloc, m_band_height * cols);
+        // kl + ku + 1 rows of band storage; a height that overflows is the same fatal as storage that does.
+        if (!crd::memory::checked_add(kl, ku, &m_band_height) ||
+            !crd::memory::checked_add(m_band_height, 1U, &m_band_height))
+        {
+            CRD_FATAL(detail::kStructuredStorageOutOfMemory);
+        }
+        m_data = detail::allocate_zeroed<T>(m_alloc, m_band_height, cols);
     }
 
     ~Banded() { detail::deallocate_storage(m_alloc, m_data, m_band_height * m_cols); }

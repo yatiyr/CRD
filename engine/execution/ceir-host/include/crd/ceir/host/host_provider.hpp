@@ -33,6 +33,17 @@ namespace crd::ceir::host
 
 struct PooledToken; // CEIR-11a stage 3: a jobs-backed launch's {own scratch, result, counter, job ctx} — defined in the .cpp
 
+namespace detail
+{
+// DIAG.3a: a pooled launch has committed to its token when it allocates it (the launch op's result is the token's
+// handle), so a provider whose allocator refuses the token is out of memory, fatal in every build, never a null token
+// written through (crd-ceir-host-fatal-* modes).
+inline constexpr const char* kPooledTokenOutOfMemory = "HostProvider: out of memory for a pooled launch's token";
+// The token's request shape, which the fatal specimen refuses exactly (the type is private to the provider).
+[[nodiscard]] crd::usize pooled_token_size() noexcept;
+[[nodiscard]] crd::usize pooled_token_alignment() noexcept;
+} // namespace detail
+
 // DIAG.9a: an observer of one execution's SUBMITTING interpreter (e.g. a run recorder). `attach` runs on the submitting
 // thread after the interpreter is built and before the entry runs, so it may install step hooks; `detach` runs after
 // the entry returned and every pooled launch was joined, while the interpreter is still alive. Step hooks are not

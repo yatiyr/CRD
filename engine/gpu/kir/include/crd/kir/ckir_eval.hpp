@@ -7,12 +7,18 @@
 // reduction bit-for-bit is the v17-f (T1/T2/T3) work; this establishes the deterministic baseline. ADR-0098.
 
 #include <crd/kir/ckir.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a: a refused scratch block is fatal)
 
 namespace crd::kir
 {
 
 namespace eval_detail
 {
+// DIAG.3a: the reference interpreter cannot evaluate without its scratch, so a scratch allocator that refuses a block
+// (an exhausted sub-budget allocator) is out of memory, fatal in every build, never a null buffer written
+// (crd-kir-fatal-* modes).
+inline constexpr const char* kEvalScratchOutOfMemory = "kir::eval_cpu: the scratch allocator is out of memory";
+
 // NOLINTNEXTLINE(readability-non-const-parameter) -- coord is written (coord[i]=...); tidy misfires on this header-only fn
 inline void unflatten(crd::i64 flat, const Shape& s, crd::i64* coord) noexcept
 {
@@ -142,7 +148,9 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
         total += g.node(i).shape.numel() * g.node(i).comps();
     }
 
-    auto*          buf = static_cast<crd::f64*>(scratch->allocate(sizeof(crd::f64) * static_cast<crd::usize>(total), alignof(crd::f64)));
+    // A negative total reads as a count no allocation holds: the same fatal, never a short buffer.
+    auto* const buf = crd::memory::allocate_array_or_fatal<crd::f64>(*scratch, static_cast<crd::usize>(total),
+                                                                     eval_detail::kEvalScratchOutOfMemory);
     crd::i64       oc[kMaxRank];
     crd::i64       ic[kMaxRank];
     // A4 tier-2: mark body-scoped (loop-varying) nodes — LoopIndex/LoopAcc + their consumers; a For is a barrier (its
@@ -1009,7 +1017,8 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
             const crd::i64  slen  = qn.shape.dims[qn.shape.rank - 2];
             const crd::i64  dim   = qn.shape.dims[qn.shape.rank - 1];
             const crd::f64  scale = n.cval;
-            auto*           sc    = static_cast<crd::f64*>(scratch->allocate(sizeof(crd::f64) * static_cast<crd::usize>(slen), alignof(crd::f64)));
+            crd::f64* const sc    = crd::memory::allocate_array_or_fatal<crd::f64>(
+                *scratch, static_cast<crd::usize>(slen), eval_detail::kEvalScratchOutOfMemory);
             for (crd::i64 qi = 0; qi < slen; ++qi)
             {
                 crd::f64 mx = -1.0e300;
@@ -1042,6 +1051,7 @@ inline void eval_cpu(const KGraph& g, const crd::f64* const* inputs, crd::memory
                     dst[qi * dim + dd] = round_dtype(acc / sum, n.dtype());
                 }
             }
+            scratch->deallocate(sc); // one row of scores per attention node (it was never returned)
         }
         else if (n.op == KOp::Gather)
         {

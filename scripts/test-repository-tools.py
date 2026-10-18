@@ -79,6 +79,10 @@ compile_commands_spec = importlib.util.spec_from_file_location('check_compile_co
                                                                ROOT / 'scripts/check-compile-commands.py')
 compile_commands = importlib.util.module_from_spec(compile_commands_spec)
 compile_commands_spec.loader.exec_module(compile_commands)
+allocation_results_spec = importlib.util.spec_from_file_location('check_allocation_results',
+                                                                 ROOT / 'scripts/check-allocation-results.py')
+allocation_results = importlib.util.module_from_spec(allocation_results_spec)
+allocation_results_spec.loader.exec_module(allocation_results)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -1959,6 +1963,86 @@ class CompileCommands(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as out:
                 self.assertEqual(1, compile_commands.main(['check', str(path)]))
             self.assertIn('ERROR: D:/src/d.cpp: optimization levels /O2 then /Od', out.getvalue())
+
+
+class AllocationResults(unittest.TestCase):
+    def test_an_unchecked_result_is_reported_by_line(self):
+        text = ('void f(crd::memory::IAllocator* a)\n'
+                '{\n'
+                '    void* const mem = a->allocate(16U, 8U);\n'
+                '    auto* t = new (mem) T();\n'
+                '    auto* p = static_cast<int*>(\n'
+                '        a->allocate(4U * sizeof(int), alignof(int)));\n'
+                '    p[0] = 1;\n'
+                '    auto* m = crd::memory::construct<Model>(*a, 3);\n'
+                '    m->run();\n'
+                '}\n')
+        self.assertEqual([3, 6, 8], allocation_results.unchecked_calls(text))
+
+    def test_checked_passed_up_conditional_and_fatal_forms_pass(self):
+        text = ('void* Wrapper::allocate(usize n, usize al) { return m_backing->allocate(n, al); }\n'
+                'void g(crd::memory::IAllocator* a, Gpu& gpu)\n'
+                '{\n'
+                '    void* raw = a->allocate(16U, 8U);\n'
+                '    if (raw == nullptr)\n'
+                '    {\n'
+                '        return;\n'
+                '    }\n'
+                '    auto* q = static_cast<T*>(a->try_allocate(sizeof(T), alignof(T)));\n'
+                '    if (!q)\n'
+                '    {\n'
+                '        return;\n'
+                '    }\n'
+                '    if (!gpu.allocate(desc, out))\n'
+                '    {\n'
+                '        return;\n'
+                '    }\n'
+                '    const Allocation x = oa.allocate(size, align);\n'
+                '    if (x.valid())\n'
+                '    {\n'
+                '        use(x);\n'
+                '    }\n'
+                '    auto* h = crd::memory::default_allocator()->allocate(8U, 8U);\n'
+                '    auto* f = crd::memory::allocate_array_or_fatal<int>(*a, 4U, "out of memory");\n'
+                '    auto* c = crd::memory::construct_or_fatal<T>(*a, "out of memory", 1);\n'
+                '    Slot s = m_slots.allocate();\n'
+                '    // a->allocate(1U, 1U) in a comment\n'
+                '}\n')
+        self.assertEqual([], allocation_results.unchecked_calls(text))
+
+    def test_a_check_too_far_from_the_call_does_not_count(self):
+        filler = ''.join('    step(%d);\n' % i for i in range(allocation_results.WINDOW + 1))
+        text = '    void* p = a->allocate(8U, 8U);\n' + filler + '    if (p == nullptr)\n'
+        self.assertEqual([1], allocation_results.unchecked_calls(text))
+
+    def test_the_tree_check_counts_allowances_and_fails_an_empty_tree(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, allocation_results.main(['check', str(root)]))
+            self.assertIn('nothing was checked', out.getvalue())
+            source = root / 'engine' / 'a.cpp'
+            source.parent.mkdir(parents=True)
+            source.write_text('void f(I* a)\n{\n    int* p = static_cast<int*>(a->allocate(4U, 4U));\n'
+                              '    *p = 1;\n}\n', encoding='utf-8')
+            seen, problems = allocation_results.check(root)
+            self.assertEqual(1, seen)
+            self.assertEqual(1, len(problems))
+            self.assertIn('engine/a.cpp: allocation result used without a check at line(s) 3', problems[0])
+            with patch.dict(allocation_results.ALLOWED, {'engine/a.cpp': (1, 'a heap allocator')}):
+                self.assertEqual((1, []), allocation_results.check(root))
+            with patch.dict(allocation_results.ALLOWED, {'engine/a.cpp': (2, 'a heap allocator')}):
+                seen, problems = allocation_results.check(root)
+                self.assertIn('1 unchecked allocations where 2 are allowed', problems[0])
+            allocator = root / 'engine' / 'foundation' / 'memory' / 'src' / 'allocators' / 'pool.cpp'
+            allocator.parent.mkdir(parents=True)
+            allocator.write_text('void* p = m_parent->allocate(n, al);\n*static_cast<char*>(p) = 0;\n',
+                                 encoding='utf-8')
+            source.write_text('void f(I* a)\n{\n    int* p = static_cast<int*>(a->allocate(4U, 4U));\n'
+                              '    if (p != nullptr)\n    {\n        *p = 1;\n    }\n}\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, allocation_results.main(['check', str(root)]))
+            self.assertIn('1 allocation calls, every result checked or passed up', out.getvalue())
 
 
 class AllmanBraces(unittest.TestCase):

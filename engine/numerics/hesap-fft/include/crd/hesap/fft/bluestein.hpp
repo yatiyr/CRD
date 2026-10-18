@@ -13,11 +13,18 @@
 #include <crd/hesap/fft/fft.hpp>
 
 #include <crd/containers/array.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 #include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
+namespace detail
+{
+// DIAG.3a: a refused power-of-two plan leaves the Bluestein plan out of memory, fatal in every build, never a null
+// plan constructed into (crd-hesap-fft-fatal-* modes).
+inline constexpr const char* kBluesteinPlanOutOfMemory = "BluesteinPlan: out of memory for its power-of-two plan";
+} // namespace detail
 
 template <typename T> class BluesteinPlan
 {
@@ -32,8 +39,7 @@ public:
         {
             m_m <<= 1;
         }
-        m_plan = static_cast<FftPlan<T>*>(m_alloc->allocate(sizeof(FftPlan<T>), alignof(FftPlan<T>)));
-        ::new (static_cast<void*>(m_plan)) FftPlan<T>(m_alloc, m_m);
+        m_plan = crd::memory::construct_or_fatal<FftPlan<T>>(*m_alloc, detail::kBluesteinPlanOutOfMemory, m_alloc, m_m);
 
         // chirp[k] = exp(+iπ k²/n), k = 0..n-1. k² is reduced mod 2n (exp has period 2n in k²) for f32/f64
         // precision at large k. The forward convention; conj() gives the −iπ variant where the algebra needs it.

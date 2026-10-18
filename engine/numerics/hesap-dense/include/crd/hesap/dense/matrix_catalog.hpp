@@ -5,11 +5,19 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a)
 
 #include <type_traits>
 
 namespace crd::hesap::dense
 {
+namespace detail
+{
+// DIAG.3a: a refused pivot array is the permutation's out-of-memory fatal in every build, never a null array filled
+// (crd-hesap-dense-fatal-* modes).
+inline constexpr const char* kPermutationOutOfMemory = "hesap::dense::Permutation: out of memory for its pivots";
+} // namespace detail
+
 // -----------------------------------------------------------------------
 // Matrix-type catalog. v0a shipped empty shells for 15 dense types; v0c
 // populates Matrix / MatrixView / Symmetric / Hermitian / Triangular /
@@ -92,7 +100,7 @@ public:
     {
         if (n > 0)
         {
-            m_pivots = static_cast<crd::usize*>(m_alloc->allocate(n * sizeof(crd::usize), alignof(crd::usize)));
+            m_pivots = crd::memory::allocate_array_or_fatal<crd::usize>(*m_alloc, n, detail::kPermutationOutOfMemory);
             for (crd::usize i = 0; i < n; ++i)
             {
                 m_pivots[i] = i;

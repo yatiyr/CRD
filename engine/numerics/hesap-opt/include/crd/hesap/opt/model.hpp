@@ -61,6 +61,10 @@ enum class ModelMethod : crd::u8
 
 namespace detail
 {
+// DIAG.3a: a model cannot hold its objective or a constraint without the functor's storage, so a refused allocation
+// (an exhausted sub-budget allocator) is out of memory, fatal in every build, never a null functor stored and called
+// by solve() (crd-hesap-opt-fatal-* modes).
+inline constexpr const char* kModelOutOfMemory = "hesap::opt::Model: out of memory for a model function";
 
 // Type-erased scalar-generic function: the two instantiations (T and Dual<T>) behind one vtable.
 template <typename T> class IModelFn
@@ -262,21 +266,24 @@ public:
     void minimize(F f)
     {
         CRD_ASSERT_MSG(m_objective == nullptr, "Model::minimize: objective already set");
-        m_objective = crd::memory::construct<detail::ModelFn<T, F>>(*m_alloc, std::move(f));
+        m_objective =
+            crd::memory::construct_or_fatal<detail::ModelFn<T, F>>(*m_alloc, detail::kModelOutOfMemory, std::move(f));
     }
 
     template <typename F>
         requires DiffFunctor<F, T>
     void subject_to_eq(F f) // c(x) = 0
     {
-        m_eq.push_back(crd::memory::construct<detail::ModelFn<T, F>>(*m_alloc, std::move(f)));
+        m_eq.push_back(
+            crd::memory::construct_or_fatal<detail::ModelFn<T, F>>(*m_alloc, detail::kModelOutOfMemory, std::move(f)));
     }
 
     template <typename F>
         requires DiffFunctor<F, T>
     void subject_to_ge(F f) // c(x) ≥ 0
     {
-        m_ineq.push_back(crd::memory::construct<detail::ModelFn<T, F>>(*m_alloc, std::move(f)));
+        m_ineq.push_back(
+            crd::memory::construct_or_fatal<detail::ModelFn<T, F>>(*m_alloc, detail::kModelOutOfMemory, std::move(f)));
     }
 
     template <typename F>
@@ -304,7 +311,18 @@ public:
         }
         if (method == ModelMethod::Auto)
         {
-            method = has_cons ? ModelMethod::Sqp : (has_bounds ? ModelMethod::Lbfgsb : ModelMethod::Lbfgs);
+            if (has_cons)
+            {
+                method = ModelMethod::Sqp;
+            }
+            else if (has_bounds)
+            {
+                method = ModelMethod::Lbfgsb;
+            }
+            else
+            {
+                method = ModelMethod::Lbfgs;
+            }
         }
         CRD_ASSERT_MSG(!(method == ModelMethod::Lbfgs && (has_cons || has_bounds)),
                        "Model::solve: Lbfgs cannot handle constraints or bounds");

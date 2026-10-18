@@ -27,3 +27,13 @@ target_compile_definitions(crd-ceir-host-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOU
 
 crd_enable_default_pch(crd-ceir-host-tests)
 crd_discover_tests(crd-ceir-host-tests)
+
+# The host provider's out-of-memory fatal, one child process per mode (a fatal cannot run in-process): an allocator
+# that refuses a pooled launch's token leaves the provider out of memory, fatal in every build, never a null token
+# written through. Source and protocol: tests/support/diag/specimens/ceir_host_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-ceir-host-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/ceir_host_fatal_specimen.cpp")
+target_link_libraries(crd-ceir-host-fatal-specimen PRIVATE crd-core crd-memory crd-jobs crd-ceir crd-ceir-host)
+crd_diag_fatal_tests(crd-ceir-host-fatal-specimen PREFIX crd-ceir-host-fatal OWNER crd-ceir-host-tests
+    MODES pool-token-refused)

@@ -6,6 +6,11 @@
 //   create-operation-arena-refused  create_operation once the parent refuses the arena's next chunk
 //   create-block-arena-refused      create_block once the parent refuses the arena's next chunk
 //   intern-symbol-arena-refused     intern_symbol of a name larger than any chunk once the parent refuses
+// The diagnostic engine copies every text and array it records into an arena that grows the same way; a refused
+// chunk is the engine's out-of-memory fatal, never a null copy written through:
+//   diagnostic-text-refused         emit of a message larger than any chunk once the parent refuses
+//   diagnostic-notes-refused        emit of a note array larger than any chunk once the parent refuses
+//   diagnostic-fixits-refused       emit of a fix-it array larger than any chunk once the parent refuses
 // func::func_body is the entry-block accessor for a func.func that has one (every create_func op does): an op without
 // a body is fatal, never a null block followed:
 //   func-body-missing               func_body on an op with no regions
@@ -19,6 +24,7 @@
 #include "specimen_common.hpp"
 
 #include <crd/ceir/context.hpp>
+#include <crd/ceir/diagnostic.hpp>
 #include <crd/ceir/func.hpp>
 #include <crd/ceir/ir.hpp>
 #include <crd/ceir/passes/rewrite_rules.hpp>
@@ -54,11 +60,50 @@ private:
 };
 
 constexpr crd::usize kChunkBytes = 1024U; // small, so a few nodes need the next chunk
+// More entries than the diagnostic engine's 16 KiB arena chunk holds in one array, so the array needs a chunk of its
+// own.
+constexpr crd::usize kDiagnosticEntries = 2048U;
 constexpr int kMaxNodes = 4096;           // far more than one chunk holds: the fatal must come long before
 
 [[nodiscard]] bool is(const char* mode, const char* name)
 {
     return std::strcmp(mode, name) == 0;
+}
+
+// The diagnostic-engine modes: the engine's first chunk is granted at construction, then the parent refuses, so the
+// first copy larger than what is left of it needs a chunk the parent refuses. Returns false for an unknown mode.
+[[nodiscard]] bool run_diagnostic_mode(const char* mode)
+{
+    const bool text = is(mode, "diagnostic-text-refused");
+    const bool notes = is(mode, "diagnostic-notes-refused");
+    const bool fixits = is(mode, "diagnostic-fixits-refused");
+    if (!text && !notes && !fixits)
+    {
+        return false;
+    }
+    crd_diag_fatal::arm(mode, ce::detail::kDiagnosticArenaOutOfMemory);
+    SwitchableParent parent;
+    ce::Context ctx(&parent, kChunkBytes);
+    ce::DiagnosticEngine engine(ctx, &parent);
+    static char message[2U * 16U * 1024U]; // larger than the engine's chunk
+    std::memset(message, 'm', sizeof(message));
+    static crd::containers::StringView note_views[kDiagnosticEntries];
+    static ce::FixIt fixit_entries[kDiagnosticEntries];
+    for (crd::usize i = 0; i < kDiagnosticEntries; ++i)
+    {
+        note_views[i] = crd::containers::StringView{"n", 1U};
+        fixit_entries[i] = ce::FixIt{ce::SourceLoc{}, crd::containers::StringView{"f", 1U}};
+    }
+    parent.refuse();
+    const crd::containers::StringView small{"specimen diagnostic", 19U};
+    engine.emit(ce::Severity::Error, ce::make_diagnostic_code("specimen.diagnostic"),
+                crd::containers::StringView{"specimen.diagnostic", 19U}, ce::SourceLoc{},
+                text ? crd::containers::StringView{message, sizeof(message)} : small,
+                notes ? crd::containers::ConstSpan<crd::containers::StringView>{note_views, kDiagnosticEntries}
+                      : crd::containers::ConstSpan<crd::containers::StringView>{},
+                fixits ? crd::containers::ConstSpan<ce::FixIt>{fixit_entries, kDiagnosticEntries}
+                       : crd::containers::ConstSpan<ce::FixIt>{});
+    return true;
 }
 
 // Runs one mode. Returns false for an unknown mode; returning at all for a known mode means the fatal did not fire.
@@ -132,7 +177,7 @@ constexpr int kMaxNodes = 4096;           // far more than one chunk holds: the 
         ce::rr_detail::rule_apply(ctx, rule, *op);
         return true;
     }
-    return false;
+    return run_diagnostic_mode(mode);
 }
 } // namespace
 

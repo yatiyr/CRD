@@ -29,6 +29,7 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 #include <crd/math/cmath.hpp>
 #include <numbers>
@@ -64,6 +65,10 @@ struct ContinuousWavelet
 
 namespace detail
 {
+// DIAG.3a: a per-job scale plan that the allocator refuses (an exhausted sub-budget allocator) leaves the transform out
+// of memory, fatal in every build, never a null plan constructed into (crd-hesap-wavelet-fatal-* modes).
+inline constexpr const char* kCwtPlanOutOfMemory = "hesap::wavelet::cwt: out of memory for a scale plan";
+
 template <typename T> [[nodiscard]] inline Complex<double> cmul(Complex<double> a, Complex<double> b) noexcept
 {
     return Complex<double>{a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re};
@@ -147,7 +152,8 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
     const double step = (w.upper - w.lower) / static_cast<double>(grid_n - 1);
     double gc[18];
     Complex<double> cc[18];
-    int gn = 0, cn = 0;
+    int gn = 0;
+    int cn = 0;
     double gsign = 1.0;
     if (w.kind == ContinuousWaveletKind::Gaus)
     {
@@ -182,7 +188,8 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
         }
         case ContinuousWaveletKind::Gaus:
         {
-            double poly = 0.0, tp = 1.0;
+            double poly = 0.0;
+            double tp = 1.0;
             for (int j = 0; j < gn; ++j)
             {
                 poly += gc[j] * tp;
@@ -225,7 +232,8 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
         {
             // ψ_m(t) = (2^m i^m m!)/sqrt(π (2m)!) · (1 - i t)^{-(m+1)}
             const int m = w.order;
-            double fact_m = 1.0, fact_2m = 1.0;
+            double fact_m = 1.0;
+            double fact_2m = 1.0;
             for (int j = 2; j <= m; ++j)
             {
                 fact_m *= j;
@@ -241,7 +249,8 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
                 im_m = Complex<double>{-im_m.im, im_m.re};
             }
             // (1 - i t)^{-(m+1)} = exp(-(m+1)·log(1 - i t))
-            const double re1 = 1.0, im1 = -t;
+            const double re1 = 1.0;
+            const double im1 = -t;
             const double r = crd::math::sqrt(re1 * re1 + im1 * im1);
             const double th = crd::math::atan2(im1, re1);
             const double mag = crd::math::pow(r, -(m + 1.0));
@@ -306,7 +315,7 @@ inline void sample_psi(const ContinuousWavelet& w, crd::usize grid_n, Complex<do
     ContinuousWavelet w;
     auto starts = [&](const char* p) {
         crd::containers::StringView s(p);
-        return name.size() >= s.size() && name.substr(0, s.size()) == s;
+        return name.starts_with(s);
     };
     if (name == "mexh")
     {
@@ -517,17 +526,20 @@ template <typename T>
 
     // per-job FFT plans + scratch, built serially (the Welch pattern).
     const crd::u32 nw = crd::jobs::num_workers();
-    const crd::u32 njobs = (ns < 4 || nw <= 1) ? 1U : ((nw < static_cast<crd::u32>(ns)) ? nw : static_cast<crd::u32>(ns));
+    crd::u32 njobs = 1U;
+    if (ns >= 4 && nw > 1)
+    {
+        njobs = nw < static_cast<crd::u32>(ns) ? nw : static_cast<crd::u32>(ns);
+    }
     crd::containers::Array<fft::FftPlan<T>*> plans(alloc);
-    crd::containers::Array<Complex<T>> kbuf(alloc), wbuf(alloc);
+    crd::containers::Array<Complex<T>> kbuf(alloc);
+    crd::containers::Array<Complex<T>> wbuf(alloc);
     plans.resize(njobs);
     kbuf.resize(static_cast<crd::usize>(njobs) * lfft);
     wbuf.resize(static_cast<crd::usize>(njobs) * lfft);
     for (crd::u32 j = 0; j < njobs; ++j)
     {
-        auto* p = static_cast<fft::FftPlan<T>*>(alloc->allocate(sizeof(fft::FftPlan<T>), alignof(fft::FftPlan<T>)));
-        ::new (static_cast<void*>(p)) fft::FftPlan<T>(alloc, lfft);
-        plans[j] = p;
+        plans[j] = crd::memory::construct_or_fatal<fft::FftPlan<T>>(*alloc, detail::kCwtPlanOutOfMemory, alloc, lfft);
     }
 
     auto do_scale = [&](crd::u32 job, crd::usize s) {

@@ -27,6 +27,17 @@ namespace crd::ceir::cook
 {
 using AssetId = crd::renderasset::AssetId;
 
+namespace detail
+{
+// The out-of-memory fatals (DIAG.3a): a set whose allocator refuses a cook Context, a generation or a generation's
+// Context cannot continue, so the refusal is fatal in every build, never a null object constructed into
+// (crd-ceir-cook-fatal-* modes).
+inline constexpr const char* kReloadCookContextOutOfMemory = "ReloadSet: out of memory for a cook context";
+inline constexpr const char* kReloadGenerationOutOfMemory = "ReloadSet: out of memory for a program generation";
+inline constexpr const char* kReloadGenerationContextOutOfMemory =
+    "ReloadSet: out of memory for a generation's context";
+} // namespace detail
+
 // A registrar installs the module's dialects into a FRESH per-generation Context. ⛔ Run immediately after the Context is
 // constructed, BEFORE load_program (its registration check runs first — the register-to-verify contract). Mirrors the
 // crd-resources ReloadCallback / crd-ceir RewritePattern function-pointer idiom (an open-world hook, no vtable).

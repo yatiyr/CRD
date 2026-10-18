@@ -70,6 +70,13 @@ using ComponentTomlReaderFn = bool (*)(const void* toml_node,
                                        crd::u32    line,
                                        crd::containers::Array<CookError>* errors);
 
+namespace detail
+{
+// DIAG.3a: a cooker cannot exist without its registry, so a refused allocation (an exhausted sub-budget allocator) is
+// out of memory, fatal in every build, never a null registry constructed into (crd-cooker-fatal-* modes).
+inline constexpr const char* kSceneCookerOutOfMemory = "SceneCooker: out of memory for its reader registry";
+} // namespace detail
+
 // Public scene cooker — opaque facade. Created via make_scene_cooker(),
 // holds the component-reader registry and built-in relation handlers.
 // Library users register additional readers via register_component_reader

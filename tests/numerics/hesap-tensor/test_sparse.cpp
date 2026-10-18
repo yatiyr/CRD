@@ -923,3 +923,14 @@ TEST_CASE("sparse: boundary adversaries - empty single-nnz duplicates and reject
         REQUIRE(reduce_sum_mode(coo, 0U, {rout.data(), 3U}) == TensorStatus::BadInput);
     }
 }
+
+// DIAG.3a: a scratch block whose byte size overflows is refused (a null block, which every caller reports as
+// AllocFailed), never a wrapped size: 2^61 + 1 doubles would wrap to an 8-byte block the caller then fills past.
+TEST_CASE("sparse: a scratch block whose byte size overflows is refused, never wrapped", "[v14i][sparse][diag]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 20, nullptr, "sparse-scratch-overflow");
+    const crd::hesap::tensor::sparsedetail::ScratchBlock<crd::f64> wrapped(&alloc, (crd::u64{1} << 61U) + 1U);
+    CHECK(wrapped.m_ptr == nullptr);
+    const crd::hesap::tensor::sparsedetail::ScratchBlock<crd::f64> fits(&alloc, 16U);
+    CHECK(fits.m_ptr != nullptr);
+}

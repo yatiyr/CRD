@@ -10,12 +10,17 @@
 // its node first (KNode is a small POD).
 
 #include <crd/kir/ckir.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a: a refused cotangent table is fatal)
 
 namespace crd::kir
 {
 
 namespace grad_detail
 {
+// DIAG.3a: reverse_ad cannot build the gradient without its cotangent table, so a scratch allocator that refuses it is
+// out of memory, fatal in every build, never a null table written (crd-kir-fatal-*).
+inline constexpr const char* kReverseAdScratchOutOfMemory = "kir::reverse_ad: the scratch allocator is out of memory";
+
 // permutation that swaps the last two axes (the matmul transpose).
 inline void swap_last2(const Shape& sh, crd::u8 (&perm)[kMaxRank]) noexcept
 {
@@ -49,8 +54,9 @@ inline void accumulate(KGraph& g, int* cot, int node, int contrib)
 // NOLINTNEXTLINE(readability-non-const-parameter) -- scratch (allocate/deallocate) + grad_of_input (written) are non-const; the check misfires
 inline void reverse_ad(KGraph& g, int output, int seed, crd::memory::IAllocator* scratch, int* grad_of_input, int n_inputs)
 {
-    const int n   = g.size();
-    auto*     cot = static_cast<int*>(scratch->allocate(sizeof(int) * static_cast<crd::usize>(n), alignof(int)));
+    const int n = g.size();
+    int* const cot = crd::memory::allocate_array_or_fatal<int>(*scratch, n > 0 ? static_cast<crd::usize>(n) : 0U,
+                                                               grad_detail::kReverseAdScratchOutOfMemory);
     for (int i = 0; i < n; ++i)
     {
         cot[i] = -1;

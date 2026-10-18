@@ -8,6 +8,7 @@
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a)
 
 #include <algorithm>
 
@@ -84,7 +85,11 @@ inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc,
                 {
                     const crd::usize jg = j_global + j;
                     T* ccol = c_data + jg * ldc;
-                    const crd::usize i_lo = fully_lower ? 0 : (jg > i_global ? jg - i_global : 0);
+                    crd::usize i_lo = 0;
+                    if (!fully_lower && jg > i_global)
+                    {
+                        i_lo = jg - i_global;
+                    }
                     for (crd::usize i = i_lo; i < rows_in; ++i)
                     {
                         ccol[i_global + i] -= micro[i * GemmTraits<T>::NR + j];
@@ -151,8 +156,8 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
     const crd::usize b_pack_capacity =
         ((b_dim_n + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR) * a_dim_k * GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
-    auto* a_pack = static_cast<T*>(alloc->allocate(a_pack_capacity * sizeof(T), align));
-    auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
+    auto* a_pack = crd::memory::allocate_array_or_fatal<T>(*alloc, a_pack_capacity, align, kGemmPackOutOfMemory);
+    auto* b_pack = crd::memory::allocate_array_or_fatal<T>(*alloc, b_pack_capacity, align, kGemmPackOutOfMemory);
 
     T* c_data = c.data();
     const crd::usize ldc = c.ld();

@@ -678,3 +678,51 @@ TEST_CASE("AS-4: the KOp::Attention fused intrinsic oracle == the naive expanded
     }
     std::printf("[module] AS-4 KOp::Attention intrinsic: oracle == expanded/module attention (naive reference) to 1e-12; the CUDA backend fuses this node to a flash kernel\n");
 }
+
+namespace
+{
+// Counts the blocks a scratch allocator has handed out and not taken back.
+class LiveBlockCounter final : public crd::memory::IAllocator
+{
+public:
+    explicit LiveBlockCounter(crd::memory::IAllocator* heap) noexcept : m_heap(heap) { m_name = "live-block-counter"; }
+    void* allocate(crd::usize size, crd::usize alignment) override
+    {
+        void* const p = m_heap->allocate(size, alignment);
+        live += p != nullptr ? 1 : 0;
+        return p;
+    }
+    void deallocate(void* p) noexcept override
+    {
+        live -= p != nullptr ? 1 : 0;
+        m_heap->deallocate(p);
+    }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return m_heap->owns(p); }
+
+    int live = 0;
+
+private:
+    crd::memory::IAllocator* m_heap;
+};
+} // namespace
+
+// The reference interpreter takes its working memory from the caller's scratch and returns all of it: an Attention
+// node's row of scores was never returned, so a heap scratch leaked one row per evaluated attention node.
+TEST_CASE("AS-4: eval_cpu returns every scratch block it takes, an attention node's scores included",
+          "[kir][module][attention]")
+{
+    crd::memory::TlsfAllocator alloc(16U << 20U);
+    kir::KGraph g(&alloc);
+    const int q = g.input(kir::make_shape({3, 2}), kir::DType::F64);
+    const int k = g.input(kir::make_shape({3, 2}), kir::DType::F64);
+    const int v = g.input(kir::make_shape({3, 2}), kir::DType::F64);
+    const int y = g.attention(q, k, v, 0.5);
+    const crd::f64 qv[6] = {0.5, 1.0, -0.5, 0.25, 0.0, 1.0};
+    const crd::f64 kv[6] = {1.0, 0.0, 0.5, -1.0, 0.25, 0.5};
+    const crd::f64 vv[6] = {2.0, 1.0, 0.0, 3.0, 1.0, 1.0};
+    const crd::f64* const in[] = {qv, kv, vv};
+    LiveBlockCounter scratch(&alloc);
+    crd::f64 out[6] = {};
+    kir::eval_cpu(g, in, &scratch, y, out);
+    CHECK(scratch.live == 0);
+}

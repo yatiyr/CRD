@@ -6,8 +6,8 @@
 #include <crd/ceir/program_asset.hpp> // interface_hash / contract_hash / collect_dependencies / DependencyRecord
 #include <crd/ceir/provenance.hpp>    // Origin (DIAG.8a: a NoChange reload refreshes authored positions)
 #include <crd/ceir/symbol_table.hpp>  // Visibility / SymbolEntry / SymbolTable
+#include <crd/memory/construct.hpp>   // construct_or_fatal (DIAG.3a: a refused generation or Context is fatal)
 
-#include <new>     // placement new
 #include <utility> // std::move (via containers)
 
 namespace crd::ceir::cook
@@ -250,10 +250,8 @@ const ReloadSet::Entry* ReloadSet::find(AssetId id) const noexcept
 
 Generation* ReloadSet::alloc_generation()
 {
-    void* const gm = m_alloc->allocate(sizeof(Generation), alignof(Generation));
-    Generation* const g = new (gm) Generation();
-    void* const cm = m_alloc->allocate(sizeof(Context), alignof(Context));
-    g->ctx = new (cm) Context(m_alloc);
+    Generation* const g = memory::construct_or_fatal<Generation>(*m_alloc, detail::kReloadGenerationOutOfMemory);
+    g->ctx = memory::construct_or_fatal<Context>(*m_alloc, detail::kReloadGenerationContextOutOfMemory, m_alloc);
     return g;
 }
 
@@ -491,8 +489,7 @@ bool ReloadSet::cook_source(AssetId id, containers::StringView source, container
                             containers::Array<crd::u8>& out_blob, CookError& out_cook, CookSite& out_site)
 {
     // transient cook Context — construct / register / cook / destroy (never cached); the cooked bytes are self-contained.
-    void* const    cm   = m_alloc->allocate(sizeof(Context), alignof(Context));
-    Context* const cctx = new (cm) Context(m_alloc);
+    Context* const cctx = memory::construct_or_fatal<Context>(*m_alloc, detail::kReloadCookContextOutOfMemory, m_alloc);
     m_reg(*cctx, m_user); // register dialects so the cook-time verifiers are not vacuous (§121 text ≡ builder)
     CookResult cr = cook_program_text(*cctx, source, file, id.value, m_alloc, m_alloc);
     out_cook       = cr.error;

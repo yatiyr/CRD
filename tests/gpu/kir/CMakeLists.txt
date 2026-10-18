@@ -93,3 +93,14 @@ crd_discover_tests(crd-kir-tests)
 
 # REPO.DEV.9: the bounded ingestion fuzz targets and their corpus replay tests.
 add_subdirectory(fuzz)
+
+# The reference interpreter's and the reverse-mode AD's out-of-memory fatals, one child process per mode (a fatal
+# cannot run in-process): a scratch allocator that refuses a block leaves them out of memory, fatal in every build,
+# never a null buffer written. The specimen links crd-kir and the base substrate only, like this suite (ADR-0098).
+# Source and protocol: tests/support/diag/specimens/kir_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-kir-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/kir_fatal_specimen.cpp")
+target_link_libraries(crd-kir-fatal-specimen PRIVATE crd-core crd-memory crd-kir)
+crd_diag_fatal_tests(crd-kir-fatal-specimen PREFIX crd-kir-fatal OWNER crd-kir-tests
+    MODES eval-scratch-refused eval-attention-scratch-refused reverse-ad-scratch-refused)

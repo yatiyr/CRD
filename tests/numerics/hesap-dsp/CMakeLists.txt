@@ -38,3 +38,13 @@ target_link_libraries(crd-hesap-dsp-tests PRIVATE
 crd_enable_default_pch(crd-hesap-dsp-tests)
 
 crd_discover_tests(crd-hesap-dsp-tests)
+
+# The convolver's and the spectral estimators' out-of-memory fatals, one child process per mode (a fatal cannot run
+# in-process): an allocator that refuses a real-FFT plan leaves them out of memory, fatal in every build, never a null
+# plan constructed into. Source and protocol: tests/support/diag/specimens/hesap_dsp_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-hesap-dsp-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/hesap_dsp_fatal_specimen.cpp")
+target_link_libraries(crd-hesap-dsp-fatal-specimen PRIVATE crd-core crd-memory crd-jobs crd-hesap-dsp)
+crd_diag_fatal_tests(crd-hesap-dsp-fatal-specimen PREFIX crd-hesap-dsp-fatal OWNER crd-hesap-dsp-tests
+    MODES convolver-plan-refused welch-plan-refused stft-plan-refused)

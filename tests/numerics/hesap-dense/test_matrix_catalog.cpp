@@ -33,13 +33,13 @@ TEST_CASE("Matrix and MatrixView default to zero size and propagate layout", "[h
     REQUIRE(m.size() == 0);
     REQUIRE(m.is_square());
     REQUIRE(m.allocator() == &alloc);
-    STATIC_REQUIRE(decltype(m)::layout == Layout::RowMajor);
+    STATIC_REQUIRE(decltype(m)::kLayout == Layout::RowMajor);
 
     MatrixView<float, Layout::ColMajor> v;
     REQUIRE(v.rows() == 0);
     REQUIRE(v.cols() == 0);
     REQUIRE(v.ld() == 0);
-    STATIC_REQUIRE(decltype(v)::layout == Layout::ColMajor);
+    STATIC_REQUIRE(decltype(v)::kLayout == Layout::ColMajor);
 }
 
 TEST_CASE("Diagonal and Identity are square by construction", "[hesap][dense][catalog]")
@@ -64,8 +64,8 @@ TEST_CASE("Permutation and Triangular carry the allocator", "[hesap][dense][cata
     // v0c Triangular body keeps the alloc-only ctor.
     Triangular<double, TriangularSide::Upper, TriangularDiag::UnitDiag> t{&alloc};
     REQUIRE(t.is_square());
-    STATIC_REQUIRE(decltype(t)::side == TriangularSide::Upper);
-    STATIC_REQUIRE(decltype(t)::diag == TriangularDiag::UnitDiag);
+    STATIC_REQUIRE(decltype(t)::kSide == TriangularSide::Upper);
+    STATIC_REQUIRE(decltype(t)::kDiag == TriangularDiag::UnitDiag);
 }
 
 TEST_CASE("Symmetric and Hermitian instantiate for real and complex", "[hesap][dense][catalog]")

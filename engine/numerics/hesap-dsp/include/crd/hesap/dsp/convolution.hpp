@@ -20,9 +20,16 @@
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/hesap/fft/real_fft.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 namespace crd::hesap::dsp
 {
+namespace detail
+{
+// DIAG.3a: a convolver cannot run without its plan, so a refused plan (an exhausted sub-budget allocator) is out of
+// memory, fatal in every build, never a null plan constructed into (crd-hesap-dsp-fatal-* modes).
+inline constexpr const char* kFftConvolverOutOfMemory = "FftConvolver: out of memory for its plan";
+} // namespace detail
 
 // direct linear convolution (mode='full'): out[k] = Σ_j a[j] b[k-j], length n+m-1. Bit-exact.
 template <typename T>
@@ -69,7 +76,9 @@ template <typename T>
     // REAL FFT path (half the work of a complex FFT — the scipy fftconvolve uses rfft too): rfft a + b,
     // multiply the Hermitian half-spectra, irfft (already normalized).
     const crd::usize half = nfft / 2 + 1;
-    crd::containers::Array<T> pa(alloc), pb(alloc), real_out(alloc);
+    crd::containers::Array<T> pa(alloc);
+    crd::containers::Array<T> pb(alloc);
+    crd::containers::Array<T> real_out(alloc);
     pa.resize(nfft);
     pb.resize(nfft);
     real_out.resize(nfft);
@@ -78,7 +87,8 @@ template <typename T>
         pa[i] = (i < a.size()) ? a[i] : T(0);
         pb[i] = (i < b.size()) ? b[i] : T(0);
     }
-    crd::containers::Array<Complex<T>> fa(alloc), fb(alloc);
+    crd::containers::Array<Complex<T>> fa(alloc);
+    crd::containers::Array<Complex<T>> fb(alloc);
     fa.resize(half);
     fb.resize(half);
     fft::RealFftPlan<T> plan(alloc, nfft);
@@ -123,9 +133,8 @@ public:
         m_ro.resize(m_nfft);
         m_fa.resize(m_half);
         m_fb.resize(m_half);
-        m_plan = static_cast<fft::RealFftPlan<T>*>(
-            m_alloc->allocate(sizeof(fft::RealFftPlan<T>), alignof(fft::RealFftPlan<T>)));
-        ::new (static_cast<void*>(m_plan)) fft::RealFftPlan<T>(m_alloc, m_nfft); // twiddle precompute ONCE
+        m_plan = crd::memory::construct_or_fatal<fft::RealFftPlan<T>>(*m_alloc, detail::kFftConvolverOutOfMemory,
+                                                                      m_alloc, m_nfft); // twiddle precompute ONCE
     }
     ~FftConvolver()
     {
@@ -193,23 +202,23 @@ template <typename T>
     {
         out[i] = T(0);
     }
-    // block size L ≈ 4× the filter length (rounded so the per-block FFT stays small); each block convolved w/ b.
-    crd::usize L = 1;
-    while (L < 4 * m)
+    // block size ≈ 4× the filter length (rounded so the per-block FFT stays small); each block convolved w/ b.
+    crd::usize block = 1;
+    while (block < 4 * m)
     {
-        L <<= 1;
+        block <<= 1;
     }
-    FftConvolver<T> conv(alloc, L, m);
+    FftConvolver<T> conv(alloc, block, m);
     crd::containers::Array<T> blk(alloc);
-    blk.resize(L);
-    for (crd::usize off = 0; off < a.size(); off += L)
+    blk.resize(block);
+    for (crd::usize off = 0; off < a.size(); off += block)
     {
-        const crd::usize len = (off + L <= a.size()) ? L : (a.size() - off);
-        for (crd::usize i = 0; i < L; ++i)
+        const crd::usize len = (off + block <= a.size()) ? block : (a.size() - off);
+        for (crd::usize i = 0; i < block; ++i)
         {
-            blk[i] = (i < len) ? a[off + i] : T(0); // zero-pad the last partial block to L
+            blk[i] = (i < len) ? a[off + i] : T(0); // zero-pad the last partial block
         }
-        const auto bc = conv.convolve(crd::containers::ConstSpan<T>(blk.data(), L), b); // length L+m-1
+        const auto bc = conv.convolve(crd::containers::ConstSpan<T>(blk.data(), block), b); // length block+m-1
         for (crd::usize i = 0; i < bc.size(); ++i)
         {
             if (off + i < n)

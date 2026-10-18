@@ -20,6 +20,8 @@
 // The consumer helpers (construct.hpp): a caller that cannot continue without the memory turns a refusal into its own
 // named out-of-memory fatal, never a null pointer it would follow:
 //   allocate-or-fatal, allocate-array-or-fatal, construct-or-fatal, construct-array-or-fatal
+//   allocate-aligned-array-or-fatal   the explicit-alignment form of allocate_array_or_fatal
+//   allocate-array-or-fatal-overflow  a count whose byte size overflows: no allocation can hold it, the same fatal
 //
 // The assert platform handler turns the expected fatal into exit 42 and any other assert into 97 (as in the
 // observer-swap specimen). If reallocate returns at all, the specimen exits 0, which the consuming test rejects, so a
@@ -214,6 +216,20 @@ private:
     {
         g_expected_fatal = message;
         (void)mem::construct_array_or_fatal<crd::u64>(none, 8U, message, crd::u64{7});
+        return true;
+    }
+    if (std::strcmp(mode, "allocate-aligned-array-or-fatal") == 0)
+    {
+        g_expected_fatal = message;
+        (void)mem::allocate_array_or_fatal<crd::u64>(none, 8U, 64U, message);
+        return true;
+    }
+    if (std::strcmp(mode, "allocate-array-or-fatal-overflow") == 0)
+    {
+        // A parent that grants everything: the overflow, not a refusal, is what reaches the fatal.
+        RefusingParent all(1000);
+        g_expected_fatal = message;
+        (void)mem::allocate_array_or_fatal<crd::u64>(all, SIZE_MAX / 4U, message);
         return true;
     }
     return run_parent_refuses_mode(mode);

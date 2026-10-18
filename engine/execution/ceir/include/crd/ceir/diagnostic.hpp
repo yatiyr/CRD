@@ -14,9 +14,19 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocators/growable_linear_allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a: a refused arena copy is fatal)
 
 namespace crd::ceir
 {
+namespace detail
+{
+// DIAG.3a: the engine copies every text and array it records into its arena, whose parent may refuse a chunk (an
+// exhausted sub-budget allocator); the engine is then out of memory, fatal in every build, never a null copy written
+// through (crd-ceir-fatal-* modes).
+inline constexpr const char* kDiagnosticArenaOutOfMemory =
+    "ceir::DiagnosticEngine: the diagnostic arena is out of memory";
+} // namespace detail
+
 // A typed diagnostic code's compile-time id (the make_interface_id shape, sharing id.hpp's fnv1a_ct).
 [[nodiscard]] constexpr DiagnosticCode make_diagnostic_code(const char* name) noexcept
 {
@@ -71,8 +81,8 @@ public:
         d.message   = copy_str(message);
         if (notes.size() > 0U)
         {
-            auto* const arr = static_cast<containers::StringView*>(
-                m_arena.allocate(notes.size() * sizeof(containers::StringView), alignof(containers::StringView)));
+            auto* const arr = memory::allocate_array_or_fatal<containers::StringView>(
+                m_arena, notes.size(), detail::kDiagnosticArenaOutOfMemory);
             for (usize i = 0; i < notes.size(); ++i)
             {
                 arr[i] = copy_str(notes[i]);
@@ -81,7 +91,8 @@ public:
         }
         if (fixits.size() > 0U)
         {
-            auto* const arr = static_cast<FixIt*>(m_arena.allocate(fixits.size() * sizeof(FixIt), alignof(FixIt)));
+            auto* const arr =
+                memory::allocate_array_or_fatal<FixIt>(m_arena, fixits.size(), detail::kDiagnosticArenaOutOfMemory);
             for (usize i = 0; i < fixits.size(); ++i)
             {
                 arr[i] = FixIt{fixits[i].loc, copy_str(fixits[i].replacement)};
@@ -151,7 +162,7 @@ private:
         {
             return {};
         }
-        char* const p = static_cast<char*>(m_arena.allocate(v.size(), 1U));
+        char* const p = memory::allocate_array_or_fatal<char>(m_arena, v.size(), detail::kDiagnosticArenaOutOfMemory);
         for (usize i = 0; i < v.size(); ++i)
         {
             p[i] = v[i];

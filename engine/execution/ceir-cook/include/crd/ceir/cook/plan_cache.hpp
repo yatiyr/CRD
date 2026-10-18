@@ -63,6 +63,14 @@ struct PlanLookup
 // Intern a provider name (IExecutionProvider::name()) into a `target` key component — FNV-1a (the CapabilityId pattern).
 [[nodiscard]] crd::u64 plan_target(containers::StringView provider_name) noexcept;
 
+namespace detail
+{
+// The out-of-memory fatals (DIAG.3a): `put` copies both inputs or cannot keep its contract, so a refused copy is fatal
+// in every build, never a null buffer filled (crd-ceir-cook-fatal-* modes).
+inline constexpr const char* kPlanCacheArtifactOutOfMemory = "PlanCache: out of memory for an artifact copy";
+inline constexpr const char* kPlanCacheDepsOutOfMemory = "PlanCache: out of memory for a dependency copy";
+} // namespace detail
+
 // A content-addressed execution-plan cache. ⛔ NOT thread-safe. Artifacts + dep records are stored as HEAP buffers owned
 // by the cache (never interior pointers into the growable entry vector — the push-back-UAF discipline).
 class PlanCache

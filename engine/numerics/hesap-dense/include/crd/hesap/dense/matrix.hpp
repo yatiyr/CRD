@@ -5,6 +5,7 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal / checked_mul (DIAG.3a)
 
 #include <cstring>
 #include <initializer_list>
@@ -13,6 +14,14 @@
 
 namespace crd::hesap::dense
 {
+namespace detail
+{
+// DIAG.3a: an owning matrix cannot exist without its elements, so a refused allocation (an exhausted sub-budget
+// allocator) and an element count whose byte size overflows are out of memory, fatal in every build, never a null or
+// short buffer filled (crd-hesap-dense-fatal-* modes).
+inline constexpr const char* kMatrixOutOfMemory = "hesap::dense::Matrix: out of memory for its elements";
+} // namespace detail
+
 // -----------------------------------------------------------------------
 // Matrix<T, Layout> — owning dense matrix. Body for the v0a shell.
 //
@@ -40,18 +49,22 @@ class Matrix
 {
 public:
     using value_type = T;
-    static constexpr Layout layout = L;
+    static constexpr Layout kLayout = L;
 
     explicit Matrix(crd::memory::IAllocator* alloc) noexcept : m_alloc(alloc) {}
 
     Matrix(crd::memory::IAllocator* alloc, crd::usize rows, crd::usize cols)
         : m_alloc(alloc), m_rows(rows), m_cols(cols)
     {
-        const crd::usize n = rows * cols;
+        crd::usize n = 0;
+        if (!crd::memory::checked_mul(rows, cols, &n))
+        {
+            CRD_FATAL(detail::kMatrixOutOfMemory);
+        }
         if (n > 0)
         {
             const crd::usize align = alignof(T) > 16 ? alignof(T) : 16;
-            m_data = static_cast<T*>(m_alloc->allocate(n * sizeof(T), align));
+            m_data = crd::memory::allocate_array_or_fatal<T>(*m_alloc, n, align, detail::kMatrixOutOfMemory);
             if constexpr (std::is_trivially_constructible_v<T>)
             {
                 std::memset(m_data, 0, n * sizeof(T));
@@ -228,7 +241,7 @@ class MatrixView
 {
 public:
     using value_type = T;
-    static constexpr Layout layout = L;
+    static constexpr Layout kLayout = L;
 
     constexpr MatrixView() noexcept = default;
 
@@ -240,8 +253,8 @@ public:
     // Implicit conversion from MatrixView<NonConstT, L> to MatrixView<const NonConstT, L>.
     // Lets `gemv(MatrixView<const T, L>)` accept `Matrix::view()` results which
     // are `MatrixView<T, L>` when the Matrix is non-const.
-    template <typename U,
-              typename = std::enable_if_t<std::is_const_v<T> && std::is_same_v<U, std::remove_const_t<T>>>>
+    template <typename U>
+        requires(std::is_const_v<T> && std::is_same_v<U, std::remove_const_t<T>>)
     constexpr MatrixView(MatrixView<U, L> other) noexcept
         : m_data(other.data()), m_rows(other.rows()), m_cols(other.cols()), m_ld(other.ld())
     {

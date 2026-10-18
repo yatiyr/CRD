@@ -500,6 +500,14 @@ struct RenderStats
     crd::u32 timed_passes     = 0;
 };
 
+namespace detail
+{
+// DIAG.3a: a frame reload stages its re-cooked desc in a block of the renderer's allocator; a refused block (an
+// exhausted sub-budget allocator) is out of memory, fatal in every build, never a null desc cooked into
+// (crd-scene-render-fatal-* modes).
+inline constexpr const char* kFrameReloadOutOfMemory = "SceneRenderer: out of memory for a staged frame graph";
+} // namespace detail
+
 // DIAG.8b: which mount an authored program's text came from (`SceneRenderer::resolve_program_text`).
 // NOLINTNEXTLINE(performance-enum-size)
 enum class ProgramSource : crd::u8

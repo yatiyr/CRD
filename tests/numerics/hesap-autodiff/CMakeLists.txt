@@ -42,3 +42,14 @@ target_link_libraries(crd-hesap-autodiff-tests PRIVATE
 crd_enable_default_pch(crd-hesap-autodiff-tests)
 
 crd_discover_tests(crd-hesap-autodiff-tests)
+
+# The vectorized HVP tape's fatals, one child process per mode (a fatal cannot run in-process): a refused node or
+# scratch array, a scratch pool size that overflows and a node past the capacity are fatal in every build, never a
+# null, short or overrun array written. Source and protocol:
+# tests/support/diag/specimens/hesap_autodiff_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-hesap-autodiff-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/hesap_autodiff_fatal_specimen.cpp")
+target_link_libraries(crd-hesap-autodiff-fatal-specimen PRIVATE crd-core crd-memory crd-hesap-autodiff)
+crd_diag_fatal_tests(crd-hesap-autodiff-fatal-specimen PREFIX crd-hesap-autodiff-fatal OWNER crd-hesap-autodiff-tests
+    MODES vtape-nodes-refused vtape-pool-refused vtape-pool-overflow vtape-capacity-exceeded)

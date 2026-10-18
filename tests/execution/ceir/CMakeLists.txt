@@ -104,7 +104,8 @@ crd_enable_default_pch(crd-ceir-tests)
 crd_discover_tests(crd-ceir-tests)
 
 # The context's arena fatal, one child process per mode (a fatal cannot run in-process): a parent that refuses the IR
-# arena's next chunk leaves the context out of memory, fatal in every build, never a null node written through.
+# arena's next chunk leaves the context out of memory, fatal in every build, never a null node written through; the
+# diagnostic engine's arena likewise, never a null copy of a message, a note array or a fix-it array.
 # Source and protocol: tests/support/diag/specimens/ceir_fatal_specimen.cpp.
 include(CrdDiag)
 crd_diag_specimen(crd-ceir-fatal-specimen
@@ -112,7 +113,7 @@ crd_diag_specimen(crd-ceir-fatal-specimen
 target_link_libraries(crd-ceir-fatal-specimen PRIVATE crd-core crd-memory crd-ceir)
 crd_diag_fatal_tests(crd-ceir-fatal-specimen PREFIX crd-ceir-fatal OWNER crd-ceir-tests
     MODES create-operation-arena-refused create-block-arena-refused intern-symbol-arena-refused func-body-missing
-          rewrite-inner-op-missing)
+          rewrite-inner-op-missing diagnostic-text-refused diagnostic-notes-refused diagnostic-fixits-refused)
 
 # REPO.DEV.9: the bounded ingestion fuzz targets and their corpus replay tests.
 add_subdirectory(fuzz)

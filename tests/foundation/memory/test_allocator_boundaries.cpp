@@ -1013,8 +1013,9 @@ TEST_CASE("allocator consumers: the or_fatal helpers turn a refusal into the cal
 {
     namespace cd = crd::diag;
     namespace cont = crd::containers;
-    const char* const modes[] = {"allocate-or-fatal", "allocate-array-or-fatal", "construct-or-fatal",
-                                 "construct-array-or-fatal"};
+    const char* const modes[] = {
+        "allocate-or-fatal",        "allocate-array-or-fatal",         "construct-or-fatal",
+        "construct-array-or-fatal", "allocate-aligned-array-or-fatal", "allocate-array-or-fatal-overflow"};
     for (const char* mode : modes)
     {
         cd::Expectation e;
@@ -1047,6 +1048,53 @@ TEST_CASE("allocator consumers: the or_fatal helpers pass a grant through and re
     // A zero count is the empty array, nullptr without a fatal: the process is still here to check it.
     CHECK(mem::allocate_array_or_fatal<crd::u64>(a, 0U, message) == nullptr);
     CHECK(mem::construct_array_or_fatal<crd::u64>(a, 0U, message) == nullptr);
+    CHECK(mem::allocate_array_or_fatal<crd::u64>(a, 0U, 64U, message) == nullptr);
+}
+
+namespace
+{
+// Records the shape of the last request it granted, so a test can see what a helper asked its allocator for.
+class ShapeRecorder final : public mem::IAllocator
+{
+public:
+    ShapeRecorder() noexcept { m_name = "shape-recorder"; }
+    void* allocate(crd::usize size, crd::usize alignment) override
+    {
+        last_size = size;
+        last_alignment = alignment;
+        return m_heap.allocate(size, alignment);
+    }
+    void deallocate(void* p) noexcept override { m_heap.deallocate(p); }
+    [[nodiscard]] bool owns(const void* p) const noexcept override { return m_heap.owns(p); }
+
+    crd::usize last_size = 0U;
+    crd::usize last_alignment = 0U;
+
+private:
+    mem::LinearAllocator m_heap{64U * 1024U, nullptr, "shape-recorder-heap"};
+};
+} // namespace
+
+TEST_CASE("allocator consumers: an explicit-alignment array asks for that alignment, never less than its element's",
+          "[memory][contract][diag]")
+{
+    ShapeRecorder a;
+    constexpr const char* message = "aligned-array test: unexpected refusal";
+    crd::u64* const wide = mem::allocate_array_or_fatal<crd::u64>(a, 4U, 64U, message);
+    REQUIRE(wide != nullptr);
+    CHECK(a.last_size == 4U * sizeof(crd::u64));
+    CHECK(a.last_alignment == 64U);
+    CHECK(reinterpret_cast<std::uintptr_t>(wide) % 64U == 0U);
+    // An alignment below the element's is raised to it.
+    crd::u64* const raised = mem::allocate_array<crd::u64>(a, 2U, 1U);
+    REQUIRE(raised != nullptr);
+    CHECK(a.last_alignment == alignof(crd::u64));
+    // The element-alignment form asks for exactly alignof(T).
+    (void)mem::allocate_array<crd::u32>(a, 3U);
+    CHECK(a.last_size == 3U * sizeof(crd::u32));
+    CHECK(a.last_alignment == alignof(crd::u32));
+    // The byte size is checked in the explicit-alignment form as well.
+    CHECK(mem::allocate_array<crd::u64>(a, SIZE_MAX / 4U, 64U) == nullptr);
 }
 
 TEST_CASE("allocator ownership: an arena refused its backing memory or handed an unusable buffer reaches its fatal",

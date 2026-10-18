@@ -7,6 +7,7 @@
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a)
 #include <crd/memory/memory.hpp>
 
 namespace crd::hesap::dense
@@ -156,8 +157,10 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize b_pack_capacity =
         ((b_pack_dim_n + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * a_pack_dim_k * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
-    auto* a_pack = static_cast<T*>(alloc->allocate(a_pack_capacity * sizeof(T), align));
-    auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
+    auto* a_pack =
+        crd::memory::allocate_array_or_fatal<T>(*alloc, a_pack_capacity, align, detail::kGemmPackOutOfMemory);
+    auto* b_pack =
+        crd::memory::allocate_array_or_fatal<T>(*alloc, b_pack_capacity, align, detail::kGemmPackOutOfMemory);
 
     for (crd::usize jc = 0; jc < n; jc += kNc)
     {
@@ -278,7 +281,8 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize b_pack_capacity =
         ((n + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * k * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
-    auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
+    auto* b_pack =
+        crd::memory::allocate_array_or_fatal<T>(*alloc, b_pack_capacity, align, detail::kGemmPackOutOfMemory);
     detail::pack_b(b, 0, 0, k, n, Trans::None, b_pack);
 
     // Parallel over Mr=8 row-panels of A. At m=256 → 32 panels; with 16
@@ -430,9 +434,11 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize b_pack_capacity =
         ((bp_nc + detail::GemmTraits<T>::NR - 1) / detail::GemmTraits<T>::NR) * ap_kc * detail::GemmTraits<T>::NR;
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
-    auto* a_pack_pool =
-        static_cast<T*>(alloc->allocate(a_pack_per_worker * total_workers * sizeof(T), align));
-    auto* b_pack = static_cast<T*>(alloc->allocate(b_pack_capacity * sizeof(T), align));
+    // One block-bounded panel per worker: a_pack_per_worker <= (kMc + MR) * kKc, so the product cannot overflow.
+    auto* a_pack_pool = crd::memory::allocate_array_or_fatal<T>(*alloc, a_pack_per_worker * total_workers, align,
+                                                                detail::kGemmPackOutOfMemory);
+    auto* b_pack =
+        crd::memory::allocate_array_or_fatal<T>(*alloc, b_pack_capacity, align, detail::kGemmPackOutOfMemory);
 
     // Shared task state. The fiber-SBO budget is 41 bytes total per Task, so the
     // lambda can only capture ~33 bytes (after begin/end). Bundle everything

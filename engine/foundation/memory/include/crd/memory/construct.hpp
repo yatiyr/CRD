@@ -64,10 +64,10 @@ template <typename T> void destroy(IAllocator& alloc, T* p) noexcept
     alloc.deallocate(p);
 }
 
-// allocate_array<T>(allocator, count) — allocate uninitialised storage
-// for `count` Ts. Caller is responsible for constructing/destructing.
-// Use `construct_array` if you want default-construction included.
-template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize count)
+// allocate_array<T>(allocator, count, alignment) — allocate uninitialised storage for `count` Ts at `alignment`, a
+// power of two; an alignment below alignof(T) is raised to it. A buffer that needs more than its element's alignment
+// (a SIMD, streaming-store or cache-line table) asks for it here. Caller is responsible for constructing/destructing.
+template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize count, usize alignment)
 {
     usize bytes = 0;
     // A count whose byte size wraps would allocate too little for `count` objects, and no object may span more than
@@ -76,8 +76,15 @@ template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize c
     {
         return nullptr;
     }
-    void* raw = alloc.allocate(bytes, alignof(T));
+    void* raw = alloc.allocate(bytes, alignment > alignof(T) ? alignment : alignof(T));
     return static_cast<T*>(raw);
+}
+
+// allocate_array<T>(allocator, count) — the same at alignof(T).
+// Use `construct_array` if you want default-construction included.
+template <typename T> [[nodiscard]] T* allocate_array(IAllocator& alloc, usize count)
+{
+    return allocate_array<T>(alloc, count, alignof(T));
 }
 
 // deallocate_array<T>(allocator, p) — counterpart for allocate_array.
@@ -158,14 +165,21 @@ template <typename T, typename... Args>
     return p;
 }
 
-template <typename T> [[nodiscard]] T* allocate_array_or_fatal(IAllocator& alloc, usize count, const char* oom_message)
+// A count whose byte size overflows is the same out-of-memory fatal: no allocation can hold it.
+template <typename T>
+[[nodiscard]] T* allocate_array_or_fatal(IAllocator& alloc, usize count, usize alignment, const char* oom_message)
 {
-    T* const p = allocate_array<T>(alloc, count);
+    T* const p = allocate_array<T>(alloc, count, alignment);
     if (p == nullptr && count != 0U)
     {
         CRD_FATAL(oom_message);
     }
     return p;
+}
+
+template <typename T> [[nodiscard]] T* allocate_array_or_fatal(IAllocator& alloc, usize count, const char* oom_message)
+{
+    return allocate_array_or_fatal<T>(alloc, count, alignof(T), oom_message);
 }
 
 template <typename T, typename... Args>

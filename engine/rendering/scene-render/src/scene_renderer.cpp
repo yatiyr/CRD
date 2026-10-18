@@ -1135,7 +1135,8 @@ struct SceneRenderer::Impl
             diags.error(crd::renderasset::DiagCode::AssetNotFound, "reload: frame source did not resolve to bytes");
             return false;
         }
-        auto*                   d = crd::memory::construct<crd::framecook::FrameGraphDesc>(*self->alloc, self->alloc);
+        auto* const d = crd::memory::construct_or_fatal<crd::framecook::FrameGraphDesc>(
+            *self->alloc, detail::kFrameReloadOutOfMemory, self->alloc);
         crd::containers::String where(self->alloc);
         if (const auto e = self->cook_frame_text(crd::containers::StringView(text.c_str(), text.size()), *d, where);
             e != crd::framecook::FrameCookError::Ok)

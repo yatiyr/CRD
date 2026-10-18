@@ -60,3 +60,15 @@ crd_discover_tests(crd-scene-render-tests
 # the env var still wins if ctest/a dev sets it.
 target_compile_definitions(crd-scene-render-tests PRIVATE
     CRD_RAF10_APP_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/app_assets")
+
+# The renderer's frame-reload out-of-memory fatal, one child process per mode (a fatal cannot run in-process): an
+# allocator that refuses the staged frame graph leaves the renderer out of memory, fatal in every build, never a null
+# desc cooked into. Device-free, like the RAF-11 live reload gate. Source and protocol:
+# tests/support/diag/specimens/scene_render_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-scene-render-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/scene_render_fatal_specimen.cpp")
+target_link_libraries(crd-scene-render-fatal-specimen PRIVATE crd-core crd-memory crd-platform crd-frame-cook
+    crd-scene-render)
+crd_diag_fatal_tests(crd-scene-render-fatal-specimen PREFIX crd-scene-render-fatal OWNER crd-scene-render-tests
+    MODES frame-reload-staging-refused)

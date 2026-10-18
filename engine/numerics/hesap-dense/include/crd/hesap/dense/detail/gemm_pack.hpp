@@ -8,6 +8,11 @@
 
 namespace crd::hesap::dense::detail
 {
+// DIAG.3a: a GEMM-family product cannot run without its packing buffers, so a scratch allocator that refuses one (an
+// exhausted sub-budget allocator) is out of memory, fatal in every build, never a null panel packed into
+// (crd-hesap-dense-fatal-* modes).
+inline constexpr const char* kGemmPackOutOfMemory = "hesap::dense: out of memory for a GEMM packing buffer";
+
 // -----------------------------------------------------------------------
 // Goto/BLIS Ac / Bc packing layers. Phase 3.1.6 v0d-perf.
 //

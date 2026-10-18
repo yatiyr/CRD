@@ -1,5 +1,7 @@
 #include <crd/ceir/cook/plan_cache.hpp>
 
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal (DIAG.3a: a refused copy is fatal, never written through)
+
 namespace crd::ceir::cook
 {
 crd::u64 plan_target(containers::StringView provider_name) noexcept
@@ -115,7 +117,8 @@ void PlanCache::put(AssetId owner, const PlanKey& key, containers::ConstSpan<crd
     // copy the artifact bytes into a cache-owned heap buffer (stable across entry-vector growth).
     if (artifact.size() > 0U)
     {
-        auto* const buf = static_cast<crd::u8*>(m_alloc->allocate(artifact.size(), alignof(crd::u8)));
+        auto* const buf =
+            memory::allocate_array_or_fatal<crd::u8>(*m_alloc, artifact.size(), detail::kPlanCacheArtifactOutOfMemory);
         for (crd::usize i = 0; i < artifact.size(); ++i)
         {
             buf[i] = artifact[i];
@@ -126,7 +129,9 @@ void PlanCache::put(AssetId owner, const PlanKey& key, containers::ConstSpan<crd
     // copy the dep records.
     if (deps.size() > 0U)
     {
-        auto* const dbuf = static_cast<PlanDep*>(m_alloc->allocate(sizeof(PlanDep) * deps.size(), alignof(PlanDep)));
+        // The byte size is checked: a count whose size wraps is the same fatal, never a short buffer filled past.
+        auto* const dbuf =
+            memory::allocate_array_or_fatal<PlanDep>(*m_alloc, deps.size(), detail::kPlanCacheDepsOutOfMemory);
         for (crd::usize i = 0; i < deps.size(); ++i)
         {
             dbuf[i] = deps[i];

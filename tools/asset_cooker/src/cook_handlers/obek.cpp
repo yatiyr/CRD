@@ -23,6 +23,7 @@
 #include <crd/containers/string_view.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 #include <crd/scene/obek.hpp>
 #include <crd/scene/relation.hpp>
 #include <crd/scene/serialize.hpp>
@@ -142,7 +143,7 @@ struct ObekCooker::Impl
 };
 
 ObekCooker::ObekCooker(crd::memory::IAllocator* alloc)
-    : m_impl(new (alloc->allocate(sizeof(Impl), alignof(Impl))) Impl(alloc))
+    : m_impl(crd::memory::construct_or_fatal<Impl>(*alloc, detail::kObekCookerOutOfMemory, alloc))
 {
 }
 

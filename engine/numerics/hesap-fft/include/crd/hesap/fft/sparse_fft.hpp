@@ -18,12 +18,19 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/sort.hpp>
+#include <crd/memory/construct.hpp> // construct_or_fatal (DIAG.3a)
 
 #include <algorithm>
 #include <crd/math/cmath.hpp>
 
 namespace crd::hesap::fft
 {
+namespace detail
+{
+// DIAG.3a: a refused bucket plan leaves the sparse plan out of memory, fatal in every build, never a null plan
+// constructed into (crd-hesap-fft-fatal-* modes).
+inline constexpr const char* kSparseFftPlanOutOfMemory = "SparseFftPlan: out of memory for its bucket plan";
+} // namespace detail
 
 template <typename T> class SparseFftPlan
 {
@@ -49,8 +56,7 @@ public:
         {
             m_b = n;
         }
-        m_plan = static_cast<FftPlan<T>*>(m_alloc->allocate(sizeof(FftPlan<T>), alignof(FftPlan<T>)));
-        ::new (static_cast<void*>(m_plan)) FftPlan<T>(m_alloc, m_b);
+        m_plan = crd::memory::construct_or_fatal<FftPlan<T>>(*m_alloc, detail::kSparseFftPlanOutOfMemory, m_alloc, m_b);
 
         // Flat filter G = sinc(·/B)·Gaussian(·): the sinc sets an n/B passband, the Gaussian window gives low
         // sidelobes (little leakage). Support w (sub-linear when w ≪ n). Normalised so the passband gain Ĝ(0)=1.

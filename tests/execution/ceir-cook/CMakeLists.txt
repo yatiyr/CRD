@@ -43,3 +43,15 @@ crd_discover_tests(crd-ceir-cook-tests)
 
 # DIAG.10a: the run-record reader fuzz target and its committed corpus replay.
 add_subdirectory(fuzz)
+
+# The reload set's and the plan cache's out-of-memory fatals, one child process per mode (a fatal cannot run
+# in-process): an allocator that refuses a cook Context, a generation, a generation's Context or a plan copy leaves them
+# out of memory, fatal in every build, never a null object constructed into or a null buffer filled. Source and
+# protocol: tests/support/diag/specimens/ceir_cook_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-ceir-cook-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/ceir_cook_fatal_specimen.cpp")
+target_link_libraries(crd-ceir-cook-fatal-specimen PRIVATE crd-core crd-memory crd-ceir crd-ceir-cook)
+crd_diag_fatal_tests(crd-ceir-cook-fatal-specimen PREFIX crd-ceir-cook-fatal OWNER crd-ceir-cook-tests
+    MODES reload-cook-context-refused reload-generation-refused reload-generation-context-refused
+          plan-artifact-refused plan-deps-refused)

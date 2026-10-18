@@ -10,15 +10,25 @@
 // adjoint TANGENT is exactly ∇²f·v, the VALUE part is ∇f — one forward build + one backward, exact, deterministic.
 // Same forward-over-reverse math as hvp.hpp, one node per vector op instead of one per scalar op. ADR-0097.
 
-#include <crd/core/assert.hpp> // CRD_ASSERT — the VTape overflow guard
+#include <crd/core/assert.hpp> // CRD_FATAL — the VTape capacity guard
 #include <crd/core/types.hpp>
 #include <crd/math/cmath.hpp>
 #include <crd/memory/allocator.hpp>
+#include <crd/memory/construct.hpp> // allocate_array_or_fatal / checked_mul (DIAG.3a)
 
 #include <cstring>
 
 namespace crd::hesap::autodiff::reverse::vec
 {
+namespace detail
+{
+// DIAG.3a: a tape cannot record without its node and scratch arrays, so a refused array, and a pool size that
+// overflows, are fatal in every build. A node past the capacity is fatal in every build as well: the arrays end there,
+// and an assert that a build without asserts drops let make() write past them (crd-hesap-autodiff-fatal-* modes).
+inline constexpr const char* kVTapeOutOfMemory = "VTape: out of memory for its node or scratch arrays";
+inline constexpr const char* kVTapeSizeOverflow = "VTape: the scratch pool size overflows";
+inline constexpr const char* kVTapeCapacityExceeded = "VTape: node capacity exceeded (raise max_nodes)";
+} // namespace detail
 
 enum class VOp : crd::u8
 {
@@ -53,10 +63,20 @@ public:
     VTape(crd::memory::IAllocator* alloc, int n, int max_nodes) noexcept
         : m_n(n), m_cap(max_nodes) // the allocator OWNS the arenas (never stored — the tape frees nothing)
     {
-        m_node = static_cast<VNode*>(alloc->allocate(sizeof(VNode) * static_cast<crd::usize>(max_nodes)));
-        // one contiguous scratch pool of 6 half-vectors per node (val/tan/adjv/adjt + the stored partial pv/pt)
-        m_pool = static_cast<crd::f64*>(
-            alloc->allocate(sizeof(crd::f64) * static_cast<crd::usize>(max_nodes) * 6 * static_cast<crd::usize>(n)));
+        // A negative count is no tape (make() refuses every node of it).
+        const crd::usize nodes = max_nodes > 0 ? static_cast<crd::usize>(max_nodes) : 0U;
+        const crd::usize width = n > 0 ? static_cast<crd::usize>(n) : 0U;
+        // one contiguous scratch pool of 6 half-vectors per node (val/tan/adjv/adjt + the stored partial pv/pt),
+        // sized before anything is allocated
+        crd::usize pool = 0;
+        if (!crd::memory::checked_mul(nodes, 6U, &pool) || !crd::memory::checked_mul(pool, width, &pool))
+        {
+            CRD_FATAL(detail::kVTapeSizeOverflow);
+        }
+        m_node = crd::memory::allocate_array_or_fatal<VNode>(*alloc, nodes, crd::memory::kDefaultAlignment,
+                                                             detail::kVTapeOutOfMemory);
+        m_pool = crd::memory::allocate_array_or_fatal<crd::f64>(*alloc, pool, crd::memory::kDefaultAlignment,
+                                                                detail::kVTapeOutOfMemory);
     }
     [[nodiscard]] int      n() const noexcept { return m_n; }
     [[nodiscard]] crd::u32 count() const noexcept { return m_count; }
@@ -64,8 +84,11 @@ public:
 
     [[nodiscard]] crd::u32 make(VOp op, int len)
     {
-        CRD_ASSERT(m_count < static_cast<crd::u32>(m_cap) && "VTape overflow: raise max_nodes"); // clang-cl found m_cap
-        const crd::u32 id  = m_count++;                                                          // unused == this guard MISSING
+        if (m_cap <= 0 || m_count >= static_cast<crd::u32>(m_cap))
+        {
+            CRD_FATAL(detail::kVTapeCapacityExceeded);
+        }
+        const crd::u32 id  = m_count++;
         VNode&         nd  = m_node[id];
         crd::f64*      base = m_pool + static_cast<crd::usize>(id) * 6 * static_cast<crd::usize>(m_n);
         nd.val  = base;
@@ -84,7 +107,7 @@ private:
     VNode*                   m_node  = nullptr;
     crd::f64*                m_pool  = nullptr;
     int                      m_n     = 0;
-    [[maybe_unused]] int     m_cap   = 0; // read only by the CRD_ASSERT overflow guard — stripped under NDEBUG (shipping)
+    int                      m_cap   = 0; // the node capacity, checked in every build by make()
     crd::u32                 m_count = 0;
 };
 

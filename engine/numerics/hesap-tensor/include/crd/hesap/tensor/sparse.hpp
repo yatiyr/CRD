@@ -32,6 +32,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/simd/simd.hpp>
+#include <crd/memory/construct.hpp> // allocate_array: a checked byte size for ScratchBlock
 
 #include <cmath>   // std::fma — the single-rounded scalar chain (codelet rule)
 #include <cstring> // memset/memcpy on trivially-copyable planes
@@ -174,7 +175,7 @@ template <typename T>
 // within equal keys) — the TripletBuilder contract, rank-N.
 template <typename KeyFn>
 inline void lsd_sort(crd::u32* perm_a, crd::u32* perm_b, crd::u32* counts, crd::u64 n, crd::u32 levels,
-                     const crd::u64* level_dims, KeyFn&& key) noexcept
+                     const crd::u64* level_dims, const KeyFn& key) noexcept
 {
     for (crd::u32 pass = 0; pass < levels; ++pass)
     {
@@ -237,10 +238,10 @@ template <typename T> inline void axpy_row(T* dst, const T* row, T a, crd::u64 r
 {
     namespace simd = crd::math::simd;
     using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 W = std::is_same_v<T, crd::f32> ? 8U : 4U;
+    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
     const V av(a);
     crd::u64 q = 0;
-    for (; q + W <= r; q += W)
+    for (; q + lanes <= r; q += lanes)
     {
         simd::fma(av, V::load(row + q), V::load(dst + q)).store(dst + q);
     }
@@ -256,9 +257,9 @@ template <typename T> inline void hadamard_acc(T* dst, const T* a, const T* b, c
 {
     namespace simd = crd::math::simd;
     using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 W = std::is_same_v<T, crd::f32> ? 8U : 4U;
+    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
     crd::u64 q = 0;
-    for (; q + W <= r; q += W)
+    for (; q + lanes <= r; q += lanes)
     {
         simd::fma(V::load(a + q), V::load(b + q), V::load(dst + q)).store(dst + q);
     }
@@ -275,9 +276,9 @@ template <typename T> inline void add_acc(T* dst, const T* src, crd::u64 r) noex
 {
     namespace simd = crd::math::simd;
     using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 W = std::is_same_v<T, crd::f32> ? 8U : 4U;
+    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
     crd::u64 q = 0;
-    for (; q + W <= r; q += W)
+    for (; q + lanes <= r; q += lanes)
     {
         (V::load(dst + q) + V::load(src + q)).store(dst + q);
     }
@@ -316,7 +317,18 @@ inline crd::u32 key_layout(crd::containers::ConstSpan<crd::u64> shape, crd::u32*
     {
         shift[m] = total;
         const crd::u32 b = dim_bits(shape[m]);
-        mask[m] = b == 0U ? 0ULL : (b >= 64U ? ~0ULL : (1ULL << b) - 1ULL);
+        if (b == 0U)
+        {
+            mask[m] = 0ULL;
+        }
+        else if (b >= 64U)
+        {
+            mask[m] = ~0ULL;
+        }
+        else
+        {
+            mask[m] = (1ULL << b) - 1ULL;
+        }
         total += b;
     }
     return total;
@@ -585,14 +597,16 @@ template <typename T, typename KT>
     return TensorStatus::Ok;
 }
 
-// RAII scratch block from an explicit IAllocator (status-checked by caller)
+// RAII scratch block from an explicit IAllocator (status-checked by caller: a null m_ptr for a non-zero count is
+// AllocFailed). A count whose byte size overflows is refused the same way, never a short block (DIAG.3a).
 template <typename T> struct ScratchBlock
 {
     ScratchBlock(crd::memory::IAllocator* alloc, crd::u64 count) noexcept : m_alloc(alloc)
     {
-        if (count > 0U && alloc != nullptr)
+        // A count a usize cannot hold (a 32-bit target) is refused as well, never truncated.
+        if (count > 0U && alloc != nullptr && static_cast<crd::u64>(static_cast<crd::usize>(count)) == count)
         {
-            m_ptr = static_cast<T*>(alloc->allocate(count * sizeof(T), 64U));
+            m_ptr = crd::memory::allocate_array<T>(*alloc, static_cast<crd::usize>(count), 64U);
         }
     }
     ~ScratchBlock()

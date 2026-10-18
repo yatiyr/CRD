@@ -45,3 +45,13 @@ target_link_libraries(crd-hesap-opt-tests PRIVATE
 crd_enable_default_pch(crd-hesap-opt-tests)
 
 crd_discover_tests(crd-hesap-opt-tests)
+
+# The model's out-of-memory fatal, one child process per mode (a fatal cannot run in-process): an allocator that
+# refuses the objective's or a constraint's function leaves the model out of memory, fatal in every build, never a
+# null function stored. Source and protocol: tests/support/diag/specimens/hesap_opt_fatal_specimen.cpp.
+include(CrdDiag)
+crd_diag_specimen(crd-hesap-opt-fatal-specimen
+    SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/hesap_opt_fatal_specimen.cpp")
+target_link_libraries(crd-hesap-opt-fatal-specimen PRIVATE crd-core crd-memory crd-hesap-opt)
+crd_diag_fatal_tests(crd-hesap-opt-fatal-specimen PREFIX crd-hesap-opt-fatal OWNER crd-hesap-opt-tests
+    MODES model-objective-refused model-eq-refused model-ineq-refused)

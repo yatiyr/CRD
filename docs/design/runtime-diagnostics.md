@@ -188,7 +188,20 @@ Settled policies (2026-10-06, [session](../sessions/2026-10-06-diag-3a-allocator
   (`crd-containers-fatal-*`, `crd-ceir-fatal-*`, `crd-scene-fatal-*`, `crd-resources-fatal-*`, the alloc-fatal
   specimen). A borrowed linear, stack, pool or TLSF buffer that is null, or a borrowed pool span that overflows, is
   fatal in every build as well, and so is a shared component pool past its index range or an entry refcount past u32
-  (its doubling ran through u32 and wrapped to an endless loop past 2^31 entries).
+  (its doubling ran through u32 and wrapped to an endless loop past 2^31 entries). Since 2026-10-18
+  ([session](../sessions/2026-10-18-diag-11b-engine-allocation-refusals.md)) the rest of the engine does too: the
+  CEIR reload set's cook Context, generations and their Contexts, the plan cache's copies, the host provider's pooled
+  launch tokens, the CEIR diagnostic engine's arena copies, the CKIR reference interpreter's and reverse AD's scratch,
+  every hesap-fft plan table and sub-plan, hesap-dense's owning matrix, vector, permutation and structured storage and
+  its GEMM/SYRK packing buffers, the DSP convolver's and spectral estimators' plans, the CWT's per-job plans, the
+  vectorized HVP tape (its node capacity now checked in every build), the optimization model's functions, the scene
+  renderer's staged frame graph and the scene and öbek cookers' registries. hesap-tensor's sparse scratch keeps its
+  `AllocFailed` status and refuses a byte size that overflows. `allocate_array` and `allocate_array_or_fatal` take an
+  explicit alignment for SIMD and streaming-store tables. Each has a child-process mode (`crd-ceir-cook-fatal-*`,
+  `crd-ceir-host-fatal-*`, `crd-kir-fatal-*`, `crd-hesap-*-fatal-*`, `crd-scene-cooker-fatal-*`,
+  `crd-scene-render-fatal-*`, three more `crd-ceir-fatal-*`), and `check-allocation-results.py`
+  (`crd-check-allocation-results`) fails a raw allocation result in engine, tools, runtime or sandbox code that is used
+  without a check, passed up to no caller, and named as no heap site.
 - **Parent/child and external buffers.** A child is destroyed before its parent and returns exactly the blocks it took.
   An arena never frees an external buffer, stays inside it, and returns it unpoisoned.
 

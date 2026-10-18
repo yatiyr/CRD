@@ -73,6 +73,12 @@ struct ObekCookContext
     void*                       file_resolver_ud      = nullptr;
 };
 
+namespace detail
+{
+// DIAG.3a: as SceneCooker (crd-cooker-fatal-* modes).
+inline constexpr const char* kObekCookerOutOfMemory = "ObekCooker: out of memory for its reader registry";
+} // namespace detail
+
 // ObekCooker — opaque facade. Holds the component-reader registry plus
 // the öbek-specific pass schedule (extends/nested/overrides). Library
 // users register additional component readers via
