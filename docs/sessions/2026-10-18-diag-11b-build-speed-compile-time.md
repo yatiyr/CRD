@@ -38,6 +38,44 @@ and [39124869209](https://github.com/yatiyr/CRD/actions/runs/39124869209)) show 
 `gate: PASS (exactly the registered third-party failures, sanitizer unsuppressed)`. Nothing to repair in Cerid; the
 register's hosted evidence names the three runs.
 
+<a id="the-allocator-corpus-on-win-asan-a-cerid-defect"></a>
+## The allocator corpus on win-asan: a Cerid defect
+
+The CI read at the start of the compile-time work's second half found push run
+[39129062998](https://github.com/yatiyr/CRD/actions/runs/39129062998) (`9461800a`, task A) failed: win-asan, the
+five TP-1 tests as registered, and `crd-fuzz-memory-allocators-corpus` unexpected, the signature the
+nonreproduced-failure register had recorded from 2026-10-11 and the first hosted sighting (39013990584). This time the
+report was read to the end:
+
+- the memset inside the ASan runtime's `RtlCreateHeap` interception, under msvcrt.dll's `DllMain`, is reached from
+  `__scrt_common_main_seh` at `exe_common.inl` line 295, which is `exit(main_result)`: after `main` returned, not at
+  start-up;
+- the shadow is `f7`, "poisoned by user": someone called the poisoning interface on those addresses earlier.
+
+The replay's `main` runs the corpus, and its virtual memory arena cases poison the arena's committed tail. The arena's
+destructor released the reservation with no unpoison, on the stated belief that "under ASan the shadow for an
+unmapped range is reclaimed by the runtime". On Windows it is not, so the released addresses keep `f7`, and when
+`exit()` loads msvcrt.dll its new heap can be mapped there; the interceptor's own memset then faults. It shows only
+when the OS reuses those exact addresses, hence one run in two. `purge()` had the same gap for the tail it decommits.
+
+Repair (`engine/foundation/memory/src/virtual_memory_allocator.cpp`): `purge()` unpoisons what it decommits (a
+recommit poisons it afresh) and the destructor unpoisons `[0, commit_pos)`, so every poisoned byte lies in the
+committed range when the reservation goes; unpoisoning the whole reservation was not an option (64 GiB by default:
+8 GiB of shadow). Tests:
+- `allocator asan: a virtual memory arena leaves no poison behind when it purges or releases its pages`
+  (`test_allocator_asan.cpp`): three blocks committed and poisoned, reset, purged, recommitted, released; the shadow of
+  the whole once-committed range is read after the purge and after the release, before any assertion allocates.
+- The allocator fuzz target itself: the arena op now runs in an inner function, and after the arena is destroyed
+  every granule of the most it committed must be unpoisoned, so every corpus replay on an ASan lane checks the class
+  deterministically instead of depending on address reuse.
+
+Teeth: with the destructor's unpoison removed, both the case and the corpus replay fail on win-asan; with purge's
+removed, both fail there as well; restored and rebuilt, 26 of 26 pass. On linux-gcc-asan the destructor half does not
+bite (that runtime clears the shadow on `munmap`, as the old comment assumed) and the purge half fails the case
+(a decommitted range stays mapped), so both halves are needed and both are now covered. The register entry
+(`win-asan-allocator-corpus-rtlcreateheap`) is `explained`; every other allocator that poisons memory it does not own
+already unpoisoned it on destruction (checked: linear, pool, stack, ring, TLSF, growable linear and growable pool).
+
 ## DIAG.11b clause (8): the elevated capture is not done yet; one command prepared
 
 Task A's summary said the elevated WPR run and the h2 hardware fault run were done. Both happened, for other rows:

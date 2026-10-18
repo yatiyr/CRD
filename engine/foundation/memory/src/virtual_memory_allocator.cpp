@@ -90,8 +90,11 @@ VirtualMemoryAllocator::VirtualMemoryAllocator(const Config& cfg, const char* na
 
 VirtualMemoryAllocator::~VirtualMemoryAllocator()
 {
-    // release() decommits everything + frees the address space; under ASan the
-    // shadow for an unmapped range is reclaimed by the runtime, so no unpoison.
+    // Unpoison before the release: AddressSanitizer does not clear the shadow of a range it sees unmapped (Windows
+    // keeps it), and the OS hands the same addresses to the next mapping, which then faults where nothing is wrong
+    // (2026-10-18: msvcrt.dll's heap, created at process exit, in the allocator fuzz corpus on win-asan). Every
+    // poisoned byte lies below m_commit_pos: purge() unpoisons what it decommits.
+    asan_unpoison(m_base, m_commit_pos);
     vm::release(m_region);
     m_base       = nullptr;
     m_reserved   = 0;
@@ -276,6 +279,9 @@ void VirtualMemoryAllocator::purge() noexcept
     const usize keep = align_up(m_alloc_pos, m_page);
     if (keep < m_commit_pos)
     {
+        // The decommitted tail was poisoned; a recommit poisons it afresh (ensure_committed), so its shadow is
+        // cleared here and the poison stays inside [0, m_commit_pos), which the destructor clears before release.
+        asan_unpoison(m_base + keep, m_commit_pos - keep);
         (void)vm::decommit(m_base + keep, m_commit_pos - keep);
         m_commit_pos = keep;
     }

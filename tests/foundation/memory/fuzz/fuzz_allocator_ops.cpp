@@ -1356,7 +1356,9 @@ void require_vm_state(const mem::VirtualMemoryAllocator& vm, const VmModel& m, c
 #endif
 }
 
-void fuzz_virtual_memory(Reader& r, Trace& trace)
+// The arena runs in this function and is destroyed when it returns; `base_out` and `high_out` report its reservation
+// and the most it ever committed, which the caller checks after the release.
+void fuzz_virtual_memory_arena(Reader& r, Trace& trace, const u8** base_out, usize* high_out)
 {
     const usize                         page = crd::vm::page_size();
     mem::VirtualMemoryAllocator::Config cfg;
@@ -1399,6 +1401,8 @@ void fuzz_virtual_memory(Reader& r, Trace& trace)
     }
     const u8* const base = static_cast<const u8*>(vm.base());
     CRD_FUZZ_REQUIRE(base != nullptr && (reinterpret_cast<std::uintptr_t>(base) & (page - 1U)) == 0U);
+    *base_out = base;
+    usize high = m.committed;
     LiveSet live;
     usize   markers[16]  = {};
     usize   marker_count = 0U;
@@ -1561,10 +1565,26 @@ void fuzz_virtual_memory(Reader& r, Trace& trace)
         require_vm_state(vm, m, live, base);
         trace.add(m.used);
         trace.add(m.committed);
+        high = high > m.committed ? high : m.committed;
     }
     live.remove_if([](const Block&) { return true; });
     vm.reset();
     require_stats_drained(vm);
+    *high_out = high;
+}
+
+void fuzz_virtual_memory(Reader& r, Trace& trace)
+{
+    const u8* base = nullptr;
+    usize high = 0U;
+    fuzz_virtual_memory_arena(r, trace, &base, &high);
+    // The arena is gone. Its released range carries no poison: the OS hands those addresses to the next mapping, which
+    // would fault under ASan where nothing is wrong (2026-10-18: msvcrt.dll's heap at process exit, win-asan). Only
+    // the shadow is read.
+    for (usize k = 0U; k < high; k += 8U)
+    {
+        CRD_FUZZ_REQUIRE(!mem::asan_is_poisoned(base + k));
+    }
 }
 
 // ---- the streaming allocator: budgets, residency policy, staging ---------------------------------------------------

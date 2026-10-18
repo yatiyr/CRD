@@ -6,14 +6,14 @@
   {
    "id": "win-asan-allocator-corpus-rtlcreateheap",
    "first_seen": "2026-10-11",
-   "lane": "win-asan (local, inside vcvars; hosted once: nightly run 39013990584 at d08436b9, 2026-10-17)",
+   "lane": "win-asan (local, inside vcvars; hosted twice: nightly run 39013990584 at d08436b9, 2026-10-17, and push run 39129062998 at 9461800a, 2026-10-18)",
    "target": "crd-fuzz-memory-allocators-corpus",
-   "signature": "AddressSanitizer use-after-poison inside RtlCreateHeap, reached from msvcrt.dll during process start, 0.11 s after launch and before any corpus input ran",
-   "reruns": "Local: the immediate rerun passed; the next run of the same seed was clean. Hosted: the next nightly run at the same revision (39108972918) passed the job.",
-   "status": "nonreproduced",
-   "explanation": "No input or Cerid frame is involved: the program does not import msvcrt.dll, a system library loaded behind USER32 initialises it under the loader, and the ASan runtime's RtlCreateHeap interception reports the memory that DLL clears. Not explained further (2026-10-18-scheduled-runs-snapshot-lost-broadcast.md).",
+   "signature": "AddressSanitizer use-after-poison (shadow f7, poisoned by user) in a memset inside RtlCreateHeap, reached from msvcrt.dll loaded during exit() after main returned (exe_common.inl line 295), 0.11-0.25 s after launch",
+   "reruns": "Local: the immediate rerun passed; the next run of the same seed was clean. Hosted: the next nightly run at the same revision (39108972918) passed the job; it failed again in 39129062998. It depends on the OS mapping the new heap where the arena had been.",
+   "status": "explained",
+   "explanation": "A Cerid defect. VirtualMemoryAllocator poisons its committed tail and released its reservation without unpoisoning, assuming the runtime clears an unmapped range's shadow; the Windows runtime keeps it (the Linux one clears it on munmap), so when exit() loaded msvcrt.dll and its heap was mapped at addresses an arena of the corpus had released, the interceptor's memset hit the stale poison. purge() also left its decommitted tail poisoned. Both now unpoison (purge what it decommits, the destructor [0, commit_pos)); a crd-memory-tests case and the corpus replay itself check the released range's shadow, and each fails with either half removed on win-asan (the purge half on linux-gcc-asan too); 2026-10-18-diag-11b-build-speed-compile-time.md.",
    "session": "2026-10-11-diag-10b-seeded-detector-failures.md",
-   "rows": ["DIAG.10b"]
+   "rows": ["DIAG.10b", "DIAG.11b"]
   },
   {
    "id": "ren-40-g1-dx12-parallel-segfault",

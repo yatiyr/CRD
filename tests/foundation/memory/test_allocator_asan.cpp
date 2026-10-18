@@ -22,6 +22,7 @@
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/allocators/virtual_memory_allocator.hpp>
 #include <crd/memory/asan_poison.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -450,6 +451,55 @@ TEST_CASE("allocator asan: a ring poisons unclaimed and retired space", "[memory
     CHECK(poisoned(d));
     CHECK(poisoned(d + 199));
     CHECK(ring.in_use_bytes() == 0U);
+}
+
+TEST_CASE("allocator asan: a virtual memory arena leaves no poison behind when it purges or releases its pages",
+          "[memory][diag][asan]")
+{
+    // The arena poisons its committed tail. AddressSanitizer does not clear the shadow of a range it sees unmapped,
+    // and the OS reuses the addresses for the next mapping, so poison left on decommitted or released pages faults in
+    // someone else's memory (2026-10-18: msvcrt.dll's heap at process exit, the allocator corpus on win-asan).
+    constexpr crd::usize block = 64U * 1024U;
+    mem::VirtualMemoryAllocator::Config cfg;
+    cfg.reserve_bytes = 16U * block;
+    cfg.commit_block = block;
+    const crd::u8* base = nullptr;
+    crd::usize high = 0U;
+    bool purged_clean = false;
+    {
+        mem::VirtualMemoryAllocator vma(cfg, "asan-vma");
+        base = static_cast<const crd::u8*>(vma.base());
+        auto* const first = static_cast<crd::u8*>(vma.allocate(100U, 16U));
+        REQUIRE(first != nullptr);
+        CHECK(live_exactly(first, 100U)); // the committed tail past the live top is poisoned
+        auto* const big = static_cast<crd::u8*>(vma.allocate(2U * block, 64U)); // commits three blocks in all
+        REQUIRE(big != nullptr);
+        std::memset(big, 0x5A, 2U * block);
+        high = vma.committed_bytes();
+        REQUIRE(high == 3U * block);
+        CHECK(poisoned(base + high - 8U));
+        vma.reset(); // everything handed out is poisoned again
+        CHECK(poisoned(first));
+        vma.purge(); // the arena is empty: every page is decommitted
+        REQUIRE(vma.committed_bytes() < high);
+        bool any = false;
+        for (crd::usize k = vma.committed_bytes(); k < high; k += 8U)
+        {
+            any = any || mem::asan_is_poisoned(base + k);
+        }
+        purged_clean = !any;
+        auto* const again = static_cast<crd::u8*>(vma.allocate(block / 2U, 16U)); // recommits one block
+        REQUIRE(again != nullptr);
+        CHECK(poisoned(base + vma.committed_bytes() - 8U)); // its tail is poisoned afresh
+    }
+    // Only the shadow is read, before any assertion allocates.
+    bool released_clean = true;
+    for (crd::usize k = 0U; k < high; k += 8U)
+    {
+        released_clean = released_clean && !mem::asan_is_poisoned(base + k);
+    }
+    CHECK(purged_clean);
+    CHECK(released_clean);
 }
 
 TEST_CASE("allocator asan: an Array marks its unused capacity as a container live range", "[memory][diag][asan]")

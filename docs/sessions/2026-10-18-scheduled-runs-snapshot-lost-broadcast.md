@@ -74,3 +74,9 @@ register entry carries the hosted sighting; it stays `nonreproduced` and is read
 Changed-only, per the user's process of 2026-10-18: the touched targets built on win-debug, linux-gcc-debug and
 linux-clang-tsan (both from the WSL source mirror), their test programs run as above, the ctest repository guards,
 tidy, the Allman check, `check-master-plan.py` and `check-repository.py`; the hosted lanes run everything else.
+
+**Addendum, 2026-10-19.** The allocator corpus failed the same way again in push run 39129062998, and the report
+reads differently than above: the crash is in `exit()` after `main` returned (`exe_common.inl` line 295), and the
+memory is `f7`, poisoned by user. It was a Cerid defect, repaired in
+[task C's note](2026-10-18-diag-11b-build-speed-compile-time.md#the-allocator-corpus-on-win-asan-a-cerid-defect):
+the virtual memory arena released poisoned pages, and Windows' runtime keeps an unmapped range's shadow.
