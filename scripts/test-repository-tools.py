@@ -568,6 +568,14 @@ class CiTiers(unittest.TestCase):
         unsafe = re.sub(r'cancel-in-progress: .*', 'cancel-in-progress: true', self.workflow)
         problems = ci_tiers.validate(self.tiers, self.presets, unsafe)
         self.assertTrue(any('limited to pull_request' in p for p in problems), problems)
+        unshared = self.workflow.replace("github.event_name == 'push' && format('push-{0}', github.ref) || ", '', 1)
+        self.assertNotEqual(unshared, self.workflow)
+        problems = ci_tiers.validate(self.tiers, self.presets, unshared)
+        self.assertTrue(any('share one concurrency group per ref' in p for p in problems), problems)
+        starving = self.workflow.replace('|| github.run_id }}', "|| 'all' }}", 1)
+        self.assertNotEqual(starving, self.workflow)
+        problems = ci_tiers.validate(self.tiers, self.presets, starving)
+        self.assertTrue(any('keep their own concurrency group' in p for p in problems), problems)
         ungated = self.workflow.replace("if: needs.preflight.outputs.presets_linux_gcc != '[]'", 'if: true')
         problems = ci_tiers.validate(self.tiers, self.presets, ungated)
         self.assertTrue(any('linux-gcc must be gated' in p for p in problems), problems)
@@ -1990,6 +1998,15 @@ class CompilerCache(unittest.TestCase):
             # A discovery build after a widely included header change keeps going and reports every broken unit.
             self.assertIn('if [[ "${CRD_LANE_KEEP_GOING:-}" == 1 ]]; then\n            keep=(-- -k 0)', wsl_lane)
             self.assertIn('cmake --build "$tree" -j "$JOBS" "${targets[@]}" "${keep[@]}"', wsl_lane)
+            # The focused plan's lane route (wsl-lane.sh dev): dev.py check in the lane's tree under the lane lock,
+            # with the build's cache server and the test preset's environment, refused on a stale mirror.
+            self.assertIn('configure|build|test|run|dev)\n        heavy "$@"', wsl_lane)
+            dev_branch = wsl_lane[wsl_lane.index('\n    dev)\n'):]
+            dev_branch = dev_branch[:dev_branch.index('\n        ;;')]
+            for needle in ('mirror check', 'server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server "$tree"',
+                           'eval "$server_env"', 'eval "$(preset_test_settings "$preset")"',
+                           'python3 "$MIRROR/scripts/dev.py" --root "$MIRROR" check --build "$tree" "$@"'):
+                self.assertIn(needle, dev_branch)
             build_target = (ROOT / 'scripts/build-target.bat').read_text(encoding='utf-8')
             self.assertIn('server "%~1" --shell cmd > "%CRD_SERVER_ENV%"\nif errorlevel 1 exit /b 1\n', build_target)
             tree = root / 'tree'

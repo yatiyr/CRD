@@ -249,6 +249,12 @@ def validate(tiers, presets_document, workflow_text):
         problems.append('workflow must declare a concurrency group with cancel-in-progress')
     elif "github.event_name == 'pull_request'" not in cancel.group(1) or cancel.group(1).strip() == 'true':
         problems.append('cancel-in-progress must be limited to pull_request runs')
+    block = re.search(r'^concurrency:\s*\n((?:[ \t]+.*\n)+)', workflow_text, re.M)
+    group_text = block.group(1) if block else ''
+    if "github.event_name == 'push'" not in group_text or 'github.ref' not in group_text:
+        problems.append('push runs must share one concurrency group per ref, so a newer push replaces a pending one')
+    if 'github.run_id' not in group_text:
+        problems.append('scheduled and manual runs must keep their own concurrency group (github.run_id)')
     return problems
 
 

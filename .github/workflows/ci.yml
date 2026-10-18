@@ -23,11 +23,15 @@ on:
         options: [change, complete]
         default: complete
 
-# Cancellation is safe only for superseded pull-request feedback. A push run on main is the qualification evidence
-# for that revision and scheduled or manual complete runs must not be starved by frequent pushes, so every other
-# run owns its own group (keyed by run id) and is never cancelled or serialized.
+# Cancellation is safe only for superseded pull-request feedback. Push runs on main share one group per ref and are
+# never cancelled once running: a newer push replaces only a push run that is still pending, because the newer
+# revision contains it and its run qualifies both (the user's decision of 2026-10-19, after per-push complete-tier
+# runs queued behind each other for hours). Scheduled and manual complete runs keep their own group (keyed by run
+# id), so frequent pushes can never starve or replace them.
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || github.run_id }}
+  group: >-
+    ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref)
+    || github.event_name == 'push' && format('push-{0}', github.ref) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Perf budgets (CRD_PERF_BUDGET_LE) are calibrated on dev hardware and are NOT a
