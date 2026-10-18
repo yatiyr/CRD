@@ -6,7 +6,9 @@ Contract: docs/design/ci-tiers.md. Every visible configure preset has exactly on
 list, and is a dependency of the required aggregate; a preset step (a non-CMake check riding on preset matrix
 entries, such as the GenMC model on linux-clang-tsan or the seeded detector failures on the five lanes they were
 qualified on) exists in each listed preset's job, is gated on exactly the listed presets and inherits each one's
-tier; the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited to
+tier; every compiler-cached lane (CRD_CACHED_PRESETS) is a hosted preset the local cache rule covers, never a
+cold-acquisition preset, built in a job with the cache steps and statistics (docs/design/build-performance.md#hosted-lanes);
+the class table ends with a catch-all so every changed path resolves to a tier; cancellation stays limited to
 superseded pull-request runs. Every other workflow file is an experiment triggered only by workflow_dispatch, so it
 never joins a tier; only there may a diagnostic preset run hosted.
 """
@@ -97,6 +99,58 @@ def validate_preset_step(step, spec, entries, blocks):
     return problems
 
 
+CACHED_LANE_STEPS = ('Install pinned sccache', 'Compiler cache service', 'Configure with the compiler cache',
+                     'Compiler cache statistics')
+
+
+def env_preset_list(workflow_text, name):
+    """The preset names of a workflow-level list variable such as CRD_CACHED_PRESETS (a quoted scalar that may be
+    folded over several lines), or None when the workflow does not define it."""
+    match = re.search(r"^  %s: '([^']*)'" % re.escape(name), workflow_text, re.M)
+    return None if match is None else match.group(1).split()
+
+
+def cache_eligible(preset):
+    """The local helpers' rule (scripts/compiler-cache.py): a Ninja preset that is neither a clang-tidy nor an MSVC
+    LTCG preset."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return bool(module.configure_args(preset, {'CRD_SCCACHE': 'sccache'}))
+
+
+def validate_cached_presets(entries, workflow_text, blocks, eligible=cache_eligible):
+    """Every lane in CRD_CACHED_PRESETS is a hosted preset the local rule caches, is not a cold-acquisition preset
+    (those stay the uncached reference build), and builds in a job that installs the pinned sccache, starts it on the
+    cache service, configures with it, prints its statistics and hands them to the evidence bundle."""
+    cached = env_preset_list(workflow_text, 'CRD_CACHED_PRESETS')
+    if cached is None:
+        return ['the workflow defines no CRD_CACHED_PRESETS']
+    problems = []
+    cold = set(env_preset_list(workflow_text, 'CRD_COLD_PRESETS') or ())
+    for preset in cached:
+        entry = entries.get(preset)
+        if entry is None or entry.get('tier') == 'diagnostic' or 'job' not in entry:
+            problems.append('cached preset %s is not a hosted preset' % preset)
+            continue
+        if preset in cold:
+            problems.append('cached preset %s is a cold-acquisition preset, which stays uncached' % preset)
+        if not eligible(preset):
+            problems.append('cached preset %s is one the compiler-cache rule leaves uncached (tidy, Visual Studio or '
+                            'MSVC LTCG)' % preset)
+        block = blocks.get(entry['job'], '')
+        for step in CACHED_LANE_STEPS:
+            if '- name: %s\n' % step not in block:
+                problems.append('job %s builds cached preset %s but lacks the step %r' % (entry['job'], preset, step))
+        if '--sccache-stats' not in block:
+            problems.append('job %s builds cached preset %s but its evidence bundle gets no --sccache-stats'
+                            % (entry['job'], preset))
+    if len(set(cached)) != len(cached):
+        problems.append('CRD_CACHED_PRESETS names a preset twice')
+    return problems
+
+
 def validate(tiers, presets_document, workflow_text):
     problems = []
     if tiers.get('schema') != 'cerid-ci-tiers/1':
@@ -161,6 +215,7 @@ def validate(tiers, presets_document, workflow_text):
             problems.append('job %s must run on %s' % (job, jobs[job]['runner']))
     for step, spec in tiers.get('preset_steps', {}).items():
         problems.extend(validate_preset_step(step, spec, entries, blocks))
+    problems.extend(validate_cached_presets(entries, workflow_text, blocks))
     for name, entry in entries.items():
         test = entry.get('test')
         if test and not re.search(r'--preset\s+%s\b' % re.escape(test), blocks.get(entry.get('job', ''), '')):

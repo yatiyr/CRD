@@ -335,8 +335,9 @@ def expected_debug_information(profile):
     compiler = Path(profile.get('cxx_compiler') or ('cl' if os.name == 'nt' else 'c++')).name.lower()
     compiler = compiler.removesuffix('.exe')
     if compiler == 'cl':
+        # Under the compiler launcher every configuration compiles /Z7, Shipping included (CRD_EMBEDDED_DEBUG_INFO).
         launcher = on(defines.get('CRD_COMPILER_LAUNCHER', ''))
-        return 'embedded' if launcher and not shipping else 'pdb'
+        return 'embedded' if launcher else 'pdb'
     if compiler == 'clang-cl':
         return 'embedded'
     return 'dwarf'

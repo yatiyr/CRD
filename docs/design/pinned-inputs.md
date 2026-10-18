@@ -18,7 +18,7 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 |---|---|---|
 | `packages` | the nine CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, and the gated Eigen and OpenBLAS) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
 | `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
-| `actions` | the seven workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
+| `actions` | the eight workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
 | `unpinned` | the apt packages of the Linux image | recorded by `dpkg-query` into every Linux lane's census; the MSVC toolset of the Windows image is recorded by the evidence bundle |
 

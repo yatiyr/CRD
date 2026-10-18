@@ -45,6 +45,15 @@ bench_spec.loader.exec_module(build_bench)
 sccache_spec = importlib.util.spec_from_file_location('install_sccache', ROOT / 'scripts/install-sccache.py')
 install_sccache = importlib.util.module_from_spec(sccache_spec)
 sccache_spec.loader.exec_module(install_sccache)
+cache_spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
+compiler_cache = importlib.util.module_from_spec(cache_spec)
+cache_spec.loader.exec_module(compiler_cache)
+mirror_spec = importlib.util.spec_from_file_location('source_mirror', ROOT / 'scripts/source-mirror.py')
+source_mirror = importlib.util.module_from_spec(mirror_spec)
+mirror_spec.loader.exec_module(source_mirror)
+wait_spec = importlib.util.spec_from_file_location('wait_for', ROOT / 'scripts/wait-for.py')
+wait_for = importlib.util.module_from_spec(wait_spec)
+wait_spec.loader.exec_module(wait_for)
 consumer_spec = importlib.util.spec_from_file_location('package_consumer', ROOT / 'scripts/test-package-consumer.py')
 package_consumer = importlib.util.module_from_spec(consumer_spec)
 consumer_spec.loader.exec_module(package_consumer)
@@ -496,6 +505,37 @@ class CiTiers(unittest.TestCase):
             self.assertEqual(self.tiers['presets'][never_hosted]['tier'], 'complete', never_hosted)
         lanes = gate.load_register(ROOT / 'docs/third-party-defects.md')['lanes']
         self.assertTrue(set(lanes) <= owned, set(lanes) - owned)
+
+    def test_cached_lanes_follow_the_cache_rule_and_carry_every_cache_step(self):
+        entries = self.tiers['presets']
+        blocks = ci_tiers.workflow_jobs(self.workflow)
+        cached = ci_tiers.env_preset_list(self.workflow, 'CRD_CACHED_PRESETS')
+        self.assertIn('win-clang-cl-shipping', cached)
+        self.assertIn('linux-clang-tsan', cached)
+        for uncached in ('win-tidy', 'win-vs', 'win-release', 'win-relwithdebinfo', 'win-shipping',
+                         'win-shipping-profile', 'win-debug-scalar', 'linux-gcc-debug-scalar'):
+            self.assertNotIn(uncached, cached)
+        self.assertEqual(ci_tiers.validate_cached_presets(entries, self.workflow, blocks), [])
+        listed = re.search(r"^  CRD_CACHED_PRESETS: '[^']*'", self.workflow, re.M).group(0)
+
+        def problems(text):
+            return ci_tiers.validate_cached_presets(entries, text, ci_tiers.workflow_jobs(text))
+
+        for added, expected in (('win-shipping', 'MSVC LTCG'), ('win-debug-scalar', 'cold-acquisition'),
+                                ('linux-clang-fuzz', 'not a hosted preset'), ('win-debug', 'twice')):
+            widened = self.workflow.replace(listed, listed[:-1] + added + " '")
+            self.assertTrue(any(expected in p for p in problems(widened)), (added, problems(widened)))
+        shipping = blocks['windows-clang-cl-shipping']
+        without_stats = self.workflow.replace(shipping, shipping.replace('- name: Compiler cache statistics\n',
+                                                                         '- name: Something else\n'))
+        self.assertEqual(problems(without_stats), ["job windows-clang-cl-shipping builds cached preset "
+                                                   "win-clang-cl-shipping but lacks the step 'Compiler cache statistics'"])
+        self.assertEqual(shipping.count('--sccache-stats'), 1)
+        without_bundle = self.workflow.replace(shipping, shipping.replace('--sccache-stats', '--no-statistics'))
+        self.assertEqual(problems(without_bundle), ["job windows-clang-cl-shipping builds cached preset "
+                                                    "win-clang-cl-shipping but its evidence bundle gets no "
+                                                    "--sccache-stats"])
+        self.assertEqual(problems(self.workflow.replace(listed, '')), ['the workflow defines no CRD_CACHED_PRESETS'])
 
     def test_missing_owner_unknown_preset_unreferenced_job_and_unsafe_cancellation_fail(self):
         presets = dict(self.tiers['presets'])
@@ -1013,10 +1053,18 @@ class BuildPerformance(unittest.TestCase):
                                         sccache=stats)
             self.assertEqual(record['build']['ninja']['edges'], 5)
             self.assertEqual(record['build']['sccache'],
-                             {'requests': 10, 'hits': 6, 'misses': 3, 'non_cacheable': 1, 'errors': 0, 'reasons': {'/Fp': 1}})
+                             {'location': None, 'requests': 10, 'hits': 6, 'misses': 3, 'non_cacheable': 1, 'errors': 0,
+                              'reasons': {'/Fp': 1}})
             markdown = ci_evidence.summary_markdown(record)
             self.assertIn('5 edges in 2 invocations, span 4.4 s', markdown)
             self.assertIn('sccache 6 hits, 3 misses, 1 non-cacheable (/Fp 1)', markdown)
+            # The hosted lanes cache through the GitHub Actions service: the bundle names the backend it used.
+            stats.write_text(json.dumps(dict(self.STATS, cache_location='GHA, name: sccache, prefix: /sccache/')),
+                             encoding='utf-8')
+            hosted = ci_evidence.bundle('win-debug', build, Path(temp) / 'out', outcome='success', environ={},
+                                        sccache=stats)
+            self.assertEqual(hosted['build']['sccache']['location'], 'GHA, name: sccache, prefix: /sccache/')
+            self.assertIn('(cache: GHA, name: sccache', ci_evidence.summary_markdown(hosted))
             plain = ci_evidence.bundle('win-debug', build, Path(temp) / 'out', outcome='success', environ={})
             self.assertIsNone(plain['build']['sccache'])
             self.assertNotIn('sccache', ci_evidence.summary_markdown(plain).split('| Build |')[1].split('\n')[0])
@@ -1040,6 +1088,15 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(build_bench.ninja_entries(log, offset), [])
             log.write_text(self.NINJA_LOG + '0\t400\t1\tnew.obj\t6\n', encoding='utf-8')
             self.assertEqual(build_bench.ninja_summary(build_bench.ninja_entries(log, offset))['edges'], 1)
+            # Ninja recompacts a long log to one line per output: the row is then what changed since the snapshot.
+            snapshot = build_bench.ninja_snapshot(log)
+            offset = build_bench.ninja_line_count(log)
+            log.write_text('# ninja log v7\n0\t200\t1\tc.obj\t4\n100\t900\t1\tapp.exe\t5\n0\t500\t9\tnew.obj\t7\n'
+                           '0\t1000\t1\ta.obj\t1\n500\t3000\t1\tb.obj\t2\n', encoding='utf-8')
+            entries, recompacted = build_bench.ninja_row_entries(log, offset, snapshot)
+            self.assertTrue(recompacted)
+            self.assertEqual([e[2] for e in entries], ['new.obj'])
+            self.assertEqual(build_bench.ninja_row_entries(log, 0, snapshot)[1], False)
             self.assertEqual(build_bench.sccache_summary(self.STATS)['hits'], 6)
             self.assertEqual(build_bench.sccache_summary({'error': 'x'}), {'error': 'x'})
             total, available, committed = build_bench.memory_status()
@@ -1060,6 +1117,57 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('cache 1.5 GiB', build_bench.render_context([cached]))
         with self.assertRaises(SystemExit):
             build_bench.Board('win-debug', Path(temp) / 'b', 4, [], 'x', sccache='sccache', environ={})
+
+    def test_teeth_rows_break_restore_and_settle_and_targets_scope_every_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'header.hpp'
+            source.write_bytes(b'inline int f() { return 1; } // one\n')
+            os.utime(source, ns=(1_600_000_000_000_000_000, 1_600_000_000_000_000_100))
+            before = source.stat().st_mtime_ns
+            with self.assertRaises(SystemExit):
+                build_bench.Tooth(source, 'return 2;', 'return 3;').apply()
+            tooth = build_bench.Tooth(source, 'return 1;', 'return 2;')
+            tooth.apply()
+            self.assertEqual(source.read_bytes(), b'inline int f() { return 2; } // one\n')
+            tooth.restore()
+            self.assertEqual(source.read_bytes(), b'inline int f() { return 1; } // one\n')
+            self.assertNotEqual(source.stat().st_mtime_ns, before, 'the restore build must see the file as changed')
+            tooth.settle()
+            self.assertEqual(source.stat().st_mtime_ns, before, 'afterwards no other tree sees the cycle')
+            board = build_bench.Board('win-debug', Path(temp) / 'b', 4, [], 'x', targets=['crd-memory-tests', 'all'],
+                                      tooth=(source.name, 'return 1;', 'return 2;'), repo=Path(temp), log=lambda _: None)
+            commands = []
+            board.run = lambda command, cwd=None: (commands.append(command), SimpleNamespace(returncode=0))[1]
+            self.assertEqual(board.teeth_break(), 0)
+            self.assertIn(b'return 2;', source.read_bytes())
+            self.assertEqual(board.teeth_restore(), 0)
+            self.assertIn(b'return 1;', source.read_bytes())
+            self.assertEqual(source.stat().st_mtime_ns, before)
+            self.assertEqual(commands[0][-4:], ['--target', 'crd-memory-tests', '--target', 'all'])
+            with self.assertRaises(SystemExit):
+                board.teeth_restore()
+            self.assertEqual(board.record['edits']['tooth'], [source.name, 'return 1;', 'return 2;'])
+            self.assertEqual(board.record['targets'], ['crd-memory-tests', 'all'])
+            # Every finished row is written at once, so a board stopped by a deadline keeps it; an applied tooth is
+            # restored on the way out.
+            saved = []
+            stopped = build_bench.Board('win-debug', Path(temp) / 'fresh', 4, [], 'x', repo=Path(temp),
+                                        tooth=(source.name, 'return 1;', 'return 2;'), log=lambda _: None)
+            stopped.checkpoint = lambda record: saved.append([r['row'] for r in record['rows']])
+
+            def row(name, action):
+                if name == 'teeth-restore':
+                    raise SystemExit('deadline')
+                stopped.record['rows'].append({'row': name})
+                if name == 'teeth-break':
+                    stopped.tooth.apply()
+
+            stopped.row = row
+            with self.assertRaises(SystemExit):
+                stopped.execute(['configure', 'cold', 'teeth-break', 'teeth-restore'])
+            self.assertEqual(saved[-1], ['configure', 'cold', 'teeth-break'])
+            self.assertIn(b'return 1;', source.read_bytes(), 'the tooth is restored when the board stops')
+            self.assertEqual(source.stat().st_mtime_ns, before)
 
     def test_sccache_installer_extracts_only_the_pinned_member_and_checks_its_digest(self):
         for archive_kind in ('zip', 'tar'):
@@ -1113,7 +1221,8 @@ class BuildPerformance(unittest.TestCase):
                 'option(CRD_SHIPPING "" OFF)\noption(CRD_ENABLE_PCH "" ON)\n'
                 'list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")\ninclude(CrdBuildPerformance)\n'
                 'message(STATUS "LAUNCHER=[${CMAKE_CXX_COMPILER_LAUNCHER}] POOL_COMPILE=[${CMAKE_JOB_POOL_COMPILE}] '
-                'POOL_LINK=[${CMAKE_JOB_POOL_LINK}]")\n', encoding='utf-8')
+                'POOL_LINK=[${CMAKE_JOB_POOL_LINK}] EMBEDDED=[${CRD_EMBEDDED_DEBUG_INFO}] '
+                'FORMAT=[${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}]")\n', encoding='utf-8')
 
             def configure(build, *defines):
                 result = subprocess.run([cmake, '-S', str(project), '-B', str(build), '-G', 'Ninja',
@@ -1123,7 +1232,7 @@ class BuildPerformance(unittest.TestCase):
 
             code, output = configure(Path(temp) / 'default')
             self.assertEqual(code, 0, output)
-            self.assertIn('LAUNCHER=[] POOL_COMPILE=[] POOL_LINK=[]', output)
+            self.assertIn('LAUNCHER=[] POOL_COMPILE=[] POOL_LINK=[] EMBEDDED=[OFF] FORMAT=[]', output)
             self.assertNotIn('[crd] Compiler launcher', output)
             self.assertNotIn('pool crd_', (Path(temp) / 'default/CMakeFiles/rules.ninja').read_text(encoding='utf-8'))
             code, output = configure(Path(temp) / 'tuned', '-DCRD_COMPILER_LAUNCHER=/opt/sccache',
@@ -1135,13 +1244,357 @@ class BuildPerformance(unittest.TestCase):
             rules = (Path(temp) / 'tuned/CMakeFiles/rules.ninja').read_text(encoding='utf-8')
             self.assertRegex(rules, r'pool crd_compile\n  depth = 3\n')
             self.assertRegex(rules, r'pool crd_link\n  depth = 1\n')
-            code, output = configure(Path(temp) / 'shipping', '-DCRD_COMPILER_LAUNCHER=/opt/sccache', '-DCRD_SHIPPING=ON')
+            self.assertIn('EMBEDDED=[OFF] FORMAT=[]', output, 'GCC and Clang keep their DWARF flags')
+            # Shipping is cached too; an MSVC-compatible compiler (MSVC set as CMake sets it for cl and clang-cl)
+            # embeds its debug information: Debug and RelWithDebInfo through the format, Shipping through the flag
+            # the root build file picks from CRD_EMBEDDED_DEBUG_INFO.
+            code, output = configure(Path(temp) / 'shipping', '-DCRD_COMPILER_LAUNCHER=/opt/sccache', '-DCRD_SHIPPING=ON',
+                                     '-DMSVC=ON')
             self.assertEqual(code, 0, output)
-            self.assertIn('Compiler launcher ignored: Shipping', output)
-            self.assertIn('LAUNCHER=[] POOL_COMPILE=[]', output)
+            self.assertNotIn('Compiler launcher ignored', output)
+            self.assertIn('LAUNCHER=[/opt/sccache] POOL_COMPILE=[]', output)
+            self.assertIn('EMBEDDED=[ON] FORMAT=[$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>]', output)
+            self.assertIn('debug information embedded', output)
+            code, output = configure(Path(temp) / 'msvc-default', '-DMSVC=ON')
+            self.assertEqual(code, 0, output)
+            self.assertIn('LAUNCHER=[] POOL_COMPILE=[] POOL_LINK=[] EMBEDDED=[OFF] FORMAT=[]', output)
+            root = (ROOT / 'CMakeLists.txt').read_text(encoding='utf-8')
+            self.assertIn('if(CRD_EMBEDDED_DEBUG_INFO)\n            set(_crd_shipping_debug_info /Z7)\n        else()\n'
+                          '            set(_crd_shipping_debug_info /Zi)', root)
+            self.assertIn(':${_crd_shipping_debug_info}>', root)
+            self.assertIn('if(CRD_EMBEDDED_DEBUG_INFO)\n            set(${out_var} "embedded" PARENT_SCOPE)',
+                          (ROOT / 'cmake/CrdPackage.cmake').read_text(encoding='utf-8'))
+            # Clang's precompiled headers carry their inputs' times only without the launcher.
+            module = (ROOT / 'cmake/CrdBuildPerformance.cmake').read_text(encoding='utf-8')
+            launcher_branch = module[module.index('if(CRD_COMPILER_LAUNCHER)'):module.index('set(_crd_pools)')]
+            self.assertIn('if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)\n'
+                          '            # Clang records', launcher_branch)
+            self.assertIn('SHELL:-Xclang -fno-pch-timestamp', launcher_branch)
+            self.assertEqual(module.count('-fno-pch-timestamp'), 1)
             code, output = configure(Path(temp) / 'bad', '-DCRD_COMPILE_JOBS=many')
             self.assertNotEqual(code, 0)
             self.assertIn('CRD_COMPILE_JOBS must be a positive integer', output)
+
+
+class CompilerCache(unittest.TestCase):
+    """scripts/compiler-cache.py: the cache entries the local helpers add and the server a cached tree uses."""
+
+    PRESETS = {'configurePresets': [
+        {'name': 'base', 'hidden': True, 'cacheVariables': {'CRD_BUILD_TESTS': 'ON'}},
+        {'name': 'win-base', 'hidden': True, 'inherits': 'base', 'generator': 'Ninja',
+         'cacheVariables': {'CMAKE_C_COMPILER': 'cl', 'CMAKE_CXX_COMPILER': 'cl'}},
+        {'name': 'linux-base', 'hidden': True, 'inherits': 'base', 'generator': 'Ninja',
+         'cacheVariables': {'CMAKE_CXX_COMPILER': 'g++'}},
+        {'name': 'win-debug', 'inherits': 'win-base', 'cacheVariables': {'CMAKE_BUILD_TYPE': 'Debug'}},
+        {'name': 'win-tidy', 'inherits': 'win-debug', 'cacheVariables': {'CRD_ENABLE_CLANG_TIDY': 'ON'}},
+        {'name': 'win-vs', 'inherits': 'win-base', 'generator': 'Visual Studio 18 2026',
+         'cacheVariables': {'CMAKE_C_COMPILER': None, 'CMAKE_CXX_COMPILER': None}},
+        {'name': 'win-clang-cl', 'inherits': 'win-base', 'cacheVariables': {'CMAKE_CXX_COMPILER': 'clang-cl'}},
+        {'name': 'win-release', 'inherits': 'win-base', 'cacheVariables': {'CMAKE_INTERPROCEDURAL_OPTIMIZATION': 'ON'}},
+        {'name': 'win-shipping', 'inherits': 'win-release', 'cacheVariables': {'CRD_SHIPPING': 'ON'}},
+        {'name': 'win-clang-cl-shipping', 'inherits': 'win-base',
+         'cacheVariables': {'CMAKE_CXX_COMPILER': 'clang-cl', 'CMAKE_INTERPROCEDURAL_OPTIMIZATION': 'ON'}},
+        {'name': 'linux-gcc-shipping', 'inherits': 'linux-base',
+         'cacheVariables': {'CMAKE_INTERPROCEDURAL_OPTIMIZATION': 'ON'}},
+        {'name': 'linux-gcc-debug', 'inherits': 'linux-base'},
+        {'name': 'mixed', 'inherits': ['linux-base', 'win-base']}]}
+
+    def test_configure_args_follow_generator_compiler_and_tidy(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            installed = compiler_cache.default_launcher('windows', home)
+            installed.parent.mkdir(parents=True)
+            installed.write_bytes(b'')
+
+            def args(preset, environ=None, host='windows'):
+                return compiler_cache.configure_args(preset, environ or {}, host, home, self.PRESETS)
+
+            exe = installed.as_posix()
+            self.assertEqual(args('win-debug'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'])
+            self.assertEqual(args('win-clang-cl'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'])
+            self.assertEqual(args('win-tidy'), [], 'clang-tidy presets analyse every unit and stay uncached')
+            self.assertEqual(args('win-shipping'), [], 'MSVC LTCG trees stay uncached: the link generates the code')
+            self.assertEqual(args('win-release', {'CRD_SCCACHE': 'off'}), [], 'and are never converted back either')
+            self.assertEqual(args('win-clang-cl-shipping'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'])
+            self.assertEqual(args('linux-gcc-shipping'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe])
+            self.assertEqual(args('win-vs'), [], 'CMake applies no launcher to a Visual Studio generator')
+            self.assertEqual(args('mixed'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe],
+                             'the first parent wins: g++ keeps its precompiled header')
+            self.assertEqual(args('win-debug', {'CRD_SCCACHE': 'off'}),
+                             ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_ENABLE_PCH=ON'], 'off returns the default graph')
+            self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': 'OFF'}), ['-DCRD_COMPILER_LAUNCHER='])
+            self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': '/opt/sccache'}),
+                             ['-DCRD_COMPILER_LAUNCHER=/opt/sccache'])
+            self.assertEqual(args('linux-gcc-debug', host='linux'), [], 'nothing installed: nothing added')
+            installed.unlink()
+            self.assertEqual(args('win-debug'), [])
+            with self.assertRaises(KeyError):
+                args('no-such-preset')
+        for name in ('win-debug', 'win-asan', 'win-shipping', 'win-clang-cl-shipping', 'linux-gcc-debug',
+                     'linux-clang-tsan'):
+            generator, _ = compiler_cache.resolve_preset(name)
+            self.assertEqual(generator, 'Ninja', name)
+        self.assertEqual(compiler_cache.configure_args('win-vs', {'CRD_SCCACHE': 'x'}), [])
+        self.assertEqual(compiler_cache.configure_args('win-tidy-local', {'CRD_SCCACHE': 'x'}), [])
+        for name in ('win-release', 'win-relwithdebinfo', 'win-shipping', 'win-shipping-profile'):
+            self.assertEqual(compiler_cache.configure_args(name, {'CRD_SCCACHE': 'x'}), [], name)
+        for name in ('win-debug', 'win-asan', 'win-clang-cl', 'win-clang-cl-shipping'):
+            self.assertEqual(compiler_cache.configure_args(name, {'CRD_SCCACHE': 'x'}),
+                             ['-DCRD_COMPILER_LAUNCHER=x', '-DCRD_ENABLE_PCH=OFF'], name)
+
+    def test_cache_locations_tree_launcher_and_server_identity(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.assertEqual(compiler_cache.cache_dir({}, 'windows', root / 'home', root / 'repo'),
+                             root / 'repo' / 'build' / 'sccache')
+            self.assertEqual(compiler_cache.cache_dir({}, 'linux', root / 'home', root / 'repo'),
+                             root / 'home' / '.cache' / 'cerid-sccache', 'outside the WSL source mirror')
+            self.assertEqual(compiler_cache.cache_dir({'CRD_SCCACHE_DIR': 'X'}, 'linux'), Path('X'))
+            self.assertEqual(compiler_cache.server_environment({}, 'linux', root)['SCCACHE_CACHE_SIZE'], '30G')
+            tree = root / 'tree'
+            tree.mkdir()
+            self.assertIsNone(compiler_cache.tree_launcher(tree))
+            (tree / 'CMakeCache.txt').write_text('CRD_COMPILER_LAUNCHER:FILEPATH=\n', encoding='utf-8')
+            self.assertIsNone(compiler_cache.tree_launcher(tree))
+            (tree / 'CMakeCache.txt').write_text('X:BOOL=ON\nCRD_COMPILER_LAUNCHER:FILEPATH=C:/t/sccache.exe\n',
+                                                 encoding='utf-8')
+            self.assertEqual(compiler_cache.tree_launcher(tree), Path('C:/t/sccache.exe'))
+            out = io.StringIO()
+            (tree / 'CMakeCache.txt').write_text('CRD_COMPILER_LAUNCHER:FILEPATH=\n', encoding='utf-8')
+            self.assertEqual(compiler_cache.main(['server', str(tree)], out=out), 0)
+            self.assertEqual(out.getvalue(), '', 'an uncached tree gets no server and no environment')
+        windows = {'cache_location': 'Local disk: "D:\\\\Dev\\\\cerid\\\\build\\\\sccache"'}
+        self.assertTrue(compiler_cache.serves(windows, 'D:\\Dev\\cerid\\build\\sccache'))
+        self.assertTrue(compiler_cache.serves(windows, 'd:/dev/cerid/build/sccache/'))
+        self.assertFalse(compiler_cache.serves(windows, 'D:\\Dev\\cerid\\build\\bench-sccache'))
+        self.assertFalse(compiler_cache.serves(None, 'x'))
+        self.assertTrue(compiler_cache.serves({'cache_location': 'Local disk: "/home/u/.cache/cerid-sccache"'},
+                                              '/home/u/.cache/cerid-sccache'))
+        self.assertEqual(compiler_cache.shell_lines({'SCCACHE_DIR': "/a b/it's"}, 'sh'),
+                         ["export SCCACHE_DIR='/a b/it'\\''s'"])
+        self.assertEqual(compiler_cache.shell_lines({'SCCACHE_DIR': 'D:\\c'}, 'cmd'), ['SCCACHE_DIR=D:\\c'])
+
+
+class SourceMirror(unittest.TestCase):
+    """scripts/source-mirror.py: the mirror holds exactly the checkout's git-visible files, and a stale one is refused."""
+
+    def git(self, root, *arguments):
+        return subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid',
+                               '-c', 'core.autocrlf=false', *arguments], capture_output=True, check=True)
+
+    def mirror(self, command, source, mirror, *extra):
+        out = io.StringIO()
+        code = source_mirror.main([command, '--source', str(source), '--mirror', str(mirror), *extra], out=out)
+        return code, out.getvalue()
+
+    def test_sync_copies_exactly_the_visible_files_and_check_refuses_every_kind_of_staleness(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, mirror = Path(temp) / 'checkout', Path(temp) / 'mirror'
+            (source / 'engine').mkdir(parents=True)
+            self.git(source, 'init', '-q')
+            self.git(source, 'config', 'core.autocrlf', 'false')
+            (source / '.gitignore').write_text('/build/\n*.log\n', encoding='utf-8')
+            (source / 'engine/a.cpp').write_text('int a = 1;\n', encoding='utf-8')
+            (source / 'engine/b.hpp').write_text('#pragma once\n', encoding='utf-8')
+            (source / 'build').mkdir()
+            (source / 'build/object.o').write_bytes(b'ignored')
+            (source / 'run.log').write_text('ignored\n', encoding='utf-8')
+            self.git(source, 'add', '.')
+            self.git(source, 'commit', '-q', '-m', 'fixture')
+            (source / 'engine/new.cpp').write_text('int n;\n', encoding='utf-8')  # untracked, not ignored
+
+            code, output = self.mirror('check', source, mirror)
+            self.assertEqual(code, source_mirror.STALE, 'a mirror that was never synced is refused')
+            code, output = self.mirror('sync', source, mirror)
+            self.assertEqual(code, 0, output)
+            self.assertIn('full sync', output)
+            self.assertEqual(source_mirror.mirror_files(mirror), ['.gitignore', 'engine/a.cpp', 'engine/b.hpp',
+                                                                  'engine/new.cpp'])
+            self.assertEqual(os.stat(mirror / 'engine/a.cpp').st_mtime_ns, os.stat(source / 'engine/a.cpp').st_mtime_ns)
+            self.assertEqual(self.mirror('check', source, mirror, '--full')[0], 0)
+
+            def stale(change, expected):
+                change()
+                code, output = self.mirror('check', source, mirror)
+                self.assertEqual(code, source_mirror.STALE, output)
+                self.assertIn(expected, output)
+                code, output = self.mirror('sync', source, mirror)
+                self.assertEqual(code, 0, output)
+                self.assertIn('incremental sync', output)
+                self.assertEqual(self.mirror('check', source, mirror, '--full')[0], 0)
+
+            stale(lambda: (source / 'engine/a.cpp').write_text('int a = 2;\n', encoding='utf-8'), 'engine/a.cpp')
+            stale(lambda: (source / 'engine/c.cpp').write_text('int c;\n', encoding='utf-8'), 'engine/c.cpp')
+            stale(lambda: (source / 'engine/b.hpp').unlink(), 'engine/b.hpp')
+            self.assertFalse((mirror / 'engine/b.hpp').exists())
+            stale(lambda: (mirror / 'engine/litter.txt').write_text('test output\n', encoding='utf-8'),
+                  'engine/litter.txt')
+            self.assertFalse((mirror / 'engine/litter.txt').exists())
+            stale(lambda: (source / 'engine/a.cpp').write_text('int a = 1;\n', encoding='utf-8'), 'engine/a.cpp')
+            stale(lambda: (self.git(source, 'add', '.'), self.git(source, 'commit', '-q', '-m', 'second')),
+                  'HEAD differs')
+            # An ignored file in the mirror is not a source difference, but the next sync removes it.
+            (mirror / 'scratch.log').write_text('x\n', encoding='utf-8')
+            self.assertEqual(self.mirror('check', source, mirror)[0], 0)
+            self.assertEqual(self.mirror('sync', source, mirror)[0], 0)
+            self.assertFalse((mirror / 'scratch.log').exists())
+            # A mirror edit that keeps size and time: the full check compares bytes.
+            target = mirror / 'engine/a.cpp'
+            times = os.stat(target).st_atime_ns, os.stat(target).st_mtime_ns
+            target.write_text('int a = 9;\n', encoding='utf-8')
+            os.utime(target, ns=times)
+            code, output = self.mirror('check', source, mirror, '--full')
+            self.assertEqual(code, source_mirror.STALE, output)
+            self.assertIn('different bytes: engine/a.cpp', output)
+            self.assertEqual(self.mirror('sync', source, mirror, '--full')[0], 0)
+            self.assertEqual(target.read_text(encoding='utf-8'), 'int a = 1;\n')
+            with self.assertRaises(SystemExit):
+                self.mirror('sync', source, source / 'inside')
+
+
+class WaitHelper(unittest.TestCase):
+    """scripts/wait-for.py: bounded waits on files, logs, exit-code sentinels, processes and commands."""
+
+    def run_main(self, *argv):
+        out = io.StringIO()
+        code = wait_for.main(list(argv), out=out)
+        return code, out.getvalue()
+
+    def test_timeouts_are_bounded_under_the_watchdog_and_polls_are_short(self):
+        def never(*args, **kwargs):
+            raise AssertionError('an out-of-range timeout or interval reached a wait')
+
+        # Refused before any wait: a lost bound fails here at once instead of waiting out the 1141 s.
+        with patch.object(wait_for, 'Waiter', never):
+            code, output = self.run_main('--timeout', '1141', 'file', 'x')
+            self.assertEqual(code, wait_for.USAGE)
+            self.assertIn('watchdog', output)
+            self.assertEqual(self.run_main('--timeout', '0', 'file', 'x')[0], wait_for.USAGE)
+            self.assertEqual(self.run_main('--interval', '31', 'file', 'x')[0], wait_for.USAGE)
+        with tempfile.TemporaryDirectory() as temp:
+            started = wait_for.time.monotonic()
+            code, output = self.run_main('--timeout', '0.3', '--interval', '0.05', 'file', str(Path(temp) / 'never'))
+            self.assertEqual(code, wait_for.TIMED_OUT)
+            self.assertLess(wait_for.time.monotonic() - started, 5)
+            self.assertIn('did not appear', output)
+
+    def test_heartbeat_reports_a_long_wait(self):
+        ticks = iter([0.0, 0.0, 61.0, 61.0, 125.0, 125.0, 200.0])
+        out = io.StringIO()
+        waiter = wait_for.Waiter(150, 2, out=out, clock=lambda: next(ticks), sleep=lambda _: None)
+        self.assertEqual(waiter.wait(lambda: None, 'thing')[0], None)
+        self.assertEqual(out.getvalue().count('still waiting for thing'), 2)
+
+    def test_file_and_log_conditions(self):
+        with tempfile.TemporaryDirectory() as temp:
+            log = Path(temp) / 'build.log'
+            scanner = wait_for.LogScanner(log, contains=r'^\[\d+/\d+\] Linking .*crd-core-tests')
+            self.assertIsNone(scanner.poll())
+            log.write_text('[1/3] Building a.obj\n', encoding='utf-8')
+            self.assertIsNone(scanner.poll())
+            with log.open('a', encoding='utf-8') as handle:
+                handle.write('[3/3] Linking CXX executable tests/core/crd-core-')
+            self.assertIsNone(scanner.poll())
+            with log.open('a', encoding='utf-8') as handle:
+                handle.write('tests.exe\n')
+            self.assertEqual(scanner.poll()[0], 'ok', 'a match spanning two reads is found')
+            failing = wait_for.LogScanner(log, contains='DONE', fail='FAILED:|ninja: build stopped')
+            log.write_text('FAILED: a.obj\nninja: build stopped\nDONE\n', encoding='utf-8')
+            self.assertEqual(failing.poll(), ('fail', 'FAILED:'))
+            log.write_text('DONE\nFAILED: later\n', encoding='utf-8')
+            self.assertEqual(wait_for.LogScanner(log, contains='DONE', fail='FAILED:').poll(), ('ok', 'DONE'))
+            code, output = self.run_main('--timeout', '2', '--interval', '0.05', 'file', str(log), '--contains', 'DONE')
+            self.assertEqual(code, 0, output)
+            log.write_text('FAILED: x\n', encoding='utf-8')
+            self.assertEqual(self.run_main('--timeout', '2', '--interval', '0.05', 'file', str(log), '--contains',
+                                           'DONE', '--fail', 'FAILED:')[0], 1)
+            truncated = wait_for.LogScanner(log, contains='again')
+            self.assertIsNone(truncated.poll())
+            log.write_text('', encoding='utf-8')
+            self.assertIsNone(truncated.poll())
+            log.write_text('again\n', encoding='utf-8')
+            self.assertEqual(truncated.poll()[0], 'ok', 'a rewritten log is read from its start')
+
+    def test_exit_file_returns_the_recorded_code_once_it_is_complete(self):
+        with tempfile.TemporaryDirectory() as temp:
+            sentinel = Path(temp) / 'build.rc'
+            log = Path(temp) / 'build.log'
+            log.write_text('\n'.join('line %d' % i for i in range(30)) + '\n', encoding='utf-8')
+            self.assertIsNone(wait_for.read_exit_code(sentinel))
+            sentinel.write_text('', encoding='utf-8')
+            self.assertIsNone(wait_for.read_exit_code(sentinel), 'an empty sentinel is still being written')
+            sentinel.write_text('3\n', encoding='utf-8')
+            code, output = self.run_main('--timeout', '2', '--interval', '0.05', 'exit-file', str(sentinel),
+                                         '--log', str(log), '--tail', '2')
+            self.assertEqual(code, 3)
+            self.assertIn('line 29', output)
+            self.assertNotIn('line 27', output)
+            sentinel.write_text('3221225477\n', encoding='utf-8')
+            code, output = self.run_main('--timeout', '2', '--interval', '0.05', 'exit-file', str(sentinel))
+            self.assertEqual(code, 1, 'a code outside 0..255 is still a failure')
+            self.assertIn('recorded exit 3221225477', output)
+
+    def test_pid_and_run_modes_follow_real_processes(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(0.5)'])
+        try:
+            self.assertTrue(wait_for.process_alive(child.pid))
+            code, output = self.run_main('--timeout', '20', '--interval', '0.05', 'pid', str(child.pid))
+            self.assertEqual(code, 0, output)
+        finally:
+            child.wait()
+        self.assertFalse(wait_for.process_alive(child.pid))
+        code, output = self.run_main('--timeout', '20', '--interval', '0.05', 'run', '--', sys.executable, '-c',
+                                     'import sys; sys.exit(7)')
+        self.assertEqual(code, 7, output)
+        with tempfile.TemporaryDirectory() as temp:
+            marker = Path(temp) / 'grandchild.pid'
+            script = ('import subprocess, sys, time\n'
+                      'child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])\n'
+                      'open(sys.argv[1], "w").write(str(child.pid))\n'
+                      'time.sleep(60)\n')
+            started = wait_for.time.monotonic()
+            code, output = self.run_main('--timeout', '3', '--interval', '0.05', 'run', '--log', str(Path(temp) / 'o'),
+                                         '--', sys.executable, '-c', script, str(marker))
+            self.assertEqual(code, wait_for.TIMED_OUT, output)
+            self.assertLess(wait_for.time.monotonic() - started, 30)
+            self.assertIn('process tree was killed', output)
+            grandchild = int(marker.read_text(encoding='utf-8'))
+            deadline = wait_for.time.monotonic() + 10
+            while wait_for.process_alive(grandchild) and wait_for.time.monotonic() < deadline:
+                wait_for.time.sleep(0.1)
+            self.assertFalse(wait_for.process_alive(grandchild), 'the command tree is killed, not only its head')
+
+    def test_start_returns_at_once_and_the_supervisor_records_code_and_deadline(self):
+        self.assertEqual(self.run_main('start', '--deadline', '3601', '--log', 'l', '--exit-file', 'e', '--', 'x')[0],
+                         wait_for.USAGE)
+        with tempfile.TemporaryDirectory() as temp:
+            log, sentinel = Path(temp) / 'logs' / 'job.log', Path(temp) / 'job.rc'
+            sentinel.write_text('0\n', encoding='utf-8')
+            started = wait_for.time.monotonic()
+            code, output = self.run_main('start', '--log', str(log), '--exit-file', str(sentinel), '--',
+                                         sys.executable, '-c', 'import sys, time; time.sleep(1); print("built");'
+                                         ' sys.exit(5)')
+            self.assertEqual(code, 0, output)
+            self.assertLess(wait_for.time.monotonic() - started, 5, 'start does not wait for the command')
+            self.assertIsNone(wait_for.read_exit_code(sentinel), 'a stale sentinel is removed before the start')
+            code, output = self.run_main('--timeout', '60', '--interval', '0.1', 'exit-file', str(sentinel), '--log',
+                                         str(log))
+            self.assertEqual(code, 5, output)
+            self.assertIn('built', output)
+            self.assertIn('exited 5', log.read_text(encoding='utf-8'))
+            # Both streams reach the log through the supervisor, in order, whatever the command does with its handles.
+            mixed = Path(temp) / 'mixed.log'
+            script = ('import sys\nfor i in range(200):\n    print("out", i, flush=True)\n'
+                      '    print("err", i, file=sys.stderr, flush=True)\n')
+            self.assertEqual(self.run_main('run', '--log', str(mixed), '--', sys.executable, '-c', script)[0], 0)
+            lines = mixed.read_text(encoding='utf-8').splitlines()
+            self.assertEqual(lines, [line for i in range(200) for line in ('out %d' % i, 'err %d' % i)])
+            code, output = self.run_main('start', '--deadline', '1', '--log', str(log), '--exit-file', str(sentinel),
+                                         '--', sys.executable, '-c', 'import time; time.sleep(60)')
+            self.assertEqual(code, 0, output)
+            code, output = self.run_main('--timeout', '60', '--interval', '0.1', 'exit-file', str(sentinel))
+            self.assertEqual(code, wait_for.TIMED_OUT, output)
+            self.assertIn('reached the 1 s deadline', log.read_text(encoding='utf-8'))
 
 
 class PublicConsumption(unittest.TestCase):
@@ -1335,7 +1788,9 @@ class PublicConsumption(unittest.TestCase):
         self.assertEqual(expected(profile('cl', 'Debug')), 'pdb')
         self.assertEqual(expected(profile('C:/VS/bin/cl.exe', 'Release', CRD_SHIPPING='ON')), 'pdb')
         self.assertEqual(expected(profile('cl', 'Debug', CRD_COMPILER_LAUNCHER='C:/sccache.exe')), 'embedded')
-        self.assertEqual(expected(profile('cl', 'Release', CRD_SHIPPING='ON', CRD_COMPILER_LAUNCHER='sccache')), 'pdb')
+        self.assertEqual(expected(profile('cl', 'Release', CRD_SHIPPING='ON', CRD_COMPILER_LAUNCHER='sccache')),
+                         'embedded', 'Shipping under the launcher compiles /Z7 as well')
+        self.assertEqual(expected(profile('cl', 'Release', CRD_SHIPPING='ON', CRD_COMPILER_LAUNCHER='')), 'pdb')
         self.assertEqual(expected(profile('cl', 'Release')), 'none')
         self.assertEqual(expected(profile('clang-cl', 'RelWithDebInfo')), 'embedded')
         self.assertEqual(expected(profile('/usr/bin/g++-13', 'Debug')), 'dwarf')

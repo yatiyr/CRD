@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Measured build board for one preset: configure, cold, no-op, source edit, header edit, PCH-header edit, link.
+"""Measured build board for one preset: configure, cold, no-op, source edit, header edit, PCH-header edit, link and a
+teeth cycle (a code edit, rebuild, restore, rebuild).
 
 The runner configures a preset into a scratch build directory (never a tree a developer builds in) with an explicit
 job count and records, per row: wall time, the Ninja log of that row (edges, span, edge sum, effective parallelism,
 slowest edges), memory pressure sampled once a second (minimum available, peak committed), the build-tree size and,
 when a launcher is under test (`--sccache`), sccache's statistics zeroed before and read after the row. Edited files
 are restored byte-for-byte with their original timestamps, so neither the working tree nor another build directory
-sees the edit. Run it from a shell with the toolchain on PATH (scripts/msvc-env.bat on Windows).
+sees the edit; the teeth rows (`--tooth FILE OLD NEW`) restore the bytes with a new time, as a restored teeth edit is.
+`--targets` scopes every build row to named targets, the way a focused local route builds. Run it from a shell with
+the toolchain on PATH (scripts/msvc-env.bat on Windows).
 
 `render` merges board documents into one markdown table for docs/bench. Contract: docs/design/build-performance.md.
 """
@@ -20,6 +23,7 @@ import os
 import platform
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -30,7 +34,7 @@ _spec = importlib.util.spec_from_file_location('ci_evidence', ROOT / 'scripts/ci
 evidence = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(evidence)
 SCHEMA = 'cerid-build-bench/1'
-ROWS = ('configure', 'cold', 'noop', 'source', 'header', 'pch-header', 'link')
+ROWS = ('configure', 'cold', 'noop', 'source', 'header', 'pch-header', 'link', 'teeth-break', 'teeth-restore')
 SLOWEST = 10
 TOUCH = b'\n// build-bench touch: restored byte-for-byte after the row\n'
 DEFAULT_SOURCE = 'engine/foundation/log/src/logger.cpp'
@@ -141,6 +145,28 @@ def ninja_line_count(path):
     return len(path.read_text(encoding='utf-8', errors='replace').splitlines())
 
 
+def ninja_snapshot(path):
+    """The last log line of every output: what a row is compared against when Ninja recompacts its log."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    latest = {}
+    for line in path.read_text(encoding='utf-8', errors='replace').splitlines():
+        fields = line.split('\t')
+        if not line.startswith('#') and len(fields) >= 5:
+            latest[fields[3]] = line
+    return latest
+
+
+def ninja_row_entries(path, offset, snapshot):
+    """The entries one row added. Ninja rewrites a long log keeping one line per output (recompaction); then the lines
+    after the old length are no longer the row's, and the row is every output whose last line changed instead."""
+    if ninja_line_count(path) >= offset:
+        return ninja_entries(path, offset), False
+    changed = [line for output, line in ninja_snapshot(path).items() if snapshot.get(output) != line]
+    return evidence.ninja_entries(changed), True
+
+
 def ninja_summary(entries, slowest=SLOWEST):
     """The evidence bundle's summary (span, edge sum, parallelism, slowest) so boards and lanes agree."""
     return evidence.ninja_summary(entries, slowest)
@@ -189,6 +215,41 @@ def sccache_summary(document):
 
 # ---- rows -----------------------------------------------------------------------------------------------------------
 
+class Tooth:
+    """A teeth-style code edit: replace one exact text in a file (break), later put the original bytes back
+    (restore). The edit must occur exactly once; the file is restored even when a row fails."""
+
+    def __init__(self, path, old, new):
+        self.path = Path(path)
+        self.old = old.encode('utf-8')
+        self.new = new.encode('utf-8')
+        self.original = None
+        self.times = None
+
+    def apply(self):
+        data = self.path.read_bytes()
+        if data.count(self.old) != 1:
+            raise SystemExit('tooth: %r occurs %d times in %s, expected once' % (self.old, data.count(self.old),
+                                                                                 self.path))
+        stat = self.path.stat()
+        self.original, self.times = data, (stat.st_atime_ns, stat.st_mtime_ns)
+        self.path.write_bytes(data.replace(self.old, self.new))
+
+    def restore(self):
+        """Put the original bytes back with a new modification time, as a restored teeth edit is: the build must see
+        the file as changed (an old time would leave the broken object in place)."""
+        if self.original is not None:
+            self.path.write_bytes(self.original)
+            self.original = None
+
+    def settle(self):
+        """After the restore build: the original timestamps, so other build trees do not see the cycle at all."""
+        self.restore()
+        if self.times is not None:
+            os.utime(self.path, ns=self.times)
+            self.times = None
+
+
 class Touched:
     """Append TOUCH to a file for the duration of a row; restore bytes and timestamps exactly afterwards."""
 
@@ -229,7 +290,7 @@ def find_output(build_dir, name):
 class Board:
     def __init__(self, preset, build_dir, jobs, defines, label, sccache=None, source=DEFAULT_SOURCE,
                  header=DEFAULT_HEADER, pch_header=DEFAULT_PCH_HEADER, link_target=DEFAULT_LINK_TARGET,
-                 repo=ROOT, environ=None, log=print):
+                 repo=ROOT, environ=None, log=print, targets=(), tooth=None):
         self.preset = preset
         self.build_dir = Path(build_dir)
         self.jobs = jobs
@@ -240,6 +301,9 @@ class Board:
         self.header = repo / header
         self.pch_header = repo / pch_header
         self.link_target = link_target
+        self.targets = list(targets)
+        self.tooth = Tooth(repo / tooth[0], tooth[1], tooth[2]) if tooth else None
+        self.checkpoint = None
         self.repo = repo
         self.env = dict(os.environ if environ is None else environ)
         self.log = log
@@ -247,7 +311,8 @@ class Board:
             raise SystemExit('--sccache requires SCCACHE_DIR in the environment so the cache location is explicit')
         self.record = {'schema': SCHEMA, 'label': label, 'preset': preset, 'jobs': jobs, 'defines': self.defines,
                        'build_dir': str(self.build_dir).replace('\\', '/'), 'launcher': str(self.sccache or ''),
-                       'edits': {'source': source, 'header': header, 'pch_header': pch_header, 'link_target': link_target},
+                       'edits': {'source': source, 'header': header, 'pch_header': pch_header, 'link_target': link_target,
+                                 'tooth': list(tooth) if tooth else None}, 'targets': self.targets,
                        'machine': machine(), 'started': datetime.datetime.now(datetime.timezone.utc).isoformat(),
                        'rows': []}
 
@@ -259,14 +324,18 @@ class Board:
         self.log('[%s] %s' % (self.label, name))
         log_path = self.build_dir / '.ninja_log'
         offset = ninja_line_count(log_path)
+        snapshot = ninja_snapshot(log_path)
         if self.sccache:
             sccache_command(self.sccache, '--zero-stats', env=self.env)
         with PressureSampler() as sampler:
             started = time.perf_counter()
             code = action()
             wall = time.perf_counter() - started
+        entries, recompacted = ninja_row_entries(log_path, offset, snapshot)
         entry = {'row': name, 'exit_code': code, 'wall_seconds': round(wall, 2),
-                 'ninja': ninja_summary(ninja_entries(log_path, offset)), 'memory': sampler.summary()}
+                 'ninja': ninja_summary(entries), 'memory': sampler.summary()}
+        if recompacted:
+            entry['ninja']['log_recompacted'] = True
         if self.sccache:
             entry['sccache'] = sccache_summary(sccache_stats(self.sccache, env=self.env))
             sccache_command(self.sccache, '--stop-server', env=self.env)
@@ -282,7 +351,24 @@ class Board:
         return self.run(command).returncode
 
     def build(self):
-        return self.run(['cmake', '--build', str(self.build_dir), '--parallel', str(self.jobs)]).returncode
+        command = ['cmake', '--build', str(self.build_dir), '--parallel', str(self.jobs)]
+        for target in self.targets:
+            command += ['--target', target]
+        return self.run(command).returncode
+
+    def teeth_break(self):
+        if self.tooth is None:
+            raise SystemExit('teeth rows need --tooth FILE OLD NEW')
+        self.tooth.apply()
+        return self.build()
+
+    def teeth_restore(self):
+        if self.tooth is None or self.tooth.original is None:
+            raise SystemExit('teeth-restore needs a teeth-break row before it')
+        self.tooth.restore()
+        code = self.build()
+        self.tooth.settle()
+        return code
 
     def edit(self, path):
         with Touched(path):
@@ -320,13 +406,21 @@ class Board:
             self.record['cache_bytes_before'] = tree_bytes(self.env['SCCACHE_DIR'])
         actions = {'configure': self.configure, 'cold': self.build, 'noop': self.build,
                    'source': lambda: self.edit(self.source), 'header': lambda: self.edit(self.header),
-                   'pch-header': lambda: self.edit(self.pch_header), 'link': self.relink}
+                   'pch-header': lambda: self.edit(self.pch_header), 'link': self.relink,
+                   'teeth-break': self.teeth_break, 'teeth-restore': self.teeth_restore}
         if 'configure' not in rows:
             rows = ['configure'] + list(rows)
-        for name in rows:
-            self.row(name, actions[name])
-            if name == 'cold':
-                self.record['build_tree_gib_after_cold'] = round(tree_bytes(self.build_dir) / GIB, 2)
+        try:
+            for name in rows:
+                self.row(name, actions[name])
+                if name == 'cold':
+                    self.record['build_tree_gib_after_cold'] = round(tree_bytes(self.build_dir) / GIB, 2)
+                if self.checkpoint:
+                    # A board stopped by a deadline keeps the rows it finished.
+                    self.checkpoint(self.record)
+        finally:
+            if self.tooth is not None:
+                self.tooth.settle()
         self.record['toolchain'] = self.toolchain()
         self.record['build_tree_gib'] = round(tree_bytes(self.build_dir) / GIB, 2)
         if self.sccache:
@@ -343,6 +437,11 @@ def row_cells(record, entry):
     cells = [record['label'], entry['row'], '%.1f' % entry['wall_seconds'], str(ninja['edges']),
              '%.1f' % ninja['span_seconds'], '%.0f' % ninja['edge_seconds'], '%.1f' % ninja['parallelism'],
              '%.1f' % memory['pressure_gib'], '%.1f' % memory['min_available_gib']]
+    if ninja.get('log_recompacted'):
+        # The edges are the outputs whose last log line changed; their times mix invocations, so the span and the
+        # parallelism are not the row's (the wall time is).
+        cells[3] += ' (recompacted log)'
+        cells[4] = cells[6] = 'n/a'
     stats = entry.get('sccache')
     if stats and 'error' not in stats:
         reasons = ', '.join('%s %d' % (k, v) for k, v in sorted(stats['reasons'].items())) if stats['reasons'] else ''
@@ -389,6 +488,9 @@ def main(argv=None):
     run.add_argument('--header', default=DEFAULT_HEADER)
     run.add_argument('--pch-header', default=DEFAULT_PCH_HEADER)
     run.add_argument('--link-target', default=DEFAULT_LINK_TARGET)
+    run.add_argument('--targets', default='', help='comma-separated targets every build row builds (default: all)')
+    run.add_argument('--tooth', nargs=3, metavar=('FILE', 'OLD', 'NEW'),
+                     help='teeth rows: replace the one occurrence of OLD in FILE with NEW, then restore it')
     run.add_argument('--output', required=True, help='board JSON document')
     run.add_argument('--delete', action='store_true', help='remove the scratch build directory afterwards')
     show = sub.add_parser('render', help='merge board documents into one markdown table')
@@ -403,9 +505,13 @@ def main(argv=None):
     if unknown:
         parser.error('unknown rows: ' + ', '.join(unknown))
     board = Board(args.preset, args.build_dir, args.jobs, args.define, args.label, args.sccache, args.source,
-                  args.header, args.pch_header, args.link_target)
+                  args.header, args.pch_header, args.link_target,
+                  targets=[t.strip() for t in args.targets.split(',') if t.strip()], tooth=args.tooth)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
+    board.checkpoint = lambda record: output.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+    # A termination request (a supervisor's deadline, Ctrl-C) unwinds through the restore of an applied tooth.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM))
     try:
         record = board.execute(rows)
     finally:

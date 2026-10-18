@@ -182,7 +182,9 @@ def sccache_summary(path):
         return {'error': 'unparseable statistics'}
     stats = document.get('stats', document) if isinstance(document, dict) else {}
     reasons = stats.get('not_cached') or {}
-    return {'requests': _count(stats.get('compile_requests', 0)), 'hits': _count(stats.get('cache_hits', 0)),
+    location = document.get('cache_location') if isinstance(document, dict) else None
+    return {'location': str(location) if location else None,
+            'requests': _count(stats.get('compile_requests', 0)), 'hits': _count(stats.get('cache_hits', 0)),
             'misses': _count(stats.get('cache_misses', 0)),
             'non_cacheable': _count(stats.get('non_cacheable_compilations', 0)),
             'errors': _count(stats.get('cache_errors', 0)) + _count(stats.get('cache_read_errors', 0))
@@ -250,6 +252,8 @@ def build_markdown(build):
             text += ' (' + ', '.join('%s %d' % (k, v) for k, v in sorted(stats['reasons'].items())) + ')'
         if stats['errors']:
             text += ', %d cache errors' % stats['errors']
+        if stats.get('location'):
+            text += ' (cache: %s)' % stats['location']
     elif stats:
         text += '; sccache statistics ' + stats['error']
     return text

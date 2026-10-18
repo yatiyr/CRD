@@ -238,6 +238,10 @@
       "ref": "v4",
       "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02"
     },
+    "actions/github-script": {
+      "ref": "v8",
+      "sha": "ed597411d8f924073f98dfc5c65a23a2325f34cd"
+    },
     "seanmiddleditch/gha-setup-ninja": {
       "ref": "v5",
       "sha": "96bed6edff20d1dd61ecff9b75cc519d516e6401"

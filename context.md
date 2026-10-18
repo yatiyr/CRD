@@ -5,8 +5,9 @@
 
 <!-- current-slice: DIAG.11b -->
 **Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (Partial), first unfinished row: measured overhead,
-focused local routes, tiered sanitizer/race/fuzz CI and runbooks. The overhead harness and first boards landed locally
+focused local routes, tiered sanitizer/race/fuzz CI and runbooks. The overhead harness and first boards landed
 ([board](docs/bench/2026-10-16-diag-11b-overhead.md)); next: the row's queued follow-ups, then its measured budget losses.
+Local routes: cached trees, WSL source mirror, bounded waits ([build performance](docs/design/build-performance.md)).
 [Implementation contract](docs/design/runtime-diagnostics.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
 

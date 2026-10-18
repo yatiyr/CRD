@@ -16,16 +16,17 @@
 #   ./scripts/wsl-build.ps1 linux-gcc-debug -BuildJobs 8   # cap Ninja to 8 threads
 #
 # The Windows path D:\Dev\cerid is accessed via /mnt/d/Dev/cerid from WSL.
-# That mount is the 9P bridge, ~2-3× slower than native Linux FS for the
-# many small file ops CMake/Ninja do (configure, _deps clones, .o writes,
-# stat checks). To dodge the bottleneck WITHOUT cloning a second source
-# tree, this script overrides the preset's binaryDir to a path under
-# WSL's native ext4 (~/cerid-build/<preset>) so all generated artefacts
-# live on native FS. Source files still live on /mnt/d but get cached
-# after the first read.
+# That mount (drvfs) costs milliseconds per file open and stat, which a
+# header-heavy build pays on every unit. Since 2026-10-18 the script runs
+# scripts/wsl-lane.sh, which builds and tests from the ext4 source mirror
+# ~/cerid-src (synced and checked before every build; a stale mirror is
+# refused before tests) into ~/cerid-mirror-build/<preset>, through the
+# pinned sccache when it is installed
+# (docs/design/build-performance.md#wsl-source-mirror). The trees under
+# ~/cerid-build/<preset> (configured from /mnt/d) are left as they are.
 #
 # CI on GitHub keeps using the in-tree build/<preset> path — that's
-# decided by the CMakePresets.json `binaryDir` and our -B override only
+# decided by the CMakePresets.json `binaryDir` and the local -B override only
 # applies to local invocations.
 
 [CmdletBinding()]
@@ -38,7 +39,9 @@ param(
         'linux-gcc-asan',
         'linux-gcc-shipping',
         'linux-gcc-debug-scalar',
-        'linux-gcc-debug-sse2'
+        'linux-gcc-debug-sse2',
+        'linux-gcc-public-checks',
+        'linux-clang-tsan'
     )]
     [string]$Preset,
 
@@ -75,9 +78,10 @@ $skipTestsForPreset = $SkipTests.IsPresent
 
 # Build the bash command. `set -e` so any failing step exits non-zero.
 # We source ~/.bashrc to pick up VULKAN_SDK from setup-wsl-deps.sh.
-# Native build dir on WSL ext4 — drives the speed-up. The path is
-# preset-specific so multiple presets coexist.
-$nativeBuildDir = "`$HOME/cerid-build/$Preset"
+# The lane's tree on WSL ext4, configured from the mirror (wsl-lane.sh tree).
+# The path is preset-specific so multiple presets coexist.
+$nativeBuildDir = "`$HOME/cerid-mirror-build/$Preset"
+$lane = "bash '$repoRootWsl/scripts/wsl-lane.sh'"
 
 $bashLines = @(
     # Exit-code propagation fix (2026-05-16): wsl.exe in current WSL2 builds
@@ -113,26 +117,25 @@ $bashLines = @(
     'echo "[wsl-build] cmake=$(cmake --version | head -1)"'
     'echo "[wsl-build] VULKAN_SDK=$VULKAN_SDK"'
     'echo "[wsl-build] CRD_PLATFORM_HEADLESS=$CRD_PLATFORM_HEADLESS"'
-    'echo "[wsl-build] BUILD_DIR=$BUILD_DIR (native ext4)"'
+    'echo "[wsl-build] BUILD_DIR=$BUILD_DIR (native ext4, sources from the mirror)"'
     'echo "[wsl-build] ===== configure ====="'
 )
 
 # Cap Ninja threads on the WSL side (same physical CPU as the Windows host).
-# `cmake --build` honours CMAKE_BUILD_PARALLEL_LEVEL when no --parallel is passed.
+# wsl-lane.sh passes CRD_LANE_JOBS (default 16) to `cmake --build -j`.
 if ($BuildJobs -gt 0) {
-    $bashLines += "export CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs"
-    $bashLines += "echo `"[wsl-build] CMAKE_BUILD_PARALLEL_LEVEL=$BuildJobs (Raptor Lake stability cap)`""
+    $bashLines += "export CRD_LANE_JOBS=$BuildJobs"
+    $bashLines += "echo `"[wsl-build] CRD_LANE_JOBS=$BuildJobs (Raptor Lake stability cap)`""
 }
 
 if ($Reconfigure) {
     $bashLines += 'rm -rf "$BUILD_DIR"'
-    $bashLines += 'mkdir -p "$BUILD_DIR"'
 }
 
-# -B overrides the preset's binaryDir; CTest --test-dir does the same.
-$bashLines += "cmake --preset $Preset -B `"`$BUILD_DIR`""
+# wsl-lane.sh syncs and checks the mirror, then configures with -B on the lane's tree.
+$bashLines += "$lane configure $Preset"
 $bashLines += 'echo "[wsl-build] ===== build ====="'
-$bashLines += "cmake --build `"`$BUILD_DIR`""
+$bashLines += "$lane build $Preset"
 
 if (-not $skipTestsForPreset) {
     $bashLines += 'echo "[wsl-build] ===== ctest ====="'
@@ -150,8 +153,8 @@ if (-not $skipTestsForPreset) {
     # shader in the suite (the IB-1 path tracer: 4 unrolled bounces x many-lights NEE+MIS) SEGFAULTed once under
     # that pressure while passing every serial and single-family run. Capping the pool keeps a parallel run
     # deterministic instead of producing phantom failures that read like code defects.
-    $bashLines += 'export LP_NUM_THREADS=4'
-    $bashLines += "ctest --test-dir `"`$BUILD_DIR`" --output-on-failure"
+    # wsl-lane.sh test exports LP_NUM_THREADS=4 and runs CTest inside the tree, after checking the mirror.
+    $bashLines += "$lane test $Preset --output-on-failure"
 }
 
 $bashLines += 'echo "[wsl-build] ===== DONE ====="'

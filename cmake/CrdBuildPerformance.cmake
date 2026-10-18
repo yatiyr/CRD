@@ -2,7 +2,8 @@
 # Nothing here changes a configuration unless CRD_COMPILER_LAUNCHER, CRD_COMPILE_JOBS or CRD_LINK_JOBS is set; the
 # default graph stays byte-identical. Generator truth: CMake applies <LANG>_COMPILER_LAUNCHER only for Makefile and
 # Ninja generators and JOB_POOLS only for Ninja, so a Visual Studio solution is reported as uncached and unbounded
-# rather than silently pretending otherwise.
+# rather than silently pretending otherwise. The local helpers (scripts/configure-preset.bat, scripts/wsl-lane.sh) turn
+# the launcher on; the presets and the default graph never do.
 include_guard(GLOBAL)
 
 set(CRD_COMPILER_LAUNCHER "" CACHE FILEPATH
@@ -16,25 +17,37 @@ else()
     set(_crd_launcher_generator OFF)
 endif()
 
+# CRD_EMBEDDED_DEBUG_INFO is the one place that says whether MSVC-compatible compiles embed their debug information
+# in the objects (/Z7) instead of a per-target compile PDB (/Zi): the root build file picks the shipping flag from it
+# and cmake/CrdPackage.cmake the packaged form. It is ON only under the compiler launcher.
+set(CRD_EMBEDDED_DEBUG_INFO OFF)
 if(CRD_COMPILER_LAUNCHER)
     if(NOT _crd_launcher_generator)
         message(STATUS "[crd] Compiler launcher ignored: ${CMAKE_GENERATOR} runs uncached "
                        "(CMake applies compiler launchers to Makefile and Ninja generators only)")
-    elseif(CRD_SHIPPING)
-        message(STATUS "[crd] Compiler launcher ignored: Shipping keeps its explicit /Zi PDB and LTCG uncached")
     else()
         set(CMAKE_C_COMPILER_LAUNCHER "${CRD_COMPILER_LAUNCHER}")
         set(CMAKE_CXX_COMPILER_LAUNCHER "${CRD_COMPILER_LAUNCHER}")
         if(MSVC)
             # sccache refuses a compile whose debug information goes to a per-target PDB (/Zi, "shared pdb"); the
             # documented cacheable form embeds it in the object (/Z7). Policy CMP0141 is NEW under 3.25, so the
-            # generator expression replaces CMake's default ProgramDatabase for the configurations that carry symbols.
+            # generator expression replaces CMake's default ProgramDatabase for the configurations that carry symbols;
+            # Shipping (a Release build type) takes its explicit flag from CRD_EMBEDDED_DEBUG_INFO and still links a
+            # full PDB (/DEBUG:FULL). clang-cl writes the same objects for /Zi and /Z7 (CodeView is always embedded).
             set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
+            set(CRD_EMBEDDED_DEBUG_INFO ON)
             if(CRD_ENABLE_PCH)
                 message(WARNING "[crd] Compiler launcher ${CRD_COMPILER_LAUNCHER} with CRD_ENABLE_PCH=ON: every "
                                 "translation unit that consumes an MSVC precompiled header (/Yu /Fp) is non-cacheable; "
                                 "configure with -DCRD_ENABLE_PCH=OFF to cache (docs/design/build-performance.md)")
             endif()
+        endif()
+        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
+            # Clang records the modification time of every input in a precompiled header and sccache hashes the .pch a
+            # unit includes, so a header rebuilt in a fresh checkout or tree (same text, new times) would make every
+            # unit that includes it miss. Without the times the .pch bytes follow the text alone (probed); Ninja still
+            # rebuilds a precompiled header whenever one of its inputs changes, so the times keep nothing current.
+            add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-Xclang -fno-pch-timestamp>")
         endif()
         set(_crd_launcher_note "")
         if(MSVC)

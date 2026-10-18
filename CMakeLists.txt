@@ -207,7 +207,9 @@ if(CRD_SHIPPING OR CRD_NATIVE_PROFILES)
         # /Gy          — function-level linking (already in /O2; restated)
         # /Zc:inline   — strip inline-only functions never called externally;
         #                helps the linker dead-strip more aggressively
-        # /Zi          — emit a separate PDB (required for crash dump symbolication)
+        # /Zi          — emit a separate PDB (required for crash dump symbolication); under the compiler launcher
+        #                /Z7 embeds the same information in the objects (cmake/CrdBuildPerformance.cmake,
+        #                CRD_EMBEDDED_DEBUG_INFO) and the /DEBUG:FULL link below still writes the program's full PDB
         #
         # Note: /Ob3 (extra-aggressive inlining) was tried as a shipping
         # flag but caused SEGFAULTs in the resource async-load path under
@@ -218,12 +220,18 @@ if(CRD_SHIPPING OR CRD_NATIVE_PROFILES)
         # of inlining the LTO pass would otherwise pick up — worth it for
         # shipping correctness under the strictest LTO settings the
         # toolchain offers.
+        if(CRD_EMBEDDED_DEBUG_INFO)
+            set(_crd_shipping_debug_info /Z7)
+        else()
+            set(_crd_shipping_debug_info /Zi)
+        endif()
         add_compile_options(
             $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Gw>
             $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Gy>
             $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Zc:inline>
-            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:/Zi>
+            $<$<AND:${_crd_shipping},$<COMPILE_LANGUAGE:CXX,C>>:${_crd_shipping_debug_info}>
         )
+        unset(_crd_shipping_debug_info)
         # /DEBUG:FULL  — full PDB (not /DEBUG:FASTLINK), required for WinDbg post-mortem
         # /OPT:REF     — strip unreferenced functions (dead code elimination)
         # /OPT:ICF     — merge identical COMDATs (binary size reduction)

@@ -42,13 +42,18 @@ permissions:
 env:
   CRD_PERF_BUDGET_SOFT: '1'
   PYTHONUTF8: '1'
-  # Lanes that build through the pinned sccache (docs/design/build-performance.md): the boards qualified
-  # win-debug without precompiled headers and linux-gcc-debug with them; every other lane stays uncached.
-  CRD_CACHED_PRESETS: ' win-debug linux-gcc-debug '
+  # Lanes that build through the pinned sccache on the GitHub Actions cache backend (docs/design/build-performance.md
+  # #hosted-lanes): MSVC and clang-cl without precompiled headers (not cacheable there), GCC and Clang with them. Each
+  # lane writes under its own namespace (preset, runner image and image version), so lanes and toolchains never share
+  # an entry. The list is sized to the repository's 10 GB cache allowance; the uncached lanes and why are in the
+  # design document.
+  # A quoted scalar folds its line breaks into single spaces, so every name keeps a space on both sides.
+  CRD_CACHED_PRESETS: ' win-debug win-asan win-debug-sse2 win-public-checks win-clang-cl win-clang-cl-shipping
+    linux-gcc-debug linux-gcc-release linux-gcc-relwithdebinfo linux-gcc-asan linux-gcc-debug-sse2
+    linux-gcc-public-checks linux-clang-tsan linux-gcc-shipping '
   # REPO.DEV.6: complete-tier presets that never restore an archive cache, so every hosted complete run proves
   # cold acquisition through the verifying helpers (scripts/check-cold-acquisition.py).
   CRD_COLD_PRESETS: ' win-debug-scalar linux-gcc-debug-scalar '
-  SCCACHE_CACHE_SIZE: '2G'
 
 jobs:
   preflight:
@@ -182,7 +187,6 @@ jobs:
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}\.cpm-cache
       CRD_PLATFORM_HEADLESS: '1'
-      SCCACHE_DIR: ${{ github.workspace }}\.sccache
 
     strategy:
       fail-fast: false
@@ -250,14 +254,50 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: python scripts/install-sccache.py --destination "${{ runner.temp }}/sccache"
 
-      - name: Restore compiler cache
+      # The GitHub Actions cache backend: the cache service's URL and token reach JavaScript actions only, so this step
+      # starts the sccache server with them (the token masked) and the lane's namespace (preset, runner image and image
+      # version: lanes and toolchains never share an entry), and exports the same settings for the later steps. The
+      # server lives until the statistics step stops it. A failed cache request makes sccache compile locally; when
+      # the service is missing or the server does not start on it, the lane builds through an empty local cache, so
+      # the cache can slow a lane but never fail it.
+      - name: Compiler cache service
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache.exe
         with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-${{ matrix.preset }}-
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
 
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
@@ -537,11 +577,70 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python scripts/install-sccache.py --destination "${{ runner.temp }}/sccache"
+
+      # The GitHub Actions cache backend, as in the windows job.
+      - name: Compiler cache service
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache.exe
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
+
       - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
+
+      # clang-cl's precompiled header (/Yu) is not cacheable either, so the cached lane compiles every unit
+      # standalone with its CodeView in the objects (/Z7, the objects clang-cl writes for /Zi too).
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats --stats-format json | Out-File -FilePath "$env:RUNNER_TEMP/sccache.json" -Encoding utf8
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --stop-server
 
       - name: Test inventory
         run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
@@ -566,6 +665,7 @@ jobs:
         run: |
           python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
             --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --sccache-stats "$env:RUNNER_TEMP/sccache.json" `
             --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
 
       - name: Preserve evidence
@@ -586,7 +686,6 @@ jobs:
     env:
       CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
       CRD_PLATFORM_HEADLESS: '1'
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
 
     strategy:
       fail-fast: false
@@ -669,14 +768,45 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: python3 scripts/install-sccache.py --destination "$RUNNER_TEMP/sccache"
 
-      - name: Restore compiler cache
+      # The GitHub Actions cache backend, as in the windows job.
+      - name: Compiler cache service
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache
         with:
-          path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ matrix.preset }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-${{ matrix.preset }}-
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
 
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
@@ -688,7 +818,8 @@ jobs:
           python3 scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
           --fetch-unselected "${{ runner.temp }}/cold-unselected"
 
-      # GCC's precompiled header is consumed through -include and stays cacheable, so only the launcher changes.
+      # GCC's precompiled header (-include) and Clang's (-include-pch) stay cacheable, so only the launcher changes;
+      # a changed precompiled header misses (probed: docs/bench/2026-10-18-build-speed-cache-mirror.md).
       - name: Configure with the compiler cache
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache"
@@ -838,11 +969,72 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python scripts/install-sccache.py --destination "${{ runner.temp }}/sccache"
+
+      # The GitHub Actions cache backend, as in the windows job.
+      - name: Compiler cache service
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache.exe
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
+
       - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
+
+      # MSVC Shipping under the launcher: no precompiled header (/Fp is not cacheable) and /Z7 in place of
+      # /Zi; the /DEBUG:FULL link still writes the program's full PDB. The LTCG link itself is never cached.
+      # No preset of this job is in CRD_CACHED_PRESETS today (the LTCG lanes stay uncached for the allowance:
+      # docs/design/build-performance.md#hosted-lanes), so these cache steps run only once one is listed.
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats --stats-format json | Out-File -FilePath "$env:RUNNER_TEMP/sccache.json" -Encoding utf8
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --stop-server
 
       - name: Test inventory
         run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
@@ -865,6 +1057,7 @@ jobs:
         run: |
           python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
             --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --sccache-stats "$env:RUNNER_TEMP/sccache.json" `
             --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
 
       - name: Preserve evidence
@@ -967,11 +1160,70 @@ jobs:
           "VULKAN_SDK=C:\VulkanSDK\1.4.341.1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "C:\VulkanSDK\1.4.341.1\Bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python scripts/install-sccache.py --destination "${{ runner.temp }}/sccache"
+
+      # The GitHub Actions cache backend, as in the windows job.
+      - name: Compiler cache service
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache.exe
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
+
       - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
+
+      # clang-cl Shipping under the launcher: /Z7 writes the same objects /Zi does, without the
+      # precompiled header (/Yu is not cacheable); the thin-LTO link itself is never cached.
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        shell: pwsh
+        run: |
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats --stats-format json | Out-File -FilePath "$env:RUNNER_TEMP/sccache.json" -Encoding utf8
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --show-stats
+          & "$env:RUNNER_TEMP/sccache/sccache.exe" --stop-server
 
       - name: Test inventory
         run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
@@ -994,6 +1246,7 @@ jobs:
         run: |
           python scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} `
             --adapters "$env:RUNNER_TEMP/adapters.txt" --outcome "${{ job.status }}" `
+            --sccache-stats "$env:RUNNER_TEMP/sccache.json" `
             --output build/${{ matrix.preset }}/evidence --summary "$env:GITHUB_STEP_SUMMARY"
 
       - name: Preserve evidence
@@ -1087,11 +1340,69 @@ jobs:
             cpm-${{ runner.os }}-${{ matrix.preset }}-
             cpm-${{ runner.os }}-
 
+      - name: Install pinned sccache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: python3 scripts/install-sccache.py --destination "$RUNNER_TEMP/sccache"
+
+      # The GitHub Actions cache backend, as in the windows job.
+      - name: Compiler cache service
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CRD_CACHE_LANE: ${{ matrix.preset }}
+          CRD_SCCACHE: ${{ runner.temp }}/sccache/sccache
+        with:
+          script: |
+            const token = process.env.ACTIONS_RUNTIME_TOKEN || '';
+            const url = process.env.ACTIONS_RESULTS_URL || '';
+            const image = [process.env.ImageOS || 'image', process.env.ImageVersion || 'unknown'];
+            const common = { SCCACHE_IDLE_TIMEOUT: '0', SCCACHE_IGNORE_SERVER_IO_ERROR: '1' };
+            const service = {
+              SCCACHE_GHA_ENABLED: 'on', SCCACHE_GHA_VERSION: [process.env.CRD_CACHE_LANE, ...image].join('-'),
+              ACTIONS_RESULTS_URL: url, ACTIONS_RUNTIME_TOKEN: token,
+              ACTIONS_CACHE_SERVICE_V2: process.env.ACTIONS_CACHE_SERVICE_V2 || '',
+            };
+            let started = false;
+            if (token && url) {
+              core.setSecret(token);
+              try {
+                const options = { env: { ...process.env, ...common, ...service }, ignoreReturnCode: true };
+                started = (await exec.exec(process.env.CRD_SCCACHE, ['--start-server'], options)) === 0;
+              } catch (error) {
+                core.warning(`sccache did not start: ${error.message}`);
+              }
+            }
+            const local = { SCCACHE_GHA_ENABLED: 'off', SCCACHE_GHA_VERSION: '' };
+            const chosen = started ? { ...common, ...service } : { ...common, ...local };
+            for (const [name, value] of Object.entries(chosen)) {
+              core.exportVariable(name, value);
+            }
+            if (started) {
+              const v2 = service.ACTIONS_CACHE_SERVICE_V2 || 'no';
+              core.info(`sccache serves ${service.SCCACHE_GHA_VERSION} from the cache service (v2: ${v2})`);
+            } else {
+              core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
+            }
+
       - name: Configure
+        if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
+
+      # GCC's precompiled header stays (it is cacheable); the -flto objects are cached, the link-time
+      # optimization of each program is not.
+      - name: Configure with the compiler cache
+        if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache"
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Compiler cache statistics
+        if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
+        run: |
+          "$RUNNER_TEMP/sccache/sccache" --show-stats --stats-format json > "$RUNNER_TEMP/sccache.json"
+          "$RUNNER_TEMP/sccache/sccache" --show-stats
+          "$RUNNER_TEMP/sccache/sccache" --stop-server
 
       - name: Test inventory
         run: python3 scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
@@ -1112,7 +1423,8 @@ jobs:
         run: |
           python3 scripts/ci-evidence.py bundle --preset ${{ matrix.preset }} --build-dir build/${{ matrix.preset }} \
             --outcome "${{ job.status }}" --output build/${{ matrix.preset }}/evidence \
-            --packages "$RUNNER_TEMP/packages.txt" --summary "$GITHUB_STEP_SUMMARY"
+            --packages "$RUNNER_TEMP/packages.txt" --sccache-stats "$RUNNER_TEMP/sccache.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
 
       - name: Preserve evidence
         if: always()

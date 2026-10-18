@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **9** · tools: **12** · workflow actions: **7** · runner images: **3** · unpinned apt packages: **18**
+- packages: **9** · tools: **12** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -50,6 +50,7 @@
 | actions/setup-python | `v5` | `a26af69be951a213d495a4c3e4e4022e16d87065` |
 | actions/cache | `v4` | `0057852bfaa89a56745cba8c7296529d2fc39830` |
 | actions/upload-artifact | `v4` | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
+| actions/github-script | `v8` | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
 | seanmiddleditch/gha-setup-ninja | `v5` | `96bed6edff20d1dd61ecff9b75cc519d516e6401` |
 | ilammy/msvc-dev-cmd | `v1` | `0b201ec74fa43914dc39ae48a89fd1d8cb592756` |
 | KyleMayes/install-llvm-action | `v2.0.9` | `ebc0426251bc40c7cd31162802432c68818ab8f0` |

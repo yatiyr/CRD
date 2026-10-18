@@ -5,7 +5,17 @@ Run commands from the repository root. Build/test rules and exact quality requir
 
 - Windows configuration/build: `configure-preset.bat <preset>`, `build-target.bat <build-dir> <target>`.
   Both use `msvc-env.bat` to discover Visual Studio and select standalone CMake. The default build cap is four;
-  `CMAKE_BUILD_PARALLEL_LEVEL` can set a smaller/larger justified cap.
+  `CMAKE_BUILD_PARALLEL_LEVEL` can set a smaller/larger justified cap. When the pinned sccache is installed
+  (`install-sccache.py --destination %USERPROFILE%\.cerid\tools\sccache`), `configure-preset.bat` configures a Ninja
+  preset through it (`compiler-cache.py configure-args <preset>` prints the entries; `CRD_SCCACHE=off` reverts) and
+  `build-target.bat` starts its server on `build/sccache` (`compiler-cache.py server|stats`)
+  ([local cached trees](../docs/design/build-performance.md#local-cached-trees)).
+- WSL lanes: `bash /mnt/d/Dev/cerid/scripts/wsl-lane.sh sync|check|configure|build|test|run|tree` builds and tests
+  `~/cerid-mirror-build/<preset>` from the ext4 mirror `~/cerid-src`, kept exact by `source-mirror.py sync|check`
+  (a stale mirror is refused) ([WSL source mirror](../docs/design/build-performance.md#wsl-source-mirror)).
+- Waiting: `wait-for.py start` runs a long build or test detached under a deadline (at most an hour) with a log and
+  an exit-code sentinel; `wait-for.py exit-file|file|pid|run` wait for it in bounded calls (at most 1,140 s, under the
+  loop watchdog) instead of fixed sleeps ([waits](../docs/design/build-performance.md#waiting-for-long-commands)).
 - Tests: invoke CTest directly with a scoped regex, `--timeout` and `--no-tests=error` as BUILDING shows.
   Do not send regex alternation through a `.bat` invocation from PowerShell: cmd reparses metacharacters.
 - Changed C++: `tidy-files.py` on any host (`tidy-files.ps1` wraps it on Windows); `tidy-rename-helper.ps1 -LogFile
@@ -26,9 +36,10 @@ Run commands from the repository root. Build/test rules and exact quality requir
   pinned major (Linux; stamped, so a cached install is reused only while pin and LLVM match) and
   `check-genmc-models.py --genmc <dir>/bin/genmc` runs the DIAG.4b model both ways and checks both verdicts.
 - Build performance ([design](../docs/design/build-performance.md)): `build-bench.py run` measures configure, cold,
-  no-op, source-edit, header-edit, PCH-header-edit and link rows of one preset in a fresh scratch directory (explicit
-  `--jobs`, optional `--sccache` statistics) and `render` merges boards for `docs/bench/`; the lane evidence bundle
-  records every hosted build's Ninja log and sccache statistics.
+  no-op, source-edit, header-edit, PCH-header-edit, link and teeth (`--tooth FILE OLD NEW`: break, rebuild, restore,
+  rebuild) rows of one preset in a fresh scratch directory (explicit `--jobs`, `--targets` to scope the build rows,
+  optional `--sccache` statistics) and `render` merges boards for `docs/bench/`; the lane evidence bundle records
+  every hosted build's Ninja log and sccache statistics with the cache backend.
 - Public consumption ([design](../docs/design/public-consumption.md)): `check-headers.py --build <dir> --changed`
   compiles changed public headers standalone with a sibling unit's flags from the compile database (outputs
   redirected to a scratch directory); `test-package-consumer.py --preset <name> --scratch <dir>` installs the

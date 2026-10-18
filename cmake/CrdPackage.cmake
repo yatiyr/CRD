@@ -16,7 +16,7 @@ set(CRD_PACKAGE_ASSET_DIR share/cerid)
 # packaged intentionally, never by accident):
 #   pdb       MSVC with /Zi: each archive's debug types live in its compile PDB, which does not travel with the .lib,
 #             so the PDB is installed next to the archive (a consumer's /DEBUG link otherwise warns LNK4099);
-#   embedded  CodeView inside the objects (clang-cl, or MSVC under the compiler launcher's /Z7);
+#   embedded  CodeView inside the objects (clang-cl, or MSVC under the compiler launcher's /Z7, shipping included);
 #   dwarf     DWARF inside the archive members (GCC and Clang with -g);
 #   none      the configuration emits no debug information (Release without the shipping condition).
 # Multi-configuration generators keep the compile PDB per configuration; their install is a declared gap
@@ -34,9 +34,9 @@ function(_crd_package_debug_information out_var)
     if(NOT with_symbols)
         set(${out_var} "none" PARENT_SCOPE)
     elseif(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
-        # The launcher switches Debug and RelWithDebInfo to Embedded (cmake/CrdBuildPerformance.cmake); shipping keeps
-        # its explicit /Zi in every case.
-        if(NOT CRD_SHIPPING AND CMAKE_MSVC_DEBUG_INFORMATION_FORMAT MATCHES "Embedded")
+        # The launcher switches Debug, RelWithDebInfo and Shipping to /Z7 (CRD_EMBEDDED_DEBUG_INFO,
+        # cmake/CrdBuildPerformance.cmake); without it every configuration keeps a compile PDB.
+        if(CRD_EMBEDDED_DEBUG_INFO)
             set(${out_var} "embedded" PARENT_SCOPE)
         else()
             set(${out_var} "pdb" PARENT_SCOPE)

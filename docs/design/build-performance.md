@@ -3,7 +3,9 @@
 <!-- doc-role: reference -->
 > Contract for REPO.DEV.7. Status lives only in [ROADMAP](../ROADMAP.md#slice-repo.dev.7); the accepted research is
 > [compiler caching and parallelism](../research/2026-09-12-large-cpp-development-and-ci.md#measure-compiler-caching-and-parallelism);
-> the measured board is [2026-09-14](../bench/2026-09-14-repo-dev7-build-board.md); the module is
+> the measured boards are [2026-09-14](../bench/2026-09-14-repo-dev7-build-board.md) and
+> [2026-10-18](../bench/2026-10-18-build-speed-cache-mirror.md) (the local routes and the hosted cache, owned by
+> [DIAG.11b](../ROADMAP.md#slice-diag.11b)'s focused-local-route and CI-cost contract); the module is
 > [CrdBuildPerformance.cmake](../../cmake/CrdBuildPerformance.cmake); the runner is
 > [build-bench.py](../../scripts/build-bench.py).
 
@@ -37,14 +39,101 @@ Ninja statements unchanged except the CMake re-run rule listing the new module):
   the generators CMake applies launchers to. On MSVC-compatible compilers it also sets
   `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT` to `Embedded` for Debug and RelWithDebInfo (policy CMP0141 is NEW under the
   3.25 minimum), and it warns when `CRD_ENABLE_PCH` is still on, because nothing would be cached; it never flips the
-  PCH option itself. A Shipping configuration keeps its explicit `/Zi`, `/DEBUG:FULL` and LTCG uncached and says so.
-  A Visual Studio generator prints that the solution runs uncached and touches nothing: native MSBuild caching
-  needs its own proof, and the truthful IDE path is the uncached one.
+  PCH option itself. Since 2026-10-18 Shipping is cached as well: the module sets `CRD_EMBEDDED_DEBUG_INFO`, the one
+  switch that makes the root build file give Shipping `/Z7` in place of its explicit `/Zi` and makes
+  [CrdPackage.cmake](../../cmake/CrdPackage.cmake) package the archives' debug information as `embedded` (no compile
+  PDB exists to install). `/DEBUG:FULL` still writes each program's full PDB, LTCG still runs at the link, and the
+  link itself is never cached. clang-cl writes byte-identical objects for `/Zi` and `/Z7` (probed on
+  `assert.cpp`), so on clang-cl the switch changes nothing but cacheability. Without the launcher every
+  configuration keeps `/Zi` and its compile PDBs. On Clang (not clang-cl) the launcher also adds
+  `-Xclang -fno-pch-timestamp`: Clang stores every input's modification time in a precompiled header and sccache
+  hashes the `.pch` a unit includes, so a header rebuilt in a fresh tree or checkout (same text, new times) missed
+  for every unit that includes it (249 of 2,059 compiles on the warm linux-clang-tsan board, every one on a hosted
+  checkout); without the times the `.pch` bytes follow the text (probed), the objects are byte-identical, and Ninja
+  still rebuilds a precompiled header whenever one of its inputs changes. A Visual Studio generator prints that the solution runs uncached
+  and touches nothing: native MSBuild caching needs its own proof, and the truthful IDE path is the uncached one.
 - `CRD_COMPILE_JOBS=<n>` and `CRD_LINK_JOBS=<n>` declare Ninja job pools (`crd_compile`, `crd_link`) and route
   compiles and links through them; other generators report that pools are ignored. Non-integers fail the configure.
 
 `scripts/install-sccache.py` acquires the pinned binary (registry entries `tools/sccache-windows` and
 `tools/sccache-linux`: archive digest, member, member digest, version check) and prints the launcher path.
+
+## Local cached trees
+
+The presets and the default graph stay uncached; the local helpers turn the launcher on (2026-10-18, DIAG.11b
+build-speed batch, [board](../bench/2026-10-18-build-speed-cache-mirror.md)).
+[compiler-cache.py](../../scripts/compiler-cache.py) owns the rules:
+
+- `configure-args <preset>` prints the entries a local configure adds: `CRD_COMPILER_LAUNCHER=<pinned sccache>` for
+  a Ninja preset, plus `CRD_ENABLE_PCH=OFF` when the compiler is cl or clang-cl (their precompiled header is not
+  cacheable). A Visual Studio preset and the clang-tidy presets get nothing (no launcher applies; the analysis runs
+  on every unit), and neither do the MSVC LTCG presets (cl with interprocedural optimization: win-release,
+  win-relwithdebinfo, win-shipping, win-shipping-profile): their compiles only parse and the link generates the code,
+  so on the focused win-shipping route a cached restore saved 17 % while the cold miss cost 42 % and converting the
+  tree rebuilds every LTCG program; such a tree is cached only when its configure names the launcher explicitly.
+  clang-cl Shipping is cached (restore 40 % faster, warm rebuild 1.85×). `CRD_SCCACHE=off` prints the reverse
+  entries, which return a converted tree to the default graph;
+  `CRD_SCCACHE=<path>` names another binary. The binary defaults to the one
+  `install-sccache.py --destination ~/.cerid/tools/sccache` installs (on Windows `%USERPROFILE%\.cerid\...`; a tool
+  launched from a packaged application writes `%LOCALAPPDATA%` into the package's private copy, which other
+  processes do not see). Nothing is added while no binary is installed.
+- `server <build-dir>` reads the tree's `CRD_COMPILER_LAUNCHER`; for a cached tree it makes sure that binary's
+  server runs on the local cache (`CRD_SCCACHE_DIR`, else `<checkout>/build/sccache` on Windows and
+  `~/.cache/cerid-sccache` on Linux, outside the WSL mirror; `CRD_SCCACHE_CACHE_SIZE`, else 30G) and prints that
+  environment. The server is started explicitly with its streams closed (measured: neither `--start-server` nor a
+  statistics query holds the caller's pipes), and a server already running on another cache (a board's scratch
+  cache) is restarted, because every client reaches the one server on the fixed port whatever its own environment.
+- [configure-preset.bat](../../scripts/configure-preset.bat) puts the entries before `--preset`, so options given
+  on its command line come later and win; [build-target.bat](../../scripts/build-target.bat) applies the server
+  environment before it builds; [wsl-lane.sh](../../scripts/wsl-lane.sh) does both on WSL. The default job count of
+  `build-target.bat` (four) is unchanged.
+
+A cached compile is keyed by the compiler, its arguments and the preprocessed (or, in sccache's direct mode, the
+source) text, and the arguments name the build directory, so a tree keeps its path: a cached tree is the same
+`build/<preset>` directory reconfigured through the helper, not a new preset. The cache never changes what a compile
+produces: a hit returns the object, standard output and diagnostics the compiler produced for those inputs, a
+compile that fails (a `/WX` warning included) is not stored, and a changed precompiled header misses (probed on
+GCC's `-include` and Clang's `-include-pch`).
+
+## WSL source mirror
+
+The Linux lanes on the WSL reference host build from `~/cerid-src`, a copy of the checkout on the native ext4 disk,
+instead of `/mnt/d` (drvfs, where every file open costs milliseconds: 5,760 `lstat` calls take about 20 s and reading
+every tracked file about 70 s). [source-mirror.py](../../scripts/source-mirror.py) keeps it exact and
+[wsl-lane.sh](../../scripts/wsl-lane.sh) is the only route:
+
+- `sync` copies the `.git` directory, then every path that `git status` reports as different on either side (the
+  checkout's status comes from the Windows git through WSL interop, about 0.2 s; the mirror's from its own git, which
+  compares content because the copied index carries the checkout's stat data), deletes mirror files git does not see
+  (ignored ones included), and puts the checkout's index back. The first sync, and `--full`, compare and copy every
+  file instead. Times are preserved, so Ninja sees what it would see on `/mnt/d` (a backup copied back keeps its old
+  time there too, so it is touched before the rebuild).
+- `check` refuses (exit 3) unless both sides have the same HEAD, the same `git status` entries and identical bytes in
+  every reported path; `--full` compares every file's bytes.
+- `wsl-lane.sh build|configure` sync, check, then build `~/cerid-mirror-build/<preset>` (configured from the mirror
+  through the compiler-cache rules above); `test` and `run` only check, so a source edited after the build is refused
+  rather than tested against binaries built from older sources. Configure, build, test and run run under
+  `flock -o` on `~/.cerid/wsl-lane.lock` (one heavy WSL job at a time; the descriptor is not inherited, because the
+  sccache server outlives a build and an inherited lock kept the next lane waiting until the server's idle
+  timeout) and bound every heavy command (`CRD_LANE_TIMEOUT`, 3,500 s).
+
+The trees configured from `/mnt/d` (`~/cerid-build/<preset>`) stay as they are; the board and the equivalence proof
+(identical compile commands up to the source and tree paths, identical test inventories, the suites passing) are in
+the [board](../bench/2026-10-18-build-speed-cache-mirror.md).
+
+## Waiting for long commands
+
+[wait-for.py](../../scripts/wait-for.py) replaces fixed sleeps with bounded, event-driven waits: `file` (a file
+appears, or a log matches a pattern, or a failure pattern ends the wait), `exit-file` (an exit-code sentinel, whose
+code it returns, with the log's tail), `pid` (processes exit) and `run` (a command killed with its process tree at the
+deadline). `start` returns at once and leaves a detached supervisor running the command with a deadline of at most an
+hour, its output in a log and its exit code (124 at the deadline) in a sentinel; a WSL command started from Windows
+this way keeps its `wsl.exe` client attached, so the distribution is not stopped as idle under it. The supervisor
+copies the command's output into the log through a pipe: handed the log file itself, `wsl.exe` wrote the Linux
+standard output and error at two separate positions of the shared handle and the later stream overwrote the start
+of the earlier one. A wait is refused
+above 1,140 s: the local loop's watchdog reaps a shell command older than 20 minutes, so a longer wait is several
+calls while the command keeps running.
 
 ## The board runner
 
@@ -56,8 +145,13 @@ and read after the row (hits, misses, non-cacheable compiles and reasons). Rows:
 `source` (append a comment to `engine/foundation/log/src/logger.cpp`), `header` (`crd/log/log.hpp`, outside the
 PCH), `pch-header` (`crd/core/types.hpp`, inside the PCH), `link` (delete `crd-ceir-tests` and relink). Edited files
 are restored byte-for-byte with their original timestamps, so neither the working tree nor another build directory
-sees the edit. `render` merges board documents into the markdown table that `docs/bench/` stores. The runner is a
-measurement instrument, not a qualification sweep: one preset, a scratch tree, an explicit job count, no tests.
+sees the edit. Since 2026-10-18 the teeth rows (`--tooth FILE OLD NEW`) replace one text, rebuild, write the
+original bytes back with a new time (as a restored tooth is) and rebuild, then put the original times back;
+`--targets` scopes every build row to named targets; each finished row is written at once, a termination request
+unwinds through the restore of an applied tooth, and a row during which Ninja rewrote its log is marked instead of
+reporting the lines after the old length. `render` merges board documents into the markdown table that `docs/bench/`
+stores. The runner is a measurement instrument, not a qualification sweep: one preset, a scratch tree, an explicit
+job count, no tests.
 
 ## Measured board and decisions
 
@@ -83,9 +177,11 @@ memory, disk, cache size). The decisions it carries:
   host is `compile jobs = (available GiB - 4) / 0.4`, which on a 16 GiB, 4-vCPU hosted runner is far above its CPU
   count, so the runners run unbounded too.
 - **Disk.** A Debug tree is 9.3 to 10.8 GiB; embedded debug information did not grow it; the whole preset caches in
-  0.71 GiB (0.99 GiB with edited variants), which sets the hosted per-lane `SCCACHE_CACHE_SIZE` of 2 GiB.
-- **Local defaults are unchanged.** The developer's `win-debug` keeps PCH on and no launcher; a developer who wants
-  the cache configures the two entries once and keeps one build directory.
+  0.71 GiB (0.99 GiB with edited variants), which set the 2 GiB per-lane `SCCACHE_CACHE_SIZE` of the hosted
+  `actions/cache` design that the GitHub Actions backend replaced on 2026-10-18 (see Hosted lanes).
+- **Local defaults (superseded 2026-10-18).** The presets and the default graph stay uncached, but the local helpers
+  now configure the qualified trees through the cache (see Local cached trees and the
+  [2026-10-18 board](../bench/2026-10-18-build-speed-cache-mirror.md)).
 
 - **Caching qualifies on `linux-gcc-debug` with the precompiled header on.** On the WSL2 board (native ext4,
   GCC 13.3, 16 jobs) 1,773 compiles went through the launcher with no non-cacheable reason; a miss costs +12 %
@@ -96,26 +192,56 @@ memory, disk, cache size). The decisions it carries:
 - **Memory is the bound on GCC, not on MSVC.** 14.0 GiB peak pressure at 16 jobs (about 0.88 GiB per compile)
   against 5.8 GiB on MSVC; `CRD_COMPILE_JOBS = (available GiB - 4) / 0.9` is the derived bound for a Linux host
   (12 on a 16 GiB workstation at 16 threads); the hosted 4-vCPU runner needs none.
+- **2026-10-18 ([board](../bench/2026-10-18-build-speed-cache-mirror.md)): the cache on every lane a batch builds,
+  the WSL sources on ext4.** The mirror alone made linux-gcc-debug 6.3× faster cold and 6.1-6.3× on a header teeth
+  cycle; a cached teeth restore is 3.6-4.2× faster on win-debug and win-asan and 6.6-15.5× on the WSL lanes; a warm
+  rebuild of a whole tree 3.1-4.2× (MSVC) and 18-19× (GCC on the mirror). MSVC LTCG trees stay uncached (their link
+  generates the code: -17 % on a focused restore against a +42 % miss), and Clang trees under the launcher drop the
+  precompiled headers' input times (`-fno-pch-timestamp`), without which a fresh tree missed for every unit that
+  includes one.
 
 ## Hosted lanes
 
-Every lane's evidence bundle now carries the lane's Ninja log summary (a hosted checkout is a fresh directory, so
-the log is the cold board of the exact revision) and, for a cached lane, the sccache statistics of the build step,
-so the first cached push records the miss board and the second the hit board without any extra job.
+Every lane's evidence bundle carries the lane's Ninja log summary (a hosted checkout is a fresh directory, so the log
+is the cold board of the exact revision) and, for a cached lane, the sccache statistics of the build step with the
+cache backend they came from, so the first cached push records the miss board and the second the hit board without
+any extra job.
 
-The cached lanes are the presets listed in the workflow's `CRD_CACHED_PRESETS`; every other lane is unchanged. A
-cached lane installs the pinned sccache, restores `SCCACHE_DIR` through `actions/cache` (key
-`sccache-<os>-<preset>-<run id>` with the `sccache-<os>-<preset>-` restore prefix, so every run restores the newest
-cache of that lane and a green run saves its own; `actions/cache` saves in its post step only when the job succeeds,
-so a failed lane restores but does not save), configures with `-DCRD_COMPILER_LAUNCHER` (and `-DCRD_ENABLE_PCH=OFF` on
-MSVC, explicitly, in the step), builds, prints and stores the statistics, and passes them to the bundle. The
-per-lane `SCCACHE_CACHE_SIZE` is capped so the cached lanes cannot evict the CPM and Vulkan SDK caches from the
-repository's 10 GB allowance. The GitHub Actions cache backend of sccache is not used: it needs
-`actions/github-script`, which is outside the pinned registry, and the local-disk cache stays inside the pinned
-`actions/cache`.
+Since 2026-10-18 the cached lanes build through sccache's GitHub Actions cache backend. This supersedes the earlier
+decision to persist a local-disk cache through `actions/cache`, which was taken because the backend needs
+`actions/github-script` and that action was outside the pinned registry; it is pinned now (`actions/github-script`
+v8, `cmake/pins.json`). The `actions/cache` design saved a full snapshot per lane per green run (2 GB each) and kept
+the stale ones until eviction: on 2026-10-18 five of them held 9.5 of the repository's 11.96 GB against its 10 GB
+allowance with only two lanes cached. The backend stores one entry per object instead, writes only misses, and keeps
+what a run reads fresh, so the stale objects are what the allowance evicts first.
 
-Extending the list is evidence-driven: read the cached lane's `conclusion.json` build section (hits, misses,
-reasons, span) over a few pushes, then add a preset only with a board row for its compiler and configuration.
+A cached lane installs the pinned, hash-verified sccache (`install-sccache.py`), then the `Compiler cache service` step
+(a pinned `actions/github-script`, because the cache service's URL and token reach JavaScript actions only) starts the
+sccache server with them, the token masked, and exports the same settings for the later steps:
+`SCCACHE_GHA_VERSION` is the lane's namespace, `<preset>-<runner image>-<image version>`, so lanes never share an
+entry and a new runner image (a new toolchain) starts a new namespace; `SCCACHE_IDLE_TIMEOUT=0` keeps the server
+until the statistics step stops it; `SCCACHE_IGNORE_SERVER_IO_ERROR=1` makes a lost server reply a local compile. A
+failed cache request is a miss, never a failed compile; when the runner offers no cache service or the server does
+not start on it, the step says so and the lane builds through an empty local cache. The lane then configures with
+`-DCRD_COMPILER_LAUNCHER` (and `-DCRD_ENABLE_PCH=OFF` on cl and clang-cl), builds, prints `sccache --show-stats` in
+the job log and passes the JSON statistics to the evidence bundle. Every gate after the build is unchanged.
+
+The cached lanes are the presets in the workflow's `CRD_CACHED_PRESETS`. The list is sized to the allowance from
+the [board](../bench/2026-10-18-build-speed-cache-mirror.md#hosted-cache-budget): the per-lane cold footprints
+measured locally add up to about 6.5 GiB (7.0 GB) for the cached lanes, beside about 1.6 GB of CPM, Vulkan SDK and
+GenMC caches. Uncached, each for a stated reason:
+
+- `win-tidy` (clang-tidy analyses every unit, so a cache would not shorten the job) and `win-vs` (CMake applies no
+  launcher to a Visual Studio generator);
+- `win-debug-scalar` and `linux-gcc-debug-scalar`, the cold-acquisition presets: they also stay the uncached
+  reference build of each complete run, so every complete run still measures a cold build of the exact revision;
+- the MSVC LTCG presets `win-release`, `win-relwithdebinfo`, `win-shipping` and `win-shipping-profile`: their
+  compiles only parse (the link generates the code; locally a cached restore saved 17 % on a focused route), and
+  their intermediate-language objects would take about 3.2 GiB of the allowance.
+
+The hosted proof arrives with the first pushes: the first run of each cached lane shows misses with no cache errors,
+the second hits, and `gh api repos/<owner>/<repo>/actions/cache/usage` stays under the allowance. Extending the
+list needs a footprint row in the board and room in the allowance.
 
 ## Not in scope
 
