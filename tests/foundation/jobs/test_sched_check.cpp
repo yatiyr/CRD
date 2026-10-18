@@ -13,15 +13,18 @@
 #include "sched_driver.hpp"
 #include "sched_record.hpp"
 #include <crd/containers/array.hpp>
+#include <crd/containers/static_array.hpp>
 #include <crd/core/minimize.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <thread>
 
 namespace
@@ -667,6 +670,176 @@ TEST_CASE("schedcheck: perturbed multicore park/reclaim stress -- the detector s
     // The zero-false-positive result for the hardware regime: across thousands of uncontrolled parks the
     // gate-only detector never fired on the repaired algorithm.
     CHECK(crd::jobs::detail::sched_check_violations() == 0U);
+}
+
+// --- The worker snapshot's lost broadcast (hosted linux-clang-tsan, 2026-10-18: an idle 3-worker snapshot heard
+//     from 2). With the semaphore's sleep points on, the first worker to find no token is held between that check
+//     and its sleep. The snapshot's request posts one token per thread and broadcasts; the two free workers take
+//     every token, and the first time one of them finds none again (the count is then 0 and stays 0, since
+//     nothing else posts) the held worker is let go into its sleep without having acknowledged. The repaired
+//     snapshot wakes the sleepers again, tokenless, on every poll; the broken variant polls without that wake. ---
+namespace
+{
+struct LostBroadcastHold
+{
+    std::mutex              mtx;
+    std::condition_variable cv;
+    bool                    have_held         = false; // a worker reached sem.pre_sleep first and is held there
+    std::thread::id         held              = {};
+    bool                    let_go            = false; // the held worker may continue into its sleep
+    bool                    requested         = false; // the test is about to request the snapshot
+    int                     passes_before     = 0;     // sem.pre_sleep passes by the free workers before that
+    bool                    released_on_empty = false; // let go by a free worker's empty check after the request
+
+    void reset()
+    {
+        const std::lock_guard<std::mutex> lock(mtx);
+        have_held         = false;
+        held              = {};
+        let_go            = false;
+        requested         = false;
+        passes_before     = 0;
+        released_on_empty = false;
+    }
+
+    void on_point(const char* tag) noexcept
+    {
+        if (std::strcmp(tag, "sem.pre_sleep") != 0)
+        {
+            return;
+        }
+        std::unique_lock<std::mutex> lock(mtx);
+        if (!have_held)
+        {
+            have_held = true;
+            held      = std::this_thread::get_id();
+            cv.notify_all();
+            // Bounded, so a broken choreography fails its checks instead of wedging the pool.
+            if (!cv.wait_for(lock, std::chrono::seconds(10), [this] { return let_go; }))
+            {
+                let_go = true;
+            }
+            return;
+        }
+        if (std::this_thread::get_id() == held)
+        {
+            return; // the held worker's later turns run free
+        }
+        if (!requested)
+        {
+            ++passes_before;
+            cv.notify_all();
+            return;
+        }
+        if (!let_go)
+        {
+            let_go            = true;
+            released_on_empty = true;
+            cv.notify_all();
+        }
+    }
+
+    static void trampoline(void* user, const char* tag) noexcept
+    {
+        static_cast<LostBroadcastHold*>(user)->on_point(tag);
+    }
+};
+
+LostBroadcastHold g_lost_broadcast; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables) oracle state
+
+// RAII: the sleep points and the break switch are cleared even if an assertion throws.
+struct SleepPointsGuard
+{
+    SleepPointsGuard() noexcept { crd::jobs::detail::sched_check_enable_sleep_points(true); }
+    ~SleepPointsGuard() { crd::jobs::detail::sched_check_enable_sleep_points(false); }
+    SleepPointsGuard(const SleepPointsGuard&)            = delete;
+    SleepPointsGuard& operator=(const SleepPointsGuard&) = delete;
+};
+
+struct SnapshotRewakeBreakGuard
+{
+    SnapshotRewakeBreakGuard() noexcept { crd::jobs::detail::sched_check_break_snapshot_rewake(true); }
+    ~SnapshotRewakeBreakGuard() { crd::jobs::detail::sched_check_break_snapshot_rewake(false); }
+    SnapshotRewakeBreakGuard(const SnapshotRewakeBreakGuard&)            = delete;
+    SnapshotRewakeBreakGuard& operator=(const SnapshotRewakeBreakGuard&) = delete;
+};
+
+struct LostBroadcastResult
+{
+    bool                                held              = false; // a worker was held and both others slept
+    bool                                released_on_empty = false; // the hold ended on an empty count
+    crd::jobs::WorkerSnapshotResult     res               = {};
+};
+
+// One snapshot with the forced lost broadcast, under whatever snapshot mode is set (the caller owns the break
+// guard). Inits and shuts down its own pool of three background workers.
+LostBroadcastResult snapshot_with_lost_broadcast()
+{
+    g_lost_broadcast.reset();
+    const SleepPointsGuard                       sleep_points;
+    static crd::jobs::detail::SchedOracle        oracle{};
+    oracle.on_point = &LostBroadcastHold::trampoline;
+    oracle.user     = &g_lost_broadcast;
+    crd::jobs::detail::set_sched_oracle(&oracle);
+
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4U; // thread 0 + three background workers: one held, two that take the request's tokens
+    crd::jobs::init(cfg);
+
+    LostBroadcastResult r;
+    {
+        std::unique_lock<std::mutex> lock(g_lost_broadcast.mtx);
+        r.held = g_lost_broadcast.cv.wait_for(lock, std::chrono::seconds(10),
+                                              [] { return g_lost_broadcast.have_held &&
+                                                          g_lost_broadcast.passes_before >= 2; });
+    }
+    // The free workers passed their pre-sleep point; let them reach the kernel wait, so the request's broadcast is
+    // what wakes them.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    {
+        const std::lock_guard<std::mutex> lock(g_lost_broadcast.mtx);
+        g_lost_broadcast.requested = true;
+    }
+
+    crd::containers::StaticArray<crd::jobs::WorkerNode, 8> nodes{};
+    r.res = crd::jobs::worker_snapshot(nodes, 200U);
+
+    {
+        const std::lock_guard<std::mutex> lock(g_lost_broadcast.mtx);
+        r.released_on_empty   = g_lost_broadcast.released_on_empty;
+        g_lost_broadcast.let_go = true; // never leave a worker held, whatever happened
+    }
+    g_lost_broadcast.cv.notify_all();
+    crd::jobs::detail::set_sched_oracle(nullptr);
+    crd::jobs::shutdown();
+    return r;
+}
+} // namespace
+
+TEST_CASE("schedcheck: a worker that slept through the snapshot request is woken again and answers",
+          "[jobs][schedcheck][diag][worker-snapshot]")
+{
+    const LostBroadcastResult r = snapshot_with_lost_broadcast();
+
+    REQUIRE(r.held);              // the choreography ran: one worker held, the two others asleep
+    REQUIRE(r.released_on_empty); // and the held one went to sleep after the free ones took every token
+    CHECK(r.res.total == 4U);
+    CHECK(r.res.expected == 3U);
+    CHECK(r.res.responded == 3U); // the repeated tokenless wake reached the late sleeper
+    CHECK(r.res.complete);
+}
+
+TEST_CASE("schedcheck: without the repeated wake the late sleeper never answers the snapshot (broken variant)",
+          "[jobs][schedcheck][diag][worker-snapshot]")
+{
+    const SnapshotRewakeBreakGuard broken;
+    const LostBroadcastResult      r = snapshot_with_lost_broadcast();
+
+    REQUIRE(r.held);
+    REQUIRE(r.released_on_empty);
+    CHECK(r.res.expected == 3U);
+    CHECK(r.res.responded == 2U); // the hosted failure: the broadcast reached two of the three idle workers
+    CHECK_FALSE(r.res.complete);
 }
 
 #endif

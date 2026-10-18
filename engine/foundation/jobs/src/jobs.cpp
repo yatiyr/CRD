@@ -1,5 +1,6 @@
 #include <crd/jobs/jobs.hpp>
 #include "hang_watchdog.hpp" // HangVerdict / hang_verdict / HangDetector (pure classifier)
+#include "sched_check.hpp"   // test-only broken-snapshot switch (gate off -> nothing)
 #include "worker_pool.hpp"
 #include <crd/core/assert.hpp>
 #include <crd/core/lifetime_ledger.hpp>
@@ -593,6 +594,17 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
         if (acked >= expected || std::chrono::steady_clock::now() >= deadline)
         {
             break;
+        }
+        // The request's broadcast reaches the workers already asleep. A worker between its empty token check and
+        // its sleep can miss it: the others take every token first, and it sleeps on an empty count without
+        // acknowledging (hosted linux-clang-tsan, 2026-10-18: 2 of 3 idle workers answered). Wake the sleepers again,
+        // without tokens, on every poll until all have answered; a worker inside a job is not at its safe point and
+        // still never answers.
+#if CRD_JOBS_SCHED_CHECK
+        if (!detail::sched_check_snapshot_rewake_broken()) // test-only: the broken variant polls without waking
+#endif
+        {
+            g_pool.wake_idle_workers();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }

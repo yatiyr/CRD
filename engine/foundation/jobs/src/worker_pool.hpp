@@ -134,6 +134,9 @@ public:
     // point-in-time diagnostics, never oracles. Building the public WorkerNode/result lives in jobs.cpp so this
     // internal header stays free of the public API types.
     void       request_snapshot() noexcept;
+    // Repeated while the snapshot polls: a worker that was about to sleep when the request's broadcast landed can
+    // sleep through it (semaphore.hpp), and this tokenless wake brings it back to its safe point.
+    void       wake_idle_workers() noexcept { m_scheduler.wake_sleepers(); }
     [[nodiscard]] crd::u32 snapshot_gen()             const noexcept { return m_snapshot_gen.load(std::memory_order_acquire); }
     [[nodiscard]] crd::u32 worker_ack_gen(crd::u32 i) const noexcept { return m_progress[i].ack_gen.load(std::memory_order_acquire); }        // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     [[nodiscard]] crd::u64 worker_task(crd::u32 i)    const noexcept { return m_progress[i].current_task_id.load(std::memory_order_relaxed); } // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sched_check.hpp"
+
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 
@@ -41,6 +43,15 @@ namespace crd::jobs::detail
 // that consumes a token synchronizes-with the release that posted it — the
 // same guarantee callers relied on from std::counting_semaphore (worker_loop's
 // m_stopping load after a shutdown wake depends on it).
+//
+// WHAT A BROADCAST DOES NOT PROMISE (2026-10-18, hosted linux-clang-tsan): the
+// sleep word is the count, so a broadcast reaches the threads already asleep
+// and the tokens it posts, nothing more. A thread between its empty drain and
+// its kernel wait when release(n) lands can find the word back at 0 -- other
+// threads took all n tokens first -- and then sleeps through that broadcast.
+// For work hints that is harmless (the job was run by whoever took its
+// token); a caller that needs EVERY idle thread to observe an event repeats
+// wake_sleepers() until each has acknowledged (worker_snapshot does).
 //
 // Token count semantics match the scheduler's usage: tokens are wake hints
 // (one per push), consumed only when an idle worker's acquire returns; a u32
@@ -89,6 +100,15 @@ public:
         wake_all();
     }
 
+    // Wake every sleeper without adding a token. A thread in acquire_or_wake() or try_acquire_for_ms() returns to
+    // its caller; one in acquire() drains or sleeps again. Repeated by a caller that waits for every idle thread
+    // to acknowledge something (see the class comment): a thread that slept after a broadcast it missed is in the
+    // kernel by the next repetition.
+    void wake_sleepers() noexcept
+    {
+        wake_all();
+    }
+
     // Block until a token is consumed.
     void acquire() noexcept
     {
@@ -112,6 +132,7 @@ public:
         {
             return;
         }
+        CRD_JOBS_SCHED_SLEEP_POINT("sem.pre_sleep"); // the count was 0 and this thread is not asleep yet
         wait_on_zero();
         (void)try_drain_one();
     }

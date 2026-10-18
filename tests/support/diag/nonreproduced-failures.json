@@ -6,12 +6,12 @@
   {
    "id": "win-asan-allocator-corpus-rtlcreateheap",
    "first_seen": "2026-10-11",
-   "lane": "win-asan (local, inside vcvars)",
+   "lane": "win-asan (local, inside vcvars; hosted once: nightly run 39013990584 at d08436b9, 2026-10-17)",
    "target": "crd-fuzz-memory-allocators-corpus",
    "signature": "AddressSanitizer use-after-poison inside RtlCreateHeap, reached from msvcrt.dll during process start, 0.11 s after launch and before any corpus input ran",
-   "reruns": "The immediate rerun passed; the next run of the same seed was clean.",
+   "reruns": "Local: the immediate rerun passed; the next run of the same seed was clean. Hosted: the next nightly run at the same revision (39108972918) passed the job.",
    "status": "nonreproduced",
-   "explanation": "No input or Cerid frame is involved. Not explained.",
+   "explanation": "No input or Cerid frame is involved: the program does not import msvcrt.dll, a system library loaded behind USER32 initialises it under the loader, and the ASan runtime's RtlCreateHeap interception reports the memory that DLL clears. Not explained further (2026-10-18-scheduled-runs-snapshot-lost-broadcast.md).",
    "session": "2026-10-11-diag-10b-seeded-detector-failures.md",
    "rows": ["DIAG.10b"]
   },

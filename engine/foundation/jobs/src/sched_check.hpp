@@ -56,14 +56,34 @@ void                   sched_check_reset_violations() noexcept;
 void               sched_check_break_handshake(bool broken) noexcept;
 [[nodiscard]] bool sched_check_handshake_broken() noexcept;
 
+// Sleep points: the worker semaphore's pre-sleep step (a token check found none, the thread is not yet asleep).
+// They are off unless a test turns them on, so the counter-path traces the recorders and drivers above see keep
+// their tags; a test that needs them enables them around its pool (RAII guard) and filters its oracle by tag.
+void               sched_check_enable_sleep_points(bool enabled) noexcept;
+[[nodiscard]] bool sched_check_sleep_points_enabled() noexcept;
+
+// Deliberately-broken worker snapshot, in the same binary: when set, worker_snapshot() polls without repeating
+// its tokenless wake, so a worker that missed the request's broadcast sleeps through the snapshot. Default false
+// = the repaired protocol. A test flips it on around the forced interleaving to show that the interleaving
+// reproduces the lost acknowledgement, then off.
+void               sched_check_break_snapshot_rewake(bool broken) noexcept;
+[[nodiscard]] bool sched_check_snapshot_rewake_broken() noexcept;
+
 } // namespace crd::jobs::detail
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage): a compile-time gate that must vanish when off cannot be a function.
 #define CRD_JOBS_SCHED_POINT(tag) ::crd::jobs::detail::sched_point(tag)
 
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): as above, and only when a test enabled the sleep points.
+#define CRD_JOBS_SCHED_SLEEP_POINT(tag)                                                                                \
+    (::crd::jobs::detail::sched_check_sleep_points_enabled() ? ::crd::jobs::detail::sched_point(tag) : (void)0)
+
 #else
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage): the gate-off form must expand to nothing at all sites.
 #define CRD_JOBS_SCHED_POINT(tag) ((void)0)
+
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): the gate-off form must expand to nothing at all sites.
+#define CRD_JOBS_SCHED_SLEEP_POINT(tag) ((void)0)
 
 #endif

@@ -442,6 +442,25 @@ void Scheduler::wake_all(crd::u32 count)
     }
 }
 
+void Scheduler::wake_sleepers() noexcept
+{
+    if (!m_initialized)
+    {
+        return;
+    }
+    if (m_targeted_wake)
+    {
+        // The targeted path sleeps at most 1 ms per turn and so cannot sleep through a request; wake its parked
+        // workers anyway so they answer at once.
+        for (auto& ts : m_thread_states)
+        {
+            ts->wake.wake_sleepers();
+        }
+        return;
+    }
+    m_semaphore.wake_sleepers();
+}
+
 bool Scheduler::wake_pinned_sleeper(crd::u32 self) noexcept
 {
     // Thread 0 never sleeps here (it pumps its own lane), so only workers 1..N-1 are looked at.

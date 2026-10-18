@@ -150,6 +150,11 @@ public:
     // Called by WorkerPool::shutdown() to unblock workers that are in wait_for_work().
     void wake_all(crd::u32 count);
 
+    // Wake every sleeping worker without posting a token: each returns to its worker loop's safe point once and
+    // sleeps again if there is no work. A broadcast can miss a worker that was about to sleep (semaphore.hpp), so
+    // worker_snapshot() repeats this while it waits for acknowledgements.
+    void wake_sleepers() noexcept;
+
     [[nodiscard]] crd::u32 num_threads()    const noexcept;
     [[nodiscard]] bool     is_initialized() const noexcept { return m_initialized; }
 
