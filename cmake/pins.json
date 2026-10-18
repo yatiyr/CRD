@@ -214,6 +214,16 @@
       "license": "MIT",
       "note": "The release build of tag v3.0.0 (commit 8de38c35a2df16a25f7ff87ac3ad07156a925beb, which the binary's --version names); the opt-in linker of docs/design/build-performance.md, installed by scripts/install-mold.py."
     },
+    "clang-build-analyzer": {
+      "version": "1.6.0",
+      "repository": "aras-p/ClangBuildAnalyzer",
+      "commit": "bae0cb488cce944bfc3da9850a69ad621701ebef",
+      "url": "https://github.com/aras-p/ClangBuildAnalyzer/archive/bae0cb488cce944bfc3da9850a69ad621701ebef.tar.gz",
+      "file": "ClangBuildAnalyzer-bae0cb48.tar.gz",
+      "sha256": "ce35d99f924250bd0e963584918bce9d1f90318ef9ab19b779d4ffe2ffbb33d1",
+      "license": "Unlicense",
+      "note": "Tag v1.6.0's commit, built from source into a user directory by scripts/install-clang-build-analyzer.py (CMake, the host compiler) to read -ftime-trace profiles (docs/design/build-performance.md#compile-time-profiles); a developer tool, never shipped. Bundled under src/external: cwalk (MIT), inih (BSD-3-Clause), enkiTS (Zlib), flat_hash_map (BSL-1.0), llvm-Demangle (Apache-2.0 WITH LLVM-exception), simdjson (Apache-2.0 OR MIT), xxHash (BSD-2-Clause), cute_files (Zlib OR Unlicense)."
+    },
     "llvm": {
       "version": "20.1.8",
       "acquired_by": "KyleMayes/install-llvm-action",

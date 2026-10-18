@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **9** · tools: **13** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
+- packages: **9** · tools: **14** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -40,6 +40,7 @@
 | sccache-windows | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-pc-windows-msvc.zip` |
 | sccache-linux | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz` |
 | mold-linux | 3.0.0 | MIT | github.com | `mold-3.0.0-x86_64-linux.tar.gz` |
+| clang-build-analyzer | 1.6.0 | Unlicense | aras-p/ClangBuildAnalyzer (bae0cb488cce) | `ClangBuildAnalyzer-bae0cb48.tar.gz` |
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | pinned action KyleMayes/install-llvm-action | installed by the action |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 

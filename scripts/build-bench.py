@@ -11,6 +11,11 @@ sees the edit; the teeth rows (`--tooth FILE OLD NEW`) restore the bytes with a 
 `--targets` scopes every build row to named targets, the way a focused local route builds. Run it from a shell with
 the toolchain on PATH (scripts/msvc-env.bat on Windows).
 
+Before the first row and after the last, a board records the host's state: available memory and the processes using
+the most CPU and memory (on WSL the Windows host's as well). A contended host (another process using a core, others
+two cores together, or less than a quarter of the memory available) is refused unless `--allow-contended` is given,
+and the board then names the load. `host` prints the same snapshot and exits 3 when it is contended.
+
 `render` merges board documents into one markdown table for docs/bench. Contract: docs/design/build-performance.md.
 """
 from pathlib import Path
@@ -94,6 +99,135 @@ def machine():
     total, _, _ = memory_status()
     return {'cpu': cpu_name(), 'logical_cpus': os.cpu_count(), 'memory_gib': round(total / GIB, 1),
             'os': platform.platform(), 'python': platform.python_version()}
+
+
+# ---- host state: what else runs on the machine ----------------------------------------------------------------------
+# A board records, before its first row and after its last, the host's available memory and the processes that use the
+# most CPU and memory, sampled HOST_SAMPLE_SECONDS apart; on WSL the Windows host too, through interop, because a
+# Windows process loads the CPUs and the memory that back the WSL VM (2026-10-18: an image generator holding 25 GB left
+# Windows 0.7 GB and one board ran 5-7x slower). No build runs at either snapshot, so a busy process is someone else's.
+HOST_SAMPLE_SECONDS = 2.0
+HOST_TOP = 6
+BUSY_CORES = 1.0
+BUSY_TOTAL_CORES = 2.0
+MIN_AVAILABLE_FRACTION = 0.25
+WINDOWS_POWERSHELL = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe'
+WINDOWS_HOST_SCRIPT = (
+    "$ErrorActionPreference = 'SilentlyContinue'; "
+    "function snap { Get-Process | Where-Object { $_.Id -ne $PID } | ForEach-Object { [pscustomobject]@{ "
+    "pid = $_.Id; name = $_.ProcessName; "
+    "rss = $_.WorkingSet64; cpu = $_.TotalProcessorTime.TotalSeconds } } }; "
+    "$a = @(snap); Start-Sleep -Milliseconds %d; $b = @(snap); "
+    "$os = Get-CimInstance Win32_OperatingSystem; "
+    "[pscustomobject]@{ total = [int64]$os.TotalVisibleMemorySize * 1024; "
+    "available = [int64]$os.FreePhysicalMemory * 1024; before = $a; after = $b } | ConvertTo-Json -Compress -Depth 3")
+
+
+def busiest(before, after, seconds, own_pids=()):
+    """Processes from two snapshots ({pid: (name, rss_bytes, cpu_seconds)}): the HOST_TOP by CPU (cores used between
+    the snapshots), the HOST_TOP by resident memory, and the cores all of them used together."""
+    rows = []
+    for pid, (name, rss, cpu) in after.items():
+        if pid in own_pids or pid not in before or before[pid][0] != name:
+            continue
+        cores = max(0.0, (cpu - before[pid][2]) / seconds) if cpu is not None and before[pid][2] is not None else 0.0
+        rows.append({'name': name, 'pid': pid, 'cores': round(cores, 2), 'gib': round(rss / GIB, 2)})
+    by_cpu = sorted(rows, key=lambda r: (-r['cores'], -r['gib']))[:HOST_TOP]
+    by_memory = sorted(rows, key=lambda r: (-r['gib'], -r['cores']))[:HOST_TOP]
+    return by_cpu, by_memory, round(sum(r['cores'] for r in rows), 2)
+
+
+def contention(state):
+    """The reasons a host snapshot does not look idle: one process using BUSY_CORES or more, all of them together
+    BUSY_TOTAL_CORES or more, or less than MIN_AVAILABLE_FRACTION of the memory available."""
+    if 'error' in state:
+        return []
+    reasons = []
+    if state.get('total_gib') and state['available_gib'] < MIN_AVAILABLE_FRACTION * state['total_gib']:
+        reasons.append('%s: %.1f of %.1f GiB available' % (state['host'], state['available_gib'], state['total_gib']))
+    for process in state.get('busiest', []):
+        if process['cores'] >= BUSY_CORES:
+            reasons.append('%s: %s (pid %d) used %.1f cores, %.1f GiB' % (state['host'], process['name'],
+                                                                          process['pid'], process['cores'],
+                                                                          process['gib']))
+    if state.get('cores', 0.0) >= BUSY_TOTAL_CORES:
+        reasons.append('%s: other processes used %.1f cores together' % (state['host'], state['cores']))
+    return reasons
+
+
+def linux_processes():
+    """{pid: (name, rss bytes, cpu seconds)} from /proc."""
+    ticks = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
+    page = os.sysconf('SC_PAGE_SIZE') if hasattr(os, 'sysconf') else 4096
+    result = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            text = (entry / 'stat').read_text(encoding='utf-8', errors='replace')
+        except OSError:
+            continue
+        name = text[text.find('(') + 1:text.rfind(')')]
+        fields = text[text.rfind(')') + 2:].split()
+        result[int(entry.name)] = (name, int(fields[21]) * page, (int(fields[11]) + int(fields[12])) / ticks)
+    return result
+
+
+def windows_host_state(powershell, seconds=HOST_SAMPLE_SECONDS, own_pids=()):
+    """The Windows host's memory and busiest processes through PowerShell (native, or WSL interop)."""
+    try:
+        completed = subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-Command',
+                                    WINDOWS_HOST_SCRIPT % int(seconds * 1000)], capture_output=True, text=True,
+                                   encoding='utf-8', errors='replace', timeout=60 + seconds, check=False)
+        document = json.loads(completed.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        return {'host': 'windows', 'error': str(error)[:200]}
+
+    def snapshot(items):
+        return {int(p['pid']): (str(p['name']), int(p.get('rss') or 0), p.get('cpu')) for p in items or []}
+
+    by_cpu, by_memory, cores = busiest(snapshot(document.get('before')), snapshot(document.get('after')), seconds,
+                                       own_pids)
+    return {'host': 'windows', 'total_gib': round(document['total'] / GIB, 1),
+            'available_gib': round(document['available'] / GIB, 1), 'cores': cores, 'busiest': by_cpu,
+            'largest': by_memory}
+
+
+def host_state(seconds=HOST_SAMPLE_SECONDS):
+    """This host's state, and on WSL the Windows host's: [linux or windows state, (windows host state)]."""
+    own = {os.getpid()}
+    if platform.system() == 'Windows':
+        return [windows_host_state('powershell.exe', seconds, own)]
+    before = linux_processes()
+    time.sleep(seconds)
+    after = linux_processes()
+    total, available, _ = memory_status()
+    by_cpu, by_memory, cores = busiest(before, after, seconds, own)
+    state = {'host': 'linux', 'total_gib': round(total / GIB, 1), 'available_gib': round(available / GIB, 1),
+             'cores': cores, 'busiest': by_cpu, 'largest': by_memory}
+    try:
+        state['load'] = [float(v) for v in Path('/proc/loadavg').read_text(encoding='utf-8').split()[:3]]
+    except (OSError, ValueError):
+        pass
+    states = [state]
+    if Path(WINDOWS_POWERSHELL).is_file():
+        states.append(windows_host_state(WINDOWS_POWERSHELL, seconds))
+    return states
+
+
+def host_summary(states):
+    """One line per host for a board's context: available memory, the busiest process and the contention found."""
+    parts = []
+    for state in states or []:
+        if 'error' in state:
+            parts.append('%s: not sampled (%s)' % (state['host'], state['error']))
+            continue
+        top = state['busiest'][0] if state.get('busiest') else None
+        parts.append('%s %.1f of %.1f GiB available, others %.1f cores, busiest %s' % (
+            state['host'], state['available_gib'], state['total_gib'], state.get('cores', 0.0),
+            '%s %.1f cores' % (top['name'], top['cores']) if top else 'none'))
+    reasons = [reason for state in states or [] for reason in contention(state)]
+    return '; '.join(parts) + ('; CONTENDED: ' + '; '.join(reasons) if reasons else '; idle')
 
 
 class PressureSampler:
@@ -312,7 +446,7 @@ def make_program(build_dir):
 class Board:
     def __init__(self, preset, build_dir, jobs, defines, label, sccache=None, source=DEFAULT_SOURCE,
                  header=DEFAULT_HEADER, pch_header=DEFAULT_PCH_HEADER, link_target=DEFAULT_LINK_TARGET,
-                 repo=ROOT, environ=None, log=print, targets=(), tooth=None):
+                 repo=ROOT, environ=None, log=print, targets=(), tooth=None, host=host_state):
         self.preset = preset
         self.build_dir = Path(build_dir)
         self.jobs = jobs
@@ -326,6 +460,8 @@ class Board:
         self.targets = list(targets)
         self.tooth = Tooth(repo / tooth[0], tooth[1], tooth[2]) if tooth else None
         self.checkpoint = None
+        self.host = host
+        self.allow_contended = False
         self.repo = repo
         self.env = dict(os.environ if environ is None else environ)
         self.log = log
@@ -451,6 +587,13 @@ class Board:
                    'teeth-restore': self.teeth_restore}
         if 'configure' not in rows:
             rows = ['configure'] + list(rows)
+        self.record['host_before'] = self.host()
+        self.log('[%s] host: %s' % (self.label, host_summary(self.record['host_before'])))
+        reasons = [reason for state in self.record['host_before'] for reason in contention(state)]
+        if reasons and not self.allow_contended:
+            raise SystemExit('the host is not idle (%s); measure on an idle host, or pass --allow-contended to '
+                             'record a contended board' % '; '.join(reasons))
+        self.record['contended'] = reasons
         try:
             for name in rows:
                 self.row(name, actions[name])
@@ -462,6 +605,8 @@ class Board:
         finally:
             if self.tooth is not None:
                 self.tooth.settle()
+        self.record['host_after'] = self.host()
+        self.log('[%s] host after: %s' % (self.label, host_summary(self.record['host_after'])))
         self.record['toolchain'] = self.toolchain()
         self.record['build_tree_gib'] = round(tree_bytes(self.build_dir) / GIB, 2)
         if self.sccache:
@@ -521,6 +666,9 @@ def render_context(records):
                          tool.get('CRD_ENABLE_PCH', '?'), record.get('launcher') or 'none',
                          linker_label(tool), record.get('build_tree_gib', 0.0),
                          ('; cache %.1f GiB' % record['cache_gib']) if 'cache_gib' in record else ''))
+        for key, when in (('host_before', 'before'), ('host_after', 'after')):
+            if key in record:
+                lines.append('  host %s: %s.' % (when, host_summary(record[key])))
     return '\n'.join(lines) + '\n'
 
 
@@ -544,13 +692,20 @@ def main(argv=None):
                      help='teeth rows: replace the one occurrence of OLD in FILE with NEW, then restore it')
     run.add_argument('--output', required=True, help='board JSON document')
     run.add_argument('--delete', action='store_true', help='remove the scratch build directory afterwards')
+    run.add_argument('--allow-contended', action='store_true',
+                     help='measure even when the host snapshot shows other load (the board records it)')
     show = sub.add_parser('render', help='merge board documents into one markdown table')
     show.add_argument('documents', nargs='+')
+    sub.add_parser('host', help='print the host state a board records; exit 3 when it is contended')
     args = parser.parse_args(argv)
     if args.command == 'render':
         records = [json.loads(Path(p).read_text(encoding='utf-8')) for p in args.documents]
         sys.stdout.write(render_context(records) + '\n' + render(records))
         return 0
+    if args.command == 'host':
+        states = host_state()
+        sys.stdout.write(host_summary(states) + '\n')
+        return 3 if any(contention(state) for state in states) else 0
     rows = [r.strip() for r in args.rows.split(',') if r.strip()]
     unknown = [r for r in rows if r not in ROWS]
     if unknown:
@@ -558,6 +713,7 @@ def main(argv=None):
     board = Board(args.preset, args.build_dir, args.jobs, args.define, args.label, args.sccache, args.source,
                   args.header, args.pch_header, args.link_target,
                   targets=[t.strip() for t in args.targets.split(',') if t.strip()], tooth=args.tooth)
+    board.allow_contended = args.allow_contended
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     board.checkpoint = lambda record: output.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')

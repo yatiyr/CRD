@@ -49,6 +49,12 @@ sccache_spec.loader.exec_module(install_sccache)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
+cba_spec = importlib.util.spec_from_file_location('install_cba', ROOT / 'scripts/install-clang-build-analyzer.py')
+install_cba = importlib.util.module_from_spec(cba_spec)
+cba_spec.loader.exec_module(install_cba)
+profile_spec = importlib.util.spec_from_file_location('build_profile', ROOT / 'scripts/build-profile.py')
+build_profile = importlib.util.module_from_spec(profile_spec)
+profile_spec.loader.exec_module(build_profile)
 cache_spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
 compiler_cache = importlib.util.module_from_spec(cache_spec)
 cache_spec.loader.exec_module(compiler_cache)
@@ -1162,7 +1168,8 @@ class BuildPerformance(unittest.TestCase):
             # restored on the way out.
             saved = []
             stopped = build_bench.Board('win-debug', Path(temp) / 'fresh', 4, [], 'x', repo=Path(temp),
-                                        tooth=(source.name, 'return 1;', 'return 2;'), log=lambda _: None)
+                                        tooth=(source.name, 'return 1;', 'return 2;'), log=lambda _: None,
+                                        host=lambda: [])
             stopped.checkpoint = lambda record: saved.append([r['row'] for r in record['rows']])
 
             def row(name, action):
@@ -1226,6 +1233,74 @@ class BuildPerformance(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'CMAKE_MAKE_PROGRAM'):
                 build_bench.make_program(tree)
         self.assertIn('relink-all', build_bench.ROWS)
+
+    def test_boards_record_the_host_and_refuse_a_contended_one(self):
+        gib = int(build_bench.GIB)
+        before = {1: ('ComfyUI', 25 * gib, 100.0), 2: ('opera', gib // 2, 10.0), 3: ('idle', 0, None),
+                  4: ('gone', 0, 1.0), 9: ('build-bench', 0, 1.0)}
+        after = {1: ('ComfyUI', 25 * gib, 108.0), 2: ('opera', gib // 2, 11.0), 3: ('idle', 0, None),
+                 4: ('reused', 0, 9.0), 5: ('new', 0, 50.0), 9: ('build-bench', 0, 99.0)}
+        by_cpu, by_memory, cores = build_bench.busiest(before, after, 2.0, own_pids={9})
+        self.assertEqual([(p['name'], p['cores']) for p in by_cpu], [('ComfyUI', 4.0), ('opera', 0.5), ('idle', 0.0)],
+                         'a process seen once, a reused pid and the board itself are left out')
+        self.assertEqual(by_memory[0]['gib'], 25.0)
+        self.assertEqual(cores, 4.5)
+        busy = {'host': 'windows', 'total_gib': 63.7, 'available_gib': 0.7, 'cores': cores, 'busiest': by_cpu}
+        reasons = build_bench.contention(busy)
+        self.assertEqual(len(reasons), 3)
+        self.assertIn('0.7 of 63.7 GiB available', reasons[0])
+        self.assertIn('ComfyUI (pid 1) used 4.0 cores', reasons[1])
+        self.assertIn('4.5 cores together', reasons[2])
+        browsing = {'host': 'windows', 'total_gib': 63.7, 'available_gib': 36.0, 'cores': 0.9,
+                    'busiest': [{'name': 'opera', 'pid': 2, 'cores': 0.9, 'gib': 0.5}]}
+        self.assertEqual(build_bench.contention(browsing), [], 'a browser tab below a core is background')
+        many = dict(browsing, cores=2.4)
+        self.assertEqual(len(build_bench.contention(many)), 1, 'several small processes add up')
+        self.assertEqual(build_bench.contention({'host': 'windows', 'error': 'x'}), [])
+        self.assertTrue(build_bench.host_summary([browsing]).endswith('; idle'))
+        summary = build_bench.host_summary([busy, {'host': 'windows', 'error': 'no interop'}])
+        self.assertIn('windows 0.7 of 63.7 GiB available, others 4.5 cores, busiest ComfyUI 4.0 cores', summary)
+        self.assertIn('not sampled (no interop)', summary)
+        self.assertIn('; CONTENDED: ', summary)
+        # The Windows sampler: PowerShell's JSON (WSL reaches it through interop); a failure is recorded, not raised.
+        document = {'total': 64 * gib, 'available': 30 * gib,
+                    'before': [{'pid': 1, 'name': 'dota2', 'rss': 4 * gib, 'cpu': 10.0}],
+                    'after': [{'pid': 1, 'name': 'dota2', 'rss': 4 * gib, 'cpu': 14.0},
+                              {'pid': 2, 'name': 'System', 'rss': 0, 'cpu': None}]}
+        with patch.object(build_bench.subprocess, 'run',
+                          return_value=SimpleNamespace(stdout=json.dumps(document))) as call:
+            state = build_bench.windows_host_state('powershell.exe', seconds=2.0)
+        self.assertIn('Start-Sleep -Milliseconds 2000', call.call_args[0][0][-1])
+        self.assertIn('$_.Id -ne $PID', call.call_args[0][0][-1], 'the sampler leaves itself out')
+        self.assertEqual((state['total_gib'], state['available_gib'], state['cores']), (64.0, 30.0, 2.0))
+        self.assertEqual(state['busiest'][0]['name'], 'dota2')
+        with patch.object(build_bench.subprocess, 'run', return_value=SimpleNamespace(stdout='not json')):
+            self.assertIn('error', build_bench.windows_host_state('powershell.exe'))
+        with patch.object(build_bench.subprocess, 'run', side_effect=OSError('missing')):
+            self.assertEqual(build_bench.windows_host_state('powershell.exe')['error'], 'missing')
+        # A board refuses a contended host unless told to record it, and names the load in its record and context.
+        with tempfile.TemporaryDirectory() as temp:
+            refused = build_bench.Board('win-debug', Path(temp) / 'b', 4, [], 'x', repo=Path(temp),
+                                        log=lambda _: None, host=lambda: [busy])
+            refused.row = lambda name, action: refused.record['rows'].append({'row': name})
+            with self.assertRaisesRegex(SystemExit, 'the host is not idle .*allow-contended'):
+                refused.execute(['configure'])
+            self.assertEqual(refused.record['rows'], [], 'nothing is measured on a refused host')
+            recorded = build_bench.Board('win-debug', Path(temp) / 'c', 4, [], 'x', repo=Path(temp),
+                                         log=lambda _: None, host=lambda: [busy])
+            recorded.allow_contended = True
+            recorded.row = lambda name, action: recorded.record['rows'].append({'row': name})
+            record = recorded.execute(['configure'])
+            self.assertEqual(record['contended'], reasons)
+            self.assertEqual(record['host_after'], [busy])
+            record.update({'jobs': 4, 'defines': [], 'toolchain': {}})
+            context = build_bench.render_context([record])
+            self.assertIn('host before: windows 0.7 of 63.7 GiB', context)
+            self.assertIn('host after: ', context)
+        if Path('/proc/self/stat').is_file():
+            processes = build_bench.linux_processes()
+            self.assertIn(os.getpid(), processes)
+            self.assertGreater(processes[os.getpid()][1], 0)
 
     def test_sccache_installer_extracts_only_the_pinned_member_and_checks_its_digest(self):
         for archive_kind in ('zip', 'tar'):
@@ -1317,6 +1392,192 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('/v%s/' % pin['version'], pin['url'])
         self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('scripts/install-mold.py', check_pins.HELPERS)
+
+    MSVC_PROFILE = (
+        '[1/3] Building CXX object engine/a.cpp.obj\n'
+        'a.cpp\n'
+        'Include Headers:\n'
+        '\tCount: 3\n'
+        '\t\tD:\\Dev\\cerid\\engine\\x.hpp: 0.500000s\n'
+        '\t\t\tC:\\VC\\include\\span: 0.300000s\n'
+        '\t\t\t\tC:\\VC\\include\\xutility: 0.200000s\n'
+        '\t\t\tD:\\Dev\\cerid\\engine\\y.hpp: 0.100000s\n'
+        '\t\tD:\\Dev\\cerid\\engine\\z.hpp: 0.050000s\n'
+        '\n'
+        '\tTop 2 (top-level only):\n'
+        '\t\tD:\\Dev\\cerid\\engine\\x.hpp: 0.500000s\n'
+        '\n'
+        '\tTotal: 0.550000s\n'
+        'Class Definitions:\n'
+        '\tCount: 2\n'
+        '\t\tcrd::ceir::Context: 0.010000s\n'
+        "\t\tstd::vector<`template-type-parameter-1'>: 0.002000s\n"
+        '\n'
+        '\tTotal: 0.012000s\n'
+        'Function Definitions:\n'
+        '\tCount: 1\n'
+        '\t\tcrd::f: 0.004000s\n'
+        '\n'
+        '\tTotal: 0.004000s\n'
+        'time(C:\\VC\\bin\\c1xx.dll)=0.80000s < 1 - 2 > BB [D:\\Dev\\cerid\\engine\\a.cpp]\n'
+        'time(C:\\VC\\bin\\c2.dll)=0.20000s < 3 - 4 > BB [D:\\Dev\\cerid\\engine\\a.cpp]\n'
+        '[2/3] Building CXX object engine/b.cpp.obj\n'
+        'b.cpp\n'
+        'Include Headers:\n'
+        '\tCount: 1\n'
+        '\t\tD:\\Dev\\cerid\\engine\\x.hpp: 0.400000s\n'
+        '\t\t\tC:\\VC\\include\\span: 0.250000s\n'
+        '\n'
+        '\tTotal: 0.400000s\n'
+        'Function Definitions:\n'
+        '\tCount: 1\n'
+        '\t\tcrd::f: 0.006000s\n'
+        '\n'
+        '\tTotal: 0.006000s\n'
+        'time(C:\\VC\\bin\\c1xx.dll)=0.60000s < 1 - 2 > BB [D:\\Dev\\cerid\\engine\\b.cpp]\n'
+        '[3/3] Linking CXX executable app.exe\n')
+
+    CBA_REPORT = ('Analyzing build trace from capture.bin...\n'
+                  '**** Time summary:\n'
+                  'Compilation (1863 times):\n'
+                  '  Parsing (frontend):         1234.5 s\n'
+                  '  Codegen & opts (backend):    345.6 s\n'
+                  '\n'
+                  '**** Files that took longest to parse (compiler frontend):\n'
+                  '  9012 ms: /home/u/cerid-src/build/tests/ceir/x.cpp.o\n'
+                  '**** Templates that took longest to instantiate:\n'
+                  '  4321 ms: crd::containers::Array<int> (1234 times, avg 3 ms)\n'
+                  '**** Expensive headers:\n'
+                  '  70000 ms: /home/u/cerid-src/engine/execution/ceir/include/crd/ceir/ir.hpp (included 500 times, '
+                  'avg 140 ms), included via:\n'
+                  '    345x: context.hpp\n'
+                  '  done in 0.4s.\n')
+
+    def test_compile_profile_reads_msvc_timings_and_clang_build_analyzer_reports(self):
+        root = Path('D:/Dev/cerid')
+        document = build_profile.parse_msvc(self.MSVC_PROFILE.splitlines(True), root=root)
+        self.assertEqual(document['units'], 2)
+        self.assertEqual((document['frontend_s'], document['backend_s']), (1.4, 0.2))
+        self.assertAlmostEqual(document['include_s'], 0.95, delta=0.051, msg='0.55 + 0.4, the top-level includes')
+        headers = {row['name']: (row['seconds'], row['units']) for row in document['headers']}
+        self.assertEqual(headers['engine/x.hpp'], (0.9, 2), 'inclusive time summed over the units that parse it')
+        self.assertEqual(headers['C:/VC/include/span'], (0.55, 2))
+        exclusive = {row['name']: row['seconds'] for row in document['headers_exclusive']}
+        self.assertEqual(exclusive['engine/x.hpp'], 0.25, 'x.hpp: 0.5 - (0.3 + 0.1) in a, 0.4 - 0.25 in b')
+        self.assertEqual(exclusive['C:/VC/include/span'], 0.35, '0.3 - 0.2 in a, 0.25 in b')
+        self.assertEqual(exclusive['C:/VC/include/xutility'], 0.2)
+        self.assertEqual(exclusive['engine/z.hpp'], 0.05)
+        self.assertAlmostEqual(sum(exclusive.values()), 0.95, places=6,
+                               msg='exclusive times add up to the build include time')
+        self.assertEqual(document['classes'][0], {'name': 'crd::ceir::Context', 'seconds': 0.01, 'units': 1})
+        self.assertEqual(document['functions'][0], {'name': 'crd::f', 'seconds': 0.01, 'units': 2})
+        first = document['top_units'][0]
+        self.assertEqual((first['source'], first['frontend_s'], first['backend_s']), ('engine/a.cpp', 0.8, 0.2))
+        self.assertNotIn('app.exe', [u['edge'] for u in document['top_units']], 'a link edge prints no timing')
+        clang = build_profile.parse_clang_report(self.CBA_REPORT, root=Path('/home/u/cerid-src'))
+        self.assertEqual(clang['summary']['Parsing (frontend)'], 1234.5)
+        self.assertEqual(clang['frontend'], [{'name': 'build/tests/ceir/x.cpp.o', 'seconds': 9.012}])
+        self.assertEqual(clang['templates'][0]['count'], 1234)
+        self.assertEqual(clang['headers'], [{'name': 'engine/execution/ceir/include/crd/ceir/ir.hpp',
+                                             'seconds': 70.0, 'count': 500}])
+        rows = build_profile.compare({'headers': [{'name': 'a', 'seconds': 2.0}, {'name': 'b', 'seconds': 1.0}]},
+                                     {'headers': [{'name': 'a', 'seconds': 1.5}]})
+        self.assertEqual(rows, [{'name': 'a', 'before': 2.0, 'after': 1.5, 'delta': -0.5},
+                                {'name': 'b', 'before': 1.0, 'after': None, 'delta': None}])
+        markdown = build_profile.render(dict(document, label='w', preset='win-debug', jobs=16, build_s=10,
+                                             edge_s=100, edges=3, defines=[]))
+        self.assertIn('| `engine/x.hpp` | 0.9 | 2 |', markdown)
+        self.assertIn('front end 1 s, back end 0 s', markdown)
+        self.assertIn('| `crd::containers::Array<int>` | 4.321 | 1234 |', build_profile.render(clang))
+
+    def test_compile_profile_runs_uncached_in_a_fresh_tree_and_refuses_a_busy_host(self):
+        command = build_profile.configure_command('win-debug', Path('B'), 'msvc', ['CRD_ENABLE_PCH=OFF'])
+        self.assertIn('-DCMAKE_CXX_FLAGS_INIT=/Bt+ /d1reportTime', command)
+        self.assertIn('-DCRD_COMPILER_LAUNCHER=', command, 'a cache hit would hide the units it serves')
+        self.assertEqual(command[-1], '-DCRD_ENABLE_PCH=OFF')
+        self.assertIn('-DCMAKE_CXX_FLAGS_INIT=-ftime-trace',
+                      build_profile.configure_command('linux-clang-tsan', Path('B'), 'clang', []))
+        with tempfile.TemporaryDirectory() as temp:
+            args = SimpleNamespace(build_dir=str(Path(temp) / 'tree'), allow_contended=False, output=str(
+                Path(temp) / 'out' / 'p.json'), preset='win-debug', compiler='msvc', define=[], jobs=4, target=[],
+                label='x', top=5, analyzer='cba')
+            busy = [{'host': 'windows', 'total_gib': 64.0, 'available_gib': 1.0, 'cores': 0.0, 'busiest': []}]
+            with self.assertRaisesRegex(SystemExit, 'not idle'):
+                build_profile.run_profile(args, runner=None, host=lambda: busy)
+            calls = []
+
+            def runner(command, cwd=None, stdout=None, stderr=None, check=False):
+                calls.append(command)
+                if stdout is not None:
+                    stdout.write(self.MSVC_PROFILE)
+                return SimpleNamespace(returncode=0)
+
+            self.assertEqual(build_profile.run_profile(args, runner=runner, host=lambda: []), 0)
+            saved = json.loads((Path(temp) / 'out' / 'p.json').read_text(encoding='utf-8'))
+            self.assertEqual((saved['units'], saved['build_exit'], saved['contended']), (2, 0, []))
+            self.assertEqual(calls[1][:2], ['cmake', '--build'])
+            self.assertTrue((Path(temp) / 'out' / 'p.log').is_file(), 'the log stays for parse-msvc')
+            (Path(temp) / 'tree').mkdir()
+            with self.assertRaisesRegex(SystemExit, 'fresh scratch directory'):
+                build_profile.run_profile(args, runner=runner, host=lambda: [])
+
+    def test_clang_build_analyzer_installer_builds_the_verified_source_and_checks_the_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / 'ClangBuildAnalyzer-test.tar.gz'
+            with tarfile.open(archive, 'w:gz') as package:
+                data = b'project(ClangBuildAnalyzer)\n'
+                info = tarfile.TarInfo('ClangBuildAnalyzer-abc/CMakeLists.txt')
+                info.size = len(data)
+                package.addfile(info, io.BytesIO(data))
+            pin = {'version': '1.6.0', 'commit': 'b' * 40, 'url': 'https://example.invalid/cba.tar.gz',
+                   'file': archive.name, 'sha256': pins_registry.sha256(archive)}
+            commands = []
+            destination = root / 'tools'
+
+            def fake_build(command, log, reported='ClangBuildAnalyzer \x1b[1m1.6.0\x1b[0m\n'):
+                commands.append(command)
+                if command[1] == '--install':
+                    tool = install_cba.binary(destination)
+                    tool.parent.mkdir(parents=True, exist_ok=True)
+                    tool.write_text('#!/bin/sh\nprintf "%s"\n' % reported, encoding='utf-8')
+
+            def version_of(command, **_):
+                return SimpleNamespace(stdout='ClangBuildAnalyzer \x1b[1m1.6.0\x1b[0m\n', stderr='')
+
+            with patch.object(install_cba.subprocess, 'run', side_effect=version_of):
+                tool = install_cba.install(destination, archive=archive, work_dir=root / 'work', pin=pin,
+                                           runner=fake_build)
+                self.assertEqual(tool, install_cba.binary(destination))
+                self.assertEqual([c[1] for c in commands], ['-S', '--build', '--install'])
+                self.assertIn('-DCMAKE_BUILD_TYPE=Release', commands[0])
+                self.assertIn('-DCMAKE_INSTALL_PREFIX=%s' % destination.resolve(), commands[0])
+                self.assertEqual(json.loads((destination / install_cba.STAMP).read_text(encoding='utf-8')),
+                                 install_cba.expected_stamp(pin))
+                # A matching stamp and version are reused without a build; a changed pin rebuilds.
+                commands.clear()
+                install_cba.install(destination, archive=archive, work_dir=root / 'work', pin=pin, runner=fake_build)
+                self.assertEqual(commands, [])
+                self.assertFalse(install_cba.reusable(destination, dict(install_cba.expected_stamp(pin), commit='c')))
+            old = root / 'old'
+
+            def build_old(command, log):
+                if command[1] == '--install':
+                    install_cba.binary(old).parent.mkdir(parents=True, exist_ok=True)
+                    install_cba.binary(old).write_text('x', encoding='utf-8')
+
+            with patch.object(install_cba.subprocess, 'run',
+                              return_value=SimpleNamespace(stdout='ClangBuildAnalyzer 1.5.0\n', stderr='')):
+                with self.assertRaisesRegex(pins_registry.PinError, "reports '1.5.0'"):
+                    install_cba.install(old, archive=archive, work_dir=root / 'work2', pin=pin, runner=build_old)
+                self.assertFalse((old / install_cba.STAMP).exists(), 'a wrong version is never stamped')
+            with self.assertRaisesRegex(pins_registry.PinError, 'checksum mismatch'):
+                install_cba.install(root / 'bad', archive=archive, work_dir=root / 'work3',
+                                    pin=dict(pin, sha256='0' * 64), runner=fake_build)
+        pin = pins_registry.entry('tools', 'clang-build-analyzer')
+        self.assertIn(pin['commit'], pin['url'])
+        self.assertEqual(pin['license'], 'Unlicense')
+        self.assertIn('scripts/install-clang-build-analyzer.py', check_pins.HELPERS)
 
     def test_cmake_module_applies_launcher_and_pools_only_when_asked(self):
         cmake = shutil.which('cmake')

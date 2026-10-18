@@ -144,6 +144,35 @@ and every hosted lane link with the toolchain's linker (2026-10-18, DIAG.11b bui
   `/INCREMENTAL`: `/INCREMENTAL:NO` doubles the link time and `/DEBUG:FASTLINK` ties the default on edits while
   doubling a full relink.
 
+<a id="compile-time-profiles"></a>
+## Compile-time profiles
+
+[build-profile.py](../../scripts/build-profile.py) answers which units, headers, classes, templates and functions a
+build spends its compile time on (2026-10-18, DIAG.11b build-speed task C). `run --compiler msvc|clang --preset <p>
+--build-dir <fresh dir> --jobs <n> --label <l> --output <profile.json>` configures the preset into a fresh scratch tree
+with no compiler launcher (a cache hit never runs the compiler, so it would hide every unit it serves) and the
+compiler's own profiling switches, builds it (`--target` scopes it, the way a module adopting the route profiles only
+its targets), and writes a profile document beside the kept build log:
+
+- MSVC: `/Bt+` (front-end and back-end seconds per unit) and `/d1reportTime` (per unit, the include tree with every
+  header's inclusive parse time, and the time of every class and function definition), seeded through
+  `CMAKE_CXX_FLAGS_INIT` so the project's own flags stay as they are. Both are compiler switches and need no
+  elevation. C++ Build Insights (`vcperf`, present in the VS 18 install) needs an elevated shell for every capture, or
+  a one-time elevated `vcperf /grantusercontrol` after which `vcperf /start /noadmin` works unelevated (measured
+  2026-10-18: "This operation requires administrator privileges", and `/noadmin` refused without the grant).
+- Clang: `-ftime-trace` (a JSON per object), read by the pinned ClangBuildAnalyzer 1.6.0 (registry entry
+  `tools/clang-build-analyzer`, built from its commit-addressed source by
+  [install-clang-build-analyzer.py](../../scripts/install-clang-build-analyzer.py) into `~/.cerid/tools`; no
+  administrator rights).
+
+The document keeps, per unit, the front-end and back-end seconds; per header the summed inclusive time (its own text
+plus everything it includes, over every unit that parses it) and the summed exclusive time (its own text only, so the
+exclusive times add up to the build's include time); per class, function or template the summed time and the units.
+Inclusive time ranks what to cut from a unit's include list; exclusive time ranks the text that is expensive wherever
+it is included. Like a board, a profile records the host before and after and refuses a contended host unless
+`--allow-contended`. `parse-msvc <log>` and `parse-clang <report>` rebuild a document from a kept log or report,
+`render` writes the tables docs/bench stores, and `compare <before> <after> --key headers` lines two documents up.
+
 ## WSL source mirror
 
 The Linux lanes on the WSL reference host build from `~/cerid-src`, a copy of the checkout on the native ext4 disk,

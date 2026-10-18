@@ -37,6 +37,9 @@ add_test(NAME crd-diag-coverage
 # DIAG.11b: every overhead-board statistic and verdict, with fake measurement processes
 add_test(NAME crd-diag-overhead-verdicts
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-diag-overhead.py")
+# DIAG.11b clause (8): every verdict of the external sampling of the overhead workloads, wpr and xperf mocked
+add_test(NAME crd-diag-overhead-sampling-runbook
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-sample-overhead-wpr.py")
 add_test(NAME crd-ci-tiers
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-ci-tiers.py")
 add_test(NAME crd-pins
@@ -57,7 +60,8 @@ set_tests_properties(crd-ci-tiers crd-pins crd-license-manifest PROPERTIES TIMEO
 set_tests_properties(crd-generated-sources PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1") # hashes 14 MB of codelets
 set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "PYTHONUTF8=1")
 set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
-    crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+    crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts crd-diag-overhead-sampling-runbook
+    PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
 # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
 set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.3a: every allocation result in shipped code is checked before it is used (a sub-budget allocator refuses by

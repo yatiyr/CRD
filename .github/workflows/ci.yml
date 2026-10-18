@@ -162,6 +162,8 @@ jobs:
         run: python scripts/test-diag-coverage.py
       - name: Overhead board verdicts
         run: python scripts/test-diag-overhead.py
+      - name: Overhead external sampling verdicts
+        run: python scripts/test-sample-overhead-wpr.py
       - name: Project structure synchronization
         run: python scripts/test-project-sync.py
       - name: Canonical build profile contracts

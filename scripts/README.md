@@ -39,7 +39,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
   no-op, source-edit, header-edit, PCH-header-edit, link and teeth (`--tooth FILE OLD NEW`: break, rebuild, restore,
   rebuild) rows of one preset in a fresh scratch directory (explicit `--jobs`, `--targets` to scope the build rows,
   optional `--sccache` statistics) and `render` merges boards for `docs/bench/`; the lane evidence bundle records
-  every hosted build's Ninja log and sccache statistics with the cache backend.
+  every hosted build's Ninja log and sccache statistics with the cache backend. Every board records the host's
+  available memory and busiest processes before and after (on WSL the Windows host's too) and refuses a contended
+  host unless `--allow-contended`; `build-bench.py host` prints that snapshot and exits 3 when it is contended.
 - Public consumption ([design](../docs/design/public-consumption.md)): `check-headers.py --build <dir> --changed`
   compiles changed public headers standalone with a sibling unit's flags from the compile database (outputs
   redirected to a scratch directory); `test-package-consumer.py --preset <name> --scratch <dir>` installs the
@@ -95,7 +97,10 @@ Run commands from the repository root. Build/test rules and exact quality requir
   runs the harness (`tests/support/diag-overhead`) once per process for every workload and arm, interleaved, and
   judges ADR-0133 ID-5's budgets (within, over, or unresolved when the host's noise is wider than the claim);
   `render` writes the markdown of a board for docs/bench. `test-diag-overhead.py` covers every statistic and verdict
-  with fake processes and is a CTest and repository CI step.
+  with fake processes and is a CTest and repository CI step. `sample-overhead-wpr.py record` (an elevated shell)
+  samples the same workloads with WPR, every arm a process of one trace; `analyze <run dir>` (no elevation) counts each
+  process's CPU samples and the share in the diagnostic frames, and judges whether a mode's measured cost is
+  explained by them (`test-sample-overhead-wpr.py`, a CTest and repository CI step, mocks wpr and xperf).
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.
