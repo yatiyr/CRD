@@ -1,13 +1,18 @@
-# Opt-in compiler caching and memory-bounded Ninja job pools (REPO.DEV.7). Contract: docs/design/build-performance.md.
-# Nothing here changes a configuration unless CRD_COMPILER_LAUNCHER, CRD_COMPILE_JOBS or CRD_LINK_JOBS is set; the
-# default graph stays byte-identical. Generator truth: CMake applies <LANG>_COMPILER_LAUNCHER only for Makefile and
-# Ninja generators and JOB_POOLS only for Ninja, so a Visual Studio solution is reported as uncached and unbounded
-# rather than silently pretending otherwise. The local helpers (scripts/configure-preset.bat, scripts/wsl-lane.sh) turn
-# the launcher on; the presets and the default graph never do.
+# Opt-in compiler caching, an opt-in linker and memory-bounded Ninja job pools (REPO.DEV.7). Contract:
+# docs/design/build-performance.md. Nothing here changes a configuration unless CRD_COMPILER_LAUNCHER, CRD_LINKER
+# (with CRD_LINKER_THREADS), CRD_COMPILE_JOBS or CRD_LINK_JOBS is set; the default graph stays byte-identical.
+# Generator truth: CMake applies <LANG>_COMPILER_LAUNCHER only for Makefile and Ninja generators and JOB_POOLS only for
+# Ninja, so a Visual Studio solution is reported as uncached and unbounded rather than silently pretending otherwise.
+# The local helpers (scripts/configure-preset.bat, scripts/wsl-lane.sh) turn the launcher and the linker on; the
+# presets and the default graph never do.
 include_guard(GLOBAL)
 
 set(CRD_COMPILER_LAUNCHER "" CACHE FILEPATH
     "Compiler launcher (the pinned sccache) for Ninja/Makefile generators; empty keeps the uncached compile")
+set(CRD_LINKER "" CACHE FILEPATH
+    "The pinned mold for GCC and Clang links (scripts/install-mold.py); empty keeps the toolchain's default linker")
+set(CRD_LINKER_THREADS "" CACHE STRING
+    "Threads per mold link (-Wl,--threads=<n>); empty keeps mold's default of one thread per CPU")
 set(CRD_COMPILE_JOBS "" CACHE STRING "Ninja compile pool depth (memory-bounded); empty keeps Ninja's -j for compiles")
 set(CRD_LINK_JOBS "" CACHE STRING "Ninja link pool depth (memory-bounded); empty keeps Ninja's -j for links")
 
@@ -56,6 +61,48 @@ if(CRD_COMPILER_LAUNCHER)
         message(STATUS "[crd] Compiler launcher: ${CRD_COMPILER_LAUNCHER} (${CMAKE_GENERATOR}${_crd_launcher_note})")
         unset(_crd_launcher_note)
     endif()
+endif()
+
+# The linker touches link lines only: no compile command changes, so a cached tree keeps every cache key. GCC takes no
+# path in -fuse-ld, so the driver finds `ld.mold` (the installer's link beside the binary) in the -B directory; Clang
+# looks it up the same way. Gated on the link language like the warning options of the root build file. CMake 3.29's
+# CMAKE_LINKER_TYPE does the same, but the WSL reference host runs CMake 3.28.
+if(CRD_LINKER)
+    if(MSVC)
+        message(STATUS "[crd] Linker override ignored: ${CMAKE_CXX_COMPILER_ID} links through link.exe or lld-link "
+                       "(CRD_LINKER is for GCC and Clang)")
+    else()
+        get_filename_component(_crd_linker_name "${CRD_LINKER}" NAME)
+        get_filename_component(_crd_linker_dir "${CRD_LINKER}" DIRECTORY)
+        if(NOT _crd_linker_name STREQUAL "mold" OR NOT EXISTS "${CRD_LINKER}")
+            message(FATAL_ERROR "CRD_LINKER must name an installed mold binary (scripts/install-mold.py), got "
+                                "'${CRD_LINKER}'")
+        endif()
+        if(NOT EXISTS "${_crd_linker_dir}/ld.mold")
+            message(FATAL_ERROR "CRD_LINKER: ${_crd_linker_dir} has no ld.mold, which -fuse-ld=mold looks for "
+                                "(scripts/install-mold.py creates it)")
+        endif()
+        add_link_options("$<$<LINK_LANGUAGE:C,CXX>:-fuse-ld=mold>" "$<$<LINK_LANGUAGE:C,CXX>:-B${_crd_linker_dir}>")
+        # mold starts a pool of one thread per CPU for every link, so the 16 links of a parallel build ran 512 threads
+        # on 32 CPUs and gained nothing over GNU ld; a bounded pool (lane jobs times threads at most the CPUs) is what
+        # made it faster (docs/design/build-performance.md#the-linker). The option names mold, so it is only ever on
+        # a mold link line; CMake's compiler probes link with the toolchain's linker and never see it.
+        set(_crd_linker_threads "")
+        # Tested as text: CMake reads "0" as false, and an explicit zero is a mistake, not "no bound".
+        if(NOT CRD_LINKER_THREADS STREQUAL "")
+            if(NOT CRD_LINKER_THREADS MATCHES "^[1-9][0-9]*$")
+                message(FATAL_ERROR "CRD_LINKER_THREADS must be a positive integer, got '${CRD_LINKER_THREADS}'")
+            endif()
+            add_link_options("$<$<LINK_LANGUAGE:C,CXX>:-Wl,--threads=${CRD_LINKER_THREADS}>")
+            set(_crd_linker_threads ", ${CRD_LINKER_THREADS} threads per link")
+        endif()
+        message(STATUS "[crd] Linker: ${CRD_LINKER} (GCC and Clang links${_crd_linker_threads})")
+        unset(_crd_linker_threads)
+        unset(_crd_linker_name)
+        unset(_crd_linker_dir)
+    endif()
+elseif(NOT CRD_LINKER_THREADS STREQUAL "")
+    message(STATUS "[crd] CRD_LINKER_THREADS ignored: it bounds mold's threads and CRD_LINKER is empty")
 endif()
 
 set(_crd_pools)

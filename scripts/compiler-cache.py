@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""The local compiler cache: which CMake options cache a preset, and the sccache server a cached tree builds through.
+"""The local compiler cache and linker: which CMake options cache (and on WSL link) a preset, and the sccache server a
+cached tree builds through.
 
     compiler-cache.py configure-args <preset> [--host windows|linux]
         prints, on one line, the cache entries the local helpers add when they configure <preset>
@@ -9,7 +10,11 @@
         launcher there), a clang-tidy preset (the analysis runs on every unit) or an MSVC LTCG preset (cl with
         interprocedural optimization: the link generates the code, so the measured gain is small and converting the
         tree rebuilds every program). With CRD_SCCACHE=off it prints the reverse entries, which return a cached tree
-        to the default graph.
+        to the default graph. On a Linux host the measured lanes (MOLD_PRESETS) also link with the pinned mold that
+        scripts/install-mold.py installs under ~/.cerid/tools/mold: CRD_LINKER and CRD_LINKER_THREADS (CRD_MOLD_THREADS,
+        else the CPUs divided by the lane's CRD_LANE_JOBS, default 16), so the lane's parallel links share the CPUs
+        instead of each starting a thread per CPU. CRD_MOLD=<path> names another binary, CRD_MOLD=off prints the
+        reverse entries (the toolchain's linker again).
     compiler-cache.py server <build-dir> [--shell cmd|sh]
         when the tree's CMakeCache.txt names a launcher, makes sure that launcher's server runs on the local cache and
         prints the environment a build needs (SCCACHE_DIR, SCCACHE_CACHE_SIZE) as `NAME=value` lines (cmd) or
@@ -17,10 +22,14 @@
         standard streams closed, so it never holds the calling shell's output open.
     compiler-cache.py stats [--zero]
         the local server's statistics.
+    compiler-cache.py port
+        the local server's TCP port, which every client of a cached tree must use (SCCACHE_SERVER_PORT).
 
 Locations (each overridable): the launcher is CRD_SCCACHE, else the pinned binary that scripts/install-sccache.py
 installs under ~/.cerid/tools/sccache; the cache is CRD_SCCACHE_DIR, else <checkout>/build/sccache on Windows and
-~/.cache/cerid-sccache on Linux (outside the WSL source mirror); its size is CRD_SCCACHE_CACHE_SIZE, else 30G.
+~/.cache/cerid-sccache on Linux (outside the WSL source mirror); its size is CRD_SCCACHE_CACHE_SIZE, else 30G; the
+server's port is CRD_SCCACHE_PORT, else 4226 on Windows and 4227 on Linux (WSL2 relays a Linux server's localhost port
+to Windows, so the two hosts' servers must not share one). A server that cannot start fails the command.
 The key of a cached compile includes the build directory, so a tree keeps its path. Nothing here changes a preset or
 the default graph. Contract: docs/design/build-performance.md#local-cached-trees.
 """
@@ -30,6 +39,7 @@ import json
 import os
 import platform
 import re
+import socket
 import subprocess
 import sys
 
@@ -38,6 +48,12 @@ PRESETS = ROOT / 'CMakePresets.json'
 DISABLED = ('off', '0', 'no', 'none', 'false')
 DEFAULT_SIZE = '30G'
 MSVC_COMPILERS = ('cl', 'clang-cl')
+DEFAULT_LANE_JOBS = 16
+WINDOWS_PORT = '4226'
+LINUX_PORT = '4227'
+# The WSL lanes whose links the pinned mold measured faster, with every program's suite, gdb and the warning gates
+# unchanged (docs/bench/2026-10-18-build-speed-linking.md). Another lane gets no linker entry until it is measured.
+MOLD_PRESETS = ('linux-gcc-debug', 'linux-gcc-asan', 'linux-clang-tsan')
 
 
 def is_on(value):
@@ -109,7 +125,13 @@ def resolve_preset(name, document=None):
 
 
 def configure_args(preset, environ=None, host=None, home=None, document=None):
-    """The -D entries for a local configure of preset (an empty list when the preset is not cached)."""
+    """The -D entries for a local configure of preset: the compiler cache's, then the linker's (empty when neither
+    applies)."""
+    return cache_args(preset, environ, host, home, document) + linker_args(preset, environ, host, home)
+
+
+def cache_args(preset, environ=None, host=None, home=None, document=None):
+    """The compiler cache's -D entries for a local configure of preset (an empty list when the preset is not cached)."""
     generator, variables = resolve_preset(preset, document)
     if not generator or 'Ninja' not in generator:
         return []
@@ -130,6 +152,37 @@ def configure_args(preset, environ=None, host=None, home=None, document=None):
     return ['-DCRD_COMPILER_LAUNCHER=%s' % path.as_posix()] + (['-DCRD_ENABLE_PCH=OFF'] if msvc else [])
 
 
+def default_mold(home=None):
+    return (Path(home) if home else Path.home()) / '.cerid' / 'tools' / 'mold' / 'mold'
+
+
+def link_threads(environ=None):
+    """Threads per mold link: CRD_MOLD_THREADS, else the CPUs shared by the lane's parallel links (CRD_LANE_JOBS,
+    wsl-lane.sh's job count, default 16), at least one."""
+    environ = os.environ if environ is None else environ
+    for name in ('CRD_MOLD_THREADS', 'CRD_LANE_JOBS'):
+        if environ.get(name) and not re.fullmatch(r'[1-9][0-9]*', environ[name]):
+            raise SystemExit('compiler-cache: %s must be a positive integer, got %r' % (name, environ[name]))
+    if environ.get('CRD_MOLD_THREADS'):
+        return int(environ['CRD_MOLD_THREADS'])
+    jobs = int(environ.get('CRD_LANE_JOBS') or DEFAULT_LANE_JOBS)
+    return max(1, (os.cpu_count() or 1) // max(1, jobs))
+
+
+def linker_args(preset, environ=None, host=None, home=None):
+    """The -D entries that link a measured WSL lane with the pinned mold (an empty list for every other preset)."""
+    environ = os.environ if environ is None else environ
+    if (host or host_name()) != 'linux' or preset not in MOLD_PRESETS:
+        return []
+    value = environ.get('CRD_MOLD', '').strip()
+    if value and value.lower() in DISABLED:
+        return ['-DCRD_LINKER=', '-DCRD_LINKER_THREADS=']
+    mold = Path(value) if value else default_mold(home)
+    if not value and not mold.is_file():
+        return []
+    return ['-DCRD_LINKER=%s' % mold.as_posix(), '-DCRD_LINKER_THREADS=%d' % link_threads(environ)]
+
+
 def tree_launcher(build_dir):
     cache = Path(build_dir) / 'CMakeCache.txt'
     if not cache.is_file():
@@ -141,16 +194,36 @@ def tree_launcher(build_dir):
     return None
 
 
+def server_port(environ=None, host=None):
+    """The local server's TCP port: CRD_SCCACHE_PORT, else sccache's 4226 on Windows and 4227 on Linux. WSL2 relays
+    every localhost port a Linux process listens on to Windows' localhost (wslrelay.exe), so a Linux server on the
+    shared default port answered the Windows clients (its cache a Linux path, cl.exe compiles sent to it) and a Windows
+    server could not start while it ran (2026-10-18: "Server startup failed: Address in use")."""
+    environ = os.environ if environ is None else environ
+    value = environ.get('CRD_SCCACHE_PORT', '').strip()
+    if value:
+        if not re.fullmatch(r'[1-9][0-9]*', value) or int(value) > 65535:
+            raise SystemExit('compiler-cache: CRD_SCCACHE_PORT must be a TCP port, got %r' % value)
+        return value
+    return WINDOWS_PORT if (host or host_name()) == 'windows' else LINUX_PORT
+
+
 def server_environment(environ=None, host=None, home=None, root=ROOT):
     environ = os.environ if environ is None else environ
     return {'SCCACHE_DIR': str(cache_dir(environ, host, home, root)),
-            'SCCACHE_CACHE_SIZE': environ.get('CRD_SCCACHE_CACHE_SIZE') or DEFAULT_SIZE}
+            'SCCACHE_CACHE_SIZE': environ.get('CRD_SCCACHE_CACHE_SIZE') or DEFAULT_SIZE,
+            'SCCACHE_SERVER_PORT': server_port(environ, host)}
 
 
 def stats(exe, env):
-    completed = subprocess.run([str(exe), '--show-stats', '--stats-format', 'json'], env=env, capture_output=True,
-                               text=True, encoding='utf-8', errors='replace', timeout=60, check=False,
-                               stdin=subprocess.DEVNULL)
+    """The statistics document of the server on the environment's port, or None (no answer: not an sccache server)."""
+    try:
+        completed = subprocess.run([str(exe), '--show-stats', '--stats-format', 'json'], env=env, capture_output=True,
+                                   text=True, encoding='utf-8', errors='replace', timeout=60, check=False,
+                                   stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        # Measured: a listener that accepts and never answers holds the client until the timeout.
+        return None
     if completed.returncode != 0:
         return None
     try:
@@ -167,22 +240,41 @@ def serves(document, directory):
     return str(directory).replace('\\', '/').lower().rstrip('/') in location
 
 
+def listening(port, host='127.0.0.1'):
+    """True when a process accepts connections on the local TCP port (sccache's 4226 when none is named)."""
+    try:
+        with socket.create_connection((host, int(port or WINDOWS_PORT)), timeout=2):
+            return True
+    except OSError:
+        return False
+
+
 def ensure_server(exe, variables, environ=None):
     """Start (or restart) exe's server on the local cache; the server's standard streams are closed."""
     env = dict(os.environ if environ is None else environ)
     env.update(variables)
     Path(variables['SCCACHE_DIR']).mkdir(parents=True, exist_ok=True)
     quiet = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
-    # A statistics query starts a server with this environment when none runs (measured: it does not hold the
-    # caller's pipes). A server that is already running answers on the fixed port whatever its cache, so ask it where
-    # it caches and restart it when that is another directory (a board's scratch cache, another checkout).
-    running = stats(exe, env)
-    if serves(running, variables['SCCACHE_DIR']):
-        return 'running'
-    subprocess.run([str(exe), '--stop-server'], env=env, timeout=60, check=False, **quiet)
-    subprocess.run([str(exe), '--start-server'], env=env, timeout=60, check=True, **quiet)
-    if not serves(stats(exe, env), variables['SCCACHE_DIR']):
-        raise SystemExit('compiler-cache: the sccache server did not start on %s' % variables['SCCACHE_DIR'])
+    # A server that is already running answers on the port whatever its cache, so ask it where it caches and restart it
+    # when that is another directory (a board's scratch cache, another checkout). Ask only when something listens: a
+    # statistics query with no server starts one that exits with the query (measured 2026-10-18; `--start-server`'s
+    # and a compile's servers stay), so the check would pass on a server the build never sees.
+    if listening(variables.get('SCCACHE_SERVER_PORT')):
+        if serves(stats(exe, env), variables['SCCACHE_DIR']):
+            return 'running'
+    try:
+        subprocess.run([str(exe), '--stop-server'], env=env, timeout=60, check=False, **quiet)
+        started = subprocess.run([str(exe), '--start-server'], env=env, timeout=60, check=False, **quiet)
+    except subprocess.TimeoutExpired as expired:
+        started = subprocess.CompletedProcess(expired.cmd, 124)
+    # The proof is a server on the port that caches here (a refused start is fine when one now does, e.g. a race);
+    # asked only when something listens, for the reason above.
+    port = variables.get('SCCACHE_SERVER_PORT')
+    if not (listening(port) and serves(stats(exe, env), variables['SCCACHE_DIR'])):
+        raise SystemExit('compiler-cache: the sccache server did not start on %s (port %s, exit %d); another process '
+                         'holds the port (a WSL server is relayed to Windows), set CRD_SCCACHE_PORT or stop it'
+                         % (variables['SCCACHE_DIR'], variables.get('SCCACHE_SERVER_PORT', 'default'),
+                            started.returncode))
     return 'restarted'
 
 
@@ -203,9 +295,13 @@ def main(argv=None, out=sys.stdout):
     server_mode.add_argument('--shell', choices=('cmd', 'sh'), default='sh' if os.name != 'nt' else 'cmd')
     stats_mode = sub.add_parser('stats', help="the local server's statistics")
     stats_mode.add_argument('--zero', action='store_true')
+    sub.add_parser('port', help="the local server's TCP port (for SCCACHE_SERVER_PORT)")
     args = parser.parse_args(argv)
     if args.command == 'configure-args':
         out.write(' '.join(configure_args(args.preset, host=args.host)) + '\n')
+        return 0
+    if args.command == 'port':
+        out.write(server_port() + '\n')
         return 0
     variables = server_environment()
     if args.command == 'stats':

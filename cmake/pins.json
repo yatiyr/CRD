@@ -204,6 +204,16 @@
       "member_sha256": "066c5a84c85044c8f48b3ab571ac114293ea717c3d36985db022af8206e21e63",
       "license": "Apache-2.0"
     },
+    "mold-linux": {
+      "version": "3.0.0",
+      "url": "https://github.com/rui314/mold/releases/download/v3.0.0/mold-3.0.0-x86_64-linux.tar.gz",
+      "file": "mold-3.0.0-x86_64-linux.tar.gz",
+      "sha256": "6c90d4a474c7c0409dfb575be03a5345878ac14fdba18de8b40fa58c60121189",
+      "member": "mold-3.0.0-x86_64-linux/bin/mold",
+      "member_sha256": "ada05c08a5686fdc8cf047f946f6c9b5163b7181ee7c500f7a904bcb750642a3",
+      "license": "MIT",
+      "note": "The release build of tag v3.0.0 (commit 8de38c35a2df16a25f7ff87ac3ad07156a925beb, which the binary's --version names); the opt-in linker of docs/design/build-performance.md, installed by scripts/install-mold.py."
+    },
     "llvm": {
       "version": "20.1.8",
       "acquired_by": "KyleMayes/install-llvm-action",

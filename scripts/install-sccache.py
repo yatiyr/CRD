@@ -8,13 +8,9 @@ Contract: docs/design/build-performance.md; registry contract: docs/design/pinne
 """
 from pathlib import Path
 import argparse
-import hashlib
 import platform
-import shutil
 import subprocess
 import sys
-import tarfile
-import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pins  # noqa: E402
@@ -24,41 +20,10 @@ PIN = pins.entry('tools', TOOL)
 VERSION = PIN['version']
 
 
-def extract_member(archive, member, output):
-    """Copy exactly `member` out of a zip or tar.gz archive to `output`; archive paths never choose the location."""
-    archive = Path(archive)
-    if zipfile.is_zipfile(archive):
-        with zipfile.ZipFile(archive) as package:
-            info = package.getinfo(member)
-            if info.is_dir():
-                raise pins.PinError(f'{archive.name}: member is not a regular file: {member}')
-            with package.open(info) as source, output.open('wb') as target:
-                shutil.copyfileobj(source, target)
-        return
-    with tarfile.open(archive, 'r:*') as package:
-        info = package.getmember(member)
-        if not info.isfile():
-            raise pins.PinError(f'{archive.name}: member is not a regular file: {member}')
-        source = package.extractfile(info)
-        with source, output.open('wb') as target:
-            shutil.copyfileobj(source, target)
-
-
 def install(destination, archive=None, download_dir=None, pin=None, check=True):
     """Return the verified sccache path under `destination`."""
     pin = PIN if pin is None else pin
-    destination = Path(destination).resolve()
-    destination.mkdir(parents=True, exist_ok=True)
-    download_dir = Path(download_dir).resolve() if download_dir else destination
-    archive = pins.fetch(pin, download_dir, archive, label='sccache archive')
-    output = destination / Path(pin['member']).name
-    extract_member(archive, pin['member'], output)
-    with output.open('rb') as installed:
-        actual = hashlib.file_digest(installed, 'sha256').hexdigest()
-    if actual != pin['member_sha256']:
-        output.unlink()
-        raise pins.PinError(f'sccache binary checksum mismatch: expected {pin["member_sha256"]}, got {actual}')
-    output.chmod(0o755)
+    output = pins.install_member(pin, destination, archive, download_dir, label='sccache')
     if check:
         reported = subprocess.run([str(output), '--version'], capture_output=True, text=True, check=True).stdout.strip()
         if reported != f'sccache {pin["version"]}':

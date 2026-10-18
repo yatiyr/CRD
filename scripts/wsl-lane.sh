@@ -16,8 +16,9 @@
 # binaries built from older sources. Run it through the checkout's path (bash /mnt/d/.../scripts/wsl-lane.sh) so the
 # mirror's source is known. One heavy job at a time: configure, build, test and run wait for ~/.cerid/wsl-lane.lock.
 # Environment: CRD_LANE_ROOT (the trees, default ~/cerid-mirror-build), CRD_SOURCE_MIRROR (default ~/cerid-src),
-# CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_SCCACHE and the other
-# compiler-cache.py settings, VULKAN_SDK (default ~/cerid-deps/vulkan-sdk), CRD_VULKAN_VALIDATION (the pinned
+# CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_SCCACHE, CRD_MOLD and
+# the other compiler-cache.py settings (the measured lanes link with the pinned mold, its threads per link the CPUs
+# divided by CRD_LANE_JOBS), VULKAN_SDK (default ~/cerid-deps/vulkan-sdk), CRD_VULKAN_VALIDATION (the pinned
 # validation layer, default ~/.cerid/vulkan-validation). The lane exports S (the mirror) and B (the tree) to run's
 # command.
 set -euo pipefail
@@ -26,9 +27,15 @@ HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 MIRROR=${CRD_SOURCE_MIRROR:-$HOME/cerid-src}
 ROOT=${CRD_LANE_ROOT:-$HOME/cerid-mirror-build}
 JOBS=${CRD_LANE_JOBS:-16}
+# compiler-cache.py sizes mold's threads per link from the lane's job count at configure time.
+export CRD_LANE_JOBS=$JOBS
 LIMIT=${CRD_LANE_TIMEOUT:-3500}
 LOCK=$HOME/.cerid/wsl-lane.lock
 export CRD_SOURCE_MIRROR=$MIRROR
+# The Linux sccache server's own port: WSL2 relays a Linux localhost listener to Windows, so on the default port the
+# Windows clients reached this server (compiler-cache.py server_port, 2026-10-18).
+SCCACHE_SERVER_PORT=$(python3 "$HERE/compiler-cache.py" port)
+export SCCACHE_SERVER_PORT
 export VULKAN_SDK=${VULKAN_SDK:-$HOME/cerid-deps/vulkan-sdk}
 export CRD_PLATFORM_HEADLESS=1
 export TMPDIR=${TMPDIR:-/tmp} TEMP=${TEMP:-/tmp} TMP=${TMP:-/tmp}
@@ -131,7 +138,10 @@ case "$command" in
         if [[ ! -f "$tree/CMakeCache.txt" ]]; then
             configure "$preset"
         fi
-        eval "$(python3 "$MIRROR/scripts/compiler-cache.py" server "$tree" --shell sh)"
+        # An assignment, not eval "$(...)": a server that cannot start must stop the build (set -e), never leave it
+        # on whatever server answers.
+        server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server "$tree" --shell sh)
+        eval "$server_env"
         targets=()
         for target in "$@"; do
             targets+=(--target "$target")

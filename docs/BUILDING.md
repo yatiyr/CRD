@@ -33,7 +33,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Tidy failed' }
 Require timeouts, nonzero CTest matches, guards.
 `-DCRD_MODULES=<module|family>` configures one dependency-closed [selection](design/module-registry.md);
 `-DCRD_INPUT_ARCHIVES=<dir>` uses verified local [archives](design/pinned-inputs.md);
-Local cache, WSL mirror (`wsl-lane.sh`), `wait-for.py`, `-DCRD_COMPILER_LAUNCHER`, `CRD_COMPILE_JOBS`/`CRD_LINK_JOBS`:
+Local cache, mold, WSL mirror (`wsl-lane.sh`), `wait-for.py`, `-DCRD_COMPILER_LAUNCHER`, `CRD_COMPILE_JOBS`/`CRD_LINK_JOBS`:
 [build performance](design/build-performance.md); `-DCRD_PUBLIC_CHECKS=ON` checks every public header and the package consumer:
 [public consumption](design/public-consumption.md); fuzz corpora replay everywhere, `fuzz.py` fuzzes:
 [instruments](design/test-instruments.md); planned coverage: [DIAG](design/runtime-diagnostics.md).

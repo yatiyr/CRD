@@ -117,7 +117,7 @@ def cache_eligible(preset):
     spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return bool(module.configure_args(preset, {'CRD_SCCACHE': 'sccache'}))
+    return bool(module.cache_args(preset, {'CRD_SCCACHE': 'sccache'}))
 
 
 def validate_cached_presets(entries, workflow_text, blocks, eligible=cache_eligible):

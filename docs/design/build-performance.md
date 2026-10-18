@@ -3,9 +3,10 @@
 <!-- doc-role: reference -->
 > Contract for REPO.DEV.7. Status lives only in [ROADMAP](../ROADMAP.md#slice-repo.dev.7); the accepted research is
 > [compiler caching and parallelism](../research/2026-09-12-large-cpp-development-and-ci.md#measure-compiler-caching-and-parallelism);
-> the measured boards are [2026-09-14](../bench/2026-09-14-repo-dev7-build-board.md) and
-> [2026-10-18](../bench/2026-10-18-build-speed-cache-mirror.md) (the local routes and the hosted cache, owned by
-> [DIAG.11b](../ROADMAP.md#slice-diag.11b)'s focused-local-route and CI-cost contract); the module is
+> the measured boards are [2026-09-14](../bench/2026-09-14-repo-dev7-build-board.md),
+> [2026-10-18](../bench/2026-10-18-build-speed-cache-mirror.md) (the local routes and the hosted cache) and
+> [2026-10-18, linking](../bench/2026-10-18-build-speed-linking.md) (the linker, split DWARF, incremental linking),
+> owned by [DIAG.11b](../ROADMAP.md#slice-diag.11b)'s focused-local-route and CI-cost contract; the module is
 > [CrdBuildPerformance.cmake](../../cmake/CrdBuildPerformance.cmake); the runner is
 > [build-bench.py](../../scripts/build-bench.py).
 
@@ -31,9 +32,10 @@ the board carries both; on GCC the precompiled header stays on and only the laun
 
 ## The opt-in module
 
-[CrdBuildPerformance.cmake](../../cmake/CrdBuildPerformance.cmake) adds three cache entries, all empty by default,
+[CrdBuildPerformance.cmake](../../cmake/CrdBuildPerformance.cmake) adds five cache entries, all empty by default,
 so the default graph is byte-identical (proved on `build/win-debug`: 292 targets, 1,814 compile commands and 5,786
-Ninja statements unchanged except the CMake re-run rule listing the new module):
+Ninja statements unchanged except the CMake re-run rule listing the new module; `CRD_LINKER` and
+`CRD_LINKER_THREADS` are described under [The linker](#the-linker)):
 
 - `CRD_COMPILER_LAUNCHER=<path>` sets `CMAKE_C/CXX_COMPILER_LAUNCHER` for Makefile and Ninja generators, which are
   the generators CMake applies launchers to. On MSVC-compatible compilers it also sets
@@ -82,7 +84,15 @@ build-speed batch, [board](../bench/2026-10-18-build-speed-cache-mirror.md)).
   `~/.cache/cerid-sccache` on Linux, outside the WSL mirror; `CRD_SCCACHE_CACHE_SIZE`, else 30G) and prints that
   environment. The server is started explicitly with its streams closed (measured: neither `--start-server` nor a
   statistics query holds the caller's pipes), and a server already running on another cache (a board's scratch
-  cache) is restarted, because every client reaches the one server on the fixed port whatever its own environment.
+  cache) is restarted, because every client reaches the one server on its port whatever its own environment. The
+  cache is asked only when something listens on the port: a statistics query with no server starts one that exits
+  with the query (measured 2026-10-18; a `--start-server` server and one a compile starts stay). The port is
+  `CRD_SCCACHE_PORT`, else 4226 on Windows and 4227 on Linux, exported as `SCCACHE_SERVER_PORT` (`port` prints it):
+  WSL2 relays every localhost port a Linux process listens on to Windows (`wslrelay.exe`), so on the shared default
+  port a Linux server left by a lane build answered the Windows clients (its cache a Linux path) and a Windows server
+  could not start ("Address in use"). A server that cannot start fails the command, and both helpers stop the build
+  on it; until 2026-10-18 they read its output through `for /f` and `eval "$(...)"`, which hid the failure, and the
+  build ran on whatever server the first compile started.
 - [configure-preset.bat](../../scripts/configure-preset.bat) puts the entries before `--preset`, so options given
   on its command line come later and win; [build-target.bat](../../scripts/build-target.bat) applies the server
   environment before it builds; [wsl-lane.sh](../../scripts/wsl-lane.sh) does both on WSL. The default job count of
@@ -94,6 +104,45 @@ source) text, and the arguments name the build directory, so a tree keeps its pa
 produces: a hit returns the object, standard output and diagnostics the compiler produced for those inputs, a
 compile that fails (a `/WX` warning included) is not stored, and a changed precompiled header misses (probed on
 GCC's `-include` and Clang's `-include-pch`).
+
+## The linker
+
+The module's `CRD_LINKER=<mold>` and `CRD_LINKER_THREADS=<n>` are empty by default: every preset, the default graph
+and every hosted lane link with the toolchain's linker (2026-10-18, DIAG.11b build-speed task B,
+[board](../bench/2026-10-18-build-speed-linking.md)).
+
+- With `CRD_LINKER` on GCC or Clang, every C and C++ link line gets `-fuse-ld=mold -B<dir>`: GCC takes no path in
+  `-fuse-ld`, so both drivers find the `ld.mold` that the installer links beside the binary in the `-B` directory
+  (CMake 3.29's `CMAKE_LINKER_TYPE` does the same; the WSL reference host runs 3.28). `CRD_LINKER_THREADS` adds
+  `-Wl,--threads=<n>`. No compile command changes, so a cached tree keeps every cache key, and CMake's compiler
+  probes link with the toolchain's linker. A path that is not an installed `mold` with its `ld.mold`, or a thread
+  count that is not a positive integer, fails the configure; MSVC-compatible compilers report the entry as ignored,
+  and so does the module for a thread count without a linker.
+- `scripts/install-mold.py --destination ~/.cerid/tools/mold` installs the pinned mold 3.0.0 (registry entry
+  `tools/mold-linux`: the archive's digest, the `bin/mold` member and its digest, the reported version, the `ld.mold`
+  link; Linux only).
+- The local helpers link the measured lanes with it: on a Linux host
+  [compiler-cache.py](../../scripts/compiler-cache.py) `configure-args` adds both entries for `MOLD_PRESETS`
+  (linux-gcc-debug, linux-gcc-asan, linux-clang-tsan) when the pinned binary is installed, so
+  [wsl-lane.sh](../../scripts/wsl-lane.sh) configures those trees with it. The thread count is the CPUs divided by
+  the lane's job count (`CRD_LANE_JOBS`, 16): two on the 32-CPU host. mold's default pool is a thread per CPU for
+  every link, and the 16 links of a parallel build then ran 512 threads on 32 CPUs and gained nothing over GNU ld
+  (whole-tree relink and teeth rows equal or slower); bounded, the summed link time of a whole-tree relink fell to
+  about half of GNU ld's on linux-gcc-debug and linux-gcc-asan and a fifth on linux-clang-tsan, its wall time by
+  23-48 %, and a one-program relink stayed as fast as with the full pool (0.7-0.9 s against GNU ld's 1.1-1.5 s for
+  `crd-ceir-tests`). `CRD_MOLD=off` prints the reverse entries (the toolchain's linker again), `CRD_MOLD=<path>`
+  names another binary and `CRD_MOLD_THREADS` another count. Converting a tree relinks every program once and
+  recompiles nothing.
+- Not kept, by measurement: `-gsplit-dwarf` on linux-gcc-debug. GCC refuses a precompiled header under it (the
+  `.gch` records the `.dwo` name of the unit it was built for: `-Winvalid-pch`, an error under `-Werror`), so it
+  needs `CRD_ENABLE_PCH=OFF`; against that PCH-off tree the warm whole-tree relink was 1.2 s shorter and the teeth
+  cycles equal, while the PCH-on tree it would replace is as fast warm and cheaper on a cache miss. gdb resolved
+  breakpoints, frames, locals and sources from the `.dwo` files, and the gdb diag CTests passed on it.
+- Not kept either: mold on the GCC LTO presets (the plugin's link-time compile is the link: four linux-gcc-shipping
+  programs relinked in 7.2-7.5 s with bounded mold against 7.3-8.0 s with GNU ld; `CRD_LINKER` still works there
+  when asked, and the link-time warning set fires under it), and on win-debug anything but the default
+  `/INCREMENTAL`: `/INCREMENTAL:NO` doubles the link time and `/DEBUG:FASTLINK` ties the default on edits while
+  doubling a full relink.
 
 ## WSL source mirror
 
@@ -143,7 +192,11 @@ effective parallelism, slowest edges), memory pressure sampled once a second (mi
 their difference from the row's baseline), the build-tree size and, with `--sccache`, the statistics zeroed before
 and read after the row (hits, misses, non-cacheable compiles and reasons). Rows: `configure`, `cold`, `noop`,
 `source` (append a comment to `engine/foundation/log/src/logger.cpp`), `header` (`crd/log/log.hpp`, outside the
-PCH), `pch-header` (`crd/core/types.hpp`, inside the PCH), `link` (delete `crd-ceir-tests` and relink). Edited files
+PCH), `pch-header` (`crd/core/types.hpp`, inside the PCH), `link` (delete `crd-ceir-tests` and relink), and since
+2026-10-18 `relink-all` (delete every output of a CMake executable, shared or module library link rule, or the
+`--targets` programs, and rebuild: the link phase alone; its wall time is bounded by the slowest edge, which on the
+sanitizer lanes is the demo assets' cook that a relinked cooker reruns, so linkers are compared by the row's edge sum
+and on the focused route). Edited files
 are restored byte-for-byte with their original timestamps, so neither the working tree nor another build directory
 sees the edit. Since 2026-10-18 the teeth rows (`--tooth FILE OLD NEW`) replace one text, rebuild, write the
 original bytes back with a new time (as a restored tooth is) and rebuild, then put the original times back;

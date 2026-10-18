@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Measured build board for one preset: configure, cold, no-op, source edit, header edit, PCH-header edit, link and a
-teeth cycle (a code edit, rebuild, restore, rebuild).
+"""Measured build board for one preset: configure, cold, no-op, source edit, header edit, PCH-header edit, link, a
+relink of every program and a teeth cycle (a code edit, rebuild, restore, rebuild).
 
 The runner configures a preset into a scratch build directory (never a tree a developer builds in) with an explicit
 job count and records, per row: wall time, the Ninja log of that row (edges, span, edge sum, effective parallelism,
@@ -34,7 +34,10 @@ _spec = importlib.util.spec_from_file_location('ci_evidence', ROOT / 'scripts/ci
 evidence = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(evidence)
 SCHEMA = 'cerid-build-bench/1'
-ROWS = ('configure', 'cold', 'noop', 'source', 'header', 'pch-header', 'link', 'teeth-break', 'teeth-restore')
+ROWS = ('configure', 'cold', 'noop', 'source', 'header', 'pch-header', 'link', 'relink-all', 'teeth-break',
+        'teeth-restore')
+# CMake's Ninja rules for a linked program or shared library (not an archive): a relink-all row deletes their outputs.
+LINK_RULE = re.compile(r'^(?:C|CXX|CUDA)_(?:EXECUTABLE|SHARED_LIBRARY|MODULE_LIBRARY)_LINKER__')
 SLOWEST = 10
 TOUCH = b'\n// build-bench touch: restored byte-for-byte after the row\n'
 DEFAULT_SOURCE = 'engine/foundation/log/src/logger.cpp'
@@ -287,6 +290,25 @@ def find_output(build_dir, name):
     return None
 
 
+def linked_outputs(targets_listing, build_dir):
+    """The programs and shared libraries in `ninja -t targets all` output (`path: rule` lines), under build_dir."""
+    outputs = []
+    for line in targets_listing.splitlines():
+        path, separator, rule = line.rpartition(': ')
+        if separator and path and LINK_RULE.match(rule.strip()):
+            outputs.append(Path(build_dir) / path)
+    return outputs
+
+
+def make_program(build_dir):
+    cache = Path(build_dir) / 'CMakeCache.txt'
+    for line in cache.read_text(encoding='utf-8', errors='replace').splitlines():
+        match = re.match(r'^CMAKE_MAKE_PROGRAM:[A-Z]+=(.*)$', line)
+        if match and match.group(1).strip():
+            return match.group(1).strip()
+    raise SystemExit('relink-all: %s names no CMAKE_MAKE_PROGRAM' % cache)
+
+
 class Board:
     def __init__(self, preset, build_dir, jobs, defines, label, sccache=None, source=DEFAULT_SOURCE,
                  header=DEFAULT_HEADER, pch_header=DEFAULT_PCH_HEADER, link_target=DEFAULT_LINK_TARGET,
@@ -381,6 +403,24 @@ class Board:
         output.unlink()
         return self.build()
 
+    def relink_all(self):
+        """Delete every program the row builds (every linked output of the tree, or the named targets' programs) and
+        rebuild: the link phase alone, nothing recompiles."""
+        if self.targets:
+            outputs = [find_output(self.build_dir, name) for name in self.targets]
+            outputs = [output for output in outputs if output is not None]
+        else:
+            listing = subprocess.run([make_program(self.build_dir), '-C', str(self.build_dir), '-t', 'targets', 'all'],
+                                     capture_output=True, text=True, encoding='utf-8', errors='replace', env=self.env,
+                                     check=True).stdout
+            outputs = [output for output in linked_outputs(listing, self.build_dir) if output.is_file()]
+        if not outputs:
+            raise SystemExit('relink-all: no linked program found under %s' % self.build_dir)
+        for output in outputs:
+            output.unlink()
+        self.log('  deleted %d linked programs' % len(outputs))
+        return self.build()
+
     def toolchain(self):
         result = {}
         cache = self.build_dir / 'CMakeCache.txt'
@@ -388,7 +428,7 @@ class Board:
             for line in cache.read_text(encoding='utf-8', errors='replace').splitlines():
                 match = re.match(r'^(CMAKE_GENERATOR|CMAKE_BUILD_TYPE|CMAKE_CXX_COMPILER|CRD_ENABLE_PCH|'
                                  r'CRD_COMPILER_LAUNCHER|CMAKE_MSVC_DEBUG_INFORMATION_FORMAT|CRD_COMPILE_JOBS|'
-                                 r'CRD_LINK_JOBS):[A-Z]+=(.*)$', line)
+                                 r'CRD_LINK_JOBS|CRD_LINKER|CRD_LINKER_THREADS):[A-Z]+=(.*)$', line)
                 if match:
                     result[match.group(1)] = match.group(2)
         for probe in sorted(self.build_dir.glob('CMakeFiles/*/CMakeCXXCompiler.cmake')):
@@ -407,7 +447,8 @@ class Board:
         actions = {'configure': self.configure, 'cold': self.build, 'noop': self.build,
                    'source': lambda: self.edit(self.source), 'header': lambda: self.edit(self.header),
                    'pch-header': lambda: self.edit(self.pch_header), 'link': self.relink,
-                   'teeth-break': self.teeth_break, 'teeth-restore': self.teeth_restore}
+                   'relink-all': self.relink_all, 'teeth-break': self.teeth_break,
+                   'teeth-restore': self.teeth_restore}
         if 'configure' not in rows:
             rows = ['configure'] + list(rows)
         try:
@@ -461,15 +502,25 @@ def render(records):
     return '\n'.join(lines) + '\n'
 
 
+def linker_label(tool):
+    """The linker a board's tree links with: the toolchain's default, or CRD_LINKER and its threads per link."""
+    linker = tool.get('CRD_LINKER') or 'default'
+    if tool.get('CRD_LINKER') and tool.get('CRD_LINKER_THREADS'):
+        linker += ', %s threads per link' % tool['CRD_LINKER_THREADS']
+    return linker
+
+
 def render_context(records):
     lines = []
     for record in records:
         tool = record.get('toolchain', {})
-        lines.append('- **%s**: preset `%s`, jobs %d, defines `%s`; %s %s; PCH %s; launcher `%s`; tree %.1f GiB%s.' % (
-            record['label'], record['preset'], record['jobs'], ' '.join(record['defines']) or 'none',
-            tool.get('CMAKE_CXX_COMPILER_ID', '?'), tool.get('CMAKE_CXX_COMPILER_VERSION', '?'),
-            tool.get('CRD_ENABLE_PCH', '?'), record.get('launcher') or 'none', record.get('build_tree_gib', 0.0),
-            ('; cache %.1f GiB' % record['cache_gib']) if 'cache_gib' in record else ''))
+        lines.append('- **%s**: preset `%s`, jobs %d, defines `%s`; %s %s; PCH %s; launcher `%s`; linker `%s`; '
+                     'tree %.1f GiB%s.' % (
+                         record['label'], record['preset'], record['jobs'], ' '.join(record['defines']) or 'none',
+                         tool.get('CMAKE_CXX_COMPILER_ID', '?'), tool.get('CMAKE_CXX_COMPILER_VERSION', '?'),
+                         tool.get('CRD_ENABLE_PCH', '?'), record.get('launcher') or 'none',
+                         linker_label(tool), record.get('build_tree_gib', 0.0),
+                         ('; cache %.1f GiB' % record['cache_gib']) if 'cache_gib' in record else ''))
     return '\n'.join(lines) + '\n'
 
 

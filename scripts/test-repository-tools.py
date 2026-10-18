@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -45,6 +46,9 @@ bench_spec.loader.exec_module(build_bench)
 sccache_spec = importlib.util.spec_from_file_location('install_sccache', ROOT / 'scripts/install-sccache.py')
 install_sccache = importlib.util.module_from_spec(sccache_spec)
 sccache_spec.loader.exec_module(install_sccache)
+mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
+install_mold = importlib.util.module_from_spec(mold_spec)
+mold_spec.loader.exec_module(install_mold)
 cache_spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
 compiler_cache = importlib.util.module_from_spec(cache_spec)
 cache_spec.loader.exec_module(compiler_cache)
@@ -1115,6 +1119,12 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('| A | cold | 100.0 | 3 | 99.0 | 900 | 9.1 | 5.5 | 40.0 | uncached |', table)
         self.assertIn('| C | cold | 100.0 | 3 | 99.0 | 900 | 9.1 | 5.5 | 40.0 | 6 / 3 / 1 (/Fp 1) |', table)
         self.assertIn('cache 1.5 GiB', build_bench.render_context([cached]))
+        self.assertIn('linker `default`', build_bench.render_context([record]))
+        linked = json.loads(json.dumps(record))
+        linked['toolchain'].update({'CRD_LINKER': '/t/mold/mold', 'CRD_LINKER_THREADS': '2'})
+        self.assertIn('linker `/t/mold/mold, 2 threads per link`', build_bench.render_context([linked]))
+        self.assertEqual(build_bench.linker_label({'CRD_LINKER': '', 'CRD_LINKER_THREADS': '2'}), 'default')
+        self.assertEqual(build_bench.linker_label({'CRD_LINKER': '/t/mold/mold'}), '/t/mold/mold')
         with self.assertRaises(SystemExit):
             build_bench.Board('win-debug', Path(temp) / 'b', 4, [], 'x', sccache='sccache', environ={})
 
@@ -1169,6 +1179,54 @@ class BuildPerformance(unittest.TestCase):
             self.assertIn(b'return 1;', source.read_bytes(), 'the tooth is restored when the board stops')
             self.assertEqual(source.stat().st_mtime_ns, before)
 
+    def test_relink_all_deletes_every_linked_program_and_nothing_else(self):
+        listing = ('tests/core/crd-core-tests: CXX_EXECUTABLE_LINKER__crd-core-tests_Debug\n'
+                   'engine/core/libcrd-core.a: CXX_STATIC_LIBRARY_LINKER__crd-core_Debug\n'
+                   'engine/core/CMakeFiles/crd-core.dir/src/assert.cpp.o: CXX_COMPILER__crd-core_unscanned_Debug\n'
+                   'tools/plugin.so: CXX_SHARED_LIBRARY_LINKER__plugin_Debug\n'
+                   'tools/module.so: CXX_MODULE_LIBRARY_LINKER__module_Debug\n'
+                   'bin/app.exe: C_EXECUTABLE_LINKER__app_Debug\n'
+                   'all: phony\n'
+                   'build.ninja: RERUN_CMAKE\n')
+        outputs = build_bench.linked_outputs(listing, Path('B'))
+        self.assertEqual([p.as_posix() for p in outputs],
+                         ['B/tests/core/crd-core-tests', 'B/tools/plugin.so', 'B/tools/module.so', 'B/bin/app.exe'])
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp) / 'tree'
+            (tree / 'tests/core').mkdir(parents=True)
+            (tree / 'engine/core').mkdir(parents=True)
+            program = tree / 'tests/core/crd-core-tests'
+            archive = tree / 'engine/core/libcrd-core.a'
+            for path in (program, archive):
+                path.write_bytes(b'x')
+            (tree / 'CMakeCache.txt').write_text('CMAKE_MAKE_PROGRAM:FILEPATH=/usr/bin/ninja\n', encoding='utf-8')
+            self.assertEqual(build_bench.make_program(tree), '/usr/bin/ninja')
+            board = build_bench.Board('linux-gcc-debug', tree, 4, [], 'x', repo=Path(temp), log=lambda _: None)
+            commands = []
+            board.run = lambda command, cwd=None: (commands.append(command), SimpleNamespace(returncode=0))[1]
+            with patch.object(build_bench.subprocess, 'run', return_value=SimpleNamespace(stdout=listing)) as query:
+                self.assertEqual(board.relink_all(), 0)
+            self.assertEqual(query.call_args[0][0], ['/usr/bin/ninja', '-C', str(tree), '-t', 'targets', 'all'])
+            self.assertFalse(program.exists(), 'the program is deleted so the build relinks it')
+            self.assertTrue(archive.exists(), 'archives are not links: deleting them would recompile nothing but '
+                                              'rebuild the archive step')
+            self.assertEqual(commands[0][:2], ['cmake', '--build'])
+            with patch.object(build_bench.subprocess, 'run', return_value=SimpleNamespace(stdout=listing)):
+                with self.assertRaisesRegex(SystemExit, 'no linked program'):
+                    board.relink_all()
+            # A scoped board relinks only its targets' programs.
+            program.write_bytes(b'x')
+            scoped = build_bench.Board('linux-gcc-debug', tree, 4, [], 'x', repo=Path(temp), log=lambda _: None,
+                                       targets=['crd-core-tests'])
+            scoped.run = board.run
+            self.assertEqual(scoped.relink_all(), 0)
+            self.assertFalse(program.exists())
+            self.assertEqual(commands[-1][-2:], ['--target', 'crd-core-tests'])
+            (tree / 'CMakeCache.txt').write_text('CMAKE_MAKE_PROGRAM:FILEPATH=\n', encoding='utf-8')
+            with self.assertRaisesRegex(SystemExit, 'CMAKE_MAKE_PROGRAM'):
+                build_bench.make_program(tree)
+        self.assertIn('relink-all', build_bench.ROWS)
+
     def test_sccache_installer_extracts_only_the_pinned_member_and_checks_its_digest(self):
         for archive_kind in ('zip', 'tar'):
             with tempfile.TemporaryDirectory() as temp, self.subTest(archive=archive_kind):
@@ -1207,6 +1265,59 @@ class BuildPerformance(unittest.TestCase):
             self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('scripts/install-sccache.py', check_pins.HELPERS)
 
+    def test_mold_installer_extracts_the_binary_names_ld_mold_and_checks_digest_and_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = b'#!/bin/sh\necho "mold 3.0.0 (8de38c35; compatible with GNU ld)"\n'
+            archive = root / 'mold-3.0.0-x86_64-linux.tar.gz'
+            with tarfile.open(archive, 'w:gz') as package:
+                for name, data in (('mold-3.0.0-x86_64-linux/bin/mold', binary),
+                                   ('mold-3.0.0-x86_64-linux/share/doc/mold/LICENSE', b'MIT')):
+                    info = tarfile.TarInfo(name)
+                    info.size = len(data)
+                    package.addfile(info, io.BytesIO(data))
+                link = tarfile.TarInfo('mold-3.0.0-x86_64-linux/bin/ld.mold')
+                link.type, link.linkname = tarfile.SYMTYPE, 'mold'
+                package.addfile(link)
+            pin = {'version': '3.0.0', 'url': 'https://example.invalid/mold', 'file': archive.name,
+                   'sha256': pins_registry.sha256(archive), 'member': 'mold-3.0.0-x86_64-linux/bin/mold',
+                   'member_sha256': hashlib.sha256(binary).hexdigest()}
+            installed = install_mold.install(root / 'tools', archive=archive, pin=pin, check=False)
+            self.assertEqual(installed.read_bytes(), binary)
+            self.assertEqual(sorted(p.name for p in (root / 'tools').iterdir()), ['ld.mold', 'mold'],
+                             'only the binary and the name -fuse-ld=mold looks for')
+            self.assertTrue((root / 'tools' / 'ld.mold').samefile(installed))
+            # A second install over the first replaces the alias instead of failing on it.
+            install_mold.install(root / 'tools', archive=archive, pin=pin, check=False)
+            self.assertTrue((root / 'tools' / 'ld.mold').samefile(installed))
+            with self.assertRaisesRegex(pins_registry.PinError, 'binary checksum mismatch'):
+                install_mold.install(root / 'wrong', archive=archive, pin=dict(pin, member_sha256='0' * 64),
+                                     check=False)
+            self.assertEqual(list((root / 'wrong').iterdir()), [])
+            with self.assertRaises(KeyError):
+                install_mold.install(root / 'symlink', archive=archive, check=False,
+                                     pin=dict(pin, member='mold-3.0.0-x86_64-linux/bin/absent'))
+            with self.assertRaisesRegex(pins_registry.PinError, 'not a regular file'):
+                install_mold.install(root / 'symlink', archive=archive, check=False,
+                                     pin=dict(pin, member='mold-3.0.0-x86_64-linux/bin/ld.mold'))
+            for reported, accepted in (('mold 3.0.0 (8de38c35; compatible with GNU ld)\n', True),
+                                       ('mold 2.42.1 (abc; compatible with GNU ld)\n', False),
+                                       ('mold 3.0.01 (abc)\n', False)):
+                target = root / ('version-%s' % accepted) / reported.split()[1]
+                with patch.object(install_mold.subprocess, 'run', return_value=SimpleNamespace(stdout=reported)):
+                    if accepted:
+                        install_mold.install(target, archive=archive, pin=pin)
+                        self.assertEqual(sorted(p.name for p in target.iterdir()), ['ld.mold', 'mold'])
+                    else:
+                        with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                            install_mold.install(target, archive=archive, pin=pin)
+                        self.assertEqual(list(target.iterdir()), [], 'a wrong version leaves nothing installed')
+        pin = pins_registry.entry('tools', 'mold-linux')
+        self.assertEqual(pin['member'], 'mold-%s-x86_64-linux/bin/mold' % pin['version'])
+        self.assertIn('/v%s/' % pin['version'], pin['url'])
+        self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
+        self.assertIn('scripts/install-mold.py', check_pins.HELPERS)
+
     def test_cmake_module_applies_launcher_and_pools_only_when_asked(self):
         cmake = shutil.which('cmake')
         ninja = shutil.which('ninja')
@@ -1220,9 +1331,11 @@ class BuildPerformance(unittest.TestCase):
                 'cmake_minimum_required(VERSION 3.25)\nproject(fixture LANGUAGES NONE)\n'
                 'option(CRD_SHIPPING "" OFF)\noption(CRD_ENABLE_PCH "" ON)\n'
                 'list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")\ninclude(CrdBuildPerformance)\n'
+                'get_directory_property(_link LINK_OPTIONS)\nget_directory_property(_compile COMPILE_OPTIONS)\n'
                 'message(STATUS "LAUNCHER=[${CMAKE_CXX_COMPILER_LAUNCHER}] POOL_COMPILE=[${CMAKE_JOB_POOL_COMPILE}] '
                 'POOL_LINK=[${CMAKE_JOB_POOL_LINK}] EMBEDDED=[${CRD_EMBEDDED_DEBUG_INFO}] '
-                'FORMAT=[${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}]")\n', encoding='utf-8')
+                'FORMAT=[${CMAKE_MSVC_DEBUG_INFORMATION_FORMAT}]")\n'
+                'message(STATUS "LINK=[${_link}] COMPILE=[${_compile}]")\n', encoding='utf-8')
 
             def configure(build, *defines):
                 result = subprocess.run([cmake, '-S', str(project), '-B', str(build), '-G', 'Ninja',
@@ -1233,7 +1346,52 @@ class BuildPerformance(unittest.TestCase):
             code, output = configure(Path(temp) / 'default')
             self.assertEqual(code, 0, output)
             self.assertIn('LAUNCHER=[] POOL_COMPILE=[] POOL_LINK=[] EMBEDDED=[OFF] FORMAT=[]', output)
+            self.assertIn('LINK=[] COMPILE=[]', output, 'the default graph links with the toolchain default')
             self.assertNotIn('[crd] Compiler launcher', output)
+            self.assertNotIn('[crd] Linker', output)
+            # The linker: only on link lines (no compile option, so a cached tree keeps its keys), only for the
+            # installed mold with the ld.mold name beside it, and ignored by MSVC-compatible compilers.
+            tools = Path(temp) / 'tools'
+            tools.mkdir()
+            mold = tools / 'mold'
+            mold.write_bytes(b'')
+            code, output = configure(Path(temp) / 'no-alias', '-DCRD_LINKER=%s' % mold.as_posix())
+            self.assertNotEqual(code, 0)
+            self.assertIn('has no ld.mold, which -fuse-ld=mold looks for', ' '.join(output.split()))
+            (tools / 'ld.mold').write_bytes(b'')
+            code, output = configure(Path(temp) / 'mold', '-DCRD_LINKER=%s' % mold.as_posix())
+            self.assertEqual(code, 0, output)
+            self.assertIn('[crd] Linker: %s (GCC and Clang links)' % mold.as_posix(), output)
+            self.assertIn('LINK=[$<$<LINK_LANGUAGE:C,CXX>:-fuse-ld=mold>;$<$<LINK_LANGUAGE:C,CXX>:-B%s>] COMPILE=[]'
+                          % tools.as_posix(), output)
+            self.assertIn('LAUNCHER=[] POOL_COMPILE=[]', output, 'the linker turns nothing else on')
+            # The thread bound: one more link option, on mold's link lines only, a positive integer, and nothing
+            # without the linker (a stale entry after the linker is turned off configures the default graph).
+            code, output = configure(Path(temp) / 'mold-threads', '-DCRD_LINKER=%s' % mold.as_posix(),
+                                     '-DCRD_LINKER_THREADS=2')
+            self.assertEqual(code, 0, output)
+            self.assertIn('[crd] Linker: %s (GCC and Clang links, 2 threads per link)' % mold.as_posix(), output)
+            self.assertIn('LINK=[$<$<LINK_LANGUAGE:C,CXX>:-fuse-ld=mold>;$<$<LINK_LANGUAGE:C,CXX>:-B%s>;'
+                          '$<$<LINK_LANGUAGE:C,CXX>:-Wl,--threads=2>] COMPILE=[]' % tools.as_posix(), output)
+            for wrong in ('0', 'two', '-1'):
+                code, output = configure(Path(temp) / 'threads-wrong', '-DCRD_LINKER=%s' % mold.as_posix(),
+                                         '-DCRD_LINKER_THREADS=%s' % wrong)
+                self.assertNotEqual(code, 0, wrong)
+                self.assertIn('CRD_LINKER_THREADS must be a positive integer', output)
+                shutil.rmtree(Path(temp) / 'threads-wrong')
+            code, output = configure(Path(temp) / 'threads-alone', '-DCRD_LINKER_THREADS=2')
+            self.assertEqual(code, 0, output)
+            self.assertIn('CRD_LINKER_THREADS ignored', output)
+            self.assertIn('LINK=[] COMPILE=[]', output)
+            code, output = configure(Path(temp) / 'msvc-linker', '-DCRD_LINKER=%s' % mold.as_posix(), '-DMSVC=ON')
+            self.assertEqual(code, 0, output)
+            self.assertIn('Linker override ignored', output)
+            self.assertIn('LINK=[] COMPILE=[]', output)
+            for wrong in ((tools / 'ld.mold').as_posix(), (tools / 'absent' / 'mold').as_posix()):
+                code, output = configure(Path(temp) / 'wrong', '-DCRD_LINKER=%s' % wrong)
+                self.assertNotEqual(code, 0, wrong)
+                self.assertIn('CRD_LINKER must name an installed mold binary', ' '.join(output.split()))
+                shutil.rmtree(Path(temp) / 'wrong')
             self.assertNotIn('pool crd_', (Path(temp) / 'default/CMakeFiles/rules.ninja').read_text(encoding='utf-8'))
             code, output = configure(Path(temp) / 'tuned', '-DCRD_COMPILER_LAUNCHER=/opt/sccache',
                                      '-DCRD_COMPILE_JOBS=3', '-DCRD_LINK_JOBS=1')
@@ -1342,6 +1500,56 @@ class CompilerCache(unittest.TestCase):
             self.assertEqual(compiler_cache.configure_args(name, {'CRD_SCCACHE': 'x'}),
                              ['-DCRD_COMPILER_LAUNCHER=x', '-DCRD_ENABLE_PCH=OFF'], name)
 
+    def test_linker_args_link_the_measured_wsl_lanes_with_the_pinned_mold(self):
+        presets = {'configurePresets': self.PRESETS['configurePresets'] + [
+            {'name': 'linux-gcc-asan', 'inherits': 'linux-base'},
+            {'name': 'linux-clang-tsan', 'inherits': 'linux-base', 'cacheVariables': {'CMAKE_CXX_COMPILER': 'clang++'}},
+            {'name': 'linux-clang-coverage', 'inherits': 'linux-base'}]}
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+
+            def args(preset, environ=None, host='linux'):
+                return compiler_cache.configure_args(preset, environ or {}, host, home, presets)
+
+            self.assertEqual(args('linux-gcc-debug'), [], 'no mold installed: nothing added')
+            mold = compiler_cache.default_mold(home)
+            mold.parent.mkdir(parents=True)
+            mold.write_bytes(b'')
+            with patch('os.cpu_count', return_value=32):
+                expected = ['-DCRD_LINKER=%s' % mold.as_posix(), '-DCRD_LINKER_THREADS=2']
+                for name in ('linux-gcc-debug', 'linux-gcc-asan', 'linux-clang-tsan'):
+                    self.assertEqual(args(name), expected, name)
+                self.assertEqual(args('linux-gcc-debug', {'CRD_LANE_JOBS': '4'}),
+                                 ['-DCRD_LINKER=%s' % mold.as_posix(), '-DCRD_LINKER_THREADS=8'],
+                                 'four parallel links share the 32 CPUs eight ways')
+                self.assertEqual(compiler_cache.cache_args('linux-gcc-debug', {}, 'linux', home, presets), [],
+                                 'the linker is no cache entry: check-ci-tiers.py judges the cache rule alone')
+                self.assertEqual(args('linux-gcc-shipping'), [], 'a lane the board did not measure faster')
+                self.assertEqual(args('linux-clang-coverage'), [], 'an unmeasured lane keeps the toolchain linker')
+                self.assertEqual(args('linux-gcc-debug', host='windows'), [], 'mold links ELF programs: WSL only')
+                self.assertEqual(args('win-debug'), [], 'MSVC links through link.exe')
+                self.assertEqual(args('linux-gcc-debug', {'CRD_MOLD': 'off'}),
+                                 ['-DCRD_LINKER=', '-DCRD_LINKER_THREADS='], 'off returns the toolchain linker')
+                self.assertEqual(args('linux-gcc-debug', {'CRD_MOLD': '/opt/m/mold', 'CRD_MOLD_THREADS': '3'}),
+                                 ['-DCRD_LINKER=/opt/m/mold', '-DCRD_LINKER_THREADS=3'])
+                sccache = compiler_cache.default_launcher('linux', home)
+                sccache.parent.mkdir(parents=True)
+                sccache.write_bytes(b'')
+                self.assertEqual(args('linux-gcc-debug'),
+                                 ['-DCRD_COMPILER_LAUNCHER=%s' % sccache.as_posix()] + expected)
+                self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': 'off', 'CRD_MOLD': 'off'}),
+                                 ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_LINKER=', '-DCRD_LINKER_THREADS='])
+                self.assertEqual(compiler_cache.link_threads({'CRD_LANE_JOBS': '64'}), 1, 'never below one')
+            with patch('os.cpu_count', return_value=None):
+                self.assertEqual(compiler_cache.link_threads({}), 1)
+            for wrong in ({'CRD_MOLD_THREADS': '0'}, {'CRD_MOLD_THREADS': 'two'}, {'CRD_LANE_JOBS': 'many'}):
+                with self.assertRaises(SystemExit):
+                    compiler_cache.link_threads(wrong)
+        for name in compiler_cache.MOLD_PRESETS:
+            generator, variables = compiler_cache.resolve_preset(name)
+            self.assertEqual(generator, 'Ninja', name)
+            self.assertNotIn(str(variables.get('CMAKE_CXX_COMPILER', '')).lower(), compiler_cache.MSVC_COMPILERS, name)
+
     def test_cache_locations_tree_launcher_and_server_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -1351,6 +1559,72 @@ class CompilerCache(unittest.TestCase):
                              root / 'home' / '.cache' / 'cerid-sccache', 'outside the WSL source mirror')
             self.assertEqual(compiler_cache.cache_dir({'CRD_SCCACHE_DIR': 'X'}, 'linux'), Path('X'))
             self.assertEqual(compiler_cache.server_environment({}, 'linux', root)['SCCACHE_CACHE_SIZE'], '30G')
+            # WSL2 relays a Linux server's localhost port to Windows: the two hosts' servers never share one.
+            self.assertEqual(compiler_cache.server_environment({}, 'linux', root)['SCCACHE_SERVER_PORT'], '4227')
+            self.assertEqual(compiler_cache.server_environment({}, 'windows', root)['SCCACHE_SERVER_PORT'], '4226')
+            self.assertEqual(compiler_cache.server_port({'CRD_SCCACHE_PORT': '5000'}, 'linux'), '5000')
+            for wrong in ('0', 'port', '70000'):
+                with self.assertRaises(SystemExit):
+                    compiler_cache.server_port({'CRD_SCCACHE_PORT': wrong}, 'windows')
+            out = io.StringIO()
+            with patch.dict(os.environ, {'CRD_SCCACHE_PORT': '4999'}):
+                self.assertEqual(compiler_cache.main(['port'], out=out), 0)
+            self.assertEqual(out.getvalue(), '4999\n')
+            # A server that cannot start (another process holds the port) fails the command; the build helpers stop.
+            variables = {'SCCACHE_DIR': str(root / 'cache'), 'SCCACHE_CACHE_SIZE': '30G', 'SCCACHE_SERVER_PORT': '4227'}
+            here = {'cache_location': 'Local disk: "%s"' % (root / 'cache').as_posix()}
+            other = {'cache_location': 'Local disk: "/home/u/.cache/cerid-sccache"'}
+            refused = subprocess.CompletedProcess(['sccache', '--start-server'], 2)
+            started = subprocess.CompletedProcess(['sccache', '--start-server'], 0)
+            exe = root / 'sccache'
+
+            def run(listens, answers, result):
+                calls = []
+
+                def fake_run(command, **_):
+                    calls.append(command[1])
+                    if isinstance(result, BaseException):
+                        raise result
+                    return result
+                with patch.object(compiler_cache, 'listening', side_effect=list(listens)), \
+                        patch.object(compiler_cache, 'stats', side_effect=list(answers)), \
+                        patch.object(compiler_cache.subprocess, 'run', side_effect=fake_run):
+                    return compiler_cache.ensure_server(exe, variables, {}), calls
+
+            restart = ['--stop-server', '--start-server']
+            # Nothing listens: no statistics query (it would start a server that exits with it), an explicit start.
+            self.assertEqual(run([False, True], [here], started), ('restarted', restart))
+            # The server on the port caches here: kept, nothing started.
+            self.assertEqual(run([True], [here], started), ('running', []))
+            # Another cache answers (a board's, or a Linux server relayed to Windows): restarted on this one.
+            self.assertEqual(run([True, True], [other, here], started), ('restarted', restart))
+            # A refused start is fine when this cache now answers (another start won a race) ...
+            self.assertEqual(run([True, True], [other, here], refused), ('restarted', restart))
+            # ... and fails the command when something else holds the port.
+            with self.assertRaises(SystemExit) as failure:
+                run([True, True], [other, None], refused)
+            self.assertIn('port 4227, exit 2', str(failure.exception))
+            # A start that leaves nothing listening fails, without the query that would start a passing transient one.
+            with self.assertRaises(SystemExit) as failure:
+                run([False, False], [here], started)
+            self.assertIn('port 4227, exit 0', str(failure.exception))
+            # A listener that accepts and never answers (measured: the client waits out its timeout) is no server.
+            hung = subprocess.TimeoutExpired(['sccache'], 60)
+            with patch.object(compiler_cache.subprocess, 'run', side_effect=hung):
+                self.assertIsNone(compiler_cache.stats(exe, {}))
+            with self.assertRaises(SystemExit) as failure:
+                run([True, True], [None, None], hung)
+            self.assertIn('port 4227, exit 124', str(failure.exception))
+            with socket.socket() as probe:
+                probe.bind(('127.0.0.1', 0))
+                probe.listen(1)
+                self.assertTrue(compiler_cache.listening(probe.getsockname()[1]))
+            wsl_lane = (ROOT / 'scripts/wsl-lane.sh').read_text(encoding='utf-8')
+            self.assertIn('SCCACHE_SERVER_PORT=$(python3 "$HERE/compiler-cache.py" port)', wsl_lane)
+            self.assertIn('server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server', wsl_lane)
+            self.assertNotIn('eval "$(python3', wsl_lane, 'eval over a substitution hides a failed server start')
+            build_target = (ROOT / 'scripts/build-target.bat').read_text(encoding='utf-8')
+            self.assertIn('server "%~1" --shell cmd > "%CRD_SERVER_ENV%"\nif errorlevel 1 exit /b 1\n', build_target)
             tree = root / 'tree'
             tree.mkdir()
             self.assertIsNone(compiler_cache.tree_launcher(tree))
