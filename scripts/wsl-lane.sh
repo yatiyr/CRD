@@ -16,7 +16,8 @@
 # binaries built from older sources. Run it through the checkout's path (bash /mnt/d/.../scripts/wsl-lane.sh) so the
 # mirror's source is known. One heavy job at a time: configure, build, test and run wait for ~/.cerid/wsl-lane.lock.
 # Environment: CRD_LANE_ROOT (the trees, default ~/cerid-mirror-build), CRD_SOURCE_MIRROR (default ~/cerid-src),
-# CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_SCCACHE, CRD_MOLD and
+# CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_LANE_KEEP_GOING (1: build
+# past failures, so a change to a widely included header shows every unit it breaks in one round), CRD_SCCACHE, CRD_MOLD and
 # the other compiler-cache.py settings (the measured lanes link with the pinned mold, its threads per link the CPUs
 # divided by CRD_LANE_JOBS), VULKAN_SDK (default ~/cerid-deps/vulkan-sdk), CRD_VULKAN_VALIDATION (the pinned
 # validation layer, default ~/.cerid/vulkan-validation). The lane exports S (the mirror) and B (the tree) to run's
@@ -146,8 +147,12 @@ case "$command" in
         for target in "$@"; do
             targets+=(--target "$target")
         done
-        echo "[wsl-lane] build $preset (${*:-all}) with $JOBS jobs"
-        timeout "$LIMIT" cmake --build "$tree" -j "$JOBS" "${targets[@]}"
+        keep=()
+        if [[ "${CRD_LANE_KEEP_GOING:-}" == 1 ]]; then
+            keep=(-- -k 0)
+        fi
+        echo "[wsl-lane] build $preset (${*:-all}) with $JOBS jobs${keep:+, keep going}"
+        timeout "$LIMIT" cmake --build "$tree" -j "$JOBS" "${targets[@]}" "${keep[@]}"
         ;;
     test)
         [[ $# -ge 1 ]] || usage

@@ -16,7 +16,7 @@ namespace crd::scene
 // Hash functor for ComponentMask (256-bit). Folds the four u64 words with a
 // boost-style mix (golden ratio + rotation) so distinct masks differing only
 // in the higher words still spread across buckets. ComponentMask has
-// value-semantic equality so std::equal_to<> suffices for the HashMap's
+// value-semantic equality so DefaultEqual suffices for the HashMap's
 // key-equal predicate.
 struct ComponentMaskHash
 {

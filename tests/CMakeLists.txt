@@ -207,6 +207,16 @@ if(CRD_BUILD_BENCHMARKS)
     crd_tests(bench)
 endif()
 
+# Hot headers stay within their include budget (scripts/include-budget.json): the standard headers the 2026-10-18
+# compile-time profiles found costliest never come back into every unit through one include. Each probe borrows a
+# test unit's compile command, so the guard runs where those tests are configured and a compile database is written.
+if(CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND TARGET crd-containers-tests AND TARGET crd-jobs-tests
+   AND TARGET crd-math-tests)
+    add_test(NAME crd-check-include-budget
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-include-budget.py" --build "${CMAKE_BINARY_DIR}")
+    set_tests_properties(crd-check-include-budget PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+endif()
+
 # Pinned WARP (scripts/install-warp.py): copy the verified DLL beside every test executable when CRD_WARP_DLL is
 # set. Hosted Windows lanes set it; local builds leave it empty and use the OS WARP or the reversible diagnostic.
 crd_stage_warp_dll("${CMAKE_CURRENT_SOURCE_DIR}")

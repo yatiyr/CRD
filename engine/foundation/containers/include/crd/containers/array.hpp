@@ -8,7 +8,6 @@
 
 #include <cstring> // memcpy for trivially-copyable relocate
 #include <initializer_list>
-#include <iterator>
 #include <new> // placement new
 #include <type_traits>
 #include <utility>

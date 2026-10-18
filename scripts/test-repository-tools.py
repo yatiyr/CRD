@@ -55,6 +55,9 @@ cba_spec.loader.exec_module(install_cba)
 profile_spec = importlib.util.spec_from_file_location('build_profile', ROOT / 'scripts/build-profile.py')
 build_profile = importlib.util.module_from_spec(profile_spec)
 profile_spec.loader.exec_module(build_profile)
+budget_spec = importlib.util.spec_from_file_location('include_budget', ROOT / 'scripts/check-include-budget.py')
+include_budget = importlib.util.module_from_spec(budget_spec)
+budget_spec.loader.exec_module(include_budget)
 cache_spec = importlib.util.spec_from_file_location('compiler_cache', ROOT / 'scripts/compiler-cache.py')
 compiler_cache = importlib.util.module_from_spec(cache_spec)
 cache_spec.loader.exec_module(compiler_cache)
@@ -1506,7 +1509,7 @@ class BuildPerformance(unittest.TestCase):
                 build_profile.run_profile(args, runner=None, host=lambda: busy)
             calls = []
 
-            def runner(command, cwd=None, stdout=None, stderr=None, check=False):
+            def runner(command, cwd=None, stdout=None, stderr=None, check=False, **_):
                 calls.append(command)
                 if stdout is not None:
                     stdout.write(self.MSVC_PROFILE)
@@ -1520,6 +1523,106 @@ class BuildPerformance(unittest.TestCase):
             (Path(temp) / 'tree').mkdir()
             with self.assertRaisesRegex(SystemExit, 'fresh scratch directory'):
                 build_profile.run_profile(args, runner=runner, host=lambda: [])
+            # C++ Build Insights around the build: started before it, stopped even when it fails, analysed twice.
+            calls.clear()
+            traced = SimpleNamespace(**dict(vars(args), build_dir=str(Path(temp) / 'traced'), vcperf='Session',
+                                            vcperf_noadmin=False, output=str(Path(temp) / 'out' / 'v.json')))
+
+            def failing_build(command, cwd=None, stdout=None, stderr=None, check=False, **_):
+                calls.append(command)
+                return SimpleNamespace(returncode=1 if command[:2] == ['cmake', '--build'] else 0, stdout='',
+                                       stderr='')
+
+            self.assertEqual(build_profile.run_profile(traced, runner=failing_build, host=lambda: [],
+                                                       which=lambda name: 'vcperf.exe'), 1)
+            verbs = [c[1] for c in calls]
+            self.assertEqual(verbs, ['--preset', '/start', '--build', '/stopnoanalyze', '/analyze', '/analyze'])
+            self.assertEqual(calls[1], ['vcperf.exe', '/start', 'Session'])
+            self.assertIn('/timetrace', calls[5])
+            saved = json.loads((Path(temp) / 'out' / 'v.json').read_text(encoding='utf-8'))
+            self.assertEqual(saved['build_insights']['outputs'][1][-11:], 'vcperf.json')
+            noadmin = build_profile.vcperf_commands('v', 'S', 'x', noadmin=True)[0]
+            self.assertEqual(noadmin, ['v', '/start', '/noadmin', 'S'])
+            calls.clear()
+            denied = SimpleNamespace(**dict(vars(traced), build_dir=str(Path(temp) / 'denied')))
+
+            def no_admin(command, cwd=None, stdout=None, stderr=None, check=False, **_):
+                calls.append(command)
+                refused = command[1:2] == ['/start']
+                return SimpleNamespace(returncode=1 if refused else 0, stdout='requires administrator privileges',
+                                       stderr='')
+
+            with self.assertRaisesRegex(SystemExit, 'grantusercontrol'):
+                build_profile.run_profile(denied, runner=no_admin, host=lambda: [], which=lambda name: 'vcperf.exe')
+            self.assertNotIn(['cmake', '--build'], [c[:2] for c in calls], 'no build without the trace')
+            with self.assertRaisesRegex(SystemExit, 'MSVC build'):
+                build_profile.run_profile(SimpleNamespace(**dict(vars(denied), compiler='clang')), runner=no_admin,
+                                          host=lambda: [])
+
+    def test_include_budget_reads_both_listings_and_fails_a_forbidden_header_with_its_chain(self):
+        gnu = ('. /src/engine/include/crd/containers/array.hpp\n'
+               '.. /src/engine/include/crd/core/assert.hpp\n'
+               '... /usr/include/c++/13/cstddef\n'
+               '.. /usr/include/c++/13/iterator\n'
+               '... /usr/include/c++/13/bits/streambuf_iterator.h\n'
+               'Multiple include guards may be useful for:\n'
+               '/usr/include/c++/13/iterator\n')
+        listing = include_budget.parse_listing(gnu, 'gnu')
+        self.assertEqual([depth for depth, _ in listing], [1, 2, 3, 2, 3], 'the include-guard summary is not listed')
+        found = include_budget.chains(listing, {'iterator', 'chrono'})
+        self.assertEqual(list(found), ['iterator'])
+        self.assertEqual([include_budget.short(p) for p in found['iterator']], ['crd/containers/array.hpp', 'c++/13/iterator'])
+        # MSVC indents one space per level after a localized prefix with its own spacing.
+        turkish = ('budget_probe_0.cpp\n'
+                   'Not: eklenen dosya:  D:\\src\\engine\\include\\crd\\containers\\hash_map.hpp\n'
+                   'Not: eklenen dosya:   D:\\src\\engine\\include\\crd\\containers\\hash.hpp\n'
+                   'Not: eklenen dosya:    C:\\VC\\include\\functional\n')
+        listing = include_budget.parse_listing(turkish, 'msvc', 'Not: eklenen dosya:  ')
+        self.assertEqual([depth for depth, _ in listing], [1, 2, 3])
+        english = 'Note: including file: C:\\a.hpp\nNote: including file:  C:\\VC\\include\\chrono\n'
+        self.assertEqual(include_budget.parse_listing(english, 'msvc'), [(1, 'C:\\a.hpp'), (2, 'C:\\VC\\include\\chrono')])
+        launched = {'command': 'C:\\tools\\sccache.exe C:\\VC\\cl.exe /nologo /c D:\\src\\a.cpp', 'file': 'D:\\src\\a.cpp'}
+        self.assertTrue(include_budget.without_launcher(launched)['command'].startswith('C:\\VC\\cl.exe'))
+        self.assertEqual(include_budget.without_launcher({'arguments': ['/usr/bin/ccache', 'g++', '-c', 'a.cpp']})
+                         ['arguments'], ['g++', '-c', 'a.cpp'])
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp) / 'build'
+            build.mkdir()
+            unit = {'directory': str(build), 'file': '/src/tests/foundation/containers/test_containers.cpp',
+                    'arguments': ['g++', '-Iinc', '-include', '/b/cmake_pch.hxx', '-o', 'x.o', '-c',
+                                  '/src/tests/foundation/containers/test_containers.cpp']}
+            (build / 'compile_commands.json').write_text(json.dumps([unit]), encoding='utf-8')
+            registry = {'schema': include_budget.SCHEMA, 'entries': [
+                {'include': 'crd/containers/array.hpp', 'flags_of': 'containers/test_containers.cpp',
+                 'forbid': ['iterator'], 'why': 'x'},
+                {'include': 'crd/math/transcendental.hpp', 'flags_of': 'containers/test_containers.cpp',
+                 'forbid': ['chrono'], 'forbid_gnu': ['immintrin.h'], 'why': 'x'},
+                {'include': 'crd/x.hpp', 'flags_of': 'absent/test_x.cpp', 'forbid': ['chrono'], 'why': 'x'}]}
+            commands = []
+
+            def compiler(arguments, **_):
+                commands.append(arguments)
+                probe = Path(arguments[-3]).read_text(encoding='utf-8')
+                text = gnu if 'array' in probe else '. /src/crd/math/transcendental.hpp\n.. /usr/lib/immintrin.h\n'
+                return SimpleNamespace(returncode=0, stdout='', stderr=text)
+
+            results = include_budget.check(build, registry, Path(temp), runner=compiler)
+            self.assertEqual([verdict for _, verdict, _ in results], ['over', 'over', 'unchecked'])
+            self.assertIn('<iterator> through crd/containers/array.hpp -> c++/13/iterator', results[0][2])
+            self.assertIn('<immintrin.h>', results[1][2], 'forbid_gnu applies on GCC and Clang')
+            self.assertIn('absent/test_x.cpp is not in', results[2][2])
+            self.assertNotIn('cmake_pch', ' '.join(commands[0]), 'the precompiled header is removed')
+            self.assertEqual(commands[0][-2:], ['-H', '-fsyntax-only'])
+            self.assertNotIn('-c', commands[0])
+
+            def broken(arguments, **_):
+                return SimpleNamespace(returncode=1, stdout='', stderr='fatal error: crd/x.hpp: No such file')
+
+            self.assertEqual(include_budget.check(build, registry, Path(temp), runner=broken)[0][1], 'unchecked',
+                             'a probe that does not compile is never within')
+        document = include_budget.load()
+        self.assertTrue(all(entry['why'] for entry in document['entries']))
+        self.assertIn('catch2/catch_test_macros.hpp', [entry['include'] for entry in document['entries']])
 
     def test_clang_build_analyzer_installer_builds_the_verified_source_and_checks_the_version(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -1884,6 +1987,9 @@ class CompilerCache(unittest.TestCase):
             self.assertIn('SCCACHE_SERVER_PORT=$(python3 "$HERE/compiler-cache.py" port)', wsl_lane)
             self.assertIn('server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server', wsl_lane)
             self.assertNotIn('eval "$(python3', wsl_lane, 'eval over a substitution hides a failed server start')
+            # A discovery build after a widely included header change keeps going and reports every broken unit.
+            self.assertIn('if [[ "${CRD_LANE_KEEP_GOING:-}" == 1 ]]; then\n            keep=(-- -k 0)', wsl_lane)
+            self.assertIn('cmake --build "$tree" -j "$JOBS" "${targets[@]}" "${keep[@]}"', wsl_lane)
             build_target = (ROOT / 'scripts/build-target.bat').read_text(encoding='utf-8')
             self.assertIn('server "%~1" --shell cmd > "%CRD_SERVER_ENV%"\nif errorlevel 1 exit /b 1\n', build_target)
             tree = root / 'tree'

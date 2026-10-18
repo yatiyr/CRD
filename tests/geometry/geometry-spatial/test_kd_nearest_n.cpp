@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory> // std::make_unique
 #include <random>
 
 using crd::f32;

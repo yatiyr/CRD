@@ -10,7 +10,11 @@
       "url": "https://github.com/catchorg/Catch2/archive/fa43b77429ba76c462b1898d6cd2f2d7a9416b14.tar.gz",
       "file": "Catch2-fa43b774.tar.gz",
       "sha256": "e7bbe2a99e111dfc9eb931f5e95b11b02f18f64c4f5b3aff6fdbd118fe440107",
-      "license": "BSL-1.0"
+      "license": "BSL-1.0",
+      "patches": [
+        "catch2-chrono-stringmaker-opt-in",
+        "catch2-clock-chrono-subset"
+      ]
     },
     "glfw": {
       "version": "3.4",

@@ -89,7 +89,18 @@ A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patc
 steps, and writes the result under `${CMAKE_BINARY_DIR}/patched/<package>/` only when its content changes; the
 target compiles that copy. An anchor that no longer matches upstream is a configure error naming the patch, where
 the former in-place `file(WRITE)` into the source tree silently did nothing on drift. Each patch is listed under its
-package's `patches` in the registry (check-pins fails a listed patch without its spec). Three exist: the imgui Vulkan
+package's `patches` in the registry (check-pins fails a listed patch without its spec). Five exist. Two are Catch2
+headers that every assertion reaches (2026-10-18): in C++20 `<chrono>` was the build's most expensive header, almost
+all of it through them ([board](../bench/2026-10-18-build-speed-compile-time.md)). `catch2-chrono-stringmaker-opt-in`
+puts `catch_tostring.hpp`'s `std::chrono` printers and their `<chrono>` behind `CATCH_CONFIG_ENABLE_CHRONO_STRINGMAKER`
+again, as Catch2 v2 had them: assertions are unchanged, and only a failure message of a duration differs (C++20's
+`operator<<`, or `{?}`). `catch2-clock-chrono-subset` gives `benchmark/catch_clock.hpp`, which the assertion path
+reaches through `IResultCapture`'s benchmark types, the standard library's own duration-and-clock header
+(`<__msvc_chrono.hpp>`, libstdc++'s `<bits/chrono.h>`; `<chrono>` on any other library) in place of the whole of
+`<chrono>`: the same declarations. A header has no target source to swap, so the copies' directory comes first on
+Catch2's include path, as a system directory like Catch2's own, and `crd-check-include-budget` fails when the
+assertion path reaches `<chrono>` or `<format>` again. CMake writes the copies with CRLF on Windows (the zstd copies
+too); compilers accept it, and an unchanged patch is not rewritten by a reconfigure (checked). The others are the imgui Vulkan
 backend (`imgui-vulkan-whole-size`), and zstd's `huf_compress.c` and `zstd_lazy.c` (`zstd-huf-is-sorted-unused`,
 `zstd-lazy-is-aligned-unused`), which give an assert-only `MEM_STATIC` helper the unused attribute upstream gives it
 under GCC but not under clang-cl, whose `-Wunused-function` was the one third-party warning win-clang-cl-shipping

@@ -1,0 +1,43 @@
+{
+  "schema": "cerid-include-budget/1",
+  "note": "Standard headers a hot header must not reach (docs/design/build-performance.md#include-budget). Each entry includes `include` in a probe unit compiled with the command of `flags_of` (a unit of the configuration's compile database, matched by path suffix) and the compiler's include listing; a forbidden header anywhere in the probe's include closure fails, with the chain that reached it. `forbid` applies to every compiler, `forbid_gnu` to GCC and Clang only (on MSVC the C runtime's <wchar.h> includes <intrin.h> and with it <immintrin.h> in nearly every unit, whatever the project includes). The costs are the 2026-10-18 profiles (docs/bench/2026-10-18-build-speed-compile-time.md).",
+  "entries": [
+    {
+      "include": "crd/containers/array.hpp",
+      "flags_of": "tests/foundation/containers/test_containers.cpp",
+      "forbid": ["chrono", "format", "functional", "iterator", "algorithm", "sstream", "istream", "ostream", "iostream"],
+      "why": "in about 1,400 units; libstdc++'s <iterator> brings the stream-buffer iterators and with them <streambuf>, <ios_base> and the locale classes (array.hpp 381 s of Clang front end before it was dropped)"
+    },
+    {
+      "include": "crd/containers/hash_map.hpp",
+      "flags_of": "tests/foundation/containers/test_containers.cpp",
+      "forbid": ["chrono", "format", "functional", "iterator", "algorithm", "unordered_map", "sstream", "iostream"],
+      "why": "hash.hpp and hash_map.hpp reach about 830 units; MSVC's <functional> brings <unordered_map> (130 s of MSVC front end)"
+    },
+    {
+      "include": "crd/containers/hash_set.hpp",
+      "flags_of": "tests/foundation/containers/test_containers.cpp",
+      "forbid": ["chrono", "format", "functional", "unordered_map", "sstream", "iostream"],
+      "why": "the set shares hash_map.hpp's key equality (DefaultEqual), not std::equal_to's <functional>"
+    },
+    {
+      "include": "crd/jobs/jobs.hpp",
+      "flags_of": "tests/foundation/jobs/test_jobs.cpp",
+      "forbid": ["algorithm", "chrono", "format", "functional", "sstream", "iostream"],
+      "why": "in about 240 units; two std::min calls had brought <algorithm>"
+    },
+    {
+      "include": "crd/math/transcendental.hpp",
+      "flags_of": "tests/foundation/math/test_transcendental.cpp",
+      "forbid": ["chrono", "format", "sstream", "iostream"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the scalar exp and log family; its cores live in crd/math/exp_log_core.hpp, apart from the AVX2 twins whose <immintrin.h> cost about 0.34 s in each Clang unit"
+    },
+    {
+      "include": "catch2/catch_test_macros.hpp",
+      "flags_of": "tests/foundation/containers/test_containers.cpp",
+      "forbid": ["chrono", "format"],
+      "why": "every test unit; with the two Catch2 patches (catch2-chrono-stringmaker-opt-in, catch2-clock-chrono-subset) the assertion path no longer reaches <chrono>, which was the build's most expensive header (575 s MSVC, 633 s Clang)"
+    }
+  ]
+}

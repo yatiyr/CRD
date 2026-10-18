@@ -42,6 +42,14 @@ Run commands from the repository root. Build/test rules and exact quality requir
   every hosted build's Ninja log and sccache statistics with the cache backend. Every board records the host's
   available memory and busiest processes before and after (on WSL the Windows host's too) and refuses a contended
   host unless `--allow-contended`; `build-bench.py host` prints that snapshot and exits 3 when it is contended.
+  `build-profile.py run --compiler msvc|clang --preset <p> --build-dir <fresh> --jobs <n> --label <l> --output <json>`
+  profiles a preset's compile time in an uncached tree (MSVC `/Bt+ /d1reportTime`; Clang `-ftime-trace` read by the
+  pinned ClangBuildAnalyzer that `install-clang-build-analyzer.py` builds into `~/.cerid/tools`; `--vcperf <session>`
+  adds C++ Build Insights in an elevated shell) and `render`/`compare` print its tables;
+  `check-include-budget.py --build <tree>` (the `crd-check-include-budget` CTest) fails a hot header of
+  `include-budget.json` that reaches a forbidden standard header, with the include chain. `elevated-captures.bat` is
+  the user's one elevated step (overhead sampling and Build Insights). `wsl-lane.sh build` takes
+  `CRD_LANE_KEEP_GOING=1` to report every broken unit of a widely included header change in one round.
 - Public consumption ([design](../docs/design/public-consumption.md)): `check-headers.py --build <dir> --changed`
   compiles changed public headers standalone with a sibling unit's flags from the compile database (outputs
   redirected to a scratch directory); `test-package-consumer.py --preset <name> --scratch <dir>` installs the

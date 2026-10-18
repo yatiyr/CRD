@@ -287,10 +287,28 @@ def configure_command(preset, build_dir, compiler, defines):
     return command + ['-D' + d for d in defines]
 
 
-def run_profile(args, runner=subprocess.run, host=bench.host_state):
+def vcperf_commands(vcperf, session, stem, noadmin=False):
+    """C++ Build Insights around the build: start, then stop into a raw trace and analyse it twice (the WPA trace with
+    template instantiations, and a Chrome trace-event JSON)."""
+    start = [vcperf, '/start'] + (['/noadmin'] if noadmin else []) + [session]
+    raw = str(stem) + '-raw.etl'
+    stop = [vcperf, '/stopnoanalyze', session, raw]
+    analyze = [[vcperf, '/analyze', '/templates', raw, str(stem) + '.etl'],
+               [vcperf, '/analyze', '/templates', raw, '/timetrace', str(stem) + '.json']]
+    return start, stop, analyze
+
+
+def run_profile(args, runner=subprocess.run, host=bench.host_state, which=shutil.which):
     build_dir = Path(args.build_dir)
     if build_dir.exists():
         raise SystemExit('%s exists; the profile needs a fresh scratch directory' % build_dir)
+    vcperf = None
+    if getattr(args, 'vcperf', None):
+        if args.compiler != 'msvc':
+            raise SystemExit('--vcperf profiles an MSVC build')
+        vcperf = which('vcperf')
+        if vcperf is None:
+            raise SystemExit('vcperf is not on PATH (run from the MSVC environment: scripts/msvc-env.bat)')
     states = host()
     reasons = [reason for state in states for reason in bench.contention(state)]
     print('host: ' + bench.host_summary(states), flush=True)
@@ -308,8 +326,25 @@ def run_profile(args, runner=subprocess.run, host=bench.host_state):
     build = ['cmake', '--build', str(build_dir), '--parallel', str(args.jobs)]
     for target in args.target:
         build += ['--target', target]
-    with log_path.open('w', encoding='utf-8', errors='replace') as log:
-        code = runner(build, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT, check=False).returncode
+    insights = None
+    if vcperf:
+        start, stop, analyze = vcperf_commands(vcperf, args.vcperf, output.with_suffix('').with_name(
+            output.stem + '-vcperf'), getattr(args, 'vcperf_noadmin', False))
+        started_trace = runner(start, cwd=str(ROOT), check=False, capture_output=True, text=True)
+        if started_trace.returncode != 0:
+            raise SystemExit('vcperf could not start (%s): it needs an elevated shell, or a one-time elevated '
+                             '`vcperf /grantusercontrol` and --vcperf-noadmin'
+                             % ((started_trace.stdout or '') + (started_trace.stderr or '')).strip()[-300:])
+        insights = {'session': args.vcperf, 'start': start}
+    try:
+        with log_path.open('w', encoding='utf-8', errors='replace') as log:
+            code = runner(build, cwd=str(ROOT), stdout=log, stderr=subprocess.STDOUT, check=False).returncode
+    finally:
+        if insights is not None:
+            insights['stop_exit'] = runner(stop, cwd=str(ROOT), check=False).returncode
+    if insights is not None:
+        insights['analyze_exits'] = [runner(command, cwd=str(ROOT), check=False).returncode for command in analyze]
+        insights['outputs'] = [analyze[0][-1], analyze[1][-1]]
     built = time.perf_counter()
     if args.compiler == 'msvc':
         with log_path.open('r', encoding='utf-8', errors='replace') as log:
@@ -324,7 +359,7 @@ def run_profile(args, runner=subprocess.run, host=bench.host_state):
                      'edges': len(edges), 'edge_s': round(sum(edges.values()), 1),
                      'slowest_edges': [{'output': o, 'seconds': s} for o, s in
                                        sorted(edges.items(), key=lambda item: -item[1])[:args.top]],
-                     'host_before': states, 'host_after': host(), 'contended': reasons,
+                     'host_before': states, 'host_after': host(), 'contended': reasons, 'build_insights': insights,
                      'machine': bench.machine(), 'log': str(log_path),
                      'finished': datetime.datetime.now(datetime.timezone.utc).isoformat()})
     output.write_text(json.dumps(document, indent=2) + '\n', encoding='utf-8')
@@ -386,6 +421,10 @@ def main(argv=None):
     run.add_argument('--analyzer', default='~/.cerid/tools/clang-build-analyzer/bin/ClangBuildAnalyzer')
     run.add_argument('--top', type=int, default=TOP)
     run.add_argument('--allow-contended', action='store_true')
+    run.add_argument('--vcperf', metavar='SESSION',
+                     help='also capture C++ Build Insights around the build (an elevated shell, see --vcperf-noadmin)')
+    run.add_argument('--vcperf-noadmin', action='store_true',
+                     help='start vcperf with /noadmin (after a one-time elevated `vcperf /grantusercontrol`)')
     parse = sub.add_parser('parse-msvc', help='rebuild a document from a kept MSVC build log')
     parse.add_argument('log')
     parse.add_argument('--output', required=True)

@@ -8,8 +8,7 @@
 #include <crd/memory/construct.hpp>
 
 #include <cstring>
-#include <functional> // std::equal_to
-#include <new>        // placement new
+#include <new> // placement new
 #include <type_traits>
 #include <utility>
 
@@ -55,7 +54,7 @@ inline constexpr u8 kEmptyDistance = 0xFFU;
 inline constexpr u8 kMaxDistance = 0xFEU; // saturates before sentinel
 } // namespace detail
 
-template <typename K, typename V, typename Hash = DefaultHash<K>, typename KeyEqual = std::equal_to<>> class HashMap
+template <typename K, typename V, typename Hash = DefaultHash<K>, typename KeyEqual = DefaultEqual> class HashMap
 {
 public:
     using key_type = K;

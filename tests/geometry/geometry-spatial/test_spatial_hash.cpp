@@ -23,6 +23,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory> // std::make_unique
 #include <random>
 
 // Catch2 listener — initialise the fiber job system once per test-binary run.

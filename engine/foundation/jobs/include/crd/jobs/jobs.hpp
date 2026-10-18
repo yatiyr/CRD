@@ -6,7 +6,6 @@
 #include <crd/jobs/detail/fiber_context.hpp>
 #include <crd/jobs/job_decl.hpp>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <span>
@@ -540,7 +539,7 @@ template <typename F>
     CRD_ASSERT_MSG(count > 0U, "parallel_for: count must be > 0");
     CRD_ASSERT_MSG(num_jobs > 0U, "parallel_for: num_jobs must be > 0");
 
-    num_jobs = std::min(num_jobs, count); // can't have more jobs than items
+    num_jobs = num_jobs < count ? num_jobs : count; // can't have more jobs than items
 
     FD fn_copy(std::forward<F>(fn));
 
@@ -650,7 +649,7 @@ template <typename R, typename MapFn, typename ReduceFn>
     CRD_ASSERT_MSG(count > 0U, "parallel_reduce: count must be > 0");
     CRD_ASSERT_MSG(num_jobs > 0U, "parallel_reduce: num_jobs must be > 0");
 
-    num_jobs = std::min(num_jobs, count);
+    num_jobs = num_jobs < count ? num_jobs : count;
 
     using MFD = std::decay_t<MapFn>;
     struct Task
@@ -688,10 +687,12 @@ template <typename R, typename MapFn, typename ReduceFn>
     Counter* const c = run(std::span<const JobDecl>(jobs, num_jobs));
     wait(c); // happens-before: the partial writes are visible after the wait
 
+    // The fold calls the caller's reducer itself (no copy), as an lvalue, once per partial.
+    ReduceFn&& fold = std::forward<ReduceFn>(reduce);
     R acc = init;
     for (crd::u32 i = 0U; i < num_jobs; ++i)
     {
-        acc = reduce(acc, partials[i]);
+        acc = fold(acc, partials[i]);
     }
     return acc;
 }

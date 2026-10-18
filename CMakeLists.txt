@@ -662,6 +662,18 @@ if (CRD_BUILD_TESTS)
     # header once its includes stopped being system includes. Third-party headers never fail the warning gate.
     crd_add_pinned_package(Catch2 SYSTEM YES EXCLUDE_FROM_ALL YES)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
+    # Every assertion reached <chrono> twice: catch_tostring.hpp for its duration and time-point printers, and
+    # benchmark/catch_clock.hpp through IResultCapture's benchmark types. In C++20 <chrono> is the build's most
+    # expensive header (calendar, time zones, <format>; 2026-10-18 profiles). The build-owned copies make the printers
+    # opt-in again, as Catch2 v2 had them, and give the clock types only the duration and clock part of the library
+    # (cmake/patches/catch2-chrono-stringmaker-opt-in.cmake, catch2-clock-chrono-subset.cmake). Their directory comes
+    # first on Catch2's include path, as a system directory like Catch2's own, so Catch2's sources and every test reach
+    # the copies.
+    crd_patched_copy(_crd_catch2_tostring Catch2 src/catch2/catch_tostring.hpp catch2-chrono-stringmaker-opt-in)
+    crd_patched_copy(_crd_catch2_clock Catch2 src/catch2/benchmark/catch_clock.hpp catch2-clock-chrono-subset)
+    target_include_directories(Catch2 SYSTEM BEFORE PUBLIC "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/patched/Catch2/src>")
+    unset(_crd_catch2_tostring)
+    unset(_crd_catch2_clock)
 endif()
 
 if("glfw" IN_LIST CRD_SELECTED_PACKAGES)

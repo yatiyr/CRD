@@ -49,6 +49,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>  // std::chrono::steady_clock — the lowering and emit timings
 #include <cstdio>  // CEIR-28d: std::snprintf — the "dx12:"+adapter_name() device key
 #include <cstring> // std::memcpy
 #include <fstream>

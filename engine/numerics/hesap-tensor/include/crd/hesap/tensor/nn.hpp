@@ -67,13 +67,15 @@
 #include "io.hpp"      // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
 
-#include <crd/math/cmath.hpp>         // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
-#include <crd/math/deterministic.hpp> // crd::math::deterministic::erf — the exact (erf-form) gelu
+#include <crd/math/cmath.hpp>               // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
+#include <crd/math/deterministic.hpp>       // crd::math::deterministic::erf — the exact (erf-form) gelu
+#include <crd/math/simd/transcendental.hpp> // crd::math::crd_exp4 — the AVX2 softmax exp, crd_exp1's twin
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
 #include <cmath> // std::fma — single-rounded accumulation (the codelet bit contract)
 #include <cstring>
+#include <utility> // std::move
 
 namespace crd::hesap::tensor
 {
@@ -939,7 +941,8 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
         for (crd::u32 r = 0; r < tg; ++r)
         {
             const crd::f32 v = d4[r] + bias[o0 + g + r];
-            yrow[o0 + g + r] = relu ? (v > 0.0F ? v : 0.0F) : v;
+            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+            yrow[o0 + g + r] = relu ? rectified : v;
         }
     }
 #else
@@ -965,7 +968,8 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
         const crd::f32 q0 = (accl[0] + accl[1]) + (accl[2] + accl[3]);
         const crd::f32 q1 = (accl[4] + accl[5]) + (accl[6] + accl[7]);
         const crd::f32 v = (q0 + q1) + bias[o0 + r];
-        yrow[o0 + r] = relu ? (v > 0.0F ? v : 0.0F) : v;
+        const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+        yrow[o0 + r] = relu ? rectified : v;
     }
 #endif
 }
@@ -1233,7 +1237,8 @@ inline void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* 
         {
             const crd::i32 dc = d4[r] - zp * colsum[o0 + g + r];
             const crd::f32 v = std::fma(scale_m, static_cast<crd::f32>(dc), bias[o0 + g + r]);
-            yrow[o0 + g + r] = relu ? (v > 0.0F ? v : 0.0F) : v;
+            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+            yrow[o0 + g + r] = relu ? rectified : v;
         }
     }
 #else
@@ -1247,7 +1252,8 @@ inline void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* 
         }
         idot -= zp * colsum[o0 + r]; // exact zero-point correction
         const crd::f32 v = std::fma(scale_m, static_cast<crd::f32>(idot), bias[o0 + r]);
-        yrow[o0 + r] = relu ? (v > 0.0F ? v : 0.0F) : v;
+        const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+        yrow[o0 + r] = relu ? rectified : v;
     }
 #endif
 }
@@ -1403,7 +1409,8 @@ inline void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd
             }
             idot -= zp[r] * colsum[o];
             const crd::f32 v = std::fma(scale_m[r], static_cast<crd::f32>(idot), bias[o]);
-            yrows[static_cast<crd::u64>(r) * n + o] = relu ? (v > 0.0F ? v : 0.0F) : v;
+            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+            yrows[static_cast<crd::u64>(r) * n + o] = relu ? rectified : v;
         }
     }
     (void)n8;
@@ -1473,7 +1480,11 @@ inline void linear_i8_run(const LinI8Ctx& c, crd::u32 lo, crd::u32 hi)
 [[nodiscard]] inline crd::u32 resolve_workers(crd::u32 requested) noexcept
 {
     const crd::u32 pool = crd::jobs::num_workers();
-    crd::u32 nw = requested != 0U ? requested : (pool != 0U ? pool : 1U);
+    crd::u32 nw = requested;
+    if (nw == 0U)
+    {
+        nw = pool != 0U ? pool : 1U;
+    }
     if (nw > pool)
     {
         nw = pool != 0U ? pool : 1U;
@@ -2384,7 +2395,8 @@ public:
             {
                 continue; // shape-only / absorbed into the producing op
             }
-            crd::f32* dst = i == last_write ? y.data() : (cur == buf0 ? buf1 : buf0);
+            crd::f32* const spare = cur == buf0 ? buf1 : buf0; // the ping-pong buffer not being read
+            crd::f32* dst = i == last_write ? y.data() : spare;
             run_op(op, cur, dst, scratch, batch, nw);
             cur = dst;
         }
@@ -2452,9 +2464,9 @@ private:
             return TensorStatus::BadInput; // append-then-finalize, never mutate a finalized graph
         }
         m_ops[m_count] = rec;
-        m_w[m_count] = static_cast<Tensor<crd::f32>&&>(w);
-        m_b[m_count] = static_cast<Tensor<crd::f32>&&>(b);
-        m_q[m_count] = static_cast<Tensor<BlockQ8_0>&&>(q);
+        m_w[m_count] = std::move(w);
+        m_b[m_count] = std::move(b);
+        m_q[m_count] = std::move(q);
         ++m_count;
         return TensorStatus::Ok;
     }
@@ -2509,8 +2521,7 @@ private:
         rec.dim_out = out;
         rec.dim_in = in;
         rec.has_q8 = true;
-        return push(rec, static_cast<Tensor<crd::f32>&&>(wscale), static_cast<Tensor<crd::f32>&&>(bias),
-                    static_cast<Tensor<BlockQ8_0>&&>(q));
+        return push(rec, static_cast<Tensor<crd::f32>&&>(wscale), static_cast<Tensor<crd::f32>&&>(bias), std::move(q));
     }
 
     [[nodiscard]] TensorStatus add_conv2d_from_blocks(Tensor<BlockQ8_0>&& q, crd::u64 oc, crd::u64 chans,
@@ -2556,8 +2567,7 @@ private:
         rec.pad = pad;
         rec.stride = stride;
         rec.has_q8 = true;
-        return push(rec, static_cast<Tensor<crd::f32>&&>(wf), static_cast<Tensor<crd::f32>&&>(bias),
-                    static_cast<Tensor<BlockQ8_0>&&>(q));
+        return push(rec, static_cast<Tensor<crd::f32>&&>(wf), static_cast<Tensor<crd::f32>&&>(bias), std::move(q));
     }
 
     [[nodiscard]] static TensorStatus shape_op(const NnOpRec& op, crd::u64 (&cur)[4],

@@ -3,8 +3,7 @@
 #include <crd/core/types.hpp>
 
 #include <cstring>
-#include <functional> // std::hash fallback
-#include <string_view>
+#include <string_view> // also declares the std::hash fallback, with its arithmetic, enum and pointer specializations
 #include <type_traits>
 
 namespace crd::containers
@@ -33,14 +32,14 @@ constexpr u64 hash_u64(u64 x) noexcept
 // identifiers). We can swap in xxhash/wyhash later when profiling demands.
 constexpr u64 fnv1a_64(const void* data, usize n) noexcept
 {
-    constexpr u64 kFnvOffset = 0xcbf29ce484222325ULL;
-    constexpr u64 kFnvPrime = 0x00000100000001B3ULL;
+    constexpr u64 fnv_offset = 0xcbf29ce484222325ULL;
+    constexpr u64 fnv_prime = 0x00000100000001B3ULL;
     const u8* bytes = static_cast<const u8*>(data);
-    u64 h = kFnvOffset;
+    u64 h = fnv_offset;
     for (usize i = 0; i < n; ++i)
     {
         h ^= static_cast<u64>(bytes[i]);
-        h *= kFnvPrime;
+        h *= fnv_prime;
     }
     return h;
 }
@@ -139,6 +138,24 @@ template <> struct DefaultHash<String>
     u64 operator()(const char* cstr) const noexcept
     {
         return hash_string(cstr ? std::string_view{cstr} : std::string_view{});
+    }
+};
+
+// -----------------------------------------------------------------------
+// DefaultEqual — the containers' default key equality
+// -----------------------------------------------------------------------
+// A transparent `a == b`: what std::equal_to<> does for the const lvalues a container compares, without <functional>
+// (on MSVC that header also brings <unordered_map>; the 2026-10-18 compile-time profile found it in about 830 units
+// through this header). HashMap<K,V> and HashSet<K> use it by default; a heterogeneous lookup (a StringView into a
+// HashMap<String, V>) compares through the same operator== overloads.
+// -----------------------------------------------------------------------
+struct DefaultEqual
+{
+    using is_transparent = void;
+
+    template <typename A, typename B> constexpr bool operator()(const A& a, const B& b) const noexcept(noexcept(a == b))
+    {
+        return a == b;
     }
 };
 } // namespace crd::containers

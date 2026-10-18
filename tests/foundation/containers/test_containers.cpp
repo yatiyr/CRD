@@ -793,7 +793,7 @@ TEST_CASE("HashMap: default empty", "[containers][hash_map]")
     REQUIRE(m.empty());
     REQUIRE(m.capacity() == 0);
     // The key literal must match the key type: MSVC 14.51 diagnoses the signed/unsigned comparison inside
-    // std::equal_to<> for a heterogeneous lookup (C4389 under /WX); older toolsets accepted it silently.
+    // the key equality for a heterogeneous lookup (C4389 under /WX); older toolsets accepted it silently.
     REQUIRE(m.find(7U) == nullptr);
     REQUIRE_FALSE(m.contains(7U));
 }

@@ -23,7 +23,7 @@ struct EmptySetValue
 };
 } // namespace detail
 
-template <typename K, typename Hash = DefaultHash<K>, typename KeyEqual = std::equal_to<>> class HashSet
+template <typename K, typename Hash = DefaultHash<K>, typename KeyEqual = DefaultEqual> class HashSet
 {
     using MapT = HashMap<K, detail::EmptySetValue, Hash, KeyEqual>;
 
@@ -46,14 +46,14 @@ public:
     ~HashSet() = default;
 
     // ---- Capacity --------------------------------------------------
-    usize size() const noexcept { return m_map.size(); }
-    usize capacity() const noexcept { return m_map.capacity(); }
-    bool empty() const noexcept { return m_map.empty(); }
-    f32 load_factor() const noexcept { return m_map.load_factor(); }
+    [[nodiscard]] usize size() const noexcept { return m_map.size(); }
+    [[nodiscard]] usize capacity() const noexcept { return m_map.capacity(); }
+    [[nodiscard]] bool empty() const noexcept { return m_map.empty(); }
+    [[nodiscard]] f32 load_factor() const noexcept { return m_map.load_factor(); }
     void reserve(usize n) { m_map.reserve(n); }
     void clear() noexcept { m_map.clear(); }
 
-    memory::IAllocator* allocator() const noexcept { return m_map.allocator(); }
+    [[nodiscard]] memory::IAllocator* allocator() const noexcept { return m_map.allocator(); }
 
     // ---- Modifiers -------------------------------------------------
     bool insert(const K& key) { return m_map.insert(key, detail::EmptySetValue{}); }
@@ -65,22 +65,23 @@ public:
 
     // ---- Iteration -------------------------------------------------
     // Iterators expose only keys (set-like). Wraps the map's iterator.
-    class const_iterator
+    class ConstIterator
     {
     public:
-        explicit const_iterator(typename MapT::const_iterator it) noexcept : m_it(it) {}
-        const_iterator& operator++() noexcept
+        explicit ConstIterator(typename MapT::const_iterator it) noexcept : m_it(it) {}
+        ConstIterator& operator++() noexcept
         {
             ++m_it;
             return *this;
         }
         const K& operator*() const noexcept { return m_it.key(); }
-        bool operator==(const const_iterator& o) const noexcept { return m_it == o.m_it; }
-        bool operator!=(const const_iterator& o) const noexcept { return m_it != o.m_it; }
+        bool operator==(const ConstIterator& o) const noexcept { return m_it == o.m_it; }
+        bool operator!=(const ConstIterator& o) const noexcept { return m_it != o.m_it; }
 
     private:
         typename MapT::const_iterator m_it;
     };
+    using const_iterator = ConstIterator; // the standard name, for range-for and generic code
 
     const_iterator begin() const noexcept { return const_iterator{m_map.begin()}; }
     const_iterator end() const noexcept { return const_iterator{m_map.end()}; }

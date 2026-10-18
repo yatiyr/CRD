@@ -115,6 +115,7 @@
 #include <crd/math/scalar.hpp>
 #include <crd/math/vec.hpp>
 
+#include <algorithm> // std::max of an initializer list
 #include <cmath>
 
 namespace crd::geometry::primitives
@@ -458,7 +459,8 @@ template <crd::math::MathScalar T>
         obb.orientation.c1 * obb.half_extents.y,
         obb.orientation.c2 * obb.half_extents.z,
     };
-    Vec3<T> tmin{}, tmax{};
+    Vec3<T> tmin{};
+    Vec3<T> tmax{};
     bool    first = true;
     for (int sx = -1; sx <= 1; sx += 2)
     {
@@ -745,7 +747,8 @@ template <crd::math::MathScalar T>
     using crd::math::Vec2;
     const Vec2<T> axes[2] = {obb.orientation.c0 * obb.half_extents.x,
                               obb.orientation.c1 * obb.half_extents.y};
-    Vec2<T> tmin{}, tmax{};
+    Vec2<T> tmin{};
+    Vec2<T> tmax{};
     bool first = true;
     for (int sx = -1; sx <= 1; sx += 2)
     {

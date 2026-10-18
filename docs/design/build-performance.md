@@ -172,6 +172,40 @@ Inclusive time ranks what to cut from a unit's include list; exclusive time rank
 it is included. Like a board, a profile records the host before and after and refuses a contended host unless
 `--allow-contended`. `parse-msvc <log>` and `parse-clang <report>` rebuild a document from a kept log or report,
 `render` writes the tables docs/bench stores, and `compare <before> <after> --key headers` lines two documents up.
+`--vcperf <session>` adds a C++ Build Insights capture around the build (an elevated shell, or `--vcperf-noadmin`
+after the one-time grant): `vcperf /stopnoanalyze`, then `/analyze /templates` into a WPA trace and a Chrome
+trace-event JSON beside the profile. [elevated-captures.bat](../../scripts/elevated-captures.bat) is the user's one
+elevated step that runs it (with DIAG.11b's overhead sampling).
+
+What the 2026-10-18 profiles changed ([board](../bench/2026-10-18-build-speed-compile-time.md)): `<chrono>`, which
+C++20 extends with the calendar, the time-zone database and `<format>`, was the build's most expensive header, and
+almost every test unit reached it through Catch2's assertion path; two registered patches
+([pinned inputs](pinned-inputs.md#patches-on-a-build-owned-copy)) keep it off that path. Hot project headers lost the
+standard headers they did not use: `crd/containers/array.hpp` its `<iterator>` (in libstdc++ it brings the stream
+buffers and the locale classes), `crd/containers/hash.hpp` and `hash_map.hpp` their `<functional>` (the containers'
+default key equality is now `DefaultEqual`, a transparent `a == b`), `crd/jobs/jobs.hpp` its `<algorithm>`. The
+scalar exp and log cores moved from `crd/math/simd/transcendental.hpp` into `crd/math/exp_log_core.hpp`, so
+`crd/math/cmath.hpp` no longer brings the SIMD backend and `<immintrin.h>` into every unit; the moved functions
+compile to identical code (per-function disassembly of a probe at `-O2 -mavx2` and `/O2 /arch:AVX2` on GCC, Clang
+and MSVC). The default precompiled header stays as it is: on MSVC its four headers save nothing (the PCH-on and
+PCH-off profiles' front ends were within the host's noise), and what every unit paid was what it included.
+
+<a id="include-budget"></a>
+## Include budget
+
+The cuts above are easy to undo: one include in a header a thousand units reach, and nothing fails.
+[check-include-budget.py](../../scripts/check-include-budget.py) makes that a failure. Its registry,
+[include-budget.json](../../scripts/include-budget.json), names each hot header, a test unit whose compile command
+it borrows from the configuration's compile database, and the standard headers it must not reach (`forbid` on every
+compiler, `forbid_gnu` on GCC and Clang only, because MSVC's C runtime brings `<immintrin.h>` through `<wchar.h>` into
+nearly every unit). For each entry a one-line probe is compiled with that command, its precompiled header removed and
+its outputs in a scratch directory, with the compiler's own include listing (`/showIncludes /Zs`, read with the
+localized prefix CMake recorded in `rules.ninja`; `-H -fsyntax-only`); a forbidden header anywhere in the listing
+fails, and the report names the chain of includes that reached it. An entry that cannot be checked (its unit missing,
+the probe not compiling) fails too. It is the `crd-check-include-budget` CTest of every Ninja configuration that
+builds the containers, jobs and math tests, so the `ctest -R "^crd-no-|^crd-check"` guards run it; on Windows it takes
+the MSVC environment from `scripts/msvc-env.bat` when the shell has none. Adopting it for a new hot header is one
+entry: the include, a test unit of its module, the forbidden headers and the measured reason.
 
 ## WSL source mirror
 

@@ -11,7 +11,7 @@
 // files following this exact pattern: fast common path + std:: edge fallback + a gen→mpmath-gate→golden-determinism
 // test entry.
 
-#include <crd/math/simd/transcendental.hpp> // crd_exp1 / crd_log1 cores (+ AVX2 twins)
+#include <crd/math/exp_log_core.hpp> // crd_exp1 / crd_log1, the scalar cores
 #include <crd/math/trig.hpp>                 // crd::math::sin/cos/sincos/tan (the trig family)
 
 #include <cmath> // edge fallbacks ONLY (NaN/Inf/subnormal/huge); the guard exempts crd-math's own kernel
@@ -27,8 +27,8 @@ inline constexpr double kLog10eConst = 0.43429448190325182765112891891661; // 1/
 // (the single rounded-constant multiply otherwise left them at ~2 ulp).
 inline constexpr double kLog2eHi = 1.44269504088896339e+00, kLog2eLo = 2.03552737409310331e-17;
 inline constexpr double kLog10eHi = 4.34294481903251817e-01, kLog10eLo = 1.09831965021676507e-17;
-inline constexpr double kLog10_2Hi = 3.01029996015131473541e-01;  // log10(2) split (hi has 30 low zero bits ⇒ k·hi
-inline constexpr double kLog10_2Lo = -3.51150278327520860677e-10; // exact) for the exp10 Cody-Waite reduction
+inline constexpr double kLog10Of2Hi = 3.01029996015131473541e-01;  // log10(2) split (hi has 30 low zero bits ⇒ k·hi
+inline constexpr double kLog10Of2Lo = -3.51150278327520860677e-10; // exact) for the exp10 Cody-Waite reduction
 // expm1 small-x: Q(x) = (e^x−1)/x ≈ 1 + Σ kQ_n·x^n on |x|<0.5 — MINIMAX (gen_expm1.py) ⇒ ≤1 ulp (Taylor was ~180).
 inline constexpr double kQ1 = 5.00000000000000000e-01, kQ2 = 1.66666666666669461e-01;
 inline constexpr double kQ3 = 4.16666666666644092e-02, kQ4 = 8.33333333316670435e-03;
@@ -60,7 +60,7 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
         return std::pow(10.0, x);
     }
     const double k = std::floor(x * 3.32192809488736234787 + 0.5);      // round(x·log2 10)
-    const double f = std::fma(k, -kLog10_2Lo, std::fma(k, -kLog10_2Hi, x)); // x − k·log10(2), two-part (no precision loss)
+    const double f = std::fma(k, -kLog10Of2Lo, std::fma(k, -kLog10Of2Hi, x)); // x − k·log10(2), two-part (no precision loss)
     return std::ldexp(crd_exp1(f * kLn10Const), static_cast<int>(k));
 }
 
@@ -135,7 +135,7 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
     double ed = 0.0;
     const double logm = crd_log_reduce(x, ed); // log10(x) = ed·log10(2) + logm·log10(e), ed exact (hi/lo split)
     const double lm = std::fma(logm, kLog10eHi, logm * kLog10eLo);
-    return std::fma(ed, kLog10_2Hi, std::fma(ed, kLog10_2Lo, lm));
+    return std::fma(ed, kLog10Of2Hi, std::fma(ed, kLog10Of2Lo, lm));
 }
 
 // log(1+x) — Goldberg correction so the low bits of x survive the 1+x rounding (<=1 ulp near 0).
