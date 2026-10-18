@@ -12,6 +12,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/math/deterministic.hpp>
+#include <crd/math/simd/vec4f.hpp> // the batched overloads' argument types
+#include <crd/math/simd/vec8f.hpp>
 
 #include <bit>
 #include <cmath>

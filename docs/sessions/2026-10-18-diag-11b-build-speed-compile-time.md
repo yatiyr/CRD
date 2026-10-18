@@ -266,3 +266,88 @@ On Clang the host carried the same load in both runs (8.2 and 8.3 Windows cores 
 (Clang); `hash.hpp` 161 → 36 s (Clang); `<functional>` 998 → 198 units (MSVC); `<iterator>` out of the MSVC top 40;
 `<format>` out of the MSVC top 40, its `std::vformat_to` template sets 223 → 43 s on Clang; `simd/backend.hpp` 818 →
 573 units (Clang), the rest through `crd/math/deterministic.hpp`'s `Vec4f` and the SIMD types.
+
+## One more cut: `deterministic.hpp` declares its vector types (2026-10-19)
+
+The rest of `simd/backend.hpp`'s Clang reach came through `crd/math/deterministic.hpp`, which included
+`simd/vec4f.hpp` and `simd/vec8f.hpp` for eight batched overloads that only name the types. It declares `struct
+Vec4f;` and `struct Vec8f;` (the definitions' tags; `alignas` belongs to the definitions only), and
+`test_deterministic.cpp`, the one caller, includes the two headers; `deterministic.cpp` already did, and the other
+users (`nn.hpp`, the scene-render GPU test) call only the scalar functions. linux-clang-tsan's dependency log:
+`simd/backend.hpp` 584 → 418 units, `<immintrin.h>` 602 → 456. Keep-going whole-tree builds on win-debug (1,843
+edges), linux-gcc-debug and linux-clang-tsan (3,008 compiles together): no failure, no warning; the math suite passes
+on all three (162 cases, 6,428 assertions on win-debug); strict tidy clean on both files. `include-budget.json` gains
+`cmath.hpp` and `deterministic.hpp` (no `<immintrin.h>` on GCC and Clang, no `<chrono>`, `<format>` or streams): 8 of
+8 within on all three trees. Teeth, run in the mirror and restored byte for byte with their times: the vector headers
+back in `deterministic.hpp` fail it on linux-gcc-debug and linux-clang-tsan (`crd/math/deterministic.hpp ->
+crd/math/simd/vec4f.hpp -> crd/math/simd/backend.hpp -> immintrin.h`). [Board](../bench/2026-10-18-build-speed-compile-time.md#deterministichpp-declares-its-vector-types-2026-10-19).
+
+<a id="the-timing-boards"></a>
+## The timing boards (2026-10-19)
+
+The profiles rank; the boards time. `build-bench.py run` into fresh uncached trees (no launcher), 16 jobs, rows
+configure, cold and the teeth cycle on `crd/memory/construct.hpp` (about 1,750 edges), four boards per lane
+interleaved after, before, before, after. The before arm checks out `d71be8d6`'s version of every build input the
+cuts changed (in the checkout for win-debug, in the ext4 mirror for linux-gcc-debug); HEAD's files
+were restored and checked after each lane. The host carried the same light load throughout (a digital audio
+workstation and a browser, 2.6-5.3 Windows cores; WSL idle), recorded by every board, nothing else heavy:
+
+| Lane | cold before → after | teeth-break before → after | teeth-restore before → after |
+|---|---|---|---|
+| win-debug, PCH off (MSVC) | 198-208 s → 157-164 s | 161-162 s → 127-132 s | 165 s → 125-131 s |
+| linux-gcc-debug, PCH on (GCC) | 193-197 s → 151-157 s | 181-182 s → 139-141 s | 179-181 s → 139-172 s |
+
+A fifth of the cold build and of a widely included header's rebuild, on both compilers. Losses: none measured; one
+after configure on win-debug took 53 s against 30 s, one after teeth-restore on Linux 172 s against its own 141 s
+teeth-break (a slower window: its edge sum rose with the same edges), and the before arm's first win-debug restore
+stopped at `LNK1103` (corrupt debug information in a library member while linking one specimen; rebuilt and linked
+in round 2: a host or linker fault, rerun once and recorded, not chased). Tables:
+[board](../bench/2026-10-18-build-speed-compile-time.md#timing-boards).
+
+<a id="the-focused-plans-risk-route"></a>
+## The focused plan's risk route
+
+`dev.py plan` printed four risk gates as sentences (`Risk gate: lifetime/concurrency sanitizer and fiber
+instrumentation`) and left the route to the reader. Each gate is now a route
+([contract](../design/developer-workflow.md#risk-routes)): the local commands that exercise it and the hosted lanes
+that qualify it, in the plan's JSON (`risk_routes`) and its text (`local:`, `note:`, `hosted:` lines), the plan's
+`--path` scenario carried into each check. Printed, never run. Headers route to `check-headers.py` on the changed
+public headers, the include budget and the other compiler family; memory, jobs, vm and containers to win-asan,
+linux-gcc-asan and linux-clang-tsan; GPU, rendering and execution to this host's adapter and lavapipe. A full scope has
+no local route, and a closure beyond the check's 32 targets keeps its commands with a note that each check then needs
+a `--target` subset.
+
+A WSL lane's route is the new `wsl-lane.sh dev <preset> [check arguments]`: `dev.py check` in the lane's own tree,
+under the lane lock, with the build's cache server and the test preset's environment. Running each draft for real
+decided its shape:
+- A CTest label filter cannot select a target's tests: `cerid.discovery.target=<target>` marks only the pending
+  placeholder of an unbuilt executable, so on a built tree `ctest -L cerid.discovery.target=crd-math-tests` lists 0 of
+  its 163 cases (probed on win-debug), and CTest's default treats no tests as a pass. Target names are no route
+  either: the Windows closure names targets Linux does not have (DX12). The lane's check selects from its own graph.
+- `dev.py check --root` is refused (the option belongs before the subcommand), and `--jobs 16` is refused ("Local
+  builds use one or two compile workers"); the check keeps its own workers.
+- From Git Bash, `wsl.exe -e bash /mnt/d/...` became `C:/Program Files/Git/mnt/d/...`; nested quoting (`bash -c
+  '..."$S"...'`) lost its variables on the way. The route is `wsl.exe --cd D:/Dev/cerid -e bash scripts/wsl-lane.sh
+  ...`: no POSIX path and no quoting cross the Windows shell.
+- The lane trees had no File API reply; the check requests one and configures itself (77 s once).
+
+End to end, the printed sanitizer route of `--path tests/foundation/memory/test_allocator_asan.cpp`, linux-gcc-asan:
+configure 77 s, build 1.5 s (crd-memory-tests), discovery, 202 of 202 selected cases passed under the preset's ASan
+environment, both guards passed, sealed evidence verified (28 artifacts); the run ends incomplete, exit 3, because
+clang-tidy 20 is not on the WSL host, so changed C++ stays ungated there, never passed (installing it is a download
+for the user to approve; follow-up). Tests: four cases in `test-dev-workflow.py` (the header route, its Linux-host
+form and the lane command parsed by dev.py's own parser; the sanitizer and device routes with the one mirror sync
+first; the scenario paths in every check; full scope and the 32-target note) and the `dev` branch in
+`test-repository-tools.py`; eleven mutations of the routes (no sync, no TSan lane, the scenario dropped from the lane
+or the Windows checks, a refused jobs override, a full scope with local routes, no 32-target note, the changed headers
+unnamed, the lane check through `run`, the lane script by a POSIX path, no checkout directory) each fail them. The
+check's 32-target limit is one constant now.
+
+The include budget had a hole on Clang that the lane run showed: Clang spells CMake's precompiled header as cc1
+options (`-Xclang -include-pch -Xclang <pch> -Xclang -include -Xclang cmake_pch.hxx`), which the shared stripping
+(`cerid_dev/tidy.py`, used by the budget's probes and by strict tidy) did not remove, so a Clang probe loaded the
+precompiled header and listed none of the headers inside it (`crd/math/deterministic.hpp`: 1 header on
+linux-clang-tsan, 33 on GCC): a forbidden header compiled into the precompiled header was invisible to it. Both
+spellings are stripped now (deterministic.hpp: 41 headers on linux-clang-tsan), and `<chrono>` added to
+`crd/core/types.hpp`, a header of the precompiled header, fails six of the eight entries on both Linux trees; four
+mutations of the stripping each fail its case.

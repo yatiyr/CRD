@@ -3,11 +3,12 @@
 from pathlib import Path
 import argparse
 import json
+import os
 import subprocess
 import sys
 
 from cerid_dev.selection import (SelectionError, buildable_targets, changes_from_git, content_identity, load_model, relative_name,
-                                 select_targets)
+                                 risk_routes, select_targets)
 from cerid_dev.evidence import EvidenceError
 from project_sync.storage import Conflict
 
@@ -90,6 +91,7 @@ def make_plan(args):
     selection['disabled_test_count'] = sum(test['disabled'] for test in selection['tests'])
     if model:
         selection['build_targets'] = buildable_targets(model['targets'], selection['targets'])
+    selection['risk_routes'] = risk_routes(root, build, selection, os.name == 'nt', sorted({relative_name(path) for path in args.path}))
     return selection
 
 
@@ -156,8 +158,13 @@ def main(arguments=None):
                   + plan['test_discovery'])
             print('Guards: ' + ', '.join(plan['guards']))
             print('Tidy: ' + (', '.join(plan['tidy_files']) or '(none)'))
-            for risk in plan['risk_checks']:
-                print('Risk gate: ' + risk)
+            for route in plan['risk_routes']:
+                print('Risk gate: ' + route['risk'])
+                for command in route['local']:
+                    print('  local: ' + command)
+                for note in route['notes']:
+                    print('  note: ' + note)
+                print('  hosted: ' + (', '.join(route['hosted']) or '(none named)'))
             print('Content identity: ' + plan['content']['sha256'])
             if plan['scope'] == 'full':
                 print('Full scope belongs to CI. This command does not launch a local repository sweep.')

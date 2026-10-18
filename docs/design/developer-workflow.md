@@ -42,8 +42,8 @@ Callable interfaces: `doctor`, `plan`, `check` and sealed `evidence` inspection.
 REPO.DEV.3b/3c; see [scoped execution evidence](../sessions/2026-09-12-scoped-check-and-native-discovery.md).
 
 `doctor` is read-only: actual tools, preset eligibility, cache/toolchain identity, runtime paths, disk/RAM and sync
-state, including invalid empty native compiler defaults. `plan` prints reasons, targets, guards, risk lanes and pending
-discovery commands as text or JSON. It and `check --dry-run` never invoke PRE_TEST executables. `check` executes
+state, including invalid empty native compiler defaults. `plan` prints reasons, targets, guards, the
+[risk routes](#risk-routes) and pending discovery commands as text or JSON. It and `check --dry-run` never invoke PRE_TEST executables. `check` executes
 the reviewed scope with bounded jobs, real exit codes, dry-run support and no synchronization bypass. `evidence`
 records revision plus worktree content identity, model/configuration, commands, counts, durations and result files.
 Existing direct CMake/CTest helpers remain valid. Incomplete execution never becomes a successful qualification.
@@ -58,13 +58,40 @@ external builds and other hosts still requires qualification. Every Git command 
 drive: the first `git diff` took 98 s cold, a few seconds afterwards) needs a larger budget, and exhausting it is an
 instrument failure, never a pass.
 
+<a id="risk-routes"></a>
+## Risk routes
+
+`plan` turns each risk gate into a route (`risk_routes` in the JSON; `local`, `note` and `hosted` lines in the text):
+the local commands that exercise that risk on this host and the hosted lanes that qualify it, with the plan's
+`--path` scenario carried into each check. It prints them and runs none. A WSL lane's route syncs the source mirror and
+runs `wsl-lane.sh dev <preset>`: `dev.py check` in that lane's own tree, under the lane lock, with the build's cache
+server and the test preset's environment (sanitizer options, suppressions), so the lane selects its affected targets
+and tests from its own graph. A target of the Windows closure may not exist on Linux (DX12), and a discovered Catch2
+case carries no owner label a CTest filter could select by (`cerid.discovery.target` marks only the pending
+placeholder of an unbuilt executable). From Windows the command is `wsl.exe --cd <checkout> -e bash
+scripts/wsl-lane.sh ...`: no POSIX path crosses a Windows shell (Git Bash rewrites `/mnt/d/...`) and nothing needs nested
+quoting. The check keeps its one or two compile workers and refreshes a lane tree's missing File API reply itself. On
+a host without clang-tidy 20 (the WSL reference host) a lane check ends incomplete after its build, tests and guards
+pass: changed C++ stays ungated there, never passed.
+
+| Risk gate | Local route | Hosted lanes |
+|---|---|---|
+| Public/header consumers | `check-headers.py` on the changed public headers, `check-include-budget.py`, the other compiler family's check (the linux-gcc-debug lane from Windows) | win-public-checks, linux-gcc-public-checks, win-clang-cl, win-clang-cl-shipping, linux-gcc-shipping, the SSE2 lanes |
+| Lifetime/concurrency | `dev.py check` in win-asan, then the linux-gcc-asan and linux-clang-tsan lane checks | win-asan, linux-gcc-asan, linux-clang-tsan |
+| Providers/devices | `dev.py check` on this host's adapter, the linux-gcc-debug lane check (Vulkan on lavapipe) | Windows lanes on the pinned WARP, Linux lanes on lavapipe |
+| CI | none: push, read the run, fix a completed failure before new work | every lane of the run |
+
+A full scope has no local route. A closure beyond the check's 32 targets keeps its commands with a note: each check
+then needs a `--target` subset, and CI qualifies the rest.
+
 ## Strict analysis
 
 Changed C++ is analysed by one portable helper, `scripts/tidy-files.py` (`cerid_dev/tidy.py`; `tidy-files.ps1` wraps
 it on Windows), on every host. clang-tidy must report LLVM 20: an explicit `--clang-tidy`/`CRD_CLANG_TIDY` is the
 only candidate, otherwise the pinned Windows install, then `clang-tidy-20` and `clang-tidy` on PATH; `doctor`
 reports the resolution. The configured build's `compile_commands.json` supplies every flag; only precompiled-header
-inputs are stripped (MSVC `/Yu`, `/Fp`, `/FI cmake_pch`; GCC `-include cmake_pch.hxx`, `-Winvalid-pch`). The MSVC
+inputs are stripped (MSVC `/Yu`, `/Fp`, `/FI cmake_pch`; GCC `-include cmake_pch.hxx`, `-Winvalid-pch`; Clang's cc1
+spelling `-Xclang -include-pch -Xclang <pch>` and `-Xclang -include -Xclang cmake_pch.hxx`). The MSVC
 flags clang-tidy drops are restated through `--extra-arg` (`/EHsc` and the cache's `CRD_SIMD_MSVC_ARCH_FLAG`, never a
 literal); a GCC database adds `-Wno-unknown-warning-option` so `-Werror` cannot turn unknown warning names into parse
 failures, and `-Wno-error` because GCC is that configuration's compiler of record: clang's own warnings under GCC's

@@ -34,6 +34,20 @@
       "why": "the scalar exp and log family; its cores live in crd/math/exp_log_core.hpp, apart from the AVX2 twins whose <immintrin.h> cost about 0.34 s in each Clang unit"
     },
     {
+      "include": "crd/math/cmath.hpp",
+      "flags_of": "tests/foundation/math/test_transcendental.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the one-include math surface, in about 640 units; through its transcendental functions it had brought the SIMD backend (simd/backend.hpp 275 s of Clang front end in 818 units)"
+    },
+    {
+      "include": "crd/math/deterministic.hpp",
+      "flags_of": "tests/foundation/math/test_deterministic.cpp",
+      "forbid": ["chrono", "format", "sstream", "iostream"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "its Vec4f and Vec8f overloads only name the vector types, so the types are declared, not included; crd/hesap/complex.hpp brings it into about 330 units"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

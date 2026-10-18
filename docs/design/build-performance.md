@@ -198,8 +198,9 @@ The cuts above are easy to undo: one include in a header a thousand units reach,
 [include-budget.json](../../scripts/include-budget.json), names each hot header, a test unit whose compile command
 it borrows from the configuration's compile database, and the standard headers it must not reach (`forbid` on every
 compiler, `forbid_gnu` on GCC and Clang only, because MSVC's C runtime brings `<immintrin.h>` through `<wchar.h>` into
-nearly every unit). For each entry a one-line probe is compiled with that command, its precompiled header removed and
-its outputs in a scratch directory, with the compiler's own include listing (`/showIncludes /Zs`, read with the
+nearly every unit). For each entry a one-line probe is compiled with that command, its precompiled header removed (in
+every spelling: MSVC's `/Yu /Fp /FI`, GCC's `-include`, Clang's `-Xclang -include-pch`; a probe that loads the
+header lists none of the headers inside it) and its outputs in a scratch directory, with the compiler's own include listing (`/showIncludes /Zs`, read with the
 localized prefix CMake recorded in `rules.ninja`; `-H -fsyntax-only`); a forbidden header anywhere in the listing
 fails, and the report names the chain of includes that reached it. An entry that cannot be checked (its unit missing,
 the probe not compiling) fails too. It is the `crd-check-include-budget` CTest of every Ninja configuration that

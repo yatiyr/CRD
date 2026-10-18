@@ -188,8 +188,14 @@ inline constexpr f64 kInvLn10F64 = 0.43429448190325182765;
 // implementation changes.
 // ===========================================================================
 
-#include <crd/math/simd/vec4f.hpp>
-#include <crd/math/simd/vec8f.hpp>
+// The overloads only name the vector types, so they are declared here, not included: a caller passing a Vec4f or a
+// Vec8f includes its header (crd/math/simd/vec4f.hpp, vec8f.hpp), and the scalar functions above bring no SIMD
+// backend or intrinsics header into the units that use only them (2026-10-18 compile-time profile).
+namespace crd::math::simd
+{
+struct Vec4f;
+struct Vec8f;
+} // namespace crd::math::simd
 
 namespace crd::math::deterministic
 {

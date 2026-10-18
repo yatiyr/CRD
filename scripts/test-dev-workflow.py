@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -14,7 +15,8 @@ import time
 import unittest
 from unittest.mock import patch
 
-from cerid_dev.selection import (SelectionError, changes_from_git, content_identity, load_model, parse_changes,
+from cerid_dev.selection import (CHECK_TARGET_LIMIT, CI_RISK, DEVICE_RISK, HEADER_RISK, SANITIZER_RISK, SelectionError,
+                                 changes_from_git, content_identity, load_model, parse_changes, risk_routes,
                                  select_targets, select_tests)
 from cerid_dev.environment import (build_environment, cache_values, compiler_metadata, env_value, native_profile_issues,
                                   resolve_clang_tidy, runtime_file, synchronization_state)
@@ -91,6 +93,15 @@ def fixture_process_running(pid):
         return False
 
 
+def lane_script_dispatches_dev():
+    """The commands scripts/wsl-lane.sh dispatches under its lane lock."""
+    text = (ROOT / 'scripts/wsl-lane.sh').read_text(encoding='utf-8')
+    for line in text.splitlines():
+        if line.strip().startswith('configure|build|test|run') and line.strip().endswith(')'):
+            return 'dev' in line.strip().rstrip(')').split('|')
+    return False
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding='utf-8')
@@ -158,6 +169,82 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(plan['targets'], ['consumer'])
         self.assertEqual(plan['scope'], 'affected')
         self.assertIn(self.build / 'generated.hpp', model['targets']['consumer']['sources'])
+
+    def routes(self, name, windows=True, root=None):
+        plan = select_targets(self.root, [{'path': name, 'status': 'M'}], self.model())
+        return plan, {route['risk']: route for route in risk_routes(root or self.root, self.build, plan, windows)}
+
+    def lane_check_arguments(self, command):
+        """The dev.py check a lane route runs (wsl-lane.sh dev <preset> <check arguments>), parsed by dev.py's own
+        parser; the lane script supplies --root and --build."""
+        tokens = shlex.split(command)
+        index = tokens.index('dev')
+        self.assertEqual(tokens[index - 1], 'scripts/wsl-lane.sh')
+        self.assertTrue(lane_script_dispatches_dev(), 'wsl-lane.sh dispatches no dev command')
+        return dev_parser().parse_args(['--root', '/mirror', 'check', '--build', '/tree', *tokens[index + 2:]])
+
+    def test_risk_routes_name_the_header_checks_and_the_other_compiler_family(self):
+        plan, routes = self.routes('engine/header-only/include/public.hpp', root=Path('D:/Dev/cerid'))
+        self.assertEqual(set(routes), set(plan['risk_checks']))
+        header = routes[HEADER_RISK]
+        self.assertTrue(any('check-headers.py' in command and command.endswith('engine/header-only/include/public.hpp')
+                            for command in header['local']))
+        self.assertTrue(any('check-include-budget.py' in command for command in header['local']))
+        lane = 'wsl.exe --cd D:/Dev/cerid -e bash scripts/wsl-lane.sh'
+        self.assertIn(lane + ' sync', header['local'])
+        runs = [command for command in header['local'] if command.startswith(lane + ' dev linux-gcc-debug ')]
+        self.assertEqual(len(runs), 1)
+        arguments = self.lane_check_arguments(runs[0])
+        self.assertEqual((arguments.command, arguments.jobs, arguments.path, arguments.target), ('check', 2, [], []))
+        self.assertIn('linux-gcc-public-checks', header['hosted'])
+        self.assertEqual(routes[CI_RISK]['local'], [])
+        _, routes = self.routes('engine/header-only/include/public.hpp', windows=False)
+        self.assertFalse(any('wsl.exe' in command for command in routes[HEADER_RISK]['local']))
+        self.assertTrue(any('win-debug' in note for note in routes[HEADER_RISK]['notes']))
+
+    def test_risk_routes_send_memory_changes_to_every_sanitizer_and_device_changes_to_an_adapter(self):
+        _, routes = self.routes('engine/header-only/include/memory/pool.hpp')
+        sanitizer = routes[SANITIZER_RISK]['local']
+        self.assertIn('python scripts/dev.py check --build build/win-asan', sanitizer)
+        for preset in ('linux-gcc-asan', 'linux-clang-tsan'):
+            self.assertTrue(any(f' dev {preset} ' in command for command in sanitizer), preset)
+        self.assertEqual(sum(command.endswith(' sync') for command in sanitizer), 1)
+        self.assertLess(next(i for i, c in enumerate(sanitizer) if c.endswith(' sync')),
+                        next(i for i, c in enumerate(sanitizer) if ' dev ' in c))
+        self.assertEqual(routes[SANITIZER_RISK]['hosted'], ['win-asan', 'linux-gcc-asan', 'linux-clang-tsan'])
+        _, routes = self.routes('engine/header-only/include/gpu/device.hpp')
+        self.assertIn('python scripts/dev.py check --build ' + self.build.as_posix(), routes[DEVICE_RISK]['local'])
+        self.assertNotIn(SANITIZER_RISK, routes)
+        self.assertTrue(any('lavapipe' in lane for lane in routes[DEVICE_RISK]['hosted']))
+
+    def test_risk_routes_keep_the_plans_scenario_paths(self):
+        plan = select_targets(self.root, [{'path': 'engine/header-only/include/memory/pool.hpp', 'status': 'M'}],
+                              self.model())
+        scenario = ['engine/header-only/include/memory/pool.hpp', 'tests/a b.cpp']
+        routes = {route['risk']: route for route in risk_routes(self.root, self.build, plan, True, scenario)}
+        local = routes[SANITIZER_RISK]['local']
+        self.assertIn('python scripts/dev.py check --build build/win-asan --path '
+                      "engine/header-only/include/memory/pool.hpp --path 'tests/a b.cpp'", local)
+        lanes = [command for command in local if ' dev ' in command]
+        self.assertEqual(len(lanes), 2)
+        for command in lanes:
+            self.assertEqual(self.lane_check_arguments(command).path, scenario)
+
+    def test_risk_routes_defer_full_scope_and_wide_closures_to_ci(self):
+        plan = select_targets(self.root, [{'path': 'engine/header-only/include/memory/new.hpp', 'status': '?'}],
+                              self.model())
+        self.assertEqual(plan['scope'], 'full')
+        self.assertTrue({HEADER_RISK, SANITIZER_RISK} <= set(plan['risk_checks']))
+        for route in risk_routes(self.root, self.build, plan, True):
+            self.assertEqual(route['local'], [])
+            self.assertTrue(any('full scope' in note for note in route['notes']))
+        plan = select_targets(self.root, [{'path': 'engine/header-only/include/memory/pool.hpp', 'status': 'M'}],
+                              self.model())
+        self.assertEqual(plan['scope'], 'affected')
+        plan['build_targets'] = [f'target-{index}' for index in range(CHECK_TARGET_LIMIT + 1)]
+        route = {route['risk']: route for route in risk_routes(self.root, self.build, plan, True)}[SANITIZER_RISK]
+        self.assertTrue(route['local'])
+        self.assertTrue(any('--target subset' in note for note in route['notes']))
 
     def test_unknown_asset_generator_deletion_and_new_file_broaden(self):
         for name, status in [('unknown.cpp', 'M'), ('assets/a.ckir', 'M'), ('scripts/generator.py', 'M'),
@@ -971,6 +1058,17 @@ class TidyTests(unittest.TestCase):
             self.assertIn(token, gnu)
         arguments = ['g++', '-Winvalid-pch', '-include', '/b/cmake_pch.hxx', '-include', 'other.hpp', '/YuX', '-c', 'a.cpp']
         self.assertEqual(strip_pch_arguments(arguments), ['g++', '-include', 'other.hpp', '-c', 'a.cpp'])
+        # Clang's form, as CMake writes it for linux-clang-tsan: cc1 options, each behind -Xclang.
+        clang = ('/usr/bin/clang++ -Xclang -fno-pch-timestamp -Winvalid-pch -Xclang -include-pch -Xclang '
+                 '/b/t.dir/cmake_pch.hxx.pch -Xclang -include -Xclang /b/t.dir/cmake_pch.hxx -include other.hpp '
+                 '-Xclang -include -Xclang kept.hpp -o a.o -c a.cpp')
+        stripped = strip_pch_command(clang)
+        for token in ('cmake_pch', '-include-pch', '-Winvalid-pch'):
+            self.assertNotIn(token, stripped)
+        for token in ('-Xclang -fno-pch-timestamp', '-include other.hpp', '-Xclang -include -Xclang kept.hpp',
+                      '-o a.o -c a.cpp'):
+            self.assertIn(token, stripped)
+        self.assertEqual(strip_pch_arguments(clang.split()), stripped.split())
         self.assertEqual(compiler_family({'command': self.MSVC}), 'msvc')
         self.assertEqual(compiler_family({'command': self.GNU}), 'gnu')
         self.assertEqual(compiler_family({'arguments': ['clang-cl.exe', '/c']}), 'msvc')

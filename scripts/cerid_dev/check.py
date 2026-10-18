@@ -13,8 +13,8 @@ import xml.etree.ElementTree as ET
 from .environment import build_environment, cache_values, cmake_tools, doctor
 from .evidence import seal
 from .process import run_command
-from .selection import (SelectionError, buildable_targets, changes_from_git, content_identity, load_model,
-                        select_tests)
+from .selection import (CHECK_TARGET_LIMIT, SelectionError, buildable_targets, changes_from_git, content_identity,
+                        load_model, select_tests)
 
 
 def source_identity(root, git_timeout=None):
@@ -243,7 +243,7 @@ def check(args, make_plan):
                 raise SelectionError('Full qualification belongs to CI; specify --target for a recorded diagnostic subset')
             else:
                 targets = plan['build_targets']
-            if len(targets) > 32:
+            if len(targets) > CHECK_TARGET_LIMIT:
                 raise SelectionError('More than 32 affected build targets requires a smaller explicit diagnostic scope and CI')
             record['build_targets'] = list(targets)
             config = ['--config', args.config] if args.config else []
@@ -261,7 +261,7 @@ def check(args, make_plan):
                     added = {target for test in selected for target in test['targets']} - built
                     if not added:
                         break
-                    if len(built | added) > 32:
+                    if len(built | added) > CHECK_TARGET_LIMIT:
                         raise SelectionError('Fixture expansion exceeds the local target budget; explicit scope/CI required')
                     run('build-fixtures', [cmake, '--build', str(build), *config, '--target', *sorted(added),
                                           '--parallel', str(args.jobs)], args.build_timeout, environment)

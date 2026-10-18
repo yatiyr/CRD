@@ -33,7 +33,13 @@ SOURCE_SUFFIXES = {'.cpp', '.cc', '.cxx'}
 HEADER_SUFFIXES = {'.h', '.hpp', '.hxx', '.inl', '.inc', '.ipp'}
 MSVC_DRIVERS = {'cl', 'cl.exe', 'clang-cl', 'clang-cl.exe'}
 QUOTED_OR_BARE = r'(?:"[^"]*"|[^\s"]*)'
-PCH_COMMAND_TOKENS = [re.compile(r'(?<!\S)[-/]Yu' + QUOTED_OR_BARE + r'\s*'),
+# Clang spells CMake's precompiled header as cc1 options: -Xclang -include-pch -Xclang <pch> -Xclang -include -Xclang
+# <cmake_pch.hxx>. Those go first, before GCC's -include form could match a part of them.
+CLANG_PCH = re.compile(r'(?<!\S)-Xclang\s+-include-pch\s+-Xclang\s+' + QUOTED_OR_BARE + r'\s*')
+CLANG_PCH_INCLUDE = re.compile(r'(?<!\S)-Xclang\s+-include\s+-Xclang\s+'
+                               r'(?:"[^"]*cmake_pch[^"]*"|[^\s"]*cmake_pch[^\s"]*)\s*')
+PCH_COMMAND_TOKENS = [CLANG_PCH, CLANG_PCH_INCLUDE,
+                      re.compile(r'(?<!\S)[-/]Yu' + QUOTED_OR_BARE + r'\s*'),
                       re.compile(r'(?<!\S)[-/]Fp' + QUOTED_OR_BARE + r'\s*'),
                       re.compile(r'(?<!\S)[-/]FI(?:"[^"]*cmake_pch[^"]*"|[^\s"]*cmake_pch[^\s"]*)\s*'),
                       re.compile(r'(?<!\S)-include\s*(?:"[^"]*cmake_pch[^"]*"|[^\s"]*cmake_pch[^\s"]*)\s*'),
@@ -75,16 +81,21 @@ def strip_pch_command(command):
 
 
 def strip_pch_arguments(arguments):
-    result, skip = [], False
+    result, skip = [], 0
     for index, token in enumerate(arguments):
         if skip:
-            skip = False
+            skip -= 1
             continue
         following = arguments[index + 1] if index + 1 < len(arguments) else ''
+        cc1 = arguments[index:index + 4]
+        if (len(cc1) == 4 and cc1[0] == cc1[2] == '-Xclang'
+                and (cc1[1] == '-include-pch' or (cc1[1] == '-include' and 'cmake_pch' in cc1[3]))):
+            skip = 3
+            continue
         if re.match(r'^[-/](Yu|Fp)', token) or re.match(r'^[-/]FI.*cmake_pch', token) or token == '-Winvalid-pch':
             continue
         if token == '-include' and 'cmake_pch' in following:
-            skip = True
+            skip = 1
             continue
         if token.startswith('-include') and 'cmake_pch' in token:
             continue

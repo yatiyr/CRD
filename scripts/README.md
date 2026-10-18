@@ -10,9 +10,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   preset through it (`compiler-cache.py configure-args <preset>` prints the entries; `CRD_SCCACHE=off` reverts) and
   `build-target.bat` starts its server on `build/sccache` (`compiler-cache.py server|stats`)
   ([local cached trees](../docs/design/build-performance.md#local-cached-trees)).
-- WSL lanes: `bash /mnt/d/Dev/cerid/scripts/wsl-lane.sh sync|check|configure|build|test|run|tree` builds and tests
+- WSL lanes: `bash /mnt/d/Dev/cerid/scripts/wsl-lane.sh sync|check|configure|build|test|run|dev|tree` builds and tests
   `~/cerid-mirror-build/<preset>` from the ext4 mirror `~/cerid-src`, kept exact by `source-mirror.py sync|check`
-  (a stale mirror is refused) ([WSL source mirror](../docs/design/build-performance.md#wsl-source-mirror)).
+  (a stale mirror is refused) ([WSL source mirror](../docs/design/build-performance.md#wsl-source-mirror)); `dev`
+  runs `dev.py check` in the lane's tree, the route `dev.py plan` prints for a lane
+  ([risk routes](../docs/design/developer-workflow.md#risk-routes)).
 - Waiting: `wait-for.py start` runs a long build or test detached under a deadline (at most an hour) with a log and
   an exit-code sentinel; `wait-for.py exit-file|file|pid|run` wait for it in bounded calls (at most 1,140 s, under the
   loop watchdog) instead of fixed sleeps ([waits](../docs/design/build-performance.md#waiting-for-long-commands)).

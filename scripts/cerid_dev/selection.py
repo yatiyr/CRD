@@ -6,8 +6,9 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
+import shlex
 import subprocess
 
 
@@ -227,11 +228,19 @@ def documentation(name):
         'AGENTS.md', 'CLAUDE.md', 'MEMORY.md', 'README.md', 'START_HERE.md', 'context.md'}
 
 
+CI_RISK = 'affected Windows/Linux CI; full matrix remains required for qualification'
+HEADER_RISK = 'public/header consumers, standalone headers and compiler/ABI diversity'
+DEVICE_RISK = 'affected actual providers, validation, declared CPU/image oracle and hardware tuple'
+SANITIZER_RISK = 'lifetime/concurrency sanitizer and fiber instrumentation'
+HEADER_SUFFIXES = {'.h', '.hpp', '.hxx', '.inl', '.inc', '.ipp'}
+CHECK_TARGET_LIMIT = 32
+
+
 def select_targets(root, changes, model=None, model_error=None, full=False):
     targets = model['targets'] if model else {}
     reasons, owners = [], {}
     selected = set()
-    risks = {'affected Windows/Linux CI; full matrix remains required for qualification'}
+    risks = {CI_RISK}
     known_inputs = model['inputs'] | {path for target in targets.values() for path in target['sources']} if model else set()
     code_changes = [item for item in changes if not documentation(item['path'])
                     or (root / item['path']).resolve() in known_inputs]
@@ -254,7 +263,7 @@ def select_targets(root, changes, model=None, model_error=None, full=False):
         for target_name, target in targets.items():
             if path in target['sources']:
                 matched.add(target_name)
-            if path.suffix.lower() in {'.h', '.hpp', '.hxx', '.inl', '.inc', '.ipp'}:
+            if path.suffix.lower() in HEADER_SUFFIXES:
                 if any(path.is_relative_to(include) for include in target['includes']):
                     matched.add(target_name)
         owners[name] = sorted(matched)
@@ -262,11 +271,11 @@ def select_targets(root, changes, model=None, model_error=None, full=False):
         if not matched:
             reasons.append(f'{name}: no proven source/header owner in this configuration')
         if '/include/' in name or path.suffix.lower() in {'.h', '.hpp', '.inl', '.inc', '.ipp'}:
-            risks.add('public/header consumers, standalone headers and compiler/ABI diversity')
+            risks.add(HEADER_RISK)
         if any(part in PurePosixPath(name).parts for part in ('gpu', 'rendering', 'execution')):
-            risks.add('affected actual providers, validation, declared CPU/image oracle and hardware tuple')
+            risks.add(DEVICE_RISK)
         if any(part in PurePosixPath(name).parts for part in ('memory', 'jobs', 'vm', 'containers')):
-            risks.add('lifetime/concurrency sanitizer and fiber instrumentation')
+            risks.add(SANITIZER_RISK)
     scope = 'full' if reasons else ('affected' if code_changes else 'documentation')
     closure = sorted(targets) if scope == 'full' else reverse_closure(targets, selected)
     return {'scope': scope, 'reasons': sorted(set(reasons)), 'owners': owners, 'targets': closure,
@@ -283,6 +292,85 @@ def buildable_targets(targets, selected):
     # Never execute arbitrary UTILITY targets such as clean-all/uninstall/dashboard tasks from graph selection.
     kinds = {'EXECUTABLE', 'STATIC_LIBRARY', 'SHARED_LIBRARY', 'MODULE_LIBRARY', 'OBJECT_LIBRARY'}
     return sorted(name for name in selected if targets[name]['type'] in kinds)
+
+
+# The risk route: for each risk gate, the local commands that exercise it and the hosted lanes that qualify it
+# (docs/design/developer-workflow.md#risk-routes). plan prints them and never runs them. A lane's route is dev.py check
+# in that lane's own tree, which selects its affected targets and tests from that configuration's graph: a target of
+# this configuration's closure may not exist in another (DX12 only on Windows), and the discovered cases carry no owner
+# label a CTest filter could select by.
+HOSTED_LANES = {
+    CI_RISK: ['every lane of the pushed revision\'s run (gh run list --branch main --limit 15)'],
+    HEADER_RISK: ['win-public-checks', 'linux-gcc-public-checks', 'win-clang-cl', 'win-clang-cl-shipping',
+                  'linux-gcc-shipping', 'win-debug-sse2', 'linux-gcc-debug-sse2'],
+    DEVICE_RISK: ['the Windows lanes on the pinned WARP adapter', 'the Linux lanes on lavapipe'],
+    SANITIZER_RISK: ['win-asan', 'linux-gcc-asan', 'linux-clang-tsan'],
+}
+
+
+def wsl_lane(root, windows):
+    """The WSL lane script from the checkout's root. From Windows, wsl.exe --cd takes the checkout's Windows path, so
+    no POSIX path crosses a Windows shell (Git Bash would rewrite /mnt/d/...) and nothing needs nested quoting."""
+    if not windows:
+        return 'bash scripts/wsl-lane.sh'
+    return f'wsl.exe --cd {shlex.quote(PureWindowsPath(str(root)).as_posix())} -e bash scripts/wsl-lane.sh'
+
+
+def lane_check(lane, preset, scenario):
+    """Sync the mirror, then dev.py check in the lane's tree (wsl-lane.sh dev) with the plan's scenario paths. The
+    check keeps its own one or two compile workers and refreshes a tree's missing File API reply itself."""
+    paths = ''.join(f' --path {shlex.quote(name)}' for name in scenario)
+    return [f'{lane} sync', f'{lane} dev {preset} --build-timeout 3000{paths}']
+
+
+def risk_routes(root, build, plan, windows, scenario=()):
+    python = 'python' if windows else 'python3'
+    lane = wsl_lane(root, windows)
+    try:
+        tree = Path(build).relative_to(root).as_posix()
+    except ValueError:
+        tree = Path(build).as_posix()
+    paths = ''.join(f' --path {shlex.quote(name)}' for name in scenario)
+
+    def check(tree_name):
+        return f'{python} scripts/dev.py check --build {tree_name}{paths}'
+
+    headers = sorted(name for name in plan['owners'] if '/include/' in name
+                     and PurePosixPath(name).suffix.lower() in HEADER_SUFFIXES)
+    routes = []
+    for risk in plan['risk_checks']:
+        local, notes = [], []
+        if plan['scope'] == 'full':
+            notes.append('full scope: the hosted run qualifies it; no local route replaces it')
+        elif risk == CI_RISK:
+            notes.append('push, then read the run; a completed failure is fixed before new work')
+        elif risk == HEADER_RISK:
+            if headers:
+                local.append(f'{python} scripts/check-headers.py --build {tree} ' + ' '.join(headers))
+            local.append(f'{python} scripts/check-include-budget.py --build {tree}')
+            if windows:
+                local += lane_check(lane, 'linux-gcc-debug', scenario)
+            else:
+                notes.append('the other compiler family: dev.py check --build build/win-debug on a Windows host')
+        elif risk == DEVICE_RISK:
+            local.append(check(tree))
+            notes.append("the affected device suites run on this host's adapter under the validation capture")
+            if windows:
+                local += lane_check(lane, 'linux-gcc-debug', scenario)
+                notes.append('the WSL lane runs the Vulkan suites on lavapipe with the pinned validation layer')
+        elif risk == SANITIZER_RISK:
+            if windows:
+                local.append(check('build/win-asan'))
+                # One sync serves both lane runs.
+                local += lane_check(lane, 'linux-gcc-asan', scenario)
+                local += lane_check(lane, 'linux-clang-tsan', scenario)[1:]
+            else:
+                local += [check('build/linux-gcc-asan'), check('build/linux-clang-tsan')]
+        if local and plan['scope'] != 'full' and len(plan['build_targets']) > CHECK_TARGET_LIMIT:
+            notes.append(f'{len(plan["build_targets"])} affected build targets exceed the local check\'s '
+                         f'{CHECK_TARGET_LIMIT}: each check needs a --target subset, and CI qualifies the rest')
+        routes.append({'risk': risk, 'local': local, 'hosted': HOSTED_LANES.get(risk, []), 'notes': notes})
+    return routes
 
 
 def select_tests(inventory, model, target_names, full=False, allow_pending=False):

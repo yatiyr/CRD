@@ -10,11 +10,15 @@
 #   wsl-lane.sh test <preset> [ctest args ...]    check, then CTest in the lane's tree with the test preset's
 #                                                 environment, jobs and timeout (as the hosted lane's --preset)
 #   wsl-lane.sh run <preset> -- command ...       check, then run a command from a fresh scratch directory
+#   wsl-lane.sh dev <preset> [check args ...]     check, then dev.py check in the lane's tree from the mirror, with the
+#                                                 build's cache server and the test preset's environment (the focused
+#                                                 plan's lane route: docs/design/developer-workflow.md#risk-routes)
 #   wsl-lane.sh tree <preset>                     print the lane's build directory
 #
-# test and run check without syncing: a source edited after the build is refused instead of being tested against
+# test, run and dev check without syncing: a source edited after the build is refused instead of being tested against
 # binaries built from older sources. Run it through the checkout's path (bash /mnt/d/.../scripts/wsl-lane.sh) so the
-# mirror's source is known. One heavy job at a time: configure, build, test and run wait for ~/.cerid/wsl-lane.lock.
+# mirror's source is known. One heavy job at a time: configure, build, test, run and dev wait for
+# ~/.cerid/wsl-lane.lock.
 # Environment: CRD_LANE_ROOT (the trees, default ~/cerid-mirror-build), CRD_SOURCE_MIRROR (default ~/cerid-src),
 # CRD_LANE_JOBS (default 16), CRD_LANE_TIMEOUT (seconds per heavy command, default 3500), CRD_LANE_KEEP_GOING (1: build
 # past failures, so a change to a widely included header shows every unit it breaks in one round), CRD_SCCACHE, CRD_MOLD and
@@ -49,7 +53,7 @@ if [[ -d "$VALIDATION/share/vulkan/explicit_layer.d" ]]; then
 fi
 
 usage() {
-    sed -n '6,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '6,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 }
 
@@ -111,7 +115,7 @@ command=${1:-}
 [[ -n "$command" ]] || usage
 shift
 case "$command" in
-    configure|build|test|run)
+    configure|build|test|run|dev)
         heavy "$@"
         ;;
 esac
@@ -180,6 +184,26 @@ case "$command" in
         export S=$MIRROR B=$tree
         cd "$scratch"
         timeout "$LIMIT" "$@"
+        ;;
+    dev)
+        [[ $# -ge 1 ]] || usage
+        preset=$1
+        shift
+        tree=$(tree_of "$preset")
+        mirror check
+        [[ -f "$tree/CMakeCache.txt" ]] || { echo "[wsl-lane] configure $preset first (wsl-lane.sh configure)" >&2; exit 2; }
+        # The check builds and tests in this tree as build and test would: the tree's cache server and the test
+        # preset's environment (sanitizer options, suppressions); its own jobs, selection and evidence.
+        server_env=$(python3 "$MIRROR/scripts/compiler-cache.py" server "$tree" --shell sh)
+        eval "$server_env"
+        export LP_NUM_THREADS=${LP_NUM_THREADS:-4}
+        PRESET_ARGS=()
+        eval "$(preset_test_settings "$preset")"
+        scratch=$(mktemp -d "$HOME/.cerid/lane-scratch.XXXXXX")
+        trap 'rm -rf "$scratch"' EXIT
+        cd "$scratch"
+        echo "[wsl-lane] dev.py check in $tree"
+        timeout "$LIMIT" python3 "$MIRROR/scripts/dev.py" --root "$MIRROR" check --build "$tree" "$@"
         ;;
     *)
         usage
