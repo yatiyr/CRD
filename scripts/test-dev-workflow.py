@@ -480,10 +480,12 @@ VALUE:STRING=a=b=c
 
         def transient_denial(path, *args, **kwargs):
             nonlocal denials
-            if path.name == 'native-status.json' and path.exists() and denials < 3:
+            # Read first: an exists() check could race the child's atomic rename and let a real read through.
+            text = read_text(path, *args, **kwargs)
+            if path.name == 'native-status.json' and denials < 3:
                 denials += 1
                 raise PermissionError('fixture transient status-file denial')
-            return read_text(path, *args, **kwargs)
+            return text
 
         with patch.object(Path, 'read_text', transient_denial):
             result = run_command([sys.executable, '-c',
@@ -501,9 +503,11 @@ VALUE:STRING=a=b=c
         read_text = Path.read_text
 
         def persistent_denial(path, *args, **kwargs):
-            if path.name == 'native-status.json' and path.exists():
+            # Read first: an exists() check could race the child's atomic rename and let a real read through.
+            text = read_text(path, *args, **kwargs)
+            if path.name == 'native-status.json':
                 raise PermissionError('fixture persistent status-file denial')
-            return read_text(path, *args, **kwargs)
+            return text
 
         with patch.object(Path, 'read_text', persistent_denial):
             result = run_command([sys.executable, '--version'], self.root, dict(os.environ),
