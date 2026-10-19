@@ -168,6 +168,8 @@ Settled policies (2026-10-06, [session](../sessions/2026-10-06-diag-3a-allocator
   them, refuse in every build a pointer they did not hand out, after an assert where asserts are compiled in. Arenas
   (linear, stack, growable linear) ignore every free. The diagnostic decorator reports `UnknownPointer`.
   `MallocAllocator` cannot tell, because `owns()` is true for every pointer; wrap it in the decorator to diagnose.
+  (Since 2026-10-19 its block header makes a free whose header fails the check a named fatal, but reading below a
+  pointer it never handed out may itself fault, so that is a corruption check, not an ownership test.)
   TLSF also refuses a misaligned pointer and an immediate double free. Interior pointers that land on a valid header,
   and stale frees after reuse, need the decorator or DIAG.3e generations.
 - **Partial construction.** An owning arena whose parent refuses its backing memory is out of memory: `CRD_FATAL`
@@ -2801,6 +2803,15 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   pair attributes the rest to the per-operation gate itself (no gate: +0.12%); the same board shows that comparing two
   separately compiled binaries has a layout floor of several percent (offline -11.0% between builds that do not touch
   its path), which the remaining disabled-mode verdicts must get under before they can be read.
+- The default allocator's exact sizes (2026-10-19,
+  [session](../sessions/2026-10-19-diag-11b-malloc-allocator-bytes.md)): `MallocAllocator` aligns inside one C-library
+  `malloc` and keeps a 16-byte header below each block (the request, and the offset to the C-library block with
+  log2 of the alignment), so `allocation_size()` is the request on every platform and its statistics count the same
+  bytes at allocation and at free. Before, Windows answered 0 (the CRT cannot size an `_aligned_malloc` block without
+  its alignment) and the bytes in use never fell; glibc answered the usable size and wrapped them. Under ASan the
+  header and the alignment padding are poisoned and read through `CRD_MEM_ASAN_UNCHECKED` loads, so a run before or
+  past a block is reported as before; a header that fails its check is a named fatal at the free in every build (a
+  check, not ownership: `owns()` stays true for every pointer).
 - Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost

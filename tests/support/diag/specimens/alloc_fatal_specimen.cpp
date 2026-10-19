@@ -17,6 +17,10 @@
 //                          the borrowing LinearAllocator, StackAllocator and PoolAllocator constructors likewise
 //   pool-borrowed-overflow the borrowing PoolAllocator's slot_size * slot_count overflows usize
 //
+// A corrupted block must stop at the allocator's named fatal, never a free of a pointer computed from garbage:
+//   malloc-header-clobbered
+//                          the 16 header bytes below a default (malloc) block are overwritten, then it is freed
+//
 // The consumer helpers (construct.hpp): a caller that cannot continue without the memory turns a refusal into its own
 // named out-of-memory fatal, never a null pointer it would follow:
 //   allocate-or-fatal, allocate-array-or-fatal, construct-or-fatal, construct-array-or-fatal
@@ -40,6 +44,7 @@
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/asan_poison.hpp>
 #include <crd/memory/construct.hpp>
 
 #include <cstdint>
@@ -261,6 +266,18 @@ private:
         crd::memory::GrowableTlsfAllocator a(pool_bytes, nullptr, "alloc-fatal-gtlsf");
         void* const p = a.allocate(64U, 16U);
         (void)a.reallocate(p, 64U, SIZE_MAX, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "malloc-header-clobbered") == 0)
+    {
+        // An underwrite of a default (malloc) block overwrites its header: the free stops at the named fatal instead
+        // of handing the C library a pointer computed from the overwritten bytes. Unpoisoned first, so an ASan build
+        // reaches the free rather than reporting the underwrite itself.
+        auto* const p = static_cast<crd::u8*>(crd::memory::default_allocator()->allocate(64U, 16U));
+        crd::memory::asan_unpoison(p - 16, 16U);
+        std::memset(p - 16, 0xFF, 16U);
+        g_expected_fatal = ": block header failed its check"; // the malloc allocator's own fatal
+        crd::memory::default_allocator()->deallocate(p);
         return true;
     }
     return run_or_fatal_mode(mode);

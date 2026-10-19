@@ -42,6 +42,22 @@
 #include <sanitizer/common_interface_defs.h>
 #endif
 
+// Marks a function whose own loads and stores ASan does not check: an allocator reading bookkeeping it poisoned for
+// itself (MallocAllocator's block header) while the caller's bytes around it stay checked. Write such a function as
+// plain loads, never a memcpy (the sanitizer intercepts that). Out of line under ASan, so the unchecked body is never
+// inlined into an instrumented caller; nothing without ASan.
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): a function attribute, which only a macro can spell per compiler.
+#if CRD_MEM_ASAN
+#if defined(_MSC_VER) && !defined(__clang__)
+#define CRD_MEM_ASAN_UNCHECKED __declspec(no_sanitize_address) __declspec(noinline)
+#else
+#define CRD_MEM_ASAN_UNCHECKED __attribute__((no_sanitize_address, noinline))
+#endif
+#else
+#define CRD_MEM_ASAN_UNCHECKED
+#endif
+// NOLINTEND(cppcoreguidelines-macro-usage)
+
 namespace crd::memory
 {
 

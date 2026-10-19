@@ -334,6 +334,24 @@ TEST_CASE("allocator boundaries: an unsatisfiable reallocate reaches the out-of-
     }
 }
 
+TEST_CASE("allocator boundaries: a MallocAllocator block whose header was overwritten stops at the named fatal",
+          "[memory][contract][diag][harness]")
+{
+    // DIAG.11b (p): the block header that sizes a malloc block exactly is in the caller's reach; an underwrite of it
+    // must end in the allocator's named fatal, in every build, not in a free() of a pointer computed from it.
+    namespace cd = crd::diag;
+    namespace cont = crd::containers;
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::CleanExit; // exit_code is the oracle here, not the verdict
+    cont::Array<cont::String> args;
+    args.push_back(cont::String{"malloc-header-clobbered"});
+    const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str());
+    // 42 = the header check's fatal fired; 97 = another assert first; 0 = the free returned; anything else is a crash
+    // inside the C library.
+    CHECK(o.exit_code == 42);
+}
+
 namespace
 {
 int g_asserts_seen = 0;

@@ -111,6 +111,80 @@ TEST_CASE("MallocAllocator: reallocate to size 0 frees", "[memory][malloc]")
     REQUIRE(q == nullptr);
 }
 
+// DIAG.11b (p): allocation_size() is the request on every platform and in every build. Before the block header,
+// Windows answered 0 (the CRT cannot size an _aligned_malloc block without its alignment) and glibc the usable size.
+TEST_CASE("MallocAllocator: allocation_size is the exact request at every alignment", "[memory][malloc]")
+{
+    MallocAllocator a("exact-size");
+    constexpr usize sizes[] = {1U, 13U, 100U, 1000U, 4097U};
+    constexpr usize alignments[] = {1U, 8U, 16U, 64U, 4096U};
+    crd::containers::Array<u8*> blocks;
+    for (const usize alignment : alignments)
+    {
+        for (const usize size : sizes)
+        {
+            INFO("size " << size << ", alignment " << alignment);
+            auto* const p = static_cast<u8*>(a.allocate(size, alignment));
+            REQUIRE(p != nullptr);
+            CHECK(is_aligned(p, alignment < kMinAlignment ? kMinAlignment : alignment));
+            CHECK(a.allocation_size(p) == size);
+            std::memset(p, static_cast<int>(blocks.size() + 1U), size); // every requested byte is the caller's
+            blocks.push_back(p);
+        }
+    }
+    usize index = 0;
+    for (const usize alignment : alignments)
+    {
+        for (const usize size : sizes)
+        {
+            INFO("size " << size << ", alignment " << alignment);
+            u8* const p = blocks[index];
+            ++index;
+            bool kept = true;
+            for (usize i = 0; i < size; ++i)
+            {
+                kept = kept && p[i] == static_cast<u8>(index);
+            }
+            CHECK(kept); // no other block's header or bytes landed in it
+            CHECK(a.allocation_size(p) == size);
+            a.deallocate(p);
+        }
+    }
+    CHECK(a.allocation_size(nullptr) == 0U);
+}
+
+// DIAG.11b (p) tooth: 100 and 1,000 bytes allocated and freed had left 1,100 bytes in use on Windows and wrapped
+// bytes_in_use to 2^64 - 52 on glibc (the request counted at allocation, the usable size at free).
+TEST_CASE("MallocAllocator: the byte statistics return to their baseline after every free", "[memory][malloc][stats]")
+{
+    MallocAllocator a("balanced-bytes");
+    const StatisticsCoverage coverage = a.request_statistics(); // before the first allocation
+    const auto before = a.stats().snapshot();
+    void* const small = a.allocate(100U, 16U);
+    void* const large = a.allocate(1000U, 64U);
+    void* const paged = a.allocate(5000U, 4096U);
+    const auto mid = a.stats().snapshot();
+    a.deallocate(large);
+    a.deallocate(small);
+    a.deallocate(paged);
+    const auto after = a.stats().snapshot();
+    if (coverage == StatisticsCoverage::CompiledOut)
+    {
+        CHECK(mid.alloc_count == 0U);
+        CHECK(mid.bytes_in_use == 0U);
+        CHECK(after.bytes_in_use == 0U);
+        return;
+    }
+    REQUIRE(coverage == StatisticsCoverage::Complete);
+    CHECK(mid.alloc_count == before.alloc_count + 3U);
+    CHECK(mid.bytes_in_use == before.bytes_in_use + 6100U);
+    CHECK(mid.total_bytes == before.total_bytes + 6100U);
+    CHECK(mid.peak_bytes >= before.bytes_in_use + 6100U);
+    CHECK(after.dealloc_count == before.dealloc_count + 3U);
+    CHECK(after.bytes_in_use == before.bytes_in_use);
+    CHECK(after.total_bytes == mid.total_bytes);
+}
+
 TEST_CASE("default_allocator returns a stable pointer", "[memory][default]")
 {
     IAllocator* a = default_allocator();
@@ -354,11 +428,12 @@ TEST_CASE("MemoryStats tracks alloc/dealloc in debug builds", "[memory][stats]")
     void* q = a.allocate(64, 16);
     const auto mid = a.stats().snapshot();
     REQUIRE(mid.alloc_count == before.alloc_count + 2);
-    REQUIRE(mid.bytes_in_use >= before.bytes_in_use + 192);
+    REQUIRE(mid.bytes_in_use == before.bytes_in_use + 192);
     a.deallocate(p);
     a.deallocate(q);
     const auto after = a.stats().snapshot();
     REQUIRE(after.dealloc_count == before.dealloc_count + 2);
+    REQUIRE(after.bytes_in_use == before.bytes_in_use);
 }
 #endif
 

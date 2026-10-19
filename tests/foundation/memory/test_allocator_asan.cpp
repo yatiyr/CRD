@@ -18,6 +18,7 @@
 #include <crd/memory/allocators/growable_pool_allocator.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
+#include <crd/memory/allocators/malloc_allocator.hpp>
 #include <crd/memory/allocators/pool_allocator.hpp>
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
@@ -613,6 +614,35 @@ TEST_CASE("allocator asan: an Array hands an arena slice back whole and never ma
     }
 }
 
+// DIAG.11b (p): a MallocAllocator block's header and the padding a large alignment reserves lie inside the C-library
+// block, so only their poison keeps a run before or past the caller's bytes visible to ASan. The header reads behind
+// allocation_size() and deallocate() are unchecked loads and report nothing.
+TEST_CASE("allocator asan: a malloc heap block is live exactly, its header and padding poisoned",
+          "[memory][diag][asan]")
+{
+    mem::MallocAllocator heap("asan-malloc"); // crd-lint-allow-malloc-allocator: the allocator under test
+    constexpr crd::usize sizes[] = {1U, 13U, 48U, 4099U};
+    constexpr crd::usize alignments[] = {8U, 16U, 64U, 256U, 4096U};
+    for (const crd::usize alignment : alignments)
+    {
+        for (const crd::usize size : sizes)
+        {
+            INFO("size " << size << ", alignment " << alignment);
+            auto* const p = static_cast<crd::u8*>(heap.allocate(size, alignment));
+            REQUIRE(p != nullptr);
+            CHECK(mem::is_aligned(p, alignment));
+            CHECK(heap.allocation_size(p) == size);
+            CHECK(live_exactly(p, size)); // the next byte is the C library's redzone or this allocator's padding
+            CHECK(poisoned(p - 1));       // the header ...
+            CHECK(poisoned(p - 16));      // ... all of it
+            CHECK(poisoned(p - 17));      // and below it the leading padding or the C library's redzone
+            std::memset(p, 0x6D, size);
+            CHECK(holds(p, size, 0x6D));
+            heap.deallocate(p);
+        }
+    }
+}
+
 TEST_CASE("allocator asan: every poisoned access is the declared ASan report, or reported absent",
           "[memory][diag][asan][harness]")
 {
@@ -622,13 +652,13 @@ TEST_CASE("allocator asan: every poisoned access is the declared ASan report, or
     const cd::LanePromise lane = cd::lane_promise();
     CHECK(kAsan == lane.asan);
     const char* const modes[] = {
-        "linear-reset",         "linear-rewind",  "linear-overrun",   "linear-small-overrun", "linear-underrun",
-        "linear-nested-parent", "stack-pop",      "glinear-reset",    "pool-freed-slot",      "pool-overrun",
-        "pool-underrun",        "pool-odd-freed", "pool-odd-overrun", "gpool-freed-slot",     "gpool-overrun",
-        "tlsf-freed",           "tlsf-overrun",   "tlsf-underrun",    "tlsf-aligned",         "tlsf-large",
-        "tlsf-shrink",          "gtlsf-freed",    "ring-retired",     "ring-overrun",         "ring-underrun",
-        "array-past-size",      "array-pop",      "array-clear",      "array-shrink",         "array-odd-bytes",
-        "array-arena",
+        "linear-reset",         "linear-rewind",   "linear-overrun",   "linear-small-overrun", "linear-underrun",
+        "linear-nested-parent", "stack-pop",       "glinear-reset",    "pool-freed-slot",      "pool-overrun",
+        "pool-underrun",        "pool-odd-freed",  "pool-odd-overrun", "gpool-freed-slot",     "gpool-overrun",
+        "tlsf-freed",           "tlsf-overrun",    "tlsf-underrun",    "tlsf-aligned",         "tlsf-large",
+        "tlsf-shrink",          "gtlsf-freed",     "ring-retired",     "ring-overrun",         "ring-underrun",
+        "array-past-size",      "array-pop",       "array-clear",      "array-shrink",         "array-odd-bytes",
+        "array-arena",          "malloc-underrun",
     };
     for (const char* mode : modes)
     {

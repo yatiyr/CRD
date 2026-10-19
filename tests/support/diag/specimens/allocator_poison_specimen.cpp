@@ -10,6 +10,7 @@
 //   linear-underrun       a 64-aligned slice after a 16-byte one: read the byte before it (alignment padding)
 //   linear-nested-parent  a child arena over a parent slice is destroyed; read the parent's unhanded tail just past it
 //   stack-pop             a StackScope pops a frame, then read the frame
+//   malloc-underrun       the default (malloc) allocator: read the byte before a live block (its header)
 //   glinear-reset         GrowableLinearAllocator::reset(), then read a slice from before the reset
 //   pool-freed-slot       read the first byte (the free-list header) of a freed pool slot
 //   pool-overrun          two adjacent slots, the upper one freed: read one byte past the lower slot
@@ -440,6 +441,14 @@ crd::u8* keep_one_of_two_neighbours(Pool& pool, crd::usize size, crd::usize alig
 
 [[nodiscard]] bool run_pool_mode(const char* mode)
 {
+    if (std::strcmp(mode, "malloc-underrun") == 0)
+    {
+        // The default allocator's block header lies inside the C-library block, so only its poison reports this.
+        auto* const p = static_cast<crd::u8*>(mem::default_allocator()->allocate(48U, 16U));
+        fill(p, 48U);
+        touch(p - 1, 0U);
+        return true;
+    }
     if (std::strcmp(mode, "pool-freed-slot") == 0)
     {
         mem::PoolAllocator a(64U, 8U, 16U, nullptr, "poison-pool");

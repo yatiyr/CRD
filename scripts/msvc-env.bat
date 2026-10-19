@@ -17,5 +17,9 @@ if not defined CRD_VS_INSTALL (
     echo Install the Visual Studio x64 C++ build tools.
     exit /b 93
 )
+rem VsDevCmd runs vswhere.exe by bare name from the installer directory; a shell that sets
+rem NoDefaultCurrentDirectoryInExePath (agent shells do) does not search the current directory, so it printed
+rem "'vswhere.exe' is not recognized" and left VSCMD_VER unset. The installer directory on PATH finds it either way.
+for %%I in ("%CRD_VSWHERE%") do set "PATH=%%~dpI;%PATH%"
 call "%CRD_VS_INSTALL%\VC\Auxiliary\Build\vcvars64.bat" >nul
 exit /b %ERRORLEVEL%

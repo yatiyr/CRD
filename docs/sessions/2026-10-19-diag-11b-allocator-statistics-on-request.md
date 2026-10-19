@@ -155,3 +155,6 @@ instruction counts before a 1% verdict is read.
 - DIAG.11b (1) and (1a): the counting choice at construction, and the method floor.
 - REPO.3: route or retire the 37 unrouted programs, and remove `bench/gpu-compute/dbg_err.txt`, `dbg_out.txt` and
   `san_out.txt`.
+
+**Addendum, 2026-10-19.** (p) is repaired:
+[the default allocator's exact sizes](2026-10-19-diag-11b-malloc-allocator-bytes.md).
