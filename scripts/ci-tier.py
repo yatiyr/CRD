@@ -4,7 +4,8 @@
 `resolve` classifies the changed paths between a base and a head revision with the class table in
 `.github/ci-tiers.json`, picks the highest tier any class asks for (scheduled and manual runs take the complete tier,
 an unknown base takes the complete tier) and writes the expected jobs and every job's preset list as workflow outputs.
-`conclude` reads the `needs` context of the required job and fails unless preflight succeeded, every expected job
+`base` finds a push's base: the head of the newest earlier run whose preflight succeeded, not the push's `before`,
+whose run a newer push may have replaced before it started. `conclude` reads the `needs` context of the required job and fails unless preflight succeeded, every expected job
 succeeded and no unexpected job failed. Contract: docs/design/ci-tiers.md.
 """
 from pathlib import Path
@@ -76,6 +77,63 @@ def changed_paths(base, head, repo=ROOT):
     if completed.returncode != 0:
         return None
     return [line for line in completed.stdout.splitlines() if line.strip()]
+
+
+PREFLIGHT_JOB = 'Preflight (tier resolution)'
+
+
+def covered_base(runs, current_run, jobs_of, preflight_job=PREFLIGHT_JOB):
+    """The head revision of the newest run before `current_run` whose preflight succeeded, or '' when none did.
+
+    A push's own `before` is the wrong base when the run of that earlier push never started: the workflow's push group
+    replaces a pending run with the newer one, so classifying `before..HEAD` would drop the replaced push's changes from
+    the tier decision. A run whose preflight succeeded resolved a tier and ran its lanes on its head, so the changes
+    since that head are the ones this run must classify. `runs` is newest first ({'id', 'head_sha'}); `jobs_of(id)`
+    returns that run's jobs ({'name', 'conclusion'}), asked only until a run qualifies. Runs created after
+    `current_run` (a larger id) are ignored, so a newer run elsewhere can never hide this run's changes. An empty
+    result makes `resolve` take the complete tier.
+    """
+    for run in runs:
+        run_id = int(run.get('id', 0))
+        if current_run is not None and run_id >= current_run:
+            continue
+        jobs = jobs_of(run_id) or []
+        if any(job.get('name') == preflight_job and job.get('conclusion') == 'success' for job in jobs):
+            return run.get('head_sha') or ''
+    return ''
+
+
+def gh_json(args, gh='gh'):
+    """`gh api` JSON for a GET, or None when the call fails (no token, no network, a refused permission)."""
+    try:
+        completed = subprocess.run([gh, 'api', '-X', 'GET'] + args, capture_output=True, text=True, encoding='utf-8',
+                                   check=False)
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    try:
+        return json.loads(completed.stdout)
+    except ValueError:
+        return None
+
+
+def hosted_base(repository, branch, current_run, workflow='ci.yml', limit=30, gh='gh'):
+    """covered_base over the hosted run list of `workflow` on `branch`; returns (base, note)."""
+    listing = gh_json(['repos/%s/actions/workflows/%s/runs' % (repository, workflow), '-f', 'branch=%s' % branch,
+                       '-f', 'per_page=%d' % limit], gh)
+    if listing is None or 'workflow_runs' not in listing:
+        return '', 'the run list is unavailable'
+    runs = [{'id': r.get('id'), 'head_sha': r.get('head_sha')} for r in listing['workflow_runs']]
+
+    def jobs_of(run_id):
+        jobs = gh_json(['repos/%s/actions/runs/%d/jobs' % (repository, run_id), '-f', 'per_page=100'], gh)
+        return (jobs or {}).get('jobs', [])
+
+    base = covered_base(runs, current_run, jobs_of)
+    if not base:
+        return '', 'no earlier run of %s on %s resolved its tier' % (workflow, branch)
+    return base, 'the newest earlier run whose preflight succeeded ran at %s' % base
 
 
 def selection(tiers, tier):
@@ -194,6 +252,13 @@ def main(argv=None):
     res.add_argument('--changed-files', help='file listing changed paths (instead of git diff)')
     res.add_argument('--output', help='GITHUB_OUTPUT file to append to')
     res.add_argument('--summary', help='GITHUB_STEP_SUMMARY file to append to')
+    bas = sub.add_parser('base', help="a push's base: the newest earlier run's head whose preflight succeeded")
+    bas.add_argument('--repository', required=True, help='owner/name')
+    bas.add_argument('--branch', required=True)
+    bas.add_argument('--current-run', type=int, required=True, help='this run, GITHUB_RUN_ID')
+    bas.add_argument('--workflow', default='ci.yml')
+    bas.add_argument('--listing', help='JSON {"runs": [{"id", "head_sha", "jobs": [...]}]} instead of the hosted API')
+    bas.add_argument('--output', help='GITHUB_OUTPUT file to append base=<revision> to')
     con = sub.add_parser('conclude', help='evaluate the required aggregate')
     con.add_argument('--needs-env', default='NEEDS', help='environment variable holding toJSON(needs)')
     con.add_argument('--expected-env', default='EXPECTED', help='environment variable holding the expected job list')
@@ -213,6 +278,20 @@ def main(argv=None):
             with open(args.summary, 'a', encoding='utf-8') as handle:
                 handle.write(markdown)
         print(markdown)
+        return 0
+
+    if args.command == 'base':
+        if args.listing:
+            listing = json.loads(Path(args.listing).read_text(encoding='utf-8'))
+            jobs = {int(r['id']): r.get('jobs') or [] for r in listing.get('runs', [])}
+            base = covered_base(listing.get('runs', []), args.current_run, lambda run_id: jobs.get(run_id, []))
+            note = 'from %s' % args.listing
+        else:
+            base, note = hosted_base(args.repository, args.branch, args.current_run, args.workflow)
+        if args.output:
+            with open(args.output, 'a', encoding='utf-8') as handle:
+                handle.write('base=%s\n' % base)
+        print('base=%s (%s)' % (base or '(none: the complete tier)', note))
         return 0
 
     needs = json.loads(os.environ.get(args.needs_env) or '{}')

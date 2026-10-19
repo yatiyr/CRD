@@ -18,9 +18,11 @@ without a fix already on main:
 - The nightly runs 39108972918 and 39013990584 and push run 39129062998 failed on causes already fixed on main
   (5cbc4c4e, the virtual memory arena's unpoisoning, d88d68ee, 471109f6), as the earlier sessions record.
 
-The previous batch's first follow-up, a complete-tier run for `86f4b900`'s win-shipping-profile clause, waits: a
-complete-tier run (39207693168) is in progress, and the rule allows a dispatch only when none is queued or running.
-So this batch took the next one, (p).
+The previous batch's first follow-up, a complete-tier run for `86f4b900`'s win-shipping-profile clause, could not be
+dispatched: a complete-tier run (39207693168) is in progress, and the rule allows a dispatch only when none is queued
+or running. So this batch took the next one, (p). Both of its pushes resolve to the complete tier themselves
+(`scripts/**` and `.github/**` are build-system paths), so their run carries that clause; reading why led to the
+tier-base defect below.
 
 ## What was wrong
 
@@ -123,6 +125,39 @@ side effect was more than noise: `VSCMD_VER` stayed unset. `msvc-env.bat` now pu
 `vswhere.exe` it already located) on `PATH` before vcvars; a probe printed the message without it, and nothing but
 `VSCMD_VER=18.6.3` with it, and no build log of this batch prints it since.
 
+## The tier base: a replaced run lost its changes
+
+Since `b5e9a003` the workflow's push group replaces a pending push run with the newer one (`cancel-in-progress` is
+false, so GitHub cancels the pending run when another queues). The replacing run classified `event.before..HEAD`,
+and `before` is the replaced push's head, so the replaced push's own changes never entered any tier decision. This
+batch's first push showed it: 39216534845 (`86f4b900`, the allocator statistics change) was replaced before any job
+started, and its replacement 39222320231 classified only `86f4b900..59807aab`. A docs-only or engine-only next push
+would in turn have replaced 39222320231 and run the preflight or change tier, so win-shipping-profile, which only the
+complete tier runs, would never have seen either change.
+
+Nothing has been lost yet: every run that replaced one since `b5e9a003` resolved to the complete tier on its own
+paths (39207693168 classified `56e45b71..a38224df`, `CMakeLists.txt` and `scripts/**`; the lookup below gives it
+`471109f6`, the head of 39189832409, as the base that covers the four replaced pushes between them).
+
+The repair:
+
+- `ci-tier.py base` returns the head of the newest earlier run of `ci.yml` on the branch whose job
+  `Preflight (tier resolution)` concluded success (any event), skipping runs created after this one, asking for each
+  run's jobs only until one qualifies. No such run, or a failed API call, leaves the base empty, which `resolve`
+  already reads as the complete tier; it never falls back to `before`.
+- The preflight job gets `permissions: contents: read, actions: read` and a "Choose the comparison base" step
+  (`GH_TOKEN` from `github.token`); the fetch and resolve steps read `steps.base.outputs.base`. A pull request still
+  compares with its base branch tip.
+- Probed against the hosted runs: for 39222320231 it answers `a38224df` (39216534845 has no job, 39207693168's
+  preflight succeeded), for 39207693168 `471109f6`.
+- Tests: `test_push_base_is_the_newest_earlier_run_that_resolved_its_tier` (a newer run, a replaced run with no
+  job, a cancelled preflight and a run without one are skipped; the jobs are asked lazily; an empty listing gives an
+  empty base; the CLI writes `base=` to the output file) and
+  `test_preflight_takes_its_push_base_from_the_last_covered_run` (the job name, the permission, the step and both
+  readers, no `github.event.before` anywhere). Five mutations each fail them: any run qualifies, the current run not
+  skipped, a preflight that did not succeed accepted, `actions: read` dropped, the resolver reading `before` again.
+- [ci-tiers.md](../design/ci-tiers.md#resolution) states the rule.
+
 ## Verification
 
 - win-debug: crd-memory-tests (182 cases, 824,841 assertions), the two specimens, `crd-fuzz-memory-allocators` and
@@ -140,8 +175,9 @@ side effect was more than noise: `VSCMD_VER` stayed unset. `msvc-env.bat` now pu
   (both pass, 9 of 9 entries within), and the sanitizer lanes above.
 - Strict tidy is clean on the eight changed C++ files (two local constants renamed to lower case). clang-format: no
   file has more findings than at HEAD; the one hunk applied is the specimen-mode table the new entry re-aligns.
-- The Allman check, `test-repository-tools.py` (117 tests, none skipped under `msvc-env.bat`) and
-  `test-dev-workflow.py` (59) pass, as do `check-master-plan.py` and `check-repository.py`.
+- The Allman check, `test-repository-tools.py` (119 tests with the two tier-base cases, none skipped under
+  `msvc-env.bat`), `test-dev-workflow.py` (59), `check-ci-tiers.py`, `check-pins.py` and the pinned actionlint 1.7.12
+  on WSL pass, as do `check-master-plan.py` and `check-repository.py`.
 
 ## Hosted evidence needed
 
@@ -151,9 +187,16 @@ side effect was more than noise: `VSCMD_VER` stayed unset. `msvc-env.bat` now pu
   42) on every lane, the shipping and release lanes included.
 - `crd-fuzz-memory-allocators-corpus` and every other corpus replay pass (the fuzz harness's budget allocator sits on
   this allocator), and every lane's suites pass with the default allocator's new layout.
-- The Windows jobs' logs print no "'vswhere.exe' is not recognized".
+- linux-gcc-shipping, -release and -relwithdebinfo link every consumer of the changed allocator with no `warning:`
+  line (the header words are read below the caller's pointer, which `-Warray-bounds=1` and `-Wnull-dereference` at
+  the link have not seen).
+- The preflight of this batch's push run prints a `base=` line from `ci-tier.py base` naming an earlier covered head
+  (`a38224df` while 39207693168 is the newest run with a finished preflight), and resolves the complete tier.
+- The vswhere repair has no hosted evidence: hosted runners do not set `NoDefaultCurrentDirectoryInExePath`, so they
+  never printed the message; the local probe is its evidence.
 
 ## Follow-up for an extra batch
 
-- The complete-tier dispatch for `86f4b900` once 39207693168 finishes (unchanged from the previous batch).
+- Read this batch's push run against the hosted clauses above and `86f4b900`'s win-shipping-profile clause (no
+  separate dispatch is needed: the run is complete-tier).
 - DIAG.11b (1), (1a) and (2) to (9) as the row lists them; REPO.3's unrouted programs and tracked debug outputs.

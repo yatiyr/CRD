@@ -71,7 +71,15 @@ pull request classifies `git diff --name-only <base> HEAD` with the first matchi
 
 The highest tier among the changed paths wins. A base that is all zeros (new branch, force push), unreachable, or
 an empty diff resolves to the complete tier: a changed build system qualifies itself with conservative scope, which
-is also why the push introducing this contract resolves to the full matrix. The resolver writes `tier`, `expected`
+is also why the push introducing this contract resolves to the full matrix.
+
+A push's base is not its own `before` (2026-10-19,
+[session](../sessions/2026-10-19-diag-11b-malloc-allocator-bytes.md#the-tier-base-a-replaced-run-lost-its-changes)):
+the push group replaces a pending run with the newer one, so the replaced push was never classified, and
+`before..HEAD` left its changes out of the decision. `ci-tier.py base` (in the preflight, which reads the run list
+with `actions: read`) takes the head of the newest earlier run of the workflow on the branch whose `Preflight (tier
+resolution)` job succeeded, any event, ignoring runs created after this one; no such run, or no answer from the API,
+leaves the base empty and the run takes the complete tier. A pull request still compares with its base branch tip. The resolver writes `tier`, `expected`
 (the jobs that must succeed) and one JSON preset list per job to the job outputs and a table to the step summary.
 
 Heavy jobs `needs: preflight` only, so the repository checks run beside them; each takes

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression checks for hygiene rejection and CMake's generated IDE model."""
 from pathlib import Path
+import contextlib
 import importlib.util
 import hashlib
 import io
@@ -687,6 +688,52 @@ class CiTiers(unittest.TestCase):
             self.assertEqual(record['tier'], 'complete', record['reason'])
             self.assertIn('build-system', record['reason'])
             self.assertIsNone(ci_tier.changed_paths(base, 'f' * 40, repo=repo), 'an unknown head is not a diff')
+
+    def test_push_base_is_the_newest_earlier_run_that_resolved_its_tier(self):
+        # 2026-10-19: the push group replaces a pending run, so a push's `before` can be a revision no run ever
+        # classified (39216534845 at 86f4b900 started no job); the base is the last head a preflight succeeded on.
+        ok = [{'name': ci_tier.PREFLIGHT_JOB, 'conclusion': 'success'}, {'name': 'windows (win-debug)'}]
+        jobs = {
+            107: [{'name': ci_tier.PREFLIGHT_JOB, 'conclusion': 'success'}],  # newer than this run
+            105: [],  # replaced while pending: no job ever started
+            104: [{'name': ci_tier.PREFLIGHT_JOB, 'conclusion': 'cancelled'}],
+            103: [{'name': 'Repository checks (ubuntu-24.04)', 'conclusion': 'success'}],  # no preflight
+            102: ok,
+            101: ok,
+        }
+        runs = [{'id': i, 'head_sha': 'sha%d' % i} for i in (107, 106, 105, 104, 103, 102, 101)]
+        asked = []
+
+        def jobs_of(run_id):
+            asked.append(run_id)
+            return jobs.get(run_id, [])
+
+        self.assertEqual(ci_tier.covered_base(runs, 106, jobs_of), 'sha102')
+        self.assertEqual(asked, [105, 104, 103, 102])  # this run and newer ones skipped; asked only until one qualifies
+        self.assertEqual(ci_tier.covered_base(runs, 102, lambda run_id: jobs.get(run_id, [])), 'sha101')
+        self.assertEqual(ci_tier.covered_base(runs[:5], 106, lambda run_id: jobs.get(run_id, [])), '')
+        self.assertEqual(ci_tier.covered_base([], 106, lambda run_id: []), '')
+        # An empty base is the conservative tier, never `before`.
+        self.assertEqual(ci_tier.resolve(self.tiers, 'push', '', 'HEAD')['tier'], 'complete')
+        with tempfile.TemporaryDirectory() as scratch:
+            listing = Path(scratch) / 'runs.json'
+            listing.write_text(json.dumps({'runs': [dict(r, jobs=jobs.get(r['id'], [])) for r in runs]}),
+                               encoding='utf-8')
+            output = Path(scratch) / 'out.txt'
+            with contextlib.redirect_stdout(io.StringIO()):
+                code = ci_tier.main(['base', '--repository', 'o/r', '--branch', 'main', '--current-run', '106',
+                                     '--listing', str(listing), '--output', str(output)])
+            self.assertEqual(code, 0)
+            self.assertEqual(output.read_text(encoding='utf-8'), 'base=sha102\n')
+
+    def test_preflight_takes_its_push_base_from_the_last_covered_run(self):
+        blocks = ci_tiers.workflow_jobs(self.workflow)
+        preflight = blocks['preflight']
+        self.assertIn('name: %s' % ci_tier.PREFLIGHT_JOB, preflight)  # the job name the lookup recognises
+        self.assertRegex(preflight, r'permissions:\s*\n\s*contents: read\s*\n\s*actions: read')
+        self.assertIn('python scripts/ci-tier.py base --repository "$GITHUB_REPOSITORY"', preflight)
+        self.assertNotIn('github.event.before', self.workflow)
+        self.assertEqual(preflight.count('CRD_CI_BASE: ${{ steps.base.outputs.base }}'), 2)
 
     def test_required_result_needs_preflight_and_every_expected_job(self):
         ok = {'preflight': {'result': 'success'}, 'repository': {'result': 'success'}, 'windows': {'result': 'success'},

@@ -64,6 +64,10 @@ jobs:
     name: Preflight (tier resolution)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # actions: read lets the push base be the last run that resolved its tier (scripts/ci-tier.py base).
+    permissions:
+      contents: read
+      actions: read
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
       reason: ${{ steps.tier.outputs.reason }}
@@ -77,9 +81,8 @@ jobs:
       presets_linux_gcc_shipping: ${{ steps.tier.outputs.presets_linux_gcc_shipping }}
       presets_windows_native: ${{ steps.tier.outputs.presets_windows_native }}
     env:
-      # push: the previous tip (all zeros on a new branch or a force push); pull_request: the base branch tip.
-      # An unavailable base resolves to the complete tier.
-      CRD_CI_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      # pull_request: the base branch tip. A push's base is chosen by the "Choose the comparison base" step.
+      CRD_PR_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -97,9 +100,27 @@ jobs:
         run: python scripts/check-pins.py
       - name: Tier mapping owns every preset
         run: python scripts/check-ci-tiers.py
+      - name: Choose the comparison base
+        id: base
+        if: github.event_name == 'push' || github.event_name == 'pull_request'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A push compares with the head of the newest earlier run whose preflight succeeded, not with its own
+          # `before`: the push group replaces a pending run with the newer one, and `before..HEAD` would drop the
+          # replaced push's changes. No such run, or no answer from the API, leaves the base empty: the complete tier.
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            echo "base=$CRD_PR_BASE" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/ci-tier.py base --repository "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" \
+              --current-run "$GITHUB_RUN_ID" --output "$GITHUB_OUTPUT"
+          fi
       - name: Fetch the comparison base
         if: github.event_name == 'push' || github.event_name == 'pull_request'
         shell: bash
+        env:
+          CRD_CI_BASE: ${{ steps.base.outputs.base }}
         run: |
           if [[ -z "$CRD_CI_BASE" || "$CRD_CI_BASE" =~ ^0+$ ]]; then
             echo "no base revision; the resolver takes the complete tier"
@@ -109,6 +130,8 @@ jobs:
       - name: Resolve the tier
         id: tier
         shell: bash
+        env:
+          CRD_CI_BASE: ${{ steps.base.outputs.base }}
         run: |
           python scripts/ci-tier.py resolve --event "$GITHUB_EVENT_NAME" --base "$CRD_CI_BASE" --head HEAD \
             --tier "${{ inputs.tier }}" --output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
