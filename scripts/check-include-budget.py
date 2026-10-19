@@ -6,8 +6,8 @@ front end in a few standard headers that hot project headers pulled into every u
 assertion path, <iterator> through Array, <functional> through the hash containers, <immintrin.h> through the scalar
 math). Removing them is easy to undo by accident: one include in a header that a thousand units reach, and nothing
 fails. This guard makes that a failure. scripts/include-budget.json names each header (`include`), a unit of the
-configuration whose compile command to borrow (`flags_of`, matched by path suffix in compile_commands.json) and the
-standard headers it must not reach (`forbid` everywhere, `forbid_gnu` on GCC and Clang). For each entry a probe unit
+configuration whose compile command to borrow (`flags_of`, matched by path suffix in compile_commands.json; a list is
+tried in order) and the standard headers it must not reach (`forbid` everywhere, `forbid_gnu` on GCC and Clang). For each entry a probe unit
 `#include <...>` is compiled with that command, its precompiled header removed, outputs in a scratch directory, and
 the compiler's own include listing (MSVC /showIncludes with /Zs, GCC and Clang -H with -fsyntax-only); a forbidden
 header anywhere in the listing fails, with the chain of includes that reached it.
@@ -71,12 +71,19 @@ def without_launcher(entry):
     return result
 
 
-def find_unit(entries, suffix):
-    wanted = suffix.replace('\\', '/').lower()
-    for entry in entries:
-        if entry.get('file', '').replace('\\', '/').lower().endswith(wanted):
-            return entry
+def find_unit(entries, suffixes):
+    """The first database entry whose file ends with one of `suffixes` (a suffix or a list, tried in order: a unit
+    can have another name in another configuration, such as Catch2's sources inside its unity batches)."""
+    for suffix in [suffixes] if isinstance(suffixes, str) else suffixes:
+        wanted = suffix.replace('\\', '/').lower()
+        for entry in entries:
+            if entry.get('file', '').replace('\\', '/').lower().endswith(wanted):
+                return entry
     return None
+
+
+def named(suffixes):
+    return suffixes if isinstance(suffixes, str) else ' or '.join(suffixes)
 
 
 def msvc_prefix(build):
@@ -133,11 +140,17 @@ def probe_command(unit, probe, family, scratch):
         return None
     arguments = headers.arguments_of(entry)
     arguments, _ = headers.redirect_outputs(arguments, family, scratch, probe.stem)
+    extra = ['/showIncludes', '/Zs'] if family == 'msvc' else ['-H', '-fsyntax-only']
     if family == 'msvc':
-        arguments = [a for a in arguments if not re.match(r'^[-/]c$', a)] + ['/showIncludes', '/Zs']
+        arguments = [a for a in arguments if not re.match(r'^[-/]c$', a)]
     else:
-        arguments = [a for a in arguments if a not in ('-c',)] + ['-H', '-fsyntax-only']
-    return arguments
+        arguments = [a for a in arguments if a not in ('-c',)]
+    # clang-cl's commands end with `-- <source>`: everything after the separator is an input file, so the listing
+    # options go in front of it.
+    if '--' in arguments:
+        cut = arguments.index('--')
+        return arguments[:cut] + extra + arguments[cut:]
+    return arguments + extra
 
 
 def msvc_environment():
@@ -161,14 +174,14 @@ def check(build, registry, scratch, runner=subprocess.run, environment=None):
     for index, item in enumerate(registry['entries']):
         unit = find_unit(entries, item['flags_of'])
         if unit is None:
-            results.append((item, 'unchecked', '%s is not in %s' % (item['flags_of'], database)))
+            results.append((item, 'unchecked', '%s is not in %s' % (named(item['flags_of']), database)))
             continue
         family = tidy.compiler_family(without_launcher(unit))
         probe = Path(scratch) / ('budget_probe_%d.cpp' % index)
         probe.write_text('#include <%s>\n' % item['include'], encoding='utf-8')
         arguments = probe_command(unit, probe, family, scratch)
         if arguments is None:
-            results.append((item, 'unchecked', 'the command of %s does not name its source' % item['flags_of']))
+            results.append((item, 'unchecked', 'the command of %s does not name its source' % named(item['flags_of'])))
             continue
         completed = runner(arguments, cwd=unit.get('directory') or str(scratch), capture_output=True, text=True,
                            encoding='utf-8', errors='replace', env=environment, check=False)

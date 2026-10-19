@@ -122,7 +122,7 @@ changed by the cuts.
   [below](#deterministichpp-declares-its-vector-types-2026-10-19)); `cmath.hpp`'s `complex.hpp` brings `<complex>`
   and, on MSVC, its stream headers (`<sstream>` in 852 units after).
 - Catch2's own library: 106 units, 179 s of edge time on MSVC (the only third-party compile above 10 s; GLFW and zstd
-  are 8 s each).
+  are 8 s each); cut on 2026-10-19 ([below](#catch2s-library-as-unity-batches-2026-10-19)).
 
 <a id="deterministichpp-declares-its-vector-types-2026-10-19"></a>
 ## `deterministic.hpp` declares its vector types (2026-10-19)
@@ -143,3 +143,36 @@ runtime's `<wchar.h>` brings `<intrin.h>` into nearly every unit anyway, so the 
 parse. The whole tree builds with no failure and no warning on win-debug, linux-gcc-debug and linux-clang-tsan, the
 math suite passes on all three, and `include-budget.json` holds the header (and `cmath.hpp`) to no `<immintrin.h>`
 on GCC and Clang.
+
+<a id="catch2s-library-as-unity-batches-2026-10-19"></a>
+## Catch2's library as unity batches (2026-10-19)
+
+`build/task-c/catch2_unity_probe.py` compiles Catch2's 106 library units from a tree's compile database (each command
+the first member's, source and object replaced, no launcher, 16 at a time, objects in a scratch directory)
+separately and as unity sources that include N members, twice each; then the tree's own unity batches once
+`CRD_CATCH2_UNITY` builds them. Host: the audio workstation, 1.3-2.0 Windows cores; WSL idle.
+
+| Compiler (tree) | separate, 106 units | batches of 8 (14) | batches of 16 (7) | the tree's batches, patched headers (7) |
+|---|---|---|---|---|
+| MSVC 19.51 (win-debug) | 105.7 / 112.9 s, wall 7.1 / 7.5 s | 21.7 / 21.8 s, wall 1.9 s | 9.7 s, wall 1.8 s | 9.0 / 9.1 s, wall 1.6 s |
+| GCC 13.3 (linux-gcc-debug) | 70.4 / 68.8 s, wall 5.1 / 4.8 s | 18.9 / 19.1 s, wall 2.0 s | 10.8 s, wall 2.1 s | 11.1 s, wall 2.0 s |
+| Clang 18 (linux-clang-tsan) | 76.5 / 69.8 s, wall 5.1 / 4.7 s | 16.9 / 18.5 s, wall 1.7-1.9 s | 9.8 s, wall 1.9 s | 9.9 s, wall 1.7 s |
+
+Summed compile seconds. Equivalence: the objects of the separate and the 16-member build define the same global
+symbols on GCC (`nm --defined-only -g`: 8,644 against 8,645, the one more a weak `std::nextafter(float, float)`
+instantiation, no strong symbol different); every batch compiled on all three compilers; with the unity library
+crd-containers-tests (12,554 assertions in 121 cases), crd-math-tests (6,428 in 162), crd-jobs-tests and
+crd-ceir-tests (18,784 in 580, the count task B recorded) pass on win-debug, the first three on linux-gcc-debug and
+linux-clang-tsan, and the Catch2 benchmarks of `crd-bench` run on win-debug and linux-gcc-debug; the whole trees
+build with no warning. The saving is a cold, uncached build's (about 95 s of MSVC and 60 s of GCC or Clang compile);
+a cached tree hits either way.
+
+Found on the way: Catch2's own units had compiled against the unpatched headers. Its target lists its source
+directory with a plain `-I`, and the patched copies were a system directory of the target (`SYSTEM BEFORE PUBLIC`),
+which the compilers search after the plain ones (on cl: `-I...catch2-src\src\catch2\..` before
+`-external:I...patched\Catch2\src`), so the library's units saw the chrono printers that its consumers do not: two
+definitions of `StringMaker` for chrono types in one program. The copies are now an interface system directory and
+a plain private directory first (`-I...patched\Catch2\src` leads the library's command), and a ninth include-budget
+entry (`catch2/catch_tostring.hpp` with a library unit's command) fails if the order is lost: without the private
+include it reports `<chrono> through catch2/catch_tostring.hpp -> chrono` on win-debug.
+

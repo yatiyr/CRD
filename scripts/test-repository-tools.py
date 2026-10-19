@@ -1605,7 +1605,12 @@ class BuildPerformance(unittest.TestCase):
                  'forbid': ['iterator'], 'why': 'x'},
                 {'include': 'crd/math/transcendental.hpp', 'flags_of': 'containers/test_containers.cpp',
                  'forbid': ['chrono'], 'forbid_gnu': ['immintrin.h'], 'why': 'x'},
-                {'include': 'crd/x.hpp', 'flags_of': 'absent/test_x.cpp', 'forbid': ['chrono'], 'why': 'x'}]}
+                {'include': 'crd/x.hpp', 'flags_of': 'absent/test_x.cpp', 'forbid': ['chrono'], 'why': 'x'},
+                # A list is tried in order: the first unit the configuration has lends its command.
+                {'include': 'crd/containers/array.hpp', 'flags_of': ['Unity/unity_0_cxx.cxx', 'test_containers.cpp'],
+                 'forbid': ['functional'], 'why': 'x'},
+                {'include': 'crd/x.hpp', 'flags_of': ['Unity/unity_0_cxx.cxx', 'absent/test_y.cpp'],
+                 'forbid': ['chrono'], 'why': 'x'}]}
             commands = []
 
             def compiler(arguments, **_):
@@ -1615,13 +1620,27 @@ class BuildPerformance(unittest.TestCase):
                 return SimpleNamespace(returncode=0, stdout='', stderr=text)
 
             results = include_budget.check(build, registry, Path(temp), runner=compiler)
-            self.assertEqual([verdict for _, verdict, _ in results], ['over', 'over', 'unchecked'])
+            self.assertEqual([verdict for _, verdict, _ in results], ['over', 'over', 'unchecked', 'within', 'unchecked'])
             self.assertIn('<iterator> through crd/containers/array.hpp -> c++/13/iterator', results[0][2])
             self.assertIn('<immintrin.h>', results[1][2], 'forbid_gnu applies on GCC and Clang')
             self.assertIn('absent/test_x.cpp is not in', results[2][2])
+            self.assertIn('Unity/unity_0_cxx.cxx or absent/test_y.cpp is not in', results[4][2])
             self.assertNotIn('cmake_pch', ' '.join(commands[0]), 'the precompiled header is removed')
             self.assertEqual(commands[0][-2:], ['-H', '-fsyntax-only'])
             self.assertNotIn('-c', commands[0])
+
+            # clang-cl: CMake ends its commands with `-- <source>`, so the listing options go before the separator,
+            # and its -TP is not doubled (a second spelling is -Woverriding-option, an error under /WX).
+            clang_cl = {'directory': str(build), 'file': 'D:/s/tests/foundation/containers/test_containers.cpp',
+                        'arguments': ['clang-cl.exe', '-TP', '/WX', '/FoX.obj', '-c', '--',
+                                      'D:/s/tests/foundation/containers/test_containers.cpp']}
+            probe = Path(temp) / 'budget_probe_9.cpp'
+            arguments = include_budget.probe_command(clang_cl, probe, 'msvc', Path(temp))
+            cut = arguments.index('--')
+            self.assertEqual(arguments[cut - 2:cut], ['/showIncludes', '/Zs'])
+            self.assertEqual(arguments[cut + 1:], [str(probe)])
+            self.assertEqual([token for token in arguments if token in ('/TP', '-TP')], ['-TP'])
+            self.assertNotIn('-c', arguments)
 
             def broken(arguments, **_):
                 return SimpleNamespace(returncode=1, stdout='', stderr='fatal error: crd/x.hpp: No such file')
@@ -1631,6 +1650,11 @@ class BuildPerformance(unittest.TestCase):
         document = include_budget.load()
         self.assertTrue(all(entry['why'] for entry in document['entries']))
         self.assertIn('catch2/catch_test_macros.hpp', [entry['include'] for entry in document['entries']])
+        # Catch2's own units are held to the patched copies too (CMakeLists.txt puts them first for Catch2 itself).
+        library = [entry for entry in document['entries'] if entry['include'] == 'catch2/catch_tostring.hpp']
+        self.assertEqual(len(library), 1)
+        self.assertIn('Catch2.dir/Unity/unity_0_cxx.cxx', library[0]['flags_of'])
+        self.assertIn('chrono', library[0]['forbid'])
 
     def test_clang_build_analyzer_installer_builds_the_verified_source_and_checks_the_version(self):
         with tempfile.TemporaryDirectory() as temp:

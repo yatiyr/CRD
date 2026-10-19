@@ -52,6 +52,12 @@
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],
       "why": "every test unit; with the two Catch2 patches (catch2-chrono-stringmaker-opt-in, catch2-clock-chrono-subset) the assertion path no longer reaches <chrono>, which was the build's most expensive header (575 s MSVC, 633 s Clang)"
+    },
+    {
+      "include": "catch2/catch_tostring.hpp",
+      "flags_of": ["Catch2.dir/Unity/unity_0_cxx.cxx", "_deps/catch2-src/src/catch2/catch_tostring.cpp"],
+      "forbid": ["chrono", "format"],
+      "why": "Catch2's own units (in its unity batches, or one per source with CRD_CATCH2_UNITY=OFF) reach the patched copies first, through a plain -I ahead of Catch2's source directory, so the whole program has one definition of every Catch2 entity; the unpatched header includes <chrono> unconditionally"
     }
   ]
 }

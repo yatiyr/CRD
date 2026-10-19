@@ -170,7 +170,8 @@ def synthesize(sibling, header, family):
         arguments[index] = header
         if family == 'gnu':
             arguments[index:index] = ['-x', 'c++']
-        elif '/TP' not in arguments:
+        elif '/TP' not in arguments and '-TP' not in arguments:
+            # clang-cl's commands spell it -TP; a second spelling is -Woverriding-option, an error under /WX.
             arguments.insert(1, '/TP')
         entry['arguments'] = arguments
     else:
@@ -179,7 +180,7 @@ def synthesize(sibling, header, family):
         command, count = pattern.subn(replacement, entry['command'], count=1)
         if not count:
             return None
-        if family == 'msvc' and not re.search(r'(?<!\S)/TP(?=\s|$)', command):
+        if family == 'msvc' and not re.search(r'(?<!\S)[-/]TP(?=\s|$)', command):
             driver = first_token(command)
             command = command.replace(driver, driver + ' /TP', 1) if not command.startswith('"') \
                 else command.replace(f'"{driver}"', f'"{driver}" /TP', 1)

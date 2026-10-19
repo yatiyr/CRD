@@ -667,13 +667,27 @@ if (CRD_BUILD_TESTS)
     # expensive header (calendar, time zones, <format>; 2026-10-18 profiles). The build-owned copies make the printers
     # opt-in again, as Catch2 v2 had them, and give the clock types only the duration and clock part of the library
     # (cmake/patches/catch2-chrono-stringmaker-opt-in.cmake, catch2-clock-chrono-subset.cmake). Their directory comes
-    # first on Catch2's include path, as a system directory like Catch2's own, so Catch2's sources and every test reach
-    # the copies.
+    # first on Catch2's include path, as a system directory like Catch2's own, so every test and Catch2WithMain reach
+    # the copies. Catch2's own units name their source directory with a plain -I, which every compiler searches before
+    # any system directory, so for them the copies come first as a plain directory too: the whole program has one
+    # definition of every Catch2 entity (no chrono printer anywhere unless a unit opts in).
     crd_patched_copy(_crd_catch2_tostring Catch2 src/catch2/catch_tostring.hpp catch2-chrono-stringmaker-opt-in)
     crd_patched_copy(_crd_catch2_clock Catch2 src/catch2/benchmark/catch_clock.hpp catch2-clock-chrono-subset)
-    target_include_directories(Catch2 SYSTEM BEFORE PUBLIC "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/patched/Catch2/src>")
+    # (INTERFACE and PRIVATE apart: a directory a target lists as SYSTEM for itself is rendered as a system directory
+    # for its own units however else it is listed, and so searched after their plain -I.)
+    target_include_directories(Catch2 SYSTEM BEFORE INTERFACE "$<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/patched/Catch2/src>")
+    target_include_directories(Catch2 BEFORE PRIVATE "${CMAKE_BINARY_DIR}/patched/Catch2/src")
     unset(_crd_catch2_tostring)
     unset(_crd_catch2_clock)
+    # Catch2's library compiles as unity batches of 16 sources: its 106 units each spent most of their time parsing
+    # the same headers (2026-10-19 probe, summed compile: 106-113 -> 10 s on MSVC, 69-70 -> 11 s on GCC, 70-77 -> 10 s
+    # on Clang, the defined global symbols identical; docs/bench/2026-10-18-build-speed-compile-time.md). Catch2 ships
+    # an amalgamated single-file build of the same sources, so they are written to compile together. Third-party
+    # code only: the engine's units stay one per source.
+    option(CRD_CATCH2_UNITY "Compile Catch2's library as unity batches" ON)
+    if(CRD_CATCH2_UNITY)
+        set_target_properties(Catch2 PROPERTIES UNITY_BUILD ON UNITY_BUILD_BATCH_SIZE 16)
+    endif()
 endif()
 
 if("glfw" IN_LIST CRD_SELECTED_PACKAGES)

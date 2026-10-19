@@ -301,6 +301,59 @@ on all three (162 cases, 6,428 assertions on win-debug); strict tidy clean on bo
 back in `deterministic.hpp` fail it on linux-gcc-debug and linux-clang-tsan (`crd/math/deterministic.hpp ->
 crd/math/simd/vec4f.hpp -> crd/math/simd/backend.hpp -> immintrin.h`). [Board](../bench/2026-10-18-build-speed-compile-time.md#deterministichpp-declares-its-vector-types-2026-10-19).
 
+<a id="catch2s-library-unity-batches-and-its-own-include-order"></a>
+## Catch2's library: unity batches, and its own include order (2026-10-19)
+
+The task's third-party-first unity build: Catch2's library is the only third-party compile above 10 s (106 units,
+179 s of MSVC edge time; GLFW and zstd 8 s each, left alone). A probe (`build/task-c/catch2_unity_probe.py`) compiled
+its units from the trees' compile databases separately and as unity sources: summed compile 106-113 s → 9.7 s in
+batches of 16 on MSVC, 69-70 → 10.8 s on GCC, 70-77 → 9.8 s on Clang, every batch compiling, and on GCC the separate
+and the unity objects define the same global symbols (one more weak `std::nextafter` instantiation in the unity
+set). Catch2 ships an amalgamated single-file build of these sources, so they are written to compile together.
+`CMakeLists.txt` sets `UNITY_BUILD` with batches of 16 on the Catch2 target (`CRD_CATCH2_UNITY`, on by default; the
+engine's units stay one per source); the trees' own seven batches take 9.0-11.1 s summed. With it the whole trees
+build with no warning on win-debug, linux-gcc-debug and linux-clang-tsan, and the Catch2-heavy suites pass with their
+counts unchanged (crd-ceir-tests 18,784 assertions in 580 cases, crd-math-tests 6,428 in 162, crd-containers-tests
+12,554 in 121; the benchmarks of `crd-bench` run). The saving belongs to cold uncached builds (about 95 s of MSVC
+compile, 60 s of GCC or Clang); a cached tree hits either way.
+
+A correction to "The reductions" above: Catch2's own units did not reach the patched copies. Its target names its
+source directory with a plain `-I`; the copies were added as a system directory of the target itself
+(`SYSTEM BEFORE PUBLIC`), and a directory a target lists as system for itself is rendered as a system directory for
+its own units however else it is listed, which every compiler searches after the plain ones. So the library's units
+compiled the chrono printers its consumers do not see (two definitions of `StringMaker` for chrono types in one
+program, unused by the library, ill-formed in principle). The copies are now an interface system directory for the
+consumers and a plain private directory first for the library itself (`-I<tree>\patched\Catch2\src` leads its
+command; the consumers' order is unchanged), and a ninth `include-budget.json` entry, `catch2/catch_tostring.hpp`
+with a library unit's command (`flags_of` may now list units, tried in order: the unity batch, else the source),
+holds it: with the private include removed it fails on win-debug with `<chrono> through catch2/catch_tostring.hpp ->
+chrono`, and passes restored. One more case in `test-repository-tools.py` covers the list form.
+[Board](../bench/2026-10-18-build-speed-compile-time.md#catch2s-library-as-unity-batches-2026-10-19).
+
+<a id="ci-after-the-pushes"></a>
+## CI after the pushes
+
+Push run 39158938834 (`d71be8d6`) failed on every Windows job through one CTest, crd-repository-tools: the
+ClangBuildAnalyzer installer's case compared the installer's resolved destination with the test's unresolved one, and
+a hosted runner's temporary directory is an 8.3 short name (`C:/Users/RUNNER~1/...`), which resolving expands. It
+passed here because this machine's temporary directory has no short form. Reproduced with `TEMP` set to a short name
+(`CERID-~1`): the case fails as hosted and passes once it starts from the resolved directory (`d88d68ee`). The runs
+for `a90754ee` and `3acdce76` were cancelled while pending, by the newer pushes, under the concurrency rule of
+`b5e9a003`. That commit also carried the `wsl-lane.sh dev` assertions of `test-repository-tools.py` without the
+script's `dev` branch (the files were committed separately), so its own run fails that case; `e51e8510` adds the
+branch.
+
+The cancelled runs' finished jobs held one more failure, on win-clang-cl and win-clang-cl-shipping:
+`crd-check-include-budget` reported every probe unchecked, "overriding '/TP' option with '-TP'
+[-Werror,-Woverriding-option]" and "no such file or directory: '/showIncludes'". Two causes in the probe's command,
+both clang-cl's: CMake spells its type option `-TP`, and the shared synthesis (`cerid_dev/tidy.py`, also strict
+tidy's) looked only for `/TP` and added a second spelling, an error under `/WX`; and CMake ends a clang-cl command
+with `-- <source>`, after which every argument is an input file, while the guard appended its listing options at the
+end. Both fixed (either spelling counts; the options go before the separator); reproduced and verified on the local
+win-clang-cl tree (0 of 9, then, reconfigured through the preset helper, 9 of 9 within; the teeth on `array.hpp`,
+`hash.hpp` and `jobs.hpp` fail it there; the SIMD tooth is GCC and Clang's, by design). A case for each in
+`test-dev-workflow.py` and `test-repository-tools.py`; three mutations each fail them.
+
 <a id="the-timing-boards"></a>
 ## The timing boards (2026-10-19)
 

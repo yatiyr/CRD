@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -24,7 +25,7 @@ from cerid_dev.process import ProcessError, run_command
 from cerid_dev.evidence import EvidenceError, inspect as inspect_evidence, seal
 from cerid_dev.check import check, execution_doctor, junit_counts, native_configure_reason, test_indices, tidy_outcome
 from cerid_dev.tidy import (analyse, classify, compiler_family, extra_arguments, prepare, strip_pch_arguments,
-                            strip_pch_command)
+                            strip_pch_command, synthesize)
 from dev import make_plan, parser as dev_parser
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1041,6 +1042,20 @@ class TidyTests(unittest.TestCase):
                 {'directory': str(build), 'file': o.as_posix(),
                  'output': f'{build.as_posix()}/engine/other/CMakeFiles/crd-other.dir/src/o.cpp.o',
                  'command': f'/usr/bin/g++ -DO=1 -c {o.as_posix()}'}]
+
+    def test_a_header_unit_keeps_clang_cls_own_spelling_of_tp(self):
+        # clang-cl's commands spell /TP as -TP; adding the other spelling is -Woverriding-option, an error under /WX.
+        command = {'directory': 'D:/b', 'file': 'D:/s/a.cpp',
+                   'command': 'C:/LLVM/bin/clang-cl.exe /nologo -TP /WX -c -- D:/s/a.cpp'}
+        self.assertEqual(re.findall(r'[-/]TP', synthesize(command, 'D:/s/h.hpp', 'msvc')['command']), ['-TP'])
+        arguments = {'directory': 'D:/b', 'file': 'D:/s/a.cpp',
+                     'arguments': ['clang-cl.exe', '-TP', '/WX', '-c', '--', 'D:/s/a.cpp']}
+        entry = synthesize(arguments, 'D:/s/h.hpp', 'msvc')
+        self.assertEqual([token for token in entry['arguments'] if token in ('/TP', '-TP')], ['-TP'])
+        self.assertEqual(entry['arguments'][-1], 'D:/s/h.hpp')
+        cl = synthesize({'directory': 'D:/b', 'file': 'D:/s/a.cpp', 'command': 'cl.exe /nologo /c D:/s/a.cpp'},
+                        'D:/s/h.hpp', 'msvc')
+        self.assertEqual(re.findall(r'[-/]TP', cl['command']), ['/TP'], 'cl still gets /TP for a header unit')
 
     def test_only_precompiled_header_inputs_are_stripped(self):
         msvc = strip_pch_command(self.MSVC)

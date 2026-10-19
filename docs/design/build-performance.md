@@ -191,19 +191,29 @@ compile to identical code (per-function disassembly of a probe at `-O2 -mavx2` a
 and MSVC). The default precompiled header stays as it is: on MSVC its four headers save nothing (the PCH-on and
 PCH-off profiles' front ends were within the host's noise), and what every unit paid was what it included.
 
+Catch2's own library (106 units, the only third-party compile above 10 s) compiles as unity batches of 16 sources
+(`CRD_CATCH2_UNITY`, on by default; 2026-10-19): its units each spent most of their time parsing the same headers,
+and seven batches take 9-11 s of summed compile against 69-113 s for the separate units, with the same defined
+global symbols (GCC) and the same suites' case and assertion counts. Catch2 ships an amalgamated single-file build of
+these sources, so they are written to compile together; the engine's units stay one per source. Catch2's own units
+reach the patched copies first as well (a plain `-I` ahead of its source directory: a directory a target lists as
+system for itself is searched after its plain ones), so the program has one definition of every Catch2 entity; an
+include-budget entry holds that.
+
 <a id="include-budget"></a>
 ## Include budget
 
 The cuts above are easy to undo: one include in a header a thousand units reach, and nothing fails.
 [check-include-budget.py](../../scripts/check-include-budget.py) makes that a failure. Its registry,
 [include-budget.json](../../scripts/include-budget.json), names each hot header, a test unit whose compile command
-it borrows from the configuration's compile database, and the standard headers it must not reach (`forbid` on every
+it borrows from the configuration's compile database (a list of units is tried in order, for a unit that has
+another name in another configuration), and the standard headers it must not reach (`forbid` on every
 compiler, `forbid_gnu` on GCC and Clang only, because MSVC's C runtime brings `<immintrin.h>` through `<wchar.h>` into
 nearly every unit). For each entry a one-line probe is compiled with that command, its precompiled header removed (in
 every spelling: MSVC's `/Yu /Fp /FI`, GCC's `-include`, Clang's `-Xclang -include-pch`; a probe that loads the
-header lists none of the headers inside it) and its outputs in a scratch directory, with the compiler's own include listing (`/showIncludes /Zs`, read with the
-localized prefix CMake recorded in `rules.ninja`; `-H -fsyntax-only`); a forbidden header anywhere in the listing
-fails, and the report names the chain of includes that reached it. An entry that cannot be checked (its unit missing,
+header lists none of the headers inside it) and its outputs in a scratch directory, with the compiler's own
+include listing (`/showIncludes /Zs`, read with the localized prefix CMake recorded in `rules.ninja`, ahead of the
+`--` that ends a clang-cl command; `-H -fsyntax-only`); a forbidden header anywhere in the listing fails, and the report names the chain of includes that reached it. An entry that cannot be checked (its unit missing,
 the probe not compiling) fails too. It is the `crd-check-include-budget` CTest of every Ninja configuration that
 builds the containers, jobs and math tests, so the `ctest -R "^crd-no-|^crd-check"` guards run it; on Windows it takes
 the MSVC environment from `scripts/msvc-env.bat` when the shell has none. Adopting it for a new hot header is one
@@ -363,5 +373,6 @@ list needs a footprint row in the board and room in the allowance.
 
 ## Not in scope
 
-Unity builds, C++20 modules, distributed compilation and a build-system replacement stay measured options for a
-later profile; public-header checks and downstream consumers are REPO.DEV.8.
+Unity builds of the engine's own units (Catch2's library is the one third-party unity target), C++20 modules,
+distributed compilation and a build-system replacement stay measured options for a later profile; public-header
+checks and downstream consumers are REPO.DEV.8.
