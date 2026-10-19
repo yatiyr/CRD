@@ -188,8 +188,13 @@ default key equality is now `DefaultEqual`, a transparent `a == b`), `crd/jobs/j
 scalar exp and log cores moved from `crd/math/simd/transcendental.hpp` into `crd/math/exp_log_core.hpp`, so
 `crd/math/cmath.hpp` no longer brings the SIMD backend and `<immintrin.h>` into every unit; the moved functions
 compile to identical code (per-function disassembly of a probe at `-O2 -mavx2` and `/O2 /arch:AVX2` on GCC, Clang
-and MSVC). The default precompiled header stays as it is: on MSVC its four headers save nothing (the PCH-on and
-PCH-off profiles' front ends were within the host's noise), and what every unit paid was what it included.
+and MSVC). The default precompiled header stays as it is for the engine: on MSVC its four headers save nothing (the
+PCH-on and PCH-off profiles' front ends were within the host's noise), and what every unit paid was what it included.
+A test target's (one that links `Catch2::Catch2WithMain` or `Catch2::Catch2`) also holds
+`catch2/catch_test_macros.hpp`, which its units include anyway (`crd_enable_default_pch` decides at the end of the
+configuration; `CRD_NO_CATCH2_PCH` on a target opts it out): on linux-gcc-debug, uncached, the cold build 5.7 %
+shorter and a widely included header's rebuild 3-11 % (2026-10-19 boards). Trees with precompiled headers off (the
+MSVC cached trees) are unchanged.
 
 Catch2's own library (106 units, the only third-party compile above 10 s) compiles as unity batches of 16 sources
 (`CRD_CATCH2_UNITY`, on by default; 2026-10-19): its units each spent most of their time parsing the same headers,

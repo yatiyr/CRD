@@ -330,6 +330,24 @@ holds it: with the private include removed it fails on win-debug with `<chrono> 
 chrono`, and passes restored. One more case in `test-repository-tools.py` covers the list form.
 [Board](../bench/2026-10-18-build-speed-compile-time.md#catch2s-library-as-unity-batches-2026-10-19).
 
+<a id="a-test-precompiled-header-with-catch2s-macros"></a>
+## A test precompiled header with Catch2's macros (2026-10-19)
+
+PCH coverage, the task's first named lever: after the cuts `catch2/catch_test_macros.hpp` was still the costliest
+header of the test units, parsed once in each, and the default precompiled header holds only four core headers.
+`crd_enable_default_pch` now defers to the end of the configuration and adds the macros header to a target that
+links `Catch2::Catch2WithMain` or `Catch2::Catch2` (111 of the 249 targets with a precompiled header; a target opts
+out with `CRD_NO_CATCH2_PCH`). Checked first: no test unit configures Catch2 before including it (the only
+`CATCH_CONFIG_*` defines, in two mains, are Catch2 v2's `CATCH_CONFIG_RUNNER`, which v3 ignores), and every test unit
+still includes what it uses, which the trees with precompiled headers off (the MSVC cached trees, every hosted
+Windows lane) keep checking. A GCC probe (`build/task-c/test_pch_probe.py`) gave crd-ceir-tests' 107 units 84 → 53 s
+of summed compile; interleaved uncached boards on linux-gcc-debug gave the cold build −5.7 % (128.3 → 121.0 s) and a
+widely included header's rebuild −3 to −11 %, the rest of the per-unit gain going to the 111 larger precompiled
+headers; three of the twelve after/before rows met bursts of another project's test programs and are marked in the
+[board](../bench/2026-10-18-build-speed-compile-time.md#a-test-precompiled-header-with-catch2s-macros-2026-10-19).
+The trees build with no warning on linux-gcc-debug, linux-clang-tsan and a scratch MSVC tree with precompiled
+headers on, and the Catch2-heavy suites keep their counts.
+
 <a id="ci-after-the-pushes"></a>
 ## CI after the pushes
 

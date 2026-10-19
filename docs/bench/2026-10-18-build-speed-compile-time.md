@@ -176,3 +176,42 @@ a plain private directory first (`-I...patched\Catch2\src` leads the library's c
 entry (`catch2/catch_tostring.hpp` with a library unit's command) fails if the order is lost: without the private
 include it reports `<chrono> through catch2/catch_tostring.hpp -> chrono` on win-debug.
 
+<a id="a-test-precompiled-header-with-catch2s-macros-2026-10-19"></a>
+## A test precompiled header with Catch2's macros (2026-10-19)
+
+After the cuts, `catch2/catch_test_macros.hpp` was still the costliest header of the test units (377 s MSVC, 273 s
+Clang, inclusive), parsed once in each. The default precompiled header (`crd/core/pch.hpp`) of a target that links
+`Catch2::Catch2WithMain` or `Catch2::Catch2` now also holds it (`crd_enable_default_pch`, decided at the end of the
+configuration from the target's link libraries; `CRD_NO_CATCH2_PCH` opts a target out). A probe first
+(`build/task-c/test_pch_probe.py`: one target's units compiled with the tree's precompiled header and with a probe
+header adding the macros, GCC 13.3, 16 at a time, twice): crd-containers-tests' 8 units 4.1-4.4 → 2.4 s of summed
+compile, crd-ceir-tests' 107 units 83.8-84.8 → 52.6-53.2 s (wall 5.5 → 3.4-3.5 s); the probe header itself builds
+in 0.6-0.7 s per target.
+
+Boards, linux-gcc-debug from the mirror, uncached, 16 jobs, before (HEAD's `CMakeLists.txt`, every earlier cut in)
+against after, interleaved A B B A and then A B. The host was quiet until about 06:00; then another project's test
+programs loaded Windows in bursts (7-12 cores in the snapshots), and the rows marked * met a burst (their edge sums
+rose 50 % for the same edges):
+
+| Board | Start (local) | cold | teeth-break | teeth-restore | Windows cores busy (before / after) |
+|---|---|---|---|---|---|
+| after, round 1 | 05:38 | 124.0 s | 106.8 s | 104.4 s | 0.9 / 0.9 |
+| before, round 1 | 05:46 | 127.8 s | 117.6 s | 118.7 s | 1.0 / 1.0 |
+| before, round 2 | 05:54 | 127.7 s | 115.9 s | 117.6 s | 1.5 / 1.0 |
+| after, round 2 | 06:02 | 118.8 s | 174.0 s * | 125.0 s * | 1.0 / 10.1 |
+| after, round 3 | 06:12 | 120.1 s | 113.4 s | 176.1 s * | 12.3 / 7.5 |
+| before, round 3 | 06:20 | 129.4 s | 116.7 s | 115.7 s | 7.1 / 0.8 |
+
+The cold build is 5.7 % shorter (means 128.3 → 121.0 s; edge sums 2,063-2,118 → 1,931-2,007 s) and a header edit's
+rebuild 3-9 % (teeth-break 115.9-117.6 → 106.8-113.4 s) to 11 % (teeth-restore 115.7-118.7 → 104.4 s, the one
+undisturbed after row). Smaller than the probe's per-unit saving because the test units are under half of the
+build and every test target now builds the larger precompiled header (111 of the 249 targets with one, 0.6-0.7 s
+each). Loss: none
+measured; the MSVC cached trees (precompiled headers off) are unchanged. These boards also show the whole batch's
+cuts at a quiet load: linux-gcc-debug's cold build at 128 s before this change against 193-197 s before the cuts
+(01:00-01:12, 2.6-5.3 Windows cores busy, so not a like-for-like timing). Equivalence: the trees build with no
+warning on linux-gcc-debug, linux-clang-tsan and an MSVC tree with precompiled headers on (scratch, no launcher), and
+crd-containers-tests (12,554 assertions in 121 cases), crd-math-tests (6,428 in 162), crd-jobs-tests, crd-memory-tests
+and crd-ceir-tests (18,784 in 580) pass with the same counts; no test unit configures Catch2 before including it
+(the two `CATCH_CONFIG_RUNNER` mains define a Catch2 v2 macro that v3 ignores).
+

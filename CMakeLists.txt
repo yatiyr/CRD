@@ -909,6 +909,23 @@ function(crd_enable_default_pch target_name)
     target_precompile_headers(${target_name} PRIVATE
         <crd/core/pch.hpp>
     )
+    # A test target's precompiled header also holds Catch2's assertion macros, which its units include anyway: about
+    # 0.3 s of GCC parsing per unit (2026-10-19 probe: crd-ceir-tests' 107 units 84 -> 53 s of summed compile;
+    # docs/bench/2026-10-18-build-speed-compile-time.md). Decided at the end of the configuration, when the target's
+    # link libraries are known; a target whose units must not see Catch2 first sets CRD_NO_CATCH2_PCH.
+    cmake_language(EVAL CODE
+        "cmake_language(DEFER DIRECTORY [[${CMAKE_SOURCE_DIR}]] CALL _crd_catch2_pch [[${target_name}]])")
+endfunction()
+
+function(_crd_catch2_pch target_name)
+    get_target_property(_crd_libraries ${target_name} LINK_LIBRARIES)
+    get_target_property(_crd_opt_out ${target_name} CRD_NO_CATCH2_PCH)
+    if(_crd_opt_out OR NOT _crd_libraries)
+        return()
+    endif()
+    if("Catch2::Catch2WithMain" IN_LIST _crd_libraries OR "Catch2::Catch2" IN_LIST _crd_libraries)
+        target_precompile_headers(${target_name} PRIVATE <catch2/catch_test_macros.hpp>)
+    endif()
 endfunction()
 
 find_program(CRD_GLSLANG_VALIDATOR NAMES glslangValidator HINTS "$ENV{VULKAN_SDK}/Bin" "$ENV{VULKAN_SDK}/bin")
