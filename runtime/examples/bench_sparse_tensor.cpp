@@ -7,10 +7,10 @@
 #include <crd/hesap/tensor/sparse_mttkrp.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <ctime>
 
 using crd::hesap::tensor::contract_mode;
 using crd::hesap::tensor::coo_to_csf;
@@ -33,12 +33,37 @@ namespace
 
 double now_ms()
 {
-    timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<double>(ts.tv_sec) * 1e3 + static_cast<double>(ts.tv_nsec) * 1e-6;
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-template <typename F> double best_of(F&& fn, int reps = 5)
+// A corpus file opened for reading, or nullptr (MSVC deprecates std::fopen under its warning set).
+FILE* open_for_reading(const char* path)
+{
+#if defined(_WIN32)
+    FILE* f = nullptr;
+    return fopen_s(&f, path, "rb") == 0 ? f : nullptr;
+#else
+    return std::fopen(path, "rb");
+#endif
+}
+
+// The home directory into `out` (HOME, as the oracle script writes the corpora there), or false when it is unset.
+bool home_directory(char* out, crd::usize capacity)
+{
+#if defined(_WIN32)
+    char* value = nullptr;
+    crd::usize length = 0;
+    const bool found = _dupenv_s(&value, &length, "HOME") == 0 && value != nullptr;
+    const bool fits = found && std::snprintf(out, capacity, "%s", value) < static_cast<int>(capacity);
+    std::free(value);
+    return fits;
+#else
+    const char* value = std::getenv("HOME");
+    return value != nullptr && std::snprintf(out, capacity, "%s", value) < static_cast<int>(capacity);
+#endif
+}
+
+template <typename F> double best_of(const F& fn, int reps = 5)
 {
     double best = 1e300;
     for (int r = 0; r < reps; ++r)
@@ -63,7 +88,7 @@ double checksum(const crd::f64* v, crd::u64 n)
 
 bool load_coo(const char* path, crd::memory::IAllocator* alloc, SparseCoo<crd::f64>& out)
 {
-    FILE* f = std::fopen(path, "rb");
+    FILE* f = open_for_reading(path);
     if (f == nullptr)
     {
         std::fprintf(stderr, "cannot open %s (run scripts/v14i_sparse_oracle.py --bench first)\n", path);
@@ -105,7 +130,7 @@ bool load_coo(const char* path, crd::memory::IAllocator* alloc, SparseCoo<crd::f
 
 crd::f64* load_mat(const char* path, crd::memory::IAllocator* alloc, crd::u64& rows, crd::u64& cols)
 {
-    FILE* f = std::fopen(path, "rb");
+    FILE* f = open_for_reading(path);
     if (f == nullptr)
     {
         return nullptr;
@@ -131,8 +156,8 @@ crd::f64* load_mat(const char* path, crd::memory::IAllocator* alloc, crd::u64& r
 int main()
 {
     static crd::memory::TlsfAllocator alloc(2ULL * 1024ULL * 1024ULL * 1024ULL);
-    const char* home = std::getenv("HOME");
-    if (home == nullptr)
+    char home[384];
+    if (!home_directory(home, sizeof(home)))
     {
         std::fprintf(stderr, "no HOME\n");
         return 1;
@@ -215,7 +240,7 @@ int main()
     // factors too, only the sparsity structure must match) ----
     for (crd::u32 target = 1; target <= 2U; ++target)
     {
-        const crd::u32 order2[3] = {target, target == 1U ? 0U : 0U, target == 1U ? 2U : 1U};
+        const crd::u32 order2[3] = {target, 0U, target == 1U ? 2U : 1U};
         SparseCsf<crd::f64> csft(&alloc);
         if (coo_to_csf(t1, {order2, 3U}, csft) != TensorStatus::Ok)
         {

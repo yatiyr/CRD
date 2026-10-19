@@ -260,7 +260,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
                 "CRD_ENABLE_ASSERTS": "ON",
-                "CRD_ENABLE_PROFILING": "ON"
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_BUILD_RETAINED_BENCHES": "ON"
             }
         },
         {

@@ -375,6 +375,38 @@ nonreproduced failures: first seen, lane, target, signature, reruns, status (`no
 `crd-diag-coverage` CTest and a repository CI step) hold every entry complete and fail if any build file, CI step or
 script reads it, so it can never select, skip or retry a test.
 
+<a id="source-routes"></a>
+## Source routes (DIAG.11b)
+
+A source that no target compiles is a test that never runs or code that rots unseen, and nothing else notices: the
+CEIR-17a scene-dialect cases (`tests/execution/ceir/test_scene.cpp`) were in no target's source list until 2026-10-17.
+A lexical CMake rule cannot see this (159 test sources are globbed, six are named by another directory's CMakeLists),
+so `check-source-routes.py --build <tree>` (the `crd-check-source-routes` CTest on every full configuration with a
+compile database) reads what the configured tree compiles, its `compile_commands.json`, and judges every first-party
+C-family source under `engine/`, `tests/`, `tools/`, `runtime/`, `sandbox/`, `bench/` and `scripts/` (tracked, and
+untracked unless ignored) against [scripts/source-routes.json](../../scripts/source-routes.json):
+
+- a source that no entry names is compiled by a target of the tree;
+- `built_when` states when the tree compiles an entry's sources, as conditions the guard reads from the tree: the
+  platform (`CMAKE_SYSTEM_NAME`: the D3D12 backends, the fiber-switch assembly, Metal), an option in `CMakeCache.txt`
+  (absent reads OFF; a CMake file must define the name: `CRD_BUILD_BENCHMARKS`, the peer-bench options), or a target
+  that compiles a source in the tree (the CUDA, WebGPU and HIP backends, configured where their toolkit is found, so
+  one manifest also holds on the hosted runners, which have none). A covered source is compiled exactly when its
+  conditions hold:
+  a source that falls out of its target fails, and so does an entry that no longer describes the tree;
+- `built_by` names the file that builds a source outside the tree's targets (a peer script, the installed-package
+  consumer's own project, the GenMC model's checker); it must name the source, and the tree must not compile it;
+- `included_by` names the source that includes a generated kernel;
+- `unrouted` names the open ROADMAP row that owns giving a peer or vendor measurement program a route or retiring it;
+  it is refused in `engine/`, `tests/`, `tools/` and `sandbox/`, for a Done row, and for a source the tree compiles.
+
+Every entry needs its reason and every pattern must match a source. The peer-free retained benchmark programs of
+`runtime/examples` build under `CRD_BUILD_RETAINED_BENCHES`, which linux-gcc-debug and the presets inheriting it turn
+on, so a hosted lane compiles and links each one. Teeth: dropping `test_scene.cpp` from crd-ceir-tests again fails the
+CTest after a reconfigure, an untracked source in a test directory fails it without one, and fifteen mutations of the
+guard's rules each fail its cases in `test-repository-tools.py`
+([session](../sessions/2026-10-19-diag-11b-source-routes.md)).
+
 ## Not in scope
 
 REPO.DEV.9 remains the bounded ingestion baseline. DIAG now owns the immediate diagnostic extensions above;

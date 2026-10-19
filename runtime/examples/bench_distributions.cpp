@@ -73,7 +73,7 @@ int main()
 
     if (g_sink == 12345.6789)
     {
-        std::printf("");
+        std::printf("%f\n", g_sink);
     }
     return 0;
 }

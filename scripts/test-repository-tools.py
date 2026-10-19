@@ -108,6 +108,10 @@ allocation_results_spec.loader.exec_module(allocation_results)
 runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
 runbooks = importlib.util.module_from_spec(runbooks_spec)
 runbooks_spec.loader.exec_module(runbooks)
+source_routes_spec = importlib.util.spec_from_file_location('check_source_routes',
+                                                            ROOT / 'scripts/check-source-routes.py')
+source_routes = importlib.util.module_from_spec(source_routes_spec)
+source_routes_spec.loader.exec_module(source_routes)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -3412,6 +3416,202 @@ class DiagRunbooks(unittest.TestCase):
         with patch('sys.stdout', new_callable=io.StringIO) as out:
             self.assertEqual(runbooks.main(['--static']), 0, out.getvalue())
         self.assertIn('test references not resolved (--static); PASS', out.getvalue())
+
+
+class SourceRoutes(unittest.TestCase):
+    """DIAG.11b follow-up (n): scripts/check-source-routes.py holds every source to a route, per configured tree."""
+
+    ROADMAP = ('| 1 | <a id="slice-repo.3"></a>**REPO.3** | Partial | x |\n'
+               '| 2 | <a id="slice-old.1"></a>**OLD.1** | Done | x |\n')
+    CMAKE = 'option(CRD_BUILD_BENCHMARKS "b" ON)\nadd_library(crd-kir-cuda STATIC x.cpp)\n'
+
+    def tree(self, compiled=(), targets=('crd-core',), cache=None, system='Windows'):
+        return source_routes.Tree(ROOT, {source_routes.key(path): 'crd-core' for path in compiled}, set(targets),
+                                  cache or {}, system)
+
+    def run_check(self, tree, entries, sources, files=None):
+        manifest = {'schema': source_routes.SCHEMA, 'entries': entries}
+        files = files or {}
+        return source_routes.check(tree, manifest, sources, self.CMAKE, self.ROADMAP, read=files.get)
+
+    def test_the_committed_manifest_is_well_formed(self):
+        manifest = json.loads(source_routes.MANIFEST.read_text(encoding='utf-8'))
+        self.assertEqual(source_routes.SCHEMA, manifest['schema'])
+        cmake_text = '\n'.join(path.read_text(encoding='utf-8', errors='replace')
+                               for path in list(ROOT.glob('**/CMakeLists.txt')) + list(ROOT.glob('cmake/*.cmake'))
+                               if 'build' not in path.relative_to(ROOT).parts[:1]
+                               and 'external' not in path.relative_to(ROOT).parts[:1])
+        rows = source_routes.open_rows(source_routes.ROADMAP.read_text(encoding='utf-8'))
+        problems = [problem for index, entry in enumerate(manifest['entries'])
+                    for problem in source_routes.check_entry_shape(index, entry, cmake_text, rows)]
+        self.assertEqual([], problems)
+        for entry in manifest['entries']:
+            if 'unrouted' in entry:
+                self.assertFalse([p for p in entry['paths'] if p.startswith(source_routes.NO_UNROUTED)])
+
+    def test_a_source_no_target_compiles_fails_by_name(self):
+        problems, counts = self.run_check(self.tree(compiled=['tests/a/test_a.cpp']), [],
+                                          ['tests/a/test_a.cpp', 'tests/a/test_scene.cpp'])
+        self.assertEqual(['tests/a/test_scene.cpp: no target of this tree compiles it; add it to its target (or name '
+                          'its route in scripts/source-routes.json)'], problems)
+        self.assertEqual(1, counts['compiled'])
+
+    def test_a_platform_condition_is_held_both_ways(self):
+        entry = {'paths': ['engine/dx12/'], 'built_when': {'platform': 'Windows'}, 'why': 'w'}
+        sources = ['engine/dx12/a.cpp']
+        self.assertEqual(([], {'compiled': 1, 'gated off': 0, 'built outside': 0, 'included': 0, 'unrouted': 0}),
+                         self.run_check(self.tree(compiled=sources), [entry], sources))
+        self.assertEqual([], self.run_check(self.tree(system='Linux'), [entry], sources)[0])
+        missing, _ = self.run_check(self.tree(), [entry], sources)
+        self.assertEqual(['engine/dx12/a.cpp: built when platform Windows, which holds here, but no target compiles '
+                          'it'], missing)
+        stale, _ = self.run_check(self.tree(compiled=sources, system='Linux'), [entry], sources)
+        self.assertIn('though entry 0 says it is built only when platform Windows', stale[0])
+
+    def test_an_option_reads_off_when_absent_and_must_be_defined(self):
+        entry = {'paths': ['tests/bench/'], 'built_when': {'option': 'CRD_BUILD_BENCHMARKS'}, 'why': 'w'}
+        sources = ['tests/bench/b.cpp']
+        self.assertEqual([], self.run_check(self.tree(), [entry], sources)[0])
+        self.assertEqual([], self.run_check(self.tree(cache={'CRD_BUILD_BENCHMARKS': 'OFF'}), [entry], sources)[0])
+        on, _ = self.run_check(self.tree(cache={'CRD_BUILD_BENCHMARKS': 'ON'}), [entry], sources)
+        self.assertIn('built when option CRD_BUILD_BENCHMARKS, which holds here', on[0])
+        typo = dict(entry, built_when={'option': 'CRD_BUILD_BENCHMARK'})
+        self.assertEqual(['entry 0 (tests/bench/): no CMake file defines the option CRD_BUILD_BENCHMARK'],
+                         self.run_check(self.tree(), [typo], sources)[0])
+
+    def test_a_target_condition_follows_the_tree_and_must_be_named(self):
+        entry = {'paths': ['tests/gpu/kir-cuda/'], 'built_when': {'target': 'crd-kir-cuda'}, 'why': 'w'}
+        sources = ['tests/gpu/kir-cuda/t.cpp']
+        self.assertEqual([], self.run_check(self.tree(), [entry], sources)[0])
+        broken, _ = self.run_check(self.tree(targets=('crd-kir-cuda',)), [entry], sources)
+        self.assertIn('built when target crd-kir-cuda, which holds here, but no target compiles it', broken[0])
+        unknown = dict(entry, built_when={'target': 'crd-kir-cudaa'})
+        self.assertIn('no CMake file defines the target crd-kir-cudaa', self.run_check(self.tree(), [unknown],
+                                                                                         sources)[0][0])
+        self.assertIn("platform 'Win' is not one of",
+                      self.run_check(self.tree(), [dict(entry, built_when={'platform': 'Win'})], sources)[0][0])
+
+    def test_a_route_outside_the_tree_must_exist_name_the_source_and_not_be_compiled(self):
+        entry = {'paths': ['scripts/b.cpp'], 'built_by': 'scripts/run_b.sh', 'why': 'w'}
+        sources = ['scripts/b.cpp']
+        self.assertEqual([], self.run_check(self.tree(), [entry], sources, {'scripts/run_b.sh': 'g++ scripts/b.cpp'})[0])
+        self.assertEqual(['scripts/b.cpp: built by scripts/run_b.sh, which does not exist'],
+                         self.run_check(self.tree(), [entry], sources)[0])
+        self.assertEqual(['scripts/b.cpp: built by scripts/run_b.sh, which does not name it'],
+                         self.run_check(self.tree(), [entry], sources, {'scripts/run_b.sh': 'g++ c.cpp'})[0])
+        compiled, _ = self.run_check(self.tree(compiled=sources), [entry], sources, {'scripts/run_b.sh': 'b.cpp'})
+        self.assertEqual(['scripts/b.cpp: compiled here (crd-core), so entry 0 no longer describes it'], compiled)
+
+    def test_an_included_source_must_be_included(self):
+        entry = {'paths': ['bench/gen/*.cu'], 'included_by': 'bench/p.cu', 'why': 'w'}
+        sources = ['bench/gen/k.cu']
+        self.assertEqual([], self.run_check(self.tree(), [entry], sources,
+                                            {'bench/p.cu': '#include "gen/k.cu"\n'})[0])
+        self.assertEqual(['bench/gen/k.cu: included by bench/p.cu, which does not include it'],
+                         self.run_check(self.tree(), [entry], sources, {'bench/p.cu': '// gen/k.cu\n'})[0])
+
+    def test_an_unrouted_source_needs_an_open_owner_outside_the_module_directories(self):
+        entry = {'paths': ['bench/'], 'unrouted': 'REPO.3', 'why': 'w'}
+        sources = ['bench/x.cu']
+        self.assertEqual([], self.run_check(self.tree(), [entry], sources)[0])
+        self.assertEqual(['entry 0 (bench/): unrouted owner OLD.1 is Done; route or retire the sources'],
+                         self.run_check(self.tree(), [dict(entry, unrouted='OLD.1')], sources)[0])
+        self.assertEqual(['entry 0 (bench/): unrouted owner NEW.9 is not a ROADMAP row'],
+                         self.run_check(self.tree(), [dict(entry, unrouted='NEW.9')], sources)[0])
+        waived, _ = self.run_check(self.tree(), [{'paths': ['tests/a/'], 'unrouted': 'REPO.3', 'why': 'w'}],
+                                   ['tests/a/t.cpp'])
+        self.assertEqual(['entry 0 (tests/a/): tests/a/ lies in a module directory, where every source needs a '
+                          'route'], waived)
+        self.assertIn('so entry 0 no longer describes it',
+                      self.run_check(self.tree(compiled=sources), [entry], sources)[0][0])
+
+    def test_patterns_rank_and_a_dead_pattern_fails(self):
+        directory = {'paths': ['bench/'], 'unrouted': 'REPO.3', 'why': 'w'}
+        glob = {'paths': ['bench/gen/*.cu'], 'included_by': 'bench/p.cu', 'why': 'w'}
+        sources = ['bench/p.cu', 'bench/gen/k.cu', 'bench/gen/deep/z.cu']
+        problems, counts = self.run_check(self.tree(), [directory, glob], sources,
+                                          {'bench/p.cu': '#include "gen/k.cu"'})
+        self.assertEqual([], problems)
+        self.assertEqual((2, 1), (counts['unrouted'], counts['included']))
+        dead, _ = self.run_check(self.tree(), [directory, dict(glob, paths=['bench/gen/*.cu', 'bench/old.cu'])],
+                                 sources, {'bench/p.cu': '#include "gen/k.cu"'})
+        self.assertEqual(['entry 1: bench/old.cu names no source the guard judges (a stale or misspelled pattern)'],
+                         dead)
+        twice, _ = self.run_check(self.tree(), [directory, dict(directory, unrouted='REPO.3')], ['bench/p.cu'])
+        self.assertIn('bench/p.cu is named by entries 0 (bench/) and 1 (bench/) at the same rank', twice)
+
+    def test_an_entry_needs_one_route_and_a_reason(self):
+        problems, _ = self.run_check(self.tree(), [{'paths': ['bench/'], 'unrouted': 'REPO.3', 'built_by': 'x',
+                                                    'why': ' ', 'via': 1}], ['bench/a.c'])
+        self.assertEqual(['entry 0 (bench/): unknown keys via',
+                          'entry 0 (bench/): needs exactly one of built_when, built_by, included_by, unrouted',
+                          'entry 0 (bench/): says nothing in `why`'], problems)
+
+    def test_cmake_truth_and_the_object_of_a_command(self):
+        for value in ('ON', 'TRUE', 'yes', 'Y', '1', '2'):
+            self.assertTrue(source_routes.cmake_true(value), value)
+        for value in ('', 'OFF', '0', 'NO', 'FALSE', 'N', 'IGNORE', 'NOTFOUND', 'X-NOTFOUND', 'maybe'):
+            self.assertFalse(source_routes.cmake_true(value), value)
+        self.assertEqual(r'tests\CMakeFiles\t.dir\a.cpp.obj', source_routes.output_of(
+            {'command': r'cl.exe /nologo /Fotests\CMakeFiles\t.dir\a.cpp.obj -c a.cpp'}))
+        self.assertEqual('CMakeFiles/t.dir/a.cpp.o', source_routes.output_of(
+            {'arguments': ['g++', '-o', 'CMakeFiles/t.dir/a.cpp.o', '-c', 'a.cpp']}))
+        self.assertIsNone(source_routes.output_of({'command': 'g++ -c a.cpp'}))
+
+    def test_the_guard_judges_a_configured_tree_from_its_compile_database(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            subprocess.run(['git', 'init', '-q', str(root)], check=True)
+            for path in ('tests/a/test_a.cpp', 'tests/a/test_lost.cpp', 'scripts/b.cpp', 'tests/a/notes.m'):
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text('int x;\n', encoding='utf-8')
+            (root / 'scripts/run_b.sh').write_text('g++ scripts/b.cpp\n', encoding='utf-8')
+            (root / 'CMakeLists.txt').write_text('add_executable(t tests/a/test_a.cpp)\n', encoding='utf-8')
+            (root / 'docs').mkdir()
+            (root / 'docs/ROADMAP.md').write_text(self.ROADMAP, encoding='utf-8')
+            build = root / 'build/t'
+            (build / 'CMakeFiles/4.3.2').mkdir(parents=True)
+            (build / 'CMakeFiles/4.3.2/CMakeSystem.cmake').write_text('set(CMAKE_SYSTEM_NAME "Linux")\n',
+                                                                       encoding='utf-8')
+            (build / 'CMakeCache.txt').write_text('CRD_BUILD_BENCHMARKS:BOOL=ON\n', encoding='utf-8')
+            (root / '.gitignore').write_text('build/\n', encoding='utf-8')
+            compiled = [{'directory': str(build), 'file': str(root / 'tests/a/test_a.cpp'),
+                         'command': 'c++ -c x', 'output': 'tests/a/CMakeFiles/t.dir/test_a.cpp.o'}]
+            (build / 'compile_commands.json').write_text(json.dumps(compiled), encoding='utf-8')
+            manifest = root / 'routes.json'
+            manifest.write_text(json.dumps({
+                'schema': source_routes.SCHEMA, 'roots': ['tests', 'scripts'], 'extensions': ['.cpp'],
+                'entries': [{'paths': ['scripts/b.cpp'], 'built_by': 'scripts/run_b.sh', 'why': 'peer'}]}),
+                encoding='utf-8')
+            with patch.object(source_routes, 'ROOT', root), \
+                    patch.object(source_routes, 'ROADMAP', root / 'docs/ROADMAP.md'), \
+                    patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, source_routes.main(['--build', str(build), '--manifest', str(manifest)]))
+            self.assertIn('ERROR: tests/a/test_lost.cpp: no target of this tree compiles it', out.getvalue())
+            self.assertIn('3 sources under tests, scripts on Linux (1 targets compile sources); 1 compiled, '
+                          '0 gated off, 1 built outside', out.getvalue())
+            compiled.append({'directory': str(build), 'file': 'tests/a/test_lost.cpp', 'command': 'c++',
+                             'output': 'tests/a/CMakeFiles/t.dir/test_lost.cpp.o'})
+            compiled[1]['file'] = str(root / compiled[1]['file'])
+            (build / 'compile_commands.json').write_text(json.dumps(compiled), encoding='utf-8')
+            with patch.object(source_routes, 'ROOT', root), \
+                    patch.object(source_routes, 'ROADMAP', root / 'docs/ROADMAP.md'), \
+                    patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, source_routes.main(['--build', str(build), '--manifest', str(manifest)]))
+            self.assertIn('PASS', out.getvalue())
+            (build / 'compile_commands.json').write_text(json.dumps([{'directory': str(build), 'file': 'x.cpp',
+                                                                       'command': 'c++ -c x.cpp'}]), encoding='utf-8')
+            with patch.object(source_routes, 'ROOT', root), \
+                    patch.object(source_routes, 'ROADMAP', root / 'docs/ROADMAP.md'), \
+                    patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(2, source_routes.main(['--build', str(build), '--manifest', str(manifest)]))
+            self.assertIn('names no output', out.getvalue())
+            (build / 'compile_commands.json').unlink()
+            with patch.object(source_routes, 'ROOT', root), \
+                    patch.object(source_routes, 'ROADMAP', root / 'docs/ROADMAP.md'), \
+                    patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(2, source_routes.main(['--build', str(build), '--manifest', str(manifest)]))
+            self.assertIn('has no compile_commands.json', out.getvalue())
 
 
 class AllmanBraces(unittest.TestCase):

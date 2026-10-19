@@ -13,23 +13,24 @@ namespace cont = crd::containers;
 int main()
 {
     crd::memory::TlsfAllocator a(crd::usize{1} << 31);
-    const crd::usize N = 10000000, nperseg = 4096;
+    const crd::usize n = 10000000;
+    const crd::usize nperseg = 4096;
     const int reps = 10;
     cont::Array<double> x(&a);
-    x.resize(N);
-    for (crd::usize i = 0; i < N; ++i)
+    x.resize(n);
+    for (crd::usize i = 0; i < n; ++i)
     {
-        x[i] = std::sin(0.05 * i) + 0.3 * std::sin(0.21 * i);
+        x[i] = std::sin(0.05 * static_cast<double>(i)) + 0.3 * std::sin(0.21 * static_cast<double>(i));
     }
     crd::jobs::Config cfg;
     cfg.num_threads = 0; // all cores
     crd::jobs::init(cfg);
-    auto w = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), N), 1.0, nperseg);
+    auto w = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), n), 1.0, nperseg);
     auto t0 = std::chrono::high_resolution_clock::now();
     double chk = 0;
     for (int r = 0; r < reps; ++r)
     {
-        auto p = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), N), 1.0, nperseg);
+        auto p = dsp::welch_psd<double>(&a, cont::ConstSpan<double>(x.data(), n), 1.0, nperseg);
         chk += p[10];
     }
     auto t1 = std::chrono::high_resolution_clock::now();

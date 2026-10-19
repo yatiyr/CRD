@@ -37,6 +37,10 @@ option(CRD_BUILD_HESAP_VS_ILUPACK "Build hesap-vs-ILUPACK bench (local-only, non
 # STRUMPACK built from source to $HOME/strumpack/install (scripts/setup-strumpack-ref.sh).
 # WSL/Linux only; NEVER built in CI, NEVER shipped — a local dev benchmarking oracle.
 option(CRD_BUILD_HESAP_VS_STRUMPACK "Build hesap-vs-STRUMPACK HSS bench (local-only, Linux)" OFF)
+# The retained measurement and differential-test programs of runtime/examples that need no peer library. No target
+# compiled them before 2026-10-19 (crd-check-source-routes), so an API change broke them unseen; linux-gcc-debug and
+# the presets inheriting it turn this on, so a hosted lane compiles and links every one.
+option(CRD_BUILD_RETAINED_BENCHES "Build the peer-free retained benchmark programs of runtime/examples" OFF)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)
@@ -634,9 +638,10 @@ crd_module(tools/cprof-export NAME cprof_export HOST EXECUTABLES cprof_export
     DEPENDS containers core memory perf)
 
 crd_module(runtime
-    DEPENDS app config containers core geometry-primitives hesap hesap-amg hesap-dense hesap-direct hesap-eigen
-        hesap-iterative hesap-ode hesap-opt hesap-ordering hesap-preconditioners hesap-resources hesap-sched
-        hesap-sparse hesap-special hesap-stats hesap-tensor jobs log math memory meshgen platform resources vm
+    DEPENDS app config containers core geometry-primitives hesap hesap-amg hesap-comms hesap-dense hesap-direct
+        hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode hesap-opt hesap-ordering
+        hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse hesap-special hesap-stats
+        hesap-tensor hesap-wavelet jobs log math memory meshgen platform resources vm
     TESTS bench TEST_DEPENDS geometry-bvh geometry-convex)
 
 if(CRD_BUILD_SANDBOX)

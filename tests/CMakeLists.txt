@@ -93,6 +93,15 @@ if(CMAKE_GENERATOR MATCHES "^Visual Studio")
                 --generator "${CMAKE_GENERATOR}")
     set_tests_properties(crd-native-build-profiles PROPERTIES TIMEOUT 240 ENVIRONMENT "PYTHONUTF8=1")
 endif()
+# Every first-party C-family source is compiled by a target of this tree or named in scripts/source-routes.json with
+# the route that builds it, judged against what this tree compiles (its compile_commands.json): a test source that no
+# target lists never runs, and nothing else notices. A partial configuration (CRD_MODULES) omits whole modules, so the
+# guard runs on full configurations; the generators that write a compile database.
+if(CMAKE_EXPORT_COMPILE_COMMANDS AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles" AND NOT CRD_MODULE_SELECTION)
+    add_test(NAME crd-check-source-routes
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-source-routes.py" --build "${CMAKE_BINARY_DIR}")
+    set_tests_properties(crd-check-source-routes PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+endif()
 # One optimization level per cl.exe/clang-cl command: cl.exe reports a second one as D9025, which /WX does not fail.
 # The generators that write compile_commands.json; Visual Studio keeps per-file settings in its projects instead.
 if(MSVC AND CMAKE_GENERATOR MATCHES "Ninja|Makefiles")

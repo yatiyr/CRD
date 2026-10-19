@@ -27,7 +27,7 @@ int main()
 {
     crd::memory::TlsfAllocator a(crd::usize{1} << 30);
     crd::hesap::stats::PhiloxRng rng(1ULL);
-    const usize n = 1u << 20;
+    const usize n = 1U << 20;
 
     // 1) Modulation: QAM64 modulate + demodulate.
     {
@@ -61,7 +61,8 @@ int main()
 
     // 2) LMS equalizer: per-sample filter + update (15 taps).
     {
-        const usize ntaps = 15, ns = 1u << 20;
+        const usize ntaps = 15;
+        const usize ns = 1U << 20;
         cm::LmsEqualizer<f64> eq(&a, ntaps, 0.01);
         cont::Array<C> in(&a);
         in.resize(ns);
@@ -85,7 +86,8 @@ int main()
 
     // 3) Pulse shaping: RRC interpolation by 4.
     {
-        const usize nsym = 1u << 18, sps = 4;
+        const usize nsym = 1U << 18;
+        const usize sps = 4;
         const auto rrc = cm::rrc_pulse<f64>(&a, 0.35, 10, sps);
         cont::Array<C> sym(&a);
         sym.resize(nsym);
@@ -100,28 +102,32 @@ int main()
         volatile f64 s = tx[tx.size() / 2].re;
         (void)s;
         std::printf("CERID rrc interp x4          %.2f ns/out-sample\n",
-                    std::chrono::duration<double, std::nano>(t1 - t0).count() / tx.size());
+                    std::chrono::duration<double, std::nano>(t1 - t0).count() / static_cast<double>(tx.size()));
     }
 
     // 4) OFDM: mod + demod (nfft=1024, cp=128), many symbols.
     {
-        const usize nfft = 1024, cp = 128, nsym = 4096;
+        const usize nfft = 1024;
+        const usize cp = 128;
+        const usize nsym = 4096;
         cm::OfdmModulator<f64> ofdm(&a, nfft, cp);
-        cont::Array<C> X(&a), tx(&a), Y(&a);
-        X.resize(nfft);
+        cont::Array<C> symbols(&a);
+        cont::Array<C> tx(&a);
+        cont::Array<C> decoded(&a);
+        symbols.resize(nfft);
         tx.resize(nfft + cp);
-        Y.resize(nfft);
+        decoded.resize(nfft);
         for (usize k = 0; k < nfft; ++k)
         {
-            X[k] = C{rng.next_f64() - 0.5, rng.next_f64() - 0.5};
+            symbols[k] = C{rng.next_f64() - 0.5, rng.next_f64() - 0.5};
         }
         volatile f64 sink = 0;
         auto t0 = std::chrono::high_resolution_clock::now();
         for (usize s = 0; s < nsym; ++s)
         {
-            ofdm.modulate(cont::ConstSpan<C>(X.data(), nfft), cont::Span<C>(tx.data(), nfft + cp));
-            ofdm.demodulate(cont::ConstSpan<C>(tx.data(), nfft + cp), cont::Span<C>(Y.data(), nfft));
-            sink += Y[0].re;
+            ofdm.modulate(cont::ConstSpan<C>(symbols.data(), nfft), cont::Span<C>(tx.data(), nfft + cp));
+            ofdm.demodulate(cont::ConstSpan<C>(tx.data(), nfft + cp), cont::Span<C>(decoded.data(), nfft));
+            sink += decoded[0].re;
         }
         auto t1 = std::chrono::high_resolution_clock::now();
         (void)sink;

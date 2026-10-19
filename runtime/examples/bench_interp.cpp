@@ -11,6 +11,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 
 using namespace crd::hesap::interp;
 using crd::containers::ConstSpan;
@@ -18,6 +19,19 @@ using crd::f64;
 using crd::u64;
 using crd::usize;
 using clk = std::chrono::steady_clock;
+
+namespace
+{
+// A failed build ends the run, so no figure is printed for an interpolant that was never built.
+void require_built(InterpStatus status, const char* what)
+{
+    if (status != InterpStatus::Ok)
+    {
+        std::fprintf(stderr, "%s: build failed (status %d)\n", what, static_cast<int>(status));
+        std::exit(1);
+    }
+}
+} // namespace
 
 int main()
 {
@@ -55,11 +69,11 @@ int main()
     const auto ys = ConstSpan<f64>{y.data(), n};
 
     auto bench_build = [&](const char* name, int reps, auto build_fn) {
-        build_fn();
+        require_built(build_fn(), name);
         const auto t0 = clk::now();
         for (int r = 0; r < reps; ++r)
         {
-            build_fn();
+            require_built(build_fn(), name);
         }
         const auto t1 = clk::now();
         const f64 us = std::chrono::duration<f64, std::micro>(t1 - t0).count() / reps;
@@ -135,11 +149,12 @@ int main()
     bench_eval_g("FloaterHorm n30", [&](f64 q) { return fh.eval(q); });
 
     // --- v13-d: Chebyshev (N=64), Padé [4/4], Trig (N=64) ---
-    auto bench_eval_n = [&](const char* name, f64 lo, f64 hi, usize npts, auto eval_fn) {
+    auto bench_eval_n = [&](const char* name, f64 from, f64 to, usize npts, auto eval_fn)
+    {
         const auto t0 = clk::now();
         for (usize i = 0; i < npts; ++i)
         {
-            acc += eval_fn(lo + (hi - lo) * static_cast<f64>(i) / static_cast<f64>(npts));
+            acc += eval_fn(from + (to - from) * static_cast<f64>(i) / static_cast<f64>(npts));
         }
         const auto t1 = clk::now();
         const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / static_cast<f64>(npts);
@@ -223,7 +238,9 @@ int main()
         return rbf.build(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2,
                          RbfKernel::Gaussian, 1.0, 0);
     });
-    rbf.build(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, RbfKernel::Gaussian, 1.0, 0);
+    require_built(rbf.build(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2,
+                            RbfKernel::Gaussian, 1.0, 0),
+                  "RBF gauss n100");
     {
         const auto t0 = clk::now();
         for (int r = 0; r < 10; ++r)
@@ -243,7 +260,8 @@ int main()
     bench_build("GP fit n100", 3000, [&] {
         return gp.fit(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, 1.0, 1e-6);
     });
-    gp.fit(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, 1.0, 1e-6);
+    require_built(gp.fit(ConstSpan<f64>{rp.data(), nrb * 2}, ConstSpan<f64>{rv.data(), nrb}, nrb, 2, 1.0, 1e-6),
+                  "GP fit n100");
     {
         const auto t0 = clk::now();
         for (int r = 0; r < 10; ++r)
@@ -261,7 +279,8 @@ int main()
         std::printf("%-18s predict     %6.2f ns/pt  (mean+var)\n", "GP n100", ns);
     }
 
-    // --- v13-f: Clough-Tocher C¹ (n=100 scattered 2-D) — fit + eval. 4 corners ⇒ hull = [0,1] ⇒ no outside-hull NaN. ---
+    // --- v13-f: Clough-Tocher C¹ (n=100 scattered 2-D) — fit + eval. 4 corners ⇒ hull = [0,1] ⇒ no
+    // outside-hull NaN. ---
     crd::containers::Array<crd::math::Vec2<f64>> cp(&alloc);
     crd::containers::Array<crd::math::Vec2<f64>> cq(&alloc);
     cp.resize(nrb);
@@ -279,9 +298,10 @@ int main()
         cq[i] = crd::math::Vec2<f64>{0.02 + 0.96 * rnd(), 0.02 + 0.96 * rnd()};
     }
     CloughTocher2DInterpolant<f64> cti(&alloc);
-    bench_build("CT fit n100", 1000,
-                [&] { return cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb}); });
-    cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb});
+    bench_build("CT fit n100", 1000, [&]
+                { return cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb}); });
+    require_built(cti.fit(ConstSpan<crd::math::Vec2<f64>>{cp.data(), nrb}, ConstSpan<f64>{rv.data(), nrb}),
+                  "CT fit n100");
     {
         const auto t0 = clk::now();
         for (int r = 0; r < 10; ++r)
@@ -314,8 +334,9 @@ int main()
     constexpr f64 g_spacing[2] = {1.0, 1.0};
     constexpr usize g_count[2] = {gn, gn};
     RegularGridInterpolant<f64> grid(&alloc);
-    grid.build(ConstSpan<f64>{g_origin, 2}, ConstSpan<f64>{g_spacing, 2}, ConstSpan<usize>{g_count, 2}, 2,
-               ConstSpan<f64>{gv.data(), gn * gn});
+    require_built(grid.build(ConstSpan<f64>{g_origin, 2}, ConstSpan<f64>{g_spacing, 2}, ConstSpan<usize>{g_count, 2}, 2,
+                             ConstSpan<f64>{gv.data(), gn * gn}),
+                  "grid 2D");
     {
         const auto t0 = clk::now();
         for (usize i = 0; i < 100000; ++i)
@@ -336,7 +357,7 @@ int main()
         const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 100000.0;
         std::printf("%-18s eval        %6.2f ns/pt\n", "grid-cubic 2D", ns);
     }
-    grid.build_bspline();
+    require_built(grid.build_bspline(), "grid-bspline 2D");
     {
         const auto t0 = clk::now();
         for (usize i = 0; i < 100000; ++i)
@@ -366,8 +387,9 @@ int main()
         constexpr f64 s1[1] = {1.0};
         constexpr usize c1[1] = {g1n};
         RegularGridInterpolant<f64> grid1(&alloc);
-        grid1.build(ConstSpan<f64>{o1, 1}, ConstSpan<f64>{s1, 1}, ConstSpan<usize>{c1, 1}, 1,
-                    ConstSpan<f64>{g1v.data(), g1n});
+        require_built(grid1.build(ConstSpan<f64>{o1, 1}, ConstSpan<f64>{s1, 1}, ConstSpan<usize>{c1, 1}, 1,
+                                  ConstSpan<f64>{g1v.data(), g1n}),
+                      "grid 1D");
         const auto t0 = clk::now();
         for (usize i = 0; i < 100000; ++i)
         {
@@ -376,7 +398,7 @@ int main()
         const auto t1 = clk::now();
         const f64 ns = std::chrono::duration<f64, std::nano>(t1 - t0).count() / 100000.0;
         std::printf("%-18s eval        %6.2f ns/pt\n", "grid-cubic 1D", ns);
-        grid1.build_bspline();
+        require_built(grid1.build_bspline(), "grid-bspline 1D");
         const auto t2 = clk::now();
         for (usize i = 0; i < 100000; ++i)
         {

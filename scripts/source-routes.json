@@ -1,0 +1,269 @@
+{
+  "schema": "cerid-source-routes/1",
+  "about": "Every first-party C-family source under these roots is compiled by a target of each configured tree, or named here with the route that builds it. scripts/check-source-routes.py (the crd-check-source-routes CTest) judges each tree; docs/design/test-instruments.md#source-routes.",
+  "roots": ["engine", "tests", "tools", "runtime", "sandbox", "bench", "scripts"],
+  "extensions": [".c", ".cc", ".cpp", ".cxx", ".cu", ".mm", ".asm", ".S"],
+  "entries": [
+    {
+      "paths": [
+        "engine/foundation/jobs/src/fiber_switch_win64.asm",
+        "engine/gpu/gpu-context-dx12/",
+        "engine/gpu/kir-dx12/",
+        "tests/gpu/gpu-context-dx12/",
+        "tests/gpu/kir-dx12/",
+        "tests/execution/ceir-gpu-dx12/"
+      ],
+      "built_when": {"platform": "Windows"},
+      "why": "The D3D12 backends with their tests, and the Windows x64 fiber switch, are configured only on Windows."
+    },
+    {
+      "paths": ["engine/foundation/jobs/src/fiber_switch_lin64.S"],
+      "built_when": {"platform": "Linux"},
+      "why": "The System V x86-64 fiber switch is the Linux build's assembly."
+    },
+    {
+      "paths": ["engine/gpu/kir-metal/", "tests/gpu/kir-metal/"],
+      "built_when": {"platform": "Darwin"},
+      "why": "The Metal backend and its tests are configured only on macOS (MAC.DIAG and the Apple rows own its qualification)."
+    },
+    {
+      "paths": ["engine/gpu/kir-cuda/", "tests/gpu/kir-cuda/", "tools/kir-autotune/"],
+      "built_when": {"target": "crd-kir-cuda"},
+      "why": "The CUDA kernel backend, its tests and the auto-tuner are configured where the CUDA toolkit is found (the hosted runners have none)."
+    },
+    {
+      "paths": ["engine/gpu/gpu-context-cuda/", "tests/gpu/gpu-context-cuda/", "tests/execution/ceir-gpu-cuda/"],
+      "built_when": {"target": "crd-gpu-context-cuda"},
+      "why": "The CUDA compute context and the tests that need it are configured where the CUDA toolkit is found."
+    },
+    {
+      "paths": ["engine/gpu/kir-webgpu/", "tests/gpu/kir-webgpu/"],
+      "built_when": {"target": "crd-kir-webgpu"},
+      "why": "The WebGPU backend is configured where the vendored wgpu-native prebuilt for the platform exists (external/wgpu-native)."
+    },
+    {
+      "paths": ["engine/gpu/kir-hip/", "tests/gpu/kir-hip/"],
+      "built_when": {"target": "crd-kir-hip"},
+      "why": "The HIP backend is configured where the HIP SDK is found; no tree of this repository has one yet."
+    },
+    {
+      "paths": ["tests/bench/"],
+      "built_when": {"option": "CRD_BUILD_BENCHMARKS"},
+      "why": "The Catch2 benchmark suites; the shipping presets turn CRD_BUILD_BENCHMARKS off."
+    },
+    {
+      "paths": [
+        "runtime/examples/bench_bessel_batch.cpp",
+        "runtime/examples/bench_comms_vs_refs.cpp",
+        "runtime/examples/bench_decomp.cpp",
+        "runtime/examples/bench_distributions.cpp",
+        "runtime/examples/bench_dsp_adaptive_vs_refs.cpp",
+        "runtime/examples/bench_dsp_conv_vs_refs.cpp",
+        "runtime/examples/bench_dsp_fir_vs_refs.cpp",
+        "runtime/examples/bench_dsp_hilbert_vs_refs.cpp",
+        "runtime/examples/bench_dsp_measure_vs_refs.cpp",
+        "runtime/examples/bench_dsp_multirate_vs_refs.cpp",
+        "runtime/examples/bench_dsp_nopq_vs_refs.cpp",
+        "runtime/examples/bench_dsp_sosfilt_vs_refs.cpp",
+        "runtime/examples/bench_dsp_welch_vs_refs.cpp",
+        "runtime/examples/bench_dsp_windows_vs_refs.cpp",
+        "runtime/examples/bench_hyperopt.cpp",
+        "runtime/examples/bench_hypothesis.cpp",
+        "runtime/examples/bench_interp.cpp",
+        "runtime/examples/bench_logpdf_grad.cpp",
+        "runtime/examples/bench_mcmc.cpp",
+        "runtime/examples/bench_nn.cpp",
+        "runtime/examples/bench_nonparametric.cpp",
+        "runtime/examples/bench_quadrature.cpp",
+        "runtime/examples/bench_regression.cpp",
+        "runtime/examples/bench_resampling.cpp",
+        "runtime/examples/bench_rng.cpp",
+        "runtime/examples/bench_samplers.cpp",
+        "runtime/examples/bench_sparse_tensor.cpp",
+        "runtime/examples/bench_tensor_io.cpp",
+        "runtime/examples/bench_tt.cpp",
+        "runtime/examples/bench_wavelet_vs_refs.cpp",
+        "runtime/examples/opt_scoreboard.cpp",
+        "runtime/examples/prof_fft_kernel.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_RETAINED_BENCHES"},
+      "why": "The retained programs that need no peer library; linux-gcc-debug and the presets inheriting it compile and link them."
+    },
+    {
+      "paths": [
+        "runtime/examples/bench_hesap_blas1_vs_reference.cpp",
+        "runtime/examples/bench_hesap_blas2_vs_reference.cpp",
+        "runtime/examples/bench_hesap_block_cg_vs_reference.cpp",
+        "runtime/examples/bench_hesap_block_gmres_vs_reference.cpp",
+        "runtime/examples/bench_hesap_bsr_vs_reference.cpp",
+        "runtime/examples/bench_hesap_cg_vs_reference.cpp",
+        "runtime/examples/bench_hesap_cholesky_vs_reference.cpp",
+        "runtime/examples/bench_hesap_eig_nonsym_vs_reference.cpp",
+        "runtime/examples/bench_hesap_eig_vs_reference.cpp",
+        "runtime/examples/bench_hesap_ell_dia_vs_reference.cpp",
+        "runtime/examples/bench_hesap_gcrot_vs_reference.cpp",
+        "runtime/examples/bench_hesap_gemm_vs_reference.cpp",
+        "runtime/examples/bench_hesap_gmres_vs_reference.cpp",
+        "runtime/examples/bench_hesap_hss_vs_reference.cpp",
+        "runtime/examples/bench_hesap_idrs_vs_reference.cpp",
+        "runtime/examples/bench_hesap_ilu_vs_reference.cpp",
+        "runtime/examples/bench_hesap_ldlt_vs_reference.cpp",
+        "runtime/examples/bench_hesap_lstsq_vs_reference.cpp",
+        "runtime/examples/bench_hesap_lu_supernodal_vs_reference.cpp",
+        "runtime/examples/bench_hesap_lu_vs_reference.cpp",
+        "runtime/examples/bench_hesap_matrix_resource_vs_reference.cpp",
+        "runtime/examples/bench_hesap_nested_vs_reference.cpp",
+        "runtime/examples/bench_hesap_ordering_vs_reference.cpp",
+        "runtime/examples/bench_hesap_qr_vs_reference.cpp",
+        "runtime/examples/bench_hesap_sddmm_vs_reference.cpp",
+        "runtime/examples/bench_hesap_solvers_vs_reference.cpp",
+        "runtime/examples/bench_hesap_spai_vs_reference.cpp",
+        "runtime/examples/bench_hesap_sparse_assembly_vs_reference.cpp",
+        "runtime/examples/bench_hesap_spgemm_stress_vs_reference.cpp",
+        "runtime/examples/bench_hesap_spgemm_vs_reference.cpp",
+        "runtime/examples/bench_hesap_spmm_vs_reference.cpp",
+        "runtime/examples/bench_hesap_spmv_vs_reference.cpp",
+        "runtime/examples/bench_hesap_svd_vs_reference.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_REFERENCE"},
+      "why": "The shootouts against Eigen and OpenBLAS, fetched at configure time only when the option is on."
+    },
+    {
+      "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_LBFGS"},
+      "why": "The L-BFGS bench against liblbfgs, a local oracle (scripts/setup-lbfgs-ref.sh)."
+    },
+    {
+      "paths": ["runtime/examples/lbfgsb_difftest.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_LBFGSB"},
+      "why": "The L-BFGS-B differential test against the reference C, a local oracle (scripts/setup-lbfgsb-ref.sh)."
+    },
+    {
+      "paths": ["runtime/examples/bench_hesap_mlilu_vs_ilupack.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_ILUPACK", "platform": "Linux"},
+      "why": "The bench against ILUPACK, a non-commercial Linux-only binary oracle (scripts/setup-ilupack-ref.sh)."
+    },
+    {
+      "paths": ["runtime/examples/bench_hesap_cholesky_vs_cholmod.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_CHOLMOD", "platform": "Linux"},
+      "why": "The bench against CHOLMOD, a local Linux oracle (scripts/setup-cholmod-ref.sh)."
+    },
+    {
+      "paths": ["runtime/examples/bench_hesap_qr_vs_spqr.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_SPQR", "platform": "Linux"},
+      "why": "The bench against SuiteSparseQR, a local Linux oracle."
+    },
+    {
+      "paths": ["runtime/examples/bench_hesap_hss_vs_strumpack.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_STRUMPACK", "platform": "Linux"},
+      "why": "The bench against STRUMPACK, a local Linux oracle (scripts/setup-strumpack-ref.sh)."
+    },
+    {
+      "paths": ["tests/support/package/diag-consumer/"],
+      "built_by": "tests/support/package/diag-consumer/CMakeLists.txt",
+      "why": "The installed-package consumer is its own CMake project, configured against an installed prefix by crd-package-consumer (scripts/test-package-consumer.py)."
+    },
+    {
+      "paths": ["tests/support/diag/models/counter_publish_reclaim.c"],
+      "built_by": "scripts/check-genmc-models.py",
+      "why": "The GenMC model of the jobs counter protocol is compiled by GenMC itself on the DIAG.4b model-checking lane."
+    },
+    {
+      "paths": ["runtime/examples/bench_comms_liquid.c"],
+      "built_by": "scripts/run_bench_comms.sh",
+      "why": "The liquid-dsp peer of the comms bench."
+    },
+    {
+      "paths": ["runtime/examples/bench_dsp_adaptive_liquid.c"],
+      "built_by": "scripts/run_bench_dsp_adaptive.sh",
+      "why": "The liquid-dsp peer of the adaptive-filter bench."
+    },
+    {
+      "paths": ["runtime/examples/bench_dsp_multirate_liquid.c"],
+      "built_by": "scripts/run_bench_dsp_multirate.sh",
+      "why": "The liquid-dsp peer of the multirate bench."
+    },
+    {
+      "paths": ["runtime/examples/bench_dct_vs_refs.cpp"],
+      "built_by": "scripts/run_bench_dct.sh",
+      "why": "The DCT bench links FFTW and pocketfft."
+    },
+    {
+      "paths": ["runtime/examples/bench_fft_vs_refs.cpp"],
+      "built_by": "scripts/run_bench_fft.sh",
+      "why": "The FFT bench links FFTW, MKL and pocketfft."
+    },
+    {
+      "paths": ["runtime/examples/bench_nufft_vs_finufft.cpp"],
+      "built_by": "scripts/run_bench_nufft.sh",
+      "why": "The NUFFT bench links FINUFFT."
+    },
+    {
+      "paths": ["runtime/examples/bench_ode_imex_vs_arkode.cpp"],
+      "built_by": "scripts/run_bench_imex.sh",
+      "why": "The IMEX bench links SUNDIALS ARKODE."
+    },
+    {
+      "paths": ["runtime/examples/bench_ode_krylov_vs_cvode_spgmr.cpp"],
+      "built_by": "scripts/run_bench_krylov.sh",
+      "why": "The Krylov ODE bench links SUNDIALS CVODE."
+    },
+    {
+      "paths": ["runtime/examples/bench_ode_sens_vs_cvodes.cpp"],
+      "built_by": "scripts/run_bench_sens.sh",
+      "why": "The sensitivity bench links SUNDIALS CVODES."
+    },
+    {
+      "paths": ["scripts/bench_dtypes.cpp"],
+      "built_by": "scripts/run_dtype_bench.sh",
+      "why": "The dtype conversion bench of docs/bench/2026-07-02-v14a-dtype-converts.md."
+    },
+    {
+      "paths": ["scripts/bench_einsum.cpp"],
+      "built_by": "scripts/run_einsum_bench.sh",
+      "why": "The einsum bench against its peers."
+    },
+    {
+      "paths": ["scripts/bench_elementwise.cpp"],
+      "built_by": "scripts/run_elementwise_bench.sh",
+      "why": "The elementwise and broadcast bench of docs/bench/2026-07-02-v14b-elementwise-broadcast.md."
+    },
+    {
+      "paths": ["scripts/bench_permute.cpp"],
+      "built_by": "scripts/run_permute_bench.sh",
+      "why": "The permute bench against HPTT of docs/bench/2026-07-02-v14d-permute-vs-hptt.md."
+    },
+    {
+      "paths": ["scripts/bench_reduce.cpp"],
+      "built_by": "scripts/run_reduce_bench.sh",
+      "why": "The reduction bench against ReproBLAS of docs/bench/2026-07-02-v14c-reduce-vs-reproblas.md."
+    },
+    {
+      "paths": ["bench/gpu-fft/generated/*.cu"],
+      "included_by": "bench/gpu-fft/ckir_fft_profilee.cu",
+      "why": "Generated kernels the CKIR FFT profile program includes."
+    },
+    {
+      "paths": [
+        "bench/",
+        "scripts/bench_gemm_v0d.cpp",
+        "scripts/v14m_ggml_q8_bench.c",
+        "runtime/examples/bench_batched.cpp",
+        "runtime/examples/bench_bessel_vs_refs.cpp",
+        "runtime/examples/bench_dist_boost.cpp",
+        "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
+        "runtime/examples/bench_dsp_windows_vs_liquid.c",
+        "runtime/examples/bench_fft_f32.cpp",
+        "runtime/examples/bench_interp_boost.cpp",
+        "runtime/examples/bench_ode_vs_refs.cpp",
+        "runtime/examples/bench_special_v12d.cpp",
+        "runtime/examples/bench_special_vs_refs.cpp",
+        "runtime/examples/bobyqa_difftest.cpp",
+        "runtime/examples/cobyla_difftest.cpp",
+        "runtime/examples/newuoa_difftest.cpp"
+      ],
+      "unrouted": "REPO.3",
+      "why": "Peer and GPU-vendor measurement programs (CUDA, cuFFT, cuBLASLt, VkFFT, MKL, Boost, liquid-dsp, SUNDIALS, ggml) that no script or option builds; REPO.3 owns giving each a checked route or retiring it with its board as the record."
+    }
+  ]
+}

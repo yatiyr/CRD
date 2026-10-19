@@ -18,8 +18,9 @@ add_executable(crd-geometry-convex-tests
     test_quickhull.cpp
     test_hull_simplify.cpp
     test_v3_close.cpp
-    # test_epa_probe.cpp        # answered: EPA robust on rotated hull-hull (77/77); pathology was OBB-OBB-rotated only, covered by SAT (v2d). probe kept on disk for reference; not built.
-    # test_simplex_size_probe.cpp  # design-phase probe (kept on disk; not built)
+    # The two v2c design probes, kept on disk unbuilt, were removed on 2026-10-19 (crd-check-source-routes): the EPA
+    # one is the "EPA: rotated hull-vs-hull self-consistency" case of test_epa.cpp (77/77 at the time); the GJK
+    # simplex-size histogram answered its v2c question (docs/archive/systems/geometry-convex.md).
 )
 
 target_link_libraries(crd-geometry-convex-tests PRIVATE

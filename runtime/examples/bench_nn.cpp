@@ -22,10 +22,22 @@ using crd::hesap::tensor::TensorStatus;
 namespace
 {
 
+// CRD_NN_CORPUS when it is set (MSVC deprecates std::getenv under its warning set), else the committed corpus.
 const char* corpus_root()
 {
-    const char* root = std::getenv("CRD_NN_CORPUS");
-    return root != nullptr ? root : "tests/numerics/hesap-tensor/nn_corpus";
+    static char root[512] = {};
+#if defined(_WIN32)
+    char* value = nullptr;
+    crd::usize length = 0;
+    const bool found = _dupenv_s(&value, &length, "CRD_NN_CORPUS") == 0 && value != nullptr &&
+                       std::snprintf(root, sizeof(root), "%s", value) < static_cast<int>(sizeof(root));
+    std::free(value);
+#else
+    const char* value = std::getenv("CRD_NN_CORPUS");
+    const bool found =
+        value != nullptr && std::snprintf(root, sizeof(root), "%s", value) < static_cast<int>(sizeof(root));
+#endif
+    return found ? root : "tests/numerics/hesap-tensor/nn_corpus";
 }
 
 bool read_file(crd::memory::IAllocator* alloc, const char* file, crd::containers::Array<crd::u8>& out)

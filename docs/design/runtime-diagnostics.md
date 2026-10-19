@@ -2783,6 +2783,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   (symptom, command, artifact, read, next discriminating test, hosted lanes, the one adoption step, a working example,
   the cost, the owning children), human-only publication stated and refused, and every entry held to the tree by
   `crd-check-diag-runbooks` on every Ninja lane; every child owns an entry except DIAG.11c and DIAG.12, listed there.
+- Source routes (2026-10-19, [contract](test-instruments.md#source-routes)): `crd-check-source-routes` judges every
+  first-party source against what each configured tree compiles, so a test or specimen that no target builds fails
+  the lane that should have built it; the conditions, outside routes and owned unrouted programs are named in
+  `scripts/source-routes.json`.
 - Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost

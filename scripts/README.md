@@ -116,6 +116,12 @@ Run commands from the repository root. Build/test rules and exact quality requir
   `ceridc` verb, diag command and grant, test executable and CMake name exist; each test regex matches a test of the
   tree on the rows for its host; artifacts, examples and costs resolve; every DIAG child owns an entry or is listed;
   nothing publishes. `--static` checks all but the test references; its cases are in `test-repository-tools.py`.
+- Source routes ([contract](../docs/design/test-instruments.md#source-routes)): `check-source-routes.py --build
+  <tree>` (the `crd-check-source-routes` CTest on every full configuration with a compile database) judges every
+  first-party C-family source against the tree's `compile_commands.json` and `source-routes.json`: compiled by a
+  target, or named with the conditions under which the tree builds it (platform, option, target), the file that
+  builds it outside the tree, its includer, or the open ROADMAP row that owns routing it. Its cases are in
+  `test-repository-tools.py`.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

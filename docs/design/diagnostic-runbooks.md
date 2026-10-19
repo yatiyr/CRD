@@ -386,14 +386,14 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 
 | Field | Value |
 |---|---|
-| Symptom | A guard CTest fails, a hot header reaches a forbidden standard header, a raw allocation result is used unchecked, or a link-time-optimized Linux link fails with a `-Werror=` diagnostic no compile showed. |
-| Command | `ctest --test-dir build/win-debug -R "^crd-no-|^crd-check"`; `python scripts/check-include-budget.py --build build/win-debug`; `python scripts/check-allocation-results.py <checkout>` |
-| Artifact | The guard's output: the include chain that reached a forbidden header, the unchecked allocation site, the link's "In function" line with its "inlined from" chain. |
-| Read | Read the chain and fix the include or the site; never widen a budget. A link-time diagnostic lists only its first failing partition: rerun that link with `-flto-partition=one` to list every site of the program. |
-| Next test | `ctest --test-dir build/win-debug -R "^crd-check-include-budget$"`; `ctest --test-dir build/win-debug -R "^crd-check-allocation-results$"` |
+| Symptom | A guard CTest fails, a hot header reaches a forbidden standard header, a raw allocation result is used unchecked, a source is compiled by no target (a test that never runs), or a link-time-optimized Linux link fails with a `-Werror=` diagnostic no compile showed. |
+| Command | `ctest --test-dir build/win-debug -R "^crd-no-|^crd-check"`; `python scripts/check-include-budget.py --build build/win-debug`; `python scripts/check-allocation-results.py <checkout>`; `python scripts/check-source-routes.py --build build/win-debug` |
+| Artifact | The guard's output: the include chain that reached a forbidden header, the unchecked allocation site, the source no target compiles or the source-routes entry the tree contradicts, the link's "In function" line with its "inlined from" chain. |
+| Read | Read the chain and fix the include or the site; never widen a budget. A source no target compiles joins its target, or `scripts/source-routes.json` names the condition or file that builds it. A link-time diagnostic lists only its first failing partition: rerun that link with `-flto-partition=one` to list every site of the program. |
+| Next test | `ctest --test-dir build/win-debug -R "^crd-check-include-budget$"`; `ctest --test-dir build/win-debug -R "^crd-check-allocation-results$"`; `ctest --test-dir build/win-debug -R "^crd-check-source-routes$"` |
 | Hosted | Every Ninja lane runs the guards; linux-gcc-shipping, -release and -relwithdebinfo judge the link-time warnings. |
-| Adopt | A new hot header gets an entry in `scripts/include-budget.json`; a new allocation site checks its result or uses `allocate_or_fatal(...)`. |
-| Example | `scripts/include-budget.json` |
+| Adopt | A new hot header gets an entry in `scripts/include-budget.json`; a new allocation site checks its result or uses `allocate_or_fatal(...)`; a new source joins its target, or gets its route in `scripts/source-routes.json`. |
+| Example | `scripts/include-budget.json`; `scripts/source-routes.json` |
 | Cost | Tooling, no runtime mode; the compile time it protects is on the [compile-time board](../bench/2026-10-18-build-speed-compile-time.md). |
 | Owner | DIAG.11b |
 

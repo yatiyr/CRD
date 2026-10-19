@@ -71,6 +71,10 @@ records and deliberately faulty detector controls. Use the existing services; ne
 profiler or silently bypass custom-allocator diagnostics. Planned DIAG modes are not existing commands until qualified.
 Memory taken from a caller's allocator may be refused (nullptr): check it, report the module's status, or use an
 `*_or_fatal` helper; `check-allocation-results.py` (`crd-check-allocation-results`) holds this on every lane.
+A new source joins its target's source list; one that a target builds only on some platform, option or toolkit, or
+that something other than this build compiles, is named with that route in
+[scripts/source-routes.json](../scripts/source-routes.json), which `crd-check-source-routes` holds to every configured
+tree ([contract](design/test-instruments.md#source-routes)).
 
 Every committed generated file is named once in [scripts/generated-sources.json](../scripts/generated-sources.json)
 with its generator, its status and the SHA-256 of its bytes; [check-generated.py](../scripts/check-generated.py)

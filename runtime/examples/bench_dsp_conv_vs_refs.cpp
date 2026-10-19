@@ -13,23 +13,25 @@ namespace cont = crd::containers;
 int main()
 {
     crd::memory::TlsfAllocator a(crd::usize{1} << 31);
-    const crd::usize N = 1000000;
+    const crd::usize n = 1000000;
     const int reps = 10;
-    cont::Array<double> x(&a), h(&a);
-    x.resize(N); h.resize(N);
-    for (crd::usize i = 0; i < N; ++i)
+    cont::Array<double> x(&a);
+    cont::Array<double> h(&a);
+    x.resize(n);
+    h.resize(n);
+    for (crd::usize i = 0; i < n; ++i)
     {
-        x[i] = std::sin(0.01 * i);
-        h[i] = std::cos(0.02 * i) * std::exp(-1e-6 * i);
+        x[i] = std::sin(0.01 * static_cast<double>(i));
+        h[i] = std::cos(0.02 * static_cast<double>(i)) * std::exp(-1e-6 * static_cast<double>(i));
     }
-    dsp::FftConvolver<double> conv(&a, N, N); // FFT plan built ONCE (amortized like scipy/MATLAB caches)
-    auto w = conv.convolve(cont::ConstSpan<double>(x.data(), N), cont::ConstSpan<double>(h.data(), N));
+    dsp::FftConvolver<double> conv(&a, n, n); // FFT plan built ONCE (amortized like scipy/MATLAB caches)
+    auto w = conv.convolve(cont::ConstSpan<double>(x.data(), n), cont::ConstSpan<double>(h.data(), n));
     auto t0 = std::chrono::high_resolution_clock::now();
     double chk = 0;
     for (int r = 0; r < reps; ++r)
     {
-        auto c = conv.convolve(cont::ConstSpan<double>(x.data(), N), cont::ConstSpan<double>(h.data(), N));
-        chk += c[N];
+        auto c = conv.convolve(cont::ConstSpan<double>(x.data(), n), cont::ConstSpan<double>(h.data(), n));
+        chk += c[n];
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     std::printf("CERID FftConvolver(1M,1M) plan-cached  %.3f ms/call (chk=%.4f)\n",

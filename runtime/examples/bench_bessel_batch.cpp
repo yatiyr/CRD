@@ -18,7 +18,7 @@ using crd::usize;
 namespace
 {
 template <class F>
-double per_elem(F&& f, usize n, int reps)
+double per_elem(const F& f, usize n, int reps)
 {
     f(); // warm
     const auto t0 = std::chrono::steady_clock::now();
@@ -27,7 +27,8 @@ double per_elem(F&& f, usize n, int reps)
         f();
     }
     const auto t1 = std::chrono::steady_clock::now();
-    return std::chrono::duration<double, std::nano>(t1 - t0).count() / (static_cast<double>(reps) * n);
+    return std::chrono::duration<double, std::nano>(t1 - t0).count() /
+           (static_cast<double>(reps) * static_cast<double>(n));
 }
 } // namespace
 
@@ -55,7 +56,8 @@ int main()
     auto row = [&](const char* name, auto call, double matlab)
     {
         const double t = per_elem(call, n, reps);
-        std::printf("%-11s  %8.3f   %8.2f       %.2fx %s\n", name, t, matlab, matlab / t, (matlab > t ? "WIN" : "lose"));
+        std::printf("%-11s  %8.3f   %8.2f       %.2fx %s\n", name, t, matlab, matlab / t,
+                    (matlab > t ? "WIN" : "lose"));
     };
     row("cyl_J", [&] { sf::cyl_bessel_j_batch<f64>(out.data(), in.data(), n, 2.5); }, 27.66);
     row("cyl_Y", [&] { sf::cyl_neumann_batch<f64>(out.data(), in.data(), n, 2.5); }, 44.41);
