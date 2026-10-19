@@ -15,8 +15,10 @@ would notice, so every checkable part of every entry is checked here:
   existing path), every Example span is an existing path, and every Cost row links to its measurement or owner;
 - every DIAG child of docs/design/runtime-diagnostics.md is the Owner of an entry or listed, with its reason, among
   the children without an entry;
-- with --build, every `ctest ... -R "<regex>"` (and `wsl-lane.sh test <preset> -R ...`) of a row that applies to this
-  host (no qualifier, or `(Windows)`/`(Linux)` matching it) matches at least one test the tree registers.
+- with --build, every `ctest ... -R "<regex>"` (and `wsl-lane.sh test <preset> -R ...`) of a row that applies to the
+  tree matches at least one test it registers, and every named executable's binary directory exists in it. A row's
+  qualifier names a platform (`(Windows)`, `(Linux)`) or a build property the configuration must compile in
+  (`(asserts)`, `(profiling)`; read from CMakeCache.txt), or both (`(Windows, profiling)`).
 
     python scripts/check-diag-runbooks.py --build build/win-debug        (the crd-check-diag-runbooks CTest)
     python scripts/check-diag-runbooks.py --static                       (no tree: the test references unresolved)
@@ -39,6 +41,10 @@ DESIGN = ROOT / 'docs/design/runtime-diagnostics.md'
 FIELDS = ('Symptom', 'Command', 'Artifact', 'Read', 'Next test', 'Hosted', 'Adopt', 'Example', 'Cost', 'Owner')
 COMMAND_FIELDS = ('Command', 'Next test', 'Adopt')
 PLATFORMS = ('Windows', 'Linux')
+# A row qualifier naming a build property resolves only in a tree whose configuration compiles it in: the cases of a
+# mode a configuration compiles out are not registered there (the RT sentinels without asserts, the CPROF and Perfetto
+# cases without profiling; the shipping and release lanes).
+BUILD_PROPERTIES = {'asserts': 'CRD_ENABLE_ASSERTS', 'profiling': 'CRD_ENABLE_PROFILING'}
 CORPUS_DIRS = ('engine', 'tools', 'sandbox', 'runtime', 'tests', 'scripts', 'cmake', '.github', 'assets/diag')
 CORPUS_SUFFIXES = {'.cpp', '.hpp', '.h', '.inl', '.py', '.cmake', '.txt', '.toml', '.yml', '.json', '.sh', '.bat',
                    '.ps1'}
@@ -60,9 +66,10 @@ PLACEHOLDER = re.compile(r'<[^<>]*>')
 class Tree:
     """What the checks look things up in: the checkout, and the configured tree when given."""
 
-    def __init__(self, root=ROOT, tests=None, platform=None, build=None):
+    def __init__(self, root=ROOT, tests=None, platform=None, build=None, properties=None):
         self.root = Path(root)
         self.tests = tests  # CTest names of the configured tree, or None (static)
+        self.properties = properties  # the build properties the tree compiles in ({'asserts', 'profiling'}), or None
         self.build = Path(build) if build else None  # the configured tree, whose binary directories are checked
         self.platform = platform or ('Windows' if os.name == 'nt' else 'Linux')
         self._corpus = None
@@ -181,7 +188,7 @@ def parse(text):
         while index < len(lines) and lines[index].startswith('|'):
             cells = [cell.strip() for cell in split_row(lines[index])]
             if len(cells) == 2 and cells[0] not in ('Field', '---'):
-                field = re.fullmatch(r'(.+?)(?: \((Windows|Linux)\))?', cells[0])
+                field = re.fullmatch(r'(.+?)(?: \(([A-Za-z, ]+)\))?', cells[0])
                 rows.append((field[1], field[2], cells[1]))
             index += 1
         entries.append((anchor[1], title, start + 1, rows))
@@ -269,6 +276,28 @@ def ctest_regex(arguments):
     return None
 
 
+def qualifiers_of(qualifier):
+    return [part.strip() for part in qualifier.split(',')] if qualifier else []
+
+
+def applies(tree, qualifier):
+    """Whether a row's qualifier holds for this tree: its platform, and the build properties it names (asserts,
+    profiling: the tests of a mode the configuration compiles out are not registered there). A static run knows no
+    build property, so a row that names one resolves nothing."""
+    for part in qualifiers_of(qualifier):
+        if part in PLATFORMS and part != tree.platform:
+            return False
+        if part in BUILD_PROPERTIES and (tree.properties is None or part not in tree.properties):
+            return False
+    return True
+
+
+def with_linux(qualifier):
+    """A wsl-lane.sh command runs in a Linux tree whatever its row says."""
+    parts = qualifiers_of(qualifier)
+    return ', '.join(parts if 'Linux' in parts else parts + ['Linux'])
+
+
 def check_regex(tree, regex, platform, where):
     if regex is None or PLACEHOLDER.search(regex):
         return []
@@ -276,7 +305,7 @@ def check_regex(tree, regex, platform, where):
         compiled = re.compile(regex)
     except re.error as error:
         return ['%s: the regex %r does not compile: %s' % (where, regex, error)]
-    if tree.tests is None or (platform and platform != tree.platform):
+    if tree.tests is None or not applies(tree, platform):
         return []
     if not any(compiled.search(name) for name in tree.tests):
         return ['%s: no test of this tree matches %r' % (where, regex)]
@@ -318,7 +347,7 @@ def check_lane(tree, words, platform, where):
             return ['%s: wsl-lane.sh %s needs a configure preset, not %r'
                     % (where, words[1], words[2] if len(words) > 2 else '')]
         if words[1] == 'test':
-            problems += check_regex(tree, ctest_regex(words[3:]), platform or 'Linux', where)
+            problems += check_regex(tree, ctest_regex(words[3:]), with_linux(platform), where)
     return problems
 
 
@@ -356,8 +385,7 @@ def check_executable(tree, words, platform, where):
     # A binary directory follows the add_subdirectory layout, not the source path (tests/foundation/jobs builds into
     # tests/jobs), and is the same in every tree of a platform; the program itself may not be built (EXCLUDE_FROM_ALL).
     directory = '/'.join(parts[2:-1])
-    applies = platform is None or platform == tree.platform
-    if tree.build is not None and applies and not (tree.build / directory).is_dir():
+    if tree.build is not None and applies(tree, platform) and not (tree.build / directory).is_dir():
         return ['%s: the configured tree has no directory %s for %s' % (where, directory, parts[-1])]
     if stem == 'ceridc':
         return check_ceridc(tree, ['ceridc'] + words[1:], where)
@@ -396,7 +424,7 @@ def check_command(tree, command, platform, where):
             if rest[:1] != ['--cd'] or len(rest) < 4 or rest[2:4] != ['-e', 'bash']:
                 return ['%s: run a lane as wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh ...' % where]
             rest = rest[4:]
-        return check_lane(tree, rest, platform or 'Linux', where) if rest else ['%s: bash without a script' % where]
+        return check_lane(tree, rest, with_linux(platform), where) if rest else ['%s: bash without a script' % where]
     if first == 'cmd':
         if words[1:2] != ['/c'] or len(words) < 3:
             return ['%s: cmd runs as cmd /c scripts\\<file>.bat' % where]
@@ -516,6 +544,8 @@ def check(tree, text, design_text):
         problems += ['%s: unknown row %r' % (where, field) for field in sorted(present - set(FIELDS))]
         for field, platform, value in rows:
             at = '%s %s%s' % (where, field, ' (%s)' % platform if platform else '')
+            problems += ['%s: unknown qualifier %r (a platform, %s)' % (at, part, ' or '.join(sorted(BUILD_PROPERTIES)))
+                         for part in qualifiers_of(platform) if part not in PLATFORMS + tuple(BUILD_PROPERTIES)]
             spans = code_spans(value)
             if field in COMMAND_FIELDS:
                 if not spans:
@@ -544,6 +574,17 @@ def check(tree, text, design_text):
     problems += ['%s is listed without an entry but is not a DIAG child' % child
                  for child in sorted(set(exempt) - children)]
     return problems
+
+
+def build_properties(build):
+    """The BUILD_PROPERTIES a configured tree compiles in, from its CMakeCache.txt (ON, TRUE, YES, Y or 1)."""
+    cache = (Path(build) / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace')
+    found = set()
+    for name, variable in BUILD_PROPERTIES.items():
+        match = re.search(r'^%s(?::[A-Z]+)?=(.*)$' % re.escape(variable), cache, re.MULTILINE)
+        if match and match[1].strip().upper() in ('ON', 'TRUE', 'YES', 'Y', '1'):
+            found.add(name)
+    return found
 
 
 def tree_tests(build, config=None):
@@ -578,12 +619,14 @@ def main(argv=None):
             print('ERROR: %s is not a configured tree with tests' % build)
             return 2
         tests = tree_tests(build, args.config)
-    tree = Tree(tests=tests, build=Path(os.path.expanduser(args.build)) if args.build else None)
+    build = Path(os.path.expanduser(args.build)) if args.build else None
+    tree = Tree(tests=tests, build=build, properties=build_properties(build) if build else None)
     problems = check(tree, runbook.read_text(encoding='utf-8'), DESIGN.read_text(encoding='utf-8'))
     entries, exempt = parse(runbook.read_text(encoding='utf-8'))
     for problem in problems:
         print('ERROR: ' + problem)
-    scope = ('test references resolved against %d tests of %s (%s rows)' % (len(tests), args.build, tree.platform)
+    scope = ('test references resolved against %d tests of %s (%s rows)'
+             % (len(tests), args.build, ', '.join([tree.platform] + sorted(tree.properties)))
              if tests is not None else 'test references not resolved (--static)')
     print('diagnostic runbooks: %d entries, %d children without an entry; %s; %s'
           % (len(entries), len(exempt), scope, 'PASS' if not problems else 'FAIL: %d findings' % len(problems)))

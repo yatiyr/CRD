@@ -137,11 +137,27 @@ Not run, by design: `scripts\elevated-captures.bat` (elevated: the user's step),
 `sample-cpu-wpr.py --from-etl` (the 2026-10-07 trace is no longer on disk; its flags are checked), `fuzz.py minimize`
 on a `linux-clang-fuzz` tree (none configured here; its flags are checked).
 
+## Configurations: the second commit
+
+The first push resolved the runbooks against win-debug and linux-gcc-debug only, while the CTest runs on every Ninja
+lane. Read against the test lists of every lane of complete run 39174216672 (the job logs' `Test #n: <name>` lines),
+three references matched nothing on the lanes that compile a mode out: `^rt sentinel: ` (the RT sentinels are
+`CRD_ENABLE_ASSERTS` only: win-shipping, win-clang-cl-shipping, win-shipping-profile, win-release, linux-gcc-shipping,
+linux-gcc-release) and `^perfetto export: ` and `^CPROF ` (`CRD_PERF_ENABLED` only: the same lanes but
+win-shipping-profile). The guard reads row qualifiers that name a build property now, `(asserts)` and `(profiling)`,
+from the tree's `CMakeCache.txt`, alone or with a platform (`(Linux, asserts)`); an unknown qualifier fails; the three
+references sit in such rows. Simulated with each lane's preset properties through the guard's own `applies()`, all 20
+lanes' real test lists pass. Locally, win-debug, win-asan and a reconfigured win-shipping pass (the other local trees
+are partial or configured before the include-budget CTest existed: win-relwithdebinfo lists 212 tests, win-shipping's
+list lacked `crd-check-include-budget` until its reconfigure). A case holds the rule: a profiling row on a tree without
+profiling is not resolved, one with profiling and no such test fails, `(Linux, asserts)` needs both, and the cache
+reader reads `ON`/`OFF`. Tooth: `applies()` ignoring build properties fails that case; restored.
+
 ## Verification of the change
 
 The focused plan for this change is the full scope (a test CMake file and new tooling), so CI owns it; locally:
 win-debug reconfigured and `ctest -R "^crd-no-|^crd-check"` (12 tests with the new one) passes, and so do its 11 on
-linux-gcc-debug; `test-repository-tools.py` (104 cases, none skipped), `check-master-plan.py`, `check-repository.py`
+linux-gcc-debug; `test-repository-tools.py` (105 cases, none skipped), `check-master-plan.py`, `check-repository.py`
 and `check-ci-tiers.py` pass. No C++ changed, so tidy,
 clang-format and the Allman check have nothing to read.
 

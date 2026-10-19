@@ -24,7 +24,8 @@ Commands run from the checkout root. A tree is `build/<preset>`, configured with
 <preset>` on Windows; the Linux lanes build and test in WSL from the ext4 mirror through `scripts/wsl-lane.sh`
 ([build performance](build-performance.md#wsl-source-mirror)), called from Windows as `wsl.exe --cd <checkout> -e bash
 scripts/wsl-lane.sh ...`. `<angle brackets>` are placeholders. A row named `(Windows)` or `(Linux)` applies on that
-host only. A `ceridc` command means the tree's own binary (`build/win-debug/tools/ceridc/ceridc.exe`); its `diag` verb
+host only; one named `(asserts)` or `(profiling)` applies only to a configuration that compiles that in (the
+shipping and release presets compile both out, so their trees register none of those cases). A `ceridc` command means the tree's own binary (`build/win-debug/tools/ceridc/ceridc.exe`); its `diag` verb
 answers from a service in that ceridc process, so the evidence of a running application (its jobs, allocators, GPU
 contexts, flight recorder) is asked from that application's own service: crd-sandbox's diagnostic panel
 (`--diag`), or the MCP `diag` tool of `ceridc mcp --diag-host <profile>`. ceridc does not run the profiler, so its own
@@ -155,7 +156,8 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Command (Windows) | `cdb -pv -p <pid> -c "~*kP;q"` |
 | Artifact | Windows: `hang_<pid>_<tick>_<serial>_<attempt>.dmp`, a non-fatal live dump with the wait evidence; a flight bundle whose trigger carries the classified kind (`WaitCycle`, starvation, livelock); `jobs.waits` items. |
 | Read | The wait graph's edges (which task waits on whose counter) and each worker's responsiveness; a snapshot that a stuck worker cannot answer is reported incomplete and names the task. A completed but unwaited counter is not a hang. |
-| Next test | `ctest --test-dir build/win-debug -R "^hang watchdog: "`; `ctest --test-dir build/win-debug -R "^diag harness: a seeded wait-cycle deadlock"`; `ctest --test-dir build/win-debug -R "^(livelock|starvation)"`; `ctest --test-dir build/win-debug -R "^worker snapshot: "`; `ctest --test-dir build/win-debug -R "^rt sentinel: "` |
+| Next test | `ctest --test-dir build/win-debug -R "^hang watchdog: "`; `ctest --test-dir build/win-debug -R "^diag harness: a seeded wait-cycle deadlock"`; `ctest --test-dir build/win-debug -R "^(livelock|starvation)"`; `ctest --test-dir build/win-debug -R "^worker snapshot: "` |
+| Next test (asserts) | `ctest --test-dir build/win-debug -R "^rt sentinel: "` |
 | Hosted | Every lane; linux-clang-tsan runs the same cases under the race detector. |
 | Adopt | `watchdog_period_ms = 250` in the host profile; `crd::RtScope(...)` around a callback that must neither allocate nor block. |
 | Example | `tests/foundation/jobs/test_diag_deadlock_specimen.cpp`; `assets/diag/host_investigate.host.toml` |
@@ -307,7 +309,8 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Command (Windows) | `python scripts/sample-cpu-wpr.py --from-etl <trace.etl>`; `scripts\elevated-captures.bat` |
 | Artifact | A CPROF capture `<name>.cprof` that `capture.stop` writes under the root; its Perfetto trace-events JSON; an overhead board record `cerid-diag-overhead/1`; a WPR trace under `build/diag-overhead-wpr/`. |
 | Read | Scopes, tasks, GPU passes and queue waits on their own tracks; an unscoped hotspot shows only in the sampled stacks. A board's interval decides: within, over, or unresolved (a loss, never a pass). |
-| Next test | `ctest --test-dir build/win-debug -R "^crd-diag-overhead-"`; `ctest --test-dir build/win-debug -R "^perfetto export: "`; `ctest --test-dir build/win-debug -R "^CPROF "`; `ctest --test-dir build/win-debug -R "^pacing is not"`; `ctest --test-dir build/win-debug -R "^crd-diag-(cpu|overhead)-sampling-runbook$"` |
+| Next test (profiling) | `ctest --test-dir build/win-debug -R "^perfetto export: "`; `ctest --test-dir build/win-debug -R "^CPROF "` |
+| Next test | `ctest --test-dir build/win-debug -R "^crd-diag-overhead-"`; `ctest --test-dir build/win-debug -R "^pacing is not"`; `ctest --test-dir build/win-debug -R "^crd-diag-(cpu|overhead)-sampling-runbook$"` |
 | Hosted | Every lane runs the overhead harness's structural CTests and the sampling verdict tests; the measured boards are local. |
 | Adopt | A site is `CRD_FLIGHT_RECORD(<recorder>, <code>, <severity>, <message>, <a>, <b>)`, whose payload runs only when the event is kept; a scope is `CRD_PERF_SCOPE(<name>)`. |
 | Example | `tests/support/diag-overhead/main.cpp`; `assets/diag/overhead_basic.flight.toml` |
@@ -406,8 +409,10 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 
 `python scripts/check-diag-runbooks.py --build build/win-debug` holds every entry to the tree: each command's script,
 flags, lane command, preset, `ceridc` verb, diag command, grant and test executable exist; each `ctest ... -R` (and
-`wsl-lane.sh test ... -R`) regex matches a test the configured tree registers, on rows that apply to the host; each
-artifact is something the sources write, each example an existing path, each cost a link; every DIAG child is an
-entry's owner or listed above; nothing publishes. The `crd-check-diag-runbooks` CTest runs it on every Ninja lane with
-that lane's tree, so the Windows lanes resolve the Windows rows and the Linux lanes the Linux rows; `--static` checks
-everything but the test references. Its cases are in `scripts/test-repository-tools.py` (`DiagRunbooks`).
+`wsl-lane.sh test ... -R`) regex matches a test the configured tree registers, and each named executable's binary
+directory exists in it, on the rows whose qualifier holds for the tree (its platform, and the asserts or profiling its
+`CMakeCache.txt` compiles in); each artifact is something the sources write, each example an existing path, each cost
+a link; every DIAG child is an entry's owner or listed above; nothing publishes. The `crd-check-diag-runbooks` CTest
+runs it on every Ninja lane with that lane's tree, so the Windows lanes resolve the Windows rows, the Linux lanes the
+Linux rows, and the shipping and release lanes leave the `(asserts)` and `(profiling)` rows to the lanes that build
+them; `--static` checks everything but the test references. Its cases are in `scripts/test-repository-tools.py` (`DiagRunbooks`).

@@ -3371,6 +3371,37 @@ class DiagRunbooks(unittest.TestCase):
             linux = runbooks.Tree(tests=['alpha: one', 'linux only: two'], platform='Linux', build=Path(temp) / 'x')
             self.assertEqual([], runbooks.check(linux, program, design), 'a Windows row is not resolved on Linux')
 
+    def test_build_qualified_rows_resolve_only_where_the_configuration_compiles_them_in(self):
+        # The shipping and release lanes compile asserts and profiling out, and register none of those modes' cases.
+        design = '## DIAG.1a — x\n'
+        entry = ('<a id="rb-x"></a>\n### X\n\n| Field | Value |\n|---|---|\n| Symptom | s |\n'
+                 '| Command | `python scripts/dev.py plan --build build/win-debug` |\n| Artifact | a |\n| Read | r |\n'
+                 '| Next test | `ctest --test-dir build/win-debug -R "^alpha: "` |\n'
+                 '| Next test (profiling) | `ctest --test-dir build/win-debug -R "^profiled: "` |\n'
+                 '| Next test (Linux, asserts) | `ctest --test-dir build/win-debug -R "^asserted: "` |\n'
+                 '| Hosted | h |\n| Adopt | `crd_discover_tests(<target>)` |\n'
+                 '| Example | `scripts/dev.py` |\n| Cost | [c](ci-tiers.md) |\n| Owner | DIAG.1a |\n')
+        shipping = runbooks.Tree(tests=['alpha: one'], platform='Linux', properties=set())
+        self.assertEqual([], runbooks.check(shipping, entry, design))
+        profiled = runbooks.Tree(tests=['alpha: one'], platform='Linux', properties={'profiling'})
+        problems = runbooks.check(profiled, entry, design)
+        self.assertEqual(1, len(problems), problems)
+        self.assertIn("no test of this tree matches '^profiled: '", problems[0])
+        debug = runbooks.Tree(tests=['alpha: one', 'profiled: a', 'asserted: b'], platform='Linux',
+                              properties={'asserts', 'profiling'})
+        self.assertEqual([], runbooks.check(debug, entry, design))
+        windows = runbooks.Tree(tests=['alpha: one', 'profiled: a'], platform='Windows',
+                                properties={'asserts', 'profiling'})
+        self.assertEqual([], runbooks.check(windows, entry, design), 'a (Linux, asserts) row needs both')
+        problems = runbooks.check(debug, entry.replace('(Linux, asserts)', '(Linux, gpu)'), design)
+        self.assertTrue(any("unknown qualifier 'gpu'" in p for p in problems), problems)
+        with tempfile.TemporaryDirectory() as temp:
+            (Path(temp) / 'CMakeCache.txt').write_text('CRD_ENABLE_ASSERTS:BOOL=OFF\nCRD_ENABLE_PROFILING:BOOL=ON\n',
+                                                       encoding='utf-8')
+            self.assertEqual({'profiling'}, runbooks.build_properties(temp))
+            (Path(temp) / 'CMakeCache.txt').write_text('CRD_ENABLE_ASSERTS:BOOL=ON\n', encoding='utf-8')
+            self.assertEqual({'asserts'}, runbooks.build_properties(temp))
+
     def test_main_needs_a_mode_and_a_usable_tree(self):
         with patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as stop:
             runbooks.main([])
