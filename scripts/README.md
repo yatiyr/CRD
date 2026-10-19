@@ -111,6 +111,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   samples the same workloads with WPR, every arm a process of one trace; `analyze <run dir>` (no elevation) counts each
   process's CPU samples and the share in the diagnostic frames, and judges whether a mode's measured cost is
   explained by them (`test-sample-overhead-wpr.py`, a CTest and repository CI step, mocks wpr and xperf).
+- Investigation runbooks ([document](../docs/design/diagnostic-runbooks.md)): `check-diag-runbooks.py --build <tree>`
+  (the `crd-check-diag-runbooks` CTest) holds every entry to the tree: each command's script, flags, lane command,
+  `ceridc` verb, diag command and grant, test executable and CMake name exist; each test regex matches a test of the
+  tree on the rows for its host; artifacts, examples and costs resolve; every DIAG child owns an entry or is listed;
+  nothing publishes. `--static` checks all but the test references; its cases are in `test-repository-tools.py`.
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.

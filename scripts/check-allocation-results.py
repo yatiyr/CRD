@@ -19,6 +19,7 @@ runtime/ and sandbox/ and reports every raw allocation whose result is not check
 
 Comment lines are skipped. A tree with no allocation call at all is a failure: nothing would have been checked.
 """
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -174,7 +175,12 @@ def check(root):
 
 
 def main(argv):
-    root = Path(argv[1]) if len(argv) > 1 else Path(__file__).resolve().parents[1]
+    # argv[0] is the program name, as in sys.argv. argparse, so `--help` prints the usage instead of being read as a
+    # repository root with no allocation call in it.
+    parser = argparse.ArgumentParser(prog='check-allocation-results.py', description=__doc__.splitlines()[0])
+    parser.add_argument('root', nargs='?', default=str(Path(__file__).resolve().parents[1]),
+                        help='the repository root (default: this checkout)')
+    root = Path(parser.parse_args(argv[1:]).root)
     seen, problems = check(root)
     if seen == 0:
         print(f'check-allocation-results: no allocation call under {root}; nothing was checked')

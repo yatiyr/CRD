@@ -13,6 +13,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | Reference | Purpose |
 |---|---|
 | [Runtime diagnostics](runtime-diagnostics.md) | DIAG source owners, allocator/race/crash/trace/replay implementation contracts and detector acceptance |
+| [Diagnostic runbooks](diagnostic-runbooks.md) | From a symptom to its command, artifact and discriminating test; adoption and cost per capability; held to the tree by a guard |
 | [Developer workflow](developer-workflow.md) | Conservative affected-target/CTest planning, scoped frontend and exact content evidence |
 | [Visual Studio configurations](visual-studio-configurations.md) | Full CMake preset selector, eight native MSVC profiles and configuration-aware synchronization gates |
 | [Project structure synchronization](project-structure-sync.md) | Transaction, IDE/CMake round-trip, conflict/recovery and physical path migration contract |

@@ -105,6 +105,9 @@ allocation_results_spec = importlib.util.spec_from_file_location('check_allocati
                                                                  ROOT / 'scripts/check-allocation-results.py')
 allocation_results = importlib.util.module_from_spec(allocation_results_spec)
 allocation_results_spec.loader.exec_module(allocation_results)
+runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
+runbooks = importlib.util.module_from_spec(runbooks_spec)
+runbooks_spec.loader.exec_module(runbooks)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -642,12 +645,44 @@ class CiTiers(unittest.TestCase):
             for key in keys:
                 self.assertIn('%s: ${{ steps.tier.outputs.%s }}' % (key, key), self.workflow) if key != 'reason' else None
 
-    def test_real_build_system_revisions_resolve_to_the_complete_tier(self):
-        known = subprocess.run(['git', 'cat-file', '-e', '18651d5^{commit}'], cwd=str(ROOT), capture_output=True)
-        if known.returncode != 0:
-            self.skipTest('revision 18651d5 is not in this clone')
-        record = ci_tier.resolve(self.tiers, 'push', 'a0419cf', '18651d5')
-        self.assertEqual(record['tier'], 'complete', record['reason'])
+    def test_real_git_ranges_resolve_through_their_diff(self):
+        # A repository of its own, so the case runs in every clone: the hosted checkout is one commit deep, and the
+        # former case (a0419cf..18651d5 of this history) skipped on every hosted run. The reason must name the class
+        # the diff found; the resolver's conservative fallback also says "complete", so the tier alone proves nothing.
+        with tempfile.TemporaryDirectory() as temp:
+            repo = Path(temp)
+
+            def git(*arguments):
+                completed = subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c',
+                                            'commit.gpgsign=false', *arguments], cwd=str(repo), capture_output=True,
+                                           text=True, check=False)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                return completed.stdout.strip()
+
+            git('init', '-q')
+            (repo / 'docs').mkdir()
+            (repo / 'docs/ROADMAP.md').write_text('a\n', encoding='utf-8')
+            git('add', '.')
+            git('commit', '-q', '-m', 'base')
+            base = git('rev-parse', 'HEAD')
+            (repo / 'docs/ROADMAP.md').write_text('b\n', encoding='utf-8')
+            git('commit', '-q', '-am', 'docs')
+            documentation = git('rev-parse', 'HEAD')
+            (repo / 'CMakeLists.txt').write_text('project(x)\n', encoding='utf-8')
+            git('add', '.')
+            git('commit', '-q', '-m', 'build')
+            build = git('rev-parse', 'HEAD')
+
+            self.assertEqual(ci_tier.changed_paths(base, documentation, repo=repo), ['docs/ROADMAP.md'])
+            docs = ci_tier.resolve(self.tiers, 'push', base, documentation,
+                                   paths=ci_tier.changed_paths(base, documentation, repo=repo))
+            self.assertEqual(docs['tier'], 'preflight', docs['reason'])
+            paths = ci_tier.changed_paths(base, build, repo=repo)
+            self.assertEqual(sorted(paths), ['CMakeLists.txt', 'docs/ROADMAP.md'])
+            record = ci_tier.resolve(self.tiers, 'push', base, build, paths=paths)
+            self.assertEqual(record['tier'], 'complete', record['reason'])
+            self.assertIn('build-system', record['reason'])
+            self.assertIsNone(ci_tier.changed_paths(base, 'f' * 40, repo=repo), 'an unknown head is not a diff')
 
     def test_required_result_needs_preflight_and_every_expected_job(self):
         ok = {'preflight': {'result': 'success'}, 'repository': {'result': 'success'}, 'windows': {'result': 'success'},
@@ -1655,6 +1690,39 @@ class BuildPerformance(unittest.TestCase):
         self.assertEqual(len(library), 1)
         self.assertIn('Catch2.dir/Unity/unity_0_cxx.cxx', library[0]['flags_of'])
         self.assertIn('chrono', library[0]['forbid'])
+
+    def test_include_budget_exits_nonzero_unless_every_entry_is_within(self):
+        # The guard's exit, not only its verdict: an entry it could not check (no unit to borrow, a probe that did not
+        # compile, as on the clang-cl lanes before 471109f6) fails the CTest exactly like a forbidden header.
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp) / 'build'
+            build.mkdir()
+            unit = {'directory': str(build), 'file': '/src/tests/foundation/containers/test_containers.cpp',
+                    'arguments': ['g++', '-c', '/src/tests/foundation/containers/test_containers.cpp']}
+            (build / 'compile_commands.json').write_text(json.dumps([unit]), encoding='utf-8')
+            registry = Path(temp) / 'budget.json'
+            registry.write_text(json.dumps({'schema': include_budget.SCHEMA, 'entries': [
+                {'include': 'crd/x.hpp', 'flags_of': 'absent/test_x.cpp', 'forbid': ['chrono'], 'why': 'x'}]}),
+                encoding='utf-8')
+            arguments = ['--build', str(build), '--registry', str(registry), '--scratch', str(Path(temp) / 'probes')]
+
+            def run(verdicts=None):
+                out = io.StringIO()
+                fake = None if verdicts is None else (
+                    lambda build, registry, scratch, **_: [(entry, verdicts, 'x') for entry in registry['entries']])
+                with patch.object(include_budget, 'msvc_environment', return_value=None), \
+                        patch.object(include_budget, 'check', fake or include_budget.check), \
+                        patch('sys.stdout', out):
+                    return include_budget.main(arguments), out.getvalue()
+
+            code, text = run()
+            self.assertEqual(code, 1, text)
+            self.assertIn('UNCHECKED', text)
+            self.assertIn('absent/test_x.cpp is not in', text)
+            self.assertIn('include budget: 0 of 1 headers within', text)
+            self.assertEqual(run('unchecked')[0], 1, 'a probe that did not compile fails the guard')
+            self.assertEqual(run('over')[0], 1)
+            self.assertEqual(run('within')[0], 0, 'the same registry passes once every entry is within')
 
     def test_clang_build_analyzer_installer_builds_the_verified_source_and_checks_the_version(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -3182,6 +3250,137 @@ class AllocationResults(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as out:
                 self.assertEqual(0, allocation_results.main(['check', str(root)]))
             self.assertIn('1 allocation calls, every result checked or passed up', out.getvalue())
+        # --help prints the usage; it was read as a repository root with nothing in it (exit 1).
+        with patch('sys.stdout', new_callable=io.StringIO) as out, self.assertRaises(SystemExit) as stop:
+            allocation_results.main(['check', '--help'])
+        self.assertEqual(stop.exception.code, 0)
+        self.assertIn('repository root', out.getvalue())
+
+
+class DiagRunbooks(unittest.TestCase):
+    """DIAG.11b clause (10): scripts/check-diag-runbooks.py holds docs/design/diagnostic-runbooks.md to the tree."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = runbooks.RUNBOOK.read_text(encoding='utf-8')
+        cls.design = runbooks.DESIGN.read_text(encoding='utf-8')
+        cls.tree = runbooks.Tree()
+
+    def problems(self, text, tree=None, design=None):
+        return runbooks.check(tree or self.tree, text, design or self.design)
+
+    def mutated(self, old, new):
+        self.assertEqual(self.text.count(old), 1, old)
+        return self.text.replace(old, new)
+
+    def test_the_committed_runbook_passes_and_covers_every_child(self):
+        self.assertEqual([], self.problems(self.text))
+        entries, exempt = runbooks.parse(self.text)
+        self.assertGreaterEqual(len(entries), 19)
+        self.assertEqual(set(exempt), {'DIAG.11c', 'DIAG.12'})
+        owned = {child for _, _, _, rows in entries for field, _, value in rows if field == 'Owner'
+                 for child in runbooks.ID.findall(value)}
+        self.assertEqual(owned | set(exempt), set(runbooks.CHILD_HEADING.findall(self.design)))
+
+    def test_each_broken_reference_fails_with_its_reason(self):
+        cases = [
+            ('--build build/win-debug --json`', '--build build/win-debug --jsn`', 'does not take --jsn'),
+            ('`python scripts/fuzz.py replay', '`python scripts/fuzzz.py replay', 'no script scripts/fuzzz.py'),
+            ('`python scripts/diag-overhead.py run --help`', '`python scripts/diag-overhead.py rn`',
+             "has no subcommand 'rn'"),
+            ('--command jobs.waits`', '--command jobs.wait`', "registers no command 'jobs.wait'"),
+            ('`ceridc diag --command replay.prepare --path <program.ceir> --root <dir>`',
+             '`ceridc diag --command replay.prepare --path <program.ceir> --rooot <dir>`', 'does not take --rooot'),
+            ('--param breaks=<line>`', '--param brakes=<line>`', "no command takes the argument 'brakes'"),
+            ('scripts/wsl-lane.sh dev linux-clang-tsan', 'scripts/wsl-lane.sh deb linux-clang-tsan', "no command 'deb'"),
+            ('scripts/wsl-lane.sh dev linux-gcc-asan --build-timeout 3000` |\n| Artifact | The sanitizer',
+             'scripts/wsl-lane.sh dev linux-gcc-asn --build-timeout 3000` |\n| Artifact | The sanitizer',
+             'needs a configure preset'),
+            ('crd-jobs-schedcheck-tests.exe`', 'crd-jobs-schedcheck-testz.exe`', 'no CMake target builds'),
+            ('build-target.bat build\\win-debug crd-jobs-schedcheck-tests`',
+             'build-target.bat win-debug crd-jobs-schedcheck-tests`', 'build-target.bat build\\<preset> <target>'),
+            ('build-target.bat build\\win-debug crd-jobs-schedcheck-tests`',
+             'build-target.bat build\\win-debug crd-jobs-schedcheck-testz`', 'no CMake target crd-jobs-schedcheck-testz'),
+            ('`crd_diag_fatal_tests(', '`crd_diag_fatal_testz(', 'nothing defines crd_diag_fatal_testz'),
+            ('`tests/support/diag/specimens/leak_specimen.cpp`', '`tests/support/diag/specimens/leak.cpp`',
+             'no path tests/support/diag/specimens/leak.cpp'),
+            ('`cerid-diag-overhead/1`', '`cerid-diag-overhead/9`', 'no source declares the schema'),
+            ('| Owner | DIAG.10a |', '| Owner | DIAG.99 |', 'DIAG.99 is not a DIAG child'),
+            ('| Owner | DIAG.10a |', '| Owner | DIAG.10b |', 'DIAG.10a has no runbook entry'),
+            ('| DIAG.12 | The independent', '| DIAG.10a | x |\n| DIAG.12 | The independent',
+             'DIAG.10a is listed without an entry but owns one'),
+            ('| Cost | Measured: [overhead board](../bench/2026-10-16-diag-11b-overhead.md#verdicts). |',
+             '| Cost | Measured somewhere. |', 'names no measurement or owner'),
+            ('| Hosted | linux-clang-tsan. The', '| Hostd | linux-clang-tsan. The', 'no Hosted row'),
+            ('`python scripts/debugger-recipes.py --probe`', '`make crash`', 'not a command form the guard knows'),
+            ('`python scripts/debugger-recipes.py --probe`', '`python scripts/debugger-recipes.py --probe && x`',
+             'one command per code span'),
+        ]
+        for old, new, expected in cases:
+            problems = self.problems(self.mutated(old, new))
+            self.assertTrue(any(expected in p for p in problems), (new, expected, problems))
+
+    def test_publication_is_refused(self):
+        for command, expected in [('git push origin main', 'git push is not a read'),
+                                  ('git commit -m x', 'git commit is not a read'),
+                                  ('gh release create v1', 'gh release create is not a read'),
+                                  ('gh workflow run ci.yml', 'gh workflow run is not a read'),
+                                  ('gh gist create bundle.json', 'gh gist create is not a read'),
+                                  ('gh api -X POST repos/yatiyr/CRD/issues', 'gh api -X writes'),
+                                  ('gh api --method PATCH repos/yatiyr/CRD', 'gh api --method writes'),
+                                  ('ceridc diag --command bundle.inspect --grant read,upload', 'grants upload'),
+                                  ('ceridc mcp --diag-grant read,remote-enable', 'grants remote-enable'),
+                                  ('ceridc diag --command diag.commands --grant read,admin', "unknown authority")]:
+            problems = runbooks.check_command(self.tree, command, None, 'x')
+            self.assertTrue(any(expected in p for p in problems), (command, problems))
+        for command in ('gh run view 1 --json jobs', 'gh api repos/yatiyr/CRD/actions/jobs/1/logs', 'git log -1',
+                        'ceridc diag --command program.inspect --grant read,execute'):
+            self.assertEqual([], runbooks.check_command(self.tree, command, None, 'x'), command)
+
+    def test_test_references_resolve_on_the_rows_for_this_host(self):
+        design = '## DIAG.1a — x\n'
+        entry = ('<a id="rb-x"></a>\n### X\n\n| Field | Value |\n|---|---|\n| Symptom | s |\n'
+                 '| Command | `python scripts/dev.py plan --build build/win-debug` |\n| Artifact | a |\n| Read | r |\n'
+                 '| Next test | `ctest --test-dir build/win-debug -R "^alpha: "` |\n'
+                 '| Next test (Windows) | `ctest --test-dir build/win-debug -R "^windows only"` |\n'
+                 '| Next test (Linux) | `wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh test linux-gcc-debug '
+                 '-R "^linux only"`; `ctest --test-dir build/win-debug -R "<failing test>"` |\n'
+                 '| Hosted | h |\n| Adopt | `crd_discover_tests(<target>)` |\n'
+                 '| Example | `scripts/dev.py` |\n| Cost | [c](ci-tiers.md) |\n| Owner | DIAG.1a |\n')
+        linux = runbooks.Tree(tests=['alpha: one', 'linux only: two'], platform='Linux')
+        self.assertEqual([], runbooks.check(linux, entry, design), 'Windows rows are not resolved on Linux')
+        windows = runbooks.Tree(tests=['alpha: one', 'windows only: three'], platform='Windows')
+        self.assertEqual([], runbooks.check(windows, entry, design), 'Linux rows are not resolved on Windows')
+        dead = runbooks.Tree(tests=['beta'], platform='Linux')
+        problems = runbooks.check(dead, entry, design)
+        self.assertTrue(any("no test of this tree matches '^alpha: '" in p for p in problems), problems)
+        self.assertTrue(any("no test of this tree matches '^linux only'" in p for p in problems), problems)
+        self.assertFalse(any('windows only' in p for p in problems), problems)
+        self.assertFalse(any('failing test' in p for p in problems), 'a placeholder regex is not resolved')
+        self.assertEqual([], runbooks.check(runbooks.Tree(), entry, design), 'static: nothing resolved')
+        # An executable's binary directory must exist in the configured tree of its host (the add_subdirectory
+        # layout: tests/foundation/jobs builds into tests/jobs); the program itself may be unbuilt.
+        program = entry.replace('| Artifact | a |', '| Command (Windows) | '
+                                '`build/win-debug/tests/jobs/crd-jobs-schedcheck-tests.exe` |\n| Artifact | a |')
+        with tempfile.TemporaryDirectory() as temp:
+            tree = runbooks.Tree(tests=['alpha: one', 'windows only: three'], platform='Windows', build=temp)
+            problems = runbooks.check(tree, program, design)
+            self.assertTrue(any('no directory tests/jobs' in p for p in problems), problems)
+            (Path(temp) / 'tests/jobs').mkdir(parents=True)
+            self.assertEqual([], runbooks.check(tree, program, design))
+            linux = runbooks.Tree(tests=['alpha: one', 'linux only: two'], platform='Linux', build=Path(temp) / 'x')
+            self.assertEqual([], runbooks.check(linux, program, design), 'a Windows row is not resolved on Linux')
+
+    def test_main_needs_a_mode_and_a_usable_tree(self):
+        with patch('sys.stderr', new_callable=io.StringIO), self.assertRaises(SystemExit) as stop:
+            runbooks.main([])
+        self.assertEqual(stop.exception.code, 2)
+        with tempfile.TemporaryDirectory() as temp, patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.assertEqual(runbooks.main(['--build', temp]), 2)
+        self.assertIn('not a configured tree', out.getvalue())
+        with patch('sys.stdout', new_callable=io.StringIO) as out:
+            self.assertEqual(runbooks.main(['--static']), 0, out.getvalue())
+        self.assertIn('test references not resolved (--static); PASS', out.getvalue())
 
 
 class AllmanBraces(unittest.TestCase):

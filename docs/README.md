@@ -16,6 +16,7 @@ Every human/agent starts at [START_HERE](../START_HERE.md). [Context](../context
 | Architecture and ownership | [PRINCIPLES](PRINCIPLES.md), then the row's ADR |
 | Bug diagnosis and evidence standard | [SANITY](SANITY.md) |
 | Runtime diagnostics, allocator/race/crash/capture implementation | [DIAG contract](design/runtime-diagnostics.md) |
+| A failure to investigate: symptom, command, artifact, next test | [Diagnostic runbooks](design/diagnostic-runbooks.md) |
 | Third-party defects and the registered-failure gate | [Register](third-party-defects.md) |
 | Build/test/tidy commands | [BUILDING](BUILDING.md); style in [CODING](CODING.md) |
 | Full renderer/UI/editor scope | [Execution contract](design/renderer-ui-execution-contract.md), [catalogue](design/rendering-ui-contracts.md) |

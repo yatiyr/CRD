@@ -156,3 +156,18 @@ microbenchmark (`events`) reports each mode's per-site cost instead. The disable
 binary's off mode against a binary built with profiling compiled out (`win-shipping-profile` against `win-shipping`);
 Linux has no such preset pair yet. The first boards violate the disabled and basic budgets on allocation-heavy frames;
 the repairs are open on DIAG.11b.
+
+### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
+
+The contract's "symptom→command→artifact→next discriminating test and human-only publication" is
+[docs/design/diagnostic-runbooks.md](../design/diagnostic-runbooks.md): one entry per symptom, each a table of fixed
+fields (Symptom, Command, Artifact, Read, Next test, Hosted, Adopt, Example, Cost, Owner), entered from what is seen,
+not from a tool. The entries are data a guard reads, not prose: `scripts/check-diag-runbooks.py` (the
+`crd-check-diag-runbooks` CTest, run with each Ninja lane's tree) fails a command whose script, flag, lane command,
+preset, `ceridc` verb, diag command, grant, executable or CMake name does not exist, a test regex that matches no test
+the tree registers (rows marked `(Windows)` or `(Linux)` resolve on that host only), an artifact the sources never
+write, an example path that is gone, a cost without a link to its measurement or its owning clause, and a DIAG child
+that owns no entry and is not listed with its reason. Publication stays the user's: a runbook command may read hosted
+evidence but never commits, pushes, releases, opens an issue or pull request, dispatches a workflow, writes through
+`gh api` or grants the service's `upload` or `remote-enable` class. Each capability's Adopt row is the one step that
+switches it on for a new module, test or application, so the renderer and execution rows ahead inherit them.

@@ -70,6 +70,19 @@ set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT
 add_test(NAME crd-check-allocation-results
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-allocation-results.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
+# command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
+# is one this tree registers (it lists them with ctest --show-only); nothing publishes.
+get_property(_crd_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_crd_multi_config)
+    set(_crd_runbook_config --config "$<CONFIG>")
+else()
+    set(_crd_runbook_config "")
+endif()
+add_test(NAME crd-check-diag-runbooks
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-diag-runbooks.py" --build "${CMAKE_BINARY_DIR}"
+            ${_crd_runbook_config})
+set_tests_properties(crd-check-diag-runbooks PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 if(CMAKE_GENERATOR MATCHES "^Visual Studio")
     add_test(NAME crd-project-structure-native
         COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/test-project-sync-native.py"

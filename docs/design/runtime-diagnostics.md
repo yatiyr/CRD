@@ -2777,10 +2777,17 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   frame against a CPU-per-frame budget). Not measured: the Linux disabled arm (no preset differs from a profiling build
   only in profiling). Reported: full mode, with two open mechanisms against "no blocking or global locking", the
   recorder-wide ring mutex per kept event and the CEIR bridge's per-instruction timing.
+- The focused local plan (2026-10-19, [contract](developer-workflow.md#risk-routes)): `dev.py plan` selects the
+  affected targets and tests and prints each risk gate's route, the local commands and the hosted lanes.
+- The investigation runbooks (2026-10-19, [runbooks](diagnostic-runbooks.md), ADR-0133 ID-6): one entry per symptom
+  (symptom, command, artifact, read, next discriminating test, hosted lanes, the one adoption step, a working example,
+  the cost, the owning children), human-only publication stated and refused, and every entry held to the tree by
+  `crd-check-diag-runbooks` on every Ninja lane; every child owns an entry except DIAG.11c and DIAG.12, listed there.
 - Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
-  specimens and mode activation; the focused local plan's risk route; the hosted sanitizer, race, corpus and
-  negative-control audit and the fuzz and soak cadence; the investigation runbooks.
+  specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost
+  of the modes that are separate binaries or targeted (sanitizers, device validation, the controlled-interleaving
+  twin), and the fuzz and soak cadence.
 
 <a id="diag-11c"></a>
 ## DIAG.11c — native qualification and portable capability boundary
