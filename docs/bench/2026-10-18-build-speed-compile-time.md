@@ -67,8 +67,9 @@ two registered Catch2 patches (the assertion path no longer reaches `<chrono>`),
 teeth cycle (`teeth-break` edits `crd/memory/construct.hpp`, which about 1,750 edges depend on, and rebuilds;
 `teeth-restore` writes it back and rebuilds: the edit of a widely included header, the loop's common case). The
 before arm checks out `d71be8d6`'s version of every build input the cuts changed (the files the cuts added stay and are
-unused); arms interleaved A B B A, so a steady load reaches both. Host: a digital audio workstation and a browser
-used 3.1-4.4 cores on Windows throughout (recorded by each board; nothing else heavy), 24-33 GiB of 63.7 available.
+unused); arms interleaved A B B A (win-debug: then B A), so a steady load reaches both. Host: a digital audio
+workstation and a browser used 2.5-5.9 cores on Windows throughout (recorded by each board; nothing else heavy),
+24-34 GiB of 63.7 available.
 
 win-debug, PCH off (the local and hosted cached trees' shape), MSVC 19.51, uncached:
 
@@ -78,13 +79,18 @@ win-debug, PCH off (the local and hosted cached trees' shape), MSVC 19.51, uncac
 | before, round 1 | 00:24 | 29.9 s | 198.3 s | 161.8 s | failed at a link (below) |
 | before, round 2 | 00:31 | 29.8 s | 208.1 s | 160.8 s | 165.1 s |
 | after, round 2 | 00:41 | 53.1 s | 163.5 s | 131.5 s | 130.7 s |
+| before, round 3 | 04:41 | 36.0 s | 189.4 s | 156.3 s | 169.6 s |
+| after, round 3 | 04:51 | 29.3 s | 163.3 s | 132.2 s | 133.1 s |
 
-The cold build is 21 % shorter (198-208 s → 157-164 s) and a header edit's rebuild 20-22 % (161-165 s → 125-132 s).
-Loss: none measured; the second after configure took 53 s against 30 s (the cuts change nothing CMake does; a
-configure-time outlier, reported). The before arm's first teeth-restore stopped at `LNK1103` ("debugging information
-corrupt") in `crd-memory.lib(malloc_allocator.cpp.obj)` while linking `crd-ceir-fatal-specimen.exe`: a fault of the
-linker or this host, not of a source (the same edit rebuilt and linked in round 2); per the host rule it was rerun,
-not chased.
+The cold build is a fifth shorter (189-208 s → 157-164 s, means 198.6 → 161.3 s, −19 %) and a header edit's rebuild
+too (teeth-break 156-162 s → 127-132 s, −18 %; teeth-restore 165-170 s → 125-133 s, −23 %). Loss: none measured; the
+second after configure took 53 s against 29-31 s (the cuts change nothing CMake does; a configure-time outlier,
+reported). The before arm's first teeth-restore stopped at `LNK1103` ("debugging information corrupt") in
+`crd-memory.lib(malloc_allocator.cpp.obj)` while linking `crd-ceir-fatal-specimen.exe`: a fault of the linker or
+this host, not of a source (the same edit rebuilt and linked in rounds 2 and 3); per the host rule it was rerun, not
+chased. Round 3 (2026-10-19, the same swap: before `d71be8d6`, after `3acdce76`, the state rounds 1 and 2 measured)
+supplies the missing before restore; the first attempt at its after arm stopped before building, when restoring the
+checkout met a file another process held open (`array.hpp`; retried and rerun).
 
 linux-gcc-debug from the ext4 mirror (`~/cerid-src`, the same before/after swap in the mirror, HEAD's files restored
 and checked afterwards), GCC 13.3, PCH on (the preset's default), the system linker, uncached, 16 jobs. WSL idle in

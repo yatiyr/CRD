@@ -19,6 +19,8 @@
   board (`gcc-asan-ld-b`) ran 5-7× slower in its cold and relink rows (its asset cook took 72 s instead of 11 s) while
   WSL itself reported no memory pressure and no swap. Every comparison below pairs arms measured in the same window,
   and the decisive whole-tree comparison is interleaved (arms rotated within each round) so a drift reaches every arm.
+  Every reported row of that window was measured again on 2026-10-19 under a light load
+  ([re-measured](#re-measured-2026-10-19)); the verdicts hold.
 - **Harness:** `scripts/build-bench.py run --preset <p> --jobs 16 --build-dir ~/bench-1018/<p>-c --rows … --tooth
   engine/foundation/memory/include/crd/memory/construct.hpp "return nullptr; // never placement-new into a refused
   allocation" "return static_cast<T*>(nullptr); // never placement-new into a refused allocation" --define
@@ -263,3 +265,100 @@ the build on it. Afterwards a lane build leaves its server on 4227 with the Linu
 server runs on 4226 with `build\sccache`, and a Windows client on the default port reaches the Windows server;
 with a silent listener holding 4226, `build-target.bat` exits 1 with "the sccache server did not start on
 D:\Dev\cerid\build\sccache (port 4226, exit 124)".
+
+<a id="re-measured-2026-10-19"></a>
+## Re-measured, 2026-10-19: the rows of the contended window
+
+Every board and the clang-tsan interleave that ran from 17:03 to 19:17 on 2026-10-18, while the image generator
+loaded the machine, ran again on 2026-10-19 between 02:05 and 04:36 local, with the same wrapper
+(`build/task-c/phase_b.sh`, after task B's `board.sh` and `relink-interleave.sh`), the same trees, warm caches,
+rows and tooth, from the mirror set to task B's sources (`591d4232`; `scripts/` at the then HEAD, so each board
+recorded the host; the mirror was restored and checked in full afterwards). Every board recorded the host: WSL idle;
+on Windows a digital audio workstation and a browser (2.6-5.5 cores) and, in bursts, another project's test
+programs (up to 5.3 cores more; 10.9-13.9 cores busy in the snapshots of four boards after 04:11); the falling
+Windows memory is the WSL VM's own page cache (`vmmemWSL` up to 27.8 GiB). Nothing at the scale of the
+2026-10-18 load (about four cores and 25 GB held throughout). The tables above are kept as measured.
+
+Whole tree at 16 jobs (teeth: break / restore, twice):
+
+| Board | Start | Linker | cold | relink-all | relink link-edge sum | teeth break | teeth restore | peak GiB |
+|---|---|---|---|---|---|---|---|---|
+| clang-tsan-ld | 02:05 | GNU ld | 26.2 | 10.7 | 135 s (cook 8.9 s) | 25.6 / 25.9 | 25.6 / 26.1 | 2.1 |
+| clang-tsan-mold | 02:09 | mold | 14.0 | 13.2 | 113 s (cook 11.7 s) | 26.9 / 26.3 | 35.2 / 26.2 | 3.8 |
+| clang-tsan-ld-again | 02:13 | GNU ld | 12.2 | 10.7 | 142 s (cook 9.4 s) | 25.9 / 26.4 | 26.0 / 26.2 | 2.3 |
+| clang-tsan-mold-t2 | 02:23 | mold, 2 threads | 10.6 | 8.5 | 37 s (cook 7.8 s) | 20.4 / 20.6 | 19.7 / 19.8 | 2.1 |
+| gcc-asan-ld-b | 02:27 | GNU ld | 19.4 | 15.9 | 209 s (cook 11.7 s) | 35.6 / 35.7 | 35.0 / 35.8 | 4.5 |
+| gcc-asan-mold-t2 | 02:32 | mold, 2 threads | 13.8 | 11.9 | 109 s (cook 10.3 s) | 29.1 / 29.9 | 31.2 / 28.2 | 7.0 |
+| gcc-asan-mold-b | 02:36 | mold | 19.4 | 17.4 | 237 s (cook 15.1 s) | 36.6 / 36.8 | 47.0 / 46.1 | 6.7 |
+
+Whole tree at 4 jobs:
+
+| Board | Start | Linker | cold | relink-all | relink link-edge sum | peak GiB |
+|---|---|---|---|---|---|---|
+| clang-tsan-ld-j4 | 02:17 | GNU ld | 29.4 | 23.3 | 91 s (cook 7.1 s) | 1.0 |
+| clang-tsan-mold-j4 | 02:20 | mold | 22.1 | 15.0 | 58 s (cook 10.2 s) | 1.5 |
+
+Interleaved whole-tree relink, linux-clang-tsan (03:54-04:11; arms rotated within each round):
+
+| Arm | Wall per round (s) | Link-edge sum per round (s) | Median wall | Median link sum | Links |
+|---|---|---|---|---|---|
+| GNU ld | 11.3 / 12.2 / 10.0 | 142.5 / 154.3 / 118.3 | 11.3 | 142.5 | 206 |
+| mold, full pool | 13.7 / 13.0 / 28.0 | 109.6 / 116.8 / 390.5 | 13.7 | 116.8 | 206 |
+| mold, 2 threads | 8.2 / 8.8 / 9.0 | 28.1 / 39.9 / 33.8 | 8.8 | 33.8 | 206 |
+| mold, 4 threads | 8.5 / 7.7 / 9.7 | 33.3 / 28.7 / 37.1 | 8.5 | 33.3 | 206 |
+
+Focused route, one program (`crd-ceir-tests`):
+
+| Board | Start | Linker | cold | source (edit, compile, link) | link (relink only) |
+|---|---|---|---|---|---|
+| gcc-debug-one-ld | 02:42 | GNU ld | 1.8 | 0.9 / 0.8 / 0.8 | 0.9 / 0.8 / 0.8 |
+| gcc-debug-one-mold | 02:44 | mold | 1.5 | 0.5 / 0.5 / 0.6 | 0.5 / 0.5 / 0.5 |
+| gcc-debug-one-ld-again | 02:46 | GNU ld | 1.8 | 0.9 / 0.8 / 0.9 | 0.7 / 0.8 / 0.8 |
+| gcc-asan-one-ld | 02:47 | GNU ld | 2.9 | 1.4 / 1.3 / 1.5 | 1.1 / 1.1 / 1.8 |
+| gcc-asan-one-mold | 02:50 | mold | 1.5 | 0.5 / 0.7 / 0.9 | 0.6 / 1.1 / 0.5 |
+| gcc-asan-one-mold-t2 | 02:52 | mold, 2 threads | 1.7 | 0.6 / 0.7 / 0.9 | 0.8 / 0.8 / 0.5 |
+| gcc-asan-one-ld-again | 02:55 | GNU ld | 3.2 | 1.3 / 1.5 / 1.5 | 1.4 / 1.4 / 1.7 |
+
+Split DWARF, linux-gcc-debug. Cache misses, each configuration on a fresh empty cache (task B's primes ran on the
+kept cache, so some of their units hit):
+
+| Board | Start | Configuration | cold (misses) | teeth break (misses) | teeth restore (hits) | peak GiB |
+|---|---|---|---|---|---|---|
+| gcc-debug-pchon-prime | 03:11 | PCH on, GNU ld | 215.2 (2,055) | 191.4 (1,412) | 25.2 | 13.7 |
+| gcc-debug-nopch-prime | 03:20 | PCH off, GNU ld | 327.2 (1,807) | 230.3 (1,412) | 29.8 | 13.6 |
+| gcc-debug-split-mold-prime | 03:33 | PCH off, `-gsplit-dwarf`, mold (full pool) | 258.4 (1,810) | 212.3 (1,415) | 29.8 | 13.4 |
+
+Warm, GNU ld, first in sequence (02:58-03:11) and then rotated PCH on, split, PCH off, PCH off, split, PCH on
+(04:11-04:36), because two PCH-on boards at 03:44-03:53 met a burst of the other load (teeth 30.2-48.2 s; kept in
+`build/bench-1018c`, not used):
+
+| Board | Start | Configuration | cold | relink-all | relink link-edge sum | teeth break | teeth restore |
+|---|---|---|---|---|---|---|---|
+| gcc-debug-split-mold | 02:58 | split, mold (full pool) | 10.8 | 7.9 | 117 s | 26.4 / 26.6 | 26.2 / 26.3 |
+| gcc-debug-split-ld | 03:02 | split | 8.2 | 6.1 | 89 s | 23.6 / 23.8 | 23.7 / 24.0 |
+| gcc-debug-nopch | 03:06 | PCH off | 9.3 | 7.1 | 103 s | 24.5 / 25.3 | 24.8 / 25.2 |
+| gcc-debug-pchon-ld-r1 | 04:11 | PCH on | 10.1 | 7.7 | 125 s | 25.6 / 25.8 | 25.6 / 26.2 |
+| gcc-debug-split-ld-r1 | 04:15 | split | 8.9 | 6.4 | 93 s | 25.4 / 43.6 | 25.1 / 29.8 |
+| gcc-debug-nopch-r1 | 04:19 | PCH off | 10.8 | 8.8 | 127 s | 35.9 / 26.5 | 32.4 / 25.8 |
+| gcc-debug-nopch-r2 | 04:23 | PCH off | 9.2 | 7.5 | 123 s | 25.9 / 27.5 | 26.2 / 28.2 |
+| gcc-debug-split-ld-r2 | 04:28 | split | 8.7 | 6.5 | 94 s | 48.5 / 24.9 | 25.1 / 25.5 |
+| gcc-debug-pchon-ld-r2 | 04:32 | PCH on | 9.6 | 7.4 | 106 s | 25.6 / 25.0 | 25.6 / 25.0 |
+
+What holds and what moved:
+- **Bounded mold: holds.** Teeth means at 16 jobs: clang-tsan 25.9 s on GNU ld, 20.1 s with two threads (−22 %),
+  28.7 s with the full pool (+10 %, where the contended boards gave +29 %); gcc-asan 35.5, 29.6 (−17 %) and 41.6 s
+  (+17 %, against +9 %). The interleaved clang-tsan relink: link sum 142.5 → 33.8 s (medians, a quarter; contended
+  125.5 → 25.6 s), wall 11.3 → 8.8 s; four threads tie two. The full pool's loss at 16 jobs is real in both windows;
+  its size moves with the load.
+- **At 4 jobs the default pool wins: holds** (clang-tsan relink-all 23.3 → 15.0 s, against 26.8 → 22.8 s).
+- **The focused route: holds.** mold relinks `crd-ceir-tests` in 0.5-0.6 s against 0.7-0.9 s on gcc-debug, and in
+  0.5-1.1 s (two threads 0.5-0.9 s) against 1.1-1.8 s on gcc-asan; the contended `gcc-asan-one-ld-again` (3.5 /
+  5.0 s source rows) measures 1.3-1.5 s now.
+- **The disturbed board: explained.** `gcc-asan-ld-b` builds cold in 19.4 s and relinks in 15.9 s (contended:
+  91.6 and 106.4 s), beside the uncontended gcc-asan-ld's 15.8 and 15.0 s.
+- **Split DWARF not kept: holds, with the warm gap measured.** Warm, interleaved, PCH on and split tie on the teeth
+  cycle (medians 25.6 and 25.5 s; split's two slow rows, 43.6 and 48.5 s, met the other load's bursts) and split
+  relinks the tree about 1 s faster (6.1-6.5 against 7.4-7.7 s, link sums 89-94 against 106-125 s); on a cache miss
+  the PCH it forces off costs more: a cold build of 258.4 s with split and 327.2 s with the PCH merely off, against
+  215.2 s with it on. PCH off without split is the slowest warm arm (median 27.0 s).
+

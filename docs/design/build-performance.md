@@ -128,8 +128,9 @@ and every hosted lane link with the toolchain's linker (2026-10-18, DIAG.11b bui
   the lane's job count (`CRD_LANE_JOBS`, 16): two on the 32-CPU host. mold's default pool is a thread per CPU for
   every link, and the 16 links of a parallel build then ran 512 threads on 32 CPUs and gained nothing over GNU ld
   (whole-tree relink and teeth rows equal or slower); bounded, the summed link time of a whole-tree relink fell to
-  about half of GNU ld's on linux-gcc-debug and linux-gcc-asan and a fifth on linux-clang-tsan, its wall time by
-  23-48 %, and a one-program relink stayed as fast as with the full pool (0.7-0.9 s against GNU ld's 1.1-1.5 s for
+  about half of GNU ld's on linux-gcc-debug and linux-gcc-asan and a fifth to a quarter on linux-clang-tsan, its wall
+  time by 22-48 % (the contended rows re-measured on 2026-10-19:
+  [board](../bench/2026-10-18-build-speed-linking.md#re-measured-2026-10-19)), and a one-program relink stayed as fast as with the full pool (0.7-0.9 s against GNU ld's 1.1-1.5 s for
   `crd-ceir-tests`). `CRD_MOLD=off` prints the reverse entries (the toolchain's linker again), `CRD_MOLD=<path>`
   names another binary and `CRD_MOLD_THREADS` another count. Converting a tree relinks every program once and
   recompiles nothing.

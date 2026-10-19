@@ -1634,7 +1634,9 @@ class BuildPerformance(unittest.TestCase):
 
     def test_clang_build_analyzer_installer_builds_the_verified_source_and_checks_the_version(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # The installer resolves its destination; a hosted runner's temporary directory is an 8.3 short name
+            # (C:/Users/RUNNER~1/...), which resolving expands, so the expectations start from the resolved path.
+            root = Path(temp).resolve()
             archive = root / 'ClangBuildAnalyzer-test.tar.gz'
             with tarfile.open(archive, 'w:gz') as package:
                 data = b'project(ClangBuildAnalyzer)\n'

@@ -142,6 +142,25 @@ sampler's own PowerShell counted) each fail it.
 The first snapshot of this batch (21:40) already refused: a game (2.0 cores, 4.5 GB), a digital audio workstation
 (1.4-1.7 cores) and a browser (1-3 cores) left 26.8-29.4 of 63.7 GB available and used 6.3 cores together.
 
+<a id="task-bs-contended-rows-re-measured"></a>
+### Task B's contended rows, re-measured (2026-10-19)
+
+Every reported board of the 17:03-19:17 window ran again between 02:05 and 04:36 on 2026-10-19 (22 boards and the
+clang-tsan interleave, then eight more for the split DWARF comparison; `build/task-c/phase_b.sh`: task B's wrapper, trees, warm caches, rows and tooth, the mirror at
+task B's sources `591d4232` with `scripts/` current so each board recorded the host, restored and checked in full
+afterwards). The load was light (a digital audio workstation and a browser, 2.6-5.5 Windows cores; WSL idle) with
+bursts of another project's test programs (up to 5.3 cores); two PCH-on warm boards met such a burst, so the split
+DWARF comparison ran again rotated (PCH on, split, PCH off, PCH off, split, PCH on). One slip, repaired: task B's
+`relink-interleave.sh` copies its result into `build/bench-1018b/`, so the re-run overwrote task B's clang-tsan
+interleave record there; it was restored from the WSL original (`~/bench-1018b`), and the re-run's copy is in
+`build/bench-1018c/`. Every verdict holds ([board](../bench/2026-10-18-build-speed-linking.md#re-measured-2026-10-19)):
+bounded mold −22 % (clang-tsan) and −17 % (gcc-asan) on the teeth cycle, the full pool +10 % and +17 % (the
+contended boards: +29 % and +9 %), the interleaved clang-tsan relink's link sum 142.5 → 33.8 s, the focused route
+0.5-0.9 s against 0.7-1.8 s, and the disturbed `gcc-asan-ld-b` at 19.4 s cold (contended 91.6 s). Split DWARF ties
+PCH on warm (teeth medians 25.5 and 25.6 s) and relinks 1 s faster, but a cold miss costs 258.4 s with it (PCH off)
+against 215.2 s with the PCH: not kept, as decided. The live linker numbers in
+[build performance](../design/build-performance.md#the-linker) and the mold lesson carry the re-measured range.
+
 ## The compile-time profile route
 
 - **C++ Build Insights.** `vcperf` 2.5 is in the VS 18 install (`VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64`), but
@@ -287,21 +306,22 @@ crd/math/simd/vec4f.hpp -> crd/math/simd/backend.hpp -> immintrin.h`). [Board](.
 
 The profiles rank; the boards time. `build-bench.py run` into fresh uncached trees (no launcher), 16 jobs, rows
 configure, cold and the teeth cycle on `crd/memory/construct.hpp` (about 1,750 edges), four boards per lane
-interleaved after, before, before, after. The before arm checks out `d71be8d6`'s version of every build input the
+interleaved after, before, before, after (on win-debug a third round, before then after, on 2026-10-19 at 04:41).
+The before arm checks out `d71be8d6`'s version of every build input the
 cuts changed (in the checkout for win-debug, in the ext4 mirror for linux-gcc-debug); HEAD's files
 were restored and checked after each lane. The host carried the same light load throughout (a digital audio
 workstation and a browser, 2.6-5.3 Windows cores; WSL idle), recorded by every board, nothing else heavy:
 
 | Lane | cold before → after | teeth-break before → after | teeth-restore before → after |
 |---|---|---|---|
-| win-debug, PCH off (MSVC) | 198-208 s → 157-164 s | 161-162 s → 127-132 s | 165 s → 125-131 s |
+| win-debug, PCH off (MSVC) | 189-208 s → 157-164 s | 156-162 s → 127-132 s | 165-170 s → 125-133 s |
 | linux-gcc-debug, PCH on (GCC) | 193-197 s → 151-157 s | 181-182 s → 139-141 s | 179-181 s → 139-172 s |
 
 A fifth of the cold build and of a widely included header's rebuild, on both compilers. Losses: none measured; one
 after configure on win-debug took 53 s against 30 s, one after teeth-restore on Linux 172 s against its own 141 s
 teeth-break (a slower window: its edge sum rose with the same edges), and the before arm's first win-debug restore
 stopped at `LNK1103` (corrupt debug information in a library member while linking one specimen; rebuilt and linked
-in round 2: a host or linker fault, rerun once and recorded, not chased). Tables:
+in rounds 2 and 3: a host or linker fault, rerun and recorded, not chased). Tables:
 [board](../bench/2026-10-18-build-speed-compile-time.md#timing-boards).
 
 <a id="the-focused-plans-risk-route"></a>
