@@ -402,8 +402,8 @@ Array<u8> build_capture(const SeedShape& shape, SeedLayout* layout = nullptr)
         fr.values[0].bits  = 12U + f;
         fr.values[1].bits  = 0x3FF8000000000000ULL; // 1.5
         fr.values[2].bits  = 250000U;
-        fr.allocators[0]._pad = 4U; // stamped name id 3 ("render") + 1
-        fr.allocators[1]._pad = 0U; // unset: the AllocatorMeta name
+        fr.allocators[0].stamps = 4U; // stamped name id 3 ("render") + 1
+        fr.allocators[1].stamps = 0U; // unset: the AllocatorMeta name
         std::memcpy(b.data() + l.frames + f * sizeof(FrameRecord), &fr, sizeof(fr));
     }
     if (correlation)

@@ -212,7 +212,7 @@ CaptureView::frame_allocator_name(crd::u32 frame_index, crd::u32 allocator_idx) 
         return "";
     }
     // DIAG.6a(d2): prefer the identity STAMPED into this record -- correct even after the slot was unregistered and
-    // reused -- and fall back to the live-at-save slot name for pre-(d2) records (_pad == 0).
+    // reused -- and fall back to the live-at-save slot name for pre-(d2) records (no name stamp).
     const NameId nid = allocator_record_name_id(frames[frame_index].allocators[allocator_idx]);
     if (nid.is_valid())
     {

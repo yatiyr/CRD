@@ -1,9 +1,10 @@
 // DIAG.6a(d2): allocator history labels survive slot reuse. `AllocatorMeta` / `allocator_info(slot)` resolve a name
 // from the LIVE slot, so a frame recorded before an unregister+reuse would show the NEW occupant's name (the
-// acceptance's "mislabelled history"). (d2) stamps the allocator's interned NameId into `AllocatorRecord::_pad`
-// (name_id + 1; 0 = unset) at each frame_mark, and `CaptureView::frame_allocator_name` prefers it -- so an older frame
+// acceptance's "mislabelled history"). (d2) stamps the allocator's interned NameId into the low half of
+// `AllocatorRecord::stamps` (then `_pad`; name_id + 1, 0 = unset) at each frame_mark, and
+// `CaptureView::frame_allocator_name` prefers it -- so an older frame
 // keeps the name the slot held THEN. Self-describing in the CPROF name blob; no format change (the 48 B pin holds, and
-// pre-(d2) captures with _pad == 0 fall back to the live slot name). Proof lanes: win-debug + win-asan.
+// pre-(d2) captures with no name stamp fall back to the live slot name). Proof lanes: win-debug + win-asan.
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/perf/capture.hpp>
 #include <crd/perf/capture_view.hpp>
@@ -62,8 +63,9 @@ TEST_CASE("history labels: an allocator record keeps its name after the slot is 
 TEST_CASE("history labels: a record with no stamped identity falls back to the live slot name",
           "[perf][diag][history]")
 {
-    // Saturate the NAME TABLE (not the arena) so the allocator's name cannot intern -> name_id invalid -> _pad stays 0,
-    // exercising the legacy/fallback path while the AllocatorMeta name (owned in the still-roomy arena) stays correct.
+    // Saturate the NAME TABLE (not the arena) so the allocator's name cannot intern -> name_id invalid -> no name
+    // stamp, exercising the legacy/fallback path while the AllocatorMeta name (owned in the still-roomy arena) stays
+    // correct.
     crd::perf::InitConfig cfg{};
     cfg.max_region_names = 2U;
     crd::perf::init(cfg);
@@ -91,7 +93,11 @@ TEST_CASE("history labels: a record with no stamped identity falls back to the l
     // The record's identity is unset (table was saturated at register time), so the reader falls back to the live-slot
     // name -- which is still correct for a slot that was never reused.
     const auto frames = view.frame_records();
-    CHECK(frames[0].allocators[slot]._pad == 0U); // no stamp -> fallback path is the one under test
+    // No name stamp -> the fallback path is the one under test. The coverage stamp is set (DIAG.11b): a growable
+    // TLSF keeps no counts of its own.
+    CHECK_FALSE(crd::perf::allocator_record_name_id(frames[0].allocators[slot]).is_valid());
+    CHECK(crd::perf::allocator_record_coverage(frames[0].allocators[slot]) ==
+          crd::memory::StatisticsCoverage::Elsewhere);
     // The fallback source is the live-at-save AllocatorMeta name (not the stamped path); pin that explicitly.
     CHECK(std::strcmp(view.allocator_info(slot).name, "alloc.fallback") == 0);
     CHECK(std::strcmp(view.frame_allocator_name(0U, slot), "alloc.fallback") == 0);

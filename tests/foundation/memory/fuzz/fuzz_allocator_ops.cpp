@@ -312,6 +312,28 @@ bool malformed(usize size, usize alignment) noexcept
     return size == 0U || !mem::is_pow2(alignment);
 }
 
+// Every fuzzed allocator's statistics are requested before its first allocation (DIAG.11b), so a build that compiles
+// them in counts it completely and the drained and balanced checks hold on win-shipping-profile, whose statistics
+// wait for a request, as on the CRD_DEBUG lanes. The decorators and composites keep no counts of their own.
+void require_counted(mem::IAllocator& a) noexcept
+{
+#if CRD_MEMORY_STATS_TRACKING
+    CRD_FUZZ_REQUIRE(a.request_statistics() == mem::StatisticsCoverage::Complete);
+    CRD_FUZZ_REQUIRE(a.stats().coverage() == mem::StatisticsCoverage::Complete);
+#else
+    CRD_FUZZ_REQUIRE(a.request_statistics() == mem::StatisticsCoverage::CompiledOut);
+#endif
+}
+
+void require_counted_elsewhere(mem::IAllocator& a) noexcept
+{
+#if CRD_MEMORY_STATS_TRACKING
+    CRD_FUZZ_REQUIRE(a.request_statistics() == mem::StatisticsCoverage::Elsewhere);
+#else
+    CRD_FUZZ_REQUIRE(a.request_statistics() == mem::StatisticsCoverage::CompiledOut);
+#endif
+}
+
 void require_stats_drained(const mem::IAllocator& a) noexcept
 {
 #if CRD_MEMORY_STATS_TRACKING
@@ -453,6 +475,7 @@ void fuzz_tlsf(Reader& r, Trace& trace, Parent& parent) noexcept
 {
     const usize capacity = mem::TlsfAllocator::min_pool_size() + static_cast<usize>(r.half()) * 4U;
     mem::TlsfAllocator heap(capacity, &parent, "fuzz-tlsf");
+    require_counted(heap);
     CRD_FUZZ_REQUIRE(heap.validate_structure());
     run_heap(heap, r, trace, capacity);
 }
@@ -463,6 +486,7 @@ void fuzz_growable_tlsf(Reader& r, Trace& trace) noexcept
     {
         const usize chunk = static_cast<usize>(r.half()) * 4U; // clamped up to the TLSF floor by the allocator
         mem::GrowableTlsfAllocator heap(chunk, &parent, "fuzz-growable-tlsf");
+        require_counted_elsewhere(heap); // its TLSF chunks count
         run_heap(heap, r, trace, usize{64} << 10U);
         trace.add(heap.num_chunks());
     }
@@ -546,6 +570,7 @@ void fuzz_pool(Reader& r, Trace& trace, Parent& parent) noexcept
     const usize slot_count = 1U + (r.byte() % 96U);
     const usize alignment  = usize{8} << (r.byte() % 4U);
     mem::PoolAllocator pool(slot_size, slot_count, alignment, &parent, "fuzz-pool");
+    require_counted(pool);
     CRD_FUZZ_REQUIRE(pool.validate_structure());
     run_pool(pool, r, trace, slot_count);
 }
@@ -558,6 +583,7 @@ void fuzz_growable_pool(Reader& r, Trace& trace) noexcept
         const usize alignment = usize{8} << (r.byte() % 4U);
         const usize per_page  = 1U + (r.byte() % 32U);
         mem::GrowablePoolAllocator pool(slot_size, alignment, per_page, &parent, "fuzz-growable-pool");
+        require_counted(pool);
         run_pool(pool, r, trace, 0U);
         trace.add(pool.page_count());
     }
@@ -682,7 +708,10 @@ template <typename Arena> void run_bump(Arena& arena, Reader& r, Trace& trace, b
 class LinearArena
 {
 public:
-    LinearArena(usize capacity, mem::IAllocator* parent) : m_arena(capacity, parent, "fuzz-linear") {}
+    LinearArena(usize capacity, mem::IAllocator* parent) : m_arena(capacity, parent, "fuzz-linear")
+    {
+        require_counted(m_arena);
+    }
     [[nodiscard]] usize capacity() const noexcept { return m_arena.capacity(); }
     [[nodiscard]] usize used() const noexcept { return m_arena.used(); }
     void* try_allocate(usize size, usize alignment) { return m_arena.try_allocate(size, alignment); }
@@ -712,6 +741,7 @@ void fuzz_stack(Reader& r, Trace& trace, Parent& parent)
 {
     const usize capacity = 1U + static_cast<usize>(r.half()) * 2U;
     mem::StackAllocator arena(capacity, &parent, "fuzz-stack");
+    require_counted(arena);
     run_bump(arena, r, trace, true);
 }
 
@@ -721,6 +751,7 @@ void fuzz_growable_linear(Reader& r, Trace& trace)
     {
         const usize chunk = 64U + static_cast<usize>(r.half());
         mem::GrowableLinearAllocator arena(chunk, &parent, "fuzz-growable-linear");
+        require_counted(arena);
         LiveSet live;
         for (usize op = 0U; op < kMaxOps && !r.done(); ++op)
         {
@@ -1006,6 +1037,7 @@ void fuzz_diagnostic(Reader& r, Trace& trace, Parent& parent)
     crd::fuzz::BudgetAllocator metadata(usize{8} << 20U);
     const usize        capacity = mem::TlsfAllocator::min_pool_size() + static_cast<usize>(r.half()) * 4U;
     mem::TlsfAllocator backing(capacity, &parent, "fuzz-diag-backing");
+    require_counted(backing);
     {
         mem::DiagnosticConfig cfg;
         cfg.redzone_bytes             = 8U << (r.byte() % 3U); // 8, 16 or 32
@@ -1014,6 +1046,7 @@ void fuzz_diagnostic(Reader& r, Trace& trace, Parent& parent)
         cfg.max_stacks                = 64U;
         cfg.capture_stacks            = false; // stack capture would make the trace depend on the call site
         mem::DiagnosticAllocator diag(&backing, cfg, &metadata, "fuzz-diag");
+        require_counted_elsewhere(diag); // the backing heap counts
         Violations violations;
         diag.set_violation_handler(&record_violation, &violations);
 
@@ -1391,6 +1424,7 @@ void fuzz_virtual_memory_arena(Reader& r, Trace& trace, const u8** base_out, usi
             break;
     }
     mem::VirtualMemoryAllocator vm(cfg, "fuzz-vm");
+    require_counted(vm);
     VmModel                     m;
     m.page     = page;
     m.reserved = (cfg.reserve_bytes + (page - 1U)) & ~(page - 1U);

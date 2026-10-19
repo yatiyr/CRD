@@ -206,7 +206,8 @@ private:
 };
 
 // IAllocator decorator for the allocation-failure site: try_allocate asks the injector first and returns null when
-// the fault fires; every other call passes through. Its own MemoryStats stay zero (the backing allocator keeps them).
+// the fault fires; every other call passes through. Its own MemoryStats stay zero and report coverage Elsewhere (the
+// backing allocator keeps them).
 class FaultAllocator final : public crd::memory::IAllocator
 {
 public:

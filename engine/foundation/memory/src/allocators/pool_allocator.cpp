@@ -45,6 +45,7 @@ PoolAllocator::PoolAllocator(usize slot_size, usize slot_count, usize slot_align
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
 
     m_name = name;
+    m_stats.keep_counts();
     // Checked stride/size arithmetic. slot_size padded to alignment, then
     // stride*count -- both overflow-checked so a hostile/buggy size can never wrap to a
     // too-small buffer. CRD_FATAL (not a debug assert) so the guard survives release.
@@ -72,6 +73,7 @@ PoolAllocator::PoolAllocator(void* buffer, usize slot_size, usize slot_count, us
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
 
     m_name = name;
+    m_stats.keep_counts();
     // build_free_list links the slots through the buffer at once, so a null one is fatal in every build, never an
     // ignorable assert that goes on to write through it. The stride and the span get the owning constructor's checked
     // arithmetic: the destructor unpoisons slot_size * slot_count bytes of the caller's buffer.

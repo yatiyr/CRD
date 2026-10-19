@@ -74,7 +74,7 @@ public:
     // DIAG.6a(d2): the allocator name recorded for slot `allocator_idx` at frame `frame_index` (dense capture-side
     // frame index, 0 = oldest). Prefers the per-record stamped name identity -- correct even after the slot was
     // unregistered and reused by a different allocator -- and falls back to the live-at-save AllocatorMeta name for
-    // pre-(d2) records (`_pad == 0`). Returns "" if either index is out of range.
+    // pre-(d2) records (no name stamp). Returns "" if either index is out of range.
     [[nodiscard]] const char* frame_allocator_name(crd::u32 frame_index, crd::u32 allocator_idx) const noexcept;
 
     // Resolve an interned NameId via the in-blob string table.

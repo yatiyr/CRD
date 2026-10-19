@@ -1194,7 +1194,8 @@ DiagStatus DiagCommandService::run_allocators(void* self, const DiagCall& call, 
             .u64("deallocations", s.dealloc_count)
             .u64("bytes_in_use", s.bytes_in_use)
             .u64("peak_bytes", s.peak_bytes)
-            .u64("total_bytes", s.total_bytes);
+            .u64("total_bytes", s.total_bytes)
+            .str("statistics", cont::StringView{crd::memory::statistics_coverage_name(s.coverage)});
         (void)out.add_item(item);
     }
     return DiagStatus::Ok;

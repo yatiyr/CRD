@@ -2787,6 +2787,20 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   first-party source against what each configured tree compiles, so a test or specimen that no target builds fails
   the lane that should have built it; the conditions, outside routes and owned unrouted programs are named in
   `scripts/source-routes.json`.
+- Allocator statistics on request (2026-10-19,
+  [session](../sessions/2026-10-19-diag-11b-allocator-statistics-on-request.md)):
+  a profiling build without `CRD_DEBUG` (win-shipping-profile) counts an allocator's operations only once a reader
+  requests them (`IAllocator::request_statistics()`, which `crd::perf::register_allocator` calls) before the
+  allocator's first allocation; unrequested, an operation costs one relaxed load. A `CRD_DEBUG` build counts every
+  allocator from construction, unchanged. `MemoryStats::coverage()` (`crd/memory/statistics_coverage.hpp`) says what
+  the counts cover (complete, not requested, too late, kept elsewhere by a decorator or composite, compiled out), and
+  the profiler's snapshots, every `AllocatorRecord` (`stamps` bits 32-39), `memory.allocators` and the panel carry it,
+  so a zero is never read as a measurement. The overhead harness holds its heap's statistics to what each build counts
+  unasked in every mode, on every lane. Measured ([board](../bench/2026-10-19-diag-11b-allocator-statistics.md)): the
+  disabled mode's allocation-heavy cost fell from +37.7% to +4.7% to +5.0%, still over 1%, and a gate-against-no-gate
+  pair attributes the rest to the per-operation gate itself (no gate: +0.12%); the same board shows that comparing two
+  separately compiled binaries has a layout floor of several percent (offline -11.0% between builds that do not touch
+  its path), which the remaining disabled-mode verdicts must get under before they can be read.
 - Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost

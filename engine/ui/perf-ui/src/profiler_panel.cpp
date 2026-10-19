@@ -643,14 +643,14 @@ void draw_memory(IProfilerSource& src) noexcept
     }
 
     const auto* latest = nf > 0U ? src.frame_record(0U) : nullptr;
-    if (ImGui::BeginTable("alloc_table", 5,
-                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
+    if (ImGui::BeginTable("alloc_table", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg))
     {
         ImGui::TableSetupColumn("Allocator", ImGuiTableColumnFlags_WidthStretch);
         ImGui::TableSetupColumn("In-use",    ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Peak",      ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Allocs",    ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("Deallocs",  ImGuiTableColumnFlags_WidthFixed);
+        ImGui::TableSetupColumn("Counted", ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableHeadersRow();
         for (crd::u32 i = 0U; i < na; ++i)
         {
@@ -674,6 +674,17 @@ void draw_memory(IProfilerSource& src) noexcept
             ImGui::TableSetColumnIndex(4);
             format_count(ar.dealloc_count, buf, sizeof(buf));
             ImGui::TextUnformatted(buf);
+            // DIAG.11b: zeros are only a measurement when the counts are complete; otherwise say why they are zero.
+            ImGui::TableSetColumnIndex(5);
+            const crd::memory::StatisticsCoverage coverage = allocator_record_coverage(ar);
+            if (coverage == crd::memory::StatisticsCoverage::Complete)
+            {
+                ImGui::TextUnformatted("complete");
+            }
+            else
+            {
+                ImGui::TextDisabled("%s", crd::memory::statistics_coverage_name(coverage));
+            }
         }
         ImGui::EndTable();
     }

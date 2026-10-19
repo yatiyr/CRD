@@ -20,6 +20,7 @@ GrowableLinearAllocator::GrowableLinearAllocator(usize chunk_bytes, IAllocator* 
 {
     CRD_ASSERT(chunk_bytes > 0);
     m_name        = name;
+    m_stats.keep_counts();
     m_header_size = align_up(sizeof(Chunk), kDefaultAlignment);
     grow(0); // reserve the first chunk so a modest working set never re-hits the parent
 }

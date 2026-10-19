@@ -225,9 +225,9 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Read | An allocator whose live count keeps rising is the owner to read; LeakSanitizer separates unreachable objects from retained arenas and caches. |
 | Next test | `ctest --test-dir build/win-debug -R "^diag 3f: a memory leak"`; `ctest --test-dir build/win-debug -R "^allocator ownership: "`; `ctest --test-dir build/win-debug -R "^crd-diag-overhead-alloc-"` |
 | Hosted | linux-gcc-asan (LeakSanitizer); every lane for the ownership cases and the overhead harness's lifetime ledger. |
-| Adopt | Register an allocator with the profiler, `crd::perf::register_allocator(...)`, so `memory.allocators` lists it. |
+| Adopt | Register an allocator with the profiler, `crd::perf::register_allocator(...)`, before its first allocation, so `memory.allocators` lists it with its `statistics` field `complete`; a profiling build without `CRD_DEBUG` counts nothing an earlier allocation could unbalance and says `too_late` instead. |
 | Example | `tests/support/diag/specimens/leak_specimen.cpp` |
-| Cost | The allocator statistics cost +37.7% in the disabled mode on allocation-heavy frames ([board losses](../bench/2026-10-16-diag-11b-overhead.md#losses-and-what-they-belong-to), DIAG.11b clause (1)). |
+| Cost | Counted on request since 2026-10-19: the disabled mode's allocation-heavy cost fell from +37.7% to +4.7% to +5.0%, the per-operation statistics gate, still over 1% ([board](../bench/2026-10-19-diag-11b-allocator-statistics.md#losses-and-what-they-belong-to), DIAG.11b clause (1)). |
 | Owner | DIAG.3f, DIAG.6a |
 
 <a id="rb-gpu"></a>

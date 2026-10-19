@@ -51,6 +51,7 @@ GrowablePoolAllocator::GrowablePoolAllocator(usize slot_size, usize slot_alignme
       m_pages_size(0), m_pages_capacity(0), m_free_head(nullptr), m_in_use(0)
 {
     m_name = name;
+    m_stats.keep_counts();
     CRD_ASSERT(slot_size >= sizeof(FreeNode));
     CRD_ASSERT(is_pow2(slot_alignment));
     CRD_ASSERT(slot_alignment >= alignof(FreeNode));
@@ -70,6 +71,7 @@ GrowablePoolAllocator::GrowablePoolAllocator(GrowablePoolAllocator&& other) noex
       m_in_use(other.m_in_use)
 {
     m_name = other.m_name;
+    m_stats.take(other.m_stats); // the live slots move here, and with them their counts
     other.m_parent = nullptr;
     other.m_pages = nullptr;
     other.m_pages_size = 0;
@@ -97,6 +99,7 @@ GrowablePoolAllocator& GrowablePoolAllocator::operator=(GrowablePoolAllocator&& 
     m_free_head = other.m_free_head;
     m_in_use = other.m_in_use;
     m_name = other.m_name;
+    m_stats.take(other.m_stats); // this pool's own slots went with free_all_pages; the source's move here
 
     other.m_parent = nullptr;
     other.m_pages = nullptr;

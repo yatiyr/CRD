@@ -870,6 +870,7 @@ TEST_CASE("diag commands: memory.allocators lists the profiler's registered allo
     REQUIRE(listed.status == DiagStatus::Ok);
     CHECK(listed.total >= 1U);
     CHECK(contains(listed.json, "\"name\":\"diag-commands-tracked\",\"allocations\":1,"));
+    CHECK(contains(listed.json, "\"statistics\":\"complete\""));
     tracked.deallocate(block);
     crd::perf::unregister_allocator(slot);
     crd::perf::shutdown();

@@ -61,6 +61,7 @@ VirtualMemoryAllocator::VirtualMemoryAllocator() : VirtualMemoryAllocator(Config
 VirtualMemoryAllocator::VirtualMemoryAllocator(const Config& cfg, const char* name)
 {
     m_name         = name;
+    m_stats.keep_counts();
     m_page = vm::page_size();
     // A whole number of pages, never fewer than one. A configured block that no page multiple can hold (near
     // SIZE_MAX) wrapped to 0 here and silently became one page; it is larger than any reservation, so it now commits

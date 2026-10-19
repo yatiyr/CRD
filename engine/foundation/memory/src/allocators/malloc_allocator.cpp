@@ -70,6 +70,7 @@ MallocAllocator::MallocAllocator() noexcept : MallocAllocator("MallocAllocator")
 MallocAllocator::MallocAllocator(const char* name) noexcept
 {
     m_name = name;
+    m_stats.keep_counts();
 }
 
 void* MallocAllocator::allocate(usize size, usize alignment)

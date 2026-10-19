@@ -814,7 +814,7 @@ void move_allocator_record(AllocatorRecord& dst, AllocatorRecord& src, bool publ
         relaxed_store(dst.bytes_in_use, src.bytes_in_use);
         relaxed_store(dst.peak_bytes, src.peak_bytes);
         relaxed_store(dst.total_bytes, src.total_bytes);
-        relaxed_store(dst._pad, src._pad);
+        relaxed_store(dst.stamps, src.stamps);
     }
     else
     {
@@ -823,7 +823,7 @@ void move_allocator_record(AllocatorRecord& dst, AllocatorRecord& src, bool publ
         dst.bytes_in_use  = relaxed_load(src.bytes_in_use);
         dst.peak_bytes    = relaxed_load(src.peak_bytes);
         dst.total_bytes   = relaxed_load(src.total_bytes);
-        dst._pad          = relaxed_load(src._pad);
+        dst.stamps        = relaxed_load(src.stamps);
     }
 }
 
@@ -937,7 +937,7 @@ void frame_mark() noexcept
         ar.bytes_in_use    = snap.bytes_in_use;
         ar.peak_bytes      = snap.peak_bytes;
         ar.total_bytes     = snap.total_bytes;
-        ar._pad            = nid != 0xFFFF'FFFFU ? static_cast<crd::u64>(nid) + 1U : 0U;
+        ar.stamps = allocator_record_stamps(nid, alloc->stats().coverage()); // name + coverage
     }
     state.snapshot_in_flight.fetch_sub(1U, std::memory_order_seq_cst);
 
@@ -1518,6 +1518,9 @@ struct OwnedName
     {
         return kInvalidAllocatorIdx;
     }
+    // DIAG.11b: a reader now exists, so the allocator's statistics are requested (a profiling build without
+    // CRD_DEBUG counts nothing until then). Idempotent; what the counts cover is read with each snapshot.
+    (void)allocator->request_statistics();
     detail::ProfilerState& state = *g_state;
     std::lock_guard<std::mutex> lock(state.alloc_mutex);
 
@@ -1668,6 +1671,7 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
     }
     const auto        raw = alloc->stats().snapshot();
     const char* const nm  = state.allocators[allocator_idx].name.load(std::memory_order_seq_cst);
+    const crd::memory::StatisticsCoverage coverage = alloc->stats().coverage(); // under the guard, as the counts
     state.snapshot_in_flight.fetch_sub(1U, std::memory_order_seq_cst);
     snap.name           = nm != nullptr ? nm : "";
     snap.alloc_count    = raw.alloc_count;
@@ -1675,6 +1679,7 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
     snap.bytes_in_use   = raw.bytes_in_use;
     snap.peak_bytes     = raw.peak_bytes;
     snap.total_bytes    = raw.total_bytes;
+    snap.coverage = coverage;
     return snap;
 }
 
@@ -1708,6 +1713,7 @@ void unregister_allocator(crd::u32 allocator_idx) noexcept
     snap.bytes_in_use   = ar.bytes_in_use;
     snap.peak_bytes     = ar.peak_bytes;
     snap.total_bytes    = ar.total_bytes;
+    snap.coverage = allocator_record_coverage(ar);
     return snap;
 }
 

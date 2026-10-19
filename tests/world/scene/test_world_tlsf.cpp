@@ -13,8 +13,8 @@
 //   - World constructible with TlsfAllocator.
 //   - Full ECS lifecycle (register / spawn / add / has / get / get_mut / remove
 //     / destroy) works end-to-end.
-//   - TLSF stats report non-zero alloc_count after the workload (only matters
-//     in debug builds since MemoryStats is debug-only).
+//   - TLSF stats report non-zero alloc_count after the workload (in every build
+//     that compiles MemoryStats in; the heap requests them before it allocates).
 //   - World destruction returns every allocated byte to the TLSF pool —
 //     bytes_in_use returns to its construction-time value.
 //   - ASan-clean (the test is also exercised under win-asan).
@@ -191,6 +191,8 @@ TEST_CASE("Chunk fill/spill works on TLSF heap", "[scene][world][tlsf]")
 TEST_CASE("World destruction returns every byte to the TLSF pool", "[scene][world][tlsf]")
 {
     TlsfAllocator scene_heap{kPoolBytes};
+    // Asked before its first allocation, so every build that compiles statistics in counts it (DIAG.11b).
+    (void)scene_heap.request_statistics();
 
     // Snapshot stats while the pool only holds its three sentinels.
     const auto baseline = scene_heap.stats().snapshot();
@@ -214,9 +216,11 @@ TEST_CASE("World destruction returns every byte to the TLSF pool", "[scene][worl
 
     const auto after = scene_heap.stats().snapshot();
 
-    // bytes_in_use only updates in CRD_DEBUG configurations. When asserts are
-    // enabled the bytes-in-use should match baseline (pool emptied).
-#if defined(CRD_DEBUG)
+    // Every build that compiles statistics in counted the World's operations: the pool is emptied.
+#if CRD_MEMORY_STATS_TRACKING
+    CHECK(scene_heap.stats().coverage() == crd::memory::StatisticsCoverage::Complete);
+    CHECK(after.alloc_count > baseline.alloc_count);
+    CHECK(after.alloc_count == after.dealloc_count);
     CHECK(after.bytes_in_use == baseline.bytes_in_use);
 #else
     (void)baseline;

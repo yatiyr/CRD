@@ -75,7 +75,7 @@ private:
 };
 
 // IAllocator decorator that reports allocation failure. It adds no state of its own beyond two pointers; its own
-// MemoryStats stay zero (the backing allocator keeps the real ones).
+// MemoryStats stay zero and report coverage Elsewhere (the backing allocator keeps the real ones).
 class FlightAllocatorWatch final : public crd::memory::IAllocator
 {
 public:

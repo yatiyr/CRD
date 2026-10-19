@@ -26,6 +26,11 @@
 #include <atomic>
 #include <cstdio>
 
+namespace crd::memory
+{
+class IAllocator;
+} // namespace crd::memory
+
 namespace diag_overhead
 {
 
@@ -98,6 +103,10 @@ public:
         (void)mode;
         return 0U;
     }
+    // The allocator the frames allocate from, when the workload owns one (alloc: the TLSF heap itself, never the
+    // host's watch over it), alive until teardown(). No mode requests its statistics, so the harness holds them to
+    // what the build counts unasked: everything on CRD_DEBUG builds, nothing on the others (DIAG.11b).
+    [[nodiscard]] virtual const crd::memory::IAllocator* measured_allocator() const noexcept { return nullptr; }
 };
 
 // The workloads by name ("alloc", "jobs", "offline", "events"); null for an unknown name. The object is static: one

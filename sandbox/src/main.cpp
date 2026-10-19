@@ -501,6 +501,10 @@ constexpr bool kSandboxShipping = false;
 // NOLINTNEXTLINE(readability-function-size)
 int main(int argc, char** argv)
 {
+    // DIAG.11b: the profiler panel and `memory.allocators` show the default allocator. A profiling build without
+    // CRD_DEBUG counts an allocator only when asked before its first allocation, so ask first; the panel's Counted
+    // column says too_late if something allocated through it before main.
+    (void)crd::memory::default_allocator()->request_statistics();
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered so log lines survive a crash
 
     bool     headless         = false;

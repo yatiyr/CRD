@@ -33,6 +33,7 @@
 #include <crd/core/build_config.hpp>
 #include <crd/core/host_pressure.hpp>
 #include <crd/core/lifetime_ledger.hpp>
+#include <crd/memory/allocator.hpp>
 #include <crd/perf/config.hpp>
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/profiler.hpp>
@@ -76,6 +77,17 @@ constexpr u32 kCaptureWaitMs  = 5000U;
 constexpr u32 kDefaultWarmup  = 10U;
 constexpr u32 kDefaultIters   = 100U;
 constexpr u32 kDefaultCapture = 3U;
+
+// What the measured allocator's statistics cover when nothing requests them (DIAG.11b): a CRD_DEBUG build counts
+// every allocator from construction; a profiling build without it waits for a request, which no mode makes, so
+// its disabled mode pays for none; a build without either compiles them out.
+#if CRD_MEMORY_STATS_ON_REQUEST
+constexpr crd::memory::StatisticsCoverage kUnaskedCoverage = crd::memory::StatisticsCoverage::NotRequested;
+#elif CRD_MEMORY_STATS_TRACKING
+constexpr crd::memory::StatisticsCoverage kUnaskedCoverage = crd::memory::StatisticsCoverage::Complete;
+#else
+constexpr crd::memory::StatisticsCoverage kUnaskedCoverage = crd::memory::StatisticsCoverage::CompiledOut;
+#endif
 
 struct Options
 {
@@ -584,6 +596,13 @@ int main(int argc, char** argv)
         host_started ? static_cast<u64>(host.recorder().policy().capacity) * sizeof(cp::FlightEvent) : 0U;
     const bool recorder_running = host_started && host.recorder().is_initialized();
 
+    // ---- the measured allocator's statistics, read before teardown destroys it -----------------------------------
+    const crd::memory::IAllocator* const measured = workload->measured_allocator();
+    const crd::memory::StatisticsCoverage stats_coverage =
+        measured != nullptr ? measured->stats().coverage() : kUnaskedCoverage;
+    const crd::memory::MemoryStats::Snapshot stats =
+        measured != nullptr ? measured->stats().snapshot() : crd::memory::MemoryStats::Snapshot{};
+
     // ---- teardown ------------------------------------------------------------------------------------------------
     workload->teardown();
 #if CRD_PERF_ENABLED
@@ -613,6 +632,23 @@ int main(int argc, char** argv)
         checks.expect(balance.verdict == crd::LifetimeVerdict::Balanced, "the lifetime ledger is not balanced");
         checks.expect(setup_threads == workload->own_threads(o.threads) + workload->diagnostic_threads(o.mode),
                       "the workload's setup started another number of threads than the mode adds to its own");
+        if (measured != nullptr)
+        {
+            checks.expect(stats_coverage == kUnaskedCoverage,
+                          "the measured allocator's statistics cover something other than this build counts unasked");
+            if constexpr (kUnaskedCoverage == crd::memory::StatisticsCoverage::Complete)
+            {
+                checks.expect(stats.alloc_count >= frames_total && stats.alloc_count == stats.dealloc_count &&
+                                  stats.bytes_in_use == 0U,
+                              "the measured allocator's counted statistics do not balance");
+            }
+            else
+            {
+                checks.expect(stats.alloc_count == 0U && stats.dealloc_count == 0U && stats.total_bytes == 0U &&
+                                  stats.peak_bytes == 0U,
+                              "the measured allocator counted operations nothing requested");
+            }
+        }
         if (o.mode == dov::Mode::Off)
         {
             checks.expect(payloads == 0U, "off: a payload was evaluated");
@@ -711,6 +747,13 @@ int main(int argc, char** argv)
     j.u("resident_frames", memory_frames.resident.in_use);
     j.u("resident_peak", memory_frames.resident.high_water);
     j.u("recorder_ring_bytes", ring_bytes);
+    j.close('}');
+    j.open("statistics", '{');
+    j.b("measured", measured != nullptr);
+    j.str("coverage", crd::memory::statistics_coverage_name(stats_coverage));
+    j.u("allocations", stats.alloc_count);
+    j.u("deallocations", stats.dealloc_count);
+    j.u("bytes_in_use", stats.bytes_in_use);
     j.close('}');
     j.open("lifetime", '{');
     lifetime_window(j, "mode_setup", before_mode, after_mode);

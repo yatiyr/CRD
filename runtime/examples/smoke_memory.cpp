@@ -6,6 +6,9 @@ CRD_DEFINE_LOG_CHANNEL(g_log_runtime_memory, "RuntimeMemory", crd::log::LogLevel
 
 int main()
 {
+    // Before anything allocates through it: a profiling build without CRD_DEBUG counts an allocator only when it
+    // is asked before its first allocation (DIAG.11b).
+    const crd::memory::StatisticsCoverage coverage = crd::memory::default_allocator()->request_statistics();
     crd::log::init();
     crd::log::add_sink(std::make_unique<crd::log::ConsoleSink>());
 
@@ -40,8 +43,9 @@ int main()
     particles.deallocate(b);
 
     const auto stats = heap->stats().snapshot();
-    CRD_LOG_INFO(g_log_runtime_memory, "heap stats: alloc={} dealloc={} bytes_in_use={} peak={}", stats.alloc_count,
-                 stats.dealloc_count, stats.bytes_in_use, stats.peak_bytes);
+    CRD_LOG_INFO(g_log_runtime_memory, "heap stats ({}): alloc={} dealloc={} bytes_in_use={} peak={}",
+                 statistics_coverage_name(coverage), stats.alloc_count, stats.dealloc_count, stats.bytes_in_use,
+                 stats.peak_bytes);
 
     crd::log::flush();
     crd::log::shutdown();

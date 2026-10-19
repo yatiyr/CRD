@@ -259,6 +259,7 @@ TlsfAllocator::TlsfAllocator(usize capacity, IAllocator* parent, const char* nam
       m_sl_bitmap{}, m_free_lists{}
 {
     m_name = name;
+    m_stats.keep_counts();
     CRD_ASSERT(capacity >= min_pool_size());
     // ⛔ The 4 GB ceiling (kFlIndexMax = 32) was DOCUMENTED in the header but never enforced: a larger pool computes a
     //    first-level index past m_free_lists[kFlIndexCount] and corrupts memory, surfacing as a SIGSEGV nowhere near the
@@ -279,6 +280,7 @@ TlsfAllocator::TlsfAllocator(void* buffer, usize capacity, const char* name) noe
     : m_parent(nullptr), m_pool(nullptr), m_pool_capacity(0), m_fl_bitmap(0), m_sl_bitmap{}, m_free_lists{}
 {
     m_name = name;
+    m_stats.keep_counts();
     // init_pool writes the sentinels into the buffer at once, so a null one is fatal in every build, never an
     // ignorable assert that goes on to write through it.
     if (buffer == nullptr)
@@ -581,32 +583,6 @@ BlockHeader* block_merge_prev(BlockHeader* block, u32& fl_bitmap, u32* sl_bitmap
     block_set_prev(after, prev);
     return prev;
 }
-// A live block resized in place: bytes_in_use (and the peak) follow its new extent; it is the same allocation, so the
-// allocation and deallocation counts and the real-time allocation sentinel are untouched.
-void stats_resize(MemoryStats& stats, usize old_bytes, usize new_bytes) noexcept
-{
-#if CRD_MEMORY_STATS_TRACKING
-    if (new_bytes > old_bytes)
-    {
-        const u64 grown = static_cast<u64>(new_bytes - old_bytes);
-        stats.total_bytes.fetch_add(grown, std::memory_order_relaxed);
-        const u64 in_use = stats.bytes_in_use.fetch_add(grown, std::memory_order_relaxed) + grown;
-        u64       peak   = stats.peak_bytes.load(std::memory_order_relaxed);
-        while (in_use > peak && !stats.peak_bytes.compare_exchange_weak(peak, in_use, std::memory_order_relaxed))
-        {
-            // peak reloaded on failure
-        }
-    }
-    else
-    {
-        stats.bytes_in_use.fetch_sub(static_cast<u64>(old_bytes - new_bytes), std::memory_order_relaxed);
-    }
-#else
-    (void)stats;
-    (void)old_bytes;
-    (void)new_bytes;
-#endif
-}
 } // namespace
 
 // ---- Allocate / deallocate -----------------------------------------------
@@ -864,7 +840,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
             block_apply_shadow(block);
             block_apply_shadow(remainder);
             // The statistics follow the block (DIAG.10a: bytes_in_use drifted by every in-place resize).
-            stats_resize(m_stats, current_cap, block_size(block));
+            m_stats.on_resize(current_cap, block_size(block));
         }
         return p;
     }
@@ -899,7 +875,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
             }
             // The live block grew over its free neighbour: its whole new extent becomes addressable.
             block_apply_shadow(merged);
-            stats_resize(m_stats, current_cap, block_size(merged));
+            m_stats.on_resize(current_cap, block_size(merged));
             return p;
         }
     }

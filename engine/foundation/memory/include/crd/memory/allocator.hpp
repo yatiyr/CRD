@@ -24,6 +24,10 @@ namespace crd::memory
 //    size == 0 request is itself an assert in debug builds.
 //  - Allocators are NOT thread-safe by default. Hand them out per-thread
 //    or wrap them yourself. (One reason: the hot path stays branch-free.)
+//  - An allocator that updates its own MemoryStats calls
+//    `m_stats.keep_counts()` in its constructor; one that only forwards
+//    (a decorator, a composite) does not, and its statistics report
+//    StatisticsCoverage::Elsewhere.
 class IAllocator
 {
 public:
@@ -79,6 +83,14 @@ public:
     // ---- Diagnostics (non-virtual, free for callers) --------------
     const char* name() const noexcept { return m_name; }
     const MemoryStats& stats() const noexcept { return m_stats; }
+
+    // Ask for this allocator's statistics to be counted (memory_stats.hpp says when they are). A CRD_DEBUG build
+    // counts every allocator from construction and answers Complete; a profiling build without it starts counting
+    // here and answers Complete only before the allocator's first allocation, TooLate after it (nothing is counted
+    // then, rather than frees of blocks allocated before the request). Elsewhere: the allocator keeps no counts of
+    // its own; ask the allocators it forwards to. CompiledOut: this build has no statistics. Idempotent and safe to
+    // call from any thread; crd::perf::register_allocator calls it.
+    StatisticsCoverage request_statistics() noexcept { return m_stats.request(); }
 
 protected:
     const char* m_name = "UnnamedAllocator";

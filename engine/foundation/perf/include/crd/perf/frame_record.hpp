@@ -23,6 +23,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>
+#include <crd/memory/statistics_coverage.hpp> // DIAG.11b allocator-record coverage stamp
 #include <crd/perf/config.hpp>
 #include <crd/perf/sample.hpp> // NameId, kInvalidNameId (DIAG.6a(d2) allocator-record name identity)
 
@@ -47,21 +48,49 @@ struct alignas(8) AllocatorRecord
     crd::u64 bytes_in_use  = 0; // 8
     crd::u64 peak_bytes    = 0; // 8
     crd::u64 total_bytes   = 0; // 8
-    crd::u64 _pad          = 0; // 8 -- DIAG.6a(d2): carries the allocator's interned name identity AT THIS FRAME as
-                                //      name_id + 1 (0 = unset -> resolve via the live AllocatorMeta name). Decoded by
-                                //      allocator_record_name_id(); pins the label across allocator slot reuse. Was
-                                //      "room for v0f flags"; 0 in every pre-(d2) capture, so old files read unchanged.
+    crd::u64 stamps        = 0; // 8 -- two stamps, each 0 when unset (every older capture reads unchanged):
+                                //      bits 0-31: DIAG.6a(d2) the allocator's interned name identity AT THIS FRAME as
+                                //      name_id + 1 (0 -> resolve via the live AllocatorMeta name); pins the label
+                                //      across allocator slot reuse. bits 32-39: DIAG.11b what the counts cover, as
+                                //      StatisticsCoverage + 1. Decoded only by the helpers below; bits 40-63 are 0.
 };
 
 static_assert(sizeof(AllocatorRecord) == 48, "AllocatorRecord is 48 B");
 
-// DIAG.6a(d2): decode AllocatorRecord::_pad -> the NameId stamped at capture time (kInvalidNameId when unset). Both the
-// file reader (CaptureView) and any live consumer decode the +1 sentinel through this one helper so it is never
+inline constexpr crd::u64 kAllocatorRecordNameBits = 0xFFFF'FFFFULL;
+inline constexpr crd::u32 kAllocatorRecordCoverageShift = 32U;
+inline constexpr crd::u64 kAllocatorRecordCoverageBits = 0xFFULL;
+
+// The stamps of one record: `name_id` (kInvalidNameId when the slot has none) and the coverage of its counts.
+[[nodiscard]] inline crd::u64 allocator_record_stamps(crd::u32 name_id,
+                                                      crd::memory::StatisticsCoverage coverage) noexcept
+{
+    const crd::u64 name = name_id != kInvalidNameId.value ? static_cast<crd::u64>(name_id) + 1U : 0U;
+    const crd::u64 cover = static_cast<crd::u64>(static_cast<crd::u8>(coverage)) + 1U;
+    return name | (cover << kAllocatorRecordCoverageShift);
+}
+
+// DIAG.6a(d2): decode AllocatorRecord::stamps -> the NameId stamped at capture time (kInvalidNameId when unset). Both
+// the file reader (CaptureView) and any live consumer decode the +1 sentinel through this one helper so it is never
 // re-derived. A valid id resolves through the capture's name blob / the live intern table; an invalid id means the
 // record predates (d2) (or interning was saturated) -- fall back to the slot's live name.
 [[nodiscard]] inline NameId allocator_record_name_id(const AllocatorRecord& ar) noexcept
 {
-    return ar._pad != 0U ? NameId{static_cast<crd::u32>(ar._pad - 1U)} : kInvalidNameId;
+    const crd::u64 name = ar.stamps & kAllocatorRecordNameBits;
+    return name != 0U ? NameId{static_cast<crd::u32>(name - 1U)} : kInvalidNameId;
+}
+
+// DIAG.11b: what the record's counts cover. Unrecorded for a record stamped before the coverage was (a capture from
+// before 2026-10-19, whose counting allocators were then counted from construction) or with a value this build does
+// not know (a capture is untrusted input).
+[[nodiscard]] inline crd::memory::StatisticsCoverage allocator_record_coverage(const AllocatorRecord& ar) noexcept
+{
+    const crd::u64 cover = (ar.stamps >> kAllocatorRecordCoverageShift) & kAllocatorRecordCoverageBits;
+    if (cover == 0U || cover - 1U >= static_cast<crd::u64>(crd::memory::StatisticsCoverage::Unrecorded))
+    {
+        return crd::memory::StatisticsCoverage::Unrecorded;
+    }
+    return static_cast<crd::memory::StatisticsCoverage>(cover - 1U);
 }
 
 struct FrameRecord

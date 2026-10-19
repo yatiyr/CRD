@@ -11,17 +11,20 @@
 // total bytes ever).
 //
 // Allocator stats live on the allocator instance itself (`IAllocator::stats()`)
-// and are updated by every concrete allocator implementation
-// (TlsfAllocator, GrowablePoolAllocator, MallocAllocator, ChunkAllocator).
-// **The widened `CRD_MEMORY_STATS_TRACKING` gate (v0e)** ensures stats are
-// kept up to date in `CRD_DEBUG` builds AND in any release/shipping build
-// where `CRD_ENABLE_PROFILING=1` -- so `win-shipping-profile` shows real
-// numbers instead of zeros.
+// and are updated by every concrete allocator that keeps its own counts
+// (TLSF, pool, growable pool, linear, growable linear, stack, malloc and
+// the virtual-memory arena; decorators and composites report Elsewhere).
+// A `CRD_DEBUG` build counts every allocator from construction. A profiling
+// build without it (`win-shipping-profile`) counts an allocator only once it
+// is requested, and registration requests it: register an allocator before
+// its first allocation and its statistics are complete; register it later
+// and they read zero with coverage TooLate (DIAG.11b; memory_stats.hpp).
+// `AllocatorSnapshot::coverage` and each AllocatorRecord carry the answer.
 //
 // Usage:
 //
 //   auto& tlsf = my_engine.tlsf_root();
-//   crd::perf::register_allocator("TLSF root", &tlsf);
+//   crd::perf::register_allocator("TLSF root", &tlsf); // before tlsf allocates
 //
 //   // ... per-frame:
 //   crd::perf::frame_mark();
@@ -37,6 +40,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>
+#include <crd/memory/statistics_coverage.hpp>
 #include <crd/perf/config.hpp>
 #include <crd/perf/frame_record.hpp>
 
@@ -70,12 +74,19 @@ struct AllocatorSnapshot
     crd::u64    bytes_in_use   = 0;
     crd::u64    peak_bytes     = 0;
     crd::u64    total_bytes    = 0;
+    // What the counts cover (DIAG.11b): Complete, or why they are zero. NotRequested for an empty slot.
+    crd::memory::StatisticsCoverage coverage = crd::memory::StatisticsCoverage::NotRequested;
 };
 
 // Register an allocator under `name`. Returns the slot index assigned.
 // Re-registering the SAME allocator pointer returns the existing index.
 // Returns `kInvalidAllocatorIdx` if the profiler isn't initialised, if
 // the table is saturated, or if either argument is null.
+//
+// Registration requests the allocator's statistics
+// (`IAllocator::request_statistics()`); the slot's snapshots say what they
+// cover. In a profiling build without CRD_DEBUG only an allocator registered
+// before its first allocation is counted.
 //
 // `name` must be a static-storage string (lifetime >= profiler lifetime).
 [[nodiscard]] crd::u32 register_allocator(const char* name,

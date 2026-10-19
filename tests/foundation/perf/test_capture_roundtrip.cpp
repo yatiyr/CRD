@@ -121,6 +121,8 @@ TEST_CASE("save_capture round-trips through CaptureView", "[perf][capture][round
     CHECK(static_cast<crd::i64>(latest.values[cid.value].bits) == 42);
     // Allocator[aid] should report >= 4096 bytes_in_use at capture time.
     CHECK(latest.allocators[aid].bytes_in_use >= 4096U);
+    // DIAG.11b: the record's coverage stamp survives the file (registered before its first allocation: complete).
+    CHECK(crd::perf::allocator_record_coverage(latest.allocators[aid]) == crd::memory::StatisticsCoverage::Complete);
 
     tlsf.deallocate(p);
 }

@@ -161,6 +161,10 @@ public:
 
     [[nodiscard]] u64 sites_per_iteration() const noexcept override { return kAllocOps / kAllocBatch; }
     [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
+    [[nodiscard]] const crd::memory::IAllocator* measured_allocator() const noexcept override
+    {
+        return m_tlsf.has_value() ? &*m_tlsf : nullptr;
+    }
 
 private:
     Sites*                                    m_sites = nullptr;
