@@ -348,6 +348,16 @@ headers; three of the twelve after/before rows met bursts of another project's t
 The trees build with no warning on linux-gcc-debug, linux-clang-tsan and a scratch MSVC tree with precompiled
 headers on, and the Catch2-heavy suites keep their counts.
 
+The shapes the hosted run adds, checked locally after the push: a Visual Studio generator configure (`win-vs`, scratch
+tree) completes, its test targets' precompiled headers hold the macros header (`Debug` and `ASan`) and
+`Catch2.vcxproj` lists the seven unity sources; win-clang-cl builds the seven batches and links crd-containers-tests
+with no warning; a tree configured with `CRD_CATCH2_UNITY=OFF` has Catch2's 106 sources one per unit, and the
+library entry of the include budget resolves its second alternative there (9 of 9 within). The clang-cl build and
+the `OFF` configure first stopped at "Another structure writer holds the repository lock" (the project-structure
+lock `build/project-sync/writer.lock`, shared by every tree of the checkout, held by another configure at that
+moment; the open Visual Studio session keeps a structure watcher) and passed on the retry. Not boarded: the test
+precompiled header's gain on MSVC and Clang trees with precompiled headers on (the GCC boards above only).
+
 <a id="ci-after-the-pushes"></a>
 ## CI after the pushes
 
