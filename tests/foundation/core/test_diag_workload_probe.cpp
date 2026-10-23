@@ -618,3 +618,37 @@ TEST_CASE("diag10c: the OS sees a thread this process started until it has been 
     CHECK(std::strlen(r.reason) > 0U);
     CHECK(std::strcmp(crd::lifetime_class_name(LifetimeClass::Thread), "thread") == 0);
 }
+
+TEST_CASE("diag10c: a thread asked about while it exits reads as present or absent, never unavailable",
+          "[core][lifetime][workload][diag10c]")
+{
+    // The kernel can reap a task between the probe's open() and read() of its stat file; that is a thread gone, not
+    // an unreadable one. Many short threads probed without pause make the window likely on every run.
+    crd::usize unavailable = 0U;
+    for (crd::usize i = 0U; i < 300U; ++i)
+    {
+        std::atomic<bool>     ready{false};
+        crd::OsThreadIdentity worker;
+        std::thread           t(
+            [&]
+            {
+                worker = crd::os_current_thread_identity();
+                ready.store(true, std::memory_order_release);
+            });
+        while (!ready.load(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+        OsPresence presence = OsPresence::Present;
+        while (presence == OsPresence::Present)
+        {
+            presence = crd::os_thread_alive(worker).presence;
+        }
+        t.join();
+        if (presence != OsPresence::Absent)
+        {
+            ++unavailable;
+        }
+    }
+    CHECK(unavailable == 0U);
+}

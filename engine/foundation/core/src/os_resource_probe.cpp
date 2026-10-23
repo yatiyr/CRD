@@ -446,6 +446,8 @@ TaskStat read_task_stat(crd::u64 tid) noexcept
         const ssize_t got = ::read(fd, text + length, sizeof(text) - 1U - length);
         if (got <= 0)
         {
+            // A task reaped after open() reads as ESRCH: it is gone, not unreadable.
+            out.missing = got < 0 && errno == ESRCH;
             break;
         }
         length += static_cast<crd::usize>(got);
