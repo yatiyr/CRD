@@ -22,6 +22,13 @@
 //   and open addressing (linear probe) on the pointer hash. The table is
 //   sized at install time; resize is not supported -- the engine's fiber
 //   count is bounded at startup.
+//
+//   No lock (DIAG.11b clause 6: a global mutex here was most of the full
+//   mode's jobs cost). A live fiber runs one job, so a key is in at most one
+//   slot. park claims an empty slot with a sentinel, writes the token, then
+//   publishes the key (release). take claims the slot back from the key,
+//   reads the token and frees it (release), so neither a later park nor the
+//   uninstall drain (which never touches a claimed slot) can race the token.
 // ---------------------------------------------------------------------------
 
 #include <crd/perf/jobs_adapter.hpp>
@@ -54,7 +61,10 @@ struct TokenSlot
 };
 
 TokenSlot g_tokens[kTokenTableSize]{};
-std::mutex g_tokens_mutex; // protects insert / erase; lookup is lock-free
+
+// A slot's key while park writes its token: an address no fiber can have.
+char g_claimed_marker = 0;
+const crd::jobs::FiberHandle kClaimed = &g_claimed_marker;
 
 // One interned NameId for every job region. v0c keeps it static -- a per-job
 // label can be threaded in a future slice when JobDecl carries a name string.
@@ -105,16 +115,16 @@ AtomicStats g_stats{};
 
 void park_token(crd::jobs::FiberHandle h, BeginToken t) noexcept
 {
-    std::lock_guard<std::mutex> lock(g_tokens_mutex);
     crd::u32 idx = hash_handle(h) & kTokenTableMask;
     for (crd::u32 step = 0U; step < kTokenTableSize; ++step)
     {
         auto& slot = g_tokens[idx];
         crd::jobs::FiberHandle expected = nullptr;
-        if (slot.key.compare_exchange_strong(expected, h, std::memory_order_acq_rel,
-                                             std::memory_order_relaxed))
+        if (slot.key.load(std::memory_order_relaxed) == nullptr &&
+            slot.key.compare_exchange_strong(expected, kClaimed, std::memory_order_acquire, std::memory_order_relaxed))
         {
             slot.token = t;
+            slot.key.store(h, std::memory_order_release);
             return;
         }
         idx = (idx + 1U) & kTokenTableMask;
@@ -124,12 +134,13 @@ void park_token(crd::jobs::FiberHandle h, BeginToken t) noexcept
 
 [[nodiscard]] bool take_token(crd::jobs::FiberHandle h, BeginToken& out) noexcept
 {
-    std::lock_guard<std::mutex> lock(g_tokens_mutex);
     crd::u32 idx = hash_handle(h) & kTokenTableMask;
     for (crd::u32 step = 0U; step < kTokenTableSize; ++step)
     {
         auto& slot = g_tokens[idx];
-        if (slot.key.load(std::memory_order_acquire) == h)
+        crd::jobs::FiberHandle expected = h;
+        if (slot.key.load(std::memory_order_relaxed) == h &&
+            slot.key.compare_exchange_strong(expected, kClaimed, std::memory_order_acquire, std::memory_order_relaxed))
         {
             out = slot.token;
             slot.key.store(nullptr, std::memory_order_release);
@@ -235,12 +246,14 @@ void uninstall_jobs_adapter() noexcept
 
     // Drain any parked tokens (jobs that began but for which on_job_end
     // never fired -- shouldn't happen under normal shutdown, but pay it
-    // off so a reinstall starts clean).
+    // off so a reinstall starts clean). A claimed slot is left to the park or
+    // take still using its token.
+    for (auto& slot : g_tokens)
     {
-        std::lock_guard<std::mutex> lock_t(g_tokens_mutex);
-        for (auto& slot : g_tokens)
+        crd::jobs::FiberHandle key = slot.key.load(std::memory_order_relaxed);
+        if (key != nullptr && key != kClaimed)
         {
-            slot.key.store(nullptr, std::memory_order_release);
+            (void)slot.key.compare_exchange_strong(key, nullptr, std::memory_order_release, std::memory_order_relaxed);
         }
     }
     // Reset stats so a subsequent test or workload reads a clean baseline

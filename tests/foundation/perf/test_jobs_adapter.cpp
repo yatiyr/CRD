@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <thread>
 
 #if CRD_PERF_ENABLED
 
@@ -188,6 +189,54 @@ TEST_CASE("a fiber at a 4 GiB-aligned address still tags its job sample", "[perf
     }
     CHECK(tagged == 1U);
     CHECK(untagged == 0U);
+
+    crd::perf::uninstall_jobs_adapter();
+    crd::perf::shutdown();
+}
+
+TEST_CASE("concurrent job begins and ends never lose a parked token", "[perf][jobs][adapter][parallel]")
+{
+    // The token table takes no lock (DIAG.11b clause 6). 12 threads each keep 32 jobs begun at once, 384 of its 512
+    // slots, so claims probe through each other's slots, and end them in reverse, 200 times over. A claim two threads
+    // can both win loses a token. Driven through the installed observer; each handle is a distinct byte's address.
+    crd::perf::init({});
+    crd::perf::install_jobs_adapter();
+    const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
+    REQUIRE(obs != nullptr);
+
+    constexpr crd::u32 k_threads = 12U;
+    constexpr crd::u32 k_live = 32U;
+    constexpr crd::u32 k_rounds = 200U;
+    static char handles[k_threads][k_live]{};
+    std::thread workers[k_threads];
+    for (crd::u32 t = 0U; t < k_threads; ++t)
+    {
+        workers[t] = std::thread(
+            [obs, t]()
+            {
+                for (crd::u32 r = 0U; r < k_rounds; ++r)
+                {
+                    for (crd::u32 i = 0U; i < k_live; ++i)
+                    {
+                        obs->on_job_begin(&handles[t][i], 0U, 0U, 0U);
+                    }
+                    for (crd::u32 i = k_live; i > 0U; --i)
+                    {
+                        obs->on_job_end(&handles[t][i - 1U], 0U);
+                    }
+                }
+            });
+    }
+    for (auto& w : workers)
+    {
+        w.join();
+    }
+
+    const auto stats = crd::perf::jobs_adapter_stats();
+    const crd::u64 total = static_cast<crd::u64>(k_threads) * k_live * k_rounds;
+    CHECK(stats.jobs_begun == total);
+    CHECK(stats.jobs_ended == total);
+    CHECK(stats.missing_tokens == 0U);
 
     crd::perf::uninstall_jobs_adapter();
     crd::perf::shutdown();
