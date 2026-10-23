@@ -67,7 +67,7 @@ ARMS = ('compiled-out', 'off', 'basic', 'full')
 # Timed frames per process, sized so the frames take at least 3.2 s in the off arm on the 2026-10-19 capture's machine
 # (alloc 83-92 us, jobs 370-417 us and offline 350-420 us per frame) and cover FRAME_FRACTION with a margin of the
 # process: the basic arm's setup takes 0.35 s (it left alloc's 20,000 frames 84% of the process).
-ITERATIONS = {'alloc': 40000, 'jobs': 8000, 'offline': 8000}
+ITERATIONS = {'alloc': 40000, 'jobs': 9000, 'offline': 10000}
 WARMUP = 50
 AFFINITY = 'FFFF'
 INTERVAL_MS = 1.0  # WPR's CPU profile samples every 1 ms per processor

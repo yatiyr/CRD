@@ -50,13 +50,16 @@ Re-analysis of the same trace with the repaired script (no elevation, 552 s):
 | offline full over off | +540.2% | +396.1% | 79.8% in the bridge (its hooks and the clock they read). The program's own frames took 28% more samples than in off: the executor calls the hooks around every op | clause (6), per-op timing |
 | alloc basic, alloc full | unresolved | unresolved | The frames covered 84% of the process (basic's setup takes 0.35 s) | next recording |
 
-The `record` sizes now give at least 3.2 s of frames per process (alloc 40,000, jobs and offline 8,000). That alloc
-cell needs a new recording, and the recording is the user's elevated step. `scripts\elevated-captures.bat` now refuses
+The `record` sizes now give at least 3.2 s of frames per process at the fastest frames seen (alloc 40,000, jobs
+9,000, offline 10,000; offline full then runs about 24 s). That alloc cell needs a new recording, and the recording is the user's elevated step. `scripts\elevated-captures.bat` now refuses
 the sampling step too, with exit 7, while Visual Studio runs. A stand-in copy checks `explorer.exe` in place of
 `devenv.exe`: `sampling`, `build-insights` and `all` all exit 7, and an unknown step exits 64. The real script,
 unelevated, reaches `wpr -start` and exits 3.
 
 ## Not done in this batch
 
+- Next batch first: the jobs adapter's global `g_tokens_mutex` (`engine/foundation/perf/src/jobs_adapter.cpp`,
+  `park_token`/`take_token`), taken at every job's begin and end in the full mode. Repair it, then show on a
+  jobs full run that the callbacks' samples leave the system lock frames.
 - (l) zstd 1.5.7 and (o) clang-tidy 20 are downloads. Each waits for the user's own approval in the conversation.
 - The user's re-recording: `scripts\elevated-captures.bat sampling` from an elevated prompt, with Visual Studio closed.
