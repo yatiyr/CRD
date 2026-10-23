@@ -2,7 +2,7 @@
 """Verdict tests for scripts/sample-overhead-wpr.py (DIAG.11b clause 8, external sampling of the overhead workloads).
 
 No WPR session is started: wpr, xperf and the harness are replaced by fakes, and the dumper text is written here in
-the form `xperf -a dumper -stacktimeshifting -add_inline` prints. Run: python scripts/test-sample-overhead-wpr.py
+the form `xperf -a dumper -stacktimeshifting` prints. Run: python scripts/test-sample-overhead-wpr.py
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,10 +43,14 @@ class Dumper(unittest.TestCase):
     def test_counts_samples_per_process_and_the_leaf_most_diagnostic_class(self):
         lines = list(HEADERS)
         exe = 'crd-diag-overhead.exe'
-        # pid 100: a sample inside the allocator statistics (inlined into the allocator), one in the flight recorder
-        # under the allocator watch (the leaf-most class wins), one plain sample, one with a template comma.
-        lines += sample(10, exe, 100, 7, exe + '!crd::memory::TlsfAllocator::allocate',
-                        [exe + '!crd::memory::TlsfAllocator::allocate [crd::memory::MemoryStats::on_allocate]',
+        # pid 100: a sample in the allocator statistics, one in a system lock the flight recorder took under the
+        # allocator watch (the leaf-most frame of the program decides), one plain sample, one with a template comma,
+        # one whose frames only list diagnostic functions among their inlinees (`-add_inline` lists a function's
+        # inlinees, not the address's chain), one in the workload under the CEIR bridge (an ancestor never claims it)
+        # and one in the standard clock the bridge's per-op hook reads.
+        lines += sample(10, exe, 100, 7, exe + '!crd::memory::MemoryStats::on_allocate',
+                        [exe + '!crd::memory::MemoryStats::on_allocate',
+                         exe + '!crd::memory::TlsfAllocator::allocate [crd::memory::MemoryStats::on_allocate]',
                          exe + '!main'])
         lines += sample(11, exe, 100, 7, 'ntdll.dll!RtlEnterCriticalSection',
                         ['ntdll.dll!RtlEnterCriticalSection', exe + '!crd::perf::FlightRecorder::record',
@@ -54,24 +58,35 @@ class Dumper(unittest.TestCase):
         lines += sample(12, exe, 100, 7, exe + '!diag_overhead::alloc_frame', [exe + '!main'])
         lines += sample(13, exe, 100, 8, exe + '!crd::containers::Array<int, 4>::push_back',
                         [exe + '!crd::containers::Array<int, 4>::push_back', exe + '!main'])
+        lines += sample(14, exe, 100, 7, exe + '!diag_overhead::OfflineWorkload::iterate [crd::perf::Profiler::begin]',
+                        [exe + '!diag_overhead::OfflineWorkload::iterate [crd::memory::MemoryStats::on_resize]',
+                         exe + '!main [crd::perf::FlightRecorder::record crd::perf::DiagnosticHost::poll]'])
         lines += ['CSwitch, 14, %s (  100), 7, 9, 0' % exe]
-        # pid 200 is not recorded; pid 300 has a sample whose stack lines carry another thread (not its stack).
+        bridge = exe + '!crd::ceir::host::profiled_run'
+        lines += sample(17, exe, 100, 7, exe + "!crd::ceir::plan::`anonymous namespace'::run_seq",
+                        [exe + "!crd::ceir::plan::`anonymous namespace'::run_seq", bridge, exe + '!main'])
+        lines += sample(18, exe, 100, 7, exe + '!std::chrono::steady_clock::now',
+                        [exe + '!std::chrono::steady_clock::now',
+                         exe + "!crd::ceir::host::`anonymous namespace'::adapter_pre", bridge, exe + '!main'])
+        # pid 200 is not recorded; pid 300 has a sample whose stack lines carry another thread (not its stack); another
+        # program that reused pid 100 in the trace is not the harness.
         lines += sample(15, 'other.exe', 200, 1, 'other.exe!crd::perf::Profiler::begin', ['other.exe!main'])
+        lines += sample(19, 'vcpkgsrv.exe', 100, 3, 'vcpkgsrv.exe!crd::perf::Profiler::begin', ['vcpkgsrv.exe!main'])
         lines += sample(16, exe, 300, 5, exe + '!main')
         lines += ['Stack, 16, 6, 1, 0x1, ' + exe + '!crd::perf::Profiler::begin']
-        counter = wpr.count_samples(lines, [100, 300, 400])
-        self.assertEqual(counter.samples, {100: 4, 300: 1, 400: 0})
-        self.assertEqual(counter.diagnostic, {100: 2, 300: 0, 400: 0})
-        self.assertEqual(counter.classes[100], {'memory-stats': 1, 'flight-recorder': 1})
-        self.assertEqual(counter.stack_lines, 9)
+        counter = wpr.count_samples(lines, {100: exe, 300: exe, 400: exe})
+        self.assertEqual(counter.samples, {100: 7, 300: 1, 400: 0})
+        self.assertEqual(counter.diagnostic, {100: 3, 300: 0, 400: 0})
+        self.assertEqual(counter.classes[100], {'memory-stats': 1, 'flight-recorder': 1, 'ceir-bridge': 1})
+        self.assertEqual(counter.stack_lines, 19)
 
     def test_the_sampled_function_alone_counts_and_columns_are_found_by_name(self):
         lines = ['SampledProfile, TimeStamp, ThreadID, Process Name (PID), Image!Function, Count',
                  'SampledProfile, 5, 9, app.exe (42), app.exe!crd::ceir::host::detail::profiled_run, 1']
-        counter = wpr.count_samples(lines, [42])
+        counter = wpr.count_samples(lines, {42: 'App.exe'})
         self.assertEqual((counter.samples[42], counter.diagnostic[42]), (1, 1))
         self.assertEqual(counter.classes[42], {'ceir-bridge': 1})
-        self.assertEqual(wpr.count_samples(['SampledProfile, 5, 9, app.exe (42)'], [42]).samples[42], 0,
+        self.assertEqual(wpr.count_samples(['SampledProfile, 5, 9, app.exe (42)'], {42: 'app.exe'}).samples[42], 0,
                          'without a header nothing is read, so nothing is counted')
 
     def test_frame_classes(self):
@@ -81,6 +96,7 @@ class Dumper(unittest.TestCase):
         self.assertEqual(wpr.frame_class('x!crd::perf::DiagnosticHost::poll'), 'diagnostic-host')
         self.assertEqual(wpr.frame_class('x!crd::perf::install_jobs_adapter'), 'perf')
         self.assertIsNone(wpr.frame_class('x!crd::jobs::Scheduler::run'))
+        self.assertIsNone(wpr.frame_class('x!main [crd::memory::MemoryStats::on_allocate]'), 'an inlinee list')
 
 
 def manifest(costs, shares_runs, frame_seconds=2.5, wall=2.6):
@@ -97,7 +113,7 @@ def manifest(costs, shares_runs, frame_seconds=2.5, wall=2.6):
 
 
 def counter_for(manifest_doc, mapping, shares, samples=1000):
-    counter = wpr.DumperCounter([run['pid'] for run in manifest_doc['runs']])
+    counter = wpr.DumperCounter({run['pid']: 'crd-diag-overhead.exe' for run in manifest_doc['runs']})
     for pid, key in mapping.items():
         counter.samples[pid] = samples
         counter.diagnostic[pid] = int(round(shares[key] * samples))
@@ -138,13 +154,17 @@ class Judge(unittest.TestCase):
                                                       {('alloc', 'off'): 0.0}))[2], 'UNRESOLVED',
                          'frames covering 19% of the process are diluted by its setup')
         none = manifest({('alloc', 'off'): 100}, {})
-        _, lines, worst = wpr.judge(none, wpr.DumperCounter([1000, 1001]))
+        _, lines, worst = wpr.judge(none, wpr.DumperCounter({1000: 'a.exe', 1001: 'a.exe'}))
         self.assertEqual(worst, 'UNREADABLE', 'no samples for a recorded process is never a zero share')
         failed = manifest({('alloc', 'off'): 100}, {})
         failed['runs'][0]['exit_code'] = 1
-        _, lines, worst = wpr.judge(failed, wpr.DumperCounter([1000, 1001]))
+        _, lines, worst = wpr.judge(failed, wpr.DumperCounter({1000: 'a.exe', 1001: 'a.exe'}))
         self.assertEqual(worst, 'UNRESOLVED')
         self.assertIn('UNRESOLVED: alloc off: a harness process failed', '\n'.join(lines))
+        reused = manifest({('alloc', 'off'): 100}, {})
+        reused['runs'][1]['pid'] = 1000
+        self.assertEqual(wpr.judge(reused, counter_for(reused, {1000: ('alloc', 'off')}, {('alloc', 'off'): 0.0}))[2],
+                         'UNRESOLVED', 'two recorded processes with one PID cannot be told apart')
 
 
 class Record(unittest.TestCase):
@@ -153,6 +173,7 @@ class Record(unittest.TestCase):
         base = Path(temp) / 'base.exe'
         exe.write_bytes(b'profile')
         base.write_bytes(b'baseline')
+        exe.with_suffix('.pdb').write_bytes(b'profile symbols')
         values = {'exe': str(exe), 'baseline_exe': str(base), 'workloads': 'alloc', 'arms': 'off,full',
                   'repetitions': 2, 'timeout': 5.0, 'out': str(Path(temp) / 'out'), 'progress': False}
         values.update(extra)
@@ -198,6 +219,9 @@ class Record(unittest.TestCase):
             self.assertEqual(saved['runs'][0]['harness']['median_ns'], 100)
             self.assertEqual(saved['exe']['sha256'], hashlib.sha256(b'profile').hexdigest())
             self.assertEqual(saved['trace'], 'overhead.etl')
+            self.assertEqual((run_dir / 'symbols/profile/crd-diag-overhead.pdb').read_bytes(), b'profile symbols',
+                             'the PDB of record time stays with the trace')
+            self.assertFalse((run_dir / 'symbols/compiled-out').exists(), 'a binary without a PDB keeps none')
 
     def test_an_interrupted_session_is_cancelled(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -227,6 +251,7 @@ class Record(unittest.TestCase):
             run_dir = Path(temp)
             doc = {'schema': wpr.SCHEMA, 'trace': 'overhead.etl', 'interval_ms': 1.0,
                    'runs': [{'workload': 'alloc', 'arm': 'off', 'repetition': 0, 'pid': 100, 'exit_code': 0,
+                             'command': ['D:/b/crd-diag-overhead.exe', '--workload', 'alloc'],
                              'wall_seconds': 2.6, 'harness': {'frames': 1000, 'frame_seconds': 2.5,
                                                               'median_ns': 100}}]}
             (run_dir / 'manifest.json').write_text(json.dumps(doc), encoding='utf-8')

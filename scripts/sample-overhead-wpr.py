@@ -8,11 +8,19 @@ diagnostic host, the profiler and the CEIR profiling bridge).
 
   record   (an elevated shell: WPR's kernel sampler needs it) one WPR CPU session with stacks; inside it every arm of
            every workload runs `--repetitions` times as its own process, the arms interleaved and rotated per
-           repetition, each process's PID, wall time and own JSON record kept in `manifest.json`. The trace stays in the
-           run directory and `analyze` runs at once.
-  analyze  (no elevation) streams `xperf -a dumper -stacktimeshifting -add_inline` of the trace, counts every CPU
-           sample of each recorded process and the samples whose stack holds a diagnostic frame (by class, the frame
-           nearest the leaf deciding), and writes `analysis.json`.
+           repetition, each process's PID, wall time and own JSON record kept in `manifest.json`. The trace and both
+           binaries' PDBs stay in the run directory (a later rebuild cannot orphan the trace); `analyze` runs at once.
+  analyze  (no elevation) streams `xperf -a dumper -stacktimeshifting` of the trace, counts every CPU sample of each
+           recorded process and the samples whose deciding frame is a diagnostic one (by class), and writes
+           `analysis.json`.
+
+A sample's deciding frame is the leaf-most frame of the program's own image that is not `std::` (DumperCounter), and
+a frame is classified by its own function only. xperf's `-add_inline` lists every function inlined anywhere into a
+frame's function, not the inline chain at the sampled address; with it, and with any diagnostic ancestor claiming a
+sample, `main` and the workload code under the CEIR bridge and the jobs adapter fell into classes (2026-10-23). A frame
+sampler attributes force-inlined code, such as the allocator statistics gate, to its host function: off over
+compiled-out is compared with off's out-of-line diagnostic samples, and the inlined gate's cost is the exact count of
+DIAG.11b clause (1).
 
 Per workload and arm the analysis reports the samples, the CPU milliseconds per frame (samples times the sampling
 interval over the timed frames: the CPU-time measurand the jobs workload needs) and the diagnostic share. Against the
@@ -56,9 +64,10 @@ DEFAULT_BASELINE = ROOT / 'build/win-shipping/tests/diag-overhead/crd-diag-overh
 DEFAULT_OUT = ROOT / 'build/diag-overhead-wpr'
 WORKLOADS = ('alloc', 'jobs', 'offline')
 ARMS = ('compiled-out', 'off', 'basic', 'full')
-# Timed frames per process, sized so the frames take about 2.5 s in the off arm on the 2026-10-16 board's machine
-# (alloc 122 us, jobs 433 us and offline 402 us per frame) and dominate the process (setup takes about 0.1 s).
-ITERATIONS = {'alloc': 20000, 'jobs': 6000, 'offline': 6000}
+# Timed frames per process, sized so the frames take at least 3.2 s in the off arm on the 2026-10-19 capture's machine
+# (alloc 83-92 us, jobs 370-417 us and offline 350-420 us per frame) and cover FRAME_FRACTION with a margin of the
+# process: the basic arm's setup takes 0.35 s (it left alloc's 20,000 frames 84% of the process).
+ITERATIONS = {'alloc': 40000, 'jobs': 8000, 'offline': 8000}
 WARMUP = 50
 AFFINITY = 'FFFF'
 INTERVAL_MS = 1.0  # WPR's CPU profile samples every 1 ms per processor
@@ -68,14 +77,14 @@ AGREE_ABSOLUTE = 0.02
 AGREE_RELATIVE = 0.25
 VERDICT_CODES = {'AGREES': 0, 'TOOL_MISSING': 2, 'PERMISSION_DENIED': 3, 'UNRESOLVED': 4, 'UNREADABLE': 5,
                  'DISAGREES': 6, 'USAGE': 64}
-# Diagnostic frame classes, matched against a frame's `module!function` text and its inlined functions. The first
-# match decides a frame's class; the frame nearest the leaf decides a sample's.
+# Diagnostic frame classes, matched against a frame's own `module!function` text. The first match decides a frame's
+# class; DumperCounter says which frame decides a sample's.
 CLASSES = (
     ('memory-stats', re.compile(r'MemoryStats::')),
     ('allocator-watch', re.compile(r'FlightAllocatorWatch')),
     ('flight-recorder', re.compile(r'Flight(?:Recorder|FrameWatch|CommandHost)')),
     ('diagnostic-host', re.compile(r'Diagnostic(?:Host|Recorder)')),
-    ('ceir-bridge', re.compile(r'crd::ceir::host::(?:\w+::)*(?:profiled_run|PlanProfile)')),
+    ('ceir-bridge', re.compile(r'crd::ceir::host::(?:.*::)?(?:profiled_run|PlanProfile|adapter_pre|adapter_post)\b')),
     ('perf', re.compile(r'crd::perf::')),
 )
 
@@ -145,6 +154,11 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
     scratch = run_dir / 'scratch'
     scratch.mkdir(parents=True, exist_ok=False)
     etl = run_dir / 'overhead.etl'
+    for name, program in (('profile', exe), ('compiled-out', baseline)):
+        pdb = program.with_suffix('.pdb') if program else None
+        if pdb is not None and pdb.is_file():
+            (run_dir / 'symbols' / name).mkdir(parents=True)
+            shutil.copy2(pdb, run_dir / 'symbols' / name / pdb.name)
     manifest = {'schema': SCHEMA, 'started': stamp, 'interval_ms': INTERVAL_MS, 'exe': file_identity(exe),
                 'baseline_exe': file_identity(baseline) if baseline else None, 'arms': arms,
                 'workloads': list(args.workloads.split(',')), 'repetitions': args.repetitions, 'trace': etl.name,
@@ -195,7 +209,11 @@ def column(header, name):
     return None
 
 
+INLINEES = re.compile(r'\s*\[.*$')  # the inlinee list `-add_inline` appends: not the sampled address's chain
+
+
 def frame_class(frame):
+    frame = INLINEES.sub('', frame)
     for name, pattern in CLASSES:
         if pattern.search(frame):
             return name
@@ -206,20 +224,26 @@ class DumperCounter:
     """Counts sampled-profile events per process from `xperf -a dumper -stacktimeshifting` lines, and the samples whose
     stack holds a diagnostic frame. The dumper writes, for every event type, a header line naming its columns
     (`SampledProfile, TimeStamp, Process Name ( PID), ...`); with -stacktimeshifting a sample's `Stack` lines follow
-    it (same TimeStamp and ThreadID), leaf first, the frame text last on the line (it may contain commas)."""
+    it (same TimeStamp and ThreadID), leaf first, the frame text last on the line (it may contain commas).
 
-    def __init__(self, pids):
-        self.pids = set(pids)
+    The leaf-most frame of the process's own image that is not `std::` decides a sample: system modules and the
+    standard library run on behalf of their caller (the bridge's clock read, the recorder's lock), and a diagnostic
+    frame further up (the CEIR bridge's `profiled_run` around the program, the jobs adapter around a job) does not
+    claim the workload code it calls."""
+
+    def __init__(self, processes):
+        self.images = {pid: image.lower() for pid, image in processes.items()}  # a PID counts only under its image
+        self.pids = set(self.images)
         self.headers = {}
         self.samples = {pid: 0 for pid in self.pids}
         self.diagnostic = {pid: 0 for pid in self.pids}
         self.classes = {pid: {} for pid in self.pids}
-        self.current = None  # (pid, timestamp, tid, class of the leaf-most diagnostic frame or None)
+        self.current = None  # [pid, timestamp, tid, image prefix, decided, class of the deciding frame or None]
         self.stack_lines = 0
 
     def _finish(self):
         if self.current is not None:
-            pid, _, _, cls = self.current
+            pid, cls = self.current[0], self.current[5]
             if cls is not None:
                 self.diagnostic[pid] += 1
                 self.classes[pid][cls] = self.classes[pid].get(cls, 0) + 1
@@ -243,19 +267,19 @@ class DumperCounter:
             if not match:
                 return
             pid = int(match.group(2))
-            if pid not in self.pids:
+            if pid not in self.pids or match.group(1).strip().lower() != self.images[pid]:
                 return
+            image = match.group(1).strip() + '!'
             self.samples[pid] += 1
             thread = column(header, 'ThreadID')
             tid = fields[thread] if thread is not None and thread < len(fields) else ''
             # The sampled instruction's own function, which may carry commas: everything between its column and the
             # columns after it.
-            leaf = None
+            self.current = [pid, fields[1], tid, image, False, None]
             first = column(header, 'Image!Function')
             if first is not None:
                 tail = len(header) - first - 1
-                leaf = frame_class(','.join(fields[first:len(fields) - tail] if tail else fields[first:]))
-            self.current = (pid, fields[1], tid, leaf)
+                self._frame(','.join(fields[first:len(fields) - tail] if tail else fields[first:]))
             return
         if kind == 'Stack' and self.current is not None:
             header = self.headers.get(kind)
@@ -268,20 +292,25 @@ class DumperCounter:
                 self._finish()
                 return
             self.stack_lines += 1
-            if self.current[3] is None:
-                first = column(header, 'Image!Function')
-                cls = frame_class(','.join(fields[first:])) if first is not None else None
-                if cls is not None:
-                    self.current = self.current[:3] + (cls,)
+            first = column(header, 'Image!Function')
+            if first is not None:
+                self._frame(','.join(fields[first:]))
             return
         self._finish()
+
+    def _frame(self, frame):
+        image = self.current[3]
+        if self.current[4] or not frame.startswith(image) or frame[len(image):].startswith('std::'):
+            return
+        self.current[4] = True
+        self.current[5] = frame_class(frame)
 
     def close(self):
         self._finish()
 
 
-def count_samples(lines, pids):
-    counter = DumperCounter(pids)
+def count_samples(lines, processes):
+    counter = DumperCounter(processes)
     for line in lines:
         counter.feed(line)
     counter.close()
@@ -291,9 +320,9 @@ def count_samples(lines, pids):
 def dumper_lines(xperf, etl, symbols):
     env = dict(os.environ)
     env['_NT_SYMBOL_PATH'] = ';'.join(str(s) for s in symbols)  # local symbols only, never a symbol server
-    process = subprocess.Popen([xperf, '-i', str(etl), '-symbols', '-a', 'dumper', '-stacktimeshifting',
-                                '-add_inline'], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
-                               encoding='utf-8', errors='replace', env=env)
+    process = subprocess.Popen([xperf, '-i', str(etl), '-symbols', '-a', 'dumper', '-stacktimeshifting'],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
+                               errors='replace', env=env)
     try:
         for line in process.stdout:
             yield line
@@ -322,13 +351,14 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
         if VERDICT_CODES[name] > VERDICT_CODES[worst]:
             worst = name
 
+    pids = [run['pid'] for run in manifest['runs']]
     for run in manifest['runs']:
         key = (run['workload'], run['arm'])
         cell = cells.setdefault(key, {'samples': 0, 'diagnostic': 0, 'classes': {}, 'frames': 0, 'medians': [],
                                       'frame_fraction': [], 'unreadable': False, 'failed': False})
         pid = run['pid']
         harness = run.get('harness')
-        if run.get('exit_code') != 0 or harness is None:
+        if run.get('exit_code') != 0 or harness is None or pids.count(pid) > 1:
             cell['failed'] = True
             continue
         samples = counter.samples.get(pid, 0)
@@ -349,7 +379,7 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
     for (workload, arm), cell in sorted(cells.items()):
         label = '%s %s' % (workload, arm)
         if cell['failed']:
-            lines.append('UNRESOLVED: %s: a harness process failed or printed no record' % label)
+            lines.append('UNRESOLVED: %s: a harness process failed, printed no record or shared its PID' % label)
             worse('UNRESOLVED')
             continue
         if cell['unreadable']:
@@ -400,9 +430,11 @@ def analyze_run(run_dir, xperf=None, lines_source=None):
             return verdict('TOOL_MISSING', 'xperf not on PATH (install the Windows Performance Toolkit)')
         if not etl.is_file():
             return verdict('USAGE', 'no trace %s' % etl)
-        symbols = sorted({str(Path(manifest[k]['path']).parent) for k in ('exe', 'baseline_exe') if manifest.get(k)})
+        kept = sorted(str(d) for d in (run_dir / 'symbols').glob('*') if d.is_dir())  # the PDBs of record time first
+        symbols = kept + sorted({str(Path(manifest[k]['path']).parent) for k in ('exe', 'baseline_exe')
+                                 if manifest.get(k)})
         lines_source = dumper_lines(xperf, etl, symbols)
-    counter = count_samples(lines_source, [run['pid'] for run in manifest['runs']])
+    counter = count_samples(lines_source, {run['pid']: Path(run['command'][0]).name for run in manifest['runs']})
     cells, lines, worst = judge(manifest, counter, manifest.get('interval_ms', INTERVAL_MS))
     analysis = {'schema': SCHEMA, 'trace': str(etl), 'stack_lines': counter.stack_lines, 'verdict': worst,
                 'lines': lines, 'cells': {'%s %s' % key: cell for key, cell in sorted(cells.items())},
