@@ -495,8 +495,7 @@ class RegisteredFailures(unittest.TestCase):
             with self.assertRaisesRegex(gate.RegisterError, 'Zero CTest results'):
                 gate.junit_results(junit)
         real = gate.load_register(ROOT / 'docs/third-party-defects.md')
-        self.assertIn('win-asan', real['lanes'])
-        self.assertEqual({entry['defect'] for entry in real['lanes']['win-asan']}, {'TP-1'})
+        self.assertEqual({entry['defect'] for entry in real['lanes']['linux-gcc-asan']}, {'TP-5'})
         presets = {p['name'] for p in json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))['configurePresets']}
         self.assertTrue(set(real['lanes']) <= presets, set(real['lanes']) - presets)
 

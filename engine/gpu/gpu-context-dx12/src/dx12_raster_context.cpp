@@ -3318,13 +3318,28 @@ public:
         D3D12_DXIL_LIBRARY_DESC libs[6]{};
         const crd::containers::ConstSpan<crd::u8> code[6] = {rg, ms, ch, ah, isect, call};
         crd::u32                                  n_libs  = 0U;
+        // TP-1 (docs/third-party-defects.md#tp-1): WARP's CreateStateObject reads 8 bytes just past a library's DXIL
+        // container, and the runtime copies exactly BytecodeLength bytes, so the read left the runtime's heap block.
+        // Each library is handed over with `tail` zero bytes after its container, so the read stays inside that copy;
+        // a provider that reads further still reaches the sanitizer. The content keys above stay on the bare DXIL.
+        constexpr crd::usize tail = 8U;
+        crd::containers::Array<crd::u8> lib_bytes(m_allocator);
+        crd::usize lib_total = 0U;
+        for (const auto& c : code)
+        {
+            lib_total += (c.data() != nullptr && c.size() > 0U) ? c.size() + tail : 0U;
+        }
+        lib_bytes.resize(lib_total);
+        crd::usize at = 0U;
         for (crd::u32 i = 0; i < 6U; ++i)
         {
             if (code[i].data() == nullptr || code[i].size() == 0U)
             {
                 continue;
             }
-            libs[n_libs].DXILLibrary = {code[i].data(), code[i].size()};
+            std::memcpy(lib_bytes.data() + at, code[i].data(), code[i].size());
+            libs[n_libs].DXILLibrary = {lib_bytes.data() + at, code[i].size() + tail};
+            at += code[i].size() + tail;
             libs[n_libs].NumExports  = 1U;
             libs[n_libs].pExports    = &ex[i];
             ++n_libs;

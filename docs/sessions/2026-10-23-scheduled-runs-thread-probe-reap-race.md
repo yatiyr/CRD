@@ -1,17 +1,16 @@
 # Scheduled runs 39746853196 and 39923363836: the thread probe's reap race, 2026-10-23
 
 <!-- doc-role: historical -->
-> Dated evidence. Live owner: [DIAG.10c](../ROADMAP.md#slice-diag.10c) (the OS thread probe); the WARP finding
-> below is queued under [DIAG.11b](../ROADMAP.md#slice-diag.11b), the LeakSanitizer one is repaired there pending its
-> hosted evidence. Rules: [AGENTS](../../AGENTS.md).
+> Dated evidence. Live owner: [DIAG.10c](../ROADMAP.md#slice-diag.10c) (the OS thread probe); the WARP and the
+> LeakSanitizer findings are repaired under [DIAG.11b](../ROADMAP.md#slice-diag.11b) pending their hosted evidence.
+> Rules: [AGENTS](../../AGENTS.md).
 
 ## Goal
 
 `1e0574f1` was green in the nightly runs of 2026-10-20 and 21 and red in
 [39746853196](https://github.com/yatiyr/CRD/actions/runs/39746853196) (2026-10-22, `linux-gcc-asan`) and
 [39923363836](https://github.com/yatiyr/CRD/actions/runs/39923363836) (2026-10-23, `linux-clang-tsan`, `win-asan`).
-Same commit, so each failure is an intermittent defect to explain. The first and the LeakSanitizer one are repaired
-below; the WARP one is measured and taken by a later batch.
+Same commit, so each failure is an intermittent defect to explain. All three are repaired below.
 
 ## linux-clang-tsan: a thread reaped between open() and read()
 
@@ -28,7 +27,7 @@ threads that return at once and probes each without pause until it is no longer 
 on all three runs on `linux-gcc-debug` (mirror tree), with 76, 52 and 45 of 300 threads read as unavailable; repaired
 and rebuilt, 0 of 300 on three runs. The `diag10c` CTest set passes on `linux-gcc-debug` (119) and `win-debug` (131).
 
-## Measured, not yet repaired
+## Measured
 
 ### win-asan: TP-1's registered set is not stable on WARP 10.0.26100.33648
 
@@ -74,3 +73,27 @@ removed and the mirror synced, `VK_LOADER_DEBUG=warn wsl-lane.sh test linux-gcc-
 caught by LeakSanitizer` still reports the specimen's leak and passes, and `raf2b`, `raf7` and the rebuilt
 `crd-gpu-context-vulkan-tests` under CTest (309 of its 312 tests finished inside the 19-minute bound: 308 passed, the
 shading-rate gate skipped on lavapipe) print no LeakSanitizer report.
+
+## win-asan: the library tail keeps WARP's read inside the runtime's copy
+
+Every TP-1 report is an 8-byte `memmove` read starting exactly at the end of a `D3D12Core.dll` block the size of one
+DXIL library: the runtime copies `BytecodeLength` bytes and WARP reads 8 more. Which library it reads past varies on
+hosted runs, so no stable registered set exists; the repair removes the out-of-bounds read instead of describing it.
+
+SDK-only probe (the 2026-09-12 program with each library copied into a buffer `pad` bytes longer, zero-filled, and
+that length passed as `BytecodeLength`), workstation WARP `10.0.26100.9711`, ASan, debug layer and unfiltered
+InfoQueue callback on: `pad=0` three runs, each the read 0 bytes after the 2,272-byte region; `pad=8`, `16` and `64`
+`CreateStateObject returned 0x00000000 errors=0 warnings=0`, no report. So WARP reads at the container's end, not at
+`BytecodeLength`, and the runtime accepts the longer bytecode.
+
+Repair: `dxr_pipeline` copies the libraries of a pipeline it builds into one array, each followed by 8 zero bytes, and
+passes container + 8. Exactly 8: a provider that reads further still reaches the sanitizer. The content keys stay on
+the bare DXIL. The work-graph state object takes no tail; `CEIR-20c-1 ... runs as a D3D12 WORK GRAPH` passed on
+`win-asan` in both runs. The five `win-asan` registrations are removed from the register; TP-1 records the handling
+and retires when the probe without the tail is clean.
+
+Local evidence (hardware adapter; this box cannot run the engine on WARP without changing a system setting):
+`win-debug`, with `crd-gpu-context-dx12-tests` and `crd-scene-render-tests` rebuilt, the 23 CTests matching `CEIR-19b`,
+`REN-38-F6`, `DXR`, `REN-38 RT` or `REN-38-F13` pass, the five former TP-1 tests among them; `win-asan`, the 8 DXR CTests of `crd-gpu-context-dx12-tests` pass with no
+report. Hosted evidence still required: the next `win-asan` run on WARP with the gate line
+`gate: no registered failures for this lane`, the five tests `Passed` and no AddressSanitizer report.
