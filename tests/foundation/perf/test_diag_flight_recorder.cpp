@@ -742,8 +742,8 @@ TEST_CASE("flight trigger: a failed invariant closes the window as fatal, delive
 #if CRD_ENABLE_ASSERTS
 namespace
 {
-// A crd-jobs worker holds the recorder's ring mutex (through the test-only seam) until the test releases it, so the
-// test's own thread can run finish(Fatal) against a held ring. A std::mutex cannot be try-locked by its owner.
+// A crd-jobs worker holds the recorder's collection lock (through the test-only seam) until the test releases it, so
+// the test's own thread can run finish(Fatal) against a held ring. A std::mutex cannot be try-locked by its owner.
 struct RingHold
 {
     cp::FlightRecorder* recorder = nullptr;
@@ -887,6 +887,123 @@ TEST_CASE("flight trigger: the fatal path that finds the ring held delivers the 
     CHECK(read.capture.end == cp::FlightEnd::Fatal);
     CHECK(read.capture.events.empty());
     CHECK(read.capture.trigger.sequence == 5U);
+}
+
+namespace
+{
+// A claim held unpublished on its own thread until `release`, bounded so a collector that waits forever fails the
+// case instead of hanging it.
+struct ClaimHold
+{
+    cp::FlightRecorder* recorder = nullptr;
+    std::atomic<bool> claimed{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> seam_ran{false};
+};
+
+void hold_claim(void* data)
+{
+    auto* const hold = static_cast<ClaimHold*>(data);
+    hold->claimed.store(true, std::memory_order_release);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!hold->release.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+    {
+        std::this_thread::yield();
+    }
+}
+
+std::thread start_claim_hold(ClaimHold& hold)
+{
+    std::thread holder(
+        [&hold]
+        {
+            hold.seam_ran.store(hold.recorder->test_with_claim_unpublished(&hold_claim, &hold),
+                                std::memory_order_release);
+        });
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!hold.claimed.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+    {
+        std::this_thread::yield();
+    }
+    return holder;
+}
+} // namespace
+
+TEST_CASE("flight recorder: a collector waits for a claim still publishing; the fatal path only within its bound",
+          "[perf][diag][diag11b][flight]")
+{
+    SECTION("take_capture keeps the event the held claim publishes")
+    {
+        cp::FlightRecorder r;
+        REQUIRE(r.init(small_policy(16U, 8U, 2U)) == cp::FlightPolicyStatus::Committed);
+        record_n(r, 0U, 3U);
+        REQUIRE(r.trigger(manual("held")) == cp::FlightTriggerResult::Started);
+        record_n(r, 3U, 1U);
+        ClaimHold hold;
+        hold.recorder = &r;
+        std::thread holder = start_claim_hold(hold); // sequence 4 fills the post window
+        const bool claimed = hold.claimed.load(std::memory_order_acquire);
+        std::thread releaser(
+            [&hold]
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                hold.release.store(true, std::memory_order_release);
+            });
+        cp::FlightCapture c;
+        const bool taken = r.take_capture(c);
+        releaser.join();
+        holder.join();
+
+        REQUIRE(claimed);
+        CHECK(hold.seam_ran.load(std::memory_order_acquire));
+        REQUIRE(taken);
+        CHECK(capture_is_consistent(c));
+        CHECK(c.end == cp::FlightEnd::PostEventsFull);
+        CHECK_FALSE(c.ring_unavailable);
+        CHECK(c.pre_retained == 3U);
+        REQUIRE(c.post_retained == 2U);
+        const cp::FlightEvent& held = c.events[c.events.size() - 1U];
+        CHECK(held.sequence == 4U);
+        CHECK(held.value_a == 4U);
+        CHECK(held.message_view() == "claim held");
+        CHECK(c.end_ns == held.timestamp_ns); // the claim that filled the window closed it at its own time
+    }
+
+    SECTION("finish(Fatal) gives up on the held claim and delivers the trigger alone")
+    {
+        SinkLog log;
+        cp::FlightRecorder r;
+        REQUIRE(r.init(small_policy(16U, 8U, 4U)) == cp::FlightPolicyStatus::Committed);
+        r.set_sink(&sink_into, &log);
+        record_n(r, 0U, 3U);
+        REQUIRE(r.trigger(manual("held")) == cp::FlightTriggerResult::Started);
+        ClaimHold hold;
+        hold.recorder = &r;
+        std::thread holder = start_claim_hold(hold); // sequence 3, the first post event
+        const bool claimed = hold.claimed.load(std::memory_order_acquire);
+        const bool delivered = r.finish(cp::FlightEnd::Fatal);
+        const bool still_held = !hold.seam_ran.load(std::memory_order_acquire); // the claim had not published
+        hold.release.store(true, std::memory_order_release);
+        holder.join();
+
+        REQUIRE(claimed);
+        CHECK(still_held);
+        CHECK(hold.seam_ran.load(std::memory_order_acquire));
+        REQUIRE(delivered);
+        REQUIRE(log.calls.load() == 1);
+        const cp::FlightCapture& c = log.last;
+        CHECK(c.ring_unavailable);
+        CHECK(c.end == cp::FlightEnd::Fatal);
+        CHECK(c.post_truncated);
+        CHECK(c.events.empty());
+        CHECK(c.trigger.sequence == 3U);
+        CHECK(r.fatal_entered());
+        CHECK(r.total_recorded() == 4U); // the held claim published after the fatal path gave up on it
+        record_n(r, 4U, 2U);
+        CHECK(r.total_recorded() == 4U);
+        r.shutdown();
+        CHECK(log.calls.load() == 1);
+    }
 }
 #endif
 
@@ -1221,9 +1338,9 @@ TEST_CASE("flight trigger: allocation failure and resource pressure trigger thro
     }
 }
 
-// A trigger reads the total without the ring mutex, so events can land between that read and the state store. This
-// case caught the post window counting those events (a capture with more than post_events after the trigger); the
-// window is now anchored under the ring mutex at the first event that sees the trigger.
+// This case caught the post window counting events that landed between a trigger's total read and its state store (a
+// capture with more than post_events after the trigger). Since DIAG.11b the trigger and every claim move one recording
+// word by compare-exchange, so the boundary is exact and no event is claimed after the window closed.
 TEST_CASE("flight recorder: concurrent recording, triggering and collection keep every capture consistent",
           "[perf][diag][diag9b][flight][concurrency]")
 {

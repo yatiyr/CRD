@@ -9,9 +9,8 @@
 //   program's own state is unchanged; where the recorder keeps the event, each is evaluated exactly once, and the
 //   recorder expression is evaluated once in every case. A detail that leaves the event out still counts it as
 //   filtered, exactly as a direct record() does.
-// - no waiting: an event the active detail leaves out is decided before the ring mutex. While another thread holds the
-//   ring (the test seam), a Basic recorder's informational record() and admit() return; a Warning, which the recorder
-//   keeps, cannot complete until the ring is released (the positive control that the ring really is held).
+// - no waiting: record() takes no lock. While another thread holds the ring's collection lock (the test seam), a Basic
+//   recorder's informational record() and admit() return, and so does a Warning, which the recorder keeps.
 //
 // The measured cost of each mode is the overhead board's (scripts/diag-overhead.py, docs/bench); these cases only
 // state what must hold on every lane. Contract: docs/design/runtime-diagnostics.md (DIAG.11b); ADR-0133.
@@ -160,15 +159,14 @@ TEST_CASE("diag 11b sites: a disabled flight site evaluates no payload and chang
 #if CRD_ENABLE_ASSERTS
 namespace
 {
-constexpr auto kSettle = std::chrono::milliseconds(50);
-constexpr auto kBound  = std::chrono::seconds(10);
+constexpr auto kBound = std::chrono::seconds(10);
 
 struct HeldRing
 {
     cp::FlightRecorder* recorder          = nullptr;
     bool                filtered_returned = false; // the informational record() and admit() returned while held
     std::atomic<bool>   admitted{true};            // what admit(Info) answered
-    bool                warning_waited = false;    // the warning had not completed while the ring was held
+    bool                warning_returned = false;  // the kept warning returned while held
     std::atomic<bool>   filtered_done{false};
     std::atomic<bool>   warning_done{false};
     std::thread         filtered;
@@ -202,34 +200,34 @@ void record_warning(HeldRing* held)
     held->warning_done.store(true, std::memory_order_release);
 }
 
-// Runs while this thread holds the recorder's ring mutex. Both threads are joined after it returns, so a record() that
-// wrongly waits on the ring fails the case instead of deadlocking it.
+// Runs while this thread holds the recorder's collection lock. Both threads are joined after it returns, so a record()
+// that wrongly waits on a collector fails the case instead of deadlocking it.
 void while_ring_held(void* user)
 {
     auto* const held        = static_cast<HeldRing*>(user);
     held->filtered          = std::thread(&record_filtered, held);
     held->filtered_returned = wait_for(held->filtered_done);
 
-    // The positive control: an event the recorder keeps takes the ring, so it cannot complete while the ring is held.
+    // An event the recorder keeps claims its slot without a lock (DIAG.11b clause 6), so it completes too.
     held->warning = std::thread(&record_warning, held);
-    std::this_thread::sleep_for(kSettle);
-    held->warning_waited = !held->warning_done.load(std::memory_order_acquire);
+    held->warning_returned = wait_for(held->warning_done);
 }
 } // namespace
 
-TEST_CASE("diag 11b sites: an event the detail leaves out never waits on the ring", "[perf][diag][diag11b][sites]")
+TEST_CASE("diag 11b sites: neither a left-out nor a kept event waits on a collector holding the ring",
+          "[perf][diag][diag11b][sites]")
 {
     cp::FlightRecorder basic;
     REQUIRE(basic.init(policy(cp::FlightDetail::Basic)) == cp::FlightPolicyStatus::Committed);
     HeldRing held;
     held.recorder = &basic;
     REQUIRE(basic.test_with_ring_held(&while_ring_held, &held));
-    held.filtered.join(); // the ring is free again, so both complete
+    held.filtered.join(); // both returned while the ring was held
     held.warning.join();
     CHECK(held.filtered_returned);
     CHECK(held.filtered_done.load(std::memory_order_acquire));
     CHECK_FALSE(held.admitted.load(std::memory_order_relaxed));
-    CHECK(held.warning_waited);
+    CHECK(held.warning_returned);
     CHECK(held.warning_done.load(std::memory_order_acquire));
     CHECK(basic.total_filtered() == 2U);
     CHECK(basic.total_recorded() == 1U);

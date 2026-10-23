@@ -1291,8 +1291,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
   capacity`, so the post window can never overwrite the pre window it keeps. A rejected candidate (or a reload while a
   capture is pending, or a generation that would wrap) leaves the active policy, its generation and the ring as they
   were. Defaults: 1024 events (152 KiB), 768 before, 256 after, 2 s, every trigger, 50 ms hitch.
-- A trigger takes only its own mutex, never the ring's. The first trigger opens the post window; any trigger while a
-  capture is pending is suppressed and counted with its kind, never replacing it. The window closes when
+- A trigger takes only its own mutex, never the collection lock, and a record takes none (DIAG.11b, 2026-10-24). The
+  first trigger opens the post window; any trigger while a capture is pending is suppressed and counted with its kind,
+  never replacing it. The window closes when
   `post_events` land, when `post_window_ns` elapses (seen by `poll()`), at shutdown or on the fatal path; the last two
   mark the post window truncated. Events between the window closing and collection are not recorded (the ring stays
   frozen) and are counted.
@@ -1304,8 +1305,8 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
 - Collection: `poll()` delivers to the host's sink, `take_capture()` without one, `finish()` closes early. A capture
   that ended Fatal is terminal: the recorder records and delivers nothing more, so the second fatal path of one failure
   (`check_invariant`'s default reaches `CRD_FATAL`, which reaches the assert trigger) cannot replace it. On the fatal
-  path the ring is taken with a bounded try-lock; if it stays held, the capture carries the trigger alone and says
-  `ring_unavailable`. Building a capture allocates, so the fatal path is an ordinary handler call, never a signal
+  path the collection lock is taken with a bounded try-lock and claims still publishing are waited for within the same
+  bound; if either runs out, the capture carries the trigger alone and says `ring_unavailable`. Building a capture allocates, so the fatal path is an ordinary handler call, never a signal
   handler: a hard signal crash still leaves only the DIAG.2b emergency record and the DIAG.5a/5b crash record.
 - The capture is bundle section `FlightRecord` (tag 6), a versioned little-endian payload ('CFR1') whose decoder
   bounds every length by its fixed limit and by the payload, checks the loss metadata against the event list and
@@ -2149,7 +2150,8 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-engine-seams.md))
 - The last three owned gaps are closed through test-only seams, compiled only where `CRD_ENABLE_ASSERTS` is (never
   in a shipping build, following `crd::crash::test_fatal_path`): `DiagnosticPolicyStore::test_set_generation` and
   `FlightRecorder::test_set_policy_generation` move only the counter (0 and a recorder before init are refused), and
-  `FlightRecorder::test_with_ring_held` calls a function while its thread holds the ring mutex. A seam never
+  `FlightRecorder::test_with_ring_held` calls a function while its thread holds the ring's collection lock (the ring
+  mutex until 2026-10-24). A seam never
   returns a status itself, so the producing sites the measurement names are the engine's own.
 - `[diag10b]` cases: a policy load and a flight reload one past generation 2^32 - 1 are refused with
   RejectedGenerationWrap, the active policy, the generation and the flight ring stay (the six events recorded before
@@ -2746,7 +2748,7 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
 - The event-site form: `CRD_FLIGHT_RECORD(recorder, code, severity, message, a, b)` (`crd/perf/flight_recorder.hpp`)
   evaluates its message and scalars only when a recorder runs and its detail keeps the event
   (`FlightRecorder::admit`, one atomic load, which counts a left-out event in `total_filtered()`); the recorder and
-  severity expressions once. `record()` decides a left-out event before it reads the clock or takes the ring mutex.
+  severity expressions once. `record()` decides a left-out event before it reads the clock or claims a sequence.
   This is the modes contract's "disabled event sites must not evaluate expensive payload expressions", held by
   side-effect controls, and a Basic recorder no longer serializes informational sites on its ring (a no-wait case with
   the ring held). Application sites use the macro; a direct `record()` stays for code that already holds its payload.
@@ -2777,8 +2779,16 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   without the statistics, unattributed); the basic mode on allocation-heavy frames (+4.0% to +5.7%, the allocator
   watch's forwarding call the remaining candidate). Unresolved: jobs on every tuple (wall time of the main thread's
   frame against a CPU-per-frame budget). Not measured: the Linux disabled arm (no preset differs from a profiling build
-  only in profiling). Reported: full mode, with two open mechanisms against "no blocking or global locking", the
-  recorder-wide ring mutex per kept event and the CEIR bridge's per-instruction timing.
+  only in profiling). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
+  adapter's token mutex and the flight recorder's ring mutex per kept event are gone (2026-10-24); the CEIR bridge's
+  per-instruction timing is open.
+- The flight recorder's record path takes no lock (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-flight-recorder-lock-free-record.md)): one recording word holds the total
+  and the state; a record claims its sequence by compare-exchange only while Armed or Triggered, and the claim that
+  fills the post window closes it in the same exchange; a trigger moves the word to Triggered in one exchange, so its
+  sequence is the exact boundary. A slot's sequence is its release-stored publication stamp; collectors and a policy
+  reload wait for every claimed slot. A record waits only when the ring laps a claim stalled before its publication,
+  or while a reload swaps the ring.
 - The focused local plan (2026-10-19, [contract](developer-workflow.md#risk-routes)): `dev.py plan` selects the
   affected targets and tests and prints each risk gate's route, the local commands and the hosted lanes.
 - The investigation runbooks (2026-10-19, [runbooks](diagnostic-runbooks.md), ADR-0133 ID-6): one entry per symptom

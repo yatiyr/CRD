@@ -172,6 +172,8 @@ def compile_job(job, scratch, environment, timeout):
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')  # a localized compiler diagnostic must not crash the report
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--build', default='build/win-debug', help='configured build directory with compile_commands.json')
     parser.add_argument('--changed', action='store_true', help='check the public headers changed against HEAD')

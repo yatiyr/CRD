@@ -21,20 +21,33 @@ namespace
 using detail::append_json_escaped;
 using detail::append_u64;
 
-// Armed -> Triggered (trigger(), under the trigger mutex) -> Complete (the ring mutex) -> Armed (collection, under
-// both mutexes). A capture that ended Fatal moves to FatalEntered instead of re-arming: the process is ending, and a
-// later fatal path (check_invariant's default reaches CRD_FATAL, which reaches the assert trigger) must not replace
-// the capture that was already delivered. Triggers are then suppressed and events dropped; nothing more is delivered.
+// Armed -> Triggered (trigger(), under the trigger mutex) -> Complete (the claim that fills the post window, or a
+// collector) -> Armed (collection, under both mutexes). A capture that ended Fatal moves to FatalEntered instead of
+// re-arming: the process is ending, and a later fatal path (check_invariant's default reaches CRD_FATAL, which reaches
+// the assert trigger) must not replace the capture that was already delivered. Triggers are then suppressed and events
+// dropped; nothing more is delivered.
 constexpr crd::u32 kStateArmed        = 0U;
 constexpr crd::u32 kStateTriggered    = 1U;
 constexpr crd::u32 kStateComplete     = 2U;
 constexpr crd::u32 kStateFatalEntered = 3U;
 
+// The recording word: the total above kStateBits; below it the state and, apart from it, the reloading flag, set
+// while a policy reload swaps the ring (claims wait). A flag, not a state, so a fatal path's move to FatalEntered and
+// the reload's end each keep the other's bits.
+constexpr crd::u32 kStateBits = 3U;
+constexpr crd::u64 kStateMask = 3U;
+constexpr crd::u64 kReloadingBit = 4U;
+
+// A slot no claim has published since its ring was allocated.
+constexpr crd::u64 kSlotEmpty = ~crd::u64{0};
+static_assert(alignof(FlightEvent) >= std::atomic_ref<crd::u64>::required_alignment,
+              "a slot's sequence is its publication stamp");
+
 constexpr cont::StringView kNoRecipe{"no replay recipe was registered with the flight recorder"};
 
-// The fatal path takes the ring with a bounded try-lock: it must not block forever behind a thread that will never
-// release it.
-constexpr crd::u32 kFatalLockAttempts = 2000U;
+// The fatal path waits a bounded number of yields, shared by the collection lock and the claims still publishing: it
+// must not block forever behind a thread that will never go on.
+constexpr crd::u32 kFatalWaitAttempts = 2000U;
 
 // Copy `src` into a fixed buffer of `cap` bytes, clipped to cap - 1 and NUL-terminated. Returns the stored length.
 crd::u16 copy_clipped(char* dst, crd::u32 cap, cont::StringView src, bool* truncated) noexcept
@@ -161,29 +174,31 @@ FlightPolicyStatus validate_flight_policy(const FlightPolicy& p) noexcept
 
 struct FlightRecorder::Impl
 {
-    // The ring and everything the post window touches: ring_mutex.
-    std::mutex               ring_mutex;
+    // The recording state is one word: the total recorded above kStateBits, the state below. record() claims a
+    // sequence with one compare-exchange of it, only while Armed or Triggered, so no event is claimed after the window
+    // closed and the trigger's boundary is exact in claim order. The record path takes no lock (DIAG.11b).
+    std::atomic<crd::u64> word{kStateArmed};
+    // Where the open post window ends (the trigger's sequence plus post_events); the claim that reaches it moves the
+    // state to Complete in the same exchange. trigger() writes it before its exchange publishes Triggered.
+    std::atomic<crd::u64> post_end{0U};
+    // The ring. A slot's `sequence` is its publication stamp: kSlotEmpty, or the sequence whose payload the slot holds,
+    // stored with release after the payload. The ring, `base` and the policy change only in reload_policy(), once
+    // every claimed slot is published and further claims wait.
     cont::Array<FlightEvent> ring;
-    crd::u32                 head                   = 0U; // next write index
-    crd::u32                 live                   = 0U; // events held (<= capacity)
-    FlightEnd                end                    = FlightEnd::None;
-    crd::u64                 end_ns                 = 0U;
-    crd::u64                 dropped_while_complete = 0U;
-    // The lowest severity the active detail keeps, as its u8 value, and the events the detail left out. Both are read
-    // and counted without the ring mutex (DIAG.11b): an event the detail leaves out never waits on the ring.
+    crd::u64                 base = 0U; // the total at the ring's allocation: sequence s is slot (s - base) % capacity
+    std::atomic<crd::u64>    dropped_while_complete{0U};
+    // The lowest severity the active detail keeps, as its u8 value, and the events the detail left out (DIAG.11b).
     std::atomic<crd::u8>     keep_from{0U};
     std::atomic<crd::u64>    filtered{0U};
-    // The post window starts at the first event recorded after a trigger became visible (or, when none was, at the
-    // total when the window closes). It is fixed under the ring mutex: trigger() cannot take it, and a total read
-    // there could be passed by events recorded before the trigger's state store, which would then be miscounted.
-    bool                     anchored               = false;
-    crd::u64                 post_start             = 0U;
-    std::atomic<crd::u64>    total{0U}; // written under ring_mutex; trigger() reads it for the provisional sequence
 
-    std::atomic<crd::u32> state{kStateArmed};
+    // Collection: poll(), take_capture(), finish() and reload_policy() hold collect_mutex; record() never takes it.
+    // `end` is how a collector closed the window; None means the claim that reached post_end closed it.
+    std::mutex collect_mutex;
+    FlightEnd end = FlightEnd::None;
+    crd::u64 end_ns = 0U;
 
     // The trigger and the replay recipe: trigger_mutex. The trigger record is written only while Armed, before the
-    // state's release store moves to Triggered, so a thread that observes Triggered or Complete reads it safely.
+    // exchange that publishes Triggered, so a thread that observes Triggered or Complete reads it safely.
     std::mutex          trigger_mutex;
     FlightTriggerRecord trigger;
     char                trigger_replay[kFlightRecipeBytes] = {};
@@ -195,7 +210,8 @@ struct FlightRecorder::Impl
     crd::u64            suppressed                          = 0U;
     crd::u32            suppressed_kinds                    = 0U;
 
-    // The policy is written under both mutexes, so a holder of either reads it safely.
+    // The policy is written under both mutexes with no claim in flight, so a holder of either reads it safely, and so
+    // does a claim holder (its capacity).
     FlightPolicy policy;
     crd::u32     policy_generation = 1U;
 
@@ -208,6 +224,21 @@ namespace
 {
 using Impl = FlightRecorder::Impl;
 
+crd::u32 state_of(crd::u64 word) noexcept
+{
+    return static_cast<crd::u32>(word & kStateMask);
+}
+
+crd::u64 total_of(crd::u64 word) noexcept
+{
+    return word >> kStateBits;
+}
+
+crd::u64 make_word(crd::u64 total, crd::u32 state) noexcept
+{
+    return (total << kStateBits) | state;
+}
+
 // The lowest severity `detail` keeps: Full keeps every event, Basic Warning and above.
 crd::u8 keep_from_of(FlightDetail detail) noexcept
 {
@@ -219,27 +250,152 @@ bool allocate_ring(cont::Array<FlightEvent>& ring, crd::u32 capacity) noexcept
 {
     ring.clear();
     ring.resize(capacity);
-    return ring.size() == capacity;
-}
-
-// The index of sequence `s` in the ring. The caller checks total - s <= live.
-crd::u32 ring_index(const Impl& impl, crd::u64 total, crd::u64 s) noexcept
-{
-    const crd::u32 cap  = impl.policy.capacity;
-    const crd::u32 back = static_cast<crd::u32>(total - s); // 1 = the newest event
-    return (impl.head + cap - back) % cap;
-}
-
-// With the ring mutex held (or `ring_held` false on the fatal path when it could not be taken): when the state is
-// Complete, build `out` and re-arm. Returns false when nothing is complete.
-bool build_capture(Impl& impl, FlightCapture& out, bool ring_held) noexcept
-{
-    if (impl.state.load(std::memory_order_acquire) != kStateComplete)
+    if (ring.size() != capacity)
     {
         return false;
     }
+    for (FlightEvent& slot : ring)
+    {
+        slot.sequence = kSlotEmpty;
+    }
+    return true;
+}
+
+FlightEvent& slot_of(Impl& impl, crd::u64 s) noexcept
+{
+    return impl.ring[static_cast<crd::usize>((s - impl.base) % impl.policy.capacity)];
+}
+
+// The oldest sequence the ring still holds when `total` events were claimed.
+crd::u64 oldest_held(const Impl& impl, crd::u64 total) noexcept
+{
+    const crd::u64 cap = impl.policy.capacity;
+    return (total - impl.base > cap) ? total - cap : impl.base;
+}
+
+// Claim the next sequence into `seq`; the claim that fills the post window closes it in the same exchange. Returns
+// false, counting the event, while the ring is frozen.
+bool claim(Impl& impl, crd::u64& seq) noexcept
+{
+    crd::u64 word = impl.word.load(std::memory_order_acquire);
+    for (;;)
+    {
+        if ((word & kReloadingBit) != 0U)
+        {
+            std::this_thread::yield();
+            word = impl.word.load(std::memory_order_acquire);
+            continue;
+        }
+        const crd::u32 state = state_of(word);
+        if (state == kStateComplete || state == kStateFatalEntered)
+        {
+            // Frozen until collected (for good after a fatal): the windows stay intact.
+            impl.dropped_while_complete.fetch_add(1U, std::memory_order_relaxed);
+            return false;
+        }
+        seq = total_of(word);
+        const bool fills = state == kStateTriggered && seq + 1U >= impl.post_end.load(std::memory_order_relaxed);
+        const crd::u64 next = make_word(seq + 1U, fills ? kStateComplete : state);
+        if (impl.word.compare_exchange_weak(word, next, std::memory_order_acq_rel, std::memory_order_acquire))
+        {
+            return true;
+        }
+    }
+}
+
+// Fill the slot of claimed sequence `seq` and publish it. The slot is this claim's once its previous occupant, a full
+// ring earlier, is published: the wait is reached only when the ring laps a claim stalled before its publication.
+void publish(Impl& impl, crd::u64 seq, crd::u64 now, EventCode code, Severity severity, cont::StringView message,
+             crd::u64 value_a, crd::u64 value_b) noexcept
+{
+    const crd::u64 capacity = impl.policy.capacity;
+    FlightEvent& slot = slot_of(impl, seq);
+    const std::atomic_ref<crd::u64> stamp(slot.sequence);
+    const crd::u64 previous = (seq - impl.base >= capacity) ? seq - capacity : kSlotEmpty;
+    while (stamp.load(std::memory_order_acquire) != previous)
+    {
+        std::this_thread::yield();
+    }
+    slot.timestamp_ns = now;
+    slot.value_a = value_a;
+    slot.value_b = value_b;
+    slot.code = code;
+    slot.severity = severity;
+    slot.message_length = copy_clipped(slot.message, kFlightMessageBytes, message, &slot.message_truncated);
+    stamp.store(seq, std::memory_order_release);
+}
+
+// Wait until the claim of sequence `s` published its slot. `budget` (yields left, shared by the caller's waits)
+// bounds the fatal path; nullptr waits as long as the claim holder takes. Returns false when the budget ran out.
+bool wait_published(Impl& impl, crd::u64 s, crd::u32* budget) noexcept
+{
+    const std::atomic_ref<crd::u64> stamp(slot_of(impl, s).sequence);
+    while (stamp.load(std::memory_order_acquire) != s)
+    {
+        if (budget != nullptr)
+        {
+            if (*budget == 0U)
+            {
+                return false;
+            }
+            --*budget;
+        }
+        std::this_thread::yield();
+    }
+    return true;
+}
+
+// With the trigger mutex held: the capture of the trigger alone, said so (the fatal path could not read the ring).
+// Terminal, as after any Fatal capture.
+void trigger_only_capture(Impl& impl, FlightCapture& out, crd::u64 now) noexcept
+{
+    out.trigger = impl.trigger;
+    out.end = FlightEnd::Fatal;
+    out.end_ns = now;
+    out.policy = impl.policy;
+    out.policy_generation = impl.policy_generation;
+    out.recorded_before_trigger = impl.trigger.sequence;
+    out.suppressed_triggers = impl.suppressed;
+    out.suppressed_kinds = impl.suppressed_kinds;
+    out.replay_available = impl.trigger_replay_available;
+    out.replay.clear();
+    out.replay.append(cont::StringView{impl.trigger_replay, impl.trigger_replay_length});
+    out.events.clear();
+    out.pre_retained = 0U;
+    out.post_retained = 0U;
+    out.dropped_while_complete = 0U;
+    out.ring_unavailable = true;
+    out.post_truncated = true;
+    // From Triggered (1) or Complete (2) to FatalEntered (3); record() and the collectors leave that state alone.
+    impl.word.fetch_or(kStateFatalEntered, std::memory_order_acq_rel);
+}
+
+// With the collect mutex held: when the state is Complete, build `out` and re-arm. `budget` bounds the wait for
+// claims still publishing (the fatal path); when it runs out, `out` is the trigger alone. Returns false when nothing
+// is complete.
+bool build_capture(Impl& impl, FlightCapture& out, crd::u32* budget) noexcept
+{
+    const crd::u64 word = impl.word.load(std::memory_order_acquire);
+    if (state_of(word) != kStateComplete)
+    {
+        return false;
+    }
+    const crd::u64 total = total_of(word); // no claim moves it while Complete
 
     std::lock_guard<std::mutex> trigger_guard(impl.trigger_mutex);
+    const crd::u64 trig = impl.trigger.sequence;
+    const crd::u64 want = (trig > impl.policy.pre_events) ? trig - impl.policy.pre_events : 0U;
+    const crd::u64 old = oldest_held(impl, total);
+    const crd::u64 first = (want > old) ? want : old;
+    for (crd::u64 s = first; s < total; ++s)
+    {
+        if (!wait_published(impl, s, budget))
+        {
+            trigger_only_capture(impl, out, diagnostic_now_ns());
+            return true;
+        }
+    }
+
     out.trigger             = impl.trigger;
     out.end                 = impl.end;
     out.end_ns              = impl.end_ns;
@@ -250,70 +406,60 @@ bool build_capture(Impl& impl, FlightCapture& out, bool ring_held) noexcept
     out.replay_available    = impl.trigger_replay_available;
     out.replay.clear();
     out.replay.append(cont::StringView{impl.trigger_replay, impl.trigger_replay_length});
-    out.events.clear();
-    if (ring_held && impl.anchored)
-    {
-        out.trigger.sequence = impl.post_start;
-    }
-    out.recorded_before_trigger = out.trigger.sequence;
+    out.recorded_before_trigger = trig;
     out.pre_retained            = 0U;
     out.post_retained           = 0U;
-    out.ring_unavailable        = !ring_held;
-    out.dropped_while_complete  = ring_held ? impl.dropped_while_complete : 0U;
-
-    if (ring_held)
+    out.ring_unavailable        = false;
+    out.events.clear();
+    out.events.reserve(static_cast<crd::usize>(total - first));
+    for (crd::u64 s = first; s < total; ++s)
     {
-        const crd::u64 total  = impl.total.load(std::memory_order_relaxed);
-        const crd::u64 oldest = total - impl.live;
-        const crd::u64 trig   = out.trigger.sequence;
-        const crd::u64 want   = (trig > impl.policy.pre_events) ? trig - impl.policy.pre_events : 0U;
-        const crd::u64 first  = (want > oldest) ? want : oldest;
-        out.events.reserve(static_cast<crd::usize>(total - first));
-        for (crd::u64 s = first; s < total; ++s)
+        out.events.push_back(slot_of(impl, s));
+        if (s < trig)
         {
-            out.events.push_back(impl.ring[ring_index(impl, total, s)]);
-            if (s < trig)
-            {
-                ++out.pre_retained;
-            }
-            else
-            {
-                ++out.post_retained;
-            }
+            ++out.pre_retained;
         }
+        else
+        {
+            ++out.post_retained;
+        }
+    }
+    if (out.end == FlightEnd::None) // the claim that filled the post window closed it, at its own time
+    {
+        out.end = FlightEnd::PostEventsFull;
+        out.end_ns = out.events.empty() ? 0U : out.events[out.events.size() - 1U].timestamp_ns;
     }
     out.post_truncated = (out.end == FlightEnd::Shutdown || out.end == FlightEnd::Fatal) &&
                          out.post_retained < impl.policy.post_events;
 
-    // Re-arm, unless the capture ended Fatal (terminal). On the fatal path without the ring the process is ending;
-    // leave the state as it is.
-    if (ring_held)
-    {
-        const bool fatal            = impl.end == FlightEnd::Fatal;
-        impl.end                    = FlightEnd::None;
-        impl.end_ns                 = 0U;
-        impl.dropped_while_complete = 0U;
-        impl.suppressed             = 0U;
-        impl.suppressed_kinds       = 0U;
-        impl.anchored               = false;
-        impl.state.store(fatal ? kStateFatalEntered : kStateArmed, std::memory_order_release);
-    }
+    // Re-arm, unless the capture ended Fatal (terminal). A drop is counted once, by the first capture collected after
+    // it: one whose thread saw the ring frozen but counted only after this exchange belongs to the next capture.
+    impl.end = FlightEnd::None;
+    impl.end_ns = 0U;
+    impl.suppressed = 0U;
+    impl.suppressed_kinds = 0U;
+    crd::u64 expected = word;
+    (void)impl.word.compare_exchange_strong(
+        expected, make_word(total, out.end == FlightEnd::Fatal ? kStateFatalEntered : kStateArmed),
+        std::memory_order_acq_rel, std::memory_order_acquire);
+    out.dropped_while_complete = impl.dropped_while_complete.exchange(0U, std::memory_order_relaxed);
     return true;
 }
 
-// With the ring mutex held: close an open window with `reason`.
+// With the collect mutex held: close an open window with `reason`. A claim that fills the window at the same time
+// wins, and the capture ends PostEventsFull.
 void close_window(Impl& impl, FlightEnd reason, crd::u64 now_ns) noexcept
 {
-    if (impl.state.load(std::memory_order_acquire) == kStateTriggered)
+    crd::u64 word = impl.word.load(std::memory_order_acquire);
+    while (state_of(word) == kStateTriggered)
     {
-        if (!impl.anchored)
+        if (impl.word.compare_exchange_weak(word, make_word(total_of(word), kStateComplete), std::memory_order_acq_rel,
+                                            std::memory_order_acquire))
         {
-            impl.anchored   = true; // nothing was recorded after the trigger: the post window is empty
-            impl.post_start = impl.total.load(std::memory_order_relaxed);
+            impl.end = reason;
+            impl.end_ns = now_ns;
+            return;
         }
-        impl.end    = reason;
-        impl.end_ns = now_ns;
-        impl.state.store(kStateComplete, std::memory_order_release);
     }
 }
 
@@ -386,9 +532,10 @@ FlightPolicyStatus FlightRecorder::reload_policy(const FlightPolicy& candidate) 
         return status;
     }
 
-    std::lock_guard<std::mutex> ring_guard(impl->ring_mutex);
+    std::lock_guard<std::mutex> collect_guard(impl->collect_mutex);
     std::lock_guard<std::mutex> trigger_guard(impl->trigger_mutex);
-    if (impl->state.load(std::memory_order_acquire) != kStateArmed)
+    crd::u64 word = impl->word.load(std::memory_order_acquire);
+    if (state_of(word) != kStateArmed)
     {
         return FlightPolicyStatus::RejectedBusy;
     }
@@ -402,12 +549,20 @@ FlightPolicyStatus FlightRecorder::reload_policy(const FlightPolicy& candidate) 
     {
         return FlightPolicyStatus::RejectedOutOfMemory;
     }
+    // Further claims wait, and every claimed slot of the old ring is published, so no claim holder touches the ring,
+    // `base` or the capacity while they change. The flag leaves the state alone and the total no longer moves.
+    word = impl->word.fetch_or(kReloadingBit, std::memory_order_acq_rel);
+    const crd::u64 total = total_of(word);
+    for (crd::u64 s = oldest_held(*impl, total); s < total; ++s)
+    {
+        (void)wait_published(*impl, s, nullptr);
+    }
     impl->ring   = static_cast<cont::Array<FlightEvent>&&>(ring);
-    impl->head   = 0U;
-    impl->live   = 0U;
+    impl->base   = total;
     impl->policy = candidate;
     impl->keep_from.store(keep_from_of(candidate.detail), std::memory_order_release);
     ++impl->policy_generation;
+    impl->word.fetch_and(~kReloadingBit, std::memory_order_acq_rel);
     return FlightPolicyStatus::Committed;
 }
 
@@ -478,51 +633,17 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
         return;
     }
     // Outside the active detail's scope: not recorded, not in the sequence, counted, and decided before the clock is
-    // read or the ring mutex taken, so a Basic policy never blocks an informational site.
+    // read or a sequence claimed.
     if (static_cast<crd::u8>(severity) < impl->keep_from.load(std::memory_order_acquire))
     {
         impl->filtered.fetch_add(1U, std::memory_order_relaxed);
         return;
     }
     const crd::u64 now = diagnostic_now_ns();
-
-    std::lock_guard<std::mutex> guard(impl->ring_mutex);
-    const crd::u32 state = impl->state.load(std::memory_order_acquire);
-    if (state == kStateComplete || state == kStateFatalEntered)
+    crd::u64 seq = 0U;
+    if (claim(*impl, seq))
     {
-        ++impl->dropped_while_complete; // frozen until collected (for good after a fatal): the windows stay intact
-        return;
-    }
-
-    const crd::u64 seq  = impl->total.load(std::memory_order_relaxed);
-    FlightEvent&   slot = impl->ring[impl->head];
-    slot.sequence       = seq;
-    slot.timestamp_ns   = now;
-    slot.value_a        = value_a;
-    slot.value_b        = value_b;
-    slot.code           = code;
-    slot.severity       = severity;
-    slot.message_length = copy_clipped(slot.message, kFlightMessageBytes, message, &slot.message_truncated);
-    impl->head          = (impl->head + 1U) % impl->policy.capacity;
-    if (impl->live < impl->policy.capacity)
-    {
-        ++impl->live;
-    }
-    impl->total.store(seq + 1U, std::memory_order_release);
-
-    // Read the state after the write: the first event to see a trigger anchors the post window, so the boundary is
-    // fixed in the ring's own order and the window holds exactly post_events events when it closes.
-    if (impl->state.load(std::memory_order_acquire) == kStateTriggered)
-    {
-        if (!impl->anchored)
-        {
-            impl->anchored   = true;
-            impl->post_start = seq;
-        }
-        if (seq + 1U - impl->post_start >= impl->policy.post_events)
-        {
-            close_window(*impl, FlightEnd::PostEventsFull, now);
-        }
+        publish(*impl, seq, now, code, severity, message, value_a, value_b);
     }
 }
 
@@ -561,7 +682,9 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     {
         return FlightTriggerResult::Masked;
     }
-    if (impl->state.load(std::memory_order_acquire) != kStateArmed)
+    // Only claims move the word while Armed and this mutex is held (a reload holds it too).
+    crd::u64 word = impl->word.load(std::memory_order_acquire);
+    if (state_of(word) != kStateArmed)
     {
         ++impl->suppressed;
         impl->suppressed_kinds |= flight_trigger_bit(input.kind);
@@ -571,7 +694,6 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     FlightTriggerRecord& t = impl->trigger;
     t.kind                 = input.kind;
     t.code                 = input.code;
-    t.sequence             = impl->total.load(std::memory_order_acquire);
     t.timestamp_ns         = now;
     t.value_a              = input.value_a;
     t.value_b              = input.value_b;
@@ -583,7 +705,14 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     impl->trigger_replay_length    = impl->replay_length;
     impl->trigger_replay_available = impl->replay_available;
 
-    impl->state.store(kStateTriggered, std::memory_order_release);
+    // The exchange fixes the boundary: every claim before it is in the pre window, every claim after it sees
+    // Triggered and is in the post window.
+    do
+    {
+        t.sequence = total_of(word);
+        impl->post_end.store(t.sequence + impl->policy.post_events, std::memory_order_relaxed);
+    } while (!impl->word.compare_exchange_weak(word, make_word(total_of(word), kStateTriggered),
+                                               std::memory_order_acq_rel, std::memory_order_acquire));
     return FlightTriggerResult::Started;
 }
 
@@ -598,17 +727,17 @@ bool FlightRecorder::poll(crd::u64 now_ns) noexcept
     FlightCapture capture;
     bool          built = false;
     {
-        std::lock_guard<std::mutex> guard(impl->ring_mutex);
-        if (impl->state.load(std::memory_order_acquire) == kStateTriggered && impl->policy.post_window_ns > 0U &&
-            now_ns - impl->trigger.timestamp_ns >= impl->policy.post_window_ns)
+        std::lock_guard<std::mutex> guard(impl->collect_mutex);
+        if (state_of(impl->word.load(std::memory_order_acquire)) == kStateTriggered &&
+            impl->policy.post_window_ns > 0U && now_ns - impl->trigger.timestamp_ns >= impl->policy.post_window_ns)
         {
             close_window(*impl, FlightEnd::PostWindowElapsed, now_ns);
         }
         if (impl->sink.load(std::memory_order_acquire) == nullptr)
         {
-            return impl->state.load(std::memory_order_acquire) == kStateComplete; // left for take_capture()
+            return state_of(impl->word.load(std::memory_order_acquire)) == kStateComplete; // left for take_capture()
         }
-        built = build_capture(*impl, capture, true);
+        built = build_capture(*impl, capture, nullptr);
     }
     if (built)
     {
@@ -624,8 +753,8 @@ bool FlightRecorder::take_capture(FlightCapture& out) noexcept
     {
         return false;
     }
-    std::lock_guard<std::mutex> guard(impl->ring_mutex);
-    const bool built = build_capture(*impl, out, true);
+    std::lock_guard<std::mutex> guard(impl->collect_mutex);
+    const bool built = build_capture(*impl, out, nullptr);
     if (built)
     {
         impl->delivered.fetch_add(1U, std::memory_order_relaxed);
@@ -649,11 +778,13 @@ bool FlightRecorder::finish(FlightEnd reason) noexcept
     FlightCapture  capture;
     bool           built   = false;
     bool           locked  = false;
+    crd::u32       budget  = kFatalWaitAttempts;
     if (reason == FlightEnd::Fatal)
     {
-        for (crd::u32 attempt = 0U; attempt < kFatalLockAttempts && !locked; ++attempt)
+        while (budget > 0U && !locked)
         {
-            locked = impl->ring_mutex.try_lock();
+            --budget;
+            locked = impl->collect_mutex.try_lock();
             if (!locked)
             {
                 std::this_thread::yield();
@@ -662,37 +793,23 @@ bool FlightRecorder::finish(FlightEnd reason) noexcept
     }
     else
     {
-        impl->ring_mutex.lock();
+        impl->collect_mutex.lock();
         locked = true;
     }
 
     if (locked)
     {
         close_window(*impl, reason, now);
-        built = build_capture(*impl, capture, true);
-        impl->ring_mutex.unlock();
+        built = build_capture(*impl, capture, (reason == FlightEnd::Fatal) ? &budget : nullptr);
+        impl->collect_mutex.unlock();
     }
-    else if (const crd::u32 state = impl->state.load(std::memory_order_acquire);
+    else if (const crd::u32 state = state_of(impl->word.load(std::memory_order_acquire));
              state == kStateTriggered || state == kStateComplete)
     {
-        // The ring stays held: deliver the trigger alone, said so, rather than nothing. The state cannot be moved
-        // without the ring mutex, so the capture is built from a Complete view of the trigger.
+        // A collector stays in the way: deliver the trigger alone, said so, rather than nothing.
         std::lock_guard<std::mutex> trigger_guard(impl->trigger_mutex);
-        capture.trigger           = impl->trigger;
-        capture.end               = FlightEnd::Fatal;
-        capture.end_ns            = now;
-        capture.policy            = impl->policy;
-        capture.policy_generation = impl->policy_generation;
-        capture.recorded_before_trigger = impl->trigger.sequence;
-        capture.suppressed_triggers     = impl->suppressed;
-        capture.suppressed_kinds        = impl->suppressed_kinds;
-        capture.replay_available        = impl->trigger_replay_available;
-        capture.replay.append(cont::StringView{impl->trigger_replay, impl->trigger_replay_length});
-        capture.ring_unavailable = true;
-        capture.post_truncated   = true;
-        built                    = true;
-        // Terminal, as after any Fatal capture; record() and close_window() leave this state alone.
-        impl->state.store(kStateFatalEntered, std::memory_order_release);
+        trigger_only_capture(*impl, capture, now);
+        built = true;
     }
 
     if (built)
@@ -705,7 +822,7 @@ bool FlightRecorder::finish(FlightEnd reason) noexcept
 crd::u64 FlightRecorder::total_recorded() const noexcept
 {
     Impl* impl = m_impl;
-    return (impl != nullptr) ? impl->total.load(std::memory_order_acquire) : 0U;
+    return (impl != nullptr) ? total_of(impl->word.load(std::memory_order_acquire)) : 0U;
 }
 
 crd::u64 FlightRecorder::total_filtered() const noexcept
@@ -721,14 +838,14 @@ bool FlightRecorder::capture_pending() const noexcept
     {
         return false;
     }
-    const crd::u32 state = impl->state.load(std::memory_order_acquire);
+    const crd::u32 state = state_of(impl->word.load(std::memory_order_acquire));
     return state == kStateTriggered || state == kStateComplete;
 }
 
 bool FlightRecorder::fatal_entered() const noexcept
 {
     Impl* impl = m_impl;
-    return impl != nullptr && impl->state.load(std::memory_order_acquire) == kStateFatalEntered;
+    return impl != nullptr && state_of(impl->word.load(std::memory_order_acquire)) == kStateFatalEntered;
 }
 
 crd::u64 FlightRecorder::captures_delivered() const noexcept
@@ -745,7 +862,7 @@ bool FlightRecorder::test_set_policy_generation(crd::u32 generation) noexcept
     {
         return false;
     }
-    std::lock_guard<std::mutex> ring_guard(impl->ring_mutex);
+    std::lock_guard<std::mutex> collect_guard(impl->collect_mutex);
     std::lock_guard<std::mutex> trigger_guard(impl->trigger_mutex);
     impl->policy_generation = generation;
     return true;
@@ -758,8 +875,22 @@ bool FlightRecorder::test_with_ring_held(void (*fn)(void* user), void* user) noe
     {
         return false;
     }
-    std::lock_guard<std::mutex> ring_guard(impl->ring_mutex);
+    std::lock_guard<std::mutex> collect_guard(impl->collect_mutex);
     fn(user);
+    return true;
+}
+
+bool FlightRecorder::test_with_claim_unpublished(void (*fn)(void* user), void* user) noexcept
+{
+    Impl* impl = m_impl;
+    crd::u64 seq = 0U;
+    if (impl == nullptr || fn == nullptr || !claim(*impl, seq))
+    {
+        return false;
+    }
+    fn(user);
+    publish(*impl, seq, diagnostic_now_ns(), kFlightCodeManual, Severity::Info, cont::StringView{"claim held"}, seq,
+            0U);
     return true;
 }
 #endif

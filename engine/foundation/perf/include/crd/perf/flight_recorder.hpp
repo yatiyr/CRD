@@ -14,12 +14,14 @@
 // when `post_window_ns` elapsed (checked by poll()), at shutdown, or on the fatal path. Shutdown and the fatal path
 // end it early; the capture then says which, and that the post window is truncated.
 //
-// Recording and triggering never allocate. record() copies into a ring slot under the ring mutex; an event the policy's
-// detail leaves out is counted and dropped before the clock is read or the mutex taken (DIAG.11b), so a Basic recorder
-// never blocks an informational site. CRD_FLIGHT_RECORD (below) is the site form: its message and scalars are not
-// evaluated when no recorder runs or the detail leaves the event out. trigger() takes only
-// its own mutex, never the ring mutex, so a trigger fired on a thread that something else is blocking (or from a
-// handler that runs while another thread records) still lands. While a capture is pending (the post window is open,
+// Recording and triggering never allocate. record() takes no lock (DIAG.11b): it claims the next sequence with one
+// compare-exchange of the recorder's recording word (total and state), copies into that sequence's ring slot and
+// publishes the slot with a release store; it waits only when the ring laps a claim stalled between its claim and its
+// publication, or while a policy reload swaps the ring. An event the policy's detail leaves out is counted and dropped
+// before the clock is read or a sequence claimed. CRD_FLIGHT_RECORD (below) is the site form: its message and scalars
+// are not evaluated when no recorder runs or the detail leaves the event out. trigger() takes only its own mutex,
+// never the collection lock, so a trigger fired on a thread that something else is blocking (or from a handler that
+// runs while another thread records) still lands. While a capture is pending (the post window is open,
 // or it is complete and not yet collected), a further trigger is suppressed and counted, with its kind; it never
 // replaces the first. Events that arrive after the post window closed and before the capture is collected are not
 // recorded (the ring is frozen so the windows stay intact) and are counted.
@@ -131,9 +133,9 @@ struct FlightEvent
 static_assert(sizeof(FlightEvent) <= 256U, "a flight event stays within the 256-byte event payload budget");
 
 // The trigger and its causal inputs, captured when the trigger fires, before the faulty operation completes (or
-// fails to). `sequence` is the boundary in the recorder's own order: the first event recorded after the trigger became
-// visible to recording threads (an event racing the trigger lands on one side, never both). Only a ring_unavailable
-// capture carries the provisional total the trigger read instead.
+// fails to). `sequence` is the boundary in the recorder's own order: the trigger moves the recording word to Triggered
+// in one exchange, so every event claimed before it is in the pre window and every event claimed after it in the post
+// window (an event racing the trigger lands on one side, never both).
 struct FlightTriggerRecord
 {
     FlightTrigger kind         = FlightTrigger::None;
@@ -218,7 +220,7 @@ struct FlightCapture
     crd::u32 pre_retained            = 0U;
     crd::u32 post_retained           = 0U;
     bool     post_truncated          = false; // the window ended (Shutdown / Fatal) before post_events landed
-    bool     ring_unavailable        = false; // the fatal path could not take the ring; events are absent
+    bool     ring_unavailable        = false; // the fatal path could not read the ring; events are absent
     crd::u64 dropped_while_complete  = 0U;    // events not recorded between the window closing and collection
     crd::u64 suppressed_triggers     = 0U;    // triggers that fired while this capture was pending
     crd::u32 suppressed_kinds        = 0U;    // their kinds, as flight_trigger_bit() flags
@@ -294,7 +296,7 @@ public:
     // policy. CRD_FLIGHT_RECORD asks it before it evaluates a payload.
     [[nodiscard]] bool admit(Severity severity) noexcept;
 
-    // Fire a trigger (thread-safe, no allocation, never takes the ring mutex).
+    // Fire a trigger (thread-safe, no allocation, never takes the collection lock).
     FlightTriggerResult trigger(const FlightTriggerInput& input) noexcept;
 
     // Close a post window whose time bound elapsed, and deliver a complete capture to the sink. Returns true when a
@@ -306,8 +308,9 @@ public:
     bool take_capture(FlightCapture& out) noexcept;
 
     // End an open post window early with `reason` (Shutdown or Fatal) and deliver the capture. On the fatal path the
-    // ring is taken with a bounded try-lock; if it stays held, the capture carries the trigger alone and says
-    // ring_unavailable. Returns true when a capture was delivered.
+    // collection lock is taken with a bounded try-lock and claims still publishing are waited for within the same
+    // bound; if either runs out, the capture carries the trigger alone and says ring_unavailable. Returns true when a
+    // capture was delivered.
     bool finish(FlightEnd reason) noexcept;
 
     // Counters for tests and the doctor. total_filtered() counts the events a Basic policy did not record (over the
@@ -326,10 +329,16 @@ public:
     // for 0.
     [[nodiscard]] bool test_set_policy_generation(crd::u32 generation) noexcept;
 
-    // Call `fn(user)` while this thread holds the ring mutex, so a finish(Fatal) on another thread finds the ring
-    // held and takes its ring_unavailable path. `fn` must not call into this recorder. Returns false without calling
-    // `fn` before init or when `fn` is null.
+    // Call `fn(user)` while this thread holds the collection lock, so a finish(Fatal) on another thread finds the
+    // ring held by a collector and takes its ring_unavailable path. `fn` must not call into this recorder. Returns
+    // false without calling `fn` before init or when `fn` is null.
     bool test_with_ring_held(void (*fn)(void* user), void* user) noexcept;
+
+    // Claim the next sequence as record() does, call `fn(user)` before the claim is published, then publish an Info
+    // event with code kFlightCodeManual, message "claim held" and value_a = its sequence. A collector meanwhile waits
+    // for the claim, and finish(Fatal) only within its bound. Returns false without calling `fn` before init, when `fn`
+    // is null or while the ring is frozen (the event is then counted as dropped).
+    bool test_with_claim_unpublished(void (*fn)(void* user), void* user) noexcept;
 #endif
 
     struct Impl; // opaque; public only so the implementation's helpers can name it
