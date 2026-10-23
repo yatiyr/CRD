@@ -1,8 +1,9 @@
 # Scheduled runs 39746853196 and 39923363836: the thread probe's reap race, 2026-10-23
 
 <!-- doc-role: historical -->
-> Dated evidence. Live owner: [DIAG.10c](../ROADMAP.md#slice-diag.10c) (the OS thread probe); the two open findings
-> below are queued under [DIAG.11b](../ROADMAP.md#slice-diag.11b). Rules: [AGENTS](../../AGENTS.md).
+> Dated evidence. Live owner: [DIAG.10c](../ROADMAP.md#slice-diag.10c) (the OS thread probe); the WARP finding
+> below is queued under [DIAG.11b](../ROADMAP.md#slice-diag.11b), the LeakSanitizer one is repaired there pending its
+> hosted evidence. Rules: [AGENTS](../../AGENTS.md).
 
 ## Goal
 
@@ -52,3 +53,25 @@ That job ran on image `20261018.339.1`; every passing `linux-gcc-asan` job ran o
 installs the same packages and versions on both (Mesa `25.2.8-0ubuntu0.24.04.4`, LLVM 20.1.2); the only difference
 is `libdebuginfod1t64`, preinstalled on the new image. That image's release notes are not published, so the
 difference between them is not known yet.
+
+## linux-gcc-asan: the Vulkan loader unloads drivers before LeakSanitizer runs
+
+Every report's driver frames are `<unknown module>`: by exit the loader had `dlclose`d the module. LeakSanitizer scans
+only mapped modules, so a block a driver keeps for the process (here one allocated under `pthread_once` in
+`vkEnumeratePhysicalDevices`, holding the blocks of the threads the driver started) is reported as leaked once its
+module is gone, and nothing in the report names the driver. On the WSL host, `LD_DEBUG=files` on
+`crd-gpu-context-vulkan-tests "v17-i-a*"` shows the loader destroying seven Mesa link maps (six probed drivers and the
+`device_select` layer) before exit. Image `20261018.339.1` was never released: the newest ubuntu24 release,
+`20261023.334.3`, lists `20261012.334.1` as its previous image and differs from it only in Bazel, and the run of
+2026-10-23 was green on `20261012.334.1`. Which of its differences made a driver keep that block is not knowable from
+here (the WSL host has Mesa `25.2.8-0ubuntu0.24.04.2`, the hosted lanes `.4`; no report reproduces locally).
+
+Repair, the whole class: the `linux-gcc-asan` test preset sets the loader's own switch,
+`VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1` (loader 1.3.275 on both hosts), so every driver and layer stays mapped
+until exit; its globals are scanned and its frames symbolized, and a block it really loses is still reported with a
+named driver frame. No suppression. With it the same run destroys no Vulkan link map. Teeth: with the preset entry
+removed and the mirror synced, `VK_LOADER_DEBUG=warn wsl-lane.sh test linux-gcc-asan -V` on `v17-i-a`, `raf2b` and
+`DIAG.7a(f)` prints no "library unloading is disabled" line (0); restored, 3 of 3. With it, `diag 3f: a memory leak is
+caught by LeakSanitizer` still reports the specimen's leak and passes, and `raf2b`, `raf7` and the rebuilt
+`crd-gpu-context-vulkan-tests` under CTest (309 of its 312 tests finished inside the 19-minute bound: 308 passed, the
+shading-rate gate skipped on lavapipe) print no LeakSanitizer report.

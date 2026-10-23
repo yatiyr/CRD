@@ -222,7 +222,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Symptom | Resident memory grows over frames, or LeakSanitizer reports `detected memory leaks` at exit. |
 | Command | `build/win-debug/sandbox/crd-sandbox.exe --diag memory.allocators --smoke-test 3`; `wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh dev linux-gcc-asan --build-timeout 3000` |
 | Artifact | The sandbox log's `memory.allocators` answer: one item per allocator registered with the profiler with its allocations, deallocations and bytes in use; the LeakSanitizer report. |
-| Read | An allocator whose live count keeps rising is the owner to read; LeakSanitizer separates unreachable objects from retained arenas and caches. |
+| Read | An allocator whose live count keeps rising is the owner to read; LeakSanitizer separates unreachable objects from retained arenas and caches. A frame `<unknown module>` is a library unloaded before exit; the linux-gcc-asan test preset keeps Vulkan drivers loaded (`VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING=1`). |
 | Next test | `ctest --test-dir build/win-debug -R "^diag 3f: a memory leak"`; `ctest --test-dir build/win-debug -R "^allocator ownership: "`; `ctest --test-dir build/win-debug -R "^crd-diag-overhead-alloc-"` |
 | Hosted | linux-gcc-asan (LeakSanitizer); every lane for the ownership cases and the overhead harness's lifetime ledger. |
 | Adopt | Register an allocator with the profiler, `crd::perf::register_allocator(...)`, before its first allocation, so `memory.allocators` lists it with its `statistics` field `complete`; a profiling build without `CRD_DEBUG` counts nothing an earlier allocation could unbalance and says `too_late` instead. |

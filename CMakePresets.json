@@ -718,7 +718,8 @@
                 "timeout": 3600
             },
             "environment": {
-                "UBSAN_OPTIONS": "print_stacktrace=1"
+                "UBSAN_OPTIONS": "print_stacktrace=1",
+                "VK_LOADER_DISABLE_DYNAMIC_LIBRARY_UNLOADING": "1"
             }
         },
         {
