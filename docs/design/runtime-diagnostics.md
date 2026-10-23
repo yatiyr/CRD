@@ -2802,7 +2802,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   disabled mode's allocation-heavy cost fell from +37.7% to +4.7% to +5.0%, still over 1%, and a gate-against-no-gate
   pair attributes the rest to the per-operation gate itself (no gate: +0.12%); the same board shows that comparing two
   separately compiled binaries has a layout floor of several percent (offline -11.0% between builds that do not touch
-  its path), which the remaining disabled-mode verdicts must get under before they can be read.
+  its path), which the remaining disabled-mode verdicts must get under before they can be read. Judged on realistic
+  frames (2026-10-23, [session](../sessions/2026-10-23-diag-11b-realistic-disabled-cost.md)): an exact count of gate
+  executions (1,008 per offline frame, none per jobs frame) times the pair's upper 0.58 ns per gate bounds the gate at
+  0.18% of an offline frame, within 1%; the `alloc` microbenchmark stays the reported worst case.
 - The default allocator's exact sizes (2026-10-19,
   [session](../sessions/2026-10-19-diag-11b-malloc-allocator-bytes.md)): `MallocAllocator` aligns inside one C-library
   `malloc` and keeps a 16-byte header below each block (the request, and the offset to the C-library block with

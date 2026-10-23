@@ -157,6 +157,12 @@ binary's off mode against a binary built with profiling compiled out (`win-shipp
 Linux has no such preset pair yet. The first boards violate the disabled and basic budgets on allocation-heavy frames;
 the repairs are open on DIAG.11b.
 
+Amended 2026-10-23 (DIAG.11b, [session](../sessions/2026-10-23-diag-11b-realistic-disabled-cost.md)), by the user's
+decision of 2026-10-19: `alloc` is the disabled budget's worst case, reported and not judged; the 1% disabled budget is
+judged on the realistic workloads (`offline`, `jobs`, later the authored rendering workload). Where the two-binary
+pair's layout floor is wider than the budget, a per-operation cost is judged by an exact count of its executions per
+frame times its measured per-execution cost.
+
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 
 The contract's "symptom→command→artifact→next discriminating test and human-only publication" is
