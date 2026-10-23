@@ -176,7 +176,8 @@ it is included. Like a board, a profile records the host before and after and re
 `--vcperf <session>` adds a C++ Build Insights capture around the build (an elevated shell, or `--vcperf-noadmin`
 after the one-time grant): `vcperf /stopnoanalyze`, then `/analyze /templates` into a WPA trace and a Chrome
 trace-event JSON beside the profile. [elevated-captures.bat](../../scripts/elevated-captures.bat) is the user's one
-elevated step that runs it (with DIAG.11b's overhead sampling).
+elevated step that runs it (with DIAG.11b's overhead sampling; `sampling` or `build-insights` runs one step alone). It
+refuses the capture, naming what to close, while Visual Studio runs or the host is busy.
 
 What the 2026-10-18 profiles changed ([board](../bench/2026-10-18-build-speed-compile-time.md)): `<chrono>`, which
 C++20 extends with the calendar, the time-zone database and `<format>`, was the build's most expensive header, and

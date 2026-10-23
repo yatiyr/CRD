@@ -4,7 +4,8 @@
 > Dated evidence. Live owner: [DIAG.11b](../ROADMAP.md#slice-diag.11b). Contract:
 > [runtime diagnostics](../design/runtime-diagnostics.md#diag-11b),
 > [ADR-0133 ID-5](../decisions/0133-runtime-diagnostics-and-instrumentation.md#implementation-decisions). Rules:
-> [AGENTS](../../AGENTS.md). Earlier board: [2026-10-19 allocator statistics](../bench/2026-10-19-diag-11b-allocator-statistics.md).
+> [AGENTS](../../AGENTS.md). Earlier board:
+> [2026-10-19 allocator statistics](../bench/2026-10-19-diag-11b-allocator-statistics.md).
 
 ## CI read at the start
 
@@ -27,8 +28,9 @@ path. So the verdict is a bound from an exact count, which that floor does not r
    `StatisticsGate::admit_first_allocation`, and the totals printed at exit. win-shipping-profile, `--mode off`, 10
    warmup frames, 100 and 300 timed frames; per frame = the difference over 200. Two runs gave identical totals.
 2. Cost per gate. The 2026-10-19 gate-against-no-gate pair on `alloc`: +4.98% (+3.53% .. +5.76%) of an 82.2 µs frame
-   over its 8,192 gate executions: 0.50 ns, upper 0.58 ns. Both binaries run the same `TlsfAllocator` code that the
-   offline workload's arena reaches, and in the off mode the gate's branches never change direction.
+   over its 8,192 gate executions: 0.50 ns, upper 0.58 ns. The gate is force-inlined, so its instructions are the same
+   in every allocator class; offline's 1,008 run in its arena's TLSF and in the frame's other allocators. In the off
+   mode its branches never change direction.
 3. Bound. Cost per frame ≤ executions × 0.58 ns, against the smallest off-arm offline frame of the boards (330.3 µs).
 
 ## Counts (win-shipping-profile, off)
@@ -37,7 +39,7 @@ path. So the verdict is a bound from an exact count, which that floor does not r
 | --- | ---: | ---: |
 | alloc | 8,192 (4,096 allocations and 4,096 frees: the probe counts what the workload does) | 0 |
 | offline | 1,008 | 3 (the frame's own arena and contexts) |
-| jobs | 0 (2 in the whole process) | 0 |
+| jobs | 0 (46 and 48 in the whole process; 2 of them over the 200 extra frames) | 0 |
 
 ## Verdict
 
@@ -47,7 +49,7 @@ path. So the verdict is a bound from an exact count, which that floor does not r
 | jobs | none | 0% | within (the gate; jobs' unresolved timing verdict is clause (4)'s measurand) |
 | alloc (microbenchmark, worst case) | 4.1 µs | +4.70% .. +4.98% measured | over, reported, not judged |
 
-Margins: offline reaches 1% only at 3.3 ns per gate, 5.6 times the upper estimate (about 19 cycles at 5.7 GHz for a
+Margins: offline reaches 1% only at 3.3 ns per gate, 5.7 times the upper estimate (about 19 cycles at 5.7 GHz for a
 load, two compares and two predicted branches). Adding to the per-gate estimate the largest gap the same pair showed on
 offline (3.5 points) gives 0.93 ns and 0.28%. The three exchanges per frame are uncontended compare-exchanges on the
 allocator's own state; at 50 ns each they would add 0.05%. Clause (1) is met on the realistic frames, so nothing is
@@ -64,6 +66,18 @@ samples and 3,487 of 3,570 alloc samples of the compiled-out binary (win-shippin
 of the offline off arm in `memory-stats`, although off is within a few percent of compiled-out. Its 6 DISAGREES and 2
 UNRESOLVED verdicts are therefore not evidence about the modes yet. The classifier and the symbol resolution are
 queued as the next batch (the follow-up below). They are not used for this verdict.
+
+## Build Insights capture runnable alone
+
+Part 2 of `scripts\elevated-captures.bat` failed on 2026-10-19 because Visual Studio was open (its project sync
+conflicts with the configure) and the host was busy; the script also passed `--allow-contended`. Now
+`scripts\elevated-captures.bat build-insights` runs that step alone (`sampling` runs part 1 alone; no argument runs
+both). It refuses, with exit 7 and a line asking to close every Visual Studio window, while `devenv.exe` runs. Without
+`--allow-contended`, `build-profile.py` refuses a busy host and names the processes. Checked unelevated: an unknown
+step prints the usage and exits 64. A copy with `explorer.exe` in place of `devenv.exe` refuses with exit 7. The
+copy's first try matched nothing, because from a Git Bash parent the first `find` on PATH was MSYS's; it went on to
+`build-profile.py`, which refused the host (`dota2 (pid 52612) used 3.5 cores`) before building. The script now names
+`%SystemRoot%\System32\find.exe`.
 
 ## Not done in this batch
 
