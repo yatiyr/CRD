@@ -261,7 +261,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane. |
 | Adopt | A host serves its own commands through `DiagCommandService::register_command(...)`; ops parsed from text keep their positions with no extra step. |
 | Example | `assets/diag/overhead_offline.ceir` |
-| Cost | The CEIR profiling bridge's per-instruction timing costs 4 to 5.4 times the run in full mode ([board losses](../bench/2026-10-16-diag-11b-overhead.md#losses-and-what-they-belong-to), DIAG.11b clause (6)). |
+| Cost | The CEIR profiling bridge times every dispatched instruction with two cycle-counter reads: offline full costs 3.2 times off on win-shipping-profile ([session](../sessions/2026-10-24-diag-11b-ceir-bridge-cycle-counter.md); 4 to 5.4 times on the 2026-10-16 [board](../bench/2026-10-16-diag-11b-overhead.md#losses-and-what-they-belong-to)'s three tuples, before). |
 | Owner | DIAG.2a, DIAG.8a, DIAG.8b, DIAG.8c |
 
 <a id="rb-replay"></a>

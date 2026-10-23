@@ -2781,7 +2781,11 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   frame against a CPU-per-frame budget). Not measured: the Linux disabled arm (no preset differs from a profiling build
   only in profiling). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
   adapter's token mutex and the flight recorder's ring mutex per kept event are gone (2026-10-24); the CEIR bridge's
-  per-instruction timing is open.
+  per-instruction timing takes no lock, blocks nowhere and allocates nothing, and reads the cycle counter instead of
+  the monotonic clock (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-ceir-bridge-cycle-counter.md)): offline full over off fell from +452% to
+  +220% on win-shipping-profile. The rest is the price of exact parent-pause self-time, two counter reads per
+  dispatch against a dispatch of a few nanoseconds.
 - The flight recorder's record path takes no lock (2026-10-24,
   [session](../sessions/2026-10-24-diag-11b-flight-recorder-lock-free-record.md)): one recording word holds the total
   and the state; a record claims its sequence by compare-exchange only while Armed or Triggered, and the claim that

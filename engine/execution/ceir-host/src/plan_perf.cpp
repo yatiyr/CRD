@@ -2,7 +2,7 @@
 
 #include <crd/perf/counters.hpp> // CRD_PERF_COUNTER_SET_I64
 #include <crd/perf/scope.hpp>    // CRD_PERF_SCOPE
-#include <crd/time/clocks.hpp>   // MonotonicClock (always available — the profile fills even on a perf-OFF build)
+#include <crd/time/clocks.hpp>   // CycleCounter, MonotonicClock (the profile fills even on a perf-OFF build)
 
 #include <utility> // std::move
 
@@ -17,23 +17,35 @@ namespace
 {
 constexpr crd::u32 kStack = 256U; // the parent-pause op stack; deeper nesting is witnessed (depth_overflow), never silent.
 
-// the seam-hook state: the profile + a parent-pause op stack + the last-event timestamp.
+// the seam-hook state: the profile, a parent-pause op stack, the self-time per Op class in cycle-counter ticks and the
+// last event's tick. A tick read costs a fraction of a monotonic clock read, and every dispatch reads two; the run
+// converts the ticks to seconds once, against the monotonic clock around it.
 struct ProfState
 {
-    PlanProfile        prof;
-    crd::u8            stack[kStack] = {};
-    crd::u32           depth         = 0U;
-    crd::time::Instant mark          = {};
+    PlanProfile prof;
+    crd::u64 ticks[PlanProfile::kMaxOps] = {};
+    crd::u8 stack[kStack] = {};
+    crd::u32 depth = 0U;
+    crd::u64 mark = 0U;
 };
+
+// the ticks since the last event; a counter that stepped back (a non-invariant TSC across cores) adds none.
+crd::u64 lap(ProfState& s) noexcept
+{
+    const crd::u64 now = crd::time::CycleCounter::now();
+    const crd::u64 delta = now > s.mark ? now - s.mark : 0U;
+    s.mark = now;
+    return delta;
+}
 
 // pre: the time since the last event belongs to the op we are INSIDE (the stack top = the parent); then push + count.
 void adapter_pre(crd::u8 op, void* user)
 {
-    auto* const              s   = static_cast<ProfState*>(user);
-    const crd::time::Instant now = crd::time::MonotonicClock::now();
+    auto* const s = static_cast<ProfState*>(user);
+    const crd::u64 delta = lap(*s);
     if (s->depth > 0U && s->depth <= kStack)
     {
-        s->prof.self_s[s->stack[s->depth - 1U]] += (now - s->mark).value;
+        s->ticks[s->stack[s->depth - 1U]] += delta;
     }
     if (s->depth < kStack)
     {
@@ -48,7 +60,6 @@ void adapter_pre(crd::u8 op, void* user)
     {
         s->prof.max_depth = s->depth;
     }
-    s->mark = now;
     if (op < PlanProfile::kMaxOps)
     {
         ++s->prof.dispatch[op];
@@ -60,17 +71,16 @@ void adapter_pre(crd::u8 op, void* user)
 // harmless (the state is reset per run).
 void adapter_post(crd::u8 op, void* user)
 {
-    auto* const              s   = static_cast<ProfState*>(user);
-    const crd::time::Instant now = crd::time::MonotonicClock::now();
+    auto* const s = static_cast<ProfState*>(user);
+    const crd::u64 delta = lap(*s);
     if (op < PlanProfile::kMaxOps)
     {
-        s->prof.self_s[op] += (now - s->mark).value;
+        s->ticks[op] += delta;
     }
     if (s->depth > 0U)
     {
         --s->depth;
     }
-    s->mark = now;
 }
 } // namespace
 
@@ -79,8 +89,18 @@ plan::RunResult profiled_run(const plan::CompiledPlan& plan, containers::ConstSp
 {
     CRD_PERF_SCOPE("ceir.plan.run");
     ProfState st;
-    st.mark           = crd::time::MonotonicClock::now();
+    const crd::time::Instant begin = crd::time::MonotonicClock::now();
+    st.mark = crd::time::CycleCounter::now();
+    const crd::u64 first = st.mark;
     plan::RunResult r = plan::run(plan, args, alloc, plan::RunHooks{adapter_pre, adapter_post, &st});
+    const crd::u64 last = crd::time::CycleCounter::now();
+    const crd::f64 wall = (crd::time::MonotonicClock::now() - begin).value;
+    // seconds per tick over this run; a run shorter than either clock's resolution leaves every self-time zero.
+    const crd::f64 per_tick = (last > first && wall > 0.0) ? wall / static_cast<crd::f64>(last - first) : 0.0;
+    for (crd::u32 i = 0; i < PlanProfile::kMaxOps; ++i)
+    {
+        st.prof.self_s[i] = static_cast<crd::f64>(st.ticks[i]) * per_tick;
+    }
     CRD_PERF_COUNTER_SET_I64("ceir.plan.dispatch_total", static_cast<crd::i64>(st.prof.total_dispatch));
     out = st.prof;
     return r;

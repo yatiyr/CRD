@@ -14,6 +14,7 @@
 #include <crd/ceir/plan.hpp>
 
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
+#include <crd/time/clocks.hpp>
 
 #if CRD_PERF_ENABLED
 #include <crd/perf/perf.hpp> // init/shutdown + counter readback
@@ -125,8 +126,10 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a LOOP (nesting + granularity
 
     const plan::CompileResult cr = host::profiled_compile(ctx, *m, "main", &root);
     REQUIRE(cr.ok());
-    host::PlanProfile     prof;
+    host::PlanProfile prof;
+    const crd::time::Instant before = crd::time::MonotonicClock::now();
     const plan::RunResult r = host::profiled_run(cr.plan, ConstSpan<i64>(), &root, prof);
+    const crd::f64 wall = (crd::time::MonotonicClock::now() - before).value;
     REQUIRE(r.ok());
     CHECK(prof.dispatch[static_cast<u8>(plan::Op::For)] == 1U);
     CHECK(prof.dispatch[static_cast<u8>(plan::Op::MulI)] == 1000U);
@@ -142,6 +145,9 @@ TEST_CASE("ceir 11c host: the perf bridge profiles a LOOP (nesting + granularity
         total_self += prof.self_s[i];
     }
     CHECK(total_self > 0.0); // the run measurably took time (structural, NOT a quantitative duration)
+    // the unit: each span is attributed at most once and converted against the monotonic clock inside this bracket,
+    // so the self-times never exceed the run's wall time (1 ps of rounding slack); raw ticks would.
+    CHECK(total_self <= wall + 1e-12);
 }
 
 TEST_CASE("ceir 11c host: the perf bridge survives an ERRORING run (adapter parent-pause state, pre>post)", "[ceir][plan-perf]")

@@ -16,9 +16,10 @@
 
 namespace crd::ceir::host
 {
-// A per-Op-class profile — dense-indexed by the `plan::Op` enum value. ⛔ A POD (no crd-perf / crd-time types leak here);
-// filled by the seam hooks (via `crd::time::MonotonicClock`, always available — so the profile fills even on a perf-OFF
-// build; only the crd-perf regions/counters are compiled out when profiling is off).
+// A per-Op-class profile — dense-indexed by the `plan::Op` enum value. ⛔ A POD (no crd-perf / crd-time types leak
+// here); filled by the seam hooks (cycle-counter ticks, converted to seconds against `crd::time::MonotonicClock` around
+// the run, always available — so the profile fills even on a perf-OFF build; only the crd-perf regions/counters are
+// compiled out when profiling is off).
 struct PlanProfile
 {
     static constexpr crd::u32 kMaxOps = 32U;      // >= the plan::Op count (indexed by u8(op))
