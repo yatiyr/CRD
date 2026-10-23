@@ -10,8 +10,8 @@
 `1e0574f1` was green in the nightly runs of 2026-10-20 and 21 and red in
 [39746853196](https://github.com/yatiyr/CRD/actions/runs/39746853196) (2026-10-22, `linux-gcc-asan`) and
 [39923363836](https://github.com/yatiyr/CRD/actions/runs/39923363836) (2026-10-23, `linux-clang-tsan`, `win-asan`).
-Same commit, so each failure is an intermittent defect to explain. This batch fixes the first; the other two are
-measured below and taken by the next batches.
+Same commit, so each failure is an intermittent defect to explain. The first and the LeakSanitizer one are repaired
+below; the WARP one is measured and taken by a later batch.
 
 ## linux-clang-tsan: a thread reaped between open() and read()
 
@@ -51,8 +51,7 @@ target vary on hosted runners, since the register needs a deterministic set.
 from `vkEnumeratePhysicalDevices` in `vulkan_context.cpp:721`. The remaining failure is the registered TP-5 oracle.
 That job ran on image `20261018.339.1`; every passing `linux-gcc-asan` job ran on `20261012.334.1`. The apt step
 installs the same packages and versions on both (Mesa `25.2.8-0ubuntu0.24.04.4`, LLVM 20.1.2); the only difference
-is `libdebuginfod1t64`, preinstalled on the new image. That image's release notes are not published, so the
-difference between them is not known yet.
+is `libdebuginfod1t64`, preinstalled on the new image. Repaired below, 2026-10-23.
 
 ## linux-gcc-asan: the Vulkan loader unloads drivers before LeakSanitizer runs
 
