@@ -676,6 +676,7 @@ struct SceneRenderer::Impl
         crd::u32 group = 0;
         crd::u32 first = 0;
         crd::u32 count = 0;
+        crd::u64 queued = 0; // DIAG.11b: the `sync_serial` that last put it in `dirty_runs` (each run uploads once)
     };
     crd::containers::HashMap<const crd::scene::EntityId*, crd::u32> chunk_index; // chunk key -> `chunks` slot
     crd::containers::Array<ChunkEntry> chunks;
@@ -688,6 +689,7 @@ struct SceneRenderer::Impl
     // `prev_world = world` for these runs (velocity → 0) and re-upload them, so a mover's trail lasts exactly one
     // frame. Bounded work: proportional to what moved last frame, not to the scene.
     crd::containers::Array<crd::u32>   prev_dirty_runs;
+    crd::u64 sync_serial = 0; // DIAG.11b: advanced by every incremental sync, stamps `RunEntry::queued`
     // ⛔ Reused across frames: `upload_bounds_range` used to allocate a fresh Array per call, which on a
     // structural frame at 1M is a 24 MB allocation inside the hot loop.
     crd::containers::Array<crd::f32>   bounds_staging{nullptr};
@@ -5954,9 +5956,14 @@ void pass_update(const crd::scene::ChunkView& view, void* ud)
     for (crd::u32 r = 0; r < entry.run_count; ++r)
     {
         const crd::u32 ri = entry.first_run + r;
-        const SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
+        SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
         ctx.run_first[run.group] = run.first;
-        impl.dirty_runs.push_back(ri);
+        impl.prev_dirty_runs.push_back(ri); // REN-41: this sync's movers, advanced by the next sync
+        if (run.queued != impl.sync_serial) // DIAG.11b: last sync's mover is queued already
+        {
+            run.queued = impl.sync_serial;
+            impl.dirty_runs.push_back(ri);
+        }
         ++ctx.stats->dirty_runs;
     }
     for (crd::u32 i = 0; i < view.entity_count; ++i)
@@ -6074,13 +6081,14 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
         // ⭐⭐ REN-41 (velocity): advance prev_world = world for LAST frame's movers before this frame's re-extract,
         // so an instance that moved then stopped reads ZERO velocity now instead of reprojecting its stale one-move
         // delta forever (the travelling-wave smear). Re-upload them by pushing their runs into dirty_runs.
+        ++impl.sync_serial;
         for (const crd::u32 ri : impl.prev_dirty_runs)
         {
             if (ri >= impl.runs.size())
             {
                 continue;
             }
-            const SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
+            SceneRenderer::Impl::RunEntry& run = impl.runs[ri];
             if (run.group >= m_groups.size())
             {
                 continue;
@@ -6091,17 +6099,12 @@ SyncStats SceneRenderer::sync(crd::scene::World& world)
             {
                 std::memcpy(g.prev_world.data() + static_cast<crd::usize>(s) * 16U, g.instances[s].world, 16U * 4U);
             }
+            run.queued = impl.sync_serial;
             impl.dirty_runs.push_back(ri);
         }
-        const crd::usize moved_start = impl.dirty_runs.size();
+        impl.prev_dirty_runs.clear(); // pass_update refills it with THIS frame's movers
         auto q = world.query<crd::scene::Transform, crd::scene::MeshRenderer>();
         q.for_each_chunk(&pass_update, &ctx);
-        // remember THIS frame's movers (only the runs pass_update just added) so next frame can advance them
-        impl.prev_dirty_runs.clear();
-        for (crd::usize i = moved_start; i < impl.dirty_runs.size(); ++i)
-        {
-            impl.prev_dirty_runs.push_back(impl.dirty_runs[i]);
-        }
     }
 
     // GEO-8: mirror the animator state (skinned chunks only — the third required component narrows the walk)

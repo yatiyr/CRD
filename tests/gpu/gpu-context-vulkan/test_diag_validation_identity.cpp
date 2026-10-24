@@ -6,6 +6,7 @@
 #include <crd/gpu/identity_registry.hpp>   // DIAG.7a(g): alive(id) after the hazard correlates
 #include <crd/gpu/object_identity.hpp>
 #include <crd/gpu/vulkan_context.hpp>
+#include <crd/gpu/vulkan_raster_context.hpp> // DIAG.11b: the upload batch's overlapping copies
 #include <crd/gpu/vulkan_validation_capture.hpp>
 
 #include "vulkan_execution.hpp"      // DIAG.7a lifetime: the submit goes through the bounded completion seam
@@ -453,6 +454,52 @@ TEST_CASE("DIAG.7a(g-2): sync validation flags a WAW on a named buffer (correlat
         CHECK(capture.error_or_warning_count() == 0U);  // two unbarriered fills are Core-valid
         rig2.teardown();
     }
+}
+
+// DIAG.11b: one upload batch keeps the order of two copies to overlapping ranges of one storage buffer, as the
+// synchronous path does (a transfer barrier between them), so synchronization validation sees no hazard.
+TEST_CASE("DIAG.11b: overlapping uploads in one Vulkan batch are ordered with no write-after-write hazard",
+          "[gpu-context][vulkan][gpu][validation][hazard][sync][diag11b]")
+{
+    gpu::GpuContextConfig cfg;
+    cfg.backend = gpu::GpuBackend::Vulkan;
+    cfg.headless = true;
+    cfg.enable_validation = true;
+    cfg.enable_sync_validation = true;
+    auto ctx = gpu::create_vulkan_gpu_context(cfg);
+    if (ctx == nullptr)
+    {
+        SKIP("no Vulkan device available");
+    }
+    auto* vk = static_cast<gpu::VulkanGpuContext*>(ctx.get());
+    REQUIRE(vk->valid());
+    REQUIRE(vk->validation_activation().is_active(gpu::ValidationMode::Synchronization));
+    auto raster = gpu::create_vulkan_raster_context(*vk);
+    REQUIRE(raster != nullptr);
+    if (!raster->valid())
+    {
+        SKIP("no valid Vulkan raster device");
+    }
+    auto storage = raster->create_storage_buffer(256U);
+    REQUIRE(storage != nullptr);
+    crd::u32 whole[64];
+    crd::u32 part[16];
+    std::ranges::fill(whole, 0x11111111U);
+    std::ranges::fill(part, 0x22222222U);
+
+    gpu::ValidationCapture capture(*vk);
+    raster->begin_upload_batch();
+    REQUIRE(raster->upload_storage(*storage, 0U, whole, sizeof(whole)));
+    REQUIRE(raster->upload_storage(*storage, 64U, part, sizeof(part)));  // inside the first copy's range
+    REQUIRE(raster->upload_storage(*storage, 128U, part, sizeof(part))); // the same barrier orders it after the first
+    raster->end_upload_batch();
+    for (const auto& r : capture.messages())
+    {
+        UNSCOPED_INFO("msg text=" << r.message_text.c_str());
+    }
+    CHECK(capture.dropped_count() == 0U);
+    CHECK_FALSE(mentions_waw(capture));
+    CHECK(capture.error_or_warning_count() == 0U);
 }
 
 // DIAG.7a(g-3): GPU-ASSISTED (GPU-AV) correlated-hazard specimen -- the descriptor/buffer-OOB route. A compute kernel

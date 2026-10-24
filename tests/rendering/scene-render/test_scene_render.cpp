@@ -340,6 +340,47 @@ TEST_CASE("scene-render: THE partial-re-upload gate -- move ONE entity, exactly 
     CHECK(s4.uploaded_bytes == 0U);
 }
 
+// DIAG.11b: a run that moves on consecutive syncs is both last sync's mover (its prev_world advances) and this sync's;
+// it uploads each of its sections once. Twice was a redundant copy, and on Vulkan two overlapping copies in one batch.
+TEST_CASE("scene-render: a run moving on consecutive syncs uploads each section once", "[scene-render][geo7][diag11b]")
+{
+    Rig rig;
+    containers::Array<scene::EntityId> entities(&galloc());
+    for (int i = 0; i < 500; ++i)
+    {
+        entities.push_back(rig.spawn_cube(static_cast<f32>(i), 0.0F, 0.0F));
+    }
+    (void)rig.renderer.sync(rig.world);
+    const auto move = [&rig, &entities](f32 y)
+    {
+        scene::Transform t;
+        t.translation = math::from_raw_vec<units::dim::Length>(math::Vec3f{7.0F, y, 0.0F});
+        t.world = math::from_trs(math::Vec3f{7.0F, y, 0.0F}, math::Quatf::identity(), math::Vec3f{1, 1, 1});
+        rig.world.add_component(entities[123], t);
+    };
+    move(9.0F);
+    const auto first = rig.renderer.sync(rig.world);
+    move(11.0F);
+    rig.raster.uploads.clear();
+    const auto again = rig.renderer.sync(rig.world);
+    CHECK(again.dirty_runs == first.dirty_runs);
+    CHECK(again.uploaded_bytes == first.uploaded_bytes);
+    for (usize i = 0; i < rig.raster.uploads.size(); ++i)
+    {
+        for (usize j = i + 1U; j < rig.raster.uploads.size(); ++j)
+        {
+            const UploadRecord& a = rig.raster.uploads[i];
+            const UploadRecord& b = rig.raster.uploads[j];
+            INFO("upload " << i << " [" << a.offset << ", +" << a.size << ") and " << j << " [" << b.offset << ", +"
+                           << b.size << ")");
+            CHECK_FALSE((a.offset < b.offset + b.size && b.offset < a.offset + a.size));
+        }
+    }
+    // still in the advance set: the sync after its last move re-uploads it once, the one after that nothing
+    CHECK(rig.renderer.sync(rig.world).uploaded_bytes == first.uploaded_bytes);
+    CHECK(rig.renderer.sync(rig.world).uploaded_bytes == 0U);
+}
+
 // ⭐⭐ REN-41 (velocity): prev_world must hold LAST FRAME's world for EVERY instance, not just the ones re-extracted
 // this frame. An instance updated on an intermittent grain (the travelling-wave grid moves one row per frame) moves,
 // then is static for many frames — its prev_world must advance so its velocity decays to 0, or the resolve reprojects

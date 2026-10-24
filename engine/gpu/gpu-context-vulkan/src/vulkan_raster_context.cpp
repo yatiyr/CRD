@@ -8022,8 +8022,7 @@ private:
         bool            submitted = false;
         ObjectIdentity  identity{}; // DIAG.7a(d2b-vk): the one logical Resource identity for this slot's staging ring
         // DIAG.11b: the destinations copied since the batch's last barrier. A copy overlapping one waits for it, the
-        // order the synchronous path keeps (synchronization validation: overlapping writes to one storage buffer
-        // in every frame of the authored forward graph).
+        // order the synchronous path keeps (test: overlapping uploads in one Vulkan batch are ordered).
         crd::containers::Array<CopyRange> written;
     };
     static constexpr crd::u32 kUploadBatches   = 2U;
