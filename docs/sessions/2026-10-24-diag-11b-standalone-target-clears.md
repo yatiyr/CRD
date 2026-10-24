@@ -22,12 +22,13 @@ captured). At HEAD on this host's adapter it read 4 warnings and 1 error:
 - **820 on the MSAA, G-buffer (both attachments) and visibility targets**: created with no clear value, so D3D12
   clears them slowly and warns on every clear, the default included. They are now created for it: opaque black for
   the RGBA8 targets (`standalone_clear()`, as the colour and colour-depth targets already were) and id 0 for the
-  R32_UINT visibility target, the only value a D3D12 visibility clear writes. The MSAA resolve texture is not a render
-  target and keeps none.
+  R32_UINT visibility target, the value `draw_visbuffer` and `clear_scope` clear it to (an MRT draw's authored id
+  stays legal). The MSAA resolve texture is not a render target and keeps none.
 - **615, a depth draw on the D24S8 target bound the D32 pipeline**: `Dx12RasterProgram::pso_for` keyed a depth PSO on
   whether a DSV exists and its compare, not its format, so a program that drew into the colour-depth target first
   reused that PSO for the stencil target. The DSV format joins the cache identity, compared exactly like the other
-  members.
+  members. The Vulkan raster context draws with shader objects and dynamic rendering, so it bakes no attachment
+  format and has no such cache.
 
 The VRS target was already silent (a colour target first). Clears of other values stay legal and keep their value
 (the raster header's contract); a frame graph's own images carry their CEIR-derived hints and `@output` its

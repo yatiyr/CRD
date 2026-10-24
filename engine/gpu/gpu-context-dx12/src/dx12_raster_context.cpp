@@ -1524,7 +1524,7 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        D3D12_CLEAR_VALUE clear_value{}; // id 0: every D3D12 visibility clear is 0 (see clear_scope)
+        D3D12_CLEAR_VALUE clear_value{}; // id 0, as draw_visbuffer and clear_scope clear; authored ids stay legal
         clear_value.Format = rd.Format;
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
                                                      &clear_value, IID_PPV_ARGS(&tex))))
