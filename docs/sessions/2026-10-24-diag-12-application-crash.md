@@ -29,7 +29,9 @@ The new `[diag12]` case in `test_diag_host.cpp` checks the faulty run:
   (`same_identity`, and `identity_matches` when the build has a PDB), and the ExceptionStream's faulting instruction
   lies inside that module;
 - Linux: exit 139; the record's `(exe)` module line carries the build id of the file, and its `rip` lies in the
-  executable's image (base plus the file's PT_LOAD span).
+  executable's image (base plus the file's PT_LOAD span; every Linux preset links a position-independent executable,
+  the toolchains' default, so that span starts at 0). On a build without a PDB (win-release) both identities are
+  `None` and `same_identity` still compares the image size, stamp and checksum.
 
 Under ASan the sanitizer owns the fault: the case asserts a non-zero exit and, on Windows, no dump, the same branch
 as crash capture's own wild write. `check_repaired_run` (exit 0, Clean, no bundle, empty crash directory) covers the
