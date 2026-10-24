@@ -2346,13 +2346,16 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-lifetime-accounti
   and compares their normalized final paths with the path's, excluding the probe's own attribute-only handle; Linux
   compares the (device, inode) of every descriptor in `/proc/self/fd`. Another process's handle (a scanner, an indexer)
   never counts. `os_range_mapped(base, bytes)`: Windows walks VirtualQuery (any state but MEM_FREE); Linux reads
-  `/proc/self/maps`; the answer is Present, Absent or Partial. A path that cannot be identified, an empty or wrapping
-  range, or another OS is Unavailable with a reason, never Absent. The handle-table read lives in pages from the OS, not
-  the heap; it queries every File-type handle (the console and ctest pipes included), so it is for quiet test and
-  investigation processes, where no synchronous pipe read is pending on another thread. Libraries have no oracle: both
-  OSes reference-count a module and expose no per-process count, so the library cases are judged by the ledger and the
-  API's behaviour alone. Device objects are held to the registry's own `live_count`, a second count the ledger must
-  agree with.
+  `/proc/self/maps`; the answer is Present, Absent or Partial. `os_range_no_access(base, bytes)` counts only what
+  nothing may touch (MEM_RESERVE or PAGE_NOACCESS; `---` in the maps) and judges a release: the freed range is where
+  the OS places the process's next mapping, which a sanitizer runtime makes at any instruction (2026-10-24: a TSan
+  runtime mapping over a released reservation), and that mapping is accessible. A path that cannot be identified, an
+  empty or wrapping range, or another OS is Unavailable with a reason, never Absent. The handle-table read lives in
+  pages from the OS, not the heap; it queries every File-type handle (the console and ctest pipes included), so it is
+  for quiet test and investigation processes, where no synchronous pipe read is pending on another thread. Libraries
+  have no oracle: both OSes reference-count a module and expose no per-process count, so the library cases are judged by
+  the ledger and the API's behaviour alone. Device objects are held to the registry's own `live_count`, a second count
+  the ledger must agree with.
 
 Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md)):
 - Queue and budget pressure is a reading the owner of a bounded resource reports and a probe judges:
@@ -2371,7 +2374,9 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   high water kept beside the acquired count), each fiber tier (its count, acquired, peak and its own refusals), each
   injection queue by priority (capacity, depth and refusals; no high water, which would cost every push a read of the
   consumers' position, so a window over an injection queue is never called Relaxed) and the pinned lanes as one budget
-  (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals).
+  (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals). Each pool raises its peak
+  just after the count it bounds, so a reading reports the high water as at least the count it read (2026-10-24: a
+  fiber reading showed 9 in use with a high water of 8); the lifetime ledger's snapshot does the same for `live`.
 - Defects found and fixed. A job pushed into a full injection queue, or into a full local deque, was guarded only by
   `CRD_ASSERT_MSG`: with asserts compiled out the job was dropped, its counter never reached zero and its waiter hung
   (resume jobs go through the High queue, so a dropped resume strands a parked fiber). And each thread's pinned work
