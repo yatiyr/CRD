@@ -55,6 +55,20 @@ public:
         std::unique_lock<std::mutex> lock(m_mtx);
         return m_cv.wait_for(lock, deadline, [&] { return m_deadlocked || arrived_locked(tag); });
     }
+    // Blocks until some thread has arrived at `passed`, or a thread is held at `held` whose scripted turn is still
+    // ahead (a thread already woken to take its turn is not held). Returns false on timeout.
+    [[nodiscard]] bool await_arrived_or_held(const char* passed, const char* held,
+                                             std::chrono::milliseconds deadline) noexcept
+    {
+        std::unique_lock<std::mutex> lock(m_mtx);
+        return m_cv.wait_for(lock, deadline,
+                             [&]
+                             {
+                                 return m_deadlocked || arrived_locked(passed) ||
+                                        (!is_next(held) && in_remaining(held) &&
+                                         count(m_arrived, held) > count(m_observed, held));
+                             });
+    }
 
 private:
     static void trampoline(void* user, const char* tag) noexcept
@@ -77,17 +91,20 @@ private:
         }
         return false;
     }
-    bool arrived_locked(const char* tag) const noexcept
+    // A thread records its arrival before it may block and its observation once released, both under m_mtx.
+    static std::size_t count(const crd::containers::Array<const char*>& tags, const char* tag) noexcept
     {
-        for (const char* t : m_arrived)
+        std::size_t n = 0U;
+        for (const char* t : tags)
         {
             if (std::strcmp(t, tag) == 0)
             {
-                return true;
+                ++n;
             }
         }
-        return false;
+        return n;
     }
+    bool arrived_locked(const char* tag) const noexcept { return count(m_arrived, tag) > 0U; }
 
     void on_point(const char* tag) noexcept
     {

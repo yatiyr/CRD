@@ -6,9 +6,10 @@
 
 // Controlled-interleaving yield points (test-only; gate off they compile to nothing). A driver installs
 // a SchedOracle (sched_check.hpp) that can block a thread at each, serializing the publication/
-// reclamation race in any order. The five points and what they bracket:
+// reclamation race in any order. The six points and what they bracket:
 //   fp.published  — counter_finish_park: after the Treiber publish CAS, before the ABA value load
 //   fp.finalizing — counter_finish_park: after the claim CAS, before the park_finalized store
+//   fp.checked    — counter_finish_park: after the gated owner-release check, before the park_finalized store
 //   dec.zero      — counter_decrement: after the decrement hits zero, before stealing the waiter list
 //   dec.claim     — counter_decrement: in the drain loop, before racing for a Waiter's claim CAS
 //   wait.resumed  — counter_wait: after the fiber resumes, before the park_finalized handshake spin
@@ -405,6 +406,7 @@ bool counter_finish_park(Counter* counter, Waiter* w) noexcept
     {
         detail::sched_check_note_violation("fp.recycled-under-park");
     }
+    CRD_JOBS_SCHED_POINT("fp.checked"); // the check above has read task_id
 #endif
 
     // Done touching `counter` and `w`. Release the fiber to complete jobs::wait()

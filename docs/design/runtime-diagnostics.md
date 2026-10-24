@@ -1613,7 +1613,8 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-minimization.md)):
   a non-reproducing one until they are adjacent; `minimize_toward_zero` tries 0, then bisects the magnitude keeping
   the sign. Bisection claims a local boundary when the predicate is not monotone, never the global one.
 - Choices: the DIAG.4b schedule-script minimization now runs through `minimize_sequence` with K = 3, and still
-  shrinks the recorded failing log to exactly `{test.reacquired, fp.finalizing}` with no race seen.
+  shrinks the recorded failing log to exactly `{test.reacquired, fp.finalizing}`; the choreography orders the
+  re-acquire against the scheduler's owner-release check (`fp.checked`), so no visited candidate is a race.
 - Seed and hits: `minimize_fault_plan` (`crd/perf/fault_minimize.hpp`, crd-perf) takes a plan that reproduces and the
   caller's run (arm the plan, run, report each site's hit count). It narrows every rule's range in rule order (an
   unbounded rule bounded first at the hits the last reproducing run counted; then its first hit raised and its last

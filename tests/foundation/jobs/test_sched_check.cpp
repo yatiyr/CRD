@@ -77,7 +77,7 @@ struct BreakGuard
 
 struct ExposeResult
 {
-    bool                     arrived    = false; // the scheduler reached fp.finalizing
+    bool                     arrived    = false; // the scheduler reached fp.finalizing, then the re-acquire was ordered
     bool                     reacquired = false; // the freed child slot was popped again by a fresh run()
     bool                     deadlocked = false; // the driver's safety net tripped
     bool                     found      = false; // the detector reported the reclamation this run
@@ -114,6 +114,11 @@ ExposeResult expose_with(const TagTrace& script)
     // Broken variant: the fiber unwinds without the handshake, the root job finishes and releases the
     // child slot; main's wait returns once c_root hits zero (child slot already free by then).
     crd::jobs::wait(c_root);
+
+    // Order the re-acquire against the scheduler's owner-release check for every script: the script holds the
+    // scheduler at fp.finalizing, or the check has run (fp.checked). Without this a scheduler preempted between
+    // fp.finalizing and its check let a script that holds nothing find the reclamation on some runs.
+    r.arrived = r.arrived && drv.await_arrived_or_held("fp.checked", "fp.finalizing", std::chrono::milliseconds(5000));
 
     crd::jobs::Counter* const        target = g_child_counter.load(std::memory_order_acquire);
     crd::containers::Array<crd::jobs::Counter*> noops;
@@ -485,8 +490,8 @@ TEST_CASE("schedcheck: the failing script minimizes to its essential tags (delta
     bool choreography_ok = true;
 
     // One run of the reproduction. The shared minimizer (crd/core/minimize.hpp) judges each candidate on all K runs:
-    // a subset that only SOMETIMES finds (a race) is not a reproduction. (For this failure every subset the greedy
-    // minimizer visits is in fact deterministic; K is margin.)
+    // a subset that only SOMETIMES finds (a race) is not a reproduction. (expose_with orders the re-acquire against
+    // the scheduler's check, so every subset the greedy minimizer visits is deterministic; K is margin.)
     const auto run_once = [&](const TagTrace& s) -> bool
     {
         const ExposeResult r = expose_with(s);
