@@ -30,6 +30,10 @@ source:
 - Declared outcome: a formatter that throws drops that record, counted. Out of memory while formatting is the
   String's or heap allocator's out-of-memory fatal. Inside a sink, with the sink lock held, the bridge suppresses its
   own record and counts it (`sink_reentrant_assert_count()`), and the fatal ends the process.
+- Outside a sink (the message String in `vdispatch`, the async queue's copy) the heap allocator's fatal is not
+  suppressed: the bridge logs, its own allocation fails, and crd-core's per-thread `s_in_handler` guard sends that
+  second fatal straight to the platform handler. Declared, not tested: no test can make the default allocator refuse,
+  and no test exercises `s_in_handler`. DIAG.12's owner-row item takes it.
 - `crd-log-fatal-specimen` (`tests/support/diag/specimens/log_fatal_specimen.cpp`, a new file: no specimen under the
   expected-fatal protocol linked crd-log) has a sink that formats each record into a String on a refusing allocator,
   as the engine's sinks format. Modes `sync-sink-format-refused` and `async-sink-format-refused` pass only when the
