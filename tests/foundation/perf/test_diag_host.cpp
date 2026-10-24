@@ -1382,9 +1382,60 @@ cd::Outcome check_repaired_run(const char* mode)
     return o;
 }
 
-// Read the application's bundle: this build's identity and the application's module, which is returned.
+u32 fold_path_char(u32 c)
+{
+    if (c == '\\')
+    {
+        return '/';
+    }
+    return c >= 'A' && c <= 'Z' ? c + 32U : c;
+}
+
+// Whether `bytes` hold `path` as UTF-8 or UTF-16LE text, either separator, ASCII case folded: a minidump names its
+// modules in UTF-16 with backslashes.
+bool holds_path(const cont::Array<u8>& bytes, cont::StringView path)
+{
+    for (const crd::usize width : {crd::usize{1U}, crd::usize{2U}})
+    {
+        for (crd::usize at = 0U; at + path.size() * width <= bytes.size(); ++at)
+        {
+            crd::usize i = 0U;
+            while (i < path.size() &&
+                   fold_path_char(bytes[at + i * width]) == fold_path_char(static_cast<u8>(path[i])) &&
+                   (width == 1U || bytes[at + i * width + 1U] == 0U))
+            {
+                ++i;
+            }
+            if (i == path.size())
+            {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// The directory the application runs from.
+cont::StringView app_directory()
+{
+    const cont::StringView exe{CRD_DIAG_HOST_SPECIMEN};
+    return exe.substr(0U, exe.size() - cont::StringView{base_name(CRD_DIAG_HOST_SPECIMEN)}.size() - 1U);
+}
+
+// DIAG.12 privacy: what a bundle carries names files, never the running host's directories: neither the application's
+// directory nor the scratch directory that holds its profile, its captures and its authored program.
+void check_private(const cont::Array<u8>& bytes, const Scratch& scratch)
+{
+    const cont::String dir = scratch.text();
+    CHECK_FALSE(holds_path(bytes, app_directory()));
+    CHECK_FALSE(holds_path(bytes, cont::StringView{dir.data(), dir.size()}));
+}
+
+// Read the application's bundle: this build's identity and the application's module, which is returned. The bundle
+// is held private first.
 const cp::ModuleIdentity* read_app_bundle(const Scratch& scratch, BundleRead& bundle)
 {
+    check_private(read_bytes(scratch.file("captures/flight-0.cdb")), scratch);
     bundle = read_flight_bundle(scratch.file("captures/flight-0.cdb"));
     REQUIRE(bundle.import.status == cp::ImportStatus::Ok);
     REQUIRE(bundle.has_flight);
@@ -1435,6 +1486,7 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         check_fatal_end(o);
 
         // The bundle names what failed, the events before it, the replay recipe, this build and the executable.
+        check_private(read_bytes(scratch.file("captures/flight-0.cdb")), scratch);
         const BundleRead bundle = read_flight_bundle(scratch.file("captures/flight-0.cdb"));
         REQUIRE(bundle.import.status == cp::ImportStatus::Ok);
         REQUIRE(bundle.has_flight);
@@ -1699,6 +1751,10 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         REQUIRE(fault_pc != 0U);
         CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId); // so identity_matches below runs
 #endif
+        // The capture is raw evidence (ADR-0133 ID-8): it holds the application's directory and nothing declares it
+        // redacted. The section imported from it, which a bundle carries, holds neither directory.
+        CHECK(holds_path(capture_bytes, app_directory()));
+        check_private(section, scratch);
         // Import: the capture's module list through the symbol index section a bundle carries.
         cp::BundleWriter writer;
         REQUIRE(writer.add_section(cp::BundleSectionTag::SymbolIndex, {section.data(), section.size()}) ==

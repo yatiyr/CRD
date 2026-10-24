@@ -113,7 +113,8 @@ static_assert(alignof(SymbolRecord) == 8, "SymbolRecord is 8-aligned");
 
 // ---- Serialise / read the SymbolIndex section payload ----
 
-// Pack `modules` into a SymbolIndex section payload (header + records + blob).
+// Pack `modules` into a SymbolIndex section payload (header + records + blob). Each name and debug file is packed as
+// its file name: no directory of the running host leaves in a section (DIAG.12).
 [[nodiscard]] crd::containers::Array<crd::u8>
 serialize_symbol_index(crd::containers::ConstSpan<ModuleIdentity> modules,
                        crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;

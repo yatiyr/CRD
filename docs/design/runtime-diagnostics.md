@@ -2983,6 +2983,15 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   device). DX12 has no route for this class: its compute context inserts every transition and it has no
   synchronization validation; its correlated Core hazards are DIAG.7a's
   ([session](../sessions/2026-10-24-diag-12-gpu-hazard.md)).
+- Privacy (ID-8): every bundle the application leaves, and the symbol section imported from its crash capture, holds
+  neither the application's directory nor the one holding its profile, captures and authored program.
+  `serialize_symbol_index` packs each module and debug file as its file name, whichever route supplied the path (the
+  live walk, a dump, the record); the authored program is registered by its file name; the replay recipe is
+  placeholders, never argv. The dump and the Linux record are raw evidence: they keep full paths, registers and
+  memory, the case checks that they hold the application's directory, and nothing declares them redacted (DIAG.5d).
+  An engine site's trigger `file` is the build's `__FILE__` (DIAG.9b), a path the binary already carries. The race
+  leaves no capture; ThreadSanitizer's report is the tool's own stderr
+  ([session](../sessions/2026-10-24-diag-12-privacy.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

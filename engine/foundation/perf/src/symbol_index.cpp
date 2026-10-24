@@ -460,12 +460,16 @@ cont::Array<crd::u8> serialize_symbol_index(cont::ConstSpan<ModuleIdentity> modu
         r.id_len    = m.id_len;
         r.flags     = m.unloaded ? kSymbolRecordFlagUnloaded : static_cast<crd::u16>(0);
         std::memcpy(r.id, m.id, kMaxSymbolIdBytes);
+        // File names only: the directory a dump or a loader reports is the running host's (DIAG.12 privacy), and
+        // lookup keys on the identity and the file name (debug_file_path).
+        const cont::StringView name  = basename_view(m.name);
+        const cont::StringView debug = basename_view(m.debug_file);
         r.name_off = static_cast<crd::u32>(blob.size());
-        r.name_len = static_cast<crd::u32>(m.name.size());
-        append_bytes(blob, m.name.c_str(), m.name.size());
+        r.name_len = static_cast<crd::u32>(name.size());
+        append_bytes(blob, name.data(), name.size());
         r.debug_off = static_cast<crd::u32>(blob.size());
-        r.debug_len = static_cast<crd::u32>(m.debug_file.size());
-        append_bytes(blob, m.debug_file.c_str(), m.debug_file.size());
+        r.debug_len = static_cast<crd::u32>(debug.size());
+        append_bytes(blob, debug.data(), debug.size());
         records.push_back(r);
     }
 

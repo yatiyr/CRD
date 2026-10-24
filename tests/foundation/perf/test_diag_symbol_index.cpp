@@ -312,6 +312,16 @@ TEST_CASE("SymbolIndex round-trips through its section and a bundle", "[perf][di
         CHECK(std::strcmp(back[i].debug_file.c_str(), mods[i].debug_file.c_str()) == 0);
     }
 
+    // A dump names its modules by full path; the section keeps each file name, never the host's directory (DIAG.12).
+    ModuleIdentity placed;
+    placed.name.append(R"(C:\Users\someone\game\app.exe)");
+    placed.debug_file.append("D:/build/out/app.pdb");
+    const cont::Array<crd::u8>        packed   = serialize_symbol_index(span_of(&placed, 1U));
+    const cont::Array<ModuleIdentity> unplaced = read_symbol_index(span_of(packed.data(), packed.size()));
+    REQUIRE(unplaced.size() == 1U);
+    CHECK(cont::StringView{unplaced[0].name.c_str()} == "app.exe");
+    CHECK(cont::StringView{unplaced[0].debug_file.c_str()} == "app.pdb");
+
     // Through a bundle: build_symbol_index_from_minidump -> tag-5 section -> read_bundle -> read_symbol_index.
     const cont::Array<crd::u8> sec = build_symbol_index_from_minidump(span_of(dump.data(), dump.size()));
     BundleWriter               w;
