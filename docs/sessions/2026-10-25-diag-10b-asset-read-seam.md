@@ -38,7 +38,8 @@ The consult's action check made always false (`if (false && ...)`): on win-debug
 - win-debug: crd-perf-tests builds and all its 302 CTests pass, the host-specimen cases among them (a plan armed
   before an asset read now spends a read hit on it, and none relied on the old count); the `crd-fuzz-ceridc-diag` and
   `crd-fuzz-perf-assets` corpus replays pass.
-- linux-gcc-debug (`wsl-lane.sh`): crd-perf-tests builds and the same cases pass.
+- linux-gcc-debug (`wsl-lane.sh`): crd-perf-tests builds and its 21 `diag assets:`, `fault commands:`,
+  `flight commands:`, `fault injector:` and `doctor:` cases pass.
 - `diag-coverage.py --validate` (23 exclusions), `test-diag-coverage.py`, the ctest guards, tidy-files, Allman,
   check-master-plan and check-repository pass. clang-format's one finding in `diag_assets.cpp` is HEAD's include-block
   regroup; the added lines have none.
