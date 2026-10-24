@@ -304,7 +304,10 @@ OsProbeResult os_file_open_in_process(const char* path) noexcept
 #endif
 }
 
-OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
+namespace
+{
+// How much of [base, base + bytes) is reserved or mapped; with `no_access_only`, only what nothing may touch.
+OsProbeResult range_coverage(const void* base, crd::usize bytes, bool no_access_only) noexcept
 {
     if (base == nullptr || bytes == 0U)
     {
@@ -329,7 +332,8 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
         const auto* const next   = static_cast<const crd::u8*>(info.BaseAddress) + info.RegionSize;
         const auto        region = reinterpret_cast<crd::usize>(info.BaseAddress);
         const auto        end    = reinterpret_cast<crd::usize>(next);
-        if (info.State != MEM_FREE)
+        const bool no_access = info.State == MEM_RESERVE || (info.Protect & 0xFFU) == PAGE_NOACCESS;
+        if (info.State != MEM_FREE && (!no_access_only || no_access))
         {
             covered += overlap(lo, hi, region, end);
         }
@@ -346,11 +350,15 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
     {
         return unavailable("cannot read /proc/self/maps");
     }
-    // Each line starts "start-end " in hex; the rest of the line is skipped, across reads when it is long.
+    // Each line starts "start-end " in hex, then the read, write and execute flags ("---p" is a mapping nothing may
+    // touch); the rest of the line is skipped, across reads when it is long.
     char       buffer[4096];
     char       head[64];
     crd::usize head_length = 0U;
     bool       in_head     = true;
+    crd::usize flags_read  = 3U; // of the current line's three access flags
+    bool       accessible  = false;
+    crd::usize line_bytes  = 0U; // of the range inside the current line's mapping
     crd::usize covered     = 0U;
     bool       failed      = false;
     while (!failed)
@@ -376,6 +384,15 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
             }
             if (!in_head)
             {
+                if (flags_read < 3U)
+                {
+                    accessible = accessible || c != '-';
+                    ++flags_read;
+                    if (flags_read == 3U && !accessible)
+                    {
+                        covered += line_bytes;
+                    }
+                }
                 continue;
             }
             if (c != ' ')
@@ -402,7 +419,16 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
                 failed = true;
                 break;
             }
-            covered += overlap(lo, hi, start, end);
+            line_bytes = overlap(lo, hi, start, end);
+            if (no_access_only)
+            {
+                flags_read = 0U;
+                accessible = false;
+            }
+            else
+            {
+                covered += line_bytes;
+            }
         }
     }
     (void)::close(fd);
@@ -412,8 +438,20 @@ OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
     }
     return coverage(covered, bytes);
 #else
+    (void)no_access_only;
     return unavailable("no address-space probe on this OS");
 #endif
+}
+} // namespace
+
+OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept
+{
+    return range_coverage(base, bytes, false);
+}
+
+OsProbeResult os_range_no_access(const void* base, crd::usize bytes) noexcept
+{
+    return range_coverage(base, bytes, true);
 }
 
 namespace

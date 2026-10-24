@@ -14,6 +14,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -285,23 +286,30 @@ TEST_CASE("diag10c: the OS sees a reserved range, part of one, and none of it on
     REQUIRE(base != nullptr);
     CHECK(crd::os_range_mapped(base, 2U * unit).presence == OsPresence::Present);
     CHECK(crd::os_range_mapped(base, unit).presence == OsPresence::Present);
+    CHECK(crd::os_range_no_access(base, 2U * unit).presence == OsPresence::Present);
     auto* const second = static_cast<crd::u8*>(base) + unit;
 
     // Only the first half stays reserved. Linux unmaps the second page of the mapping; Windows cannot release part
-    // of a reservation, so it releases the whole one and reserves its first unit again at the same address.
+    // of a reservation, so it releases the whole one and reserves its first unit again at the same address. A
+    // released page is where the OS places the process's next mapping, which a sanitizer runtime can make at any
+    // instruction, so a release is judged by the reservation's no-access state, not by the page being unmapped.
 #if CRD_OS_WINDOWS
     os_release(base, 2U * unit);
-    CHECK(crd::os_range_mapped(base, 2U * unit).presence == OsPresence::Absent);
+    CHECK(crd::os_range_no_access(base, 2U * unit).presence == OsPresence::Absent);
     REQUIRE(os_reserve(base, unit) == base); // an explicit address is reserved there or not at all
 #else
     os_release(second, unit);
 #endif
-    CHECK(crd::os_range_mapped(base, 2U * unit).presence == OsPresence::Partial);
-    CHECK(crd::os_range_mapped(second, unit).presence == OsPresence::Absent);
+    CHECK(crd::os_range_no_access(base, 2U * unit).presence == OsPresence::Partial);
+    CHECK(crd::os_range_no_access(second, unit).presence == OsPresence::Absent);
     CHECK(crd::os_range_mapped(base, unit).presence == OsPresence::Present);
     os_release(base, unit);
-    CHECK(crd::os_range_mapped(base, 2U * unit).presence == OsPresence::Absent);
+    CHECK(crd::os_range_no_access(base, 2U * unit).presence == OsPresence::Absent);
 
+    // Nothing is ever mapped at 4096: below Linux's lowest mappable address (vm.mmap_min_addr) and inside the first
+    // 64 KiB, which Windows never allocates.
+    const auto* const never = std::bit_cast<const void*>(crd::usize{4096U});
+    CHECK(crd::os_range_mapped(never, 4096U).presence == OsPresence::Absent);
     CHECK(crd::os_range_mapped(nullptr, unit).presence == OsPresence::Unavailable);
     CHECK(crd::os_range_mapped(base, 0U).presence == OsPresence::Unavailable);
 }

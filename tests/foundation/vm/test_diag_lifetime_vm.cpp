@@ -2,7 +2,9 @@
 // Declared contract (docs/design/runtime-diagnostics.md, DIAG.10c): vm::reserve records one MappedRegion of the
 // page-rounded size once the OS granted it, vm::release records its release once the OS took it back, and nothing
 // else (a failed reserve, the release of an empty region, commit and decommit) changes the ledger. The address
-// space is asked independently (crd::os_range_mapped).
+// space is asked independently (crd::os_range_mapped, and crd::os_range_no_access for the release: a released range
+// is where the OS places the process's next mapping, which a sanitizer runtime can make at any instruction, so only
+// the reservation's own no-access state shows that it is gone).
 
 #include <crd/core/lifetime_ledger.hpp>
 #include <crd/core/os_resource_probe.hpp>
@@ -41,10 +43,12 @@ TEST_CASE("diag10c: a reservation is one mapped region of its size until it is r
 
     // Backing pages come and go inside the reservation; the reservation itself does not.
     REQUIRE(vm::commit(region.base, vm::page_size()));
+    CHECK(crd::os_range_no_access(base, size).presence == OsPresence::Partial); // the committed page is accessible
     REQUIRE(vm::decommit(region.base, vm::page_size()));
     r = since(start);
     CHECK(r.live_change(LifetimeClass::MappedRegion) == 1);
     CHECK(r.byte_change(LifetimeClass::MappedRegion) == static_cast<crd::i64>(size));
+    CHECK(crd::os_range_no_access(base, size).presence == OsPresence::Present);
 
     vm::release(region);
     CHECK_FALSE(region.valid());
@@ -53,7 +57,7 @@ TEST_CASE("diag10c: a reservation is one mapped region of its size until it is r
     (void)crd::format_lifetime_report(r, line, sizeof(line));
     INFO("window: " << line);
     CHECK(r.verdict == LifetimeVerdict::Balanced);
-    CHECK(crd::os_range_mapped(base, size).presence == OsPresence::Absent);
+    CHECK(crd::os_range_no_access(base, size).presence == OsPresence::Absent);
 }
 
 TEST_CASE("diag10c: what the OS never granted is never recorded", "[vm][lifetime][diag10c]")

@@ -13,6 +13,10 @@
 //   path's. The probe's own handle on Windows is excluded.
 // - os_range_mapped: how much of [base, base + bytes) is reserved or mapped. Windows walks VirtualQuery (any state
 //   but MEM_FREE); Linux reads /proc/self/maps.
+// - os_range_no_access: how much of the range is reserved or mapped with no access (Windows: MEM_RESERVE, or committed
+//   PAGE_NOACCESS; Linux: "---"), the state of a reservation nothing has committed. A released range is where the OS
+//   places the process's next mapping, which a heap or a sanitizer runtime can make at any time, so its release is
+//   judged by this probe: what a runtime maps there is accessible, a reservation that survived is not.
 // - os_thread_alive: is the thread an identity names still running in this process? An identity is read from inside
 //   the thread (os_current_thread_identity) and is the OS id plus the thread's start time, so an id the OS has handed
 //   to a later thread is not mistaken for the recorded one. Windows opens the id (OpenThread), requires it to belong
@@ -50,6 +54,7 @@ struct OsProbeResult
 
 [[nodiscard]] OsProbeResult os_file_open_in_process(const char* path) noexcept;
 [[nodiscard]] OsProbeResult os_range_mapped(const void* base, crd::usize bytes) noexcept;
+[[nodiscard]] OsProbeResult os_range_no_access(const void* base, crd::usize bytes) noexcept;
 
 // A thread as the OS names it.
 struct OsThreadIdentity
