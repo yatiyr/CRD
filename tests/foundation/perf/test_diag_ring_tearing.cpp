@@ -20,6 +20,7 @@
 #if CRD_PERF_ENABLED
 
 #include <atomic>
+#include <chrono>
 #include <thread>
 
 TEST_CASE("ring: frame-history reads are free of torn records under a wrapping writer", "[perf][diag][ring]")
@@ -55,7 +56,13 @@ TEST_CASE("ring: frame-history reads are free of torn records under a wrapping w
             }
         });
 
-    for (crd::u64 f = 0; f < n_frames; ++f)
+    // The writer keeps lapping past n_frames until the reader has made a copy: a reader thread the scheduler starts
+    // after the last frame would otherwise leave nothing checked. The deadline makes a reader that never copies a
+    // failure below, not a hang.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    for (crd::u64 f = 0;
+         f < n_frames || (copies.load(std::memory_order_relaxed) == 0U && std::chrono::steady_clock::now() < deadline);
+         ++f)
     {
         crd::perf::counter_set_i64(id, static_cast<crd::i64>(crd::perf::frame_count()));
         crd::perf::frame_mark();
@@ -63,12 +70,12 @@ TEST_CASE("ring: frame-history reads are free of torn records under a wrapping w
     done.store(true, std::memory_order_release);
     reader.join();
 
+    // Every read is either a consistent copy or an explicit unavailable -- the two must account for a torn-free run.
+    INFO("copies=" << copies.load() << " unavailable=" << crd::perf::frame_history_unavailable_count());
     // A consistent (seqlock-verified) copy never mixes two frames' fields.
     CHECK(torn.load() == 0U);
     // The reader actually exercised the copy path (guards against a vacuous pass).
     CHECK(copies.load() > 0U);
-    // Every read is either a consistent copy or an explicit unavailable -- the two must account for a torn-free run.
-    INFO("unavailable=" << crd::perf::frame_history_unavailable_count());
 
     crd::perf::shutdown();
 }
