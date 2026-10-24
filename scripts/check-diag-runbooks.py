@@ -16,9 +16,10 @@ would notice, so every checkable part of every entry is checked here:
 - every DIAG child of docs/design/runtime-diagnostics.md is the Owner of an entry or listed, with its reason, among
   the children without an entry;
 - with --build, every `ctest ... -R "<regex>"` (and `wsl-lane.sh test <preset> -R ...`) of a row that applies to the
-  tree matches at least one test it registers, and every named executable's binary directory exists in it. A row's
-  qualifier names a platform (`(Windows)`, `(Linux)`) or a build property the configuration must compile in
-  (`(asserts)`, `(profiling)`; read from CMakeCache.txt), or both (`(Windows, profiling)`).
+  tree matches at least one test it registers, every `-L <regex>` at least one label of its tests, and every named
+  executable's binary directory exists in it. A row's qualifier names a platform (`(Windows)`, `(Linux)`) or a build
+  property the configuration must compile in (`(asserts)`, `(profiling)`; read from CMakeCache.txt), or both
+  (`(Windows, profiling)`).
 
     python scripts/check-diag-runbooks.py --build build/win-debug        (the crd-check-diag-runbooks CTest)
     python scripts/check-diag-runbooks.py --static                       (no tree: the test references unresolved)
@@ -66,9 +67,10 @@ PLACEHOLDER = re.compile(r'<[^<>]*>')
 class Tree:
     """What the checks look things up in: the checkout, and the configured tree when given."""
 
-    def __init__(self, root=ROOT, tests=None, platform=None, build=None, properties=None):
+    def __init__(self, root=ROOT, tests=None, platform=None, build=None, properties=None, labels=None):
         self.root = Path(root)
         self.tests = tests  # CTest names of the configured tree, or None (static)
+        self.labels = labels  # the labels of those tests, or None (static)
         self.properties = properties  # the build properties the tree compiles in ({'asserts', 'profiling'}), or None
         self.build = Path(build) if build else None  # the configured tree, whose binary directories are checked
         self.platform = platform or ('Windows' if os.name == 'nt' else 'Linux')
@@ -269,9 +271,9 @@ def check_script(tree, words, where):
             for flag in flags_of(rest) if flag not in known]
 
 
-def ctest_regex(arguments):
+def ctest_regex(arguments, flag='-R'):
     for i, argument in enumerate(arguments):
-        if argument == '-R' and i + 1 < len(arguments):
+        if argument == flag and i + 1 < len(arguments):
             return arguments[i + 1]
     return None
 
@@ -298,18 +300,25 @@ def with_linux(qualifier):
     return ', '.join(parts if 'Linux' in parts else parts + ['Linux'])
 
 
-def check_regex(tree, regex, platform, where):
+def check_regex(tree, regex, platform, where, label=False):
+    """A -R regex must match a test name of the tree, a -L regex (`label`) a label of its tests."""
     if regex is None or PLACEHOLDER.search(regex):
         return []
     try:
         compiled = re.compile(regex)
     except re.error as error:
         return ['%s: the regex %r does not compile: %s' % (where, regex, error)]
-    if tree.tests is None or not applies(tree, platform):
+    names = tree.labels if label else tree.tests
+    if names is None or not applies(tree, platform):
         return []
-    if not any(compiled.search(name) for name in tree.tests):
-        return ['%s: no test of this tree matches %r' % (where, regex)]
+    if not any(compiled.search(name) for name in names):
+        return ['%s: no test %sof this tree matches %r' % (where, 'label ' if label else '', regex)]
     return []
+
+
+def check_selection(tree, arguments, platform, where):
+    return (check_regex(tree, ctest_regex(arguments), platform, where) +
+            check_regex(tree, ctest_regex(arguments, '-L'), platform, where, label=True))
 
 
 def check_ctest(tree, words, platform, where):
@@ -333,7 +342,7 @@ def check_ctest(tree, words, platform, where):
         i += 1
     if ctest_regex(arguments) is None and '-L' not in arguments:
         problems.append('%s: select the tests with -R or -L' % where)
-    return problems + check_regex(tree, ctest_regex(arguments), platform, where)
+    return problems + check_selection(tree, arguments, platform, where)
 
 
 def check_lane(tree, words, platform, where):
@@ -347,7 +356,7 @@ def check_lane(tree, words, platform, where):
             return ['%s: wsl-lane.sh %s needs a configure preset, not %r'
                     % (where, words[1], words[2] if len(words) > 2 else '')]
         if words[1] == 'test':
-            problems += check_regex(tree, ctest_regex(words[3:]), with_linux(platform), where)
+            problems += check_selection(tree, words[3:], with_linux(platform), where)
     return problems
 
 
@@ -594,10 +603,12 @@ def tree_tests(build, config=None):
     if completed.returncode != 0:
         raise SystemExit('ERROR: ctest --show-only in %s exited %d: %s'
                          % (build, completed.returncode, completed.stderr.strip()[:400]))
-    names = [test['name'] for test in json.loads(completed.stdout).get('tests', [])]
-    if not names:
+    tests = json.loads(completed.stdout).get('tests', [])
+    if not tests:
         raise SystemExit('ERROR: %s registers no test; nothing could be resolved' % build)
-    return names
+    labels = {label for test in tests for prop in test.get('properties', []) if prop['name'] == 'LABELS'
+              for label in prop['value'] or []}
+    return [test['name'] for test in tests], labels
 
 
 def main(argv=None):
@@ -612,15 +623,15 @@ def main(argv=None):
     if not runbook.is_file() or not DESIGN.is_file():
         print('ERROR: %s or %s is missing' % (runbook, DESIGN))
         return 2
-    tests = None
+    tests, labels = None, None
     if args.build:
         build = Path(os.path.expanduser(args.build))
         if not (build / 'CTestTestfile.cmake').is_file():
             print('ERROR: %s is not a configured tree with tests' % build)
             return 2
-        tests = tree_tests(build, args.config)
+        tests, labels = tree_tests(build, args.config)
     build = Path(os.path.expanduser(args.build)) if args.build else None
-    tree = Tree(tests=tests, build=build, properties=build_properties(build) if build else None)
+    tree = Tree(tests=tests, build=build, properties=build_properties(build) if build else None, labels=labels)
     problems = check(tree, runbook.read_text(encoding='utf-8'), DESIGN.read_text(encoding='utf-8'))
     entries, exempt = parse(runbook.read_text(encoding='utf-8'))
     for problem in problems:

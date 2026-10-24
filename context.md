@@ -6,7 +6,7 @@
 <!-- current-slice: DIAG.11b -->
 **Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (Partial), first unfinished row: measured overhead,
 focused local routes, tiered sanitizer/race/fuzz CI and runbooks. Left: the user's (l), (o) and (8); next local
-work: [DIAG.11c](docs/ROADMAP.md#slice-diag.11c) (Partial): the per-tuple workflows and the portable boundary audit.
+work: [DIAG.11c](docs/ROADMAP.md#slice-diag.11c) (Partial): the portable boundary audit.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).
 [Contract](docs/design/runtime-diagnostics.md); [runbooks](docs/design/diagnostic-runbooks.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).

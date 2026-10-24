@@ -50,7 +50,11 @@ crd_enable_default_pch(crd-gpu-context-dx12-tests)
 # CEIR-18a-1: the repo root, so the shared cull gate loads assets/compute/scene_light_cull.ckir (the retired builder's asset).
 target_compile_definitions(crd-gpu-context-dx12-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
-crd_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST PROPERTIES RESOURCE_LOCK crd_gpu_device)
+# DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
+crd_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST TEST_SPEC "~[diag-workflow]"
+    PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-gpu-context-dx12-tests DISCOVERY_MODE PRE_TEST TEST_SPEC "[diag-workflow]"
+    PROPERTIES RESOURCE_LOCK crd_gpu_device LABELS "diag;diag-workflow")
 
 # ── CEIR-20c-1: the D3D12 Work Graphs device gate — ISOLATED in its OWN exe so the Work-Graphs-capable dxc it copies next
 #    to itself (lib_6_8 node attrs) does not change which dxcompiler.dll the other dx12 tests load (the advisor's isolation

@@ -143,7 +143,7 @@ int read_marker(const fs::path& dir)
 } // namespace
 
 TEST_CASE("crash capture: a wild write terminates with the fault code and writes exactly one dump",
-          "[core][diag][crash-capture]")
+          "[core][diag][crash-capture][diag-workflow]")
 {
     const fs::path    dir = fresh_dir("av");
     const cd::Outcome o   = run_mode("av", dir);
@@ -575,7 +575,7 @@ RecordFields parse_record(const fs::path& p)
 } // namespace
 
 TEST_CASE("crash capture (linux): a wild write terminates with SIGSEGV and writes one record",
-          "[core][diag][crash-capture]")
+          "[core][diag][crash-capture][diag-workflow]")
 {
     const fs::path    dir = fresh_dir("av");
     const cd::Outcome o   = run_mode("av", dir);

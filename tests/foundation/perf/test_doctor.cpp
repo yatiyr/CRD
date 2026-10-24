@@ -36,7 +36,7 @@ void clear_env(const char* name)
 }
 } // namespace
 
-TEST_CASE("doctor: reports the schema, host tuple and the diagnostic modes", "[diag][doctor]")
+TEST_CASE("doctor: reports the schema, host tuple and the diagnostic modes", "[diag][doctor][diag-workflow]")
 {
     const cp::DoctorReport r = cp::run_doctor();
     CHECK(cont::StringView{r.schema} == cont::StringView{"cerid-diagnostics/1"});

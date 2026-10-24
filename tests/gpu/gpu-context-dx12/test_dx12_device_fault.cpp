@@ -405,7 +405,7 @@ TEST_CASE("DIAG.7b(h) device fault child (spawned by the fault tests, never run 
 }
 
 TEST_CASE("DIAG.7b(h1): a GPU use-after-free on WARP runs the device-fault path end to end",
-          "[dx12][validation][dred][device-fault]")
+          "[dx12][validation][dred][device-fault][diag-workflow]")
 {
     const std::filesystem::path dir = fresh_dump_dir("warp");
     const DWORD child = run_fault_child(dir, L"warp");

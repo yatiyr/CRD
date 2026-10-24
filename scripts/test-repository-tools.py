@@ -3466,6 +3466,22 @@ class DiagRunbooks(unittest.TestCase):
             linux = runbooks.Tree(tests=['alpha: one', 'linux only: two'], platform='Linux', build=Path(temp) / 'x')
             self.assertEqual([], runbooks.check(linux, program, design), 'a Windows row is not resolved on Linux')
 
+    def test_a_label_selection_must_name_a_label_of_the_tree(self):
+        design = '## DIAG.1a — x\n'
+        entry = ('<a id="rb-x"></a>\n### X\n\n| Field | Value |\n|---|---|\n| Symptom | s |\n'
+                 '| Command | `python scripts/dev.py plan --build build/win-debug` |\n| Artifact | a |\n| Read | r |\n'
+                 '| Next test | `ctest --test-dir build/win-debug -L diag-workflow`; `wsl.exe --cd <checkout> -e bash '
+                 'scripts/wsl-lane.sh test linux-gcc-debug -L diag-workflow` |\n'
+                 '| Hosted | h |\n| Adopt | `crd_discover_tests(<target>)` |\n'
+                 '| Example | `scripts/dev.py` |\n| Cost | [c](ci-tiers.md) |\n| Owner | DIAG.1a |\n')
+        labelled = runbooks.Tree(tests=['alpha: one'], platform='Linux', labels={'diag', 'diag-workflow'})
+        self.assertEqual([], runbooks.check(labelled, entry, design))
+        unlabelled = runbooks.Tree(tests=['alpha: one'], platform='Linux', labels={'diag'})
+        problems = runbooks.check(unlabelled, entry, design)
+        self.assertEqual(2, len(problems), problems)
+        self.assertTrue(all("no test label of this tree matches 'diag-workflow'" in p for p in problems), problems)
+        self.assertEqual([], runbooks.check(runbooks.Tree(), entry, design), 'static: nothing resolved')
+
     def test_build_qualified_rows_resolve_only_where_the_configuration_compiles_them_in(self):
         # The shipping and release lanes compile asserts and profiling out, and register none of those modes' cases.
         design = '## DIAG.1a — x\n'

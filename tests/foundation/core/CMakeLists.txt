@@ -16,4 +16,6 @@ target_compile_definitions(crd-core-tests PRIVATE
 
 crd_enable_default_pch(crd-core-tests)
 
-crd_discover_tests(crd-core-tests)
+# DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
+crd_discover_tests(crd-core-tests TEST_SPEC "~[diag-workflow]")
+crd_discover_tests(crd-core-tests TEST_SPEC "[diag-workflow]" PROPERTIES LABELS "diag;diag-workflow")

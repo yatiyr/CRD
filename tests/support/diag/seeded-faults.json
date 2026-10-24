@@ -96,8 +96,8 @@
         },
         {
           "file": "tests/foundation/perf/CMakeLists.txt",
-          "old": "crd_discover_tests(crd-perf-tests)\n",
-          "new": "crd_discover_tests(crd-perf-tests)\nset_source_files_properties(test_diag_harness.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON\n    COMPILE_OPTIONS \"-fno-sanitize=address;-fno-sanitize=thread;-fno-sanitize=undefined\")\n"
+          "old": "crd_discover_tests(crd-perf-tests TEST_SPEC \"~[diag-workflow]\")\n",
+          "new": "crd_discover_tests(crd-perf-tests TEST_SPEC \"~[diag-workflow]\")\nset_source_files_properties(test_diag_harness.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON\n    COMPILE_OPTIONS \"-fno-sanitize=address;-fno-sanitize=thread;-fno-sanitize=undefined\")\n"
         },
         {
           "file": "tests/foundation/jobs/CMakeLists.txt",

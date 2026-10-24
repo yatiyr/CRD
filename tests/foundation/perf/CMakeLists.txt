@@ -91,7 +91,9 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_COMMANDS_SCRATCH="${CMAKE_CURRENT_BINARY_DIR}"
     CRD_DIAG_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/diag")
 
-crd_discover_tests(crd-perf-tests)
+# DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
+crd_discover_tests(crd-perf-tests TEST_SPEC "~[diag-workflow]")
+crd_discover_tests(crd-perf-tests TEST_SPEC "[diag-workflow]" PROPERTIES LABELS "diag;diag-workflow")
 
 # REPO.DEV.9 / DIAG.5d(e2): the bounded diagnostic-bundle ingestion fuzz target + its committed corpus replay.
 add_subdirectory(fuzz)

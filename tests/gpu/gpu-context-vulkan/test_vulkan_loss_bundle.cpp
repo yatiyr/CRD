@@ -90,7 +90,7 @@ void inject_compute_loss(gpu::VulkanGpuContext& vk)
 } // namespace
 
 TEST_CASE("DIAG.7c(g): a recorded Vulkan loss is written as a readable bundle",
-          "[gpu-context][vulkan][gpu][device-loss]")
+          "[gpu-context][vulkan][gpu][device-loss][diag-workflow]")
 {
     using crd::crash::WriteResult;
     gpu::GpuContextConfig cfg;

@@ -2922,7 +2922,18 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-11c-doctor-modes.md))
   service (`DoctorLive::commands`). GPU validation and device faults are the GPU device's to report.
 - `doctor:` cases hold the instrument modes to `lane_promise()` on every lane and the upper-module modes to the
   registered commands; `diag commands:` holds `diag.capabilities` to the same.
-- Not settled here: the per-tuple workflows and their record, and the portable boundary audit.
+- The native workflow (2026-10-24, [session](../sessions/2026-10-24-diag-11c-native-workflow.md)): the
+  `[diag-workflow]` cases, CTest label `diag-workflow` (`ctest -L diag-workflow`), run one route per tuple: the doctor
+  names the tuple; an application fails on purpose under its profile and its bundle carries this build's identity,
+  the executable's module identity (PDB or GNU build id) and the forty events `bundle.inspect` decodes; a real crash
+  is captured (a minidump whose every module resolves to a debug-file path and whose wrong symbols are refused on
+  Windows, a signal record on Linux); a device fault (DX12 on WARP) and a Vulkan loss run the GPU providers. Every
+  lane runs them, so each `conclusion.json` counts them beside its toolchain, modes and adapters. Under ASan the
+  sanitizer owns the crash, so the capture steps qualify on the same tuple's other lanes.
+- Open qualification, named, not passed: Vulkan on the hosted Windows runners (no Vulkan device; qualified on this
+  host's hardware adapter), a native Linux hardware GPU (lavapipe qualifies that adapter only), ARM64 (JOBS-PORT),
+  the hardware DX12 page fault (user-only h2) and MAC.DIAG/WEB.DIAG.
+- Not settled here: the portable boundary audit.
 
 <a id="diag-12"></a>
 ## DIAG.12 — independent end-to-end close audit

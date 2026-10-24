@@ -116,7 +116,7 @@ cont::Array<crd::u8> read_bytes(const fs::path& p)
 } // namespace
 
 TEST_CASE("symbolize (windows): a real dump yields every-module identity + matching path, rejects wrong symbols",
-          "[perf][diag][symbols][e2e]")
+          "[perf][diag][symbols][e2e][diag-workflow]")
 {
     const fs::path    dir = fresh_dir();
     const cd::Outcome o   = run_unload_av(dir);

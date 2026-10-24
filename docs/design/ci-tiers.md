@@ -113,7 +113,8 @@ version, CMake version, the Cerid switches from the cache, the diagnostic modes 
 (`modes`: ASan, UBSan, TSan, libFuzzer, coverage, asserts, profiling, clang-tidy), adapters, inventory counts with
 labels and resource locks, executed/passed/failed/skipped counts and duration, overall and per label
 (`results.labels`: `diag-fatal` for the contract-fatal specimens, `diag-race` for the controlled-interleaving
-cases and `diag-overhead` for the overhead modes, all three also under `diag`, and `fuzz` for the corpus replays),
+cases, `diag-overhead` for the overhead modes and `diag-workflow` for the native diagnostic workflow, all four also
+under `diag`, and `fuzz` for the corpus replays),
 failing tests with their output tails, the slowest tests, the build board of the lane from its Ninja log (edges,
 span, edge sum, effective parallelism, slowest edges) and the sccache statistics of a cached lane ([build performance](build-performance.md)), the job status when the
 bundle ran and what evidence was missing), copies the JUnit and inventory beside it, and appends a table to the job

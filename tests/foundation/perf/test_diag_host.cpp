@@ -1272,7 +1272,7 @@ TEST_CASE("diagnostic host: the crash handler is installed into the profile's di
 }
 
 TEST_CASE("diagnostic host: an application that fails on purpose leaves an attributable bundle from its profile",
-          "[perf][diag][diag11a][diag-host]")
+          "[perf][diag][diag11a][diag-host][diag-workflow]")
 {
     namespace cd = crd::diag;
     for (const char* mode : {"invariant", "assert"})

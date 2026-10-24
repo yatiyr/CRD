@@ -63,4 +63,7 @@ crd_enable_default_pch(crd-gpu-context-vulkan-tests)
 # CEIR-18a-1: the repo root, so the shared cull gate loads assets/compute/scene_light_cull.ckir (the retired builder's asset).
 target_compile_definitions(crd-gpu-context-vulkan-tests PRIVATE CRD_REPO_DIR="${CMAKE_SOURCE_DIR}")
 
-crd_discover_tests(crd-gpu-context-vulkan-tests PROPERTIES RESOURCE_LOCK crd_gpu_device)
+# DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
+crd_discover_tests(crd-gpu-context-vulkan-tests TEST_SPEC "~[diag-workflow]" PROPERTIES RESOURCE_LOCK crd_gpu_device)
+crd_discover_tests(crd-gpu-context-vulkan-tests TEST_SPEC "[diag-workflow]"
+    PROPERTIES RESOURCE_LOCK crd_gpu_device LABELS "diag;diag-workflow")
