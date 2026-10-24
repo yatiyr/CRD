@@ -2,6 +2,8 @@
 
 #include <crd/perf/flight_recorder.hpp>
 
+#include <crd/containers/atomic_array.hpp>
+#include <crd/containers/static_array.hpp>
 #include <crd/perf/build_identity.hpp>
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
@@ -37,6 +39,21 @@ constexpr crd::u32 kStateFatalEntered = 3U;
 constexpr crd::u32 kStateBits = 3U;
 constexpr crd::u64 kStateMask = 3U;
 constexpr crd::u64 kReloadingBit = 4U;
+
+// Left-out events are counted in stripes of a cache line each, a thread always in the same one: a single counter was a
+// line every thread wrote at every left-out site, beside `keep_from`, which every site reads (DIAG.11b: 1.2 points of
+// a four-thread jobs frame on linux-gcc-relwithdebinfo).
+constexpr crd::u32 kFilteredStripes = 16U;
+
+using FilteredStripes =
+    crd::containers::StaticArray<crd::containers::CacheLinePadded<std::atomic<crd::u64>>, kFilteredStripes>;
+
+void count_filtered(FilteredStripes& stripes) noexcept
+{
+    static std::atomic<crd::u32> next{0U};
+    thread_local const crd::u32 kStripe = next.fetch_add(1U, std::memory_order_relaxed) % kFilteredStripes;
+    stripes[kStripe].value.fetch_add(1U, std::memory_order_relaxed);
+}
 
 // A slot no claim has published since its ring was allocated.
 constexpr crd::u64 kSlotEmpty = ~crd::u64{0};
@@ -189,7 +206,7 @@ struct FlightRecorder::Impl
     std::atomic<crd::u64>    dropped_while_complete{0U};
     // The lowest severity the active detail keeps, as its u8 value, and the events the detail left out (DIAG.11b).
     std::atomic<crd::u8>     keep_from{0U};
-    std::atomic<crd::u64>    filtered{0U};
+    FilteredStripes          filtered{};
 
     // Collection: poll(), take_capture(), finish() and reload_policy() hold collect_mutex; record() never takes it.
     // `end` is how a collector closed the window; None means the claim that reached post_end closed it.
@@ -636,7 +653,7 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
     // read or a sequence claimed.
     if (static_cast<crd::u8>(severity) < impl->keep_from.load(std::memory_order_acquire))
     {
-        impl->filtered.fetch_add(1U, std::memory_order_relaxed);
+        count_filtered(impl->filtered);
         return;
     }
     const crd::u64 now = diagnostic_now_ns();
@@ -661,7 +678,7 @@ bool FlightRecorder::admit(Severity severity) noexcept
     }
     if (static_cast<crd::u8>(severity) < impl->keep_from.load(std::memory_order_acquire))
     {
-        impl->filtered.fetch_add(1U, std::memory_order_relaxed);
+        count_filtered(impl->filtered);
         return false;
     }
     return true;
@@ -828,7 +845,16 @@ crd::u64 FlightRecorder::total_recorded() const noexcept
 crd::u64 FlightRecorder::total_filtered() const noexcept
 {
     Impl* impl = m_impl;
-    return (impl != nullptr) ? impl->filtered.load(std::memory_order_relaxed) : 0U;
+    if (impl == nullptr)
+    {
+        return 0U;
+    }
+    crd::u64 total = 0U;
+    for (const auto& stripe : impl->filtered)
+    {
+        total += stripe.value.load(std::memory_order_relaxed);
+    }
+    return total;
 }
 
 bool FlightRecorder::capture_pending() const noexcept
