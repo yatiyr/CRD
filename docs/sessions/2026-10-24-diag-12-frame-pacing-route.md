@@ -8,8 +8,8 @@
 
 ## CI read
 
-No completed run has a failed job that main has not fixed. 40128305793, 40128640993 and 40130140033 were cancelled
-before any job started. 40122902896 (head `a4500838`) is still running; its four failed jobs are the two causes
+No completed run has a failed job that main has not fixed. 40128305793, 40128640993, 40130140033 and 40130228499
+were cancelled with no failed job. 40122902896 (head `a4500838`) is still running; its four failed jobs are the two causes
 `7bee95e8` and `17176125` fix.
 
 ## Finding
@@ -38,7 +38,8 @@ fed it.
 ## Teeth (win-debug)
 
 - `p99_interval_ns` written from the 50th percentile fails `perfetto export: the metadata carries the frames' pacing
-  apart from their work`. The case puts one 30 ms hitch among six frames, so p50 and p99 differ.
+  apart from their work`. The case puts one 30 ms hitch among six frames, so the p99 is the hitch, past the
+  histogram's range. It assumes nothing about the other intervals' timing.
 - The interval computed as `begin - previous begin` again fails `frame pacing: an untrusted capture's extreme times
   saturate instead of overflowing` (maximum, mean and p99 interval).
 - Restored from byte copies, touched, rebuilt: both cases pass.

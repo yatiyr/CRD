@@ -433,7 +433,7 @@ TEST_CASE("perfetto export: the metadata carries the frames' pacing apart from t
     crd::perf::feed_frames(expected, view.frame_records());
     REQUIRE(expected.interval_count() == view.frame_records().size() - 1U);
     REQUIRE(expected.max_interval_ns() >= 30000000);
-    REQUIRE(expected.percentile_interval_ns(99U) > expected.percentile_interval_ns(50U)); // the tail shows the hitch
+    REQUIRE(expected.percentile_interval_ns(99U) == expected.max_interval_ns()); // under 100 intervals: the hitch
     char block[512];
     const int n = std::snprintf(
         block, sizeof(block),
