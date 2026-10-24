@@ -9,12 +9,15 @@ which is the true zero the runtime-disabled mode is held to.
 
 Per arm the board keeps the pooled frame percentiles (p50/p95/p99 by nearest rank over every timed frame of every
 process), each process's median, the events (sites, payloads evaluated, recorded, filtered, profiler drops), the
-captures (requested, delivered, bytes written, the longest), the resident-set growth and the recorder's ring. Each
-comparison pairs processes of the same repetition: the ratio of the arm's median to the reference's median, its
-median over the repetitions and a percentile-bootstrap 95% interval (a fixed seed, so a board re-renders the same).
+captures (requested, delivered, bytes written, the longest), the resident-set growth, the recorder's ring and the
+median CPU per frame (every thread's, in the record's unit: cycles on Windows, nanoseconds on POSIX). Each comparison
+pairs processes of the same repetition, once for the frame time (the ratio of the arm's median to the reference's)
+and once for the CPU per frame: the ratio's median over the repetitions and a percentile-bootstrap 95% interval (a
+fixed seed, so a board re-renders the same).
 
 Verdicts against ADR-0133 ID-5 (docs/design/runtime-diagnostics.md, modes and budgets):
-  disabled  off vs compiled-out, budget 1%; basic  basic vs off, budget 2%.
+  disabled  off vs compiled-out, budget 1%; basic  basic vs off, budget 2%; each judged on the frame time and on the
+            CPU per frame, the worse of the two verdicts deciding.
   within      the interval's upper end is at or below the budget;
   over        the interval's lower end is above the budget;
   unresolved  the interval straddles it: the host's noise is wider than the claim, which is a measured loss, never
@@ -118,6 +121,8 @@ def record_problem(record, expected_frames):
         return '%s frames computed the wrong answer' % record['wrong']
     if len(record.get('samples_ns', [])) != record.get('iterations'):
         return 'samples missing'
+    if not record.get('cpu', {}).get('read'):
+        return 'no process CPU time'
     captures = record.get('captures', {})
     if captures.get('delivered') != captures.get('requested') or captures.get('failures'):
         return 'captures delivered %s of %s (%s failures)' % (captures.get('delivered'), captures.get('requested'),
@@ -147,7 +152,7 @@ def summarize_arm(runs):
     """The pooled statistics of one arm's usable runs (a list of records in repetition order, None for failures)."""
     usable = [r for r in runs if r is not None]
     pooled = [s for r in usable for s in r['samples_ns']]
-    medians = [median(r['samples_ns']) for r in usable]
+    medians = [frame_wall(r) for r in usable]
     events = {key: sum(r['events'].get(key, 0) for r in usable) for key in
               ('sites', 'frames', 'payloads', 'recorded', 'filtered', 'profiler_drops')}
     captures = {key: sum(r['captures'].get(key, 0) for r in usable) for key in
@@ -160,7 +165,8 @@ def summarize_arm(runs):
     return {'processes': len(runs), 'usable': len(usable), 'frames': len(pooled),
             'p50_ns': p50, 'p95_ns': percentile(pooled, 0.95), 'p99_ns': percentile(pooled, 0.99),
             'site_p50_ns': None if p50 is None or not sites_per_frame else p50 / sites_per_frame,
-            'process_medians_ns': medians, 'events': events,
+            'process_medians_ns': medians, 'cpu_per_frame': median([frame_cpu(r) for r in usable]),
+            'cpu_unit': usable[0]['cpu']['unit'] if usable else None, 'events': events,
             'captures': captures, 'resident_growth_bytes': median(growth),
             'resident_peak_bytes': max((r['memory']['resident_peak'] for r in usable), default=None),
             'recorder_ring_bytes': max((r['memory']['recorder_ring_bytes'] for r in usable), default=0),
@@ -168,10 +174,20 @@ def summarize_arm(runs):
             'build': usable[0]['build'] if usable else None}
 
 
-def compare(candidate_runs, reference_runs):
-    """Paired ratios of per-process medians (same repetition), their median and 95% interval, as relative costs."""
-    ratios = [median(c['samples_ns']) / median(r['samples_ns']) for c, r in zip(candidate_runs, reference_runs)
-              if c is not None and r is not None and median(r['samples_ns'])]
+def frame_wall(record):
+    """A process's frame time: the median of its timed frames, in nanoseconds."""
+    return median(record['samples_ns'])
+
+
+def frame_cpu(record):
+    """A process's CPU per frame: every thread's CPU over the timed frames over their count, in the record's unit."""
+    return record['cpu']['timed'] / record['iterations']
+
+
+def compare(candidate_runs, reference_runs, value=frame_wall):
+    """Paired ratios of a per-process value (same repetition), their median and 95% interval, as relative costs."""
+    ratios = [value(c) / value(r) for c, r in zip(candidate_runs, reference_runs)
+              if c is not None and r is not None and value(r)]
     if not ratios:
         return {'pairs': 0, 'cost': None, 'low': None, 'high': None}
     low, high = bootstrap_interval(ratios)
@@ -179,23 +195,33 @@ def compare(candidate_runs, reference_runs):
             'high': None if high is None else high - 1.0}
 
 
+def worse(first, second):
+    """The verdict of a budget judged on two measurands: over if either is over, within only if both are within."""
+    for name in ('over', 'unmeasured', 'unresolved'):
+        if name in (first, second):
+            return name
+    return first
+
+
 def judge(arms, budgeted=True):
-    """Comparisons and verdicts of one workload's arms. A site microbenchmark (`budgeted` false) is reported, never
+    """Comparisons and verdicts of one workload's arms: each budget is judged on the frame time and on the CPU per
+    frame, and its verdict is the worse of the two. A site microbenchmark (`budgeted` false) is reported, never
     judged: the budgets bound the cost of a frame of work, not of an empty loop of sites."""
     result = {}
-    for name, (candidate, reference, budget) in BUDGETS.items():
+    pairs = [(name, candidate, reference, budget if budgeted else None)
+             for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)]
+    for name, candidate, reference, budget in pairs:
         if candidate not in arms or reference not in arms:
-            result[name] = {'verdict': 'not measured', 'budget': budget}
+            if name != 'full':
+                result[name] = {'verdict': 'not measured', 'budget': budget}
             continue
         comparison = compare(arms[candidate]['runs'], arms[reference]['runs'])
-        comparison.update({'budget': budget if budgeted else None, 'candidate': candidate, 'reference': reference,
-                           'verdict': verdict(comparison['low'], comparison['high'], budget) if budgeted
-                           else 'reported'})
+        cpu = compare(arms[candidate]['runs'], arms[reference]['runs'], frame_cpu)
+        wall_verdict, cpu['verdict'] = ('reported', 'reported') if budget is None else (
+            verdict(comparison['low'], comparison['high'], budget), verdict(cpu['low'], cpu['high'], budget))
+        comparison.update({'budget': budget, 'candidate': candidate, 'reference': reference, 'cpu': cpu,
+                           'wall_verdict': wall_verdict, 'verdict': worse(wall_verdict, cpu['verdict'])})
         result[name] = comparison
-    if 'full' in arms and 'off' in arms:
-        comparison = compare(arms['full']['runs'], arms['off']['runs'])
-        comparison.update({'budget': None, 'candidate': 'full', 'reference': 'off', 'verdict': 'reported'})
-        result['full'] = comparison
     if 'basic' in arms and 'off' in arms:
         basic, off = arms['basic']['summary'], arms['off']['summary']
         growth = None
@@ -264,6 +290,14 @@ def micro(ns):
     return 'n/a' if ns is None else '%.1f' % (ns / 1000.0)
 
 
+def cpu_text(summary):
+    """An arm's CPU per frame: microseconds when the unit is nanoseconds, else millions of the unit."""
+    value, unit = summary.get('cpu_per_frame'), summary.get('cpu_unit')
+    if value is None:
+        return 'n/a'
+    return '%.1f µs' % (value / 1000.0) if unit == 'ns' else '%.2f M%s' % (value / 1e6, unit)
+
+
 def render(boards):
     lines = []
     for board in boards:
@@ -275,8 +309,9 @@ def render(boards):
                                     board['parameters']['warmup'], board['parameters']['affinity'] or 'not pinned'),
                   '']
         lines += ['| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | '
-                  'Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |',
-                  '|---|---|---:|---:|---:|---:|---|---|---|---|---:|']
+                  'CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | '
+                  'Captures (bytes) | Resident growth |',
+                  '|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|']
         for workload, entry in board['workloads'].items():
             verdicts = entry['verdicts']
             by_arm = {'compiled-out': None, 'off': verdicts.get('disabled'), 'basic': verdicts.get('basic'),
@@ -284,30 +319,35 @@ def render(boards):
             for arm, summary in entry['arms'].items():
                 judged = by_arm.get(arm)
                 cost = 'reference'
+                cpu_cost = ''
                 verdict_text = ''
                 if judged and judged.get('cost') is not None:
                     cost = '%s vs %s (%s .. %s)' % (percent(judged['cost']), judged['reference'],
                                                     percent(judged['low']), percent(judged['high']))
+                    cpu = judged.get('cpu') or {}
+                    cpu_cost = 'n/a' if cpu.get('cost') is None else '%s (%s .. %s)' % (
+                        percent(cpu['cost']), percent(cpu['low']), percent(cpu['high']))
                     budget = judged.get('budget')
                     verdict_text = judged['verdict'] + ('' if budget is None else ' (%.0f%%)' % (100.0 * budget))
                 events = summary['events']
                 captures = summary['captures']
                 growth = summary['resident_growth_bytes']
                 site = summary.get('site_p50_ns')
-                lines.append('| %s | %s | %s | %s | %s | %s | %s | %s | %s / %s / %s | %s of %s (%s) | %s |' % (
-                    workload, arm, micro(summary['p50_ns']), micro(summary['p95_ns']), micro(summary['p99_ns']),
-                    'n/a' if site is None else '%.1f' % site, cost, verdict_text, events['payloads'], events['recorded'], events['filtered'], captures['delivered'],
-                    captures['requested'], captures['bytes_written'],
-                    'n/a' if growth is None else '%.1f MiB' % (growth / 1048576.0)))
+                row = (workload, arm, micro(summary['p50_ns']), micro(summary['p95_ns']), micro(summary['p99_ns']),
+                       'n/a' if site is None else '%.1f' % site, cost, cpu_text(summary), cpu_cost, verdict_text,
+                       '%s / %s / %s' % (events['payloads'], events['recorded'], events['filtered']),
+                       '%s of %s (%s)' % (captures['delivered'], captures['requested'], captures['bytes_written']),
+                       'n/a' if growth is None else '%.1f MiB' % (growth / 1048576.0))
+                lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
             storage = verdicts.get('storage')
             if storage:
-                lines.append('| %s | basic storage | | | | | ring %.0f KiB, resident growth over off %s | %s (32 MiB) | | |'
-                             ' |' % (workload, storage['recorder_ring_bytes'] / 1024.0,
+                lines.append('| %s | basic storage | | | | | ring %.0f KiB, resident growth over off %s | | | '
+                             '%s (32 MiB) | | | |' % (workload, storage['recorder_ring_bytes'] / 1024.0,
                                 'n/a' if storage['resident_growth_over_off'] is None
                                 else '%.2f MiB' % (storage['resident_growth_over_off'] / 1048576.0),
                                 storage['verdict']))
             for failure in entry['failures']:
-                lines.append('| %s | %s | | | | | instrument failure #%d: %s | | | | |' % (
+                lines.append('| %s | %s | | | | | instrument failure #%d: %s | | | | | | |' % (
                     workload, failure['arm'], failure['repetition'], failure['problem'].replace('|', '/')))
         lines.append('')
     return '\n'.join(lines)
@@ -325,7 +365,9 @@ def main(argv=None):
     run.add_argument('--iterations', type=int, default=200)
     run.add_argument('--warmup', type=int, default=20)
     run.add_argument('--captures', type=int, default=3)
-    run.add_argument('--threads', type=int, default=8)
+    run.add_argument('--threads', type=int, default=4,
+                     help='the jobs pool, the main thread included; at most the physical cores the affinity leaves, '
+                          'or thread placement spreads the processes wider than the budgets')
     run.add_argument('--affinity', help='hex processor mask every process pins itself to')
     run.add_argument('--timeout', type=float, default=600.0, help='seconds per process')
     run.add_argument('--scratch', required=True, help='an ignored directory for the crash and capture directories')

@@ -2761,25 +2761,32 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   profiling also compiled-out), basic (the `DiagnosticHost` with `assets/diag/overhead_basic.flight.toml`, Warning and
   above), full (`overhead_full.flight.toml`, every event, plus the profiler, the jobs adapter and the CEIR profiling
   bridge). The harness is `tests/support/diag-overhead` (`crd-diag-overhead`, one workload and mode per process, record
-  `cerid-diag-overhead/1`); workloads `alloc` (TLSF heap behind the allocator watch), `jobs` (2048 tiny jobs on an
-  8-thread pool), `offline` (cook, load, compile and run an authored CEIR program) and `events` (a site
-  microbenchmark, reported per site, never judged). Every frame has a known answer.
+  `cerid-diag-overhead/1`); workloads `alloc` (TLSF heap behind the allocator watch), `jobs` (2048 tiny jobs on a
+  pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program)
+  and `events` (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
 - What holds on every lane: the 12 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
   written; the lifetime ledger balances.
 - How a budget is judged: `scripts/diag-overhead.py` interleaves the arms across processes, pools nearest-rank
   percentiles, pairs per-repetition median ratios and takes a seeded bootstrap 95% interval; within (upper end at or
-  below the budget), over (lower end above it) or unresolved (a loss, never a pass). Storage: the recorder's ring and
-  the resident growth over off, against 32 MiB.
+  below the budget), over (lower end above it) or unresolved (a loss, never a pass). Each budget is judged on the
+  frame time and on the CPU per frame (every thread's CPU over the timed frames: `QueryProcessCycleTime` cycles on
+  Windows, `CLOCK_PROCESS_CPUTIME_ID` nanoseconds on POSIX), the worse verdict deciding. Storage: the recorder's ring
+  and the resident growth over off, against 32 MiB.
 - The first boards (Windows win-shipping-profile against win-shipping; Linux linux-gcc-shipping and
   linux-gcc-relwithdebinfo under WSL2): storage within everywhere (152 KiB ring, at most 0.60 MiB growth); basic within
   on offline where resolved. Violated and open: the disabled mode on allocation-heavy frames (+37.7%, the allocator
   statistics `memory_stats.hpp` tracks in every profiling build, shown by experiment) and on offline (+6.6%; +4.6%
   without the statistics, unattributed); the basic mode on allocation-heavy frames (+4.0% to +5.7%, the allocator
-  watch's forwarding call the remaining candidate). Unresolved: jobs on every tuple (wall time of the main thread's
-  frame against a CPU-per-frame budget). Not measured: the Linux disabled arm (no preset differs from a profiling build
-  only in profiling). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
+  watch's forwarding call the remaining candidate). Jobs (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-jobs-cpu-per-frame.md)): unresolved on every tuple with an eight-thread
+  pool on sixteen logical processors (eight cores), where thread placement spreads one process's frame from another's
+  by 7.6%; with a four-thread pool on eight cores, one logical processor each (2-3%), and 96 to 288 processes per arm,
+  basic is within on all three tuples on the frame time and the CPU per frame, once left-out events are counted in
+  cache-line stripes (one counter every thread wrote cost linux-gcc-relwithdebinfo's basic about 1.2 points); the
+  disabled arm stays inside the two-binary floor (within on one Windows board, unresolved on the next). Not measured:
+  the Linux disabled arm (no preset differs from a profiling build only in profiling). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
   adapter's token mutex and the flight recorder's ring mutex per kept event are gone (2026-10-24); the CEIR bridge's
   per-instruction timing takes no lock, blocks nowhere and allocates nothing, and reads the cycle counter instead of
   the monotonic clock (2026-10-24,

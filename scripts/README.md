@@ -106,9 +106,10 @@ Run commands from the repository root. Build/test rules and exact quality requir
 - Diagnostic overhead ([contract](../docs/design/runtime-diagnostics.md#diag-11b)): `diag-overhead.py run --exe
   <crd-diag-overhead> [--baseline-exe <compiled-out build>] --scratch <dir> --label <lane> --output <board.json>`
   runs the harness (`tests/support/diag-overhead`) once per process for every workload and arm, interleaved, and
-  judges ADR-0133 ID-5's budgets (within, over, or unresolved when the host's noise is wider than the claim);
-  `render` writes the markdown of a board for docs/bench. `test-diag-overhead.py` covers every statistic and verdict
-  with fake processes and is a CTest and repository CI step. `sample-overhead-wpr.py record` (an elevated shell)
+  judges ADR-0133 ID-5's budgets on the frame time and on the CPU per frame, the worse deciding (within, over, or
+  unresolved when the host's noise is wider than the claim); `render` writes the markdown of a board for docs/bench.
+  `test-diag-overhead.py` covers every statistic and verdict with fake processes and is a CTest and repository CI
+  step. `sample-overhead-wpr.py record` (an elevated shell)
   samples the same workloads with WPR, every arm a process of one trace; `analyze <run dir>` (no elevation) counts each
   process's CPU samples and the share in the diagnostic frames, and judges whether a mode's measured cost is
   explained by them (`test-sample-overhead-wpr.py`, a CTest and repository CI step, mocks wpr and xperf).

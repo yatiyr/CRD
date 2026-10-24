@@ -163,6 +163,12 @@ judged on the realistic workloads (`offline`, `jobs`, later the authored renderi
 pair's layout floor is wider than the budget, a per-operation cost is judged by an exact count of its executions per
 frame times its measured per-execution cost.
 
+Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-jobs-cpu-per-frame.md)): each budget is judged
+on the frame time and on the CPU per frame (every thread of the process over the timed frames), and the worse verdict
+decides. The `jobs` workload runs a pool no larger than the physical cores its affinity leaves (four threads, the main
+thread included, on eight cores, one logical processor each): an eight-thread pool on sixteen logical processors
+spread one process's frame from another's by 7.6%, wider than either budget.
+
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 
 The contract's "symptom→command→artifact→next discriminating test and human-only publication" is

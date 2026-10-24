@@ -5,18 +5,20 @@
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
 //
 // One process measures one workload in one mode and prints one JSON record (schema cerid-diag-overhead/1) on stdout:
-// the build, the host's modes, every timed iteration in nanoseconds, the sites and their payload evaluations, what
-// the recorder kept and left out, the captures requested and delivered with the bytes written, the resident set, the
-// lifetime ledger's windows and, with --check, the structural verdicts. Nothing here judges a timing: that is the
-// driver's (scripts/diag-overhead.py), over interleaved processes.
+// the build, the host's modes, every timed iteration in nanoseconds, the CPU every thread used over the timed
+// iterations, the sites and their payload evaluations, what the recorder kept and left out, the captures requested
+// and delivered with the bytes written, the resident set, the lifetime ledger's windows and, with --check, the
+// structural verdicts. Nothing here judges a timing: that is the driver's (scripts/diag-overhead.py), over
+// interleaved processes.
 //
 // The capture phase follows the timed frames: K manual triggers, each waited for (bounded) until the host delivered
 // its capture and, with --scratch, wrote its bundle; the bytes written are counted and the bundles removed unless
 // --keep. The crash handler writes into --scratch too (only when a crash happens).
 //
 // --check holds what must hold whatever the timing (exit 1 when one fails):
-//   every mode   every timed and warmup iteration ran and produced the known answer; every class of the lifetime
-//                ledger is balanced from before the mode was set up to after it was torn down.
+//   every mode   every timed and warmup iteration ran and produced the known answer; the process CPU time over the
+//                timed iterations was read; every class of the lifetime ledger is balanced from before the mode was
+//                set up to after it was torn down.
 //   off          no payload evaluated; setting the mode up acquired nothing (no thread, callback, file or mapping);
 //                no recorder and no profiler run.
 //   basic        no payload evaluated (every application site is informational); every site and frame event counted
@@ -49,6 +51,7 @@
 #include <windows.h>
 #else
 #include <sched.h>
+#include <time.h>
 #endif
 
 #ifndef CRD_DIAG_OVERHEAD_ASSETS
@@ -263,6 +266,35 @@ bool pin(u64 mask)
     }
     return sched_setaffinity(0, sizeof(set), &set) == 0;
 #endif
+}
+
+// The CPU every thread of the process has used so far. Windows counts cycles (`QueryProcessCycleTime`;
+// `GetProcessTimes` advances by whole clock ticks, too coarse for a few seconds of frames), POSIX nanoseconds; the
+// driver compares only ratios within one unit.
+#if defined(_WIN32)
+constexpr const char* kCpuUnit = "cycles";
+#else
+constexpr const char* kCpuUnit = "ns";
+#endif
+
+bool read_process_cpu(u64& out)
+{
+#if defined(_WIN32)
+    ULONG64 cycles = 0U;
+    if (::QueryProcessCycleTime(::GetCurrentProcess(), &cycles) == 0)
+    {
+        return false;
+    }
+    out = cycles;
+#else
+    timespec now{};
+    if (clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &now) != 0)
+    {
+        return false;
+    }
+    out = (static_cast<u64>(now.tv_sec) * 1000000000ULL) + static_cast<u64>(now.tv_nsec);
+#endif
+    return true;
 }
 
 u64 file_bytes(const char* path)
@@ -497,8 +529,15 @@ int main(int argc, char** argv)
     u32       executed  = 0U;
     u32       wrong     = 0U;
     u64       signature = 0U;
+    u64       cpu_begin = 0U;
+    u64       cpu_end   = 0U;
+    bool      cpu_read  = false;
     for (u32 frame = 0U; frame < total; ++frame)
     {
+        if (frame == o.warmup)
+        {
+            cpu_read = read_process_cpu(cpu_begin);
+        }
         const u64  begin = cp::diagnostic_now_ns();
         const bool ok    = workload->iterate(signature);
         const u64  work  = cp::diagnostic_now_ns();
@@ -524,6 +563,7 @@ int main(int argc, char** argv)
             samples.push_back(end - begin);
         }
     }
+    cpu_read = cpu_read && read_process_cpu(cpu_end) && cpu_end > cpu_begin;
     const crd::HostMemoryReading memory_frames = crd::read_host_memory();
     const u64                    recorded      = host_started ? host.recorder().total_recorded() : 0U;
     const u64                    filtered      = host_started ? host.recorder().total_filtered() : 0U;
@@ -629,6 +669,7 @@ int main(int argc, char** argv)
     {
         checks.expect(executed == total && samples.size() == o.iterations, "not every frame ran");
         checks.expect(wrong == 0U, "a frame computed the wrong answer");
+        checks.expect(cpu_read, "the process CPU time over the timed frames was not read");
         checks.expect(balance.verdict == crd::LifetimeVerdict::Balanced, "the lifetime ledger is not balanced");
         checks.expect(setup_threads == workload->own_threads(o.threads) + workload->diagnostic_threads(o.mode),
                       "the workload's setup started another number of threads than the mode adds to its own");
@@ -724,6 +765,11 @@ int main(int argc, char** argv)
         j.u(nullptr, s);
     }
     j.close(']');
+    j.open("cpu", '{');
+    j.b("read", cpu_read);
+    j.str("unit", kCpuUnit);
+    j.u("timed", cpu_read ? cpu_end - cpu_begin : 0U);
+    j.close('}');
     j.open("events", '{');
     j.u("sites", sites_total);
     j.u("frames", frames_total);

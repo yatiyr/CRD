@@ -3,9 +3,10 @@
 
 The measurement itself runs crd-diag-overhead on a build. These tests need no build: they drive the statistics and
 every verdict with fake processes, including the ones a quiet machine never produces: a cost interval straddling its
-budget (unresolved, never a pass), a cost over it, a process that exits nonzero, prints no record, computes a wrong
-answer or loses a capture (an instrument failure that takes the workload's verdicts with it), and a board rendered
-twice the same way (the bootstrap seed is fixed).
+budget (unresolved, never a pass), a cost over it, a CPU per frame over its budget or noisier than it while the frame
+time is within (the worse verdict decides), a process that exits nonzero, prints no record or CPU time, computes a
+wrong answer or loses a capture (an instrument failure that takes the workload's verdicts with it), and a board
+rendered twice the same way (the bootstrap seed is fixed).
 Run: python scripts/test-diag-overhead.py
 """
 import importlib.util
@@ -20,9 +21,13 @@ mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
 
-def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0):
+def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None):
+    """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
+    False when it was not read."""
+    per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
     return {'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': 1,
             'iterations': len(samples), 'executed': len(samples) + 1, 'wrong': wrong, 'samples_ns': samples,
+            'cpu': {'read': cpu is not False, 'unit': 'cycles', 'timed': int(per_frame * len(samples))},
             'events': {'sites': 4, 'frames': 2, 'payloads': 0, 'recorded': 0, 'filtered': 6, 'profiler_drops': 0},
             'captures': {'requested': captures, 'delivered': captures if delivered is None else delivered,
                          'failures': 0, 'bytes_written': 100, 'longest_ns': 5},
@@ -51,12 +56,15 @@ class Args:
 
 
 class FakeRunner:
-    """Answers each command from a table of per-arm medians; `special` maps (arm, repetition) to (code, stdout)."""
+    """Answers each command from a table of per-arm medians (and of per-arm CPU per frame, `cpu`, jittered by
+    `cpu_jitter`; by default the medians); `special` maps (arm, repetition) to (code, stdout)."""
 
-    def __init__(self, medians, special=None, jitter=0.0):
+    def __init__(self, medians, special=None, jitter=0.0, cpu=None, cpu_jitter=0.0):
         self.medians = medians
         self.special = special or {}
         self.jitter = jitter
+        self.cpu = cpu
+        self.cpu_jitter = cpu_jitter
         self.calls = []
 
     def __call__(self, command, timeout):
@@ -71,8 +79,9 @@ class FakeRunner:
         sign = 1.0 if (repetition + (arm == 'off')) % 2 else -1.0
         base = self.medians[arm] * (1.0 + sign * self.jitter)
         samples = [int(base) - 2, int(base) - 1, int(base), int(base) + 1, int(base) + 2]
+        cpu = None if self.cpu is None else self.cpu[arm] * (1.0 + sign * self.cpu_jitter)
         ring = 155648 if arm in ('basic', 'full') else 0
-        return 0, 'noise line\n' + json.dumps(record('alloc', mode, samples, ring=ring)) + '\n', ''
+        return 0, 'noise line\n' + json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu)) + '\n', ''
 
 
 class Statistics(unittest.TestCase):
@@ -118,6 +127,7 @@ class Statistics(unittest.TestCase):
         self.assertIn('executed', mod.record_problem(record('alloc', 'off', [1, 2]), 9))
         self.assertIn('wrong answer', mod.record_problem(record('alloc', 'off', [1, 2], wrong=1), 3))
         self.assertIn('captures', mod.record_problem(record('alloc', 'off', [1, 2], delivered=1), 3))
+        self.assertEqual(mod.record_problem(record('alloc', 'off', [1, 2], cpu=False), 3), 'no process CPU time')
         self.assertEqual(mod.record_problem(None, 3), 'no record')
 
 
@@ -165,6 +175,24 @@ class Boards(unittest.TestCase):
             self.assertEqual(entry['verdicts'], {}, special)
             self.assertIn('instrument failure', mod.render([board]))
 
+    def test_the_cpu_per_frame_is_judged_too_and_the_worse_verdict_decides(self):
+        medians = {'compiled-out': 100000, 'off': 100000, 'basic': 100500, 'full': 101000}
+        cpu = {'compiled-out': 400000, 'off': 400000, 'basic': 420000, 'full': 800000}
+        board = self.measure(FakeRunner(medians, cpu=cpu))
+        verdicts = board['workloads']['alloc']['verdicts']
+        self.assertEqual(verdicts['basic']['wall_verdict'], 'within')
+        self.assertEqual(verdicts['basic']['cpu']['verdict'], 'over')
+        self.assertEqual(verdicts['basic']['verdict'], 'over')
+        self.assertAlmostEqual(verdicts['basic']['cpu']['cost'], 0.05, places=6)
+        self.assertEqual(verdicts['disabled']['verdict'], 'within')
+        self.assertEqual(verdicts['full']['cpu']['verdict'], 'reported')
+        self.assertEqual(board['workloads']['alloc']['arms']['basic']['cpu_per_frame'], 420000)
+        noisy = self.measure(FakeRunner(medians, cpu=dict(cpu, basic=400000), cpu_jitter=0.03), processes=8)
+        verdicts = noisy['workloads']['alloc']['verdicts']
+        self.assertEqual(verdicts['basic']['wall_verdict'], 'within')
+        self.assertEqual(verdicts['basic']['cpu']['verdict'], 'unresolved')
+        self.assertEqual(verdicts['basic']['verdict'], 'unresolved')
+
     def test_without_a_compiled_out_binary_the_disabled_budget_is_not_measured(self):
         board = self.measure(FakeRunner({'off': 100000, 'basic': 100500, 'full': 120000}), baseline_exe=None)
         self.assertEqual(board['workloads']['alloc']['verdicts']['disabled']['verdict'], 'not measured')
@@ -185,6 +213,8 @@ class Boards(unittest.TestCase):
         for arm in ('compiled-out', 'off', 'basic', 'full', 'basic storage'):
             self.assertIn('| %s |' % arm, text)
         self.assertIn('within (2%)', text)
+        self.assertIn('| 0.10 Mcycles |', text)
+        self.assertTrue(all(line.count('|') == 14 for line in text.splitlines() if line.startswith('|')))
 
 
 if __name__ == '__main__':
