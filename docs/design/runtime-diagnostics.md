@@ -2992,6 +2992,15 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   An engine site's trigger `file` is the build's `__FILE__` (DIAG.9b), a path the binary already carries. The race
   leaves no capture; ThreadSanitizer's report is the tool's own stderr
   ([session](../sessions/2026-10-24-diag-12-privacy.md)).
+- The schema's redaction class is `crd::RedactionClass` (`crd/core/redaction.hpp`, shared with DIAG.8b's inspected
+  values). A flight event, a flight trigger and a `DiagnosticEvent` carry it; a Restricted one keeps its code,
+  severity, source and scalars and no text: the recorder never copies the text, so no bundle, `bundle.inspect`,
+  `flight.status` or summary can carry it, and `make_event` keeps no message. The flight record holds the class in
+  the event's flags byte (bit 1; the clip flag is bit 0) and the trigger's in the record flags (bit 3), and refuses a
+  restricted record with text. A CPROF capture's names are instrument identifiers the program registers and are
+  Public by kind. The application's last order names its customer and is Restricted; no bundle it leaves holds the
+  name. The manifest has no string fields, so version 1 defines no flag bit and reports every set one
+  ([session](../sessions/2026-10-24-diag-12-redaction-class.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

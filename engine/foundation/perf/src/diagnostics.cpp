@@ -136,16 +136,21 @@ bool DiagnosticPolicyStore::test_set_generation(crd::u32 generation) noexcept
 #endif
 
 DiagnosticEvent make_event(EventCode code, Severity sev, SourceIdentity src, cont::StringView message,
-                           const DiagnosticPolicyStore& policy, GenerationKey gen)
+                           const DiagnosticPolicyStore& policy, GenerationKey gen, RedactionClass redaction)
 {
     DiagnosticEvent e;
     e.schema_version = kDiagnosticSchemaVersion;
     e.code           = code;
     e.severity       = sev;
+    e.redaction      = redaction;
     e.source         = src;
     e.generation     = gen;
     e.timestamp_ns   = diagnostic_now_ns();
 
+    if (redaction == RedactionClass::Restricted)
+    {
+        return e; // keeps no message
+    }
     const crd::u32 cap = policy.active().max_message_bytes;
     if (message.size() > cap)
     {
@@ -166,6 +171,7 @@ void to_json(const DiagnosticEvent& e, cont::String& out)
     append_key_num(out, "code", e.code, true);
     append_key_str(out, "module", owning_module(e.code), true);
     append_key_str(out, "severity", severity_name(e.severity), true);
+    append_key_str(out, "redaction", redaction_class_name(e.redaction), true);
     append_key_str(out, "file", e.source.file, true);
     append_key_str(out, "symbol", e.source.symbol, true);
     append_key_num(out, "line", e.source.line, true);
@@ -193,6 +199,10 @@ void to_log_line(const DiagnosticEvent& e, cont::String& out)
     if (e.message_truncated)
     {
         out.append(" [truncated]");
+    }
+    if (e.redaction == RedactionClass::Restricted)
+    {
+        out.append("[restricted]");
     }
 }
 

@@ -23,7 +23,8 @@
 //                   labelled pass, the application reports it as a trigger naming both, stop() writes the bundle and
 //                   the run exits 9; a host with no Vulkan device, no validation layer or no synchronization
 //                   validation prints CRD_HOST_GPU_ABSENT with the reason and exits 10, never clean
-// A repaired run prints CRD_HOST_CLEAN with the bundles written and exits 0; an unknown mode exits 2.
+// Every mode first records 40 orders; the last names its customer as a restricted event. A repaired run prints
+// CRD_HOST_CLEAN with the bundles written and exits 0; an unknown mode exits 2.
 #include "specimen_common.hpp"
 
 #include <crd/ceir/ceir.hpp>
@@ -478,11 +479,14 @@ int main(int argc, char** argv)
     host.recorder().set_replay_recipe("crd-diag-host-specimen <profile> <mode> [repaired]");
 
     char text[32];
-    for (crd::u32 i = 0U; i < 40U; ++i)
+    for (crd::u32 i = 0U; i < 39U; ++i)
     {
         (void)std::snprintf(text, sizeof(text), "order %u", static_cast<unsigned>(i));
         host.recorder().record(kOrderEvent, cp::Severity::Info, cont::StringView{text}, i, 0U);
     }
+    // The last order names its customer: a restricted event, whose text no capture may carry.
+    host.recorder().record(kOrderEvent, cp::Severity::Info, cont::StringView{"order 39 for customer-0042"}, 39U, 0U,
+                           crd::RedactionClass::Restricted);
 
     static Shared shared; // static: a parked job still reads it after main's frame is gone
     shared.repaired = repaired;

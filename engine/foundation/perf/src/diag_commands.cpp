@@ -274,6 +274,7 @@ void add_flight_items(const FlightCapture& c, DiagFields& item, DiagSnapshot& ou
         .str("file", t.file_view())
         .u64("line", t.line)
         .str("message", t.message_view())
+        .str("redaction", redaction_class_name(t.redaction))
         .u64("value_a", t.value_a)
         .u64("value_b", t.value_b)
         .u64("sequence", t.sequence)
@@ -315,7 +316,8 @@ void add_flight_items(const FlightCapture& c, DiagFields& item, DiagSnapshot& ou
             .u64("value_a", e.value_a)
             .u64("value_b", e.value_b)
             .str("message", e.message_view())
-            .boolean("message_truncated", e.message_truncated);
+            .boolean("message_truncated", e.message_truncated)
+            .str("redaction", redaction_class_name(e.redaction));
         (void)out.add_item(item);
     }
 }

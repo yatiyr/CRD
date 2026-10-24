@@ -3,15 +3,14 @@
 // ---------------------------------------------------------------------------
 // crd-perf -- DIAG.5d(e1): the Manifest bundle section (tag 1) payload format.
 //
-// The manifest records bundle-level metadata: the cerid-diagnostics schema version, which sections
-// are EXPLICITLY ABSENT (so a reader distinguishes "omitted on purpose" from "lost to truncation"),
-// and whether the MANIFEST's OWN fields were redacted.
+// The manifest records bundle-level metadata: the cerid-diagnostics schema version and which sections
+// are EXPLICITLY ABSENT (so a reader distinguishes "omitted on purpose" from "lost to truncation").
 //
 // ID-8 invariant (ADR-0133: "A raw dump is not sanitized merely because the accompanying manifest is
 // redacted"). This is enforced STRUCTURALLY: there is NO field, bit, or API in this format that can
-// declare the raw dump (the RawDump section) redacted or safe. kManifestFlagFieldsRedacted refers
-// ONLY to the manifest's own strings. The flag set is a CLOSED known-mask (kManifestKnownFlags);
-// unknown bits are REPORTED by the importer, never interpreted as a safety claim.
+// declare the raw dump (the RawDump section) redacted or safe. The flag set is a CLOSED known-mask
+// (kManifestKnownFlags, empty in version 1); unknown bits are REPORTED by the importer, never
+// interpreted as a safety claim.
 //
 // On-disk (little-endian, pinned POD):
 //   [ManifestHeader]                 -- versions + flags + absent_count
@@ -31,10 +30,9 @@ namespace crd::perf
 
 inline constexpr crd::u32 kManifestVersion = 1U;
 
-// Manifest flag bits. The ONLY meaningful bit concerns the manifest's own strings; none can say anything about the
-// raw dump (ID-8). kManifestKnownFlags is the closed mask the importer validates against.
-inline constexpr crd::u32 kManifestFlagFieldsRedacted = 1U << 0; // the manifest's OWN string fields were redacted
-inline constexpr crd::u32 kManifestKnownFlags         = kManifestFlagFieldsRedacted;
+// Manifest flag bits: version 1 defines none, and no bit may ever say anything about the raw dump (ID-8).
+// kManifestKnownFlags is the closed mask the importer validates against.
+inline constexpr crd::u32 kManifestKnownFlags = 0U;
 
 // A sane upper bound on how many absent-tag entries a manifest may declare (there are only a handful of section tags;
 // this bounds a hostile absent_count before any allocation).

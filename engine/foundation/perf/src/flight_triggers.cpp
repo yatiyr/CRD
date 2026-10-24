@@ -55,10 +55,11 @@ void flight_fatal_handler(const DiagnosticEvent& e)
     if (recorder != nullptr)
     {
         FlightTriggerInput input;
-        input.kind    = FlightTrigger::FatalInvariant;
-        input.code    = e.code;
-        input.message = cont::StringView{e.message.c_str(), e.message.size()};
-        input.source  = e.source;
+        input.kind      = FlightTrigger::FatalInvariant;
+        input.code      = e.code;
+        input.message   = cont::StringView{e.message.c_str(), e.message.size()};
+        input.source    = e.source;
+        input.redaction = e.redaction;
         (void)recorder->trigger(input);
         (void)recorder->finish(FlightEnd::Fatal);
     }

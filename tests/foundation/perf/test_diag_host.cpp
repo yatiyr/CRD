@@ -1423,12 +1423,27 @@ cont::StringView app_directory()
 }
 
 // DIAG.12 privacy: what a bundle carries names files, never the running host's directories: neither the application's
-// directory nor the scratch directory that holds its profile, its captures and its authored program.
+// directory nor the scratch directory that holds its profile, its captures and its authored program. Nor the text of
+// the application's restricted order event.
 void check_private(const cont::Array<u8>& bytes, const Scratch& scratch)
 {
     const cont::String dir = scratch.text();
     CHECK_FALSE(holds_path(bytes, app_directory()));
     CHECK_FALSE(holds_path(bytes, cont::StringView{dir.data(), dir.size()}));
+    CHECK_FALSE(holds_path(bytes, "customer-0042"));
+}
+
+// The application's 40 orders: the last one names its customer, so it is a restricted event that keeps its class and
+// its order number but no text.
+void check_orders(const cp::FlightCapture& c)
+{
+    REQUIRE(c.events.size() >= 40U);
+    CHECK(c.events[0].message_view() == "order 0");
+    CHECK(c.events[38].message_view() == "order 38");
+    CHECK(c.events[38].redaction == crd::RedactionClass::Public);
+    CHECK(c.events[39].redaction == crd::RedactionClass::Restricted);
+    CHECK(c.events[39].message_length == 0U);
+    CHECK(c.events[39].value_a == 39U);
 }
 
 // Read the application's bundle: this build's identity and the application's module, which is returned. The bundle
@@ -1506,8 +1521,7 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         CHECK(c.end == cp::FlightEnd::Fatal);
         CHECK(c.recorded_before_trigger == 40U);
         REQUIRE(c.events.size() == 40U);
-        CHECK(c.events[0].message_view() == "order 0");
-        CHECK(c.events[39].message_view() == "order 39");
+        check_orders(c);
         CHECK(c.replay_available);
         CHECK(cont::StringView{c.replay.c_str(), c.replay.size()} ==
               "crd-diag-host-specimen <profile> <mode> [repaired]");
@@ -1550,7 +1564,8 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         CHECK(contains(inspected, R"({"kind":"flight","end":"fatal",)"));
         CHECK(contains(inspected, R"({"kind":"event","index":0,"side":"before",)"));
         CHECK(contains(inspected, R"({"kind":"event","index":39,"side":"before",)"));
-        CHECK(contains(inspected, R"("message":"order 39","message_truncated":false})"));
+        CHECK(contains(inspected, R"("message":"order 38","message_truncated":false,"redaction":"public"})"));
+        CHECK(contains(inspected, R"("message":"","message_truncated":false,"redaction":"restricted"})"));
         CHECK_FALSE(contains(inspected, R"("side":"after")"));
 
         // DIAG.12: with the refund fixed the same application runs clean.
@@ -1605,9 +1620,7 @@ TEST_CASE("diagnostic host: the application's wait cycle leaves a hang bundle, a
     CHECK(c.trigger.kind == cp::FlightTrigger::Hang);
     CHECK(c.trigger.value_a == static_cast<u64>(crd::jobs::HangKind::WaitCycle));
     CHECK(c.trigger.value_b == 2U); // the two counters nothing can decrement
-    REQUIRE(c.events.size() >= 40U);
-    CHECK(c.events[0].message_view() == "order 0");
-    CHECK(c.events[39].message_view() == "order 39");
+    check_orders(c);
 
     (void)check_repaired_run("wait");
 }
@@ -1653,7 +1666,7 @@ TEST_CASE("diagnostic host: the application's authored program fault names its a
     CHECK(c.end == cp::FlightEnd::Shutdown); // the application's stop() delivered the window
     CHECK(c.recorded_before_trigger == 40U);
     REQUIRE(c.events.size() == 40U);
-    CHECK(c.events[39].message_view() == "order 39");
+    check_orders(c);
     CHECK(c.replay_available);
 
     // bundle.inspect names the authored site too.
@@ -1828,7 +1841,7 @@ TEST_CASE("diagnostic host: the application's missing GPU barrier is a hazard on
     CHECK(c.trigger.message_view() == cont::StringView{expect});
     CHECK(c.end == cp::FlightEnd::Shutdown);
     REQUIRE(c.events.size() == 40U);
-    CHECK(c.events[39].message_view() == "order 39");
+    check_orders(c);
     CHECK(contains(inspect_app_bundle(scratch), R"("trigger":"manual","code":1812,)"));
 
     // With the barrier between the two copies the same upload validates clean.

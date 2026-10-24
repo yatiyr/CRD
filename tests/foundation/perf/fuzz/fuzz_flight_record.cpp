@@ -8,18 +8,19 @@
 //     the decoder, what FlightRecorder::trigger(), build_capture() and finish() guarantee (the trigger and every
 //     suppressed kind armed by the recorded policy, a suppression count exactly when there are suppressed kinds, one
 //     contiguous run of events across the trigger, the end reason and the truncation flag derived from the post window,
-//     a capture without the ring fatal and empty, a clipped message filling its buffer, a Basic policy holding Warning
-//     and above only, a replay that is unavailable naming why);
+//     a capture without the ring fatal and empty, a clipped message filling its buffer, a restricted event or trigger
+//     holding no text, a Basic policy holding Warning and above only, a replay that is unavailable naming why);
 //   * an accepted record re-encodes to exactly its own bytes (the decoder refuses trailing bytes and the encoder is
 //     canonical), and its JSON summary is produced without fault.
 // decode_flight_record takes no allocator: the harness budget does not bound it. Its own check that every event takes
 // at least 40 payload bytes bounds the event array (at most 1,638 events in a 64 KiB input).
 //
 // Seeds: captures written by a real FlightRecorder (each end reason, a Basic policy, a suppressed trigger, a replay
-// recipe, a clipped message, an empty post window) with their clock readings replaced by fixed values so the committed
-// corpus is the same bytes on every lane; a capture without the ring derived the way finish() builds one; records
-// that contradict themselves in exactly one way (each must be refused); and structural damage (truncation at several
-// points, a trailing byte, a count past the payload, a text length at its bound, an unknown detail level, garbage).
+// recipe, a clipped message, an empty post window, a restricted event and trigger) with their clock readings replaced
+// by fixed values so the committed corpus is the same bytes on every lane; a capture without the ring derived the way
+// finish() builds one; records that contradict themselves in exactly one way (each must be refused); and structural
+// damage (truncation at several points, a trailing byte, a count past the payload, a text length at its bound, an
+// unknown detail level, garbage).
 #include <crd/fuzz/harness.hpp>
 
 #include <crd/containers/array.hpp>
@@ -32,6 +33,7 @@
 
 namespace
 {
+using crd::RedactionClass;
 using crd::u16;
 using crd::u32;
 using crd::u64;
@@ -87,6 +89,7 @@ bool recorder_could_write(const FlightCapture& c) noexcept
             static_cast<u32>(e.severity) > static_cast<u32>(Severity::FatalInvariant) ||
             !terminated_at(e.message, e.message_length, kFlightMessageBytes) ||
             (e.message_truncated && e.message_length != kFlightMessageBytes - 1U) ||
+            (e.redaction == RedactionClass::Restricted && (e.message_length != 0U || e.message_truncated)) ||
             (p.detail == FlightDetail::Basic && e.severity < Severity::Warning))
         {
             return false;
@@ -108,6 +111,7 @@ bool recorder_could_write(const FlightCapture& c) noexcept
     }
     return terminated_at(c.trigger.file, c.trigger.file_length, kFlightTriggerFileBytes) &&
            terminated_at(c.trigger.message, c.trigger.message_length, kFlightTriggerMessageBytes) &&
+           (c.trigger.redaction == RedactionClass::Public || c.trigger.message_length == 0U) &&
            c.replay.size() < kFlightRecipeBytes && (c.replay_available || !c.replay.empty());
 }
 } // namespace
@@ -271,6 +275,22 @@ FlightCapture capture_clipped_empty_window()
     return c;
 }
 
+// A restricted event and a restricted trigger: their class kept, their text never recorded.
+FlightCapture capture_restricted()
+{
+    FlightRecorder r;
+    (void)r.init(small_policy());
+    record_numbered(r, 2U, Severity::Info);
+    r.record(EventCode{0x0300U}, Severity::Warning, StringView{"seed: restricted"}, 3U, 4U, RedactionClass::Restricted);
+    FlightTriggerInput t = manual_trigger(StringView{"seed: restricted trigger"});
+    t.redaction          = RedactionClass::Restricted;
+    (void)r.trigger(t);
+    record_numbered(r, 4U, Severity::Info, 2U);
+    FlightCapture c;
+    (void)r.take_capture(c);
+    return c;
+}
+
 // What finish(Fatal) delivers when the ring stays held: the trigger alone, said so.
 FlightCapture without_ring(FlightCapture c)
 {
@@ -308,9 +328,9 @@ bool flight_accepted(const u8* data, usize size)
 }
 
 // The captures a recorder wrote; every other seed must be refused.
-constexpr const char* kAcceptedSeeds[] = {"post-events-full", "post-window-elapsed-replay", "shutdown-suppressed",
-                                          "fatal-suppressed", "basic-detail",               "clipped-empty-window",
-                                          "ring-unavailable"};
+constexpr const char* kAcceptedSeeds[] = {
+    "post-events-full", "post-window-elapsed-replay", "shutdown-suppressed", "fatal-suppressed",
+    "basic-detail",     "clipped-empty-window",       "ring-unavailable",    "restricted-event-and-trigger"};
 } // namespace
 
 void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
@@ -323,6 +343,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
     const FlightCapture fatal    = capture_ended_early(FlightEnd::Fatal);
     const FlightCapture basic    = capture_basic();
     const FlightCapture clipped  = capture_clipped_empty_window();
+    const FlightCapture hidden   = capture_restricted();
 
     add_capture(sink, "post-events-full", full);
     add_capture(sink, "post-window-elapsed-replay", elapsed);
@@ -331,6 +352,7 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
     add_capture(sink, "basic-detail", basic);
     add_capture(sink, "clipped-empty-window", clipped);
     add_capture(sink, "ring-unavailable", without_ring(fatal));
+    add_capture(sink, "restricted-event-and-trigger", hidden);
 
     // Each contradicts what a recorder writes in exactly one way; each must be refused.
     {
@@ -373,6 +395,18 @@ void crd_fuzz_seeds(crd::fuzz::SeedSink& out)
         FlightCapture c = basic;
         c.events[0].severity = Severity::Info;
         add_capture(sink, "forged-basic-info-event", std::move(c));
+    }
+    {
+        FlightCapture c            = hidden; // the restricted event is the third
+        c.events[2].message[0]     = 's';
+        c.events[2].message_length = 1U;
+        add_capture(sink, "forged-restricted-event-with-text", std::move(c));
+    }
+    {
+        FlightCapture c          = hidden;
+        c.trigger.message[0]     = 's';
+        c.trigger.message_length = 1U;
+        add_capture(sink, "forged-restricted-trigger-with-text", std::move(c));
     }
     {
         FlightCapture c                 = full;

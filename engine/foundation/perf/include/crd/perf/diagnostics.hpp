@@ -12,6 +12,7 @@
 
 #include <crd/containers/string.hpp>
 #include <crd/core/build_config.hpp>
+#include <crd/core/redaction.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::perf
@@ -64,12 +65,13 @@ struct GenerationKey
 
 // One diagnostic event. `message` is owned (survives the producer's frame); `message_truncated`
 // is set when the message was clipped to the active policy's byte bound -- truncation is never
-// silent.
+// silent. A Restricted event carries no message (crd/core/redaction.hpp).
 struct DiagnosticEvent
 {
     crd::u32       schema_version = kDiagnosticSchemaVersion;
     EventCode      code           = 0U;
     Severity       severity       = Severity::Info;
+    RedactionClass redaction      = RedactionClass::Public;
     SourceIdentity source;
     GenerationKey  generation;
     crd::u64       timestamp_ns   = 0U; // monotonic clock (see diagnostic_now_ns)
@@ -141,11 +143,11 @@ private:
 [[nodiscard]] bool policy_admits(const DiagnosticPolicy& p, Severity s) noexcept;
 
 // Build an event, clipping `message` to the active policy's max_message_bytes and setting
-// message_truncated when it did. Stamps schema version, monotonic timestamp and generation.
-[[nodiscard]] DiagnosticEvent make_event(EventCode code, Severity sev, SourceIdentity src,
-                                         cont::StringView message,
-                                         const DiagnosticPolicyStore& policy,
-                                         GenerationKey gen = {});
+// message_truncated when it did. Stamps schema version, monotonic timestamp and generation. A
+// Restricted event keeps no message.
+[[nodiscard]] DiagnosticEvent make_event(EventCode code, Severity sev, SourceIdentity src, cont::StringView message,
+                                         const DiagnosticPolicyStore& policy, GenerationKey gen = {},
+                                         RedactionClass redaction = RedactionClass::Public);
 
 // ---------------------------------------------------------------------------
 // Serialization -- the shared structured context (CLI/JSON + logging)

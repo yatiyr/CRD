@@ -493,6 +493,99 @@ TEST_CASE("flight record: a capture round-trips through a bundle, and malformed 
     CHECK(inflated.error == "event count disagrees with the retained counts");
 }
 
+TEST_CASE("flight record: a restricted event or trigger keeps its class and scalars, never its text",
+          "[perf][diag][diag12][flight]")
+{
+    constexpr const char* secret = "customer-0042";
+    cp::FlightRecorder    r;
+    REQUIRE(r.init(small_policy(16U, 8U, 1U)) == cp::FlightPolicyStatus::Committed);
+    r.record(7U, cp::Severity::Warning, cont::StringView{secret}, 11U, 12U, crd::RedactionClass::Restricted);
+    cp::DiagnosticPolicyStore store;
+    const cp::DiagnosticEvent made = cp::make_event(8U, cp::Severity::Warning, {}, cont::StringView{secret}, store, {},
+                                                    crd::RedactionClass::Restricted);
+    CHECK(made.message.empty());
+    cont::String made_json;
+    cp::to_json(made, made_json);
+    CHECK(cont::StringView{made_json.c_str(), made_json.size()}.find("\"redaction\":\"restricted\"") !=
+          cont::StringView::npos);
+    r.record(made);
+    r.record(9U, cp::Severity::Warning, cont::StringView{"public order"});
+    cp::FlightTriggerInput in = manual(secret);
+    in.redaction              = crd::RedactionClass::Restricted;
+    REQUIRE(r.trigger(in) == cp::FlightTriggerResult::Started);
+    record_n(r, 0U, 1U);
+    cp::FlightCapture c;
+    REQUIRE(r.take_capture(c));
+    REQUIRE(c.events.size() == 4U);
+    CHECK(c.trigger.redaction == crd::RedactionClass::Restricted);
+    CHECK(c.trigger.message_length == 0U);
+    for (crd::usize i = 0U; i < 2U; ++i)
+    {
+        CHECK(c.events[i].redaction == crd::RedactionClass::Restricted);
+        CHECK(c.events[i].message_length == 0U);
+        CHECK_FALSE(c.events[i].message_truncated);
+    }
+    CHECK(c.events[0].code == 7U);
+    CHECK(c.events[0].value_a == 11U);
+    CHECK(c.events[0].value_b == 12U);
+    CHECK(c.events[1].code == 8U);
+    CHECK(c.events[2].redaction == crd::RedactionClass::Public);
+    CHECK(c.events[2].message_view() == "public order");
+
+    // The bundle holds the public text (the control) and never the restricted one; decoding keeps every class.
+    const cont::Array<crd::u8> bundle = cp::write_flight_bundle(c);
+    const cont::StringView     bytes{reinterpret_cast<const char*>(bundle.data()), bundle.size()};
+    CHECK(bytes.find("public order") != cont::StringView::npos);
+    CHECK(bytes.find(secret) == cont::StringView::npos);
+    const cont::Array<crd::u8> payload = cp::encode_flight_record(c);
+    const cp::FlightRecordRead back =
+        cp::decode_flight_record(cont::ConstSpan<crd::u8>{payload.data(), payload.size()});
+    REQUIRE(back.ok);
+    CHECK(back.capture.trigger.redaction == crd::RedactionClass::Restricted);
+    REQUIRE(back.capture.events.size() == 4U);
+    CHECK(back.capture.events[0].redaction == crd::RedactionClass::Restricted);
+    CHECK(back.capture.events[1].redaction == crd::RedactionClass::Restricted);
+    CHECK(back.capture.events[2].redaction == crd::RedactionClass::Public);
+    cont::String json;
+    cp::flight_capture_summary_json(c, json);
+    CHECK(cont::StringView{json.c_str(), json.size()}.find("\"redaction\":\"restricted\"") != cont::StringView::npos);
+
+    // A record the recorder could not have written is refused: an unknown event flag bit, a restricted event or
+    // trigger that carries text.
+    const crd::usize first_event = payload.size() - [&c] {
+        crd::usize n = 0U;
+        for (crd::usize i = 0U; i < c.events.size(); ++i)
+        {
+            n += 40U + c.events[i].message_length;
+        }
+        return n;
+    }();
+    cont::Array<crd::u8> bad = payload;
+    bad[first_event + 37U]   = static_cast<crd::u8>(bad[first_event + 37U] | 0x04U); // the event's flags byte
+    const cp::FlightRecordRead unknown_flag =
+        cp::decode_flight_record(cont::ConstSpan<crd::u8>{bad.data(), bad.size()});
+    CHECK_FALSE(unknown_flag.ok);
+    CHECK(unknown_flag.error == "malformed event");
+
+    cp::FlightCapture forged        = c;
+    forged.events[0].message[0]     = 'x';
+    forged.events[0].message_length = 1U;
+    const cont::Array<crd::u8> event_text = cp::encode_flight_record(forged);
+    const cp::FlightRecordRead with_text =
+        cp::decode_flight_record(cont::ConstSpan<crd::u8>{event_text.data(), event_text.size()});
+    CHECK_FALSE(with_text.ok);
+    CHECK(with_text.error == "an event the recorder could not have written (clip flag, redaction or detail level)");
+
+    cp::FlightCapture forged_trigger      = c;
+    forged_trigger.trigger.message[0]     = 'x';
+    forged_trigger.trigger.message_length = 1U;
+    const cont::Array<crd::u8> trigger_text = cp::encode_flight_record(forged_trigger);
+    const cp::FlightRecordRead trigger_read =
+        cp::decode_flight_record(cont::ConstSpan<crd::u8>{trigger_text.data(), trigger_text.size()});
+    CHECK_FALSE(trigger_read.ok);
+    CHECK(trigger_read.error == "a restricted trigger with a message");
+}
+
 TEST_CASE("flight record: bundle.inspect names the flight section of a written flight bundle",
           "[perf][diag][diag9b][flight]")
 {
@@ -534,9 +627,10 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
     CHECK(std::strstr(json, "\"tag_name\":\"reserved\"") == nullptr);
     CHECK(std::strstr(json, "\"same_as_host\":true,\"differing\":\"\"") != nullptr);
     CHECK(std::strstr(json, "\"flight_record\":true,\"flight_refused\":false,\"flight_error\":\"\"") != nullptr);
-    CHECK(std::strstr(json, "{\"kind\":\"trigger\",\"trigger\":\"manual\",\"code\":2304,\"file\":\"src/orders.cpp\","
-                            "\"line\":321,\"message\":\"inspect me\",\"value_a\":7,\"value_b\":9,\"sequence\":4,") !=
-          nullptr);
+    CHECK(std::strstr(json,
+                      "{\"kind\":\"trigger\",\"trigger\":\"manual\",\"code\":2304,\"file\":\"src/orders.cpp\","
+                      "\"line\":321,\"message\":\"inspect me\",\"redaction\":\"public\",\"value_a\":7,\"value_b\":9,"
+                      "\"sequence\":4,") != nullptr);
     CHECK(std::strstr(json, "{\"kind\":\"flight\",\"end\":\"post-events-full\",") != nullptr);
     CHECK(std::strstr(json, "\"pre_retained\":4,\"post_retained\":2,\"post_truncated\":false,"
                             "\"ring_unavailable\":false,") != nullptr);
@@ -551,7 +645,7 @@ TEST_CASE("flight record: bundle.inspect names the flight section of a written f
         CHECK(std::strstr(json, expected) != nullptr);
         (void)std::snprintf(expected, sizeof(expected),
                             R"("code":66,"severity":"info","value_a":%u,"value_b":0,"message":"event %u",)"
-                            R"("message_truncated":false})",
+                            R"("message_truncated":false,"redaction":"public"})",
                             static_cast<unsigned>(i), static_cast<unsigned>(i));
         CHECK(std::strstr(json, expected) != nullptr);
     }

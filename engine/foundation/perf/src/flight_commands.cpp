@@ -222,6 +222,7 @@ DiagStatus run_flight_status(void* context, const DiagCall& /*call*/, DiagSnapsh
         .u64("trigger_code", capture.trigger.code)
         .u64("trigger_sequence", capture.trigger.sequence)
         .str("trigger_message", capture.trigger.message_view())
+        .str("trigger_redaction", redaction_class_name(capture.trigger.redaction))
         .str("end", flight_end_name(capture.end))
         .u64("pre_retained", capture.pre_retained)
         .u64("pre_dropped", capture.recorded_before_trigger - capture.pre_retained)
@@ -241,7 +242,8 @@ DiagStatus run_flight_status(void* context, const DiagCall& /*call*/, DiagSnapsh
             .u64("a", e.value_a)
             .u64("b", e.value_b)
             .str("message", e.message_view())
-            .boolean("message_truncated", e.message_truncated);
+            .boolean("message_truncated", e.message_truncated)
+            .str("redaction", redaction_class_name(e.redaction));
         (void)out.add_item(item);
     }
     return DiagStatus::Ok;

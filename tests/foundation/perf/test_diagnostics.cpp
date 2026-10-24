@@ -168,6 +168,7 @@ TEST_CASE("diag: JSON is deterministic, escaped and carries the structured conte
     CHECK(json_contains(j, "\"code\":7"));
     CHECK(json_contains(j, "\"module\":\"foundation\""));
     CHECK(json_contains(j, "\"severity\":\"recoverable_error\""));
+    CHECK(json_contains(j, "\"redaction\":\"public\""));
     CHECK(json_contains(j, "\"generation\":99"));
     CHECK(json_contains(j, "\\\"quote\\\"")); // escaped quotes
     CHECK(json_contains(j, "\\n"));           // escaped newline

@@ -46,6 +46,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/build_config.hpp>
+#include <crd/core/redaction.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -114,23 +115,26 @@ inline constexpr crd::u32 kFlightMaxEvents           = 65536U; // hard capacity 
 inline constexpr crd::u64 kFlightMaxPostWindowNs     = 60ULL * 1000ULL * 1000ULL * 1000ULL;
 
 // One recorded event. Fixed size, no owned storage: copying it never allocates. `message_truncated` is set when the
-// message was clipped to kFlightMessageBytes - 1 bytes; truncation is never silent.
+// message was clipped to kFlightMessageBytes - 1 bytes; truncation is never silent. A Restricted event keeps no
+// message (crd/core/redaction.hpp).
 struct FlightEvent
 {
-    crd::u64  sequence     = 0U; // position in the recorder's total order (0-based, never reused)
-    crd::u64  timestamp_ns = 0U; // diagnostic_now_ns() at record
-    crd::u64  value_a      = 0U; // code-specific scalars (documented with each code)
-    crd::u64  value_b      = 0U;
-    EventCode code         = 0U;
-    Severity  severity     = Severity::Info;
-    bool      message_truncated = false;
-    crd::u16  message_length    = 0U;
-    char      message[kFlightMessageBytes] = {};
+    crd::u64       sequence     = 0U; // position in the recorder's total order (0-based, never reused)
+    crd::u64       timestamp_ns = 0U; // diagnostic_now_ns() at record
+    crd::u64       value_a      = 0U; // code-specific scalars (documented with each code)
+    crd::u64       value_b      = 0U;
+    EventCode      code         = 0U;
+    Severity       severity     = Severity::Info;
+    bool           message_truncated = false;
+    RedactionClass redaction         = RedactionClass::Public;
+    crd::u8        message_length    = 0U;
+    char           message[kFlightMessageBytes] = {};
 
     [[nodiscard]] cont::StringView message_view() const noexcept { return {message, message_length}; }
 };
 
-static_assert(sizeof(FlightEvent) <= 256U, "a flight event stays within the 256-byte event payload budget");
+static_assert(kFlightMessageBytes <= 256U, "an event's message length fits its byte");
+static_assert(sizeof(FlightEvent) == 152U, "a flight event is 152 bytes (the ring sizes above)");
 
 // The trigger and its causal inputs, captured when the trigger fires, before the faulty operation completes (or
 // fails to). `sequence` is the boundary in the recorder's own order: the trigger moves the recording word to Triggered
@@ -138,18 +142,19 @@ static_assert(sizeof(FlightEvent) <= 256U, "a flight event stays within the 256-
 // window (an event racing the trigger lands on one side, never both).
 struct FlightTriggerRecord
 {
-    FlightTrigger kind         = FlightTrigger::None;
-    EventCode     code         = 0U;
-    crd::u64      sequence     = 0U; // events recorded before the trigger; the first post-window event has this
-    crd::u64      timestamp_ns = 0U;
-    crd::u64      value_a      = 0U; // trigger-specific scalars (see each trigger source)
-    crd::u64      value_b      = 0U;
-    crd::u32      line         = 0U;
+    FlightTrigger  kind         = FlightTrigger::None;
+    RedactionClass redaction    = RedactionClass::Public; // Restricted: no message is kept
+    EventCode      code         = 0U;
+    crd::u64       sequence     = 0U; // events recorded before the trigger; the first post-window event has this
+    crd::u64       timestamp_ns = 0U;
+    crd::u64       value_a      = 0U; // trigger-specific scalars (see each trigger source)
+    crd::u64       value_b      = 0U;
+    crd::u32       line         = 0U;
     // The source file. A path longer than kFlightTriggerFileBytes - 1 keeps its tail (the file name) after "...".
-    crd::u16      file_length    = 0U;
-    crd::u16      message_length = 0U;
-    char          file[kFlightTriggerFileBytes]       = {};
-    char          message[kFlightTriggerMessageBytes] = {};
+    crd::u16       file_length    = 0U;
+    crd::u16       message_length = 0U;
+    char           file[kFlightTriggerFileBytes]       = {};
+    char           message[kFlightTriggerMessageBytes] = {};
 
     [[nodiscard]] cont::StringView file_view() const noexcept { return {file, file_length}; }
     [[nodiscard]] cont::StringView message_view() const noexcept { return {message, message_length}; }
@@ -244,6 +249,7 @@ struct FlightTriggerInput
     crd::u64         value_a = 0U;
     crd::u64         value_b = 0U;
     SourceIdentity   source;
+    RedactionClass   redaction = RedactionClass::Public; // Restricted: the trigger keeps no message
 };
 
 enum class FlightTriggerResult : crd::u8
@@ -285,9 +291,10 @@ public:
     void set_replay_recipe(cont::StringView recipe) noexcept;
     void set_replay_unavailable(cont::StringView reason) noexcept;
 
-    // Record one event (thread-safe, no allocation). A no-op before init and after shutdown.
+    // Record one event (thread-safe, no allocation). A no-op before init and after shutdown. A Restricted event keeps
+    // its code, severity and scalars, never its message.
     void record(EventCode code, Severity severity, cont::StringView message, crd::u64 value_a = 0U,
-                crd::u64 value_b = 0U) noexcept;
+                crd::u64 value_b = 0U, RedactionClass redaction = RedactionClass::Public) noexcept;
     void record(const DiagnosticEvent& e) noexcept;
 
     // Whether record() keeps an event of `severity` under the active detail (DIAG.11b). Lock-free: one atomic load, no

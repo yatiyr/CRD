@@ -54,6 +54,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/redaction.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -133,12 +134,8 @@ enum class ValueStatus : u8
 };
 [[nodiscard]] containers::StringView value_status_name(ValueStatus s) noexcept;
 
-// NOLINTNEXTLINE(performance-enum-size)
-enum class RedactionClass : u8
-{
-    Public = 0,
-    Restricted, // the bits never leave the executing thread
-};
+// A Restricted value's bits never leave the executing thread (crd/core/redaction.hpp).
+using RedactionClass = crd::RedactionClass;
 
 // The host's freeze/thaw for a WholeHost pause (e.g. stop submitting frames and jobs). Called on the executing thread.
 struct HostPause

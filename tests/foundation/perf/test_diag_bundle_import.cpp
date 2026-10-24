@@ -86,7 +86,6 @@ TEST_CASE("manifest round-trips and reports unknown flags without interpreting t
 {
     BundleManifest man;
     man.schema_version = kDiagnosticSchemaVersion;
-    man.flags          = kManifestFlagFieldsRedacted;
     man.absent_tags.push_back(4U);
     man.absent_tags.push_back(5U);
     const cont::Array<crd::u8> payload = serialize_manifest(man);
@@ -95,7 +94,7 @@ TEST_CASE("manifest round-trips and reports unknown flags without interpreting t
     REQUIRE(r.ok);
     CHECK(r.manifest_version == kManifestVersion);
     CHECK(r.schema_version == kDiagnosticSchemaVersion);
-    CHECK((r.flags & kManifestFlagFieldsRedacted) != 0U);
+    CHECK(r.flags == 0U);
     CHECK(r.unknown_flags == 0U);
     REQUIRE(r.absent_tags.size() == 2U);
     CHECK(r.absent_tags[0] == 4U);
@@ -108,7 +107,8 @@ TEST_CASE("manifest round-trips and reports unknown flags without interpreting t
         std::memcpy(&bad[offsetof(ManifestHeader, flags)], &all, sizeof(all));
         const ManifestReadResult rr = read_manifest(span_of(bad.data(), bad.size()));
         REQUIRE(rr.ok);
-        CHECK(rr.unknown_flags == (0xFFFFFFFFU & ~kManifestKnownFlags)); // surfaced, not acted on
+        CHECK(rr.flags == 0xFFFFFFFFU);
+        CHECK(rr.unknown_flags == 0xFFFFFFFFU); // version 1 knows no bit: every one surfaced, none acted on
     }
     SECTION("a hostile absent_count is refused, not trusted")
     {

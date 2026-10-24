@@ -309,7 +309,7 @@ bool claim(Impl& impl, crd::u64& seq) noexcept
 // Fill the slot of claimed sequence `seq` and publish it. The slot is this claim's once its previous occupant, a full
 // ring earlier, is published: the wait is reached only when the ring laps a claim stalled before its publication.
 void publish(Impl& impl, crd::u64 seq, crd::u64 now, EventCode code, Severity severity, cont::StringView message,
-             crd::u64 value_a, crd::u64 value_b) noexcept
+             crd::u64 value_a, crd::u64 value_b, RedactionClass redaction = RedactionClass::Public) noexcept
 {
     const crd::u64 capacity = impl.policy.capacity;
     FlightEvent& slot = slot_of(impl, seq);
@@ -324,7 +324,11 @@ void publish(Impl& impl, crd::u64 seq, crd::u64 now, EventCode code, Severity se
     slot.value_b = value_b;
     slot.code = code;
     slot.severity = severity;
-    slot.message_length = copy_clipped(slot.message, kFlightMessageBytes, message, &slot.message_truncated);
+    slot.redaction = redaction;
+    // A restricted event's message is never copied, so no route out of the ring can carry it.
+    const cont::StringView kept = redaction == RedactionClass::Restricted ? cont::StringView{} : message;
+    slot.message_length =
+        static_cast<crd::u8>(copy_clipped(slot.message, kFlightMessageBytes, kept, &slot.message_truncated));
     stamp.store(seq, std::memory_order_release);
 }
 
@@ -628,7 +632,7 @@ void FlightRecorder::set_replay_unavailable(cont::StringView reason) noexcept
 }
 
 void FlightRecorder::record(EventCode code, Severity severity, cont::StringView message, crd::u64 value_a,
-                            crd::u64 value_b) noexcept
+                            crd::u64 value_b, RedactionClass redaction) noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr) // early-init / late-shutdown: a no-op, never a fault
@@ -646,13 +650,13 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
     crd::u64 seq = 0U;
     if (claim(*impl, seq))
     {
-        publish(*impl, seq, now, code, severity, message, value_a, value_b);
+        publish(*impl, seq, now, code, severity, message, value_a, value_b, redaction);
     }
 }
 
 void FlightRecorder::record(const DiagnosticEvent& e) noexcept
 {
-    record(e.code, e.severity, cont::StringView{e.message.c_str(), e.message.size()}, 0U, 0U);
+    record(e.code, e.severity, cont::StringView{e.message.c_str(), e.message.size()}, 0U, 0U, e.redaction);
 }
 
 bool FlightRecorder::admit(Severity severity) noexcept
@@ -702,7 +706,10 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     t.value_b              = input.value_b;
     t.line                 = input.source.line;
     t.file_length          = copy_path_tail(t.file, kFlightTriggerFileBytes, input.source.file);
-    t.message_length       = copy_clipped(t.message, kFlightTriggerMessageBytes, input.message, nullptr);
+    t.redaction            = input.redaction;
+    t.message_length =
+        copy_clipped(t.message, kFlightTriggerMessageBytes,
+                     input.redaction == RedactionClass::Restricted ? cont::StringView{} : input.message, nullptr);
 
     std::memcpy(impl->trigger_replay, impl->replay, sizeof(impl->trigger_replay));
     impl->trigger_replay_length    = impl->replay_length;
@@ -908,10 +915,15 @@ bool FlightRecorder::test_with_claim_unpublished(void (*fn)(void* user), void* u
 
 namespace
 {
-constexpr crd::u32 kRecordFlagPostTruncated   = 1U << 0U;
-constexpr crd::u32 kRecordFlagRingUnavailable = 1U << 1U;
-constexpr crd::u32 kRecordFlagReplay          = 1U << 2U;
-constexpr crd::u32 kRecordKnownFlags          = 0x07U;
+constexpr crd::u32 kRecordFlagPostTruncated     = 1U << 0U;
+constexpr crd::u32 kRecordFlagRingUnavailable   = 1U << 1U;
+constexpr crd::u32 kRecordFlagReplay            = 1U << 2U;
+constexpr crd::u32 kRecordFlagTriggerRestricted = 1U << 3U; // the trigger is Restricted: it has no message
+constexpr crd::u32 kRecordKnownFlags            = 0x0FU;
+// An event's flags byte (records before redaction classes held 0 or 1 there, the clip flag).
+constexpr crd::u8 kEventFlagTruncated  = 1U << 0U;
+constexpr crd::u8 kEventFlagRestricted = 1U << 1U;
+constexpr crd::u8 kEventKnownFlags     = 0x03U;
 
 void put_u8(cont::Array<crd::u8>& out, crd::u8 v)
 {
@@ -1030,6 +1042,7 @@ cont::Array<crd::u8> encode_flight_record(const FlightCapture& c, crd::memory::I
     flags |= c.post_truncated ? kRecordFlagPostTruncated : 0U;
     flags |= c.ring_unavailable ? kRecordFlagRingUnavailable : 0U;
     flags |= c.replay_available ? kRecordFlagReplay : 0U;
+    flags |= c.trigger.redaction == RedactionClass::Restricted ? kRecordFlagTriggerRestricted : 0U;
     put_u8(out, static_cast<crd::u8>(c.trigger.kind));
     put_u8(out, static_cast<crd::u8>(c.end));
     put_u8(out, static_cast<crd::u8>(flags));
@@ -1077,7 +1090,8 @@ cont::Array<crd::u8> encode_flight_record(const FlightCapture& c, crd::memory::I
         put_u64(out, e.value_b);
         put_u32(out, e.code);
         put_u8(out, static_cast<crd::u8>(e.severity));
-        put_u8(out, e.message_truncated ? 1U : 0U);
+        put_u8(out, static_cast<crd::u8>((e.message_truncated ? kEventFlagTruncated : 0U) |
+                                         (e.redaction == RedactionClass::Restricted ? kEventFlagRestricted : 0U)));
         put_u16(out, e.message_length);
         put_bytes(out, e.message, e.message_length);
     }
@@ -1117,6 +1131,8 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
     c.post_truncated   = (flags & kRecordFlagPostTruncated) != 0U;
     c.ring_unavailable = (flags & kRecordFlagRingUnavailable) != 0U;
     c.replay_available = (flags & kRecordFlagReplay) != 0U;
+    c.trigger.redaction =
+        (flags & kRecordFlagTriggerRestricted) != 0U ? RedactionClass::Restricted : RedactionClass::Public;
 
     c.trigger.code           = in.u32();
     c.trigger.sequence       = in.u64();
@@ -1130,6 +1146,10 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
         !in.text(c.trigger.message, kFlightTriggerMessageBytes, c.trigger.message_length))
     {
         return refuse(r, "trigger text over its bound or past the payload");
+    }
+    if (c.trigger.redaction == RedactionClass::Restricted && c.trigger.message_length != 0U)
+    {
+        return refuse(r, "a restricted trigger with a message");
     }
     c.end_ns = in.u64();
 
@@ -1216,26 +1236,30 @@ FlightRecordRead decode_flight_record(cont::ConstSpan<crd::u8> payload)
         e.value_a      = in.u64();
         e.value_b      = in.u64();
         e.code         = in.u32();
-        const crd::u8 severity  = in.u8();
-        const crd::u8 truncated = in.u8();
-        e.message_length        = in.u16();
-        if (!in.ok || severity > static_cast<crd::u8>(Severity::FatalInvariant) || truncated > 1U ||
-            !in.text(e.message, kFlightMessageBytes, e.message_length))
+        const crd::u8  severity    = in.u8();
+        const crd::u8  event_flags = in.u8();
+        const crd::u16 length      = in.u16();
+        if (!in.ok || severity > static_cast<crd::u8>(Severity::FatalInvariant) ||
+            (event_flags & ~kEventKnownFlags) != 0U || !in.text(e.message, kFlightMessageBytes, length))
         {
             return refuse(r, "malformed event");
         }
         e.severity          = static_cast<Severity>(severity);
-        e.message_truncated = truncated != 0U;
+        e.message_length    = static_cast<crd::u8>(length); // in.text() bounded it by kFlightMessageBytes
+        e.message_truncated = (event_flags & kEventFlagTruncated) != 0U;
+        e.redaction = (event_flags & kEventFlagRestricted) != 0U ? RedactionClass::Restricted : RedactionClass::Public;
         // The capture copies one contiguous run of the ring, from pre_retained before the trigger's sequence on.
         if (e.sequence != c.trigger.sequence - c.pre_retained + i)
         {
             return refuse(r, "event sequence not contiguous across the trigger");
         }
-        // A clipped message fills its buffer; a Basic policy records Warning and above only.
+        // A clipped message fills its buffer, a restricted event has none, and a Basic policy records Warning and
+        // above only.
         if ((e.message_truncated && e.message_length != kFlightMessageBytes - 1U) ||
+            (e.redaction == RedactionClass::Restricted && (e.message_length != 0U || e.message_truncated)) ||
             (c.policy.detail == FlightDetail::Basic && e.severity < Severity::Warning))
         {
-            return refuse(r, "an event the recorder could not have written (clip flag or detail level)");
+            return refuse(r, "an event the recorder could not have written (clip flag, redaction or detail level)");
         }
         c.events.push_back(e);
     }
@@ -1307,6 +1331,8 @@ void flight_capture_summary_json(const FlightCapture& c, cont::String& out)
     append_u64(out, c.trigger.sequence);
     key("message", true);
     str(c.trigger.message_view());
+    key("redaction", true);
+    str(redaction_class_name(c.trigger.redaction));
     key("file", true);
     str(c.trigger.file_view());
     key("line", true);

@@ -1,5 +1,5 @@
 // crd-perf -- DIAG.5d(e1): the Manifest bundle section payload. See bundle_manifest.hpp.
-// No field here can declare the raw dump redacted (ID-8); redaction refers only to the manifest's own strings.
+// No field here can declare the raw dump redacted (ID-8).
 
 #include <crd/perf/bundle_manifest.hpp>
 
