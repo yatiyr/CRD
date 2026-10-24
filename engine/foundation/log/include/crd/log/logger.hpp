@@ -56,7 +56,7 @@ void flush() noexcept;
 // evidence and terminates promptly instead of hanging. flush() is unchanged. See DIAG.5c.
 bool flush_for(u32 timeout_ms) noexcept;
 
-// Number of records dropped because the async queue was full.
+// Number of records dropped: the async queue was full, a formatter threw, or the record could not be delivered.
 u64 dropped_count() noexcept;
 
 // Number of times flush_for() gave up before fully draining (stuck sink, queue pressure, or a reentrant call from

@@ -16,6 +16,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
+#include <format>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -471,8 +473,8 @@ namespace detail
 {
 namespace
 {
-// The body of `dispatch`, split out so the public entry point can be a `noexcept` WRAPPER. Every step below
-// can throw — the sink mutex, the std::string record copy, the async deque push — and `dispatch` is declared
+// The body of `dispatch`, split out so the public entry point can be a `noexcept` WRAPPER. The sink and queue
+// mutexes can throw (std::system_error; a refused String copy is a fatal, not a throw), and `dispatch` is declared
 // `noexcept`, so an escape means std::terminate in the middle of someone else's error handling. Logging is
 // best-effort infrastructure; a failed log is a dropped log, never a crash. (bugprone-exception-escape — only
 // visible since the tidy gate stopped dropping `/EHsc`; see the CRD_ENABLE_CLANG_TIDY block in CMakeLists.)
@@ -559,6 +561,21 @@ void dispatch(LogLevel level, const Channel& ch, std::source_location loc, std::
         // A log we could not deliver is a DROPPED log — same accounting as async-queue overflow, so the
         // existing `dropped_count()` telemetry reports it instead of the failure vanishing.
         state().dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void vdispatch(LogLevel level, const Channel& ch, std::source_location loc, std::string_view fmt,
+               std::format_args args) noexcept
+{
+    try
+    {
+        crd::containers::String message;
+        std::vformat_to(std::back_inserter(message), fmt, args);
+        dispatch_impl(level, ch, loc, message);
+    }
+    catch (...)
+    {
+        state().dropped.fetch_add(1, std::memory_order_relaxed); // a formatter threw: the same dropped log
     }
 }
 } // namespace detail

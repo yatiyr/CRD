@@ -2,7 +2,8 @@
 // counted, contained failure -- not std::terminate on the noexcept async worker, and not a lost record for the
 // OTHER sinks. Plus the declared queue-pressure contract: newest-dropped under overflow (drop_on_overflow, the
 // headless default), and Critical retained because flush_on_critical delivers it synchronously, bypassing the
-// queue. Throwing does not depend on CRD_ENABLE_ASSERTS (/EHsc is global), so these are not assert-gated.
+// queue. A formatter that throws is a counted drop too. Throwing does not depend on CRD_ENABLE_ASSERTS (/EHsc is
+// global), so these are not assert-gated.
 
 #include <crd/log/log.hpp>
 #include <crd/log/logger.hpp>
@@ -12,10 +13,25 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <condition_variable>
+#include <format>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
+
+// A value whose formatter throws, as a formatter of a user type may.
+struct ThrowingFormat
+{
+};
+
+template <> struct std::formatter<ThrowingFormat>
+{
+    constexpr auto parse(std::format_parse_context& ctx) { return ctx.begin(); }
+    auto format(const ThrowingFormat&, std::format_context&) const -> std::format_context::iterator
+    {
+        throw std::runtime_error("format boom");
+    }
+};
 
 using namespace crd;
 using namespace crd::log;
@@ -136,6 +152,33 @@ TEST_CASE("a throwing sink does not lose the record for other sinks (sync)", "[l
 
     CHECK(sink_failure_count() > before);
     CHECK(ring->snapshot().size() >= 1);
+
+    shutdown();
+}
+
+TEST_CASE("a formatter that throws drops that record, counted, and never throws into the logging caller",
+          "[log][diag][sinkfail]")
+{
+    LoggerConfig cfg;
+    cfg.async = false;
+    fresh_logger(cfg);
+
+    auto ring_owner = std::make_unique<RingBufferSink>(8);
+    RingBufferSink* ring = ring_owner.get();
+    add_sink(std::move(ring_owner));
+
+    const u64 before = dropped_count();
+    CHECK_NOTHROW(
+        []
+        {
+            CRD_LOG_INFO(g_log_sinkfail_test, "lost {}", ThrowingFormat{});
+        }());
+    CRD_LOG_INFO(g_log_sinkfail_test, "kept");
+
+    CHECK(dropped_count() - before == 1);
+    const auto records = ring->snapshot();
+    REQUIRE(records.size() == 1);
+    CHECK(std::string_view{records[0].message} == "kept");
 
     shutdown();
 }

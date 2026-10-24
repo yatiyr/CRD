@@ -11,6 +11,25 @@
 #include <source_location>
 #include <string_view>
 
+namespace crd::log::detail
+{
+// The macro's slow path: formats the message out of line, then routes it as dispatch() does. A formatter that throws
+// drops the record, counted by dropped_count(), and never throws into the logging caller, which may be noexcept (the
+// assert bridge is). Running out of memory while formatting is the heap allocator's out-of-memory fatal. DIAG.5c.
+void vdispatch(LogLevel level, const Channel& ch, std::source_location loc, std::string_view fmt,
+               std::format_args args) noexcept;
+
+// Checks the format string against the arguments at compile time, as std::format does.
+template <typename... Args>
+void dispatch_format(LogLevel level, const Channel& ch, std::source_location loc,
+                     std::format_string<const Args&...> fmt, const Args&... args) noexcept
+{
+    vdispatch(level, ch, loc, fmt.get(), std::make_format_args(args...));
+}
+} // namespace crd::log::detail
+
+// NOLINTBEGIN(cppcoreguidelines-macro-usage): a function evaluates its arguments before it can check the level, and
+// only a macro captures the caller's source_location and compiles out whole.
 // CRD_LOG_IMPL: the single shared expansion every CRD_LOG_xxx macro funnels through.
 // It is wrapped in a CRD_WHILE_FALSE so that
 //     if (cond) CRD_LOG_INFO(g_log_x, "..."); else foo();
@@ -19,15 +38,15 @@
 // Ordering matters:
 //  1) compile-time level check  -> selects whether the whole block is `((void)0)`
 //  2) runtime should_log()      -> one byte compare; arguments are NOT yet evaluated
-//  3) std::format(...)          -> only happens on the rare "we are logging" path
-//  4) detail::dispatch(...)     -> push to queue (async) or fan-out (sync)
+//  3) detail::dispatch_format() -> only on the rare "we are logging" path: format, then push to the queue (async) or
+//                                  fan out (sync)
 #define CRD_LOG_IMPL(LEVEL_ENUM, CHANNEL_REF, FMT, ...)                                                                \
     do                                                                                                                 \
     {                                                                                                                  \
         if (::crd::log::detail::should_log((CHANNEL_REF), (LEVEL_ENUM)))                                               \
         {                                                                                                              \
-            ::crd::log::detail::dispatch((LEVEL_ENUM), (CHANNEL_REF), ::std::source_location::current(),               \
-                                         ::std::string_view(::std::format(FMT __VA_OPT__(, ) __VA_ARGS__)));           \
+            ::crd::log::detail::dispatch_format((LEVEL_ENUM), (CHANNEL_REF), ::std::source_location::current(),        \
+                                                FMT __VA_OPT__(, ) __VA_ARGS__);                                       \
         }                                                                                                              \
     }                                                                                                                  \
     CRD_WHILE_FALSE
@@ -95,3 +114,4 @@
         }                                                                                                              \
     }                                                                                                                  \
     CRD_WHILE_FALSE
+// NOLINTEND(cppcoreguidelines-macro-usage)

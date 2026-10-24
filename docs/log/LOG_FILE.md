@@ -29,10 +29,12 @@ CRD_LOG_INFO(g_log_renderer, "loaded {} meshes in {} ms", count, ms);
    `<= Info` right now?" If not, we return immediately. Cost: one load + one
    compare. The arguments `count`, `ms` are *not yet evaluated*.
 
-3. **`std::format` runs** on the format string and args, producing a `std::string`.
-   This is where the cost actually lives — but only when we're going to log.
+3. **The message is formatted** out of line (`detail::vdispatch`, `std::vformat_to` into a
+   crd `String`; the format string is still checked at compile time). This is where the
+   cost actually lives — but only when we're going to log. A formatter that throws drops
+   the record (`dropped_count()`); it never throws into the caller.
 
-4. **`detail::dispatch()` is called.** It packages the formatted message + metadata
+4. **`detail::dispatch()`'s body runs.** It packages the formatted message + metadata
    (channel pointer, source location, timestamp, thread id) into a `LogRecord`.
 
 5. **In sync mode**, `dispatch` walks every sink and calls `sink->write(rec)`.
@@ -226,9 +228,9 @@ void dispatch(LogLevel level, const Channel& ch,
   and `drop_on_overflow` is true, increment `dropped` and return immediately.
   Otherwise wait on `drain_cv` until the worker drains some space.
 
-Crucially: the per-thread cost of a *queued* log is one `std::string` copy + one
-mutex acquire + one CV signal. That's it. No I/O, no formatting (formatting
-already happened in the caller via `std::format`).
+Crucially: the per-thread cost of a *queued* log is one `String` copy + one
+mutex acquire + one CV signal. That's it. No I/O, no record formatting (the message
+was already formatted by `vdispatch`, the macro's slow path).
 
 #### The worker thread
 
@@ -258,10 +260,10 @@ and the core is:
     {                                                                                    \
         if (::crd::log::detail::should_log((CH), (LEVEL)))                               \
         {                                                                                \
-            ::crd::log::detail::dispatch(                                                \
+            ::crd::log::detail::dispatch_format(                                         \
                 (LEVEL), (CH),                                                           \
                 ::std::source_location::current(),                                       \
-                ::std::string_view(::std::format(FMT __VA_OPT__(,) __VA_ARGS__)));       \
+                FMT __VA_OPT__(,) __VA_ARGS__);                                          \
         }                                                                                \
     } CRD_WHILE_FALSE
 ```
@@ -413,24 +415,23 @@ do
 {
     if (crd::log::detail::should_log(g_log_renderer, LogLevel::Info))
     {
-        crd::log::detail::dispatch(
+        crd::log::detail::dispatch_format(
             LogLevel::Info, g_log_renderer,
             std::source_location::current(),
-            std::string_view(std::format("compiled {} pipelines", n)));
+            "compiled {} pipelines", n);
     }
 } while (false);
 ```
 
 1. **`should_log`**: `(u8)Info >= (u8)g_log_renderer.runtime_level`. If
    `runtime_level == Info`, true; if `Warn`, false. One load + one branch.
-2. We pass: `std::format` runs. We get a temporary `std::string`. The
-   `std::string_view` ctor stores a pointer into that temporary (which is alive
-   until the full expression completes — the `dispatch` call returns).
-3. `dispatch` enters. `state().config.async == true`, level is not Critical.
+2. We pass: `dispatch_format` checked the format string at compile time and calls
+   `vdispatch`, which formats into a local `String` and hands a `string_view` of it on.
+3. `dispatch`'s body runs. `state().config.async == true`, level is not Critical.
    We build a `QueuedRecord`, *copy* the string contents into `q.message`, push
    onto the deque, signal the CV.
-4. Caller returns. The temporary `std::string` is destroyed; we don't care, we
-   already copied.
+4. Caller returns. The local `String` is destroyed; we don't care, we already
+   copied.
 5. **Worker thread** wakes up (already blocked on the CV), pops, builds a
    `LogRecord` whose `message` is a `string_view` into `q.message`, locks
    `sinks_mutex`, calls each sink's `write()`.
