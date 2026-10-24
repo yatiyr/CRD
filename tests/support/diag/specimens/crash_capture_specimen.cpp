@@ -12,8 +12,9 @@
 //   concurrent              -- two threads fault at once: the single-shot gate writes exactly ONE dump, exit 0xC0000005.
 //   fastfail                -- __fastfail bypasses SEH entirely: NO dump is written, exit 0xC0000409 (honest limitation).
 //   denied                  -- install() succeeds, the dir is then removed, so the write fails (no partial), 0xC0000005.
-//   logger_lock             -- fault holding the stdio stream lock (Win: _lock_file; Linux: flockfile): the handler's
-//                              write(2)-only fatal path still records (a stdio-using handler would deadlock).
+//   logger_lock             -- fault inside a crd::log sink's write, holding the log's sink mutex and the stdio stream
+//                              lock (Win: _lock_file; Linux: flockfile): the handler takes neither, so it still
+//                              records (a handler that logged or used stdio would deadlock).
 //   chain                   -- (linux) a prior SIGSEGV handler is installed before crd::install(); crd records, then
 //                              chains to it -> it drops chain.marker and re-raises. Proves signal chaining. Win: plain fault.
 //   hook_fault              -- the crash-report hook itself faults: the record (written before the hook) survives and the
@@ -38,11 +39,14 @@
 #include <crd/core/crash.hpp>
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/log/log.hpp>
+#include <crd/log/logger.hpp>
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <thread>
 
 #if defined(_WIN32)
@@ -63,6 +67,8 @@ extern "C" const char* __tsan_default_options()
 }
 #endif
 
+CRD_DEFINE_LOG_CHANNEL(g_log_crash_specimen, "CrashSpecimen", crd::log::LogLevel::Trace)
+
 namespace
 {
 // A wild write through a null pointer -> an access violation. The pointee is volatile so the store is not optimized
@@ -74,6 +80,22 @@ void null_write() noexcept
     volatile int* volatile p = nullptr;
     *p = 42;
 }
+
+// `logger_lock`'s sink: it faults inside the logger's delivery, holding the stdio stream lock too.
+class FaultingSink final : public crd::log::ISink
+{
+public:
+    void write(const crd::log::LogRecord& /*rec*/) override
+    {
+#if defined(_WIN32)
+        _lock_file(stderr);
+#elif defined(__linux__)
+        flockfile(stderr);
+#endif
+        null_write();
+    }
+    void flush() override {}
+};
 
 // A job body that faults inside a fiber (whichever worker runs it).
 void fiber_fault_job(void* /*data*/) noexcept
@@ -345,12 +367,9 @@ int main(int argc, char** argv)
     }
     else if (std::strcmp(mode, "logger_lock") == 0)
     {
-#if defined(_WIN32)
-        _lock_file(stderr); // hold the CRT stderr stream lock, then fault: a handler that fprintf's stderr would hang
-#elif defined(__linux__)
-        flockfile(stderr); // hold the stdio stream lock, then fault: a handler using stdio (not write(2)) would hang
-#endif
-        null_write();
+        // The logger is not initialized, so the record is delivered synchronously under its sink mutex.
+        crd::log::add_sink(std::make_unique<FaultingSink>());
+        CRD_LOG_CRITICAL(g_log_crash_specimen, "fault inside the sink"); // never compiled out
     }
     else if (std::strcmp(mode, "chain") == 0)
     {

@@ -107,9 +107,10 @@ target_link_libraries(crd-diag-queue-full-specimen PRIVATE crd-jobs)
 # The DIAG.5a crash-capture acceptance specimen: installs the real crd crash handler and faults in one of several
 # modes (av / concurrent / fastfail / denied / logger_lock / stack-overflow x3 / fiber / injected-failure) so the
 # harness can verify termination, the retained fault reason and the on-disk dump outcome from outside the process.
-# Links crd-core (the crash API), crd-jobs (the fiber mode drives a real fiber) and Threads (concurrent/overflow modes).
+# Links crd-core (the crash API), crd-jobs (the fiber mode drives a real fiber), crd-log (logger_lock faults inside a
+# log sink) and Threads (concurrent/overflow modes).
 crd_diag_specimen(crd-diag-crash-capture-specimen SOURCES specimens/crash_capture_specimen.cpp)
-target_link_libraries(crd-diag-crash-capture-specimen PRIVATE crd-core crd-jobs Threads::Threads)
+target_link_libraries(crd-diag-crash-capture-specimen PRIVATE crd-core crd-jobs crd-log Threads::Threads)
 
 # The DIAG.9b fatal-path flight-recorder specimen: records events, then enters a real fatal path (a failed
 # CRD_DIAG_INVARIANT, or a headless assertion) with the flight triggers installed; the trigger's sink writes the

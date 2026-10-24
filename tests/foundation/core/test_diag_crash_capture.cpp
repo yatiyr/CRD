@@ -266,12 +266,12 @@ TEST_CASE("crash capture: a fatal assert with no handler under headless terminat
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("crash capture: a fault while the faulter holds the stderr lock still dumps (lock-free fatal output)",
+TEST_CASE("crash capture: a fault inside a log sink, holding the log and stderr locks, still dumps",
           "[core][diag][crash-capture]")
 {
-    // The regression guard for the lock-free stderr fix: the faulting thread holds the CRT stderr stream lock, so a
-    // handler that printed via fprintf(stderr) would block until the 30s HandlerTimeout (harness -> Timeout). With
-    // WriteFile on the fatal path the dump completes normally.
+    // The specimen faults inside a crd::log sink's write, holding the logger's sink mutex and the CRT stderr stream
+    // lock, so a handler that logged or printed via fprintf(stderr) would block until the 30s HandlerTimeout
+    // (harness -> Timeout). The dump is written with WriteFile and no lock, so it completes normally.
     const fs::path    dir = fresh_dir("logger_lock");
     const cd::Outcome o   = run_mode("logger_lock", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
@@ -829,13 +829,12 @@ TEST_CASE("crash capture (linux): SIGKILL writes no record and retains a prior o
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("crash capture (linux): a fault holding the stdio lock still records (write(2)-only handler)",
+TEST_CASE("crash capture (linux): a fault inside a log sink, holding the log and stdio locks, still records",
           "[core][diag][crash-capture]")
 {
-    // logger/allocator lock ownership: the specimen holds the stdio stream lock (flockfile) then faults. The handler
-    // records with write(2) only (no fprintf/fputs -- grep-confirmed in crash.cpp's Linux block), so the held lock
-    // cannot deadlock it. (On Linux flockfile is also recursive and the handler runs on the faulting thread, so a
-    // same-thread stdio call would not self-deadlock anyway; the real guarantee is the write(2)-only handler.)
+    // Logger lock ownership: the specimen faults inside a crd::log sink's write, holding the logger's sink mutex and
+    // the stdio stream lock (flockfile). The handler runs on the faulting thread and records with write(2) only, so
+    // neither held lock can deadlock it; a handler that logged would block on the non-recursive sink mutex.
     const fs::path    dir = fresh_dir("logger_lock");
     const cd::Outcome o   = run_mode("logger_lock", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
