@@ -196,7 +196,7 @@
    "enum": "DiagModeState", "header": "engine/foundation/perf/include/crd/perf/diagnostic_host.hpp"},
   {"name": "flight recorder window", "kind": "state-transition", "row": "DIAG.9b",
    "states": ["kStateArmed", "kStateTriggered", "kStateComplete", "kStateFatalEntered"],
-   "site": "\\bstate\\.(store|exchange|compare_exchange_\\w+)\\(",
+   "site": "\\bmake_word\\(|\\bword\\.fetch_or\\(",
    "files": ["engine/foundation/perf/src/flight_recorder.cpp"]}
  ],
  "exclusions": [

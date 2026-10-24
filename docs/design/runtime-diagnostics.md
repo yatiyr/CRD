@@ -2115,10 +2115,10 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-coverage-and-fail
   corpus replays and the schedcheck program CTest does not register), requires every selected test to pass in the
   JUnit, merges profiles with `--failure-mode=any` and exports exactly the scope files from every program, specimen
   and ceridc.
-- Error-path coverage is defined per outcome: every value of 32 registered result/status enums must be produced at
+- Error-path coverage is defined per outcome: every value of each registered result/status enum must be produced at
   a site whose innermost coverage region ran (a producing site is `Enum::Value` that is not a `case` label or an
   operand of `==`/`!=`). State-transition coverage is per transition site (the flight recorder's window machine:
-  every `state.store`/`exchange`/`compare_exchange` naming a state), not per edge pair. Region, branch, function and
+  every `make_word` or `word.fetch_or` of the recording word naming a state), not per edge pair. Region, branch, function and
   line totals are reported per file and group and are never a threshold.
 - Gaps are owned evidence, never silently missing: each unrun value or site needs an exclusion with a class and a
   reason, and an exclusion that matches nothing, now runs, or contradicts its class is stale. A child that dies

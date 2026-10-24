@@ -122,6 +122,18 @@
    "explanation": "Inside Mesa lavapipe's LLVM JIT, which is not built with TSan, so its own hand-offs are invisible; no Cerid frame is in either access stack and nothing in Cerid links LLVM. race:libLLVM.so is now in tests/support/diag/tsan-suppressions.txt under the file's third-party rule.",
    "session": "2026-10-12-complete-run-38209499793-repairs.md",
    "rows": ["DIAG.1b"]
+  },
+  {
+   "id": "win-debug-compile-commands-guard-python-segfault",
+   "first_seen": "2026-10-24",
+   "lane": "win-debug on this host (Windows 11, CPython 3.14), ctest -j 8 over the 15 handover guards",
+   "target": "crd-check-compile-commands",
+   "signature": "CTest reported SEGFAULT for C:\\Python314\\python.exe scripts/check-compile-commands.py build/win-debug/compile_commands.json; its output was overwritten by the rerun",
+   "reruns": "Passed alone at once (0.57 s) and in three more runs of the same 15-guard set with -j 8.",
+   "status": "nonreproduced",
+   "explanation": "The script is pure Python (json, re, shlex, pathlib) reading a 3.2 MB file; no Cerid binary ran in that process, so the crash is in the interpreter or this host, not Cerid code.",
+   "session": "2026-10-24-diag-11b-coverage-registry-recording-word.md",
+   "rows": ["DIAG.11b"]
   }
  ]
 }
