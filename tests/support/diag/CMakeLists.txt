@@ -118,8 +118,9 @@ crd_diag_specimen(crd-diag-flight-fatal-specimen SOURCES specimens/flight_fatal_
 target_link_libraries(crd-diag-flight-fatal-specimen PRIVATE crd-perf)
 
 # The DIAG.11a diagnostic-host specimen: a small application that starts the engine's DiagnosticHost from an authored
-# profile, records its work and fails on purpose (a fatal invariant or a headless assertion); the profile's capture
-# directory gets the flight bundle. crd-perf-tests runs it once per mode and reads the bundle.
+# profile, records its work and fails on purpose (a fatal invariant, a headless assertion, a write after free, a wait
+# cycle or a job race); the profile's capture directory gets the flight bundle. crd-perf-tests runs each mode faulty
+# and repaired (DIAG.12) and reads the bundle.
 crd_diag_specimen(crd-diag-host-specimen SOURCES specimens/diag_host_specimen.cpp)
 target_link_libraries(crd-diag-host-specimen PRIVATE crd-perf)
 

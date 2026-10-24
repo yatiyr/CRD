@@ -2955,6 +2955,14 @@ Acceptance: all claimed detection classes pass both faulty and valid controls; a
 is tied to the published code; documentation/recipes/bench/indexes are current; every residual capability limitation
 has an explicit owner. DIAG closes only after every child, never because code builds or a dashboard looks complete.
 
+Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.md)):
+- The same application is `crd-diag-host-specimen` (DIAG.11a), run as a bounded child per mode, `<mode> [repaired]`:
+  `invariant` and `assert`, `use-after-free` (the `DiagnosticAllocator` quarantine; the event before the fatal
+  invariant carries the allocation and free PCs, which the bundle's module list places in the application), `wait`
+  (a wait cycle the host's watchdog window reports as a `Hang` bundle) and `race`. Each faulty run is caught by the
+  engine's own detector on every lane, except the race: only ThreadSanitizer catches it, and elsewhere it is
+  InstrumentAbsent, judged against the lane's promise. Every repaired run exits 0 with no bundle and no dump.
+
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
 

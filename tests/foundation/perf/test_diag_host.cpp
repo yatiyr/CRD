@@ -20,6 +20,10 @@
 // directory without changing anything; the crash handler is installed into the profile's directory; and an
 // application that fails on purpose in a child process leaves an attributable bundle from its authored profile.
 //
+// Covered (DIAG.12): the same application, faulty then repaired: a write after free names its allocation and free
+// sites in the application's module, a wait cycle is a hang bundle, a job race is caught where ThreadSanitizer runs
+// (InstrumentAbsent elsewhere), and each repaired run exits clean with no bundle and no dump.
+//
 // A shipping build compiles the fault seams out: there fault injection is Unavailable, fault.* is not served and the
 // cases check that instead. ASCII test names.
 
@@ -1271,55 +1275,114 @@ TEST_CASE("diagnostic host: the crash handler is installed into the profile's di
     CHECK_FALSE(host.started());
 }
 
-TEST_CASE("diagnostic host: an application that fails on purpose leaves an attributable bundle from its profile",
-          "[perf][diag][diag11a][diag-host][diag-workflow]")
+namespace
 {
-    namespace cd = crd::diag;
+namespace cd = crd::diag;
+
+// Run the application (crd-diag-host-specimen) in `mode`, faulty or repaired, as a bounded child under its authored
+// profile: the crash handler on into <scratch>/crashes, the default flight policy, bundles written to
+// <scratch>/captures.
+cd::Outcome run_app(const Scratch& scratch, const char* mode, bool repaired,
+                    cd::Expectation::Want want = cd::Expectation::Want::CleanExit)
+{
+    const cont::String captures = scratch.file("captures");
+    REQUIRE(fs::create_directories(fs::Path{cont::StringView{captures.data(), captures.size()}}));
+    DiagnosticHostProfile profile;
+    profile.crash_dir   = scratch.file("crashes");
+    profile.capture_dir = captures;
+    cont::String text;
+    cp::diagnostic_host_profile_to_asset(profile, text);
+    const cont::String profile_path = scratch.file("app.host.toml");
+    write_text(profile_path, text.c_str());
+
+    cd::Expectation e;
+    e.want              = want; // CleanExit: the bundle and the exit code are the oracle
+    e.expected_identity = "crd-diag-host-specimen";
+    e.timeout_ms        = 30000U;
+    cont::Array<cont::String> args;
+    args.push_back(cont::String{profile_path.c_str()});
+    args.push_back(cont::String{mode});
+    if (repaired)
+    {
+        args.push_back(cont::String{"repaired"});
+    }
+    cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_HOST_SPECIMEN}, args, e);
+    // The host started from the profile before the work, the crash handler with it.
+    CHECK(contains(o.output, "CRD_HOST_STARTED crash=active flight=active faults=off"));
+    CHECK(fs::is_directory(scratch.path / "crashes"));
+    return o;
+}
+
+// The fatal path ended the run: abort() on Windows, SIGABRT on Linux; an ASan build ends it its own way.
+void check_fatal_end(const cd::Outcome& o)
+{
+    CHECK(o.verdict != cd::Verdict::MissingExecutable);
+    CHECK(o.verdict != cd::Verdict::MismatchedBinary);
+    CHECK_FALSE(o.timed_out);
+    CHECK((o.crashed || o.exit_code != 0)); // exit 0 means the fatal path returned
+    if (!built_with_asan())
+    {
+#if defined(_WIN32)
+        CHECK(o.exit_code == 3); // abort()
+#else
+        CHECK(o.crashed); // SIGABRT
+#endif
+    }
+}
+
+// DIAG.12: the repaired application does the same work and runs clean: exit 0, no bundle, no dump.
+cd::Outcome check_repaired_run(const char* mode)
+{
+    char name[64];
+    (void)std::snprintf(name, sizeof(name), "crd-diag-host-app-%s-repaired", mode);
+    const Scratch     scratch(name);
+    const cd::Outcome o = run_app(scratch, mode, true);
+    INFO("repaired mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " reason=" << o.reason.c_str()
+                          << " output=" << o.output.c_str());
+    CHECK(o.verdict == cd::Verdict::Clean);
+    CHECK(contains(o.output, "CRD_HOST_CLEAN bundles=0"));
+    CHECK(count_bundles(scratch.path / "captures") == 0U);
+    cont::Array<fs::Path> dumps;
+    fs::list_directory(scratch.path / "crashes", dumps);
+    CHECK(dumps.empty());
+    return o;
+}
+
+// Read the application's bundle: this build's identity and the application's module, which is returned.
+const cp::ModuleIdentity* read_app_bundle(const Scratch& scratch, BundleRead& bundle)
+{
+    bundle = read_flight_bundle(scratch.file("captures/flight-0.cdb"));
+    REQUIRE(bundle.import.status == cp::ImportStatus::Ok);
+    REQUIRE(bundle.has_flight);
+    REQUIRE(bundle.flight.ok);
+    REQUIRE(bundle.import.has_build);
+    cont::String differing;
+    CHECK(cp::same_build_identity(bundle.import.build, cp::current_build_identity(), differing));
+    REQUIRE(bundle.import.has_symbols);
+    return find_module(bundle.import.symbols, base_name(CRD_DIAG_HOST_SPECIMEN));
+}
+
+bool in_module(u64 pc, const cp::ModuleIdentity& m)
+{
+    return pc >= m.base && pc < m.base + m.size;
+}
+} // namespace
+
+TEST_CASE("diagnostic host: an application that fails on purpose leaves an attributable bundle from its profile",
+          "[perf][diag][diag11a][diag12][diag-host][diag-workflow]")
+{
     for (const char* mode : {"invariant", "assert"})
     {
         char name[64];
         (void)std::snprintf(name, sizeof(name), "crd-diag-host-app-%s", mode);
-        const Scratch      scratch(name);
-        const cont::String captures = scratch.file("captures");
-        REQUIRE(fs::create_directories(fs::Path{cont::StringView{captures.data(), captures.size()}}));
-        const cont::String crashes = scratch.file("crashes");
-
-        // The application's profile, authored as a file: the crash handler on, the default policy, captures written.
-        DiagnosticHostProfile profile;
-        profile.crash_dir   = crashes;
-        profile.capture_dir = captures;
-        cont::String text;
-        cp::diagnostic_host_profile_to_asset(profile, text);
-        const cont::String profile_path = scratch.file("app.host.toml");
-        write_text(profile_path, text.c_str());
-
-        cd::Expectation e;
-        e.want              = cd::Expectation::Want::CleanExit; // the bundle and the exit code are the oracle here
-        e.expected_identity = "crd-diag-host-specimen";
-        e.timeout_ms        = 30000U;
-        cont::Array<cont::String> args;
-        args.push_back(cont::String{profile_path.c_str()});
-        args.push_back(cont::String{mode});
-        const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_HOST_SPECIMEN}, args, e);
+        const Scratch     scratch(name);
+        const cd::Outcome o = run_app(scratch, mode, false);
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " reason=" << o.reason.c_str());
-        CHECK(o.verdict != cd::Verdict::MissingExecutable);
-        CHECK(o.verdict != cd::Verdict::MismatchedBinary);
-        CHECK_FALSE(o.timed_out);
-        CHECK((o.crashed || o.exit_code != 0)); // the fatal path ended it; exit 0 means it returned
-        if (!built_with_asan())
-        {
-#if defined(_WIN32)
-            CHECK(o.exit_code == 3); // abort()
-#else
-            CHECK(o.crashed); // SIGABRT
-#endif
-        }
-        // The host started from the profile before the failure, the crash handler with it.
-        CHECK(contains(o.output, "CRD_HOST_STARTED crash=active flight=active faults=off"));
-        CHECK(fs::is_directory(fs::Path{cont::StringView{crashes.data(), crashes.size()}}));
+        check_fatal_end(o);
 
         // The bundle names what failed, the events before it, the replay recipe, this build and the executable.
+        const cont::String captures    = scratch.file("captures");
         const cont::String bundle_path = scratch.file("captures/flight-0.cdb");
         const BundleRead   bundle      = read_flight_bundle(bundle_path);
         REQUIRE(bundle.import.status == cp::ImportStatus::Ok);
@@ -1344,7 +1407,7 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         CHECK(c.events[39].message_view() == "order 39");
         CHECK(c.replay_available);
         CHECK(cont::StringView{c.replay.c_str(), c.replay.size()} ==
-              "crd-diag-host-specimen <profile> invariant|assert");
+              "crd-diag-host-specimen <profile> <mode> [repaired]");
         REQUIRE(bundle.import.has_build);
         cont::String differing;
         CHECK(cp::same_build_identity(bundle.import.build, cp::current_build_identity(), differing));
@@ -1397,5 +1460,85 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         CHECK(contains(inspected.json, R"({"kind":"event","index":39,"side":"before",)"));
         CHECK(contains(inspected.json, R"("message":"order 39","message_truncated":false})"));
         CHECK_FALSE(contains(inspected.json, R"("side":"after")"));
+
+        // DIAG.12: with the refund fixed the same application runs clean.
+        (void)check_repaired_run(mode);
     }
+}
+
+TEST_CASE("diagnostic host: the application's write after free names both sites, and the repaired one runs clean",
+          "[perf][diag][diag12][diag-host]")
+{
+    const Scratch     scratch("crd-diag-host-app-use-after-free");
+    const cd::Outcome o = run_app(scratch, "use-after-free", false);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str());
+    check_fatal_end(o);
+
+    BundleRead                      bundle;
+    const cp::ModuleIdentity* const app = read_app_bundle(scratch, bundle);
+    REQUIRE(app != nullptr);
+    const cp::FlightCapture& c = bundle.flight.capture;
+    CHECK(c.trigger.kind == cp::FlightTrigger::FatalInvariant);
+    CHECK(c.trigger.code == 0x0712U);
+    CHECK(c.trigger.message_view() == "a released order was written after free");
+    CHECK(ends_with(c.trigger.file_view(), "diag_host_specimen.cpp")); // the invariant's own source line
+    CHECK(c.trigger.line > 0U);
+    REQUIRE(c.events.size() == 41U);
+    // The quarantine's report, the last event before the trigger: the allocation and the free site are program counters
+    // in the application's module, which the bundle's symbol identity resolves offline.
+    const cp::FlightEvent& stale = c.events[40];
+    CHECK(stale.code == 0x0043U);
+    CHECK(stale.message_view() == "an order was written after free at byte 0");
+    CHECK(in_module(stale.value_a, *app));
+    CHECK(in_module(stale.value_b, *app));
+    CHECK(stale.value_a != stale.value_b);
+
+    (void)check_repaired_run("use-after-free");
+}
+
+TEST_CASE("diagnostic host: the application's wait cycle leaves a hang bundle, and the repaired one runs clean",
+          "[perf][diag][diag12][diag-host]")
+{
+    const Scratch     scratch("crd-diag-host-app-wait");
+    const cd::Outcome o = run_app(scratch, "wait", false);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str()
+                    << " output=" << o.output.c_str());
+    CHECK_FALSE(o.timed_out);
+    CHECK(o.exit_code == 5); // the hang bundle was written while the two jobs stayed parked
+    CHECK(contains(o.output, "CRD_HOST_HANG bundles=1"));
+
+    BundleRead bundle;
+    REQUIRE(read_app_bundle(scratch, bundle) != nullptr);
+    const cp::FlightCapture& c = bundle.flight.capture;
+    CHECK(c.trigger.kind == cp::FlightTrigger::Hang);
+    CHECK(c.trigger.value_a == static_cast<u64>(crd::jobs::HangKind::WaitCycle));
+    CHECK(c.trigger.value_b == 2U); // the two counters nothing can decrement
+    REQUIRE(c.events.size() >= 40U);
+    CHECK(c.events[0].message_view() == "order 0");
+    CHECK(c.events[39].message_view() == "order 39");
+
+    (void)check_repaired_run("wait");
+}
+
+TEST_CASE("diagnostic host: ThreadSanitizer catches the application's job race, and the repaired one runs clean",
+          "[perf][diag][diag12][diag-host]")
+{
+    const Scratch     scratch("crd-diag-host-app-race");
+    const cd::Outcome o = run_app(scratch, "race", false, cd::Expectation::Want::SanitizerCatch);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str());
+    // Only ThreadSanitizer catches a race; which verdict is right is the lane's promise, never the child's own tag.
+    if (cd::lane_promise().tsan)
+    {
+        CHECK(cont::StringView{o.sanitizer} == cont::StringView{"tsan"});
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught);
+        CHECK(contains(o.output, "ThreadSanitizer: data race"));
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent);
+    }
+
+    const cd::Outcome repaired = check_repaired_run("race");
+    CHECK(contains(repaired.output, "CRD_HOST_TALLY 400000"));
 }
