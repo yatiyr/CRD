@@ -169,6 +169,12 @@ decides. The `jobs` workload runs a pool no larger than the physical cores its a
 thread included, on eight cores, one logical processor each): an eight-thread pool on sixteen logical processors
 spread one process's frame from another's by 7.6%, wider than either budget.
 
+Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-instruction-counts.md)): the disabled budget
+is also judged on the instructions executed per frame (`diag-overhead.py instructions`, Valgrind's cachegrind), which
+do not depend on the binaries' layout; the simulated cache misses are reported. Linux measures it against a scratch
+configuration of `linux-gcc-shipping` with profiling on; Windows, with no unprivileged counter on the reference host,
+keeps the exact count times cost until DIAG.11c qualifies an instruction count.
+
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 
 The contract's "symptom→command→artifact→next discriminating test and human-only publication" is

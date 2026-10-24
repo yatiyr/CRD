@@ -27,6 +27,13 @@ Verdicts against ADR-0133 ID-5 (docs/design/runtime-diagnostics.md, modes and bu
 A process that fails, prints no record or computes a wrong answer makes its arm an instrument failure: the board
 says so and no verdict uses it.
 
+`instructions` judges the disabled budget without the two-binary layout floor: it runs the off mode of both binaries
+under Valgrind's cachegrind, each at two frame counts, and takes the difference per frame, so setup cancels. The
+instructions executed do not depend on where the linker placed the code, and they are judged; the simulated cache's
+misses, which do, are reported. Every count is repeated; the interval spans every pairing of the repeats, so a count
+that moves between runs widens it. The jobs pool runs one thread by default: waiting workers make counts follow the
+scheduler.
+
 `render` turns boards into the markdown of docs/bench. Contract: docs/design/runtime-diagnostics.md (DIAG.11b).
 """
 from pathlib import Path
@@ -41,7 +48,10 @@ import subprocess
 import sys
 
 SCHEMA = 'cerid-diag-overhead-board/1'
+COUNT_SCHEMA = 'cerid-diag-overhead-instructions/1'
 RECORD_SCHEMA = 'cerid-diag-overhead/1'
+# cachegrind's events, summed into what a board shows: instructions (judged), first-level and last-level misses.
+COUNTED = {'instructions': ('Ir',), 'L1 misses': ('I1mr', 'D1mr', 'D1mw'), 'LL misses': ('ILmr', 'DLmr', 'DLmw')}
 WORKLOADS = ('alloc', 'jobs', 'offline', 'events')
 SITE_WORKLOADS = ('events',) # site microbenchmarks: their cost per site is reported, no budget judges them
 MODES = ('off', 'basic', 'full')
@@ -235,6 +245,87 @@ def judge(arms, budgeted=True):
     return result
 
 
+def board_head(schema, args, binaries, parameters):
+    """A board's identity: when, where and what it measured; its workloads follow."""
+    return {'schema': schema, 'label': args.label,
+            'measured_at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
+            'host': {'system': platform.system(), 'release': platform.release(), 'machine': platform.machine(),
+                     'processor': platform.processor(), 'cpus': os.cpu_count(), 'python': platform.python_version()},
+            'binaries': {name: file_identity(exe) for name, exe in binaries.items()}, 'parameters': parameters,
+            'workloads': {}}
+
+
+def parse_cachegrind(text):
+    """A cachegrind output file's totals by event."""
+    names = totals = None
+    for line in text.splitlines():
+        if line.startswith('events:'):
+            names = line.split()[1:]
+        elif line.startswith('summary:'):
+            totals = [int(value) for value in line.split()[1:]]
+    if not names or totals is None or len(names) != len(totals):
+        raise OverheadError('not a cachegrind summary')
+    return {name: sum(dict(zip(names, totals)).get(event, 0) for event in events)
+            for name, events in COUNTED.items()}
+
+
+def per_frame(short_runs, long_runs, frames):
+    """(least, most) per frame of a total counted at two frame counts `frames` apart, over every pairing of the
+    repeats; (None, None) without a run of each."""
+    deltas = [(long - short) / float(frames) for long in long_runs for short in short_runs]
+    return (min(deltas), max(deltas)) if deltas else (None, None)
+
+
+def count(args, runner=run_process):
+    """The instruction board: each arm's events per frame under cachegrind, and the disabled budget judged on the
+    instructions (the misses are reported)."""
+    arms = [('compiled-out', args.baseline_exe), ('off', args.exe)]
+    short, long = args.frames
+    scratch = Path(args.scratch).resolve()
+    board = board_head(COUNT_SCHEMA, args, dict(arms),
+                       {'frames': [short, long], 'warmup': args.warmup, 'threads': args.threads,
+                        'repeats': args.repeats, 'tool': [args.valgrind, '--tool=cachegrind', '--cache-sim=yes']})
+    for workload in args.workloads:
+        totals = {name: {short: [], long: []} for name, _ in arms}
+        failures = []
+        for repeat in range(args.repeats):
+            for name, exe in arm_order(arms, repeat):
+                for frames in (short, long):
+                    directory = scratch / ('%s-%s-%d-%d' % (workload, name, frames, repeat))
+                    directory.mkdir(parents=True, exist_ok=True)
+                    output = directory / 'cachegrind.out'
+                    command = [args.valgrind, '--tool=cachegrind', '--cache-sim=yes',
+                               '--cachegrind-out-file=' + str(output), str(exe), '--workload', workload, '--mode',
+                               'off', '--iterations', str(frames), '--warmup', str(args.warmup), '--captures', '0',
+                               '--threads', str(args.threads), '--scratch', str(directory)]
+                    code, stdout, stderr = runner(command, args.timeout)
+                    problem = ('exit %s: %s' % (code, stderr.strip()[-300:])) if code != 0 else record_problem(
+                        parse_record(stdout), frames + args.warmup)
+                    if not problem:
+                        try:
+                            totals[name][frames].append(parse_cachegrind(output.read_text(encoding='utf-8')))
+                        except (OSError, OverheadError) as error:
+                            problem = str(error)
+                    if problem:
+                        failures.append({'arm': name, 'repetition': repeat, 'problem': problem})
+                    if args.progress:
+                        print('%s %s %d frames #%d: %s' % (workload, name, frames, repeat, problem or 'ok'),
+                              file=sys.stderr, flush=True)
+        rates = {name: {event: per_frame([t[event] for t in totals[name][short]],
+                                         [t[event] for t in totals[name][long]], long - short)
+                        for event in COUNTED} for name, _ in arms}
+        costs = {}
+        if not failures:
+            for event in COUNTED:
+                (off_least, off_most), (out_least, out_most) = rates['off'][event], rates['compiled-out'][event]
+                costs[event] = ({'low': off_least / out_most - 1.0, 'high': off_most / out_least - 1.0}
+                                if out_least > 0 else {'low': None, 'high': None})
+            _, _, budget = BUDGETS['disabled']
+            costs['verdict'] = verdict(costs['instructions']['low'], costs['instructions']['high'], budget)
+        board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'failures': failures}
+    return board
+
+
 def measure(args, runner=run_process):
     arms = [('off', args.exe, 'off'), ('basic', args.exe, 'basic'), ('full', args.exe, 'full')]
     if args.baseline_exe:
@@ -244,15 +335,10 @@ def measure(args, runner=run_process):
         raise OverheadError('no arm selected')
     scratch = Path(args.scratch).resolve()
     frames = args.iterations + args.warmup
-    board = {'schema': SCHEMA, 'label': args.label,
-             'measured_at': datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),
-             'host': {'system': platform.system(), 'release': platform.release(), 'machine': platform.machine(),
-                      'processor': platform.processor(), 'cpus': os.cpu_count(), 'python': platform.python_version()},
-             'binaries': {name: file_identity(exe) for name, exe, _ in arms},
-             'parameters': {'processes': args.processes, 'iterations': args.iterations, 'warmup': args.warmup,
-                            'captures': args.captures, 'threads': args.threads, 'affinity': args.affinity,
-                            'bootstrap': BOOTSTRAP, 'seed': SEED},
-             'workloads': {}}
+    board = board_head(SCHEMA, args, {name: exe for name, exe, _ in arms},
+                       {'processes': args.processes, 'iterations': args.iterations, 'warmup': args.warmup,
+                        'captures': args.captures, 'threads': args.threads, 'affinity': args.affinity,
+                        'bootstrap': BOOTSTRAP, 'seed': SEED})
     for workload in args.workloads:
         runs = {name: [] for name, _, _ in arms}
         failures = []
@@ -353,6 +439,37 @@ def render(boards):
     return '\n'.join(lines)
 
 
+def render_counts(board):
+    def rate(least, most):
+        return 'n/a' if least is None else ('%.0f' % least if least == most else '%.0f .. %.0f' % (least, most))
+
+    def cost(entry):
+        return 'n/a' if not entry or entry['low'] is None else (
+            percent(entry['low']) if entry['low'] == entry['high'] else '%s .. %s' % (percent(entry['low']),
+                                                                                     percent(entry['high'])))
+
+    parameters = board['parameters']
+    lines = ['### %s' % board['label'], '',
+             'cachegrind with a simulated cache; per frame = the difference of runs of %d and %d timed frames after %d '
+             'warmup, %d repeats each; %d jobs thread(s).' % (parameters['frames'][0], parameters['frames'][1],
+                                                            parameters['warmup'], parameters['repeats'],
+                                                            parameters['threads']), '',
+             '| Workload | Arm | %s | Verdict |' % ' | '.join('%s per frame' % event for event in COUNTED),
+             '|---|---|%s---|' % ('---:|' * len(COUNTED))]
+    for workload, entry in board['workloads'].items():
+        for arm, rates in entry['per_frame'].items():
+            lines.append('| %s | %s | %s | |' % (workload, arm, ' | '.join(rate(*rates[e]) for e in COUNTED)))
+        disabled = entry['disabled']
+        if disabled:
+            lines.append('| %s | off vs compiled-out | %s | %s (1%%) |' % (
+                workload, ' | '.join(cost(disabled[e]) for e in COUNTED), disabled['verdict']))
+        for failure in entry['failures']:
+            lines.append('| %s | %s | instrument failure #%d: %s |%s |' % (
+                workload, failure['arm'], failure['repetition'], failure['problem'].replace('|', '/'),
+                ' |' * (len(COUNTED) - 1)))
+    return '\n'.join(lines + [''])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest='command', required=True)
@@ -374,30 +491,49 @@ def main(argv=None):
     run.add_argument('--label', required=True, help='the lane and host the board names')
     run.add_argument('--output', required=True)
     run.add_argument('--progress', action='store_true')
+    counted = commands.add_parser('instructions', help='judge the disabled budget on counts under cachegrind')
+    counted.add_argument('--exe', required=True, help='crd-diag-overhead of the measured build (its off mode)')
+    counted.add_argument('--baseline-exe', required=True, help='crd-diag-overhead built with profiling compiled out')
+    counted.add_argument('--workloads', default='offline,jobs')
+    counted.add_argument('--frames', default='100,300', help='the two timed frame counts, shorter first')
+    counted.add_argument('--warmup', type=int, default=20)
+    counted.add_argument('--threads', type=int, default=1, help='the jobs pool, the main thread included')
+    counted.add_argument('--repeats', type=int, default=2)
+    counted.add_argument('--valgrind', default='valgrind')
+    counted.add_argument('--timeout', type=float, default=1200.0, help='seconds per process')
+    counted.add_argument('--scratch', required=True, help='an ignored directory for the runs and their counts')
+    counted.add_argument('--label', required=True, help='the lane and host the board names')
+    counted.add_argument('--output', required=True)
+    counted.add_argument('--progress', action='store_true')
     show = commands.add_parser('render', help='markdown of one or more boards')
     show.add_argument('boards', nargs='+')
     args = parser.parse_args(argv)
     try:
         if args.command == 'render':
             boards = [json.loads(Path(p).read_text(encoding='utf-8')) for p in args.boards]
-            if any(b.get('schema') != SCHEMA for b in boards):
+            if any(b.get('schema') not in (SCHEMA, COUNT_SCHEMA) for b in boards):
                 raise OverheadError('not an overhead board')
-            print(render(boards))
+            print('\n'.join(render_counts(b) if b['schema'] == COUNT_SCHEMA else render([b]) for b in boards))
             return 0
         args.workloads = [w for w in args.workloads.split(',') if w]
-        args.arms = [a for a in args.arms.split(',') if a]
         unknown = [w for w in args.workloads if w not in WORKLOADS]
-        if unknown or args.processes < 2 or args.iterations < 1:
-            raise OverheadError('bad workloads %s, or fewer than two processes or one frame' % unknown)
+        if args.command == 'instructions':
+            args.frames = [int(f) for f in args.frames.split(',') if f]
+            if unknown or len(args.frames) != 2 or not 0 < args.frames[0] < args.frames[1] or args.repeats < 1:
+                raise OverheadError('bad workloads %s, or not two increasing frame counts, or no repeat' % unknown)
+        else:
+            args.arms = [a for a in args.arms.split(',') if a]
+            if unknown or args.processes < 2 or args.iterations < 1:
+                raise OverheadError('bad workloads %s, or fewer than two processes or one frame' % unknown)
         for name in ('exe', 'baseline_exe'):
             if getattr(args, name):
                 path = Path(getattr(args, name)).resolve()
                 if not path.is_file():
                     raise OverheadError('no such program: %s' % path)
                 setattr(args, name, str(path))
-        board = measure(args)
+        board = count(args) if args.command == 'instructions' else measure(args)
         Path(args.output).write_text(json.dumps(board, indent=1) + '\n', encoding='utf-8')
-        print(render([board]))
+        print(render_counts(board) if args.command == 'instructions' else render([board]))
         failed = any(entry['failures'] for entry in board['workloads'].values())
         return 1 if failed else 0
     except (OverheadError, OSError, ValueError) as error:

@@ -2785,8 +2785,8 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   by 7.6%; with a four-thread pool on eight cores, one logical processor each (2-3%), and 96 to 288 processes per arm,
   basic is within on all three tuples on the frame time and the CPU per frame, once left-out events are counted in
   cache-line stripes (one counter every thread wrote cost linux-gcc-relwithdebinfo's basic about 1.2 points); the
-  disabled arm stays inside the two-binary floor (within on one Windows board, unresolved on the next). Not measured:
-  the Linux disabled arm (no preset differs from a profiling build only in profiling). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
+  disabled arm's timing stays inside the two-binary floor (within on one Windows board, unresolved on the next), and
+  its instructions decide (below). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
   adapter's token mutex and the flight recorder's ring mutex per kept event are gone (2026-10-24); the CEIR bridge's
   per-instruction timing takes no lock, blocks nowhere and allocates nothing, and reads the cycle counter instead of
   the monotonic clock (2026-10-24,
@@ -2828,10 +2828,21 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   disabled mode's allocation-heavy cost fell from +37.7% to +4.7% to +5.0%, still over 1%, and a gate-against-no-gate
   pair attributes the rest to the per-operation gate itself (no gate: +0.12%); the same board shows that comparing two
   separately compiled binaries has a layout floor of several percent (offline -11.0% between builds that do not touch
-  its path), which the remaining disabled-mode verdicts must get under before they can be read. Judged on realistic
+  its path), which the instruction board (below) does not have. Judged on realistic
   frames (2026-10-23, [session](../sessions/2026-10-23-diag-11b-realistic-disabled-cost.md)): an exact count of gate
   executions (1,008 per offline frame, none per jobs frame) times the pair's upper 0.58 ns per gate bounds the gate at
   0.18% of an offline frame, within 1%; the `alloc` microbenchmark stays the reported worst case.
+- The disabled mode on instructions per frame (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-instruction-counts.md)): `diag-overhead.py instructions` runs both
+  binaries' off mode under Valgrind's cachegrind at two frame counts (the difference per frame cancels setup; repeats
+  span the interval), judging the instructions executed, which the linker's layout does not change, and reporting the
+  simulated cache's misses. On linux-gcc-shipping against a scratch configuration of it with profiling on: offline
+  +0.08% and jobs +0.00% (four threads -0.23% .. +0.23%), within 1%, the misses within a percent; alloc +5.55%, the
+  reported worst case. The extra work is the statistics gate (7.8 to 8.5 instructions per execution), so offline's
+  disabled timing residual on Windows (+4.6%; -11.0% to +0.2% across rebuilds) is layout, not work. The same pair's
+  timing boards are within on both workloads, frame time and CPU per frame. Windows has no unprivileged instruction
+  counter here: its disabled verdicts rest on the exact count times cost; an MSVC instruction count is DIAG.11c open
+  qualification.
 - The default allocator's exact sizes (2026-10-19,
   [session](../sessions/2026-10-19-diag-11b-malloc-allocator-bytes.md)): `MallocAllocator` aligns inside one C-library
   `malloc` and keeps a 16-byte header below each block (the request, and the offset to the C-library block with

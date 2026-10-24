@@ -6,7 +6,9 @@ every verdict with fake processes, including the ones a quiet machine never prod
 budget (unresolved, never a pass), a cost over it, a CPU per frame over its budget or noisier than it while the frame
 time is within (the worse verdict decides), a process that exits nonzero, prints no record or CPU time, computes a
 wrong answer or loses a capture (an instrument failure that takes the workload's verdicts with it), and a board
-rendered twice the same way (the bootstrap seed is fixed).
+rendered twice the same way (the bootstrap seed is fixed). The instruction board's fake cachegrind files check that
+setup cancels between the two frame counts, that repeats which disagree widen the interval to unresolved, and that a
+failed run takes the verdict.
 Run: python scripts/test-diag-overhead.py
 """
 import importlib.util
@@ -21,12 +23,13 @@ mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
 
-def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None):
+def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None,
+           warmup=1):
     """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
     False when it was not read."""
     per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
-    return {'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': 1,
-            'iterations': len(samples), 'executed': len(samples) + 1, 'wrong': wrong, 'samples_ns': samples,
+    return {'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': warmup,
+            'iterations': len(samples), 'executed': len(samples) + warmup, 'wrong': wrong, 'samples_ns': samples,
             'cpu': {'read': cpu is not False, 'unit': 'cycles', 'timed': int(per_frame * len(samples))},
             'events': {'sites': 4, 'frames': 2, 'payloads': 0, 'recorded': 0, 'filtered': 6, 'profiler_drops': 0},
             'captures': {'requested': captures, 'delivered': captures if delivered is None else delivered,
@@ -215,6 +218,97 @@ class Boards(unittest.TestCase):
         self.assertIn('within (2%)', text)
         self.assertIn('| 0.10 Mcycles |', text)
         self.assertTrue(all(line.count('|') == 14 for line in text.splitlines() if line.startswith('|')))
+
+
+class FakeCachegrind:
+    """Writes each run's cachegrind file: a setup cost plus a per-frame cost per arm (`frame`, instructions; the
+    misses a hundredth of them in every column), the instructions moved by `wobble` on every second repeat;
+    `special` maps (arm, frames, repeat) to (code, stdout) without a file."""
+    SETUP = 5000000
+
+    def __init__(self, frame, wobble=0, special=None):
+        self.frame = frame
+        self.wobble = wobble
+        self.special = special or {}
+        self.seen = {}
+
+    def __call__(self, command, timeout):
+        exe = command[command.index('--workload') - 1]
+        arm = 'compiled-out' if exe == 'compiled-out' else 'off'
+        frames = int(command[command.index('--iterations') + 1])
+        repeat = self.seen.get((arm, frames), 0)
+        self.seen[(arm, frames)] = repeat + 1
+        if (arm, frames, repeat) in self.special:
+            return self.special[(arm, frames, repeat)]
+        output = Path(next(c for c in command if c.startswith('--cachegrind-out-file=')).split('=', 1)[1])
+        instructions = self.SETUP + self.frame[arm] * frames + (self.wobble if repeat % 2 else 0)
+        misses = ' '.join([str(instructions // 100)] * 8)
+        output.write_text('desc: I1 cache\ncmd: x\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw\nfl=a\n'
+                          'summary: %d %s\n' % (instructions, misses), encoding='utf-8')
+        return 0, json.dumps(record('offline', 'off', [100] * frames, captures=0, warmup=20)) + '\n', ''
+
+
+class CountArgs:
+    def __init__(self, scratch, **kw):
+        self.exe = 'measured'
+        self.baseline_exe = 'compiled-out'
+        self.workloads = ['offline']
+        self.frames = [100, 300]
+        self.warmup = 20
+        self.threads = 1
+        self.repeats = 2
+        self.valgrind = 'valgrind'
+        self.timeout = 5.0
+        self.scratch = scratch
+        self.label = 'test'
+        self.progress = False
+        self.__dict__.update(kw)
+
+
+class Instructions(unittest.TestCase):
+    def count(self, runner, **kw):
+        with tempfile.TemporaryDirectory() as scratch:
+            return mod.count(CountArgs(scratch, **kw), runner=runner)
+
+    def test_a_cachegrind_summary_sums_into_the_counted_events(self):
+        totals = mod.parse_cachegrind('events: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw\nsummary: 10 1 2 3 4 5 6 7 8\n')
+        self.assertEqual(totals, {'instructions': 10, 'L1 misses': 12, 'LL misses': 15})
+        for broken in ('events: Ir I1mr\n', 'events: Ir\nsummary: 1 2\n', ''):
+            with self.assertRaises(mod.OverheadError):
+                mod.parse_cachegrind(broken)
+
+    def test_setup_cancels_and_the_instructions_decide(self):
+        board = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10050000}))
+        entry = board['workloads']['offline']
+        self.assertEqual(entry['per_frame']['off']['instructions'], (10050000.0, 10050000.0))
+        self.assertAlmostEqual(entry['disabled']['instructions']['low'], 0.005, places=9)
+        self.assertEqual(entry['disabled']['verdict'], 'within')
+        over = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10200000}))
+        self.assertEqual(over['workloads']['offline']['disabled']['verdict'], 'over')
+
+    def test_a_count_that_moves_between_repeats_widens_the_interval(self):
+        board = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10090000}, wobble=400000000))
+        disabled = board['workloads']['offline']['disabled']
+        self.assertLess(disabled['instructions']['low'], 0.01)
+        self.assertGreater(disabled['instructions']['high'], 0.01)
+        self.assertEqual(disabled['verdict'], 'unresolved')
+
+    def test_a_failed_run_is_an_instrument_failure_and_takes_the_verdict(self):
+        frame = {'compiled-out': 10000000, 'off': 10000000}
+        for special in ({('off', 300, 1): (3, '', 'valgrind: unhandled instruction')},
+                        {('compiled-out', 100, 0): (0, 'no record', '')}):
+            board = self.count(FakeCachegrind(frame, special=special))
+            entry = board['workloads']['offline']
+            self.assertEqual(len(entry['failures']), 1, special)
+            self.assertEqual(entry['disabled'], {}, special)
+            self.assertIn('instrument failure', mod.render_counts(board))
+
+    def test_render_is_stable_and_names_the_verdict(self):
+        board = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10008000}))
+        text = mod.render_counts(board)
+        self.assertEqual(text, mod.render_counts(json.loads(json.dumps(board))))
+        self.assertIn('| offline | off vs compiled-out | +0.08% | +0.08% | +0.08% | within (1%) |', text)
+        self.assertTrue(all(line.count('|') == 7 for line in text.splitlines() if line.startswith('|')))
 
 
 if __name__ == '__main__':
