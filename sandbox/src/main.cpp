@@ -2159,6 +2159,7 @@ int main(int argc, char** argv)
             post_mode_live = post_mode;
             if (ok)
             {
+                surface->wait_idle(); // frames in flight may still use the canvas this replaces
                 canvas = raster->create_color_depth_target_for(surface->width(), surface->height(),
                                                                scene_renderer.output_clear());
                 if (canvas == nullptr)

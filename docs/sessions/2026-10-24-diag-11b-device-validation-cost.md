@@ -35,7 +35,8 @@ For the D3D12 draws to be validated the raster context needed a request of its o
   created without a clear value warns too, so the creation must know the clear: `FramePlans::output_clear` records the
   first clear a pass applies to `@output` (its colour and its own depth), `SceneRenderer::output_clear()` returns it,
   and `IRasterContext::create_color_depth_target_for(w, h, clear)` creates the target for it (D3D12; other backends
-  ignore it). The harness, the sandbox (also after each frame switch and resize) and the gizmo probe use it. The other
+  ignore it). The harness, the sandbox (also after each frame switch, once its frames in flight are drained, and each
+  resize) and the gizmo probe use it; `forward_basic`, the step-down, clears its output the same way. The other
   standalone targets (colour only, MSAA, VRS, stencil, G-buffer, visibility) keep their fixed or absent clear values:
   follow-up below.
 - **Turning GBV on beside a live D3D12 device failed device creation** (`DXGI_ERROR_DEVICE_RESET`): D3D12 devices are
@@ -68,7 +69,9 @@ Each on its lane, then restored, rebuilt and green:
 ## Verification
 
 win-debug: the 768 CTests of crd-gpu-context-dx12-tests, crd-gpu-context-vulkan-tests, crd-scene-render-tests,
-crd-frame-cook-tests and crd-diag-overhead pass (one pre-existing skip); crd-sandbox and crd-gizmo-probe build.
+crd-frame-cook-tests and crd-diag-overhead pass (one pre-existing skip); crd-gizmo-probe builds; crd-sandbox
+`--diag memory.allocators --smoke-test 3` passes on Vulkan (167 frames) and D3D12 (118), its frame installed and the
+canvas made again for it.
 linux-gcc-debug (mirror): the 521 CTests of crd-gpu-context-vulkan-tests, crd-scene-render-tests,
 crd-frame-cook-tests and crd-diag-overhead pass. win-shipping and linux-gcc-shipping build the harness with no
 warning. The ctest guards, `tidy-files.py` and `clang-format --dry-run` on the changed C++, `check-allman-braces.py`,
@@ -85,4 +88,5 @@ three new legs on the Windows lanes; the frame-cook output-clear case and the Vu
   (8) waits for the user's elevated recording.
 
 Follow-up for an extra batch: the other standalone targets' clear values (colour, MSAA, VRS, stencil, G-buffer and
-visibility targets) against the graphs that clear them.
+visibility targets) against the graphs that clear them; which two uploads of one Vulkan batch overlap (a redundant
+upload as well as the race the barrier now orders).
