@@ -2763,9 +2763,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   bridge). The harness is `tests/support/diag-overhead` (`crd-diag-overhead`, one workload and mode per process, record
   `cerid-diag-overhead/1`); workloads `alloc` (a TLSF heap the host's allocator watch observes), `jobs` (2048 tiny jobs on a
   pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program),
-  `io` (mixed I/O: 50 whole-file, range and `AsyncFile` reads a frame, 1.25 MiB, on a two-thread pool) and `events`
-  (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
-- What holds on every lane: the 15 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
+  `io` (mixed I/O: 50 whole-file, range and `AsyncFile` reads a frame, 1.25 MiB, on a two-thread pool), `render`
+  (the scene renderer draws 4096 instances through the authored `engine://frame/forward_csm` graph on a headless device)
+  and `events` (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
+- What holds on every lane: the 18 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
   written; the lifetime ledger balances.
@@ -2864,7 +2865,14 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   alternate between about 210 and 400 µs in every arm, compiled-out included (Windows is flat). Since the readers
   stopped zeroing the bytes they read into ([session](../sessions/2026-10-24-diag-11b-file-reads-zero-pass.md)) the
   Linux frame is 172 µs, disabled and basic within, full +3.2%.
-- Not settled here: the repairs and the measurement gaps above; the authored rendering workload;
+- Authored rendering (2026-10-24, [session](../sessions/2026-10-24-diag-11b-authored-rendering-workload.md)): `render`
+  is the sandbox's frame path without its window: 4096 instances (1024 behind the camera, 64 moved a frame) through
+  `engine://frame/forward_csm` with its cascades into an offscreen target on a headless device, D3D12 on Windows and
+  Vulkan elsewhere, its heap under the host's allocator watch in basic and full. The first frame must draw and cull
+  exact counts, run its passes on the device and cover the grid's pixels. A workload's process-lifetime caches (the
+  Vulkan backend's shaderc) fill before the ledger's window (`Workload::warm`). Disabled within 1% and basic within 2%
+  on the hardware D3D12 tuple (192 processes) and on llvmpipe (both Linux tuples); full +0.1% to +1.5%, reported.
+- Not settled here: the repairs and the measurement gaps above;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost
   of the modes that are separate binaries or targeted (sanitizers, device validation, the controlled-interleaving

@@ -405,8 +405,8 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
     memory::TlsfAllocator       cook(4U << 20U);
     const resources::ResourceId mesh_id = resources::ResourceId::mint_random();
     const resources::ResourceId mtl_id  = resources::ResourceId::mint_random();
-    crd::tests::write_one_pack(&galloc(), mesh_path, mesh_id, resources::kFourCC_MESH,
-                               crd::tests::build_quad_mesh_crdr(&galloc(), mesh_id), "quad");
+    REQUIRE(crd::tests::write_one_pack(&galloc(), mesh_path, mesh_id, resources::kFourCC_MESH,
+                                       crd::tests::build_quad_mesh_crdr(&galloc(), mesh_id), "quad"));
     resources::PbrmParams params;
     params.base_color[0] = base;
     params.base_color[1] = base;
@@ -414,7 +414,7 @@ void run_tint_noise_hash_arm(gpu::IRasterContext& raster, gpu::IGpuContext& gpu_
     params.base_alpha    = 1.0F;
     resources::PbrmTextures textures; // no texture slots — the surface's base colour comes from params
     auto                    mtl_bytes = resources::pbrm_build(params, textures, mtl_id, &cook);
-    crd::tests::write_one_pack(&galloc(), mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl");
+    REQUIRE(crd::tests::write_one_pack(&galloc(), mtl_path, mtl_id, resources::kFourCC_PBRM, mtl_bytes, "mtl"));
 
     resources::register_mesh_loader(&rm, nullptr);
     resources::register_openpbr_material_loader(&rm);

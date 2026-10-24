@@ -55,6 +55,7 @@ inline constexpr cp::EventCode kCodeJobDone    = 0x00A20002U; // a = job, b = it
 inline constexpr cp::EventCode kCodeProgramRan = 0x00A20003U; // a = iteration, b = the program's result
 inline constexpr cp::EventCode kCodeEvent      = 0x00A20004U; // a = event, b = iteration
 inline constexpr cp::EventCode kCodeRead       = 0x00A20005U; // a = read, b = its bytes
+inline constexpr cp::EventCode kCodeFrame      = 0x00A20006U; // a = instances drawn, b = draws
 
 // What a workload's sites write to. `payloads` counts payload evaluations (a site's message is built only when the
 // recorder admits the event), across every thread the workload runs on.
@@ -71,7 +72,8 @@ struct WorkloadSetup
     Sites*              sites   = nullptr;
     crd::u32            threads = 8U;      // jobs workload: the pool's threads (io runs two)
     const char*         program = nullptr; // offline workload: the authored CEIR program
-    const char*         scratch = nullptr; // io workload: the directory its files are written to (--scratch)
+    const char*         scratch = nullptr; // io and render: the directory their files are written to (--scratch)
+    const char*         assets  = nullptr; // render workload: the engine asset root its authored frame graph is in
 };
 
 class Workload
@@ -85,6 +87,13 @@ public:
     Workload& operator=(Workload&&)      = delete;
 
     [[nodiscard]] virtual const char* name() const noexcept = 0;
+    // Fill the process-lifetime caches the workload's path keeps (the Vulkan backend's shader compiler library),
+    // before the lifetime ledger's window opens: they outlive every mode and are not the run's to release.
+    virtual bool warm(cont::String& reason)
+    {
+        (void)reason;
+        return true;
+    }
     // Prepare everything an iteration needs. False with `reason` when the workload cannot run here.
     virtual bool setup(const WorkloadSetup& setup, cont::String& reason) = 0;
     // One frame of work. Its result signature is compared with expected(); false when the work itself failed.
@@ -111,8 +120,8 @@ public:
     [[nodiscard]] virtual const crd::memory::IAllocator* measured_allocator() const noexcept { return nullptr; }
 };
 
-// The workloads by name ("alloc", "jobs", "offline", "io", "events"); null for an unknown name. The object is static: one
-// workload per process.
+// The workloads by name ("alloc", "jobs", "offline", "io", "render", "events"); null for an unknown name. The object is
+// static: one workload per process.
 [[nodiscard]] Workload* find_workload(const char* name) noexcept;
 
 // Open `path` for binary reading (fopen_s where the CRT deprecates fopen); null when it cannot be opened.

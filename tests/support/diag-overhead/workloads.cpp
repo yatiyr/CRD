@@ -1,4 +1,4 @@
-// crd-diag-overhead -- the five workloads (DIAG.11b). See overhead.hpp for the modes.
+// crd-diag-overhead -- the six workloads (DIAG.11b). See overhead.hpp for the modes.
 //
 // Each is a production path an acceptance workload of ADR-0133 ID-5 names, driven the way an application drives it:
 //
@@ -13,11 +13,17 @@
 //            run go through the profiling bridge (crd/ceir/host/plan_perf.hpp). One site per program run.
 //   io       mixed I/O: per frame 50 reads (whole files, ranges and AsyncFile completions on a two-thread crd-jobs
 //            pool) of files setup() writes into --scratch, every byte hashed. One site per read.
+//   render   authored rendering: the scene renderer draws 4096 instances (a quad mesh setup() packs into --scratch,
+//            1024 of them behind the camera) through the authored engine://frame/forward_csm graph, its shadow
+//            cascades on, into an offscreen target on a headless device (D3D12 on Windows, Vulkan elsewhere), 64
+//            instances moved every frame; the renderer, the world and the resources allocate from one heap, watched
+//            by the host in basic and full. One site per frame.
 //   events   the site itself: 4096 sites per frame on one thread, the per-event cost of each mode.
 //
 // Every workload knows its answer: an iteration that computes anything else fails the run.
 
 #include "overhead.hpp"
+#include "quad_scene_fixture.hpp"
 
 #include <crd/ceir/ceir.hpp>
 #include <crd/ceir/cook/program_cook.hpp>
@@ -27,12 +33,28 @@
 #include <crd/ceir/host/plan_perf.hpp>
 #include <crd/ceir/plan.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/gpu/raster_context.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/math/mat.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/config.hpp>
 #include <crd/platform/async_file.hpp>
 #include <crd/platform/filesystem.hpp>
+#include <crd/resources/resource_manager.hpp>
+#include <crd/scene/render_components.hpp>
+#include <crd/scene/transform.hpp>
+#include <crd/scene/world.hpp>
+#include <crd/scenerender/scene_renderer.hpp>
+
+#if defined(_WIN32)
+#include <crd/gpu/dx12_context.hpp>
+#include <crd/gpu/dx12_raster_context.hpp>
+#else
+#include <crd/gpu/vulkan_context.hpp>
+#include <crd/gpu/vulkan_raster_context.hpp>
+#include <crd/gpu/vulkan_shader_compile.hpp>
+#endif
 
 #if CRD_PERF_ENABLED
 #include <crd/perf/jobs_adapter.hpp>
@@ -40,6 +62,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <optional>
 #include <span>
 
@@ -49,6 +72,7 @@ namespace diag_overhead
 namespace
 {
 
+using crd::f32;
 using crd::u32;
 using crd::u64;
 using crd::usize;
@@ -655,6 +679,261 @@ private:
     u64                      m_expected = 0U;
 };
 
+// ---- render -----------------------------------------------------------------------------------------------------
+
+constexpr u32   kRenderColumns = 64U;    // the visible grid, kRenderColumns x kRenderRows quads on z = 0
+constexpr u32   kRenderRows    = 48U;
+constexpr u32   kRenderBehind  = 1024U;  // instances behind the camera: every frame culls them
+constexpr u32   kRenderMoved   = 64U;    // instances moved every frame (the first grid row)
+constexpr u32   kRenderTarget  = 512U;   // the offscreen target's side, in pixels: a quad is about 6 pixels tall
+constexpr u32   kRenderCovered = 50000U; // pixels unlike the background the first frame must draw (it draws 124,032)
+constexpr usize kRenderHeap    = usize{32} << 20U;
+
+class RenderWorkload final : public Workload
+{
+public:
+    [[nodiscard]] const char* name() const noexcept override { return "render"; }
+
+    bool warm(cont::String& reason) override
+    {
+#if defined(_WIN32)
+        (void)reason; // the D3D12 context owns its compiler and releases it
+#else
+        // The Vulkan backend loads shaderc once and keeps it for the process: one compile loads it.
+        const crd::gpu::ShaderCompileResult compiled = crd::gpu::compile_glsl_to_spirv(
+            crd::gpu::ShaderStage::Compute, cont::StringView{"#version 450\nvoid main() {}\n"},
+            cont::StringView{"diag-overhead-warm"});
+        if (!compiled.ok)
+        {
+            reason.append("shaderc did not compile: ");
+            reason.append(compiled.error_message.c_str());
+            return false;
+        }
+#endif
+        return true;
+    }
+
+    bool setup(const WorkloadSetup& setup, cont::String& reason) override
+    {
+        if (!set_up(setup, reason))
+        {
+            teardown(); // before the host it allocates through stops
+            return false;
+        }
+        return true;
+    }
+
+    bool iterate(u64& signature) override
+    {
+        ++m_frame;
+        const f32 shift = (m_frame & 1U) != 0U ? 0.1F : 0.0F;
+        for (u32 i = 0U; i < kRenderMoved; ++i)
+        {
+            place(m_movers[i], i, shift);
+        }
+        const crd::scenerender::SyncStats   synced = m_renderer->sync(*m_world);
+        const crd::scenerender::RenderStats st     = draw();
+        char                                buffer[kPayloadBytes];
+        CRD_FLIGHT_RECORD(m_sites->recorder, kCodeFrame, cp::Severity::Info,
+                          payload(*m_sites, buffer, kPayloadBytes, "frame drew", st.drawn_instances, st.draws),
+                          st.drawn_instances, st.draws);
+        signature = signature_of(st);
+        return synced.dirty_runs > 0U && st.timed_passes > 0U;
+    }
+
+    void teardown() override
+    {
+        m_renderer.reset();
+        m_target.reset();
+        m_world.reset();
+        m_rm.reset();
+        m_raster.reset();
+        m_gpu.reset();
+        if (!m_pack.empty())
+        {
+            (void)fs::remove_file(m_pack);
+        }
+        m_alloc = nullptr;
+        m_heap.reset();
+    }
+
+    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return 1U; }
+    [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
+
+private:
+    bool set_up(const WorkloadSetup& setup, cont::String& reason)
+    {
+        m_sites = setup.sites;
+        if (setup.scratch == nullptr || setup.assets == nullptr)
+        {
+            reason.append("render needs --scratch (its mesh pack) and the engine asset root");
+            return false;
+        }
+        m_heap.emplace(kRenderHeap, nullptr, "diag-overhead-render");
+        m_alloc = &*m_heap;
+        if (setup.host != nullptr)
+        {
+            m_alloc = setup.host->watch_allocator(&*m_heap, "diag-overhead-render");
+            if (m_alloc == nullptr)
+            {
+                reason.append("the host refused to watch the allocator");
+                return false;
+            }
+        }
+        if (!open_device(reason))
+        {
+            return false;
+        }
+        const crd::resources::ResourceId mesh = crd::resources::ResourceId::mint_random();
+        m_pack = fs::Path(setup.scratch) / cont::StringView{"diag-overhead-render.crdr"};
+        m_rm.emplace(m_alloc);
+        crd::resources::register_mesh_loader(&*m_rm, nullptr);
+        if (!crd::tests::write_one_pack(m_alloc, m_pack, mesh, crd::resources::kFourCC_MESH,
+                                        crd::tests::build_quad_mesh_crdr(m_alloc, mesh), "quad") ||
+            !m_rm->mount_manifest(m_pack.generic()).is_valid())
+        {
+            reason.append("the mesh pack could not be written to --scratch and mounted");
+            return false;
+        }
+        spawn(mesh);
+        m_renderer.emplace(m_alloc);
+        if (!m_renderer->set_asset_root(setup.assets) || !m_renderer->init(*m_raster, *m_rm) ||
+            !m_renderer->init_programs(*m_gpu) || !m_renderer->set_shadows_enabled(true) ||
+            m_renderer->sync(*m_world).total_instances != kRenderColumns * kRenderRows + kRenderBehind ||
+            !m_renderer->set_frame_graph("engine://frame/forward_csm"))
+        {
+            reason.append("the renderer did not install engine://frame/forward_csm from ");
+            reason.append(setup.assets);
+            return false;
+        }
+        m_target = m_raster->create_color_depth_target(kRenderTarget, kRenderTarget);
+        if (m_target == nullptr)
+        {
+            reason.append("the offscreen target could not be created");
+            return false;
+        }
+        // The first frame's counts are every frame's answer: it must draw the whole grid, cull every instance behind
+        // the camera, run its passes on the device and cover the grid's pixels.
+        const crd::scenerender::RenderStats first = draw();
+        const u32                           lit   = covered();
+        if (first.draws == 0U || first.timed_passes == 0U || first.drawn_instances != kRenderColumns * kRenderRows ||
+            first.culled_instances != kRenderBehind || lit < kRenderCovered)
+        {
+            char text[160];
+            (void)std::snprintf(text, sizeof(text),
+                                "the first frame fell short: %u draws, %u device passes, %u drawn, %u culled, %u of %u "
+                                "pixels covered",
+                                first.draws, first.timed_passes, first.drawn_instances, first.culled_instances, lit,
+                                kRenderCovered);
+            reason.append(text);
+            return false;
+        }
+        m_expected = signature_of(first);
+        return true;
+    }
+
+    bool open_device(cont::String& reason)
+    {
+#if defined(_WIN32)
+        m_gpu    = crd::gpu::create_dx12_gpu_context();
+        m_raster = m_gpu != nullptr && m_gpu->valid() ? crd::gpu::create_dx12_raster_context() : nullptr;
+#else
+        crd::gpu::GpuContextConfig config;
+        config.backend  = crd::gpu::GpuBackend::Vulkan;
+        config.headless = true;
+        m_gpu           = crd::gpu::create_vulkan_gpu_context(config);
+        auto* const vk  = m_gpu != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(m_gpu.get()) : nullptr;
+        m_raster        = vk != nullptr && vk->graphics_capable() && vk->shader_object()
+                              ? crd::gpu::create_vulkan_raster_context(*vk)
+                              : nullptr;
+#endif
+        if (m_raster == nullptr)
+        {
+            reason.append("no graphics device: render needs a D3D12 adapter (Windows) or a Vulkan device with shader "
+                          "objects (elsewhere)");
+            return false;
+        }
+        return true;
+    }
+
+    // The grid on z = 0 in front of the camera, then the instances behind it; the first row is kept to move.
+    void spawn(const crd::resources::ResourceId& mesh)
+    {
+        m_world.emplace(m_alloc);
+        m_world->register_component<crd::scene::Transform>(crd::scene::transform_serialize_trait(),
+                                                           crd::scene::SpatialBVH{});
+        crd::scene::register_render_components(*m_world);
+        for (u32 i = 0U; i < kRenderColumns * kRenderRows + kRenderBehind; ++i)
+        {
+            const crd::scene::EntityId e = m_world->spawn();
+            place(e, i, 0.0F);
+            m_world->add_component(e, crd::scene::MeshRenderer{mesh, {}});
+            if (i < kRenderMoved)
+            {
+                m_movers[i] = e;
+            }
+        }
+    }
+
+    void place(crd::scene::EntityId e, u32 i, f32 shift)
+    {
+        const bool behind = i >= kRenderColumns * kRenderRows;
+        const u32  cell   = behind ? i - (kRenderColumns * kRenderRows) : i;
+        const u32  row    = cell / kRenderColumns;
+        const crd::math::Vec3f at{(static_cast<f32>(cell % kRenderColumns) * 0.8F) - 25.6F + shift,
+                                  (static_cast<f32>(row) * 0.8F) - 19.2F, behind ? 70.0F : 0.0F};
+        crd::scene::Transform t;
+        t.translation = crd::math::from_raw_vec<crd::units::dim::Length>(at);
+        t.world       = crd::math::from_trs(at, crd::math::Quatf::identity(), crd::math::Vec3f{0.4F, 0.4F, 1.0F});
+        m_world->add_component(e, t);
+    }
+
+    crd::scenerender::RenderStats draw()
+    {
+        const crd::math::Mat4f view =
+            crd::math::look_at(crd::math::Vec3f{0.0F, 0.0F, 50.0F}, crd::math::Vec3f{0.0F, 0.0F, 0.0F},
+                               crd::math::Vec3f{0.0F, 1.0F, 0.0F});
+        const crd::math::Mat4f proj = crd::math::perspective_reverse_z(1.0472F, 1.0F, 0.1F);
+        return m_renderer->render(*m_target, proj * view, crd::math::Vec3f{0.3F, 1.0F, 0.2F},
+                                  crd::gpu::ClearColor{0.0F, 0.0F, 0.0F, 1.0F}, nullptr);
+    }
+
+    // The pixels unlike the background (the corner, outside the grid).
+    [[nodiscard]] u32 covered() const
+    {
+        const u32 background = m_target->read_pixel(0U, 0U);
+        u32       lit        = 0U;
+        for (u32 y = 0U; y < kRenderTarget; ++y)
+        {
+            for (u32 x = 0U; x < kRenderTarget; ++x)
+            {
+                lit += m_target->read_pixel(x, y) != background ? 1U : 0U;
+            }
+        }
+        return lit;
+    }
+
+    [[nodiscard]] static u64 signature_of(const crd::scenerender::RenderStats& st) noexcept
+    {
+        return static_cast<u64>(st.draws) + (static_cast<u64>(st.timed_passes) << 12U) +
+               (static_cast<u64>(st.drawn_instances) << 20U) + (static_cast<u64>(st.culled_instances) << 42U);
+    }
+
+    Sites*                                            m_sites = nullptr;
+    std::optional<crd::memory::GrowableTlsfAllocator> m_heap;
+    crd::memory::IAllocator*                          m_alloc = nullptr;
+    std::unique_ptr<crd::gpu::IGpuContext>            m_gpu;
+    std::unique_ptr<crd::gpu::IRasterContext>         m_raster;
+    std::unique_ptr<crd::gpu::IRasterTarget>          m_target;
+    std::optional<crd::resources::ResourceManager>    m_rm;
+    std::optional<crd::scene::World>                  m_world;
+    std::optional<crd::scenerender::SceneRenderer>    m_renderer;
+    crd::scene::EntityId                              m_movers[kRenderMoved] = {}; // NOLINT(modernize-avoid-c-arrays)
+    fs::Path                                          m_pack;
+    u32                                               m_frame    = 0U;
+    u64                                               m_expected = 0U;
+};
+
 // ---- events -----------------------------------------------------------------------------------------------------
 
 constexpr u32 kEvents = 4096U;
@@ -700,6 +979,7 @@ AllocWorkload   g_alloc;
 JobsWorkload    g_jobs;
 OfflineWorkload g_offline;
 IoWorkload      g_io;
+RenderWorkload  g_render;
 EventsWorkload  g_events;
 
 } // namespace
@@ -730,7 +1010,8 @@ std::FILE* open_for_reading(const char* path) noexcept
 
 Workload* find_workload(const char* name) noexcept
 {
-    Workload* const all[] = {&g_alloc, &g_jobs, &g_offline, &g_io, &g_events}; // NOLINT(modernize-avoid-c-arrays)
+    Workload* const all[] = {&g_alloc, &g_jobs, &g_offline, &g_io, &g_render, // NOLINT(modernize-avoid-c-arrays)
+                             &g_events};
     for (Workload* w : all)
     {
         const char* a = w->name();

@@ -3,8 +3,9 @@
 // CEIR-31b-4-b-iii — a SHARED geometry-scene fixture: a UV quad mesh cooked through the real resource pipeline + the
 // single-entry .crdr pack writer. Lifted so the frosted-glass hard-edge arms (orientation / far==tint / blur monotone /
 // width∝radius) can put REAL geometry-pass content in scene_color — the flip question is specifically about a geometry
-// pass's output read by the ui fullscreen chain, so a fullscreen-written backdrop would dodge it. Allocator-parametrized
-// (no per-TU galloc) so any test TU can use it. `write_one_pack` REQUIREs its write, so include from a Catch2 TU.
+// pass's output read by the ui fullscreen chain, so a fullscreen-written backdrop would dodge it.
+// Allocator-parametrized (no per-TU galloc) and framework-free, so a test TU or a harness can use it
+// (crd-diag-overhead's render workload).
 //
 // (test_scene_render_gpu.cpp carries its own older copies of these two helpers; migrating that TU onto this fixture is a
 // ledgered follow-up — left untouched here to keep this slice's blast radius to the frosted-glass TU.)
@@ -14,8 +15,6 @@
 #include <crd/resources/crdr.hpp>
 #include <crd/resources/mesh_resource.hpp>
 #include <crd/resources/resource_manager.hpp>
-
-#include <catch2/catch_test_macros.hpp>
 
 #include <cstring> // std::memcpy/std::memset — the .crdr byte layout
 
@@ -68,10 +67,10 @@ namespace crd::tests
 }
 
 // Write ONE resource as a single-entry .crdr manifest pack to `path` (the two-pass offset fixup mirrors
-// test_scene_render_gpu.cpp's write_one_pack). REQUIREs the disk write — call from a Catch2 TU.
-inline void write_one_pack(crd::memory::IAllocator* a, const crd::platform::fs::Path& path,
-                           const crd::resources::ResourceId& id, crd::u32 fourcc,
-                           const crd::containers::Array<crd::u8>& art, const char* name)
+// test_scene_render_gpu.cpp's write_one_pack). False when the disk write failed.
+[[nodiscard]] inline bool write_one_pack(crd::memory::IAllocator* a, const crd::platform::fs::Path& path,
+                                         const crd::resources::ResourceId& id, crd::u32 fourcc,
+                                         const crd::containers::Array<crd::u8>& art, const char* name)
 {
     crd::containers::Array<crd::u8> pool(a);
     for (const char* p = name;; ++p)
@@ -102,6 +101,6 @@ inline void write_one_pack(crd::memory::IAllocator* a, const crd::platform::fs::
     {
         pack.push_back(b);
     }
-    REQUIRE(crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack)));
+    return crd::platform::fs::write_file_binary(path, crd::containers::as_const_span(pack));
 }
 } // namespace crd::tests

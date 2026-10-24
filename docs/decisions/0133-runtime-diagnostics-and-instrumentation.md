@@ -179,6 +179,12 @@ Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-mixed-io
 I/O workload is the harness's `io` (whole-file, range and `AsyncFile` reads of files it writes, on a two-thread pool),
 and it joins `offline` and `jobs` as a realistic workload the disabled and basic budgets are judged on.
 
+Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-authored-rendering-workload.md)): the
+contract's authored rendering workload is the harness's `render` (the scene renderer through the authored
+`engine://frame/forward_csm` graph on a headless device), a realistic workload too. It is judged on frame time and
+CPU per frame only: on Linux the reference device is llvmpipe, whose rasteriser is the frame, so it is not counted
+under cachegrind.
+
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 
 The contract's "symptom→command→artifact→next discriminating test and human-only publication" is

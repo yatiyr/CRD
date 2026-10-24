@@ -364,7 +364,7 @@ crd_module(engine/foundation/units engine/units DEPENDS containers core memory T
 crd_module(engine/execution/ceir engine/ceir DEPENDS containers core log memory units TESTS execution/ceir support/fuzz)
 # D-007 CEIR-6b: the crd-jobs execution-provider bridge (ADR-0109 §4.2) — crd-ceir + crd-jobs
 crd_module(engine/execution/ceir-host engine/ceir-host DEPENDS ceir ceir-cook containers core jobs memory perf time
-    TESTS execution/ceir-host support/diag-overhead)
+    TESTS execution/ceir-host)
 # D-007 CEIR-7a: the CEIR asset cook bridge (ADR-0109 §4.2) — crd-ceir + crd-resources + crd-render-asset-core
 crd_module(engine/execution/ceir-cook engine/ceir-cook DEPENDS ceir containers core kir memory perf
     render-asset-core resources time TESTS execution/ceir-cook support/fuzz)
@@ -604,7 +604,7 @@ crd_module(engine/rendering/draw engine/draw
 crd_module(engine/rendering/scene-render engine/scene-render
     DEPENDS anim containers core frame-cook geometry-primitives gpu-context kir light-cook lod log material-cook math
         memory render-asset-core resources scene vertex-cook
-    TESTS rendering/scene-render applications/sandbox-inspect
+    TESTS rendering/scene-render applications/sandbox-inspect support/diag-overhead
     TEST_DEPENDS app ceir ceir-cook ceir-gpu ceir-host gpu-context-dx12 gpu-context-vulkan jobs meshgen perf perf-ui)
 crd_module(engine/rendering/draw-imgui engine/draw-imgui DEPENDS core draw imgui PACKAGES imgui)
 crd_module(engine/physics/eylem-viz engine/eylem-viz DEPENDS core draw eylem eylem-rigid3d math scene

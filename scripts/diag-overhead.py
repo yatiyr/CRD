@@ -52,7 +52,7 @@ COUNT_SCHEMA = 'cerid-diag-overhead-instructions/1'
 RECORD_SCHEMA = 'cerid-diag-overhead/1'
 # cachegrind's events, summed into what a board shows: instructions (judged), first-level and last-level misses.
 COUNTED = {'instructions': ('Ir',), 'L1 misses': ('I1mr', 'D1mr', 'D1mw'), 'LL misses': ('ILmr', 'DLmr', 'DLmw')}
-WORKLOADS = ('alloc', 'jobs', 'offline', 'io', 'events')
+WORKLOADS = ('alloc', 'jobs', 'offline', 'io', 'render', 'events')
 SITE_WORKLOADS = ('events',) # site microbenchmarks: their cost per site is reported, no budget judges them
 MODES = ('off', 'basic', 'full')
 BUDGETS = {'disabled': ('off', 'compiled-out', 0.01), 'basic': ('basic', 'off', 0.02)}

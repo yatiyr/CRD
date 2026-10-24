@@ -1,6 +1,6 @@
 // crd-diag-overhead -- the DIAG.11b measurement harness (see overhead.hpp).
 //
-//   crd-diag-overhead --workload <alloc|jobs|offline|io|events> --mode <off|basic|full>
+//   crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> --mode <off|basic|full>
 //                     [--iterations N] [--warmup N] [--captures K] [--threads T] [--affinity <hex mask>]
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
 //
@@ -13,8 +13,8 @@
 //
 // The capture phase follows the timed frames: K manual triggers, each waited for (bounded) until the host delivered
 // its capture and, with --scratch, wrote its bundle; the bytes written are counted and the bundles removed unless
-// --keep. The crash handler writes into --scratch too (only when a crash happens); the io workload writes its files
-// there in every mode and removes them at teardown.
+// --keep. The crash handler writes into --scratch too (only when a crash happens); the io and render workloads write
+// their files there in every mode and remove them at teardown.
 //
 // --check holds what must hold whatever the timing (exit 1 when one fails):
 //   every mode   every timed and warmup iteration ran and produced the known answer; the process CPU time over the
@@ -57,6 +57,9 @@
 
 #ifndef CRD_DIAG_OVERHEAD_ASSETS
 #define CRD_DIAG_OVERHEAD_ASSETS ""
+#endif
+#ifndef CRD_DIAG_OVERHEAD_ENGINE_ASSETS
+#define CRD_DIAG_OVERHEAD_ENGINE_ASSETS ""
 #endif
 #ifndef CRD_DIAG_OVERHEAD_SHIPPING
 #define CRD_DIAG_OVERHEAD_SHIPPING false
@@ -130,7 +133,7 @@ bool parse_u32(const char* text, u32 limit, u32& out)
 int usage(const char* why)
 {
     std::fprintf(stderr,
-                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|io|events> "
+                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> "
                  "--mode <off|basic|full> [--iterations N] [--warmup N] [--captures K] [--threads T] "
                  "[--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] [--program <file>] [--keep] [--check]\n",
                  why);
@@ -471,6 +474,11 @@ int main(int argc, char** argv)
     dov::Sites   sites;
     cont::Array<u64> samples;
     samples.reserve(o.iterations);
+    if (!workload->warm(reason))
+    {
+        std::fprintf(stderr, "crd-diag-overhead: the workload's process caches did not fill: %s\n", reason.c_str());
+        return 3;
+    }
 
     const crd::LifetimeSnapshot  before_mode   = crd::lifetime_ledger().snapshot();
     const crd::HostMemoryReading memory_before = crd::read_host_memory();
@@ -518,6 +526,7 @@ int main(int argc, char** argv)
     setup.threads = o.threads;
     setup.program = o.program;
     setup.scratch = o.scratch;
+    setup.assets  = CRD_DIAG_OVERHEAD_ENGINE_ASSETS;
     if (!workload->setup(setup, reason))
     {
         std::fprintf(stderr, "crd-diag-overhead: the workload did not set up: %s\n", reason.c_str());
@@ -807,6 +816,17 @@ int main(int argc, char** argv)
     lifetime_window(j, "mode_setup", before_mode, after_mode);
     lifetime_window(j, "workload_setup", after_mode, after_setup);
     j.str("balance", crd::lifetime_verdict_name(balance.verdict));
+    cont::String unbalanced; // the classes that hold more or less than before the mode was set up
+    for (usize c = 0U; c < crd::kLifetimeClassCount; ++c)
+    {
+        const auto cls = static_cast<crd::LifetimeClass>(c);
+        if (((balance.outstanding | balance.drained | balance.underflowed) & crd::lifetime_class_bit(cls)) != 0U)
+        {
+            unbalanced.append(unbalanced.empty() ? "" : ",");
+            unbalanced.append(crd::lifetime_class_name(cls));
+        }
+    }
+    j.str("unbalanced", unbalanced.c_str());
     j.close('}');
     j.open("check", '{');
     j.b("ran", o.check);
