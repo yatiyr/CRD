@@ -1286,8 +1286,8 @@ recoverable failure. Shipping capability checks reject injection and arbitrary e
 
 Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md)):
 - The flight recorder is `crd::perf::FlightRecorder` (`crd/perf/flight_recorder.hpp`), separate from the DIAG.2b
-  `DiagnosticRecorder`: its events are fixed 152-byte records (code, severity, two scalars, a message clipped to 111
-  bytes with the clip flagged), so recording and triggering never allocate. Codes 0x0900..0x09FF belong to it.
+  `DiagnosticRecorder`: its events are fixed 152-byte records (code, severity, redaction class, two scalars, a
+  message clipped to 111 bytes with the clip flagged), so recording and triggering never allocate. Codes 0x0900..0x09FF belong to it.
 - Bounds are an authored, versioned `FlightPolicy` (capacity at most 65536 events, about 9.5 MiB; `pre_events`,
   `post_events`, `post_window_ns` at most 60 s, a trigger mask, `hitch_threshold_ns`). `pre_events + post_events <=
   capacity`, so the post window can never overwrite the pre window it keeps. A rejected candidate (or a reload while a

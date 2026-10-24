@@ -234,10 +234,13 @@ void DiagnosticRecorder::capture_emergency(const DiagnosticEvent& e) noexcept
     r.present      = true;
     r.code         = e.code;
     r.severity     = e.severity;
+    r.redaction    = e.redaction;
     r.timestamp_ns = e.timestamp_ns;
     r.line         = e.source.line;
     copy_bounded(r.file, sizeof(r.file), e.source.file);
-    copy_bounded(r.message, sizeof(r.message), cont::StringView{e.message.c_str(), e.message.size()});
+    copy_bounded(r.message, sizeof(r.message),
+                 e.redaction == RedactionClass::Restricted ? cont::StringView{}
+                                                           : cont::StringView{e.message.c_str(), e.message.size()});
 }
 
 EmergencyRecord DiagnosticRecorder::emergency() const noexcept

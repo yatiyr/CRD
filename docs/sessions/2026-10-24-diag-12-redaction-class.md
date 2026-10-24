@@ -28,7 +28,8 @@ not amended:
 
 - `crd::RedactionClass` moves to `crd/core/redaction.hpp` (new file: crd-ceir does not link crd-perf, and crd-core is
   the one library both reach), with `redaction_class_name`; `crd::ceir::inspect::RedactionClass` is an alias.
-- `FlightEvent`, `FlightTriggerRecord`, `FlightTriggerInput` and `DiagnosticEvent` carry it. A Restricted one keeps
+- `FlightEvent`, `FlightTriggerRecord`, `FlightTriggerInput`, `DiagnosticEvent` and the DIAG.2b `EmergencyRecord`
+  (in memory only; `capture_emergency` copies no restricted text) carry it. A Restricted one keeps
   code, severity, source and scalars and no text: `publish()` and `trigger()` never copy it, so no route out of the
   ring (bundle, `bundle.inspect`, `flight.status`, the summary JSON) can carry it; `make_event` keeps no message;
   `record(DiagnosticEvent)` and the fatal handler pass the class on. `FlightEvent` stays 152 bytes: its message length
@@ -57,6 +58,7 @@ Each break was built, run, restored, rebuilt and rerun (`build/diag12-redaction/
 | decoder takes a restricted trigger with text | the restricted-record case |
 | `make_event` keeps a restricted message | the restricted-record case |
 | encoder drops the event's class | the restricted-record case |
+| `capture_emergency` copies a restricted text | `recorder: emergency record is captured independently of the ring` |
 
 ## Verification
 
@@ -64,13 +66,23 @@ Each break was built, run, restored, rebuilt and rerun (`build/diag12-redaction/
   crd-ceir-tests and crd-diag-overhead built; 148 CTests (flight, diagnostic host, manifest and golden bundle, `diag:`,
   `diag 8b`, `doctor:`, `diag commands`, the flight corpus) pass after the JSON expectations gained `redaction`.
 - linux-gcc-debug (`wsl-lane.sh build`/`test`): the five targets built `-Werror` with no compiler warning; the same
-  set, 120 CTests, passes (the two `diag 11a` window cases skip headless, as before).
-- `tidy-files.py` clean on all 17 files; `clang-format --dry-run` on the added lines reports only the house
+  set, 120 CTests, passes (the two `diag 11a` window cases skip headless, as before); after the emergency record and
+  the jobs case, crd-perf-tests and crd-jobs-tests rebuilt and their 14 affected CTests pass.
+- `tidy-files.py` clean on all 21 files; `clang-format --dry-run` on the added lines reports only the house
   declaration alignment and the file's lambda style; `check-headers.py` on the five changed headers,
   `check-allman-braces.py`, the ctest guards, `check-master-plan.py` and `check-repository.py` pass.
 
 Hosted once pushed: `flight record: a restricted event or trigger keeps its class and scalars, never its text`, the
 application cases and `crd-fuzz-perf-flight-corpus` pass on every lane.
+
+## A jobs test that failed once
+
+After a teeth restore, `diag: a batch runs across more than one worker thread (pooled, not sequential)` failed once
+on win-debug (crd-jobs-tests, not rebuilt by this batch) and passed on five reruns. Its 32 rounds of 64 yielding jobs
+had all run on the calling thread: on a loaded host the workers did not wake before the caller drained each short
+batch, so the answer depended on wake latency. Now the first job to start holds its thread until a sibling starts on
+another thread (bounded at 10 s), which a pooled scheduler always does and a single-threaded one never can. 20 of 20
+runs pass in 0.02 s; with `num_threads = 1` (one thread) it fails at the bound; linux-gcc-debug passes.
 
 ## Remaining in DIAG.12
 

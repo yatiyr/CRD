@@ -178,6 +178,15 @@ TEST_CASE("recorder: emergency record is captured independently of the ring", "[
     CHECK(em.line == 7U);
     CHECK(cont::StringView{em.message} == cont::StringView{"invariant violated"});
     CHECK(cont::StringView{em.file} == cont::StringView{"rec.cpp"});
+    CHECK(em.redaction == crd::RedactionClass::Public);
+
+    // A restricted event keeps its class and its code, never its text.
+    fatal.redaction = crd::RedactionClass::Restricted;
+    r.capture_emergency(fatal);
+    const cp::EmergencyRecord hidden = r.emergency();
+    CHECK(hidden.code == 0xDEADU);
+    CHECK(hidden.redaction == crd::RedactionClass::Restricted);
+    CHECK(hidden.message[0] == '\0');
 
     // The emergency capture does not disturb the ordinary ring.
     CHECK(r.count() == 0U);

@@ -35,16 +35,17 @@ struct ReaderToken
 };
 
 // The independent, fixed-size emergency record. No owned storage -- fixed char buffers so it can
-// be written without allocation and read after the recorder is gone.
+// be written without allocation and read after the recorder is gone. A Restricted one has no message.
 struct EmergencyRecord
 {
-    bool      present      = false;
-    EventCode code         = 0U;
-    Severity  severity     = Severity::Info;
-    crd::u64  timestamp_ns = 0U;
-    crd::u32  line         = 0U;
-    char      file[128]    = {};
-    char      message[192] = {};
+    bool           present      = false;
+    EventCode      code         = 0U;
+    Severity       severity     = Severity::Info;
+    RedactionClass redaction    = RedactionClass::Public;
+    crd::u64       timestamp_ns = 0U;
+    crd::u32       line         = 0U;
+    char           file[128]    = {};
+    char           message[192] = {};
 };
 
 class DiagnosticRecorder
