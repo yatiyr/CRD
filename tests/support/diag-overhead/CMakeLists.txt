@@ -64,9 +64,9 @@ foreach(_crd_workload alloc jobs offline io render events)
     endforeach()
 endforeach()
 # The render workload under device validation (D3D12 has no synchronization validation): the requested modes active on
-# the device it draws with and no validation message over the run. GPU-assisted validation is DIAG.11b's next item.
+# the device it draws with and no validation message over the run. Vulkan's GPU-assisted mode is DIAG.11b's next item.
 if(WIN32)
-    set(_crd_overhead_validations core)
+    set(_crd_overhead_validations core gpu)
 else()
     set(_crd_overhead_validations core sync)
 endif()

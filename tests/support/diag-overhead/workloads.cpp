@@ -856,7 +856,8 @@ private:
 #if defined(_WIN32)
         if (config.enable_validation)
         {
-            m_capture.emplace(crd::memory::default_allocator()); // before any device, or it misses the run
+            // Before any device, or it misses the run; GPU-based validation's infos outgrow the default 256 records.
+            m_capture.emplace(crd::memory::default_allocator(), 4096U);
         }
         config.backend = crd::gpu::GpuBackend::Dx12;
         m_gpu          = crd::gpu::create_dx12_gpu_context(crd::memory::default_allocator(), config);

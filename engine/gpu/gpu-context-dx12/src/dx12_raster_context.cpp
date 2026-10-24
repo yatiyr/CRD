@@ -1263,6 +1263,17 @@ public:
         {
             return;
         }
+        // DIAG.11b: the root signature `frame_prepare` binds to drop the previous page's tables (see there).
+        const D3D12_ROOT_SIGNATURE_DESC unbound{};
+        ComPtr<ID3DBlob> unbound_blob;
+        ComPtr<ID3DBlob> unbound_error;
+        if (FAILED(
+                D3D12SerializeRootSignature(&unbound, D3D_ROOT_SIGNATURE_VERSION_1, &unbound_blob, &unbound_error)) ||
+            FAILED(m_device->CreateRootSignature(0, unbound_blob->GetBufferPointer(), unbound_blob->GetBufferSize(),
+                                                 IID_PPV_ARGS(&m_unbound_root))))
+        {
+            return;
+        }
         if (FAILED(m_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&m_fence))))
         {
             return;
@@ -7680,8 +7691,10 @@ private:
             // Heap changes invalidate table state. Equal root layouts can share the same native signature;
             // redundantly selecting it does not discard tables from the previous shader/page. Start both
             // bind points afresh; each recording verb must set every argument used by its actual shader.
-            m_list->SetGraphicsRootSignature(nullptr);
-            m_list->SetComputeRootSignature(nullptr);
+            // DIAG.11b: through an empty signature, never null: D3D12 does not define a null one, and GPU-based
+            // validation's injected barriers crashed the NVIDIA driver on it.
+            m_list->SetGraphicsRootSignature(m_unbound_root.Get());
+            m_list->SetComputeRootSignature(m_unbound_root.Get());
         }
         return true;
     }
@@ -8407,6 +8420,7 @@ private:
     crd::LifetimeHold                  m_queue_hold{crd::LifetimeClass::NativeGpuObject}; // DIAG.10c: before `m_queue`
     ComPtr<ID3D12CommandQueue>         m_queue;
     ComPtr<ID3D12CommandAllocator>     m_cmd_alloc;
+    ComPtr<ID3D12RootSignature>        m_unbound_root; // DIAG.11b: no parameters; frame_prepare's reset
     // REN-8: the frame graph's per-frame allocator+list RING, plus the dedicated pair saved while it is swapped
     // in (see frame_rec_begin). The standalone synchronous draw paths always use the dedicated pair.
     static constexpr crd::u32          kFrameRingSize = 2U;
