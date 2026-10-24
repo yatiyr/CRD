@@ -35,7 +35,7 @@ static volatile void* g_sink = nullptr;
 
 // Allocate and drop the reference in a separate frame so no live stack/register copy of the pointer
 // survives into the leak check -- the block is genuinely unreachable when LSan scans.
-__attribute__((noinline)) static void leak_now()
+CRD_DIAG_SITE static void crd_diag_leak_site()
 {
     void* p = std::malloc(1024);
     g_sink = p;       // force the allocation (defeat elision)
@@ -48,7 +48,7 @@ int main()
     crd_diag_harden();
     crd_diag_announce();
 #ifdef CRD_DIAG_LEAK_ACTIVE
-    leak_now();
+    crd_diag_leak_site();
     if (__lsan_do_recoverable_leak_check() != 0)
     {
         std::abort(); // a crash the harness classifies as SanitizerCaught

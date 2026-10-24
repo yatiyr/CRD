@@ -30,10 +30,15 @@ extern "C" const char* __asan_default_options()
 
 static volatile int* g_escaped = nullptr;
 
-__attribute__((noinline)) static void stash_local()
+CRD_DIAG_SITE static void stash_local()
 {
     int local = 0x5A5A;  // lives only for this frame
     g_escaped = &local;  // escape the address; the frame dies on return
+}
+
+CRD_DIAG_SITE static int crd_diag_read_dead_frame()
+{
+    return *g_escaped; // read the now-dead frame -- stack-use-after-return
 }
 #endif
 
@@ -43,7 +48,7 @@ int main()
     crd_diag_announce();
 #ifdef CRD_DIAG_UAR_ACTIVE
     stash_local();
-    const int observed = *g_escaped; // read the now-dead frame -- stack-use-after-return
+    const int observed = crd_diag_read_dead_frame();
     return observed == 0x5A5A ? 0 : 1;
 #else
     return 0;

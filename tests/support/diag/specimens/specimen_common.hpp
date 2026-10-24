@@ -54,6 +54,14 @@
 // Back-compat alias: any sanitizer runtime present.
 #define CRD_DIAG_HAS_SANITIZER (CRD_DIAG_HAS_ASAN || CRD_DIAG_HAS_TSAN)
 
+// The function a sanitizer specimen commits its error in: kept out of line so its report's frame names it, which the
+// harness requires of a catch (Expectation::expected_site, a symbolized site).
+#if defined(_MSC_VER)
+#define CRD_DIAG_SITE __declspec(noinline) // NOLINT(cppcoreguidelines-macro-usage): an attribute spelling.
+#else
+#define CRD_DIAG_SITE __attribute__((noinline)) // NOLINT(cppcoreguidelines-macro-usage): an attribute spelling.
+#endif
+
 // A specimen may define the value-less flag CRD_DIAG_SPECIMEN_ROUTE_ABSENT before including this header to declare
 // that its specific error ROUTE is unavailable on this toolchain even though a sanitizer is linked (e.g.
 // stack-use-after-return is not reliably reported by MSVC ASan), or that no sanitizer is involved at all. The label

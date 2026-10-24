@@ -162,7 +162,7 @@ class RegistryTests(unittest.TestCase):
         for s in seeds:
             self.assertTrue(any(mod.applicable_detect(s, lane) for lane in lanes.values()), s["id"])
         applied = {name: [s["id"] for s in seeds if mod.applicable_detect(s, lane)] for name, lane in lanes.items()}
-        self.assertEqual({"win-debug": 3, "win-asan": 5, "linux-gcc-debug": 3, "linux-gcc-asan": 6,
+        self.assertEqual({"win-debug": 3, "win-asan": 6, "linux-gcc-debug": 3, "linux-gcc-asan": 7,
                           "linux-clang-tsan": 6}, {name: len(ids) for name, ids in applied.items()}, applied)
 
     def test_validate_mode_passes_on_the_tree(self):

@@ -34,7 +34,7 @@ enum class Verdict : crd::u8
     Crashed,           // died by signal / abnormal exit: the expected-crash positive
     SanitizerCaught,   // the specimen died and its output carries its sanitizer's report: the sanitizer positive
     InstrumentAbsent,  // a sanitizer catch was expected but the specimen carries no sanitizer
-    MissingSymbolizer, // the symbolizer dependency the run needs is unavailable
+    MissingSymbolizer, // a sanitizer report whose frames are not symbolized, so it cannot name the expected site
     ZeroSelection,     // the filter selected no specimen at all
     DeniedOutput,      // the requested output path is not writable
     MismatchedBinary,  // the specimen's stamped identity != the expected identity
@@ -64,6 +64,7 @@ struct Expectation
     Want                     want = Want::CleanExit;
     crd::containers::String  expected_identity; // empty: skip the identity check
     crd::containers::String  output_dir;        // non-empty: probe writability before spawning; a file -> DeniedOutput
+    crd::containers::String  expected_site;     // non-empty: a sanitizer catch's report must name this function
     crd::u32                 timeout_ms = 10000U;
 };
 

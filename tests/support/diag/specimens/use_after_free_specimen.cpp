@@ -8,6 +8,13 @@
 
 #include <cstdlib>
 
+#if CRD_DIAG_HAS_ASAN
+CRD_DIAG_SITE static char crd_diag_read_after_free(volatile char* buf)
+{
+    return buf[0]; // read after free -- caught by AddressSanitizer
+}
+#endif
+
 int main()
 {
     crd_diag_harden();
@@ -20,7 +27,7 @@ int main()
     }
     buf[0] = 'x';
     std::free(const_cast<char*>(buf));
-    const char sink = buf[0]; // read after free -- caught by AddressSanitizer
+    const char sink = crd_diag_read_after_free(buf);
     return sink == 'x' ? 0 : 1;
 #else
     return 0;

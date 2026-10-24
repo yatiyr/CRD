@@ -396,6 +396,34 @@
           ]
         }
       ]
+    },
+    {
+      "id": "asan-symbolizer-off",
+      "class": "symbol-mapping",
+      "summary": "ASan prints its reports unsymbolized, so no frame names the site a catch must name.",
+      "when": {
+        "asan": true
+      },
+      "env": {
+        "ASAN_OPTIONS": "{inherit} symbolize=0"
+      },
+      "build": [
+        "crd-perf-tests"
+      ],
+      "detect": [
+        {
+          "test": "diag harness: the sanitizer specimen is caught, or reported absent",
+          "text": [
+            "verdict=MissingSymbolizer"
+          ]
+        },
+        {
+          "test": "diag 3f: heap-use-after-free is caught by ASan, or reported absent",
+          "text": [
+            "verdict=MissingSymbolizer"
+          ]
+        }
+      ]
     }
   ]
 }

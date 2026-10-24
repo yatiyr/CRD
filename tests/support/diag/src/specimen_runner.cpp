@@ -13,6 +13,7 @@
 
 #include <crd/diag/specimen_runner.hpp>
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <string_view>
@@ -186,6 +187,51 @@ bool carries_report(std::string_view out, std::string_view tag)
         return out.find("WARNING: ThreadSanitizer") != std::string_view::npos;
     }
     return false;
+}
+
+// A sanitizer's frame line reads "#<n> 0x<pc> in <function> <file>:<line>" when symbolized and
+// "#<n> 0x<pc> (<module>+0x<offset>)" when not. True when any frame of the output names a function.
+bool has_symbolized_frame(std::string_view out)
+{
+    std::string_view::size_type pos = out.find('#');
+    while (pos != std::string_view::npos)
+    {
+        std::string_view::size_type i = pos + 1;
+        const std::string_view::size_type digits = i;
+        while (i < out.size() && out[i] >= '0' && out[i] <= '9')
+        {
+            ++i;
+        }
+        if (i > digits && out.substr(i, 3) == " 0x")
+        {
+            i += 3;
+            while (i < out.size() && std::isxdigit(static_cast<unsigned char>(out[i])) != 0)
+            {
+                ++i;
+            }
+            if (out.substr(i, 4) == " in ")
+            {
+                return true;
+            }
+        }
+        pos = out.find('#', pos + 1);
+    }
+    return false;
+}
+
+// A sanitizer catch names the specimen's site in its report. A report that does not is MissingSymbolizer when no
+// frame of it is symbolized (DIAG.0) and a report about other code when frames are.
+Verdict site_verdict(std::string_view out, std::string_view site, cont::String& reason)
+{
+    if (site.empty() || out.find(site) != std::string_view::npos)
+    {
+        return Verdict::SanitizerCaught;
+    }
+    const bool symbolized = has_symbolized_frame(out);
+    reason.append("the report does not name ");
+    reason.append(site.data(), site.size());
+    reason.append(symbolized ? "; " : ", and no frame of it is symbolized; ");
+    return symbolized ? Verdict::Unexpected : Verdict::MissingSymbolizer;
 }
 
 const char* report_name(std::string_view tag)
@@ -565,7 +611,7 @@ Outcome run_specimen(const crd::containers::String& exe_path,
         }
         else if (carries_report(out_view, std::string_view{o.sanitizer}))
         {
-            o.verdict = Verdict::SanitizerCaught;
+            o.verdict = site_verdict(out_view, std::string_view{expect.expected_site}, o.reason);
         }
         else
         {

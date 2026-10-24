@@ -91,10 +91,12 @@ TEST_CASE("diag harness: the sanitizer specimen is caught, or reported absent", 
     // not -- never a silent pass either way. The promise is the lane's configuration
     // (DIAG.10b), not this binary's flags: a lane that lost -fsanitize everywhere
     // would otherwise see InstrumentAbsent from both sides and pass. This binary
-    // must also carry what its lane promises.
+    // must also carry what its lane promises. A catch names the specimen's site in a symbolized frame; a report
+    // with no symbolized frame is MissingSymbolizer (seeded on the ASan lanes by `asan-symbolizer-off`).
     const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_overflow_site"};
     const cd::Outcome o = cd::run_specimen(heap_overflow_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
                     << " reason=" << o.reason.c_str() << " lane_asan=" << yes_no(lane.asan)
@@ -119,6 +121,7 @@ TEST_CASE("diag 3f: heap-use-after-free is caught by ASan, or reported absent", 
     const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_read_after_free"};
     const cd::Outcome o = cd::run_specimen(use_after_free_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
                     << " reason=" << o.reason.c_str() << " lane_asan=" << yes_no(lane.asan)
@@ -146,6 +149,7 @@ TEST_CASE("diag 3f: stack-use-after-return is qualified on the gcc/clang ASan la
     const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_read_dead_frame"};
     const cd::Outcome o = cd::run_specimen(use_after_return_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
                     << " reason=" << o.reason.c_str() << " lane_use_after_return=" << yes_no(lane.use_after_return));
@@ -170,6 +174,7 @@ TEST_CASE("diag 3f: a memory leak is caught by LeakSanitizer, or reported absent
     const cd::LanePromise lane = cd::lane_promise();
     cd::Expectation e;
     e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_leak_site"};
     const cd::Outcome o = cd::run_specimen(leak_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
                     << " reason=" << o.reason.c_str() << " lane_leak_route=" << yes_no(lane.leak_route));

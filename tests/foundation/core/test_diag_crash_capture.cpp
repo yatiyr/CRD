@@ -441,10 +441,10 @@ TEST_CASE("crash capture: an injected MiniDumpWriteDump failure is honest on the
 // Every expectation below was MEASURED against the built specimen before being asserted -- several differ from the
 // Windows results and are called out inline (notably `fiber` is captured here, and `fastfail` -> SIGILL is captured).
 // ASan builds are handled as in the Windows block: on Linux crd's sigaction replaces ASan's own SIGSEGV handler, so
-// the exact records under ASan are uncharacterized (there is no linux-asan tree here) -- that branch asserts only that
-// the fault stays fatal, never skip-passes, and the full record assertions run on the linux-gcc-debug lane. Out of
-// scope, tracked as (e2) in the 5b session doc: inject_dump_fail + the marker are Windows-only (the Linux writer does
-// not honor the injection seam), and abort/SIGFPE are not yet specimen modes.
+// the exact records under ASan are not yet characterized (owned by DIAG.12) -- that branch asserts only that the
+// fault stays fatal, never skip-passes, and the full record assertions run on the linux-gcc-debug lane. Also owned by
+// DIAG.12: inject_dump_fail + the marker are Windows-only (the Linux writer does not honor the injection seam), and
+// SIGFPE is not yet a specimen mode (`assert_default` records SIGABRT).
 #if defined(__linux__)
 
 namespace

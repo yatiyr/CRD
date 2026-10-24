@@ -7,6 +7,14 @@
 
 #include <cstdlib>
 
+#if CRD_DIAG_HAS_ASAN
+CRD_DIAG_SITE static char crd_diag_overflow_site(volatile char* buf)
+{
+    buf[8] = 'x'; // one past the end -- caught by AddressSanitizer
+    return buf[8];
+}
+#endif
+
 int main()
 {
     crd_diag_harden();
@@ -17,8 +25,7 @@ int main()
     {
         return 3;
     }
-    buf[8] = 'x'; // one past the end -- caught by AddressSanitizer
-    const char sink = buf[8];
+    const char sink = crd_diag_overflow_site(buf);
     std::free(const_cast<char*>(buf));
     return sink == 'x' ? 0 : 1;
 #else
