@@ -166,9 +166,9 @@ TEST_CASE("crash capture: a wild write terminates with the fault code and writes
         // rejects. win-release links without /DEBUG, so there the binary and its dump correctly carry none.
         const fs::path dump = first_crash_dump(dir);
         REQUIRE_FALSE(dump.empty());
-        CHECK(crd_test_minidump::exception_code(dump.c_str()) == kAccessViolation);
+        CHECK(crd_test_minidump::exception_code(dump) == kAccessViolation);
         const fs::path want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename();
-        const crd_test_minidump::DumpModule module = crd_test_minidump::find_dump_module(dump.c_str(), want.c_str());
+        const crd_test_minidump::DumpModule module = crd_test_minidump::find_dump_module(dump, want.c_str());
         CHECK(module.named);
         CHECK(module.rsds == crd_test_minidump::image_has_rsds(fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.c_str()));
     }

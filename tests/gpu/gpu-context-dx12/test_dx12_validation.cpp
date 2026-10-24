@@ -2557,7 +2557,8 @@ TEST_CASE("DIAG.7b(f): a recorded removal is written as a readable bundle", "[dx
     const fs::path bundle_path = first_dump_with_prefix(dir, "gpu_");
     REQUIRE_FALSE(bundle_path.empty());
     g::detail::Dx12RemovalRecord read{};
-    REQUIRE(g::detail::dx12_read_removal_bundle(bundle_path.c_str(), read) == Dx12BundleRead::Ok);
+    REQUIRE(g::detail::dx12_read_removal_bundle(reinterpret_cast<const char*>(bundle_path.u8string().c_str()), read) ==
+            Dx12BundleRead::Ok);
     CHECK(read.origin == g::detail::Dx12RemovalOrigin::EngineForced);
     CHECK(read.sequence == recorded.sequence);
     CHECK(read.dred.removal_reason == static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED));
@@ -2568,7 +2569,8 @@ TEST_CASE("DIAG.7b(f): a recorded removal is written as a readable bundle", "[dx
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(nullptr));
     const fs::path plain = first_dump_with_prefix(dir, "live_");
     REQUIRE_FALSE(plain.empty());
-    CHECK(g::detail::dx12_read_removal_bundle(plain.c_str(), read) == Dx12BundleRead::NoStream);
+    CHECK(g::detail::dx12_read_removal_bundle(reinterpret_cast<const char*>(plain.u8string().c_str()), read) ==
+          Dx12BundleRead::NoStream);
     const crd::u32       foreign[4] = {0x11111111U, 1U, 2U, 3U};
     crd::crash::DumpNote note{};
     note.kind           = crd::crash::DumpKind::Hang;
@@ -2577,7 +2579,8 @@ TEST_CASE("DIAG.7b(f): a recorded removal is written as a readable bundle", "[dx
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(note, nullptr));
     const fs::path hang = first_dump_with_prefix(dir, "hang_");
     REQUIRE_FALSE(hang.empty());
-    CHECK(g::detail::dx12_read_removal_bundle(hang.c_str(), read) == Dx12BundleRead::BadMagic);
+    CHECK(g::detail::dx12_read_removal_bundle(reinterpret_cast<const char*>(hang.u8string().c_str()), read) ==
+          Dx12BundleRead::BadMagic);
 
     crd::crash::uninstall();
     fs::remove_all(dir, ec);

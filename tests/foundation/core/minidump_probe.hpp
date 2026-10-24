@@ -28,14 +28,26 @@
 #include <cstring>
 #include <cwchar>
 #include <cwctype>
+#include <filesystem>
 #include <fstream>
 
 namespace crd_test_minidump
 {
-// Paths are native wide strings (std::filesystem::path::c_str() on Windows); bytes live in a Cerid Array.
+// Paths are std::filesystem paths; the crash API takes and reports UTF-8. Bytes live in a Cerid Array.
 using Bytes = crd::containers::Array<unsigned char>;
 
-inline Bytes read_file_bytes(const wchar_t* path)
+// The path the crash API reported (UTF-8; a plain char string would be read in the ANSI code page).
+inline std::filesystem::path path_from_utf8(const char* utf8)
+{
+    return std::filesystem::path{reinterpret_cast<const char8_t*>(utf8)};
+}
+
+inline std::size_t read_stream(const std::filesystem::path& dump_path, std::uint32_t type, void* out, std::size_t cap)
+{
+    return crd::crash::read_dump_stream(reinterpret_cast<const char*>(dump_path.u8string().c_str()), type, out, cap);
+}
+
+inline Bytes read_file_bytes(const std::filesystem::path& path)
 {
     Bytes         bytes;
     std::ifstream f{path, std::ios::binary | std::ios::ate};
@@ -58,17 +70,17 @@ inline Bytes read_file_bytes(const wchar_t* path)
 }
 
 // Read the whole ExceptionStream (type 6) of the dump into a struct; false if it is absent or short.
-inline bool read_exception_stream(const wchar_t* dump_path, MINIDUMP_EXCEPTION_STREAM& out)
+inline bool read_exception_stream(const std::filesystem::path& dump_path, MINIDUMP_EXCEPTION_STREAM& out)
 {
     constexpr std::uint32_t exception_stream = 6U; // MINIDUMP_STREAM_TYPE::ExceptionStream
-    const std::size_t       sz               = crd::crash::read_dump_stream(dump_path, exception_stream, nullptr, 0);
+    const std::size_t       sz               = read_stream(dump_path, exception_stream, nullptr, 0);
     if (sz < sizeof(MINIDUMP_EXCEPTION_STREAM))
     {
         return false;
     }
     Bytes buf;
     buf.resize(sz);
-    if (crd::crash::read_dump_stream(dump_path, exception_stream, buf.data(), buf.size()) != sz)
+    if (read_stream(dump_path, exception_stream, buf.data(), buf.size()) != sz)
     {
         return false;
     }
@@ -77,7 +89,7 @@ inline bool read_exception_stream(const wchar_t* dump_path, MINIDUMP_EXCEPTION_S
 }
 
 // The faulting exception code recorded in the dump, or 0 if the ExceptionStream is absent.
-inline std::uint32_t exception_code(const wchar_t* dump_path)
+inline std::uint32_t exception_code(const std::filesystem::path& dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
@@ -88,7 +100,7 @@ inline std::uint32_t exception_code(const wchar_t* dump_path)
 }
 
 // The thread id recorded in the dump's ExceptionStream (the faulting thread, not the writer), or 0 if absent.
-inline std::uint32_t exception_thread_id(const wchar_t* dump_path)
+inline std::uint32_t exception_thread_id(const std::filesystem::path& dump_path)
 {
     MINIDUMP_EXCEPTION_STREAM es{};
     if (!read_exception_stream(dump_path, es))
@@ -131,7 +143,7 @@ inline bool is_rsds(const unsigned char* p, std::size_t avail) noexcept
     return avail >= 24U && p[0] == 'R' && p[1] == 'S' && p[2] == 'D' && p[3] == 'S';
 }
 
-inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want_basename)
+inline DumpModule find_dump_module(const std::filesystem::path& dump_path, const wchar_t* want_basename)
 {
     DumpModule  result;
     const Bytes file = read_file_bytes(dump_path);
@@ -141,14 +153,14 @@ inline DumpModule find_dump_module(const wchar_t* dump_path, const wchar_t* want
     }
 
     constexpr std::uint32_t module_list_stream = 4U; // MINIDUMP_STREAM_TYPE::ModuleListStream
-    const std::size_t       list_size = crd::crash::read_dump_stream(dump_path, module_list_stream, nullptr, 0);
+    const std::size_t       list_size = read_stream(dump_path, module_list_stream, nullptr, 0);
     if (list_size < sizeof(std::uint32_t))
     {
         return result;
     }
     Bytes list;
     list.resize(list_size);
-    if (crd::crash::read_dump_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
+    if (read_stream(dump_path, module_list_stream, list.data(), list.size()) != list_size)
     {
         return result;
     }

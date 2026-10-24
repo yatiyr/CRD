@@ -211,7 +211,8 @@ void check_fault_bundle(const std::filesystem::path& dir)
     const std::filesystem::path bundle = first_gpu_dump(dir);
     REQUIRE_FALSE(bundle.empty());
     g::detail::Dx12RemovalRecord record{};
-    REQUIRE(g::detail::dx12_read_removal_bundle(bundle.c_str(), record) == g::detail::Dx12BundleRead::Ok);
+    REQUIRE(g::detail::dx12_read_removal_bundle(reinterpret_cast<const char*>(bundle.u8string().c_str()), record) ==
+            g::detail::Dx12BundleRead::Ok);
     print_record(record);
     const g::detail::Dx12DredReport& d = record.dred;
     CHECK(record.origin == g::detail::Dx12RemovalOrigin::Observed);

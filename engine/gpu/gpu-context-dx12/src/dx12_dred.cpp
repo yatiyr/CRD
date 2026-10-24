@@ -317,7 +317,7 @@ void dx12_record_removal(ID3D12Device* device, Dx12RemovalOrigin origin) noexcep
     }
 }
 
-Dx12BundleRead dx12_read_removal_bundle(const wchar_t* dump_path, Dx12RemovalRecord& out) noexcept
+Dx12BundleRead dx12_read_removal_bundle(const char* dump_path, Dx12RemovalRecord& out) noexcept
 {
     // read_dump_stream copies at most `cap` bytes and returns the stream's full size, so one bounded read both fetches a
     // bundle and measures any other stream (a longer one is truncated into `bundle`, then refused below).

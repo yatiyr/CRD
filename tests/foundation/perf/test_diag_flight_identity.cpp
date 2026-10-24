@@ -359,13 +359,14 @@ TEST_CASE("live modules: every module matches a minidump of this process written
     crash::uninstall();
     REQUIRE(crash::install(dir.string().c_str()) == crash::InstallResult::Ok);
     const cp::LiveModules before = cp::enumerate_loaded_modules();
-    const wchar_t*        dump   = nullptr;
+    const char*           dump   = nullptr;
     const crash::WriteResult w   = crash::capture_dump(&dump);
     const cp::LiveModules after  = cp::enumerate_loaded_modules();
     crash::uninstall();
     REQUIRE(w == crash::WriteResult::Ok);
     REQUIRE(dump != nullptr);
-    const cont::Array<crd::u8> bytes = mf::read_whole_file(fs::path(dump).string().c_str());
+    const fs::path             dump_file{reinterpret_cast<const char8_t*>(dump)}; // the crash API reports UTF-8
+    const cont::Array<crd::u8> bytes = mf::read_whole_file(dump_file.string().c_str());
     REQUIRE(bytes.size() > 0U);
     const cont::Array<cp::ModuleIdentity> dumped = cp::parse_minidump_modules({bytes.data(), bytes.size()});
     REQUIRE(dumped.size() >= 2U);

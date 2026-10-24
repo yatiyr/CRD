@@ -156,7 +156,7 @@ enum class VkBundleRead : crd::u8
 };
 
 // Read a loss bundle back from a dump file. Never throws; `out` is written only on Ok.
-[[nodiscard]] VkBundleRead vk_read_loss_bundle(const wchar_t* dump_path, VkLossRecord& out) noexcept;
+[[nodiscard]] VkBundleRead vk_read_loss_bundle(const char* dump_path, VkLossRecord& out) noexcept;
 // The most recently written loss, with its bundle result, kept after its device is destroyed (origin None before any).
 [[nodiscard]] VkLossRecord vk_last_loss() noexcept;
 

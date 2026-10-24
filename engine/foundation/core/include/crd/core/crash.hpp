@@ -56,16 +56,16 @@ struct DumpNote
 };
 
 // Filled on the fatal path and passed to an installed report handler. All fields are preallocated;
-// nothing here allocates or takes a lock. dump_path is the resolved wide path on Windows (may be null
-// when the write never opened a file); it is null on platforms without an in-process dump path.
+// nothing here allocates or takes a lock. dump_path is the resolved path as UTF-8, the encoding of every engine path
+// (null when the write never opened a file, and on platforms without an in-process dump path).
 struct CrashReport
 {
-    std::uint32_t  code{0};          // exception code (Windows) / signal number (Linux)
-    const void*    address{nullptr}; // faulting address, when the platform reports one
-    std::uint32_t  faulting_tid{0};  // OS thread id of the faulting thread
-    WriteResult    write{WriteResult::Unsupported};
-    const wchar_t* dump_path{nullptr};
-    std::uint32_t  last_error{0};    // raw GetLastError / HRESULT of the failing step (0 when write == Ok)
+    std::uint32_t code{0};          // exception code (Windows) / signal number (Linux)
+    const void*   address{nullptr}; // faulting address, when the platform reports one
+    std::uint32_t faulting_tid{0};  // OS thread id of the faulting thread
+    WriteResult   write{WriteResult::Unsupported};
+    const char*   dump_path{nullptr};
+    std::uint32_t last_error{0};    // raw GetLastError / HRESULT of the failing step (0 when write == Ok)
 };
 
 // Installed with the atomic-pair, no-default-action pattern: nothing fires unless a handler is set.
@@ -97,9 +97,10 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 void uninstall() noexcept;
 
 // Live, non-fatal capture of the current process through the same writer the fatal path uses. Returns the
-// write result; on Ok, *out_path (when non-null) receives the resolved dump path. Requires a prior install()
-// (it reuses the resolved output path). This is the shared entry point the hang path will drive later.
-WriteResult capture_dump(const wchar_t** out_path = nullptr) noexcept;
+// write result; on Ok, *out_path (when non-null) receives the resolved UTF-8 dump path, stable until the next write.
+// Requires a prior install() (it reuses the resolved output path). This is the shared entry point the hang path will
+// drive later.
+WriteResult capture_dump(const char** out_path = nullptr) noexcept;
 
 // Live, non-fatal capture that also records what produced it and (optionally) an evidence blob as a user stream.
 // This is the entry a hang/watchdog observer drives to capture the stuck worker stacks: MiniDumpWriteDump suspends
@@ -108,12 +109,13 @@ WriteResult capture_dump(const wchar_t** out_path = nullptr) noexcept;
 // Bounded: after a small per-process cap of non-fatal dumps, further calls return Suppressed. Must not be called
 // from a fiber (it captures OS stacks and holds a lock across a possible park); the fatal single-shot gate is
 // untouched. Requires a prior install().
-WriteResult capture_dump(const DumpNote& note, const wchar_t** out_path = nullptr) noexcept;
+WriteResult capture_dump(const DumpNote& note, const char** out_path = nullptr) noexcept;
 
 // Copy the bytes of one stream (system stream number or a user-stream type such as kEvidenceStreamType) out of a
-// written dump file, up to cap. Returns the stream's byte count (which may exceed cap -> truncated copy), or 0 when
-// the file, the stream, or DbgHelp is unavailable. Lets tests/tools read a dump without linking dbghelp themselves.
-std::size_t read_dump_stream(const wchar_t* dump_path, std::uint32_t stream_type, void* out, std::size_t cap) noexcept;
+// written dump file (a UTF-8 path), up to cap. Returns the stream's byte count (which may exceed cap -> truncated
+// copy), or 0 when the file, the stream, or DbgHelp is unavailable. Lets tests/tools read a dump without linking
+// dbghelp themselves.
+std::size_t read_dump_stream(const char* dump_path, std::uint32_t stream_type, void* out, std::size_t cap) noexcept;
 
 // Reserve stack for the current thread's own last-chance unwinding so a stack-overflow fault still has room
 // to signal the handler thread. Checked wrapper over SetThreadStackGuarantee (no-op / harmless off Windows).

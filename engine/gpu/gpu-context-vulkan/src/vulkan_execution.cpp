@@ -581,7 +581,7 @@ VkLossRecord vk_last_loss() noexcept
     return s.last_loss;
 }
 
-VkBundleRead vk_read_loss_bundle(const wchar_t* dump_path, VkLossRecord& out) noexcept
+VkBundleRead vk_read_loss_bundle(const char* dump_path, VkLossRecord& out) noexcept
 {
     // One bounded read: a stream of exactly this build's bundle size is read whole; any other size is measured (a
     // longer one is truncated into `bundle`, then refused below).

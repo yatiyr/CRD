@@ -73,13 +73,13 @@ void hang_dumps(const crd::jobs::HangReport& report, void* /*user*/) noexcept
     note.evidence       = &ev;
     note.evidence_bytes = static_cast<std::uint32_t>(sizeof(ev));
 
-    const wchar_t*    path = nullptr;
+    const char*       path = nullptr;
     const WriteResult wr   = crd::crash::capture_dump(note, &path); // suspends the other threads, walks their stacks
     g_dump_result.store(static_cast<int>(wr), std::memory_order_relaxed);
     g_evidence_bytes.store(note.evidence_bytes, std::memory_order_relaxed);
     if (wr == WriteResult::Ok && path != nullptr)
     {
-        g_dump_path = path; // safe: capture_dump has returned, all threads resumed
+        g_dump_path = fs::path{reinterpret_cast<const char8_t*>(path)}; // UTF-8; capture_dump returned, threads resumed
     }
     g_dump_done.store(true, std::memory_order_release);
 }
@@ -124,8 +124,8 @@ TEST_CASE("hang dump: a watchdog-fired hang writes one non-fatal dump with evide
 
     // The evidence stream round-trips out of the live dump.
     HangEvidence      back{};
-    const std::size_t n =
-        crd::crash::read_dump_stream(g_dump_path.c_str(), crd::crash::kEvidenceStreamType, &back, sizeof(back));
+    const std::size_t n = crd::crash::read_dump_stream(reinterpret_cast<const char*>(g_dump_path.u8string().c_str()),
+                                                       crd::crash::kEvidenceStreamType, &back, sizeof(back));
     CHECK(n == sizeof(HangEvidence));
     CHECK(back.kind == static_cast<crd::i32>(crd::jobs::HangKind::ExecutorStarved));
     CHECK(back.executing == 0U); // nobody executing in an executor-starved hang

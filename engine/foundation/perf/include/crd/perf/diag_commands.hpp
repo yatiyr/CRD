@@ -219,8 +219,10 @@ private:
 };
 
 // Whether `path` is a safe request path: relative, '/'-separated, every component a plain [A-Za-z0-9._-] name (no
-// empty, "." or ".." component, no drive, no backslash), so joined to the host's root it can never leave it. The
-// service applies it to every request path; a command applies it to a path it takes as an argument.
+// empty, "." or ".." component, no drive, no backslash), so joined to the host's root it can never leave it, and
+// portable: no component ends in '.' (Windows drops it) or names a Windows device (CON, PRN, AUX, NUL, COM0-9, LPT0-9
+// before its first '.', any case), so on every host it names a file under the root. The service applies it to every
+// request path; a command applies it to a path it takes as an argument.
 [[nodiscard]] bool diag_path_is_safe(cont::StringView path) noexcept;
 
 // The arguments a handler sees after every check passed.

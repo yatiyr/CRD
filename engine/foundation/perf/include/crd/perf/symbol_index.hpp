@@ -32,6 +32,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/containers/string_view.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -85,6 +86,7 @@ struct SymbolIndexHeader
 
 static_assert(sizeof(SymbolIndexHeader) == 16, "SymbolIndexHeader is 16 B; on-disk pin");
 static_assert(alignof(SymbolIndexHeader) == 8, "SymbolIndexHeader is 8-aligned");
+static_assert(CRD_LITTLE_ENDIAN, "the symbol index is copied as host bytes");
 
 struct SymbolRecord
 {

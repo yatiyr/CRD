@@ -42,6 +42,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -96,6 +97,7 @@ struct BundleHeader
 
 static_assert(sizeof(BundleHeader) == 40, "BundleHeader is 40 B; on-disk pin");
 static_assert(alignof(BundleHeader) == 8, "BundleHeader is 8-aligned");
+static_assert(CRD_LITTLE_ENDIAN, "the bundle is copied as host bytes");
 
 struct BundleSectionHeader
 {

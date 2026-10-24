@@ -25,9 +25,15 @@ wchar_t s_output_dir_w[kPathCap] = L"";
 wchar_t s_scratch_a[kPathCap];
 wchar_t s_scratch_b[kPathCap];
 
-// The last built dump path; returned to callers via out_path and stable until the next write (serialized
-// by s_dump_lock). Lives in BSS so building it on the fatal path touches no allocator.
+// The last built dump path, and its UTF-8 form returned to callers via out_path, stable until the next write
+// (serialized by s_dump_lock). Both live in BSS so building them on the fatal path touches no allocator; a UTF-16 unit
+// takes at most 3 UTF-8 bytes.
 wchar_t s_dump_path[kPathCap];
+char    s_dump_path_utf8[kPathCap * 3];
+
+// read_dump_stream's wide copy of its UTF-8 path argument, under its own lock so a reader never waits on a dump.
+wchar_t s_read_path[kPathCap];
+SRWLOCK s_read_lock = SRWLOCK_INIT;
 
 LPTOP_LEVEL_EXCEPTION_FILTER s_prev_filter = nullptr; // the genuine previous filter (preserved across re-installs)
 bool                         s_have_prev   = false;
@@ -199,9 +205,9 @@ void emit_hex(HANDLE h, unsigned long long v, int width) noexcept
 }
 
 // The single writer shared by the fatal filter and the live capture. mei == nullptr => a general (non-exception)
-// dump. On Ok, *out_path (when non-null) points at s_dump_path. Caller holds s_dump_lock.
+// dump. On Ok, *out_path (when non-null) points at s_dump_path_utf8. Caller holds s_dump_lock.
 crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::crash::DumpKind kind,
-                                   const crd::crash::DumpNote* note, const wchar_t** out_path,
+                                   const crd::crash::DumpNote* note, const char** out_path,
                                    DWORD* out_last_error) noexcept
 {
     using crd::crash::WriteResult;
@@ -354,9 +360,15 @@ crd::crash::WriteResult write_dump(MINIDUMP_EXCEPTION_INFORMATION* mei, crd::cra
         return WriteResult::FlushFailed;
     }
     (void)CloseHandle(file);
+    // Win32 conversion, no CRT lock: the path came from UTF-8 and an ASCII name, so it always fits and converts.
+    if (WideCharToMultiByte(CP_UTF8, 0, s_dump_path, -1, s_dump_path_utf8, static_cast<int>(sizeof(s_dump_path_utf8)),
+                            nullptr, nullptr) == 0)
+    {
+        s_dump_path_utf8[0] = '\0';
+    }
     if (out_path != nullptr)
     {
-        *out_path = s_dump_path;
+        *out_path = s_dump_path_utf8;
     }
     return WriteResult::Ok;
 }
@@ -413,8 +425,8 @@ void do_fatal_dump() noexcept
     mei.ExceptionPointers = s_req_ep;
     mei.ClientPointers    = FALSE;
 
-    const wchar_t* dump_path  = nullptr;
-    DWORD          last_error = 0;
+    const char* dump_path  = nullptr;
+    DWORD       last_error = 0;
     AcquireSRWLockExclusive(&s_dump_lock);
     const crd::crash::WriteResult wr = write_dump(&mei, crd::crash::DumpKind::Crash, nullptr, &dump_path, &last_error);
     ReleaseSRWLockExclusive(&s_dump_lock);
@@ -424,15 +436,7 @@ void do_fatal_dump() noexcept
     if (wr == crd::crash::WriteResult::Ok)
     {
         emit_cstr(herr, "[crd] crash dump: ");
-        // Narrow the wide path for the emergency line (Win32, no CRT lock). Static buffer: only the single gate
-        // winner ever reaches this, so there is no concurrent writer.
-        static char narrow_path[kPathCap];
-        const int   pn = WideCharToMultiByte(CP_UTF8, 0, dump_path, -1, narrow_path, static_cast<int>(kPathCap),
-                                             nullptr, nullptr);
-        if (pn > 1)
-        {
-            emit(herr, narrow_path, static_cast<DWORD>(pn - 1)); // pn includes the NUL
-        }
+        emit_cstr(herr, dump_path);
         emit_cstr(herr, "\n");
     }
     else
@@ -500,8 +504,8 @@ crd::crash::CrashReport direct_fallback_dump(EXCEPTION_POINTERS* ep, DWORD tid) 
     mei.ExceptionPointers = ep;
     mei.ClientPointers    = FALSE;
 
-    const wchar_t* p  = nullptr;
-    DWORD          le = 0;
+    const char* p  = nullptr;
+    DWORD       le = 0;
     if (TryAcquireSRWLockExclusive(&s_dump_lock))
     {
         r.write = write_dump(&mei, crd::crash::DumpKind::Crash, nullptr, &p, &le);
@@ -749,7 +753,7 @@ void guard_current_thread_stack(std::uint32_t reserve_bytes) noexcept
     (void)SetThreadStackGuarantee(&bytes); // best-effort; a failure here is non-fatal
 }
 
-WriteResult capture_dump(const DumpNote& note, const wchar_t** out_path) noexcept
+WriteResult capture_dump(const DumpNote& note, const char** out_path) noexcept
 {
     if (s_output_dir_w[0] == L'\0')
     {
@@ -768,19 +772,25 @@ WriteResult capture_dump(const DumpNote& note, const wchar_t** out_path) noexcep
     return wr;
 }
 
-WriteResult capture_dump(const wchar_t** out_path) noexcept
+WriteResult capture_dump(const char** out_path) noexcept
 {
     return capture_dump(DumpNote{DumpKind::Manual, nullptr, 0U}, out_path);
 }
 
-std::size_t read_dump_stream(const wchar_t* dump_path, std::uint32_t stream_type, void* out, std::size_t cap) noexcept
+std::size_t read_dump_stream(const char* dump_path, std::uint32_t stream_type, void* out, std::size_t cap) noexcept
 {
     if (dump_path == nullptr)
     {
         return 0;
     }
-    HANDLE file = CreateFileW(dump_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE file = INVALID_HANDLE_VALUE;
+    AcquireSRWLockExclusive(&s_read_lock);
+    if (MultiByteToWideChar(CP_UTF8, 0, dump_path, -1, s_read_path, static_cast<int>(kPathCap)) != 0)
+    {
+        file = CreateFileW(s_read_path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL,
+                           nullptr);
+    }
+    ReleaseSRWLockExclusive(&s_read_lock);
     if (file == INVALID_HANDLE_VALUE)
     {
         return 0;
@@ -1510,17 +1520,17 @@ void uninstall() noexcept
     t_alt_installed = false;
 }
 
-WriteResult capture_dump(const DumpNote& /*note*/, const wchar_t** /*out_path*/) noexcept
+WriteResult capture_dump(const DumpNote& /*note*/, const char** /*out_path*/) noexcept
 {
     return WriteResult::Unsupported; // no in-process minidump equivalent; core dumps are OS-driven
 }
 
-WriteResult capture_dump(const wchar_t** /*out_path*/) noexcept
+WriteResult capture_dump(const char** /*out_path*/) noexcept
 {
     return WriteResult::Unsupported;
 }
 
-std::size_t read_dump_stream(const wchar_t* /*dump_path*/, std::uint32_t /*stream_type*/, void* /*out*/,
+std::size_t read_dump_stream(const char* /*dump_path*/, std::uint32_t /*stream_type*/, void* /*out*/,
                              std::size_t /*cap*/) noexcept
 {
     return 0; // minidump files are a Windows artifact
@@ -1581,9 +1591,9 @@ namespace crd::crash
 void          set_crash_report_handler(CrashReportHandler, void*) noexcept {}
 InstallResult install(const char*) noexcept { return InstallResult::Unsupported; }
 void          uninstall() noexcept {}
-WriteResult   capture_dump(const DumpNote&, const wchar_t**) noexcept { return WriteResult::Unsupported; }
-WriteResult   capture_dump(const wchar_t**) noexcept { return WriteResult::Unsupported; }
-std::size_t   read_dump_stream(const wchar_t*, std::uint32_t, void*, std::size_t) noexcept { return 0; }
+WriteResult   capture_dump(const DumpNote&, const char**) noexcept { return WriteResult::Unsupported; }
+WriteResult   capture_dump(const char**) noexcept { return WriteResult::Unsupported; }
+std::size_t   read_dump_stream(const char*, std::uint32_t, void*, std::size_t) noexcept { return 0; }
 void          guard_current_thread_stack(std::uint32_t) noexcept {}
 
 #if CRD_ENABLE_ASSERTS

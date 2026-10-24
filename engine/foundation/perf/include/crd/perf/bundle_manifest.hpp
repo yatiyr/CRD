@@ -22,6 +22,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -49,6 +50,7 @@ struct ManifestHeader
 
 static_assert(sizeof(ManifestHeader) == 16, "ManifestHeader is 16 B; on-disk pin");
 static_assert(alignof(ManifestHeader) == 4, "ManifestHeader is 4-aligned");
+static_assert(CRD_LITTLE_ENDIAN, "the manifest is copied as host bytes");
 
 // The decoded/authored manifest (in-memory form).
 struct BundleManifest

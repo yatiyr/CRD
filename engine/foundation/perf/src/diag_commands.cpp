@@ -34,8 +34,36 @@ constexpr crd::usize kObjectOverhead = 2U + kClippedTail.size();
 
 constexpr crd::u64 kCursorOffsetMask = (1ULL << kDiagCursorOffsetBits) - 1ULL;
 
+// Whether a path component names a file on every host. Windows drops a trailing '.' and opens a device for a name
+// whose part before the first '.' is CON, PRN, AUX, NUL, COM0-9 or LPT0-9 in any case ("nul.json" writes nothing,
+// "con" waits on the console), so such a component is refused on every host.
+[[nodiscard]] bool portable_component(cont::StringView part) noexcept
+{
+    if (part.back() == '.')
+    {
+        return false;
+    }
+    const cont::StringView stem     = part.substr(0U, part.find('.'));
+    const bool             numbered = stem.size() == 4U && stem[3] >= '0' && stem[3] <= '9';
+    const cont::StringView letters  = numbered ? stem.substr(0U, 3U) : stem; // COM0-9, LPT0-9 by their letters
+    const auto             names    = [letters](cont::StringView device) noexcept
+    {
+        return std::ranges::equal(letters, device,
+                                  [](char a, char b) noexcept
+                                  {
+                                      return (a >= 'a' && a <= 'z' ? static_cast<char>(a - 'a' + 'A') : a) == b;
+                                  });
+    };
+    if (numbered)
+    {
+        return !names("COM") && !names("LPT");
+    }
+    return !names("CON") && !names("PRN") && !names("AUX") && !names("NUL");
+}
+
 // A request path is relative, '/'-separated, and every component is a plain name: no empty, "." or ".." component,
-// no drive, no backslash and nothing outside [A-Za-z0-9._-]. So a joined path can never leave the host's root.
+// no drive, no backslash and nothing outside [A-Za-z0-9._-]. So a joined path can never leave the host's root, and
+// each component is portable (above).
 [[nodiscard]] bool safe_relative_path(cont::StringView path) noexcept
 {
     if (path.empty())
@@ -63,6 +91,10 @@ constexpr crd::u64 kCursorOffsetMask = (1ULL << kDiagCursorOffsetBits) - 1ULL;
             {
                 return false;
             }
+        }
+        if (!portable_component(part))
+        {
+            return false;
         }
         start = end + 1U;
     }
@@ -928,7 +960,8 @@ DiagResult DiagCommandService::execute(const DiagRequest& request, const std::at
         if (!safe_relative_path(request.path))
         {
             refuse(result, request, DiagStatus::BadArgument,
-                   "the path must be relative and made of plain [A-Za-z0-9._-] names separated by '/'");
+                   "the path must be relative and made of plain [A-Za-z0-9._-] names separated by '/', none a "
+                   "Windows device name or ending in '.'");
             return result;
         }
         if (m_root.empty())

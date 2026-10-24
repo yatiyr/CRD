@@ -183,7 +183,8 @@ TEST_CASE("DIAG.9b: an injected device loss takes the Vulkan loss path and is ca
     CHECK(bundles == 1U);
     REQUIRE_FALSE(bundle_path.empty());
     d::VkLossRecord read{};
-    REQUIRE(d::vk_read_loss_bundle(bundle_path.c_str(), read) == d::VkBundleRead::Ok);
+    REQUIRE(d::vk_read_loss_bundle(reinterpret_cast<const char*>(bundle_path.u8string().c_str()), read) ==
+            d::VkBundleRead::Ok);
     CHECK(read.loss_origin == d::VkFailureOrigin::Simulated);
     CHECK(std::strcmp(read.loss_operation, "compute submit") == 0);
     crd::crash::uninstall();

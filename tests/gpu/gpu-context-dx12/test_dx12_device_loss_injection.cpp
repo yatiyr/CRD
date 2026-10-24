@@ -181,7 +181,8 @@ TEST_CASE("DIAG.9b: an injected device loss removes the DX12 device and is captu
     CHECK(bundles == 1U);
     REQUIRE_FALSE(bundle_path.empty());
     g::detail::Dx12RemovalRecord read{};
-    REQUIRE(g::detail::dx12_read_removal_bundle(bundle_path.c_str(), read) == g::detail::Dx12BundleRead::Ok);
+    REQUIRE(g::detail::dx12_read_removal_bundle(reinterpret_cast<const char*>(bundle_path.u8string().c_str()), read) ==
+            g::detail::Dx12BundleRead::Ok);
     CHECK(read.origin == Dx12RemovalOrigin::Simulated);
     CHECK(read.sequence == removals_before + 1U);
     CHECK(read.dred.removal_reason == static_cast<crd::i32>(DXGI_ERROR_DEVICE_REMOVED));

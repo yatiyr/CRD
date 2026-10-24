@@ -123,13 +123,15 @@ cont::Array<crd::u8> read_bytes(const fs::path& p)
 cont::Array<crd::u8> read_stream(const fs::path& dmp, std::uint32_t stream_type)
 {
     cont::Array<crd::u8> out;
-    const std::size_t    sz = crd::crash::read_dump_stream(dmp.wstring().c_str(), stream_type, nullptr, 0);
+    const std::size_t    sz =
+        crd::crash::read_dump_stream(reinterpret_cast<const char*>(dmp.u8string().c_str()), stream_type, nullptr, 0);
     if (sz == 0)
     {
         return out;
     }
     out.resize_uninitialized(sz);
-    const std::size_t got = crd::crash::read_dump_stream(dmp.wstring().c_str(), stream_type, out.data(), sz);
+    const std::size_t got = crd::crash::read_dump_stream(reinterpret_cast<const char*>(dmp.u8string().c_str()),
+                                                         stream_type, out.data(), sz);
     out.resize(got);
     return out;
 }

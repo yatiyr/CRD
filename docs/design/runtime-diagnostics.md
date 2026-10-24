@@ -2933,7 +2933,15 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-11c-doctor-modes.md))
 - Open qualification, named, not passed: Vulkan on the hosted Windows runners (no Vulkan device; qualified on this
   host's hardware adapter), a native Linux hardware GPU (lavapipe qualifies that adapter only), ARM64 (JOBS-PORT),
   the hardware DX12 page fault (user-only h2) and MAC.DIAG/WEB.DIAG.
-- Not settled here: the portable boundary audit.
+- The portable boundary (2026-10-24, [session](../sessions/2026-10-24-diag-11c-portable-boundary.md)): every
+  on-disk schema has fixed-width fields and a byte-buffer writer and reader beside any file route, and either writes
+  little-endian bytes (flight record, build identity) or asserts a little-endian host where it copies host bytes
+  (bundle, manifest, symbol index, CPROF). The crash adapter takes and reports UTF-8 paths. A diag command path
+  refuses a component ending in `.` or naming a Windows device on every host. Named for later platforms: wasm32
+  (`platform.hpp` refuses it; JOBS-PORT.3, WEB.DIAG), 64-bit macOS thread ids against `u32` `faulting_tid` and
+  `current_thread_id()` and a Mach-O UUID symbol kind (an older reader clamps an unknown kind to `None`) (MAC.DIAG),
+  and the file adapters `crash::install`, `write_bundle_atomic`, `save_capture_to_file` (WEB.DIAG takes the buffer
+  routes).
 
 <a id="diag-12"></a>
 ## DIAG.12 — independent end-to-end close audit

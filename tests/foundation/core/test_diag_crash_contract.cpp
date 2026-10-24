@@ -152,23 +152,43 @@ TEST_CASE("crash contract: a live capture writes a complete, long-path-safe, non
     const fs::path dir = fresh_temp_dir();
     REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
 
-    const wchar_t* path1 = nullptr;
+    const char* path1 = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path1));
     REQUIRE(path1 != nullptr);
 
-    const std::wstring_view wpath1{path1};
-    CHECK(wpath1.rfind(L"\\\\?\\", 0) == 0); // resolved to the long-path form
-    const fs::path dump1{wpath1};
+    CHECK(std::string_view{path1}.rfind("\\\\?\\", 0) == 0); // resolved to the long-path form
+    const fs::path dump1 = crd_test_minidump::path_from_utf8(path1);
     CHECK(fs::exists(dump1));
     CHECK(fs::file_size(dump1) > 0U);
 
     // A second back-to-back capture must not collide with or overwrite the first.
-    const wchar_t* path2 = nullptr;
+    const char* path2 = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path2));
-    const fs::path dump2{path2};
+    const fs::path dump2 = crd_test_minidump::path_from_utf8(path2);
     CHECK(dump2 != dump1);
     CHECK(fs::exists(dump2));
     CHECK(fs::exists(dump1)); // the first is still there -- not clobbered
+
+    crd::crash::uninstall();
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("crash contract: dump paths are UTF-8 both ways, a non-ASCII directory included", "[core][diag][crash]")
+{
+    crd::crash::uninstall();
+    // U+00FC and U+011F as UTF-8: no single ANSI code page holds both, so only a UTF-8 path round-trips them.
+    fs::path dir = fresh_temp_dir();
+    dir += crd_test_minidump::path_from_utf8("_\xC3\xBC\xC4\x9F");
+    REQUIRE(InstallResult::Ok == crd::crash::install(reinterpret_cast<const char*>(dir.u8string().c_str())));
+
+    const char* path = nullptr;
+    REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path));
+    REQUIRE(path != nullptr);
+    CHECK(std::string_view{path}.find("_\xC3\xBC\xC4\x9F\\live_") != std::string_view::npos);
+    CHECK(fs::exists(crd_test_minidump::path_from_utf8(path)));
+    constexpr std::uint32_t thread_list_stream = 3U; // MINIDUMP_STREAM_TYPE::ThreadListStream
+    CHECK(crd::crash::read_dump_stream(path, thread_list_stream, nullptr, 0) > 0U); // read back by the same path
 
     crd::crash::uninstall();
     std::error_code ec;
@@ -203,10 +223,10 @@ TEST_CASE("crash contract: a hang-kind live dump embeds and round-trips its evid
     note.evidence       = blob.data();
     note.evidence_bytes = static_cast<std::uint32_t>(blob.size());
 
-    const wchar_t* path = nullptr;
+    const char* path = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(note, &path));
     REQUIRE(path != nullptr);
-    CHECK(std::wstring_view{path}.find(L"\\hang_") != std::wstring_view::npos); // the Hang prefix
+    CHECK(std::string_view{path}.find("\\hang_") != std::string_view::npos); // the Hang prefix
 
     cont::StaticArray<unsigned char, 64> read_back{};
     const std::size_t                    n =
@@ -238,10 +258,10 @@ TEST_CASE("crash contract: a manual live dump uses the live_ prefix", "[core][di
     const fs::path dir = fresh_temp_dir();
     REQUIRE(InstallResult::Ok == crd::crash::install(dir.string().c_str()));
 
-    const wchar_t* path = nullptr;
+    const char* path = nullptr;
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(&path)); // the Manual overload
     REQUIRE(path != nullptr);
-    CHECK(std::wstring_view{path}.find(L"\\live_") != std::wstring_view::npos);
+    CHECK(std::string_view{path}.find("\\live_") != std::string_view::npos);
 
     crd::crash::uninstall();
     std::error_code ec;
@@ -417,18 +437,18 @@ TEST_CASE("crash contract: the written dump is readable and identifies the fault
     const crd::crash::CrashReport r      = crd::crash::test_fatal_path(0xC0000005U);
     REQUIRE(r.write == WriteResult::Ok);
     REQUIRE(r.dump_path != nullptr);
-    const fs::path dump_path{r.dump_path}; // copied: the shared path buffer is rewritten by the next write
+    // Copied: the shared path buffer is rewritten by the next write.
+    const fs::path dump_path = crd_test_minidump::path_from_utf8(r.dump_path);
 
-    CHECK(crd_test_minidump::exception_code(dump_path.c_str()) == 0xC0000005U); // the fault code landed in the dump
-    CHECK(crd_test_minidump::exception_thread_id(dump_path.c_str()) == caller); // ...tagged to the faulting thread
+    CHECK(crd_test_minidump::exception_code(dump_path) == 0xC0000005U); // the fault code landed in the dump
+    CHECK(crd_test_minidump::exception_thread_id(dump_path) == caller); // ...tagged to the faulting thread
 
     wchar_t     exe[MAX_PATH] = {0};
     const DWORD n             = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
     REQUIRE(n > 0U);
     const fs::path exe_base = fs::path{exe, exe + n}.filename();
-    const crd_test_minidump::DumpModule module =
-        crd_test_minidump::find_dump_module(dump_path.c_str(), exe_base.c_str());
-    CHECK(module.named);                                            // the crashing binary is named...
+    const crd_test_minidump::DumpModule module = crd_test_minidump::find_dump_module(dump_path, exe_base.c_str());
+    CHECK(module.named);                                          // the crashing binary is named...
     CHECK(module.rsds == crd_test_minidump::image_has_rsds(exe)); // ...and CV-identified iff it has a PDB identity
 
     crd::crash::uninstall();

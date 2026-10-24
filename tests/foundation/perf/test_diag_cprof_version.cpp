@@ -52,20 +52,20 @@ static_assert(offsetof(cp::ThreadHeader, sample_count) == 4, "ThreadHeader.sampl
 static_assert(offsetof(cp::ThreadHeader, sample_byte_offset) == 8, "ThreadHeader.sample_byte_offset @8");
 static_assert(offsetof(cp::ThreadHeader, name) == 16, "ThreadHeader.name @16");
 static_assert(offsetof(cp::ThreadHeader, dropped_count) == 48, "ThreadHeader.dropped_count @48");
-static_assert(offsetof(cp::ThreadHeader, _pad_a) == 52, "ThreadHeader._pad_a @52 (spare slot -- pinned so repurposing it is deliberate)");
+static_assert(offsetof(cp::ThreadHeader, pad_a) == 52, "ThreadHeader.pad_a @52 (spare slot -- pinned so repurposing it is deliberate)");
 
 // CounterMeta (64 B)
 static_assert(sizeof(cp::CounterMeta) == 64, "CounterMeta size pin");
 static_assert(offsetof(cp::CounterMeta, index) == 0, "CounterMeta.index @0");
 static_assert(offsetof(cp::CounterMeta, kind) == 4, "CounterMeta.kind @4");
 static_assert(offsetof(cp::CounterMeta, type) == 5, "CounterMeta.type @5");
-static_assert(offsetof(cp::CounterMeta, _pad_a) == 6, "CounterMeta._pad_a @6 (spare slot)");
+static_assert(offsetof(cp::CounterMeta, pad_a) == 6, "CounterMeta.pad_a @6 (spare slot)");
 static_assert(offsetof(cp::CounterMeta, name) == 8, "CounterMeta.name @8");
 
 // AllocatorMeta (64 B)
 static_assert(sizeof(cp::AllocatorMeta) == 64, "AllocatorMeta size pin");
 static_assert(offsetof(cp::AllocatorMeta, index) == 0, "AllocatorMeta.index @0");
-static_assert(offsetof(cp::AllocatorMeta, _pad_a) == 4, "AllocatorMeta._pad_a @4 (spare slot)");
+static_assert(offsetof(cp::AllocatorMeta, pad_a) == 4, "AllocatorMeta.pad_a @4 (spare slot)");
 static_assert(offsetof(cp::AllocatorMeta, name) == 8, "AllocatorMeta.name @8");
 
 // Sample (32 B) -- also runtime-CHECKed in test_sample_pod.cpp; pinned here at compile time so the whole

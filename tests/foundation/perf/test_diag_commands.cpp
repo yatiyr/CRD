@@ -585,7 +585,13 @@ TEST_CASE("diag commands: a command declaring a second class needs both grants",
     CHECK(paths.execute(r).status == DiagStatus::Ok);
     CHECK(cont::StringView{root_cmd.root.data(), root_cmd.root.size()} == "some/root");
     CHECK(crd::perf::diag_path_is_safe("a/b-c_d.e"));
-    for (const char* unsafe : {"", "../x", "a/../b", "a//b", "./a", "C:/x", "a\b", "/abs", "a/b/"})
+    for (const char* portable : {"console", "nullx", "com10", "lpt", "com", "a.con", "con_1", "a/b.c.d"})
+    {
+        CHECK(crd::perf::diag_path_is_safe(portable));
+    }
+    // Names a Windows host opens as a device or strips a trailing '.' from are refused on every host.
+    for (const char* unsafe : {"", "../x", "a/../b", "a//b", "./a", "C:/x", "a\b", "/abs", "a/b/", "con", "NUL.json",
+                               "a/Aux", "prn.x.y", "com1", "LPT9.txt", "Com0", "a.", "a/b./c"})
     {
         CHECK_FALSE(crd::perf::diag_path_is_safe(unsafe));
         r.path = cont::StringView{unsafe};

@@ -158,7 +158,7 @@ enum class Dx12BundleRead : u8
 };
 
 // Read a removal bundle back from a dump file. Never throws; `out` is written only on Ok.
-[[nodiscard]] Dx12BundleRead dx12_read_removal_bundle(const wchar_t* dump_path, Dx12RemovalRecord& out) noexcept;
+[[nodiscard]] Dx12BundleRead dx12_read_removal_bundle(const char* dump_path, Dx12RemovalRecord& out) noexcept;
 
 // The completion helpers call this whenever they stop a failed device: read DRED and keep it as the process's
 // last-known removal, which survives the provider's shutdown (it is not owned by any context).

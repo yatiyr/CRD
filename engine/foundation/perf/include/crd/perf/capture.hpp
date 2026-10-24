@@ -49,6 +49,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/perf/config.hpp>
@@ -108,6 +109,7 @@ struct CprofHeader
 
 static_assert(sizeof(CprofHeader) == 72, "CprofHeader is 72 B; on-disk pin");
 static_assert(alignof(CprofHeader) == 8, "CprofHeader is 8-aligned");
+static_assert(CRD_LITTLE_ENDIAN, "CPROF is copied as host bytes");
 
 struct ThreadHeader
 {
@@ -117,7 +119,7 @@ struct ThreadHeader
                                  //      relative to the start of the buffer
     char     name[32];           // 32 -- null-padded
     crd::u32 dropped_count;      // 4 -- total samples dropped to overflow
-    crd::u32 _pad_a;             // 4
+    crd::u32 pad_a;              // 4
 };
 
 static_assert(sizeof(ThreadHeader) == 56, "ThreadHeader is 56 B; on-disk pin");
@@ -127,7 +129,7 @@ struct CounterMeta
     crd::u32 index;        // 4
     crd::u8  kind;         // 1 -- CounterKind
     crd::u8  type;         // 1 -- CounterType
-    crd::u16 _pad_a;       // 2
+    crd::u16 pad_a;        // 2
     char     name[56];     // 56 -- null-padded
 };
 
@@ -136,7 +138,7 @@ static_assert(sizeof(CounterMeta) == 64, "CounterMeta is 64 B; on-disk pin");
 struct AllocatorMeta
 {
     crd::u32 index;        // 4
-    crd::u32 _pad_a;       // 4
+    crd::u32 pad_a;        // 4
     char     name[56];     // 56 -- null-padded
 };
 

@@ -236,7 +236,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
         counter_meta[i].index  = i;
         counter_meta[i].kind   = static_cast<crd::u8>(info.kind);
         counter_meta[i].type   = static_cast<crd::u8>(info.type);
-        counter_meta[i]._pad_a = 0U;
+        counter_meta[i].pad_a = 0U;
         copy_to_fixed(counter_meta[i].name, sizeof(counter_meta[i].name), info.name);
     }
     cursor += counter_meta_bytes;
@@ -247,7 +247,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
     {
         const auto info = allocator_info(i);
         alloc_meta[i].index  = i;
-        alloc_meta[i]._pad_a = 0U;
+        alloc_meta[i].pad_a = 0U;
         copy_to_fixed(alloc_meta[i].name, sizeof(alloc_meta[i].name), info.name);
     }
     cursor += alloc_meta_bytes;
@@ -326,7 +326,7 @@ save_capture_to_buffer(crd::memory::IAllocator* alloc) noexcept
         th.thread_index           = t.thread_index;
         th.sample_byte_offset     = cursor; // th.sample_count is set below, to the count actually copied (truthful)
         th.dropped_count          = t.dropped_count;
-        th._pad_a                 = 0U;
+        th.pad_a                  = 0U;
         copy_to_fixed(th.name, sizeof(th.name), t.name);
 
         // Acquire-snapshot the ring contents again. The size we read here

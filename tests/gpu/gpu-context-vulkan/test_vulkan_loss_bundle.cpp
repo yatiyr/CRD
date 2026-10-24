@@ -84,7 +84,7 @@ void inject_compute_loss(gpu::VulkanGpuContext& vk)
     const std::filesystem::path hang = first_dump_with_prefix(dir, "hang_");
     REQUIRE_FALSE(hang.empty());
     d::VkLossRecord read{};
-    return d::vk_read_loss_bundle(hang.c_str(), read);
+    return d::vk_read_loss_bundle(reinterpret_cast<const char*>(hang.u8string().c_str()), read);
 }
 #endif
 } // namespace
@@ -173,7 +173,8 @@ TEST_CASE("DIAG.7c(g): a recorded Vulkan loss is written as a readable bundle",
     const fs::path bundle_path = first_dump_with_prefix(dir, "gpu_");
     REQUIRE_FALSE(bundle_path.empty());
     d::VkLossRecord read{};
-    REQUIRE(d::vk_read_loss_bundle(bundle_path.c_str(), read) == d::VkBundleRead::Ok);
+    REQUIRE(d::vk_read_loss_bundle(reinterpret_cast<const char*>(bundle_path.u8string().c_str()), read) ==
+            d::VkBundleRead::Ok);
     CHECK(read.origin == d::VkFailureOrigin::TimedOut);
     CHECK(read.first_result == static_cast<crd::i32>(VK_TIMEOUT));
     CHECK(std::strcmp(read.operation, "test wait") == 0);
@@ -193,7 +194,8 @@ TEST_CASE("DIAG.7c(g): a recorded Vulkan loss is written as a readable bundle",
     REQUIRE(WriteResult::Ok == crd::crash::capture_dump(nullptr));
     const fs::path plain = first_dump_with_prefix(dir, "live_");
     REQUIRE_FALSE(plain.empty());
-    CHECK(d::vk_read_loss_bundle(plain.c_str(), read) == d::VkBundleRead::NoStream);
+    CHECK(d::vk_read_loss_bundle(reinterpret_cast<const char*>(plain.u8string().c_str()), read) ==
+          d::VkBundleRead::NoStream);
     const crd::u32 foreign[4] = {0x11111111U, 1U, 2U, 3U};
     CHECK(read_foreign(dir, foreign, sizeof(foreign)) == d::VkBundleRead::BadMagic);
     const crd::u32 dx12_removal[4] = {0x52445243U, 2U, 16U, 0U}; // 'CRDR', the DX12 removal bundle header
