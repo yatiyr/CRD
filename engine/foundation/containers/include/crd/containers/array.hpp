@@ -256,9 +256,13 @@ public:
         {
             reserve(n);
             annotate_size(m_size, n);
-            for (usize i = m_size; i < n; ++i)
+            // Through local pointers: a store of a byte-sized T may alias the m_data member, so a loop indexing
+            // m_data reloads it every element. An index loop over a local base is no better: GCC's link-time pass
+            // then reports the wrapped bound of resize(size() - 1) on an empty array as undefined behaviour.
+            T* const last = m_data + n;
+            for (T* slot = m_data + m_size; slot != last; ++slot)
             {
-                ::new (static_cast<void*>(m_data + i)) T();
+                ::new (static_cast<void*>(slot)) T();
             }
         }
         m_size = n;
@@ -277,9 +281,10 @@ public:
         {
             reserve(n);
             annotate_size(m_size, n);
-            for (usize i = m_size; i < n; ++i)
+            T* const last = m_data + n; // as resize(n)
+            for (T* slot = m_data + m_size; slot != last; ++slot)
             {
-                ::new (static_cast<void*>(m_data + i)) T(fill);
+                ::new (static_cast<void*>(slot)) T(fill);
             }
         }
         m_size = n;

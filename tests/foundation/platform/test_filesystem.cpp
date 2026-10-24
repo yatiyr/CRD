@@ -75,6 +75,11 @@ TEST_CASE("filesystem: binary roundtrip", "[platform][fs]")
         REQUIRE(out[i] == bytes[i]);
     }
 
+    // A range past the end fails and leaves nothing behind: the readers do not zero the bytes they read into.
+    crd::containers::Array<crd::u8> past_end;
+    REQUIRE_FALSE(fs::read_file_range(file, 4U, 8U, past_end));
+    REQUIRE(past_end.empty());
+
     REQUIRE(fs::remove_all(root));
 }
 

@@ -2861,7 +2861,9 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   writes through the three reads the I/O fault seam consults, hashing every byte. Disabled within 1% on Windows (frame
   time and CPU per frame) and on Linux by instructions (cachegrind) and timing; basic within 2% on all three tuples;
   full +0.1% to +2.5%, reported. Its pool is fixed at two threads: with four, the Linux reference host's frames
-  alternate between about 210 and 400 µs in every arm, compiled-out included (Windows is flat).
+  alternate between about 210 and 400 µs in every arm, compiled-out included (Windows is flat). Since the readers
+  stopped zeroing the bytes they read into ([session](../sessions/2026-10-24-diag-11b-file-reads-zero-pass.md)) the
+  Linux frame is 172 µs, disabled and basic within, full +3.2%.
 - Not settled here: the repairs and the measurement gaps above; the authored rendering workload;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost

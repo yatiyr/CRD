@@ -426,7 +426,8 @@ bool read_file_binary(const Path& path, containers::Array<u8>& out) noexcept
         {
             return false;
         }
-        out.resize(static_cast<crd::usize>(size));
+        // No zero pass: the read below fills every byte, or out is cleared.
+        out.resize_uninitialized(static_cast<crd::usize>(size));
         in.seekg(0, std::ios::beg);
         if (size > 0)
         {
@@ -473,7 +474,7 @@ bool read_file_range(const Path& path, crd::u64 offset, crd::u64 size, container
         {
             return false;
         }
-        out.resize(static_cast<crd::usize>(size));
+        out.resize_uninitialized(static_cast<crd::usize>(size)); // as read_file_binary
         if (size > 0)
         {
             in.read(reinterpret_cast<char*>(out.data()), static_cast<std::streamsize>(size));
