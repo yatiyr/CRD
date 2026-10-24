@@ -2974,6 +2974,13 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   the authored `orders.ceir` beside its profile, and reports a run fault as a `Manual` trigger (code 0x0713) whose
   source is the faulting op's authored file and line and whose message is its rendered provenance; `stop()` writes the
   bundle ([session](../sessions/2026-10-24-diag-12-authored-program.md)).
+- A GPU hazard (`gpu`) is a missing barrier between two overlapping copies the application records into one Vulkan
+  buffer through the public `ComputeRecorder`, inside a debug label carrying its own Pass identity. Synchronization
+  validation reports the write-after-write; the application reports it as a `Manual` trigger (code 0x0714) naming the
+  buffer's and the pass's identities. A host without a Vulkan device, the layer or synchronization validation says so
+  and exits 10, never clean; only the hosted Windows runners' `no-vulkan-device` is accepted. DX12 has no route for
+  this class: its compute context inserts every transition and it has no synchronization validation; its correlated
+  Core hazards are DIAG.7a's ([session](../sessions/2026-10-24-diag-12-gpu-hazard.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

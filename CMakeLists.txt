@@ -376,7 +376,8 @@ crd_module(engine/execution/chir engine/chir DEPENDS ceir containers core log me
     TEST_DEPENDS ceir-cook perf platform)
 crd_module(engine/foundation/time engine/time DEPENDS core units TESTS foundation/time)
 crd_module(engine/foundation/perf engine/perf DEPENDS containers core jobs memory time toml
-    TESTS foundation/perf support/diag support/fuzz TEST_DEPENDS ceir ceir-cook platform)
+    TESTS foundation/perf support/diag support/fuzz
+    TEST_DEPENDS ceir ceir-cook gpu-context gpu-context-vulkan platform)
 crd_module(engine/foundation/memory engine/memory DEPENDS core log vm TESTS foundation/memory support/diag support/fuzz TEST_DEPENDS jobs)
 crd_module(engine/foundation/math engine/math DEPENDS core units TESTS foundation/math)
 crd_module(engine/geometry/geometry-primitives engine/geometry-primitives DEPENDS containers core math

@@ -55,6 +55,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -1718,4 +1719,62 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
     }
 
     (void)check_repaired_run("crash");
+}
+
+TEST_CASE("diagnostic host: the application's missing GPU barrier is a hazard on its buffer inside its pass, and the "
+          "repaired one runs clean",
+          "[perf][diag][diag12][diag-host][vulkan]")
+{
+    const Scratch     scratch("crd-diag-host-app-gpu");
+    const cd::Outcome o = run_app(scratch, "gpu", false);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str()
+                    << " output=" << o.output.c_str());
+    CHECK_FALSE(o.timed_out);
+    if (contains(o.output, "CRD_HOST_GPU_ABSENT"))
+    {
+        // Every Linux lane has lavapipe and the pinned layer; the hosted Windows runners have no Vulkan device, an open
+        // qualification the design names (runtime-diagnostics.md, DIAG.11c), so there only that reason is accepted.
+#if defined(_WIN32)
+        CHECK(contains(o.output, "CRD_HOST_GPU_ABSENT no-vulkan-device"));
+        CHECK(o.exit_code == 10);
+        CHECK(count_bundles(scratch.path / "captures") == 0U);
+#else
+        FAIL("the Vulkan detector is absent on a Linux lane");
+#endif
+        return;
+    }
+    CHECK(o.exit_code == 9); // the hazard's bundle was written
+    CHECK(contains(o.output, "CRD_HOST_GPU_HAZARD bundles=1"));
+    // The Pass identity the application minted for its upload, printed before the work: the oracle for the label the
+    // layer's report resolved.
+    const char* const printed = std::strstr(o.output.c_str(), "CRD_HOST_GPU_PASS ");
+    REQUIRE(printed != nullptr);
+    char pass[32] = {};
+    for (crd::usize i = 0U; i + 1U < sizeof(pass) && std::isgraph(static_cast<unsigned char>(printed[18U + i])); ++i)
+    {
+        pass[i] = printed[18U + i]; // the token after "CRD_HOST_GPU_PASS "
+    }
+
+    BundleRead bundle;
+    REQUIRE(read_app_bundle(scratch, bundle) != nullptr);
+    const cp::FlightCapture& c = bundle.flight.capture;
+    CHECK(c.trigger.kind == cp::FlightTrigger::Manual);
+    CHECK(c.trigger.code == 0x0714U);
+    // The message names the buffer and the pass whose identities the values carry, and the pass is the minted one.
+    const u64 buffer = c.trigger.value_a;
+    const u64 site   = c.trigger.value_b;
+    char      expect[160];
+    (void)std::snprintf(expect, sizeof(expect), "crd:pass:%08x:g%08x", static_cast<unsigned>(site >> 32U),
+                        static_cast<unsigned>(site & 0xFFFFFFFFU));
+    CHECK(cont::StringView{pass} == cont::StringView{expect});
+    (void)std::snprintf(expect, sizeof(expect), "SYNC-HAZARD-WRITE-AFTER-WRITE on crd:res:%08x:g%08x in %s",
+                        static_cast<unsigned>(buffer >> 32U), static_cast<unsigned>(buffer & 0xFFFFFFFFU), pass);
+    CHECK(c.trigger.message_view() == cont::StringView{expect});
+    CHECK(c.end == cp::FlightEnd::Shutdown);
+    REQUIRE(c.events.size() == 40U);
+    CHECK(c.events[39].message_view() == "order 39");
+    CHECK(contains(inspect_app_bundle(scratch), R"("trigger":"manual","code":1812,)"));
+
+    // With the barrier between the two copies the same upload validates clean.
+    (void)check_repaired_run("gpu");
 }

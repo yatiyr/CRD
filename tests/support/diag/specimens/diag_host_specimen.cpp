@@ -18,6 +18,11 @@
 //   program         the authored order program beside the profile (orders.ceir) is cooked, loaded, compiled and run on
 //                   the engine's CEIR path: its zero loop step faults the run, the application reports the fault as a
 //                   trigger at the authored op's file and line, stop() writes the bundle and the run exits 7
+//   gpu             the order ledger goes up to a Vulkan buffer in two overlapping copies with no barrier between them:
+//                   synchronization validation reports the write-after-write on that buffer inside the upload's
+//                   labelled pass, the application reports it as a trigger naming both, stop() writes the bundle and
+//                   the run exits 9; a host with no Vulkan device, no validation layer or no synchronization
+//                   validation prints CRD_HOST_GPU_ABSENT with the reason and exits 10, never clean
 // A repaired run prints CRD_HOST_CLEAN with the bundles written and exits 0; an unknown mode exits 2.
 #include "specimen_common.hpp"
 
@@ -29,6 +34,10 @@
 #include <crd/ceir/plan.hpp>
 #include <crd/ceir/provenance.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/gpu/identity_registry.hpp>
+#include <crd/gpu/vulkan_compute_context.hpp>
+#include <crd/gpu/vulkan_context.hpp>
+#include <crd/gpu/vulkan_validation_capture.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
@@ -44,6 +53,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <span>
 #include <thread>
 
@@ -298,6 +308,113 @@ int run_program(cp::DiagnosticHost& host, const char* profile_path)
     return 7;
 }
 
+// gpu: the detector is the Vulkan validation layer's synchronization validation, read through the engine's capture;
+// the application records its upload through the public compute recorder inside a debug label carrying its own Pass
+// identity. Returns 0 when the upload validated clean, 9 once the hazard's bundle is written, 10 when this host
+// cannot run the detector and 11 when the repaired upload is not clean.
+constexpr cp::EventCode kGpuHazardCode = 0x0714U;
+constexpr crd::u64      kLedgerBytes   = 256U;
+
+crd::u64 packed(const crd::gpu::ObjectIdentity& id)
+{
+    return (static_cast<crd::u64>(id.index) << 32U) | id.generation;
+}
+
+int gpu_hazard(cp::DiagnosticHost& host, bool repaired)
+{
+    namespace gpu = crd::gpu;
+    gpu::GpuContextConfig cfg;
+    cfg.backend                = gpu::GpuBackend::Vulkan;
+    cfg.headless               = true;
+    cfg.enable_validation      = true;
+    cfg.enable_sync_validation = true;
+    const std::unique_ptr<gpu::IGpuContext> ctx = gpu::create_vulkan_gpu_context(cfg);
+    const char*                             absent = nullptr;
+    if (ctx == nullptr || !ctx->valid())
+    {
+        absent = "no-vulkan-device";
+    }
+    else if (gpu::validation_layer_spec_version() == 0U)
+    {
+        absent = "no-validation-layer";
+    }
+    else if (!ctx->validation_activation().is_active(gpu::ValidationMode::Synchronization))
+    {
+        absent = "no-synchronization-validation";
+    }
+    if (absent != nullptr)
+    {
+        std::printf("CRD_HOST_GPU_ABSENT %s\n", absent);
+        return 10;
+    }
+    auto&                     vk = static_cast<gpu::VulkanGpuContext&>(*ctx);
+    gpu::ValidationCapture    capture(vk);
+    gpu::VulkanComputeContext compute(vk, nullptr);
+    const auto                staging =
+        compute.create_buffer(kLedgerBytes, gpu::compute_usage::transfer_src, gpu::ComputeMemory::CpuToGpu);
+    const auto ledger = compute.create_buffer(
+        kLedgerBytes, gpu::compute_usage::storage | gpu::compute_usage::transfer_dst, gpu::ComputeMemory::GpuOnly);
+    const gpu::ObjectIdentity upload = gpu::identity_registry().mint(gpu::ObjectKind::Pass);
+    char                      token[gpu::kObjectIdentityBufferSize];
+    (void)gpu::encode(upload, token, sizeof(token));
+    std::printf("CRD_HOST_GPU_PASS %s\n", token);
+    std::memset(staging->map(), 0x5A, kLedgerBytes);
+    staging->unmap();
+
+    gpu::ComputeRecorder& rec      = compute.begin();
+    const bool            labelled = rec.begin_label(upload, cont::StringView{"orders upload"});
+    rec.copy(*staging, *ledger, 0U, 0U, kLedgerBytes / 2U);
+    if (repaired)
+    {
+        rec.barrier(*ledger, gpu::ComputeAccess::TransferDst, gpu::ComputeAccess::TransferDst);
+    }
+    rec.copy(*staging, *ledger, kLedgerBytes / 4U, kLedgerBytes / 4U, kLedgerBytes / 2U); // overlaps the first copy
+    if (labelled)
+    {
+        rec.end_label();
+    }
+    compute.submit_and_wait();
+
+    const gpu::ValidationMessage* hazard = nullptr;
+    for (const gpu::ValidationMessage& m : capture.messages())
+    {
+        const cont::StringView name{m.message_id_name.data(), m.message_id_name.size()};
+        if (hazard == nullptr && name == "SYNC-HAZARD-WRITE-AFTER-WRITE" &&
+            m.identity.kind == gpu::ObjectKind::Resource && gpu::identity_registry().alive(m.identity))
+        {
+            hazard = &m;
+        }
+    }
+    const gpu::ValidationReport report = capture.report();
+    if (hazard == nullptr || report.dropped != 0U)
+    {
+        if (repaired && !report.clean())
+        {
+            std::printf("CRD_HOST_GPU_UNCLEAN errors=%llu warnings=%llu dropped=%llu\n",
+                        static_cast<unsigned long long>(report.error), static_cast<unsigned long long>(report.warning),
+                        static_cast<unsigned long long>(report.dropped));
+            return 11;
+        }
+        return 0; // faulty: a missed or incomplete detection, which the parent reads from the missing clean line
+    }
+    char buffer[gpu::kObjectIdentityBufferSize];
+    char site[gpu::kObjectIdentityBufferSize] = "no-label";
+    (void)gpu::encode(hazard->identity, buffer, sizeof(buffer));
+    (void)gpu::encode(hazard->label, site, sizeof(site));
+    char message[160];
+    (void)std::snprintf(message, sizeof(message), "%s on %s in %s", hazard->message_id_name.c_str(), buffer, site);
+    cp::FlightTriggerInput trigger;
+    trigger.kind    = cp::FlightTrigger::Manual;
+    trigger.code    = kGpuHazardCode;
+    trigger.message = cont::StringView{message};
+    trigger.value_a = packed(hazard->identity);
+    trigger.value_b = packed(hazard->label);
+    (void)host.recorder().trigger(trigger);
+    host.stop();
+    std::printf("CRD_HOST_GPU_HAZARD bundles=%llu\n", static_cast<unsigned long long>(host.bundles_written()));
+    return 9;
+}
+
 // A refund larger than the payment makes the balance negative.
 bool balance_holds(bool repaired)
 {
@@ -325,7 +442,7 @@ int main(int argc, char** argv)
 #endif
     std::printf("CRD_DIAG_IDENTITY=%s\nCRD_DIAG_SANITIZER=%s\n", CRD_DIAG_SPECIMEN_ID, sanitizer);
     std::fflush(stdout);
-    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race", "crash", "program"};
+    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race", "crash", "program", "gpu"};
     bool              known   = false;
     for (const char* m : modes)
     {
@@ -333,7 +450,7 @@ int main(int argc, char** argv)
     }
     if (!known || (argc == 4 && std::strcmp(argv[3], "repaired") != 0) || argc > 4)
     {
-        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race|crash|program "
+        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race|crash|program|gpu "
                     "[repaired]\n");
         return 2;
     }
@@ -393,9 +510,9 @@ int main(int argc, char** argv)
     {
         write_order(repaired);
     }
-    else if (std::strcmp(mode, "program") == 0)
+    else if (std::strcmp(mode, "program") == 0 || std::strcmp(mode, "gpu") == 0)
     {
-        const int ended = run_program(host, argv[1]);
+        const int ended = std::strcmp(mode, "gpu") == 0 ? gpu_hazard(host, repaired) : run_program(host, argv[1]);
         if (ended != 0)
         {
             std::fflush(stdout);

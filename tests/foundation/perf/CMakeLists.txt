@@ -92,7 +92,9 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_ASSETS_DIR="${CMAKE_SOURCE_DIR}/assets/diag")
 
 # DIAG.11c: the [diag-workflow] cases are the native diagnostic workflow; their CTests carry its label.
-crd_discover_tests(crd-perf-tests TEST_SPEC "~[diag-workflow]")
+# The application's GPU hazard creates a Vulkan device, so it holds the device lock the GPU suites hold.
+crd_discover_tests(crd-perf-tests TEST_SPEC "~[diag-workflow]~[vulkan]")
+crd_discover_tests(crd-perf-tests TEST_SPEC "[vulkan]" PROPERTIES RESOURCE_LOCK crd_gpu_device)
 crd_discover_tests(crd-perf-tests TEST_SPEC "[diag-workflow]" PROPERTIES LABELS "diag;diag-workflow")
 
 # REPO.DEV.9 / DIAG.5d(e2): the bounded diagnostic-bundle ingestion fuzz target + its committed corpus replay.
