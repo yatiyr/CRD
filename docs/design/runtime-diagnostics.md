@@ -2970,6 +2970,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   [import](../sessions/2026-10-24-diag-12-crash-record-import.md)).
 - One walk reads a loaded ELF object's PT_LOAD span and GNU build-id: `crd::crash::read_elf_image`, used by the crash
   record's module lines and `enumerate_loaded_modules` ([session](../sessions/2026-10-24-diag-12-one-elf-walk.md)).
+- An authored-program error (`program`) is the CEIR run's own fault: the application cooks, loads, compiles and runs
+  the authored `orders.ceir` beside its profile, and reports a run fault as a `Manual` trigger (code 0x0713) whose
+  source is the faulting op's authored file and line and whose message is its rendered provenance; `stop()` writes the
+  bundle ([session](../sessions/2026-10-24-diag-12-authored-program.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

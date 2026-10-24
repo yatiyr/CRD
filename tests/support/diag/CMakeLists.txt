@@ -119,10 +119,10 @@ target_link_libraries(crd-diag-flight-fatal-specimen PRIVATE crd-perf)
 
 # The DIAG.11a diagnostic-host specimen: a small application that starts the engine's DiagnosticHost from an authored
 # profile, records its work and fails on purpose (a fatal invariant, a headless assertion, a write after free, a wait
-# cycle or a job race); the profile's capture directory gets the flight bundle. crd-perf-tests runs each mode faulty
-# and repaired (DIAG.12) and reads the bundle.
+# cycle, a job race, a wild write or an authored CEIR program's run fault); the profile's capture directory gets the
+# flight bundle. crd-perf-tests runs each mode faulty and repaired (DIAG.12) and reads the bundle.
 crd_diag_specimen(crd-diag-host-specimen SOURCES specimens/diag_host_specimen.cpp)
-target_link_libraries(crd-diag-host-specimen PRIVATE crd-perf)
+target_link_libraries(crd-diag-host-specimen PRIVATE crd-perf crd-platform crd-ceir crd-ceir-cook)
 
 # The DIAG.9c corruption specimen: an off-by-one write into a sentinel that every reverse-debugging and watchpoint
 # route of scripts/reverse-debug-recipes.py must name at its marked line. Debug information is part of that contract,

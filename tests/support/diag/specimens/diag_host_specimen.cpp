@@ -15,9 +15,19 @@
 //                   can catch it, so the mode announces sanitizer "none" there and the harness says InstrumentAbsent
 //   crash           an order written through a lookup that found nothing: the crash handler the host installed
 //                   writes one dump (Windows) or signal record (Linux) into the profile's crash directory, no bundle
+//   program         the authored order program beside the profile (orders.ceir) is cooked, loaded, compiled and run on
+//                   the engine's CEIR path: its zero loop step faults the run, the application reports the fault as a
+//                   trigger at the authored op's file and line, stop() writes the bundle and the run exits 7
 // A repaired run prints CRD_HOST_CLEAN with the bundles written and exits 0; an unknown mode exits 2.
 #include "specimen_common.hpp"
 
+#include <crd/ceir/ceir.hpp>
+#include <crd/ceir/cook/program_cook.hpp>
+#include <crd/ceir/func.hpp>
+#include <crd/ceir/gen/arith_ops.hpp>
+#include <crd/ceir/gen/core_ops.hpp>
+#include <crd/ceir/plan.hpp>
+#include <crd/ceir/provenance.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
@@ -26,6 +36,7 @@
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/flight_triggers.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -207,6 +218,86 @@ void write_order(bool repaired)
     }
 }
 
+// program: the authored program is read from beside the profile and registered under its file name, so the trigger
+// names the asset its author edits. Returns 0 when the program ran (its result printed), 7 once its fault's bundle is
+// written and 8 when the program could not be read, cooked, loaded or compiled.
+constexpr cp::EventCode kProgramFaultCode = 0x0713U;
+constexpr const char*   kProgramFile      = "orders.ceir";
+
+void register_dialects(crd::ceir::Context& ctx)
+{
+    (void)crd::ceir::arith::register_arith_ops(ctx);
+    (void)crd::ceir::core::register_core_ops(ctx);
+    (void)crd::ceir::func::register_dialect(ctx);
+}
+
+int run_program(cp::DiagnosticHost& host, const char* profile_path)
+{
+    namespace fs   = crd::platform::fs;
+    namespace ceir = crd::ceir;
+    const fs::Path         profile{profile_path};
+    const cont::StringView given = profile.generic();
+    crd::usize             dir   = given.size();
+    while (dir > 0U && given[dir - 1U] != '/')
+    {
+        --dir;
+    }
+    const fs::Path source = dir == 0U ? fs::Path{kProgramFile} : fs::Path{given.substr(0U, dir)} / kProgramFile;
+    crd::memory::GrowableTlsfAllocator arena{crd::usize{4} << 20U, nullptr, "orders-program"};
+    cont::String                       text{&arena};
+    if (!fs::read_file_text(source, text))
+    {
+        std::printf("CRD_HOST_PROGRAM_UNREADABLE\n");
+        return 8;
+    }
+    ceir::Context cook_ctx{&arena};
+    register_dialects(cook_ctx);
+    const ceir::cook::CookResult cooked = ceir::cook::cook_program_text(
+        cook_ctx, cont::StringView{text.data(), text.size()}, kProgramFile, 0x00A20012U, &arena, &arena);
+    ceir::Context run_ctx{&arena};
+    register_dialects(run_ctx);
+    const ceir::cook::ReadResult loaded =
+        cooked.ok() ? ceir::cook::read_program(run_ctx, {cooked.blob.data(), cooked.blob.size()}, &arena)
+                    : ceir::cook::ReadResult{&arena};
+    if (!loaded.ok() || loaded.module == nullptr)
+    {
+        std::printf("CRD_HOST_PROGRAM_REFUSED\n");
+        return 8;
+    }
+    const ceir::plan::CompileResult compiled = ceir::plan::compile(run_ctx, *loaded.module, "main", &arena);
+    if (!compiled.ok())
+    {
+        std::printf("CRD_HOST_PROGRAM_REFUSED\n");
+        return 8;
+    }
+    const ceir::plan::RunResult ran = ceir::plan::run(compiled.plan, {}, &arena);
+    if (ran.ok())
+    {
+        std::printf("CRD_HOST_PROGRAM result=%lld\n",
+                    ran.values.size() == 1U ? static_cast<long long>(ran.values[0]) : -1LL);
+        return 0;
+    }
+    // The defect: the plan names the faulting instruction, whose provenance rode the cooked blob to the authored op.
+    const ceir::Provenance    where = ceir::plan::instr_provenance(compiled.plan, ran.fault);
+    const ceir::Origin* const at    = where.primary();
+    cont::String              message{&arena};
+    message.append(ceir::plan::run_error_name(ran.error));
+    message.append(" at ");
+    message.append(ceir::render_provenance(run_ctx, where, &arena));
+    cp::FlightTriggerInput trigger;
+    trigger.kind        = cp::FlightTrigger::Manual;
+    trigger.code        = kProgramFaultCode;
+    trigger.message     = cont::StringView{message.data(), message.size()};
+    trigger.value_a     = static_cast<crd::u64>(ran.error);
+    trigger.value_b     = where.op.value;
+    trigger.source.file = at != nullptr ? run_ctx.file_path(at->loc.file_id) : cont::StringView{};
+    trigger.source.line = at != nullptr ? at->loc.line : 0U;
+    (void)host.recorder().trigger(trigger);
+    host.stop(); // delivers the open capture, which the host writes as a bundle
+    std::printf("CRD_HOST_PROGRAM_FAULT bundles=%llu\n", static_cast<unsigned long long>(host.bundles_written()));
+    return 7;
+}
+
 // A refund larger than the payment makes the balance negative.
 bool balance_holds(bool repaired)
 {
@@ -234,7 +325,7 @@ int main(int argc, char** argv)
 #endif
     std::printf("CRD_DIAG_IDENTITY=%s\nCRD_DIAG_SANITIZER=%s\n", CRD_DIAG_SPECIMEN_ID, sanitizer);
     std::fflush(stdout);
-    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race", "crash"};
+    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race", "crash", "program"};
     bool              known   = false;
     for (const char* m : modes)
     {
@@ -242,7 +333,8 @@ int main(int argc, char** argv)
     }
     if (!known || (argc == 4 && std::strcmp(argv[3], "repaired") != 0) || argc > 4)
     {
-        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race|crash [repaired]\n");
+        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race|crash|program "
+                    "[repaired]\n");
         return 2;
     }
     const bool        repaired = argc == 4;
@@ -300,6 +392,15 @@ int main(int argc, char** argv)
     else if (std::strcmp(mode, "crash") == 0)
     {
         write_order(repaired);
+    }
+    else if (std::strcmp(mode, "program") == 0)
+    {
+        const int ended = run_program(host, argv[1]);
+        if (ended != 0)
+        {
+            std::fflush(stdout);
+            return ended;
+        }
     }
     if (!repaired)
     {

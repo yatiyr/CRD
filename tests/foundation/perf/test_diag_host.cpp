@@ -23,8 +23,9 @@
 // Covered (DIAG.12): the same application, faulty then repaired: a write after free names its allocation and free
 // sites in the application's module, a wait cycle is a hang bundle, a job race is caught where ThreadSanitizer runs
 // (InstrumentAbsent elsewhere), a wild write leaves one crash capture (a dump or a signal record, never a bundle) whose
-// faulting instruction lies in the application's module, matched to its file, and each repaired run exits clean with
-// no bundle and no dump.
+// faulting instruction lies in the application's module, matched to its file, an authored CEIR program's run fault is
+// a bundle whose trigger names the program's file and line, and each repaired run exits clean with no bundle and no
+// dump.
 //
 // A shipping build compiles the fault seams out: there fault injection is Unavailable, fault.* is not served and the
 // cases check that instead. ASCII test names.
@@ -1284,9 +1285,32 @@ namespace
 {
 namespace cd = crd::diag;
 
+// The authored order program the application runs in mode "program" (as <scratch>/orders.ceir). The faulty one's loop
+// steps by zero, which the CEIR run refuses at the core.for; the repaired one steps by one and returns 41.
+cont::String order_program(bool repaired)
+{
+    cont::String text{"module {\n"
+                      "  ^bb0:\n"
+                      "    func.func() {sym_name = \"main\"} {\n"
+                      "      ^bb0:\n"
+                      "        %0 = arith.const() {value = 0} : !i32\n"
+                      "        %1 = arith.const() {value = 40} : !i32\n"};
+    text.append(repaired ? "        %2 = arith.const() {value = 1} : !i32\n"
+                         : "        %2 = arith.const() {value = 0} : !i32\n");
+    text.append("        core.for(%0, %1, %2) {\n"
+                "          ^bb0(%3 : !i32):\n"
+                "            core.yield()\n"
+                "        }\n"
+                "        %4 = arith.addi(%1, %2) : !i32\n"
+                "        func.return(%4)\n"
+                "    }\n"
+                "}\n");
+    return text;
+}
+
 // Run the application (crd-diag-host-specimen) in `mode`, faulty or repaired, as a bounded child under its authored
 // profile: the crash handler on into <scratch>/crashes, the default flight policy, bundles written to
-// <scratch>/captures.
+// <scratch>/captures, and in mode "program" its authored program beside the profile.
 cd::Outcome run_app(const Scratch& scratch, const char* mode, bool repaired,
                     cd::Expectation::Want want = cd::Expectation::Want::CleanExit)
 {
@@ -1299,6 +1323,10 @@ cd::Outcome run_app(const Scratch& scratch, const char* mode, bool repaired,
     cp::diagnostic_host_profile_to_asset(profile, text);
     const cont::String profile_path = scratch.file("app.host.toml");
     write_text(profile_path, text.c_str());
+    if (std::strcmp(mode, "program") == 0)
+    {
+        write_text(scratch.file("orders.ceir"), order_program(repaired).c_str());
+    }
 
     cd::Expectation e;
     e.want              = want; // CleanExit: the bundle and the exit code are the oracle
@@ -1371,6 +1399,25 @@ bool in_module(u64 pc, const cp::ModuleIdentity& m)
 {
     return pc >= m.base && pc < m.base + m.size;
 }
+
+// The application's bundle through the investigation route an external application has (DIAG.11a): bundle.inspect
+// decodes the trigger, how the window ended and the events before the failure.
+cont::String inspect_app_bundle(const Scratch& scratch)
+{
+    const cont::String    captures = scratch.file("captures");
+    cp::DiagServiceConfig config;
+    config.root = cont::StringView{captures.data(), captures.size()};
+    cp::DiagCommandService service{cp::authority_bit(cp::DiagAuthority::Read), config};
+    cp::DiagRequest        req;
+    req.command                    = "bundle.inspect";
+    req.path                       = "flight-0.cdb";
+    req.page_items                 = cp::kDiagMaxPageItems;
+    req.page_bytes                 = cp::kDiagMaxPageBytes;
+    const cp::DiagResult inspected = service.execute(req);
+    REQUIRE(inspected.status == cp::DiagStatus::Ok);
+    CHECK(inspected.complete);
+    return inspected.json;
+}
 } // namespace
 
 TEST_CASE("diagnostic host: an application that fails on purpose leaves an attributable bundle from its profile",
@@ -1387,9 +1434,7 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         check_fatal_end(o);
 
         // The bundle names what failed, the events before it, the replay recipe, this build and the executable.
-        const cont::String captures    = scratch.file("captures");
-        const cont::String bundle_path = scratch.file("captures/flight-0.cdb");
-        const BundleRead   bundle      = read_flight_bundle(bundle_path);
+        const BundleRead bundle = read_flight_bundle(scratch.file("captures/flight-0.cdb"));
         REQUIRE(bundle.import.status == cp::ImportStatus::Ok);
         REQUIRE(bundle.has_flight);
         REQUIRE(bundle.flight.ok);
@@ -1438,33 +1483,22 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
             CHECK_FALSE(cp::identity_matches(*named, from_file));
         }
 
-        // The same evidence through the investigation route an external application has (DIAG.11a): bundle.inspect
-        // decodes the trigger, how the window ended and the forty events before the failure.
-        cp::DiagServiceConfig config;
-        config.root = cont::StringView{captures.data(), captures.size()};
-        cp::DiagCommandService service{cp::authority_bit(cp::DiagAuthority::Read), config};
-        cp::DiagRequest        req;
-        req.command                    = "bundle.inspect";
-        req.path                       = "flight-0.cdb";
-        req.page_items                 = cp::kDiagMaxPageItems;
-        req.page_bytes                 = cp::kDiagMaxPageBytes;
-        const cp::DiagResult inspected = service.execute(req);
-        REQUIRE(inspected.status == cp::DiagStatus::Ok);
-        CHECK(inspected.complete);
-        CHECK(contains(inspected.json, R"("flight_record":true,"flight_refused":false)"));
+        // The same evidence through bundle.inspect, the forty events before the failure included.
+        const cont::String inspected = inspect_app_bundle(scratch);
+        CHECK(contains(inspected, R"("flight_record":true,"flight_refused":false)"));
         if (std::strcmp(mode, "invariant") == 0)
         {
-            CHECK(contains(inspected.json, R"({"kind":"trigger","trigger":"fatal-invariant","code":1809,)"));
+            CHECK(contains(inspected, R"({"kind":"trigger","trigger":"fatal-invariant","code":1809,)"));
         }
         else
         {
-            CHECK(contains(inspected.json, R"({"kind":"trigger","trigger":"assertion",)"));
+            CHECK(contains(inspected, R"({"kind":"trigger","trigger":"assertion",)"));
         }
-        CHECK(contains(inspected.json, R"({"kind":"flight","end":"fatal",)"));
-        CHECK(contains(inspected.json, R"({"kind":"event","index":0,"side":"before",)"));
-        CHECK(contains(inspected.json, R"({"kind":"event","index":39,"side":"before",)"));
-        CHECK(contains(inspected.json, R"("message":"order 39","message_truncated":false})"));
-        CHECK_FALSE(contains(inspected.json, R"("side":"after")"));
+        CHECK(contains(inspected, R"({"kind":"flight","end":"fatal",)"));
+        CHECK(contains(inspected, R"({"kind":"event","index":0,"side":"before",)"));
+        CHECK(contains(inspected, R"({"kind":"event","index":39,"side":"before",)"));
+        CHECK(contains(inspected, R"("message":"order 39","message_truncated":false})"));
+        CHECK_FALSE(contains(inspected, R"("side":"after")"));
 
         // DIAG.12: with the refund fixed the same application runs clean.
         (void)check_repaired_run(mode);
@@ -1523,6 +1557,63 @@ TEST_CASE("diagnostic host: the application's wait cycle leaves a hang bundle, a
     CHECK(c.events[39].message_view() == "order 39");
 
     (void)check_repaired_run("wait");
+}
+
+TEST_CASE("diagnostic host: the application's authored program fault names its authored line, and the repaired one "
+          "runs clean",
+          "[perf][diag][diag12][diag-host]")
+{
+    const Scratch     scratch("crd-diag-host-app-program");
+    const cd::Outcome o = run_app(scratch, "program", false);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str()
+                    << " output=" << o.output.c_str());
+    CHECK_FALSE(o.timed_out);
+    CHECK(o.exit_code == 7); // the fault's bundle was written
+    CHECK(contains(o.output, "CRD_HOST_PROGRAM_FAULT bundles=1"));
+
+    // The oracle is the text this case wrote, never the parser: the core.for's line and the column it starts at.
+    const cont::String text = order_program(false);
+    const char* const  op   = std::strstr(text.c_str(), "core.for");
+    REQUIRE(op != nullptr);
+    u32         line       = 1U;
+    const char* line_start = text.c_str();
+    for (const char* p = text.c_str(); p != op; ++p)
+    {
+        if (*p == '\n')
+        {
+            ++line;
+            line_start = p + 1;
+        }
+    }
+    char site[64];
+    (void)std::snprintf(site, sizeof(site), "bad-for-step at orders.ceir:%u:%u op#", static_cast<unsigned>(line),
+                        static_cast<unsigned>(op - line_start + 1));
+
+    BundleRead bundle;
+    REQUIRE(read_app_bundle(scratch, bundle) != nullptr);
+    const cp::FlightCapture& c = bundle.flight.capture;
+    CHECK(c.trigger.kind == cp::FlightTrigger::Manual);
+    CHECK(c.trigger.code == 0x0713U);
+    CHECK(c.trigger.file_view() == "orders.ceir");
+    CHECK(c.trigger.line == line);
+    CHECK(starts_with(c.trigger.message_view(), site));
+    CHECK(c.end == cp::FlightEnd::Shutdown); // the application's stop() delivered the window
+    CHECK(c.recorded_before_trigger == 40U);
+    REQUIRE(c.events.size() == 40U);
+    CHECK(c.events[39].message_view() == "order 39");
+    CHECK(c.replay_available);
+
+    // bundle.inspect names the authored site too.
+    char expect[128];
+    (void)std::snprintf(expect, sizeof(expect), R"("trigger":"manual","code":1811,"file":"orders.ceir","line":%u,)",
+                        static_cast<unsigned>(line));
+    const cont::String inspected = inspect_app_bundle(scratch);
+    CHECK(contains(inspected, expect));
+    CHECK(contains(inspected, site));
+
+    // With the step fixed the same program runs to its result.
+    const cd::Outcome fixed = check_repaired_run("program");
+    CHECK(contains(fixed.output, "CRD_HOST_PROGRAM result=41"));
 }
 
 TEST_CASE("diagnostic host: ThreadSanitizer catches the application's job race, and the repaired one runs clean",
