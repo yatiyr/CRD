@@ -3007,6 +3007,9 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   Public by kind. The application's last order names its customer and is Restricted; no bundle it leaves holds the
   name. The manifest has no string fields, so version 1 defines no flag bit and reports every set one
   ([session](../sessions/2026-10-24-diag-12-redaction-class.md)).
+- Duplicated services: the DIAG.2b `DiagnosticRecorder` had no production consumer and is removed; the doctor reports
+  no `emergency-recording` mode, and the [DIAG.2b](#diag-2b) section names each clause's carrier. Every specimen target
+  has a consuming test ([session](../sessions/2026-10-24-diag-12-one-recorder.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
