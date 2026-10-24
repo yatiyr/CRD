@@ -19,6 +19,9 @@
 // throughout (locale-independent), and no dependency on the profiler being compiled in. GPU/shader execution time
 // stays where it already lives (GPU scopes); this analyzer never reads scope durations, which is exactly how the
 // "separately from ... shader execution time" clause is honoured.
+//
+// User route: export_perfetto_json (cprof_export) writes a capture's pacing and work as the metadata "pacing" block.
+// A capture records no input or present time; UX-QUAL.2 owns recording them for the latency axis.
 
 #include <crd/core/types.hpp>
 #include <crd/containers/span.hpp>   // ConstSpan (feeding from a CaptureView's frame history)
@@ -26,6 +29,20 @@
 
 namespace crd::perf
 {
+
+inline constexpr crd::i64 kMaxSpanNs = static_cast<crd::i64>(~0ULL >> 1U); // INT64_MAX without <limits>
+
+// The nanoseconds from `begin_ns` to `end_ns`: 0 when the span is reversed, kMaxSpanNs when the difference does not
+// fit. A capture file is untrusted, and `end - begin` of two arbitrary i64 values is undefined when it overflows.
+[[nodiscard]] inline crd::i64 span_ns(crd::i64 begin_ns, crd::i64 end_ns) noexcept
+{
+    if (end_ns <= begin_ns)
+    {
+        return 0;
+    }
+    const crd::u64 span = static_cast<crd::u64>(end_ns) - static_cast<crd::u64>(begin_ns);
+    return span > static_cast<crd::u64>(kMaxSpanNs) ? kMaxSpanNs : static_cast<crd::i64>(span);
+}
 
 // A bounded frame-timing analyzer. Percentiles come from a linear fixed-bucket histogram over [0, kBuckets*width);
 // intervals at or beyond the range land in a single overflow bucket and are reported at the observed max. Tail stats
@@ -76,17 +93,13 @@ public:
     {
         if (m_have_prev)
         {
-            add_interval(begin_ns - m_prev_begin_ns);
+            add_interval(span_ns(m_prev_begin_ns, begin_ns));
         }
         m_prev_begin_ns = begin_ns;
         m_have_prev     = true;
 
-        crd::i64 dur = end_ns - begin_ns; // a truncated capture can hand us end < begin -> clamp like interval/latency
-        if (dur < 0)
-        {
-            dur = 0;
-        }
-        m_dur_sum += dur;
+        // A truncated capture can hand us end < begin: span_ns clamps it like the interval and the latency.
+        m_dur_sum = saturating_add(m_dur_sum, span_ns(begin_ns, end_ns));
         ++m_dur_count;
     }
 
@@ -105,7 +118,7 @@ public:
         {
             m_interval_max = interval_ns;
         }
-        m_interval_sum += interval_ns;
+        m_interval_sum = saturating_add(m_interval_sum, interval_ns);
         ++m_interval_count;
         ++m_interval_hist[bucket_of(interval_ns)];
     }
@@ -114,11 +127,7 @@ public:
     // frame interval or duration.
     void add_latency(crd::i64 input_ns, crd::i64 present_ns) noexcept
     {
-        crd::i64 latency_ns = present_ns - input_ns;
-        if (latency_ns < 0)
-        {
-            latency_ns = 0;
-        }
+        const crd::i64 latency_ns = span_ns(input_ns, present_ns);
         if (m_lat_count == 0 || latency_ns < m_lat_min)
         {
             m_lat_min = latency_ns;
@@ -127,10 +136,13 @@ public:
         {
             m_lat_max = latency_ns;
         }
-        m_lat_sum += latency_ns;
+        m_lat_sum = saturating_add(m_lat_sum, latency_ns);
         ++m_lat_count;
         ++m_lat_hist[bucket_of(latency_ns)];
     }
+
+    // The histogram resolution: every percentile is a multiple of it.
+    [[nodiscard]] crd::i64 bucket_width_ns() const noexcept { return m_bucket_width_ns; }
 
     // --- pacing axis (frame delivery timing) -------------------------------------------------------------------
     [[nodiscard]] crd::u64 interval_count() const noexcept { return m_interval_count; }
@@ -184,6 +196,12 @@ public:
     }
 
 private:
+    // Both operands are >= 0: a sum past INT64_MAX stays there instead of overflowing.
+    [[nodiscard]] static crd::i64 saturating_add(crd::i64 sum, crd::i64 value_ns) noexcept
+    {
+        return value_ns > kMaxSpanNs - sum ? kMaxSpanNs : sum + value_ns;
+    }
+
     [[nodiscard]] crd::u32 bucket_of(crd::i64 value_ns) const noexcept
     {
         crd::i64 idx = value_ns / m_bucket_width_ns;

@@ -15,6 +15,7 @@
 
 #include <crd/perf/config.hpp>
 #include <crd/perf/capture_view.hpp>
+#include <crd/perf/frame_pacing.hpp>
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
@@ -32,6 +33,9 @@ struct PerfettoExportStats
     crd::u64 metadata_events = 0; // "M" process_name / thread_name events emitted
     crd::u64 instant_events  = 0; // "i" instants emitted (dropped-sample loss markers)
     crd::u64 dropped_samples = 0; // sum of ThreadHeader.dropped_count reported (loss, never hidden)
+
+    // The frames' pacing and work, written as the document's metadata "pacing" block.
+    FramePacingAnalyzer pacing = FramePacingAnalyzer{};
 };
 
 // Render `view` as a Perfetto trace-events JSON document appended to `out`. Returns false if the view is invalid

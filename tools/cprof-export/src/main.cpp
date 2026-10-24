@@ -77,5 +77,15 @@ int main(int argc, char** argv)
                  static_cast<unsigned long long>(stats.metadata_events),
                  static_cast<unsigned long long>(stats.instant_events),
                  static_cast<unsigned long long>(stats.dropped_samples));
+    // The same numbers as the document's metadata "pacing" block: the interval tail apart from the mean and the work.
+    const crd::perf::FramePacingAnalyzer& pacing = stats.pacing;
+    std::fprintf(
+        stdout,
+        "cprof_export: frame pacing over %llu intervals -- mean %lld ns, p50 %lld ns, p99 %lld ns, max %lld "
+        "ns (%lld ns buckets); mean work %lld ns per frame; input-to-present not recorded\n",
+        static_cast<unsigned long long>(pacing.interval_count()), static_cast<long long>(pacing.mean_interval_ns()),
+        static_cast<long long>(pacing.percentile_interval_ns(50U)),
+        static_cast<long long>(pacing.percentile_interval_ns(99U)), static_cast<long long>(pacing.max_interval_ns()),
+        static_cast<long long>(pacing.bucket_width_ns()), static_cast<long long>(pacing.mean_duration_ns()));
     return 0;
 }

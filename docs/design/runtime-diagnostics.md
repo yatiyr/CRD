@@ -3010,6 +3010,12 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
 - Duplicated services: the DIAG.2b `DiagnosticRecorder` had no production consumer and is removed; the doctor reports
   no `emergency-recording` mode, and the [DIAG.2b](#diag-2b) section names each clause's carrier. Every specimen target
   has a consuming test ([session](../sessions/2026-10-24-diag-12-one-recorder.md)).
+- Unwired: DIAG.6c(i)'s `FramePacingAnalyzer` reaches the user through the capture's export. `export_perfetto_json`
+  (so `cprof_export`) writes a `pacing` block in the document's metadata: the frame interval's mean (throughput),
+  p50, p99 and maximum (pacing), the bucket width and the mean work per frame; `cprof_export` prints the same numbers.
+  A capture records no input or present time, so the block says `not recorded`; UX-QUAL.2 owns recording them. The
+  analyzer reads untrusted capture times through `span_ns` and saturating sums
+  ([session](../sessions/2026-10-24-diag-12-frame-pacing-route.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

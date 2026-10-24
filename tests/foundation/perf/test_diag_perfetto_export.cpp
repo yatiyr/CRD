@@ -18,9 +18,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <chrono>  // the pacing case's hitch
 #include <cstdio>  // std::FILE for the .cprof identity-oracle drop
 #include <cstdlib> // std::getenv
 #include <cstring> // std::strstr
+#include <thread>
 
 #if CRD_PERF_ENABLED
 
@@ -399,6 +401,59 @@ TEST_CASE("perfetto export: native == external timings (export/import acceptance
 
     // ---- Raw GPU path: raw ticks emitted as-is (integer), full fragment. ----
     CHECK(contains(out, "\"ts\":500000,\"dur\":4096,\"name\":\"shadow_depth\""));
+}
+
+TEST_CASE("perfetto export: the metadata carries the frames' pacing apart from their work", "[perf][diag][perfetto]")
+{
+    Fx fx;
+    for (crd::u32 i = 0U; i < 6U; ++i)
+    {
+        {
+            CRD_PERF_SCOPE("paced_frame");
+        }
+        if (i == 3U)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30)); // one hitch, past the histogram's range
+        }
+        CRD_PERF_FRAME_MARK();
+    }
+
+    auto buf = crd::perf::save_capture_to_buffer(&fx.alloc);
+    REQUIRE(buf.size() > 0U);
+    crd::perf::CaptureView view{crd::containers::ConstSpan<crd::u8>{buf.data(), buf.size()}};
+    REQUIRE(view.is_valid());
+    REQUIRE(view.frame_records().size() >= 2U);
+
+    crd::containers::String out{&fx.alloc};
+    crd::perf::PerfettoExportStats stats;
+    REQUIRE(crd::perf::export_perfetto_json(view, out, stats));
+
+    // The expected block, from an analyzer fed the same frame records on its own.
+    crd::perf::FramePacingAnalyzer expected;
+    crd::perf::feed_frames(expected, view.frame_records());
+    REQUIRE(expected.interval_count() == view.frame_records().size() - 1U);
+    REQUIRE(expected.max_interval_ns() >= 30000000);
+    REQUIRE(expected.percentile_interval_ns(99U) > expected.percentile_interval_ns(50U)); // the tail shows the hitch
+    char block[512];
+    const int n = std::snprintf(
+        block, sizeof(block),
+        "\"pacing\":{\"frames\":%llu,\"intervals\":%llu,\"mean_interval_ns\":%lld,"
+        "\"p50_interval_ns\":%lld,\"p99_interval_ns\":%lld,\"max_interval_ns\":%lld,"
+        "\"bucket_ns\":%lld,\"mean_work_ns\":%lld,\"input_to_present\":\"not recorded\"}",
+        static_cast<unsigned long long>(expected.frame_count()),
+        static_cast<unsigned long long>(expected.interval_count()), static_cast<long long>(expected.mean_interval_ns()),
+        static_cast<long long>(expected.percentile_interval_ns(50U)),
+        static_cast<long long>(expected.percentile_interval_ns(99U)),
+        static_cast<long long>(expected.max_interval_ns()), static_cast<long long>(expected.bucket_width_ns()),
+        static_cast<long long>(expected.mean_duration_ns()));
+    REQUIRE(n > 0);
+    REQUIRE(n < static_cast<int>(sizeof(block)));
+    CHECK(contains(out, block));
+
+    // The stats hand the CLI the analyzer the document was written from.
+    CHECK(stats.pacing.interval_count() == expected.interval_count());
+    CHECK(stats.pacing.max_interval_ns() == expected.max_interval_ns());
+    CHECK(stats.pacing.mean_duration_ns() == expected.mean_duration_ns());
 }
 
 #endif // CRD_PERF_ENABLED

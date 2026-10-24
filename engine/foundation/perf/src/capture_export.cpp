@@ -6,12 +6,12 @@
 #include <crd/perf/sample.hpp>
 #include <crd/perf/counters.hpp>
 #include <crd/perf/frame_record.hpp>
+#include <crd/perf/frame_pacing.hpp> // span_ns, FramePacingAnalyzer
 
 #include "json_writer.hpp"
 
 #include <bit>    // std::bit_cast
 #include <cstdio> // std::FILE for the _to_file twin
-#include <limits>
 
 namespace crd::perf
 {
@@ -43,20 +43,6 @@ using detail::append_us_from_ns;
     case Category::Wait:   return "wait";
     }
     return "unknown";
-}
-
-// A span's duration in nanoseconds: never negative and never overflowing. A capture file is untrusted, and the
-// difference of two arbitrary i64 endpoints is undefined when it overflows (DIAG.10a: libFuzzer found
-// end - begin = 72057947567445849 - INT64_MIN). A reversed span is 0, as append_us_from_ns already clamps it.
-[[nodiscard]] crd::i64 duration_ns(crd::i64 begin_ns, crd::i64 end_ns) noexcept
-{
-    if (end_ns <= begin_ns)
-    {
-        return 0;
-    }
-    const crd::u64 span = static_cast<crd::u64>(end_ns) - static_cast<crd::u64>(begin_ns);
-    constexpr auto max = static_cast<crd::u64>(std::numeric_limits<crd::i64>::max());
-    return span > max ? std::numeric_limits<crd::i64>::max() : static_cast<crd::i64>(span);
 }
 
 // A reserved tid for the per-frame span row (kept clear of real thread indices).
@@ -243,7 +229,7 @@ struct SeenSet
                 append_us_from_ns(out, s.begin_ns);
             }
             out.append(",\"dur\":");
-            const crd::i64 dur = duration_ns(s.begin_ns, s.end_ns);
+            const crd::i64 dur = span_ns(s.begin_ns, s.end_ns);
             if (raw_gpu)
             {
                 append_i64(out, dur);
@@ -299,6 +285,7 @@ struct SeenSet
     // ---- Frame spans (reserved tid) + per-frame counters. ----
     const auto     frames        = view.frame_records();
     const crd::u32 counter_count = view.counter_count();
+    feed_frames(stats.pacing, frames);
     if (frames.size() > 0U)
     {
         comma();
@@ -317,7 +304,7 @@ struct SeenSet
         out.append(",\"ts\":");
         append_us_from_ns(out, fr.frame_begin_ns);
         out.append(",\"dur\":");
-        append_us_from_ns(out, duration_ns(fr.frame_begin_ns, fr.frame_end_ns));
+        append_us_from_ns(out, span_ns(fr.frame_begin_ns, fr.frame_end_ns));
         out.append(R"(,"name":"frame )");
         append_u64(out, fr.frame_index);
         out.append(R"(","cat":"frame"})");
@@ -357,7 +344,20 @@ struct SeenSet
     append_kv_u64(out, "cprof_version", kCprofVersion, true);
     append_kv_u64(out, "captured_at_ns", view.captured_at_ns(), true);
     append_kv_str(out, "schema", "cerid-diagnostics/1", true);
-    out.append("}}");
+    // DIAG.6c(i): the frame pacing (the interval tail) apart from throughput (the mean interval) and from the work
+    // (each frame's duration). Percentiles are bucket upper edges. A capture records no input or present time.
+    const FramePacingAnalyzer& pacing = stats.pacing;
+    out.append(",\"pacing\":{");
+    append_kv_u64(out, "frames", pacing.frame_count(), false);
+    append_kv_u64(out, "intervals", pacing.interval_count(), true);
+    append_kv_u64(out, "mean_interval_ns", static_cast<crd::u64>(pacing.mean_interval_ns()), true);
+    append_kv_u64(out, "p50_interval_ns", static_cast<crd::u64>(pacing.percentile_interval_ns(50U)), true);
+    append_kv_u64(out, "p99_interval_ns", static_cast<crd::u64>(pacing.percentile_interval_ns(99U)), true);
+    append_kv_u64(out, "max_interval_ns", static_cast<crd::u64>(pacing.max_interval_ns()), true);
+    append_kv_u64(out, "bucket_ns", static_cast<crd::u64>(pacing.bucket_width_ns()), true);
+    append_kv_u64(out, "mean_work_ns", static_cast<crd::u64>(pacing.mean_duration_ns()), true);
+    append_kv_str(out, "input_to_present", "not recorded", true);
+    out.append("}}}");
     return true;
 }
 

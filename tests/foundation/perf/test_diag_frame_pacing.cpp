@@ -16,6 +16,28 @@ namespace
 constexpr crd::i64 kMs = 1000000; // 1 ms in ns
 }
 
+TEST_CASE("frame pacing: an untrusted capture's extreme times saturate instead of overflowing", "[perf][diag][pacing]")
+{
+    constexpr crd::i64 min_ns = -crd::perf::kMaxSpanNs - 1;
+    constexpr crd::i64 max_ns = crd::perf::kMaxSpanNs;
+
+    crd::perf::FramePacingAnalyzer a;
+    a.add_frame(min_ns, max_ns); // a duration past INT64_MAX
+    a.add_frame(max_ns, max_ns); // an interval past INT64_MAX
+    a.add_frame(min_ns, min_ns); // a reversed interval
+    REQUIRE(a.interval_count() == 2U);
+    CHECK(a.max_interval_ns() == max_ns);
+    CHECK(a.min_interval_ns() == 0);
+    CHECK(a.mean_interval_ns() == max_ns / 2); // the sum stops at INT64_MAX
+    CHECK(a.mean_duration_ns() == max_ns / 3);
+    CHECK(a.percentile_interval_ns(99U) == max_ns); // the overflow bucket reports the observed maximum
+
+    a.add_latency(min_ns, max_ns);
+    a.add_latency(max_ns, min_ns);
+    CHECK(a.max_latency_ns() == max_ns);
+    CHECK(a.mean_latency_ns() == max_ns / 2);
+}
+
 TEST_CASE("pacing is not throughput: equal mean interval, different tail", "[perf][diag][pacing]")
 {
     crd::perf::FramePacingAnalyzer steady;
