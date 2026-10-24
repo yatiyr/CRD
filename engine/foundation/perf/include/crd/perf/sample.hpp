@@ -34,9 +34,7 @@ struct NameId
 
 inline constexpr NameId kInvalidNameId{0xFFFF'FFFFU};
 
-// Strongly-typed category for region color-coding. Reserved for v0c when
-// the auto-instrumentation hooks tag jobs / scene-systems / frame-graph /
-// rhi-cmd regions with their domain.
+// A region's domain: the jobs adapter tags Job, GPU scopes Gpu, Io or Wait, and the Perfetto export names each one.
 enum class Category : crd::u8
 {
     User       = 0,

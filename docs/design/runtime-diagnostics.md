@@ -3016,6 +3016,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   A capture records no input or present time, so the block says `not recorded`; UX-QUAL.2 owns recording them. The
   analyzer reads untrusted capture times through `span_ns` and saturating sums
   ([session](../sessions/2026-10-24-diag-12-frame-pacing-route.md)).
+- The log mutex (DIAG.2b, DIAG.5a/5b): the crash-capture specimen's `logger_lock` mode faults inside a crd::log
+  sink's `write`, holding the logger's sink mutex and the stdio stream lock. The handler takes neither, so the dump
+  or record is still written; a handler that logged would time out
+  ([re-read](../sessions/2026-10-25-diag-12-re-read.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

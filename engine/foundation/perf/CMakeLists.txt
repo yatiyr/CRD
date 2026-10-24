@@ -1,20 +1,8 @@
-# crd-perf -- Detour D-003 v0a (Profiler substrate).
-#
-# Region-based profiler substrate. Leaf module: deps `crd-core` + `crd-time`
-# only at v0a. v0c will add a callback-only edge from crd-jobs to crd-perf
-# (one-way; profiler subscribes, jobs publishes). v0d (GPU) lives in
-# crd-rhi-vulkan, not here.
-#
-# Public surface lives in `include/crd/perf/`:
-#   - config.hpp        compile-time gate + sizing knobs
-#   - sample.hpp        32-byte Sample POD
-#   - profiler.hpp      Profiler singleton API
-#   - scope.hpp         ScopedRegion + CRD_PERF_SCOPE macros
-#   - perf.hpp          umbrella
-#
-# The substrate is gated by the existing project-wide CRD_ENABLE_PROFILING
-# flag (already wired per-preset in CMakePresets.json). When the gate is
-# off, every macro expands to ((void)0) and the singleton is never built.
+# crd-perf -- the owned profiling and runtime diagnostics service (ADR-0133): the region profiler and CPROF captures,
+# diagnostic events and bundles, symbol identities, the flight recorder, fault injection and the diag commands.
+# Public headers live in `include/crd/perf/`. CRD_ENABLE_PROFILING gates the profiler's recording macros (they expand
+# to ((void)0) when it is off); the library itself is built in every configuration. The GPU timestamp bridge lives in
+# crd-perf-gpu-bridge (engine/gpu/perf-gpu-bridge), so this module names no GPU API.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
