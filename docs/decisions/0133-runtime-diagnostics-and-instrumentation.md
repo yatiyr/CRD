@@ -181,9 +181,9 @@ and it joins `offline` and `jobs` as a realistic workload the disabled and basic
 
 Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-authored-rendering-workload.md)): the
 contract's authored rendering workload is the harness's `render` (the scene renderer through the authored
-`engine://frame/forward_csm` graph on a headless device), a realistic workload too. It is judged on frame time and
-CPU per frame only: on Linux the reference device is llvmpipe, whose rasteriser is the frame, so it is not counted
-under cachegrind.
+`engine://frame/forward_csm` graph on a headless device), a realistic workload too, judged on frame time and
+CPU per frame: on Linux the reference device is llvmpipe, whose rasteriser is the frame, so its boards do not count
+it under cachegrind.
 
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 

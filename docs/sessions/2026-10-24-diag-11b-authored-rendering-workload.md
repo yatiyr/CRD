@@ -66,8 +66,8 @@ llvmpipe rasterises on the process's own threads. Every arm delivered its captur
 A first Windows board at 48 processes read disabled and basic within on the frame and unresolved on the CPU
 (intervals of about ±1.4% and ±2.2%: the driver's threads add their own spread); 192 resolves both. The Linux
 tuples measure the modes against a software-rasterised frame, which dilutes a fixed cost eightfold; the hardware
-tuple is the strict one. `render` is not counted under cachegrind: llvmpipe's compiled rasteriser is the frame, so
-the Linux disabled verdict rests on the frame and CPU above.
+tuple is the strict one. No instruction board counts `render` under cachegrind: llvmpipe's compiled rasteriser is
+the frame, so the Linux disabled verdict rests on the frame and CPU above.
 
 ## Verification
 
