@@ -49,10 +49,12 @@ compile time, so neither class fits an existing specimen.
 - win-asan: the five `diag 3f:` cases pass; the scope report names `crd_diag_read_dead_scope`, the overflow is
   absent.
 - linux-gcc-asan (`wsl-lane.sh`): the 17 cases pass; the scope report and the UBSan report (`signed integer overflow:
-  2147483647 + 1`, frame `crd_diag_add_overflow`) name their sites.
+  2147483647 + 1`, frame `crd_diag_add_overflow`) name their sites. Run directly with `UBSAN_OPTIONS` unset, the
+  overflow specimen still prints that frame: its own defaults print the stack, not only the test preset's.
 - `diag-seeded-faults.py`: on linux-gcc-asan both activation seeds are DETECTED with six tests each, the two new
   cases among them; on win-asan `specimens-lose-sanitizer` is DETECTED with three (heap overflow, use after free, use
   after scope). The win-asan cases pass again after the runner's restore.
+- The unused `CRD_DIAG_HAS_SANITIZER` alias, whose comment the UBSan label made wrong, is deleted.
 - The ctest guards, tidy-files (six files clean), Allman, `test-diag-seeded-faults.py`, `diag-coverage.py
   --validate`, check-master-plan and check-repository pass; clang-format finds nothing in the new files and no more
   than HEAD in the changed ones.

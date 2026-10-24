@@ -59,9 +59,6 @@
 #define CRD_DIAG_HAS_UBSAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
-// Back-compat alias: any sanitizer runtime present.
-#define CRD_DIAG_HAS_SANITIZER (CRD_DIAG_HAS_ASAN || CRD_DIAG_HAS_TSAN)
-
 // The function a sanitizer specimen commits its error in: kept out of line so its report's frame names it, which the
 // harness requires of a catch (Expectation::expected_site, a symbolized site).
 #if defined(_MSC_VER)

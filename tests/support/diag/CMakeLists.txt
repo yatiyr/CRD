@@ -10,7 +10,8 @@ target_link_libraries(crd-diag-harness PUBLIC crd-core crd-containers)
 target_compile_features(crd-diag-harness PUBLIC cxx_std_20)
 # DIAG.10b: what this lane promises, from its configuration rather than from any binary's own flags, so a specimen or
 # a test that loses its sanitizer fails against the promise instead of reporting InstrumentAbsent and passing. The
-# routes mirror the specimens': use-after-return needs gcc or clang ASan, LeakSanitizer additionally Linux.
+# routes mirror the specimens': use-after-return needs gcc or clang ASan, LeakSanitizer additionally Linux; UBSan is
+# its own option.
 crd_profile_condition(_crd_diag_lane_asan CRD_ENABLE_ASAN)
 if(MSVC)
     set(_crd_diag_lane_gnu 0)
