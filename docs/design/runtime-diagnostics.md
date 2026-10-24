@@ -2962,6 +2962,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   (a wait cycle the host's watchdog window reports as a `Hang` bundle) and `race`. Each faulty run is caught by the
   engine's own detector on every lane, except the race: only ThreadSanitizer catches it, and elsewhere it is
   InstrumentAbsent, judged against the lane's promise. Every repaired run exits 0 with no bundle and no dump.
+- A crash (`crash`, a wild write) is caught by the crash handler the host installed: one dump or signal record, no
+  bundle. The dump's module list goes through the bundle import route and places the faulting instruction in the
+  application's module; the Linux record's `rip` and `(exe)` build id do the same. Under ASan the sanitizer owns the
+  fault ([session](../sessions/2026-10-24-diag-12-application-crash.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates

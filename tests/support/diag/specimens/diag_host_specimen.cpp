@@ -13,6 +13,8 @@
 //                   wait cycle as a hang, the bundle is written while the jobs stay parked, and the run exits 5
 //   race            two jobs add to one plain counter: ThreadSanitizer (halt_on_error) aborts the run; no other build
 //                   can catch it, so the mode announces sanitizer "none" there and the harness says InstrumentAbsent
+//   crash           an order written through a lookup that found nothing: the crash handler the host installed
+//                   writes one dump (Windows) or signal record (Linux) into the profile's crash directory, no bundle
 // A repaired run prints CRD_HOST_CLEAN with the bundles written and exits 0; an unknown mode exits 2.
 #include "specimen_common.hpp"
 
@@ -33,6 +35,15 @@
 #include <cstring>
 #include <span>
 #include <thread>
+
+#if CRD_DIAG_HAS_TSAN
+// crash: the host's crash handler must receive the fault. ThreadSanitizer otherwise handles SIGSEGV itself and exits
+// with code 66 before that handler runs (as in crash_capture_specimen).
+extern "C" const char* __tsan_default_options()
+{
+    return "handle_segv=0";
+}
+#endif
 
 namespace
 {
@@ -185,6 +196,17 @@ void job_race(const cp::DiagnosticHost& host, Shared& s)
     std::printf("CRD_HOST_TALLY %d\n", s.repaired ? s.counted.load() : s.plain);
 }
 
+// crash: the order lookup finds nothing and the defect writes through the null result. Both pointers are volatile, so
+// the store reaches the hardware as written (see crash_capture_specimen's null_write).
+void write_order(bool repaired)
+{
+    volatile crd::u32* volatile order = nullptr;
+    if (!repaired)
+    {
+        *order = 8U;
+    }
+}
+
 // A refund larger than the payment makes the balance negative.
 bool balance_holds(bool repaired)
 {
@@ -212,7 +234,7 @@ int main(int argc, char** argv)
 #endif
     std::printf("CRD_DIAG_IDENTITY=%s\nCRD_DIAG_SANITIZER=%s\n", CRD_DIAG_SPECIMEN_ID, sanitizer);
     std::fflush(stdout);
-    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race"};
+    const char* const modes[] = {"invariant", "assert", "use-after-free", "wait", "race", "crash"};
     bool              known   = false;
     for (const char* m : modes)
     {
@@ -220,7 +242,7 @@ int main(int argc, char** argv)
     }
     if (!known || (argc == 4 && std::strcmp(argv[3], "repaired") != 0) || argc > 4)
     {
-        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race [repaired]\n");
+        std::printf("usage: diag_host_specimen <profile> invariant|assert|use-after-free|wait|race|crash [repaired]\n");
         return 2;
     }
     const bool        repaired = argc == 4;
@@ -274,6 +296,10 @@ int main(int argc, char** argv)
     else if (race)
     {
         job_race(host, shared);
+    }
+    else if (std::strcmp(mode, "crash") == 0)
+    {
+        write_order(repaired);
     }
     if (!repaired)
     {

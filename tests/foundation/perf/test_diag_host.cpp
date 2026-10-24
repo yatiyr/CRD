@@ -22,11 +22,14 @@
 //
 // Covered (DIAG.12): the same application, faulty then repaired: a write after free names its allocation and free
 // sites in the application's module, a wait cycle is a hang bundle, a job race is caught where ThreadSanitizer runs
-// (InstrumentAbsent elsewhere), and each repaired run exits clean with no bundle and no dump.
+// (InstrumentAbsent elsewhere), a wild write leaves one crash capture (a dump or a signal record, never a bundle) whose
+// faulting instruction lies in the application's module, matched to its file, and each repaired run exits clean with
+// no bundle and no dump.
 //
 // A shipping build compiles the fault seams out: there fault injection is Unavailable, fault.* is not served and the
 // cases check that instead. ASCII test names.
 
+#include "../core/minidump_probe.hpp" // Windows: the dump's ExceptionStream (nothing off Windows)
 #include "module_file_identity.hpp"
 
 #include <crd/containers/array.hpp>
@@ -46,12 +49,14 @@
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
+#include <crd/perf/symbol_index.hpp>
 #include <crd/platform/filesystem.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -1541,4 +1546,132 @@ TEST_CASE("diagnostic host: ThreadSanitizer catches the application's job race, 
 
     const cd::Outcome repaired = check_repaired_run("race");
     CHECK(contains(repaired.output, "CRD_HOST_TALLY 400000"));
+}
+
+namespace
+{
+#if defined(__linux__)
+// The application's crash record (crash.cpp's text): the faulting rip and the executable's "module <base> <id> (exe)".
+struct CrashRecord
+{
+    u64          rip      = 0U;
+    u64          exe_base = 0U;
+    cont::String exe_id;
+    bool         has_rip = false;
+    bool         has_exe = false;
+};
+
+CrashRecord read_crash_record(const cont::String& path)
+{
+    const cont::Array<u8> bytes = read_bytes(path);
+    const cont::String    text{cont::StringView{reinterpret_cast<const char*>(bytes.data()), bytes.size()}};
+    cont::Array<cont::String> words;
+    const char*               p = text.c_str();
+    while (*p != '\0')
+    {
+        const char* const end = p + std::strcspn(p, " \n");
+        if (end != p)
+        {
+            words.push_back(cont::String{cont::StringView{p, static_cast<crd::usize>(end - p)}});
+        }
+        p = *end == '\0' ? end : end + 1;
+    }
+    CrashRecord r;
+    for (crd::usize i = 0U; i + 1U < words.size(); ++i)
+    {
+        if (words[i] == cont::StringView{"rip"} && !r.has_rip)
+        {
+            r.rip     = std::strtoull(words[i + 1U].c_str(), nullptr, 16);
+            r.has_rip = true;
+        }
+        else if (words[i] == cont::StringView{"module"} && i + 3U < words.size() &&
+                 words[i + 3U] == cont::StringView{"(exe)"})
+        {
+            r.exe_base = std::strtoull(words[i + 1U].c_str(), nullptr, 16);
+            r.exe_id   = words[i + 2U];
+            r.has_exe  = true;
+        }
+    }
+    return r;
+}
+
+cont::String hex_id(const cp::ModuleIdentity& m)
+{
+    cont::String out;
+    char         two[3];
+    for (u32 i = 0U; i < m.id_len; ++i)
+    {
+        (void)std::snprintf(two, sizeof(two), "%02x", static_cast<unsigned>(m.id[i]));
+        out.append(two);
+    }
+    return out;
+}
+#endif
+} // namespace
+
+TEST_CASE("diagnostic host: the application's wild write leaves one attributable crash capture, and the repaired one "
+          "runs clean",
+          "[perf][diag][diag12][diag-host]")
+{
+    const Scratch     scratch("crd-diag-host-app-crash");
+    const cd::Outcome o = run_app(scratch, "crash", false, cd::Expectation::Want::Crash);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str());
+    CHECK_FALSE(o.timed_out);
+    CHECK(count_bundles(scratch.path / "captures") == 0U); // a hard crash leaves the crash capture, never a bundle
+    cont::Array<fs::Path> crashes;
+    fs::list_directory(scratch.path / "crashes", crashes);
+    if (built_with_asan())
+    {
+        CHECK(o.exit_code != 0); // the sanitizer owns the fault, as for crash capture's own wild write
+#if defined(_WIN32)
+        CHECK(crashes.empty()); // its handler runs before the host's
+#endif
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::Crashed);
+        REQUIRE(crashes.size() == 1U);
+        const cont::String capture{crashes[0].generic()};
+        CHECK(contains(capture, "/crash_"));
+        cp::ModuleIdentity from_file;
+        REQUIRE(crd::test::module_file::file_identity(CRD_DIAG_HOST_SPECIMEN, from_file));
+#if defined(_WIN32)
+        CHECK(static_cast<u32>(o.exit_code) == 0xC0000005U); // the access violation, retained
+        // Import: the dump's module list through the symbol index section a bundle carries.
+        const cont::Array<u8> dump    = read_bytes(capture);
+        const cont::Array<u8> section = cp::build_symbol_index_from_minidump({dump.data(), dump.size()});
+        cp::BundleWriter      writer;
+        REQUIRE(writer.add_section(cp::BundleSectionTag::SymbolIndex, {section.data(), section.size()}) ==
+                cp::BundleWriter::AddStatus::Ok);
+        const cont::Array<u8>  bundle = writer.finish(0U);
+        const cp::BundleImport imp    = cp::import_bundle({bundle.data(), bundle.size()});
+        REQUIRE(imp.status == cp::ImportStatus::Ok);
+        REQUIRE(imp.has_symbols);
+        const cp::ModuleIdentity* const app = find_module(imp.symbols, base_name(CRD_DIAG_HOST_SPECIMEN));
+        REQUIRE(app != nullptr);
+        CHECK(crd::test::module_file::same_identity(*app, from_file));
+        if (from_file.id_kind != cp::SymbolIdKind::None)
+        {
+            CHECK(cp::identity_matches(*app, from_file));
+        }
+        // Attribution: the faulting instruction lies in the application's module.
+        MINIDUMP_EXCEPTION_STREAM fault{};
+        REQUIRE(crd_test_minidump::read_exception_stream(crd_test_minidump::path_from_utf8(capture.c_str()), fault));
+        CHECK(fault.ExceptionRecord.ExceptionCode == 0xC0000005U);
+        CHECK(in_module(fault.ExceptionRecord.ExceptionAddress, *app));
+#else
+        CHECK(o.exit_code == 139); // 128 + SIGSEGV
+        CHECK(ends_with(cont::StringView{capture.data(), capture.size()}, ".log"));
+        const CrashRecord record = read_crash_record(capture);
+        REQUIRE(record.has_rip);
+        REQUIRE(record.has_exe);
+        // The record names the executable by the build id of its file, and the faulting rip lies in its image.
+        CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId);
+        CHECK(record.exe_id == hex_id(from_file));
+        CHECK(record.rip >= record.exe_base);
+        CHECK(record.rip - record.exe_base < from_file.size);
+#endif
+    }
+
+    (void)check_repaired_run("crash");
 }
