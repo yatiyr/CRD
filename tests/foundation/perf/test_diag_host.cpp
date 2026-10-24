@@ -1730,11 +1730,18 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
     CHECK(count_bundles(scratch.path / "captures") == 0U); // a hard crash leaves the crash capture, never a bundle
     cont::Array<fs::Path> crashes;
     fs::list_directory(scratch.path / "crashes", crashes);
-    if (built_with_asan())
-    {
-        CHECK(o.exit_code != 0); // the sanitizer owns the fault, as for crash capture's own wild write
 #if defined(_WIN32)
-        CHECK(crashes.empty()); // its handler runs before the host's
+    const bool sanitizer_owns = cd::lane_promise().asan; // ASan's handler takes the access violation before the host's
+#else
+    const bool sanitizer_owns = cd::lane_promise().ubsan; // UBSan's null check stops the store before it executes
+#endif
+    if (sanitizer_owns) // as for crash capture's null-store modes
+    {
+        CHECK(o.exit_code != 0);
+        CHECK(crashes.empty());
+#if !defined(_WIN32)
+        CHECK(o.exit_code == 1);
+        CHECK(contains(o.output, "runtime error: store to null pointer"));
 #endif
     }
     else

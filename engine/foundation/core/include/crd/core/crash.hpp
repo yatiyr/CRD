@@ -88,9 +88,8 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 //          and never reports success. ExceptionCode/Address are printed to stderr as the emergency
 //          fallback regardless of whether the dump could be written.
 //
-// Linux:   sigaction(SIGSEGV | SIGABRT | SIGFPE | SIGILL); writes a crash log then re-raises with the
-//          default handler so the OS writes a core dump. (Alternate signal stack and install-failure
-//          hardening belong to the Linux crash-capture slice.)
+// Linux:   sigaction(SIGSEGV | SIGABRT | SIGFPE | SIGILL) on the alternate signal stack; writes one crash record,
+//          then restores the previous disposition and re-raises, so a default disposition lets the OS write its core.
 //
 // Safe to call multiple times; a re-install preserves the originally saved previous handler so
 // uninstall() restores it rather than restoring our own filter.
@@ -150,7 +149,8 @@ CrashReport test_fatal_path(std::uint32_t exception_code) noexcept;
 // Test-only seam: force the NEXT dump write to fail at a chosen step so the honest-failure paths that only a real
 // failure can reach (notably a FALSE MiniDumpWriteDump -> DumpFailed) are exercised. Pass Ok to clear. Only
 // OpenFailed / DumpFailed / FlushFailed are meaningful; the check is off by default and install() clears it, so no
-// real oracle is weakened -- the true checks still run, this only injects an additional failure. Windows only.
+// real oracle is weakened -- the true checks still run, this only injects an additional failure. Windows honors all
+// three; the Linux record writer honors DumpFailed (its failed write or fsync), and other platforms ignore it.
 void test_inject_write_failure(WriteResult step) noexcept;
 #endif
 

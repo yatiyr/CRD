@@ -33,7 +33,10 @@
 //                              (DIAG.5b (d)). Falls back to exit 61 if no fault occurs (never expected).
 //   sigkill                 -- (linux) kill(getpid, SIGKILL): uncatchable, no handler runs, NO record written -- used
 //                              to prove a pre-seeded prior record is retained. Windows: falls through to a plain fault.
-//   inject_dump_fail        -- (asserts only) force MiniDumpWriteDump FALSE, then fault: 0 dumps, marker == DumpFailed.
+//   fpe                     -- (linux) unmask FE_DIVBYZERO, then divide by zero: SIGFPE (FPE_FLTDIV), one record.
+//                              Elsewhere the division does not trap: exit 61.
+//   inject_dump_fail        -- (asserts only) force the dump or record write to fail, then fault: 0 dumps or records,
+//                              marker == DumpFailed.
 #include "specimen_common.hpp"
 
 #include <crd/core/crash.hpp>
@@ -53,17 +56,20 @@
 #include <intrin.h>  // __fastfail
 #include <windows.h> // RemoveDirectoryA, FAST_FAIL_FATAL_APP_EXIT, CreateFileA/WriteFile
 #elif defined(__linux__)
-#include <fcntl.h>  // open, O_WRONLY/O_CREAT/O_TRUNC (chain.marker)
+#include <fcntl.h>  // open, O_WRONLY/O_CREAT/O_TRUNC (chain.marker, report.marker)
+#include <fenv.h>   // feenableexcept (fpe)
 #include <signal.h> // kill/SIGKILL (sigkill), sigaction/raise/SA_SIGINFO (chain)
 #include <unistd.h> // rmdir (denied), getpid, write, close
 #endif
 
 #if CRD_DIAG_HAS_TSAN
 // The engine's crash handler under test must receive the fault. ThreadSanitizer otherwise handles SIGSEGV itself,
-// reports "ThreadSanitizer: SEGV" and exits with code 66 before crd::install's handler runs. Scoped to this specimen.
+// reports "ThreadSanitizer: SEGV" and exits with code 66 before crd::install's handler runs; it also takes the
+// re-executed SIGFPE once crd has recorded it (handle_sigfpe), exiting 66 instead of by the signal. Scoped to this
+// specimen.
 extern "C" const char* __tsan_default_options()
 {
-    return "handle_segv=0";
+    return "handle_segv=0:handle_sigfpe=0";
 }
 #endif
 
@@ -97,6 +103,19 @@ public:
     void flush() override {}
 };
 
+// `fpe`: a floating-point division by zero with the trap unmasked, so the FPU raises a synchronous SIGFPE. Not an
+// integer division: that is undefined behaviour, which UBSan reports before the instruction can trap.
+void fp_divide_by_zero() noexcept
+{
+#if defined(__linux__)
+    (void)::feenableexcept(FE_DIVBYZERO);
+#endif
+    volatile double one      = 1.0;
+    volatile double zero     = 0.0;
+    volatile double quotient = one / zero;
+    (void)quotient;
+}
+
 // A job body that faults inside a fiber (whichever worker runs it).
 void fiber_fault_job(void* /*data*/) noexcept
 {
@@ -104,16 +123,35 @@ void fiber_fault_job(void* /*data*/) noexcept
 }
 
 char              g_output_dir[1024] = {0};  // argv[1], captured at startup for the marker path
-#if defined(_WIN32)
 std::atomic<bool> g_marker_written{false};   // write the marker once (concurrent modes fire the hook twice)
+
+// <output dir>/<leaf>, built by hand: the Linux callers run inside a signal handler, so no libc formatting.
+void output_file(const char* leaf, char (&path)[1088]) noexcept
+{
+#if defined(_WIN32)
+    constexpr char separator = '\\';
+#else
+    constexpr char separator = '/';
 #endif
+    int n = 0;
+    for (int i = 0; g_output_dir[i] != '\0' && n < 1000; ++i)
+    {
+        path[n++] = g_output_dir[i];
+    }
+    path[n++] = separator;
+    for (int i = 0; leaf[i] != '\0' && n < 1087; ++i)
+    {
+        path[n++] = leaf[i];
+    }
+    path[n] = '\0';
+}
 
 // The hook records only (never terminates). It drops a machine-readable marker so the parent can tell an honest
 // write failure ("handler ran, saw DumpFailed") from "the handler never ran": the marker holds the decimal
-// WriteResult. Written with Win32 CreateFileA/WriteFile on the handler thread -- no CRT lock.
+// WriteResult. Written without the CRT: Win32 CreateFileA/WriteFile on the handler thread, open/write/close inside
+// the Linux signal handler.
 void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexcept
 {
-#if defined(_WIN32)
     if (g_marker_written.exchange(true, std::memory_order_acq_rel))
     {
         return;
@@ -124,17 +162,7 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
     }
 
     char path[1088];
-    int  n = 0;
-    for (int i = 0; g_output_dir[i] != '\0' && n < 1000; ++i)
-    {
-        path[n++] = g_output_dir[i];
-    }
-    const char* suffix = "\\report.marker";
-    for (int i = 0; suffix[i] != '\0'; ++i)
-    {
-        path[n++] = suffix[i];
-    }
-    path[n] = '\0';
+    output_file("report.marker", path);
 
     char     body[16];
     int      bn = 0;
@@ -155,6 +183,7 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
         body[bn++] = tmp[--tn];
     }
 
+#if defined(_WIN32)
     HANDLE f = CreateFileA(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f != INVALID_HANDLE_VALUE)
     {
@@ -162,8 +191,14 @@ void recording_hook(const crd::crash::CrashReport& report, void* /*user*/) noexc
         (void)WriteFile(f, body, static_cast<DWORD>(bn), &written, nullptr);
         (void)CloseHandle(f);
     }
-#else
-    (void)report;
+#elif defined(__linux__)
+    const int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0)
+    {
+        const ssize_t written = ::write(fd, body, static_cast<std::size_t>(bn)); // short writes fail the read-back
+        (void)written;
+        (void)::close(fd);
+    }
 #endif
 }
 
@@ -230,17 +265,7 @@ void chain_prev_handler(int sig, siginfo_t* /*info*/, void* /*ctx*/) noexcept
     if (g_output_dir[0] != '\0')
     {
         char path[1088];
-        int  n = 0;
-        for (int i = 0; g_output_dir[i] != '\0' && n < 1000; ++i)
-        {
-            path[n++] = g_output_dir[i];
-        }
-        const char* suffix = "/chain.marker";
-        for (int i = 0; suffix[i] != '\0'; ++i)
-        {
-            path[n++] = suffix[i];
-        }
-        path[n]        = '\0';
+        output_file("chain.marker", path);
         const int fd = ::open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (fd >= 0)
         {
@@ -448,10 +473,15 @@ int main(int argc, char** argv)
         crd::jobs::shutdown();
         return 61; // reached only if the worker never faulted (never expected)
     }
+    else if (std::strcmp(mode, "fpe") == 0)
+    {
+        fp_divide_by_zero();
+        return 61; // reached only where the division does not trap
+    }
     else if (std::strcmp(mode, "inject_dump_fail") == 0)
     {
 #if CRD_ENABLE_ASSERTS
-        crd::crash::test_inject_write_failure(crd::crash::WriteResult::DumpFailed); // force MiniDumpWriteDump FALSE
+        crd::crash::test_inject_write_failure(crd::crash::WriteResult::DumpFailed); // the write runs, then fails
         null_write();
 #else
         std::printf("inject_dump_fail needs CRD_ENABLE_ASSERTS\n");

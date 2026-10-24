@@ -38,25 +38,11 @@ namespace cd   = crd::diag;
 namespace fs   = std::filesystem;
 
 // Platform-neutral helpers, shared by the Windows and Linux acceptance blocks below. The specimen path, a fresh
-// output dir, the sanitizer-build probe and the bounded harness invocation are identical across platforms; only the
-// on-disk artifact (a Windows .dmp minidump vs a Linux crash_*.log record) and the fatal-reason codes differ.
+// output dir and the bounded harness invocation are identical across platforms, and both judge a sanitizer by the
+// lane's promise (cd::lane_promise()); only the on-disk artifact (a Windows .dmp minidump vs a Linux crash_*.log
+// record) and the fatal-reason codes differ.
 namespace
 {
-bool built_with_asan()
-{
-#if defined(__SANITIZE_ADDRESS__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
-    return true;
-#else
-    return false;
-#endif
-#else
-    return false;
-#endif
-}
-
 cont::String specimen_path()
 {
     return cont::String{CRD_DIAG_CRASH_CAPTURE_SPECIMEN};
@@ -83,6 +69,21 @@ cd::Outcome run_mode(const char* mode, const fs::path& dir)
     e.want       = cd::Expectation::Want::Crash;
     e.timeout_ms = 15000U; // a cold DbgHelp self-dump is not instant (Linux records are fast; the bound is shared)
     return cd::run_specimen(specimen_path(), args, e);
+}
+
+// Read the specimen's marker file (decimal WriteResult), or -1 if absent.
+int read_marker(const fs::path& dir)
+{
+    const fs::path  marker = dir / "report.marker";
+    std::error_code ec;
+    if (!fs::exists(marker, ec))
+    {
+        return -1;
+    }
+    std::ifstream f{marker};
+    int           v = -1;
+    f >> v;
+    return v;
 }
 } // namespace
 
@@ -125,21 +126,6 @@ fs::path first_crash_dump(const fs::path& dir)
     }
     return {};
 }
-
-// Read the specimen's marker file (decimal WriteResult), or -1 if absent.
-int read_marker(const fs::path& dir)
-{
-    const fs::path  marker = dir / "report.marker";
-    std::error_code ec;
-    if (!fs::exists(marker, ec))
-    {
-        return -1;
-    }
-    std::ifstream f{marker};
-    int           v = -1;
-    f >> v;
-    return v;
-}
 } // namespace
 
 TEST_CASE("crash capture: a wild write terminates with the fault code and writes exactly one dump",
@@ -149,7 +135,7 @@ TEST_CASE("crash capture: a wild write terminates with the fault code and writes
     const cd::Outcome o   = run_mode("av", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0);             // ASan's VEH owns the AV: still fatal...
         CHECK(count_crash_dumps(dir) == 0U); // ...but our SEH handler is preempted, so no crd dump
@@ -184,7 +170,7 @@ TEST_CASE("crash capture: concurrent faults write exactly one dump (the single-s
     const cd::Outcome o   = run_mode("concurrent", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0);
         CHECK(count_crash_dumps(dir) == 0U);
@@ -222,7 +208,7 @@ TEST_CASE("crash capture: a denied output path fails the write, still terminates
     const cd::Outcome o   = run_mode("denied", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0); // ASan owns the AV; the write path is not reached, but the fault is still fatal
     }
@@ -250,7 +236,7 @@ TEST_CASE("crash capture: a fatal assert with no handler under headless terminat
 
     // The (b) guarantee on both builds: no modal dialog blocked the process to the harness timeout.
     CHECK(o.verdict != cd::Verdict::Timeout);
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         // ASan intercepts abort() and owns the process exit (its own report + exit code), so the exact code is not
         // crd's; assert only that the process terminated abnormally -- the same scoping the other modes use under ASan.
@@ -276,7 +262,7 @@ TEST_CASE("crash capture: a fault inside a log sink, holding the log and stderr 
     const cd::Outcome o   = run_mode("logger_lock", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         // ASan owns the AV and writes via its own path, not the CRT lock -> fatal, no crd dump, and NOT a timeout.
         CHECK(o.exit_code != 0);
@@ -301,7 +287,7 @@ TEST_CASE("crash capture: a stack overflow on the installing thread still dumps"
     const cd::Outcome o   = run_mode("overflow", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0); // ASan reports the stack-overflow itself
         CHECK(count_crash_dumps(dir) == 0U);
@@ -332,7 +318,7 @@ TEST_CASE("crash capture: a stack overflow on a raw thread created after install
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code)
                     << std::dec << " marker=" << read_marker(dir));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0);
         CHECK(count_crash_dumps(dir) == 0U);
@@ -355,7 +341,7 @@ TEST_CASE("crash capture: a stack overflow on a guarded worker thread still dump
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code)
                     << std::dec << " marker=" << read_marker(dir));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         CHECK(o.exit_code != 0);
         CHECK(count_crash_dumps(dir) == 0U);
@@ -389,7 +375,7 @@ TEST_CASE("crash capture: a fault inside a fiber job is NOT caught by the last-c
 
     CHECK(o.exit_code != 0);             // the fault is fatal on every build
     CHECK(count_crash_dumps(dir) == 0U); // ...but the last-chance filter does not capture a fiber-stack fault
-    if (!built_with_asan())
+    if (!cd::lane_promise().asan)
     {
         CHECK(o.verdict == cd::Verdict::Crashed);
         CHECK(static_cast<std::uint32_t>(o.exit_code) == kAccessViolation);
@@ -413,7 +399,7 @@ TEST_CASE("crash capture: an injected MiniDumpWriteDump failure is honest on the
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=0x" << std::hex << static_cast<std::uint32_t>(o.exit_code)
                     << " marker=" << read_marker(dir));
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
         // ASan's VEH preempts the AV -> our handler never runs -> no marker at all.
         CHECK(o.exit_code != 0);
@@ -440,11 +426,11 @@ TEST_CASE("crash capture: an injected MiniDumpWriteDump failure is honest on the
 // reason is a signal, so the parent exit code is 128 + signo; capture is per-OS-thread via sigaction + SA_ONSTACK.
 // Every expectation below was MEASURED against the built specimen before being asserted -- several differ from the
 // Windows results and are called out inline (notably `fiber` is captured here, and `fastfail` -> SIGILL is captured).
-// ASan builds are handled as in the Windows block: on Linux crd's sigaction replaces ASan's own SIGSEGV handler, so
-// the exact records under ASan are not yet characterized (owned by DIAG.12) -- that branch asserts only that the
-// fault stays fatal, never skip-passes, and the full record assertions run on the linux-gcc-debug lane. Also owned by
-// DIAG.12: inject_dump_fail + the marker are Windows-only (the Linux writer does not honor the injection seam), and
-// SIGFPE is not yet a specimen mode (`assert_default` records SIGABRT).
+// Sanitizer lanes, measured on linux-gcc-asan (DIAG.12) and judged by the lane's promise: UBSan's null check stops a
+// null store before it executes, so the null-store modes end in its report (exit 1) and crd's handler never runs;
+// a fault the kernel raises reaches crd first, which records it and returns, so the instruction faults again under
+// ASan's own handler (exit 1, its report names the real fault). SIGILL and SIGABRT are not ASan's (handle_sigill and
+// handle_abort are off), so those modes match the plain lanes.
 #if defined(__linux__)
 
 namespace
@@ -452,10 +438,15 @@ namespace
 constexpr int kExitSegv   = 139; // 128 + SIGSEGV(11): a wild write or a stack fault
 constexpr int kExitIll    = 132; // 128 + SIGILL(4):  __builtin_trap()
 constexpr int kExitAbrt   = 134; // 128 + SIGABRT(6): abort() from the headless assert path
+constexpr int kExitFpe    = 136; // 128 + SIGFPE(8): a trapped floating-point division by zero
+constexpr int kExitReport = 1;   // a sanitizer's exit after its report (no exitcode option is set)
 constexpr int kSigSegv    = 11;
 constexpr int kSigIll     = 4;
 constexpr int kSigAbrt    = 6;
-constexpr int kSegvAccerr = 2; // si_code SEGV_ACCERR = a guard-page hit (stack overflow); SEGV_MAPERR(1) = unmapped
+constexpr int kSigFpe     = 8;
+constexpr int kSegvAccerr = 2;  // si_code SEGV_ACCERR = a guard-page hit (stack overflow); SEGV_MAPERR(1) = unmapped
+constexpr int kFpeFltdiv  = 3;  // si_code FPE_FLTDIV
+constexpr int kSiTkill    = -6; // si_code SI_TKILL: a sent signal (abort raises SIGABRT this way)
 
 struct RecordFields
 {
@@ -569,8 +560,29 @@ RecordFields parse_record(const fs::path& p)
             r.has_cr2 = true;
         }
     }
-    r.ok = (r.pid >= 0 && r.tid >= 0 && r.signal >= 0 && r.code >= 0);
+    r.ok = (r.pid >= 0 && r.tid >= 0 && r.signal >= 0 && r.has_regs);
     return r;
+}
+
+bool output_has(const cd::Outcome& o, std::string_view text)
+{
+    return std::string_view{o.output}.find(text) != std::string_view::npos;
+}
+
+// A null-store mode on a UBSan lane: the sanitizer's report and exit, no record.
+void check_null_store_reported(const cd::Outcome& o, const fs::path& dir)
+{
+    CHECK(o.exit_code == kExitReport);
+    CHECK(output_has(o, "runtime error: store to null pointer"));
+    CHECK(count_crash_records(dir) == 0U);
+}
+
+// A kernel-raised fault on an ASan lane: crd's record, then ASan's report of the same fault and its exit.
+void check_asan_chained(const cd::Outcome& o, const fs::path& dir, std::string_view report)
+{
+    CHECK(o.exit_code == kExitReport);
+    CHECK(output_has(o, report));
+    CHECK(count_crash_records(dir) == 1U);
 }
 } // namespace
 
@@ -581,9 +593,9 @@ TEST_CASE("crash capture (linux): a wild write terminates with SIGSEGV and write
     const cd::Outcome o   = run_mode("av", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0); // ASan owns SIGSEGV on Linux; the fault stays fatal (records uncharacterized under ASan)
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -617,9 +629,10 @@ TEST_CASE("crash capture (linux): a main-thread stack overflow is captured on th
     const cd::Outcome o   = run_mode("overflow", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
-        CHECK(o.exit_code != 0);
+        check_asan_chained(o, dir, "AddressSanitizer: stack-overflow");
+        CHECK(parse_record(first_crash_record(dir)).signal == kSigSegv);
     }
     else
     {
@@ -642,9 +655,13 @@ TEST_CASE("crash capture (linux): an UNguarded worker stack overflow writes NO r
     const cd::Outcome o   = run_mode("overflow_thread", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
-        CHECK(o.exit_code != 0);
+        // ASan gives every thread an alternate signal stack, which crd borrows, so this worker is captured.
+        check_asan_chained(o, dir, "AddressSanitizer: stack-overflow");
+        const RecordFields rf = parse_record(first_crash_record(dir));
+        CHECK(rf.tid != rf.pid);
+        CHECK(rf.code == kSegvAccerr);
     }
     else
     {
@@ -664,9 +681,12 @@ TEST_CASE("crash capture (linux): a GUARDED worker stack overflow is captured wi
     const cd::Outcome o   = run_mode("overflow_thread_guarded", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
-        CHECK(o.exit_code != 0);
+        check_asan_chained(o, dir, "AddressSanitizer: stack-overflow");
+        const RecordFields rf = parse_record(first_crash_record(dir));
+        CHECK(rf.tid != rf.pid);
+        CHECK(rf.code == kSegvAccerr);
     }
     else
     {
@@ -692,9 +712,12 @@ TEST_CASE("crash capture (linux): a fiber-stack overflow on a background worker 
     const cd::Outcome o   = run_mode("fiber_overflow_worker", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().asan)
     {
-        CHECK(o.exit_code != 0);
+        check_asan_chained(o, dir, "AddressSanitizer: stack-overflow");
+        const RecordFields rf = parse_record(first_crash_record(dir));
+        CHECK(rf.tid != rf.pid);
+        CHECK(rf.code == kSegvAccerr);
     }
     else
     {
@@ -721,9 +744,9 @@ TEST_CASE("crash capture (linux): a fiber null-deref pumped onto main is capture
     const cd::Outcome o   = run_mode("fiber", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -743,9 +766,9 @@ TEST_CASE("crash capture (linux): two threads faulting at once write exactly ONE
     const cd::Outcome o   = run_mode("concurrent", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -764,9 +787,9 @@ TEST_CASE("crash capture (linux): a denied output path fails the write, still te
     const cd::Outcome o   = run_mode("denied", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -788,17 +811,10 @@ TEST_CASE("crash capture (linux): __builtin_trap raises SIGILL and is captured (
     const cd::Outcome o   = run_mode("fastfail", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
-    {
-        CHECK(o.exit_code != 0);
-    }
-    else
-    {
-        CHECK(o.verdict == cd::Verdict::Crashed);
-        CHECK(o.exit_code == kExitIll);
-        CHECK(count_crash_records(dir) == 1U);
-        CHECK(parse_record(first_crash_record(dir)).signal == kSigIll);
-    }
+    CHECK(o.verdict == cd::Verdict::Crashed);
+    CHECK(o.exit_code == kExitIll);
+    CHECK(count_crash_records(dir) == 1U);
+    CHECK(parse_record(first_crash_record(dir)).signal == kSigIll);
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
@@ -839,9 +855,9 @@ TEST_CASE("crash capture (linux): a fault inside a log sink, holding the log and
     const cd::Outcome o   = run_mode("logger_lock", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -862,9 +878,9 @@ TEST_CASE("crash capture (linux): crd records then chains to the previous handle
     const cd::Outcome o   = run_mode("chain", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -887,9 +903,9 @@ TEST_CASE("crash capture (linux): a faulting crash-report hook is bounded and th
     const cd::Outcome o   = run_mode("hook_fault", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    if (cd::lane_promise().ubsan)
     {
-        CHECK(o.exit_code != 0);
+        check_null_store_reported(o, dir);
     }
     else
     {
@@ -911,20 +927,70 @@ TEST_CASE("crash capture (linux): a fatal assert with no handler under headless 
     const cd::Outcome o   = run_mode("assert_default", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    if (built_with_asan())
+    CHECK(o.verdict == cd::Verdict::Crashed);
+    CHECK(o.exit_code == kExitAbrt);
+    CHECK(count_crash_records(dir) == 1U);
+    const RecordFields rf = parse_record(first_crash_record(dir));
+    CHECK(rf.ok);
+    CHECK(rf.signal == kSigAbrt);
+    CHECK(rf.code == kSiTkill); // sent by abort(), not raised by the kernel: crd re-raises it rather than returning
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_CASE("crash capture (linux): a trapped floating-point division raises SIGFPE and is recorded",
+          "[core][diag][crash-capture]")
+{
+    const fs::path    dir = fresh_dir("fpe");
+    const cd::Outcome o   = run_mode("fpe", dir);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
+
+    if (cd::lane_promise().asan)
     {
-        CHECK(o.exit_code != 0);
+        check_asan_chained(o, dir, "AddressSanitizer: FPE");
     }
     else
     {
         CHECK(o.verdict == cd::Verdict::Crashed);
-        CHECK(o.exit_code == kExitAbrt);
+        CHECK(o.exit_code == kExitFpe);
         CHECK(count_crash_records(dir) == 1U);
-        CHECK(parse_record(first_crash_record(dir)).signal == kSigAbrt);
+    }
+    const RecordFields rf = parse_record(first_crash_record(dir));
+    CHECK(rf.ok);
+    CHECK(rf.signal == kSigFpe);
+    CHECK(rf.code == kFpeFltdiv);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+#if CRD_ENABLE_ASSERTS
+TEST_CASE("crash capture (linux): an injected record write failure is honest on the fatal path",
+          "[core][diag][crash-capture]")
+{
+    // The write runs, then the seam fails it: no record is left, the handler says FAILED, and the hook's marker shows
+    // it ran and saw DumpFailed. On a UBSan lane the null store never reaches crd, so this is the plain lanes' case.
+    const fs::path    dir = fresh_dir("inject_dump_fail");
+    const cd::Outcome o   = run_mode("inject_dump_fail", dir);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " marker=" << read_marker(dir));
+
+    if (cd::lane_promise().ubsan)
+    {
+        check_null_store_reported(o, dir);
+        CHECK(read_marker(dir) == -1);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::Crashed);
+        CHECK(o.exit_code == kExitSegv);
+        CHECK(fs::exists(dir));
+        CHECK(count_crash_records(dir) == 0U);
+        CHECK(output_has(o, "[crd] crash record FAILED"));
+        CHECK(read_marker(dir) == static_cast<int>(crd::crash::WriteResult::DumpFailed));
     }
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+#endif // CRD_ENABLE_ASSERTS
 
 #endif // defined(__linux__)
 

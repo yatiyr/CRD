@@ -29,21 +29,6 @@ namespace fs   = std::filesystem;
 
 namespace
 {
-bool built_with_asan()
-{
-#if defined(__SANITIZE_ADDRESS__)
-    return true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
-    return true;
-#else
-    return false;
-#endif
-#else
-    return false;
-#endif
-}
-
 cont::String specimen_path()
 {
     return cont::String{CRD_DIAG_CRASH_CAPTURE_SPECIMEN};
@@ -245,17 +230,10 @@ std::size_t parse_elf_build_id(const char* path, unsigned char* out, std::size_t
 
 TEST_CASE("crash record (linux): carries the exe ELF build-id matching the on-disk binary", "[core][diag][build-id]")
 {
+    // A trap (SIGILL): no sanitizer takes it and UBSan does not stop it first, so every Linux lane writes the record.
     const fs::path    dir = fresh_dir("bid");
-    const cd::Outcome o   = run_mode("av", dir);
+    const cd::Outcome o   = run_mode("fastfail", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
-
-    if (built_with_asan())
-    {
-        CHECK(o.exit_code != 0); // ASan owns SIGSEGV on Linux; no crd record is written (asserted, never skipped)
-        std::error_code ec;
-        fs::remove_all(dir, ec);
-        return;
-    }
 
     REQUIRE(o.verdict == cd::Verdict::Crashed);
     const fs::path rec = first_crash_record(dir);

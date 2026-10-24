@@ -2,6 +2,23 @@
 
 #include <atomic>
 
+#if CRD_ENABLE_ASSERTS && (defined(_WIN32) || defined(__linux__))
+namespace
+{
+// Test-only: force the next write to fail at a chosen step (Ok = no injection). Off by default; install() clears it.
+// A relaxed load is async-signal-safe, so the Linux record writer reads it inside the fault handler.
+std::atomic<crd::crash::WriteResult> s_inject_step{crd::crash::WriteResult::Ok};
+} // namespace
+
+namespace crd::crash
+{
+void test_inject_write_failure(WriteResult step) noexcept
+{
+    s_inject_step.store(step, std::memory_order_relaxed);
+}
+} // namespace crd::crash
+#endif
+
 // ---- Windows ---------------------------------------------------------------
 #if defined(_WIN32)
 
@@ -44,11 +61,6 @@ std::atomic<unsigned>                       s_dump_serial{0};
 std::atomic<unsigned>                       s_live_dumps{0}; // non-fatal dumps written this process (bounded)
 
 constexpr unsigned kMaxLiveDumps = 16; // a bounded per-process cap on non-fatal dumps (2a-style policy, not a knob)
-
-#if CRD_ENABLE_ASSERTS
-// Test-only: force the next write to fail at a chosen step (Ok = no injection). Off by default; install() clears it.
-std::atomic<crd::crash::WriteResult> s_inject_step{crd::crash::WriteResult::Ok};
-#endif
 
 SRWLOCK s_dump_lock = SRWLOCK_INIT; // serializes MiniDumpWriteDump (DbgHelp is not thread-safe)
 
@@ -851,11 +863,6 @@ CrashReport test_fatal_path(std::uint32_t exception_code) noexcept
     // Straight into the fatal core -- NOT crash_filter, so the test never chains to Catch2's own fatal filter.
     return handle_fatal(&ep, GetCurrentThreadId());
 }
-
-void test_inject_write_failure(WriteResult step) noexcept
-{
-    s_inject_step.store(step, std::memory_order_relaxed);
-}
 #endif
 
 } // namespace crd::crash
@@ -1146,10 +1153,15 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
     n             = ap_str(rec, sizeof(rec), n, "\nsignal ");
     n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(sig));
     n             = ap_str(rec, sizeof(rec), n, " code ");
-    n             = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(static_cast<unsigned>(si_code)));
-    n             = ap_str(rec, sizeof(rec), n, " addr ");
-    n             = ap_hex(rec, sizeof(rec), n, addr);
-    n             = ap_str(rec, sizeof(rec), n, "\nexe ");
+    const std::int64_t code = si_code; // signed: a sent signal's code is not positive (SI_TKILL from abort is -6)
+    if (code < 0)
+    {
+        n = ap_str(rec, sizeof(rec), n, "-");
+    }
+    n = ap_dec(rec, sizeof(rec), n, static_cast<std::uint64_t>(code < 0 ? -code : code));
+    n = ap_str(rec, sizeof(rec), n, " addr ");
+    n = ap_hex(rec, sizeof(rec), n, addr);
+    n = ap_str(rec, sizeof(rec), n, "\nexe ");
     if (s_exe_path_len != 0U)
     {
         n = ap_str(rec, sizeof(rec), n, s_exe_path);
@@ -1237,11 +1249,18 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
         n = ap_str(rec, sizeof(rec), n, "\n");
     }
 
-    const bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);
+    bool ok = write_all(fd, rec, n) && (fsync(fd) == 0);
     if (!ok)
     {
         err = errno; // capture the write/fsync errno before close() can change it
     }
+#if CRD_ENABLE_ASSERTS
+    if (s_inject_step.load(std::memory_order_relaxed) == crd::crash::WriteResult::DumpFailed)
+    {
+        ok  = false; // the real write ran; force the failure branch so the exact DumpFailed cleanup is exercised
+        err = ECANCELED;
+    }
+#endif
     (void)close(fd);
     if (!ok)
     {
@@ -1334,12 +1353,14 @@ void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
         (void)write_all(STDERR_FILENO, msg, m);
     }
 
-    // Chain to the previously-installed handler, then re-raise: a default previous disposition terminates with the
-    // original signal (retained fault reason, read from WTERMSIG); a sanitizer's previous handler also gets to report.
+    // Chain to the previously-installed handler. A fault the kernel raised (si_code > 0) is left to re-execute: the
+    // handler returns, the instruction faults again and the previous handler receives the real siginfo and context,
+    // so a sanitizer reports the fault itself, not the re-raise. A sent signal (abort's SIGABRT, kill) is re-raised.
+    // A default previous disposition terminates with the original signal either way (WTERMSIG keeps the reason).
     // The handler is NOT SA_RESETHAND -- that resets the disposition process-wide on entry, so a concurrent same-signal
     // fault on another thread would take SIG_DFL and kill the process mid-record. Instead the four fault signals are
     // blocked in sa_mask during the handler, so a RECURSIVE fault on this thread is forced to SIG_DFL (bounded, no
-    // re-entry); restoring prev here replaces our handler so the re-raise reaches the correct next link.
+    // re-entry); restoring prev here replaces our handler, so the re-fault or re-raise reaches the next link.
     struct sigaction* prev = nullptr;
     switch (sig)
     {
@@ -1353,7 +1374,10 @@ void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
     {
         (void)sigaction(sig, prev, nullptr);
     }
-    (void)raise(sig);
+    if (si_code <= 0)
+    {
+        (void)raise(sig);
+    }
 }
 
 } // namespace
@@ -1466,6 +1490,9 @@ InstallResult install(const char* output_dir) noexcept
 
     s_gate.store(0, std::memory_order_relaxed); // fresh generation: no fault has claimed the record slot yet
     s_done.store(false, std::memory_order_relaxed);
+#if CRD_ENABLE_ASSERTS
+    s_inject_step.store(WriteResult::Ok, std::memory_order_relaxed); // no test injection carries across an install
+#endif
 
     struct sigaction sa{};
     sa.sa_sigaction = crash_signal_handler;
@@ -1587,8 +1614,6 @@ CrashReport test_fatal_path(std::uint32_t exception_code) noexcept
     r.write = WriteResult::Unsupported; // the synthetic-record path is Windows-only
     return r;
 }
-
-void test_inject_write_failure(WriteResult /*step*/) noexcept {} // no in-process minidump write to inject into
 #endif
 
 } // namespace crd::crash
