@@ -161,7 +161,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane; linux-clang-tsan runs the same cases under the race detector. |
 | Adopt | `watchdog_period_ms = 250` in the host profile; `crd::RtScope(...)` around a callback that must neither allocate nor block. |
 | Example | `tests/foundation/jobs/test_diag_deadlock_specimen.cpp`; `assets/diag/host_investigate.host.toml` |
-| Cost | The watchdog and the pool's diagnostics are in the basic and full arms of the jobs workload, unresolved on every tuple ([board losses](../bench/2026-10-16-diag-11b-overhead.md#losses-and-what-they-belong-to), DIAG.11b clause (4)). |
+| Cost | The watchdog and the pool's diagnostics are in the basic and full arms of the jobs workload: basic within 2% on every tuple with a four-thread pool ([session](../sessions/2026-10-24-diag-11b-jobs-cpu-per-frame.md)); full, with the profiler's jobs adapter, costs +32% on win-shipping-profile and +36% on linux-gcc-relwithdebinfo ([session](../sessions/2026-10-24-diag-11b-jobs-full-attribution.md)). |
 | Owner | DIAG.4a, DIAG.4c |
 
 <a id="rb-race"></a>

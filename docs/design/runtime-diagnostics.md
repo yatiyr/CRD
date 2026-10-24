@@ -2792,7 +2792,12 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   the monotonic clock (2026-10-24,
   [session](../sessions/2026-10-24-diag-11b-ceir-bridge-cycle-counter.md)): offline full over off fell from +452% to
   +220% on win-shipping-profile. The rest is the price of exact parent-pause self-time, two counter reads per
-  dispatch against a dispatch of a few nanoseconds.
+  dispatch against a dispatch of a few nanoseconds. Full on jobs (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-jobs-full-attribution.md)): `register_thread` re-registers a thread of the
+  live lifetime without the reader pin and the jobs adapter's tallies are striped, which took four-thread jobs full
+  over off from +47% to +32% on win-shipping-profile and from +40% to +36% on linux-gcc-relwithdebinfo; the rest is
+  attributed (payload formatting, the event slot write, the recording word, the adapter's clock reads and token
+  claims).
 - The flight recorder's record path takes no lock (2026-10-24,
   [session](../sessions/2026-10-24-diag-11b-flight-recorder-lock-free-record.md)): one recording word holds the total
   and the state; a record claims its sequence by compare-exchange only while Armed or Triggered, and the claim that

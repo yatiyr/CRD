@@ -659,6 +659,20 @@ void               state_read_release() noexcept { reader_leave(); }
 
 crd::u8 register_thread(const char* name) noexcept
 {
+    // A thread registered in the live lifetime under the same name returns without the reader pin: it records into
+    // that state, so the "join every recording thread before shutdown" contract covers it as it covers push_region.
+    // The pin is two seq_cst read-modify-writes of one global counter, and the jobs adapter re-registers at every job
+    // (DIAG.11b: 10 points of a four-thread jobs frame in the full mode).
+    detail::ProfilerState* const live = detail::g_state.load(std::memory_order_acquire);
+    if (live != nullptr && t_thread_index != detail::kInvalidThread && t_state_gen == live->generation)
+    {
+        t_ring = &live->rings[t_thread_index];
+        if (name == nullptr || (t_ring->name != nullptr && std::strcmp(t_ring->name, name) == 0))
+        {
+            return t_thread_index;
+        }
+    }
+
     detail::StateGuard state_guard;
     detail::ProfilerState* const g_state = state_guard.s;
     if (g_state == nullptr)

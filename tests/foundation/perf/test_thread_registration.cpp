@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cstring>
 #include <thread>
 
 namespace
@@ -33,6 +34,46 @@ TEST_CASE("register_thread is idempotent on the calling thread", "[perf][thread]
     const auto a = crd::perf::register_thread("main");
     const auto b = crd::perf::register_thread("main");
     CHECK(a == b);
+}
+
+TEST_CASE("re-registering takes a new name and never reuses another lifetime's index", "[perf][thread]")
+{
+    // register_thread returns a live cache without the reader pin (DIAG.11b); the cache must be of this lifetime and
+    // carry the same name.
+    crd::perf::init({});
+    std::atomic<int> step{0};
+    std::atomic<crd::u8> stale_again{0xFFU};
+    std::thread stale(
+        [&]()
+        {
+            (void)crd::perf::register_thread("worker.same");
+            step.store(1, std::memory_order_release);
+            while (step.load(std::memory_order_acquire) != 2)
+            {
+                std::this_thread::yield();
+            }
+            stale_again.store(crd::perf::register_thread("worker.same"), std::memory_order_release);
+        });
+    while (step.load(std::memory_order_acquire) != 1)
+    {
+        std::this_thread::yield();
+    }
+    crd::perf::shutdown(); // `stale` keeps its cache of the retired lifetime
+    crd::perf::init({});
+    std::atomic<crd::u8> fresh{0xFFU};
+    std::thread([&]() { fresh.store(crd::perf::register_thread("worker.same"), std::memory_order_release); }).join();
+    step.store(2, std::memory_order_release);
+    stale.join();
+    CHECK(fresh.load() != 0xFFU);
+    CHECK(stale_again.load() != 0xFFU);
+    CHECK(stale_again.load() != fresh.load()); // the stale thread did not take the ring another thread records into
+    CHECK(crd::perf::thread_count() == 3U);
+
+    const crd::u8 main_idx = crd::perf::current_thread_index();
+    CHECK(crd::perf::register_thread("main.renamed") == main_idx);
+    const auto view = crd::perf::thread_samples(main_idx);
+    CHECK(std::strcmp(view.name != nullptr ? view.name : "", "main.renamed") == 0);
+    crd::perf::shutdown();
 }
 
 TEST_CASE("worker threads get unique indices", "[perf][thread][workers]")

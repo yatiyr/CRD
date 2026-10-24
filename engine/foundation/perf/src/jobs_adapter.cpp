@@ -38,6 +38,8 @@
 #include <crd/perf/profiler.hpp>
 #include <crd/perf/sample.hpp>
 
+#include "striped_count.hpp"
+
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -81,22 +83,24 @@ std::mutex g_install_mutex;
 // parallel), so the counters must be atomic -- a plain `++` is a data race
 // (lost updates surfaced as `jobs_ended == 7` for an 8-job batch under
 // linux-gcc -O2). Relaxed ordering is correct: these are pure tallies with
-// no happens-before relationship to any other read.
+// no happens-before relationship to any other read. Striped (DIAG.11b): five
+// counters on one line every worker wrote twice per job were 5 points of a
+// four-thread jobs frame in the full mode.
 struct AtomicStats
 {
-    std::atomic<crd::u64> jobs_begun{0};
-    std::atomic<crd::u64> jobs_ended{0};
-    std::atomic<crd::u64> fibers_yielded{0};
-    std::atomic<crd::u64> fibers_resumed{0};
-    std::atomic<crd::u64> missing_tokens{0};
+    detail::StripedCount jobs_begun;
+    detail::StripedCount jobs_ended;
+    detail::StripedCount fibers_yielded;
+    detail::StripedCount fibers_resumed;
+    detail::StripedCount missing_tokens;
 
     void reset() noexcept
     {
-        jobs_begun.store(0, std::memory_order_relaxed);
-        jobs_ended.store(0, std::memory_order_relaxed);
-        fibers_yielded.store(0, std::memory_order_relaxed);
-        fibers_resumed.store(0, std::memory_order_relaxed);
-        missing_tokens.store(0, std::memory_order_relaxed);
+        jobs_begun.reset();
+        jobs_ended.reset();
+        fibers_yielded.reset();
+        fibers_resumed.reset();
+        missing_tokens.reset();
     }
 };
 
@@ -174,7 +178,7 @@ void cb_on_job_begin(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/,
 
     BeginToken tok = push_region(g_job_name, Category::Job);
     park_token(fiber, tok);
-    g_stats.jobs_begun.fetch_add(1, std::memory_order_relaxed);
+    g_stats.jobs_begun.add();
 }
 
 void cb_on_job_end(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) noexcept
@@ -183,18 +187,18 @@ void cb_on_job_end(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) noexc
     if (take_token(fiber, tok))
     {
         pop_region(g_job_name, tok, Category::Job);
-        g_stats.jobs_ended.fetch_add(1, std::memory_order_relaxed);
+        g_stats.jobs_ended.add();
     }
     else
     {
-        g_stats.missing_tokens.fetch_add(1, std::memory_order_relaxed);
+        g_stats.missing_tokens.add();
     }
     set_current_fiber_id(0U); // clear fiber tag on the thread; next non-job scope is OS-thread context
 }
 
 void cb_on_fiber_yield(crd::jobs::FiberHandle /*fiber*/, crd::u8 /*thread_index*/) noexcept
 {
-    g_stats.fibers_yielded.fetch_add(1, std::memory_order_relaxed);
+    g_stats.fibers_yielded.add();
     // v0c keeps a single paired Sample per job (begin -> end across the
     // yield is captured by Sample.begin_thread vs end_thread). A future
     // v0g UI enhancement could emit a split marker here.
@@ -204,7 +208,7 @@ void cb_on_fiber_resume(crd::jobs::FiberHandle fiber, crd::u8 /*thread_index*/) 
 {
     register_thread("job-worker"); // lazy register on resume thread too
     set_current_fiber_id(fiber_tag(fiber));
-    g_stats.fibers_resumed.fetch_add(1, std::memory_order_relaxed);
+    g_stats.fibers_resumed.add();
 }
 
 } // namespace
@@ -267,11 +271,11 @@ void uninstall_jobs_adapter() noexcept
 [[nodiscard]] JobsAdapterStats jobs_adapter_stats() noexcept
 {
     JobsAdapterStats out{};
-    out.jobs_begun     = g_stats.jobs_begun.load(std::memory_order_relaxed);
-    out.jobs_ended     = g_stats.jobs_ended.load(std::memory_order_relaxed);
-    out.fibers_yielded = g_stats.fibers_yielded.load(std::memory_order_relaxed);
-    out.fibers_resumed = g_stats.fibers_resumed.load(std::memory_order_relaxed);
-    out.missing_tokens = g_stats.missing_tokens.load(std::memory_order_relaxed);
+    out.jobs_begun     = g_stats.jobs_begun.total();
+    out.jobs_ended     = g_stats.jobs_ended.total();
+    out.fibers_yielded = g_stats.fibers_yielded.total();
+    out.fibers_resumed = g_stats.fibers_resumed.total();
+    out.missing_tokens = g_stats.missing_tokens.total();
     return out;
 }
 
