@@ -12,7 +12,10 @@
 // parks (counter_wait) or completes (job_fiber_trampoline) and then switches back to the scheduler stack of the
 // thread it is running on, which may not be the thread that dispatched it. So the scheduler side keeps its switch
 // state in the dispatching frame, and the fiber keeps its own in the Fiber struct: the fake stack it left behind
-// and the bounds of the scheduler stack it will return to, learned each time it is entered or resumed. Every switch
+// and the bounds of the scheduler stack it will return to, learned each time it is entered or resumed. A completed
+// fiber's context is rebuilt for its next job, but its fake stack is kept and restored when the trampoline is entered
+// again: entering with none made ASan map a new fake stack for every job and never free the old one (DIAG.11b,
+// 2026-10-24); destroying it at completion would unmap and unpoison it per job instead. Every switch
 // is a synchronization point for TSan on the switching thread (flags 0); cross-thread ordering is the work queues'
 // acquire/release, which the switch composes with, so a race TSan reports through this model is a real one.
 //
@@ -62,6 +65,8 @@
 #endif
 #if CRD_JOBS_TSAN
 #include <sanitizer/tsan_interface.h>
+// The instrumentation's function-exit hook; the runtime exports it, the public header does not declare it.
+extern "C" void __tsan_func_exit(); // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
 #endif
 
 namespace crd::jobs::detail
@@ -95,8 +100,9 @@ CRD_FORCEINLINE void sanitizer_switch_begin(SanitizerSwitch& state, const void* 
     (void)state;
 }
 
-// Immediately after fiber_switch() returned, back on the stack that called sanitizer_switch_begin(): restores the
-// fake stack and records the bounds of the stack that switched here (the one this stack will return to next).
+// Immediately after fiber_switch() returned, back on the stack that called sanitizer_switch_begin(), and as the
+// trampoline's first instruction: restores the fake stack (none on a fiber that never ran) and records the bounds of
+// the stack that switched here (the one this stack will return to next).
 CRD_FORCEINLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 {
 #if CRD_JOBS_ASAN
@@ -106,13 +112,14 @@ CRD_FORCEINLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 #endif
 }
 
-// The first instruction of a fresh fiber stack: no fake stack to restore, but the dispatching stack's bounds.
-CRD_FORCEINLINE void sanitizer_fiber_entered(SanitizerSwitch& state) noexcept
+// The trampoline's last step before a completed fiber leaves (forced inline, so TSan's top frame is the trampoline's):
+// the fiber's context is rebuilt for its next job, so the trampoline never returns and its TSan frame is popped here.
+// Left on the fiber's shadow stack, one frame a job made every later stack trace on that fiber unique, so TSan's
+// stack depot grew with every allocation (DIAG.11b, 2026-10-24).
+CRD_FORCEINLINE void sanitizer_fiber_finished() noexcept
 {
-#if CRD_JOBS_ASAN
-    __sanitizer_finish_switch_fiber(nullptr, &state.return_bottom, &state.return_size);
-#else
-    (void)state;
+#if CRD_JOBS_TSAN
+    __tsan_func_exit();
 #endif
 }
 

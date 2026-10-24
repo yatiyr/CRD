@@ -27,6 +27,20 @@
 
 #include <thread>
 
+#if defined(__SANITIZE_THREAD__)
+#define CRD_JOBS_TESTS_TSAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define CRD_JOBS_TESTS_TSAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#endif
+#endif
+
+#if defined(CRD_JOBS_TESTS_TSAN) && defined(__linux__)
+#include <unistd.h>
+
+#include <fstream>
+#endif
+
 namespace
 {
 // Two-hop relay so a reader job copies from one plain int to another.
@@ -124,3 +138,49 @@ TEST_CASE("tsan: ordered hand-off chain across migrating fibers is clean",
 
     crd::jobs::shutdown();
 }
+
+// A completed fiber's context is rebuilt for its next job, so its trampoline never returns: the trampoline pops its own
+// TSan frame before it leaves (sanitizer_fibers.hpp). Left on the fiber's shadow stack, one frame a job made every later
+// stack trace on that fiber one frame deeper and unique, so TSan's stack depot grew with each job that opened a file
+// (the overhead harness's io workload: 955 MiB after 3600 frames; DIAG.11b). Each job here opens a file as those did.
+#if defined(CRD_JOBS_TESTS_TSAN) && defined(__linux__)
+TEST_CASE("tsan: a completed fiber leaves no frame on its shadow stack", "[jobs][tsan][diag]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads        = 2U;
+    cfg.small_fiber_count  = 4U;
+    cfg.medium_fiber_count = 2U;
+    cfg.large_fiber_count  = 1U;
+    crd::jobs::init(cfg);
+
+    crd::jobs::JobDecl job{};
+    job.fn = [](void* data)
+    {
+        std::ifstream statm("/proc/self/statm");
+        statm >> *static_cast<unsigned long*>(data);
+    };
+    unsigned long pages = 0U;
+    job.data           = &pages;
+    const auto resident = []()
+    {
+        unsigned long size  = 0U;
+        unsigned long count = 0U;
+        std::ifstream("/proc/self/statm") >> size >> count;
+        return static_cast<crd::u64>(count) * static_cast<crd::u64>(sysconf(_SC_PAGESIZE));
+    };
+    crd::u64 before = 0U;
+    for (int i = 0; i < 6000; ++i)
+    {
+        if (i == 500)
+        {
+            before = resident();
+        }
+        crd::jobs::wait(crd::jobs::run(job));
+    }
+    const crd::u64 after  = resident();
+    const crd::u64 growth = after > before ? after - before : 0U;
+    crd::jobs::shutdown();
+    CHECK(pages > 0U);
+    CHECK(growth < (crd::u64{8} << 20U));
+}
+#endif

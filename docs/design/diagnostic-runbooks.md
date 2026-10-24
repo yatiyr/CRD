@@ -178,7 +178,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | linux-clang-tsan. The controlled-interleaving tests are CTests and run on every lane, the sanitizer lanes included. |
 | Adopt | `CRD_JOBS_SCHED_POINT(<tag>)` at a publication or reclamation step, live only in the `crd-jobs-schedcheck` twin. |
 | Example | `tests/foundation/jobs/test_sched_check.cpp`; `tests/support/diag/specimens/data_race_specimen.cpp` |
-| Cost | Measured: [schedcheck twin](../sessions/2026-10-24-diag-11b-schedcheck-ctests.md#cost), 1 to 11 s of tests on the measured lanes. |
+| Cost | Measured: [schedcheck twin](../sessions/2026-10-24-diag-11b-schedcheck-ctests.md#cost), 1 to 11 s of tests on the measured lanes; the TSan binary 1.9 to 8.9 times a GCC Debug frame per workload, a median hosted test at most 2.6 times ([board](../bench/2026-10-24-diag-11b-sanitizer-cost.md)). |
 | Owner | DIAG.1a, DIAG.1b, DIAG.4b |
 
 <a id="rb-memory"></a>
@@ -195,7 +195,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | win-asan; linux-gcc-asan (with UBSan). A non-sanitizer lane reports each route absent, never caught. |
 | Adopt | An allocator that poisons calls `asan_poison(...)` and `asan_unpoison(...)` on exactly its own ranges; a container marks its live range with `asan_annotate_live_range(...)`; wrap a suspect allocator in `crd::memory::DiagnosticAllocator(...)`. |
 | Example | `tests/support/diag/specimens/allocator_poison_specimen.cpp`; `engine/foundation/memory/include/crd/memory/diagnostic_allocator.hpp` |
-| Cost | A separate binary (the ASan lanes); its slowdown is not on a board yet ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | A separate binary: hosted, a median test 2.2 times win-debug on win-asan and 2.7 times linux-gcc-debug on linux-gcc-asan (with UBSan); per workload 1.5 to 7.1 times, with an ASan quarantine of up to 256 MiB ([board](../bench/2026-10-24-diag-11b-sanitizer-cost.md)). |
 | Owner | DIAG.3b, DIAG.3c, DIAG.3d, DIAG.3f |
 
 <a id="rb-lifetime"></a>

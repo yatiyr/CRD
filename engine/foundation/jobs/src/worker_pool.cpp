@@ -161,8 +161,8 @@ static void resume_fiber_fn(void* /*data*/) noexcept
 
 static void job_fiber_trampoline() noexcept
 {
-    // A fresh stack: the sanitizers learn which stack dispatched us (sanitizer_fibers.hpp).
-    sanitizer_fiber_entered(tl_current_fiber_ref()->sanitizer);
+    // A rebuilt stack: restore the fiber's fake stack and learn which stack dispatched us (sanitizer_fibers.hpp).
+    sanitizer_switch_end(tl_current_fiber_ref()->sanitizer);
     while (true)
     {
         tl_job_fn(tl_job_data);
@@ -209,6 +209,7 @@ static void job_fiber_trampoline() noexcept
             }
         }
 
+        sanitizer_fiber_finished();
         sanitizer_switch_begin(done->sanitizer, done->sanitizer.return_bottom, done->sanitizer.return_size,
                                done->tsan_return);
         fiber_switch(&done->context, &tl_scheduler_context());

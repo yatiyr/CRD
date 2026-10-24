@@ -29,7 +29,6 @@ using crd::jobs::detail::fiber_switch;
 using crd::jobs::detail::sanitizer_create_fiber;
 using crd::jobs::detail::sanitizer_current_fiber;
 using crd::jobs::detail::sanitizer_destroy_fiber;
-using crd::jobs::detail::sanitizer_fiber_entered;
 using crd::jobs::detail::sanitizer_switch_begin;
 using crd::jobs::detail::sanitizer_switch_end;
 using crd::jobs::detail::tl_take_pending_park;
@@ -394,7 +393,7 @@ static WaitTestState g_s10;
 
 static void wait_job_entry_10()
 {
-    sanitizer_fiber_entered(g_s10.job_fiber.sanitizer);
+    sanitizer_switch_end(g_s10.job_fiber.sanitizer);
     // This fiber waits on the counter (value starts at 1, target = 0).
     counter_wait(g_s10.counter, &g_s10.waiter, &g_s10.job_fiber, g_s10.sched_ctx, 0U);
     g_s10.job_completed = true;
@@ -509,7 +508,7 @@ static WaitTestState12 g_s12;
 
 static void wait_job_entry_12()
 {
-    sanitizer_fiber_entered(g_s12.job_fiber.sanitizer);
+    sanitizer_switch_end(g_s12.job_fiber.sanitizer);
     // First wait.
     counter_wait(g_s12.counter, &g_s12.waiter, &g_s12.job_fiber, g_s12.sched_ctx, 0U);
     ++g_s12.run_count;

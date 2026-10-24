@@ -8,6 +8,21 @@
 #include <chrono>
 #include <thread>
 
+// GCC and Clang AddressSanitizer builds, whose stacks have fake stacks (the fake-stack case below).
+#if defined(__SANITIZE_ADDRESS__) && !defined(_MSC_VER)
+#define CRD_JOBS_TESTS_FAKE_STACKS 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#elif defined(__has_feature) && !defined(_MSC_VER)
+#if __has_feature(address_sanitizer)
+#define CRD_JOBS_TESTS_FAKE_STACKS 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#endif
+#endif
+
+#if defined(CRD_JOBS_TESTS_FAKE_STACKS)
+#include <sanitizer/asan_interface.h>
+
+#include <algorithm>
+#endif
+
 using crd::jobs::detail::WorkerConfig;
 using crd::jobs::detail::WorkerPool;
 using crd::jobs::JobDecl;
@@ -889,3 +904,42 @@ TEST_CASE("jobs: cross-thread fiber resume stress", "[jobs][stress]")
     crd::jobs::shutdown();
     CHECK(total.load() == static_cast<long>(rounds) * k_roots * k_children);
 }
+
+// ASan's use-after-return detection gives each stack a fake stack (GCC and Clang; MSVC has none without
+// /fsanitize-address-use-after-return). A fiber keeps one across the jobs it runs: the trampoline restores the fake
+// stack the fiber saved when its previous job completed (sanitizer_fibers.hpp). Restoring none mapped a new fake stack
+// for every job and leaked the old one, 41 MB a frame on the overhead harness's jobs workload (DIAG.11b).
+#if defined(CRD_JOBS_TESTS_FAKE_STACKS)
+TEST_CASE("asan: a fiber keeps one fake stack across the jobs it runs", "[jobs][asan][diag]")
+{
+    constexpr crd::u32 k_fibers = 4U + 2U + 1U;
+    crd::jobs::Config cfg;
+    cfg.num_threads        = 2U;
+    cfg.small_fiber_count  = 4U;
+    cfg.medium_fiber_count = 2U;
+    cfg.large_fiber_count  = 1U;
+    crd::jobs::init(cfg);
+
+    void*   seen = nullptr;
+    JobDecl job{};
+    job.fn   = [](void* data) { *static_cast<void**>(data) = __asan_get_current_fake_stack(); };
+    job.data = &seen;
+    void*    distinct[k_fibers + 1U] = {}; // NOLINT(modernize-avoid-c-arrays): a fixed local table
+    crd::u32 count = 0U;
+    for (int i = 0; i < 1000 && count <= k_fibers; ++i)
+    {
+        seen = nullptr;
+        crd::jobs::wait(crd::jobs::run(job));
+        // Null only when the runtime has detect_stack_use_after_return off, which leaves this oracle nothing to judge.
+        REQUIRE(seen != nullptr);
+        if (std::find(distinct, distinct + count, seen) == distinct + count)
+        {
+            distinct[count] = seen;
+            ++count;
+        }
+    }
+
+    crd::jobs::shutdown();
+    CHECK(count <= k_fibers);
+}
+#endif

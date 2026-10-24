@@ -266,7 +266,9 @@ clang.
 **ASan and the fiber stacks.** The scheduler switches stacks in hand-written assembly at three sites (a fiber
 parking in `counter_wait`, a fiber completing in `job_fiber_trampoline`, the scheduler dispatching or resuming a
 fiber in `run_job_in_fiber`). `sanitizer_fibers.hpp` gives each site `__sanitizer_start_switch_fiber` before and
-`__sanitizer_finish_switch_fiber` after the switch and the trampoline's first instruction a finish call, so ASan's
+`__sanitizer_finish_switch_fiber` after the switch and the trampoline's first instruction a finish call that
+restores the fake stack the fiber saved when its previous job completed (entering with none leaked one fake stack
+a job until 2026-10-24, [DIAG.11b](../sessions/2026-10-24-diag-11b-sanitizer-cost.md)), so ASan's
 notion of the current stack, its bounds and the fake stack of `detect_stack_use_after_return` follow the fiber; the
 scheduler side keeps its state in the dispatching frame, the fiber keeps its own (the fake stack it left, the
 scheduler stack it returns to) in the `Fiber` record because it may resume on another thread. The helpers are empty
@@ -291,10 +293,12 @@ and the table says so rather than claiming it.
 `-fsanitize=thread`; every fiber stack gets a TSan context at pool init (`__tsan_create_fiber`), every switch
 announces its target immediately before it (`__tsan_switch_to_fiber`, flags 0: the switch is a synchronization
 point on the switching thread, cross-thread ordering being the work queues' acquire/release, which the switch
-composes with), the contexts are destroyed at shutdown, and the work-stealing deque's standalone seq_cst fence,
-which GCC's TSan cannot model (`-Wtsan`), becomes a seq_cst read-modify-write on the same location under the
-instrument only. On this WSL2 kernel TSan aborts with "unexpected memory mapping" unless address-space
-randomization is off for the process (`setarch x86_64 -R`, no root needed; the sysctl is unreadable there).
+composes with), a completing fiber's trampoline pops its own frame from the fiber's shadow stack before it
+leaves (its context is rebuilt for the next job, so it never returns), the contexts are destroyed at shutdown, and
+the work-stealing deque's standalone seq_cst fence, which GCC's TSan cannot model (`-Wtsan`), becomes a seq_cst
+read-modify-write on the same location under the instrument only. On this WSL2 kernel TSan aborts with "unexpected
+memory mapping" unless address-space randomization is off for the process (`setarch x86_64 -R`, no root needed; the
+sysctl is unreadable there).
 
 The recorded probe: the switch path itself produced no report in 22 tests and a 2,048-wait probe. This does not prove
 the model preserves all required race visibility; DIAG.1b supplies that qualification. The recorded reports are

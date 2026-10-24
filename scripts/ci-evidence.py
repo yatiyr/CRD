@@ -5,7 +5,9 @@
 `bundle` collects, after the lane's steps, the revision and tree identity, the toolchain fingerprint from the CMake
 cache, the adapter census, the inventory, the JUnit results and the failing tests' output into
 `<output>/conclusion.json`, copies the raw JUnit and inventory beside it and appends a concise job summary. Neither
-command changes a lane's verdict: the register gate owns the exit code. Contract: docs/design/ci-tiers.md.
+command changes a lane's verdict: the register gate owns the exit code. `compare` reads two lanes' evidence and
+reports one lane's per-test slowdown against the other (a separate-binary mode's cost, DIAG.11b). Contract:
+docs/design/ci-tiers.md.
 """
 from pathlib import Path
 import argparse
@@ -31,6 +33,8 @@ RUN_KEYS = ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'GITHUB_EVENT_N
             'RUNNER_OS', 'RUNNER_ARCH', 'ImageOS', 'ImageVersion')
 OUTPUT_TAIL_LINES = 60
 SLOWEST = 15
+# Tests faster than this on the reference lane are left out of a comparison: their time is process start-up.
+RATIO_FLOOR = 0.05
 
 
 def git(args, repo=ROOT):
@@ -96,33 +100,43 @@ def test_labels(path):
     return labels
 
 
-def junit_summary(path, labels=None):
-    """Counts, duration, failing tests with output tails, the slowest tests and, per label, the executed tests'
-    outcomes from a CTest JUnit document; `labels` maps a test name to its labels (test_labels)."""
+def junit_cases(path):
+    """The testcase elements of a CTest JUnit document, or None when it is absent."""
     path = Path(path)
     if not path.is_file():
         return None
     root = ET.parse(path).getroot()
     suites = [root] if root.tag == 'testsuite' else list(root.iter('testsuite'))
-    cases = []
-    for suite in suites:
-        cases.extend(suite.findall('testcase'))
+    return [case for suite in suites for case in suite.findall('testcase')]
+
+
+def case_outcome(case):
+    if case.find('skipped') is not None:
+        return 'skipped'
+    if case.find('failure') is not None or case.get('status') == 'fail':
+        return 'failed'
+    return 'passed'
+
+
+def junit_summary(path, labels=None):
+    """Counts, duration, failing tests with output tails, the slowest tests and, per label, the executed tests'
+    outcomes from a CTest JUnit document; `labels` maps a test name to its labels (test_labels)."""
+    cases = junit_cases(path)
+    if cases is None:
+        return None
     failed, skipped, durations, by_label = [], 0, [], {}
     for case in cases:
         name = case.get('name', '?')
         seconds = float(case.get('time') or 0.0)
         durations.append((seconds, name))
-        failure = case.find('failure')
-        if case.find('skipped') is not None:
+        outcome = case_outcome(case)
+        if outcome == 'skipped':
             skipped += 1
-            outcome = 'skipped'
-        elif failure is not None or case.get('status') == 'fail':
+        elif outcome == 'failed':
+            failure = case.find('failure')
             output = (case.findtext('system-out') or '').splitlines()
             failed.append({'name': name, 'time': seconds, 'message': (failure.get('message') if failure is not None else '') or '',
                            'output_tail': output[-OUTPUT_TAIL_LINES:]})
-            outcome = 'failed'
-        else:
-            outcome = 'passed'
         for label in (labels or {}).get(name, []):
             tally = by_label.setdefault(label, {'tests': 0, 'passed': 0, 'failed': 0, 'skipped': 0})
             tally['tests'] += 1
@@ -132,6 +146,40 @@ def junit_summary(path, labels=None):
             'passed': len(cases) - len(failed) - skipped, 'duration_seconds': round(sum(d for d, _ in durations), 3),
             'failed': failed, 'slowest': [{'name': n, 'time': round(t, 3)} for t, n in durations[:SLOWEST]],
             'labels': dict(sorted(by_label.items()))}
+
+
+def passed_seconds(path):
+    """Seconds per passed test of a CTest JUnit document."""
+    return {case.get('name', '?'): float(case.get('time') or 0.0) for case in junit_cases(path) or []
+            if case_outcome(case) == 'passed'}
+
+
+def slowdown(mode_junit, reference_junit, floor=RATIO_FLOOR):
+    """One lane's per-test time over another's, over the tests that passed on both and took at least `floor`
+    seconds on the reference: the count, the nearest-rank quartiles and median of the ratios, and both sums."""
+    mode, reference = passed_seconds(mode_junit), passed_seconds(reference_junit)
+    names = sorted(name for name in mode if reference.get(name, 0.0) >= floor)
+    ratios = sorted(mode[name] / reference[name] for name in names)
+    if not ratios:
+        return {'tests': 0}
+    rank = lambda q: ratios[max(0, -(-len(ratios) * q // 100) - 1)]
+    return {'tests': len(ratios), 'p25': round(rank(25), 2), 'median': round(rank(50), 2), 'p75': round(rank(75), 2),
+            'mode_seconds': round(sum(mode[name] for name in names), 1),
+            'reference_seconds': round(sum(reference[name] for name in names), 1)}
+
+
+def compare_markdown(mode_dir, reference_dir, floor=RATIO_FLOOR):
+    """A board row: both lanes' presets and recorded modes, the per-test slowdown and the lanes' test totals."""
+    lanes = [json.loads((Path(d) / 'conclusion.json').read_text(encoding='utf-8')) for d in (mode_dir, reference_dir)]
+    ratio = slowdown(Path(mode_dir) / 'ctest-junit.xml', Path(reference_dir) / 'ctest-junit.xml', floor)
+    name = lambda lane: '%s (%s)' % (lane['preset'],
+                                     ', '.join(lane['modes']) if 'modes' in lane else 'modes not recorded')
+    if not ratio['tests']:
+        return '| %s | %s | 0 | - | - | - | - |' % (name(lanes[0]), name(lanes[1]))
+    return '| %s | %s | %d | %.2f | %.2f-%.2f | %.0f s / %.0f s | %.0f s / %.0f s |' % (
+        name(lanes[0]), name(lanes[1]), ratio['tests'], ratio['median'], ratio['p25'], ratio['p75'],
+        ratio['mode_seconds'], ratio['reference_seconds'], lanes[0]['results']['duration_seconds'],
+        lanes[1]['results']['duration_seconds'])
 
 
 def read_lines(path):
@@ -364,9 +412,16 @@ def main(argv=None):
     bun.add_argument('--sccache-stats', help='sccache --show-stats --stats-format json output of the build step')
     bun.add_argument('--outcome', help='outcome of the step that decides the lane (success, failure, cancelled, skipped)')
     bun.add_argument('--summary', help='GITHUB_STEP_SUMMARY file to append to')
+    cmp = sub.add_parser('compare', help="a board row: one lane's per-test slowdown against another's")
+    cmp.add_argument('--mode', required=True, help='evidence directory of the lane built with the mode')
+    cmp.add_argument('--reference', required=True, help='evidence directory of the lane without it')
+    cmp.add_argument('--floor', type=float, default=RATIO_FLOOR, help='least reference seconds of a compared test')
     args = parser.parse_args(argv)
     if args.command == 'inventory':
         return run_inventory(args.build_dir, args.config, args.output)
+    if args.command == 'compare':
+        print(compare_markdown(args.mode, args.reference, args.floor))
+        return 0
     record = bundle(args.preset, args.build_dir, args.output, args.junit, args.inventory, args.adapters,
                     args.outcome or None, packages=args.packages, sccache=args.sccache_stats)
     markdown = summary_markdown(record)

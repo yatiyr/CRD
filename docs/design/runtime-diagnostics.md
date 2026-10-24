@@ -2884,9 +2884,14 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   label (`results.labels`): `diag-fatal` (every `crd_diag_fatal_tests` mode), `diag-race` (the schedcheck cases),
   `diag-overhead` and `fuzz`; the job summary shows both, so a lane that ran none reads 0. `dev.py plan` owns a
   specimen's CTests through its artifact: `array.hpp` selects crd-containers' nine fatal modes.
+- The sanitizers' cost (2026-10-24, [board](../bench/2026-10-24-diag-11b-sanitizer-cost.md)): per workload the off
+  arm of each sanitizer lane's harness against its reference (ASan 1.5 to 7.1 times, TSan against GCC Debug 1.9 to
+  8.9 times), per lane `ci-evidence.py compare` on two hosted evidence bundles (a median test 2.2 times on win-asan,
+  2.7 on linux-gcc-asan, at most 2.6 on linux-clang-tsan). The board found, and the fiber annotations no longer have,
+  a fake stack mapped per job under ASan and a TSan frame left per job on a fiber's shadow stack.
 - Not settled here: the repairs and the measurement gaps above; independent external sampling and peer tools; the
-  hosted sanitizer, race, corpus and negative-control audit, with the measured cost of the modes that are separate
-  binaries or targeted (sanitizers, device validation), and the fuzz and soak cadence.
+  cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
+  counts on a run of the current head.
 
 <a id="diag-11c"></a>
 ## DIAG.11c — native qualification and portable capability boundary

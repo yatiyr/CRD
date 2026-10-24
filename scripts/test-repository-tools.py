@@ -820,6 +820,36 @@ class CiEvidence(unittest.TestCase):
             self.assertEqual(record['missing'], ['CMakeCache.txt', 'adapters', 'inventory', 'junit'])
             self.assertIn('Missing evidence: CMakeCache.txt, adapters, inventory, junit', ci_evidence.summary_markdown(record))
 
+    def test_compare_takes_tests_that_passed_on_both_above_the_floor(self):
+        def lane(root, preset, cases, modes=None):
+            root.mkdir()
+            body = ''.join('<testcase name="%s" time="%s" status="run">%s</testcase>\n' % (
+                name, seconds, '' if passed else '<failure message="x"/>') for name, seconds, passed in cases)
+            (root / 'ctest-junit.xml').write_text('<testsuite name="x">\n%s</testsuite>\n' % body, encoding='utf-8')
+            record = {'preset': preset, 'results': {'duration_seconds': sum(c[1] for c in cases)}}
+            if modes is not None:
+                record['modes'] = modes
+            (root / 'conclusion.json').write_text(json.dumps(record), encoding='utf-8')
+            return root
+
+        with tempfile.TemporaryDirectory() as temp:
+            # Ratios 1, 2, 3 and 4; `fast` is under the floor on the reference and `flaky` failed there.
+            mode = lane(Path(temp) / 'mode', 'win-asan', [('a', 2.0, True), ('b', 1.0, True), ('c', 3.0, True),
+                                                          ('d', 6.0, True), ('fast', 1.0, True), ('flaky', 10.0, True),
+                                                          ('broken', 9.0, False)], ['ASan'])
+            reference = lane(Path(temp) / 'reference', 'win-debug', [('a', 2.0, True), ('b', 0.5, True),
+                                                                     ('c', 1.0, True), ('d', 1.5, True),
+                                                                     ('fast', 0.01, True), ('flaky', 1.0, False),
+                                                                     ('broken', 1.0, True)])
+            mode_junit, reference_junit = mode / 'ctest-junit.xml', reference / 'ctest-junit.xml'
+            self.assertEqual(ci_evidence.slowdown(mode_junit, reference_junit),
+                             {'tests': 4, 'p25': 1.0, 'median': 2.0, 'p75': 3.0, 'mode_seconds': 12.0,
+                              'reference_seconds': 5.0})
+            self.assertEqual(ci_evidence.compare_markdown(mode, reference),
+                             '| win-asan (ASan) | win-debug (modes not recorded) | 4 | 2.00 | 1.00-3.00 | 12 s / 5 s '
+                             '| 32 s / 7 s |')
+            self.assertEqual(ci_evidence.slowdown(mode_junit, reference_junit, 5.0), {'tests': 0})
+
     def test_glob_patterns_match_segments_and_trees(self):
         matches = lambda pattern, path: bool(ci_tier.glob_regex(pattern).match(path))
         self.assertTrue(matches('**/*.md', 'a/b/c.md') and matches('**/*.md', 'c.md'))
@@ -3043,14 +3073,18 @@ class TestInstruments(unittest.TestCase):
         self.assertIn('CRD_ENABLE_FUZZER needs clang', text)
         header = (ROOT / 'engine/foundation/jobs/src/sanitizer_fibers.hpp').read_text(encoding='utf-8')
         for symbol in ('__sanitizer_start_switch_fiber', '__sanitizer_finish_switch_fiber', '__tsan_create_fiber',
-                       '__tsan_switch_to_fiber', '__tsan_destroy_fiber'):
+                       '__tsan_switch_to_fiber', '__tsan_destroy_fiber', '__tsan_func_exit'):
             self.assertIn(symbol, header)
-        sites = {'engine/foundation/jobs/src/counter.cpp': 1, 'engine/foundation/jobs/src/worker_pool.cpp': 2}
-        for path, count in sites.items():
+        # Switches, then finishes: the trampoline's entry also restores the fiber's fake stack, and the completing
+        # trampoline pops its TSan frame once.
+        sites = {'engine/foundation/jobs/src/counter.cpp': (1, 1, 0),
+                 'engine/foundation/jobs/src/worker_pool.cpp': (2, 3, 1)}
+        for path, (switches, ends, finished) in sites.items():
             source = (ROOT / path).read_text(encoding='utf-8')
-            self.assertEqual(source.count('fiber_switch('), count, path)
-            self.assertEqual(source.count('sanitizer_switch_begin('), count, path)
-            self.assertEqual(source.count('sanitizer_switch_end('), count, path)
+            self.assertEqual(source.count('fiber_switch('), switches, path)
+            self.assertEqual(source.count('sanitizer_switch_begin('), switches, path)
+            self.assertEqual(source.count('sanitizer_switch_end('), ends, path)
+            self.assertEqual(source.count('sanitizer_fiber_finished('), finished, path)
 
 
 class Provenance(unittest.TestCase):
