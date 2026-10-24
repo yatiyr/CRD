@@ -34,9 +34,9 @@ constexpr crd::usize kObjectOverhead = 2U + kClippedTail.size();
 
 constexpr crd::u64 kCursorOffsetMask = (1ULL << kDiagCursorOffsetBits) - 1ULL;
 
-// Whether a path component names a file on every host. Windows drops a trailing '.' and opens a device for a name
-// whose part before the first '.' is CON, PRN, AUX, NUL, COM0-9 or LPT0-9 in any case ("nul.json" writes nothing,
-// "con" waits on the console), so such a component is refused on every host.
+// Whether a path component names a file on every host. Windows drops a trailing '.', opens a device for a bare CON,
+// PRN, AUX, NUL, COM0-9 or LPT0-9 in any case ("con" is the console; a bundle published as "nul" fails its rename
+// and leaves "nul.tmp"), and before Windows 11 also for such a name with an extension, so all are refused everywhere.
 [[nodiscard]] bool portable_component(cont::StringView part) noexcept
 {
     if (part.back() == '.')

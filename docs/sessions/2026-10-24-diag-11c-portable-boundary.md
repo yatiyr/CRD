@@ -19,7 +19,7 @@ byte order, architecture-only fields and file-only routes.
 | Contract | Finding | Result |
 |---|---|---|
 | `crash.hpp` (crash adapter) | `CrashReport::dump_path`, `capture_dump`'s out path and `read_dump_stream` used `const wchar_t*`, a Windows path type, in a header every platform compiles; every other engine path is UTF-8 (`platform::fs::Path`) | Fixed: UTF-8 both ways |
-| `diag_path_is_safe` (diag command paths) | accepted `con`, `nul.json`, `com1`, `a.`: on Windows `flight.write path=nul` reported Ok and wrote nothing, a read of `con` waits on the console | Fixed: refused on every host |
+| `diag_path_is_safe` (diag command paths) | accepted `con`, `nul.json`, `com1`, `a.`. Probed on this Windows 11 host: a bundle published as `nul` (written to `nul.tmp`, renamed over `nul`) fails the rename onto the device and leaves `nul.tmp`; `nul.json` and `con.json` are plain files here but devices before Windows 11; bare `con` is the console | Fixed: refused on every host |
 | Bundle, manifest, symbol index, CPROF | fixed-width fields, size and offset pins; copied as host bytes, little-endian only by comment | `static_assert(CRD_LITTLE_ENDIAN == 1)` beside the pins |
 | Flight record, build identity | fixed-width fields written byte by byte, little-endian; `arch` is `crd::arch_name()` text | Portable |
 | Linux crash record | text; registers for x86_64 and aarch64, `unsupported-arch` otherwise; tid as decimal | Portable |
