@@ -211,7 +211,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane. |
 | Adopt | Address a reloadable or public object through `crd::containers::SlotMap<T>(...)` and its `Handle`, never a raw pointer that outlives a reload. |
 | Example | `engine/foundation/containers/include/crd/containers/slot_map.hpp` |
-| Cost | One generation compare per lookup; not boarded ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Measured: a lookup's bounds, occupancy and generation compares add 0.5 to 0.7 ns over a raw index, a stale handle is refused in about the same time, and an entity's `is_alive` costs about 0.55 ns; the identity registry looks up at creation and retirement, never per frame ([board](../bench/2026-10-24-diag-11b-checks-recording-probes.md#results)). |
 | Owner | DIAG.3e |
 
 <a id="rb-leak"></a>
@@ -277,7 +277,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane. |
 | Adopt | Read random numbers, clocks and events through the host's input seam (`--seed`, `--clock`, `--events`), so a record can hold them. |
 | Example | `engine/execution/ceir-cook/src/replay_record.cpp` |
-| Cost | Recording is an `execute` and `record` request, not a runtime mode; not boarded ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Paid only by a `replay.record` request: the traced run costs +35% to +55% over a plain run with the default 4,096 events kept and +137% to +232% with every event kept (60,004 dispatches), and the encode about 45 ns per kept event ([board](../bench/2026-10-24-diag-11b-checks-recording-probes.md#results)). |
 | Owner | DIAG.9a |
 
 <a id="rb-rare"></a>
@@ -362,7 +362,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane. |
 | Adopt | Compare `read_fp_environment(...)` with `declared_fp_environment(...)` at a boundary; judge a value with `classify_value(...)` against its `FloatDomain`. |
 | Example | `engine/foundation/core/include/crd/core/value_domain.hpp`; `engine/foundation/core/include/crd/core/fp_environment.hpp` |
-| Cost | Probes are calls a boundary makes; not boarded ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Measured per call: a float-mode boundary 14 ns (MSVC) or 3.5 ns (GCC), 0.004% of a D3D12 `render` frame per witnessed driver call; a value probe 1.3 to 2.4 ns per value; a pressure or ledger snapshot 10 to 60 ns, taken when asked; a ledger record 15 ns per acquisition and release ([board](../bench/2026-10-24-diag-11b-checks-recording-probes.md#results)). |
 | Owner | DIAG.10c |
 
 <a id="rb-host"></a>

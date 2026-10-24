@@ -642,7 +642,7 @@ crd_module(runtime
         hesap-dsp hesap-eigen hesap-fft hesap-interp hesap-iterative hesap-ode hesap-opt hesap-ordering
         hesap-preconditioners hesap-quadrature hesap-resources hesap-sched hesap-sparse hesap-special hesap-stats
         hesap-tensor hesap-wavelet jobs log math memory meshgen platform resources vm
-    TESTS bench TEST_DEPENDS geometry-bvh geometry-convex)
+    TESTS bench TEST_DEPENDS ceir ceir-cook geometry-bvh geometry-convex scene)
 
 if(CRD_BUILD_SANDBOX)
     # asset_cooker is a build-time dependency: the demo pack is cooked by $<TARGET_FILE:asset_cooker>.

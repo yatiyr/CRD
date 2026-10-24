@@ -4,6 +4,7 @@ add_executable(crd-bench
     test_bench_bvh.cpp
     test_bench_gjk.cpp
     test_bench_quickhull.cpp
+    test_bench_diag.cpp        # DIAG.11b (9): generation checks, recording and probes per call
 )
 
 target_link_libraries(crd-bench PRIVATE
@@ -16,8 +17,12 @@ target_link_libraries(crd-bench PRIVATE
     crd-jobs                   # bvh_build_parallel needs the job system up in the bench body
     crd-memory
     crd-containers
+    crd-ceir-cook              # DIAG.11b (9): replay.record's traced run
+    crd-scene                  # DIAG.11b (9): the entity generation check
     Catch2::Catch2WithMain
 )
+target_compile_definitions(crd-bench PRIVATE
+    CRD_BENCH_DIAG_PROGRAM="${CMAKE_SOURCE_DIR}/assets/diag/overhead_offline.ceir")
 
 crd_enable_default_pch(crd-bench)
 
