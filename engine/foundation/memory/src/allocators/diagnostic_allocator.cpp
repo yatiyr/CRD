@@ -17,6 +17,15 @@
 #include <execinfo.h> // backtrace
 #endif
 
+// The return address of the function this expands in: each public entry point is CRD_NOINLINE, so it is the
+// application's call site.
+#if defined(_MSC_VER)
+#include <intrin.h>
+#define CRD_DIAG_CALLER _ReturnAddress()
+#else
+#define CRD_DIAG_CALLER __builtin_return_address(0)
+#endif
+
 namespace crd::memory
 {
 namespace
@@ -25,29 +34,36 @@ constexpr crd::u8 kStateEmpty = 0U;
 constexpr crd::u8 kStateOccupied = 1U;
 constexpr crd::u8 kStateTombstone = 2U;
 
-crd::u32 capture_pcs(void** out, crd::u32 max, crd::u32 skip) noexcept
+// Up to kMaxStackFrames PCs from `caller` outward. The allocator's own frames are dropped by address, not by a frame
+// count, which inlining and tail calls change between builds. A capture that misses `caller` keeps it alone.
+crd::u32 capture_pcs(void** out, void* caller) noexcept
 {
+    constexpr crd::u32 capture_depth = kMaxStackFrames + 8U; // the allocator's own frames come first
+    void* tmp[capture_depth];
+    crd::u32 got = 0U;
 #if defined(_WIN32)
-    // RtlCaptureStackBackTrace can capture at most a bounded number of frames; skip our own frames.
-    return static_cast<crd::u32>(
-        RtlCaptureStackBackTrace(static_cast<ULONG>(skip) + 1UL, static_cast<ULONG>(max), out, nullptr));
+    got = RtlCaptureStackBackTrace(0UL, capture_depth, tmp, nullptr);
 #elif __has_include(<execinfo.h>)
-    void*     tmp[kMaxStackFrames + 8U];
-    const int want = static_cast<int>(max + skip + 1U);
-    const int got = backtrace(tmp, want < static_cast<int>(kMaxStackFrames + 8U) ? want
-                                                                                 : static_cast<int>(kMaxStackFrames + 8U));
-    crd::u32  n = 0U;
-    for (int i = static_cast<int>(skip + 1U); i < got && n < max; ++i)
+    const int frames = backtrace(tmp, static_cast<int>(capture_depth));
+    got = frames > 0 ? static_cast<crd::u32>(frames) : 0U;
+#endif
+    crd::u32 first = 0U;
+    while (first < got && tmp[first] != caller)
     {
-        out[n++] = tmp[i];
+        ++first;
+    }
+    if (first == got)
+    {
+        out[0] = caller;
+        return 1U;
+    }
+    crd::u32 n = 0U;
+    while (first + n < got && n < kMaxStackFrames)
+    {
+        out[n] = tmp[first + n];
+        ++n;
     }
     return n;
-#else
-    (void)out;
-    (void)max;
-    (void)skip;
-    return 0U;
-#endif
 }
 } // namespace
 
@@ -164,14 +180,14 @@ void DiagnosticAllocator::raise(const Violation& v) const noexcept
     }
 }
 
-StackId DiagnosticAllocator::intern_current_stack(crd::u32 skip) noexcept
+StackId DiagnosticAllocator::intern_current_stack(void* caller) noexcept
 {
     if (!m_cfg.capture_stacks)
     {
         return kNullStackId;
     }
     void*          pcs[kMaxStackFrames];
-    const crd::u32 n = capture_pcs(pcs, kMaxStackFrames, skip + 1U);
+    const crd::u32 n = capture_pcs(pcs, caller);
     if (n == 0U)
     {
         return kNullStackId;
@@ -349,19 +365,19 @@ void DiagnosticAllocator::flush_quarantine_until(crd::usize incoming_bytes) noex
     }
 }
 
-void* DiagnosticAllocator::allocate(usize size, usize alignment)
+CRD_NOINLINE void* DiagnosticAllocator::allocate(usize size, usize alignment)
 {
-    return allocate_tagged(size, alignment, AllocationTag{});
+    return allocate_from(size, alignment, AllocationTag{}, false, CRD_DIAG_CALLER);
 }
 
-void* DiagnosticAllocator::try_allocate(usize size, usize alignment)
+CRD_NOINLINE void* DiagnosticAllocator::try_allocate(usize size, usize alignment)
 {
-    return allocate_from(size, alignment, AllocationTag{}, true);
+    return allocate_from(size, alignment, AllocationTag{}, true, CRD_DIAG_CALLER);
 }
 
-void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const AllocationTag& tag)
+CRD_NOINLINE void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const AllocationTag& tag)
 {
-    return allocate_from(size, alignment, tag, false);
+    return allocate_from(size, alignment, tag, false, CRD_DIAG_CALLER);
 }
 
 // The backing's block of `bytes` for a request of `requested`: a refusal is reported before the fatal path asks the
@@ -377,7 +393,8 @@ void* DiagnosticAllocator::backing_allocate(usize bytes, usize alignment, bool n
     return non_fatal ? nullptr : m_backing->allocate(bytes, alignment);
 }
 
-void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal)
+void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal,
+                                         void* caller)
 {
     if (size == 0U)
     {
@@ -465,7 +482,7 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
     rec->tag = tag;
     rec->freed = false;
     rec->free_stack = kNullStackId;
-    rec->alloc_stack = sampled ? intern_current_stack(1U) : kNullStackId;
+    rec->alloc_stack = sampled ? intern_current_stack(caller) : kNullStackId;
     if (sampled)
     {
         ++m_sampled_count;
@@ -473,7 +490,7 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
     return user;
 }
 
-void DiagnosticAllocator::deallocate(void* p) noexcept
+CRD_NOINLINE void DiagnosticAllocator::deallocate(void* p) noexcept
 {
     if (p == nullptr)
     {
@@ -522,7 +539,7 @@ void DiagnosticAllocator::deallocate(void* p) noexcept
     (void)verify_redzones(*rec); // catch an under/overrun that happened before the free
     if (rec->alloc_stack != kNullStackId) // sampled allocations also record their free site
     {
-        rec->free_stack = intern_current_stack(1U);
+        rec->free_stack = intern_current_stack(CRD_DIAG_CALLER);
     }
 
     if (m_cfg.quarantine_capacity_bytes > 0U && rec->size <= m_cfg.quarantine_capacity_bytes)

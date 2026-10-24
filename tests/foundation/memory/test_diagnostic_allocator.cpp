@@ -2,6 +2,7 @@
 // leak/retention summaries. Every acceptance clause is asserted as a distinct, attributable verdict,
 // never a silent pass. Contract: docs/design/runtime-diagnostics.md#diag-3c.
 
+#include <crd/core/platform.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/memory/diagnostic_allocator.hpp>
 
@@ -64,6 +65,38 @@ struct LeakSink
     int        n = 0;
     crd::usize bytes = 0;
 };
+
+// Each public entry is called from its own line here, and this function from one line of entry_caller, so a stack
+// that starts at the application's call has a distinct first frame per entry and the same second frame.
+CRD_NOINLINE mem::StackId entry_site(mem::DiagnosticAllocator& da, int entry)
+{
+    void* p = nullptr;
+    switch (entry)
+    {
+        case 0:
+            p = da.allocate(32U, 16U);
+            break;
+        case 1:
+            p = da.try_allocate(32U, 16U);
+            break;
+        case 2:
+            p = da.allocate_tagged(32U, 16U, mem::AllocationTag{});
+            break;
+        default:
+            p = da.allocate(32U, 16U);
+            da.deallocate(p);
+            return da.provenance_of(p).free_stack;
+    }
+    const mem::StackId id = da.provenance_of(p).alloc_stack;
+    da.deallocate(p);
+    return id;
+}
+
+CRD_NOINLINE mem::StackId entry_caller(mem::DiagnosticAllocator& da, int entry)
+{
+    const volatile mem::StackId id = entry_site(da, entry); // read back, so the call is not a tail call
+    return id;
+}
 } // namespace
 
 TEST_CASE("diag-alloc: correct usage is clean and provenance-complete", "[memory][diag][provenance]")
@@ -91,6 +124,36 @@ TEST_CASE("diag-alloc: correct usage is clean and provenance-complete", "[memory
     da.deallocate(p);
     CHECK(rec.count == 0);
     CHECK(da.violation_count() == 0U);
+}
+
+TEST_CASE("diag-alloc: every entry's stack starts at the application's call", "[memory][diag][provenance]")
+{
+    mem::DiagnosticConfig cfg = default_cfg();
+    cfg.quarantine_capacity_bytes = 4096U; // the freed block keeps its free site
+    mem::TlsfAllocator backing(256U * 1024U, nullptr, "backing");
+    mem::DiagnosticAllocator da(&backing, cfg);
+
+    constexpr int entry_count = 4;
+    void* first[entry_count] = {};
+    void* second[entry_count] = {};
+    volatile int entries = entry_count; // opaque, so no copy of entry_caller is made per entry
+    for (int entry = 0; entry < entries; ++entry)
+    {
+        void* frames[2] = {};
+        INFO("entry " << entry);
+        REQUIRE(da.stack_frames(entry_caller(da, entry), frames, 2U) == 2U);
+        first[entry] = frames[0];
+        second[entry] = frames[1];
+    }
+    for (int i = 1; i < entry_count; ++i)
+    {
+        INFO("entry " << i);
+        CHECK(second[i] == second[0]); // the one call of entry_site
+        for (int j = 0; j < i; ++j)
+        {
+            CHECK(first[i] != first[j]); // each entry's own line of entry_site
+        }
+    }
 }
 
 TEST_CASE("diag-alloc: a rear overrun is an attributable RedzoneOverrun", "[memory][diag][redzone]")
