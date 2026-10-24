@@ -211,7 +211,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | Every lane. |
 | Adopt | Address a reloadable or public object through `crd::containers::SlotMap<T>(...)` and its `Handle`, never a raw pointer that outlives a reload. |
 | Example | `engine/foundation/containers/include/crd/containers/slot_map.hpp` |
-| Cost | Measured: a lookup's bounds, occupancy and generation compares add 0.5 to 0.7 ns over a raw index, a stale handle is refused in about the same time, and an entity's `is_alive` costs about 0.55 ns; the identity registry looks up at creation and retirement, never per frame ([board](../bench/2026-10-24-diag-11b-checks-recording-probes.md#results)). |
+| Cost | Measured: a lookup's bounds, occupancy and generation compares add 0.5 to 0.7 ns over a raw index, a stale handle is refused in about the same time, and an entity's `is_alive` costs about 0.55 ns; the GPU identity registry, the container's engine user, checks one under its mutex when an identity (a frame-graph pass's too) is retired or queried ([board](../bench/2026-10-24-diag-11b-checks-recording-probes.md#results)). |
 | Owner | DIAG.3e |
 
 <a id="rb-leak"></a>

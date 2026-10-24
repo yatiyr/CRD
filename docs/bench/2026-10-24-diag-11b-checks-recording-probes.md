@@ -48,8 +48,8 @@ Each cell is the range of the two runs' means; a percentage is over the plain ru
 
 - **Generation check.** Bounds, occupancy and generation compares add 0.5 to 0.7 ns per lookup over a raw index in
   shuffled order; refusing a stale handle costs the same. The engine's `containers::SlotMap` user is the GPU identity
-  registry, which looks up under its mutex at creation and retirement, never per frame; entity lookups go through
-  `scene::SlotMap::is_alive`, about 0.55 ns each.
+  registry, which checks one under its mutex when an identity is retired or queried (a frame-graph pass mints and
+  retires one each frame); entity lookups go through `scene::SlotMap::is_alive`, about 0.55 ns each.
 - **Recording.** A traced run pays per dispatch: about 4 to 5 ns averaged over the run with the default 4,096 events
   kept (each kept event reads up to four results at the next safe point; a dispatch past the bound only counts), and
   15 to 21 ns with every event kept. The record's encode then costs about 45 ns per kept event. This is the same shape
