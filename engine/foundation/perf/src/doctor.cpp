@@ -210,8 +210,6 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
     report.modes.push_back(built_mode(cont::StringView{"full-profile"}, kEnabled,
                                       cont::StringView{"the full flight detail, chosen by the host's flight policy"},
                                       profiling_absent));
-    report.modes.push_back(mode(cont::StringView{"emergency-recording"}, true, true, true,
-                                cont::StringView{"fixed record written without the ring mutex (DiagnosticRecorder)"}));
     report.modes.push_back(built_mode(cont::StringView{"crash-capture"}, diagnostic_host_capabilities().crash_backend,
                                       cont::StringView{"crd::crash: a Windows minidump, a signal-safe Linux record"},
                                       cont::StringView{"no crash backend on this platform (MAC.DIAG, WEB.DIAG)"}));

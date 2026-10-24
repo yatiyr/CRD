@@ -33,8 +33,7 @@
 // trigger) cannot replace the capture already delivered. shutdown() calls finish(Shutdown) first, so a pending
 // capture is never lost to teardown while a sink is set. Building a capture allocates (its event array), so
 // collection happens on the host's thread or on the fatal path, which is an ordinary function call (an assert handler,
-// a fatal invariant handler), never a signal handler. A hard signal crash leaves only the DIAG.2b emergency record and
-// the DIAG.5a/5b crash record.
+// a fatal invariant handler), never a signal handler. A hard signal crash leaves only the DIAG.5a/5b crash record.
 //
 // The policy is validated before it takes effect; a rejected candidate leaves the active policy, its generation and
 // the ring untouched (last known good). Contract: docs/design/runtime-diagnostics.md (DIAG.9b); ADR-0133.

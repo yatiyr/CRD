@@ -75,8 +75,7 @@ struct CrashReport
 // Installed with the atomic-pair, no-default-action pattern: nothing fires unless a handler is set.
 // For the fatal dump the handler runs on the dedicated crash handler thread (a fresh stack, so it is
 // reached even when the faulting stack is exhausted); a suppressed concurrent-fault notification instead
-// runs on that extra faulting thread. Either way it must not allocate or block; hosts route it to the
-// preallocated emergency record.
+// runs on that extra faulting thread. Either way it must not allocate or block.
 using CrashReportHandler = void (*)(const CrashReport&, void* user) noexcept;
 void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 

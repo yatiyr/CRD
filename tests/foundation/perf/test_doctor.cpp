@@ -50,9 +50,8 @@ TEST_CASE("doctor: reports the schema, host tuple and the diagnostic modes", "[d
     const auto* crash = r.find_mode(cont::StringView{"crash-capture"});
     REQUIRE(crash != nullptr);
     CHECK(crash->compiled == cp::diagnostic_host_capabilities().crash_backend);
-    const auto* emergency = r.find_mode(cont::StringView{"emergency-recording"});
-    REQUIRE(emergency != nullptr);
-    CHECK(emergency->usable);
+    // The emergency channel is crash-capture's record and the flight recorder's fatal path; no separate mode.
+    CHECK(r.find_mode(cont::StringView{"emergency-recording"}) == nullptr);
     const auto* gpu = r.find_mode(cont::StringView{"gpu-fault"});
     REQUIRE(gpu != nullptr);
     CHECK_FALSE(gpu->compiled);

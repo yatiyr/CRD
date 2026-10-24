@@ -151,6 +151,13 @@ reentrant failure and full buffers retain valid records without dangling pointer
 mutex is held still yields an emergency record. Test under TSan once DIAG.1b is qualified; retain that evidence gate.
 DIAG.1b is a prerequisite in the sequence; do not defer this concurrency evidence to a later child.
 
+Settled (2026-10-24, DIAG.12, [session](../sessions/2026-10-24-diag-12-one-recorder.md)): the DIAG.2b
+`DiagnosticRecorder` had no production consumer; it is removed, and each clause names its carrier. The preallocated
+ring, a full ring, concurrent recording, early-init and late-shutdown no-ops and a fatal path that finds the ring held
+are `FlightRecorder`'s (DIAG.9b, its `flight recorder:` and `flight trigger:` cases). The emergency record is the crash
+capture's record (DIAG.5a/5b), written without a lock or an allocation. Registration lifetimes are their owners':
+profiler names and allocator entries (DG08, DIAG.6a), the jobs observer (DIAG.10c) and unloaded modules (DIAG.9b).
+
 <a id="diag-3a"></a>
 ## DIAG.3a — complete allocator contracts
 
@@ -1285,8 +1292,7 @@ replay/minimization recipe. Inject during load/cook/install/execute/reload/teard
 recoverable failure. Shipping capability checks reject injection and arbitrary external I/O replay.
 
 Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md)):
-- The flight recorder is `crd::perf::FlightRecorder` (`crd/perf/flight_recorder.hpp`), separate from the DIAG.2b
-  `DiagnosticRecorder`: its events are fixed 152-byte records (code, severity, redaction class, two scalars, a
+- The flight recorder is `crd::perf::FlightRecorder` (`crd/perf/flight_recorder.hpp`): its events are fixed 152-byte records (code, severity, redaction class, two scalars, a
   message clipped to 111 bytes with the clip flagged), so recording and triggering never allocate. Codes 0x0900..0x09FF belong to it.
 - Bounds are an authored, versioned `FlightPolicy` (capacity at most 65536 events, about 9.5 MiB; `pre_events`,
   `post_events`, `post_window_ns` at most 60 s, a trigger mask, `hitch_threshold_ns`). `pre_events + post_events <=
@@ -1309,7 +1315,7 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
   (`check_invariant`'s default reaches `CRD_FATAL`, which reaches the assert trigger) cannot replace it. On the fatal
   path the collection lock is taken with a bounded try-lock and claims still publishing are waited for within the same
   bound; if either runs out, the capture carries the trigger alone and says `ring_unavailable`. Building a capture allocates, so the fatal path is an ordinary handler call, never a signal
-  handler: a hard signal crash still leaves only the DIAG.2b emergency record and the DIAG.5a/5b crash record.
+  handler: a hard signal crash still leaves only the DIAG.5a/5b crash record.
 - The capture is bundle section `FlightRecord` (tag 6), a versioned little-endian payload ('CFR1') whose decoder
   bounds every length by its fixed limit and by the payload, checks the loss metadata against the event list and
   refuses trailing bytes; `write_flight_bundle` writes it beside a Manifest. `flight_capture_summary_json` is the

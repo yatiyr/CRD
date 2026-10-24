@@ -24,7 +24,6 @@ add_executable(crd-perf-tests
     test_diag_harness.cpp
     test_doctor.cpp
     test_diagnostics.cpp
-    test_diagnostic_recorder.cpp
     test_diag_bundle.cpp
     test_diag_symbol_index.cpp
     test_diag_bundle_import.cpp
