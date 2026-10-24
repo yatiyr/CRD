@@ -953,7 +953,7 @@ public:
         {
             // ⛔ c3: the FULL per-attachment fmts[] joins the identity, member-by-member (num_rts is in `key`, so a key
             // match ⇒ same count) — never a single format or a hash (a collision hands one pass another's pipeline).
-            if (m_cache[i].key == key && m_cache[i].state == st
+            if (m_cache[i].key == key && m_cache[i].dsv == dsv && m_cache[i].state == st
                 && std::memcmp(m_cache[i].rt_fmts, fmts, nf * sizeof(DXGI_FORMAT)) == 0)
             {
                 return m_cache[i].pso.Get();
@@ -964,6 +964,7 @@ public:
             return nullptr;
         }
         m_cache[m_cache_n].key = key;
+        m_cache[m_cache_n].dsv = dsv;
         std::memcpy(m_cache[m_cache_n].rt_fmts, fmts, sizeof(fmts));
         m_cache[m_cache_n].state = st;
         m_cache[m_cache_n].pso =
@@ -986,6 +987,7 @@ private:
     struct PsoCacheEntry
     {
         crd::u32                    key = 0;
+        DXGI_FORMAT                 dsv = DXGI_FORMAT_UNKNOWN; // DIAG.11b: the DSV format, as baked (D32 or D24S8)
         DXGI_FORMAT                 rt_fmts[8]{}; // CEIR-14z-4c c3: the PER-ATTACHMENT RTV formats — the full cache identity
         PassRasterState             state{};      // REN-38 audit: exact per-pass state, part of the cache identity
         ComPtr<ID3D12PipelineState> pso;
@@ -1457,11 +1459,9 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        // The default clear is opaque black. A missing hint warns even for that default; arbitrary later clears
-        // remain legal and preserve their value. Authored non-default hints belong at image creation.
-        D3D12_CLEAR_VALUE clear_value{};
-        clear_value.Format = kColorFormat;
-        clear_value.Color[3] = 1.0F;
+        // Every standalone target is created for the public draws' default clear (standalone_clear): a missing hint
+        // warns on every clear, the default included; other clears remain legal and keep their value (DIAG.11b).
+        const D3D12_CLEAR_VALUE clear_value = optimized_clear_value(kColorFormat, false, standalone_clear());
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
                                                      &clear_value, IID_PPV_ARGS(&tex))))
         {
@@ -1524,8 +1524,10 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                     IID_PPV_ARGS(&tex))))
+        D3D12_CLEAR_VALUE clear_value{}; // id 0: every D3D12 visibility clear is 0 (see clear_scope)
+        clear_value.Format = rd.Format;
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
+                                                     &clear_value, IID_PPV_ARGS(&tex))))
         {
             return nullptr;
         }
@@ -1601,8 +1603,9 @@ public:
         rd.Layout             = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags              = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, nullptr,
-                                                     IID_PPV_ARGS(&tex))))
+        const D3D12_CLEAR_VALUE clear_value = optimized_clear_value(kColorFormat, false, standalone_clear());
+        if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
+                                                     &clear_value, IID_PPV_ARGS(&tex))))
         {
             return nullptr;
         }
@@ -6933,10 +6936,11 @@ public:
         rd.SampleDesc.Count = 1;
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        const D3D12_CLEAR_VALUE clear_value = optimized_clear_value(kColorFormat, false, standalone_clear());
         for (crd::u32 i = 0; i < attachments; ++i)
         {
             if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON,
-                                                         nullptr, IID_PPV_ARGS(&tex[i]))))
+                                                         &clear_value, IID_PPV_ARGS(&tex[i]))))
             {
                 return nullptr;
             }

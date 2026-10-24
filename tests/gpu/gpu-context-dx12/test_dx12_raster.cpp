@@ -2280,6 +2280,78 @@ TEST_CASE("D-007 B1-f: native SV_InnerCoverage conforms on a qualified provider 
     });
 }
 
+// DIAG.11b: D3D12 warns on every clear of a render target created without the clear it receives (820/821), so each
+// standalone target is created for the public draws' default clear (opaque black, depth 1, id 0) and that clear stays
+// silent under the debug layer. Other clears stay legal; a frame graph's own images carry their CEIR-derived hints.
+TEST_CASE("DIAG.11b: every standalone DX12 target is created for its default clear (DX12)", "[dx12][raster][gpu][ir]")
+{
+    namespace kir = crd::kir;
+    crd::memory::TlsfAllocator alloc(8U << 20U);
+    crd::gpu_test::qualify_dx12_workload(
+        &alloc,
+        [&]
+        {
+            auto gctx = g::create_dx12_gpu_context(&alloc);
+            if (gctx == nullptr || !gctx->valid())
+            {
+                SKIP("no D3D12 device/compiler available");
+            }
+            auto raster = g::create_dx12_raster_context(&alloc);
+            REQUIRE(raster != nullptr);
+            const auto program =
+                [&](void (*vs_builder)(kir::KGraph&, kir::KEntry&), void (*fs_builder)(kir::KGraph&, kir::KEntry&))
+            {
+                kir::KGraph vg(&alloc);
+                kir::KEntry ve;
+                vs_builder(vg, ve);
+                kir::KGraph fg(&alloc);
+                kir::KEntry fe;
+                fs_builder(fg, fe);
+                auto vs = gctx->create_program(vg, ve);
+                auto fs = gctx->create_program(fg, fe);
+                REQUIRE(vs != nullptr);
+                REQUIRE(fs != nullptr);
+                auto linked = raster->create_raster_program(*vs, *fs);
+                REQUIRE(linked != nullptr);
+                return linked;
+            };
+            const auto solid = program(crd::gputest::build_fullscreen_vs, [](kir::KGraph& graph, kir::KEntry& entry)
+                                       { crd::gputest::build_solid_fs(graph, entry, 1.0, 0.0, 0.0); });
+            const auto mrt = program(crd::gputest::build_fullscreen_vs, crd::gputest::build_gbuffer_two_output_fs);
+            const auto ids = program(crd::gputest::build_visbuffer_vs, crd::gputest::build_visbuffer_fs);
+            const g::ClearColor black{0.0F, 0.0F, 0.0F, 1.0F};
+            constexpr crd::u32 dim = 16U;
+
+            auto color = raster->create_color_target(dim, dim);
+            auto msaa = raster->create_color_target_ms(dim, dim, 4U);
+            auto vrs = raster->create_color_vrs_target(dim, dim, g::ShadingRate::Rate2x2);
+            auto depth = raster->create_color_depth_target(dim, dim);
+            auto stencil = raster->create_color_depth_stencil_target(dim, dim);
+            auto gbuffer = raster->create_gbuffer_target(dim, dim, 2U);
+            auto visibility = raster->create_visbuffer_target(dim, dim);
+            REQUIRE(color != nullptr);
+            REQUIRE(msaa != nullptr);
+            REQUIRE(vrs != nullptr);
+            REQUIRE(depth != nullptr);
+            REQUIRE(stencil != nullptr);
+            REQUIRE(gbuffer != nullptr);
+            REQUIRE(visibility != nullptr);
+
+            crd::gputest::enc_draw(*raster, *color, *solid, black, 3U);
+            crd::gputest::enc_draw(*raster, *msaa, *solid, black, 3U);
+            crd::gputest::enc_draw_vrs(*raster, *vrs, *solid, black, g::ShadingRate::Rate1x1,
+                                       g::ShadingRateCombiner::Keep, 3U);
+            crd::gputest::enc_draw_depth(*raster, *depth, *solid, black, 1.0F, g::DepthCompare::Less, 3U);
+            crd::gputest::enc_draw_depth(*raster, *stencil, *solid, black, 1.0F, g::DepthCompare::Less, 3U);
+            crd::gputest::enc_draw_gbuffer(*raster, *gbuffer, *mrt, black, 3U);
+            crd::gputest::enc_draw_visbuffer(*raster, *visibility, *ids, 0U, 6U);
+            CHECK((color->read_pixel(dim / 2U, dim / 2U) & 0xFFU) == 0xFFU);
+            CHECK((msaa->read_pixel(dim / 2U, dim / 2U) & 0xFFU) == 0xFFU);
+            CHECK((gbuffer->read_pixel(1U, dim / 2U, dim / 2U) & 0xFF00U) == 0xFF00U);
+            CHECK(visibility->read_pixel(dim / 2U, dim / 2U) <= 1U);
+        });
+}
+
 TEST_CASE("D-007 B1-f: fragment interlock RMW counter is deterministic (DX12)", "[dx12][raster][gpu][ir]")
 {
     namespace kir = crd::kir;
