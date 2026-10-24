@@ -2978,9 +2978,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   buffer through the public `ComputeRecorder`, inside a debug label carrying its own Pass identity. Synchronization
   validation reports the write-after-write; the application reports it as a `Manual` trigger (code 0x0714) naming the
   buffer's and the pass's identities. A host without a Vulkan device, the layer or synchronization validation says so
-  and exits 10, never clean; only the hosted Windows runners' `no-vulkan-device` is accepted. DX12 has no route for
-  this class: its compute context inserts every transition and it has no synchronization validation; its correlated
-  Core hazards are DIAG.7a's ([session](../sessions/2026-10-24-diag-12-gpu-hazard.md)).
+  and exits 10, never clean; only `no-vulkan-device` on a Windows host is accepted (the hosted runners have no Vulkan
+  device). DX12 has no route for this class: its compute context inserts every transition and it has no
+  synchronization validation; its correlated Core hazards are DIAG.7a's
+  ([session](../sessions/2026-10-24-diag-12-gpu-hazard.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
