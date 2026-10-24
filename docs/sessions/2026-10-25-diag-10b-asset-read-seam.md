@@ -35,11 +35,14 @@ The consult's action check made always false (`if (false && ...)`): on win-debug
 
 ## Verification
 
-- win-debug: crd-perf-tests builds; the `diag assets:`, `fault commands:`, `flight commands:`, `fault injector:` and
-  `doctor:` cases (21) pass.
+- win-debug: crd-perf-tests builds and all its 302 CTests pass, the host-specimen cases among them (a plan armed
+  before an asset read now spends a read hit on it, and none relied on the old count); the `crd-fuzz-ceridc-diag` and
+  `crd-fuzz-perf-assets` corpus replays pass.
 - linux-gcc-debug (`wsl-lane.sh`): crd-perf-tests builds and the same cases pass.
-- `diag-coverage.py --validate`, the ctest guards, tidy-files, Allman, check-master-plan and check-repository pass;
-  clang-format reports nothing on the added lines.
+- `diag-coverage.py --validate` (23 exclusions), `test-diag-coverage.py`, the ctest guards, tidy-files, Allman,
+  check-master-plan and check-repository pass. clang-format's one finding in `diag_assets.cpp` is HEAD's include-block
+  regroup; the added lines have none.
 
-Hosted once pushed: the two cases pass on every lane (shipping lanes take the compiled-out branch), and
-`crd-diag-coverage`'s registry check passes in the repository job.
+Hosted once pushed: the two cases pass on every lane (shipping lanes take the compiled-out branch), and the
+repository job's "Diagnostic coverage verdicts" (`test-diag-coverage.py`, the committed registry against the tree)
+passes. The coverage measurement itself (`linux-clang-coverage`) is not hosted.
