@@ -44,9 +44,11 @@ against +35.9%, 10 rounds), so the table stays as it is.
 ## Repairs
 
 - `register_thread` (`engine/foundation/perf/src/profiler.cpp`): a thread whose cache belongs to the live lifetime
-  (its generation equals the live state's) and carries the same name returns without the reader pin. It records into
-  that state, so the "join every recording thread before shutdown" contract covers it as it covers `push_region`; a
-  stale cache, a changed name and an inactive profiler take the pinned path as before.
+  (its generation is the latest `init()`'s stamp, compared before the state is read) and carries the same name returns
+  without the reader pin. It records into that state, so the "join every recording thread before shutdown" contract
+  covers it as it covers `push_region`; a stale cache, a changed name and an inactive profiler take the pinned path as
+  before. A first form read the live state's generation before the match, which a thread of an earlier lifetime is not
+  entitled to; reordered in a second commit (tooth 1 rerun on it, `[thread]` and `[quiescence]` pass).
 - `StripedCount` (`engine/foundation/perf/src/striped_count.hpp`, new): the flight recorder's striped left-out count,
   moved out of `flight_recorder.cpp` so the jobs adapter's five tallies use it too. A new header because the two users
   are separate units of crd-perf; the recorder's copy is deleted.
@@ -85,7 +87,7 @@ Each restored, rebuilt and rerun on win-debug (295 cases pass):
 ## Verification
 
 win-debug: crd-perf-tests (295 cases) and the 12 `crd-diag-overhead-*` CTests; linux-gcc-debug and linux-clang-tsan
-through `wsl-lane.sh`: crd-perf-tests (293 cases; TSan reports nothing) and the 12 CTests; `tidy-files.py` clean on the
+through `wsl-lane.sh`: crd-perf-tests (293 cases; under TSan exit 0 and no `ThreadSanitizer` line) and the 12 CTests; `tidy-files.py` clean on the
 five files, clang-format findings per file unchanged from HEAD, `check-allman-braces.py`, the ctest guards.
 
 ## Not done in this batch
