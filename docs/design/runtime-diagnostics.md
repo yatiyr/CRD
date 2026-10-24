@@ -2135,7 +2135,8 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-coverage-and-fail
   15 are real untested error paths owned as `owned-gap` with their rows (four record-minimization verdicts, the
   host-executor adapter's refusals, inspection script and host-load failures, a failed record write, a cancelled
   external-results analysis, the flight recorder's fatal path with the ring held, the harness's own timeout
-  verdict and two generation wraps with no seam), and one declared verdict (`MissingSymbolizer`) is never produced.
+  verdict and two generation wraps with no seam), and one declared verdict (`MissingSymbolizer`) was never produced
+  (since DIAG.12, 2026-10-25, the harness returns it for a report with no symbolized frame).
 - [nonreproduced-failures.json](../../tests/support/diag/nonreproduced-failures.json) registers flaky and
   nonreproduced failures with signature, reruns, status and session; a test fails if any build file, CI step or
   script reads it, so it cannot become a quarantine list.
@@ -3020,6 +3021,11 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   sink's `write`, holding the logger's sink mutex and the stdio stream lock. The handler takes neither, so the dump
   or record is still written; a handler that logged would time out
   ([re-read](../sessions/2026-10-25-diag-12-re-read.md)).
+- A sanitizer catch names the specimen's site: `Expectation::expected_site` is the function its report must name.
+  A report that does not is `MissingSymbolizer` when none of its frames is symbolized (DIAG.0's missing symbolizer,
+  seeded by `asan-symbolizer-off`) and `Unexpected` when frames are. Every residual limitation of the children has an
+  owner row, named in each child's ROADMAP row, or is DIAG.12's own remaining work
+  ([session](../sessions/2026-10-25-diag-12-owner-rows.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
