@@ -1861,9 +1861,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-10a-command-decoding.
   which a native caller can set past 2^53: only the cursors the service issues are promised exact in a double.
 - Duplicate member names keep the parser's first occurrence (RFC 8259 leaves them to the implementation); the
   transport, the service and the target read them the same way.
-- The commands' file readers (`bundle.inspect`, the diag asset reader, crd-ceir-cook's bounded file reader) open files
-  directly, outside crd-core's I/O fault seam, so neither fault injection nor this target observes which paths they
-  open; the target's root does not exist, so they open nothing.
+- The commands' file readers (`bundle.inspect`, crd-ceir-cook's bounded file reader) open files directly, outside
+  crd-core's I/O fault seam, so neither fault injection nor this target observes which paths they open; the target's
+  root does not exist, so they open nothing. The diag asset reader consults the seam since 2026-10-25 (DIAG.12).
 - Not yet: resource reload, the compiled and reference CEIR comparison, the virtual-memory and streaming allocators,
   the unknown-origin artifacts and the concurrent-load corruption.
 
@@ -3026,6 +3026,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   seeded by `asan-symbolizer-off`) and `Unexpected` when frames are. Every residual limitation of the children has an
   owner row, named in each child's ROADMAP row, or is DIAG.12's own remaining work
   ([session](../sessions/2026-10-25-diag-12-owner-rows.md)).
+- The diag asset reader (DIAG.10b): `read_diag_asset_file` consults the I/O fault seam as a `ReadWhole` before it
+  opens the file, as crd-platform's whole-file reads do, so a failed, short or cancelled read is `Failed` and a
+  `failed-read` plan fails a host profile, flight policy or fault-plan read
+  ([session](../sessions/2026-10-25-diag-10b-asset-read-seam.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
