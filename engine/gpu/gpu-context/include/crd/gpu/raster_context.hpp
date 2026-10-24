@@ -12,6 +12,7 @@
 
 #include <crd/core/types.hpp>
 #include <crd/gpu/frame_graph.hpp> // REN-1: IFrameGraph (create_frame_graph's return — the default body needs it complete)
+#include <crd/gpu/validation.hpp> // DIAG.11b: ValidationActivation
 
 #include <memory>
 
@@ -340,6 +341,9 @@ public:
     IRasterContext& operator=(IRasterContext&&)      = delete;
 
     [[nodiscard]] virtual bool valid() const noexcept = 0; // false ⇒ context not graphics-capable (skip)
+    // DIAG.11b: the per-mode validation this context's device runs with, as IGpuContext::validation_activation()
+    // reports it (Vulkan: the context it was created from; DX12: the GpuContextConfig given to its factory).
+    [[nodiscard]] virtual ValidationActivation validation_activation() const noexcept { return ValidationActivation{}; }
 
     [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_target(crd::u32 width, crd::u32 height) = 0;
 
@@ -377,7 +381,15 @@ public:
     // A colour target that also carries a D32_SFLOAT depth buffer. Draw into it with `draw_depth`; `read_pixel` returns the
     // COLOUR texel (depth is the test target, not read back). Single-sample.
     [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) = 0;
-
+    // The same target, created for the clear it will receive (a frame graph's `SceneRenderer::output_clear()`): D3D12
+    // creates it with that optimized clear value, which every clear must match to stay fast and silent (DIAG.11b);
+    // other clears stay legal. A backend without optimized clears ignores the hint.
+    [[nodiscard]] virtual std::unique_ptr<IRasterTarget> create_color_depth_target_for(crd::u32 width, crd::u32 height,
+                                                                                       const FgClearHint& clear)
+    {
+        (void)clear;
+        return create_color_depth_target(width, height);
+    }
 
     // --- B1-e: variable-rate shading (VRS) — coarse shading, three combinable rate sources ------------------------------
 

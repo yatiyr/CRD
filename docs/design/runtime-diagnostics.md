@@ -2769,7 +2769,9 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
 - What holds on every lane: the 18 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
-  written; the lifetime ledger balances.
+  written; the lifetime ledger balances. `render-validation-core` (and `-sync` on Linux) runs `render` with device
+  validation: the mode active on the device it draws with and no validation message; its cost is reported, never
+  budgeted (2026-10-24, [board](../bench/2026-10-24-diag-11b-device-validation.md)).
 - How a budget is judged: `scripts/diag-overhead.py` interleaves the arms across processes, pools nearest-rank
   percentiles, pairs per-repetition median ratios and takes a seeded bootstrap 95% interval; within (upper end at or
   below the budget), over (lower end above it) or unresolved (a loss, never a pass). Each budget is judged on the

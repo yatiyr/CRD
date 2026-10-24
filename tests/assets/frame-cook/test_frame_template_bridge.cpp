@@ -228,11 +228,10 @@ void gate_shipped_asset(const char* stem, crd::memory::IAllocator& alloc)
     ab_template_fidelity(desc, schemas, alloc);
 }
 
-// CEIR-16-3c-5 PREREQ: parse a shipped .frame.toml and prove build_frame_plans builds a CEIR replay plan for EVERY fullscreen
-// pass without error — the real-asset validation that must pass BEFORE the 3c-5 flip makes a null plan a record-time error.
-void gate_frame_plans(const char* stem, crd::memory::IAllocator& alloc)
+// Parse a shipped frame asset and build its replay plans.
+void build_shipped_plans(const char* stem, crd::memory::IAllocator& alloc, fc::FrameGraphDesc& desc,
+                         fc::FramePlans& plans)
 {
-    INFO("shipped asset = " << stem);
     crd::containers::String path(&alloc);
     path.append(CRD_FRAME_ASSETS_DIR);
     path.append("/");
@@ -241,14 +240,23 @@ void gate_frame_plans(const char* stem, crd::memory::IAllocator& alloc)
     crd::containers::String toml(&alloc);
     REQUIRE(crd::platform::fs::read_file_text(crd::platform::fs::Path{StringView(path.c_str(), path.size())}, toml));
 
-    fc::FrameGraphDesc      desc(&alloc);
     crd::containers::String where(&alloc);
     REQUIRE(fc::parse_frame_toml(StringView(toml.c_str(), toml.size()), desc, &where) == fc::FrameCookError::Ok);
 
-    fc::FramePlans                   plans(&alloc);
     crd::renderasset::DiagnosticList diags(&alloc);
     REQUIRE(fc::build_frame_plans(desc, plans, diags)); // ⭐ the extraction builds every real fullscreen composite w/o error
     REQUIRE_FALSE(diags.has_errors());
+}
+
+// CEIR-16-3c-5 PREREQ: parse a shipped .frame.toml and prove build_frame_plans builds a CEIR replay plan for EVERY
+// fullscreen pass without error — the real-asset validation that must pass BEFORE the 3c-5 flip makes a null plan a
+// record-time error.
+void gate_frame_plans(const char* stem, crd::memory::IAllocator& alloc)
+{
+    INFO("shipped asset = " << stem);
+    fc::FrameGraphDesc desc(&alloc);
+    fc::FramePlans plans(&alloc);
+    build_shipped_plans(stem, alloc, desc, plans);
     for (u32 pi = 0; pi < desc.passes.size(); ++pi)
     {
         if (!fc::pass_is_fullscreen(desc.passes[pi]))
@@ -944,6 +952,23 @@ TEST_CASE("Frame clear hints preserve authored CEIR clears and first-writer iden
     g::DepthStencilAttachmentDesc depth;
     CHECK_FALSE(crd::ceir::gpu::materialize_depth_attachment_desc(*plan->ctx, scope, depth));
     CHECK_FALSE(crd::ceir::gpu::materialize_depth_attachment_desc(*plan->ctx, nullptr, depth));
+}
+
+// DIAG.11b: the host creates the imported `@output` target, so the plans carry the clear the graph first applies to
+// it (SceneRenderer::output_clear): forward_csm's forward pass clears it to its authored colour and reverse-Z depth.
+TEST_CASE("DIAG.11b: a shipped frame's output clear is its first clear of @output", "[framecook][ceir][clear-hints]")
+{
+    crd::memory::TlsfAllocator alloc(32U << 20U, nullptr, "output-clear");
+    fc::FrameGraphDesc desc(&alloc);
+    fc::FramePlans plans(&alloc);
+    build_shipped_plans("forward_csm", alloc, desc, plans);
+    CHECK(plans.output_clear.color_set);
+    CHECK(plans.output_clear.value.color[0] == 0.09F);
+    CHECK(plans.output_clear.value.color[1] == 0.10F);
+    CHECK(plans.output_clear.value.color[2] == 0.13F);
+    CHECK(plans.output_clear.value.color[3] == 1.0F);
+    CHECK(plans.output_clear.depth_set);
+    CHECK(plans.output_clear.value.depth == 0.0F);
 }
 
 TEST_CASE("ceir 16-3c-5 prereq: build_frame_plans succeeds on every shipped frame asset's fullscreen passes",

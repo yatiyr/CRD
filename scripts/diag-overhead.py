@@ -5,7 +5,10 @@
 the arms interleaved (each repetition rotates their order, so drift lands on every arm alike), and writes one board
 document (schema cerid-diag-overhead-board/1). An arm is a binary and a mode: `off`, `basic` and `full` of the
 measured binary, and `compiled-out` (the `off` mode of a binary built with profiling compiled out, `--baseline-exe`),
-which is the true zero the runtime-disabled mode is held to.
+which is the true zero the runtime-disabled mode is held to. `validation-core`, `validation-sync` and
+`validation-gpu` are the measured binary's off mode with that device validation (`--validation`, render only); their
+cost over off is reported, never budgeted (ADR-0133 accounts GPU-assisted validation separately), and a run whose
+validation reported or lost a message is an instrument failure.
 
 Per arm the board keeps the pooled frame percentiles (p50/p95/p99 by nearest rank over every timed frame of every
 process), each process's median, the events (sites, payloads evaluated, recorded, filtered, profiler drops), the
@@ -55,6 +58,8 @@ COUNTED = {'instructions': ('Ir',), 'L1 misses': ('I1mr', 'D1mr', 'D1mw'), 'LL m
 WORKLOADS = ('alloc', 'jobs', 'offline', 'io', 'render', 'events')
 SITE_WORKLOADS = ('events',) # site microbenchmarks: their cost per site is reported, no budget judges them
 MODES = ('off', 'basic', 'full')
+VALIDATIONS = ('core', 'sync', 'gpu') # device validation arms, `validation-<name>`: render's off mode, reported
+VALIDATION_COUNTS = ('errors', 'warnings', 'lost', 'instrumentation_failures')
 BUDGETS = {'disabled': ('off', 'compiled-out', 0.01), 'basic': ('basic', 'off', 0.02)}
 STORAGE_BUDGET = 32 * 1024 * 1024
 BOOTSTRAP = 2000
@@ -137,6 +142,9 @@ def record_problem(record, expected_frames):
     if captures.get('delivered') != captures.get('requested') or captures.get('failures'):
         return 'captures delivered %s of %s (%s failures)' % (captures.get('delivered'), captures.get('requested'),
                                                               captures.get('failures'))
+    validation = record.get('validation', {})
+    if validation.get('requested', 'none') != 'none' and any(validation.get(k, 1) for k in VALIDATION_COUNTS):
+        return 'validation: %s' % ', '.join('%s %s' % (k, validation.get(k)) for k in VALIDATION_COUNTS)
     return None
 
 
@@ -181,7 +189,8 @@ def summarize_arm(runs):
             'resident_peak_bytes': max((r['memory']['resident_peak'] for r in usable), default=None),
             'recorder_ring_bytes': max((r['memory']['recorder_ring_bytes'] for r in usable), default=0),
             'lifetime': usable[0]['lifetime'] if usable else None, 'host': usable[0]['host'] if usable else None,
-            'build': usable[0]['build'] if usable else None}
+            'build': usable[0]['build'] if usable else None,
+            'validation': usable[0].get('validation') if usable else None}
 
 
 def frame_wall(record):
@@ -219,10 +228,11 @@ def judge(arms, budgeted=True):
     judged: the budgets bound the cost of a frame of work, not of an empty loop of sites."""
     result = {}
     pairs = [(name, candidate, reference, budget if budgeted else None)
-             for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)]
+             for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)] + [
+                 ('validation-' + v, 'validation-' + v, 'off', None) for v in VALIDATIONS]
     for name, candidate, reference, budget in pairs:
         if candidate not in arms or reference not in arms:
-            if name != 'full':
+            if name in BUDGETS:
                 result[name] = {'verdict': 'not measured', 'budget': budget}
             continue
         comparison = compare(arms[candidate]['runs'], arms[reference]['runs'])
@@ -327,28 +337,31 @@ def count(args, runner=run_process):
 
 
 def measure(args, runner=run_process):
-    arms = [('off', args.exe, 'off'), ('basic', args.exe, 'basic'), ('full', args.exe, 'full')]
+    arms = [('off', args.exe, 'off', []), ('basic', args.exe, 'basic', []), ('full', args.exe, 'full', [])]
+    arms += [('validation-' + v, args.exe, 'off', ['--validation', v]) for v in VALIDATIONS]
     if args.baseline_exe:
-        arms.insert(0, ('compiled-out', args.baseline_exe, 'off'))
+        arms.insert(0, ('compiled-out', args.baseline_exe, 'off', []))
     arms = [a for a in arms if a[0] in args.arms]
     if not arms:
         raise OverheadError('no arm selected')
+    if any(extra for _, _, _, extra in arms) and args.workloads != ['render']:
+        raise OverheadError('the validation arms measure the render workload alone')
     scratch = Path(args.scratch).resolve()
     frames = args.iterations + args.warmup
-    board = board_head(SCHEMA, args, {name: exe for name, exe, _ in arms},
+    board = board_head(SCHEMA, args, {name: exe for name, exe, _, _ in arms},
                        {'processes': args.processes, 'iterations': args.iterations, 'warmup': args.warmup,
                         'captures': args.captures, 'threads': args.threads, 'affinity': args.affinity,
                         'bootstrap': BOOTSTRAP, 'seed': SEED})
     for workload in args.workloads:
-        runs = {name: [] for name, _, _ in arms}
+        runs = {name: [] for name, _, _, _ in arms}
         failures = []
         for repetition in range(args.processes):
-            for name, exe, mode in arm_order(arms, repetition):
+            for name, exe, mode, extra in arm_order(arms, repetition):
                 directory = scratch / ('%s-%s-%d' % (workload, name, repetition))
                 directory.mkdir(parents=True, exist_ok=True)
                 command = [str(exe), '--workload', workload, '--mode', mode, '--iterations', str(args.iterations),
                            '--warmup', str(args.warmup), '--captures', str(args.captures), '--threads',
-                           str(args.threads), '--scratch', str(directory)]
+                           str(args.threads), '--scratch', str(directory)] + extra
                 if args.affinity:
                     command += ['--affinity', args.affinity]
                 code, stdout, stderr = runner(command, args.timeout)
@@ -403,7 +416,7 @@ def render(boards):
             by_arm = {'compiled-out': None, 'off': verdicts.get('disabled'), 'basic': verdicts.get('basic'),
                       'full': verdicts.get('full')}
             for arm, summary in entry['arms'].items():
-                judged = by_arm.get(arm)
+                judged = by_arm[arm] if arm in by_arm else verdicts.get(arm)
                 cost = 'reference'
                 cpu_cost = ''
                 verdict_text = ''

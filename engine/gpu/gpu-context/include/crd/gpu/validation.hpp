@@ -80,6 +80,7 @@ enum class ValidationUnsupportedReason : crd::u8
     FeatureAbsent,          // a required device feature is missing (e.g. GPU-assisted needs stores/atomics)
     BackendHasNoEquivalent, // this backend has no such mode
     DeviceRejected,         // creation was rejected with the mode requested
+    SettledByLiveDevice,    // a process-wide setting a live device was created with (D3D12's debug layer and GBV)
 };
 
 [[nodiscard]] constexpr const char* to_string(ValidationUnsupportedReason r) noexcept
@@ -93,6 +94,7 @@ enum class ValidationUnsupportedReason : crd::u8
     case ValidationUnsupportedReason::FeatureAbsent:          return "feature-absent";
     case ValidationUnsupportedReason::BackendHasNoEquivalent: return "backend-has-no-equivalent";
     case ValidationUnsupportedReason::DeviceRejected:         return "device-rejected";
+    case ValidationUnsupportedReason::SettledByLiveDevice:    return "settled-by-live-device";
     }
     return "none";
 }

@@ -17,7 +17,8 @@
 //            1024 of them behind the camera) through the authored engine://frame/forward_csm graph, its shadow
 //            cascades on, into an offscreen target on a headless device (D3D12 on Windows, Vulkan elsewhere), 64
 //            instances moved every frame; the renderer, the world and the resources allocate from one heap, watched
-//            by the host in basic and full. One site per frame.
+//            by the host in basic and full. One site per frame. With --validation the device runs that validation
+//            under a message capture, and a mode the device does not run refuses the run.
 //   events   the site itself: 4096 sites per frame on one thread, the per-event cost of each mode.
 //
 // Every workload knows its answer: an iteration that computes anything else fails the run.
@@ -50,10 +51,12 @@
 #if defined(_WIN32)
 #include <crd/gpu/dx12_context.hpp>
 #include <crd/gpu/dx12_raster_context.hpp>
+#include <crd/gpu/dx12_validation_capture.hpp>
 #else
 #include <crd/gpu/vulkan_context.hpp>
 #include <crd/gpu/vulkan_raster_context.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
+#include <crd/gpu/vulkan_validation_capture.hpp>
 #endif
 
 #if CRD_PERF_ENABLED
@@ -748,7 +751,13 @@ public:
         m_world.reset();
         m_rm.reset();
         m_raster.reset();
+#if defined(_WIN32)
+        m_gpu.reset(); // the DX12 capture's lifecycle counts close with the last device
+        read_validation();
+#else
+        read_validation(); // the Vulkan capture's messenger lives on the context's instance
         m_gpu.reset();
+#endif
         if (!m_pack.empty())
         {
             (void)fs::remove_file(m_pack);
@@ -759,11 +768,17 @@ public:
 
     [[nodiscard]] u64 sites_per_iteration() const noexcept override { return 1U; }
     [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
+    [[nodiscard]] const ValidationOutcome* validation() const noexcept override
+    {
+        return m_outcome.has_value() ? &*m_outcome : nullptr;
+    }
 
 private:
     bool set_up(const WorkloadSetup& setup, cont::String& reason)
     {
         m_sites = setup.sites;
+        m_validation = setup.validation;
+        m_outcome.reset();
         if (setup.scratch == nullptr || setup.assets == nullptr)
         {
             reason.append("render needs --scratch (its mesh pack) and the engine asset root");
@@ -806,7 +821,7 @@ private:
             reason.append(setup.assets);
             return false;
         }
-        m_target = m_raster->create_color_depth_target(kRenderTarget, kRenderTarget);
+        m_target = m_raster->create_color_depth_target_for(kRenderTarget, kRenderTarget, m_renderer->output_clear());
         if (m_target == nullptr)
         {
             reason.append("the offscreen target could not be created");
@@ -834,18 +849,32 @@ private:
 
     bool open_device(cont::String& reason)
     {
-#if defined(_WIN32)
-        m_gpu    = crd::gpu::create_dx12_gpu_context();
-        m_raster = m_gpu != nullptr && m_gpu->valid() ? crd::gpu::create_dx12_raster_context() : nullptr;
-#else
         crd::gpu::GpuContextConfig config;
+        config.enable_validation = m_validation != Validation::None;
+        config.enable_sync_validation = m_validation == Validation::Sync;
+        config.enable_gpu_assisted_validation = m_validation == Validation::Gpu;
+#if defined(_WIN32)
+        if (config.enable_validation)
+        {
+            m_capture.emplace(crd::memory::default_allocator()); // before any device, or it misses the run
+        }
+        config.backend = crd::gpu::GpuBackend::Dx12;
+        m_gpu          = crd::gpu::create_dx12_gpu_context(crd::memory::default_allocator(), config);
+        m_raster       = m_gpu != nullptr && m_gpu->valid()
+                             ? crd::gpu::create_dx12_raster_context(crd::memory::default_allocator(), config)
+                             : nullptr;
+#else
         config.backend  = crd::gpu::GpuBackend::Vulkan;
         config.headless = true;
         m_gpu           = crd::gpu::create_vulkan_gpu_context(config);
         auto* const vk  = m_gpu != nullptr ? static_cast<crd::gpu::VulkanGpuContext*>(m_gpu.get()) : nullptr;
-        m_raster        = vk != nullptr && vk->graphics_capable() && vk->shader_object()
-                              ? crd::gpu::create_vulkan_raster_context(*vk)
-                              : nullptr;
+        if (vk != nullptr && config.enable_validation)
+        {
+            m_capture.emplace(*vk); // on the context's instance, before the raster context is made
+        }
+        m_raster = vk != nullptr && vk->graphics_capable() && vk->shader_object()
+                       ? crd::gpu::create_vulkan_raster_context(*vk)
+                       : nullptr;
 #endif
         if (m_raster == nullptr)
         {
@@ -853,7 +882,67 @@ private:
                           "objects (elsewhere)");
             return false;
         }
+        // A requested mode the device does not run refuses the run: its frames would measure nothing.
+        m_activation = m_raster->validation_activation();
+        // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+        const bool asked[] = {config.enable_validation, config.enable_sync_validation,
+                              config.enable_gpu_assisted_validation};
+        for (usize m = 0U; m < crd::gpu::kValidationModeCount; ++m)
+        {
+            if (asked[m] && !m_activation.active[m])
+            {
+                reason.append(validation_name(static_cast<Validation>(m + 1U)));
+                reason.append(" validation is not active: ");
+                reason.append(crd::gpu::to_string(m_activation.reason[m]));
+                return false;
+            }
+        }
         return true;
+    }
+
+    // What the capture saw over the whole run, a capture that missed part of it counted as an instrumentation
+    // failure; the capture then goes, before the context it observes.
+    void read_validation()
+    {
+        if (!m_capture.has_value())
+        {
+            return;
+        }
+        ValidationOutcome outcome;
+        outcome.activation = m_activation;
+#if defined(_WIN32)
+        const crd::gpu::Dx12ValidationReport native = m_capture->report();
+        outcome.report = crd::gpu::to_common(native);
+        if (native.contexts_started == 0U || native.contexts_started != native.contexts_finished ||
+            native.active_contexts != 0U)
+        {
+            ++outcome.report.instrumentation_failures;
+        }
+        for (u32 i = 0U; i < native.messages; ++i)
+        {
+            crd::gpu::Dx12ValidationMessage message;
+            if (m_capture->message(i, message) && message.severity != crd::gpu::Dx12ValidationSeverity::Info)
+            {
+                std::fprintf(stderr, "crd-diag-overhead: validation %u: %s\n", message.id, message.text);
+            }
+        }
+#else
+        outcome.report = m_capture->report();
+        if (crd::gpu::validation_layer_spec_version() == 0U)
+        {
+            ++outcome.report.instrumentation_failures;
+        }
+        for (const crd::gpu::ValidationMessage& message : m_capture->messages())
+        {
+            if (message.severity != crd::gpu::ValidationSeverity::Info)
+            {
+                std::fprintf(stderr, "crd-diag-overhead: validation %s: %s\n", message.message_id_name.c_str(),
+                             message.message_text.c_str());
+            }
+        }
+#endif
+        m_capture.reset();
+        m_outcome = outcome;
     }
 
     // The grid on z = 0 in front of the camera, then the instances behind it; the first row is kept to move.
@@ -930,8 +1019,16 @@ private:
     std::optional<crd::scenerender::SceneRenderer>    m_renderer;
     crd::scene::EntityId                              m_movers[kRenderMoved] = {}; // NOLINT(modernize-avoid-c-arrays)
     fs::Path                                          m_pack;
-    u32                                               m_frame    = 0U;
-    u64                                               m_expected = 0U;
+    u32                                               m_frame      = 0U;
+    u64                                               m_expected   = 0U;
+    Validation                                        m_validation = Validation::None;
+    crd::gpu::ValidationActivation                    m_activation{};
+    std::optional<ValidationOutcome>                  m_outcome;
+#if defined(_WIN32)
+    std::optional<crd::gpu::Dx12ValidationCapture> m_capture;
+#else
+    std::optional<crd::gpu::ValidationCapture> m_capture;
+#endif
 };
 
 // ---- events -----------------------------------------------------------------------------------------------------
@@ -994,6 +1091,22 @@ const char* mode_name(Mode m) noexcept
         return "basic";
     case Mode::Full:
         return "full";
+    }
+    return "?";
+}
+
+const char* validation_name(Validation v) noexcept
+{
+    switch (v)
+    {
+    case Validation::None:
+        return "none";
+    case Validation::Core:
+        return "core";
+    case Validation::Sync:
+        return "sync";
+    case Validation::Gpu:
+        return "gpu";
     }
     return "?";
 }

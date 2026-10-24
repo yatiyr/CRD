@@ -240,12 +240,12 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Command (Windows) | `set CRD_DX12_HARDWARE_FAULT_OPT_IN=1`; `build/win-debug/tests/gpu-context-dx12/crd-gpu-context-dx12-tests.exe "[.dx12-hardware-device-fault]" -s` |
 | Artifact | `gpu_<pid>_<tick>_<serial>_<attempt>.dmp`, a `DeviceRemoved` live dump: DX12's removal bundle with DRED breadcrumbs and page-fault allocations, or Vulkan's loss record (magic CRVL) with the first failure and the device-fault report; validation reports correlated to Cerid identities. |
 | Read | The in-flight pass DRED names, the page-fault allocation's Cerid identity, the loss origin (`Observed` or `Simulated`) and the first failure. Software adapters (WARP, lavapipe) are labelled as such. The hardware opt-in run above (one contained page fault in a child process, never in CI) recorded no fault on this machine's GPU on 2026-10-07; the route is explicitly unqualified. |
-| Next test | `ctest --test-dir build/win-debug -R "^DIAG\.7a"`; `ctest --test-dir build/win-debug -R "^DIAG\.7c"` |
+| Next test | `ctest --test-dir build/win-debug -R "^DIAG\.7a"`; `ctest --test-dir build/win-debug -R "^DIAG\.7c"`; `ctest --test-dir build/win-debug -R "^crd-diag-overhead-render-validation-"` |
 | Next test (Windows) | `ctest --test-dir build/win-debug -R "^DIAG\.7b"`; `ctest --test-dir build/win-debug -R "^DIAG\.9b: an injected device loss"` |
 | Hosted | The Windows lanes on the pinned WARP adapter; the Linux lanes on lavapipe with the pinned validation layer. |
 | Adopt | Name a native object with its identity through `format_debug_name(...)`; a host registers its contexts with the `gpu.resources` command. |
 | Example | `tests/gpu/gpu-context-dx12/test_dx12_device_fault.cpp` |
-| Cost | Device validation is a targeted mode outside the basic budget; its cost is not boarded ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Reported outside the basic budget: on the authored rendering workload, core validation costs +22.7% frame time and +40.0% CPU per frame on the D3D12 hardware adapter, +7.5% and +2.1% on lavapipe, synchronization +11.6% and +2.9% ([board](../bench/2026-10-24-diag-11b-device-validation.md)); GPU-assisted is not boarded yet ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
 | Owner | DIAG.7a, DIAG.7b, DIAG.7c |
 
 <a id="rb-program"></a>

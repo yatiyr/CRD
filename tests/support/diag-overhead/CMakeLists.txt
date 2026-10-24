@@ -63,9 +63,25 @@ foreach(_crd_workload alloc jobs offline io render events)
         list(APPEND _crd_overhead_tests "${_crd_name}")
     endforeach()
 endforeach()
+# The render workload under device validation (D3D12 has no synchronization validation): the requested modes active on
+# the device it draws with and no validation message over the run. GPU-assisted validation is DIAG.11b's next item.
+if(WIN32)
+    set(_crd_overhead_validations core)
+else()
+    set(_crd_overhead_validations core sync)
+endif()
+set(_crd_overhead_device_tests crd-diag-overhead-render-off crd-diag-overhead-render-basic crd-diag-overhead-render-full)
+foreach(_crd_validation IN LISTS _crd_overhead_validations)
+    set(_crd_name "crd-diag-overhead-render-validation-${_crd_validation}")
+    file(MAKE_DIRECTORY "${_crd_overhead_scratch}/render-validation-${_crd_validation}")
+    add_test(NAME "${_crd_name}"
+        COMMAND crd-diag-overhead --workload render --mode off --validation ${_crd_validation} --iterations 6
+                --warmup 2 --check --scratch "${_crd_overhead_scratch}/render-validation-${_crd_validation}")
+    list(APPEND _crd_overhead_tests "${_crd_name}")
+    list(APPEND _crd_overhead_device_tests "${_crd_name}")
+endforeach()
 set_tests_properties(${_crd_overhead_tests} PROPERTIES TIMEOUT 120 LABELS "diag;diag-overhead")
-set_tests_properties(crd-diag-overhead-render-off crd-diag-overhead-render-basic crd-diag-overhead-render-full
-    PROPERTIES RESOURCE_LOCK crd_gpu_device)
+set_tests_properties(${_crd_overhead_device_tests} PROPERTIES RESOURCE_LOCK crd_gpu_device)
 foreach(_crd_name IN LISTS _crd_overhead_tests)
     crd_test_target("${_crd_name}" crd-diag-overhead)
 endforeach()

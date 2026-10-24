@@ -1208,12 +1208,14 @@ public:
     {
         return std::make_unique<detail::CommandEncoder<Dx12RasterContext>>(*this);
     }
-    explicit Dx12RasterContext(crd::memory::IAllocator* allocator) : m_allocator(allocator)
+    Dx12RasterContext(crd::memory::IAllocator* allocator, const GpuContextConfig& config) : m_allocator(allocator)
     {
         if (allocator == nullptr)
         {
             return;
         }
+        m_validation.request_validation(config.enable_validation, config.enable_sync_validation,
+                                        config.enable_gpu_assisted_validation);
         if (FAILED(m_validation.create(m_device)))
         {
             return;
@@ -1414,6 +1416,10 @@ public:
     [[nodiscard]] bool valid() const noexcept override
     {
         return m_ok && SUCCEEDED(m_device->GetDeviceRemovedReason());
+    }
+    [[nodiscard]] ValidationActivation validation_activation() const noexcept override
+    {
+        return m_validation.activation();
     }
     [[nodiscard]] bool supports_vrs() const noexcept override // B1-e: Tier 2 = per-draw + per-primitive + image
     {
@@ -1650,18 +1656,31 @@ public:
 
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_target(crd::u32 width, crd::u32 height) override
     {
-        return make_color_depth_target(width, height, kDepthFormat);
+        return make_color_depth_target(width, height, kDepthFormat, standalone_clear());
+    }
+    [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_target_for(crd::u32 width, crd::u32 height,
+                                                                               const FgClearHint& clear) override
+    {
+        return make_color_depth_target(width, height, kDepthFormat, clear);
     }
 
     // REN-38-F11: colour + D24S8 - the target the authored stencil vocabulary draws against.
     [[nodiscard]] std::unique_ptr<IRasterTarget> create_color_depth_stencil_target(crd::u32 width,
                                                                                    crd::u32 height) override
     {
-        return make_color_depth_target(width, height, DXGI_FORMAT_D24_UNORM_S8_UINT);
+        return make_color_depth_target(width, height, DXGI_FORMAT_D24_UNORM_S8_UINT, standalone_clear());
     }
 
-    [[nodiscard]] std::unique_ptr<IRasterTarget> make_color_depth_target(crd::u32 width, crd::u32 height,
-                                                                         DXGI_FORMAT depth_fmt)
+    // The public draw defaults a standalone target is created for: opaque black, depth 1.
+    [[nodiscard]] static FgClearHint standalone_clear() noexcept
+    {
+        FgClearHint clear{};
+        clear.depth = 1.0F;
+        return clear;
+    }
+
+    [[nodiscard]] std::unique_ptr<IRasterTarget>
+    make_color_depth_target(crd::u32 width, crd::u32 height, DXGI_FORMAT depth_fmt, const FgClearHint& clear)
     {
         if (!m_ok || width == 0U || height == 0U)
         {
@@ -1683,22 +1702,21 @@ public:
         rd.Layout           = D3D12_TEXTURE_LAYOUT_UNKNOWN;
         rd.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
         ComPtr<ID3D12Resource> tex;
-        const D3D12_CLEAR_VALUE color_clear = optimized_clear_value(kColorFormat, false, FgClearHint{});
+        const D3D12_CLEAR_VALUE color_clear = optimized_clear_value(kColorFormat, false, clear);
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &rd, D3D12_RESOURCE_STATE_COMMON, &color_clear,
                                                      IID_PPV_ARGS(&tex))))
         {
             return nullptr;
         }
 
-        // Standalone targets use the public draw defaults (opaque black / depth 1). Authored graph images
-        // carry their own CEIR-derived hints. A hint is not initialization and never changes a requested clear.
+        // Created for `clear`: the public draw defaults, or the clear a frame graph applies to its output.
+        // Authored graph images carry their own CEIR-derived hints. A hint is not initialization and never
+        // changes a requested clear.
         D3D12_RESOURCE_DESC dd = rd;
         dd.Format              = depth_fmt;
         dd.Flags               = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
         ComPtr<ID3D12Resource> depth;
-        FgClearHint depth_hint{};
-        depth_hint.depth = 1.0F;
-        const D3D12_CLEAR_VALUE depth_clear = optimized_clear_value(depth_fmt, true, depth_hint);
+        const D3D12_CLEAR_VALUE depth_clear = optimized_clear_value(depth_fmt, true, clear);
         if (FAILED(m_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAG_NONE, &dd, D3D12_RESOURCE_STATE_DEPTH_WRITE,
                                                      &depth_clear, IID_PPV_ARGS(&depth))))
         {
@@ -10245,9 +10263,10 @@ std::unique_ptr<IFrameGraph> Dx12RasterContext::create_frame_graph()
     return std::make_unique<Dx12FrameGraph>(*this);
 }
 
-std::unique_ptr<IRasterContext> create_dx12_raster_context(crd::memory::IAllocator* alloc)
+std::unique_ptr<IRasterContext> create_dx12_raster_context(crd::memory::IAllocator* alloc,
+                                                           const GpuContextConfig& config)
 {
-    auto ctx = std::make_unique<Dx12RasterContext>(alloc);
+    auto ctx = std::make_unique<Dx12RasterContext>(alloc, config);
     if (!ctx->valid())
     {
         return nullptr;

@@ -20,6 +20,7 @@
 
 #include <crd/containers/string.hpp>
 #include <crd/core/types.hpp>
+#include <crd/gpu/validation.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
@@ -47,6 +48,27 @@ enum class Mode : crd::u8
 // "off", "basic", "full".
 [[nodiscard]] const char* mode_name(Mode m) noexcept;
 
+// The device validation the render workload's device runs with (--validation): none, the core layer, or the core
+// layer and one more mode. ADR-0133 reports its cost apart from the modes' budgets (DIAG.11b clause (9)).
+enum class Validation : crd::u8
+{
+    None,
+    Core,
+    Sync,
+    Gpu,
+};
+
+// "none", "core", "sync", "gpu".
+[[nodiscard]] const char* validation_name(Validation v) noexcept;
+
+// What the device validation saw, read at teardown once every context it covers is destroyed. A capture that missed
+// part of the run (installed after a device, no layer loaded) is an instrumentation failure, so it never reads clean.
+struct ValidationOutcome
+{
+    crd::gpu::ValidationActivation activation{};
+    crd::gpu::ValidationReport report{};
+};
+
 // The application event codes the workloads' sites record, above the foundation range.
 inline constexpr cp::EventCode kCodeFirst      = 0x00A20000U;
 inline constexpr cp::EventCode kCodeLast       = 0x00A2FFFFU;
@@ -67,13 +89,14 @@ struct Sites
 
 struct WorkloadSetup
 {
-    Mode                mode    = Mode::Off;
-    cp::DiagnosticHost* host    = nullptr; // started in basic and full; null in off
-    Sites*              sites   = nullptr;
-    crd::u32            threads = 8U;      // jobs workload: the pool's threads (io runs two)
-    const char*         program = nullptr; // offline workload: the authored CEIR program
-    const char*         scratch = nullptr; // io and render: the directory their files are written to (--scratch)
-    const char*         assets  = nullptr; // render workload: the engine asset root its authored frame graph is in
+    Mode                mode       = Mode::Off;
+    cp::DiagnosticHost* host       = nullptr; // started in basic and full; null in off
+    Sites*              sites      = nullptr;
+    crd::u32            threads    = 8U;      // jobs workload: the pool's threads (io runs two)
+    const char*         program    = nullptr; // offline workload: the authored CEIR program
+    const char*         scratch    = nullptr; // io and render: the directory their files are written to (--scratch)
+    const char*         assets     = nullptr; // render workload: the engine asset root its authored frame graph is in
+    Validation          validation = Validation::None; // render workload: its device's validation (--validation)
 };
 
 class Workload
@@ -118,6 +141,8 @@ public:
     // host's watch over it), alive until teardown(). No mode requests its statistics, so the harness holds them to
     // what the build counts unasked: everything on CRD_DEBUG builds, nothing on the others (DIAG.11b).
     [[nodiscard]] virtual const crd::memory::IAllocator* measured_allocator() const noexcept { return nullptr; }
+    // After teardown: what the device validation the setup asked for saw; null when none was asked for.
+    [[nodiscard]] virtual const ValidationOutcome* validation() const noexcept { return nullptr; }
 };
 
 // The workloads by name ("alloc", "jobs", "offline", "io", "render", "events"); null for an unknown name. The object is

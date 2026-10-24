@@ -394,16 +394,20 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
     m_activation.requested[2] = m_req_gbv;
     bool debug_ok  = false;
     bool debug1_ok = false;
+    // DIAG.11b: a D3D12 device is a per-adapter singleton; changing GBV while a scope's device lives made this creation
+    // fail with DXGI_ERROR_DEVICE_RESET. While one lives, the new device takes the live debug layer and GBV settings,
+    // and a requested mode they lack is reported SettledByLiveDevice.
+    const bool settled = state.live_contexts != 0U;
     {
         const bool any_req = m_req_core || m_req_sync || m_req_gbv;
         // DIAG.7b(g): a scope requesting nothing must still turn an earlier scope's GBV off, or GBV instruments every
         // later device (measured: its descriptor-heap shadow memory exhausted a frame-graph heap -> driver fault).
-        const bool reset_gbv = !m_req_gbv && state.gpu_based_validation;
+        const bool reset_gbv = !settled && !m_req_gbv && state.gpu_based_validation;
         Microsoft::WRL::ComPtr<ID3D12Debug> debug;
         debug_ok = (any_req || reset_gbv) && SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)));
         if (debug_ok)
         {
-            if ((m_req_core || m_req_gbv) && !state.enabled)
+            if ((m_req_core || m_req_gbv) && !state.enabled && !settled)
             {
                 debug->EnableDebugLayer();
                 state.enabled = true;
@@ -413,7 +417,7 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
             {
                 debug1_ok = true;
                 // Explicit set (not TRUE-only-if-requested) so GBV never leaks into a later context's device.
-                if (state.gpu_based_validation != m_req_gbv)
+                if (!settled && state.gpu_based_validation != m_req_gbv)
                 {
                     debug1->SetEnableGPUBasedValidation(m_req_gbv ? TRUE : FALSE);
                     state.gpu_based_validation = m_req_gbv;
@@ -460,9 +464,14 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         const bool core_active = m_req_core && SUCCEEDED(output.As(&iq));
         va.active[0] = core_active;
         va.reason[0] = ValidationUnsupportedReason::NotRequested;
-        if (m_req_core)
+        if (m_req_core && !core_active)
         {
-            va.reason[0] = core_active ? ValidationUnsupportedReason::None : ValidationUnsupportedReason::LayerAbsent;
+            va.reason[0] = settled && !state.enabled ? ValidationUnsupportedReason::SettledByLiveDevice
+                                                     : ValidationUnsupportedReason::LayerAbsent;
+        }
+        else if (m_req_core)
+        {
+            va.reason[0] = ValidationUnsupportedReason::None;
         }
         va.active[1] = false;
         va.reason[1] = m_req_sync ? ValidationUnsupportedReason::BackendHasNoEquivalent
@@ -477,6 +486,10 @@ HRESULT detail::Dx12DeviceScope::create(ComPtr<ID3D12Device>& output, IUnknown* 
         else if (m_req_gbv && !debug1_ok)
         {
             va.reason[2] = ValidationUnsupportedReason::ExtensionAbsent;
+        }
+        else if (m_req_gbv && settled && !gbv_active)
+        {
+            va.reason[2] = ValidationUnsupportedReason::SettledByLiveDevice;
         }
         else if (m_req_gbv)
         {

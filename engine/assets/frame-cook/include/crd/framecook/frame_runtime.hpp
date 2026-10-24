@@ -409,6 +409,9 @@ struct FramePlans
         bool depth_set = false;
     };
     crd::containers::Array<ClearHint> clear_hints;
+    // The same for the imported `@output` target, which the host creates: the clear it should be created for
+    // (IRasterContext::create_color_depth_target_for), or D3D12 clears it slowly and warns every frame (DIAG.11b).
+    ClearHint output_clear{};
     crd::memory::IAllocator* alloc = nullptr;
 };
 

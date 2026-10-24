@@ -1778,22 +1778,48 @@ TEST_CASE("DIAG.7a(f-3): DX12 reports per-mode validation activation", "[dx12][v
     CHECK(va.unsupported_reason(g::ValidationMode::Synchronization)
           == g::ValidationUnsupportedReason::BackendHasNoEquivalent);
 
+    // DIAG.11b: the raster context requests the same modes for its own device through its factory's config.
+    {
+        auto raster = g::create_dx12_raster_context(crd::memory::default_allocator(), cfg);
+        REQUIRE(raster != nullptr);
+        const g::ValidationActivation ra = raster->validation_activation();
+        REQUIRE(ra.consistent());
+        CHECK(ra.is_active(g::ValidationMode::Core));
+        CHECK(ra.is_active(g::ValidationMode::GpuAssisted));
+        CHECK(ra.unsupported_reason(g::ValidationMode::Synchronization) ==
+              g::ValidationUnsupportedReason::BackendHasNoEquivalent);
+    }
+
     // A context that requests NOTHING reports every mode NotRequested / inactive. (The process-global GBV reset itself is
     // not observable from this report; the no-leak proof is [identity][naming] holding its baseline after this test runs.)
     g::GpuContextConfig plain;
     plain.backend = g::GpuBackend::Dx12;
+    // DIAG.11b: it is created while the GBV device above lives, and so is a raster context after it.
     auto ctx2 = g::create_dx12_gpu_context(&allocator, plain);
-    if (ctx2 != nullptr && ctx2->valid())
+    REQUIRE(ctx2 != nullptr);
+    REQUIRE(ctx2->valid());
+    const g::ValidationActivation va2 = ctx2->validation_activation();
+    REQUIRE(va2.consistent());
+    for (crd::usize i = 0; i < g::kValidationModeCount; ++i)
     {
-        const g::ValidationActivation va2 = ctx2->validation_activation();
-        REQUIRE(va2.consistent());
-        for (crd::usize i = 0; i < g::kValidationModeCount; ++i)
-        {
-            CHECK_FALSE(va2.requested[i]);
-            CHECK_FALSE(va2.active[i]);
-            CHECK(va2.reason[i] == g::ValidationUnsupportedReason::NotRequested);
-        }
+        CHECK_FALSE(va2.requested[i]);
+        CHECK_FALSE(va2.active[i]);
+        CHECK(va2.reason[i] == g::ValidationUnsupportedReason::NotRequested);
     }
+    REQUIRE(g::create_dx12_raster_context() != nullptr);
+
+    // Once only a device created without GBV lives, a GBV request cannot apply (turning GBV on beside it failed the
+    // creation with DXGI_ERROR_DEVICE_RESET): it is refused by name and the device is made.
+    ctx.reset();
+    ctx2.reset();
+    auto without_gbv = g::create_dx12_gpu_context(&allocator, plain);
+    REQUIRE(without_gbv != nullptr);
+    auto late = g::create_dx12_raster_context(crd::memory::default_allocator(), cfg);
+    REQUIRE(late != nullptr);
+    const g::ValidationActivation la = late->validation_activation();
+    REQUIRE(la.consistent());
+    CHECK_FALSE(la.is_active(g::ValidationMode::GpuAssisted));
+    CHECK(la.unsupported_reason(g::ValidationMode::GpuAssisted) == g::ValidationUnsupportedReason::SettledByLiveDevice);
 }
 
 // DIAG.7a(g-5): the DX12 CORE resource route -- the 2nd-backend claimed route. DX12 has no object list; the debug layer

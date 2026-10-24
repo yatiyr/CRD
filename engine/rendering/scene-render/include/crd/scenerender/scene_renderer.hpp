@@ -743,6 +743,10 @@ public:
     // id REFUSES (returns false, KEEPS the previous frame) and reports a NAMED diagnostic. (RAF-12 retired the
     // relative-name `set_frame_graph_asset` wrapper — a frame is selected by canonical id, never a relative path.)
     [[nodiscard]] bool set_frame_graph(const char* canonical_id);
+    // The clear the installed frame graph first applies to its `@output` target, for the host to create that target
+    // with (IRasterContext::create_color_depth_target_for): a part the graph does not clear keeps the standalone
+    // default (opaque black, depth 1). DIAG.11b: on D3D12 a target cleared to another value clears slowly and warns.
+    [[nodiscard]] crd::gpu::FgClearHint output_clear() const noexcept;
     // ⭐⭐ RAF-11: HOT RELOAD a render asset by canonical id — re-read its source, re-cook it, and (if the cooked
     // content changed) install a new immutable GENERATION at the next frame boundary, rebuilding every dependent in
     // dependency order. On any cook/validate failure — including an interface change a dependent can no longer bind —

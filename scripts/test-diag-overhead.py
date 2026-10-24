@@ -5,8 +5,9 @@ The measurement itself runs crd-diag-overhead on a build. These tests need no bu
 every verdict with fake processes, including the ones a quiet machine never produces: a cost interval straddling its
 budget (unresolved, never a pass), a cost over it, a CPU per frame over its budget or noisier than it while the frame
 time is within (the worse verdict decides), a process that exits nonzero, prints no record or CPU time, computes a
-wrong answer or loses a capture (an instrument failure that takes the workload's verdicts with it), and a board
-rendered twice the same way (the bootstrap seed is fixed). The instruction board's fake cachegrind files check that
+wrong answer or loses a capture (an instrument failure that takes the workload's verdicts with it), a device
+validation arm reported over off and failed by any message it saw, and a board rendered twice the same way (the
+bootstrap seed is fixed). The instruction board's fake cachegrind files check that
 setup cancels between the two frame counts, that repeats which disagree widen the interval to unresolved, and that a
 failed run takes the verdict.
 Run: python scripts/test-diag-overhead.py
@@ -24,7 +25,7 @@ _spec.loader.exec_module(mod)
 
 
 def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None,
-           warmup=1):
+           warmup=1, validation='none', errors=0):
     """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
     False when it was not read."""
     per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
@@ -36,6 +37,8 @@ def record(workload, mode, samples, wrong=0, captures=3, delivered=None, residen
                          'failures': 0, 'bytes_written': 100, 'longest_ns': 5},
             'memory': {'read': True, 'resident_before': resident[0], 'resident_frames': resident[1],
                        'resident_peak': resident[1], 'recorder_ring_bytes': ring},
+            'validation': {'requested': validation} if validation == 'none' else {
+                'requested': validation, 'errors': errors, 'warnings': 0, 'lost': 0, 'instrumentation_failures': 0},
             'lifetime': {}, 'host': {}, 'build': {}}
 
 
@@ -74,6 +77,8 @@ class FakeRunner:
         exe = command[0]
         mode = command[command.index('--mode') + 1]
         arm = 'compiled-out' if exe == 'compiled-out' else mode
+        validation = command[command.index('--validation') + 1] if '--validation' in command else 'none'
+        arm = arm if validation == 'none' else 'validation-' + validation
         repetition = sum(1 for c in self.calls if c == arm)
         self.calls.append(arm)
         if (arm, repetition) in self.special:
@@ -84,7 +89,8 @@ class FakeRunner:
         samples = [int(base) - 2, int(base) - 1, int(base), int(base) + 1, int(base) + 2]
         cpu = None if self.cpu is None else self.cpu[arm] * (1.0 + sign * self.cpu_jitter)
         ring = 155648 if arm in ('basic', 'full') else 0
-        return 0, 'noise line\n' + json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu)) + '\n', ''
+        text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation))
+        return 0, 'noise line\n' + text + '\n', ''
 
 
 class Statistics(unittest.TestCase):
@@ -132,6 +138,8 @@ class Statistics(unittest.TestCase):
         self.assertIn('captures', mod.record_problem(record('alloc', 'off', [1, 2], delivered=1), 3))
         self.assertEqual(mod.record_problem(record('alloc', 'off', [1, 2], cpu=False), 3), 'no process CPU time')
         self.assertEqual(mod.record_problem(None, 3), 'no record')
+        self.assertIsNone(mod.record_problem(record('render', 'off', [1, 2], validation='gpu'), 3))
+        self.assertIn('errors 1', mod.record_problem(record('render', 'off', [1, 2], validation='gpu', errors=1), 3))
 
 
 class Boards(unittest.TestCase):
@@ -208,6 +216,23 @@ class Boards(unittest.TestCase):
             self.assertEqual(entry['verdicts'][name]['verdict'], 'reported', name)
         self.assertIsNone(entry['verdicts']['basic']['budget'])
         self.assertEqual(entry['arms']['basic']['site_p50_ns'], 9000 / 2.0) # 4 sites in 2 frames per record
+
+    def test_a_validation_arm_is_reported_over_off_and_a_message_fails_its_run(self):
+        medians = {'off': 100000, 'validation-core': 130000, 'validation-gpu': 250000}
+        arms = ['off', 'validation-core', 'validation-gpu']
+        board = self.measure(FakeRunner(medians), workloads=['render'], baseline_exe=None, arms=arms)
+        verdicts = board['workloads']['render']['verdicts']
+        self.assertEqual(verdicts['validation-gpu']['verdict'], 'reported')
+        self.assertIsNone(verdicts['validation-gpu']['budget'])
+        self.assertAlmostEqual(verdicts['validation-gpu']['cost'], 1.5, places=6)
+        self.assertNotIn('validation-sync', verdicts)
+        self.assertIn('| validation-core |', mod.render([board]))
+        failed = record('render', 'off', [1, 2, 3, 4, 5], validation='gpu', errors=1)
+        board = self.measure(FakeRunner(medians, {('validation-gpu', 3): (0, json.dumps(failed), '')}),
+                             workloads=['render'], baseline_exe=None, arms=arms)
+        self.assertEqual(board['workloads']['render']['failures'][0]['arm'], 'validation-gpu')
+        with self.assertRaises(mod.OverheadError):
+            self.measure(FakeRunner(medians), workloads=['alloc'], baseline_exe=None, arms=arms)
 
     def test_render_is_stable_and_names_every_arm(self):
         board = self.measure(FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000}))

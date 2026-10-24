@@ -4116,6 +4116,25 @@ ProgramSource SceneRenderer::resolve_program_text(const char* rel, crd::containe
     return m_impl->program_source(rel, out);
 }
 
+crd::gpu::FgClearHint SceneRenderer::output_clear() const noexcept
+{
+    crd::gpu::FgClearHint clear{};
+    clear.depth = 1.0F;
+    const crd::framecook::FramePlans* const plans = m_impl != nullptr ? m_impl->frame_plans.get() : nullptr;
+    if (plans != nullptr && plans->output_clear.color_set)
+    {
+        for (crd::u32 i = 0; i < 4U; ++i)
+        {
+            clear.color[i] = plans->output_clear.value.color[i];
+        }
+    }
+    if (plans != nullptr && plans->output_clear.depth_set)
+    {
+        clear.depth = plans->output_clear.value.depth;
+    }
+    return clear;
+}
+
 const crd::gpu::IFrameGraph* SceneRenderer::debug_frame_graph() const noexcept
 {
     return m_impl != nullptr ? m_impl->frame_graph.get() : nullptr;

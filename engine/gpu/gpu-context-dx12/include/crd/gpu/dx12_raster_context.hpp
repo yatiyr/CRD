@@ -9,6 +9,7 @@
 // C4-a (this slice): graphics device + queue + offscreen RGBA8 targets + a CLEAR with pixel readback (the render-target /
 // RTV / readback plumbing, green). C4-b appends the shader DRAW (a graphics pipeline from a VS+FS DXIL pair + `DrawInstanced`).
 
+#include <crd/gpu/context.hpp> // GpuContextConfig: the validation request
 #include <crd/gpu/raster_context.hpp>
 
 #include <crd/memory/allocator.hpp>
@@ -21,8 +22,11 @@ namespace crd::gpu
 // Create a D3D12 raster context. Returns nullptr if D3D12 / a graphics device is unavailable (non-Windows, no adapter).
 // The returned object is an `IRasterContext`; a consumer never sees D3D12.
 // The allocator owns frame-descriptor page metadata and must outlive the context and its graphs. Null is rejected.
+// `config`'s validation flags request the device's per-mode validation (DIAG.11b), as create_dx12_gpu_context does;
+// the result is the context's validation_activation().
 [[nodiscard]] std::unique_ptr<IRasterContext>
-create_dx12_raster_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator());
+create_dx12_raster_context(crd::memory::IAllocator* alloc = crd::memory::default_allocator(),
+                           const GpuContextConfig& config = {});
 
 // ⭐ REN-39-D2: the DX12 twin of `vulkan_present_*` — the handful of native handles a BACKEND-AWARE consumer
 // (the ImGui render backend, and nothing else) needs, handed over as opaque pointers so no caller has to include

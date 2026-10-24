@@ -3,6 +3,7 @@
 //   crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> --mode <off|basic|full>
 //                     [--iterations N] [--warmup N] [--captures K] [--threads T] [--affinity <hex mask>]
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
+//                     [--validation <core|sync|gpu>]
 //
 // One process measures one workload in one mode and prints one JSON record (schema cerid-diag-overhead/1) on stdout:
 // the build, the host's modes, every timed iteration in nanoseconds, the CPU every thread used over the timed
@@ -26,6 +27,8 @@
 //                as filtered and none recorded; every requested capture delivered (and written, with --scratch).
 //   full         every payload evaluated once per site; every site and frame event recorded and none filtered; the
 //                profiler counted every frame (where profiling is compiled); every requested capture delivered.
+//   --validation (render only) the device validation saw the whole run and reported no error, warning or lost
+//                message. Its cost is reported, not budgeted (ADR-0133: GPU-assisted validation accounts separately).
 //
 // Exit codes: 0 measured (and checked), 1 a check failed, 2 usage, 3 the mode or the workload could not be set up.
 
@@ -98,19 +101,20 @@ constexpr crd::memory::StatisticsCoverage kUnaskedCoverage = crd::memory::Statis
 
 struct Options
 {
-    const char* workload   = nullptr;
-    dov::Mode   mode       = dov::Mode::Off;
-    bool        mode_given = false;
-    u32         iterations = kDefaultIters;
-    u32         warmup     = kDefaultWarmup;
-    u32         captures   = kDefaultCapture;
-    u32         threads    = 8U;
-    u64         affinity   = 0U;
-    const char* scratch    = nullptr;
-    const char* policy_dir = CRD_DIAG_OVERHEAD_ASSETS;
-    const char* program    = nullptr;
-    bool        keep       = false;
-    bool        check      = false;
+    const char*     workload   = nullptr;
+    dov::Mode       mode       = dov::Mode::Off;
+    bool            mode_given = false;
+    u32             iterations = kDefaultIters;
+    u32             warmup     = kDefaultWarmup;
+    u32             captures   = kDefaultCapture;
+    u32             threads    = 8U;
+    u64             affinity   = 0U;
+    const char*     scratch    = nullptr;
+    const char*     policy_dir = CRD_DIAG_OVERHEAD_ASSETS;
+    const char*     program    = nullptr;
+    bool            keep       = false;
+    bool            check      = false;
+    dov::Validation validation = dov::Validation::None;
 };
 
 bool same(const char* a, const char* b)
@@ -135,7 +139,8 @@ int usage(const char* why)
     std::fprintf(stderr,
                  "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> "
                  "--mode <off|basic|full> [--iterations N] [--warmup N] [--captures K] [--threads T] "
-                 "[--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] [--program <file>] [--keep] [--check]\n",
+                 "[--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] [--program <file>] [--keep] [--check] "
+                 "[--validation <core|sync|gpu>]\n",
                  why);
     return 2;
 }
@@ -220,6 +225,18 @@ bool parse(int argc, char** argv, Options& o, const char*& error)
         else if (same(a, "--program"))
         {
             o.program = value;
+        }
+        else if (same(a, "--validation"))
+        {
+            ok = false;
+            for (const dov::Validation v : {dov::Validation::Core, dov::Validation::Sync, dov::Validation::Gpu})
+            {
+                if (same(value, dov::validation_name(v)))
+                {
+                    o.validation = v;
+                    ok = true;
+                }
+            }
         }
         else
         {
@@ -458,6 +475,10 @@ int main(int argc, char** argv)
     {
         return usage("unknown workload");
     }
+    if (o.validation != dov::Validation::None && !same(workload->name(), "render"))
+    {
+        return usage("--validation applies to the render workload");
+    }
     if (o.mode != dov::Mode::Off && o.scratch == nullptr)
     {
         return usage("basic and full need --scratch <existing dir> (crash and capture directory)");
@@ -520,13 +541,14 @@ int main(int argc, char** argv)
 
     // ---- the workload --------------------------------------------------------------------------------------------
     dov::WorkloadSetup setup;
-    setup.mode    = o.mode;
-    setup.host    = host_started ? &host : nullptr;
-    setup.sites   = &sites;
-    setup.threads = o.threads;
-    setup.program = o.program;
-    setup.scratch = o.scratch;
-    setup.assets  = CRD_DIAG_OVERHEAD_ENGINE_ASSETS;
+    setup.mode       = o.mode;
+    setup.host       = host_started ? &host : nullptr;
+    setup.sites      = &sites;
+    setup.threads    = o.threads;
+    setup.program    = o.program;
+    setup.scratch    = o.scratch;
+    setup.assets     = CRD_DIAG_OVERHEAD_ENGINE_ASSETS;
+    setup.validation = o.validation;
     if (!workload->setup(setup, reason))
     {
         std::fprintf(stderr, "crd-diag-overhead: the workload did not set up: %s\n", reason.c_str());
@@ -656,6 +678,7 @@ int main(int argc, char** argv)
 
     // ---- teardown ------------------------------------------------------------------------------------------------
     workload->teardown();
+    const dov::ValidationOutcome* const validated = workload->validation();
 #if CRD_PERF_ENABLED
     if (perf_started)
     {
@@ -723,6 +746,11 @@ int main(int argc, char** argv)
             checks.expect(filtered == 0U, "full: an event was filtered");
             checks.expect(delivered == o.captures && failures == 0U, "full: a capture was not delivered");
             checks.expect(!CRD_PERF_ENABLED || profiler_frames == frames_total, "full: the profiler missed a frame");
+        }
+        if (o.validation != dov::Validation::None)
+        {
+            checks.expect(validated != nullptr && validated->report.clean(),
+                          "validation: a message was reported or lost, or the capture missed part of the run");
         }
     }
 
@@ -811,6 +839,20 @@ int main(int argc, char** argv)
     j.u("allocations", stats.alloc_count);
     j.u("deallocations", stats.dealloc_count);
     j.u("bytes_in_use", stats.bytes_in_use);
+    j.close('}');
+    j.open("validation", '{');
+    j.str("requested", dov::validation_name(o.validation));
+    if (validated != nullptr)
+    {
+        j.b("core", validated->activation.active[0]);
+        j.b("sync", validated->activation.active[1]);
+        j.b("gpu", validated->activation.active[2]);
+        j.u("errors", validated->report.error);
+        j.u("warnings", validated->report.warning);
+        j.u("info", validated->report.info);
+        j.u("lost", validated->report.dropped + validated->report.truncated);
+        j.u("instrumentation_failures", validated->report.instrumentation_failures);
+    }
     j.close('}');
     j.open("lifetime", '{');
     lifetime_window(j, "mode_setup", before_mode, after_mode);

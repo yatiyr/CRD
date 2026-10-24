@@ -582,7 +582,7 @@ int main(int argc, char** argv)
         }
     }
 
-    auto canvas = raster->create_color_depth_target(surface->width(), surface->height());
+    auto canvas = raster->create_color_depth_target_for(surface->width(), surface->height(), renderer.output_clear());
     if (canvas == nullptr)
     {
         CRD_LOG_ERROR(g_log_gizmo, "Canvas creation failed");
@@ -670,7 +670,8 @@ int main(int argc, char** argv)
             win_h = cur_h;
             if (surface->resize(win_w, win_h))
             {
-                canvas = raster->create_color_depth_target(surface->width(), surface->height());
+                canvas =
+                    raster->create_color_depth_target_for(surface->width(), surface->height(), renderer.output_clear());
                 if (canvas == nullptr)
                 {
                     break;

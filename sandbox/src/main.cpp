@@ -1659,8 +1659,10 @@ int main(int argc, char** argv)
         CRD_LOG_WARN(g_log_sandbox, "Scene renderer unavailable — falling back to overlay-only");
     }
 
-    // the canvas now carries DEPTH — the scene pass writes it; the overlay depth-tests against it
-    auto canvas = raster->create_color_depth_target(surface->width(), surface->height());
+    // the canvas now carries DEPTH — the scene pass writes it; the overlay depth-tests against it. It is created
+    // for the installed frame's output clear and again whenever another frame is installed (DIAG.11b).
+    auto canvas =
+        raster->create_color_depth_target_for(surface->width(), surface->height(), scene_renderer.output_clear());
     if (canvas == nullptr)
     {
         CRD_LOG_ERROR(g_log_sandbox, "Canvas creation failed");
@@ -1994,7 +1996,8 @@ int main(int argc, char** argv)
             taa_has_prev = false;
             if (surface->resize(win_w, win_h))
             {
-                canvas = raster->create_color_depth_target(surface->width(), surface->height());
+                canvas = raster->create_color_depth_target_for(surface->width(), surface->height(),
+                                                               scene_renderer.output_clear());
                 if (canvas == nullptr)
                 {
                     break;
@@ -2154,6 +2157,15 @@ int main(int argc, char** argv)
             CRD_LOG_INFO(g_log_sandbox, "38-G1 frame '{}' -> {}", post_frames[post_mode == 1 ? 1 : 0],
                          ok ? "installed" : "REJECTED");
             post_mode_live = post_mode;
+            if (ok)
+            {
+                canvas = raster->create_color_depth_target_for(surface->width(), surface->height(),
+                                                               scene_renderer.output_clear());
+                if (canvas == nullptr)
+                {
+                    break;
+                }
+            }
         }
         if (scene_ready)
         {

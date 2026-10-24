@@ -1629,6 +1629,10 @@ public:
     VulkanRasterContext& operator=(VulkanRasterContext&&)      = delete;
 
     [[nodiscard]] bool valid() const noexcept override { return m_queue != VK_NULL_HANDLE && m_pool != VK_NULL_HANDLE; }
+    [[nodiscard]] ValidationActivation validation_activation() const noexcept override
+    {
+        return m_ctx->validation_activation();
+    }
     [[nodiscard]] bool supports_vrs() const noexcept override { return m_set_vrs != nullptr; } // B1-e
     [[nodiscard]] bool supports_conservative_raster() const noexcept override { return m_set_conservative != nullptr; }
     // B1-f: on Vulkan the inner-coverage builtin (FullyCoveredEXT) + underestimate mode both ride VK_EXT_conservative_
@@ -8002,6 +8006,12 @@ private:
     // barrier at open orders the copies after the PREVIOUS frame's shader reads, the barrier at close makes
     // them visible to every consumer stage. ⛔ No host wait anywhere on the fast path — that wait, per upload,
     // was 8.3 ms of a 16 ms frame.
+    struct CopyRange
+    {
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceSize begin = 0U;
+        VkDeviceSize end = 0U;
+    };
     struct UploadBatch
     {
         BufferBundle    ring{};
@@ -8011,6 +8021,10 @@ private:
         VkFence         fence     = VK_NULL_HANDLE;
         bool            submitted = false;
         ObjectIdentity  identity{}; // DIAG.7a(d2b-vk): the one logical Resource identity for this slot's staging ring
+        // DIAG.11b: the destinations copied since the batch's last barrier. A copy overlapping one waits for it, the
+        // order the synchronous path keeps (synchronization validation: overlapping writes to one storage buffer
+        // in every frame of the authored forward graph).
+        crd::containers::Array<CopyRange> written;
     };
     static constexpr crd::u32 kUploadBatches   = 2U;
     static constexpr crd::u32 kUploadRingBytes = 8U << 20U; // initial; grows by doubling on demand
@@ -8105,7 +8119,8 @@ private:
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_DRAW_INDIRECT_BIT |
                                  VK_PIPELINE_STAGE_VERTEX_INPUT_BIT,
                              VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1U, &war, 0, nullptr, 0, nullptr);
-        b.used       = 0U;
+        b.used = 0U;
+        b.written.clear();
         m_batch_open = true;
     }
 
@@ -8188,6 +8203,19 @@ private:
             return upload_batched(sb, byte_offset, data, size_bytes);
         }
         std::memcpy(static_cast<crd::u8*>(b.ring.mapped) + b.used, data, size_bytes);
+        const CopyRange to{sb.buf(), byte_offset, static_cast<VkDeviceSize>(byte_offset) + size_bytes};
+        if (std::ranges::any_of(b.written, [&to](const CopyRange& w)
+                                { return w.buffer == to.buffer && w.begin < to.end && to.begin < w.end; }))
+        {
+            VkMemoryBarrier waw{};
+            waw.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+            waw.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            waw.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            vkCmdPipelineBarrier(b.cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1U, &waw, 0,
+                                 nullptr, 0, nullptr);
+            b.written.clear();
+        }
+        b.written.push_back(to);
         VkBufferCopy region{};
         region.srcOffset = b.used;
         region.dstOffset = byte_offset;

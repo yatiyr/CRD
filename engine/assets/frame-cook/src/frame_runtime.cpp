@@ -1845,11 +1845,13 @@ bool fs_read_is_buffer(FrameResourceKind k) noexcept
 
 // Follow the same authored slot routing as the recorder: color writes exclude buffers/depth; an explicit
 // shared depth wins over a depth write, then a primary color's companion is the fallback. Imported targets
-// belong to the host, so this load-time metadata never changes their allocation or contents.
+// belong to the host, so this load-time metadata never changes their allocation or contents; the `@output`
+// target's first clear (its color and its own depth) goes to `plans.output_clear` for the host to create it with.
 void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, FramePlans& plans,
                          const crd::containers::Array<crd::ceir::gpu::LoweredCommand>& commands)
 {
     const FrameResourceDesc* colors[g::kMaxColorAttachments]{};
+    bool to_output[g::kMaxColorAttachments]{};
     crd::u32 color_count = 0U;
     const FrameResourceDesc* depth = nullptr;
     for (const FrameResourceRef& write : pass.writes)
@@ -1865,6 +1867,7 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
         }
         else if (color_count < g::kMaxColorAttachments)
         {
+            to_output[color_count] = resource == nullptr && SV(write.name.c_str(), write.name.size()) == SV("@output");
             colors[color_count++] = resource;
         }
     }
@@ -1884,6 +1887,7 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
     {
         depth = colors[0];
     }
+    const bool depth_to_output = depth == nullptr && color_count > 0U && to_output[0];
     const crd::ceir::Context& ctx = *plans.ctx;
     for (const crd::ceir::gpu::LoweredCommand& command : commands)
     {
@@ -1914,11 +1918,13 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
                     }
                     slot = static_cast<crd::u32>(value.i);
                 }
-                if (slot >= color_count || colors[slot] == nullptr)
+                if (slot >= color_count || (colors[slot] == nullptr && !to_output[slot]))
                 {
                     continue;
                 }
-                auto& hint = plans.clear_hints[static_cast<crd::usize>(colors[slot] - desc.resources.data())];
+                auto& hint = colors[slot] == nullptr
+                                 ? plans.output_clear
+                                 : plans.clear_hints[static_cast<crd::usize>(colors[slot] - desc.resources.data())];
                 if (hint.color_set)
                 {
                     continue;
@@ -1946,10 +1952,13 @@ void collect_clear_hints(const FrameGraphDesc& desc, const FramePassDesc& pass, 
                     hint.value.color[3] = color.clear.a;
                 }
             }
-            else if (depth != nullptr && crd::ceir::gpu::materialize_depth_attachment_desc(ctx, attachment, dep)
-                     && dep.load == g::LoadOp::Clear)
+            else if ((depth != nullptr || depth_to_output) &&
+                     crd::ceir::gpu::materialize_depth_attachment_desc(ctx, attachment, dep) &&
+                     dep.load == g::LoadOp::Clear)
             {
-                auto& hint = plans.clear_hints[static_cast<crd::usize>(depth - desc.resources.data())];
+                auto& hint = depth == nullptr
+                                 ? plans.output_clear
+                                 : plans.clear_hints[static_cast<crd::usize>(depth - desc.resources.data())];
                 if (!hint.depth_set)
                 {
                     hint.value.depth = dep.clear_depth;
@@ -1970,6 +1979,7 @@ bool build_frame_plans(const FrameGraphDesc& desc, FramePlans& out, crd::rendera
     static const char* const kIn[8] = {"input0", "input1", "input2", "input3", "input4", "input5", "input6", "input7"};
     out.clear_hints.clear();
     out.clear_hints.resize(desc.resources.size());
+    out.output_clear = FramePlans::ClearHint{};
     // Reserve storage to the EXACT fullscreen-pass count: the CeirPassPlans bind pointers INTO `storage`, so it must never
     // relocate (the reserved-arena discipline the recorder itself uses).
     // ⛔ CEIR-16d-live-2: scene.raster (raster.scene / raster.depth_only / raster.mrt — all kExecSceneRaster) joins the
