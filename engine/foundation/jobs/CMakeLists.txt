@@ -73,10 +73,11 @@ crd_enable_default_pch(crd-jobs)
 
 # ---------------------------------------------------------------------------
 # crd-jobs-schedcheck — DIAG.4b test-only twin of crd-jobs, built with the controlled-interleaving
-# yield points ACTIVE (CRD_JOBS_SCHED_CHECK=1). Same sources; the only difference is the gate. Never in
-# a shipping build (EXCLUDE_FROM_ALL); only the 4b controlled-interleaving tests link it. It must mirror
-# every crd-jobs build property that is load-bearing for correctness (the LTO-off pin and the MSVC
-# /Od pin on the context-switch-adjacent TUs), or it SEGFAULTs like crd-jobs would.
+# yield points ACTIVE (CRD_JOBS_SCHED_CHECK=1). Same sources; the only difference is the gate. No product
+# links it (EXCLUDE_FROM_ALL keeps it out of the consumer view); only the 4b controlled-interleaving tests
+# do, which build it on every lane. It must mirror every crd-jobs build property that is load-bearing for
+# correctness (the LTO-off pin and the MSVC /Od pin on the context-switch-adjacent TUs), or it SEGFAULTs
+# like crd-jobs would.
 # ---------------------------------------------------------------------------
 add_library(crd-jobs-schedcheck STATIC EXCLUDE_FROM_ALL ${SOURCES} ${HEADERS} ${CRD_JOBS_ASM_SRC})
 target_include_directories(crd-jobs-schedcheck PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
