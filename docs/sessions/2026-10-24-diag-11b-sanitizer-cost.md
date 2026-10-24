@@ -12,6 +12,12 @@
 repaired by `9583f26b`) were cancelled with no failed job; 40067359705 (head `9ce438da`) was running, 13 jobs green
 and none failed.
 
+After the push, 40067359705's linux-gcc-shipping job had failed `crd-repository-tools`: `CiTiers`' git ranges case
+could not remove its temporary repository (`Directory not empty: .git`). Since Git 2.47 a commit starts automatic
+maintenance detached (`GIT_TRACE=1` shows `git maintenance run --auto --quiet --detach`; with
+`-c maintenance.auto=false` there is none), and the hosted runner's Git 2.55 process wrote into `.git` during the
+cleanup. Both fixture helpers that commit now pass `maintenance.auto=false`.
+
 ## Change
 
 Clause (9) asks for the measured cost of every mode that is a separate binary. [Board](../bench/2026-10-24-diag-11b-sanitizer-cost.md).

@@ -657,9 +657,11 @@ class CiTiers(unittest.TestCase):
             repo = Path(temp)
 
             def git(*arguments):
+                # No automatic maintenance: since Git 2.47 a commit starts it detached, and it wrote into .git while
+                # the temporary directory was being removed (hosted linux-gcc-shipping, run 40067359705).
                 completed = subprocess.run(['git', '-c', 'user.name=t', '-c', 'user.email=t@t', '-c',
-                                            'commit.gpgsign=false', *arguments], cwd=str(repo), capture_output=True,
-                                           text=True, check=False)
+                                            'commit.gpgsign=false', '-c', 'maintenance.auto=false', *arguments],
+                                           cwd=str(repo), capture_output=True, text=True, check=False)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
                 return completed.stdout.strip()
 
@@ -2218,8 +2220,10 @@ class SourceMirror(unittest.TestCase):
     """scripts/source-mirror.py: the mirror holds exactly the checkout's git-visible files, and a stale one is refused."""
 
     def git(self, root, *arguments):
+        # No automatic maintenance, which a commit starts detached (see CiTiers' git ranges case).
         return subprocess.run(['git', '-C', str(root), '-c', 'user.name=fixture', '-c', 'user.email=fixture@invalid',
-                               '-c', 'core.autocrlf=false', *arguments], capture_output=True, check=True)
+                               '-c', 'core.autocrlf=false', '-c', 'maintenance.auto=false', *arguments],
+                              capture_output=True, check=True)
 
     def mirror(self, command, source, mirror, *extra):
         out = io.StringIO()
