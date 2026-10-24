@@ -54,5 +54,5 @@ guards, `tidy-files.py` (LLVM 20) clean on the four files, `clang-format --dry-r
 The [device validation board](../bench/2026-10-24-diag-11b-device-validation.md) was measured with the repeated copies;
 the change only drops the moved runs' second copy each frame, so the board is not re-run.
 
-Hosted once pushed: the two new cases pass on every lane that has a Vulkan device (lavapipe on Linux), and the Linux
-lanes' `crd-diag-overhead-render-validation-sync` stays clean.
+Hosted once pushed: the scene-render case passes on every lane, the Vulkan case on every lane that has a Vulkan
+device (lavapipe on Linux), and the Linux lanes' `crd-diag-overhead-render-validation-sync` stays clean.
