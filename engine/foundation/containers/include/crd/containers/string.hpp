@@ -197,7 +197,7 @@ public:
         if (n > old)
         {
             reserve(n);
-            char* p = data();
+            char* p = data_after_reserve(n);
             std::memset(p + old, static_cast<unsigned char>(fill), n - old);
             if (!sso_state() || n < kSsoCapacity)
             {
@@ -217,10 +217,10 @@ public:
     void push_back(char c)
     {
         const usize old = size();
-        reserve(old + 1);
-        char* p = data();
-        p[old] = c;
         const usize new_size = old + 1;
+        reserve(new_size);
+        char* p = data_after_reserve(new_size);
+        p[old] = c;
         // In SSO mode at capacity, set_size places '\0' via size_or_flag = 0;
         // writing p[kSsoCapacity] directly would be UB (past buf end).
         if (!sso_state() || new_size < kSsoCapacity)
@@ -259,12 +259,7 @@ public:
         const usize old = size();
         const usize new_size = old + n;
         reserve(new_size);
-        CRD_ASSERT(!sso_state() || new_size <= kSsoCapacity);
-        if (sso_state() && new_size > kSsoCapacity) // unreachable: reserve() moved a longer string to the heap;
-        {                                           // without it GCC follows data()'s inline branch with a heap-sized
-            return;                                 // `old` and reports -Wstringop-overflow on the copy below.
-        }
-        char* p = data();
+        char* p = data_after_reserve(new_size);
         std::memcpy(p + old, s, n);
         if (!sso_state() || new_size < kSsoCapacity)
         {
@@ -395,6 +390,14 @@ private:
     // ---- Discriminant helpers --------------------------------------
     [[nodiscard]] bool sso_state() const noexcept { return m_small.size_or_flag != kHeapFlag; }
 
+    // Storage once capacity() >= n: a size above the inline capacity is always on the heap. Reading m_heap there keeps
+    // GCC from following data()'s inline branch with a heap-sized offset (-Wstringop-overflow at the LTO link).
+    [[nodiscard]] char* data_after_reserve(usize n) noexcept
+    {
+        CRD_ASSERT(n <= kSsoCapacity || !sso_state());
+        return n > kSsoCapacity ? m_heap.data : data();
+    }
+
     // Internal heap-mode field accessors. Capacity uses the low 56 bits,
     // top byte is reserved for the sentinel (0xFF).
     static constexpr usize kCapMask = (~static_cast<usize>(0)) >> 8;
@@ -464,13 +467,16 @@ private:
     {
         if (n <= capacity())
         {
-            // Fits in current storage.
-            char* p = data();
+            // Fits in current storage. A full inline buffer is terminated by set_size (size_or_flag = 0).
+            char* p = data_after_reserve(n);
             if (n > 0)
             {
                 std::memmove(p, s, n);
             }
-            p[n] = '\0';
+            if (!sso_state() || n < kSsoCapacity)
+            {
+                p[n] = '\0';
+            }
             set_size(n);
             return;
         }

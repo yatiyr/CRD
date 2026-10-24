@@ -514,6 +514,40 @@ TEST_CASE("String: push_back / pop_back", "[containers][string]")
     REQUIRE(s.size() == 2);
 }
 
+TEST_CASE("String: push_back, assign and resize across the inline boundary", "[containers][string][sso]")
+{
+    const StringView s23{"12345678901234567890123"};
+    String s(std::string_view{"1234567890123456789012"});
+    s.push_back('3');
+    REQUIRE(s.is_small());
+    REQUIRE(s == s23);
+    REQUIRE(std::strlen(s.c_str()) == 23);
+    s.push_back('4');
+    REQUIRE_FALSE(s.is_small());
+    REQUIRE(s == StringView{"123456789012345678901234"});
+    REQUIRE(s.c_str()[24] == '\0');
+
+    String small("ab");
+    small = s23;
+    REQUIRE(small.is_small());
+    REQUIRE(small == s23);
+    REQUIRE(std::strlen(small.c_str()) == 23);
+
+    String heap(std::string_view{"a string that has to live on the heap"});
+    heap = StringView{"a shorter heap-held text!"};
+    REQUIRE_FALSE(heap.is_small());
+    REQUIRE(heap == StringView{"a shorter heap-held text!"});
+    REQUIRE(heap.c_str()[heap.size()] == '\0');
+
+    String grown("xy");
+    grown.resize(23, 'z');
+    REQUIRE(grown.is_small());
+    REQUIRE(std::strlen(grown.c_str()) == 23);
+    grown.resize(24, 'z');
+    REQUIRE_FALSE(grown.is_small());
+    REQUIRE(grown == StringView{"xyzzzzzzzzzzzzzzzzzzzzzz"});
+}
+
 TEST_CASE("String: append cstr / view / cstr+n", "[containers][string]")
 {
     String s("hello");
