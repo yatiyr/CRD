@@ -42,6 +42,18 @@ constexpr std::string_view kGpuAssistedSetupWarning = "WARNING-GPU-Assisted-Vali
     return message_id_name != nullptr && std::string_view{message_id_name} == kGpuAssistedSetupWarning;
 }
 
+// DIAG.11b: the prefix of the warnings GPU-assisted validation raises about its own cost when it instruments a shader
+// with more than 75 storage/uniform (or texel) buffer bounds checks ("GPUAV-Compile-time-general-buffer"). They report
+// the instrumentation, not the application's use of the API. Pinned to the same layer; the GPU-assisted render CTest
+// fails if a layer update renames them.
+constexpr std::string_view kGpuAssistedCostNotice = "GPUAV-Compile-time-";
+
+[[nodiscard]] bool is_cost_notice(ValidationSeverity severity, const char* message_id_name) noexcept
+{
+    return severity == ValidationSeverity::Warning && message_id_name != nullptr &&
+           std::string_view{message_id_name}.starts_with(kGpuAssistedCostNotice);
+}
+
 } // namespace
 
 struct ValidationCapture::Impl
@@ -54,6 +66,7 @@ struct ValidationCapture::Impl
     std::atomic<crd::u32> warnings{0};
     std::atomic<crd::u32> infos{0};
     std::atomic<crd::u32> uninstrumented{0}; // DIAG.7c(e)
+    std::atomic<crd::u32> cost_notices{0};   // DIAG.11b
 
     mutable std::mutex                        records_mu;
     crd::containers::Array<ValidationMessage> records{};
@@ -123,12 +136,15 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
 
     const auto sev     = to_severity(severity);
     const bool refused = is_instrumentation_refusal(callback_data->pMessageIdName);
+    const bool cost    = is_cost_notice(sev, callback_data->pMessageIdName);
     if (!whitelisted)
     {
         switch (sev)
         {
         case ValidationSeverity::Error: impl->errors.fetch_add(1, std::memory_order_relaxed); break;
-        case ValidationSeverity::Warning: impl->warnings.fetch_add(1, std::memory_order_relaxed); break;
+        case ValidationSeverity::Warning:
+            (cost ? impl->cost_notices : impl->warnings).fetch_add(1, std::memory_order_relaxed);
+            break;
         case ValidationSeverity::Info: impl->infos.fetch_add(1, std::memory_order_relaxed); break;
         }
         if (refused)
@@ -151,6 +167,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL capture_callback(VkDebugUtilsMessageSeverityFlagB
                 rec.message_id_name = crd::containers::String(callback_data->pMessageIdName);
             }
             rec.instrumentation_refused = refused;
+            rec.cost_notice             = cost;
             // DIAG.7a(d1): resolve the Cerid identity from the named objects this message references (each carries its
             // debug-utils name); first valid token wins. If no named object yields one, fall back to the message prose.
             // Multi-object correlation (which of several named objects is "the" subject) is (e)/(g), not (d1).
@@ -271,6 +288,7 @@ ValidationReport ValidationCapture::report() const noexcept
     r.warning = m_impl->warnings.load(std::memory_order_relaxed);
     r.error   = m_impl->errors.load(std::memory_order_relaxed);
     r.instrumentation_failures = m_impl->uninstrumented.load(std::memory_order_relaxed); // DIAG.7c(e)
+    r.cost_notices             = m_impl->cost_notices.load(std::memory_order_relaxed);   // DIAG.11b
     {
         std::lock_guard<std::mutex> lk(m_impl->records_mu);
         r.dropped = m_impl->records_dropped;
@@ -308,6 +326,7 @@ void ValidationCapture::reset() noexcept
     m_impl->warnings.store(0, std::memory_order_relaxed);
     m_impl->infos.store(0, std::memory_order_relaxed);
     m_impl->uninstrumented.store(0, std::memory_order_relaxed);
+    m_impl->cost_notices.store(0, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lk(m_impl->records_mu);
     m_impl->records.clear();
     m_impl->records_dropped = 0;

@@ -935,7 +935,7 @@ private:
         }
         for (const crd::gpu::ValidationMessage& message : m_capture->messages())
         {
-            if (message.severity != crd::gpu::ValidationSeverity::Info)
+            if (message.severity != crd::gpu::ValidationSeverity::Info && !message.cost_notice)
             {
                 std::fprintf(stderr, "crd-diag-overhead: validation %s: %s\n", message.message_id_name.c_str(),
                              message.message_text.c_str());

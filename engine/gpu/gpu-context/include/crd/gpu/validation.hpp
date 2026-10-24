@@ -49,6 +49,9 @@ struct ValidationReport
     crd::u64 dropped                  = 0; // messages the capture could not store (capacity overflow) -- lost
     crd::u64 truncated                = 0; // messages stored but with their text cut -- partially lost
     crd::u64 instrumentation_failures = 0; // the capture / layer itself failed (e.g. startup overflow)
+    // The layer's notices about its own instrumentation cost (Vulkan GPU-assisted validation's compile-time notices):
+    // reported, not counted as warnings, so they do not make a run unclean.
+    crd::u64 cost_notices = 0;
 
     [[nodiscard]] bool clean() const noexcept
     {

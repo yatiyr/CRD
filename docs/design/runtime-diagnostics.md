@@ -484,7 +484,9 @@ Settled (2026-10-07, [session](../sessions/2026-10-07-diag-7c-descriptor-limit-a
   slot (`VulkanValidationLayer::instrumentation_set_slot`, `instruments(n)`). The capture classifies the layer's GPU-AV
   setup warning (`WARNING-GPU-Assisted-Validation`, pinned to the SDK's layer) as an instrumentation refusal, carried
   by the common `ValidationReport::instrumentation_failures`. A run that saw one is not clean, because the refused
-  work ran unchecked.
+  work ran unchecked. The layer's `GPUAV-Compile-time-*` warnings (a shader instrumented with more than 75 buffer
+  checks) report the instrumentation's own cost; the capture counts them as `ValidationReport::cost_notices`, not
+  as warnings (2026-10-24, [DIAG.11b](../ROADMAP.md#slice-diag.11b)).
 - **Asynchronous reports.** GPU-AV results arrive only once completion is observed (the fence wait), never at record
   or submit. On VVL 1.4.341 the Core image-layout mismatch, although it names `vkQueueSubmit`, also arrives at the
   wait. Gates assert "nothing at record, correlated by the wait"; they never assert the submit-time count.

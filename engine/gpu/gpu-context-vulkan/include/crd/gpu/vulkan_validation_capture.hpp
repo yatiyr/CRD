@@ -51,6 +51,9 @@ struct ValidationMessage
     // layout that uses the descriptor-set slot the instrumentation needs). Counted in
     // ValidationReport::instrumentation_failures.
     bool                    instrumentation_refused = false;
+    // DIAG.11b: a warning in which GPU-assisted validation reported its own instrumentation cost for a shader. Counted
+    // in ValidationReport::cost_notices, never as a warning.
+    bool                    cost_notice = false;
     // DIAG.8a: the innermost Cerid identity among the debug labels active when the message was raised (command-buffer
     // labels, then queue labels), resolved on its own even when a named object supplies `identity`. A label names the
     // recording site (a frame-graph pass, a CEIR dispatch) that a message about a named buffer or pipeline would
@@ -69,7 +72,7 @@ public:
     ValidationCapture(ValidationCapture&&)                 = delete;
     ValidationCapture& operator=(ValidationCapture&&)      = delete;
 
-    // Severity counts since construction.
+    // Severity counts since construction (a cost notice counts in report().cost_notices instead).
     [[nodiscard]] crd::u32 error_count() const noexcept;
     [[nodiscard]] crd::u32 warning_count() const noexcept;
     [[nodiscard]] crd::u32 info_count() const noexcept;

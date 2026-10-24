@@ -245,7 +245,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | The Windows lanes on the pinned WARP adapter; the Linux lanes on lavapipe with the pinned validation layer. |
 | Adopt | Name a native object with its identity through `format_debug_name(...)`; a host registers its contexts with the `gpu.resources` command. |
 | Example | `tests/gpu/gpu-context-dx12/test_dx12_device_fault.cpp` |
-| Cost | Reported outside the basic budget: on the authored rendering workload, core validation costs +22.7% frame time and +40.0% CPU per frame on the D3D12 hardware adapter, +7.5% and +2.1% on lavapipe, synchronization +11.6% and +2.9%, D3D12 GPU-based validation +66.1% and +227.7% ([board](../bench/2026-10-24-diag-11b-device-validation.md)); Vulkan's GPU-assisted mode is not boarded yet ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Reported outside the basic budget: on the authored rendering workload, core validation costs +22.7% frame time and +40.0% CPU per frame on the D3D12 hardware adapter, +7.5% and +2.1% on lavapipe, synchronization +11.6% and +2.9%, D3D12 GPU-based validation +66.1% and +227.7%, Vulkan GPU-assisted validation on lavapipe +80.3% and +129.4% ([board](../bench/2026-10-24-diag-11b-device-validation.md)). |
 | Owner | DIAG.7a, DIAG.7b, DIAG.7c |
 
 <a id="rb-program"></a>

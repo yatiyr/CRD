@@ -52,6 +52,17 @@ struct Submitter
         // Severity + type inside the capture messenger's masks (INFO|WARNING|ERROR / GENERAL|VALIDATION|PERFORMANCE).
         fn(instance, VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT, &data);
     }
+
+    // A message under a layer message-ID name, at `severity`, naming no object.
+    void send(VkDebugUtilsMessageSeverityFlagBitsEXT severity, const char* id_name, crd::i32 id_number) const
+    {
+        VkDebugUtilsMessengerCallbackDataEXT data{};
+        data.sType           = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CALLBACK_DATA_EXT;
+        data.pMessageIdName  = id_name;
+        data.messageIdNumber = id_number;
+        data.pMessage        = "synthetic";
+        fn(instance, severity, VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT, &data);
+    }
 };
 
 [[nodiscard]] const gpu::ValidationMessage* find_by_id(const gpu::ValidationCapture& capture, crd::i32 id_number)
@@ -67,7 +78,7 @@ struct Submitter
 }
 } // namespace
 
-TEST_CASE("Vulkan validation resolves the Cerid identity from a named object then message prose",
+TEST_CASE("Vulkan validation resolves the Cerid identity from a named object then message prose; cost notices apart",
           "[gpu-context][vulkan][gpu][validation][identity]")
 {
     gpu::GpuContextConfig cfg;
@@ -117,7 +128,23 @@ TEST_CASE("Vulkan validation resolves the Cerid identity from a named object the
     REQUIRE(plain != nullptr);
     CHECK_FALSE(plain->identity.valid());
 
-    CHECK(capture.dropped_count() == 0U); // three records, well under the 256 cap
+    // (4) DIAG.11b: GPU-assisted validation's notice of its own instrumentation cost is counted apart, never as a
+    // warning; an error under that name and a warning under another name still count.
+    const crd::u32 warnings4 = capture.warning_count();
+    const crd::u32 errors4   = capture.error_count();
+    submit.send(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, "GPUAV-Compile-time-general-buffer", 0x11B001);
+    CHECK(capture.warning_count() == warnings4);
+    CHECK(capture.report().cost_notices == 1U);
+    const gpu::ValidationMessage* notice = find_by_id(capture, 0x11B001);
+    REQUIRE(notice != nullptr);
+    CHECK(notice->cost_notice);
+    submit.send(VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT, "GPUAV-Compile-time-general-buffer", 0x11B002);
+    submit.send(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT, "GPUAV-Shader-Instrumentation", 0x11B003);
+    CHECK(capture.error_count() - errors4 == 1U);
+    CHECK(capture.warning_count() - warnings4 == 1U);
+    CHECK(capture.report().cost_notices == 1U);
+
+    CHECK(capture.dropped_count() == 0U); // six records, well under the 256 cap
 }
 
 // DIAG.7a(g): the correlated-hazard acceptance (Vulkan Core route). An intentional usage-bounds hazard on a NAMED Cerid buffer

@@ -34,9 +34,12 @@ which exports the pinned layer).
 | linux-gcc-shipping, lavapipe (`00c9fbfe5ff0`), 12 | off | 2,823 / 3,272 | reference | 10.78 ms | reference |
 | | core | 3,045 / 3,566 | +7.5% (+6.7 .. +9.4) | 10.99 ms | +2.1% (+1.5 .. +3.7) |
 | | synchronization | 3,150 / 3,670 | +11.6% (+10.3 .. +13.4) | 11.14 ms | +2.9% (+2.7 .. +4.0) |
+| linux-gcc-shipping, lavapipe (`42304733741a`), 12, later the same day | off | 3,171 / 3,948 | reference | 12.09 ms | reference |
+| | core | 3,520 / 4,307 | +12.0% (+8.2 .. +14.2) | 12.45 ms | +3.1% (+2.0 .. +4.4) |
+| | GPU-assisted | 5,723 / 6,818 | +80.3% (+79.6 .. +83.3) | 27.86 ms | +129.4% (+124.0 .. +132.2) |
 
 Resident growth over the run: 107 MiB off and 118 MiB core on D3D12, then 120, 135 and 214 MiB with GPU-based
-validation; 251, 289 and 289 MiB on lavapipe.
+validation; 251, 289 and 289 MiB on lavapipe, then 251, 289 and 381 MiB with GPU-assisted validation.
 
 - The D3D12 debug layer validates every call on the submitting thread, so its CPU cost (+40%) is larger than the frame
   cost (+23%), part of which the device's own time hides. lavapipe rasterises on the process's threads, which dilutes
@@ -46,5 +49,9 @@ validation; 251, 289 and 289 MiB on lavapipe.
   and +228% CPU per frame. Its first run crashed in the driver until the frame recorder stopped binding a null root
   signature ([session](../sessions/2026-10-24-diag-11b-gpu-based-validation.md)). The core arm of that binary reads
   +19.2% against the earlier +22.7%: the intervals overlap.
-- Not measured: Vulkan's GPU-assisted validation. On lavapipe the layer reports its own instrumentation cost as
-  warnings (`GPUAV-Compile-time-general-buffer`); it is DIAG.11b's next item.
+- Vulkan's GPU-assisted validation (lavapipe) runs every shader instrumented, the layer's safe mode on and robustness
+  not forced: +80% frame time and +129% CPU per frame. The 8-frame CTest takes 3.1 s against core's 0.8 s, nearly
+  all of it before the first frame (the timed frames add about 20 ms), where the layer instruments the shaders. Each GPU-assisted process reports 10 cost notices (the layer's duplicate limit;
+  19 shader modules exceed its 75 buffer checks) and no error or warning
+  ([session](../sessions/2026-10-24-diag-11b-vulkan-gpu-assisted-validation.md)). The core arm of that binary reads
+  +12.0% against the earlier +7.5%, with off itself 12% slower: the two runs are hours apart.

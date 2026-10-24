@@ -28,7 +28,8 @@
 //   full         every payload evaluated once per site; every site and frame event recorded and none filtered; the
 //                profiler counted every frame (where profiling is compiled); every requested capture delivered.
 //   --validation (render only) the device validation saw the whole run and reported no error, warning or lost
-//                message. Its cost is reported, not budgeted (ADR-0133: GPU-assisted validation accounts separately).
+//                message; the layer's notices of its own cost are counted (cost_notices), not failed. Its cost is
+//                reported, not budgeted (ADR-0133: GPU-assisted validation accounts separately).
 //
 // Exit codes: 0 measured (and checked), 1 a check failed, 2 usage, 3 the mode or the workload could not be set up.
 
@@ -852,6 +853,7 @@ int main(int argc, char** argv)
         j.u("info", validated->report.info);
         j.u("lost", validated->report.dropped + validated->report.truncated);
         j.u("instrumentation_failures", validated->report.instrumentation_failures);
+        j.u("cost_notices", validated->report.cost_notices);
     }
     j.close('}');
     j.open("lifetime", '{');
