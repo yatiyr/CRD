@@ -46,6 +46,8 @@ mechanism could carry the clause; the watch became an observer (`IRefusalObserve
   fault injection runs) and releases it at `stop()`. Either side may go first: the allocator's destructor tells the
   watch (`on_allocator_gone`), so `crd-diag-overhead`'s teardown, which destroys its heap before the host stops, stays
   valid.
+- The thread-safe and diagnostic decorators' fatal path tries, reports, then asks the inner `allocate`, as the old watch
+  did; a sub-budget inner logs its exhaustion twice on that failure path only.
 
 ## Boards after the repair
 

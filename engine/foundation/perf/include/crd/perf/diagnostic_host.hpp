@@ -8,7 +8,7 @@
 //   - the FlightRecorder, started from the profile's flight-policy asset (or FlightPolicy{}), and its trigger sources:
 //     assertions and fatal invariants (chained to the handlers installed before), the jobs watchdog's starvation and
 //     hang reports (configure_jobs gives the pool the profile's watchdog window), frame hitches (frame(), once per
-//     frame) and allocation failure at an allocator the host wraps (watch_allocator);
+//     frame) and allocation failure at an allocator the host observes (watch_allocator);
 //   - a FlightCommandHost as the recorder's sink, its module snapshot taken at start and refreshed after the host
 //     loads modules; with a capture directory every delivered capture is also written there as a flight bundle
 //     (flight-<n>.cdb, the first free n, never overwriting, the newest `max_bundles` kept). The writer runs wherever

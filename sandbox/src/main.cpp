@@ -1162,9 +1162,9 @@ int main(int argc, char** argv)
     // GEO-9: the camera-shot timeline (automation-driven crane move, sampled per frame in rational time)
     const crd::timeline::TimelineResource camera_timeline = build_camera_timeline(&scene_alloc);
 
-    // DIAG.9b: the manager allocates through the diagnostic host's decorators: an injected allocation-failure first
-    // (when the profile turns injection on), then a real failure of the arena reported as an allocation-failure
-    // trigger.
+    // DIAG.9b: the manager allocates from the arena the diagnostic host observes: an injected allocation-failure first
+    // (through the host's decorator, when the profile turns injection on), then a real failure of the arena reported
+    // as an allocation-failure trigger.
     crd::memory::IAllocator* const  rm_alloc = diag_host.watch_allocator(&scene_alloc, "sandbox resources");
     crd::resources::ResourceManager rm(rm_alloc != nullptr ? rm_alloc : &scene_alloc);
     crd::resources::register_mesh_loader(&rm, nullptr);

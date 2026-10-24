@@ -38,7 +38,7 @@ public:
     void* allocate(usize size, usize alignment = kDefaultAlignment) override
     {
         void* const p = try_allocate(size, alignment);
-        if (p != nullptr || size == 0U)
+        if (p != nullptr)
         {
             return p;
         }
