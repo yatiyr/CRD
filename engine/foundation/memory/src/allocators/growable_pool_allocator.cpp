@@ -228,11 +228,11 @@ void* GrowablePoolAllocator::try_allocate(usize size, usize alignment)
 {
     if (size == 0U || size > m_slot_size || !is_pow2(alignment) || alignment > m_slot_alignment)
     {
-        return nullptr; // the request does not fit a slot: refuse, never assert
+        return refuse(size, alignment); // the request does not fit a slot: refuse, never assert
     }
     if (m_free_head == nullptr && !grow())
     {
-        return nullptr; // the parent refused a page: non-fatal here
+        return refuse(size, alignment); // the parent refused a page: non-fatal here
     }
     return allocate(size, alignment);
 }
@@ -242,11 +242,9 @@ void* GrowablePoolAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size <= m_slot_size);
     CRD_ASSERT(is_pow2(alignment));
     CRD_ASSERT(alignment <= m_slot_alignment);
-    (void)size;
-    (void)alignment;
-
     if (m_free_head == nullptr && !grow())
     {
+        (void)refuse(size, alignment);
         CRD_FATAL("GrowablePoolAllocator: out of memory (the parent refused a page)");
         return nullptr;
     }

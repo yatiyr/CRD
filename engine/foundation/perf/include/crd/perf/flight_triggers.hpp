@@ -17,9 +17,9 @@
 //   frame hitch        FlightFrameWatch::note_frame, called by the host once per frame. Records each frame as a
 //                      kFlightCodeFrame event (a = interval, b = duration) and triggers when the interval exceeds the
 //                      policy's hitch_threshold_ns. value_a = interval, value_b = threshold.
-//   allocation failure FlightAllocatorWatch, an IAllocator decorator. A failed try_allocate triggers (a = size,
-//                      b = alignment). A failed allocate triggers, closes the window as Fatal and delivers it before
-//                      the backing allocator's own out-of-memory fatal runs.
+//   allocation failure FlightAllocatorWatch, the observer of one allocator's refusals (IRefusalObserver). Each
+//                      refused request triggers (a = size, b = alignment); a fatal-on-OOM allocate reports before its
+//                      own out-of-memory fatal, which closes the window as Fatal and delivers it.
 //   resource pressure  FlightPressurePolicy, an IResidencyPolicy decorator for StreamingAllocator: each evict() the
 //                      allocator asks for under budget pressure triggers (a = category, b = bytes needed).
 //
@@ -74,26 +74,31 @@ private:
     crd::u64        m_hitches       = 0U;
 };
 
-// IAllocator decorator that reports allocation failure. It adds no state of its own beyond two pointers; its own
-// MemoryStats stay zero and report coverage Elsewhere (the backing allocator keeps the real ones).
-class FlightAllocatorWatch final : public crd::memory::IAllocator
+// Reports the requests one allocator refuses as allocation-failure triggers. It observes instead of decorating, so the
+// allocator's successful calls never reach it (DIAG.11b). Either side may go first: the watch detaches when it is
+// destroyed or released, and the allocator tells it when the allocator is destroyed.
+class FlightAllocatorWatch final : public crd::memory::IRefusalObserver
 {
 public:
-    FlightAllocatorWatch(crd::memory::IAllocator* backing, FlightRecorder* recorder,
-                         const char* name = "FlightAllocatorWatch") noexcept;
+    explicit FlightAllocatorWatch(FlightRecorder* recorder) noexcept : m_recorder(recorder) {}
+    ~FlightAllocatorWatch() { release(); }
+    FlightAllocatorWatch(const FlightAllocatorWatch&)            = delete;
+    FlightAllocatorWatch& operator=(const FlightAllocatorWatch&) = delete;
 
-    void* allocate(crd::usize size, crd::usize alignment = crd::memory::kDefaultAlignment) override;
-    [[nodiscard]] void* try_allocate(crd::usize size, crd::usize alignment = crd::memory::kDefaultAlignment) override;
-    void  deallocate(void* p) noexcept override;
-    [[nodiscard]] bool owns(const void* p) const noexcept override;
-    [[nodiscard]] crd::usize allocation_size(const void* p) const noexcept override;
+    // Observe `allocator` until release() or its destruction. False (nothing changes) when this watch already observes
+    // one, `allocator` is null or another observer has it. Install before the allocator is handed out.
+    [[nodiscard]] bool watch(crd::memory::IAllocator* allocator) noexcept;
+    // Stop observing (idempotent). Call after the observed allocator's last call.
+    void release() noexcept;
+    [[nodiscard]] const crd::memory::IAllocator* watched() const noexcept { return m_allocator; }
+
+    void on_refused(const crd::memory::IAllocator& allocator, crd::usize size, crd::usize alignment) noexcept override;
+    void on_allocator_gone(const crd::memory::IAllocator& allocator) noexcept override;
 
     [[nodiscard]] crd::u64 failures() const noexcept { return m_failures.load(std::memory_order_relaxed); }
 
 private:
-    void report(crd::usize size, crd::usize alignment) noexcept;
-
-    crd::memory::IAllocator* m_backing;
+    crd::memory::IAllocator* m_allocator = nullptr;
     FlightRecorder*          m_recorder;
     std::atomic<crd::u64>    m_failures{0U};
 };

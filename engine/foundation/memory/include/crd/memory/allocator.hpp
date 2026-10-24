@@ -6,6 +6,21 @@
 
 namespace crd::memory
 {
+class IAllocator;
+
+// Hears of the requests one allocator refuses (observe_refusals). The diagnostic host installs one to turn a refusal
+// into an allocation-failure trigger (DIAG.11b: no decorator, so nothing on the successful path).
+class IRefusalObserver
+{
+public:
+    virtual void on_refused(const IAllocator& allocator, usize size, usize alignment) noexcept = 0;
+    // `allocator` is being destroyed while this observer is installed; it reports nothing after this.
+    virtual void on_allocator_gone(const IAllocator& allocator) noexcept = 0;
+
+protected:
+    ~IRefusalObserver() = default;
+};
+
 // Abstract base for every allocator in the engine.
 //
 // Design notes:
@@ -28,10 +43,20 @@ namespace crd::memory
 //    `m_stats.keep_counts()` in its constructor; one that only forwards
 //    (a decorator, a composite) does not, and its statistics report
 //    StatisticsCoverage::Elsewhere.
+//  - Refusals: every nullptr an allocator returns for a nonzero request
+//    goes through `refuse()`, which tells an installed IRefusalObserver
+//    first (before a fatal-on-OOM allocate ends the process). A successful
+//    call never looks at the observer.
 class IAllocator
 {
 public:
-    virtual ~IAllocator() = default;
+    virtual ~IAllocator()
+    {
+        if (m_refusals != nullptr)
+        {
+            m_refusals->on_allocator_gone(*this);
+        }
+    }
 
     // ---- Required overrides ---------------------------------------
 
@@ -92,9 +117,25 @@ public:
     // call from any thread; crd::perf::register_allocator calls it.
     StatisticsCoverage request_statistics() noexcept { return m_stats.request(); }
 
+    // Install the observer of this allocator's refusals; null removes it. Not synchronized with the allocator's own
+    // calls: install it before the allocator is handed out and remove it after its last call.
+    void observe_refusals(IRefusalObserver* observer) noexcept { m_refusals = observer; }
+    [[nodiscard]] IRefusalObserver* refusal_observer() const noexcept { return m_refusals; }
+
 protected:
+    // The nullptr of a refused request, reported first to the installed observer (a zero size is no request).
+    [[nodiscard]] void* refuse(usize size, usize alignment) const noexcept
+    {
+        if (m_refusals != nullptr && size != 0U)
+        {
+            m_refusals->on_refused(*this, size, alignment);
+        }
+        return nullptr;
+    }
+
     const char* m_name = "UnnamedAllocator";
     MemoryStats m_stats{};
+    IRefusalObserver* m_refusals = nullptr;
 };
 
 // ----------------------------------------------------------------------

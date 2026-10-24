@@ -364,9 +364,17 @@ void* DiagnosticAllocator::allocate_tagged(usize size, usize alignment, const Al
     return allocate_from(size, alignment, tag, false);
 }
 
-void* DiagnosticAllocator::backing_allocate(usize size, usize alignment, bool non_fatal)
+// The backing's block of `bytes` for a request of `requested`: a refusal is reported before the fatal path asks the
+// backing's allocate, which ends the process when the backing is fatal on out-of-memory.
+void* DiagnosticAllocator::backing_allocate(usize bytes, usize alignment, bool non_fatal, usize requested)
 {
-    return non_fatal ? m_backing->try_allocate(size, alignment) : m_backing->allocate(size, alignment);
+    void* const p = m_backing->try_allocate(bytes, alignment);
+    if (p != nullptr)
+    {
+        return p;
+    }
+    (void)refuse(requested, alignment);
+    return non_fatal ? nullptr : m_backing->allocate(bytes, alignment);
 }
 
 void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal)
@@ -377,14 +385,14 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
     }
     if (non_fatal && !is_pow2(alignment))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     CRD_ASSERT(is_pow2(alignment));
     ++m_total_count;
 
     if (!m_ok) // metadata arena unavailable: degrade to a clean passthrough, never corrupt anything
     {
-        return backing_allocate(size, alignment, non_fatal);
+        return backing_allocate(size, alignment, non_fatal, size);
     }
 
     // Sampling decision (guards the expensive stack capture only; redzones/records are always on).
@@ -404,18 +412,18 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
     usize total = 0U;
     if (rz != 0U && (!checked_align_up(rz, alignment, &front_bytes) || front_bytes > UINT32_MAX))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     const crd::u32 front = static_cast<crd::u32>(front_bytes);
     if (!checked_add(front_bytes, size, &total) || !checked_add(total, rz, &total))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
 
-    void* const raw = backing_allocate(total, alignment, non_fatal);
+    void* const raw = backing_allocate(total, alignment, non_fatal, size);
     if (raw == nullptr)
     {
-        return nullptr; // backing OOM -- surfaced to the caller unchanged
+        return nullptr; // backing OOM, reported by backing_allocate and surfaced to the caller unchanged
     }
     void* const user = static_cast<crd::u8*>(raw) + front;
 
@@ -432,7 +440,7 @@ void* DiagnosticAllocator::allocate_from(usize size, usize alignment, const Allo
         // Undo the redzoned block (we cannot track its raw start) and hand back a plain passthrough
         // whose user pointer == the backing block, so deallocate() frees it correctly via owns().
         m_backing->deallocate(raw);
-        void* const plain = backing_allocate(size, alignment, non_fatal);
+        void* const plain = backing_allocate(size, alignment, non_fatal, size);
         if (plain != nullptr)
         {
             ++m_passthrough_live;

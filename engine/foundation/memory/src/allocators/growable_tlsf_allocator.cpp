@@ -99,7 +99,7 @@ void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
     // parent; DIAG.10a allocator fuzzing).
     if (size == 0 || !is_pow2(alignment))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     for (Chunk* c = m_head; c != nullptr; c = c->next)
     {
@@ -116,21 +116,22 @@ void* GrowableTlsfAllocator::try_allocate(usize size, usize alignment)
     // Each term is bounded first, so the sum cannot wrap into a small chunk (DIAG.3a).
     if (size > kMaxChunkBytes || alignment > kMaxChunkBytes)
     {
-        return nullptr; // no chunk can ever hold it
+        return refuse(size, alignment); // no chunk can ever hold it
     }
     const usize search_round = (size >> 5) + 1; // ~size/32: the SL sub-class round-up
     usize       need         = 0;
     if (!checked_add(size + search_round, alignment, &need) ||
         !checked_add(need, TlsfAllocator::min_pool_size() + (usize{4} << 10), &need) || need > kMaxChunkBytes)
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     Chunk* c = grow(need);
     if (c == nullptr) // parent exhausted (grow used try_allocate)
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
-    return c->tlsf.try_allocate(size, alignment);
+    void* const p = c->tlsf.try_allocate(size, alignment);
+    return p != nullptr ? p : refuse(size, alignment);
 }
 
 void* GrowableTlsfAllocator::allocate(usize size, usize alignment)

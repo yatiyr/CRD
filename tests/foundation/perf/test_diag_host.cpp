@@ -521,7 +521,9 @@ TEST_CASE("diagnostic host: allocation failure at a wrapped allocator, injected 
     CHECK(real.trigger.kind == cp::FlightTrigger::AllocationFailure);
     CHECK(real.trigger.value_a == 1024U * 1024U);
     CHECK(real.suppressed_triggers == 0U);
+    CHECK((alloc == &arena) != seams); // without injection the owner gets the arena itself: observed, not decorated
     host.stop();
+    CHECK(arena.refusal_observer() == nullptr); // the stopped host hears the arena no more
 }
 
 TEST_CASE("diagnostic host: a read failed through the I/O hook the host installed is an injected-fault capture",

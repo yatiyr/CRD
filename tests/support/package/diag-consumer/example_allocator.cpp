@@ -11,13 +11,13 @@
 //               independent arena, so the diagnosis never allocates from the heap it diagnoses. An investigation
 //               build's choice.
 //
-// Whichever is chosen, the owner receives host.watch_allocator(chosen) instead: a try_allocate that fails becomes an
-// allocation-failure trigger whose message names the chosen allocator, and while fault injection runs a seeded plan
-// can fail it on purpose. The example books 1 KiB orders until the heap is exhausted, which captures the bookings
-// before the failure and the releases after it into a flight bundle in the profile's capture directory. With the
-// diagnostic allocator it also writes one byte past an order before booking the rest: the redzone check reports the
-// overrun with its offset, the application records the violation as a flight event, and the bundle shows it before
-// the exhaustion.
+// Whichever is chosen, the owner receives host.watch_allocator(chosen): the chosen allocator itself, whose refusals the
+// host observes (a decorator over it while fault injection runs, so a seeded plan can fail it on purpose). A
+// try_allocate that fails becomes an allocation-failure trigger whose message names the chosen allocator. The example
+// books 1 KiB orders until the heap is exhausted, which captures the bookings before the failure and the releases after
+// it into a flight bundle in the profile's capture directory. With the diagnostic allocator it also writes one byte
+// past an order before booking the rest: the redzone check reports the overrun with its offset, the application records
+// the violation as a flight event, and the bundle shows it before the exhaustion.
 //
 // Lifetimes: the allocators outlive every block, and the host is stopped before the allocator it watches goes.
 #include "consumer_support.hpp"

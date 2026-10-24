@@ -603,7 +603,7 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     // two is refused, never asserted, like every other allocator's try_allocate (DIAG.10a allocator fuzzing).
     if (size == 0 || !is_pow2(alignment))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
 
     // Round up size to a multiple of kAlignSize and clamp to min user size. DIAG.3a: checked, so a near-SIZE_MAX
@@ -611,7 +611,7 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     usize adjusted = 0;
     if (!checked_align_up(size, kAlignSize, &adjusted) || adjusted > m_pool_capacity)
     {
-        return nullptr; // no block in this pool can ever hold it
+        return refuse(size, alignment); // no block in this pool can ever hold it
     }
     if (adjusted < kBlockMinUserSize)
     {
@@ -630,7 +630,7 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
         if (!checked_add(adjusted, alignment, &with_alignment) ||
             !checked_add(with_alignment, gap_minimum, &requested) || requested > m_pool_capacity)
         {
-            return nullptr; // the alignment shift alone exceeds the pool
+            return refuse(size, alignment); // the alignment shift alone exceeds the pool
         }
     }
 
@@ -640,7 +640,7 @@ void* TlsfAllocator::try_allocate(usize size, usize alignment)
     BlockHeader* block = detail::find_suitable_block(m_fl_bitmap, m_sl_bitmap, m_free_lists, fl, sl);
     if (block == nullptr)
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     remove_free_block_helper(block, m_fl_bitmap, m_sl_bitmap, m_free_lists, fl, sl);
 
@@ -810,6 +810,7 @@ void* TlsfAllocator::reallocate(void* p, usize old_size, usize new_size, usize a
     {
         // The unchecked round-up wrapped to 0 and "shrank" the live block in place (DIAG.3a). No pool can hold
         // the request, so it is out of memory: fatal, like every other TLSF allocation failure.
+        (void)refuse(new_size, alignment);
         CRD_FATAL("TlsfAllocator: reallocate size overflows");
         return nullptr;
     }

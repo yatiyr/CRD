@@ -188,7 +188,7 @@ private:
     void*  raw_from_user(void* user) const noexcept;   // user ptr -> backing block start
     // allocate/allocate_tagged (fatal backing) and try_allocate (non-fatal backing) share this body.
     void*  allocate_from(usize size, usize alignment, const AllocationTag& tag, bool non_fatal);
-    void*  backing_allocate(usize size, usize alignment, bool non_fatal);
+    void*  backing_allocate(usize bytes, usize alignment, bool non_fatal, usize requested);
     void   raise(const Violation& v) const noexcept;
     StackId intern_current_stack(crd::u32 skip) noexcept;
     Record* find_record(const void* user) const noexcept;

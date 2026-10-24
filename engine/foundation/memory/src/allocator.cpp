@@ -52,7 +52,7 @@ void* IAllocator::try_allocate(usize size, usize alignment)
     // allocate() whose precondition asserts would reject it (DIAG.3a).
     if (size == 0U || !is_pow2(alignment))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     return allocate(size, alignment);
 }

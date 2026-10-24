@@ -32,7 +32,7 @@ public:
 
     void* allocate(usize size, usize alignment = kDefaultAlignment) override
     {
-        void* p = m_sa->try_allocate_resident(m_category, size, alignment);
+        void* p = try_allocate(size, alignment);
         CRD_ASSERT_MSG(p != nullptr || size == 0,
                        "StreamingCategoryAllocator: resident store exhausted (over budget, nothing to shed)");
         return p;
@@ -40,7 +40,8 @@ public:
 
     [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override
     {
-        return m_sa->try_allocate_resident(m_category, size, alignment);
+        void* const p = m_sa->try_allocate_resident(m_category, size, alignment);
+        return p != nullptr ? p : refuse(size, alignment);
     }
 
     void deallocate(void* p) noexcept override

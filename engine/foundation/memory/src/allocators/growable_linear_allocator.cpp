@@ -111,7 +111,7 @@ void* GrowableLinearAllocator::allocate(usize size, usize alignment)
         usize need = 0;
         if (!checked_add(size, alignment, &need) || !grow(need))
         {
-            return nullptr;
+            return refuse(size, alignment);
         }
     }
 }

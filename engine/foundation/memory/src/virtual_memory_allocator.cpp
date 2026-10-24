@@ -143,13 +143,13 @@ void* VirtualMemoryAllocator::bump(usize size, usize alignment) noexcept
     // Reservation-exhaustion / overflow guard.
     if (offset < m_alloc_pos || size > m_reserved || offset > m_reserved - size)
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     const usize new_top = offset + size;
 
     if (new_top > m_commit_pos && !ensure_committed(new_top))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
 
     // Hand out [alloc_pos, new_top): unpoison padding + payload (keeps the
@@ -181,7 +181,7 @@ void* VirtualMemoryAllocator::try_allocate(usize size, usize alignment)
     // never asserted, like every other allocator's try_allocate (DIAG.10a allocator fuzzing).
     if (!is_pow2(alignment))
     {
-        return nullptr;
+        return refuse(size, alignment);
     }
     return bump(size, alignment);
 }
@@ -223,12 +223,14 @@ void* VirtualMemoryAllocator::reallocate(void* p, usize old_size, usize new_size
         const usize new_top = m_last_offset + new_size;
         if (new_size > m_reserved || m_last_offset > m_reserved - new_size)
         {
+            (void)refuse(new_size, alignment);
             CRD_FATAL("VirtualMemoryAllocator: reallocate exceeds reserved address space");
         }
         if (new_top > m_alloc_pos) // grow
         {
             if (new_top > m_commit_pos && !ensure_committed(new_top))
             {
+                (void)refuse(new_size, alignment);
                 CRD_FATAL("VirtualMemoryAllocator: reallocate commit failed");
             }
             asan_unpoison(m_base + m_alloc_pos, new_top - m_alloc_pos);

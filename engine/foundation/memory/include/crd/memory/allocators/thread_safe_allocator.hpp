@@ -34,8 +34,14 @@ public:
     ThreadSafeAllocator(const ThreadSafeAllocator&)            = delete;
     ThreadSafeAllocator& operator=(const ThreadSafeAllocator&) = delete;
 
+    // A refusal is reported (refuse, outside the lock) before a fatal-on-OOM inner allocate ends the process.
     void* allocate(usize size, usize alignment = kDefaultAlignment) override
     {
+        void* const p = try_allocate(size, alignment);
+        if (p != nullptr || size == 0U)
+        {
+            return p;
+        }
         const std::lock_guard<std::mutex> lock(m_mutex);
         return m_inner->allocate(size, alignment);
     }
@@ -51,8 +57,12 @@ public:
     }
     void* reallocate(void* p, usize old_size, usize new_size, usize alignment = kDefaultAlignment) override
     {
-        const std::lock_guard<std::mutex> lock(m_mutex);
-        return m_inner->reallocate(p, old_size, new_size, alignment);
+        void* q = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            q = m_inner->reallocate(p, old_size, new_size, alignment);
+        }
+        return q != nullptr ? q : refuse(new_size, alignment);
     }
     [[nodiscard]] usize allocation_size(const void* p) const noexcept override
     {
@@ -61,8 +71,12 @@ public:
     }
     [[nodiscard]] void* try_allocate(usize size, usize alignment = kDefaultAlignment) override
     {
-        const std::lock_guard<std::mutex> lock(m_mutex);
-        return m_inner->try_allocate(size, alignment);
+        void* p = nullptr;
+        {
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            p = m_inner->try_allocate(size, alignment);
+        }
+        return p != nullptr ? p : refuse(size, alignment);
     }
 
     [[nodiscard]] IAllocator* inner() const noexcept { return m_inner; }

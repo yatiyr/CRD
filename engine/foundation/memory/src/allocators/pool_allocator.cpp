@@ -127,7 +127,7 @@ void* PoolAllocator::try_allocate(usize size, usize alignment)
 {
     if (size == 0U || size > m_slot_size || !is_pow2(alignment) || alignment > m_slot_alignment)
     {
-        return nullptr; // the request does not fit a slot: refuse, never assert
+        return refuse(size, alignment); // the request does not fit a slot: refuse, never assert
     }
     return allocate(size, alignment);
 }
@@ -138,13 +138,10 @@ void* PoolAllocator::allocate(usize size, usize alignment)
     CRD_ASSERT(size <= m_slot_size);
     CRD_ASSERT(is_pow2(alignment));
     CRD_ASSERT(alignment <= m_slot_alignment);
-    (void)size;
-    (void)alignment;
-
     if (!m_free_head)
     {
         CRD_LOG_WARN(g_log_memory, "{} exhausted ({} of {} slots in use)", m_name, m_in_use, m_slot_count);
-        return nullptr;
+        return refuse(size, alignment);
     }
 
     FreeNode* node = m_free_head;

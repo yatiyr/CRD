@@ -1288,14 +1288,16 @@ TEST_CASE("flight trigger: allocation failure and resource pressure trigger thro
         cp::FlightRecorder r;
         REQUIRE(r.init(small_policy(16U, 8U, 2U)) == cp::FlightPolicyStatus::Committed);
         crd::memory::LinearAllocator linear(4096U, nullptr, "scratch-linear");
-        cp::FlightAllocatorWatch     watch(&linear, &r);
+        cp::FlightAllocatorWatch     watch(&r);
+        REQUIRE(watch.watch(&linear));
+        CHECK(linear.refusal_observer() == &watch);
+        CHECK_FALSE(watch.watch(&linear)); // one allocator per watch, one observer per allocator
 
         record_n(r, 0U, 3U);
-        void* ok = watch.try_allocate(1024U, 16U);
+        void* ok = linear.try_allocate(1024U, 16U);
         CHECK(ok != nullptr);
-        CHECK(watch.owns(ok));
         CHECK(watch.failures() == 0U);
-        CHECK(watch.try_allocate(1U << 20U, 16U) == nullptr);
+        CHECK(linear.try_allocate(1U << 20U, 16U) == nullptr);
         CHECK(watch.failures() == 1U);
         record_n(r, 3U, 2U);
 
@@ -1306,7 +1308,33 @@ TEST_CASE("flight trigger: allocation failure and resource pressure trigger thro
         CHECK(c.trigger.value_b == 16U);
         CHECK(c.trigger.message_view().find("scratch-linear") != cont::StringView::npos);
         CHECK(c.pre_retained == 3U);
-        watch.deallocate(ok);
+        linear.deallocate(ok);
+        watch.release();
+        CHECK(linear.refusal_observer() == nullptr);
+        CHECK(linear.try_allocate(1U << 20U, 16U) == nullptr);
+        CHECK(watch.failures() == 1U); // released: not heard
+    }
+
+    SECTION("either side may go first")
+    {
+        cp::FlightRecorder r;
+        REQUIRE(r.init(small_policy(16U, 8U, 2U)) == cp::FlightPolicyStatus::Committed);
+        crd::memory::LinearAllocator outlives(256U, nullptr, "outlives-the-watch");
+        {
+            cp::FlightAllocatorWatch watch(&r);
+            REQUIRE(watch.watch(&outlives));
+        }
+        CHECK(outlives.refusal_observer() == nullptr); // the destroyed watch detached itself
+        CHECK(outlives.try_allocate(1024U, 16U) == nullptr);
+
+        cp::FlightAllocatorWatch watch(&r);
+        {
+            crd::memory::LinearAllocator gone(256U, nullptr, "gone-first");
+            REQUIRE(watch.watch(&gone));
+        }
+        CHECK(watch.watched() == nullptr); // the destroyed allocator told the watch
+        watch.release();                   // and releasing touches nothing
+        CHECK(watch.failures() == 0U);
     }
 
     SECTION("a streaming category over its budget")

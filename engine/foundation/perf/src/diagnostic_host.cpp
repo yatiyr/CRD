@@ -496,16 +496,16 @@ bool DiagnosticHost::serve(DiagCommandService& service)
 
 crd::memory::IAllocator* DiagnosticHost::watch_allocator(crd::memory::IAllocator* backing, const char* name)
 {
-    if (!m_started || m_modes.flight != DiagModeState::Active || m_alloc_watch != nullptr || backing == nullptr)
+    if (!m_started || m_modes.flight != DiagModeState::Active || m_alloc_watched || !m_alloc_watch.watch(backing))
     {
         return nullptr; // one per host
     }
-    m_alloc_watch = std::make_unique<FlightAllocatorWatch>(backing, &m_recorder, name);
+    m_alloc_watched = true;
     if (m_modes.faults != DiagModeState::Active)
     {
-        return m_alloc_watch.get();
+        return backing; // observed, not decorated: its successful calls cost nothing more
     }
-    m_alloc_faults = std::make_unique<FaultAllocator>(m_alloc_watch.get(), &m_injector, name);
+    m_alloc_faults = std::make_unique<FaultAllocator>(backing, &m_injector, name);
     return m_alloc_faults.get();
 }
 
@@ -565,6 +565,7 @@ void DiagnosticHost::undo_start() noexcept
         uninstall_flight_assert_trigger();
         m_assert_trigger = false;
     }
+    m_alloc_watch.release(); // the watched allocator may outlive the host
     if (m_recorder.is_initialized())
     {
         m_recorder.shutdown(); // a pending capture is delivered (and written) first

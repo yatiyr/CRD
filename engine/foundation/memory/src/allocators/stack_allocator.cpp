@@ -67,7 +67,7 @@ void* StackAllocator::allocate(usize size, usize alignment)
         !checked_add(new_offset, size, &new_offset))
     {
         CRD_LOG_ERROR(g_log_memory, "{} size arithmetic overflow (requested {})", m_name, size);
-        return nullptr;
+        return refuse(size, alignment);
     }
     const usize padding = aligned - current;
 
@@ -75,7 +75,7 @@ void* StackAllocator::allocate(usize size, usize alignment)
     {
         CRD_LOG_ERROR(g_log_memory, "{} exhausted (requested {} + {} pad, have {} of {})", m_name, size, padding,
                       m_capacity - m_offset, m_capacity);
-        return nullptr;
+        return refuse(size, alignment);
     }
 
     // The statistics charge what the arena consumed, alignment padding included, so bytes_in_use equals used() and

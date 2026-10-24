@@ -27,9 +27,14 @@
 //   allocate-aligned-array-or-fatal   the explicit-alignment form of allocate_array_or_fatal
 //   allocate-array-or-fatal-overflow  a count whose byte size overflows: no allocation can hold it, the same fatal
 //
-// The assert platform handler turns the expected fatal into exit 42 and any other assert into 97 (as in the
-// observer-swap specimen). If reallocate returns at all, the specimen exits 0, which the consuming test rejects, so a
-// missing check cannot pass. An unknown mode exits 96.
+// Refusal before the fatal (DIAG.11b): every out-of-memory mode above observes its allocator's refusals
+// (IRefusalObserver), and these allocate a request no allocator holds:
+//   vm-allocate-huge, malloc-allocate-huge  VirtualMemoryAllocator and the default (malloc) allocator
+//   ts-allocate-huge, diag-allocate-huge    ThreadSafeAllocator and DiagnosticAllocator over a TlsfAllocator
+//
+// The assert platform handler turns the expected fatal into exit 42 (95 when an observed allocator had not reported
+// the refusal first) and any other assert into 97 (as in the observer-swap specimen). If reallocate returns at all, the
+// specimen exits 0, which the consuming test rejects, so a missing check cannot pass. An unknown mode exits 96.
 
 #define CRD_DIAG_SPECIMEN_ROUTE_ABSENT // no sanitizer involved: this is an engine-fatal control
 
@@ -43,9 +48,12 @@
 #include <crd/memory/allocators/pool_allocator.hpp>
 #include <crd/memory/allocators/ring_allocator.hpp>
 #include <crd/memory/allocators/stack_allocator.hpp>
+#include <crd/memory/allocators/thread_safe_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/allocators/virtual_memory_allocator.hpp>
 #include <crd/memory/asan_poison.hpp>
 #include <crd/memory/construct.hpp>
+#include <crd/memory/diagnostic_allocator.hpp>
 
 #include <cstdint>
 #include <cstdlib>
@@ -54,15 +62,35 @@
 namespace
 {
 const char* g_expected_fatal = nullptr; // the CRD_FATAL message this mode must reach
+bool g_observed = false;                // an observer was installed: the refusal must be reported first
+bool g_refused = false;
 
 int alloc_fatal_assert_handler(const char* formatted_message)
 {
     if (g_expected_fatal != nullptr && formatted_message != nullptr &&
         std::strstr(formatted_message, g_expected_fatal) != nullptr)
     {
-        std::_Exit(42); // the expected fatal fired
+        std::_Exit(g_observed && !g_refused ? 95 : 42); // the expected fatal fired (95: unreported)
     }
     std::_Exit(97); // some other assert fired first
+}
+
+class RefusalFlag final : public crd::memory::IRefusalObserver
+{
+public:
+    void on_refused(const crd::memory::IAllocator& /*allocator*/, crd::usize /*size*/,
+                    crd::usize /*alignment*/) noexcept override
+    {
+        g_refused = true;
+    }
+    void on_allocator_gone(const crd::memory::IAllocator& /*allocator*/) noexcept override {}
+};
+RefusalFlag g_refusal_flag;
+
+void observe(crd::memory::IAllocator& allocator)
+{
+    allocator.observe_refusals(&g_refusal_flag);
+    g_observed = true;
 }
 
 // A parent that grants `allowance` requests from the default allocator and then refuses every later one, returning
@@ -187,6 +215,7 @@ private:
     {
         g_expected_fatal = "GrowablePoolAllocator: out of memory";
         mem::GrowablePoolAllocator a(64U, 16U, 16U, &none, "alloc-fatal-gpool");
+        observe(a);
         (void)a.allocate(64U, 16U);
         return true;
     }
@@ -240,6 +269,50 @@ private:
     return run_parent_refuses_mode(mode);
 }
 
+// The refusal-before-fatal modes. Returns false for an unknown mode.
+[[nodiscard]] bool run_refusal_mode(const char* mode)
+{
+    namespace mem = crd::memory;
+    constexpr crd::usize bytes = crd::usize{64} * 1024U;
+    if (std::strcmp(mode, "vm-allocate-huge") == 0)
+    {
+        g_expected_fatal = "VirtualMemoryAllocator: out of reserved address space";
+        mem::VirtualMemoryAllocator::Config cfg;
+        cfg.reserve_bytes = crd::usize{1} << 20;
+        mem::VirtualMemoryAllocator a(cfg, "alloc-fatal-vm");
+        observe(a);
+        (void)a.allocate(crd::usize{2} << 20, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "malloc-allocate-huge") == 0)
+    {
+        g_expected_fatal = "Out of memory";
+        mem::IAllocator& a = *mem::default_allocator(); // the process's malloc allocator
+        observe(a);
+        (void)a.allocate(SIZE_MAX - 8U, 16U); // refused by the size check: malloc is never asked
+        return true;
+    }
+    if (std::strcmp(mode, "ts-allocate-huge") == 0)
+    {
+        g_expected_fatal = "TlsfAllocator: out of memory";
+        mem::TlsfAllocator heap(bytes, nullptr, "alloc-fatal-heap");
+        mem::ThreadSafeAllocator a(&heap, "alloc-fatal-ts");
+        observe(a);
+        (void)a.allocate(bytes * 2U, 16U);
+        return true;
+    }
+    if (std::strcmp(mode, "diag-allocate-huge") == 0)
+    {
+        g_expected_fatal = "TlsfAllocator: out of memory";
+        mem::TlsfAllocator heap(bytes, nullptr, "alloc-fatal-heap");
+        mem::DiagnosticAllocator a(&heap, mem::DiagnosticConfig{});
+        observe(a);
+        (void)a.allocate(bytes * 2U, 16U);
+        return true;
+    }
+    return run_or_fatal_mode(mode);
+}
+
 // Runs one mode. Returns false for an unknown mode; returning at all for a known mode means the fatal did not fire.
 [[nodiscard]] bool run_mode(const char* mode)
 {
@@ -248,6 +321,7 @@ private:
     {
         g_expected_fatal = "TlsfAllocator: reallocate size overflows";
         crd::memory::TlsfAllocator a(pool_bytes, nullptr, "alloc-fatal-tlsf");
+        observe(a);
         void* const p = a.allocate(64U, 16U);
         (void)a.reallocate(p, 64U, SIZE_MAX, 16U);
         return true;
@@ -256,6 +330,7 @@ private:
     {
         g_expected_fatal = "TlsfAllocator: out of memory";
         crd::memory::TlsfAllocator a(pool_bytes, nullptr, "alloc-fatal-tlsf");
+        observe(a);
         void* const p = a.allocate(64U, 16U);
         (void)a.reallocate(p, 64U, SIZE_MAX / 2U + 1U, 16U);
         return true;
@@ -264,6 +339,7 @@ private:
     {
         g_expected_fatal = "GrowableTlsfAllocator: out of memory";
         crd::memory::GrowableTlsfAllocator a(pool_bytes, nullptr, "alloc-fatal-gtlsf");
+        observe(a);
         void* const p = a.allocate(64U, 16U);
         (void)a.reallocate(p, 64U, SIZE_MAX, 16U);
         return true;
@@ -280,7 +356,7 @@ private:
         crd::memory::default_allocator()->deallocate(p);
         return true;
     }
-    return run_or_fatal_mode(mode);
+    return run_refusal_mode(mode);
 }
 } // namespace
 

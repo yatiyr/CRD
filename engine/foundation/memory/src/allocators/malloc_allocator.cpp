@@ -120,6 +120,7 @@ void* MallocAllocator::try_allocate(usize size, usize alignment)
     {
         return nullptr;
     }
+    const usize requested = alignment; // what a refusal reports
     if (alignment < kMinAlignment)
     {
         alignment = kMinAlignment;
@@ -129,12 +130,12 @@ void* MallocAllocator::try_allocate(usize size, usize alignment)
     // Checked: a huge size or alignment is refused, never wrapped into a small block (DIAG.3a).
     if (log2 > kMaxAlignmentLog2 || !checked_add(size, kHeaderBytes + padding_budget(alignment), &total))
     {
-        return nullptr;
+        return refuse(size, requested);
     }
     auto* const raw = static_cast<u8*>(std::malloc(total));
     if (raw == nullptr)
     {
-        return nullptr;
+        return refuse(size, requested);
     }
     const auto first = reinterpret_cast<std::uintptr_t>(raw) + kHeaderBytes;
     const auto lead = static_cast<usize>((alignment - (first & (alignment - 1U))) & (alignment - 1U));

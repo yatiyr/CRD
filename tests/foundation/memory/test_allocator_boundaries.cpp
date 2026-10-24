@@ -76,25 +76,58 @@ enum class Ownership : crd::u8
     AlwaysFalse,
 };
 
-// The shared contract.
+// Counts the refusals an allocator reports to its observer (IAllocator::refuse, DIAG.11b) and keeps the last one.
+class RefusalCount final : public mem::IRefusalObserver
+{
+public:
+    void on_refused(const mem::IAllocator& allocator, crd::usize size, crd::usize alignment) noexcept override
+    {
+        ++count;
+        last_allocator = &allocator;
+        last_size = size;
+        last_alignment = alignment;
+    }
+    void on_allocator_gone(const mem::IAllocator& /*allocator*/) noexcept override {}
+
+    crd::usize count = 0U;
+    const mem::IAllocator* last_allocator = nullptr;
+    crd::usize last_size = 0U;
+    crd::usize last_alignment = 0U;
+};
+
+// The shared contract. Every refusal of a nonzero request is reported once to the allocator's observer, with the
+// request; a zero size and a granted request are not.
 void check_boundaries(mem::IAllocator& a, const char* name, Ownership ownership = Ownership::Exact)
 {
     INFO("allocator: " << name);
+    RefusalCount refusals;
+    a.observe_refusals(&refusals);
     CHECK(a.try_allocate(0U, 16U) == nullptr); // zero size: nullptr, never a block and never an assert
 
     void* first = a.try_allocate(kBlock, 16U);
     REQUIRE(first != nullptr);
     CHECK(aligned(first, 16U));
     fill(first, 0xA5U);
+    CHECK(refusals.count == 0U);
 
+    crd::usize expected = 0U;
     for (const crd::usize size : kHugeSizes)
     {
         INFO("size " << size);
         CHECK(a.try_allocate(size, 16U) == nullptr); // never a wrapped, small allocation
+        CHECK(refusals.count == ++expected);
+        CHECK(refusals.last_allocator == &a);
+        CHECK(refusals.last_size == size);
+        CHECK(refusals.last_alignment == 16U);
     }
     CHECK(a.try_allocate(kBlock, kHugeAlignment) == nullptr); // an unsatisfiable alignment never wraps the address
+    CHECK(refusals.count == ++expected);
+    CHECK(refusals.last_size == kBlock);
+    CHECK(refusals.last_alignment == kHugeAlignment);
 
     void* second = a.try_allocate(kBlock, 32U); // still usable after every refusal
+    CHECK(refusals.count == expected);
+    a.observe_refusals(nullptr);
     REQUIRE(second != nullptr);
     CHECK(aligned(second, 32U));
     CHECK(second != first);
@@ -196,10 +229,12 @@ namespace
 constexpr crd::usize kMaxBlocks = 512U;
 
 // Allocates `block`-byte blocks with try_allocate until it refuses. The refusal must come within kMaxBlocks, the
-// allocator must survive it, and the first block must keep its bytes. Returns how many blocks succeeded; `blocks`
-// receives them.
+// allocator must survive it, report it to its observer once, and the first block must keep its bytes. Returns how
+// many blocks succeeded; `blocks` receives them.
 crd::usize exhaust(mem::IAllocator& a, crd::usize block, void* (&blocks)[kMaxBlocks])
 {
+    RefusalCount refusals;
+    a.observe_refusals(&refusals);
     crd::usize n = 0U;
     while (n < kMaxBlocks)
     {
@@ -211,8 +246,11 @@ crd::usize exhaust(mem::IAllocator& a, crd::usize block, void* (&blocks)[kMaxBlo
         blocks[n] = p;
         ++n;
     }
+    a.observe_refusals(nullptr);
     REQUIRE(n > 0U);
     REQUIRE(n < kMaxBlocks); // exhaustion was reached and refused, not an endless supply
+    CHECK(refusals.count == 1U);
+    CHECK(refusals.last_size == block);
     return n;
 }
 } // namespace
@@ -328,8 +366,31 @@ TEST_CASE("allocator boundaries: an unsatisfiable reallocate reaches the out-of-
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " reason=" << o.reason.c_str());
         CHECK(cont::StringView{o.identity} == cont::StringView{"crd-diag-alloc-fatal-specimen"});
-        // 42 = the expected fatal fired; 97 = a different assert fired first; 0 = reallocate returned (the wrap this
-        // test exists to catch); 96 = unknown mode.
+        // 42 = the expected fatal fired; 95 = it fired before the observed refusal was reported; 97 = a different
+        // assert fired first; 0 = reallocate returned (the wrap this test exists to catch); 96 = unknown mode.
+        CHECK(o.exit_code == 42);
+    }
+}
+
+TEST_CASE("allocator refusals: a fatal-on-OOM allocate reports its refusal to the observer before its fatal",
+          "[memory][contract][diag][harness]")
+{
+    // DIAG.11b: the diagnostic host observes an allocator instead of decorating it, so the allocator's own fatal path
+    // must report first. The reallocate and growable-pool modes observe their allocator as well.
+    namespace cd = crd::diag;
+    namespace cont = crd::containers;
+    const char* const modes[] = {"vm-allocate-huge", "malloc-allocate-huge", "ts-allocate-huge", "diag-allocate-huge"};
+    for (const char* mode : modes)
+    {
+        cd::Expectation e;
+        e.want = cd::Expectation::Want::CleanExit; // exit_code is the oracle here, not the verdict
+        cont::Array<cont::String> args;
+        args.push_back(cont::String{mode});
+        const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
+        INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
+                     << " reason=" << o.reason.c_str());
+        // 42 = reported, then the expected fatal; 95 = the fatal without the report; 97 = another assert first;
+        // 0 = allocate returned; 96 = unknown mode.
         CHECK(o.exit_code == 42);
     }
 }
@@ -1133,9 +1194,9 @@ TEST_CASE("allocator ownership: an arena refused its backing memory or handed an
         const cd::Outcome o = cd::run_specimen(cont::String{CRD_DIAG_ALLOC_FATAL_SPECIMEN}, args, e);
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " reason=" << o.reason.c_str());
-        // 42 = the arena's own fatal fired; 97 = another assert fired first (an ignorable assert where the fatal
-        // belongs); 0 = the arena was built on null and returned; 96 = unknown mode. A crash on the null buffer is
-        // none of these.
+        // 42 = the arena's own fatal fired; 95 = gpool's fired before its observed refusal was reported; 97 = another
+        // assert fired first (an ignorable assert where the fatal belongs); 0 = the arena was built on null and
+        // returned; 96 = unknown mode. A crash on the null buffer is none of these.
         CHECK(o.exit_code == 42);
     }
 }

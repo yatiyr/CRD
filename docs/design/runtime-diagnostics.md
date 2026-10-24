@@ -1317,9 +1317,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
   headless with no platform handler, the window is closed Fatal and delivered first), fatal invariants (new
   `get_fatal_invariant_handler` and `default_fatal_invariant`, chained the same way), queue starvation and hangs
   (`flight_on_starvation` / `flight_on_hang` for the jobs watchdog's handlers), frame hitches (`FlightFrameWatch`,
-  fed by the host's frame boundaries), allocation failure (`FlightAllocatorWatch`, an `IAllocator` decorator: a failed
-  `try_allocate` triggers; a failed `allocate` triggers before the backing allocator's own out-of-memory path, whose
-  `CRD_FATAL` then closes the window through the assert trigger) and resource pressure (`FlightPressurePolicy`, an
+  fed by the host's frame boundaries), allocation failure (`FlightAllocatorWatch`, the `IRefusalObserver` of one
+  allocator since DIAG.11b, an `IAllocator` decorator before: each refused request triggers; a fatal-on-OOM `allocate`
+  reports before its own `CRD_FATAL`, which then closes the window through the assert trigger) and resource pressure (`FlightPressurePolicy`, an
   `IResidencyPolicy` decorator that triggers on each `StreamingAllocator` eviction request).
 
 Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-fault-injection.md)):
@@ -1509,9 +1509,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-sandbox-flight-hos
   handlers never fire); frame hitches, fed from the top of each frame-loop iteration (start to start, so no `continue`
   skips a frame); and allocation failure at the resource manager's allocator. The sandbox has no `StreamingAllocator`,
   so the resource-pressure trigger has no seam in this host.
-- The resource manager allocates through `FaultAllocator` over `FlightAllocatorWatch` over the arena: an injected
-  failure is one injected-fault capture (the watch never sees the injected null, so nothing is suppressed), and a real
-  failure of the arena an allocation-failure capture.
+- The resource manager allocates through `FaultAllocator` over the arena, whose refusals `FlightAllocatorWatch`
+  observes: an injected failure is one injected-fault capture (the arena never sees the injected request, so nothing
+  is suppressed), and a real failure of the arena an allocation-failure capture.
 - The recorder's sink is a `FlightCommandHost` whose module snapshot is taken at start and refreshed once the GPU
   device is up (its driver's modules load then). With `--flight-dir <dir>` every delivered capture is also written as
   `flight-<n>.cdb` (the first free n, never over an existing file; the newest `kDefaultMaxBundles` are kept). The
@@ -2761,7 +2761,7 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   profiling also compiled-out), basic (the `DiagnosticHost` with `assets/diag/overhead_basic.flight.toml`, Warning and
   above), full (`overhead_full.flight.toml`, every event, plus the profiler, the jobs adapter and the CEIR profiling
   bridge). The harness is `tests/support/diag-overhead` (`crd-diag-overhead`, one workload and mode per process, record
-  `cerid-diag-overhead/1`); workloads `alloc` (TLSF heap behind the allocator watch), `jobs` (2048 tiny jobs on a
+  `cerid-diag-overhead/1`); workloads `alloc` (a TLSF heap the host's allocator watch observes), `jobs` (2048 tiny jobs on a
   pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program)
   and `events` (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
 - What holds on every lane: the 12 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
@@ -2779,7 +2779,8 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   on offline where resolved. Violated and open: the disabled mode on allocation-heavy frames (+37.7%, the allocator
   statistics `memory_stats.hpp` tracks in every profiling build, shown by experiment) and on offline (+6.6%; +4.6%
   without the statistics, unattributed); the basic mode on allocation-heavy frames (+4.0% to +5.7%, the allocator
-  watch's forwarding call the remaining candidate). Jobs (2026-10-24,
+  watch's forwarding; since 2026-10-24 the watch observes refusals instead and basic is within 2% there,
+  [session](../sessions/2026-10-24-diag-11b-basic-allocator-watch.md)). Jobs (2026-10-24,
   [session](../sessions/2026-10-24-diag-11b-jobs-cpu-per-frame.md)): unresolved on every tuple with an eight-thread
   pool on sixteen logical processors (eight cores), where thread placement spreads one process's frame from another's
   by 7.6%; with a four-thread pool on eight cores, one logical processor each (2-3%), and 96 to 288 processes per arm,

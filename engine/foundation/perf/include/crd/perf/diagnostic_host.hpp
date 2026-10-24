@@ -261,9 +261,10 @@ public:
     // a command could not be registered. Call once, after start(); the service must be destroyed before this host.
     [[nodiscard]] bool serve(DiagCommandService& service);
 
-    // The allocator to hand an owner instead of `backing`: injected failures first (when fault injection runs), then
-    // real failures reported as allocation-failure triggers, then `backing`. One per host; nullptr when the recorder
-    // does not run, `backing` is null or one was already made. It must not outlive the host.
+    // The allocator to hand an owner instead of `backing`: `backing` itself, whose refusals the host observes and
+    // reports as allocation-failure triggers until stop(), or with fault injection running a decorator that injects
+    // failures first and must not outlive the host. One per host; nullptr when the recorder does not run, `backing`
+    // is null or already observed, or one was already made. Either the host or `backing` may go first.
     [[nodiscard]] crd::memory::IAllocator* watch_allocator(crd::memory::IAllocator* backing, const char* name);
 
     // Merge the loaded modules into the snapshot bundles carry. Call after loading modules, on the host's thread.
@@ -311,7 +312,7 @@ private:
     FlightCommandHost                       m_command_host{m_recorder};
     FaultInjector                           m_injector;
     FlightFrameWatch                        m_frame_watch{&m_recorder};
-    std::unique_ptr<FlightAllocatorWatch>   m_alloc_watch;
+    FlightAllocatorWatch                    m_alloc_watch{&m_recorder};
     std::unique_ptr<FaultAllocator>         m_alloc_faults;
     DiagnosticHostProfile                   m_profile;
     DiagnosticHostModes                     m_modes;
@@ -323,6 +324,7 @@ private:
     bool                                    m_jobs_handlers  = false;
     bool                                    m_io_hook        = false;
     bool                                    m_gpu_hook       = false;
+    bool                                    m_alloc_watched  = false; // watch_allocator answered once
     mutable std::mutex                      m_bundle_mutex; // the capture directory, the bound, the name, last_bundle
     cont::String                            m_capture_dir;
     crd::u32                                m_max_bundles = kDefaultMaxBundles;

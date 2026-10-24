@@ -196,14 +196,36 @@ bool FlightFrameWatch::note_frame(crd::u64 begin_ns, crd::u64 end_ns) noexcept
            FlightTriggerResult::Started;
 }
 
-FlightAllocatorWatch::FlightAllocatorWatch(crd::memory::IAllocator* backing, FlightRecorder* recorder,
-                                           const char* name) noexcept
-    : m_backing(backing), m_recorder(recorder)
+bool FlightAllocatorWatch::watch(crd::memory::IAllocator* allocator) noexcept
 {
-    m_name = name;
+    if (m_allocator != nullptr || allocator == nullptr || allocator->refusal_observer() != nullptr)
+    {
+        return false;
+    }
+    m_allocator = allocator;
+    allocator->observe_refusals(this);
+    return true;
 }
 
-void FlightAllocatorWatch::report(crd::usize size, crd::usize alignment) noexcept
+void FlightAllocatorWatch::release() noexcept
+{
+    if (m_allocator != nullptr)
+    {
+        m_allocator->observe_refusals(nullptr);
+        m_allocator = nullptr;
+    }
+}
+
+void FlightAllocatorWatch::on_allocator_gone(const crd::memory::IAllocator& allocator) noexcept
+{
+    if (m_allocator == &allocator)
+    {
+        m_allocator = nullptr;
+    }
+}
+
+void FlightAllocatorWatch::on_refused(const crd::memory::IAllocator& allocator, crd::usize size,
+                                      crd::usize alignment) noexcept
 {
     m_failures.fetch_add(1U, std::memory_order_relaxed);
     if (m_recorder == nullptr)
@@ -212,51 +234,9 @@ void FlightAllocatorWatch::report(crd::usize size, crd::usize alignment) noexcep
     }
     char text[kFlightTriggerMessageBytes];
     (void)std::snprintf(text, sizeof(text), "allocator %s failed to allocate %llu bytes (alignment %llu)",
-                        (m_backing->name() != nullptr) ? m_backing->name() : "?",
-                        static_cast<unsigned long long>(size), static_cast<unsigned long long>(alignment));
+                        (allocator.name() != nullptr) ? allocator.name() : "?", static_cast<unsigned long long>(size),
+                        static_cast<unsigned long long>(alignment));
     (void)fire(m_recorder, FlightTrigger::AllocationFailure, kFlightCodeAllocationFailure, text, size, alignment);
-}
-
-void* FlightAllocatorWatch::allocate(crd::usize size, crd::usize alignment)
-{
-    if (size == 0U)
-    {
-        return m_backing->allocate(size, alignment);
-    }
-    void* p = m_backing->try_allocate(size, alignment);
-    if (p != nullptr)
-    {
-        return p;
-    }
-    // Record the failure before the backing allocator's own out-of-memory path runs: for a fatal-on-OOM allocator
-    // that path is CRD_FATAL, which reaches the assert trigger (when installed) and closes this window as Fatal.
-    report(size, alignment);
-    return m_backing->allocate(size, alignment);
-}
-
-void* FlightAllocatorWatch::try_allocate(crd::usize size, crd::usize alignment)
-{
-    void* p = m_backing->try_allocate(size, alignment);
-    if (p == nullptr && size > 0U)
-    {
-        report(size, alignment);
-    }
-    return p;
-}
-
-void FlightAllocatorWatch::deallocate(void* p) noexcept
-{
-    m_backing->deallocate(p);
-}
-
-bool FlightAllocatorWatch::owns(const void* p) const noexcept
-{
-    return m_backing->owns(p);
-}
-
-crd::usize FlightAllocatorWatch::allocation_size(const void* p) const noexcept
-{
-    return m_backing->allocation_size(p);
 }
 
 crd::u64 FlightPressurePolicy::evict(crd::memory::StreamingAllocator& sa, crd::memory::CategoryId category,
