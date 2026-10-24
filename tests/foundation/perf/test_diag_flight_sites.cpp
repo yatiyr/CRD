@@ -11,6 +11,7 @@
 //   filtered, exactly as a direct record() does.
 // - no waiting: record() takes no lock. While another thread holds the ring's collection lock (the test seam), a Basic
 //   recorder's informational record() and admit() return, and so does a Warning, which the recorder keeps.
+// - exact counts: left-out events admitted on more threads than own a tally stripe are all counted.
 //
 // The measured cost of each mode is the overhead board's (scripts/diag-overhead.py, docs/bench); these cases only
 // state what must hold on every lane. Contract: docs/design/runtime-diagnostics.md (DIAG.11b); ADR-0133.
@@ -233,3 +234,44 @@ TEST_CASE("diag 11b sites: neither a left-out nor a kept event waits on a collec
     CHECK(basic.total_recorded() == 1U);
 }
 #endif
+
+TEST_CASE("diag 11b sites: left-out events counted on more threads than own a stripe are all counted",
+          "[perf][diag][diag11b][sites][parallel]")
+{
+    // The left-out tally's first 48 threads in the process add to a stripe each without a locked instruction; later
+    // threads share 16 stripes with fetch_add. 96 threads started together put at least 48 on the shared stripes,
+    // three to a stripe, whatever earlier cases used, so a shared add that is not atomic, or a shared stripe an owner
+    // also writes, loses counts. Distinct OS threads, not jobs: the stripe belongs to the thread.
+    cp::FlightRecorder basic;
+    REQUIRE(basic.init(policy(cp::FlightDetail::Basic)) == cp::FlightPolicyStatus::Committed);
+    constexpr u32 k_threads = 96U;
+    constexpr u32 k_adds = 200000U;
+    std::atomic<bool> go{false};
+    std::atomic<u32> admitted{0U};
+    std::thread adders[k_threads];
+    for (auto& t : adders)
+    {
+        t = std::thread(
+            [&basic, &go, &admitted]()
+            {
+                while (!go.load(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+                for (u32 i = 0U; i < k_adds; ++i)
+                {
+                    if (basic.admit(cp::Severity::Info))
+                    {
+                        admitted.fetch_add(1U, std::memory_order_relaxed);
+                    }
+                }
+            });
+    }
+    go.store(true, std::memory_order_release);
+    for (auto& t : adders)
+    {
+        t.join();
+    }
+    CHECK(admitted.load(std::memory_order_relaxed) == 0U);
+    CHECK(basic.total_filtered() == static_cast<u64>(k_threads) * k_adds);
+}

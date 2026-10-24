@@ -2784,7 +2784,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   pool on sixteen logical processors (eight cores), where thread placement spreads one process's frame from another's
   by 7.6%; with a four-thread pool on eight cores, one logical processor each (2-3%), and 96 to 288 processes per arm,
   basic is within on all three tuples on the frame time and the CPU per frame, once left-out events are counted in
-  cache-line stripes (one counter every thread wrote cost linux-gcc-relwithdebinfo's basic about 1.2 points); the
+  cache-line stripes (one counter every thread wrote cost linux-gcc-relwithdebinfo's basic about 1.2 points), and the
+  first 48 threads own a stripe and add without a locked instruction: that add was nearly all of a left-out site's cost
+  (3.2 ns, now 1.0 ns), and on Windows it spaced the pool's contended dequeues so basic read below off (2026-10-24,
+  [session](../sessions/2026-10-24-diag-11b-jobs-basic-below-off.md)); the
   disabled arm's timing stays inside the two-binary floor (within on one Windows board, unresolved on the next), and
   its instructions decide (below). Reported: full mode. Of its mechanisms against "no blocking or global locking", the jobs
   adapter's token mutex and the flight recorder's ring mutex per kept event are gone (2026-10-24); the CEIR bridge's
