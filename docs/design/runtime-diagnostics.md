@@ -2878,10 +2878,15 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   Cost: crd-jobs' units again, the test unit and two links a lane; the cases take 0.8 s (win-debug) to 10.4 s
   (linux-gcc-asan). The race runbook's `ctest -R "^schedcheck: "` makes `crd-check-diag-runbooks` fail a tree that
   does not register them.
-- Not settled here: the repairs and the measurement gaps above;
-  independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
-  specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost
-  of the modes that are separate binaries or targeted (sanitizers, device validation), and the fuzz and soak cadence.
+- Modes and specimens in the conclusion artifact (2026-10-24, [session](../sessions/2026-10-24-diag-11b-conclusion-modes-labels.md)):
+  every lane's `conclusion.json` names the diagnostic modes its binaries are built with (`modes`, from the CMake
+  cache: ASan, UBSan, TSan, libFuzzer, coverage, asserts, profiling, clang-tidy) and counts the executed tests per
+  label (`results.labels`): `diag-fatal` (every `crd_diag_fatal_tests` mode), `diag-race` (the schedcheck cases),
+  `diag-overhead` and `fuzz`; the job summary shows both, so a lane that ran none reads 0. `dev.py plan` owns a
+  specimen's CTests through its artifact: `array.hpp` selects crd-containers' nine fatal modes.
+- Not settled here: the repairs and the measurement gaps above; independent external sampling and peer tools; the
+  hosted sanitizer, race, corpus and negative-control audit, with the measured cost of the modes that are separate
+  binaries or targeted (sanitizers, device validation), and the fuzz and soak cadence.
 
 <a id="diag-11c"></a>
 ## DIAG.11c — native qualification and portable capability boundary

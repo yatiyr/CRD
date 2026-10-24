@@ -19,10 +19,14 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = 'cerid-ci-evidence/1'
+# The diagnostic modes a lane's binaries are built with (runtime-diagnostics.md, DIAG.11b), named as a summary shows them.
+MODES = (('CRD_ENABLE_ASAN', 'ASan'), ('CRD_ENABLE_UBSAN', 'UBSan'), ('CRD_ENABLE_TSAN', 'TSan'),
+         ('CRD_ENABLE_FUZZER', 'libFuzzer'), ('CRD_ENABLE_COVERAGE', 'coverage'), ('CRD_ENABLE_ASSERTS', 'asserts'),
+         ('CRD_ENABLE_PROFILING', 'profiling'), ('CRD_ENABLE_CLANG_TIDY', 'clang-tidy'))
 CACHE_KEYS = ('CMAKE_GENERATOR', 'CMAKE_BUILD_TYPE', 'CMAKE_CONFIGURATION_TYPES', 'CMAKE_CXX_COMPILER',
               'CMAKE_INTERPROCEDURAL_OPTIMIZATION', 'CRD_SIMD_LEVEL', 'CRD_SHIPPING', 'CRD_DETERMINISTIC_FP',
-              'CRD_ENABLE_PROFILING', 'CRD_MODULES', 'CRD_BUILD_TESTS', 'CLANG_TIDY_EXE', 'CRD_ENABLE_PCH',
-              'CRD_COMPILER_LAUNCHER')
+              'CRD_MODULES', 'CRD_BUILD_TESTS', 'CLANG_TIDY_EXE', 'CRD_ENABLE_PCH',
+              'CRD_COMPILER_LAUNCHER') + tuple(key for key, _ in MODES)
 RUN_KEYS = ('GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_JOB', 'GITHUB_EVENT_NAME', 'GITHUB_REF', 'GITHUB_SHA',
             'RUNNER_OS', 'RUNNER_ARCH', 'ImageOS', 'ImageVersion')
 OUTPUT_TAIL_LINES = 60
@@ -79,8 +83,22 @@ def inventory_summary(path):
     return {'tests': len(tests), 'labels': labels, 'resource_locks': locks}
 
 
-def junit_summary(path):
-    """Counts, duration, failing tests with output tails and the slowest tests from a CTest JUnit document."""
+def test_labels(path):
+    """Each test's labels from a json-v1 inventory, without the `cerid.` ownership annotations."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    labels = {}
+    for test in json.loads(path.read_text(encoding='utf-8')).get('tests', []):
+        for prop in test.get('properties', []):
+            if prop['name'] == 'LABELS':
+                labels[test['name']] = [label for label in prop['value'] or [] if not label.startswith('cerid.')]
+    return labels
+
+
+def junit_summary(path, labels=None):
+    """Counts, duration, failing tests with output tails, the slowest tests and, per label, the executed tests'
+    outcomes from a CTest JUnit document; `labels` maps a test name to its labels (test_labels)."""
     path = Path(path)
     if not path.is_file():
         return None
@@ -89,23 +107,31 @@ def junit_summary(path):
     cases = []
     for suite in suites:
         cases.extend(suite.findall('testcase'))
-    failed, skipped, durations = [], 0, []
+    failed, skipped, durations, by_label = [], 0, [], {}
     for case in cases:
         name = case.get('name', '?')
         seconds = float(case.get('time') or 0.0)
         durations.append((seconds, name))
+        failure = case.find('failure')
         if case.find('skipped') is not None:
             skipped += 1
-            continue
-        failure = case.find('failure')
-        if failure is not None or case.get('status') == 'fail':
+            outcome = 'skipped'
+        elif failure is not None or case.get('status') == 'fail':
             output = (case.findtext('system-out') or '').splitlines()
             failed.append({'name': name, 'time': seconds, 'message': (failure.get('message') if failure is not None else '') or '',
                            'output_tail': output[-OUTPUT_TAIL_LINES:]})
+            outcome = 'failed'
+        else:
+            outcome = 'passed'
+        for label in (labels or {}).get(name, []):
+            tally = by_label.setdefault(label, {'tests': 0, 'passed': 0, 'failed': 0, 'skipped': 0})
+            tally['tests'] += 1
+            tally[outcome] += 1
     durations.sort(reverse=True)
     return {'tests': len(cases), 'failures': len(failed), 'skipped': skipped,
             'passed': len(cases) - len(failed) - skipped, 'duration_seconds': round(sum(d for d, _ in durations), 3),
-            'failed': failed, 'slowest': [{'name': n, 'time': round(t, 3)} for t, n in durations[:SLOWEST]]}
+            'failed': failed, 'slowest': [{'name': n, 'time': round(t, 3)} for t, n in durations[:SLOWEST]],
+            'labels': dict(sorted(by_label.items()))}
 
 
 def read_lines(path):
@@ -208,6 +234,8 @@ def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None,
     record['toolchain'] = toolchain(build_dir)
     if not record['toolchain']:
         missing.append('CMakeCache.txt')
+    record['modes'] = [name for key, name in MODES
+                       if record['toolchain'].get(key, '').upper() in ('ON', 'TRUE', 'YES', 'Y', '1')]
     census = read_lines(adapters)
     record['adapters'] = census
     if census is None:
@@ -219,7 +247,7 @@ def bundle(preset, build_dir, output, junit=None, inventory=None, adapters=None,
         missing.append('inventory')
     else:
         shutil.copyfile(inventory, output / 'inventory.json')
-    record['results'] = junit_summary(junit)
+    record['results'] = junit_summary(junit, test_labels(inventory))
     if record['results'] is None:
         missing.append('junit')
     else:
@@ -271,9 +299,10 @@ def summary_markdown(record):
                                                     tool.get('CMAKE_BUILD_TYPE') or tool.get('CMAKE_CONFIGURATION_TYPES', ''),
                                                     tool.get('cmake_version', '?'))),
             ('Switches', ', '.join('%s=%s' % (k, tool[k]) for k in ('CRD_SIMD_LEVEL', 'CRD_SHIPPING', 'CRD_DETERMINISTIC_FP',
-                                                                   'CRD_ENABLE_PROFILING', 'CMAKE_INTERPROCEDURAL_OPTIMIZATION',
+                                                                   'CMAKE_INTERPROCEDURAL_OPTIMIZATION',
                                                                    'CRD_ENABLE_PCH', 'CRD_COMPILER_LAUNCHER')
                                    if k in tool) or 'none recorded'),
+            ('Diagnostic modes', ', '.join(record.get('modes') or []) or 'none'),
             ('Adapters', '; '.join(record['adapters'][:6]) if record['adapters'] else 'not recorded'),
             ('Packages', '; '.join(record['packages'][:12]) if record.get('packages') else 'not recorded'),
             ('Build', build_markdown(record.get('build'))),
@@ -282,6 +311,10 @@ def summary_markdown(record):
              if inventory else 'not recorded'),
             ('Results', '%d executed: %d passed, %d failed, %d skipped in %.1f s' % (
                 results['tests'], results['passed'], results['failures'], results['skipped'], results['duration_seconds'])
+             if results else 'no JUnit document'),
+            ('By label', '; '.join('%s %d executed: %d passed, %d failed, %d skipped' % (
+                label, t['tests'], t['passed'], t['failed'], t['skipped'])
+                for label, t in results['labels'].items()) or 'no labelled test executed'
              if results else 'no JUnit document')]
     lines = ['### %s: %s' % (record['preset'], record['status']), '', '| Field | Value |', '|---|---|']
     lines += ['| %s | %s |' % (k, v.replace('|', '\\|')) for k, v in rows]

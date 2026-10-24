@@ -760,14 +760,16 @@ class CiEvidence(unittest.TestCase):
              '</testsuite>\n')
     INVENTORY = {'kind': 'ctest', 'tests': [
         {'name': 'slow', 'properties': [{'name': 'LABELS', 'value': ['gpu']}, {'name': 'RESOURCE_LOCK', 'value': ['crd_gpu_device']}]},
-        {'name': 'broken', 'properties': []}, {'name': 'absent', 'properties': [{'name': 'LABELS', 'value': ['gpu']}]}]}
+        {'name': 'broken', 'properties': [{'name': 'LABELS', 'value': ['cerid.test.target=broken']}]},
+        {'name': 'absent', 'properties': [{'name': 'LABELS', 'value': ['gpu']}]}]}
 
     def fixture(self, temp):
         build = Path(temp) / 'build'
         (build / 'Testing/Temporary').mkdir(parents=True)
         (build / 'CMakeFiles/4.3.2').mkdir(parents=True)
         (build / 'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Debug\nCRD_SIMD_LEVEL:STRING=sse2\n'
-                                              'CMAKE_GENERATOR:INTERNAL=Ninja\nOTHER:BOOL=ON\n', encoding='utf-8')
+                                              'CMAKE_GENERATOR:INTERNAL=Ninja\nOTHER:BOOL=ON\nCRD_ENABLE_ASAN:BOOL=ON\n'
+                                              'CRD_ENABLE_TSAN:BOOL=OFF\n', encoding='utf-8')
         (build / 'CMakeFiles/4.3.2/CMakeCXXCompiler.cmake').write_text(
             'set(CMAKE_CXX_COMPILER "cl.exe")\nset(CMAKE_CXX_COMPILER_ID "MSVC")\n'
             'set(CMAKE_CXX_COMPILER_VERSION "19.51.36246.0")\n', encoding='utf-8')
@@ -789,12 +791,15 @@ class CiEvidence(unittest.TestCase):
             self.assertEqual(record['toolchain']['CMAKE_CXX_COMPILER_VERSION'], '19.51.36246.0')
             self.assertEqual(record['toolchain']['CRD_SIMD_LEVEL'], 'sse2')
             self.assertNotIn('OTHER', record['toolchain'])
-            self.assertEqual(record['inventory'], {'tests': 3, 'labels': {'gpu': 2}, 'resource_locks': {'crd_gpu_device': 1}})
+            self.assertEqual(record['inventory'], {'tests': 3, 'labels': {'gpu': 2, 'cerid.test.target=broken': 1},
+                                                   'resource_locks': {'crd_gpu_device': 1}})
+            self.assertEqual(record['modes'], ['ASan'])
             results = record['results']
             self.assertEqual((results['tests'], results['passed'], results['failures'], results['skipped']), (3, 1, 1, 1))
             self.assertEqual(results['failed'][0]['name'], 'broken')
             self.assertEqual(results['failed'][0]['output_tail'], ['line1', 'line2', 'line3'])
             self.assertEqual([s['name'] for s in results['slowest']], ['slow', 'broken', 'absent'])
+            self.assertEqual(results['labels'], {'gpu': {'tests': 2, 'passed': 1, 'failed': 0, 'skipped': 1}})
             self.assertEqual(record['adapters'], ['Name : Microsoft Basic Render Driver', 'DriverVersion : 10.0'])
             self.assertEqual(json.loads((out / 'conclusion.json').read_text(encoding='utf-8'))['status'], 'fail')
             self.assertTrue((out / 'ctest-junit.xml').is_file() and (out / 'inventory.json').is_file())
@@ -802,6 +807,8 @@ class CiEvidence(unittest.TestCase):
             self.assertIn('### win-debug: fail', markdown)
             self.assertIn('`broken` (0.5 s): boom', markdown)
             self.assertIn('3 executed: 1 passed, 1 failed, 1 skipped', markdown)
+            self.assertIn('| Diagnostic modes | ASan |', markdown)
+            self.assertIn('| By label | gpu 2 executed: 1 passed, 0 failed, 1 skipped |', markdown)
             passed = ci_evidence.bundle('win-debug', build, out, adapters=adapters, outcome='success', environ={})
             self.assertEqual(passed['status'], 'pass')
             self.assertEqual(ci_evidence.bundle('win-debug', build, out, outcome='failure', environ={})['status'], 'failure')

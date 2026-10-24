@@ -65,4 +65,4 @@ target_link_libraries(crd-jobs-schedcheck-tests PRIVATE
     crd-jobs-schedcheck
     Catch2::Catch2WithMain)
 
-crd_discover_tests(crd-jobs-schedcheck-tests)
+crd_discover_tests(crd-jobs-schedcheck-tests PROPERTIES LABELS "diag;diag-race")

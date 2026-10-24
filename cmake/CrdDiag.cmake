@@ -25,7 +25,7 @@ endfunction()
 # specimen with the mode and passes only on its `CRD_DIAG_FATAL_OK <mode>` line, which the specimen prints when the
 # armed CRD_FATAL fired. Another assert, a crash, a hang or a clean return lacks that line and fails. The specimen gets
 # the shared specimen headers and is built with the owning test executable, so every lane that builds the tests runs
-# the modes.
+# the modes. The `diag-fatal` label counts them in a lane's conclusion.json (scripts/ci-evidence.py).
 function(crd_diag_fatal_tests specimen)
     cmake_parse_arguments(ARG "" "PREFIX;OWNER" "MODES" ${ARGN})
     if(NOT ARG_PREFIX OR NOT ARG_OWNER OR NOT ARG_MODES)
@@ -38,6 +38,7 @@ function(crd_diag_fatal_tests specimen)
         set_tests_properties("${ARG_PREFIX}-${mode}" PROPERTIES
             PASS_REGULAR_EXPRESSION "CRD_DIAG_FATAL_OK ${mode}"
             FAIL_REGULAR_EXPRESSION "CRD_DIAG_FATAL_OTHER"
-            TIMEOUT 60)
+            TIMEOUT 60
+            LABELS "diag;diag-fatal")
     endforeach()
 endfunction()

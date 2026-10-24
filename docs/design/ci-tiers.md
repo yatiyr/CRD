@@ -109,10 +109,13 @@ Every lane records the adapter census, configures, builds, writes the CTest inve
 [register gate](../third-party-defects.md) on every preset (lanes without entries require zero failures and
 propagate CTest's exit). `ci-evidence.py bundle` then always runs: it writes `conclusion.json` (schema
 `cerid-ci-evidence/1`: revision and tree hash, run identity, preset, generator, build type, compiler identity and
-version, CMake version, the Cerid switches from the cache, adapters, inventory counts with labels and resource
-locks, executed/passed/failed/skipped counts and duration, failing tests with their output tails, the slowest
-tests, the build board of the lane from its Ninja log (edges, span, edge sum, effective parallelism, slowest edges)
-and the sccache statistics of a cached lane ([build performance](build-performance.md)), the job status when the
+version, CMake version, the Cerid switches from the cache, the diagnostic modes the binaries are built with
+(`modes`: ASan, UBSan, TSan, libFuzzer, coverage, asserts, profiling, clang-tidy), adapters, inventory counts with
+labels and resource locks, executed/passed/failed/skipped counts and duration, overall and per label
+(`results.labels`: `diag-fatal` for the contract-fatal specimens, `diag-race` for the controlled-interleaving
+cases and `diag-overhead` for the overhead modes, all three also under `diag`, and `fuzz` for the corpus replays),
+failing tests with their output tails, the slowest tests, the build board of the lane from its Ninja log (edges,
+span, edge sum, effective parallelism, slowest edges) and the sccache statistics of a cached lane ([build performance](build-performance.md)), the job status when the
 bundle ran and what evidence was missing), copies the JUnit and inventory beside it, and appends a table to the job
 summary. The artifact `evidence-<preset>` carries the bundle and the CTest logs. The
 bundle never changes a lane's exit code.

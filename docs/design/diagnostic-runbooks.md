@@ -102,8 +102,8 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 |---|---|
 | Symptom | A job of a push or nightly run failed, or a run was cancelled after some of its jobs had finished. |
 | Command | `gh run list --branch main --limit 15`; `gh run view <run> --json jobs`; `gh api repos/yatiyr/CRD/actions/jobs/<job>/logs` |
-| Artifact | The job log; the lane's `evidence-<preset>` artifact (`conclusion.json`, the CTest JUnit file); the gate's line `registered failures for this lane`. |
-| Read | `gate: FAIL` names each unexpected failure and each registered test that did not fail. `registered TP-n: failed` is a known third-party defect ([register](../third-party-defects.md)); a failure seen before and never reproduced is in `tests/support/diag/nonreproduced-failures.json`. A cancelled run does not read as failed: read its finished jobs. |
+| Artifact | The job log; the lane's `evidence-<preset>` artifact (`conclusion.json`, the CTest JUnit file); the gate's line `registered failures for this lane`; the job summary's `Diagnostic modes` and `By label` rows. |
+| Read | `gate: FAIL` names each unexpected failure and each registered test that did not fail. `conclusion.json`'s `modes` names the lane's sanitizers and compiled-in diagnostics; `results.labels` counts the executed specimen (`diag-fatal`), race (`diag-race`), overhead (`diag-overhead`) and corpus (`fuzz`) tests, so a lane that ran none of them reads 0, not pass. `registered TP-n: failed` is a known third-party defect ([register](../third-party-defects.md)); a failure seen before and never reproduced is in `tests/support/diag/nonreproduced-failures.json`. A cancelled run does not read as failed: read its finished jobs. |
 | Next test | `python scripts/check-registered-failures.py --lane <preset> --junit <ctest-junit.xml> --ctest-exit <code>`; `python scripts/dev.py plan --build build/win-debug --path <failing file>`; `wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh test linux-gcc-asan -R "<failing test>"` |
 | Hosted | Every lane ends in the registered-failure gate. |
 | Adopt | `python scripts/check-registered-failures.py --lane <preset> --junit <file> --ctest-exit <code>` is the last line of a new lane's test step; a third-party failure joins the register only with its reproduction. |
@@ -227,7 +227,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Hosted | linux-gcc-asan (LeakSanitizer); every lane for the ownership cases and the overhead harness's lifetime ledger. |
 | Adopt | Register an allocator with the profiler, `crd::perf::register_allocator(...)`, before its first allocation, so `memory.allocators` lists it with its `statistics` field `complete`; a profiling build without `CRD_DEBUG` counts nothing an earlier allocation could unbalance and says `too_late` instead. |
 | Example | `tests/support/diag/specimens/leak_specimen.cpp` |
-| Cost | Counted on request since 2026-10-19: the disabled mode's allocation-heavy cost fell from +37.7% to +4.7% to +5.0%, the per-operation statistics gate, still over 1% ([board](../bench/2026-10-19-diag-11b-allocator-statistics.md#losses-and-what-they-belong-to), DIAG.11b clause (1)). |
+| Cost | Counted on request since 2026-10-19: the disabled mode's allocation-only microbenchmark fell from +37.7% to +4.7% to +5.0%, the per-operation statistics gate, its reported worst case ([board](../bench/2026-10-19-diag-11b-allocator-statistics.md#losses-and-what-they-belong-to)); on a realistic frame the gate is at most 0.18% of an offline frame, within 1% ([session](../sessions/2026-10-23-diag-11b-realistic-disabled-cost.md)). |
 | Owner | DIAG.3f, DIAG.6a |
 
 <a id="rb-gpu"></a>
