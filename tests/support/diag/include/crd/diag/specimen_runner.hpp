@@ -82,7 +82,7 @@ struct Outcome
     bool                    timed_out = false;
     bool                    memory_bound_enforced = false; // false on sanitizer children by design (RLIMIT_AS breaks ASan)
     crd::containers::String identity;   // as echoed by the specimen on stdout
-    crd::containers::String sanitizer;  // "asan" | "tsan" | "none", as echoed by the specimen
+    crd::containers::String sanitizer;  // "asan" | "tsan" | "ubsan" | "none", as echoed by the specimen
     crd::containers::String reason;     // human-readable detail
     crd::containers::String host_tuple; // os/isa/compiler recorded on every run
     crd::containers::String output;     // the child's stdout and stderr together, first kMaxOutputBytes kept
@@ -97,6 +97,7 @@ struct LanePromise
 {
     bool asan = false;             // CRD_ENABLE_ASAN for the configuration being built
     bool tsan = false;             // CRD_ENABLE_TSAN
+    bool ubsan = false;            // CRD_ENABLE_UBSAN
     bool leak_route = false;       // LeakSanitizer: ASan built by gcc or clang on Linux
     bool use_after_return = false; // fake-stack use-after-return reports: ASan built by gcc or clang
 };

@@ -186,7 +186,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 
 | Field | Value |
 |---|---|
-| Symptom | `heap-buffer-overflow`, `heap-use-after-free`, `use-after-poison`, `container-overflow`, `stack-use-after-return`, a UBSan `runtime error`, or a guarded allocator's `RedzoneOverrun`. |
+| Symptom | `heap-buffer-overflow`, `heap-use-after-free`, `use-after-poison`, `container-overflow`, `stack-use-after-return`, `stack-use-after-scope`, a UBSan `runtime error`, or a guarded allocator's `RedzoneOverrun`. |
 | Command (Windows) | `python scripts/dev.py check --build build/win-asan` |
 | Command (Linux) | `wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh dev linux-gcc-asan --build-timeout 3000` |
 | Artifact | The sanitizer report in the test log: the access, the allocation and free stacks, the shadow bytes; a `DiagnosticAllocator` report with both sites. |

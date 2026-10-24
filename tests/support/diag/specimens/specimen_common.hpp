@@ -51,6 +51,14 @@
 #define CRD_DIAG_HAS_TSAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
 #endif
 
+// UndefinedBehaviorSanitizer detection. GCC defines no macro for -fsanitize=undefined, so a specimen of a UBSan class
+// receives CRD_DIAG_UBSAN_BUILD from its target (tests/support/diag/CMakeLists.txt, from CRD_ENABLE_UBSAN).
+#if defined(CRD_DIAG_UBSAN_BUILD) && CRD_DIAG_UBSAN_BUILD
+#define CRD_DIAG_HAS_UBSAN 1 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#else
+#define CRD_DIAG_HAS_UBSAN 0 // NOLINT(cppcoreguidelines-macro-usage): controls #if branches.
+#endif
+
 // Back-compat alias: any sanitizer runtime present.
 #define CRD_DIAG_HAS_SANITIZER (CRD_DIAG_HAS_ASAN || CRD_DIAG_HAS_TSAN)
 
@@ -71,7 +79,13 @@
 // A specimen whose error class only AddressSanitizer catches defines CRD_DIAG_SPECIMEN_ASAN_CLASS. Without ASan its
 // route is absent even when another sanitizer is linked: a ThreadSanitizer build cannot catch a heap overflow, so
 // the label is "none" there rather than "tsan" (which would make the harness wait for a catch that cannot come).
+// A specimen whose class only UndefinedBehaviorSanitizer catches defines CRD_DIAG_SPECIMEN_UBSAN_CLASS: "ubsan" with
+// UBSan, "none" without, even on an ASan build (ASan would never report it).
 #if defined(CRD_DIAG_SPECIMEN_ROUTE_ABSENT)
+#define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
+#elif defined(CRD_DIAG_SPECIMEN_UBSAN_CLASS) && CRD_DIAG_HAS_UBSAN
+#define CRD_DIAG_SPECIMEN_SANITIZER "ubsan" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
+#elif defined(CRD_DIAG_SPECIMEN_UBSAN_CLASS)
 #define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.
 #elif defined(CRD_DIAG_SPECIMEN_ASAN_CLASS) && !CRD_DIAG_HAS_ASAN
 #define CRD_DIAG_SPECIMEN_SANITIZER "none" // NOLINT(cppcoreguidelines-macro-usage): selected by #if branches.

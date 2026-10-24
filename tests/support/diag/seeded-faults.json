@@ -17,7 +17,7 @@
         {
           "file": "tests/support/diag/CMakeLists.txt",
           "old": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\n",
-          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-leak-specimen crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
+          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-use-after-scope-specimen crd-diag-signed-overflow-specimen crd-diag-leak-specimen\n        crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
         }
       ],
       "build": [
@@ -51,6 +51,24 @@
           "when": {
             "asan": true,
             "msvc": false
+          }
+        },
+        {
+          "test": "diag 3f: stack-use-after-scope is caught by ASan, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: a signed overflow is caught by UBSan, or reported absent",
+          "text": [
+            "verdict=Unexpected"
+          ],
+          "when": {
+            "ubsan": true
           }
         },
         {
@@ -92,7 +110,7 @@
         {
           "file": "tests/support/diag/CMakeLists.txt",
           "old": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\n",
-          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-leak-specimen crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
+          "new": "crd_diag_specimen(crd-diag-leak-specimen SOURCES specimens/leak_specimen.cpp)\nforeach(_crd_seed crd-diag-heap-overflow-specimen crd-diag-use-after-free-specimen crd-diag-use-after-return-specimen\n        crd-diag-use-after-scope-specimen crd-diag-signed-overflow-specimen crd-diag-leak-specimen\n        crd-diag-data-race-specimen)\n    get_target_property(_crd_seed_options ${_crd_seed} COMPILE_OPTIONS)\n    list(FILTER _crd_seed_options EXCLUDE REGEX \"sanitize\")\n    set_target_properties(${_crd_seed} PROPERTIES COMPILE_OPTIONS \"${_crd_seed_options}\")\nendforeach()\n"
         },
         {
           "file": "tests/foundation/perf/CMakeLists.txt",
@@ -135,6 +153,24 @@
           ],
           "when": {
             "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: stack-use-after-scope is caught by ASan, or reported absent",
+          "text": [
+            "verdict=InstrumentAbsent"
+          ],
+          "when": {
+            "asan": true
+          }
+        },
+        {
+          "test": "diag 3f: a signed overflow is caught by UBSan, or reported absent",
+          "text": [
+            "verdict=Unexpected"
+          ],
+          "when": {
+            "ubsan": true
           }
         },
         {

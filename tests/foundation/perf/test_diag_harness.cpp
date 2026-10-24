@@ -34,6 +34,14 @@ cont::String use_after_return_specimen()
 {
     return cont::String{CRD_DIAG_USE_AFTER_RETURN_SPECIMEN};
 }
+cont::String use_after_scope_specimen()
+{
+    return cont::String{CRD_DIAG_USE_AFTER_SCOPE_SPECIMEN};
+}
+cont::String signed_overflow_specimen()
+{
+    return cont::String{CRD_DIAG_SIGNED_OVERFLOW_SPECIMEN};
+}
 cont::String leak_specimen()
 {
     return cont::String{CRD_DIAG_LEAK_SPECIMEN};
@@ -161,6 +169,54 @@ TEST_CASE("diag 3f: stack-use-after-return is qualified on the gcc/clang ASan la
     else
     {
         CHECK(o.verdict == cd::Verdict::InstrumentAbsent); // no ASan, or the MSVC-unqualified route
+    }
+}
+
+TEST_CASE("diag 3f: stack-use-after-scope is caught by ASan, or reported absent", "[diag][harness][diag3f]")
+{
+    // A local read after its block ended, while its frame lives: every ASan lane (gcc, clang, MSVC) poisons the slot
+    // at the end of the scope. Judged on the lane's promise (DIAG.10b); the report must name the class and the site.
+    // Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    const cd::LanePromise lane = cd::lane_promise();
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_read_dead_scope"};
+    const cd::Outcome o = cd::run_specimen(use_after_scope_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_asan=" << yes_no(lane.asan));
+    if (lane.asan)
+    {
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught);
+        CHECK(cont::StringView{o.output}.find("stack-use-after-scope") != cont::StringView::npos);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent);
+    }
+}
+
+TEST_CASE("diag 3f: a signed overflow is caught by UBSan, or reported absent", "[diag][harness][diag3f]")
+{
+    // The UndefinedBehaviorSanitizer class: on the UBSan lane (linux-gcc-asan, no recovery) the specimen tags "ubsan"
+    // and dies on the report, which must name the class and the site; elsewhere InstrumentAbsent. Judged on the
+    // lane's promise (DIAG.10b). This binary cannot show its own UBSan: GCC defines no macro for it.
+    // Contract: docs/design/runtime-diagnostics.md#diag-3f.
+    const cd::LanePromise lane = cd::lane_promise();
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::SanitizerCatch;
+    e.expected_site = cont::String{"crd_diag_add_overflow"};
+    const cd::Outcome o = cd::run_specimen(signed_overflow_specimen(), cont::Array<cont::String>{}, e);
+    INFO("verdict=" << cd::verdict_name(o.verdict) << " sanitizer=" << o.sanitizer.c_str()
+                    << " reason=" << o.reason.c_str() << " lane_ubsan=" << yes_no(lane.ubsan));
+    if (lane.ubsan)
+    {
+        CHECK(cont::StringView{o.sanitizer} == cont::StringView{"ubsan"});
+        CHECK(o.verdict == cd::Verdict::SanitizerCaught);
+        CHECK(cont::StringView{o.output}.find("signed integer overflow") != cont::StringView::npos);
+    }
+    else
+    {
+        CHECK(o.verdict == cd::Verdict::InstrumentAbsent);
     }
 }
 

@@ -186,6 +186,10 @@ bool carries_report(std::string_view out, std::string_view tag)
     {
         return out.find("WARNING: ThreadSanitizer") != std::string_view::npos;
     }
+    if (tag == "ubsan")
+    {
+        return out.find("runtime error: ") != std::string_view::npos;
+    }
     return false;
 }
 
@@ -243,6 +247,10 @@ const char* report_name(std::string_view tag)
     if (tag == "tsan")
     {
         return "a ThreadSanitizer";
+    }
+    if (tag == "ubsan")
+    {
+        return "an UndefinedBehaviorSanitizer";
     }
     return "a known sanitizer";
 }
@@ -643,6 +651,9 @@ LanePromise lane_promise()
 #endif
 #if CRD_DIAG_LANE_TSAN
     p.tsan = true;
+#endif
+#if CRD_DIAG_LANE_UBSAN
+    p.ubsan = true;
 #endif
     return p;
 }

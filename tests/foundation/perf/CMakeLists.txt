@@ -72,6 +72,8 @@ add_dependencies(crd-perf-tests
     crd-diag-heap-overflow-specimen
     crd-diag-use-after-free-specimen    # DIAG.3f
     crd-diag-use-after-return-specimen  # DIAG.3f
+    crd-diag-use-after-scope-specimen   # DIAG.3f
+    crd-diag-signed-overflow-specimen   # DIAG.3f
     crd-diag-leak-specimen              # DIAG.3f
     crd-diag-flight-fatal-specimen      # DIAG.9b: the fatal path writes the flight window before the process dies
     crd-diag-host-specimen              # DIAG.11a: an application that fails on purpose under its authored profile
@@ -83,6 +85,8 @@ target_compile_definitions(crd-perf-tests PRIVATE
     CRD_DIAG_HEAP_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-heap-overflow-specimen>"
     CRD_DIAG_USE_AFTER_FREE_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-free-specimen>"
     CRD_DIAG_USE_AFTER_RETURN_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-return-specimen>"
+    CRD_DIAG_USE_AFTER_SCOPE_SPECIMEN="$<TARGET_FILE:crd-diag-use-after-scope-specimen>"
+    CRD_DIAG_SIGNED_OVERFLOW_SPECIMEN="$<TARGET_FILE:crd-diag-signed-overflow-specimen>"
     CRD_DIAG_LEAK_SPECIMEN="$<TARGET_FILE:crd-diag-leak-specimen>"
     CRD_DIAG_FLIGHT_FATAL_SPECIMEN="$<TARGET_FILE:crd-diag-flight-fatal-specimen>"
     CRD_DIAG_HOST_SPECIMEN="$<TARGET_FILE:crd-diag-host-specimen>"

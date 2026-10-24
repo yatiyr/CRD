@@ -25,6 +25,7 @@ endif()
 target_compile_definitions(crd-diag-harness PRIVATE
     "CRD_DIAG_LANE_ASAN=$<IF:${_crd_diag_lane_asan},1,0>"
     "CRD_DIAG_LANE_TSAN=$<IF:$<BOOL:${CRD_ENABLE_TSAN}>,1,0>"
+    "CRD_DIAG_LANE_UBSAN=$<IF:$<BOOL:${CRD_ENABLE_UBSAN}>,1,0>"
     "CRD_DIAG_LANE_GNU=${_crd_diag_lane_gnu}"
     "CRD_DIAG_LANE_LINUX=${_crd_diag_lane_linux}")
 
@@ -51,6 +52,16 @@ crd_diag_specimen(crd-diag-use-after-return-specimen SOURCES specimens/use_after
 # The DIAG.3f heap-use-after-free specimen. Caught by core AddressSanitizer on every ASan lane
 # (win-asan and linux-gcc-asan); InstrumentAbsent on a non-sanitizer build.
 crd_diag_specimen(crd-diag-use-after-free-specimen SOURCES specimens/use_after_free_specimen.cpp)
+
+# The DIAG.3f stack-use-after-scope specimen. Caught by AddressSanitizer on every ASan lane (gcc, clang and MSVC
+# poison a local's slot at the end of its scope); InstrumentAbsent on a non-sanitizer build.
+crd_diag_specimen(crd-diag-use-after-scope-specimen SOURCES specimens/use_after_scope_specimen.cpp)
+
+# The DIAG.3f signed-overflow specimen. Caught by UndefinedBehaviorSanitizer on the UBSan lane (linux-gcc-asan); GCC
+# names no macro for -fsanitize=undefined, so the configuration tells the specimen. InstrumentAbsent elsewhere.
+crd_diag_specimen(crd-diag-signed-overflow-specimen SOURCES specimens/signed_overflow_specimen.cpp)
+target_compile_definitions(crd-diag-signed-overflow-specimen PRIVATE
+    "CRD_DIAG_UBSAN_BUILD=$<IF:$<BOOL:${CRD_ENABLE_UBSAN}>,1,0>")
 
 # The DIAG.3f memory-leak specimen. Qualified on the LeakSanitizer lane (linux-gcc-asan); self-tags the
 # route absent (InstrumentAbsent) where no LSan interface exists (MSVC ASan / plain builds).
