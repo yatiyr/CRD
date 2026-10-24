@@ -1,6 +1,6 @@
 // crd-diag-overhead -- the DIAG.11b measurement harness (see overhead.hpp).
 //
-//   crd-diag-overhead --workload <alloc|jobs|offline|events> --mode <off|basic|full>
+//   crd-diag-overhead --workload <alloc|jobs|offline|io|events> --mode <off|basic|full>
 //                     [--iterations N] [--warmup N] [--captures K] [--threads T] [--affinity <hex mask>]
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
 //
@@ -13,7 +13,8 @@
 //
 // The capture phase follows the timed frames: K manual triggers, each waited for (bounded) until the host delivered
 // its capture and, with --scratch, wrote its bundle; the bytes written are counted and the bundles removed unless
-// --keep. The crash handler writes into --scratch too (only when a crash happens).
+// --keep. The crash handler writes into --scratch too (only when a crash happens); the io workload writes its files
+// there in every mode and removes them at teardown.
 //
 // --check holds what must hold whatever the timing (exit 1 when one fails):
 //   every mode   every timed and warmup iteration ran and produced the known answer; the process CPU time over the
@@ -129,7 +130,7 @@ bool parse_u32(const char* text, u32 limit, u32& out)
 int usage(const char* why)
 {
     std::fprintf(stderr,
-                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|events> "
+                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|io|events> "
                  "--mode <off|basic|full> [--iterations N] [--warmup N] [--captures K] [--threads T] "
                  "[--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] [--program <file>] [--keep] [--check]\n",
                  why);
@@ -516,6 +517,7 @@ int main(int argc, char** argv)
     setup.sites   = &sites;
     setup.threads = o.threads;
     setup.program = o.program;
+    setup.scratch = o.scratch;
     if (!workload->setup(setup, reason))
     {
         std::fprintf(stderr, "crd-diag-overhead: the workload did not set up: %s\n", reason.c_str());

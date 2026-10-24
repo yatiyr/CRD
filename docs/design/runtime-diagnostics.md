@@ -2762,9 +2762,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   above), full (`overhead_full.flight.toml`, every event, plus the profiler, the jobs adapter and the CEIR profiling
   bridge). The harness is `tests/support/diag-overhead` (`crd-diag-overhead`, one workload and mode per process, record
   `cerid-diag-overhead/1`); workloads `alloc` (a TLSF heap the host's allocator watch observes), `jobs` (2048 tiny jobs on a
-  pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program)
-  and `events` (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
-- What holds on every lane: the 12 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
+  pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program),
+  `io` (mixed I/O: 50 whole-file, range and `AsyncFile` reads a frame, 1.25 MiB, on a two-thread pool) and `events`
+  (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
+- What holds on every lane: the 15 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
   written; the lifetime ledger balances.
@@ -2856,7 +2857,12 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   header and the alignment padding are poisoned and read through `CRD_MEM_ASAN_UNCHECKED` loads, so a run before or
   past a block is reported as before; a header that fails its check is a named fatal at the free in every build (a
   check, not ownership: `owns()` stays true for every pointer).
-- Not settled here: the repairs and the measurement gaps above; the mixed I/O and authored rendering workloads;
+- Mixed I/O (2026-10-24, [session](../sessions/2026-10-24-diag-11b-mixed-io-workload.md)): `io` reads files its setup
+  writes through the three reads the I/O fault seam consults, hashing every byte. Disabled within 1% on Windows (frame
+  time and CPU per frame) and on Linux by instructions (cachegrind) and timing; basic within 2% on all three tuples;
+  full +0.1% to +2.5%, reported. Its pool is fixed at two threads: with four, the Linux reference host's frames
+  alternate between about 210 and 400 µs in every arm, compiled-out included (Windows is flat).
+- Not settled here: the repairs and the measurement gaps above; the authored rendering workload;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost
   of the modes that are separate binaries or targeted (sanitizers, device validation, the controlled-interleaving

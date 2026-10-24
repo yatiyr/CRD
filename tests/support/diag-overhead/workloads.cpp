@@ -1,4 +1,4 @@
-// crd-diag-overhead -- the four workloads (DIAG.11b). See overhead.hpp for the modes.
+// crd-diag-overhead -- the five workloads (DIAG.11b). See overhead.hpp for the modes.
 //
 // Each is a production path an acceptance workload of ADR-0133 ID-5 names, driven the way an application drives it:
 //
@@ -11,6 +11,8 @@
 //   offline  an offline CEIR pipeline per frame: the authored program text is cooked (parse, verify, serialize),
 //            loaded back from the blob, compiled and run (the step loop of ceridc's run path); in full the compile and
 //            run go through the profiling bridge (crd/ceir/host/plan_perf.hpp). One site per program run.
+//   io       mixed I/O: per frame 50 reads (whole files, ranges and AsyncFile completions on a two-thread crd-jobs
+//            pool) of files setup() writes into --scratch, every byte hashed. One site per read.
 //   events   the site itself: 4096 sites per frame on one thread, the per-event cost of each mode.
 //
 // Every workload knows its answer: an iteration that computes anything else fails the run.
@@ -29,12 +31,15 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/config.hpp>
+#include <crd/platform/async_file.hpp>
+#include <crd/platform/filesystem.hpp>
 
 #if CRD_PERF_ENABLED
 #include <crd/perf/jobs_adapter.hpp>
 #endif
 
 #include <cstdio>
+#include <cstring>
 #include <optional>
 #include <span>
 
@@ -47,6 +52,7 @@ namespace
 using crd::u32;
 using crd::u64;
 using crd::usize;
+namespace fs = crd::platform::fs;
 
 // Build a site's message into `buffer`; called only when the recorder admits the event.
 cont::StringView payload(Sites& sites, char* buffer, usize capacity, const char* what, u64 a, u64 b)
@@ -222,7 +228,46 @@ void sum_slice(void* data)
                       payload(*slice->sites, buffer, kPayloadBytes, "job", slice->index, sum), slice->index, sum);
 }
 
-class JobsWorkload final : public Workload
+// The crd-jobs pool the jobs and io workloads run on (the calling thread is worker 0, the pool starts the others),
+// configured by the host (its watchdog window, which adds the watchdog thread) and observed by the profiler's jobs
+// adapter in full.
+class PooledWorkload : public Workload
+{
+public:
+    [[nodiscard]] u64 own_threads(u32 threads) const noexcept override { return pool_threads(threads) - 1U; }
+    [[nodiscard]] u64 diagnostic_threads(Mode mode) const noexcept override { return mode == Mode::Off ? 0U : 1U; }
+
+protected:
+    // The pool's threads, the calling thread included, for --threads `requested`.
+    [[nodiscard]] virtual u32 pool_threads(u32 requested) const noexcept { return requested; }
+
+    void start_pool(const WorkloadSetup& setup)
+    {
+        crd::jobs::Config config;
+        config.num_threads = pool_threads(setup.threads);
+        if (setup.host != nullptr)
+        {
+            setup.host->configure_jobs(config); // the profile's watchdog window, before the pool exists
+        }
+        m_adapter = setup.mode == Mode::Full && set_jobs_adapter(true); // the profiler observes every job
+        crd::jobs::init(config);
+    }
+
+    void stop_pool()
+    {
+        crd::jobs::shutdown(); // joins the workers and the watchdog before the host they report into stops
+        if (m_adapter)
+        {
+            (void)set_jobs_adapter(false);
+            m_adapter = false;
+        }
+    }
+
+private:
+    bool m_adapter = false;
+};
+
+class JobsWorkload final : public PooledWorkload
 {
 public:
     [[nodiscard]] const char* name() const noexcept override { return "jobs"; }
@@ -230,14 +275,7 @@ public:
     bool setup(const WorkloadSetup& setup, cont::String& reason) override
     {
         (void)reason;
-        crd::jobs::Config config;
-        config.num_threads = setup.threads;
-        if (setup.host != nullptr)
-        {
-            setup.host->configure_jobs(config); // the profile's watchdog window, before the pool exists
-        }
-        m_adapter = setup.mode == Mode::Full && set_jobs_adapter(true); // the profiler observes every job
-        crd::jobs::init(config);
+        start_pool(setup);
         for (u32 i = 0U; i < kJobs; ++i)
         {
             g_slices[i].begin = static_cast<u64>(i) * kJobItems;
@@ -261,30 +299,15 @@ public:
         return true;
     }
 
-    void teardown() override
-    {
-        crd::jobs::shutdown(); // joins the workers and the watchdog before the host they report into stops
-        if (m_adapter)
-        {
-            (void)set_jobs_adapter(false);
-            m_adapter = false;
-        }
-    }
+    void teardown() override { stop_pool(); }
 
     [[nodiscard]] u64 sites_per_iteration() const noexcept override { return kJobs; }
-
-    // The calling thread is worker 0; the pool starts the others. The host's window adds the watchdog thread.
-    [[nodiscard]] u64 own_threads(u32 threads) const noexcept override { return threads - 1U; }
-    [[nodiscard]] u64 diagnostic_threads(Mode mode) const noexcept override { return mode == Mode::Off ? 0U : 1U; }
 
     [[nodiscard]] u64 expected() const noexcept override
     {
         const u64 n = static_cast<u64>(kJobs) * kJobItems; // the sum of i * i for i in [0, n)
         return ((n - 1U) * n * ((2U * n) - 1U)) / 6U;
     }
-
-private:
-    bool m_adapter = false;
 };
 
 // ---- offline ----------------------------------------------------------------------------------------------------
@@ -421,6 +444,217 @@ private:
     cont::String m_text;
 };
 
+// ---- io ---------------------------------------------------------------------------------------------------------
+
+constexpr u32 kIoFiles     = 8U;
+constexpr u64 kIoFileBytes = u64{256} << 10U;
+constexpr u64 kIoChunk     = u64{16} << 10U;
+constexpr u64 kIoChunks    = kIoFileBytes / kIoChunk;
+constexpr u32 kIoWhole     = 2U;  // read_file_binary, files 0 and 1
+constexpr u32 kIoRanges    = 16U; // read_file_range, one chunk each
+constexpr u32 kIoAsync     = 32U; // AsyncFile completions on the pool, one chunk each
+constexpr u64 kFnvOffset   = 14695981039346656037ULL;
+constexpr u64 kFnvPrime    = 1099511628211ULL;
+
+// The byte at `offset` of file `file`: the top byte of a Fibonacci hash, so a read of the wrong file or offset
+// hashes differently.
+crd::u8 io_byte(u32 file, u64 offset) noexcept
+{
+    return static_cast<crd::u8>(((offset + (static_cast<u64>(file) * kIoFileBytes) + 1U) * kAllocSeed) >> 56U);
+}
+
+// FNV-1a over 8-byte little-endian words (every read is a multiple of 8 bytes), from memory or from io_byte().
+u64 io_hash(const crd::u8* bytes, u64 size) noexcept
+{
+    u64 h = kFnvOffset;
+    for (u64 i = 0U; i < size; i += 8U)
+    {
+        u64 word = 0U;
+        std::memcpy(&word, bytes + i, 8U);
+        h = (h ^ word) * kFnvPrime;
+    }
+    return h;
+}
+
+u64 io_hash_generated(u32 file, u64 offset, u64 size) noexcept
+{
+    u64 h = kFnvOffset;
+    for (u64 i = 0U; i < size; i += 8U)
+    {
+        u64 word = 0U;
+        for (u64 k = 0U; k < 8U; ++k)
+        {
+            word |= static_cast<u64>(io_byte(file, offset + i + k)) << (8U * k);
+        }
+        h = (h ^ word) * kFnvPrime;
+    }
+    return h;
+}
+
+// Read i's file and offset: ranges and completions visit every file and differing chunks of it.
+constexpr u32 io_range_file(u32 i) noexcept
+{
+    return i % kIoFiles;
+}
+
+constexpr u64 io_range_offset(u32 i) noexcept
+{
+    return ((static_cast<u64>(i) * 5U) % kIoChunks) * kIoChunk;
+}
+
+constexpr u32 io_async_file(u32 i) noexcept
+{
+    return (i + 3U) % kIoFiles;
+}
+
+constexpr u64 io_async_offset(u32 i) noexcept
+{
+    return (((static_cast<u64>(i) * 3U) + 1U) % kIoChunks) * kIoChunk;
+}
+
+alignas(64) crd::u8 g_io_async[kIoAsync][kIoChunk]; // NOLINT(modernize-avoid-c-arrays): the completions' targets
+
+// Mixed I/O: the three reads the I/O fault seam consults, on the files setup() wrote. Each frame submits 32 AsyncFile
+// chunk reads to the pool, reads two files whole and 16 chunks with read_file_range on this thread while they
+// complete, then waits for every completion: 1.25 MiB, 50 reads, each hashed and one site each. The pool is this
+// thread and one completion worker whatever --threads says: with more workers the Linux reference host's frames
+// alternate between two durations (DIAG.11b), wider than the budgets.
+class IoWorkload final : public PooledWorkload
+{
+public:
+    [[nodiscard]] const char* name() const noexcept override { return "io"; }
+
+    bool setup(const WorkloadSetup& setup, cont::String& reason) override
+    {
+        m_sites = setup.sites;
+        if (setup.scratch == nullptr)
+        {
+            reason.append("io needs --scratch (the directory its files are written to)");
+            return false;
+        }
+        cont::Array<crd::u8> content;
+        content.resize(static_cast<usize>(kIoFileBytes));
+        for (u32 f = 0U; f < kIoFiles; ++f)
+        {
+            char name[48];
+            (void)std::snprintf(name, sizeof(name), "diag-overhead-io-%u.bin", f);
+            m_paths[f] = fs::Path(setup.scratch) / cont::StringView{name};
+            for (u64 i = 0U; i < kIoFileBytes; ++i)
+            {
+                content[static_cast<usize>(i)] = io_byte(f, i);
+            }
+            const bool written =
+                fs::write_file_binary(m_paths[f], cont::ConstSpan<crd::u8>{content.data(), content.size()});
+            m_files[f] = written ? crd::platform::AsyncFile::open(m_paths[f].generic()) : crd::platform::AsyncFile{};
+            if (!m_files[f].is_open())
+            {
+                reason.append("an io file could not be written and opened in --scratch");
+                remove_files();
+                return false;
+            }
+        }
+        m_expected = 0U;
+        for (u32 i = 0U; i < kIoWhole; ++i)
+        {
+            m_expected += io_hash_generated(i, 0U, kIoFileBytes);
+        }
+        for (u32 i = 0U; i < kIoRanges; ++i)
+        {
+            m_expected += io_hash_generated(io_range_file(i), io_range_offset(i), kIoChunk);
+        }
+        for (u32 i = 0U; i < kIoAsync; ++i)
+        {
+            m_expected += io_hash_generated(io_async_file(i), io_async_offset(i), kIoChunk);
+        }
+        start_pool(setup);
+        return true;
+    }
+
+    bool iterate(u64& signature) override
+    {
+        crd::jobs::Counter*            counters[kIoAsync] = {}; // NOLINT(modernize-avoid-c-arrays)
+        crd::platform::AsyncReadStatus status[kIoAsync]   = {}; // NOLINT(modernize-avoid-c-arrays)
+        for (u32 i = 0U; i < kIoAsync; ++i)
+        {
+            counters[i] = m_files[io_async_file(i)].read_async(
+                io_async_offset(i), cont::Span<crd::u8>{g_io_async[i], static_cast<usize>(kIoChunk)}, status[i]);
+        }
+        u64  sum  = 0U;
+        u32  read = 0U;
+        bool ok   = true;
+        for (u32 i = 0U; i < kIoWhole; ++i)
+        {
+            const bool whole = fs::read_file_binary(m_paths[i], m_bytes) && m_bytes.size() == kIoFileBytes;
+            ok               = ok && whole;
+            sum += whole ? io_hash(m_bytes.data(), kIoFileBytes) : 0U;
+            site(read++, kIoFileBytes);
+        }
+        for (u32 i = 0U; i < kIoRanges; ++i)
+        {
+            const bool range = fs::read_file_range(m_paths[io_range_file(i)], io_range_offset(i), kIoChunk, m_bytes) &&
+                               m_bytes.size() == kIoChunk;
+            ok = ok && range;
+            sum += range ? io_hash(m_bytes.data(), kIoChunk) : 0U;
+            site(read++, kIoChunk);
+        }
+        for (u32 i = 0U; i < kIoAsync; ++i)
+        {
+            if (counters[i] != nullptr)
+            {
+                crd::jobs::wait(counters[i]);
+            }
+            const bool done = counters[i] != nullptr && status[i] == crd::platform::AsyncReadStatus::Complete;
+            ok              = ok && done;
+            sum += done ? io_hash(g_io_async[i], kIoChunk) : 0U;
+            site(read++, kIoChunk);
+        }
+        signature = sum;
+        return ok;
+    }
+
+    void teardown() override
+    {
+        stop_pool();
+        remove_files();
+    }
+
+    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return kIoWhole + kIoRanges + kIoAsync; }
+    [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
+
+protected:
+    [[nodiscard]] u32 pool_threads(u32 requested) const noexcept override
+    {
+        (void)requested;
+        return 2U;
+    }
+
+private:
+    void site(u32 read, u64 bytes)
+    {
+        char buffer[kPayloadBytes];
+        CRD_FLIGHT_RECORD(m_sites->recorder, kCodeRead, cp::Severity::Info,
+                          payload(*m_sites, buffer, kPayloadBytes, "read", read, bytes), read, bytes);
+    }
+
+    void remove_files()
+    {
+        for (u32 f = 0U; f < kIoFiles; ++f)
+        {
+            m_files[f] = crd::platform::AsyncFile{};
+            if (!m_paths[f].empty())
+            {
+                (void)fs::remove_file(m_paths[f]);
+            }
+        }
+    }
+
+    Sites*                   m_sites = nullptr;
+    fs::Path                 m_paths[kIoFiles]; // NOLINT(modernize-avoid-c-arrays)
+    crd::platform::AsyncFile m_files[kIoFiles]; // NOLINT(modernize-avoid-c-arrays)
+    cont::Array<crd::u8>     m_bytes;
+    u64                      m_expected = 0U;
+};
+
 // ---- events -----------------------------------------------------------------------------------------------------
 
 constexpr u32 kEvents = 4096U;
@@ -465,6 +699,7 @@ private:
 AllocWorkload   g_alloc;
 JobsWorkload    g_jobs;
 OfflineWorkload g_offline;
+IoWorkload      g_io;
 EventsWorkload  g_events;
 
 } // namespace
@@ -495,7 +730,7 @@ std::FILE* open_for_reading(const char* path) noexcept
 
 Workload* find_workload(const char* name) noexcept
 {
-    Workload* const all[] = {&g_alloc, &g_jobs, &g_offline, &g_events}; // NOLINT(modernize-avoid-c-arrays)
+    Workload* const all[] = {&g_alloc, &g_jobs, &g_offline, &g_io, &g_events}; // NOLINT(modernize-avoid-c-arrays)
     for (Workload* w : all)
     {
         const char* a = w->name();

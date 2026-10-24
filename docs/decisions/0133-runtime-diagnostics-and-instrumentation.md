@@ -175,6 +175,10 @@ do not depend on the binaries' layout; the simulated cache misses are reported. 
 configuration of `linux-gcc-shipping` with profiling on; Windows, with no unprivileged counter on the reference host,
 keeps the exact count times cost until DIAG.11c qualifies an instruction count.
 
+Amended 2026-10-24 (DIAG.11b, [session](../sessions/2026-10-24-diag-11b-mixed-io-workload.md)): the contract's mixed
+I/O workload is the harness's `io` (whole-file, range and `AsyncFile` reads of files it writes, on a two-thread pool),
+and it joins `offline` and `jobs` as a realistic workload the disabled and basic budgets are judged on.
+
 ### ID-6 (2026-10-19, DIAG.11b) — investigation runbooks held to the tree
 
 The contract's "symptom→command→artifact→next discriminating test and human-only publication" is
