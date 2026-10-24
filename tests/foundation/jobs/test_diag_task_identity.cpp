@@ -12,6 +12,8 @@
 #include <crd/core/types.hpp>
 #include <crd/containers/static_array.hpp>
 
+#include <atomic>
+#include <chrono>
 #include <span>
 #include <thread>
 
@@ -270,10 +272,11 @@ TEST_CASE("diag: parent_task_id records the immediate submitter across two nesti
 }
 
 // ---------------------------------------------------------------------------
-// Pooled execution, not a sequential fallback: a batch actually runs across more than one thread. Each
-// job records the worker index it ran on. Scheduling is nondeterministic (a slow round could land every
-// job on one thread), so the batch is retried a bounded number of times; a correctly pooled scheduler
-// spreads within a round or two, while a genuinely single-threaded executor could never satisfy it.
+// Pooled execution, not a sequential fallback: a batch actually runs across more than one thread. The
+// first job to start holds its thread until a sibling starts on another one (bounded at 10 s), so the
+// answer does not depend on whether the workers wake before the calling thread drains a short batch (on
+// a loaded host they did not, and every job ran on the caller); a single-threaded executor never
+// starts a sibling while the first job holds its thread.
 // ---------------------------------------------------------------------------
 TEST_CASE("diag: a batch runs across more than one worker thread (pooled, not sequential)", "[jobs][diag]")
 {
@@ -282,26 +285,39 @@ TEST_CASE("diag: a batch runs across more than one worker thread (pooled, not se
     crd::jobs::init(cfg);
 
     constexpr crd::usize job_count = 64U;
-    bool multithreaded = false;
-
-    for (int round = 0; round < 32 && !multithreaded; ++round)
+    struct Spread
     {
-        crd::containers::StaticArray<crd::u32, job_count>           where{};
-        crd::containers::StaticArray<crd::jobs::JobDecl, job_count> jobs{};
-        for (crd::usize i = 0U; i < job_count; ++i)
+        std::atomic<crd::u32> first{0xFFFFFFFFU}; // the worker index of the first job to start
+        std::atomic<bool>     other{false};       // a job started on another thread
+    };
+    Spread                                                      spread;
+    crd::containers::StaticArray<crd::jobs::JobDecl, job_count> jobs{};
+    for (crd::usize i = 0U; i < job_count; ++i)
+    {
+        jobs[i].fn = [](void* d) noexcept
         {
-            jobs[i].fn = [](void* d) noexcept
+            auto* const    s        = static_cast<Spread*>(d);
+            const crd::u32 me       = crd::jobs::worker_index();
+            crd::u32       expected = 0xFFFFFFFFU;
+            if (!s->first.compare_exchange_strong(expected, me))
             {
-                std::this_thread::yield(); // let siblings be picked up by other workers, not all drained here
-                *static_cast<crd::u32*>(d) = crd::jobs::worker_index();
-            };
-            jobs[i].data = &where[i];
-        }
-        crd::jobs::run_and_wait(std::span<const crd::jobs::JobDecl>(jobs.data(), job_count));
-        multithreaded = distinct_count(where.data(), job_count) > 1U;
+                if (expected != me)
+                {
+                    s->other.store(true);
+                }
+                return;
+            }
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            while (!s->other.load() && std::chrono::steady_clock::now() < until)
+            {
+                std::this_thread::yield();
+            }
+        };
+        jobs[i].data = &spread;
     }
+    crd::jobs::run_and_wait(std::span<const crd::jobs::JobDecl>(jobs.data(), job_count));
 
-    CHECK(multithreaded); // ran on >1 thread -> real pooled execution, not a sequential fallback
+    CHECK(spread.other.load()); // ran on >1 thread -> real pooled execution, not a sequential fallback
 
     crd::jobs::shutdown();
 }
