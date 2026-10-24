@@ -1684,8 +1684,8 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9c-observer-effect.md
   ("duplicate key", at the second definition), in tables and inline tables. Every committed TOML file parses
   unchanged.
 - Not covered: a diagnostic command that runs an experiment (it is a library call a host or test makes); experiments
-  on schedule-script reproductions (the schedcheck twin runs in no hosted job); the profiler's scope trace as a
-  third instrumented level (a process singleton, compiled out on the perf-off lane).
+  on schedule-script reproductions (the schedcheck twin then ran in no hosted job; it does since DIAG.11b); the
+  profiler's scope trace as a third instrumented level (a process singleton, compiled out on the perf-off lane).
 
 <a id="diag-10a"></a>
 ## DIAG.10a — stateful fuzzing and evidence-reader security
@@ -2112,9 +2112,9 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-coverage-and-fail
   tier, never hosted). MSVC has no equivalent, so a Win32-only branch is outside this lane's denominator, and a
   value produced only there is owned `windows-only`; such an exclusion is stale the moment the site is compiled on
   the lane. [diag-coverage.py](../../scripts/diag-coverage.py) runs the test set once (eight CTest programs, seven
-  corpus replays and the schedcheck program CTest does not register), requires every selected test to pass in the
-  JUnit, merges profiles with `--failure-mode=any` and exports exactly the scope files from every program, specimen
-  and ceridc.
+  corpus replays and the schedcheck program, a CTest program since DIAG.11b), requires every selected test to pass
+  in the JUnit, merges profiles with `--failure-mode=any` and exports exactly the scope files from every program,
+  specimen and ceridc.
 - Error-path coverage is defined per outcome: every value of each registered result/status enum must be produced at
   a site whose innermost coverage region ran (a producing site is `Enum::Value` that is not a `case` label or an
   operand of `==`/`!=`). State-transition coverage is per transition site (the flight recorder's window machine:
@@ -2872,11 +2872,16 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   exact counts, run its passes on the device and cover the grid's pixels. A workload's process-lifetime caches (the
   Vulkan backend's shaderc) fill before the ledger's window (`Workload::warm`). Disabled within 1% and basic within 2%
   on the hardware D3D12 tuple (192 processes) and on llvmpipe (both Linux tuples); full +0.1% to +1.5%, reported.
+- The controlled-interleaving twin (2026-10-24, [session](../sessions/2026-10-24-diag-11b-schedcheck-ctests.md)):
+  `crd-jobs-schedcheck-tests` is in the default build and its eight cases (`^schedcheck: `, two of them broken
+  variants that must be found) are CTests on every lane, ASan and TSan included; the twin library stays out of ALL.
+  Cost: crd-jobs' units again, the test unit and two links a lane; the cases take 0.8 s (win-debug) to 10.4 s
+  (linux-gcc-asan). The race runbook's `ctest -R "^schedcheck: "` makes `crd-check-diag-runbooks` fail a tree that
+  does not register them.
 - Not settled here: the repairs and the measurement gaps above;
   independent external sampling and peer tools; dev.py and CI ownership and conclusion artifacts for diagnostic
   specimens and mode activation; the hosted sanitizer, race, corpus and negative-control audit, with the measured cost
-  of the modes that are separate binaries or targeted (sanitizers, device validation, the controlled-interleaving
-  twin), and the fuzz and soak cadence.
+  of the modes that are separate binaries or targeted (sanitizers, device validation), and the fuzz and soak cadence.
 
 <a id="diag-11c"></a>
 ## DIAG.11c — native qualification and portable capability boundary

@@ -5,6 +5,7 @@
   "tests/core/crd-core-tests",
   "tests/memory/crd-memory-tests",
   "tests/jobs/crd-jobs-tests",
+  "tests/jobs/crd-jobs-schedcheck-tests",
   "tests/perf/crd-perf-tests",
   "tests/ceir-cook/crd-ceir-cook-tests",
   "tests/ceir-host/crd-ceir-host-tests",
@@ -22,9 +23,6 @@
   "crd-fuzz-memory-allocators-corpus",
   "crd-fuzz-ceir-record-corpus",
   "crd-fuzz-ceridc-diag-corpus"
- ],
- "direct": [
-  "tests/jobs/crd-jobs-schedcheck-tests"
  ],
  "objects": [
   "tests/diag/crd-diag-*-specimen",

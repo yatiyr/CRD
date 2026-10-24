@@ -8,9 +8,7 @@ whose every value must be reached, and the owned exclusions. On a configuration 
 
   1. selects exactly the registry's test set from CTest (every program must register tests; zero is a failure);
   2. runs it once with LLVM_PROFILE_FILE pointing at a fresh directory and reads CTest's JUnit: every selected test
-     must be in it and pass (a failing run is not coverage evidence, and nothing is rerun). A Catch2 program the
-     registry lists as `direct` (a diagnostic binary CTest does not register) runs once with Catch2's JUnit reporter,
-     which must show tests and no failure;
+     must be in it and pass (a failing run is not coverage evidence, and nothing is rerun);
   3. merges the raw profiles (any unreadable profile fails the merge) and exports the scope's files from every
      program, specimen and helper binary the registry names;
   4. reports, per scope file, the regions, branches, functions and lines llvm-cov instrumented on this lane and how
@@ -63,7 +61,7 @@ EXCLUSION_CLASSES = ("dying-child", "windows-only", "other-configuration", "reso
 NO_SITE_CLASSES = ("no-producer", "default-value")
 METRICS = ("regions", "branches", "functions", "lines")
 DEFAULT_TEST_TIMEOUT = 1800
-REGISTRY_KEYS = {"schema", "lane", "programs", "ctests", "direct", "objects", "scope", "outcomes", "exclusions"}
+REGISTRY_KEYS = {"schema", "lane", "programs", "ctests", "objects", "scope", "outcomes", "exclusions"}
 SCOPE_KEYS = {"group", "rows", "paths"}
 OUTCOME_KEYS = {"name", "kind", "enum", "header", "states", "site", "files", "row"}
 EXCLUSION_KEYS = {"outcome", "value", "text", "path", "class", "reason"}
@@ -93,7 +91,7 @@ def load_registry(path):
     unknown = set(data) - REGISTRY_KEYS
     if unknown:
         raise RegistryError("unknown registry keys: %s" % ", ".join(sorted(unknown)))
-    for key in ("programs", "ctests", "direct", "objects", "scope", "outcomes", "exclusions"):
+    for key in ("programs", "ctests", "objects", "scope", "outcomes", "exclusions"):
         if not isinstance(data.get(key, []), list):
             raise RegistryError("%s must be a list" % key)
     if not data.get("programs"):
@@ -604,45 +602,6 @@ def read_junit(path, names):
     return problems
 
 
-def read_catch2_junit(path):
-    """Problems in a Catch2 JUnit report: it must exist, hold at least one test case and no failure or error."""
-    try:
-        tree = ET.parse(path)
-    except (OSError, ET.ParseError) as error:
-        return ["cannot read %s: %s" % (path, error)]
-    cases = list(tree.getroot().iter("testcase"))
-    if not cases:
-        return ["%s holds no test case" % path]
-    problems = []
-    for case in cases:
-        if case.find("failure") is not None or case.find("error") is not None:
-            problems.append("%s: failed" % case.get("name"))
-    return problems
-
-
-def run_direct(registry, build, raw, out, timeout):
-    """Run the registry's direct Catch2 programs once under the profile; return their resolved paths."""
-    ran = []
-    env = dict(os.environ)
-    env["LLVM_PROFILE_FILE"] = str(raw / "%p-%m.profraw")
-    for index, program in enumerate(registry.get("direct", [])):
-        exe = build / program
-        if not exe.is_file():
-            raise Failure("RUN_FAILED", "direct program %s is not built" % program)
-        report = out / ("direct-%d.xml" % index)
-        try:
-            result = subprocess.run([str(exe), "--reporter", "junit", "--out", str(report)], cwd=out, env=env,
-                                    capture_output=True, text=True, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired as error:
-            raise Failure("RUN_FAILED", "direct program %s timed out" % program) from error
-        problems = read_catch2_junit(report)
-        if result.returncode != 0 or problems:
-            raise Failure("RUN_FAILED", "direct program %s did not pass (exit %d): %s" % (
-                program, result.returncode, "; ".join(problems[:10])))
-        ran.append(str(exe.resolve()))
-    return ran
-
-
 def run_lane(registry, build_dir, out_dir, llvm_bin, timeout):
     build = Path(build_dir).resolve()
     cache = read_cache(build)
@@ -675,7 +634,6 @@ def run_lane(registry, build_dir, out_dir, llvm_bin, timeout):
     if problems:
         raise Failure("RUN_FAILED", "the test set did not pass (%d of %d): %s" % (
             len(problems), len(names), "; ".join(problems[:10])))
-    direct = run_direct(registry, build, raw, out, timeout)
     profiles = sorted(raw.glob("*.profraw"))
     if not profiles:
         raise Failure("RUN_FAILED", "the run wrote no raw profile")
@@ -684,7 +642,7 @@ def run_lane(registry, build_dir, out_dir, llvm_bin, timeout):
                            + [str(p) for p in profiles], capture_output=True, text=True, check=False)
     if merge.returncode != 0:
         raise Failure("RUN_FAILED", "llvm-profdata merge failed: %s" % merge.stderr.strip()[:2000])
-    objects = list(commands) + direct
+    objects = list(commands)
     for pattern in registry.get("objects", []):
         matches = sorted(p for p in build.glob(pattern) if p.is_file())
         if not matches:
@@ -704,8 +662,7 @@ def run_lane(registry, build_dir, out_dir, llvm_bin, timeout):
         raise Failure("RUN_FAILED", "llvm-cov export failed: %s" % result.stderr.strip()[:2000])
     export = json.loads(exported.read_text(encoding="utf-8"))
     report = evaluate(registry, export, ROOT, source_root)
-    report["run"] = {"build_dir": str(build), "tests": len(names), "direct": registry.get("direct", []),
-                     "profiles": len(profiles),
+    report["run"] = {"build_dir": str(build), "tests": len(names), "profiles": len(profiles),
                      "objects": [os.path.relpath(o, build) for o in objects],
                      "compiler": cache.get("CMAKE_CXX_COMPILER", ""), "profdata": profdata, "llvm_cov": llvm_cov,
                      "export_warnings": result.stderr.strip()[:2000]}

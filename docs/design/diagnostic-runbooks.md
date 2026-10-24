@@ -174,11 +174,11 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 | Artifact | The TSan report in the CTest log. Suppressions are for third-party code only: `tests/support/diag/tsan-suppressions.txt`. |
 | Read | The two stacks and the missing happens-before edge. Fiber switches are modelled, so a report across fibers is real; an instrument may not add ordering to make a run clean. |
 | Next test (Linux) | `wsl.exe --cd <checkout> -e bash scripts/wsl-lane.sh test linux-clang-tsan -R "^tsan"` |
-| Next test | `cmd /c scripts\build-target.bat build\win-debug crd-jobs-schedcheck-tests`; `build/win-debug/tests/jobs/crd-jobs-schedcheck-tests.exe`; `python scripts/check-genmc-models.py --help` |
-| Hosted | linux-clang-tsan. The controlled-interleaving executable is not a CTest and runs on no hosted lane (DIAG.11b clause (9)). |
+| Next test | `cmd /c scripts\build-target.bat build\win-debug crd-jobs-schedcheck-tests`; `ctest --test-dir build/win-debug -R "^schedcheck: "`; `build/win-debug/tests/jobs/crd-jobs-schedcheck-tests.exe`; `python scripts/check-genmc-models.py --help` |
+| Hosted | linux-clang-tsan. The controlled-interleaving tests are CTests and run on every lane, the sanitizer lanes included. |
 | Adopt | `CRD_JOBS_SCHED_POINT(<tag>)` at a publication or reclamation step, live only in the `crd-jobs-schedcheck` twin. |
 | Example | `tests/foundation/jobs/test_sched_check.cpp`; `tests/support/diag/specimens/data_race_specimen.cpp` |
-| Cost | A separate binary; its slowdown is not on a board yet ([DIAG.11b](../ROADMAP.md#slice-diag.11b) clause (9)). |
+| Cost | Measured: [schedcheck twin](../sessions/2026-10-24-diag-11b-schedcheck-ctests.md#cost), 1 to 11 s of tests on the measured lanes. |
 | Owner | DIAG.1a, DIAG.1b, DIAG.4b |
 
 <a id="rb-memory"></a>

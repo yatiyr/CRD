@@ -55,13 +55,14 @@ crd_enable_default_pch(crd-jobs-tests)
 crd_discover_tests(crd-jobs-tests)
 
 # DIAG.4b controlled-interleaving tests: a separate binary linking the gate-ON twin (crd-jobs-schedcheck)
-# so the yield points are live. EXCLUDE_FROM_ALL and NOT ctest-registered -- it is a diagnostic tool
-# built and run explicitly (like the tsan/fuzz diagnostic presets), never in the default build or the CI
-# ctest set. The gated test files compile to nothing in crd-jobs-tests (gate off); here the
-# CRD_JOBS_SCHED_CHECK=1 definition arrives via crd-jobs-schedcheck's PUBLIC compile definition.
-add_executable(crd-jobs-schedcheck-tests EXCLUDE_FROM_ALL test_sched_check.cpp)
+# so the yield points are live. It builds and runs on every lane (DIAG.11b); the twin library stays out of ALL
+# and is built only for this program. The gated test files compile to nothing in crd-jobs-tests (gate off); here
+# the CRD_JOBS_SCHED_CHECK=1 definition arrives via crd-jobs-schedcheck's PUBLIC compile definition.
+add_executable(crd-jobs-schedcheck-tests test_sched_check.cpp)
 target_link_libraries(crd-jobs-schedcheck-tests PRIVATE
     crd-core
     crd-containers
     crd-jobs-schedcheck
     Catch2::Catch2WithMain)
+
+crd_discover_tests(crd-jobs-schedcheck-tests)
