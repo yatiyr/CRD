@@ -887,15 +887,16 @@ bool        s_have_prev        = false;
 // -- DIAG.5d(c2): per-module ELF build-id, captured at install() (dl_iterate_phdr takes the loader lock and may
 // allocate -- forbidden in the async-signal handler), then only READ when the record is written. The build-id is the
 // Linux analogue of the Windows RSDS GUID: it lets an offline symbolizer find the matching debug file and REJECT a
-// wrong one. This slice ends at "the record carries it"; turning the record into a SymbolIndex section is a later
-// composer's job. --
+// wrong one. Base and size are the PT_LOAD span enumerate_loaded_modules reports, so crd::perf's
+// parse_crash_record_modules turns the record into the same SymbolIndex a flight bundle carries. --
 constexpr std::size_t kMaxModuleNotes = 64;   // bounded; a busier process marks s_modules_overflow
 constexpr std::size_t kBuildIdBytes   = 20;   // GNU build-id is SHA-1 (20 B) by default; longer ids are truncated
 constexpr std::size_t kModulePathCap  = 128;  // basename only
 
 struct ModuleNote
 {
-    std::uintptr_t base;
+    std::uintptr_t base; // load bias + the lowest PT_LOAD address
+    std::uintptr_t size; // the PT_LOAD span; 0 when nothing is mapped
     unsigned char  id[kBuildIdBytes];
     unsigned char  id_len;
     char           path[kModulePathCap]; // basename; "" for the main executable
@@ -960,8 +961,22 @@ int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
     unsigned char     id[kBuildIdBytes];
     const std::size_t idlen = extract_build_id(info->dlpi_phdr, info->dlpi_phnum, info->dlpi_addr, id, sizeof(id));
 
+    std::uintptr_t low  = ~static_cast<std::uintptr_t>(0U);
+    std::uintptr_t high = 0U;
+    for (int i = 0; i < info->dlpi_phnum; ++i)
+    {
+        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
+        if (ph.p_type == PT_LOAD)
+        {
+            low  = ph.p_vaddr < low ? ph.p_vaddr : low;
+            high = ph.p_vaddr + ph.p_memsz > high ? ph.p_vaddr + ph.p_memsz : high;
+        }
+    }
+    low = high != 0U ? low : 0U;
+
     ModuleNote& m = s_modules[s_module_count];
-    m.base        = static_cast<std::uintptr_t>(info->dlpi_addr);
+    m.base        = static_cast<std::uintptr_t>(info->dlpi_addr) + low;
+    m.size        = high - low;
     m.id_len      = static_cast<unsigned char>(idlen);
     std::memcpy(m.id, id, idlen);
 
@@ -1263,6 +1278,8 @@ crd::crash::WriteResult write_crash_record(int sig, void* ctx, long tid, std::ui
         }
         n = ap_str(rec, sizeof(rec), n, "module ");
         n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(s_modules[i].base));
+        n = ap_str(rec, sizeof(rec), n, " ");
+        n = ap_hex(rec, sizeof(rec), n, static_cast<std::uint64_t>(s_modules[i].size));
         n = ap_str(rec, sizeof(rec), n, " ");
         if (s_modules[i].id_len != 0U)
         {

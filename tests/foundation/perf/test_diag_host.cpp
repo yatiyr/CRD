@@ -1551,60 +1551,13 @@ TEST_CASE("diagnostic host: ThreadSanitizer catches the application's job race, 
 namespace
 {
 #if defined(__linux__)
-// The application's crash record (crash.cpp's text): the faulting rip and the executable's "module <base> <id> (exe)".
-struct CrashRecord
+// The faulting rip of a crash record's registers (crash.cpp's text), or 0.
+u64 record_rip(const cont::Array<u8>& record)
 {
-    u64          rip      = 0U;
-    u64          exe_base = 0U;
-    cont::String exe_id;
-    bool         has_rip = false;
-    bool         has_exe = false;
-};
-
-CrashRecord read_crash_record(const cont::String& path)
-{
-    const cont::Array<u8> bytes = read_bytes(path);
-    const cont::String    text{cont::StringView{reinterpret_cast<const char*>(bytes.data()), bytes.size()}};
-    cont::Array<cont::String> words;
-    const char*               p = text.c_str();
-    while (*p != '\0')
-    {
-        const char* const end = p + std::strcspn(p, " \n");
-        if (end != p)
-        {
-            words.push_back(cont::String{cont::StringView{p, static_cast<crd::usize>(end - p)}});
-        }
-        p = *end == '\0' ? end : end + 1;
-    }
-    CrashRecord r;
-    for (crd::usize i = 0U; i + 1U < words.size(); ++i)
-    {
-        if (words[i] == cont::StringView{"rip"} && !r.has_rip)
-        {
-            r.rip     = std::strtoull(words[i + 1U].c_str(), nullptr, 16);
-            r.has_rip = true;
-        }
-        else if (words[i] == cont::StringView{"module"} && i + 3U < words.size() &&
-                 words[i + 3U] == cont::StringView{"(exe)"})
-        {
-            r.exe_base = std::strtoull(words[i + 1U].c_str(), nullptr, 16);
-            r.exe_id   = words[i + 2U];
-            r.has_exe  = true;
-        }
-    }
-    return r;
-}
-
-cont::String hex_id(const cp::ModuleIdentity& m)
-{
-    cont::String out;
-    char         two[3];
-    for (u32 i = 0U; i < m.id_len; ++i)
-    {
-        (void)std::snprintf(two, sizeof(two), "%02x", static_cast<unsigned>(m.id[i]));
-        out.append(two);
-    }
-    return out;
+    const cont::StringView text{reinterpret_cast<const char*>(record.data()), record.size()};
+    const crd::usize       regs = text.find("\nregs ");
+    const crd::usize       at   = regs == cont::StringView::npos ? regs : text.find("rip 0x", regs);
+    return at == cont::StringView::npos ? 0U : std::strtoull(text.data() + at + 4U, nullptr, 16);
 }
 #endif
 } // namespace
@@ -1635,12 +1588,27 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
         CHECK(contains(capture, "/crash_"));
         cp::ModuleIdentity from_file;
         REQUIRE(crd::test::module_file::file_identity(CRD_DIAG_HOST_SPECIMEN, from_file));
+        const cont::Array<u8> capture_bytes = read_bytes(capture);
 #if defined(_WIN32)
         CHECK(static_cast<u32>(o.exit_code) == 0xC0000005U); // the access violation, retained
-        // Import: the dump's module list through the symbol index section a bundle carries.
-        const cont::Array<u8> dump    = read_bytes(capture);
-        const cont::Array<u8> section = cp::build_symbol_index_from_minidump({dump.data(), dump.size()});
-        cp::BundleWriter      writer;
+        const cont::Array<u8> section =
+            cp::build_symbol_index_from_minidump({capture_bytes.data(), capture_bytes.size()});
+        MINIDUMP_EXCEPTION_STREAM fault{};
+        REQUIRE(crd_test_minidump::read_exception_stream(crd_test_minidump::path_from_utf8(capture.c_str()), fault));
+        CHECK(fault.ExceptionRecord.ExceptionCode == 0xC0000005U);
+        const u64 fault_pc = fault.ExceptionRecord.ExceptionAddress;
+#else
+        CHECK(o.exit_code == 139); // 128 + SIGSEGV
+        CHECK(ends_with(cont::StringView{capture.data(), capture.size()}, ".log"));
+        const cont::Array<cp::ModuleIdentity> modules =
+            cp::parse_crash_record_modules({capture_bytes.data(), capture_bytes.size()});
+        const cont::Array<u8> section = cp::serialize_symbol_index({modules.data(), modules.size()});
+        const u64             fault_pc = record_rip(capture_bytes);
+        REQUIRE(fault_pc != 0U);
+        CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId); // so identity_matches below runs
+#endif
+        // Import: the capture's module list through the symbol index section a bundle carries.
+        cp::BundleWriter writer;
         REQUIRE(writer.add_section(cp::BundleSectionTag::SymbolIndex, {section.data(), section.size()}) ==
                 cp::BundleWriter::AddStatus::Ok);
         const cont::Array<u8>  bundle = writer.finish(0U);
@@ -1655,22 +1623,7 @@ TEST_CASE("diagnostic host: the application's wild write leaves one attributable
             CHECK(cp::identity_matches(*app, from_file));
         }
         // Attribution: the faulting instruction lies in the application's module.
-        MINIDUMP_EXCEPTION_STREAM fault{};
-        REQUIRE(crd_test_minidump::read_exception_stream(crd_test_minidump::path_from_utf8(capture.c_str()), fault));
-        CHECK(fault.ExceptionRecord.ExceptionCode == 0xC0000005U);
-        CHECK(in_module(fault.ExceptionRecord.ExceptionAddress, *app));
-#else
-        CHECK(o.exit_code == 139); // 128 + SIGSEGV
-        CHECK(ends_with(cont::StringView{capture.data(), capture.size()}, ".log"));
-        const CrashRecord record = read_crash_record(capture);
-        REQUIRE(record.has_rip);
-        REQUIRE(record.has_exe);
-        // The record names the executable by the build id of its file, and the faulting rip lies in its image.
-        CHECK(from_file.id_kind == cp::SymbolIdKind::GnuBuildId);
-        CHECK(record.exe_id == hex_id(from_file));
-        CHECK(record.rip >= record.exe_base);
-        CHECK(record.rip - record.exe_base < from_file.size);
-#endif
+        CHECK(in_module(fault_pc, *app));
     }
 
     (void)check_repaired_run("crash");

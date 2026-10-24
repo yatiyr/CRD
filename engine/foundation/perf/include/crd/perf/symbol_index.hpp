@@ -8,9 +8,8 @@
 // one ("plausible lines" guard) instead of symbolizing against a mismatch. Identity is:
 //   - Windows: the PDB RSDS GUID (16 bytes) + age, from the crash minidump's ModuleListStream
 //     (EVERY loaded module, not only the faulting one).
-//   - Linux: the ELF GNU build-id (up to 20 bytes), captured at install() -- that CAPTURE is
-//     DIAG.5d(c2); the GnuBuildId kind and its matching-path convention already live here so (c2)
-//     only fills in the bytes.
+//   - Linux: the ELF GNU build-id (up to 20 bytes), captured at install() (DIAG.5d(c2)) and read
+//     back from the crash record's module lines.
 //
 // The Windows identities are read back by a SELF-CONTAINED, PLATFORM-NEUTRAL byte parser: the
 // minidump structs are defined here (not pulled from <DbgHelp.h>), so the parser compiles and is
@@ -155,6 +154,18 @@ parse_minidump_unloaded_modules(crd::containers::ConstSpan<crd::u8> dump,
 [[nodiscard]] crd::containers::Array<crd::u8>
 build_symbol_index_from_minidump(crd::containers::ConstSpan<crd::u8> dump,
                                  crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
+
+// ---- Linux crash record parser (platform-neutral; compiles on every lane) ----
+
+// Parse the module lines of a Linux crash record (crd::crash's `crash_*.log`): each
+// `module <base> <size> <build-id or -> <basename>` becomes an identity with the base and PT_LOAD span
+// enumerate_loaded_modules reports (id_kind GnuBuildId, or None for `-`). The main executable's
+// `(exe)` is named by the basename of the record's `exe` line, so no directory leaves in an index.
+// Untrusted input: only newline-terminated lines count, and a malformed module line ends the parse,
+// so a truncated or corrupt record yields the modules parsed so far. Returns empty for a non-record.
+[[nodiscard]] crd::containers::Array<ModuleIdentity>
+parse_crash_record_modules(crd::containers::ConstSpan<crd::u8> record,
+                           crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept;
 
 // ---- Live module enumeration (DIAG.9b: the SymbolIndex of a flight bundle) ----
 

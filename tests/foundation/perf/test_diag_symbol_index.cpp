@@ -2,7 +2,8 @@
 // instead of giving plausible lines" (identity_matches) and "matching debug files" (debug_file_path, symsrv +
 // .build-id conventions) -- plus the crd-native minidump byte parser (every module's RSDS GUID/age/PDB, untrusted
 // input bounds-checked so a truncated dump yields a partial index) and round-trip through the SymbolIndex section and
-// a full bundle. Runs on every lane (the parser is platform-neutral). Linux build-id CAPTURE at install() is (c2).
+// a full bundle. Runs on every lane (the parsers are platform-neutral). Linux build-id CAPTURE at install() is (c2);
+// its crash record's module lines are read back by parse_crash_record_modules.
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -232,6 +233,59 @@ TEST_CASE("minidump parser treats a truncated dump as untrusted (partial, no ove
         const cont::Array<ModuleIdentity> mods = parse_minidump_modules(span_of(dump.data(), 300));
         REQUIRE(mods.size() == 2U);
         CHECK(mods[0].id_kind == SymbolIdKind::None);
+    }
+}
+
+TEST_CASE("crash record parser reads the Linux module identities and treats a cut record as untrusted",
+          "[perf][diag][symbols]")
+{
+    // The shape crd::crash writes: the 5b fields, then the build id and the module lines.
+    const cont::StringView rec = "crd crash record\npid 7 tid 7\nsignal 11 code 1 addr 0x0\nexe /home/u/b/app-bin\n"
+                                 "regs x86_64\nrip 0x555555555123 efl 0x10246\n"
+                                 "build_id 0102030405060708090a0b0c0d0e0f1011121314\nmodules 3\n"
+                                 "module 0x555555554000 0x2a000 0102030405060708090a0b0c0d0e0f1011121314 (exe)\n"
+                                 "module 0x7ffff7fc1000 0x1000 - linux-vdso.so.1\n"
+                                 "module 0x7ffff7dd0000 0x1c0000 aabbccdd libc.so.6\n";
+    const auto parse = [](cont::StringView text)
+    {
+        return parse_crash_record_modules(span_of(reinterpret_cast<const crd::u8*>(text.data()), text.size()));
+    };
+
+    const cont::Array<ModuleIdentity> mods = parse(rec);
+    REQUIRE(mods.size() == 3U);
+    CHECK(mods[0].base == 0x555555554000ULL);
+    CHECK(mods[0].size == 0x2a000ULL);
+    CHECK(mods[0].id_kind == SymbolIdKind::GnuBuildId);
+    REQUIRE(mods[0].id_len == 20U);
+    CHECK(mods[0].id[0] == 0x01U);
+    CHECK(mods[0].id[19] == 0x14U);
+    CHECK(cont::StringView{mods[0].name.c_str()} == "app-bin"); // the exe line's basename, no directory
+    CHECK(mods[1].id_kind == SymbolIdKind::None);               // "-": nothing to match
+    CHECK(cont::StringView{mods[1].name.c_str()} == "linux-vdso.so.1");
+    CHECK(mods[2].id_len == 4U);
+    CHECK(mods[2].id[3] == 0xddU);
+
+    SECTION("cut inside the last line -> only the complete lines")
+    {
+        CHECK(parse(rec.substr(0U, rec.size() - 3U)).size() == 2U);
+        CHECK(parse(rec.substr(0U, rec.find("0a0b0c0d0e0f1011121314 (exe)"))).size() == 0U); // half an id
+    }
+    SECTION("a malformed module line ends the parse")
+    {
+        cont::String bad{rec};
+        bad.data()[rec.find(" - ") + 1U] = 'x';
+        CHECK(parse(bad).size() == 1U); // module 0 kept; the bad id and what follows refused
+        CHECK(parse("crd crash record\nmodule 555555554000 0x1000 - a.so\n").size() == 0U);     // no 0x
+        CHECK(parse("crd crash record\nmodule 0x1 0x1000 abc a.so\n").size() == 0U);            // half a byte
+        CHECK(parse("crd crash record\nmodule 0x1 0x1000 -\n").size() == 0U);                   // no name
+        CHECK(parse("crd crash record\nmodule 0x11112222333344445 0x1 - a.so\n").size() == 0U); // over 64 bits
+    }
+    SECTION("not a record, or no exe path")
+    {
+        CHECK(parse(rec.substr(17U)).size() == 0U);
+        const cont::Array<ModuleIdentity> unnamed = parse("crd crash record\nexe \nmodule 0x1 0x2 - (exe)\n");
+        REQUIRE(unnamed.size() == 1U);
+        CHECK(cont::StringView{unnamed[0].name.c_str()} == "(exe)");
     }
 }
 

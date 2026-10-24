@@ -2,7 +2,8 @@
 // list), captured at install() and verified from OUTSIDE the process. The load-bearing check is INDEPENDENT: the
 // build-id decoded from the on-disk crash_*.log record is compared against the specimen binary's .note.gnu.build-id
 // parsed directly from the file (in-memory-at-install vs on-disk-ELF) -- the identity a later symbolizer matches or
-// refuses. Windows RSDS identity is DIAG.5d(c1); turning this record into a SymbolIndex section is a later composer.
+// refuses. Windows RSDS identity is DIAG.5d(c1); crd::perf::parse_crash_record_modules turns the record into a
+// SymbolIndex.
 
 #include <crd/diag/specimen_runner.hpp>
 
@@ -303,9 +304,10 @@ TEST_CASE("crash record (linux): carries the exe ELF build-id matching the on-di
             break;
         }
         // The "modules N" header does not match "module " (the 7th char is 's', not a space), so every hit here is a
-        // real module line. fields: module <base-hex> <id-hex-or-dash> <basename>
+        // real module line. fields: module <base-hex> <size-hex> <id-hex-or-dash> <basename>
         const std::size_t base_start = p + 7;
-        const std::size_t id_start   = sv.find(' ', base_start);
+        const std::size_t size_start = sv.find(' ', base_start);
+        const std::size_t id_start   = size_start == std::string_view::npos ? size_start : sv.find(' ', size_start + 1);
         if (id_start == std::string_view::npos)
         {
             break;

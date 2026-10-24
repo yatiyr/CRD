@@ -4,6 +4,7 @@
 // SizeOfImage and CheckSum and the CodeView RSDS GUID and age, read from the loaded image's own headers; on Linux the
 // GNU build-id note. Every read of a loaded image is bounds-checked against the image size, so a module with a
 // malformed or missing header yields id_kind None (nothing to match), never a read outside the image.
+// parse_crash_record_modules reads the same Linux identities back from a crash record's text, on every lane.
 
 #include <crd/perf/symbol_index.hpp>
 
@@ -35,7 +36,7 @@ namespace cont = crd::containers;
 [[maybe_unused]] constexpr crd::usize kModuleNameBytes = 256U;        // a basename's bound in the Linux walk
 
 // The part of `path` after its last separator ('/' or '\\').
-[[maybe_unused]] cont::StringView basename_of_path(const char* path, crd::usize n) noexcept
+cont::StringView basename_of_path(const char* path, crd::usize n) noexcept
 {
     crd::usize start = 0U;
     for (crd::usize i = 0U; i < n; ++i)
@@ -55,6 +56,88 @@ namespace cont = crd::containers;
     return a.base == b.base && a.size == b.size && a.timestamp == b.timestamp && a.checksum == b.checksum &&
            a.age == b.age && a.id_kind == b.id_kind && a.id_len == b.id_len &&
            std::memcmp(a.id, b.id, kMaxSymbolIdBytes) == 0 && an == bn;
+}
+
+// The value of one hex digit, or -1.
+[[nodiscard]] int hex_digit(char c) noexcept
+{
+    if (c >= '0' && c <= '9')
+    {
+        return c - '0';
+    }
+    if (c >= 'a' && c <= 'f')
+    {
+        return c - 'a' + 10;
+    }
+    return -1;
+}
+
+// A crash record's `0x`-prefixed hex number (at most 16 digits), or false.
+[[nodiscard]] bool parse_record_hex(cont::StringView t, crd::u64& out) noexcept
+{
+    if (t.size() < 3U || t.size() > 18U || t[0] != '0' || t[1] != 'x')
+    {
+        return false;
+    }
+    crd::u64 v = 0U;
+    for (crd::usize i = 2U; i < t.size(); ++i)
+    {
+        const int d = hex_digit(t[i]);
+        if (d < 0)
+        {
+            return false;
+        }
+        v = (v << 4U) | static_cast<crd::u64>(d);
+    }
+    out = v;
+    return true;
+}
+
+// The next space-delimited token of `line` from `pos`; `pos` moves past its space.
+[[nodiscard]] cont::StringView next_token(cont::StringView line, crd::usize& pos) noexcept
+{
+    const crd::usize start = pos < line.size() ? pos : line.size();
+    crd::usize       end   = line.find(' ', start);
+    end                    = end == cont::StringView::npos ? line.size() : end;
+    pos                    = end + 1U;
+    return line.substr(start, end - start);
+}
+
+// One `module <base> <size> <id or -> <name>` line into `m`, or false when any field is malformed.
+[[nodiscard]] bool parse_record_module(cont::StringView line, cont::StringView exe_name, ModuleIdentity& m,
+                                       crd::memory::IAllocator* alloc)
+{
+    crd::usize             pos  = 7U; // past "module "
+    const cont::StringView base = next_token(line, pos);
+    const cont::StringView size = next_token(line, pos);
+    const cont::StringView id   = next_token(line, pos);
+    const cont::StringView name = pos < line.size() ? line.substr(pos) : cont::StringView{};
+    if (!parse_record_hex(base, m.base) || !parse_record_hex(size, m.size) || name.empty())
+    {
+        return false;
+    }
+    if (id != "-")
+    {
+        if (id.empty() || id.size() % 2U != 0U || id.size() > 2U * kMaxSymbolIdBytes)
+        {
+            return false;
+        }
+        for (crd::usize i = 0U; i < id.size(); i += 2U)
+        {
+            const int hi = hex_digit(id[i]);
+            const int lo = hex_digit(id[i + 1U]);
+            if (hi < 0 || lo < 0)
+            {
+                return false;
+            }
+            m.id[i / 2U] = static_cast<crd::u8>((hi << 4) | lo);
+        }
+        m.id_kind = SymbolIdKind::GnuBuildId;
+        m.id_len  = static_cast<crd::u8>(id.size() / 2U);
+    }
+    m.name       = cont::String(name == "(exe)" && !exe_name.empty() ? exe_name : name, alloc);
+    m.debug_file = cont::String(alloc);
+    return true;
 }
 
 #if defined(_WIN32)
@@ -349,6 +432,48 @@ LiveModules enumerate_loaded_modules(crd::memory::IAllocator* alloc)
 #else
     (void)alloc;
 #endif
+    return out;
+}
+
+cont::Array<ModuleIdentity> parse_crash_record_modules(cont::ConstSpan<crd::u8> record,
+                                                       crd::memory::IAllocator* alloc) noexcept
+{
+    cont::Array<ModuleIdentity> out(alloc);
+    const cont::StringView      text{reinterpret_cast<const char*>(record.data()), record.size()};
+    cont::StringView            exe_name;
+    crd::usize                  pos   = 0U;
+    bool                        first = true;
+    while (out.size() < kMaxLiveModules)
+    {
+        const crd::usize eol = text.find('\n', pos);
+        if (eol == cont::StringView::npos)
+        {
+            break; // an unterminated line was cut short: never half an identity
+        }
+        const cont::StringView line = text.substr(pos, eol - pos);
+        pos                         = eol + 1U;
+        if (first)
+        {
+            if (line != "crd crash record")
+            {
+                break;
+            }
+            first = false;
+        }
+        else if (line.starts_with("exe "))
+        {
+            exe_name = basename_of_path(line.data() + 4U, line.size() - 4U);
+        }
+        else if (line.starts_with("module "))
+        {
+            ModuleIdentity m;
+            if (!parse_record_module(line, exe_name, m, alloc))
+            {
+                break;
+            }
+            out.push_back(static_cast<ModuleIdentity&&>(m));
+        }
+    }
     return out;
 }
 

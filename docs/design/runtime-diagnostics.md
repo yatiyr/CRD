@@ -2963,9 +2963,11 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   engine's own detector on every lane, except the race: only ThreadSanitizer catches it, and elsewhere it is
   InstrumentAbsent, judged against the lane's promise. Every repaired run exits 0 with no bundle and no dump.
 - A crash (`crash`, a wild write) is caught by the crash handler the host installed: one dump or signal record, no
-  bundle. The dump's module list goes through the bundle import route and places the faulting instruction in the
-  application's module; the Linux record's `rip` and `(exe)` build id do the same. Under ASan the sanitizer owns the
-  fault ([session](../sessions/2026-10-24-diag-12-application-crash.md)).
+  bundle. The capture's module list goes through the bundle import route (`build_symbol_index_from_minidump`, or
+  `parse_crash_record_modules` for the Linux record, whose module lines carry the PT_LOAD span) and places the
+  faulting instruction (the dump's exception address, the record's `rip`) in the application's module. Under ASan the
+  sanitizer owns the fault ([session](../sessions/2026-10-24-diag-12-application-crash.md),
+  [import](../sessions/2026-10-24-diag-12-crash-record-import.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
