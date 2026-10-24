@@ -2914,6 +2914,16 @@ Acceptance: one complete native diagnostic workflow per required available tuple
 as open qualification, not pass. A software Vulkan adapter qualifies that adapter only. Do not procure/register new
 hardware/services. DIAG cannot close on required Windows/Linux evidence that is unavailable; later-platform rows stay explicit.
 
+Settled (2026-10-24, [session](../sessions/2026-10-24-diag-11c-doctor-modes.md)):
+- The doctor (`run_doctor`, `diag.capabilities`) reads every mode from this build or host: the tuple and the
+  instruments from `current_build_identity()`; `memory-check` (ASan) and `race-check` (TSan) each need their own build
+  and, absent, name its CMake switch; `crash-capture` follows the platform's crash backend and, absent, names
+  MAC.DIAG and WEB.DIAG; `controlled-replay` and `authored-provenance` follow the commands registered with the
+  service (`DoctorLive::commands`). GPU validation and device faults are the GPU device's to report.
+- `doctor:` cases hold the instrument modes to `lane_promise()` on every lane and the upper-module modes to the
+  registered commands; `diag commands:` holds `diag.capabilities` to the same.
+- Not settled here: the per-tuple workflows and their record, and the portable boundary audit.
+
 <a id="diag-12"></a>
 ## DIAG.12 — independent end-to-end close audit
 

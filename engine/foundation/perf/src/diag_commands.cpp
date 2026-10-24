@@ -1054,9 +1054,15 @@ DiagStatus DiagCommandService::run_commands(void* self, const DiagCall& call, Di
 DiagStatus DiagCommandService::run_capabilities(void* self, const DiagCall& call, DiagSnapshot& out)
 {
     const auto*        svc    = static_cast<const DiagCommandService*>(self);
+    cont::Array<cont::StringView> commands(out.allocator()); // the doctor's upper-module modes follow these
+    for (const Entry& e : svc->m_commands)
+    {
+        commands.push_back(e.spec.name);
+    }
     DoctorLive live;
     live.flight_recorder      = svc->m_config.flight_recorder;
     live.fault_injector       = svc->m_config.fault_injector;
+    live.commands             = cont::ConstSpan<cont::StringView>{commands.data(), commands.size()};
     const DoctorReport report = run_doctor(cont::StringView{}, live);
 
     cont::String grant(out.allocator());

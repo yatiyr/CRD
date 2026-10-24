@@ -2,7 +2,9 @@
 
 #include <crd/perf/doctor.hpp>
 
+#include <crd/perf/build_identity.hpp>
 #include <crd/perf/config.hpp>
+#include <crd/perf/diagnostic_host.hpp>
 #include <crd/perf/fault_injection.hpp>
 #include <crd/perf/flight_recorder.hpp>
 
@@ -11,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <initializer_list>
 #include <string_view>
 
 namespace crd::perf
@@ -19,48 +22,18 @@ namespace
 {
 namespace fs = std::filesystem;
 
-#if defined(__SANITIZE_ADDRESS__)
-constexpr bool kBuiltWithAsan = true;
-#elif defined(__has_feature)
-#if __has_feature(address_sanitizer)
-constexpr bool kBuiltWithAsan = true;
-#else
-constexpr bool kBuiltWithAsan = false;
-#endif
-#else
-constexpr bool kBuiltWithAsan = false;
-#endif
-
-cont::String host_tuple_string()
+// "platform/arch/compiler version/configuration", from the identity a bundle records for this build.
+cont::String host_tuple_string(const BuildIdentity& build)
 {
     cont::String t;
-#if defined(_WIN32)
-    t.append("windows");
-#elif defined(__linux__)
-    t.append("linux");
-#elif defined(__APPLE__)
-    t.append("macos");
-#else
-    t.append("unknown-os");
-#endif
-    t.append("/");
-#if defined(__x86_64__) || defined(_M_X64)
-    t.append("x86_64");
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    t.append("arm64");
-#else
-    t.append("unknown-isa");
-#endif
-    t.append("/");
-#if defined(__clang__)
-    t.append("clang");
-#elif defined(_MSC_VER)
-    t.append("msvc");
-#elif defined(__GNUC__)
-    t.append("gcc");
-#else
-    t.append("unknown-cc");
-#endif
+    for (const cont::String* field : {&build.platform, &build.arch, &build.compiler_version, &build.config})
+    {
+        if (!t.empty())
+        {
+            t.push_back('/');
+        }
+        t.append(cont::StringView{field->data(), field->size()});
+    }
     return t;
 }
 
@@ -120,6 +93,30 @@ DiagnosticMode mode(cont::StringView name, bool compiled, bool enabled, bool usa
 {
     return DiagnosticMode{name, compiled, enabled, usable, disposition};
 }
+
+// A mode of this build that is present or absent as a whole, with what it is, or what builds it.
+DiagnosticMode built_mode(cont::StringView name, bool built, cont::StringView present, cont::StringView absent)
+{
+    return mode(name, built, built, built, built ? present : absent);
+}
+
+// True when `commands` names every one of `names`.
+bool serves(cont::ConstSpan<cont::StringView> commands, std::initializer_list<cont::StringView> names) noexcept
+{
+    for (const cont::StringView name : names)
+    {
+        bool found = false;
+        for (const cont::StringView command : commands)
+        {
+            found = found || std::string_view{command} == std::string_view{name};
+        }
+        if (!found)
+        {
+            return false;
+        }
+    }
+    return true;
+}
 } // namespace
 
 const DiagnosticMode* DoctorReport::find_mode(cont::StringView name) const noexcept
@@ -152,14 +149,21 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
 {
     DoctorReport report;
     report.schema = cont::StringView{"cerid-diagnostics/1"};
-    report.host_tuple = host_tuple_string();
+    const BuildIdentity build = current_build_identity();
+    const bool          asan  = (build.flags & kBuildFlagAsan) != 0U;
+    const bool          tsan  = (build.flags & kBuildFlagTsan) != 0U;
+    report.host_tuple         = host_tuple_string(build);
 
     // ---- live-probed dependencies -------------------------------------------
     {
         DiagnosticDependency san;
         san.name = cont::StringView{"sanitizer_runtime"};
-        san.present = kBuiltWithAsan;
-        san.detail = cont::String{kBuiltWithAsan ? "asan" : "none"};
+        san.present = asan || tsan;
+        san.detail = cont::String{"none"};
+        if (san.present)
+        {
+            san.detail = cont::String{asan ? "asan" : "tsan"}; // exclusive instruments
+        }
         report.dependencies.push_back(static_cast<DiagnosticDependency&&>(san));
     }
     {
@@ -196,29 +200,36 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
         report.dependencies.push_back(static_cast<DiagnosticDependency&&>(out));
     }
 
-    // ---- modes (census-sourced; live dependencies fold into `usable`) --------
-    const bool san_ready = kBuiltWithAsan;
+    // ---- modes of this build -----------------------------------------------
+    const cont::StringView profiling_absent{"needs a build with CRD_ENABLE_PROFILING"};
     report.modes.push_back(mode(cont::StringView{"disabled"}, true, !kEnabled, true,
                                 cont::StringView{"no-op path when the perf gate is off"}));
-    report.modes.push_back(mode(cont::StringView{"basic-recording"}, kEnabled, kEnabled, kEnabled,
-                                cont::StringView{"unqualified overhead/budget; DIAG.2"}));
-    report.modes.push_back(mode(cont::StringView{"emergency-recording"}, false, false, false,
-                                cont::StringView{"unsupported; DIAG.5"}));
-    report.modes.push_back(mode(cont::StringView{"crash-capture"}, true, true, true,
-                                cont::StringView{"unqualified fatal path; DIAG.5a/5b"}));
-    report.modes.push_back(mode(cont::StringView{"sanitizer-coverage"}, kBuiltWithAsan, kBuiltWithAsan, san_ready,
-                                cont::StringView{"unqualified; DIAG.1b/3f"}));
+    report.modes.push_back(built_mode(cont::StringView{"basic-recording"}, kEnabled,
+                                      cont::StringView{"profiler regions and the basic flight detail"},
+                                      profiling_absent));
+    report.modes.push_back(built_mode(cont::StringView{"full-profile"}, kEnabled,
+                                      cont::StringView{"the full flight detail, chosen by the host's flight policy"},
+                                      profiling_absent));
+    report.modes.push_back(mode(cont::StringView{"emergency-recording"}, true, true, true,
+                                cont::StringView{"fixed record written without the ring mutex (DiagnosticRecorder)"}));
+    report.modes.push_back(built_mode(cont::StringView{"crash-capture"}, diagnostic_host_capabilities().crash_backend,
+                                      cont::StringView{"crd::crash: a Windows minidump, a signal-safe Linux record"},
+                                      cont::StringView{"no crash backend on this platform (MAC.DIAG, WEB.DIAG)"}));
+    report.modes.push_back(built_mode(cont::StringView{"memory-check"}, asan,
+                                      cont::StringView{"this build carries AddressSanitizer"},
+                                      cont::StringView{"needs its own build: CRD_ENABLE_ASAN"}));
+    report.modes.push_back(built_mode(cont::StringView{"race-check"}, tsan,
+                                      cont::StringView{"this build carries ThreadSanitizer"},
+                                      cont::StringView{"needs its own GCC or Clang build: CRD_ENABLE_TSAN"}));
     report.modes.push_back(mode(cont::StringView{"gpu-fault"}, false, false, false,
-                                cont::StringView{"unsupported; DIAG.7"}));
-    report.modes.push_back(mode(cont::StringView{"authored-provenance"}, true, true, true,
-                                cont::StringView{"unqualified full chain; DIAG.8"}));
+                                cont::StringView{"not reported here: the GPU device reports validation and faults"}));
 
     // ---- live modes (DIAG.9b): read from the host's instances ----------------
     {
         const FlightRecorder* flight  = live.flight_recorder;
         const bool            enabled = flight != nullptr && flight->is_initialized();
         const bool            usable  = enabled && !flight->fatal_entered();
-        cont::StringView      disposition{"triggered bounded capture, unqualified overhead; DIAG.9b"};
+        cont::StringView      disposition{"triggered bounded capture; DIAG.9b"};
         if (flight == nullptr)
         {
             disposition = cont::StringView{"no flight recorder installed by this host; DIAG.9b"};
@@ -249,6 +260,18 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
         }
         report.modes.push_back(mode(cont::StringView{"fault-injection"}, compiled, enabled, usable, disposition));
     }
+
+    // ---- upper-module modes: the commands the host registered with its service ----
+    report.modes.push_back(
+        built_mode(cont::StringView{"controlled-replay"},
+                   serves(live.commands, {cont::StringView{"replay.record"}, cont::StringView{"replay.run"}}),
+                   cont::StringView{"served by replay.record and replay.run"},
+                   cont::StringView{"replay.record and replay.run not registered by this host"}));
+    report.modes.push_back(built_mode(cont::StringView{"authored-provenance"},
+                                      serves(live.commands, {cont::StringView{"program.provenance"}}),
+                                      cont::StringView{"served by program.provenance"},
+                                      cont::StringView{"program.provenance not registered by this host"}));
+
     // No build replays external I/O (DIAG.9b): a run record holds no external I/O completions or opaque call results,
     // and replay.run refuses a program that needs them, decided from its ops (crd-ceir-cook check_external_replay).
     report.modes.push_back(mode(cont::StringView{"external-io-replay"}, false, false, false,

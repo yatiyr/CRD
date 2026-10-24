@@ -724,6 +724,16 @@ TEST_CASE("diag commands: capabilities report the doctor, the grant and the auth
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"execute\",\"granted\":false}"));
     CHECK(contains(caps.json, "{\"kind\":\"mode\",\"name\":"));
     CHECK(contains(caps.json, "{\"kind\":\"dependency\",\"name\":\"sanitizer_runtime\""));
+
+    // DIAG.11c: an upper module's mode is reported from the commands registered with this service.
+    CHECK(contains(caps.json, R"("name":"controlled-replay","compiled":false)"));
+    NeverCommand replay;
+    REQUIRE(svc.register_command({"replay.record", "test", "record", DiagAuthority::Read, false}, &run_never, &replay));
+    REQUIRE(svc.register_command({"replay.run", "test", "run", DiagAuthority::Read, false}, &run_never, &replay));
+    const DiagResult served = svc.execute(req);
+    REQUIRE(served.status == DiagStatus::Ok);
+    CHECK(contains(served.json, R"("name":"controlled-replay","compiled":true,"enabled":true,"usable":true)"));
+    CHECK(contains(served.json, R"("name":"authored-provenance","compiled":false)"));
 }
 
 TEST_CASE("diag commands: bundle.inspect reads through the bounded importer and refuses a large file unread",
