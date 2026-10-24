@@ -20,8 +20,9 @@
 #include <windows.h>  // GetModuleHandleExW, FreeLibrary, IMAGE_* headers
 #include <tlhelp32.h> // CreateToolhelp32Snapshot, Module32FirstW / Module32NextW
 #elif defined(__linux__)
-#include <elf.h>
-#include <link.h> // dl_iterate_phdr, ElfW, struct dl_phdr_info
+#include <crd/core/crash.hpp> // read_elf_image
+
+#include <link.h>   // dl_iterate_phdr, struct dl_phdr_info
 #include <unistd.h> // readlink
 #endif
 
@@ -299,62 +300,15 @@ struct Walk
     const char* exe_name = "";
 };
 
-// The GNU build-id from the PT_NOTE segments of one loaded object, bounds-checked against each segment's size.
-crd::u8 note_build_id(const dl_phdr_info* info, crd::u8* out) noexcept
-{
-    for (int i = 0; i < info->dlpi_phnum; ++i)
-    {
-        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
-        if (ph.p_type != PT_NOTE)
-        {
-            continue;
-        }
-        const auto* p   = reinterpret_cast<const crd::u8*>(info->dlpi_addr + ph.p_vaddr);
-        crd::u64    rem = ph.p_memsz;
-        while (rem >= sizeof(ElfW(Nhdr)))
-        {
-            ElfW(Nhdr) nh{};
-            std::memcpy(&nh, p, sizeof(nh));
-            const crd::u64 name_pad = (static_cast<crd::u64>(nh.n_namesz) + 3U) & ~static_cast<crd::u64>(3U);
-            const crd::u64 desc_pad = (static_cast<crd::u64>(nh.n_descsz) + 3U) & ~static_cast<crd::u64>(3U);
-            const crd::u64 total    = sizeof(ElfW(Nhdr)) + name_pad + desc_pad;
-            if (total > rem)
-            {
-                break;
-            }
-            if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U &&
-                std::memcmp(p + sizeof(ElfW(Nhdr)), "GNU", 4U) == 0)
-            {
-                const crd::u64 take = nh.n_descsz < kMaxSymbolIdBytes ? nh.n_descsz : kMaxSymbolIdBytes;
-                std::memcpy(out, p + sizeof(ElfW(Nhdr)) + name_pad, static_cast<std::size_t>(take));
-                return static_cast<crd::u8>(take);
-            }
-            p += total;
-            rem -= total;
-        }
-    }
-    return 0U;
-}
-
 // dl_iterate_phdr callback: copies into the preallocated slots only (it runs under the loader lock).
 int walk_module(dl_phdr_info* info, size_t /*size*/, void* data) noexcept
 {
     auto*      walk  = static_cast<Walk*>(data);
     const bool first = walk->first;
     walk->first      = false;
-    crd::u64   low   = ~static_cast<crd::u64>(0U);
-    crd::u64   high  = 0U;
-    for (int i = 0; i < info->dlpi_phnum; ++i)
-    {
-        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
-        if (ph.p_type != PT_LOAD)
-        {
-            continue;
-        }
-        low  = ph.p_vaddr < low ? ph.p_vaddr : low;
-        high = ph.p_vaddr + ph.p_memsz > high ? ph.p_vaddr + ph.p_memsz : high;
-    }
-    if (high == 0U)
+    crd::u8                    id[kMaxSymbolIdBytes];
+    const crd::crash::ElfImage image = crd::crash::read_elf_image(*info, id, sizeof(id));
+    if (image.size == 0U)
     {
         return 0; // nothing mapped: not a module a symbolizer could use
     }
@@ -364,9 +318,10 @@ int walk_module(dl_phdr_info* info, size_t /*size*/, void* data) noexcept
         return 1;
     }
     RawModule& r = walk->slots[walk->count];
-    r.base       = static_cast<crd::u64>(info->dlpi_addr) + low;
-    r.size       = high - low;
-    r.id_len     = note_build_id(info, r.id);
+    r.base       = image.base;
+    r.size       = image.size;
+    r.id_len     = static_cast<crd::u8>(image.id_len);
+    std::memcpy(r.id, id, image.id_len);
     const char* path = info->dlpi_name != nullptr ? info->dlpi_name : "";
     if (first && path[0] == '\0')
     {

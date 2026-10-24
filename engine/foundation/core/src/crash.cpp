@@ -887,7 +887,7 @@ bool        s_have_prev        = false;
 // -- DIAG.5d(c2): per-module ELF build-id, captured at install() (dl_iterate_phdr takes the loader lock and may
 // allocate -- forbidden in the async-signal handler), then only READ when the record is written. The build-id is the
 // Linux analogue of the Windows RSDS GUID: it lets an offline symbolizer find the matching debug file and REJECT a
-// wrong one. Base and size are the PT_LOAD span enumerate_loaded_modules reports, so crd::perf's
+// wrong one. read_elf_image reads each module as enumerate_loaded_modules does, so crd::perf's
 // parse_crash_record_modules turns the record into the same SymbolIndex a flight bundle carries. --
 constexpr std::size_t kMaxModuleNotes = 64;   // bounded; a busier process marks s_modules_overflow
 constexpr std::size_t kBuildIdBytes   = 20;   // GNU build-id is SHA-1 (20 B) by default; longer ids are truncated
@@ -908,48 +908,6 @@ bool          s_modules_overflow = false;
 unsigned char s_exe_build_id[kBuildIdBytes] = {};
 unsigned char s_exe_build_id_len            = 0;
 
-// Walk the PT_NOTE segments of one loaded object for NT_GNU_BUILD_ID. Bounds-checked against p_memsz so a malformed
-// or truncated note can never overrun. Returns the number of build-id bytes copied into out (0 if none).
-std::size_t extract_build_id(const ElfW(Phdr)* phdr, int phnum, ElfW(Addr) load_base, unsigned char* out,
-                             std::size_t out_cap) noexcept
-{
-    for (int i = 0; i < phnum; ++i)
-    {
-        if (phdr[i].p_type != PT_NOTE)
-        {
-            continue;
-        }
-        const unsigned char* p   = reinterpret_cast<const unsigned char*>(load_base + phdr[i].p_vaddr);
-        std::size_t          rem = static_cast<std::size_t>(phdr[i].p_memsz);
-        while (rem >= sizeof(ElfW(Nhdr)))
-        {
-            ElfW(Nhdr) nh{};
-            std::memcpy(&nh, p, sizeof(nh));
-            const std::size_t name_pad = (static_cast<std::size_t>(nh.n_namesz) + 3U) & ~static_cast<std::size_t>(3);
-            const std::size_t desc_pad = (static_cast<std::size_t>(nh.n_descsz) + 3U) & ~static_cast<std::size_t>(3);
-            const std::size_t total    = sizeof(ElfW(Nhdr)) + name_pad + desc_pad;
-            if (total > rem || total < sizeof(ElfW(Nhdr))) // second test guards a wrapped add
-            {
-                break;
-            }
-            if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U &&
-                std::memcmp(p + sizeof(ElfW(Nhdr)), "GNU", 4) == 0)
-            {
-                std::size_t take = nh.n_descsz;
-                if (take > out_cap)
-                {
-                    take = out_cap;
-                }
-                std::memcpy(out, p + sizeof(ElfW(Nhdr)) + name_pad, take);
-                return take;
-            }
-            p += total;
-            rem -= total;
-        }
-    }
-    return 0;
-}
-
 // dl_iterate_phdr callback: record one module's base + build-id + basename. Runs at install() only.
 int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
 {
@@ -958,27 +916,12 @@ int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
         s_modules_overflow = true;
         return 0;
     }
-    unsigned char     id[kBuildIdBytes];
-    const std::size_t idlen = extract_build_id(info->dlpi_phdr, info->dlpi_phnum, info->dlpi_addr, id, sizeof(id));
-
-    std::uintptr_t low  = ~static_cast<std::uintptr_t>(0U);
-    std::uintptr_t high = 0U;
-    for (int i = 0; i < info->dlpi_phnum; ++i)
-    {
-        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
-        if (ph.p_type == PT_LOAD)
-        {
-            low  = ph.p_vaddr < low ? ph.p_vaddr : low;
-            high = ph.p_vaddr + ph.p_memsz > high ? ph.p_vaddr + ph.p_memsz : high;
-        }
-    }
-    low = high != 0U ? low : 0U;
-
-    ModuleNote& m = s_modules[s_module_count];
-    m.base        = static_cast<std::uintptr_t>(info->dlpi_addr) + low;
-    m.size        = high - low;
-    m.id_len      = static_cast<unsigned char>(idlen);
-    std::memcpy(m.id, id, idlen);
+    ModuleNote&                m     = s_modules[s_module_count];
+    const crd::crash::ElfImage image = crd::crash::read_elf_image(*info, m.id, sizeof(m.id));
+    const std::size_t          idlen = image.id_len;
+    m.base                           = image.base;
+    m.size                           = image.size;
+    m.id_len                         = static_cast<unsigned char>(idlen);
 
     const char* name = (info->dlpi_name != nullptr) ? info->dlpi_name : "";
     const char* bn   = name;
@@ -998,7 +941,7 @@ int phdr_cb(struct dl_phdr_info* info, size_t /*size*/, void* /*data*/) noexcept
 
     if (name[0] == '\0' && idlen != 0U) // dlpi_name == "" is the main executable
     {
-        std::memcpy(s_exe_build_id, id, idlen);
+        std::memcpy(s_exe_build_id, m.id, idlen);
         s_exe_build_id_len = static_cast<unsigned char>(idlen);
     }
     ++s_module_count;
@@ -1417,6 +1360,57 @@ void crash_signal_handler(int sig, siginfo_t* info, void* ctx) noexcept
 
 namespace crd::crash
 {
+
+ElfImage read_elf_image(const dl_phdr_info& info, unsigned char* id, std::size_t id_cap) noexcept
+{
+    ElfImage       image{};
+    std::uintptr_t low  = ~static_cast<std::uintptr_t>(0U);
+    std::uintptr_t high = 0U;
+    for (int i = 0; i < info.dlpi_phnum; ++i)
+    {
+        const ElfW(Phdr)& ph = info.dlpi_phdr[i];
+        if (ph.p_type == PT_LOAD)
+        {
+            low  = ph.p_vaddr < low ? ph.p_vaddr : low;
+            high = ph.p_vaddr + ph.p_memsz > high ? ph.p_vaddr + ph.p_memsz : high;
+        }
+    }
+    low        = high != 0U ? low : 0U;
+    image.base = static_cast<std::uintptr_t>(info.dlpi_addr) + low;
+    image.size = high - low;
+
+    for (int i = 0; i < info.dlpi_phnum; ++i)
+    {
+        const ElfW(Phdr)& ph = info.dlpi_phdr[i];
+        if (ph.p_type != PT_NOTE)
+        {
+            continue;
+        }
+        const auto* p   = reinterpret_cast<const unsigned char*>(info.dlpi_addr + ph.p_vaddr);
+        std::size_t rem = static_cast<std::size_t>(ph.p_memsz);
+        while (rem >= sizeof(ElfW(Nhdr)))
+        {
+            ElfW(Nhdr) nh{};
+            std::memcpy(&nh, p, sizeof(nh));
+            const std::size_t name_pad = (static_cast<std::size_t>(nh.n_namesz) + 3U) & ~static_cast<std::size_t>(3);
+            const std::size_t desc_pad = (static_cast<std::size_t>(nh.n_descsz) + 3U) & ~static_cast<std::size_t>(3);
+            const std::size_t total    = sizeof(ElfW(Nhdr)) + name_pad + desc_pad;
+            if (total > rem || total < sizeof(ElfW(Nhdr))) // second test guards a wrapped add
+            {
+                break;
+            }
+            if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4U && std::memcmp(p + sizeof(ElfW(Nhdr)), "GNU", 4) == 0)
+            {
+                image.id_len = nh.n_descsz < id_cap ? nh.n_descsz : id_cap;
+                std::memcpy(id, p + sizeof(ElfW(Nhdr)) + name_pad, image.id_len);
+                return image;
+            }
+            p += total;
+            rem -= total;
+        }
+    }
+    return image;
+}
 
 void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept
 {

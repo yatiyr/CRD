@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(__linux__)
+struct dl_phdr_info; // <link.h>
+#endif
+
 namespace crd::crash
 {
 
@@ -121,6 +125,21 @@ std::size_t read_dump_stream(const char* dump_path, std::uint32_t stream_type, v
 // to signal the handler thread. Checked wrapper over SetThreadStackGuarantee (no-op / harmless off Windows).
 // install() calls it for the installing thread; hosts may call it on threads they own.
 void guard_current_thread_stack(std::uint32_t reserve_bytes = 65536U) noexcept;
+
+#if defined(__linux__)
+// One loaded ELF object as a dl_iterate_phdr callback sees it: base = load bias + the lowest PT_LOAD address and size
+// = the PT_LOAD span (both the bias and 0 when nothing is mapped), and the GNU build-id from its PT_NOTE segments,
+// copied into `id` (longer ids truncated to id_cap) with its length in id_len (0 when it has none). Every note read
+// is bounded by its segment's size; nothing allocates, so it is safe under the loader lock. The crash record's module
+// lines and crd::perf's live module enumeration both read modules through it.
+struct ElfImage
+{
+    std::uintptr_t base{0};
+    std::uintptr_t size{0};
+    std::size_t    id_len{0};
+};
+ElfImage read_elf_image(const dl_phdr_info& info, unsigned char* id, std::size_t id_cap) noexcept;
+#endif
 
 #if CRD_ENABLE_ASSERTS
 // Test-only seam: drive the fatal path with a SYNTHETIC exception record (no real fault, no filter chaining)

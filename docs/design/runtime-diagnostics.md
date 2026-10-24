@@ -2968,6 +2968,8 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-12-same-application.m
   faulting instruction (the dump's exception address, the record's `rip`) in the application's module. Under ASan the
   sanitizer owns the fault ([session](../sessions/2026-10-24-diag-12-application-crash.md),
   [import](../sessions/2026-10-24-diag-12-crash-record-import.md)).
+- One walk reads a loaded ELF object's PT_LOAD span and GNU build-id: `crd::crash::read_elf_image`, used by the crash
+  record's module lines and `enumerate_loaded_modules` ([session](../sessions/2026-10-24-diag-12-one-elf-walk.md)).
 
 <a id="later-platforms"></a>
 ## MAC.DIAG and WEB.DIAG — later native and browser release gates
