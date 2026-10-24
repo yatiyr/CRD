@@ -18,15 +18,15 @@ stay open: this run's only user message approves no download.
 The device validation batch read the GPU-based validation crash as the driver's. It is ours. Under cdb, the second frame
 of `crd-diag-overhead --workload render --validation gpu` faults in `nvwgf2umx` (32.0.16.1088, driver 610.88), called
 from `D3D12SDKLayers!NDebug::CGBVDataController::InjectValidationShader` inside the readback barrier of
-`frame_readback_from`, the 8th injected barrier of the process. The faulting load reads a root parameter's slot
-(index 13) through a null pointer in the driver's command list state.
+`frame_readback_from`, the 8th injected barrier of the process. The faulting load reads entry 13 of a table behind a
+null pointer in the driver's command list state.
 
 `Dx12RasterContext::frame_prepare` binds `nullptr` as the graphics and compute root signature whenever a reservation
 selects a descriptor heap page: once per frame here, at the frame's first reservation (a probe printed it). This drops
 the previous page's tables, so a verb that forgot an argument is caught at its draw. D3D12 does not define a null root
-signature, and GPU-based validation's injected work restores its state onto it. The first frame passes; the second
-crashes. The standalone draws record no frame and bind no null, which is why GBV passes on the standalone targets
-(checked with a temporary GBV variant of that case).
+signature; the debug layer accepts the null bind silently, and GPU-based validation's injected barrier does not
+survive it. The first frame passes; the second crashes. The standalone draws record no frame and bind no null, which
+is why GBV passes on the standalone targets (checked with a temporary GBV variant of that case).
 
 The context now creates a root signature with no parameters and binds it there instead. A different signature drops
 every root argument exactly as before. These were the backend's only null binds. WARP never crashed, so the hosted
