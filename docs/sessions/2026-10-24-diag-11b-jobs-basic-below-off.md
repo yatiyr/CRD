@@ -54,7 +54,8 @@ slots `361915b39de2`, plus a dequeue race count in `ConcurrentQueue::try_pop` `4
 the first 48 threads to add in the process each own a stripe and add with a relaxed load and store, no locked
 instruction; later threads use `fetch_add` on 16 separate shared stripes no owner writes. The owned count never passes
 48, so an index is never reused; `reset()` needs quiescent adders, as its two callers already are. `add()` still reads
-one `thread_local` and holds nothing across a suspension point; no target builds with `/GT`.
+one `thread_local` and holds nothing across a suspension point; no target builds with `/GT`. The new case starts
+96 `std::thread`s, not jobs: the stripe belongs to the OS thread, and a pool would not guarantee 96 distinct ones.
 
 The site microbenchmark (`events`, basic, 48 processes, two boards of each binary): 3.2 ns a left-out site at HEAD,
 1.0 ns repaired (off 0.2 ns). Jobs boards (`diag-overhead.py run --workloads jobs --arms off,basic --processes 96`),
