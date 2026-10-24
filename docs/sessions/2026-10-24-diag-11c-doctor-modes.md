@@ -49,10 +49,16 @@ Each restored and rebuilt, the cases green again:
 - `memory-check` read from the TSan flag (win-asan, inside vcvars): the instrument case fails (`false == true`
   against `lane_promise().asan`).
 
+Recorded, not teeth: `emergency-recording` and `gpu-fault` are constant rows (`DiagnosticRecorder` has no build gate),
+and `crash-capture`'s absent branch needs a platform without a crash backend, which no tuple here has (MAC.DIAG,
+WEB.DIAG). `race-check` compiled runs only on linux-clang-tsan, hosted.
+
 ## Verification
 
 win-debug and win-asan: crd-perf-tests builds; the `doctor:` cases, `diag commands:`, the flight and diag host cases
-pass. linux-gcc-debug (`wsl-lane.sh`): the same. `tidy-files.py` on the five files (clean), `check-headers.py` on
+pass. linux-gcc-debug (`wsl-lane.sh`): the same. `ceridc diag --command diag.capabilities` (win-debug, rebuilt)
+reports 23 items on one page, the tuple `WINDOWS/X64/msvc 195136246/debug`, and `controlled-replay` and
+`authored-provenance` served (ceridc registers crd-ceir-cook's commands). `tidy-files.py` on the five files (clean), `check-headers.py` on
 doctor.hpp, `check-include-budget.py`, the ctest guards, `check-allman-braces.py`, `check-master-plan.py`,
 `check-repository.py`. clang-format: the added lines match the file's hand alignment; the one rewrapped call follows
 its output.
