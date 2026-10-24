@@ -326,7 +326,7 @@ TEST_CASE("diag assets: a fault-plan document is the plan its text names, and ma
                        "not valid TOML");
 }
 
-TEST_CASE("diag assets: an asset file over the bound is refused, and a missing one says so",
+TEST_CASE("diag assets: an asset file over the bound is refused, a missing one says so, and the I/O seam can fail it",
           "[perf][diag][diag9b][assets]")
 {
     const cont::String big = scratch_path("diag_assets_big.toml");
@@ -344,6 +344,35 @@ TEST_CASE("diag assets: an asset file over the bound is refused, and a missing o
     (void)std::remove(big.c_str());
     const cont::String missing = scratch_path("diag_assets_missing.toml");
     CHECK(cp::read_diag_asset_file(missing.c_str(), out) == cp::DiagAssetRead::Missing);
+
+    // A read the I/O fault seam fails is Failed and delivers nothing; a delayed one reads (shipping has no seam).
+    const cont::String plain = scratch_path("diag_assets_plain.toml");
+    write_text(plain, "# plain\n");
+    const auto fail = [](void*, crd::IoFaultOp, const char*, crd::usize, crd::u64, crd::u64) noexcept
+    {
+        return crd::IoFault{crd::IoFaultAction::Fail, 0U};
+    };
+    const auto delay = [](void*, crd::IoFaultOp, const char*, crd::usize, crd::u64, crd::u64) noexcept
+    {
+        return crd::IoFault{crd::IoFaultAction::Delay, 1000000U};
+    };
+    if (crd::install_io_fault_hook(+fail, nullptr))
+    {
+        out = cont::String{cont::StringView{"stale"}};
+        CHECK(cp::read_diag_asset_file(plain.c_str(), out) == cp::DiagAssetRead::Failed);
+        CHECK(out.empty());
+        crd::uninstall_io_fault_hook();
+        REQUIRE(crd::install_io_fault_hook(+delay, nullptr));
+        CHECK(cp::read_diag_asset_file(plain.c_str(), out) == cp::DiagAssetRead::Ok);
+        CHECK(contains(out, "# plain"));
+        crd::uninstall_io_fault_hook();
+    }
+    else
+    {
+        CHECK_FALSE(crd::fault_seams_compiled());
+    }
+    CHECK(cp::read_diag_asset_file(plain.c_str(), out) == cp::DiagAssetRead::Ok);
+    (void)std::remove(plain.c_str());
 }
 
 TEST_CASE("flight commands: trigger, status, write and policy reload through the command service",
@@ -557,6 +586,23 @@ TEST_CASE("fault commands: fault.arm arms a fault-plan asset under the root and 
         REQUIRE(armed.status == cp::DiagStatus::Ok);
         CHECK(injector.armed());
         CHECK(contains(armed.json, "\"plan\":\"seed=1;allocation-failure@0+1%1000000\""));
+
+        // An armed failed-read fails the plan asset's own read, so the next arm is refused and the armed plan stays.
+        cp::DiagArg failed_read{"plan", "seed=1;failed-read@0+1%1000000"};
+        cp::DiagRequest by_text = command("fault.arm");
+        by_text.args = cont::ConstSpan<cp::DiagArg>{&failed_read, 1U};
+        REQUIRE(service.execute(by_text).status == cp::DiagStatus::Ok);
+        REQUIRE(crd::install_io_fault_hook(&cp::FaultInjector::io_hook, &injector));
+        const cp::DiagResult unread = service.execute(arm);
+        crd::uninstall_io_fault_hook();
+        CHECK(unread.status == cp::DiagStatus::Failed);
+        CHECK(contains(unread.reason, "could not be read"));
+        CHECK(injector.fired(cp::FaultSite::FailedRead) == 1U);
+        cp::FaultPlan kept;
+        REQUIRE(injector.plan(kept));
+        cont::String kept_text;
+        cp::fault_plan_to_text(kept, kept_text);
+        CHECK(contains(kept_text, "failed-read"));
         injector.disarm();
     }
     else

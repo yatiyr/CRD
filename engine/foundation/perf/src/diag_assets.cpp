@@ -3,9 +3,12 @@
 #include <crd/perf/diag_assets.hpp>
 #include <crd/perf/diagnostic_host.hpp>
 
+#include <crd/core/fault_seam.hpp>
+#include <crd/time/deadline.hpp>
 #include <crd/toml/toml.hpp>
 
 #include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <string_view>
 
@@ -787,6 +790,18 @@ cont::StringView diag_asset_read_name(DiagAssetRead r) noexcept
 DiagAssetRead read_diag_asset_file(const char* path, cont::String& out)
 {
     out.clear();
+    // The I/O fault seam, consulted before the file is touched as crd-platform's whole-file reads do: a failed, short
+    // or cancelled read is Failed, and a delay is slept here.
+    const crd::IoFault fault = crd::consult_io_fault(crd::IoFaultOp::ReadWhole, path, std::strlen(path), 0U, 0U);
+    if (fault.action == crd::IoFaultAction::Fail || fault.action == crd::IoFaultAction::Short ||
+        fault.action == crd::IoFaultAction::Cancel)
+    {
+        return DiagAssetRead::Failed;
+    }
+    if (fault.action == crd::IoFaultAction::Delay)
+    {
+        crd::time::sleep_for(crd::time::Duration{static_cast<crd::f64>(fault.value) * 1.0e-9});
+    }
     std::FILE* fp = nullptr;
 #if defined(_MSC_VER)
     if (fopen_s(&fp, path, "rb") != 0)

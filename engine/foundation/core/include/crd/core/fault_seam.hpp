@@ -3,10 +3,10 @@
 // crd-core -- the process-wide fault seams (DIAG.9b): one for file reads, one for GPU queue submissions.
 //
 // The file reads every engine module shares (crd-platform's read_file_binary, read_file_text, read_file_range and
-// AsyncFile's completion jobs) consult the I/O seam before they touch the file. With no hook installed the consult is
-// one atomic load and the read proceeds. A diagnostics host installs one hook (crd-perf's seeded FaultInjector
-// provides FaultInjector::io_hook) to fail a read, cut it short, delay its completion or cancel it, so a test can drive
-// the real recovery paths of load, cook, reload and teardown without a broken disk.
+// AsyncFile's completion jobs, and crd-perf's read_diag_asset_file) consult the I/O seam before they touch the file.
+// With no hook installed the consult is one atomic load and the read proceeds. A diagnostics host installs one hook
+// (crd-perf's seeded FaultInjector provides FaultInjector::io_hook) to fail a read, cut it short, delay its completion
+// or cancel it, so a test can drive the real recovery paths of load, cook, reload and teardown without a broken disk.
 //
 // The GPU providers' queue submissions (the Vulkan completion seam's vk_submit and DX12's dx12_submit) consult the
 // GPU seam before any work of the submission is queued. Its hook (FaultInjector::gpu_hook) can answer LoseDevice:

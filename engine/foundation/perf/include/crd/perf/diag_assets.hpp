@@ -61,13 +61,13 @@ enum class DiagAssetRead : crd::u8
     Ok,
     Missing,  // the file could not be opened
     TooLarge, // the file is larger than kDiagAssetMaxBytes; nothing was read
-    Failed,   // a read error
+    Failed,   // a read error, or a read the I/O fault seam failed, cut short or cancelled
 };
 
 // "ok", "missing", "too-large", "failed".
 [[nodiscard]] cont::StringView diag_asset_read_name(DiagAssetRead r) noexcept;
 
-// Read an asset file of at most kDiagAssetMaxBytes into `out` (replacing its contents).
+// Read an asset file of at most kDiagAssetMaxBytes into `out` (replacing its contents), through the I/O fault seam.
 [[nodiscard]] DiagAssetRead read_diag_asset_file(const char* path, cont::String& out);
 
 } // namespace crd::perf
