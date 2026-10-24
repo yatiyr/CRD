@@ -177,7 +177,10 @@ LifetimeSnapshot LifetimeLedger::snapshot() const noexcept
         o.acquired           = s.acquired.load(std::memory_order_relaxed);
         o.released           = s.released.load(std::memory_order_relaxed);
         o.live               = s.live.load(std::memory_order_relaxed);
-        o.high_water         = s.high_water.load(std::memory_order_relaxed);
+        // acquired() raises the high water just after the live count, so a snapshot between the two would read
+        // it below `live`; the live count read first is a level the class reached.
+        const crd::u64 high_water = s.high_water.load(std::memory_order_relaxed);
+        o.high_water              = high_water > o.live ? high_water : o.live;
         o.live_bytes         = s.live_bytes.load(std::memory_order_relaxed);
         o.unmatched_releases = s.unmatched.load(std::memory_order_relaxed);
     }

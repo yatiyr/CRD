@@ -279,8 +279,8 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
                            "fiber pool: acquired fiber was not Idle — double-acquire?");
             f->state = FiberState::Active;
 #endif
-            // Update peak-usage watermark. All relaxed: these are profiling stats,
-            // slight under-counting under heavy concurrency is acceptable.
+            // Raise the peak-usage watermark. Relaxed: the CAS loop never loses a raise, but it lands just after
+            // the count, so jobs::pressure_snapshot() reports the high water at or above the count it read.
             const crd::u32 now  = tier.acquired_count.fetch_add(1U, std::memory_order_relaxed) + 1U;
             crd::u32       peak = tier.peak_count.load(std::memory_order_relaxed);
             while (now > peak &&

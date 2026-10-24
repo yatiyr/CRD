@@ -674,7 +674,10 @@ JobsPressure pressure_snapshot() noexcept
     p.counters.high_water_tracked = true;
     p.counters.capacity           = cp.capacity();
     p.counters.in_use             = cp.acquired();
-    p.counters.high_water         = cp.peak_acquired();
+    // A pool raises its peak just after the count it bounds, so a reading between the two would put the high water
+    // below the count; the count read first is a level the pool held, and the high water is never below it.
+    const crd::u32 counter_peak   = cp.peak_acquired();
+    p.counters.high_water         = counter_peak > p.counters.in_use ? counter_peak : p.counters.in_use;
     p.counters.refusals           = cp.exhaustions();
 
     detail::FiberPool&      fp       = g_pool.fiber_pool();
@@ -687,7 +690,8 @@ JobsPressure pressure_snapshot() noexcept
         r.high_water_tracked  = true;
         r.capacity            = fp.tier_count(tiers[i]);
         r.in_use              = fp.acquired_count(tiers[i]);
-        r.high_water          = fp.peak_acquired(tiers[i]);
+        const crd::u32 peak   = fp.peak_acquired(tiers[i]);
+        r.high_water          = peak > r.in_use ? peak : r.in_use; // as for the counters above
         r.refusals            = fp.exhaustions(tiers[i]);
     }
 

@@ -559,6 +559,8 @@ crd::BudgetReading Scheduler::pinned_pressure() const noexcept
         r.in_use            = held > r.in_use ? held : r.in_use;
         r.high_water        = peak > r.high_water ? peak : r.high_water;
     }
+    // A push raises the peak just after the lane grew, so a lane read between the two is above it.
+    r.high_water = r.in_use > r.high_water ? r.in_use : r.high_water;
     return r;
 }
 
