@@ -8,7 +8,9 @@ measured binary, and `compiled-out` (the `off` mode of a binary built with profi
 which is the true zero the runtime-disabled mode is held to. `validation-core`, `validation-sync` and
 `validation-gpu` are the measured binary's off mode with that device validation (`--validation`, render only); their
 cost over off is reported, never budgeted (ADR-0133 accounts GPU-assisted validation separately), and a run whose
-validation reported or lost a message is an instrument failure.
+validation reported or lost a message is an instrument failure. `before-off`, `before-basic` and `before-full` are the
+modes of `--before-exe`, the same build made before a change; each mode's change (`change-<mode>`, the mode over its
+before arm, interleaved and paired like every comparison) is reported, never budgeted.
 
 Per arm the board keeps the pooled frame percentiles (p50/p95/p99 by nearest rank over every timed frame of every
 process), each process's median, the events (sites, payloads evaluated, recorded, filtered, profiler drops), the
@@ -35,7 +37,8 @@ under Valgrind's cachegrind, each at two frame counts, and takes the difference 
 instructions executed do not depend on where the linker placed the code, and they are judged; the simulated cache's
 misses, which do, are reported. Every count is repeated; the interval spans every pairing of the repeats, so a count
 that moves between runs widens it. The jobs pool runs one thread by default: waiting workers make counts follow the
-scheduler; io runs its own two-thread pool.
+scheduler; io runs its own two-thread pool. With `--before-exe` the off mode of the build made before a change is
+counted too and the change reported (`off vs before-off`); either comparison binary may be left out, not both.
 
 `render` turns boards into the markdown of docs/bench. Contract: docs/design/runtime-diagnostics.md (DIAG.11b).
 """
@@ -229,7 +232,8 @@ def judge(arms, budgeted=True):
     result = {}
     pairs = [(name, candidate, reference, budget if budgeted else None)
              for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)] + [
-                 ('validation-' + v, 'validation-' + v, 'off', None) for v in VALIDATIONS]
+                 ('validation-' + v, 'validation-' + v, 'off', None) for v in VALIDATIONS] + [
+                 ('change-' + m, m, 'before-' + m, None) for m in MODES]
     for name, candidate, reference, budget in pairs:
         if candidate not in arms or reference not in arms:
             if name in BUDGETS:
@@ -288,8 +292,13 @@ def per_frame(short_runs, long_runs, frames):
 
 def count(args, runner=run_process):
     """The instruction board: each arm's events per frame under cachegrind, and the disabled budget judged on the
-    instructions (the misses are reported)."""
-    arms = [('compiled-out', args.baseline_exe), ('off', args.exe)]
+    instructions (the misses are reported). With `before_exe` (the same build made before a change) the off mode's
+    change is reported too."""
+    arms = [('off', args.exe)]
+    if args.baseline_exe:
+        arms.insert(0, ('compiled-out', args.baseline_exe))
+    if getattr(args, 'before_exe', None):
+        arms.append(('before-off', args.before_exe))
     short, long = args.frames
     scratch = Path(args.scratch).resolve()
     board = board_head(COUNT_SCHEMA, args, dict(arms),
@@ -325,15 +334,27 @@ def count(args, runner=run_process):
                                          [t[event] for t in totals[name][long]], long - short)
                         for event in COUNTED} for name, _ in arms}
         costs = {}
-        if not failures:
-            for event in COUNTED:
-                (off_least, off_most), (out_least, out_most) = rates['off'][event], rates['compiled-out'][event]
-                costs[event] = ({'low': off_least / out_most - 1.0, 'high': off_most / out_least - 1.0}
-                                if out_least > 0 else {'low': None, 'high': None})
+        change = {}
+        if not failures and 'compiled-out' in rates:
+            costs = relative_rates(rates['off'], rates['compiled-out'])
             _, _, budget = BUDGETS['disabled']
             costs['verdict'] = verdict(costs['instructions']['low'], costs['instructions']['high'], budget)
-        board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'failures': failures}
+        if not failures and 'before-off' in rates:
+            change = relative_rates(rates['off'], rates['before-off'])
+            change['verdict'] = 'reported'
+        board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'change': change,
+                                        'failures': failures}
     return board
+
+
+def relative_rates(candidate, reference):
+    """Per event, the least and the most relative cost of a candidate's per-frame range over a reference's."""
+    costs = {}
+    for event in COUNTED:
+        (least, most), (ref_least, ref_most) = candidate[event], reference[event]
+        costs[event] = ({'low': least / ref_most - 1.0, 'high': most / ref_least - 1.0}
+                        if ref_least > 0 else {'low': None, 'high': None})
+    return costs
 
 
 def measure(args, runner=run_process):
@@ -341,6 +362,8 @@ def measure(args, runner=run_process):
     arms += [('validation-' + v, args.exe, 'off', ['--validation', v]) for v in VALIDATIONS]
     if args.baseline_exe:
         arms.insert(0, ('compiled-out', args.baseline_exe, 'off', []))
+    if getattr(args, 'before_exe', None):
+        arms += [('before-' + m, args.before_exe, m, []) for m in MODES]
     arms = [a for a in arms if a[0] in args.arms]
     if not arms:
         raise OverheadError('no arm selected')
@@ -438,6 +461,16 @@ def render(boards):
                        '%s of %s (%s)' % (captures['delivered'], captures['requested'], captures['bytes_written']),
                        'n/a' if growth is None else '%.1f MiB' % (growth / 1048576.0))
                 lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
+            for name in ('change-' + m for m in MODES):
+                change = verdicts.get(name)
+                if change and change.get('cost') is not None:
+                    cpu = change.get('cpu') or {}
+                    row = (workload, '%s vs %s' % (change['candidate'], change['reference']), '', '', '', '',
+                           '%s (%s .. %s)' % (percent(change['cost']), percent(change['low']), percent(change['high'])),
+                           '', 'n/a' if cpu.get('cost') is None else '%s (%s .. %s)' % (
+                               percent(cpu['cost']), percent(cpu['low']), percent(cpu['high'])),
+                           change['verdict'], '', '', '')
+                    lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
             storage = verdicts.get('storage')
             if storage:
                 lines.append('| %s | basic storage | | | | | ring %.0f KiB, resident growth over off %s | | | '
@@ -476,6 +509,10 @@ def render_counts(board):
         if disabled:
             lines.append('| %s | off vs compiled-out | %s | %s (1%%) |' % (
                 workload, ' | '.join(cost(disabled[e]) for e in COUNTED), disabled['verdict']))
+        change = entry.get('change')
+        if change:
+            lines.append('| %s | off vs before-off | %s | %s |' % (
+                workload, ' | '.join(cost(change[e]) for e in COUNTED), change['verdict']))
         for failure in entry['failures']:
             lines.append('| %s | %s | instrument failure #%d: %s |%s |' % (
                 workload, failure['arm'], failure['repetition'], failure['problem'].replace('|', '/'),
@@ -489,6 +526,8 @@ def main(argv=None):
     run = commands.add_parser('run', help='measure and write a board')
     run.add_argument('--exe', required=True, help='crd-diag-overhead of the measured build')
     run.add_argument('--baseline-exe', help='crd-diag-overhead built with profiling compiled out (the compiled-out arm)')
+    run.add_argument('--before-exe', help='the measured build made before a change: its before-off, before-basic and '
+                     'before-full arms, each mode reported against (select them in --arms)')
     run.add_argument('--workloads', default=','.join(WORKLOADS))
     run.add_argument('--arms', default='compiled-out,off,basic,full')
     run.add_argument('--processes', type=int, default=10)
@@ -506,7 +545,8 @@ def main(argv=None):
     run.add_argument('--progress', action='store_true')
     counted = commands.add_parser('instructions', help='judge the disabled budget on counts under cachegrind')
     counted.add_argument('--exe', required=True, help='crd-diag-overhead of the measured build (its off mode)')
-    counted.add_argument('--baseline-exe', required=True, help='crd-diag-overhead built with profiling compiled out')
+    counted.add_argument('--baseline-exe', help='crd-diag-overhead built with profiling compiled out')
+    counted.add_argument('--before-exe', help='the measured build made before a change (its off mode, reported)')
     counted.add_argument('--workloads', default='offline,jobs')
     counted.add_argument('--frames', default='100,300', help='the two timed frame counts, shorter first')
     counted.add_argument('--warmup', type=int, default=20)
@@ -538,7 +578,9 @@ def main(argv=None):
             args.arms = [a for a in args.arms.split(',') if a]
             if unknown or args.processes < 2 or args.iterations < 1:
                 raise OverheadError('bad workloads %s, or fewer than two processes or one frame' % unknown)
-        for name in ('exe', 'baseline_exe'):
+        if args.command == 'instructions' and not args.baseline_exe and not args.before_exe:
+            raise OverheadError('instructions needs --baseline-exe or --before-exe to compare with')
+        for name in ('exe', 'baseline_exe', 'before_exe'):
             if getattr(args, name):
                 path = Path(getattr(args, name)).resolve()
                 if not path.is_file():

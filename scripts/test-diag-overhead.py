@@ -76,7 +76,7 @@ class FakeRunner:
     def __call__(self, command, timeout):
         exe = command[0]
         mode = command[command.index('--mode') + 1]
-        arm = 'compiled-out' if exe == 'compiled-out' else mode
+        arm = 'compiled-out' if exe == 'compiled-out' else ('before-' + mode if exe == 'before' else mode)
         validation = command[command.index('--validation') + 1] if '--validation' in command else 'none'
         arm = arm if validation == 'none' else 'validation-' + validation
         repetition = sum(1 for c in self.calls if c == arm)
@@ -234,6 +234,31 @@ class Boards(unittest.TestCase):
         with self.assertRaises(mod.OverheadError):
             self.measure(FakeRunner(medians), workloads=['alloc'], baseline_exe=None, arms=arms)
 
+    def test_a_change_is_reported_against_the_same_modes_of_the_build_before_it(self):
+        medians = {'off': 90000, 'basic': 91000, 'full': 120000, 'before-off': 100000, 'before-basic': 101000,
+                   'before-full': 150000}
+        arms = ['off', 'basic', 'full', 'before-off', 'before-basic', 'before-full']
+        runner = FakeRunner(medians)
+        board = self.measure(runner, baseline_exe=None, before_exe='before', arms=arms)
+        verdicts = board['workloads']['alloc']['verdicts']
+        for mode, cost in (('off', 0.9), ('basic', 91000 / 101000.0), ('full', 0.8)):
+            change = verdicts['change-' + mode]
+            self.assertEqual((change['candidate'], change['reference']), (mode, 'before-' + mode))
+            self.assertAlmostEqual(change['cost'], cost - 1.0, places=6)
+            self.assertAlmostEqual(change['cpu']['cost'], cost - 1.0, places=6, msg='the CPU per frame as well')
+            self.assertEqual(change['verdict'], 'reported')
+            self.assertIsNone(change['budget'], 'a change is reported, never budgeted')
+        self.assertEqual(sorted(runner.calls[:6]), sorted(arms), 'interleaved with the arms it is paired with')
+        self.assertEqual(board['binaries']['before-off']['path'], 'before')
+        text = mod.render([board])
+        self.assertIn('| alloc | off vs before-off |', text)
+        self.assertIn('| alloc | full vs before-full |', text)
+        self.assertIn('-20.00% (', text)
+        self.assertTrue(all(line.count('|') == 14 for line in text.splitlines() if line.startswith('|')))
+        plain = self.measure(FakeRunner(medians), baseline_exe=None, arms=['off', 'basic', 'full'])
+        self.assertFalse([name for name in plain['workloads']['alloc']['verdicts'] if name.startswith('change-')])
+        self.assertNotIn('vs before', mod.render([plain]))
+
     def test_render_is_stable_and_names_every_arm(self):
         board = self.measure(FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000}))
         text = mod.render([board])
@@ -259,7 +284,7 @@ class FakeCachegrind:
 
     def __call__(self, command, timeout):
         exe = command[command.index('--workload') - 1]
-        arm = 'compiled-out' if exe == 'compiled-out' else 'off'
+        arm = {'compiled-out': 'compiled-out', 'before': 'before-off'}.get(exe, 'off')
         frames = int(command[command.index('--iterations') + 1])
         repeat = self.seen.get((arm, frames), 0)
         self.seen[(arm, frames)] = repeat + 1
@@ -327,6 +352,22 @@ class Instructions(unittest.TestCase):
             self.assertEqual(len(entry['failures']), 1, special)
             self.assertEqual(entry['disabled'], {}, special)
             self.assertIn('instrument failure', mod.render_counts(board))
+
+    def test_a_change_is_counted_against_the_build_before_it(self):
+        frame = {'compiled-out': 10000000, 'off': 9000000, 'before-off': 10000000}
+        board = self.count(FakeCachegrind(frame), before_exe='before')
+        entry = board['workloads']['offline']
+        self.assertAlmostEqual(entry['change']['instructions']['low'], -0.1, places=9)
+        self.assertEqual(entry['change']['verdict'], 'reported')
+        self.assertEqual(entry['disabled']['verdict'], 'within', 'off below compiled-out is within the budget')
+        self.assertIn('| offline | off vs before-off | -10.00% | -10.00% | -10.00% | reported |',
+                      mod.render_counts(board))
+        alone = self.count(FakeCachegrind(frame), baseline_exe=None, before_exe='before')
+        self.assertEqual(alone['workloads']['offline']['disabled'], {}, 'no compiled-out arm, no disabled verdict')
+        self.assertEqual(sorted(alone['workloads']['offline']['per_frame']), ['before-off', 'off'])
+        self.assertEqual(self.count(FakeCachegrind(frame))['workloads']['offline']['change'], {})
+        self.assertEqual(mod.main(['instructions', '--exe', __file__, '--scratch', '.', '--label', 'x',
+                                   '--output', 'unused.json']), 2, 'nothing to compare with')
 
     def test_render_is_stable_and_names_the_verdict(self):
         board = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10008000}))
