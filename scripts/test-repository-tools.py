@@ -1533,7 +1533,9 @@ class BuildPerformance(unittest.TestCase):
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
+            # The installer resolves its destination; a hosted runner's temporary directory is an 8.3 short name
+            # (C:/Users/RUNNER~1/...), which resolving expands, so the expectations start from the resolved path.
+            root = Path(temp).resolve()
             binary = b'#!/bin/sh\necho "LLVM (http://llvm.org/):"; echo "  LLVM version 20.1.0"\n'
             headers = {'stddef.h': b'/* stddef */', 'module.modulemap': b'module _Builtin {}',
                        'cuda_wrappers/new': b'//'}
