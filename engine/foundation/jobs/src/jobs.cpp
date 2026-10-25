@@ -20,6 +20,16 @@ namespace crd::jobs
 // NOLINTBEGIN(cppcoreguidelines-avoid-non-const-global-variables)
 static detail::WorkerPool g_pool;
 
+// --- Outside readers of the snapshots (progress, pressure, lanes, wait graph, monitored tasks, workers, quiescence).
+//     Any thread may call them at any time, a diagnostic host's sampler included, also while another thread runs
+//     init() or shutdown(). A reader pins itself, then looks at the open flag; shutdown() closes the flag, then waits
+//     for the pinned readers to leave before the pool frees anything, and init() opens it once the pool is up. Both
+//     sides are sequentially consistent, so a reader either sees the pool closed and reads nothing (an unread or
+//     empty result) or is seen by shutdown(), which waits for it. Before this, the guard was the pool's plain
+//     is_initialized(), which shutdown() clears only after freeing the storage a snapshot walks. ---
+static std::atomic<crd::u32> g_snapshot_readers{0U};
+static std::atomic<bool>     g_snapshot_open{false};
+
 // --- Hang watchdog (opt-in via Config::hang_watchdog_period_ms). A thread OUTSIDE the pool samples progress
 //     each window and, after several stale windows, calls the installed handler once per stall episode. It
 //     uses only the public snapshot APIs (progress_snapshot / wait_graph_snapshot / is_quiescent), touches no
@@ -42,6 +52,34 @@ static std::condition_variable  g_watchdog_cv;
 static bool                     g_watchdog_stop = false; // guarded by g_watchdog_mutex
 static std::thread              g_watchdog_thread;
 // NOLINTEND(cppcoreguidelines-avoid-non-const-global-variables)
+
+namespace
+{
+// A snapshot's pin against teardown (see g_snapshot_open). open() is false before init() finished and from the start
+// of shutdown(): the snapshot then reads nothing.
+class SnapshotPin
+{
+public:
+    SnapshotPin() noexcept
+    {
+        g_snapshot_readers.fetch_add(1U, std::memory_order_seq_cst);
+        m_open = g_snapshot_open.load(std::memory_order_seq_cst);
+    }
+    ~SnapshotPin()
+    {
+        g_snapshot_readers.fetch_sub(1U, std::memory_order_release);
+    }
+    SnapshotPin(const SnapshotPin&)            = delete;
+    SnapshotPin& operator=(const SnapshotPin&) = delete;
+    SnapshotPin(SnapshotPin&&)                 = delete;
+    SnapshotPin& operator=(SnapshotPin&&)      = delete;
+
+    [[nodiscard]] bool open() const noexcept { return m_open; }
+
+private:
+    bool m_open = false;
+};
+} // namespace
 
 namespace
 {
@@ -207,6 +245,8 @@ void init(const Config& cfg)
 
     [[maybe_unused]] const bool ok = g_pool.init(wc);
     CRD_ASSERT_MSG(ok, "crd::jobs::init: WorkerPool::init failed");
+    // Outside snapshot readers see the pool from here on (g_snapshot_open), once it is fully up.
+    g_snapshot_open.store(ok, std::memory_order_seq_cst);
 
     // Start the hang watchdog only after the pool is fully up (it samples pool state). Opt-in: period 0 = off.
     if (cfg.hang_watchdog_period_ms > 0U)
@@ -234,6 +274,13 @@ void shutdown()
         g_watchdog_cv.notify_all();
         g_watchdog_thread.join();
         crd::lifetime_ledger().released(crd::LifetimeClass::Thread);
+    }
+
+    // Close the snapshots to outside readers and wait for the pinned ones to leave before anything is freed.
+    g_snapshot_open.store(false, std::memory_order_seq_cst);
+    while (g_snapshot_readers.load(std::memory_order_seq_cst) != 0U)
+    {
+        std::this_thread::yield(); // a snapshot is a bounded walk; worker_snapshot is bounded by its timeout
     }
 
     g_pool.shutdown();
@@ -493,13 +540,19 @@ bool is_quiescent() noexcept
 {
     // available() is capacity() - acquired counters (a cheap counter read, not a free-list walk).
     // Before init() the pool reports uninitialised, which is trivially quiescent.
+    const SnapshotPin pin;
+    if (!pin.open())
+    {
+        return true;
+    }
     auto& cp = g_pool.counter_pool();
     return !cp.is_initialized() || (cp.available() == cp.capacity());
 }
 
 crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
 {
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return 0U;
     }
@@ -537,7 +590,8 @@ crd::usize wait_graph_snapshot(std::span<WaitGraphNode> out) noexcept
 
 crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept
 {
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return 0U;
     }
@@ -576,7 +630,8 @@ crd::usize monitored_snapshot(std::span<ProgressNode> out) noexcept
 WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout_ms) noexcept
 {
     WorkerSnapshotResult r{0U, 0U, 0U, true};
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return r; // no workers -> vacuously complete
     }
@@ -658,7 +713,8 @@ WorkerSnapshotResult worker_snapshot(std::span<WorkerNode> out, crd::u32 timeout
 ProgressSample progress_snapshot() noexcept
 {
     ProgressSample s{0U, 0U, 0U, true, 0U};
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return s;
     }
@@ -684,7 +740,8 @@ ProgressSample progress_snapshot() noexcept
 JobsPressure pressure_snapshot() noexcept
 {
     JobsPressure p{};
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return p;
     }
@@ -723,7 +780,8 @@ JobsPressure pressure_snapshot() noexcept
 LaneSample lane_snapshot() noexcept
 {
     LaneSample s{};
-    if (!g_pool.is_initialized())
+    const SnapshotPin pin;
+    if (!pin.open())
     {
         return s;
     }
