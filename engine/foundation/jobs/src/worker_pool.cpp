@@ -278,6 +278,13 @@ void WorkerPool::keep_fiber(crd::u32 thread_index, Fiber* fiber) noexcept
     }
 }
 
+// The worker's SleepHook: the thread is about to block in wait_for_work, so it holds no fiber while it sleeps. A thread
+// that finds its queues empty but a token posted loops instead, keeping its fiber: work is coming.
+static void release_kept_before_sleep(void* pool) noexcept
+{
+    static_cast<WorkerPool*>(pool)->release_kept_fiber(tl_thread_index());
+}
+
 void WorkerPool::release_kept_fiber(crd::u32 thread_index) noexcept
 {
     KeptFiber& k = m_kept[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
@@ -494,8 +501,8 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
         }
         else
         {
-            self->release_kept_fiber(thread_index); // an idle worker holds no fiber while it waits
-            self->m_scheduler.wait_for_work(thread_index);
+            // A worker that is about to block returns its kept fiber first (release_kept_before_sleep).
+            self->m_scheduler.wait_for_work(thread_index, &release_kept_before_sleep, self);
         }
     }
     self->release_kept_fiber(thread_index); // a stopping worker returns its kept fiber before it is joined
@@ -764,8 +771,7 @@ bool WorkerPool::pump_keeping()
     std::optional<crd::jobs::JobDecl> job = m_scheduler.try_pop(tl_idx);
     if (!job)
     {
-        release_kept_fiber(tl_idx); // no job: an idle thread holds no fiber
-        return false;
+        return false; // the caller keeps iterating (it holds its kept fiber) or returns it when it stops
     }
     m_progress[tl_idx].current_task_id.store(task_id_of(*job), std::memory_order_relaxed);
     m_progress[tl_idx].executing.store(1U, std::memory_order_relaxed); // hang-watchdog: main thread busy

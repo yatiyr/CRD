@@ -384,7 +384,7 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
 // wait_for_work
 // ---------------------------------------------------------------------------
 
-void Scheduler::wait_for_work(crd::u32 thread_index)
+void Scheduler::wait_for_work(crd::u32 thread_index, SleepHook before_sleep, void* user)
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wait_for_work called before init");
     if (!m_targeted_wake)
@@ -408,7 +408,7 @@ void Scheduler::wait_for_work(crd::u32 thread_index)
             me.sleeping.store(0U, std::memory_order_relaxed);
             return;
         }
-        m_semaphore.acquire_or_wake();
+        m_semaphore.acquire_or_wake(before_sleep, user);
         me.sleeping.store(0U, std::memory_order_relaxed);
         return;
     }
@@ -417,7 +417,7 @@ void Scheduler::wait_for_work(crd::u32 thread_index)
     // execute_one). In the common case wake_worker/wake_one_idle posts this semaphore and the wait returns at once.
     const crd::u64 bit = crd::u64{1} << thread_index;
     m_idle_mask.fetch_or(bit, std::memory_order_seq_cst);
-    (void)m_thread_states[thread_index]->wake.try_acquire_for_ms(1U);
+    (void)m_thread_states[thread_index]->wake.try_acquire_for_ms(1U, before_sleep, user);
     m_idle_mask.fetch_and(~bit, std::memory_order_seq_cst);
 }
 

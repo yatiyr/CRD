@@ -1,8 +1,8 @@
 // JOBS-HARD.3: the kept fiber. A thread keeps the fiber of the job it completed, still acquired from the FiberPool,
 // and reuses it for its next new job of the same tier; it returns it before a resume, before a job of another tier,
-// before it sleeps or leaves its dispatch loop, and when the main thread's wait() or pump returns. The pool's
-// readings count the kept fiber (no other job can have it), so they stay exact, and a refusal still needs every
-// other fiber running, parked or kept: the sizing bound (parked fibers + threads) is unchanged.
+// before it blocks waiting for work or leaves its dispatch loop, and when the main thread's wait() or pump returns.
+// The pool's readings count the kept fiber (no other job can have it), so they stay exact, and a refusal still needs
+// every other fiber running, parked or kept: the sizing bound (parked fibers + threads) is unchanged.
 //
 // The white-box cases drive a WorkerPool of one thread by hand (the calling thread is thread 0, nothing else
 // dispatches), so each count is read at a known step. The public cases run the job system as a program does, with
@@ -164,7 +164,7 @@ crd::BudgetReading small_reading()
 }
 } // namespace
 
-TEST_CASE("fiber keep: a completed job's fiber stays acquired for the thread's next job and an idle pump returns it",
+TEST_CASE("fiber keep: a completed job's fiber stays acquired for the thread's next job until it stops iterating",
           "[jobs][fiber_keep]")
 {
     WorkerPool pool;
@@ -188,7 +188,9 @@ TEST_CASE("fiber keep: a completed job's fiber stays acquired for the thread's n
     CHECK(acquired() == 1U);
     CHECK(pool.fiber_pool().peak_acquired(FiberTier::Small) == 1U);
 
-    CHECK_FALSE(pool.pump_keeping()); // no job: the idle thread returns its kept fiber
+    CHECK_FALSE(pool.pump_keeping()); // no job yet: a thread still iterating keeps its fiber for the next one
+    CHECK(acquired() == 1U);
+    pool.release_kept_fiber(0U); // ... and returns it when it stops iterating, as wait() does
     CHECK(acquired() == 0U);
 
     Seen third{&pool};
@@ -227,6 +229,7 @@ TEST_CASE("fiber keep: a job of another tier returns the kept fiber before it ta
     CHECK(small_again.small == 1U);
     CHECK(small_again.medium == 0U); // ... nor the kept medium fiber through the small one
     CHECK_FALSE(pool.pump_keeping());
+    pool.release_kept_fiber(0U);
     CHECK(pool.fiber_pool().acquired_count(FiberTier::Small) == 0U);
     CHECK(pool.fiber_pool().acquired_count(FiberTier::Medium) == 0U);
     CHECK(pool.fiber_pool().peak_acquired(FiberTier::Small) == 1U);
@@ -484,16 +487,20 @@ TEST_CASE("fiber keep: at the sizing bound a worker still gets a fiber while the
     crd::jobs::shutdown();
 }
 
-TEST_CASE("fiber keep: while tiny jobs stream the readings stay exact and bounded, and an idle pool holds nothing",
-          "[jobs][fiber_keep][diag10c]")
+namespace
 {
+// Frames of tiny jobs on a pool of `thread_count` threads while a reader outside the pool samples the small tier.
+void stream_and_read(bool targeted)
+{
+    INFO("targeted wake " << targeted);
     constexpr crd::u32 thread_count = 4U;
     crd::jobs::Config  cfg;
-    cfg.num_threads = thread_count;
+    cfg.num_threads   = thread_count;
+    cfg.pcore_routing = targeted;
     crd::jobs::init(cfg);
 
-    // A reader outside the pool samples the small tier while the test thread runs frames of tiny jobs (none parks,
-    // so a thread holds at most one fiber: the one it runs on or the one it keeps between two jobs).
+    // None of the jobs parks, so a thread holds at most one fiber: the one it runs on or the one it keeps between two
+    // jobs.
     std::atomic<bool>     reading{true};
     std::atomic<crd::u32> most_seen{0U};
     std::atomic<crd::u32> broken{0U};
@@ -539,9 +546,17 @@ TEST_CASE("fiber keep: while tiny jobs stream the readings stay exact and bounde
     CHECK(idle_soon.high_water >= most_seen.load(std::memory_order_relaxed));
     CHECK(idle_soon.high_water >= 1U);
     CHECK(idle_soon.high_water <= thread_count);
-    CHECK(eventually([] { return small_reading().in_use == 0U; })); // idle threads give their kept fibers back
+    CHECK(eventually([] { return small_reading().in_use == 0U; })); // blocked threads give their kept fibers back
     CHECK(small_reading().refusals == 0U);
     crd::jobs::shutdown();
+}
+} // namespace
+
+TEST_CASE("fiber keep: while tiny jobs stream the readings stay exact and bounded, and an idle pool holds nothing",
+          "[jobs][fiber_keep][diag10c]")
+{
+    stream_and_read(false); // the shared semaphore
+    stream_and_read(true);  // the opt-in targeted wake (ADR-0094): an idle worker parks on its own semaphore
 }
 
 namespace
@@ -604,4 +619,33 @@ TEST_CASE("fiber keep: frames of short jobs reach the pool's shared free list on
     CHECK(acquisitions * 8U <= crd::u64{job_count} * frame_count);
     CHECK(pool.fiber_pool().available_count(FiberTier::Small) == 128U);
     pool.shutdown();
+}
+
+TEST_CASE("fiber keep: the main thread's pumps return its kept fiber when they stop", "[jobs][fiber_keep][diag10c]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads       = 1U; // the calling thread runs every job, only when it pumps
+    cfg.small_fiber_count = 2U;
+    crd::jobs::init(cfg);
+
+    std::atomic<crd::u32> ran{0U};
+    crd::jobs::JobDecl    jobs[3];
+    for (crd::jobs::JobDecl& j : jobs)
+    {
+        j      = crd::jobs::JobDecl{};
+        j.fn   = &tiny;
+        j.data = &ran;
+    }
+    crd::jobs::Counter* const all = crd::jobs::run(std::span<const crd::jobs::JobDecl>(jobs));
+    CHECK(crd::jobs::pump_main_thread_until_idle()); // runs all three on one kept fiber, then returns it
+    CHECK(ran.load(std::memory_order_relaxed) == 3U);
+    CHECK(small_reading().in_use == 0U);
+    CHECK(small_reading().high_water == 1U);
+    crd::jobs::Counter* const one = crd::jobs::run(jobs[0]);
+    CHECK(crd::jobs::pump_main_thread_once());
+    CHECK(small_reading().in_use == 0U); // one iteration keeps nothing past it
+    crd::jobs::wait(all);
+    crd::jobs::wait(one);
+    CHECK(ran.load(std::memory_order_relaxed) == 4U);
+    crd::jobs::shutdown();
 }

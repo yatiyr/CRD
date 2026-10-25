@@ -391,10 +391,11 @@ bool pump_main_thread_until_idle()
     CRD_ASSERT_MSG((detail::tl_worker_pool() == &g_pool) && (detail::tl_thread_index() == 0U),
                    "pump_main_thread_until_idle: must be called from the enrolled main thread (thread 0)");
     bool did_work = false;
-    while (g_pool.pump_keeping()) // the iteration that finds no job returns the kept fiber
+    while (g_pool.pump_keeping()) // the fiber of a completed job is kept for the next iteration
     {
         did_work = true;
     }
+    g_pool.release_kept_fiber(0U); // idle: the main thread leaves the job system and keeps no fiber
     return did_work;
 }
 

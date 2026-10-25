@@ -57,7 +57,8 @@ struct alignas(64) WorkerProgress
 // the pool's shared free list once instead of twice a job. At most one per thread, read and written only by the
 // thread whose index it has (and by shutdown() after the workers are joined), so it is a plain pointer. It is
 // returned to the pool at every other transition: before a resume, before a job of another tier, before the thread
-// sleeps or leaves its dispatch loop, and when the main thread's wait() or pump returns. A kept fiber stays counted
+// blocks in wait_for_work (a worker that finds a token instead loops and keeps it) or leaves its dispatch loop, and
+// when the main thread's wait() or pump returns. A kept fiber stays counted
 // as acquired, so the pool's readings are exact: no other thread can take it, and a refusal still needs every
 // other fiber running, parked or kept, which is what the pool's sizing (parked + threads) already covers.
 struct alignas(64) KeptFiber
@@ -122,8 +123,8 @@ public:
     [[nodiscard]] bool pump();
 
     // pump() for a loop of iterations (wait(), pump_main_thread_until_idle()): the fiber of a completed job stays
-    // kept for the next iteration, and is returned to the pool when an iteration finds no job. A caller that stops
-    // iterating before that returns it with release_kept_fiber().
+    // kept for the next iteration, also across iterations that find no job (the caller is still waiting for work).
+    // The caller returns it with release_kept_fiber() when it stops iterating.
     [[nodiscard]] bool pump_keeping();
 
     // Return the calling thread's kept fiber, if any, to the pool. `thread_index` is the calling thread's index.

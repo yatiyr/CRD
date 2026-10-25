@@ -10,6 +10,10 @@
 namespace crd::jobs::detail
 {
 
+// Called by acquire_or_wake() and try_acquire_for_ms() once, on the calling thread, when it is about to sleep (its
+// drain found no token): the worker returns what it must not hold while it is blocked (its kept fiber).
+using SleepHook = void (*)(void* user) noexcept;
+
 // ---------------------------------------------------------------------------
 // Semaphore — the worker-sleep primitive, built directly on futex (Linux) /
 // WaitOnAddress (Windows) with the canonical expected==decision-value protocol.
@@ -126,11 +130,15 @@ public:
     // one if the wake left any). Unlike acquire(), a broadcast that leaves no token for this thread still returns it to
     // its caller. The worker loop relies on that: every woken worker must revisit its loop-top safe point, otherwise one
     // fast worker can drain a broadcast's tokens while the others re-sleep inside acquire() without observing it.
-    void acquire_or_wake() noexcept
+    void acquire_or_wake(SleepHook before_sleep = nullptr, void* user = nullptr) noexcept
     {
         if (try_drain_one())
         {
             return;
+        }
+        if (before_sleep != nullptr)
+        {
+            before_sleep(user);
         }
         CRD_JOBS_SCHED_SLEEP_POINT("sem.pre_sleep"); // the count was 0 and this thread is not asleep yet
         wait_on_zero();
@@ -140,11 +148,15 @@ public:
     // Try to consume a token, sleeping at most ~ms milliseconds once.
     // Returns true iff a token was consumed. Callers that must wait longer
     // loop (the scheduler's targeted-wake backstop pattern).
-    [[nodiscard]] bool try_acquire_for_ms(crd::u32 ms) noexcept
+    [[nodiscard]] bool try_acquire_for_ms(crd::u32 ms, SleepHook before_sleep = nullptr, void* user = nullptr) noexcept
     {
         if (try_drain_one())
         {
             return true;
+        }
+        if (before_sleep != nullptr)
+        {
+            before_sleep(user);
         }
         timed_wait_on_zero(ms);
         return try_drain_one();
