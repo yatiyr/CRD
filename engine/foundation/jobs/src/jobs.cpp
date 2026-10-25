@@ -325,11 +325,15 @@ void wait(Counter* counter, crd::u32 target)
         }
         while (counter->value.load(std::memory_order_acquire) != target)
         {
-            if (is_main && g_pool.pump())
+            if (is_main && g_pool.pump_keeping()) // the fiber of a completed job is kept for the next iteration
             {
                 continue;
             }
             std::this_thread::yield();
+        }
+        if (is_main)
+        {
+            g_pool.release_kept_fiber(0U); // the main thread leaves the job system: it keeps no fiber
         }
     }
     else
@@ -387,7 +391,7 @@ bool pump_main_thread_until_idle()
     CRD_ASSERT_MSG((detail::tl_worker_pool() == &g_pool) && (detail::tl_thread_index() == 0U),
                    "pump_main_thread_until_idle: must be called from the enrolled main thread (thread 0)");
     bool did_work = false;
-    while (g_pool.pump())
+    while (g_pool.pump_keeping()) // the iteration that finds no job returns the kept fiber
     {
         did_work = true;
     }

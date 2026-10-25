@@ -51,6 +51,19 @@ struct alignas(64) WorkerProgress
     std::atomic<crd::u64> current_task_id{0U};
     std::atomic<crd::u32> ack_gen{0U};
 };
+
+// A thread's kept fiber (JOBS-HARD.3): the fiber of the last job it completed, still acquired from the FiberPool,
+// rebuilt and reused for the thread's next new job of the same tier, so a run of tiny jobs on one worker touches
+// the pool's shared free list once instead of twice a job. At most one per thread, read and written only by the
+// thread whose index it has (and by shutdown() after the workers are joined), so it is a plain pointer. It is
+// returned to the pool at every other transition: before a resume, before a job of another tier, before the thread
+// sleeps or leaves its dispatch loop, and when the main thread's wait() or pump returns. A kept fiber stays counted
+// as acquired, so the pool's readings are exact: no other thread can take it, and a refusal still needs every
+// other fiber running, parked or kept, which is what the pool's sizing (parked + threads) already covers.
+struct alignas(64) KeptFiber
+{
+    Fiber* fiber = nullptr;
+};
 #if CRD_COMPILER_MSVC
 #pragma warning(pop)
 #endif
@@ -64,7 +77,8 @@ struct alignas(64) WorkerProgress
 //   local), switches to the fiber. The trampoline reads tl_pending_job and calls fn(data).
 //   After the job returns, the trampoline clears tl_current_fiber (completion signal) and
 //   switches back. The scheduler detects completion, resets the fiber's context to its
-//   initial state, and returns it to the pool.
+//   initial state, and keeps it for the thread's next new job of the same tier (KeptFiber),
+//   or returns it to the pool when the thread already keeps one.
 //
 // Suspension (counter_wait):
 //   If fn(data) calls counter_wait, the fiber switches back to the scheduler with
@@ -104,7 +118,16 @@ public:
 
     // Run one drain-execute iteration on the calling thread (thread 0 only).
     // Returns true if a job was found and executed; false if all queues were empty.
+    // The thread keeps no fiber after it returns.
     [[nodiscard]] bool pump();
+
+    // pump() for a loop of iterations (wait(), pump_main_thread_until_idle()): the fiber of a completed job stays
+    // kept for the next iteration, and is returned to the pool when an iteration finds no job. A caller that stops
+    // iterating before that returns it with release_kept_fiber().
+    [[nodiscard]] bool pump_keeping();
+
+    // Return the calling thread's kept fiber, if any, to the pool. `thread_index` is the calling thread's index.
+    void release_kept_fiber(crd::u32 thread_index) noexcept;
 
     // Reset all per-thread frame arenas to cursor 0. Must only be called when no
     // concurrent frame_alloc() is in flight (i.e. after all jobs of the frame have
@@ -148,6 +171,13 @@ private:
 
     static FiberTier stack_size_to_tier(crd::jobs::StackSize s) noexcept;
 
+    // The kept fiber of `thread_index` when it is of `tier` (the slot is emptied); a kept fiber of another tier is
+    // returned to the pool and nullptr is the answer.
+    [[nodiscard]] Fiber* take_kept_fiber(crd::u32 thread_index, FiberTier tier) noexcept;
+    // Keep `fiber` (its job completed, its stack rebuilt) for the thread's next job, or return it to the pool when
+    // the thread already keeps one.
+    void keep_fiber(crd::u32 thread_index, Fiber* fiber) noexcept;
+
     Scheduler    m_scheduler;
     FiberPool    m_fiber_pool;
     CounterPool  m_counter_pool;
@@ -159,6 +189,9 @@ private:
 
     // Per-worker hang-watchdog progress slots, indexed by thread_index (sized to m_num_threads in init()).
     std::unique_ptr<WorkerProgress[]> m_progress;
+
+    // Per-thread kept fibers, indexed by thread_index (sized to m_num_threads in init()).
+    std::unique_ptr<KeptFiber[]> m_kept;
 
     crd::containers::Array<std::thread> m_threads;
     std::atomic<bool>        m_stopping{false};

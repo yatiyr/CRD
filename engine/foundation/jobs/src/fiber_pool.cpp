@@ -121,6 +121,7 @@ bool FiberPool::init_tier(Tier& tier, crd::u32 count, crd::usize usable_bytes,
     tier.acquired_count.store(0U, std::memory_order_relaxed);
     tier.peak_count.store(0U, std::memory_order_relaxed);
     tier.exhaustions.store(0U, std::memory_order_relaxed);
+    tier.acquisitions.store(0U, std::memory_order_relaxed);
 
     for (crd::u32 i = 0; i < count; ++i)
     {
@@ -287,6 +288,8 @@ Fiber* FiberPool::acquire_from(Tier& tier) noexcept
                    !tier.peak_count.compare_exchange_weak(peak, now, std::memory_order_relaxed))
             {
             }
+            // The free list's traffic (JOBS-HARD.3): the line is this thread's already, after the count above.
+            tier.acquisitions.fetch_add(1U, std::memory_order_relaxed);
 
             return f;
         }
@@ -379,6 +382,11 @@ crd::u32 FiberPool::acquired_count(FiberTier tier_kind) const noexcept
 crd::u32 FiberPool::exhaustions(FiberTier tier_kind) const noexcept
 {
     return tier_of(tier_kind).exhaustions.load(std::memory_order_relaxed);
+}
+
+crd::u64 FiberPool::acquisitions(FiberTier tier_kind) const noexcept
+{
+    return tier_of(tier_kind).acquisitions.load(std::memory_order_relaxed);
 }
 
 // ---------------------------------------------------------------------------

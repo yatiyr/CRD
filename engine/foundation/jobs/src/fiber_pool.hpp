@@ -86,12 +86,17 @@ public:
     [[nodiscard]] crd::u32 acquired_count(FiberTier tier) const noexcept;
     [[nodiscard]] crd::u32 exhaustions(FiberTier tier) const noexcept;
 
+    // The acquire() calls that took a fiber off the tier's shared free list, since init() (monotonic, relaxed). A
+    // thread's kept fiber (worker_pool.hpp) is reused without one, so this is the free list's traffic: about one a
+    // thread for each run of jobs, not one a job (JOBS-HARD.3).
+    [[nodiscard]] crd::u64 acquisitions(FiberTier tier) const noexcept;
+
     // Diagnostics walk: invoke fn(const Fiber&, FiberTier) for every fiber slot in every tier. Read-only and
     // lock-free; it may run concurrently with acquire()/release(), so callers must treat the fiber fields as a
     // racy point-in-time snapshot, never as an oracle (see jobs::wait_graph_snapshot). Bodies of inline member
     // templates see the whole class, so the private Tier type declared below is in scope here.
     template<typename Fn>
-    void for_each_fiber(Fn&& fn) const
+    void for_each_fiber(const Fn& fn) const
     {
         const auto walk = [&fn](const Tier& t, FiberTier kind)
         {
@@ -119,6 +124,7 @@ private:
         std::atomic<crd::u32>    acquired_count{0U};
         std::atomic<crd::u32>    peak_count    {0U};
         std::atomic<crd::u32>    exhaustions   {0U}; // acquire()-found-empty events on this tier
+        std::atomic<crd::u64>    acquisitions  {0U}; // fibers taken off the free list (the list's traffic)
     };
 
     // Tagged-head helpers: [gen:32 | idx:32]

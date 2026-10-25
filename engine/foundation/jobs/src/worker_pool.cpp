@@ -235,6 +235,61 @@ FiberTier WorkerPool::stack_size_to_tier(crd::jobs::StackSize s) noexcept
 }
 
 // ---------------------------------------------------------------------------
+// Kept fibers (KeptFiber in worker_pool.hpp)
+//
+// The fiber of a completed job stays acquired and is rebuilt for the thread's next new job of the same tier, so a
+// stream of jobs that do not park reaches the FiberPool's shared free list only when a thread's run of jobs
+// starts and ends. Only the owning thread touches its slot; the pool's own counters still count the kept fiber,
+// so FiberPool::acquired_count and the high water stay exact readings of the fibers no other job can have.
+// ---------------------------------------------------------------------------
+
+Fiber* WorkerPool::take_kept_fiber(crd::u32 thread_index, FiberTier tier) noexcept
+{
+    Fiber* const kept = m_kept[thread_index].fiber; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (kept == nullptr)
+    {
+        return nullptr;
+    }
+    m_kept[thread_index].fiber = nullptr; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+#if CRD_ENABLE_ASSERTS
+    CRD_ASSERT_MSG(kept->state == FiberState::Active, "WorkerPool: a kept fiber must stay acquired (Active)");
+#endif
+    if (kept->tier == tier)
+    {
+        return kept;
+    }
+    m_fiber_pool.release(kept); // a job of another tier: the kept fiber is not held through it
+    return nullptr;
+}
+
+void WorkerPool::keep_fiber(crd::u32 thread_index, Fiber* fiber) noexcept
+{
+    // A kept fiber reads as unmonitored, as one on the free list does (FiberPool::release_to clears it there):
+    // monitored_snapshot() must not report a completed task's fiber as a running monitored one.
+    fiber->progress_epoch.store(0U, std::memory_order_relaxed);
+    KeptFiber& k = m_kept[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (k.fiber == nullptr)
+    {
+        k.fiber = fiber;
+    }
+    else
+    {
+        m_fiber_pool.release(fiber);
+    }
+}
+
+void WorkerPool::release_kept_fiber(crd::u32 thread_index) noexcept
+{
+    KeptFiber& k = m_kept[thread_index]; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+    if (k.fiber != nullptr)
+    {
+        Fiber* const fiber = k.fiber;
+        k.fiber            = nullptr;
+        m_fiber_pool.release(fiber);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WorkerPool::run_job_in_fiber
 //
 // Routes a job through the fiber system. Two cases:
@@ -265,12 +320,17 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     // The snapshot keeps this dispatch's begin/yield/resume calls consistent even though the store is
     // atomic.
     const crd::jobs::JobObserver* const obs = crd::jobs::current_observer();
-    const crd::u8 thread_idx = static_cast<crd::u8>(tl_thread_index());
+    // This call runs on its calling OS thread from start to end (a fiber returns here through this thread's
+    // scheduler context), so the index names the thread that owns the kept-fiber slot throughout.
+    const crd::u32 slot       = tl_thread_index();
+    const crd::u8  thread_idx = static_cast<crd::u8>(slot);
 
     const bool is_resume = (job.fn == &resume_fiber_fn);
 
     if (is_resume)
     {
+        // A resume runs on the parked fiber, not a fresh one: a kept fiber would sit idle through it.
+        release_kept_fiber(slot);
         target = static_cast<Fiber*>(job.data);
         CRD_ASSERT_MSG(target != nullptr,
                        "run_job_in_fiber: resume sentinel carries null fiber pointer");
@@ -283,7 +343,12 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     }
     else
     {
-        target = m_fiber_pool.acquire(stack_size_to_tier(job.stack));
+        const FiberTier tier = stack_size_to_tier(job.stack);
+        target               = take_kept_fiber(slot, tier);
+        if (target == nullptr)
+        {
+            target = m_fiber_pool.acquire(tier);
+        }
         if (!target)
         {
             // Fiber-pool exhaustion: acquire() tallied the event and (in assert builds) asserted, then returned
@@ -341,9 +406,10 @@ void WorkerPool::run_job_in_fiber(const crd::jobs::JobDecl& job)
     {
         // Job completed — the trampoline already ran the observer's on_job_end,
         // released the counter and cleared target->job_counter *and* tl_fiber.
-        // Rebuild the initial stack frame so the fiber is clean on re-use.
+        // Rebuild the initial stack frame so the fiber is clean on re-use, then keep it for this thread's next
+        // job (this thread's: a fiber that parked elsewhere and was resumed here completes here).
         fiber_init_stack(target->context, target->usable_base, target->usable_size, target->trampoline);
-        m_fiber_pool.release(target);
+        keep_fiber(slot, target);
     }
     else
     {
@@ -428,9 +494,11 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
         }
         else
         {
+            self->release_kept_fiber(thread_index); // an idle worker holds no fiber while it waits
             self->m_scheduler.wait_for_work(thread_index);
         }
     }
+    self->release_kept_fiber(thread_index); // a stopping worker returns its kept fiber before it is joined
 }
 
 // ---------------------------------------------------------------------------
@@ -552,6 +620,7 @@ bool WorkerPool::init(const WorkerConfig& cfg)
     m_frame_arenas       = std::make_unique<FrameArena[]>(m_num_threads);
     m_frame_arena_count  = m_num_threads;
     m_progress           = std::make_unique<WorkerProgress[]>(m_num_threads); // per-worker hang-watchdog slots
+    m_kept               = std::make_unique<KeptFiber[]>(m_num_threads);      // per-thread kept fibers
     for (crd::u32 i = 0U; i < m_num_threads; ++i)
     {
         [[maybe_unused]] const bool ok = m_frame_arenas[i].init(cfg.frame_arena_bytes);
@@ -605,6 +674,15 @@ void WorkerPool::shutdown() noexcept
         }
     }
     m_threads.clear();
+
+    // Drain every kept fiber before the pool checks that none is acquired. The workers returned theirs on their way
+    // out; the main thread's (thread 0, the caller here) is returned by its wait()/pump, and is drained here too in
+    // case a job dispatch on it ended any other way. No thread dispatches now, so the slots are this thread's.
+    for (crd::u32 i = 0U; i < m_num_threads; ++i)
+    {
+        release_kept_fiber(i);
+    }
+    m_kept.reset();
 
     m_counter_pool.shutdown();
     m_fiber_pool.shutdown();
@@ -674,11 +752,19 @@ void WorkerPool::enqueue_fiber_resume(Fiber* fiber)
 
 bool WorkerPool::pump()
 {
+    const bool ran = pump_keeping();
+    release_kept_fiber(tl_idx); // one iteration driven from outside: nothing is kept past it
+    return ran;
+}
+
+bool WorkerPool::pump_keeping()
+{
     CRD_ASSERT_MSG(m_initialized, "WorkerPool::pump called before init");
 
     std::optional<crd::jobs::JobDecl> job = m_scheduler.try_pop(tl_idx);
     if (!job)
     {
+        release_kept_fiber(tl_idx); // no job: an idle thread holds no fiber
         return false;
     }
     m_progress[tl_idx].current_task_id.store(task_id_of(*job), std::memory_order_relaxed);
