@@ -5,8 +5,8 @@ cached tree builds through.
     compiler-cache.py configure-args <preset> [--host windows|linux]
         prints, on one line, the cache entries the local helpers add when they configure <preset>
         (scripts/configure-preset.bat on Windows, scripts/wsl-lane.sh on WSL): the pinned sccache as
-        CRD_COMPILER_LAUNCHER and, for cl and clang-cl, CRD_ENABLE_PCH=OFF (an MSVC precompiled header is not
-        cacheable). Nothing is printed for a preset that is not cached: a Visual Studio generator (CMake applies no
+        CRD_COMPILER_LAUNCHER and CRD_ENABLE_PCH=OFF (the launcher refuses a precompiled header: MSVC's is not
+        cacheable, a cached GCC or Clang one records bytes its key omits). Nothing is printed for a preset that is not cached: a Visual Studio generator (CMake applies no
         launcher there), a clang-tidy preset (the analysis runs on every unit) or an MSVC LTCG preset (cl with
         interprocedural optimization: the link generates the code, so the measured gain is small and converting the
         tree rebuilds every program). With CRD_SCCACHE=off it prints the reverse entries, which return a cached tree
@@ -47,7 +47,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PRESETS = ROOT / 'CMakePresets.json'
 DISABLED = ('off', '0', 'no', 'none', 'false')
 DEFAULT_SIZE = '30G'
-MSVC_COMPILERS = ('cl', 'clang-cl')
 DEFAULT_LANE_JOBS = 16
 WINDOWS_PORT = '4226'
 LINUX_PORT = '4227'
@@ -143,13 +142,12 @@ def cache_args(preset, environ=None, host=None, home=None, document=None):
         # (docs/bench/2026-10-18-build-speed-cache-mirror.md) a cached restore saves 17% while a cold miss costs 42%
         # and converting the tree rebuilds every LTCG program, so these trees stay uncached unless asked for.
         return []
-    msvc = compiler in MSVC_COMPILERS
     path, disabled = launcher(environ, host, home)
     if disabled:
-        return ['-DCRD_COMPILER_LAUNCHER='] + (['-DCRD_ENABLE_PCH=ON'] if msvc else [])
+        return ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_ENABLE_PCH=ON']
     if path is None:
         return []
-    return ['-DCRD_COMPILER_LAUNCHER=%s' % path.as_posix()] + (['-DCRD_ENABLE_PCH=OFF'] if msvc else [])
+    return ['-DCRD_COMPILER_LAUNCHER=%s' % path.as_posix(), '-DCRD_ENABLE_PCH=OFF']
 
 
 def default_mold(home=None):

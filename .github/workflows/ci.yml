@@ -47,7 +47,7 @@ env:
   CRD_PERF_BUDGET_SOFT: '1'
   PYTHONUTF8: '1'
   # Lanes that build through the pinned sccache on the GitHub Actions cache backend (docs/design/build-performance.md
-  # #hosted-lanes): MSVC and clang-cl without precompiled headers (not cacheable there), GCC and Clang with them. Each
+  # #hosted-lanes), every one without precompiled headers (docs/design/build-performance.md#the-opt-in-module). Each
   # lane writes under its own namespace (preset, runner image and image version), so lanes and toolchains never share
   # an entry. The list is sized to the repository's 10 GB cache allowance; the uncached lanes and why are in the
   # design document.
@@ -847,11 +847,11 @@ jobs:
           python3 scripts/check-cold-acquisition.py --after "${{ env.CPM_SOURCE_CACHE }}" --build "build/${{ matrix.preset }}"
           --fetch-unselected "${{ runner.temp }}/cold-unselected"
 
-      # GCC's precompiled header (-include) and Clang's (-include-pch) stay cacheable, so only the launcher changes;
-      # a changed precompiled header misses (probed: docs/bench/2026-10-18-build-speed-cache-mirror.md).
+      # No precompiled header under the cache: a cached one records its inputs' bytes, which the cache key does not
+      # hold (docs/design/build-performance.md#the-opt-in-module).
       - name: Configure with the compiler cache
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
-        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache"
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
@@ -1417,11 +1417,11 @@ jobs:
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
 
-      # GCC's precompiled header stays (it is cacheable); the -flto objects are cached, the link-time
-      # optimization of each program is not.
+      # No precompiled header under the cache (as above); the -flto objects are cached, the link-time optimization of
+      # each program is not.
       - name: Configure with the compiler cache
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
-        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache"
+        run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache" -DCRD_ENABLE_PCH=OFF
 
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}

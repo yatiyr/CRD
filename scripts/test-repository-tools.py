@@ -1948,7 +1948,7 @@ class BuildPerformance(unittest.TestCase):
                 self.assertIn('CRD_LINKER must name an installed mold binary', ' '.join(output.split()))
                 shutil.rmtree(Path(temp) / 'wrong')
             self.assertNotIn('pool crd_', (Path(temp) / 'default/CMakeFiles/rules.ninja').read_text(encoding='utf-8'))
-            code, output = configure(Path(temp) / 'tuned', '-DCRD_COMPILER_LAUNCHER=/opt/sccache',
+            code, output = configure(Path(temp) / 'tuned', '-DCRD_COMPILER_LAUNCHER=/opt/sccache', '-DCRD_ENABLE_PCH=OFF',
                                      '-DCRD_COMPILE_JOBS=3', '-DCRD_LINK_JOBS=1')
             self.assertEqual(code, 0, output)
             self.assertIn('[crd] Compiler launcher: /opt/sccache (Ninja', output)
@@ -1962,7 +1962,7 @@ class BuildPerformance(unittest.TestCase):
             # embeds its debug information: Debug and RelWithDebInfo through the format, Shipping through the flag
             # the root build file picks from CRD_EMBEDDED_DEBUG_INFO.
             code, output = configure(Path(temp) / 'shipping', '-DCRD_COMPILER_LAUNCHER=/opt/sccache', '-DCRD_SHIPPING=ON',
-                                     '-DMSVC=ON')
+                                     '-DMSVC=ON', '-DCRD_ENABLE_PCH=OFF')
             self.assertEqual(code, 0, output)
             self.assertNotIn('Compiler launcher ignored', output)
             self.assertIn('LAUNCHER=[/opt/sccache] POOL_COMPILE=[]', output)
@@ -1977,13 +1977,12 @@ class BuildPerformance(unittest.TestCase):
             self.assertIn(':${_crd_shipping_debug_info}>', root)
             self.assertIn('if(CRD_EMBEDDED_DEBUG_INFO)\n            set(${out_var} "embedded" PARENT_SCOPE)',
                           (ROOT / 'cmake/CrdPackage.cmake').read_text(encoding='utf-8'))
-            # Clang's precompiled headers carry their inputs' times only without the launcher.
-            module = (ROOT / 'cmake/CrdBuildPerformance.cmake').read_text(encoding='utf-8')
-            launcher_branch = module[module.index('if(CRD_COMPILER_LAUNCHER)'):module.index('set(_crd_pools)')]
-            self.assertIn('if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)\n'
-                          '            # Clang records', launcher_branch)
-            self.assertIn('SHELL:-Xclang -fno-pch-timestamp', launcher_branch)
-            self.assertEqual(module.count('-fno-pch-timestamp'), 1)
+            # A cached tree has no precompiled header, on every compiler: the launcher refuses one.
+            for compiler in ((), ('-DMSVC=ON',)):
+                code, output = configure(Path(temp) / 'pch', '-DCRD_COMPILER_LAUNCHER=/opt/sccache', *compiler)
+                self.assertNotEqual(code, 0, compiler)
+                self.assertIn('needs -DCRD_ENABLE_PCH=OFF', ' '.join(output.split()), compiler)
+                shutil.rmtree(Path(temp) / 'pch')
             code, output = configure(Path(temp) / 'bad', '-DCRD_COMPILE_JOBS=many')
             self.assertNotEqual(code, 0)
             self.assertIn('CRD_COMPILE_JOBS must be a positive integer', output)
@@ -2029,15 +2028,16 @@ class CompilerCache(unittest.TestCase):
             self.assertEqual(args('win-shipping'), [], 'MSVC LTCG trees stay uncached: the link generates the code')
             self.assertEqual(args('win-release', {'CRD_SCCACHE': 'off'}), [], 'and are never converted back either')
             self.assertEqual(args('win-clang-cl-shipping'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'])
-            self.assertEqual(args('linux-gcc-shipping'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe])
+            self.assertEqual(args('linux-gcc-shipping'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'])
             self.assertEqual(args('win-vs'), [], 'CMake applies no launcher to a Visual Studio generator')
-            self.assertEqual(args('mixed'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe],
-                             'the first parent wins: g++ keeps its precompiled header')
+            self.assertEqual(args('mixed'), ['-DCRD_COMPILER_LAUNCHER=%s' % exe, '-DCRD_ENABLE_PCH=OFF'],
+                             'every cached tree drops its precompiled header')
             self.assertEqual(args('win-debug', {'CRD_SCCACHE': 'off'}),
                              ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_ENABLE_PCH=ON'], 'off returns the default graph')
-            self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': 'OFF'}), ['-DCRD_COMPILER_LAUNCHER='])
+            self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': 'OFF'}),
+                             ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_ENABLE_PCH=ON'])
             self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': '/opt/sccache'}),
-                             ['-DCRD_COMPILER_LAUNCHER=/opt/sccache'])
+                             ['-DCRD_COMPILER_LAUNCHER=/opt/sccache', '-DCRD_ENABLE_PCH=OFF'])
             self.assertEqual(args('linux-gcc-debug', host='linux'), [], 'nothing installed: nothing added')
             installed.unlink()
             self.assertEqual(args('win-debug'), [])
@@ -2091,9 +2091,10 @@ class CompilerCache(unittest.TestCase):
                 sccache.parent.mkdir(parents=True)
                 sccache.write_bytes(b'')
                 self.assertEqual(args('linux-gcc-debug'),
-                                 ['-DCRD_COMPILER_LAUNCHER=%s' % sccache.as_posix()] + expected)
+                                 ['-DCRD_COMPILER_LAUNCHER=%s' % sccache.as_posix(), '-DCRD_ENABLE_PCH=OFF'] + expected)
                 self.assertEqual(args('linux-gcc-debug', {'CRD_SCCACHE': 'off', 'CRD_MOLD': 'off'}),
-                                 ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_LINKER=', '-DCRD_LINKER_THREADS='])
+                                 ['-DCRD_COMPILER_LAUNCHER=', '-DCRD_ENABLE_PCH=ON', '-DCRD_LINKER=',
+                                  '-DCRD_LINKER_THREADS='])
                 self.assertEqual(compiler_cache.link_threads({'CRD_LANE_JOBS': '64'}), 1, 'never below one')
             with patch('os.cpu_count', return_value=None):
                 self.assertEqual(compiler_cache.link_threads({}), 1)
@@ -2103,7 +2104,7 @@ class CompilerCache(unittest.TestCase):
         for name in compiler_cache.MOLD_PRESETS:
             generator, variables = compiler_cache.resolve_preset(name)
             self.assertEqual(generator, 'Ninja', name)
-            self.assertNotIn(str(variables.get('CMAKE_CXX_COMPILER', '')).lower(), compiler_cache.MSVC_COMPILERS, name)
+            self.assertNotIn(str(variables.get('CMAKE_CXX_COMPILER', '')).lower(), ('cl', 'clang-cl'), name)
 
     def test_cache_locations_tree_launcher_and_server_identity(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -41,18 +41,13 @@ if(CRD_COMPILER_LAUNCHER)
             # full PDB (/DEBUG:FULL). clang-cl writes the same objects for /Zi and /Z7 (CodeView is always embedded).
             set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT "$<$<CONFIG:Debug,RelWithDebInfo>:Embedded>")
             set(CRD_EMBEDDED_DEBUG_INFO ON)
-            if(CRD_ENABLE_PCH)
-                message(WARNING "[crd] Compiler launcher ${CRD_COMPILER_LAUNCHER} with CRD_ENABLE_PCH=ON: every "
-                                "translation unit that consumes an MSVC precompiled header (/Yu /Fp) is non-cacheable; "
-                                "configure with -DCRD_ENABLE_PCH=OFF to cache (docs/design/build-performance.md)")
-            endif()
         endif()
-        if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT MSVC)
-            # Clang records the modification time of every input in a precompiled header and sccache hashes the .pch a
-            # unit includes, so a header rebuilt in a fresh checkout or tree (same text, new times) would make every
-            # unit that includes it miss. Without the times the .pch bytes follow the text alone (probed); Ninja still
-            # rebuilds a precompiled header whenever one of its inputs changes, so the times keep nothing current.
-            add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-Xclang -fno-pch-timestamp>")
+        if(CRD_ENABLE_PCH)
+            # MSVC's precompiled header (/Yu /Fp) is not cacheable. A GCC or Clang one is cached by its preprocessed
+            # text, but it records its inputs' bytes (GCC: each #pragma once header's size and MD5), so an edit that
+            # keeps the text (a comment, line endings) is served a header whose consumers re-include those headers.
+            message(FATAL_ERROR "[crd] Compiler launcher ${CRD_COMPILER_LAUNCHER} needs -DCRD_ENABLE_PCH=OFF: a "
+                                "cached tree has no precompiled header (docs/design/build-performance.md)")
         endif()
         set(_crd_launcher_note "")
         if(MSVC)
