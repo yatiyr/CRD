@@ -28,6 +28,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib> // strtoul
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -223,30 +224,32 @@ TEST_CASE("crash capture: a denied output path fails the write, still terminates
     fs::remove_all(dir, ec);
 }
 
-TEST_CASE("crash capture: a fatal assert with no handler under headless terminates promptly, no modal dialog",
+TEST_CASE("crash capture: a fatal assert with no handler under headless terminates promptly and dumps the aborting "
+          "thread",
           "[core][diag][crash-capture]")
 {
     // DIAG.5c (b): crd_diag_harden() declared the spawned specimen headless, so the DEFAULT assert path (no platform
-    // handler) must terminate promptly instead of blocking on MessageBox. On Windows abort() -> prompt exit 3, no
-    // dialog (a blocked dialog would surface as a Timeout verdict), and no SEH minidump (abort does not reach the
-    // last-chance filter -- the emergency-channel routing for a fatal assert is a Linux property here).
+    // handler) must terminate promptly instead of blocking on MessageBox (a blocked dialog would surface as a Timeout
+    // verdict). abort() never reaches the last-chance filter; crd's SIGABRT handler dumps the aborting thread through
+    // the fatal path (the emergency channel), then abort() exits 3.
     const fs::path    dir = fresh_dir("assert_default");
     const cd::Outcome o   = run_mode("assert_default", dir);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code);
 
-    // The (b) guarantee on both builds: no modal dialog blocked the process to the harness timeout.
+    // The (b) guarantee: no modal dialog blocked the process to the harness timeout. Measured on win-debug and
+    // win-asan alike: ASan's Windows runtime leaves abort() to the CRT, so the dump and the exit are crd's there too.
     CHECK(o.verdict != cd::Verdict::Timeout);
-    if (cd::lane_promise().asan)
-    {
-        // ASan intercepts abort() and owns the process exit (its own report + exit code), so the exact code is not
-        // crd's; assert only that the process terminated abnormally -- the same scoping the other modes use under ASan.
-        CHECK(o.exit_code != 0);
-    }
-    else
-    {
-        CHECK(o.exit_code == 3);             // abort()'s CRT exit code on win-debug
-        CHECK(count_crash_dumps(dir) == 0U); // abort does not route to the SEH minidump path on Windows
-    }
+    CHECK(o.exit_code == 3); // abort()'s CRT exit code, after the dump
+    REQUIRE(count_crash_dumps(dir) == 1U);
+    const fs::path dump = first_crash_dump(dir);
+    CHECK(crd_test_minidump::exception_code(dump) == crd::crash::kAbortExceptionCode);
+    const std::string_view out{o.output};
+    const std::size_t      at = out.find("CRD_ABORT_TID=");
+    REQUIRE(at != std::string_view::npos);
+    const auto aborting_tid = static_cast<std::uint32_t>(std::strtoul(out.data() + at + 14U, nullptr, 10));
+    CHECK(crd_test_minidump::exception_thread_id(dump) == aborting_tid); // the aborting thread, not the writer
+    const fs::path want = fs::path{CRD_DIAG_CRASH_CAPTURE_SPECIMEN}.filename();
+    CHECK(crd_test_minidump::find_dump_module(dump, want.c_str()).named);
 
     std::error_code ec;
     fs::remove_all(dir, ec);

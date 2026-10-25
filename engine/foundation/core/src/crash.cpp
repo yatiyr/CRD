@@ -27,7 +27,11 @@ void test_inject_write_failure(WriteResult step) noexcept
 #include <windows.h>
 // DbgHelp must follow windows.h -- its types depend on it.
 #include <DbgHelp.h>
+#include <intrin.h> // _ReturnAddress
 
+#include <crd/core/platform.hpp> // CRD_NOINLINE
+
+#include <csignal>
 #include <cstdio>
 
 namespace
@@ -52,8 +56,9 @@ char    s_dump_path_utf8[kPathCap * 3];
 wchar_t s_read_path[kPathCap];
 SRWLOCK s_read_lock = SRWLOCK_INIT;
 
-LPTOP_LEVEL_EXCEPTION_FILTER s_prev_filter = nullptr; // the genuine previous filter (preserved across re-installs)
-bool                         s_have_prev   = false;
+LPTOP_LEVEL_EXCEPTION_FILTER s_prev_filter  = nullptr; // the genuine previous filter (preserved across re-installs)
+_crt_signal_t                s_prev_sigabrt = SIG_DFL; // the SIGABRT disposition before the first install, likewise
+bool                         s_have_prev    = false;
 
 std::atomic<crd::crash::CrashReportHandler> s_handler{nullptr};
 std::atomic<void*>                          s_handler_user{nullptr};
@@ -601,6 +606,37 @@ LONG CALLBACK crash_filter(EXCEPTION_POINTERS* ep) noexcept
     return (s_prev_filter != nullptr) ? s_prev_filter(ep) : EXCEPTION_CONTINUE_SEARCH;
 }
 
+// Drive the fatal core for the current thread with a record of `code` and this thread's own context; no fault is
+// raised. The abort handler and the test seam share it.
+CRD_NOINLINE crd::crash::CrashReport fatal_on_this_thread(DWORD code) noexcept
+{
+    CONTEXT ctx{};
+    RtlCaptureContext(&ctx);
+
+    EXCEPTION_RECORD rec{};
+    rec.ExceptionCode    = code;
+    rec.ExceptionFlags   = EXCEPTION_NONCONTINUABLE;
+    rec.ExceptionAddress = _ReturnAddress(); // the caller's code; the stack in the dump carries the real site
+
+    EXCEPTION_POINTERS ep{};
+    ep.ExceptionRecord = &rec;
+    ep.ContextRecord   = &ctx;
+    return handle_fatal(&ep, GetCurrentThreadId());
+}
+
+// abort() calls the SIGABRT handler and then exits, never through the unhandled-exception filter, so the handler dumps
+// the aborting thread. UCRT resets the disposition before the call; re-arming it first sends a concurrent abort here
+// too, where the single-shot gate makes it wait for the dump instead of exiting under it.
+void __cdecl crash_sigabrt(int signum) noexcept
+{
+    (void)std::signal(SIGABRT, &crash_sigabrt);
+    (void)fatal_on_this_thread(crd::crash::kAbortExceptionCode);
+    if (s_prev_sigabrt != SIG_DFL && s_prev_sigabrt != SIG_IGN && s_prev_sigabrt != SIG_ERR)
+    {
+        s_prev_sigabrt(signum);
+    }
+}
+
 } // namespace
 
 // Register crash_tls_callback with the loader: a pointer in the CRT's TLS-callback section (.CRT$XLB sorts between
@@ -720,11 +756,13 @@ InstallResult install(const char* output_dir) noexcept
     guard_current_thread_stack(); // reserve last-chance stack for the installing thread
     s_auto_guard.store(true, std::memory_order_release); // and for every thread created from now on (TLS callback)
 
-    const LPTOP_LEVEL_EXCEPTION_FILTER prev = SetUnhandledExceptionFilter(&crash_filter);
+    const LPTOP_LEVEL_EXCEPTION_FILTER prev       = SetUnhandledExceptionFilter(&crash_filter);
+    const _crt_signal_t                prev_abort = std::signal(SIGABRT, &crash_sigabrt);
     if (!s_have_prev)
     {
-        s_prev_filter = prev; // first install: the genuine previous filter
-        s_have_prev   = true;
+        s_prev_filter  = prev; // first install: the genuine previous filter and disposition
+        s_prev_sigabrt = prev_abort;
+        s_have_prev    = true;
         return InstallResult::Ok;
     }
     if (prev == &crash_filter)
@@ -740,8 +778,10 @@ void uninstall() noexcept
     if (s_have_prev)
     {
         (void)SetUnhandledExceptionFilter(s_prev_filter);
-        s_prev_filter = nullptr;
-        s_have_prev   = false;
+        (void)std::signal(SIGABRT, s_prev_sigabrt);
+        s_prev_filter  = nullptr;
+        s_prev_sigabrt = SIG_DFL;
+        s_have_prev    = false;
     }
     if (s_handler_thread != nullptr)
     {
@@ -849,19 +889,8 @@ std::size_t read_dump_stream(const char* dump_path, std::uint32_t stream_type, v
 #if CRD_ENABLE_ASSERTS
 CrashReport test_fatal_path(std::uint32_t exception_code) noexcept
 {
-    CONTEXT ctx{};
-    RtlCaptureContext(&ctx); // a real context for this thread; no fault is actually raised
-
-    EXCEPTION_RECORD rec{};
-    rec.ExceptionCode    = static_cast<DWORD>(exception_code);
-    rec.ExceptionAddress = &rec; // a valid, non-null address (no function-pointer cast)
-
-    EXCEPTION_POINTERS ep{};
-    ep.ExceptionRecord = &rec;
-    ep.ContextRecord   = &ctx;
-
     // Straight into the fatal core -- NOT crash_filter, so the test never chains to Catch2's own fatal filter.
-    return handle_fatal(&ep, GetCurrentThreadId());
+    return fatal_on_this_thread(static_cast<DWORD>(exception_code));
 }
 #endif
 

@@ -20,7 +20,8 @@
 //   hook_fault              -- the crash-report hook itself faults: the record (written before the hook) survives and the
 //                              recursive fault is bounded (no hang). Proves recursive-fault safety.
 //   assert_default          -- a CRD_FATAL with NO assert platform handler under declared-headless: the default assert
-//                              path terminates promptly (abort -> SIGABRT) with evidence, never a modal dialog/hang.
+//                              path terminates promptly (abort -> SIGABRT) with evidence, never a modal dialog/hang;
+//                              one dump (Windows: prints CRD_ABORT_TID first) or record, exit 3 / SIGABRT.
 //   overflow                -- unbounded recursion on the main thread: stack overflow (0xC00000FD), still dumps.
 //   overflow_thread         -- overflow on an UNguarded worker thread: still dumps (the dump runs on the handler stack).
 //   overflow_thread_guarded -- overflow on a worker that reserved a last-chance guard first: still dumps.
@@ -411,8 +412,12 @@ int main(int argc, char** argv)
     {
         // A fatal assertion with NO assert platform handler installed. crd_diag_harden() declared this process
         // headless, so the DEFAULT assert path must terminate promptly (abort -> SIGABRT) with evidence -- never a
-        // modal dialog, never a silent ignore, never a hang. On Linux the installed crash handler records the SIGABRT
-        // (the emergency channel); on Windows it terminates promptly with the stderr evidence.
+        // modal dialog, never a silent ignore, never a hang. The installed crash handler takes the SIGABRT (the
+        // emergency channel): a record on Linux, a dump of this thread on Windows.
+#if defined(_WIN32)
+        std::printf("CRD_ABORT_TID=%lu\n", GetCurrentThreadId());
+        std::fflush(stdout);
+#endif
         CRD_FATAL("forced fatal assertion (assert_default specimen mode)"); // headless -> abort(); never returns
     }
     else if (std::strcmp(mode, "overflow") == 0)

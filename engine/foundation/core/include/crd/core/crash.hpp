@@ -50,6 +50,9 @@ enum class DumpKind : std::uint8_t
 // never collides with a system stream). Read it back with read_dump_stream(path, kEvidenceStreamType, ...).
 inline constexpr std::uint32_t kEvidenceStreamType = 0x43524444U; // 'CRDD'
 
+// The exception code of an abort() dump on Windows (STATUS_FATAL_APP_EXIT, the code Windows itself records for abort).
+inline constexpr std::uint32_t kAbortExceptionCode = 0x40000015U;
+
 // Optional evidence embedded in a non-fatal dump as one user stream. `evidence` must stay valid for the duration of
 // the capture_dump call; the bytes are copied into the dump. evidence_bytes == 0 embeds no stream.
 struct DumpNote
@@ -86,10 +89,13 @@ void set_crash_report_handler(CrashReportHandler handler, void* user) noexcept;
 //          tick + a counter and is opened CREATE_NEW, so concurrent or same-second crashes never collide
 //          or overwrite. The write result is checked: a failed MiniDumpWriteDump deletes the partial file
 //          and never reports success. ExceptionCode/Address are printed to stderr as the emergency
-//          fallback regardless of whether the dump could be written.
+//          fallback regardless of whether the dump could be written. abort() never reaches that filter, so a SIGABRT
+//          handler dumps the aborting thread through the same path, with code kAbortExceptionCode; abort() then exits
+//          as it would have (exit 3, or a fail-fast when _CALL_REPORTFAULT is kept).
 //
 // Linux:   sigaction(SIGSEGV | SIGABRT | SIGFPE | SIGILL) on the alternate signal stack; writes one crash record,
-//          then restores the previous disposition and re-raises, so a default disposition lets the OS write its core.
+//          then restores the previous disposition; a kernel-raised fault re-executes under it and a sent signal is
+//          re-raised, so a default disposition lets the OS write its core.
 //
 // Safe to call multiple times; a re-install preserves the originally saved previous handler so
 // uninstall() restores it rather than restoring our own filter.

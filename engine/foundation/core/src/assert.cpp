@@ -195,8 +195,8 @@ int report_assert_failure(const char* expression, const char* file, int line, co
 
     // Headless/CI (declared via set_assert_headless): a modal dialog would hang and a silent ignore would hide a
     // required check, so do neither. The evidence is already emitted; terminate promptly. abort() raises SIGABRT,
-    // which crd's crash handler records on Linux (routing the failure to the emergency channel); on Windows it
-    // terminates promptly with the evidence above. A platform handler, checked earlier, still takes precedence.
+    // which crd's installed crash handler captures (a record on Linux, a dump of this thread on Windows): the
+    // emergency channel. A platform handler, checked earlier, still takes precedence.
     if (g_assert_headless.load(std::memory_order_acquire))
     {
         std::fflush(stderr);

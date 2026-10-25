@@ -1347,8 +1347,9 @@ cd::Outcome run_app(const Scratch& scratch, const char* mode, bool repaired,
     return o;
 }
 
-// The fatal path ended the run: abort() on Windows, SIGABRT on Linux; an ASan build ends it its own way.
-void check_fatal_end(const cd::Outcome& o)
+// The fatal path ended the run: abort() on Windows, after the host's crash handler dumped it, SIGABRT on Linux; an ASan
+// build ends it its own way.
+void check_fatal_end(const cd::Outcome& o, [[maybe_unused]] const Scratch& scratch)
 {
     CHECK(o.verdict != cd::Verdict::MissingExecutable);
     CHECK(o.verdict != cd::Verdict::MismatchedBinary);
@@ -1358,6 +1359,10 @@ void check_fatal_end(const cd::Outcome& o)
     {
 #if defined(_WIN32)
         CHECK(o.exit_code == 3); // abort()
+        cont::Array<fs::Path> dumps;
+        fs::list_directory(scratch.path / "crashes", dumps);
+        REQUIRE(dumps.size() == 1U);
+        CHECK(contains(cont::String{dumps[0].generic()}, "/crash_"));
 #else
         CHECK(o.crashed); // SIGABRT
 #endif
@@ -1498,7 +1503,7 @@ TEST_CASE("diagnostic host: an application that fails on purpose leaves an attri
         const cd::Outcome o = run_app(scratch, mode, false);
         INFO("mode=" << mode << " verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code
                      << " reason=" << o.reason.c_str());
-        check_fatal_end(o);
+        check_fatal_end(o, scratch);
 
         // The bundle names what failed, the events before it, the replay recipe, this build and the executable.
         check_private(read_bytes(scratch.file("captures/flight-0.cdb")), scratch);
@@ -1579,7 +1584,7 @@ TEST_CASE("diagnostic host: the application's write after free names both sites,
     const Scratch     scratch("crd-diag-host-app-use-after-free");
     const cd::Outcome o = run_app(scratch, "use-after-free", false);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " exit=" << o.exit_code << " reason=" << o.reason.c_str());
-    check_fatal_end(o);
+    check_fatal_end(o, scratch);
 
     BundleRead                      bundle;
     const cp::ModuleIdentity* const app = read_app_bundle(scratch, bundle);

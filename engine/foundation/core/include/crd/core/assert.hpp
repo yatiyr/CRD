@@ -29,8 +29,8 @@ AssertPlatformHandler get_assert_platform_handler() noexcept;
 ///
 /// When set, the DEFAULT assert path (no platform handler installed) must never show a modal dialog and must never
 /// silently ignore: it writes the failure evidence and terminates promptly via std::abort(). abort() raises SIGABRT,
-/// which crd's crash handler captures on Linux (routing the failure to the emergency channel); on Windows it
-/// terminates promptly with the evidence already emitted. A platform handler, if installed, still takes precedence
+/// which crd's installed crash handler captures (a record on Linux, a dump of the aborting thread on Windows), routing
+/// the failure to the emergency channel. A platform handler, if installed, still takes precedence
 /// over this. Off by default (interactive: the Windows MessageBox / the debugger break is preserved). An installed
 /// platform handler is unaffected. This is a declared mode, not auto-detected — headless contexts opt in (the test
 /// harness's crd_diag_harden() sets it; a shipping headless app sets it at startup).
@@ -99,12 +99,14 @@ int report_assert_failure(const char* expression, const char* file, int line, co
 
 #if CRD_ENABLE_ASSERTS
 /// Evaluate `expr` in all build types. In assert-enabled builds behaves like CRD_ASSERT; in Release the side-effects of `expr` are still executed.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): reports the caller's __FILE__ and __LINE__
 #define CRD_VERIFY(expr) CRD_ASSERT(expr)
 #else
 #define CRD_VERIFY(expr) ((void)(expr))
 #endif
 
 /// Unconditional failure. Always active regardless of CRD_ENABLE_ASSERTS. Reports `msg` and breaks into the debugger.
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): reports the caller's __FILE__ and __LINE__
 #define CRD_FATAL(msg)                                                                                                 \
     do                                                                                                                 \
     {                                                                                                                  \
@@ -124,6 +126,7 @@ int report_assert_failure(const char* expression, const char* file, int line, co
 /// conditional) under /WX since the `if (!false)` test inside CRD_ASSERT folds to a constant.
 /// This macro has no constant test, so it is C4127-clean across MSVC / clang-cl / GCC.
 #if CRD_ENABLE_ASSERTS
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): reports the caller's __FILE__ and __LINE__
 #define CRD_ASSERT_UNREACHABLE(msg)                                                                                    \
     do                                                                                                                 \
     {                                                                                                                  \
