@@ -36,7 +36,8 @@ def sample(timestamp, process, pid, tid, function, frames=()):
 
 def harness_record(median_ns, frames=1000):
     return json.dumps({'schema': 'cerid-diag-overhead/1', 'samples_ns': [median_ns] * frames, 'executed': frames,
-                       'wrong': 0, 'build': {'config': 'Shipping'}})
+                       'wrong': 0, 'build': {'config': 'Shipping'}, 'host': {'threads': 4},
+                       'cpu': {'read': True, 'unit': 'cycles', 'timed': 123456}})
 
 
 class Dumper(unittest.TestCase):
@@ -98,6 +99,38 @@ class Dumper(unittest.TestCase):
         self.assertIsNone(wpr.frame_class('x!crd::jobs::Scheduler::run'))
         self.assertIsNone(wpr.frame_class('x!main [crd::memory::MemoryStats::on_allocate]'), 'an inlinee list')
 
+    def test_the_c_runtime_runs_for_its_caller_and_a_diagnostic_sample_names_its_call_site(self):
+        exe = 'crd-diag-overhead.exe'
+        lines = list(HEADERS)
+        # full mode's payload formatting at a site in the job body (the macro expands there): `snprintf` is the
+        # UCRT's inline wrapper in the image and runs for the job body.
+        lines += sample(1, exe, 100, 7, 'ucrtbase.dll!__stdio_common_vsprintf',
+                        ['ucrtbase.dll!__stdio_common_vsprintf', exe + '!snprintf',
+                         exe + "!diag_overhead::`anonymous namespace'::sum_slice", exe + '!main'])
+        # the CEIR bridge's hook: the executor that calls it is its call site, not the bridge around the run
+        lines += sample(2, exe, 100, 7, exe + "!crd::ceir::host::`anonymous namespace'::adapter_pre",
+                        [exe + "!crd::ceir::host::`anonymous namespace'::adapter_pre",
+                         exe + "!crd::ceir::plan::`anonymous namespace'::run_seq",
+                         exe + '!crd::ceir::host::profiled_run', exe + '!main'])
+        # a copy inside the recorder under the jobs adapter's callback: the recorder decides, and the call site is
+        # the first frame above them that is not diagnostic
+        lines += sample(3, exe, 100, 7, exe + '!memcpy',
+                        [exe + '!memcpy', exe + '!crd::perf::FlightRecorder::record',
+                         exe + "!crd::perf::`anonymous namespace'::cb_on_job_end",
+                         exe + '!crd::jobs::detail::WorkerPool::run_job_in_fiber', exe + '!main'])
+        counter = wpr.count_samples(lines, {100: exe})
+        self.assertEqual(counter.functions[100], {
+            exe + "!diag_overhead::`anonymous namespace'::sum_slice": 1,
+            exe + "!crd::ceir::host::`anonymous namespace'::adapter_pre": 1,
+            exe + '!crd::perf::FlightRecorder::record': 1})
+        self.assertEqual(counter.classes[100], {'ceir-bridge': 1, 'flight-recorder': 1})
+        self.assertEqual(counter.callers[100], {
+            exe + "!crd::ceir::plan::`anonymous namespace'::run_seq": 1,
+            exe + '!crd::jobs::detail::WorkerPool::run_job_in_fiber': 1})
+        self.assertIsNotNone(wpr.RUNS_FOR_CALLER.match('vsnprintf'))
+        self.assertIsNone(wpr.RUNS_FOR_CALLER.match('fiber_switch'), "the image's own assembly decides")
+        self.assertIsNone(wpr.RUNS_FOR_CALLER.match('main'))
+
 
 def manifest(costs, shares_runs, frame_seconds=2.5, wall=2.6):
     runs = []
@@ -121,27 +154,132 @@ def counter_for(manifest_doc, mapping, shares, samples=1000):
     return counter
 
 
+EXE = 'crd-diag-overhead.exe!'
+ALLOCATE = EXE + 'crd::memory::TlsfAllocator::try_allocate'
+RUN_SEQ = EXE + "crd::ceir::plan::`anonymous namespace'::run_seq"
+HOOK = EXE + "crd::ceir::host::`anonymous namespace'::adapter_pre"
+RECORD = EXE + 'crd::perf::FlightRecorder::record'
+ACQUIRE = EXE + 'crd::jobs::detail::FiberPool::acquire'
+
+
+def cells_doc(specs, frames=1000):
+    """A manifest and a counter for cells given as {(workload, arm): spec}; each cell is two processes that share the
+    spec's samples, diagnostic samples, deciding functions and call sites. spec: median_ns (or medians, one per
+    process), samples, diagnostic, functions {name: samples}, callers {name: samples}, cpu (per frame, or None)."""
+    runs = []
+    processes = {}
+    pid = 2000
+    for (workload, arm), spec in specs.items():
+        for repetition in range(2):
+            medians = spec.get('medians') or [spec['median_ns']] * 2
+            cpu = spec.get('cpu')
+            runs.append({'workload': workload, 'arm': arm, 'repetition': repetition, 'pid': pid, 'exit_code': 0,
+                         'wall_seconds': 2.6, 'harness': {
+                             'frames': frames, 'frame_seconds': 2.5, 'median_ns': medians[repetition],
+                             'cpu_timed': None if cpu is None else cpu * frames, 'cpu_unit': 'cycles'}})
+            processes[pid] = spec
+            pid += 1
+    counter = wpr.DumperCounter({p: 'crd-diag-overhead.exe' for p in processes})
+    for p, spec in processes.items():
+        counter.samples[p] = spec['samples'] // 2
+        counter.diagnostic[p] = spec.get('diagnostic', 0) // 2
+        counter.classes[p] = {'flight-recorder': counter.diagnostic[p]} if counter.diagnostic[p] else {}
+        counter.functions[p] = {name: count // 2 for name, count in spec.get('functions', {}).items()}
+        counter.callers[p] = {name: count // 2 for name, count in spec.get('callers', {}).items()}
+    return {'schema': wpr.SCHEMA, 'trace': 'overhead.etl', 'interval_ms': 1.0, 'runs': runs}, counter
+
+
 class Judge(unittest.TestCase):
-    def test_a_cost_explained_by_its_diagnostic_samples_agrees(self):
-        mapping = {}
-        doc = manifest({('alloc', 'compiled-out'): 100, ('alloc', 'off'): 137, ('alloc', 'full'): 150}, mapping)
-        # off's 37% over compiled-out sits in the allocator statistics (27% of off's samples); full adds 9% more.
-        shares = {('alloc', 'compiled-out'): 0.0, ('alloc', 'off'): 0.27, ('alloc', 'full'): 0.33}
-        cells, lines, worst = wpr.judge(doc, counter_for(doc, mapping, shares))
+    def judged(self, specs, frames=1000):
+        doc, counter = cells_doc(specs, frames)
+        return wpr.judge(doc, counter)
+
+    # The 2026-10-25 trace's alloc pair: off's frames are 10.0% longer than the separately linked compiled-out
+    # binary's, its samples 8.4% more, none of them diagnostic; the gap sits in the function the statistics gate is
+    # force-inlined into.
+    ALLOC = {('alloc', 'compiled-out'): {'median_ns': 79250, 'samples': 6554, 'diagnostic': 4,
+                                         'functions': {ALLOCATE: 3184}},
+             ('alloc', 'off'): {'median_ns': 87200, 'samples': 7104, 'functions': {ALLOCATE: 3688}}}
+
+    def test_two_binaries_are_judged_on_the_diagnostic_code_off_runs(self):
+        cells, lines, worst = self.judged(self.ALLOC, frames=40000)
         self.assertEqual(worst, 'AGREES', lines)
-        self.assertAlmostEqual(cells[('alloc', 'compiled-out')]['measured_cost'], 0.37)
-        self.assertAlmostEqual(cells[('alloc', 'compiled-out')]['external_cost'], 1.0 / 0.73 - 1.0)
-        self.assertAlmostEqual(cells[('alloc', 'full')]['external_cost'], 0.73 / 0.67 - 1.0)
-        self.assertEqual(cells[('alloc', 'off')]['cpu_ms_per_frame'], 1.0, '2000 samples over 2000 frames')
-        self.assertTrue(any(line.startswith('SAMPLED: alloc off') for line in lines))
+        cell = cells[('alloc', 'compiled-out')]
+        self.assertAlmostEqual(cell['measured_cost'], 87200 / 79250 - 1)
+        self.assertEqual(cell['measurand'], 'frame time', 'one-thread frames: their CPU is their frame time')
+        self.assertAlmostEqual(cell['external_cost'], 7104 / 6554 - 1)
+        self.assertAlmostEqual(cell['diagnostic_cost'], -4 / 6554)
+        text = '\n'.join(lines)
+        self.assertIn('off runs no out-of-line diagnostic code', text)
+        self.assertIn('TlsfAllocator::try_allocate +7.7%', text, 'the gap is located')
+        self.assertIn('judged by their instruction count', text)
+
+    def test_two_binaries_disagree_when_off_runs_diagnostic_code(self):
+        specs = {key: dict(spec) for key, spec in self.ALLOC.items()}
+        specs[('alloc', 'off')]['diagnostic'] = 568  # 8% of off's samples in an out-of-line diagnostic frame
+        specs[('alloc', 'off')]['functions'] = {ALLOCATE: 3120, RECORD: 568}
+        _, lines, worst = self.judged(specs, frames=40000)
+        self.assertEqual(worst, 'DISAGREES', lines)
+        self.assertIn('off runs its out-of-line diagnostic code (+8.6%', '\n'.join(lines))
+
+    def test_a_cost_in_the_diagnostic_code_and_its_call_sites_agrees(self):
+        # full doubles the CPU: half in the hooks, half in the executor that calls them (spills and reloads around two
+        # calls per op); the hooks alone (+50%) do not explain +100%.
+        specs = {('offline', 'off'): {'median_ns': 500000, 'samples': 1000, 'functions': {RUN_SEQ: 400}},
+                 ('offline', 'full'): {'median_ns': 1000000, 'samples': 2000, 'diagnostic': 500,
+                                       'functions': {RUN_SEQ: 900, HOOK: 500}, 'callers': {RUN_SEQ: 500}}}
+        cells, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'AGREES', lines)
+        cell = cells[('offline', 'full')]
+        self.assertAlmostEqual(cell['external_cost'], 1.0)
+        self.assertAlmostEqual(cell['diagnostic_cost'], 0.5)
+        self.assertAlmostEqual(cell['call_site_cost'], 0.5)
+        self.assertAlmostEqual(cell['elsewhere_cost'], 0.0)
+        self.assertIn('its call sites +50.0% (plan::run_seq)', '\n'.join(lines))
+        # The same growth in a function that never calls the diagnostic code is not explained.
+        specs[('offline', 'full')]['callers'] = {}
+        _, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'DISAGREES', lines)
+        self.assertIn('the cost is not where the diagnostic code runs', '\n'.join(lines))
+
+    def test_a_multithreaded_frame_is_compared_on_its_cpu(self):
+        # Eight busy threads: frame time and CPU differ; the harness's CPU per frame is the measurand the samples
+        # estimate. Frame time read -14% where the CPU rose 37%.
+        specs = {('jobs', 'off'): {'median_ns': 440000, 'samples': 7238, 'cpu': 1.1e7,
+                                   'functions': {ACQUIRE: 2000}},
+                 ('jobs', 'full'): {'median_ns': 378400, 'samples': 9916, 'diagnostic': 2200, 'cpu': 1.507e7,
+                                    'functions': {ACQUIRE: 2000, RECORD: 2200, RUN_SEQ: 478},
+                                    'callers': {RUN_SEQ: 2200}}}
+        cells, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'AGREES', lines)
+        cell = cells[('jobs', 'full')]
+        self.assertEqual(cell['measurand'], 'CPU')
+        self.assertAlmostEqual(cell['measured_cost'], 0.37)
+        self.assertIn('full over off measured +37.0% (CPU)', '\n'.join(lines))
+        for spec in specs.values():
+            spec['cpu'] = None
+        cells, lines, worst = self.judged(specs)
+        self.assertIsNone(cells[('jobs', 'full')]['measured_cost'], 'no CPU measurand: frame time is not compared')
+        self.assertIn('measured -14.0% in frame time, not compared', '\n'.join(lines))
+        self.assertEqual(worst, 'AGREES', 'the location is still judged')
 
     def test_a_cost_the_samples_do_not_explain_disagrees(self):
-        mapping = {}
-        doc = manifest({('jobs', 'off'): 400, ('jobs', 'full'): 800}, mapping)
-        shares = {('jobs', 'off'): 0.0, ('jobs', 'full'): 0.05}
-        _, lines, worst = wpr.judge(doc, counter_for(doc, mapping, shares))
-        self.assertEqual(worst, 'DISAGREES')
-        self.assertIn('full over off measured +100.0%, external +5.3%', '\n'.join(lines))
+        # The pool's contended free list (37% of off's CPU) falls as full's per-job work spaces its acquires: the
+        # sampled CPU falls 7.5% while the diagnostic code adds 17%.
+        specs = {('jobs', 'off'): {'median_ns': 440000, 'samples': 7238, 'cpu': 1.1e7,
+                                   'functions': {ACQUIRE: 2700}},
+                 ('jobs', 'full'): {'median_ns': 378400, 'samples': 6696, 'diagnostic': 1260, 'cpu': 1.0175e7,
+                                    'functions': {ACQUIRE: 900, RECORD: 1260}}}
+        cells, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'DISAGREES', lines)
+        self.assertIn('FiberPool::acquire -24.9%', '\n'.join(lines), 'the moved cost is named')
+
+    def test_processes_that_disagree_are_unresolved(self):
+        specs = {('jobs', 'off'): {'medians': [441400, 438000], 'samples': 7238},
+                 ('jobs', 'basic'): {'medians': [393100, 470500], 'samples': 7300}}
+        _, lines, worst = self.judged(specs)
+        self.assertEqual(worst, 'UNRESOLVED', lines)
+        self.assertIn('the processes of basic disagree, their median frames 19.7% apart', '\n'.join(lines))
 
     def test_too_few_samples_short_frames_unreadable_and_failed_processes(self):
         mapping = {}
@@ -167,6 +305,25 @@ class Judge(unittest.TestCase):
                          'UNRESOLVED', 'two recorded processes with one PID cannot be told apart')
 
 
+def fake_run(calls, start_code=0, dry_run='ninja: no work to do.\n'):
+    """subprocess.run for wpr, the build tool's dry run and git; every command is kept in `calls`."""
+
+    def run(command, **_):
+        calls.append(list(command))
+        if command[0] == 'git':
+            return SimpleNamespace(returncode=0, stdout='0123abcd\n' if 'rev-parse' in command else '', stderr='')
+        if command[0] == 'ninja':
+            return SimpleNamespace(returncode=0, stdout=dry_run, stderr='')
+        return SimpleNamespace(returncode=start_code if command[1] == '-start' else 0, stdout='',
+                               stderr='Failed to enable the policy to profile system performance.')
+
+    return run
+
+
+def sampler_calls(calls):
+    return [c[1] for c in calls if c[0] == 'wpr']
+
+
 class Record(unittest.TestCase):
     def args(self, temp, **extra):
         exe = Path(temp) / 'crd-diag-overhead.exe'
@@ -174,6 +331,8 @@ class Record(unittest.TestCase):
         exe.write_bytes(b'profile')
         base.write_bytes(b'baseline')
         exe.with_suffix('.pdb').write_bytes(b'profile symbols')
+        (Path(temp) / 'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Release\n'
+                                                   'CMAKE_MAKE_PROGRAM:FILEPATH=ninja\n', encoding='utf-8')
         values = {'exe': str(exe), 'baseline_exe': str(base), 'workloads': 'alloc', 'arms': 'off,full',
                   'repetitions': 2, 'timeout': 5.0, 'out': str(Path(temp) / 'out'), 'progress': False}
         values.update(extra)
@@ -182,41 +341,59 @@ class Record(unittest.TestCase):
     def test_a_denied_sampler_is_permission_denied_and_leaves_nothing(self):
         with tempfile.TemporaryDirectory() as temp:
             calls = []
-
-            def run(command, **_):
-                calls.append(command)
-                return SimpleNamespace(returncode=0xc5585011 if command[1] == '-start' else 0, stdout='',
-                                       stderr='Failed to enable the policy to profile system performance.')
-
-            code = wpr.record(self.args(temp), runner=None, which=lambda name: name, subprocess_run=run)
+            code = wpr.record(self.args(temp), runner=None, which=lambda name: name,
+                              subprocess_run=fake_run(calls, start_code=0xc5585011))
             self.assertEqual(code, 3)
-            self.assertEqual(calls, [['wpr', '-start', 'CPU', '-filemode']])
+            self.assertEqual(sampler_calls(calls), ['-start'])
             self.assertEqual(list((Path(temp) / 'out').iterdir()), [], 'no run directory without a trace')
+
+    def test_a_tree_not_current_with_the_checkout_is_refused_before_the_sampler(self):
+        with tempfile.TemporaryDirectory() as temp:
+            calls = []
+            code = wpr.record(self.args(temp), runner=None, which=lambda name: name,
+                              subprocess_run=fake_run(calls, dry_run='[1/2] Building CXX object x.obj\n'))
+            self.assertEqual(code, 2)
+            self.assertEqual(sampler_calls(calls), [], 'refused before the kernel sampler starts')
+            self.assertIn(['ninja', '-C', str(Path(temp).resolve()), '-n', 'crd-diag-overhead'], calls)
+            self.assertFalse((Path(temp) / 'out').exists())
+            calls.clear()
+            args = self.args(temp, arms='compiled-out,off')
+            code = wpr.record(args, runner=None, which=lambda name: name,
+                              subprocess_run=fake_run(calls, start_code=0xc5585011))
+            self.assertEqual(code, 3, 'both trees current: the sampler is asked (and the fake denies it)')
+            self.assertEqual([c[-1] for c in calls if c[0] == 'ninja'], ['crd-diag-overhead', 'base'],
+                             'the compiled-out binary is checked as well')
+        with tempfile.TemporaryDirectory() as temp:
+            args = self.args(temp)
+            (Path(temp) / 'CMakeCache.txt').unlink()
+            self.assertIn('is not in a CMake build tree', wpr.tree_current(args.exe, fake_run([])))
 
     def test_a_recorded_session_runs_every_arm_interleaved_and_keeps_its_manifest(self):
         with tempfile.TemporaryDirectory() as temp:
             calls = []
             processes = []
 
-            def run(command, **_):
-                calls.append(command[:2])
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-
             def runner(command, timeout):
                 processes.append(command)
                 return 5000 + len(processes), 0, harness_record(100 if '--mode' in command else 0), 2.6
 
             with mock.patch.object(wpr, 'analyze_run', return_value=0) as analysed:
-                code = wpr.record(self.args(temp), runner=runner, which=lambda name: name, subprocess_run=run)
+                code = wpr.record(self.args(temp), runner=runner, which=lambda name: name,
+                                  subprocess_run=fake_run(calls))
             self.assertEqual(code, 0)
-            self.assertEqual([c[1] for c in calls], ['-start', '-stop'], 'one session; never cancelled')
+            self.assertEqual(sampler_calls(calls), ['-start', '-stop'], 'one session; never cancelled')
             modes = [p[p.index('--mode') + 1] for p in processes]
             self.assertEqual(modes, ['off', 'full', 'full', 'off'], 'arms rotate per repetition')
-            self.assertIn('--affinity', processes[0])
+            for option, value in (('--affinity', '5555'), ('--threads', '4')):
+                self.assertEqual(processes[0][processes[0].index(option) + 1], value, "the boards' shape")
             run_dir = analysed.call_args[0][0]
             saved = json.loads((run_dir / 'manifest.json').read_text(encoding='utf-8'))
             self.assertEqual([r['pid'] for r in saved['runs']], [5001, 5002, 5003, 5004])
             self.assertEqual(saved['runs'][0]['harness']['median_ns'], 100)
+            self.assertEqual(saved['runs'][0]['harness']['cpu_timed'], 123456, 'the CPU measurand is kept')
+            self.assertEqual(saved['runs'][0]['harness']['cpu_unit'], 'cycles')
+            self.assertEqual(saved['source'], {'head': '0123abcd', 'modified': False})
+            self.assertEqual((saved['threads'], saved['affinity']), (4, '5555'))
             self.assertEqual(saved['exe']['sha256'], hashlib.sha256(b'profile').hexdigest())
             self.assertEqual(saved['trace'], 'overhead.etl')
             self.assertEqual((run_dir / 'symbols/profile/crd-diag-overhead.pdb').read_bytes(), b'profile symbols',
@@ -227,16 +404,12 @@ class Record(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             calls = []
 
-            def run(command, **_):
-                calls.append(command[1])
-                return SimpleNamespace(returncode=0, stdout='', stderr='')
-
             def runner(command, timeout):
                 raise KeyboardInterrupt
 
             with self.assertRaises(KeyboardInterrupt):
-                wpr.record(self.args(temp), runner=runner, which=lambda name: name, subprocess_run=run)
-            self.assertEqual(calls, ['-start', '-cancel'], 'a kernel session is never left running')
+                wpr.record(self.args(temp), runner=runner, which=lambda name: name, subprocess_run=fake_run(calls))
+            self.assertEqual(sampler_calls(calls), ['-start', '-cancel'], 'a kernel session is never left running')
 
     def test_missing_tools_and_harness(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -272,6 +445,8 @@ class Record(unittest.TestCase):
         self.assertEqual(wpr.arm_order(['a', 'b', 'c'], 1), ['b', 'c', 'a'])
         self.assertEqual(wpr.arm_command('p.exe', 'b.exe', 'jobs', 'compiled-out', 's', 6000)[:5],
                          ['b.exe', '--workload', 'jobs', '--mode', 'off'])
+        self.assertEqual(wpr.arm_command('p.exe', 'b.exe', 'jobs', 'off', 's', 6000)[9:13],
+                         ['--threads', '4', '--affinity', '5555'], "the boards' shape")
         self.assertIsNone(wpr.harness_summary('not json'))
         self.assertIsNone(wpr.harness_summary(json.dumps({'schema': 'other'})))
 

@@ -3,6 +3,8 @@ rem The user's one elevated step (2026-10-18), run from an elevated prompt in th
 rem   scripts\elevated-captures.bat [step]   (step: all, the default; sampling; build-insights)
 rem 1. sampling: DIAG.11b clause (8), WPR samples the overhead workloads in every arm (sample-overhead-wpr.py record),
 rem    and the analysis runs at once; the trace stays under build\diag-overhead-wpr\ for unelevated re-analysis.
+rem    Build crd-diag-overhead on win-shipping-profile and win-shipping at the same commit first: record refuses a
+rem    tree that still has work for it (exit 2), so the two binaries come from one source.
 rem 2. build-insights: C++ Build Insights (vcperf) around an uncached win-debug build in the cached shape (PCH off),
 rem    with the MSVC timing switches of build-profile.py; the traces go to build\build-insights\. Refused while the
 rem    host is busy.
@@ -43,7 +45,7 @@ if exist build\build-insights\win-debug rmdir /s /q build\build-insights\win-deb
 python scripts\build-profile.py run --compiler msvc --preset win-debug --jobs 16 --build-dir build\build-insights\win-debug --label build-insights --define CRD_ENABLE_PCH=OFF --output build\build-insights\win-debug.json --vcperf CeridBuildInsights
 set "CRD_VCPERF_EXIT=%ERRORLEVEL%"
 :report
-echo [elevated] sampling exit %CRD_WPR_EXIT% (0 agrees, 6 disagrees, 3 permission, 7 Visual Studio open), build insights exit %CRD_VCPERF_EXIT% (0 captured, 1 busy host or failure, 7 Visual Studio open)
+echo [elevated] sampling exit %CRD_WPR_EXIT% (0 agrees, 6 disagrees, 4 unresolved, 2 harness missing or not built at this commit, 3 permission, 7 Visual Studio open), build insights exit %CRD_VCPERF_EXIT% (0 captured, 1 busy host or failure, 7 Visual Studio open)
 if not "%CRD_WPR_EXIT%"=="skipped" if not "%CRD_WPR_EXIT%"=="0" if not "%CRD_WPR_EXIT%"=="6" exit /b %CRD_WPR_EXIT%
 if "%CRD_VCPERF_EXIT%"=="skipped" exit /b 0
 exit /b %CRD_VCPERF_EXIT%

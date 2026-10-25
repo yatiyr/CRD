@@ -14,20 +14,38 @@ diagnostic host, the profiler and the CEIR profiling bridge).
            recorded process and the samples whose deciding frame is a diagnostic one (by class), and writes
            `analysis.json`.
 
-A sample's deciding frame is the leaf-most frame of the program's own image that is not `std::` (DumperCounter), and
-a frame is classified by its own function only. xperf's `-add_inline` lists every function inlined anywhere into a
-frame's function, not the inline chain at the sampled address; with it, and with any diagnostic ancestor claiming a
-sample, `main` and the workload code under the CEIR bridge and the jobs adapter fell into classes (2026-10-23). A frame
-sampler attributes force-inlined code, such as the allocator statistics gate, to its host function: off over
-compiled-out is compared with off's out-of-line diagnostic samples, and the inlined gate's cost is the exact count of
-DIAG.11b clause (1).
+A sample's deciding frame is the leaf-most frame of the program's own image that is neither `std::` nor a C runtime
+function compiled into the image (`snprintf`, `memcpy`: RUNS_FOR_CALLER; they run on behalf of their caller, as the
+system modules do), and a frame is classified by its own function only. xperf's `-add_inline` lists every function
+inlined anywhere into a frame's function, not the inline chain at the sampled address; with it, and with any diagnostic
+ancestor claiming a sample, `main` and the workload code under the CEIR bridge and the jobs adapter fell into classes
+(2026-10-23). For a diagnostic sample the next non-diagnostic frame of the image is its call site (the CEIR executor's
+`run_seq` for the bridge's per-op hooks).
 
 Per workload and arm the analysis reports the samples, the CPU milliseconds per frame (samples times the sampling
-interval over the timed frames: the CPU-time measurand the jobs workload needs) and the diagnostic share. Against the
-`off` arm it compares the harness's measured cost (the median frame ratio) with the external estimate
-(1 - share_off) / (1 - share_arm) - 1. They agree when the two costs differ by at most AGREE_ABSOLUTE plus
-AGREE_RELATIVE of the measured cost. Each process's frames must cover at least FRAME_FRACTION of its wall time, or the
-comparison is unresolved (setup and teardown would dilute the share).
+interval over the timed frames) and the diagnostic share. Each row compares two cells (an arm over `off`; `off` over
+`compiled-out`) twice, as of 2026-10-25:
+
+- magnitude: the external cost is the ratio of the sampled CPU per frame; the measured cost is the harness's own CPU
+  per frame (`cpu.timed` over the frames, kept in the manifest) when both cells recorded it, else the median frame
+  ratio when both cells' frames run on one thread (sampled CPU over the frame time at most SERIAL_LIMIT), else it is
+  not compared: a multi-threaded frame's CPU is not its wall time (jobs full read 14% faster in frame time and 7.5%
+  cheaper in sampled CPU at eight threads, 2026-10-25).
+- location, same binary (basic, full): the added CPU per frame of the diagnostic frames and the growth of their call
+  sites, over the reference's CPU per frame, must explain the external cost. The earlier estimate
+  (1 - share_off) / (1 - share_arm) - 1 normalised the diagnostic samples by the arm's own non-diagnostic time, so it
+  missed every cost the mode adds outside its frames: offline full +134.5% against +252.6% sampled, the rest in the
+  executor's hook call sites.
+- location, two binaries (off over compiled-out): two separately linked executables differ in layout and in the
+  force-inlined gates a frame sampler leaves in their hosts (the allocator statistics gate in
+  `TlsfAllocator::try_allocate`), so their frame-time gap is judged by the instruction count (`diag-overhead.py
+  instructions`), not here. What the samples can judge is that off runs no out-of-line diagnostic code: its added
+  diagnostic CPU per frame over compiled-out must be within AGREE_ABSOLUTE of none. The gap's location is reported.
+
+Two costs agree when they differ by at most AGREE_ABSOLUTE plus AGREE_RELATIVE of the one compared against. Each
+process's frames must cover at least FRAME_FRACTION of its wall time, and a cell's processes must agree on their median
+frame within SPREAD_LIMIT, or the comparison is unresolved (setup would dilute the samples; jobs basic's two processes
+read 393 and 471 us at eight threads on sixteen logical processors).
 
 Verdicts (one line each; the exit code is the worst):
   AGREES          (0)  every resolved comparison agrees
@@ -35,8 +53,13 @@ Verdicts (one line each; the exit code is the worst):
   UNRESOLVED      (4)  too few samples (MIN_SAMPLES) or frames that do not dominate their process
   UNREADABLE      (5)  the trace held no sampled-profile events for a recorded process (never read as zero)
   PERMISSION_DENIED (3) wpr could not start the kernel sampler (re-run from an elevated shell)
-  TOOL_MISSING    (2)  wpr/xperf or the harness is missing
+  TOOL_MISSING    (2)  wpr/xperf or the harness is missing, or a harness tree is not current with the checkout
   USAGE           (64) bad arguments
+
+`record` runs every workload in the boards' shape (`diag-overhead.py run`: the jobs pool at THREADS, every process
+pinned to AFFINITY, one logical processor of each core) and refuses, before the sampler starts, a harness whose build
+tree is not current with the checkout (`ninja -n` of the target), so the two binaries come from one source; the
+manifest keeps the checkout's commit and each harness record's CPU measurand.
 
 The one command (an elevated PowerShell in the checkout, after building crd-diag-overhead on win-shipping-profile and
 win-shipping):
@@ -70,12 +93,19 @@ ARMS = ('compiled-out', 'off', 'basic', 'full')
 # the process).
 ITERATIONS = {'alloc': 40000, 'jobs': 9000, 'offline': 10000, 'io': 6000}
 WARMUP = 50
-AFFINITY = 'FFFF'
+# The boards' shape (diag-overhead.py run --threads 4 --affinity 5555): a four-thread jobs pool, one logical processor
+# of each of eight cores. The 2026-10-25 trace ran the harness's default eight threads on 16 logical processors, where
+# off spent 37% of its CPU in one compare-exchange of the fiber pool's free list.
+THREADS = 4
+AFFINITY = '5555'
 INTERVAL_MS = 1.0  # WPR's CPU profile samples every 1 ms per processor
 MIN_SAMPLES = 500
 FRAME_FRACTION = 0.85
+SPREAD_LIMIT = 0.02  # a cell's processes' median frames, highest over lowest
+SERIAL_LIMIT = 1.25  # sampled CPU per frame over the median frame time of a frame that runs on one thread
 AGREE_ABSOLUTE = 0.02
 AGREE_RELATIVE = 0.25
+TOP_ELSEWHERE = 3
 VERDICT_CODES = {'AGREES': 0, 'TOOL_MISSING': 2, 'PERMISSION_DENIED': 3, 'UNRESOLVED': 4, 'UNREADABLE': 5,
                  'DISAGREES': 6, 'USAGE': 64}
 # Diagnostic frame classes, matched against a frame's own `module!function` text. The first match decides a frame's
@@ -88,6 +118,11 @@ CLASSES = (
     ('ceir-bridge', re.compile(r'crd::ceir::host::(?:.*::)?(?:profiled_run|PlanProfile|adapter_pre|adapter_post)\b')),
     ('perf', re.compile(r'crd::perf::')),
 )
+# Functions of the image that run on behalf of their caller: the standard library and the C runtime's formatting and
+# memory functions compiled into it (`snprintf` is an inline wrapper of the UCRT's; full mode's payload formatting at
+# the sites in the jobs workload's job body decided 3,883 jobs full samples as `snprintf`, 2026-10-25).
+RUNS_FOR_CALLER = re.compile(r'^(?:std::|_*(?:v?s?n?printf(?:_s)?|v?f?printf|mem(?:cpy|move|set|cmp)|'
+                             r'str(?:len|cmp|ncmp|cpy|ncpy|chr)|_*stdio_common_\w+)$)')
 
 
 # ---- recording ------------------------------------------------------------------------------------------------------
@@ -109,7 +144,48 @@ def arm_command(exe, baseline, workload, arm, scratch, iterations):
     program = baseline if arm == 'compiled-out' else exe
     mode = 'off' if arm == 'compiled-out' else arm
     return [str(program), '--workload', workload, '--mode', mode, '--iterations', str(iterations),
-            '--warmup', str(WARMUP), '--affinity', AFFINITY, '--scratch', str(scratch)]
+            '--warmup', str(WARMUP), '--threads', str(THREADS), '--affinity', AFFINITY, '--scratch', str(scratch)]
+
+
+def build_tree(exe):
+    """The CMake build tree an executable was linked in (the nearest parent with a CMakeCache.txt); None outside one."""
+    for parent in list(Path(exe).resolve().parents)[:5]:
+        if (parent / 'CMakeCache.txt').is_file():
+            return parent
+    return None
+
+
+def tree_current(exe, subprocess_run):
+    """None when `exe`'s tree has no work left for its target (it is the checkout's source as built), else why not."""
+    tree = build_tree(exe)
+    if tree is None:
+        return '%s is not in a CMake build tree' % exe
+    make = None
+    for line in (tree / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace').splitlines():
+        if line.startswith('CMAKE_MAKE_PROGRAM:'):
+            make = line.split('=', 1)[1].strip()
+    if not make:
+        return '%s names no CMAKE_MAKE_PROGRAM' % (tree / 'CMakeCache.txt')
+    target = Path(exe).stem
+    try:
+        dry = subprocess_run([make, '-C', str(tree), '-n', target], capture_output=True, text=True)
+    except OSError as error:
+        return 'cannot run %s: %s' % (make, error)
+    if dry.returncode != 0 or 'no work to do' not in (dry.stdout or ''):
+        return ('%s in %s is not current with the checkout (`%s -C %s -n %s` has work); build it before recording, '
+                'so both binaries come from one source' % (target, tree, Path(make).name, tree, target))
+    return None
+
+
+def checkout_identity(subprocess_run):
+    """The checkout's commit and whether tracked files differ from it (the source both trees were checked against)."""
+    try:
+        head = subprocess_run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], capture_output=True, text=True)
+        status = subprocess_run(['git', '-C', str(ROOT), 'status', '--porcelain', '--untracked-files=no'],
+                                capture_output=True, text=True)
+    except OSError:
+        return None
+    return {'head': (head.stdout or '').strip() or None, 'modified': bool((status.stdout or '').strip())}
 
 
 def run_process(command, timeout):
@@ -127,7 +203,8 @@ def run_process(command, timeout):
 
 
 def harness_summary(stdout):
-    """The frame count, the summed and the median frame time of a harness record; None when it is not one."""
+    """The frame count, the summed and the median frame time and the CPU over the timed frames (every thread's: the
+    measurand a sampler's CPU is compared with) of a harness record; None when it is not one."""
     try:
         record = json.loads(stdout)
     except ValueError:
@@ -135,8 +212,11 @@ def harness_summary(stdout):
     samples = sorted(record.get('samples_ns') or [])
     if record.get('schema') != 'cerid-diag-overhead/1' or not samples:
         return None
+    cpu = record.get('cpu') or {}
     return {'frames': len(samples), 'frame_seconds': sum(samples) / 1e9, 'median_ns': samples[len(samples) // 2],
-            'build': record.get('build'), 'executed': record.get('executed'), 'wrong': record.get('wrong')}
+            'cpu_timed': cpu.get('timed') if cpu.get('read') else None, 'cpu_unit': cpu.get('unit'),
+            'threads': (record.get('host') or {}).get('threads'), 'build': record.get('build'),
+            'executed': record.get('executed'), 'wrong': record.get('wrong')}
 
 
 def record(args, runner=run_process, which=shutil.which, subprocess_run=subprocess.run):
@@ -150,6 +230,10 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
         return verdict('TOOL_MISSING', 'the compiled-out arm needs --baseline-exe (not built: %s)' % baseline)
     if not exe.is_file():
         return verdict('TOOL_MISSING', 'crd-diag-overhead not built: %s' % exe)
+    for program in (exe, baseline if 'compiled-out' in arms else None):
+        stale = tree_current(program, subprocess_run) if program is not None else None
+        if stale:
+            return verdict('TOOL_MISSING', stale)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
     run_dir = Path(args.out) / stamp
     scratch = run_dir / 'scratch'
@@ -163,7 +247,7 @@ def record(args, runner=run_process, which=shutil.which, subprocess_run=subproce
     manifest = {'schema': SCHEMA, 'started': stamp, 'interval_ms': INTERVAL_MS, 'exe': file_identity(exe),
                 'baseline_exe': file_identity(baseline) if baseline else None, 'arms': arms,
                 'workloads': list(args.workloads.split(',')), 'repetitions': args.repetitions, 'trace': etl.name,
-                'runs': []}
+                'threads': THREADS, 'affinity': AFFINITY, 'source': checkout_identity(subprocess_run), 'runs': []}
     start = subprocess_run([wpr, '-start', 'CPU', '-filemode'], capture_output=True, text=True)
     if start.returncode != 0:
         message = (start.stderr or start.stdout or '').strip().replace('\n', ' ')
@@ -227,10 +311,12 @@ class DumperCounter:
     (`SampledProfile, TimeStamp, Process Name ( PID), ...`); with -stacktimeshifting a sample's `Stack` lines follow
     it (same TimeStamp and ThreadID), leaf first, the frame text last on the line (it may contain commas).
 
-    The leaf-most frame of the process's own image that is not `std::` decides a sample: system modules and the
-    standard library run on behalf of their caller (the bridge's clock read, the recorder's lock), and a diagnostic
-    frame further up (the CEIR bridge's `profiled_run` around the program, the jobs adapter around a job) does not
-    claim the workload code it calls."""
+    The leaf-most frame of the process's own image that does not run for its caller (RUNS_FOR_CALLER) decides a
+    sample: system modules, the standard library and the C runtime's formatting run on behalf of their caller (the
+    bridge's clock read, the recorder's lock, a payload's `snprintf`), and a diagnostic frame further up (the CEIR
+    bridge's `profiled_run` around the program, the jobs adapter around a job) does not claim the workload code it
+    calls. Per PID it also counts the deciding functions and, for a diagnostic sample, its call site: the next frame of
+    the image above it that is not diagnostic and does not run for its caller."""
 
     def __init__(self, processes):
         self.images = {pid: image.lower() for pid, image in processes.items()}  # a PID counts only under its image
@@ -239,7 +325,10 @@ class DumperCounter:
         self.samples = {pid: 0 for pid in self.pids}
         self.diagnostic = {pid: 0 for pid in self.pids}
         self.classes = {pid: {} for pid in self.pids}
-        self.current = None  # [pid, timestamp, tid, image prefix, decided, class of the deciding frame or None]
+        self.functions = {pid: {} for pid in self.pids}  # deciding function -> samples
+        self.callers = {pid: {} for pid in self.pids}  # a diagnostic sample's call site -> samples
+        # [pid, timestamp, tid, image prefix, decided, class of the deciding frame or None, call site pending]
+        self.current = None
         self.stack_lines = 0
 
     def _finish(self):
@@ -276,7 +365,7 @@ class DumperCounter:
             tid = fields[thread] if thread is not None and thread < len(fields) else ''
             # The sampled instruction's own function, which may carry commas: everything between its column and the
             # columns after it.
-            self.current = [pid, fields[1], tid, image, False, None]
+            self.current = [pid, fields[1], tid, image, False, None, False]
             first = column(header, 'Image!Function')
             if first is not None:
                 tail = len(header) - first - 1
@@ -301,10 +390,21 @@ class DumperCounter:
 
     def _frame(self, frame):
         image = self.current[3]
-        if self.current[4] or not frame.startswith(image) or frame[len(image):].startswith('std::'):
+        if not frame.startswith(image):
             return
-        self.current[4] = True
-        self.current[5] = frame_class(frame)
+        name = INLINEES.sub('', frame)
+        if RUNS_FOR_CALLER.match(name[len(image):]):
+            return
+        pid = self.current[0]
+        if not self.current[4]:
+            self.current[4] = True
+            self.current[5] = frame_class(name)
+            self.current[6] = self.current[5] is not None
+            self.functions[pid][name] = self.functions[pid].get(name, 0) + 1
+            return
+        if self.current[6] and frame_class(name) is None:
+            self.current[6] = False
+            self.callers[pid][name] = self.callers[pid].get(name, 0) + 1
 
     def close(self):
         self._finish()
@@ -340,9 +440,21 @@ def median(values):
     return ordered[middle] if len(ordered) % 2 else (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
+def tolerance(cost):
+    return AGREE_ABSOLUTE + AGREE_RELATIVE * abs(cost)
+
+
+def short_name(function):
+    """`image!crd::ns::Type::method` -> `Type::method` for a verdict line (the analysis keeps the full names)."""
+    name = function.split('!', 1)[-1]
+    parts = [p for p in re.split(r'::(?![^<]*>)', name) if p and not p.startswith('`anonymous namespace')]
+    return '::'.join(parts[-2:]) if len(parts) > 1 else name
+
+
 def judge(manifest, counter, interval_ms=INTERVAL_MS):
-    """Per (workload, arm): samples, CPU ms per frame, diagnostic share and classes; against off: the measured and the
-    external cost and a verdict. Returns (cells, verdict lines, worst verdict)."""
+    """Per (workload, arm): samples, CPU ms per frame, diagnostic share and classes; per row (an arm over off, off over
+    compiled-out): the measured and the external cost, where the added CPU sits and a verdict. Returns (cells, verdict
+    lines, worst verdict)."""
     cells = {}
     lines = []
     worst = 'AGREES'
@@ -356,7 +468,8 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
     for run in manifest['runs']:
         key = (run['workload'], run['arm'])
         cell = cells.setdefault(key, {'samples': 0, 'diagnostic': 0, 'classes': {}, 'frames': 0, 'medians': [],
-                                      'frame_fraction': [], 'unreadable': False, 'failed': False})
+                                      'frame_fraction': [], 'unreadable': False, 'failed': False, 'functions': {},
+                                      'callers': {}, 'cpu_timed': 0, 'cpu_units': [], 'cpu_missing': False})
         pid = run['pid']
         harness = run.get('harness')
         if run.get('exit_code') != 0 or harness is None or pids.count(pid) > 1:
@@ -367,16 +480,32 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
             cell['unreadable'] = True
         cell['samples'] += samples
         cell['diagnostic'] += counter.diagnostic.get(pid, 0)
-        for cls, count in counter.classes.get(pid, {}).items():
-            cell['classes'][cls] = cell['classes'].get(cls, 0) + count
+        for into, source in ((cell['classes'], counter.classes), (cell['functions'], counter.functions),
+                             (cell['callers'], counter.callers)):
+            for name, count in source.get(pid, {}).items():
+                into[name] = into.get(name, 0) + count
         cell['frames'] += harness['frames']
         cell['medians'].append(harness['median_ns'])
         cell['frame_fraction'].append(harness['frame_seconds'] / run['wall_seconds'] if run['wall_seconds'] else 0.0)
+        if harness.get('cpu_timed') is None:
+            cell['cpu_missing'] = True
+        else:
+            cell['cpu_timed'] += harness['cpu_timed']
+            cell['cpu_units'].append(harness.get('cpu_unit'))
     for (workload, arm), cell in sorted(cells.items()):
         cell['share'] = cell['diagnostic'] / cell['samples'] if cell['samples'] else None
         cell['cpu_ms_per_frame'] = cell['samples'] * interval_ms / cell['frames'] if cell['frames'] else None
         cell['median_ns'] = median(cell['medians'])
         cell['min_frame_fraction'] = min(cell['frame_fraction']) if cell['frame_fraction'] else None
+        cell['spread'] = max(cell['medians']) / min(cell['medians']) - 1.0 if cell['medians'] and min(
+            cell['medians']) > 0 else None
+        # threads busy per frame: the sampled CPU over the frame time (1 for a frame that runs on one thread)
+        cell['parallelism'] = (cell['cpu_ms_per_frame'] * 1e6 / cell['median_ns']
+                               if cell['cpu_ms_per_frame'] is not None and cell['median_ns'] else None)
+        units = set(cell['cpu_units'])
+        cell['harness_cpu_per_frame'] = (cell['cpu_timed'] / cell['frames'] if cell['frames'] and not
+                                         cell['cpu_missing'] and len(units) == 1 else None)
+        cell['harness_cpu_unit'] = units.pop() if len(units) == 1 else None
     for (workload, arm), cell in sorted(cells.items()):
         label = '%s %s' % (workload, arm)
         if cell['failed']:
@@ -394,27 +523,73 @@ def judge(manifest, counter, interval_ms=INTERVAL_MS):
             worse('UNRESOLVED')
             continue
         reference = cells.get((workload, 'off'))
-        if arm == 'off' or reference is None or reference.get('share') is None or not reference.get('median_ns'):
-            lines.append('SAMPLED: %s: %d samples, %.3f CPU ms per frame, diagnostic share %.1f%% %s'
-                         % (label, cell['samples'], cell['cpu_ms_per_frame'], 100.0 * cell['share'],
-                            json.dumps(cell['classes'], sort_keys=True)))
+        usable = (reference is not None and not reference['failed'] and not reference['unreadable']
+                  and reference['samples'] >= MIN_SAMPLES and reference.get('median_ns'))
+        if arm == 'off' or not usable:
+            lines.append('SAMPLED: %s: %d samples, %.3f CPU ms per frame, %.1f threads busy, diagnostic share %.1f%% %s'
+                         % (label, cell['samples'], cell['cpu_ms_per_frame'], cell['parallelism'] or 0.0,
+                            100.0 * cell['share'], json.dumps(cell['classes'], sort_keys=True)))
             continue
-        measured = cell['median_ns'] / reference['median_ns'] - 1.0
-        if arm == 'compiled-out':
-            # The reference is the faster arm here: off's cost over compiled-out, explained by off's own samples.
-            measured = reference['median_ns'] / cell['median_ns'] - 1.0
-            external = (1.0 - cell['share']) / (1.0 - reference['share']) - 1.0
+        cross = arm == 'compiled-out'
+        # base: the cheaper side of the row (off for an arm, compiled-out for off); other: the side whose cost is read.
+        base, other = (cell, reference) if cross else (reference, cell)
+        what = 'off over compiled-out' if cross else '%s over off' % arm
+        spread = [(name, c['spread']) for name, c in (('off', reference), (arm, cell))
+                  if c['spread'] is not None and c['spread'] > SPREAD_LIMIT]
+        if spread:
+            lines.append('UNRESOLVED: %s: %s: the processes of %s disagree, their median frames %s apart (need at most '
+                         '%.0f%%)' % (label, what, ' and '.join(n for n, _ in spread),
+                                      ' and '.join('%.1f%%' % (100.0 * s) for _, s in spread), 100.0 * SPREAD_LIMIT))
+            worse('UNRESOLVED')
+            continue
+        per_frame = base['samples'] / float(base['frames'])
+
+        def growth(function, base=base, other=other, per_frame=per_frame):
+            return (other['functions'].get(function, 0) / float(other['frames'])
+                    - base['functions'].get(function, 0) / float(base['frames'])) / per_frame
+
+        external = other['cpu_ms_per_frame'] / base['cpu_ms_per_frame'] - 1.0
+        if base['harness_cpu_per_frame'] and other['harness_cpu_per_frame'] and \
+                base['harness_cpu_unit'] == other['harness_cpu_unit']:
+            measured, measurand = other['harness_cpu_per_frame'] / base['harness_cpu_per_frame'] - 1.0, 'CPU'
+        elif max(base['parallelism'] or 0.0, other['parallelism'] or 0.0) <= SERIAL_LIMIT:
+            measured, measurand = other['median_ns'] / base['median_ns'] - 1.0, 'frame time'
         else:
-            external = (1.0 - reference['share']) / (1.0 - cell['share']) - 1.0 if cell['share'] < 1.0 else float('inf')
-        agree = abs(external - measured) <= AGREE_ABSOLUTE + AGREE_RELATIVE * abs(measured)
-        cell['measured_cost'] = measured
-        cell['external_cost'] = external
-        name = 'AGREES' if agree else 'DISAGREES'
+            measured, measurand = None, None
+        diagnostic = (other['diagnostic'] / float(other['frames']) - base['diagnostic'] / float(base['frames'])) \
+            / per_frame
+        sites = 0.0 if cross else sum(max(0.0, growth(f)) for f in other['callers'])
+        elsewhere = external - diagnostic - sites
+        moved = sorted((f for f in set(base['functions']) | set(other['functions'])
+                        if frame_class(f) is None and (cross or f not in other['callers'])),
+                       key=lambda f: (-abs(growth(f)), f))[:TOP_ELSEWHERE]
+        magnitude_ok = measured is None or abs(external - measured) <= tolerance(measured)
+        location_ok = abs(diagnostic) <= AGREE_ABSOLUTE if cross else \
+            abs(diagnostic + sites - external) <= tolerance(external)
+        cell.update({'measured_cost': measured, 'measurand': measurand, 'external_cost': external,
+                     'diagnostic_cost': diagnostic, 'call_site_cost': sites, 'elsewhere_cost': elsewhere,
+                     'elsewhere': {f: growth(f) for f in moved}, 'call_sites': sorted(other['callers'])})
+        name = 'AGREES' if magnitude_ok and location_ok else 'DISAGREES'
         worse(name)
-        what = 'off over compiled-out' if arm == 'compiled-out' else '%s over off' % arm
-        lines.append('%s: %s: %s measured %+.1f%%, external %+.1f%% (share %.1f%% against %.1f%%; %d samples) %s'
-                     % (name, label, what, 100.0 * measured, 100.0 * external, 100.0 * cell['share'],
-                        100.0 * reference['share'], cell['samples'], json.dumps(cell['classes'], sort_keys=True)))
+        if measured is None:
+            shown = 'measured %+.1f%% in frame time, not compared (%.1f threads busy per frame, no CPU measurand ' \
+                    'recorded)' % (100.0 * (other['median_ns'] / base['median_ns'] - 1.0),
+                                   max(base['parallelism'] or 0.0, other['parallelism'] or 0.0))
+        else:
+            shown = 'measured %+.1f%% (%s)' % (100.0 * measured, measurand)
+        places = ', '.join('%s %+.1f%%' % (short_name(f), 100.0 * growth(f)) for f in moved)
+        if cross:
+            where = ('off runs %s out-of-line diagnostic code (%+.1f%% of compiled-out\'s CPU, need within %.0f%%); '
+                     'the gap is the two binaries\' code (%s), judged by their instruction count'
+                     % ('no' if location_ok else 'its', 100.0 * diagnostic, 100.0 * AGREE_ABSOLUTE, places))
+        else:
+            where = ('the diagnostic code %+.1f%% %s, its call sites %+.1f%% (%s), elsewhere %+.1f%% (%s)%s'
+                     % (100.0 * diagnostic, json.dumps(cell['classes'], sort_keys=True), 100.0 * sites,
+                        ', '.join(short_name(f) for f in sorted(other['callers'], key=lambda f: -growth(f))[:2])
+                        or 'none', 100.0 * elsewhere, places,
+                        '' if location_ok else ': the cost is not where the diagnostic code runs'))
+        lines.append('%s: %s: %s %s, external %+.1f%% (sampled CPU per frame, %d against %d samples); %s'
+                     % (name, label, what, shown, 100.0 * external, other['samples'], base['samples'], where))
     return cells, lines, worst
 
 
@@ -440,7 +615,9 @@ def analyze_run(run_dir, xperf=None, lines_source=None):
     analysis = {'schema': SCHEMA, 'trace': str(etl), 'stack_lines': counter.stack_lines, 'verdict': worst,
                 'lines': lines, 'cells': {'%s %s' % key: cell for key, cell in sorted(cells.items())},
                 'classes': [name for name, _ in CLASSES], 'agree_absolute': AGREE_ABSOLUTE,
-                'agree_relative': AGREE_RELATIVE, 'min_samples': MIN_SAMPLES, 'frame_fraction': FRAME_FRACTION}
+                'agree_relative': AGREE_RELATIVE, 'min_samples': MIN_SAMPLES, 'frame_fraction': FRAME_FRACTION,
+                'spread_limit': SPREAD_LIMIT, 'serial_limit': SERIAL_LIMIT, 'source': manifest.get('source'),
+                'threads': manifest.get('threads'), 'affinity': manifest.get('affinity')}
     (run_dir / 'analysis.json').write_text(json.dumps(analysis, indent=2, default=str) + '\n', encoding='utf-8')
     for line in lines:
         print(line)

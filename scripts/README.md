@@ -110,9 +110,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   unresolved when the host's noise is wider than the claim); `render` writes the markdown of a board for docs/bench.
   `test-diag-overhead.py` covers every statistic and verdict with fake processes and is a CTest and repository CI
   step. `sample-overhead-wpr.py record` (an elevated shell)
-  samples the same workloads with WPR, every arm a process of one trace; `analyze <run dir>` (no elevation) counts each
-  process's CPU samples and the share in the diagnostic frames, and judges whether a mode's measured cost is
-  explained by them (`test-sample-overhead-wpr.py`, a CTest and repository CI step, mocks wpr and xperf).
+  samples the same workloads with WPR in the boards' shape, every arm a process of one trace, and refuses a harness
+  tree not current with the checkout; `analyze <run dir>` (no elevation) counts each process's CPU samples, the
+  diagnostic frames and their call sites, and judges whether the sampled CPU per frame agrees with the harness's and
+  sits in the diagnostic code (two binaries: whether off runs any) (`test-sample-overhead-wpr.py`, a CTest and
+  repository CI step, mocks wpr, xperf and the build tool).
 - Investigation runbooks ([document](../docs/design/diagnostic-runbooks.md)): `check-diag-runbooks.py --build <tree>`
   (the `crd-check-diag-runbooks` CTest) holds every entry to the tree: each command's script, flags, lane command,
   `ceridc` verb, diag command and grant, test executable and CMake name exist; each test regex matches a test of the
