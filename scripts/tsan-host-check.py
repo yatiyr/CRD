@@ -5,7 +5,7 @@ Contract: docs/design/test-instruments.md (host separation). On the development 
 jobs streaming case ("fiber keep: while tiny jobs stream ...") faults in about one run in ten with impossible values
 in -O0 getter chains, and so does a Cerid-free control of the same shape, also with no fiber at all, while the
 unsanitized control is clean (docs/sessions/2026-10-25-jobs-fiber-pool-contention.md). This driver repeats that
-exposure on another machine. It compiles the control (tests/support/diag/host-check/tsan_control.cpp) with
+exposure on another machine. It compiles the control (scripts/tsan_host_control.cpp) with
 -fsanitize=thread and without, then runs interleaved rounds of four arms: the jobs case from a configured
 linux-clang-tsan tree, the control on fibers, the control on plain threads and the unsanitized control. Every process
 is pinned to two CPUs beside one busy loop pinned to each of them. An event is a nonzero exit, a timeout, a missing
@@ -26,7 +26,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONTROL = ROOT / 'tests/support/diag/host-check/tsan_control.cpp'
+CONTROL = ROOT / 'scripts/tsan_host_control.cpp'
 SUPPRESSIONS = ROOT / 'tests/support/diag/tsan-suppressions.txt'
 CASE = 'fiber keep: while tiny jobs stream*'
 # The options of the linux-clang-tsan test preset (CMakePresets.json), so the jobs arm runs as its CTest does.

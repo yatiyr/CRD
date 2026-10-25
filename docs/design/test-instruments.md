@@ -258,7 +258,7 @@ Two more legs (JOBS-HARD.3, [session](../sessions/2026-10-25-jobs-fiber-pool-con
 to ThreadSanitizer. On this host the `linux-clang-tsan` run of the jobs streaming case ("fiber keep: while tiny jobs
 stream ...") faults about one run in ten with values no store wrote (a `{pid, uid}` word, instruction bytes, a null
 from a `unique_ptr` that held its array), and so does
-[a Cerid-free control](../../tests/support/diag/host-check/tsan_control.cpp) of the same shape: in its fiber mode,
+[a Cerid-free control](../../scripts/tsan_host_control.cpp) of the same shape: in its fiber mode,
 and in its plain mode, which runs no fiber at all; the same control unsanitized was clean. Each TSan leg configures
 `linux-clang-tsan`, builds `crd-jobs-tests` and runs [tsan-host-check.py](../../scripts/tsan-host-check.py):
 `tsan_rounds` rounds (150 by default, so the two legs run the jobs case 300 times) of four interleaved arms (the

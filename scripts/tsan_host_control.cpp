@@ -6,7 +6,7 @@
 // as the jobs pool does; mode "plain" calls it directly, so no fiber code runs at all. A correct machine never fails
 // either mode: on the development host both fault, the plain mode without any fiber, so a fault there is the host's.
 // scripts/tsan-host-check.py builds and runs it:
-//     clang++ -std=c++20 -O0 -g -fsanitize=thread -fno-omit-frame-pointer -pthread tsan_control.cpp
+//     clang++ -std=c++20 -O0 -g -fsanitize=thread -fno-omit-frame-pointer -pthread tsan_host_control.cpp
 // Without -fsanitize=thread only the plain mode exists (the unsanitized arm).
 #if defined(__has_feature)
 #if __has_feature(thread_sanitizer)
