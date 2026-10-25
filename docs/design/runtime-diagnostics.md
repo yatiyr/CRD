@@ -2107,6 +2107,10 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10b-seeded-detector-f
 - The committed suppression files may name only third-party shared libraries; the verdict tests refuse any other
   entry. CI has no retry: no `--repeat` or `--rerun-failed` in [ci.yml](../../.github/workflows/ci.yml) or the CTest
   wrappers, and the registered-failure gate admits only reproduced third-party defects.
+- A seed's own suppression entry must name a file under `tests/support/diag/specimens` or a symbol in one of its
+  sources, or the registry is stale (2026-10-25, [session](../sessions/2026-10-25-diag-final-ci-repairs.md)). Before,
+  renaming the leak specimen's site left `leak:leak_now` suppressing nothing, and the LSan seed survived on
+  linux-gcc-asan with the registry check green.
 - Not yet measured (2026-10-11, superseded by the next block for coverage and the register): branch, region,
   error-path and state-transition coverage of the DIAG scope with its denominator, the register of coverage
   exclusions and nonreproduced failures, and the seeds on hosted lanes.

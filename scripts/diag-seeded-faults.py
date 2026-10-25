@@ -202,10 +202,47 @@ def stale_edit(seed, root):
     for name, spec in seed.get("files", {}).items():
         if spec.get("from") and not (Path(root) / spec["from"]).is_file():
             return "file %s: %s does not exist" % (name, spec["from"])
+        if "suppressions" in name:
+            missing = unknown_suppression_targets(spec.get("text", ""), root)
+            if missing:
+                return "file %s: %s names no specimen source or symbol under %s" % (
+                    name, ", ".join(missing), SPECIMEN_DIR.as_posix())
     return None
 
 
 SUPPRESSION_ENTRY = re.compile(r"^[a-z_]+:(lib[A-Za-z0-9_+.-]+\.so(\.[0-9]+)*)$")
+SPECIMEN_DIR = Path("tests") / "support" / "diag" / "specimens"
+
+
+def unknown_suppression_targets(text, root):
+    """Entries a seed adds to a suppression file whose target is not in the specimen sources.
+
+    A seed suppresses one of Cerid's own specimens to prove the suite notices. An entry naming a specimen file or a
+    function that no longer exists (a renamed site) suppresses nothing, so the seeded run would equal the control and
+    the seed would survive for a reason that has nothing to do with the suite. Third-party library entries are not
+    seed targets and are left to suppression_violations.
+    """
+    specimens = Path(root) / SPECIMEN_DIR
+    sources = {}
+    if specimens.is_dir():
+        for path in sorted(specimens.iterdir()):
+            if path.is_file():
+                sources[path.name] = path.read_bytes().decode("utf-8", errors="replace")
+    missing = []
+    for line in text.splitlines():
+        entry = line.strip()
+        if not entry or entry.startswith("#") or SUPPRESSION_ENTRY.match(entry):
+            continue
+        kind, _, target = entry.partition(":")
+        if not kind or not target:
+            missing.append(entry)
+            continue
+        if target in sources:
+            continue
+        word = re.compile(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(target))
+        if not any(word.search(source) for source in sources.values()):
+            missing.append(entry)
+    return missing
 
 
 def suppression_violations(text):

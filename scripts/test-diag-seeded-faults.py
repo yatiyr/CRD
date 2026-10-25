@@ -213,6 +213,32 @@ class RegistryTests(unittest.TestCase):
         finally:
             tree.close()
 
+    def test_a_seeded_suppression_must_name_a_specimen_that_exists(self):
+        # A renamed site (leak_now became crd_diag_leak_site) left a seed suppressing nothing, so the seeded run
+        # equalled the control and the seed survived; the registry check names it stale instead.
+        tree = Tree()
+        try:
+            specimens = tree.root / mod.SPECIMEN_DIR
+            specimens.mkdir(parents=True)
+            (specimens / "leak_specimen.cpp").write_text("static void crd_diag_leak_site()\n{\n}\n", encoding="utf-8")
+
+            def suppressing(text, name="lsan-suppressions.txt"):
+                return seed(edits=[], env={"LSAN_OPTIONS": "suppressions={trace}/%s" % name},
+                            files={name: {"text": text}})
+
+            for text in ("leak:crd_diag_leak_site\n", "race:leak_specimen.cpp\n", "# note\n\nrace:libvulkan_lvp.so\n"):
+                self.assertIsNone(mod.stale_edit(suppressing(text), tree.root), text)
+            for text, entry in (("leak:leak_now\n", "leak:leak_now"), ("race:gone_specimen.cpp\n", "race:gone"),
+                                ("leak:crd_diag_leak\n", "leak:crd_diag_leak"), ("leak_now\n", "leak_now")):
+                problem = mod.stale_edit(suppressing(text), tree.root)
+                self.assertIsNotNone(problem, text)
+                self.assertIn(entry, problem)
+                self.assertIn("names no specimen", problem)
+            self.assertIsNone(mod.stale_edit(suppressing("leak:leak_now\n", "notes.txt"), tree.root),
+                              "only suppression files are held to the specimens")
+        finally:
+            tree.close()
+
 
 class SuppressionPolicyTests(unittest.TestCase):
     """The committed sanitizer suppressions may name only third-party shared libraries (test-instruments.md)."""

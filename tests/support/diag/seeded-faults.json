@@ -283,7 +283,7 @@
       },
       "files": {
         "lsan-suppressions.txt": {
-          "text": "leak:leak_now\n"
+          "text": "leak:crd_diag_leak_site\n"
         }
       },
       "env": {
