@@ -145,6 +145,61 @@ Three fiber stack sizes matching the Naughty Dog reference and industry practice
 Stacks are VirtualAlloc'd with a guard page below the stack to catch overflows. Fiber pool
 acquisition fails loudly (assert) rather than silently returning nullptr.
 
+### 8. A thread keeps its completed job's fiber (2026-10-25, JOBS-HARD.3)
+
+Each tier's free list is a Treiber stack whose 64-bit head packs the fiber index with a pop generation (ABA-safe
+without a double-width compare-exchange). Every job used to pop a fiber from it and push the fiber back, so with
+eight workers on 16 logical processors the overhead harness's tiny-job workload spent 53% of its CPU in
+`FiberPool::acquire`, 37% on the head's `lock cmpxchg`
+([sampling board](../bench/2026-10-25-diag-11b-external-sampling.md)).
+
+A worker thread (and the main thread while it waits or pumps) now keeps the fiber of the job it completed. The
+fiber stays acquired from the pool; its stack is rebuilt and it runs the thread's next new job of the same tier. The
+thread returns it before it dispatches a resume (the parked fiber runs, not a fresh one), before a job of another
+tier, just before it blocks waiting for work (the semaphore's pre-sleep step, a `SleepHook`; a worker that finds a
+token instead loops and keeps it, because work is coming), when it leaves its dispatch loop, when `wait()`,
+`pump_main_thread_once()` or `pump_main_thread_until_idle()` returns, and `WorkerPool::shutdown()` drains every slot
+before the pool's own shutdown. Returning it on every empty `try_pop` instead (the first version, 1a12466c) left one
+free-list acquisition for every 3.6 jobs at sixteen threads, because a worker that found the queues empty usually
+found a token as well. A run of jobs that do not park then reaches the free list once when it starts and once when it ends,
+instead of twice per job. The slot is a plain pointer that only its thread touches, so no hand-off between threads
+exists. A fiber parked on one thread and completed on another is kept by the thread that completed it.
+
+**Why this and not a cache of idle fibers in front of the free list.** A per-thread cache of idle fibers, filled
+and drained in batches, makes acquire and release local too, but then a fiber in a cache is not in use. The pool's
+in-use count would be the sum of per-thread counts. Its high water would be the peak of that sum, and that peak
+cannot be observed without a global update on every acquire. `crd::BudgetReading` promises a high water that the
+resource actually held and never undercounts: `pressure_report` proves a window Relaxed from it. Under that promise
+an idle cache keeps one contended atomic update per job, or it gives up the exact high water. A kept fiber is
+counted as acquired, so the existing counters stay exact, and no other job can take it.
+
+**Why not let a starving thread take another thread's kept fiber.** Kept fibers are not stolen. With stealing, a
+reading could show every fiber in use while a request would still be served, so Full and Saturated would overstate
+the pool. Stealing is not needed for safety. A request is refused only when every fiber is running, parked or kept
+by another thread, and each other thread holds at most one fiber at any moment (the one it runs or the one it
+keeps between jobs). So a refusal needs `parked + threads − 1` fibers held, the same condition as before. The
+sizing rule is unchanged: a tier is safe when its count is at least the fibers that can be parked at once plus
+the threads. A tier sized below that bound could be refused before too, whenever every thread ran at once. The
+high water can now read up to one fiber per thread higher on the same work: those fibers really were held.
+
+The free list itself is unchanged: its head, the in-use count and the peak share one cache line, written by the same
+thread in the same call (one line transfer, not two), and each tier has its own line. `FiberPool::acquisitions()`
+counts the fibers taken off the list.
+
+### 9. One wake per batch of submitted jobs (2026-10-25, JOBS-HARD.3)
+
+A token on the worker semaphore is a wake hint, and only an idle worker consumes one. `push()` posted one token and
+one wake per job, so a `run()` of 2048 tiny jobs left up to 2048 tokens for idle workers to spin through (an empty scan
+of every queue and peer deque each), and the producer paid a wake per job (on Linux a `FUTEX_WAKE` syscall even with no
+sleeper). The per-job pool operations had paced the consumers; once the kept fiber removed them, that spin made
+linux-gcc-shipping's off mode 25% slower at four threads. `jobs::run` of a span now pushes its jobs without a wake
+each (`Scheduler::push_unwoken`) and posts at most one token per thread with one wake (`Scheduler::wake_for`), after
+its first injected job, so sleeping workers start while the rest is pushed, and after its last, for a worker that ran
+dry and slept in between. A woken worker runs jobs until the queues are empty, so a token per thread wakes every
+worker a batch can use. Pinned jobs keep their own broadcast (that token is for one thread), single pushes are
+unchanged, and the opt-in targeted wake path (ADR-0094) wakes up to the same number of idle workers. The
+`Semaphore` protocol itself is unchanged.
+
 ## Consequences
 
 - `crd-jobs` depends only on `crd-core` and `crd-containers`. No circular deps.

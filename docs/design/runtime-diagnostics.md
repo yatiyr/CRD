@@ -2391,6 +2391,12 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   (the per-thread capacity, the fullest lane, the highest lane peak, all lanes' refusals). Each pool raises its peak
   just after the count it bounds, so a reading reports the high water as at least the count it read (2026-10-24: a
   fiber reading showed 9 in use with a high water of 8); the lifetime ledger's snapshot does the same for `live`.
+  Since 2026-10-25 ([JOBS-HARD.3](../ROADMAP.md#slice-jobs-hard.3), [ADR-0033](../decisions/0033-jobs-implementation-architecture.md)
+  decision 8) a tier's acquired count includes the fiber a thread keeps between two of its jobs (at most one a
+  thread, returned before the thread blocks waiting for work, resumes a parked fiber or runs a job of another tier).
+  Nothing else can take it, so the count and the high water stay exact readings of the fibers held. The high water
+  can read up to one a thread higher than the same work read before, and a refusal still means every fiber was
+  running, parked or kept.
 - Defects found and fixed. A job pushed into a full injection queue, or into a full local deque, was guarded only by
   `CRD_ASSERT_MSG`: with asserts compiled out the job was dropped, its counter never reached zero and its waiter hung
   (resume jobs go through the High queue, so a dropped resume strands a parked fiber). And each thread's pinned work
