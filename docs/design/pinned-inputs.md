@@ -17,7 +17,7 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 | Section | Entries | Fields |
 |---|---|---|
 | `packages` | the nine CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, and the gated Eigen and OpenBLAS) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
-| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
+| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
 | `actions` | the eight workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
 | `unpinned` | the apt packages of the Linux image | recorded by `dpkg-query` into every Linux lane's census; the MSVC toolset of the Windows image is recorded by the evidence bundle |
@@ -109,10 +109,12 @@ printed. zstd's CMake builds its library from a glob, so the root `CMakeLists.tx
 `lib/compress` for their same-directory includes; the objects are the upstream objects (identical code; with asserts
 compiled, only the asserts' line numbers move) ([session](../sessions/2026-10-17-diag-11b-zstd-configure-and-pause-landing.md)).
 
-zstd 1.5.5's own CMake also drew configure warnings on every lane. Its `cmake_minimum_required(VERSION 2.8.12)` is
-raised to 3.10 through `CMAKE_POLICY_VERSION_MINIMUM` (zstd sets `cmake_policy(VERSION 3.13.0)` next, so its policies
-are unchanged); CMake before 4.0 has no such variable and still prints that deprecation, which the zstd 1.5.7 pin ends.
-Its unconditional `project(... ASM)` meets CMP0194 under MSVC, answered `OLD` for zstd's directory only (the
+zstd's own CMake drew configure warnings on every lane. 1.5.5 declared `cmake_minimum_required(VERSION 2.8.12)`,
+raised to 3.10 through `CMAKE_POLICY_VERSION_MINIMUM` on CMake 4, still deprecated before 4.0 (the hosted Linux image's
+3.31.6); the 1.5.7 pin (2026-10-25) declares 3.10 itself, so that setting is gone and no CMake deprecates zstd's
+configure
+([session](../sessions/2026-10-25-diag-11b-zstd-and-wsl-tidy.md)). Its unconditional `project(... ASM)`, still in
+1.5.7, meets CMP0194 under MSVC, answered `OLD` for zstd's directory only (the
 behaviour of every earlier configure; zstd assembles nothing under MSVC), under both the `CMP0194` name and the
 `CMP194` spelling CMake 4.1 to 4.3 read the default under.
 

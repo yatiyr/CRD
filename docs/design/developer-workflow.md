@@ -71,8 +71,9 @@ case carries no owner label a CTest filter could select by (`cerid.discovery.tar
 placeholder of an unbuilt executable). From Windows the command is `wsl.exe --cd <checkout> -e bash
 scripts/wsl-lane.sh ...`: no POSIX path crosses a Windows shell (Git Bash rewrites `/mnt/d/...`) and nothing needs nested
 quoting. The check keeps its one or two compile workers and refreshes a lane tree's missing File API reply itself. On
-a host without clang-tidy 20 (the WSL reference host) a lane check ends incomplete after its build, tests and guards
-pass: changed C++ stays ungated there, never passed.
+a host without clang-tidy 20 a lane check ends incomplete after its build, tests and guards pass: changed C++ stays
+ungated there, never passed. A Linux host installs the pinned one once with `python3 scripts/install-clang-tidy.py`
+(below); the WSL reference host has it since 2026-10-25, and its lane checks now end passed.
 
 | Risk gate | Local route | Hosted lanes |
 |---|---|---|
@@ -88,8 +89,12 @@ then needs a `--target` subset, and CI qualifies the rest.
 
 Changed C++ is analysed by one portable helper, `scripts/tidy-files.py` (`cerid_dev/tidy.py`; `tidy-files.ps1` wraps
 it on Windows), on every host. clang-tidy must report LLVM 20: an explicit `--clang-tidy`/`CRD_CLANG_TIDY` is the
-only candidate, otherwise the pinned Windows install, then `clang-tidy-20` and `clang-tidy` on PATH; `doctor`
-reports the resolution. The configured build's `compile_commands.json` supplies every flag; only precompiled-header
+only candidate, otherwise the host's pinned install, then `clang-tidy-20` and `clang-tidy` on PATH; `doctor`
+reports the resolution. The pinned install is LLVM 20.1.8 at `C:/LLVM-20.1.8` on Windows (the hosted lanes' version)
+and, on Linux, `$HOME/.cerid/tools/clang-tidy/bin/clang-tidy`: PyPI's clang-tidy 20.1.0 wheel (its only LLVM 20
+release, registry entry `tools/clang-tidy-linux`), which `scripts/install-clang-tidy.py` verifies (wheel and binary
+digests, header count, reported version) and lays out as `bin/` and `lib/clang/20/include` so the binary finds its
+builtin headers. The gate checks the major only, so 20.1.0 there and 20.1.8 on Windows both qualify. The configured build's `compile_commands.json` supplies every flag; only precompiled-header
 inputs are stripped (MSVC `/Yu`, `/Fp`, `/FI cmake_pch`; GCC `-include cmake_pch.hxx`, `-Winvalid-pch`; Clang's cc1
 spelling `-Xclang -include-pch -Xclang <pch>` and `-Xclang -include -Xclang cmake_pch.hxx`). The MSVC
 flags clang-tidy drops are restated through `--extra-arg` (`/EHsc` and the cache's `CRD_SIMD_MSVC_ARCH_FLAG`, never a
