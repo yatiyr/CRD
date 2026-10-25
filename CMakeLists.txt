@@ -722,16 +722,15 @@ if("glfw" IN_LIST CRD_SELECTED_PACKAGES)
 endif()
 
 if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
-    # zstd 1.5.5 declares cmake_minimum_required(VERSION 2.8.12), which CMake 4 rejects below 3.5 and deprecates below
-    # 3.10 (a "Compatibility with CMake < 3.10" warning on every configure). CMAKE_POLICY_VERSION_MINIMUM raises that
-    # declaration to 3.10; zstd's next line sets cmake_policy(VERSION 3.13.0) itself, so no policy zstd runs under
-    # changes (zstd 1.5.7 declares 3.10).
-    set(CMAKE_POLICY_VERSION_MINIMUM "3.10")
-    # zstd's project() enables ASM on every platform, but under MSVC it assembles nothing (its CMake defines
-    # ZSTD_DISABLE_ASM and globs no .S file there). CMake 4.1+ asks through CMP0194 whether cl.exe may stand in as that
-    # unused assembler, warning on every MSVC configure while unset. OLD is the answer every configure before 4.1 gave:
-    # NEW drops cl.exe and lets enable_language(ASM) pick whatever assembler PATH offers, or fail. zstd's dev branch
-    # enables ASM only where it assembles; a pin that does so retires this setting. CMake 4.1 to 4.3 register the
+    # zstd 1.5.7 declares cmake_minimum_required(VERSION 3.10) and then cmake_policy(VERSION 3.13.0), so no CMake
+    # deprecates its configure; 1.5.5's 2.8.12 needed CMAKE_POLICY_VERSION_MINIMUM on CMake 4 and drew the deprecation
+    # on CMake before 4.0 (until 2026-10-25).
+    # zstd 1.5.7's project(zstd LANGUAGES C ASM CXX) and project(libzstd C ASM) enable ASM on every platform, but under
+    # MSVC it assembles nothing (its lib CMake defines ZSTD_DISABLE_ASM there and adds huf_decompress_amd64.S only for
+    # other compilers). CMake 4.1+ asks through CMP0194 whether cl.exe may stand in as that unused assembler, warning on
+    # every MSVC configure while unset. OLD is the answer every configure before 4.1 gave: NEW drops cl.exe and lets
+    # enable_language(ASM) pick whatever assembler PATH offers, or fail. zstd's dev branch (read 2026-10-17) enables
+    # ASM only where it assembles; a pin that does so retires this setting. CMake 4.1 to 4.3 register the
     # policy as `CMP194` (Source/cmPolicies.h; their warning prints that name) and read its default under that
     # spelling; 4.4 corrected it to CMP0194. Both names are set so every CMake that knows the policy reads OLD.
     set(CMAKE_POLICY_DEFAULT_CMP0194 OLD)
@@ -744,11 +743,11 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
             "ZSTD_BUILD_SHARED OFF"
             "ZSTD_BUILD_STATIC ON"
             # Cerid decodes only frames its own cooker wrote with this zstd (`crdr.cpp` and the resources fuzz target;
-            # no tracked file holds a v0.1-v0.7 frame magic), so the legacy v0.1-v0.7 decoders are unused surface.
-            # Without IPO (below) GCC compiles them optimized and reports -Wmaybe-uninitialized in zstd_v01.c.
+            # no tracked file holds a v0.1-v0.7 frame magic), so the legacy v0.1-v0.7 decoders are unused surface
+            # (1.5.7 still builds them by default, ZSTD_LEGACY_LEVEL 5). Without IPO (below) GCC compiles them
+            # optimized and reports -Wmaybe-uninitialized in zstd_v01.c.
             "ZSTD_LEGACY_SUPPORT OFF"
     )
-    unset(CMAKE_POLICY_VERSION_MINIMUM)
     unset(CMAKE_POLICY_DEFAULT_CMP0194)
     unset(CMAKE_POLICY_DEFAULT_CMP194)
     if(NOT TARGET libzstd_static)
@@ -769,15 +768,16 @@ if("zstd" IN_LIST CRD_SELECTED_PACKAGES)
     # zstd's CMake target is `libzstd_static` (`zstd_static` is only its output base name), so a guard naming
     # `zstd_static` never applied: until 2026-10-17 zstd's objects were /GL- and -flto-compiled on every IPO lane, and
     # GCC's lto-wrapper warned on each link that it dropped zstd's `-Wa,--noexecstack`. Without IPO zstd's objects are
-    # ordinary objects, assembled with their own options.
+    # ordinary objects, assembled with their own options (1.5.7 still adds -Wa,--noexecstack to zstd's C flags).
     set_target_properties(libzstd_static PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 
     # Two zstd sources compile from build-owned patched copies (cmake/patches/zstd-*-unused.cmake). zstd marks its
-    # MEM_STATIC helpers __attribute__((unused)) only under __GNUC__, which clang-cl does not define, so HUF_isSorted
-    # and ZSTD_isAligned, used only inside assert(), drew -Wunused-function on every win-clang-cl-shipping build
-    # (1.5.5, 1.5.7 and the dev branch alike). Each patch gives its helper the attribute under clang without __GNUC__
-    # only; every other compiler preprocesses the copy to the upstream text. The copies live outside zstd's tree, so
-    # they also take zstd's lib/compress for their same-directory includes.
+    # MEM_STATIC helpers unused only under __GNUC__ (1.5.7: UNUSED_ATTR in lib/common/compiler.h, also under IAR; 1.5.5
+    # had it in mem.h), which clang-cl does not define, so HUF_isSorted and ZSTD_isAligned, used only inside assert(),
+    # draw -Wunused-function on every win-clang-cl-shipping build (1.5.5 and 1.5.7 built, the dev branch read). Each
+    # patch gives its helper the attribute under clang without __GNUC__ only; every other compiler preprocesses the
+    # copy to the upstream text. The copies live outside zstd's tree, so they also take zstd's lib/compress for their
+    # same-directory and `../common/` includes.
     crd_patched_copy(_crd_zstd_huf zstd lib/compress/huf_compress.c zstd-huf-is-sorted-unused)
     crd_patched_copy(_crd_zstd_lazy zstd lib/compress/zstd_lazy.c zstd-lazy-is-aligned-unused)
     get_target_property(_crd_zstd_sources libzstd_static SOURCES)

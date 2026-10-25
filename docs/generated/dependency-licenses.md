@@ -17,7 +17,7 @@
 |---|---|---|---|---|
 | Catch2 | 3.7.1 | BSL-1.0 | catchorg/Catch2 @ `v3.7.1` (fa43b77429ba) | `Catch2-fa43b774.tar.gz` |
 | glfw | 3.4 | Zlib | glfw/glfw @ `3.4` (7b6aead9fb88) | `glfw-7b6aead9.tar.gz` |
-| zstd | 1.5.5 | BSD-3-Clause OR GPL-2.0-only | facebook/zstd @ `v1.5.5` (63779c798237) | `zstd-63779c79.tar.gz` |
+| zstd | 1.5.7 | BSD-3-Clause OR GPL-2.0-only | facebook/zstd @ `v1.5.7` (f8745da6ff1a) | `zstd-f8745da6.tar.gz` |
 | stb | 2c980bb | MIT OR Unlicense | nothings/stb @ `2c980bb59875b0d32144a71867fbdebb2f77cd20` (2c980bb59875) | `stb-2c980bb5.tar.gz` |
 | cgltf | 1.14 | MIT | jkuhlmann/cgltf @ `v1.14` (52c23814dbb6) | `cgltf-52c23814.tar.gz` |
 | MikkTSpace | 3e895b4 | Zlib | mmikk/MikkTSpace @ `3e895b49d05ea07e4c2133156cfa94369e19e409` (3e895b49d05e) | `MikkTSpace-3e895b49.tar.gz` |
