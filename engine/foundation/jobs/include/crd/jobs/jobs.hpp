@@ -160,6 +160,13 @@ private:
 // the tick is a single relaxed atomic increment on the running fiber. A no-op when called off any job fiber.
 void note_progress() noexcept;
 
+// Outside readers across a restart. is_quiescent() and every *_snapshot() below may be called from any thread at
+// any time, also while another thread runs init() or shutdown(): a reader pins the pool for the length of its read,
+// shutdown() closes the pool to new readers and waits for the pinned ones before it frees anything, and init() opens
+// it once the pool is up. A closed pool reads as one before init(): unread readings, empty snapshots, a vacuously
+// complete worker snapshot, is_quiescent() true. A reader never sees a half-built or half-freed pool; it may see the
+// pool before or after a restart.
+//
 // True when no job is in flight: the counter pool is uninitialised, or every counter is free.
 // set_observer() requires it — the observer may change only while quiescent, so each job begins and
 // ends under the same observer. A detector, not a lock: a concurrent run() makes the result stale at

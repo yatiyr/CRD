@@ -2396,7 +2396,12 @@ Settled (2026-10-11, [session](../sessions/2026-10-11-diag-10c-queue-pressure.md
   thread, returned before the thread blocks waiting for work, resumes a parked fiber or runs a job of another tier).
   Nothing else can take it, so the count and the high water stay exact readings of the fibers held. The high water
   can read up to one a thread higher than the same work read before, and a refusal still means every fiber was
-  running, parked or kept.
+  running, parked or kept. Also since 2026-10-25 (0e1433ef) an outside reader may sample across a restart: every
+  snapshot pins the pool for the length of its read, `shutdown()` closes the pool to new readers and waits for the
+  pinned ones before it frees anything, and `init()` opens it once the pool is up, so a closed pool reads as one
+  before `init()` (unread, empty). The guard before was the pool's own initialised flag, which `shutdown()` cleared
+  only after freeing the storage a snapshot walks; `test_diag_snapshot_restart.cpp` samples every snapshot through
+  100 init and shutdown cycles and crashed on every run with the old guard (four of four on win-asan and win-debug).
 - Defects found and fixed. A job pushed into a full injection queue, or into a full local deque, was guarded only by
   `CRD_ASSERT_MSG`: with asserts compiled out the job was dropped, its counter never reached zero and its waiter hung
   (resume jobs go through the High queue, so a dropped resume strands a parked fiber). And each thread's pinned work
