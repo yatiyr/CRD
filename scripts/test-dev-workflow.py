@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -19,7 +20,8 @@ from unittest.mock import patch
 from cerid_dev.selection import (CHECK_TARGET_LIMIT, CI_RISK, DEVICE_RISK, HEADER_RISK, SANITIZER_RISK, SelectionError,
                                  changes_from_git, content_identity, load_model, parse_changes, risk_routes,
                                  select_targets, select_tests)
-from cerid_dev.environment import (build_environment, cache_values, compiler_metadata, env_value, native_profile_issues,
+from cerid_dev.environment import (PINNED_LINUX_TIDY, PINNED_WINDOWS_TIDY, build_environment, cache_values,
+                                  compiler_metadata, env_value, native_profile_issues, pinned_clang_tidy,
                                   resolve_clang_tidy, runtime_file, synchronization_state)
 from cerid_dev.process import ProcessError, run_command
 from cerid_dev.evidence import EvidenceError, inspect as inspect_evidence, seal
@@ -29,6 +31,9 @@ from cerid_dev.tidy import (analyse, classify, compiler_family, extra_arguments,
 from dev import make_plan, parser as dev_parser
 
 ROOT = Path(__file__).resolve().parents[1]
+_tidy_installer_spec = importlib.util.spec_from_file_location('install_clang_tidy', ROOT / 'scripts/install-clang-tidy.py')
+install_clang_tidy = importlib.util.module_from_spec(_tidy_installer_spec)
+_tidy_installer_spec.loader.exec_module(install_clang_tidy)
 
 # A clang-tidy stand-in: reports the configured LLVM version, logs every argv, and answers each analysed file with
 # canned output and exit code, so the gate's classification and refusal paths run without a compiler.
@@ -1233,7 +1238,9 @@ class TidyTests(unittest.TestCase):
         # Without an explicit tool: the pinned install, then PATH names; nothing found is unavailable with reasons.
         empty = Path(self.temp.name) / 'empty'
         empty.mkdir()
-        bare = {key: value for key, value in os.environ.items() if key.upper() not in ('PATH', 'CRD_CLANG_TIDY')}
+        # No HOME either: a host with the pinned Linux install below its home (install-clang-tidy.py) would find it.
+        bare = {key: value for key, value in os.environ.items()
+                if key.upper() not in ('PATH', 'CRD_CLANG_TIDY', 'HOME')}
         with patch('cerid_dev.environment.PINNED_WINDOWS_TIDY', str(empty / 'absent-clang-tidy.exe')):
             resolution = resolve_clang_tidy(dict(bare, PATH=str(empty)))
             self.assertIsNone(resolution['path'])
@@ -1243,6 +1250,35 @@ class TidyTests(unittest.TestCase):
         with self.assertRaises(SelectionError):
             analyse(self.root, Path(self.temp.name) / 'unconfigured', ['engine/a/src/a.cpp'],
                     dict(os.environ, CRD_TIDY_STUB=str(config20)), tool=str(stub20))
+
+    def test_linux_hosts_find_the_pinned_install_under_home_without_path(self):
+        home = Path(self.temp.name) / 'home'
+        pinned = home / PINNED_LINUX_TIDY
+        self.assertEqual(Path(pinned_clang_tidy({'HOME': str(home)}, windows=False)), pinned)
+        self.assertIsNone(pinned_clang_tidy({}, windows=False), 'no HOME, no pinned candidate')
+        self.assertEqual(pinned_clang_tidy({'HOME': str(home)}, windows=True), PINNED_WINDOWS_TIDY)
+        # The installer's default install is the path the gate looks at.
+        self.assertEqual(install_clang_tidy.binary(install_clang_tidy.default_destination()),
+                         Path.home() / PINNED_LINUX_TIDY)
+        if os.name == 'nt':
+            return  # the stub below is a POSIX executable; the Windows branch is covered by the pinned 20.1.8 path
+        stub, config = stub_clang_tidy(pinned.parent, '20.1.0')
+        self.assertEqual(stub, pinned)
+        empty = Path(self.temp.name) / 'empty-path'
+        empty.mkdir()
+        bare = {key: value for key, value in os.environ.items()
+                if key.upper() not in ('PATH', 'CRD_CLANG_TIDY', 'HOME')}
+        environment = dict(bare, HOME=str(home), PATH=str(empty), CRD_TIDY_STUB=str(config))
+        resolution = resolve_clang_tidy(environment)
+        self.assertEqual((resolution['path'], resolution['version'], resolution['candidate'], resolution['rejected']),
+                         (str(pinned.resolve()), '20.1.0', str(pinned), []))
+        # The Windows branch never looks below HOME.
+        with patch('cerid_dev.environment.PINNED_WINDOWS_TIDY', str(empty / 'absent-clang-tidy.exe')):
+            self.assertIsNone(resolve_clang_tidy(environment, windows=True)['path'])
+        # An explicit tool stays the only candidate even with the pinned install present.
+        resolution = resolve_clang_tidy(dict(environment, CRD_CLANG_TIDY=str(empty / 'absent')))
+        self.assertIsNone(resolution['path'])
+        self.assertIn('no candidate', resolution['reason'])
 
 
 def integration(generator):

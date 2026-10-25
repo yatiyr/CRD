@@ -53,6 +53,9 @@ mold_spec.loader.exec_module(install_mold)
 cba_spec = importlib.util.spec_from_file_location('install_cba', ROOT / 'scripts/install-clang-build-analyzer.py')
 install_cba = importlib.util.module_from_spec(cba_spec)
 cba_spec.loader.exec_module(install_cba)
+tidy_spec = importlib.util.spec_from_file_location('install_tidy', ROOT / 'scripts/install-clang-tidy.py')
+install_tidy = importlib.util.module_from_spec(tidy_spec)
+tidy_spec.loader.exec_module(install_tidy)
 profile_spec = importlib.util.spec_from_file_location('build_profile', ROOT / 'scripts/build-profile.py')
 build_profile = importlib.util.module_from_spec(profile_spec)
 profile_spec.loader.exec_module(build_profile)
@@ -1527,6 +1530,80 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('/v%s/' % pin['version'], pin['url'])
         self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('scripts/install-mold.py', check_pins.HELPERS)
+
+    def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = b'#!/bin/sh\necho "LLVM (http://llvm.org/):"; echo "  LLVM version 20.1.0"\n'
+            headers = {'stddef.h': b'/* stddef */', 'module.modulemap': b'module _Builtin {}',
+                       'cuda_wrappers/new': b'//'}
+            include = 'clang_tidy/data/lib/clang/20/include/'
+            wheel = root / 'clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.whl'
+            with zipfile.ZipFile(wheel, 'w') as package:
+                package.writestr('clang_tidy/__init__.py', b'')
+                package.writestr('clang_tidy/data/bin/clang-tidy', binary)
+                package.writestr(include, b'')
+                for name, data in headers.items():
+                    package.writestr(include + name, data)
+                package.writestr('clang_tidy-20.1.0.dist-info/METADATA', b'Name: clang-tidy')
+            pin = {'version': '20.1.0', 'url': 'https://example.invalid/clang-tidy.whl', 'file': wheel.name,
+                   'sha256': pins_registry.sha256(wheel), 'member': 'clang_tidy/data/bin/clang-tidy',
+                   'member_sha256': hashlib.sha256(binary).hexdigest(), 'headers': include,
+                   'header_count': len(headers)}
+            destination = root / 'tools' / 'clang-tidy'
+            installed = install_tidy.install(destination, archive=wheel, pin=pin, check=False)
+            self.assertEqual(installed, destination / 'bin' / 'clang-tidy')
+            self.assertEqual(installed.read_bytes(), binary)
+            files = sorted(p.relative_to(destination).as_posix() for p in destination.rglob('*') if p.is_file())
+            self.assertEqual(files, ['bin/clang-tidy', 'cerid-clang-tidy.json',
+                                     *sorted('lib/clang/20/include/' + name for name in headers)],
+                             'the binary, its resource directory and the stamp; nothing else from the wheel')
+            self.assertFalse(destination.with_name('clang-tidy.partial').exists())
+            # A matching stamp is reused without reading the wheel again.
+            with patch.object(install_tidy.pins, 'fetch', side_effect=AssertionError('refetched')):
+                self.assertEqual(install_tidy.install(destination, archive=wheel, pin=pin, check=False), installed)
+            for name, changed, message in (('binary', dict(pin, member_sha256='0' * 64), 'binary checksum mismatch'),
+                                           ('count', dict(pin, header_count=4), '3 files under'),
+                                           ('wheel', dict(pin, sha256='0' * 64), 'checksum mismatch'),
+                                           ('member', dict(pin, member='clang_tidy/data/clang-tidy'), 'bin/clang-tidy'),
+                                           ('escape', dict(pin, member='clang_tidy/data/../x'), 'escapes')):
+                target = root / 'refused' / name
+                with self.assertRaisesRegex(pins_registry.PinError, message):
+                    install_tidy.install(target, archive=wheel, pin=changed, check=False)
+                self.assertFalse(target.exists(), f'{name}: a refused install leaves nothing in place')
+                self.assertFalse(target.with_name(name + '.partial').exists())
+            # A symbolic link among the headers is refused, whatever it points at.
+            linked = root / 'linked.whl'
+            with zipfile.ZipFile(wheel) as source, zipfile.ZipFile(linked, 'w') as package:
+                for info in source.infolist():
+                    package.writestr(info, source.read(info))
+                link = zipfile.ZipInfo(include + 'escape.h')
+                link.external_attr = 0o120777 << 16
+                package.writestr(link, b'../../../../../etc/passwd')
+            with self.assertRaisesRegex(pins_registry.PinError, 'not a regular file'):
+                install_tidy.install(root / 'refused' / 'link', archive=linked, check=False,
+                                     pin=dict(pin, sha256=pins_registry.sha256(linked), header_count=4))
+            self.assertFalse((root / 'refused' / 'link').exists())
+            for reported, accepted in (('LLVM (http://llvm.org/):\n  LLVM version 20.1.0\n', True),
+                                       ('LLVM (http://llvm.org/):\n  LLVM version 20.1.8\n', False),
+                                       ('Ubuntu clang-tidy\n', False)):
+                target = root / ('version-%s' % accepted) / reported.split()[-1]
+                result = SimpleNamespace(stdout=reported, returncode=0)
+                with patch.object(install_tidy.subprocess, 'run', return_value=result):
+                    if accepted:
+                        install_tidy.install(target, archive=wheel, pin=pin)
+                        self.assertTrue((target / 'bin' / 'clang-tidy').is_file())
+                    else:
+                        with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                            install_tidy.install(target, archive=wheel, pin=pin)
+                        self.assertFalse(target.exists(), 'a wrong version leaves nothing installed')
+        pin = pins_registry.entry('tools', 'clang-tidy-linux')
+        self.assertIn('/clang_tidy-%s-' % pin['version'], pin['url'])
+        self.assertEqual(pin['file'], pin['url'].rsplit('/', 1)[-1])
+        self.assertEqual(pin['version'].split('.')[0], str(tidy_gate.REQUIRED_TIDY_MAJOR))
+        self.assertEqual(pin['headers'], 'clang_tidy/data/lib/clang/%d/include/' % tidy_gate.REQUIRED_TIDY_MAJOR)
+        self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
+        self.assertIn('scripts/install-clang-tidy.py', check_pins.HELPERS)
 
     MSVC_PROFILE = (
         '[1/3] Building CXX object engine/a.cpp.obj\n'

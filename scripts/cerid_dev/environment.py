@@ -96,6 +96,8 @@ def resolve_tool(name, environment):
 
 REQUIRED_TIDY_MAJOR = 20
 PINNED_WINDOWS_TIDY = 'C:/LLVM-20.1.8/bin/clang-tidy.exe'
+# scripts/install-clang-tidy.py's default install below the user's home (cmake/pins.json tools/clang-tidy-linux).
+PINNED_LINUX_TIDY = '.cerid/tools/clang-tidy/bin/clang-tidy'
 TIDY_CANDIDATES = ('clang-tidy-20', 'clang-tidy')
 LLVM_VERSION = re.compile(r'LLVM version (\d+)\.(\d+)\.(\d+)')
 
@@ -112,12 +114,22 @@ def probe_llvm_version(path, environment):
     return '.'.join(match.groups()), None
 
 
-def resolve_clang_tidy(environment, override=None):
+def pinned_clang_tidy(environment, windows=None):
+    """The pinned install the gate tries before PATH: LLVM 20.1.8 at its fixed path on Windows; elsewhere
+    scripts/install-clang-tidy.py's install below the environment's HOME (none without a HOME)."""
+    windows = os.name == 'nt' if windows is None else windows
+    if windows:
+        return PINNED_WINDOWS_TIDY
+    home = env_value(environment, 'HOME')
+    return str(Path(home) / PINNED_LINUX_TIDY) if home else None
+
+
+def resolve_clang_tidy(environment, override=None, windows=None):
     """First candidate whose reported LLVM major is the gate's: an explicit tool (argument or CRD_CLANG_TIDY) is the
-    only candidate; otherwise the pinned Windows install, then the PATH names. Any other version is unavailable,
-    never a substitute; the reason names each rejection."""
+    only candidate; otherwise the host's pinned install (pinned_clang_tidy), then the PATH names. Any other version is
+    unavailable, never a substitute; the reason names each rejection."""
     explicit = override or env_value(environment, 'CRD_CLANG_TIDY')
-    searched = [explicit] if explicit else [PINNED_WINDOWS_TIDY if os.name == 'nt' else None, *TIDY_CANDIDATES]
+    searched = [explicit] if explicit else [pinned_clang_tidy(environment, windows), *TIDY_CANDIDATES]
     candidates = []
     for name in searched:
         path = resolve_tool(name, environment) if name else None

@@ -228,6 +228,18 @@
       "license": "Unlicense",
       "note": "Tag v1.6.0's commit, built from source into a user directory by scripts/install-clang-build-analyzer.py (CMake, the host compiler) to read -ftime-trace profiles (docs/design/build-performance.md#compile-time-profiles); a developer tool, never shipped. Bundled under src/external: cwalk (MIT), inih (BSD-3-Clause), enkiTS (Zlib), flat_hash_map (BSL-1.0), llvm-Demangle (Apache-2.0 WITH LLVM-exception), simdjson (Apache-2.0 OR MIT), xxHash (BSD-2-Clause), cute_files (Zlib OR Unlicense)."
     },
+    "clang-tidy-linux": {
+      "version": "20.1.0",
+      "url": "https://files.pythonhosted.org/packages/52/76/42c61be1c1fdf8bacdbb265f0cd3e11321fee7362f91fa840717a6a41ad6/clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "file": "clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "e205541e350044ffe0b0d1fcaf62b9953890f8ecba31458bbcdcfe73040e58b6",
+      "member": "clang_tidy/data/bin/clang-tidy",
+      "member_sha256": "8ad8c09fb4cf87b67a2dda1aed0036bb16a2daa78cd8eb930fcf2a90205b28e7",
+      "headers": "clang_tidy/data/lib/clang/20/include/",
+      "header_count": 273,
+      "license": "Apache-2.0 WITH LLVM-exception AND Apache-2.0",
+      "note": "PyPI's clang-tidy wheel (ssciwr/clang-tidy-wheel); 20.1.0 is its only LLVM 20 release. The strict-analysis gate checks the LLVM major only (scripts/cerid_dev/environment.py), so it stands in for the hosted lanes' 20.1.8 on Linux developer hosts; installed into a user directory by scripts/install-clang-tidy.py (the binary and clang's builtin headers, laid out as bin/ and lib/clang/20/include so the binary finds its resource directory); a developer tool, never a lane step and never shipped. The binary and headers are LLVM's (Apache-2.0 WITH LLVM-exception), the wheel's packaging Apache-2.0."
+    },
     "llvm": {
       "version": "20.1.8",
       "acquired_by": "KyleMayes/install-llvm-action",
