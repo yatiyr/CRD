@@ -72,7 +72,9 @@ cd::Outcome run_mode(const char* mode, const fs::path& dir)
     return cd::run_specimen(specimen_path(), args, e);
 }
 
-// Read the specimen's marker file (decimal WriteResult), or -1 if absent.
+// Read the specimen's marker file (decimal WriteResult), or -1 if absent. Windows reads it in every configuration;
+// Linux reads it only in the injected-write-failure case, which needs asserts.
+#if defined(_WIN32) || (defined(__linux__) && CRD_ENABLE_ASSERTS)
 int read_marker(const fs::path& dir)
 {
     const fs::path  marker = dir / "report.marker";
@@ -86,6 +88,7 @@ int read_marker(const fs::path& dir)
     f >> v;
     return v;
 }
+#endif // defined(_WIN32) || (defined(__linux__) && CRD_ENABLE_ASSERTS)
 } // namespace
 
 // Windows crash capture; the acceptance codes are NTSTATUS values. The Linux acceptance block (its own signal codes)
