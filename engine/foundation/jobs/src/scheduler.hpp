@@ -125,6 +125,21 @@ public:
     // dropped (DIAG.10c; in builds without asserts a full queue used to lose the job and hang its waiter).
     void push(const crd::jobs::JobDecl& job);
 
+    // push() without its wake, for a batch (jobs::run of a span): a job injected this way is woken for by the batch's
+    // wake_for(). Returns true when the job went to an injection queue; a pinned job still wakes its thread here, as
+    // push() does (that token is for one particular thread) and returns false.
+    [[nodiscard]] bool push_unwoken(const crd::jobs::JobDecl& job);
+
+    // Wake for `jobs` injected jobs: post min(jobs, num_threads) tokens with one wake (the targeted path wakes up to
+    // that many idle workers). A token is a wake hint that only an idle worker consumes, and a woken worker runs jobs
+    // until the queues are empty, so a token per thread wakes every worker a batch can use. A token per job, as one
+    // push() each posts, left a batch of 2048 jobs up to 2048 tokens for idle workers to spin through (an empty scan
+    // of every queue each) and cost the producer a wake per job (a futex syscall on Linux even with no sleeper).
+    void wake_for(crd::u32 jobs) noexcept;
+
+    // The shared semaphore's unconsumed tokens (the default wake path; relaxed, for tests and diagnostics).
+    [[nodiscard]] crd::u32 wake_tokens() const noexcept { return m_semaphore.tokens(); }
+
     // Push directly to a thread's local deque (must be called by the owning thread).
     // Avoids injection-queue contention for child jobs spawned by a running job.
     // Posts the semaphore once. A full deque is an always-on fatal, like push().

@@ -113,6 +113,10 @@ public:
     // Inject a job into the priority scheduler (thread-safe, lock-free).
     void push(const crd::jobs::JobDecl& job);
 
+    // A batch's pushes and its wake (Scheduler::push_unwoken, Scheduler::wake_for).
+    [[nodiscard]] bool push_unwoken(const crd::jobs::JobDecl& job) { return m_scheduler.push_unwoken(job); }
+    void               wake_for(crd::u32 jobs) noexcept { m_scheduler.wake_for(jobs); }
+
     // Re-queue a suspended fiber as a High-priority job.
     // Called from the counter_decrement wakeup path after a counter reaches its target.
     void enqueue_fiber_resume(Fiber* fiber);

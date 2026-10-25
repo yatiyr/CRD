@@ -104,6 +104,9 @@ public:
         wake_all();
     }
 
+    // The tokens posted and not yet consumed (relaxed; a diagnostic and test reading, never a decision).
+    [[nodiscard]] crd::u32 tokens() const noexcept { return m_count.load(std::memory_order_relaxed); }
+
     // Wake every sleeper without adding a token. A thread in acquire_or_wake() or try_acquire_for_ms() returns to
     // its caller; one in acquire() drains or sleeps again. Repeated by a caller that waits for every idle thread
     // to acknowledge something (see the class comment): a thread that slept after a broadcast it missed is in the

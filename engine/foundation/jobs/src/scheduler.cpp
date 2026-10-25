@@ -81,6 +81,14 @@ void Scheduler::shutdown() noexcept
 
 void Scheduler::push(const crd::jobs::JobDecl& job)
 {
+    if (push_unwoken(job))
+    {
+        wake_for(1U);
+    }
+}
+
+bool Scheduler::push_unwoken(const crd::jobs::JobDecl& job)
+{
     CRD_ASSERT_MSG(m_initialized, "Scheduler::push called before init");
 
     if (job.pin_thread >= 0)
@@ -93,7 +101,7 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
         {
             m_pinned_refusals.fetch_add(1U, std::memory_order_relaxed);
             CRD_FATAL("Scheduler::push: pinned lane full — raise pinned_queue_capacity in jobs::Config");
-            return;
+            return false;
         }
         const auto held = static_cast<crd::u32>(ts.pinned.size());
         crd::u32   peak = ts.pinned_peak.load(std::memory_order_relaxed);
@@ -114,30 +122,41 @@ void Scheduler::push(const crd::jobs::JobDecl& job)
             std::atomic_thread_fence(std::memory_order_seq_cst);
             m_semaphore.release_broadcast();
         }
-        return;
+        return false;
     }
 
     const auto lane = static_cast<crd::u32>(job.priority); // 0 = High, 1 = Normal, 2 = Low
     if (lane > 2U)
     {
         CRD_FATAL("Scheduler::push: unknown job priority");
-        return;
+        return false;
     }
     JobInjectionQueue* const lanes[3] = {m_high_injection.get(), m_normal_injection.get(), m_low_injection.get()};
     if (!lanes[lane]->try_push(job))
     {
         m_injection_refusals[lane].fetch_add(1U, std::memory_order_relaxed);
         CRD_FATAL("Scheduler::push: injection queue full — raise injection_queue_capacity in jobs::Config");
+        return false;
+    }
+    return true;
+}
+
+void Scheduler::wake_for(crd::u32 jobs) noexcept
+{
+    const crd::u32 tokens = jobs < m_config.num_threads ? jobs : m_config.num_threads;
+    if (tokens == 0U)
+    {
         return;
     }
     if (m_targeted_wake)
     {
-        wake_one_idle();
+        for (crd::u32 i = 0U; i < tokens; ++i)
+        {
+            wake_one_idle();
+        }
+        return;
     }
-    else
-    {
-        m_semaphore.release(1);
-    }
+    m_semaphore.release(tokens); // one wake: a single token wakes one sleeper, more wake every sleeper
 }
 
 // ---------------------------------------------------------------------------

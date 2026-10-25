@@ -258,12 +258,27 @@ static detail::Counter* submit_jobs(std::span<const JobDecl> jobs)
         CRD_FATAL("crd::jobs::run: CounterPool exhausted — raise max_counters in jobs::Config");
     }
 
+    // One wake for the batch, not one a job (Scheduler::wake_for): after its first injected job, so sleeping workers
+    // start while the rest is pushed, and after its last, for a worker that ran dry and slept in between.
+    const auto size     = static_cast<crd::u32>(jobs.size());
+    crd::u32   injected = 0U;
     for (const JobDecl& src : jobs)
     {
         JobDecl j = src;
         detail::Counter* cp = c;
         std::memcpy(&j._pad[0], &cp, sizeof(cp));
-        g_pool.push(j);
+        if (g_pool.push_unwoken(j))
+        {
+            ++injected;
+            if (injected == 1U)
+            {
+                g_pool.wake_for(size);
+            }
+        }
+    }
+    if (injected > 1U)
+    {
+        g_pool.wake_for(injected);
     }
 
     return c;
