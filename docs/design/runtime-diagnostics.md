@@ -2910,7 +2910,18 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   8.9 times), per lane `ci-evidence.py compare` on two hosted evidence bundles (a median test 2.2 times on win-asan,
   2.7 on linux-gcc-asan, at most 2.6 on linux-clang-tsan). The board found, and the fiber annotations no longer have,
   a fake stack mapped per job under ASan and a TSan frame left per job on a fiber's shadow stack.
-- Not settled here: the repairs and the measurement gaps above; independent external sampling and peer tools; the
+- Independent external sampling (2026-10-25, [session](../sessions/2026-10-25-diag-11b-external-sampling.md),
+  [board](../bench/2026-10-25-diag-11b-external-sampling.md)): `scripts/sample-overhead-wpr.py` records every arm
+  of the alloc, jobs, offline and io workloads as processes of one WPR trace, in the boards' shape (a four-thread
+  jobs pool, one logical processor of each core) from two harness trees current with one checkout, and keeps each
+  record's CPU measurand. A row compares the sampled CPU per frame with the harness's CPU per frame (the frame time
+  only for frames on one thread) and requires the added CPU to sit in the diagnostic frames and their call sites
+  (the CEIR executor around the bridge's hooks held +44% of offline full's +253%); off over compiled-out is judged
+  only on the out-of-line diagnostic code off runs (none, within 2%), the two binaries' gap staying with the
+  instruction count. The 2026-10-25 capture, recorded before these repairs at eight jobs threads, agrees on ten
+  rows; jobs basic is unresolved and jobs full disagrees because its frame there is the fiber pool's contention.
+- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling and peer
+  tools; the
   cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
   counts on a run of the current head.
 

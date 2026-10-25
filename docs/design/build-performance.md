@@ -177,7 +177,10 @@ it is included. Like a board, a profile records the host before and after and re
 `render` writes the tables docs/bench stores, and `compare <before> <after> --key headers` lines two documents up.
 `--vcperf <session>` adds a C++ Build Insights capture around the build (an elevated shell, or `--vcperf-noadmin`
 after the one-time grant): `vcperf /stopnoanalyze`, then `/analyze /templates` into a WPA trace and a Chrome
-trace-event JSON beside the profile. [elevated-captures.bat](../../scripts/elevated-captures.bat) is the user's one
+trace-event JSON beside the profile (the 2026-10-25 capture: its function generation and passes are in the JSON;
+the add-in's template-instantiation table came out empty, so MSVC's template time is read from `/d1reportTime`'s
+class and function definitions, [board](../bench/2026-10-18-build-speed-compile-time.md#c-build-insights-capture-2026-10-25)).
+[elevated-captures.bat](../../scripts/elevated-captures.bat) is the user's one
 elevated step that runs it (with DIAG.11b's overhead sampling; `sampling` or `build-insights` runs one step alone). It
 refuses each step, naming what to close, while Visual Studio runs, and the capture on a busy host.
 

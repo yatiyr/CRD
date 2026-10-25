@@ -215,3 +215,84 @@ crd-containers-tests (12,554 assertions in 121 cases), crd-math-tests (6,428 in 
 and crd-ceir-tests (18,784 in 580) pass with the same counts; no test unit configures Catch2 before including it
 (the two `CATCH_CONFIG_RUNNER` mains define a Catch2 v2 macro that v3 ignores).
 
+
+<a id="c-build-insights-capture-2026-10-25"></a>
+## C++ Build Insights capture (2026-10-25)
+
+The user's elevated `scripts\elevated-captures.bat` (Visual Studio closed) ran `build-profile.py run --compiler msvc
+--preset win-debug --jobs 16 --define CRD_ENABLE_PCH=OFF --vcperf CeridBuildInsights` into a fresh tree: the cached
+shape (no precompiled header), no compiler launcher, `/Bt+ /d1reportTime`, and vcperf 2.5 around the build
+(`/stopnoanalyze`, then `/analyze /templates` into `build/build-insights/win-debug-vcperf.etl` and `.json`). Host
+idle: 38.1 of 63.7 GiB free, other processes 1.1 cores. Build exit 0. Read on 2026-10-25
+([session](../sessions/2026-10-25-diag-11b-external-sampling.md#c-build-insights)).
+
+| Profile | Wall | Edge sum | Front end | Back end | Include parsing | Units |
+|---|---|---|---|---|---|---|
+| win-debug, PCH off, 2026-10-25 | 176.5 s (configure 45.0 s) | 2,073.1 s (2,116 edges) | 1,705.5 s | 71.7 s | 1,297.8 s | 1,738 |
+
+The 2026-10-18 rows above ran on a contended host (5.7 cores busy after), so the totals are not a like-for-like
+timing; vcperf's own front-end and back-end passes give the same sums as `/Bt+` (1,705.5 s and 71.7 s).
+
+| Unit (front + back end, summed over its compilations) | Seconds | Front / back |
+|---|---:|---|
+| `tests/support/fuzz/src/replay_main.cpp` (13 compilations, one per fuzz target) | 20.87 | 20.2 / 0.6 |
+| `tests/numerics/hesap-fft/test_fft.cpp` | 7.85 | 5.5 / 2.3 |
+| `tests/numerics/hesap-fft/test_nufft.cpp` | 7.30 | 4.8 / 2.5 |
+| `tests/numerics/hesap-fft/test_dct.cpp` | 7.24 | 4.8 / 2.5 |
+| `tests/numerics/hesap-dsp/test_spectral.cpp` | 6.94 | 6.3 / 0.6 |
+| `tests/numerics/hesap-wavelet/test_cwt.cpp` | 6.92 | 6.4 / 0.6 |
+
+Back end per unit, the largest: `test_nufft.cpp` 2.49 s, `test_dct.cpp` 2.48 s, `test_fft.cpp` 2.32 s,
+`test_hilbert.cpp` 1.76 s, `test_fir.cpp` 1.57 s, `test_multirate.cpp` 1.53 s, `hesap-fft/src/fft.cpp` 1.20 s: every
+unit above 1 s of back end includes the FFT.
+
+| Header, inclusive | Seconds | Units |
+|---|---:|---:|
+| Catch2 `catch_test_macros.hpp` (`catch_assertion_handler.hpp` 229.6 s) | 243.5 | 1,002 |
+| MSVC `__msvc_ostream.hpp` (`<ios>` 184.3 s, `xlocnum` 183.2 s, `<streambuf>` 142.9 s) | 191.1 | 1,273 |
+| MSVC `xutility` | 184.9 | 1,642 |
+| `crd/math/cmath.hpp` (through `crd/math/complex.hpp`, 172.1 s) | 172.7 | 644 |
+| MSVC `<span>` (through `crd/containers/span.hpp`, 142.3 s) | 145.0 | 1,335 |
+| MSVC `<complex>` | 141.4 | 657 |
+| `crd/hesap/fft/fft.hpp` | 135.0 | 35 |
+
+| Header, exclusive | Seconds | Units |
+|---|---:|---:|
+| `crd/hesap/fft/detail/batched_codelets_gen.hpp` | 101.9 | 35 |
+| MSVC `xutility` | 72.2 | 1,642 |
+| MSVC `xstring` | 49.2 | 1,339 |
+| MSVC `zmmintrin.h` | 47.8 | 1,653 |
+| MSVC `type_traits` | 43.2 | 1,675 |
+| MSVC `<memory>` | 34.7 | 1,394 |
+| MSVC `<chrono>` | 33.7 | 201 |
+
+The stream headers' route, from the include trees: `<ostream>` reaches 601 units through Catch2's
+`catch_tostring.hpp`, `<istream>` 547 units through `crd/math/complex.hpp` (MSVC's `<complex>` includes `<sstream>`)
+and 43 through `crd/log/log_record.hpp`; no other project header brings them to more than 18 units.
+
+Templates and classes (front end, `/d1reportTime`; MSVC's template instantiation time lands in the class and function
+definitions): `std::basic_string` 5.7 s for the primary template and 4.4-4.5 s for each of its five specializations
+over 1,339 units, `std::tuple` 3.8 s (1,437), Catch2's `ExprLhs` 3.2 s (1,006); functions: the FFT's
+`codelet256_stage1_fused_sh_csf` 19.0 s, `_sh_cs` 14.1 s, `codelet256_batched` 11.7 s and `_batched_sc` 11.2 s (35
+units each), Catch2's `CATCH2_INTERNAL_TEST_0` 10.3 s (906), `std::_Integral_to_string` 5.8 s (1,277). vcperf's own
+template-instantiation table has no rows in this capture (`wpaexporter` with the add-in's Template Instantiations
+table: "No data in table for preset Templates"), although `/analyze /templates` ran.
+
+Function generation (vcperf, the functions above its threshold; code-generation thread time): 135.6 s in 1,302
+generations of 258 functions. The FFT's codelets and twiddles are 126.8 s of it (735 generations of 85 functions:
+each `double` codelet is generated in 21 units, each `float` one in 4); Catch2's test bodies 6.2 s; everything else
+2.6 s. The largest: `codelet256_stage1_fused_sh_csf<double>` 14.3 s over 21 generations,
+`codelet256_stage1_fused_sh_cs` 11.0 s, `codelet64_stage1_fused_64x64` 9.7 s, `codelet64_stage1_fused_64x32` 9.3 s,
+`codelet256_batched_sc` 8.0 s.
+
+Follow-up data (recorded, not started; each would be measured on its own board):
+
+- The FFT codelets: header-inline functions generated again in every unit that uses them, 126.8 s of code generation
+  of which 20 of every 21 `double` copies repeat, plus `batched_codelets_gen.hpp`'s 101.9 s of exclusive parse in 35
+  units. The cut is the one named [above](#timing-boards) (the definitions out of line in one unit, or an explicit
+  instantiation of `FftPlan<f32/f64>`), keeping the force-inlining into the dispatchers on optimized GCC and Clang.
+- `replay_main.cpp` compiles once per fuzz target (`crd_fuzz_target`, 13 times, about 1.6 s each): one object library
+  shared by the targets saves about 19 s of edge time.
+- `crd/math/cmath.hpp` includes `complex.hpp`, whose `<complex>` brings MSVC's stream headers into 547 of its 644
+  units: a `cmath.hpp` without the complex functions (their consumers include `complex.hpp`) is a cut of the kind the
+  include budget holds.
