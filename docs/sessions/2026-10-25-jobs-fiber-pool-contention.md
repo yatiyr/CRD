@@ -91,6 +91,13 @@ about 2.83 M → 1.25 M at four (-56%); off over compiled-out +0.00% (within the
 -0.80% (Windows) and -0.31% (Linux). Full now costs +57% (Windows, contended) and +42% (Linux) over off at four
 threads: the pool's contention no longer hides its per-job work.
 
+Caveats, stated rather than left to the tables: the final boards ran on a contended host (the e0de26cc boards, idle,
+show the kept fiber alone; the batch-wake probes had no host check); on the contended eight-thread Windows board basic
+read +4.3% CPU over off, "over (2%)" (a 24-process board, not a budget board; the idle e0de26cc eight-thread board read
+-2.4%), and with the pool's contention gone basic's own per-job cost is no longer hidden, so the budget boards and the
+elevated sampling decide it; the sixteen-thread Linux "before" frames (15.8 ms on WSL2) were pathological, so -98%
+describes that host, not a general factor.
+
 ## Correctness
 
 | Lane | Runs |
@@ -119,7 +126,9 @@ suite is back to its own tags and passed 100 of 100 minimization runs on TSan un
 
 On linux-clang-tsan, "fiber keep: while tiny jobs stream the readings stay exact and bounded, and an idle pool holds
 nothing" failed once in the lane run and about one in 25 to one in 300 runs alone: a SIGSEGV with a wild pointer, in
-the reader thread (`Scheduler::pinned_pressure`) or a worker (`keep_fiber`) or TSan's `MemoryAccess`. Evidence:
+the reader thread (`Scheduler::pinned_pressure`) or a worker (`keep_fiber`) or TSan's `MemoryAccess`. One direct run
+hung instead and was killed after about two hours (its last live thread in `hrtimer_nanosleep`), so on a hosted lane the
+symptom may be a CTest timeout of that case rather than a crash. Evidence:
 
 - It reproduces on c4a56808, before any of this work, with a probe using only the public API (3 of 49 runs with two
   shared-path pools, 2 of 150 with a shared and a targeted pool), so it is not a regression of these commits.
