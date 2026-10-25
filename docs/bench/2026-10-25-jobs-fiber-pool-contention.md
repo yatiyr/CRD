@@ -15,7 +15,8 @@
 - **Load:** the history boards ran on an idle host (`build-bench.py host`: idle, under 1 core of other load); the probes ran between them without a check of their own. The final boards ran while an interactive game used 1.1
   to 3.8 cores (`build-bench.py host`: CONTENDED); every arm of a board is interleaved and paired by repetition, so
   drift lands on before and after alike, but the p95/p99 columns of the final Windows boards are wider than on an idle
-  host and the 24-process intervals are not the 96-288-process budget boards.
+  host and the 24-process intervals are not the 96-288-process budget boards. The four- and eight-thread Windows
+  boards were run again on an idle host on 2026-10-26, with 96-process budget boards (below).
 - **Harness:** [`scripts/diag-overhead.py`](../../scripts/diag-overhead.py) `run --before-exe` (the before-off,
   before-basic and before-full arms of the build made before the change, interleaved with compiled-out, off, basic and
   full; 50 warmup frames; the jobs workload, 2048 jobs a frame each summing 512 squares) and `instructions
@@ -152,6 +153,94 @@ Linux 6.6.87.2-microsoft-standard-WSL2 (x86_64), 32 logical processors; 12 proce
 | jobs | basic vs before-basic |  |  |  |  | -98.03% (-98.12% .. -97.99%) |  | -87.98% (-88.29% .. -87.38%) | reported |  |  |  |
 | jobs | full vs before-full |  |  |  |  | -97.63% (-97.66% .. -97.56%) |  | -87.83% (-88.49% .. -87.67%) | reported |  |  |  |
 | jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.50 MiB | | | within (32 MiB) | | | |
+
+## Idle host: 03a5fd0b against c4a56808 (2026-10-26)
+
+The final boards above ran on a contended host, and their eight-thread board read basic +4.3% CPU over off, "over
+(2%)". These were run again at 03a5fd0b (the code of cdcc3e79 plus the snapshot pin of 0e1433ef) with
+`build-bench.py host` reading idle before and after every board (0.5 to 1.6 cores of other load). Binaries:
+win-shipping-profile `8b2546a13dac`, win-shipping `6c7fdb91a86e` (SHA-256 prefixes); before as above. First the
+seven-arm boards, 24 processes an arm, then compiled-out, off and basic at 96 processes an arm (the size that
+resolves a 2% budget), then off at 03a5fd0b against off at cdcc3e79, whose jobs hot path is the same source.
+
+### win-shipping-profile, jobs, 4 threads on 5555, idle host
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | compiled-out | 209.2 | 238.8 | 265.0 | 102.1 | reference | 2.67 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | off | 212.4 | 241.3 | 268.3 | 103.7 | +1.73% vs compiled-out (+0.00% .. +2.59%) | 2.70 Mcycles | +1.45% (-0.63% .. +2.25%) | unresolved (1%) | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | basic | 210.5 | 239.4 | 262.3 | 102.8 | -0.13% vs off (-1.25% .. +0.21%) | 2.68 Mcycles | -0.05% (-1.06% .. +0.64%) | within (2%) | 0 / 0 / 100810800 | 72 of 72 (207720) | 3.9 MiB |
+| jobs | full | 324.6 | 360.4 | 398.4 | 158.5 | +52.81% vs off (+51.12% .. +54.72%) | 4.11 Mcycles | +52.42% (+50.95% .. +55.12%) | reported | 100761600 / 100810800 / 0 | 72 of 72 (3910968) | 5.4 MiB |
+| jobs | before-off | 356.6 | 384.7 | 441.3 | 174.1 | reference | 4.49 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | before-basic | 359.5 | 385.6 | 420.2 | 175.5 | reference | 4.53 Mcycles |  |  | 0 / 0 / 100810800 | 72 of 72 (207720) | 3.9 MiB |
+| jobs | before-full | 480.9 | 515.6 | 556.7 | 234.8 | reference | 6.10 Mcycles |  |  | 100761600 / 100810800 / 0 | 72 of 72 (3910968) | 5.4 MiB |
+| jobs | off vs before-off |  |  |  |  | -40.59% (-41.17% .. -39.58%) |  | -40.14% (-40.70% .. -38.99%) | reported |  |  |  |
+| jobs | basic vs before-basic |  |  |  |  | -41.83% (-42.28% .. -40.77%) |  | -41.33% (-41.94% .. -40.13%) | reported |  |  |  |
+| jobs | full vs before-full |  |  |  |  | -32.77% (-33.53% .. -31.58%) |  | -32.76% (-33.40% .. -31.60%) | reported |  |  |  |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.55 MiB | | | within (32 MiB) | | | |
+
+### win-shipping-profile, jobs, 8 threads on FFFF, idle host
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | compiled-out | 173.9 | 225.2 | 305.6 | 84.9 | reference | 4.14 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.7 MiB |
+| jobs | off | 171.4 | 211.1 | 248.2 | 83.7 | -3.21% vs compiled-out (-5.11% .. +2.34%) | 4.12 Mcycles | -1.04% (-3.52% .. +6.49%) | unresolved (1%) | 0 / 0 / 0 | 0 of 0 (0) | 3.8 MiB |
+| jobs | basic | 172.3 | 216.1 | 246.6 | 84.1 | -0.03% vs off (-2.63% .. +2.31%) | 4.17 Mcycles | +1.02% (-2.23% .. +2.67%) | unresolved (2%) | 0 / 0 / 100810800 | 72 of 72 (207720) | 4.3 MiB |
+| jobs | full | 210.0 | 275.3 | 345.3 | 102.5 | +22.93% vs off (+21.11% .. +24.59%) | 5.11 Mcycles | +23.90% (+22.17% .. +26.04%) | reported | 100761600 / 100810800 / 0 | 72 of 72 (3910962) | 6.3 MiB |
+| jobs | before-off | 398.2 | 498.0 | 1964.2 | 194.4 | reference | 10.83 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.7 MiB |
+| jobs | before-basic | 388.6 | 438.7 | 731.6 | 189.7 | reference | 10.29 Mcycles |  |  | 0 / 0 / 100810800 | 72 of 72 (207720) | 4.3 MiB |
+| jobs | before-full | 390.2 | 442.5 | 807.5 | 190.5 | reference | 10.38 Mcycles |  |  | 100761600 / 100810800 / 0 | 72 of 72 (3910959) | 6.3 MiB |
+| jobs | off vs before-off |  |  |  |  | -57.02% (-58.06% .. -55.43%) |  | -61.58% (-63.76% .. -60.70%) | reported |  |  |  |
+| jobs | basic vs before-basic |  |  |  |  | -56.23% (-56.92% .. -54.87%) |  | -59.47% (-61.17% .. -57.31%) | reported |  |  |  |
+| jobs | full vs before-full |  |  |  |  | -46.37% (-47.48% .. -45.47%) |  | -51.06% (-52.09% .. -49.10%) | reported |  |  |  |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.51 MiB | | | within (32 MiB) | | | |
+
+### win-shipping-profile, jobs, 4 threads on 5555, idle host, 96 processes
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | compiled-out | 210.0 | 240.8 | 265.9 | 102.5 | reference | 2.69 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | off | 212.8 | 242.3 | 264.3 | 103.9 | +1.32% vs compiled-out (+0.91% .. +1.64%) | 2.71 Mcycles | +0.95% (+0.47% .. +1.41%) | unresolved (1%) | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | basic | 213.3 | 242.2 | 265.3 | 104.2 | +0.40% vs off (-0.33% .. +1.04%) | 2.72 Mcycles | +0.40% (-0.29% .. +0.83%) | within (2%) | 0 / 0 / 403243200 | 288 of 288 (830880) | 3.9 MiB |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.55 MiB | | | within (32 MiB) | | | |
+
+### win-shipping-profile, jobs, 8 threads on FFFF, idle host, 96 processes
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | compiled-out | 172.2 | 215.9 | 251.2 | 84.1 | reference | 4.16 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.8 MiB |
+| jobs | off | 174.3 | 216.1 | 251.0 | 85.1 | +1.78% vs compiled-out (+0.30% .. +3.40%) | 4.21 Mcycles | +1.69% (+0.31% .. +2.64%) | unresolved (1%) | 0 / 0 / 0 | 0 of 0 (0) | 3.8 MiB |
+| jobs | basic | 171.0 | 211.5 | 249.6 | 83.5 | -0.60% vs off (-1.59% .. +0.82%) | 4.13 Mcycles | -0.41% (-1.46% .. +0.49%) | within (2%) | 0 / 0 / 403243200 | 288 of 288 (830880) | 4.3 MiB |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.55 MiB | | | within (32 MiB) | | | |
+
+### off at HEAD against off at cdcc3e79, 4 threads on 5555, idle host, 96 processes
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | off | 213.7 | 244.4 | 271.6 | 104.3 | reference | 2.73 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | before-off | 210.3 | 241.0 | 267.8 | 102.7 | reference | 2.70 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | off vs before-off |  |  |  |  | +1.54% (+0.95% .. +1.81%) |  | +1.14% (+0.68% .. +1.62%) | reported |  |  |  |
+
+### off at HEAD against off at cdcc3e79, 8 threads on FFFF, idle host, 96 processes
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | off | 173.1 | 215.6 | 252.1 | 84.5 | reference | 4.19 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.8 MiB |
+| jobs | before-off | 171.7 | 213.2 | 250.5 | 83.8 | reference | 4.15 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.8 MiB |
+| jobs | off vs before-off |  |  |  |  | +0.35% (-0.48% .. +2.24%) |  | +0.61% (-1.14% .. +2.07%) | reported |  |  |  |
+
+Basic is within its 2% budget at both shapes: +0.40% CPU (-0.29% .. +0.83%) at four threads and -0.41% (-1.46% ..
++0.49%) at eight on 96 processes, so the contended +4.3% was the contention, and there is no per-job cost of basic to
+remove. Against the build before, idle: off -40.6% frame and -40.1% CPU at four threads, basic -41.8% / -41.3%, full
+-32.8% / -32.8%; at eight -57.0% / -61.6%, -56.2% / -59.5% and -46.4% / -51.1%.
+
+Off over compiled-out reads +1.32% frame and +0.95% CPU at four threads and +1.78% / +1.69% at eight on 96
+processes, "unresolved (1%)", where cdcc3e79's four-thread board read -0.80% and cachegrind +0.00% instructions. Off
+at 03a5fd0b against off at cdcc3e79 reads +1.54% / +1.14% at four threads and +0.35% / +0.61% at eight, though no
+instruction of the jobs hot path changed between them (the pin touches only the snapshot entry points, init() and
+shutdown()). So a rebuild alone moves this workload by up to about 1.5% here: the two-binary floor of these boards
+is at the size of the 1% budget, the boards cannot resolve off against compiled-out, and the instruction count
+(+0.00%) and the user's elevated sampling run stay the evidence for off.
 
 ## Instruction counts (cachegrind, off mode, cdcc3e79 against c4a56808)
 

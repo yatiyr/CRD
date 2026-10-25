@@ -92,11 +92,16 @@ about 2.83 M → 1.25 M at four (-56%); off over compiled-out +0.00% (within the
 threads: the pool's contention no longer hides its per-job work.
 
 Caveats, stated rather than left to the tables: the final boards ran on a contended host (the e0de26cc boards, idle,
-show the kept fiber alone; the batch-wake probes had no host check); on the contended eight-thread Windows board basic
-read +4.3% CPU over off, "over (2%)" (a 24-process board, not a budget board; the idle e0de26cc eight-thread board read
--2.4%), and with the pool's contention gone basic's own per-job cost is no longer hidden, so the budget boards and the
-elevated sampling decide it; the sixteen-thread Linux "before" frames (15.8 ms on WSL2) were pathological, so -98%
-describes that host, not a general factor.
+show the kept fiber alone; the batch-wake probes had no host check), and on the contended eight-thread Windows board
+basic read +4.3% CPU over off, "over (2%)". The four- and eight-thread Windows boards were run again on an idle host at
+03a5fd0b ([bench](../bench/2026-10-25-jobs-fiber-pool-contention.md#idle-host-03a5fd0b-against-c4a56808-2026-10-26)):
+basic is within its 2% budget at both shapes on 96 processes (+0.40% CPU at four threads, -0.41% at eight), so there
+was no per-job cost of basic to find; against the build before, off is -40.6% frame and -40.1% CPU at four threads and
+-57.0% / -61.6% at eight, basic and full alike. Off over compiled-out reads +1.3% to +1.8% there, "unresolved (1%)",
+but off at 03a5fd0b against off at cdcc3e79, with the same hot-path source, reads +1.5% at four threads: a rebuild
+alone moves these boards by the size of the budget, so for off the instruction count (+0.00%) and the elevated
+sampling decide. The sixteen-thread Linux "before" frames (15.8 ms on WSL2) were pathological, so -98% describes that
+host, not a general factor.
 
 ## Correctness
 
@@ -122,30 +127,58 @@ in seeds at timing-dependent places and the replay wedged at the driver's deadli
 under load, and on linux-gcc-debug). The points were removed in favour of the `acquisitions()` tally; the schedule-check
 suite is back to its own tags and passed 100 of 100 minimization runs on TSan under the neighbour.
 
-## A pre-existing TSan-only corruption the new case exposes
+## Outside readers raced the pool's teardown (0e1433ef)
 
-On linux-clang-tsan, "fiber keep: while tiny jobs stream the readings stay exact and bounded, and an idle pool holds
-nothing" failed once in the lane run and about one in 25 to one in 300 runs alone: a SIGSEGV with a wild pointer, in
-the reader thread (`Scheduler::pinned_pressure`) or a worker (`keep_fiber`) or TSan's `MemoryAccess`. One direct run
-hung instead and was killed after about two hours (its last live thread in `hrtimer_nanosleep`), so on a hosted lane the
-symptom may be a CTest timeout of that case rather than a crash. Evidence:
+The first TSan crashes of the streaming case pointed at `pinned_pressure()` and `peak_acquired()` reading the
+scheduler's thread states and the fiber tiers while `shutdown()` freed them (watchpoints saw `Scheduler::shutdown`
+destroy the array and the next `init()` rebuild it at the same address). Every snapshot guarded itself with the pool's
+plain `is_initialized()`, which `shutdown()` cleared only after freeing what the snapshot walks, so a sampler on
+another thread could read freed memory across a restart. Contract now (`jobs.hpp`, DIAG.10c in
+[runtime diagnostics](../design/runtime-diagnostics.md#diag-10c)): a reader pins the pool for the length of its read
+(a seq_cst count and an open flag), `shutdown()` closes the flag and waits for the pinned readers before it frees
+anything, `init()` opens it once the pool is up, and a closed pool reads as one before `init()`.
+`test_diag_snapshot_restart.cpp` samples every snapshot from another thread through 100 init, 20-frame, shutdown
+cycles and checks that it read both open and closed pools and never a wrong capacity: with the old guard it crashed
+four of four runs on win-asan and four of four on win-debug; with the pin it passes with about 13,800 reads a run.
 
-- It reproduces on c4a56808, before any of this work, with a probe using only the public API (3 of 49 runs with two
-  shared-path pools, 2 of 150 with a shared and a targeted pool), so it is not a regression of these commits.
-- It needs ThreadSanitizer and an outside thread calling `jobs::pressure_snapshot()` while the pool runs: 0 of 1000
-  runs unsanitized (linux-gcc-debug), 0 of 300 under ASan, 0 of 300 with a reader that reads no pool state, 0 of 300
-  for the existing cross-thread fiber-resume stress under TSan.
-- gdb, at the crash: the faulting thread runs on its own stack, inside no fiber stack of either pool (all 416 recorded);
-  no signal arrives before the fault; hardware watchpoints on the scheduler's four thread-state slots saw only init and
-  shutdown write them. The bad values are the reader's own callee-saved iterator register holding the return address
-  of its call into `__tsan_atomic32_load`, a pointer read as eight bytes of machine code, pointers cut to 32 bits, and
-  values shaped `{pid, uid}`.
-- That points at TSan's runtime with many fibers (each `__tsan_create_fiber` is a TSan thread; two pools are 416), not
-  at the pool. An LLVM fix in this area concerns the per-thread signal context `__tsan_destroy_fiber` left behind
-  ([commit](https://repo.hca.bsc.es/gitlab/rferrer/llvm-epi/-/commit/d8a0f76de7bd98dc7a271bc15b39a4cdbfdf6ecb)); whether the
-  hosted runtime has it is not checked. The third-party register needs a reproduction without Cerid code, which this is
-  not yet, so it is a JOBS-HARD.3 finding. The case is kept as it is; the hosted linux-clang-tsan run decides whether it
-  follows the runtime or this host (whose WSL processes are known to misexecute, `host-misexecutes-local-faults`).
+## The TSan fault is this host's, not the pool's
+
+The pin did not end the TSan fault of "fiber keep: while tiny jobs stream ...". It needed reading, not more fixing:
+
+- What the fault is. Under gdb, with every signal-sending system call caught (`kill`, `tkill`, `tgkill`,
+  `rt_sigqueueinfo`, `rt_tgsigqueueinfo`), 3 of 257 runs faulted, none after any signal or such call. Each time a
+  thread read a value no store wrote. The reader's local array of three queue pointers in `injection_pressure()` held
+  `0xc8458948807d8b48`, the bytes of `mov -0x80(%rbp),%rdi; mov %rax,-0x38(%rbp)`; the range-for over the scheduler's
+  thread states gave a pinned lane at `0xf3cd5c0`. One run hung for twenty minutes instead: worker 1 had computed
+  `&m_progress[1].ack_gen` as `0x58`, so `unique_ptr::get()` had returned null, while `m_progress` held
+  `0x724000000200` throughout (assigned only in `init()` before any worker starts, reset only after they are joined).
+  The fault came inside `__tsan_atomic32_store`; Catch2's handler then called `sigaction`, whose TSan interceptor
+  blocked in `SlotLock`, and the main thread blocked in `SlotAttachAndLock`: that is the hang signature, and
+  `timeout`'s SIGTERM could not end it. Almost every unattended fault reads an address shaped
+  `{pid, uid}` (`0x03e8` with the process id), which no Cerid code stores.
+- A Cerid-free control. `scripts/tsan_host_control.cpp` has the case's shape at `-O0`: three workers
+  and the main thread run frames of tiny jobs, an outside reader walks owned arrays through `unique_ptr` and `vector`
+  getters, every getter result is checked, mode `fiber` runs each job on a TSan-announced fiber as the pool does and
+  mode `plain` runs no fiber at all. 300 interleaved rounds, unpinned: the jobs case 41 faults (110 s of runs), the
+  fiber control 30 (543 s), the plain control 24 (461 s). The control's reports include `got 0x720800000020, want
+  0x720800000020` (a compare of two equal values that failed, the values read again for the message), getters
+  returning instruction bytes and stack addresses, and a stack overflow whose program counter was a stack address.
+  250 more rounds of the plain control alone: unsanitized 0 of 250 (394 s), TSan 5 of 250 (397 s).
+- Pinned, at HEAD 7fd17271 (each process on two CPUs beside a busy loop on each, 150 interleaved rounds):
+  linux-gcc-debug 0, linux-gcc-asan 0, linux-clang-tsan 1 (the same `{pid, uid}` fault), the TSan plain control 0, the
+  unsanitized control 0. Pinned to two CPUs the host faults far less often, in Cerid code and outside it.
+- Hosted: linux-clang-tsan of run 40209542390 (e0de26cc, job 121252170269) passed the streaming case in 1.72 s, with
+  the rest of the lane.
+
+So the fault follows ThreadSanitizer-instrumented code on this host (i9-14900K under WSL2, kernel 6.6.87.2), with or
+without Cerid and with or without a fiber. That matches this host's record (2026-10-11: input-independent faults under
+ASan and in an unsanitized GCC build, none in 140.6 M hosted executions). The earlier reading of this section, that it
+pointed at TSan's fiber runtime, is withdrawn: the plain control runs no fiber. Whether a plain TSan program faults on
+other machines is the question the new host-check legs answer: `host-check.yml` gained two ThreadSanitizer legs
+([test instruments](../design/test-instruments.md#host-separation-diag10a), `scripts/tsan-host-check.py`), each
+150 rounds of the jobs case and the control's fiber, plain and unsanitized arms, every process pinned beside busy
+loops, failing on any event. The workflow is dispatch-only; it was not started here. The case stays as it is and no
+test was skipped or loosened.
 
 ## Verification and housekeeping
 
@@ -161,5 +194,8 @@ symptom may be a CTest timeout of that case rather than a crash. Evidence:
 - The user's elevated sampling run (`scripts\elevated-captures.bat sampling`): it re-records the jobs rows on the
   repaired pool. Expected: jobs off over compiled-out loses its `FiberPool::acquire` gap and jobs full reads its own
   cost at every shape.
-- Hosted: every lane builds the new cases and passes them, `crd-jobs-schedcheck-tests` included; linux-clang-tsan with
-  the streaming case decides the TSan finding above; macOS and other CPUs are not measured here.
+- Hosted: every lane builds the new cases and passes them, `crd-jobs-schedcheck-tests` included; macOS and other CPUs
+  are not measured here.
+- The dispatched host check (`host-check.yml`, its two ThreadSanitizer legs): 300 pinned runs of the streaming case on
+  hosted machines beside the Cerid-free control. Clean legs settle the TSan fault above as this host's; a fault in the
+  jobs arm beside a clean control would make it a jobs defect.
