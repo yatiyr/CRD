@@ -83,6 +83,9 @@ fuzz_spec.loader.exec_module(fuzz_driver)
 host_check_spec = importlib.util.spec_from_file_location('fuzz_host_check', ROOT / 'scripts/fuzz-host-check.py')
 fuzz_host_check = importlib.util.module_from_spec(host_check_spec)
 host_check_spec.loader.exec_module(fuzz_host_check)
+tsan_host_check_spec = importlib.util.spec_from_file_location('tsan_host_check', ROOT / 'scripts/tsan-host-check.py')
+tsan_host_check = importlib.util.module_from_spec(tsan_host_check_spec)
+tsan_host_check_spec.loader.exec_module(tsan_host_check)
 provenance_spec = importlib.util.spec_from_file_location('check_generated', ROOT / 'scripts/check-generated.py')
 provenance = importlib.util.module_from_spec(provenance_spec)
 provenance_spec.loader.exec_module(provenance)
@@ -3112,6 +3115,42 @@ class TestInstruments(unittest.TestCase):
         self.assertTrue(fuzz_host_check.find_unit('ckir-binary', 'ace35b97').is_file())
         with self.assertRaises(fuzz_host_check.fuzz.FuzzError):  # its own import of fuzz.py
             fuzz_host_check.find_unit('ceir-text', 'seed-')
+
+    def test_tsan_host_check_counts_every_failed_run_as_an_event(self):
+        # JOBS-HARD.3 host separation: a run is clean only with a zero exit, no report line and its pass line; a
+        # ThreadSanitizer SEGV, the control's "=== WRONG" abort, a report under a zero exit, a missing pass line and a
+        # timeout are each an event.
+        passed = 'Filters: "fiber keep: while tiny jobs stream*"\nAll tests passed (16 assertions in 1 test case)\n'
+        self.assertIsNone(tsan_host_check.classify(0, passed, 'All tests passed'))
+        self.assertIsNone(tsan_host_check.classify(0, 'cycle 0 done\ncycle 1 done, 204800 jobs\n', 'cycle 1 done'))
+        segv = ('ThreadSanitizer:DEADLYSIGNAL\n==27426==ERROR: ThreadSanitizer: SEGV on unknown address '
+                '0x03e800006b22 (pc 0x5555557207b3)\n    #0 __tsan_atomic32_load\n')
+        self.assertEqual(tsan_host_check.classify(66, segv, 'All tests passed'), 'exit 66')
+        reports = tsan_host_check.reports_in(segv)
+        self.assertEqual(len(reports), 2, reports)
+        self.assertIn('SEGV on unknown address 0x03e800006b22', reports[1][0])
+        self.assertEqual(reports[1][1], '#0 __tsan_atomic32_load')
+        wrong = '=== WRONG progress: got 0x7ffff36fb5f0, want 0x7240000000c0\n'
+        self.assertEqual(tsan_host_check.classify(134, wrong, 'cycle 1 done'), 'exit 134')
+        self.assertEqual(tsan_host_check.classify(0, wrong + 'cycle 1 done\n', 'cycle 1 done'), 'report')
+        race = 'WARNING: ThreadSanitizer: data race (pid=28158)\n  Write of size 8\n' + passed
+        self.assertEqual(tsan_host_check.classify(0, race, 'All tests passed'), 'report')
+        self.assertEqual(tsan_host_check.classify(0, 'cycle 0 done\n', 'cycle 1 done'), 'no pass line')
+        self.assertEqual(tsan_host_check.classify(0, passed, 'All tests passed', timed_out=True), 'timeout')
+        self.assertEqual(tsan_host_check.pinned([2, 3], ['exe', 'plain']), ['taskset', '-c', '2,3', 'exe', 'plain'])
+        self.assertEqual([arm[0] for arm in tsan_host_check.ARMS],
+                         ['jobs', 'control-fiber', 'control-plain', 'control-unsanitized'])
+        records = [{'arm': 'jobs', 'event': None, 'wall_seconds': 1.5},
+                   {'arm': 'jobs', 'event': 'exit 66', 'wall_seconds': 0.5},
+                   {'arm': 'control-plain', 'event': 'report', 'wall_seconds': 2.0}]
+        self.assertEqual(tsan_host_check.tally(records)[0], {'arm': 'jobs', 'runs': 2, 'events': 1, 'seconds': 2.0})
+        self.assertEqual(tsan_host_check.tally(records)[2]['events'], 1)
+        self.assertTrue(tsan_host_check.CONTROL.is_file())
+        # The jobs arm runs under the options of the linux-clang-tsan test preset, so it sees what the CTest sees.
+        presets = json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))
+        tsan = next(preset for preset in presets['testPresets'] if preset['name'] == 'linux-clang-tsan')
+        expected = tsan['environment']['TSAN_OPTIONS'].replace('${sourceDir}', ROOT.as_posix())
+        self.assertEqual(tsan_host_check.TSAN_OPTIONS, expected)
 
     def test_host_check_reads_mmap_rnd_bits_through_each_route(self):
         # The /proc file is root-only on hosted runners and sysctl reads the same file: each route is tried in turn,

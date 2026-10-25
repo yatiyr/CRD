@@ -164,6 +164,11 @@
       "why": "The installed-package consumer is its own CMake project, configured against an installed prefix by crd-package-consumer (scripts/test-package-consumer.py)."
     },
     {
+      "paths": ["tests/support/diag/host-check/tsan_control.cpp"],
+      "built_by": "scripts/tsan-host-check.py",
+      "why": "The Cerid-free ThreadSanitizer control of the host check is compiled by its driver with clang++, with and without -fsanitize=thread, on the dispatched host-check workflow (JOBS-HARD.3)."
+    },
+    {
       "paths": ["tests/support/diag/models/counter_publish_reclaim.c"],
       "built_by": "scripts/check-genmc-models.py",
       "why": "The GenMC model of the jobs counter protocol is compiled by GenMC itself on the DIAG.4b model-checking lane."

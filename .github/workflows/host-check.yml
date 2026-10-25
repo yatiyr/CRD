@@ -1,10 +1,12 @@
 name: Host check
 
 # DIAG.10a host separation (docs/design/test-instruments.md#host-separation-diag10a): the libFuzzer rounds and
-# repetition replays that faulted on the development host, run on hosted machines. A diagnostic experiment, never part
+# repetition replays that faulted on the development host, run on hosted machines, and (JOBS-HARD.3) the
+# ThreadSanitizer jobs streaming case beside its Cerid-free control. A diagnostic experiment, never part
 # of a CI tier (docs/design/ci-tiers.md): it runs only when dispatched, builds only one libFuzzer target of the
-# diagnostic linux-clang-fuzz preset per leg and never writes to the committed corpora. Each leg runs its round under
-# the default ASan options and then under the container-overflow control for the same time; a leg fails on any event.
+# diagnostic linux-clang-fuzz preset per fuzz leg (crd-jobs-tests of linux-clang-tsan per TSan leg) and never writes
+# to the committed corpora. Each fuzz leg runs its round under the default ASan options and then under the
+# container-overflow control for the same time; a leg fails on any event.
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +18,10 @@ on:
         description: 'executions of an adopted unit per repetition process'
         type: number
         default: 10000
+      tsan_rounds:
+        description: 'rounds per ThreadSanitizer leg (each runs the jobs case and the three control arms once)'
+        type: number
+        default: 150
 
 permissions:
   contents: read
@@ -139,5 +145,104 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: host-check-${{ matrix.target }}-${{ matrix.seed }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  tsan:
+    # JOBS-HARD.3: on the development host the linux-clang-tsan streaming case faults about one run in ten and so does
+    # a Cerid-free control with no fiber at all, while the unsanitized control is clean
+    # (docs/sessions/2026-10-25-jobs-fiber-pool-contention.md). Two legs draw two hosted machines; each runs the jobs
+    # case and the control's three arms interleaved, every process pinned beside busy loops (scripts/tsan-host-check.py).
+    name: Host check (ThreadSanitizer, leg ${{ matrix.leg }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 200
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        leg: [1, 2]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Ninja
+        uses: seanmiddleditch/gha-setup-ninja@96bed6edff20d1dd61ecff9b75cc519d516e6401 # v5
+        with:
+          destination: ${{ runner.temp }}/ninja
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y \
+            libvulkan-dev \
+            glslang-tools \
+            libshaderc-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcursor-dev \
+            libxi-dev \
+            mesa-common-dev
+          clang++ --version
+
+      - name: Install pinned Vulkan headers and SPIRV-Reflect
+        run: |
+          python3 scripts/install-vulkan-headers.py --destination /tmp/vulkan-sdk --download-dir "$RUNNER_TEMP/vulkan-headers"
+          echo "VULKAN_SDK=/tmp/vulkan-sdk" >> "$GITHUB_ENV"
+
+      - name: Cache CPM downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-linux-clang-tsan-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-linux-clang-tsan-
+            cpm-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset linux-clang-tsan
+
+      - name: Build the jobs tests
+        run: cmake --build --preset linux-clang-tsan --target crd-jobs-tests
+
+      - name: Rounds
+        env:
+          ROUNDS: ${{ inputs.tsan_rounds }}
+          LEG: ${{ matrix.leg }}
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          python3 scripts/tsan-host-check.py --build build/linux-clang-tsan --rounds "$ROUNDS" \
+            --scratch "$RUNNER_TEMP/host-check/work" --json "$evidence/host-check-tsan-$LEG.json" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          if [ -d "$RUNNER_TEMP/host-check/work" ]; then
+            find "$RUNNER_TEMP/host-check/work" -name '*.log' -exec cp {} "$evidence/" \;
+          fi
+          cp /proc/cpuinfo "$evidence/cpuinfo.txt"
+
+      - name: Preserve logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: host-check-tsan-${{ matrix.leg }}
           path: ${{ runner.temp }}/host-check/evidence
           if-no-files-found: warn

@@ -254,6 +254,22 @@ the next seed after an event until its time is spent. An event is an artifact, a
 assertion or libFuzzer report in a log; the step summary names the CPU from `/proc/cpuinfo`, the executions of every
 process and the stack head of every report, the logs and crash files are uploaded, and a leg with an event fails.
 
+Two more legs (JOBS-HARD.3, [session](../sessions/2026-10-25-jobs-fiber-pool-contention.md)) carry the same question
+to ThreadSanitizer. On this host the `linux-clang-tsan` run of the jobs streaming case ("fiber keep: while tiny jobs
+stream ...") faults about one run in ten with values no store wrote (a `{pid, uid}` word, instruction bytes, a null
+from a `unique_ptr` that held its array), and so does
+[a Cerid-free control](../../tests/support/diag/host-check/tsan_control.cpp) of the same shape: in its fiber mode,
+and in its plain mode, which runs no fiber at all; the same control unsanitized was clean. Each TSan leg configures
+`linux-clang-tsan`, builds `crd-jobs-tests` and runs [tsan-host-check.py](../../scripts/tsan-host-check.py):
+`tsan_rounds` rounds (150 by default, so the two legs run the jobs case 300 times) of four interleaved arms (the
+jobs case under the test preset's `TSAN_OPTIONS`, the control on fibers, on plain threads and unsanitized), every
+process pinned to two CPUs beside a busy loop pinned to each. An event is a nonzero exit, a timeout, a missing pass
+line, or a ThreadSanitizer report or
+`=== WRONG` line in a log; the summary names the CPU and tallies runs, events and seconds per arm, failing logs are
+uploaded, and a leg with an event fails. The arms separate the causes: a hosted event in the jobs arm beside a clean
+control is a jobs defect, an event in the plain control anywhere is that machine's, and clean legs where this host
+faults put the fault on this host.
+
 ## The sanitizer audit
 
 **UBSan recovered.** `-fsanitize=undefined` alone prints a report and continues, so the Linux ASan+UBSan lane could
