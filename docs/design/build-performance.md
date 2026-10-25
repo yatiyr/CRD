@@ -24,11 +24,18 @@ design before any board ran:
 |---|---|---|---|
 | MSVC 14.51 | CMake precompiled header on (`/Yu … /Fp …`) | non-cacheable | sccache refuses `/Fp` and `/Yc` ("PCHs are not supported"); every consuming unit is counted under `Non-cacheable reasons: /Fp` |
 | MSVC 14.51 | PCH off, `/Z7` | hit | embedded debug information; `/Zi` without a per-object PDB is refused as "shared pdb" |
-| GCC 13.3 | CMake precompiled header on (`-include cmake_pch.hxx`) | hit | the include is a preprocessor argument; the preprocessed unit hashes the same |
+| GCC 13.3 | CMake precompiled header on (`-include cmake_pch.hxx`) | hit, unsafe | the include is a preprocessor argument; the preprocessed unit hashes the same, but the `.gch` records its inputs' bytes (below) |
 | GCC 13.3 | PCH off | hit | |
 
 So the MSVC question is never "cached versus uncached" but "PCH on and uncached" against "PCH off and cached", and
-the board carries both; on GCC the precompiled header stays on and only the launcher is added.
+the board carries both. GCC kept its precompiled header under the cache until 2026-10-25: a cached `.gch` is keyed by
+the preprocessed text, but GCC records the size and MD5 of each `#pragma once` header it holds and skips a later
+`#include` of that header only when the bytes match. An edit that leaves the text alone (a comment of the same line
+count, line endings) was therefore served the old `.gch`, and every unit that missed for another reason included the
+header a second time (`assert.hpp`: "default argument given for parameter 4"; reproduced on linux-gcc-debug, the
+`.gch` a cache hit, the same commands without the launcher clean;
+[session](../sessions/2026-10-25-diag-5c-headless-fatal-dump.md)). Since then a cached tree has no precompiled header
+on any compiler, and the launcher refuses one.
 
 ## The opt-in module
 
@@ -41,18 +48,14 @@ Ninja statements unchanged except the CMake re-run rule listing the new module; 
   the generators CMake applies launchers to. On MSVC-compatible compilers it also sets
   `CMAKE_MSVC_DEBUG_INFORMATION_FORMAT` to `Embedded` for Debug and RelWithDebInfo (policy CMP0141 is NEW under the
   3.25 minimum), and it warns when `CRD_ENABLE_PCH` is still on, because nothing would be cached; it never flips the
-  PCH option itself. Since 2026-10-18 Shipping is cached as well: the module sets `CRD_EMBEDDED_DEBUG_INFO`, the one
+  PCH option itself; since 2026-10-25 that warning is a configure error on every compiler (a cached tree has no
+  precompiled header, see the probes above). Since 2026-10-18 Shipping is cached as well: the module sets `CRD_EMBEDDED_DEBUG_INFO`, the one
   switch that makes the root build file give Shipping `/Z7` in place of its explicit `/Zi` and makes
   [CrdPackage.cmake](../../cmake/CrdPackage.cmake) package the archives' debug information as `embedded` (no compile
   PDB exists to install). `/DEBUG:FULL` still writes each program's full PDB, LTCG still runs at the link, and the
   link itself is never cached. clang-cl writes byte-identical objects for `/Zi` and `/Z7` (probed on
   `assert.cpp`), so on clang-cl the switch changes nothing but cacheability. Without the launcher every
-  configuration keeps `/Zi` and its compile PDBs. On Clang (not clang-cl) the launcher also adds
-  `-Xclang -fno-pch-timestamp`: Clang stores every input's modification time in a precompiled header and sccache
-  hashes the `.pch` a unit includes, so a header rebuilt in a fresh tree or checkout (same text, new times) missed
-  for every unit that includes it (249 of 2,059 compiles on the warm linux-clang-tsan board, every one on a hosted
-  checkout); without the times the `.pch` bytes follow the text (probed), the objects are byte-identical, and Ninja
-  still rebuilds a precompiled header whenever one of its inputs changes. A Visual Studio generator prints that the solution runs uncached
+  configuration keeps `/Zi` and its compile PDBs. A Visual Studio generator prints that the solution runs uncached
   and touches nothing: native MSBuild caching needs its own proof, and the truthful IDE path is the uncached one.
 - `CRD_COMPILE_JOBS=<n>` and `CRD_LINK_JOBS=<n>` declare Ninja job pools (`crd_compile`, `crd_link`) and route
   compiles and links through them; other generators report that pools are ignored. Non-integers fail the configure.
@@ -67,8 +70,7 @@ build-speed batch, [board](../bench/2026-10-18-build-speed-cache-mirror.md)).
 [compiler-cache.py](../../scripts/compiler-cache.py) owns the rules:
 
 - `configure-args <preset>` prints the entries a local configure adds: `CRD_COMPILER_LAUNCHER=<pinned sccache>` for
-  a Ninja preset, plus `CRD_ENABLE_PCH=OFF` when the compiler is cl or clang-cl (their precompiled header is not
-  cacheable). A Visual Studio preset and the clang-tidy presets get nothing (no launcher applies; the analysis runs
+  a Ninja preset, plus `CRD_ENABLE_PCH=OFF` (the launcher refuses a precompiled header). A Visual Studio preset and the clang-tidy presets get nothing (no launcher applies; the analysis runs
   on every unit), and neither do the MSVC LTCG presets (cl with interprocedural optimization: win-release,
   win-relwithdebinfo, win-shipping, win-shipping-profile): their compiles only parse and the link generates the code,
   so on the focused win-shipping route a cached restore saved 17 % while the cold miss cost 42 % and converting the
@@ -101,9 +103,9 @@ build-speed batch, [board](../bench/2026-10-18-build-speed-cache-mirror.md)).
 A cached compile is keyed by the compiler, its arguments and the preprocessed (or, in sccache's direct mode, the
 source) text, and the arguments name the build directory, so a tree keeps its path: a cached tree is the same
 `build/<preset>` directory reconfigured through the helper, not a new preset. The cache never changes what a compile
-produces: a hit returns the object, standard output and diagnostics the compiler produced for those inputs, a
-compile that fails (a `/WX` warning included) is not stored, and a changed precompiled header misses (probed on
-GCC's `-include` and Clang's `-include-pch`).
+produces: a hit returns the object, standard output and diagnostics the compiler produced for those inputs, and a
+compile that fails (a `/WX` warning included) is not stored. That holds because a cached tree has no precompiled
+header: one records its inputs' bytes, which the key does not hold (the probes above).
 
 ## The linker
 
@@ -194,8 +196,8 @@ PCH-on and PCH-off profiles' front ends were within the host's noise), and what 
 A test target's (one that links `Catch2::Catch2WithMain` or `Catch2::Catch2`) also holds
 `catch2/catch_test_macros.hpp`, which its units include anyway (`crd_enable_default_pch` decides at the end of the
 configuration; `CRD_NO_CATCH2_PCH` on a target opts it out): on linux-gcc-debug, uncached, the cold build 5.7 %
-shorter and a widely included header's rebuild 3-11 % (2026-10-19 boards). Trees with precompiled headers off (the
-MSVC cached trees) are unchanged.
+shorter and a widely included header's rebuild 3-11 % (2026-10-19 boards). Trees with precompiled headers off (every
+cached tree since 2026-10-25) are unchanged.
 
 Catch2's own library (106 units, the only third-party compile above 10 s) compiles as unity batches of 16 sources
 (`CRD_CATCH2_UNITY`, on by default; 2026-10-19): its units each spent most of their time parsing the same headers,

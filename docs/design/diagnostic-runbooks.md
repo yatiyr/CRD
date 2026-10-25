@@ -137,7 +137,7 @@ a workflow, writes through `gh api`, or grants `upload` or `remote-enable`.
 |---|---|
 | Symptom | `CRD_FATAL` or a failed `CRD_ASSERT` printed its file and line and the process aborted; or an allocator's out-of-memory fatal named itself and the request. |
 | Command | `ceridc diag --command bundle.inspect --path <flight bundle> --root <capture dir>` |
-| Artifact | The flight bundle `flight-<n>.cdb` in the host profile's `capture_dir`: the trigger, the events of the window before it and this build's identity. |
+| Artifact | The flight bundle `flight-<n>.cdb` in the host profile's `capture_dir`: the trigger, the events of the window before it and this build's identity. With the crash handler on, the abort also leaves a `crash_` capture of the aborting thread in `crash_dir` (Windows: exception code `0x40000015`; Linux: SIGABRT). |
 | Read | The trigger's code, file and line, and the events before it. An allocation refusal names the allocator and the size; a refused shape in a test is a `CRD_DIAG_FATAL_OTHER` naming the allocator that refused first. |
 | Next test | `ctest --test-dir build/win-debug -R "^crd-(containers|scene|ceir|resources|toml)-fatal-"`; `ctest --test-dir build/win-debug -R "^flight trigger: "`; `ctest --test-dir build/win-debug -R "^allocator consumers: "` |
 | Hosted | Every lane: the `crd-*-fatal-*` modes pass on their `CRD_DIAG_FATAL_OK` line. |
