@@ -29,6 +29,28 @@ and the profiling binary none, so the pair also differed in source (the shared h
 sampler starts, any harness whose tree has work left for the target (`ninja -n`, from the tree's
 `CMAKE_MAKE_PROGRAM`), and the manifest keeps the checkout's commit and whether tracked files differ.
 
+**Addendum, later the same day: the tree check could never pass.** The user's elevated
+`scripts\elevated-captures.bat sampling` refused with TOOL_MISSING although `crd-diag-overhead` had just been built
+at `c4a56808` on both trees. On a tree with CONFIGURE_DEPENDS globs, `ninja -n <target>` always prints `[0/2]
+Re-checking globbed directories...` and `[1/2] Re-running CMake...`: `CMakeFiles/VerifyGlobs.cmake_force` is a phony
+with no inputs, so dirty in every dry run (`-d explain` says so), and ninja's dry run exits as soon as the manifest
+would be regenerated, before it looks at the target. So neither "no work to do" nor a list of the target's work is
+ever printed; reading `-d explain` cannot help either, because an edge with a dirty input skips its output-time checks
+and a touched `CMakeLists.txt` is not explained. `tree_current` now does the build's own first steps without their
+effects: it runs the glob check for real (`cmake -P CMakeFiles/VerifyGlobs.cmake` from the tree's `CMAKE_COMMAND`; it
+touches the stamp only when a glob's matches changed), writes a temporary copy of `build.ninja` without the
+VERIFY_GLOBS edge (the stamp is then a plain input judged by its time), and runs `ninja -C <tree> -f <copy> -n -d
+explain build.ninja <target>`; the copy's absolute path is no node of the graph, so ninja does not try to regenerate
+it, and `build.ninja` is asked for by name, so a changed CMake input is work. On both trees at `c4a56808`: current
+(0.5 s each); touching `tests/support/diag-overhead/main.cpp`, `engine/foundation/jobs/src/fiber_pool.hpp` or
+`tests/support/diag-overhead/CMakeLists.txt` refused with ninja's own explanation; restored, current. The Linux
+mirror tree linux-gcc-shipping (refused: it was really stale) parsed the same way. Tests: the Windows and Linux
+manifest shapes, ninja 1.13.2's real outputs (glob chain, touched source, header and CMake input), a failed glob
+check, and a real CMake and ninja tree configured and built in the test (`RealTree`; under CTest the tree's own tools
+are passed in), where a built tree is current, the former plain dry run is shown to refuse it, each touched input and a
+new globbed file refuse, and restoring or rebuilding makes it current. Teeth, each restored: dry-running the
+unstripped manifest, dropping `build.ninja` from the dry run and skipping the real glob check each fail the tests.
+
 ## (a) Off over compiled-out (alloc, jobs, offline): method fixed
 
 Hypothesis: the gap is the two-binary layout floor, no diagnostic code runs in off, so the frame-time verdict is

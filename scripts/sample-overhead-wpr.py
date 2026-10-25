@@ -58,8 +58,9 @@ Verdicts (one line each; the exit code is the worst):
 
 `record` runs every workload in the boards' shape (`diag-overhead.py run`: the jobs pool at THREADS, every process
 pinned to AFFINITY, one logical processor of each core) and refuses, before the sampler starts, a harness whose build
-tree is not current with the checkout (`ninja -n` of the target), so the two binaries come from one source; the
-manifest keeps the checkout's commit and each harness record's CPU measurand.
+tree is not current with the checkout (the glob check run for real, then a dry run of build.ninja and the target past
+the always-dirty glob-verification edge: tree_current), so the two binaries come from one source; the manifest keeps
+the checkout's commit and each harness record's CPU measurand.
 
 The one command (an elevated PowerShell in the checkout, after building crd-diag-overhead on win-shipping-profile and
 win-shipping):
@@ -78,6 +79,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -155,25 +157,104 @@ def build_tree(exe):
     return None
 
 
+def cache_value(tree, name):
+    """One entry of a build tree's CMakeCache.txt; None when it is not there."""
+    for line in (tree / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace').splitlines():
+        if line.startswith(name + ':'):
+            return line.split('=', 1)[1].strip() or None
+    return None
+
+
+def build_rule(statement):
+    """The rule of a ninja `build` statement: the word after the first unescaped `:` (`D$:` is an escaped colon)."""
+    match = re.search(r'(?<!\$):[ \t]*([A-Za-z0-9_.-]+)', statement)
+    return match.group(1) if match else None
+
+
+def without_glob_verification(text):
+    """A CMake Ninja manifest's text without its glob-verification edge (rule VERIFY_GLOBS, its statement with any
+    `$` line continuations and its indented bindings), and how many edges were removed.
+
+    CMake gives every tree with CONFIGURE_DEPENDS globs the chain `build.ninja <- CMakeFiles/cmake.verify_globs <-
+    CMakeFiles/VerifyGlobs.cmake_force`, the last a phony with no inputs and no file, so dirty in every dry run. The
+    real build runs `cmake -P VerifyGlobs.cmake` with restat, which touches the stamp only when a glob's matches changed;
+    a dry run cannot restat, so `ninja -n` of any target on such a tree reports `Re-checking globbed directories...`,
+    `Re-running CMake...` and stops: a dry run that would regenerate the manifest exits at once, before it looks at the
+    target. Without the edge the stamp is a plain input of build.ninja, judged by its time like every CMake input."""
+    lines = text.split('\n')
+    kept = []
+    removed = 0
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if not line.startswith('build '):
+            kept.append(line)
+            index += 1
+            continue
+        statement = [line]
+        while (len(statement[-1].rstrip('\r')) - len(statement[-1].rstrip('\r').rstrip('$'))) % 2 == 1 and \
+                index + len(statement) < len(lines):
+            statement.append(lines[index + len(statement)])
+        index += len(statement)
+        if build_rule(' '.join(part.rstrip('\r').rstrip('$') for part in statement)) != 'VERIFY_GLOBS':
+            kept.extend(statement)
+            continue
+        removed += 1
+        while index < len(lines) and lines[index][:1] in (' ', '\t') and lines[index].strip():
+            index += 1
+    return '\n'.join(kept), removed
+
+
 def tree_current(exe, subprocess_run):
-    """None when `exe`'s tree has no work left for its target (it is the checkout's source as built), else why not."""
+    """None when `exe`'s tree has no work left for its target (it is the checkout's source as built), else why not.
+
+    The check is the build's own first two steps without their effects: the glob check runs for real (`cmake -P
+    CMakeFiles/VerifyGlobs.cmake`, as every build runs it; it touches the stamp only when a glob's matches changed), then
+    ninja dry-runs build.ninja and the target from a copy of the manifest without the glob-verification edge
+    (without_glob_verification). The copy is named by its absolute path, which is no node of the graph, so ninja does not
+    first try to regenerate it; build.ninja is asked for by name instead, so a changed CMake input (or a changed glob,
+    through the stamp) is work, as a changed source or header of the target is."""
     tree = build_tree(exe)
     if tree is None:
         return '%s is not in a CMake build tree' % exe
-    make = None
-    for line in (tree / 'CMakeCache.txt').read_text(encoding='utf-8', errors='replace').splitlines():
-        if line.startswith('CMAKE_MAKE_PROGRAM:'):
-            make = line.split('=', 1)[1].strip()
+    make = cache_value(tree, 'CMAKE_MAKE_PROGRAM')
     if not make:
         return '%s names no CMAKE_MAKE_PROGRAM' % (tree / 'CMakeCache.txt')
+    manifest = tree / 'build.ninja'
+    if not manifest.is_file():
+        return '%s has no build.ninja (the check reads a Ninja tree)' % tree
     target = Path(exe).stem
-    try:
-        dry = subprocess_run([make, '-C', str(tree), '-n', target], capture_output=True, text=True)
-    except OSError as error:
-        return 'cannot run %s: %s' % (make, error)
+    verify = tree / 'CMakeFiles' / 'VerifyGlobs.cmake'
+    with tempfile.TemporaryDirectory(prefix='crd-tree-current-') as scratch:
+        dry_manifest = manifest
+        if verify.is_file():
+            cmake = cache_value(tree, 'CMAKE_COMMAND')
+            if not cmake:
+                return '%s names no CMAKE_COMMAND for its glob check' % (tree / 'CMakeCache.txt')
+            try:
+                globs = subprocess_run([cmake, '-P', str(verify)], capture_output=True, text=True, cwd=str(tree))
+            except OSError as error:
+                return 'cannot run %s: %s' % (cmake, error)
+            if globs.returncode != 0:
+                message = (globs.stderr or globs.stdout or '').strip().replace('\n', ' ')
+                return 'the glob check of %s failed (rc=%d): %s' % (tree, globs.returncode, message)
+            text, removed = without_glob_verification(manifest.read_bytes().decode('utf-8', 'surrogateescape'))
+            if removed != 1:
+                return ('%s has %d glob-verification edges, not one: the check knows no other manifest shape'
+                        % (manifest, removed))
+            dry_manifest = Path(scratch) / 'build.ninja'
+            dry_manifest.write_bytes(text.encode('utf-8', 'surrogateescape'))
+        command = [make, '-C', str(tree), '-f', str(dry_manifest.resolve()), '-n', '-d', 'explain', 'build.ninja',
+                   target]
+        try:
+            dry = subprocess_run(command, capture_output=True, text=True)
+        except OSError as error:
+            return 'cannot run %s: %s' % (make, error)
     if dry.returncode != 0 or 'no work to do' not in (dry.stdout or ''):
-        return ('%s in %s is not current with the checkout (`%s -C %s -n %s` has work); build it before recording, '
-                'so both binaries come from one source' % (target, tree, Path(make).name, tree, target))
+        why = [line.split('explain: ', 1)[1] for line in (dry.stderr or '').splitlines() if 'explain: ' in line]
+        work = [line for line in (dry.stdout or '').splitlines() if line.startswith('[')]
+        return ('%s in %s is not current with the checkout (%s); build it before recording, so both binaries come '
+                'from one source' % (target, tree, '; '.join((why or work or ['ninja rc=%d' % dry.returncode])[:3])))
     return None
 
 

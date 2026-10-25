@@ -62,6 +62,12 @@ set_tests_properties(crd-developer-workflow PROPERTIES TIMEOUT 90 ENVIRONMENT "P
 set_tests_properties(crd-diag-cpu-sampling-runbook crd-diag-counters-capability crd-diag-debugger-recipes
     crd-diag-reverse-debug-recipes crd-diag-overhead-verdicts crd-diag-overhead-sampling-runbook
     PROPERTIES TIMEOUT 30 ENVIRONMENT "PYTHONUTF8=1")
+# The harness-tree check's teeth configure and build a real CONFIGURE_DEPENDS tree with this tree's own CMake and ninja,
+# so under CTest that case always runs (outside CTest it looks for both on PATH).
+if(CMAKE_GENERATOR MATCHES "Ninja")
+    set_property(TEST crd-diag-overhead-sampling-runbook APPEND PROPERTY ENVIRONMENT
+        "CRD_TEST_CMAKE=${CMAKE_COMMAND}" "CRD_TEST_NINJA=${CMAKE_MAKE_PROGRAM}")
+endif()
 # It reads the seeded sources through the checkout: 10 s through WSL's 9p mount, under 1 s on a native disk.
 set_tests_properties(crd-diag-seeded-faults crd-diag-coverage PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.3a: every allocation result in shipped code is checked before it is used (a sub-budget allocator refuses by

@@ -10,6 +10,9 @@ from unittest import mock
 import hashlib
 import importlib.util
 import json
+import os
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -305,19 +308,227 @@ class Judge(unittest.TestCase):
                          'UNRESOLVED', 'two recorded processes with one PID cannot be told apart')
 
 
-def fake_run(calls, start_code=0, dry_run='ninja: no work to do.\n'):
-    """subprocess.run for wpr, the build tool's dry run and git; every command is kept in `calls`."""
+# The manifest shapes CMake 4.3's Ninja generator writes for a tree with CONFIGURE_DEPENDS globs (excerpts of
+# build/win-shipping-profile/build.ninja and ~/cerid-mirror-build/linux-gcc-shipping/build.ninja, 2026-10-25).
+WINDOWS_MANIFEST = r"""# CMAKE generated file: DO NOT EDIT!
+include CMakeFiles\rules.ninja
+
+build tests\diag-overhead\crd-diag-overhead.exe: CXX_EXECUTABLE_LINKER__crd-diag-overhead_Release main.cpp.obj
+  LINK_FLAGS = /machine:x64
+
+#############################################
+# Phony target to force glob verification run.
+
+build D$:\b\CMakeFiles\VerifyGlobs.cmake_force: phony
+
+
+#############################################
+# Re-run CMake to check if globbed directories changed.
+
+build D$:\b\CMakeFiles\cmake.verify_globs: VERIFY_GLOBS | D$:\b\CMakeFiles\VerifyGlobs.cmake_force
+  pool = console
+  restat = 1
+
+
+#############################################
+# Re-run CMake if any of its inputs changed.
+
+build build.ninja D$:\b\cmake_install.cmake: RERUN_CMAKE D$:\b\CMakeFiles\cmake.verify_globs | ..\..\CMakeLists.txt
+  pool = console
+"""
+LINUX_MANIFEST = """include CMakeFiles/rules.ninja
+
+build /home/u/b/CMakeFiles/VerifyGlobs.cmake_force: phony
+
+build /home/u/b/CMakeFiles/cmake.verify_globs: VERIFY_GLOBS | $
+    /home/u/b/CMakeFiles/VerifyGlobs.cmake_force
+  pool = console
+  restat = 1
+
+build build.ninja: RERUN_CMAKE /home/u/b/CMakeFiles/cmake.verify_globs | /home/u/s/CMakeLists.txt
+  pool = console
+"""
+# What ninja 1.13.2 printed on build/win-shipping-profile at c4a56808, crd-diag-overhead built and nothing touched:
+# a dry run that would regenerate the manifest exits before it looks at the target.
+GLOB_CHAIN = '[0/2] Re-checking globbed directories...\n[1/2] Re-running CMake...\n'
+GLOB_CHAIN_EXPLAIN = ('ninja explain: D:/b/CMakeFiles/VerifyGlobs.cmake_force is dirty\n'
+                      'ninja explain: D:/b/CMakeFiles/cmake.verify_globs is dirty\n')
+CURRENT = "ninja: Entering directory `D:/b'\nninja: no work to do.\n"
+TOUCHED_SOURCE = ("ninja: Entering directory `D:/b'\n"
+                  '[1/2] Building CXX object tests\\diag-overhead\\CMakeFiles\\crd-diag-overhead.dir\\main.cpp.obj\n'
+                  '[2/2] Linking CXX executable tests\\diag-overhead\\crd-diag-overhead.exe\n')
+TOUCHED_SOURCE_EXPLAIN = ('ninja explain: output tests/diag-overhead/CMakeFiles/crd-diag-overhead.dir/main.cpp.obj '
+                          'older than most recent input D:/Dev/cerid/tests/support/diag-overhead/main.cpp '
+                          '(8146394240954498 vs 8146400852579344)\n')
+TOUCHED_HEADER_EXPLAIN = ('ninja explain: output engine/jobs/CMakeFiles/crd-jobs.dir/src/fiber_pool.cpp.obj older '
+                          'than most recent input ../../engine/foundation/jobs/src/fiber_pool.hpp '
+                          '(8146394078539297 vs 8146401006733599)\n')
+TOUCHED_CMAKE = "ninja: Entering directory `D:/b'\n[0/1] Re-running CMake...\n"
+TOUCHED_CMAKE_EXPLAIN = ('ninja explain: output build.ninja older than most recent input '
+                         'D:/Dev/cerid/tests/support/diag-overhead/CMakeLists.txt (8146394041416084 vs 8146400858137685)\n')
+
+
+def fake_run(calls, start_code=0, dry_run=CURRENT, explain='', globs_code=0):
+    """subprocess.run for wpr, the glob check, the build tool's dry run and git; every command is kept in `calls`.
+
+    Like the real tool, the fake ninja reports the glob chain (and nothing about the target) for a dry run of a manifest
+    that still has the glob-verification edge, and `dry_run` only for one past it."""
 
     def run(command, **_):
         calls.append(list(command))
         if command[0] == 'git':
             return SimpleNamespace(returncode=0, stdout='0123abcd\n' if 'rev-parse' in command else '', stderr='')
+        if command[0] == 'cmake':
+            return SimpleNamespace(returncode=globs_code, stdout='', stderr='CMake Error: cannot read the glob')
         if command[0] == 'ninja':
-            return SimpleNamespace(returncode=0, stdout=dry_run, stderr='')
+            manifest = Path(command[command.index('-f') + 1]) if '-f' in command else None
+            if manifest is None or ': VERIFY_GLOBS' in manifest.read_text(encoding='utf-8'):
+                return SimpleNamespace(returncode=0, stdout=GLOB_CHAIN, stderr=GLOB_CHAIN_EXPLAIN)
+            return SimpleNamespace(returncode=0, stdout=dry_run, stderr=explain)
         return SimpleNamespace(returncode=start_code if command[1] == '-start' else 0, stdout='',
                                stderr='Failed to enable the policy to profile system performance.')
 
     return run
+
+
+def write_tree(temp, globs=True):
+    """A CMake Ninja tree's files as tree_current reads them."""
+    temp = Path(temp)
+    (temp / 'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Release\nCMAKE_MAKE_PROGRAM:FILEPATH=ninja\n'
+                                         'CMAKE_COMMAND:INTERNAL=cmake\n', encoding='utf-8')
+    (temp / 'build.ninja').write_text(WINDOWS_MANIFEST if globs else 'build build.ninja: RERUN_CMAKE | a\n',
+                                      encoding='utf-8')
+    if globs:
+        (temp / 'CMakeFiles').mkdir(exist_ok=True)
+        (temp / 'CMakeFiles/VerifyGlobs.cmake').write_text('file(GLOB NEW_GLOB "src/*.cpp")\n', encoding='utf-8')
+
+
+class TreeCurrent(unittest.TestCase):
+    def test_the_glob_verification_edge_alone_is_removed(self):
+        for manifest in (WINDOWS_MANIFEST, LINUX_MANIFEST):
+            text, removed = wpr.without_glob_verification(manifest)
+            self.assertEqual(removed, 1)
+            self.assertNotIn(': VERIFY_GLOBS', text)
+            self.assertNotIn('restat = 1', text, "the edge's bindings go with it")
+            self.assertNotIn('VerifyGlobs.cmake_force\n  pool', text, 'a continuation line goes with its statement')
+            for kept in ('VerifyGlobs.cmake_force: phony', ': RERUN_CMAKE', 'include CMakeFiles'):
+                self.assertIn(kept, text)
+            self.assertEqual(text.count('pool = console'), 1, "build.ninja's own bindings stay")
+        self.assertEqual(wpr.without_glob_verification('build a: phony\n'), ('build a: phony\n', 0))
+        self.assertEqual(wpr.build_rule(r'build D$:\b\x.obj: CXX_COMPILER__crd D$:\s\x.cpp'), 'CXX_COMPILER__crd',
+                         'an escaped drive colon is part of a path')
+
+    def check(self, temp, **fake):
+        calls = []
+        return wpr.tree_current(Path(temp) / 'crd-diag-overhead.exe', fake_run(calls, **fake)), calls
+
+    def test_a_tree_whose_only_work_is_the_glob_chain_is_current(self):
+        with tempfile.TemporaryDirectory() as temp:
+            write_tree(temp)
+            why, calls = self.check(temp)
+            self.assertIsNone(why)
+            tree = Path(temp).resolve()
+            self.assertEqual(calls[0], ['cmake', '-P', str(tree / 'CMakeFiles/VerifyGlobs.cmake')],
+                             'the glob check runs for real first')
+            self.assertEqual(calls[1][:4], ['ninja', '-C', str(tree), '-f'])
+            self.assertEqual(calls[1][-5:], ['-n', '-d', 'explain', 'build.ninja', 'crd-diag-overhead'],
+                             'build.ninja is asked for by name, so a changed CMake input is work')
+            self.assertTrue(Path(calls[1][4]).is_absolute(), 'no node of the graph: ninja does not regenerate it')
+            self.assertNotEqual(Path(calls[1][4]).parent, tree, 'the tree is not written')
+            self.assertEqual((tree / 'build.ninja').read_text(encoding='utf-8'), WINDOWS_MANIFEST)
+        with tempfile.TemporaryDirectory() as temp:
+            write_tree(temp, globs=False)
+            why, calls = self.check(temp)
+            self.assertIsNone(why, 'a tree without globs is dry-run from its own manifest')
+            self.assertEqual([c[0] for c in calls], ['ninja'])
+            self.assertEqual(calls[0][4], str((Path(temp) / 'build.ninja').resolve()))
+
+    def test_the_former_check_refused_every_current_tree(self):
+        """The defect repaired: a plain `ninja -n <target>` (the 9254f216 check) sees only the glob chain."""
+        plain = fake_run([])(['ninja', '-C', 'b', '-n', 'crd-diag-overhead'])
+        self.assertNotIn('no work to do', plain.stdout)
+        self.assertIn('Re-running CMake', plain.stdout)
+
+    def test_real_work_is_refused(self):
+        for dry_run, explain, expect in ((TOUCHED_SOURCE, TOUCHED_SOURCE_EXPLAIN, 'main.cpp.obj older than'),
+                                         (TOUCHED_SOURCE, TOUCHED_HEADER_EXPLAIN, 'fiber_pool.hpp'),
+                                         (TOUCHED_CMAKE, TOUCHED_CMAKE_EXPLAIN, 'build.ninja older than most recent'),
+                                         (TOUCHED_SOURCE, '', '[1/2] Building CXX object')):
+            with tempfile.TemporaryDirectory() as temp:
+                write_tree(temp)
+                why, _ = self.check(temp, dry_run=dry_run, explain=explain)
+                self.assertIn('is not current with the checkout', why)
+                self.assertIn(expect, why, 'the refusal names the work')
+        with tempfile.TemporaryDirectory() as temp:
+            write_tree(temp)
+            why, calls = self.check(temp, globs_code=1)
+            self.assertIn('the glob check of', why)
+            self.assertEqual([c[0] for c in calls], ['cmake'], 'no dry run after a failed glob check')
+            (Path(temp) / 'build.ninja').write_text(WINDOWS_MANIFEST + WINDOWS_MANIFEST, encoding='utf-8')
+            self.assertIn('2 glob-verification edges', self.check(temp)[0], 'an unknown shape is refused')
+            (Path(temp) / 'build.ninja').unlink()
+            self.assertIn('has no build.ninja', self.check(temp)[0])
+
+
+def real_tool(variable, name):
+    """A build tool for the real-tree test: the CTest-given one (tests/CMakeLists.txt), else the one on PATH."""
+    return os.environ.get(variable) or shutil.which(name)
+
+
+class RealTree(unittest.TestCase):
+    """tree_current on a tree CMake and ninja really generate and build, with a CONFIGURE_DEPENDS glob.
+
+    Under CTest the tree's own CMake and ninja are given (CRD_TEST_CMAKE, CRD_TEST_NINJA), so it always runs there."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cmake = real_tool('CRD_TEST_CMAKE', 'cmake')
+        cls.ninja = real_tool('CRD_TEST_NINJA', 'ninja')
+        if not cls.cmake or not cls.ninja:
+            raise unittest.SkipTest('cmake or ninja not found (CTest names both: CRD_TEST_CMAKE, CRD_TEST_NINJA)')
+
+    def run_tool(self, *command):
+        done = subprocess.run(list(command), capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        return done
+
+    def test_current_and_touched_trees(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source, tree = Path(temp) / 'src', Path(temp) / 'build'
+            (source / 'parts').mkdir(parents=True)
+            (source / 'parts/a.txt').write_text('a\n', encoding='utf-8')
+            (source / 'header.txt').write_text('h\n', encoding='utf-8')
+            (source / 'CMakeLists.txt').write_text(
+                'cmake_minimum_required(VERSION 3.20)\nproject(probe NONE)\n'
+                'file(GLOB parts CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/parts/*.txt")\n'
+                'add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/probe.out"\n'
+                '    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_SOURCE_DIR}/parts/a.txt" "${CMAKE_BINARY_DIR}/probe.out"\n'
+                '    DEPENDS ${parts} "${CMAKE_SOURCE_DIR}/header.txt")\n'
+                'add_custom_target(crd-probe ALL DEPENDS "${CMAKE_BINARY_DIR}/probe.out")\n', encoding='utf-8')
+            self.run_tool(self.cmake, '-G', 'Ninja', '-DCMAKE_MAKE_PROGRAM=' + self.ninja, '-S', str(source),
+                          '-B', str(tree))
+            self.run_tool(self.ninja, '-C', str(tree))
+            exe = tree / 'crd-probe.exe'
+            self.assertIsNone(wpr.tree_current(exe, subprocess.run), 'a built tree is current')
+            plain = self.run_tool(self.ninja, '-C', str(tree), '-n', 'crd-probe')
+            self.assertNotIn('no work to do', plain.stdout, 'the former check refused this current tree')
+            for touched, newer_than in ((source / 'parts/a.txt', tree / 'probe.out'),
+                                        (source / 'header.txt', tree / 'probe.out'),
+                                        (source / 'CMakeLists.txt', tree / 'build.ninja')):
+                before = touched.stat()
+                later = newer_than.stat().st_mtime_ns + 5_000_000_000
+                os.utime(touched, ns=(later, later))
+                why = wpr.tree_current(exe, subprocess.run)
+                self.assertIsNotNone(why, '%s touched: the tree has work' % touched.name)
+                self.assertIn('not current with the checkout', why)
+                os.utime(touched, ns=(before.st_atime_ns, before.st_mtime_ns))
+                self.assertIsNone(wpr.tree_current(exe, subprocess.run), '%s restored: current' % touched.name)
+            (source / 'parts/b.txt').write_text('b\n', encoding='utf-8')
+            why = wpr.tree_current(exe, subprocess.run)
+            self.assertIsNotNone(why, 'a new file a glob matches: CMake must re-run')
+            self.assertIn('cmake.verify_globs', why, 'found by the real glob check')
+            self.run_tool(self.ninja, '-C', str(tree))
+            self.assertIsNone(wpr.tree_current(exe, subprocess.run), 'rebuilt: current')
 
 
 def sampler_calls(calls):
@@ -331,8 +542,7 @@ class Record(unittest.TestCase):
         exe.write_bytes(b'profile')
         base.write_bytes(b'baseline')
         exe.with_suffix('.pdb').write_bytes(b'profile symbols')
-        (Path(temp) / 'CMakeCache.txt').write_text('CMAKE_BUILD_TYPE:STRING=Release\n'
-                                                   'CMAKE_MAKE_PROGRAM:FILEPATH=ninja\n', encoding='utf-8')
+        write_tree(temp)
         values = {'exe': str(exe), 'baseline_exe': str(base), 'workloads': 'alloc', 'arms': 'off,full',
                   'repetitions': 2, 'timeout': 5.0, 'out': str(Path(temp) / 'out'), 'progress': False}
         values.update(extra)
@@ -354,7 +564,9 @@ class Record(unittest.TestCase):
                               subprocess_run=fake_run(calls, dry_run='[1/2] Building CXX object x.obj\n'))
             self.assertEqual(code, 2)
             self.assertEqual(sampler_calls(calls), [], 'refused before the kernel sampler starts')
-            self.assertIn(['ninja', '-C', str(Path(temp).resolve()), '-n', 'crd-diag-overhead'], calls)
+            dry = [c for c in calls if c[0] == 'ninja']
+            self.assertEqual(len(dry), 1)
+            self.assertEqual(dry[0][-5:], ['-n', '-d', 'explain', 'build.ninja', 'crd-diag-overhead'])
             self.assertFalse((Path(temp) / 'out').exists())
             calls.clear()
             args = self.args(temp, arms='compiled-out,off')
