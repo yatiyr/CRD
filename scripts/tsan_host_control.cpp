@@ -59,8 +59,10 @@ ctl_switch:
 
 namespace
 {
-constexpr std::size_t kStack   = 64 * 1024;
-constexpr int         kThreads = 4; // main and three workers
+#if CTL_FIBERS
+constexpr std::size_t kStack = 64 * 1024;
+#endif
+constexpr int kThreads = 4; // main and three workers
 
 struct Progress
 {
@@ -73,39 +75,44 @@ struct Lane
 {
     std::atomic<std::uint64_t> pushed{0};
     std::atomic<std::uint64_t> popped{0};
-    std::uint64_t              capacity = 1024;
-    [[nodiscard]] std::uint64_t size() const { return pushed.load(std::memory_order_acquire) - popped.load(std::memory_order_acquire); }
+    std::uint64_t capacity = 1024;
+    [[nodiscard]] std::uint64_t size() const
+    {
+        return pushed.load(std::memory_order_acquire) - popped.load(std::memory_order_acquire);
+    }
 };
 
 struct Fiber
 {
-    void*  stack    = nullptr;
-    void*  rsp      = nullptr;
-    void*  tsan     = nullptr;
-    void*  tsan_ret = nullptr;
-    void** ret_rsp  = nullptr;
+    void* stack = nullptr;
+    void* rsp = nullptr;
+    void* tsan = nullptr;
+    void* tsan_ret = nullptr;
+    void** ret_rsp = nullptr;
 };
 
 struct Pool
 {
-    std::unique_ptr<Progress[]>        progress;
+    std::unique_ptr<Progress[]> progress;
     std::vector<std::unique_ptr<Lane>> lanes;
-    std::atomic<std::uint64_t>         done{0};
-    std::atomic<std::uint64_t>         remaining{0};
-    std::atomic<std::uint32_t>         gen{0};
-    std::atomic<bool>                  stop{false};
-    std::atomic<std::uint32_t>         in_use{0};
-    std::atomic<std::uint32_t>         peak{0};
+    std::atomic<std::uint64_t> done{0};
+    std::atomic<std::uint64_t> remaining{0};
+    std::atomic<std::uint32_t> gen{0};
+    std::atomic<bool> stop{false};
+    std::atomic<std::uint32_t> in_use{0};
+    std::atomic<std::uint32_t> peak{0};
 };
 
-Pool                g_pool;
-Progress*           g_progress_expect = nullptr;
-std::vector<Lane*>  g_lanes_expect;
-bool                g_fibers = true;
-std::mutex          g_free_mutex;
+Pool g_pool;
+Progress* g_progress_expect = nullptr;
+std::vector<Lane*> g_lanes_expect;
+bool g_fibers = true;
 std::vector<Fiber*> g_free;
-thread_local void*  t_sched_rsp = nullptr;
-thread_local Fiber* t_current   = nullptr;
+#if CTL_FIBERS
+std::mutex g_free_mutex;
+thread_local void* t_sched_rsp = nullptr;
+thread_local Fiber* t_current = nullptr;
+#endif
 
 [[noreturn]] void wrong(const char* what, const void* got, const void* want)
 {
@@ -150,9 +157,9 @@ void job_body() noexcept
 void init_stack(Fiber* f)
 {
     auto* top = reinterpret_cast<std::uintptr_t*>(static_cast<char*>(f->stack) + kStack);
-    top       = reinterpret_cast<std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(top) & ~std::uintptr_t{15});
-    *--top    = 0;
-    *--top    = reinterpret_cast<std::uintptr_t>(&fiber_entry);
+    top = reinterpret_cast<std::uintptr_t*>(reinterpret_cast<std::uintptr_t>(top) & ~std::uintptr_t{15});
+    *--top = 0;
+    *--top = reinterpret_cast<std::uintptr_t>(&fiber_entry);
     for (int i = 0; i < 6; ++i)
     {
         *--top = 0;
@@ -175,8 +182,8 @@ bool run_one(int idx) noexcept
     lane.popped.fetch_add(1, std::memory_order_release);
     progress_of(idx).task.store(left, std::memory_order_relaxed);
     progress_of(idx).executing.store(1, std::memory_order_relaxed);
-    const std::uint32_t now  = g_pool.in_use.fetch_add(1, std::memory_order_relaxed) + 1;
-    std::uint32_t       peak = g_pool.peak.load(std::memory_order_relaxed);
+    const std::uint32_t now = g_pool.in_use.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::uint32_t peak = g_pool.peak.load(std::memory_order_relaxed);
     while (now > peak && !g_pool.peak.compare_exchange_weak(peak, now, std::memory_order_relaxed))
     {
     }
@@ -190,9 +197,9 @@ bool run_one(int idx) noexcept
             g_free.pop_back();
         }
         init_stack(f);
-        f->ret_rsp  = &t_sched_rsp;
+        f->ret_rsp = &t_sched_rsp;
         f->tsan_ret = __tsan_get_current_fiber();
-        t_current   = f;
+        t_current = f;
         __tsan_switch_to_fiber(f->tsan, 0);
         ctl_switch(&t_sched_rsp, f->rsp);
         t_current = nullptr;
@@ -250,7 +257,8 @@ std::uint64_t read_pool() noexcept
     }
     for (int t = 0; t < kThreads; ++t)
     {
-        v += progress_of(t).ack.load(std::memory_order_relaxed) + progress_of(t).executing.load(std::memory_order_relaxed);
+        v += progress_of(t).ack.load(std::memory_order_relaxed) +
+             progress_of(t).executing.load(std::memory_order_relaxed);
     }
     return v;
 }
@@ -258,11 +266,11 @@ std::uint64_t read_pool() noexcept
 
 int main(int argc, char** argv)
 {
-    g_fibers           = CTL_FIBERS && (argc > 1) && (std::strcmp(argv[1], "fiber") == 0);
-    const int frames   = (argc > 2) ? std::atoi(argv[2]) : 200;
+    g_fibers = CTL_FIBERS && (argc > 1) && (std::strcmp(argv[1], "fiber") == 0);
+    const int frames = (argc > 2) ? std::atoi(argv[2]) : 200;
     for (int cycle = 0; cycle < 2; ++cycle)
     {
-        g_pool.progress   = std::make_unique<Progress[]>(kThreads);
+        g_pool.progress = std::make_unique<Progress[]>(kThreads);
         g_progress_expect = g_pool.progress.get();
         g_pool.lanes.clear();
         g_lanes_expect.clear();
@@ -277,9 +285,9 @@ int main(int argc, char** argv)
         {
             for (int i = 0; i < 208; ++i)
             {
-                auto* f  = new Fiber;
+                auto* f = new Fiber;
                 f->stack = ::mmap(nullptr, kStack, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-                f->tsan  = __tsan_create_fiber(0);
+                f->tsan = __tsan_create_fiber(0);
                 all.push_back(f);
             }
         }
@@ -291,9 +299,9 @@ int main(int argc, char** argv)
         {
             workers.emplace_back(&worker, i);
         }
-        std::atomic<bool>          reading{true};
+        std::atomic<bool> reading{true};
         std::atomic<std::uint64_t> sampled{0};
-        std::thread                reader(
+        std::thread reader(
             [&]
             {
                 while (reading.load(std::memory_order_acquire))
@@ -332,7 +340,8 @@ int main(int argc, char** argv)
 #endif
         g_free.clear();
         g_pool.progress.reset();
-        std::printf("cycle %d done, %llu jobs, %llu samples\n", cycle, static_cast<unsigned long long>(g_pool.done.load()),
+        std::printf("cycle %d done, %llu jobs, %llu samples\n", cycle,
+                    static_cast<unsigned long long>(g_pool.done.load()),
                     static_cast<unsigned long long>(sampled.load()));
     }
     return 0;
