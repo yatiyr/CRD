@@ -200,8 +200,6 @@
  "exclusions": [
   {"outcome": "DiagHostChangeKind", "value": "Unchanged", "class": "default-value",
    "reason": "DiagHostChange::kind's initializer in diagnostic_host.hpp; a candidate equal to the active profile keeps it."},
-  {"outcome": "DiagHostStart", "value": "RecorderRefused", "class": "resource-failure",
-   "reason": "start() validates the profile's policy and refuses a started host first, so the recorder's init can refuse only by failing to allocate its ring, which takes no allocator a test could fail."},
   {"outcome": "ResultVerdict", "value": "Agrees", "class": "default-value",
    "reason": "ResultCheck::verdict's initializer in result_oracle.hpp; a run whose results all agree keeps it."},
   {"outcome": "WorkloadVerdict", "value": "Clean", "class": "default-value",
@@ -216,7 +214,6 @@
    "reason": "DeviceDivergence::kind's initializer in device_replay.hpp; an agreeing replay keeps it."},
   {"outcome": "specimen Verdict", "value": "MissingSymbolizer", "class": "other-configuration",
    "reason": "Only a sanitizer lane's specimens print a report to symbolize; the seed asan-symbolizer-off produces it on win-asan and linux-gcc-asan."},
-  {"outcome": "FlightPolicyStatus", "value": "RejectedOutOfMemory", "class": "resource-failure", "reason": "new (std::nothrow) or the ring allocation must fail; the recorder takes no allocator a test could fail."},
   {"outcome": "FaultArmStatus", "value": "Unavailable", "class": "other-configuration", "reason": "Returned only where fault seams are not compiled (shipping lanes); crd-perf-tests asserts it on win-shipping and linux-gcc-shipping."},
   {"outcome": "InstallResult", "value": "OkReplacedForeignFilter", "class": "windows-only", "reason": "The unhandled-exception filter replacement exists only in the Win32 install path."},
   {"outcome": "InstallResult", "value": "PathTooLong", "class": "windows-only", "reason": "The wide-path length check exists only in the Win32 install path."},
