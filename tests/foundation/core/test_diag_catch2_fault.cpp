@@ -26,6 +26,7 @@
 #include <windows.h>
 #else
 #include <csignal>
+#include <sys/resource.h>
 #include <unistd.h>
 #endif
 
@@ -49,10 +50,14 @@ int read_wild_address()
     return *reinterpret_cast<const volatile int*>(kWildAddress); // NOLINT(performance-no-int-to-ptr): the fault
 }
 
+// A child that dies by its fault shows no dialog (Windows) and writes no core file (the exit status is the evidence).
 void headless_child()
 {
 #if defined(_WIN32)
     ::SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#else
+    struct rlimit none{};
+    (void)::setrlimit(RLIMIT_CORE, &none);
 #endif
 }
 
@@ -141,6 +146,7 @@ TEST_CASE("catch2 fault: a wild read in a test case reaches the next handler wit
 #if !defined(_WIN32)
 TEST_CASE("catch2 fault child: a sent SIGSEGV", "[.catch2-fault-child-sent]")
 {
+    headless_child();
     (void)std::raise(SIGSEGV);
     std::printf("CHILD CONTINUED AFTER A SENT SIGSEGV\n");
     std::fflush(stdout);
