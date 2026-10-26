@@ -104,9 +104,10 @@ TEST_CASE("flight rings: the merged capture is one global order that agrees with
 {
     // A token passes thread to thread: thread (h % k_threads) records hop h after acquiring the token at h and then
     // releases it at h + 1, so hop h happens before hop h + 1 and every consecutive pair is on two threads' rings.
-    // Two more threads record freely, interleaving their own rings' sequences.
-    constexpr u32 k_threads = 4U;
-    constexpr u32 k_hops    = 4000U;
+    // Two more threads record freely, interleaving their own rings' sequences. The hops go on until the capture is
+    // taken, so the post window fills however late the trigger comes.
+    constexpr u32 k_threads     = 4U;
+    constexpr u32 k_trigger_hop = 2000U;
     cp::FlightRecorder r;
     REQUIRE(r.init(policy(4096U, 1024U, 256U)) == cp::FlightPolicyStatus::Committed);
 
@@ -117,13 +118,22 @@ TEST_CASE("flight rings: the merged capture is one global order that agrees with
     for (u32 t = 0U; t < k_threads; ++t)
     {
         hoppers[t] = std::thread(
-            [&r, &token, &stalled, t]
+            [&r, &token, &stop, &stalled, t]
             {
-                for (u32 h = t; h < k_hops; h += k_threads)
+                for (u32 h = t;; h += k_threads)
                 {
-                    if (!wait_until([&] { return token.load(std::memory_order_acquire) == h; }))
+                    if (!wait_until(
+                            [&]
+                            {
+                                return token.load(std::memory_order_acquire) == h ||
+                                       stop.load(std::memory_order_acquire);
+                            }))
                     {
                         stalled.store(true);
+                        return;
+                    }
+                    if (stop.load(std::memory_order_acquire))
+                    {
                         return;
                     }
                     r.record(kHopCode, cp::Severity::Info, cont::StringView{"hop"}, h, t);
@@ -152,15 +162,15 @@ TEST_CASE("flight rings: the merged capture is one global order that agrees with
                 }
             });
     }
-    REQUIRE(wait_until([&] { return token.load(std::memory_order_acquire) >= k_hops / 2U; }));
-    REQUIRE(r.trigger(manual("half way")) == cp::FlightTriggerResult::Started);
+    REQUIRE(wait_until([&] { return token.load(std::memory_order_acquire) >= k_trigger_hop; }));
+    REQUIRE(r.trigger(manual("on the way")) == cp::FlightTriggerResult::Started);
+    cp::FlightCapture c;
+    const bool        taken = take(r, c);
+    stop.store(true, std::memory_order_release);
     for (auto& t : hoppers)
     {
         t.join();
     }
-    cp::FlightCapture c;
-    const bool        taken = take(r, c);
-    stop.store(true, std::memory_order_release);
     for (auto& t : noise)
     {
         t.join();
@@ -294,30 +304,48 @@ TEST_CASE("flight rings: the trigger boundary is exact in the trigger's own thre
 TEST_CASE("flight rings: the post window holds exactly post_events and void claims are given back",
           "[perf][diag][diag11b][flight][concurrency]")
 {
-    // Main records first, so it holds the lowest ring and the workers' rings are gathered after it.
+    // Main records first, so it holds the lowest ring and the workers' rings are gathered after it. Each worker records
+    // until it has seen the trigger, then k_after more, so the post window fills and the claims after it are void
+    // whatever the threads' speeds (fixed counts let every worker finish before a late trigger: hosted Windows lanes).
     constexpr u32 k_workers = 4U;
-    constexpr u64 k_each    = 20000U;
+    constexpr u64 k_after   = 2000U;
     cp::FlightRecorder r;
     REQUIRE(r.init(policy(256U, 64U, 32U)) == cp::FlightPolicyStatus::Committed);
     r.record(kMarkerCode, cp::Severity::Info, cont::StringView{"main first"}, 0U, 99U);
 
-    std::thread workers[k_workers];
+    std::atomic<bool> triggered{false};
+    u64               recorded[k_workers] = {};
+    std::thread       workers[k_workers];
     for (u32 w = 0U; w < k_workers; ++w)
     {
         workers[w] = std::thread(
-            [&r, w]
+            [&r, &triggered, &recorded, w]
             {
-                for (u64 i = 0U; i < k_each; ++i)
+                u64 i    = 0U;
+                u64 left = k_after;
+                while (left > 0U)
                 {
-                    r.record(kNoiseCode, cp::Severity::Info, cont::StringView{"worker"}, i, w);
+                    const bool after = triggered.load(std::memory_order_acquire);
+                    r.record(kNoiseCode, cp::Severity::Info, cont::StringView{"worker"}, i++, w);
+                    if (after)
+                    {
+                        --left;
+                    }
                 }
+                recorded[w] = i;
             });
     }
     REQUIRE(wait_until([&] { return r.total_recorded() > 1000U; }));
     REQUIRE(r.trigger(manual("exact")) == cp::FlightTriggerResult::Started);
+    triggered.store(true, std::memory_order_release);
     for (auto& t : workers)
     {
         t.join();
+    }
+    u64 all_recorded = 1U; // main's first event
+    for (const u64 n : recorded)
+    {
+        all_recorded += n;
     }
     const u64         frozen = r.total_recorded();
     cp::FlightCapture c;
@@ -354,7 +382,7 @@ TEST_CASE("flight rings: the post window holds exactly post_events and void clai
     // gave the dropped events' sequences back, so the next event takes the window's end, and no event recorded after
     // the window closed is in any later capture.
     CHECK(r.total_recorded() == frozen);
-    CHECK(k_workers * k_each + 1U == frozen + c.dropped_while_complete);
+    CHECK(all_recorded == frozen + c.dropped_while_complete);
     CHECK(c.dropped_while_complete > 0U);
     for (u64 i = 0U; i < 8U; ++i)
     {
