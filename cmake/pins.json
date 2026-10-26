@@ -13,7 +13,8 @@
       "license": "BSL-1.0",
       "patches": [
         "catch2-chrono-stringmaker-opt-in",
-        "catch2-clock-chrono-subset"
+        "catch2-clock-chrono-subset",
+        "catch2-posix-signal-refault"
       ]
     },
     "glfw": {

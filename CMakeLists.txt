@@ -670,6 +670,11 @@ if (CRD_BUILD_TESTS)
     # SYSTEM and EXCLUDE_FROM_ALL are what CPM's single-argument shorthand implied before the pins registry; the long
     # form implies neither, and the first complete-tier run (34821419392) failed clang-cl on a warning inside a Catch2
     # header once its includes stopped being system includes. Third-party headers never fail the warning gate.
+    # Under ThreadSanitizer Catch2 installs no POSIX signal handler, so TSan reports a fault inside a test case itself:
+    # Catch2's report allocates in the handler, and TSan (halt_on_error) ends the process at that signal-unsafe call
+    # before the fault is named; with the report left out, a handler in the chain still cost TSan's report its stack
+    # ("nested bug in the same thread"; docs/sessions/2026-10-26-catch2-fault-address.md).
+    set(CATCH_CONFIG_NO_POSIX_SIGNALS ${CRD_ENABLE_TSAN} CACHE BOOL "Catch2 installs no POSIX signal handler" FORCE)
     crd_add_pinned_package(Catch2 SYSTEM YES EXCLUDE_FROM_ALL YES)
     list(APPEND CMAKE_MODULE_PATH ${Catch2_SOURCE_DIR}/extras)
     # Every assertion reached <chrono> twice: catch_tostring.hpp for its duration and time-point printers, and
@@ -689,6 +694,29 @@ if (CRD_BUILD_TESTS)
     target_include_directories(Catch2 BEFORE PRIVATE "${CMAKE_BINARY_DIR}/patched/Catch2/src")
     unset(_crd_catch2_tostring)
     unset(_crd_catch2_clock)
+    # Catch2's POSIX fatal-condition handler re-raised every signal, so a sanitizer reported a fault inside a test case
+    # at the sender's {pid, uid} instead of the faulting address. Its copy lets a fault the kernel raised re-execute
+    # under the restored handler (cmake/patches/catch2-posix-signal-refault.cmake); the library compiles the copy in
+    # place of the upstream source (exactly one, or the configure fails).
+    crd_patched_copy(_crd_catch2_signals Catch2 src/catch2/internal/catch_fatal_condition_handler.cpp
+                     catch2-posix-signal-refault)
+    get_target_property(_crd_catch2_sources Catch2 SOURCES)
+    set(_crd_catch2_kept ${_crd_catch2_sources})
+    list(FILTER _crd_catch2_kept EXCLUDE REGEX "/internal/catch_fatal_condition_handler\\.cpp$")
+    list(LENGTH _crd_catch2_sources _crd_catch2_count)
+    list(LENGTH _crd_catch2_kept _crd_catch2_kept_count)
+    math(EXPR _crd_catch2_replaced "${_crd_catch2_count} - ${_crd_catch2_kept_count}")
+    if(NOT _crd_catch2_replaced EQUAL 1)
+        message(FATAL_ERROR "catch2-posix-signal-refault: Catch2 lists catch_fatal_condition_handler.cpp "
+                            "${_crd_catch2_replaced} times, expected exactly 1")
+    endif()
+    set_property(TARGET Catch2 PROPERTY SOURCES ${_crd_catch2_kept} "${_crd_catch2_signals}")
+    unset(_crd_catch2_signals)
+    unset(_crd_catch2_sources)
+    unset(_crd_catch2_kept)
+    unset(_crd_catch2_count)
+    unset(_crd_catch2_kept_count)
+    unset(_crd_catch2_replaced)
     # Catch2's library compiles as unity batches of 16 sources: its 106 units each spent most of their time parsing
     # the same headers (2026-10-19 probe, summed compile: 106-113 -> 10 s on MSVC, 69-70 -> 11 s on GCC, 70-77 -> 10 s
     # on Clang, the defined global symbols identical; docs/bench/2026-10-18-build-speed-compile-time.md). Catch2 ships
