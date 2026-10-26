@@ -2957,7 +2957,7 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   bodies are not inlined into baseline-ISA libraries); the read uses the compiler's own loads and is judged against
   the system clock (above). The same defect in every baseline library is follow-up (r), a decision.
   TickClock promises per-thread monotonic readings through the calibration, the hand-off to the first map and every
-  re-anchor (a hosted reader stepped back at the hand-off until 2026-10-26,
+  re-anchor (a reader stepped back at the hand-off until 2026-10-26, the shape of the hosted failure,
   [session](../sessions/2026-10-26-tick-clock-cross-thread.md)), not an order that agrees with happens-before across
   threads: the recorder's order is its claim word's.
 - Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-ups (q)
