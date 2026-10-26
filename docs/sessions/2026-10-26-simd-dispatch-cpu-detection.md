@@ -8,8 +8,9 @@
 
 - Push run [40340291698](https://github.com/yatiyr/CRD/actions/runs/40340291698) (head `4e0a0298`) failed seven jobs
   on the two flight-ring races, and 40351178841 (head `e4c56fb8`, running) win-clang-cl on the post-window case
-  (`take_capture` false at line 324, the same `REQUIRE` as line 306 before the file grew). `13f8e651` and `1df6bdd1`,
-  both newer than those heads and in HEAD, repaired them ([races](2026-10-26-ci-audit-and-flight-ring-races.md)).
+  (`take_capture` false at line 324, the same `REQUIRE` as line 306 before the file grew). Both are in HEAD's repairs
+  ([races](2026-10-26-ci-audit-and-flight-ring-races.md)): `13f8e651`, newer than both heads, fixed the post-window
+  case; `1df6bdd1`, newer than `4e0a0298` and part of `e4c56fb8`, fixed the trigger-boundary case.
   linux-gcc-asan's other failure is the registered TP-5. The cancelled runs 40341016749 to 40384366175 have no failed
   job.
 - Needs CI audit: no complete-tier run has finished since 40307186916, so DIAG.11c and DIAG.12 stay as that audit

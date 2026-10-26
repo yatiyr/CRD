@@ -38,7 +38,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    execute. Hybrid parts and virtual machines are not trusted to be uniform; the walk proves it and records the core
    types seen. It takes about 2 ms for 32 CPUs. `CRD_CPU_LEVEL` lowers the level for tests and qualification; a level
    above the hardware, of another architecture or unknown is refused, the detected level stays, and the status is
-   reported. The name is not `CRD_SIMD_LEVEL`, the build option.
+   reported. The name is not `CRD_SIMD_LEVEL`, the build option. The walk moves whichever thread calls first
+   (TickClock's first map can be a pinned job worker) and gives it back exactly its own affinity.
 4. **Baseline build.** General engine code builds at the baseline ISA: crd-simd-flags keeps the determinism flags and
    loses the ISA flags. `CRD_SIMD_LEVEL` caps the levels a build compiles (`scalar` stays the portable reference build
    for the oracle lanes); the `-sse2` lanes become forced-level arms of one binary.
