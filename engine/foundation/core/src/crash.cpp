@@ -1015,11 +1015,16 @@ static_assert(std::atomic<int>::is_always_lock_free && std::atomic<bool>::is_alw
 // Per-thread alternate signal stack. A stack-EXHAUSTED fault has no room on its own stack to run the handler, so
 // SA_ONSTACK diverts the handler onto this buffer. thread_local => zero-initialised .tbss (no malloc, nothing to
 // free); each thread that may fault registers it via guard_current_thread_stack(). Fixed 64 KiB deliberately:
-// SIGSTKSZ is not a constant expression on glibc >= 2.34, so a static-sized buffer cannot use it.
+// SIGSTKSZ is not a constant expression on glibc >= 2.34, so a static-sized buffer cannot use it. Which stack the
+// thread has is read from the kernel each time, never cached: another runtime may remove the stack crd borrowed.
 constexpr std::size_t                  kAltStackBytes = 64U * 1024U;
 alignas(64) thread_local unsigned char t_alt_stack[kAltStackBytes];
-thread_local bool                      t_alt_installed = false; // this thread has an alternate stack for SA_ONSTACK
-thread_local bool                      t_alt_owned     = false; // ...and it is t_alt_stack (ours to disable)
+
+// The thread's registered alternate stack, or false when it has none.
+bool current_alt_stack(stack_t& out) noexcept
+{
+    return sigaltstack(nullptr, &out) == 0 && (out.ss_flags & SS_DISABLE) == 0 && out.ss_sp != nullptr;
+}
 
 // -- Async-signal-safe primitives: format into a fixed buffer (no libc formatting) then write(2). --
 
@@ -1439,6 +1444,7 @@ ElfImage read_elf_image(const dl_phdr_info& info, unsigned char* id, std::size_t
         {
             continue;
         }
+        // NOLINTNEXTLINE(performance-no-int-to-ptr): the loader reports a module's base as an integer.
         const auto* p   = reinterpret_cast<const unsigned char*>(info.dlpi_addr + ph.p_vaddr);
         std::size_t rem = static_cast<std::size_t>(ph.p_memsz);
         while (rem >= sizeof(ElfW(Nhdr)))
@@ -1577,14 +1583,13 @@ void uninstall() noexcept
     s_gate.store(0, std::memory_order_relaxed);
     s_done.store(false, std::memory_order_relaxed);
 
-    if (t_alt_owned) // disable OUR alt stack on this thread; a borrowed one stays with its owner
+    stack_t current{};
+    if (current_alt_stack(current) && current.ss_sp == t_alt_stack) // disable OUR alt stack; a borrowed one stays
     {
         stack_t ss{};
         ss.ss_flags = SS_DISABLE;
         (void)sigaltstack(&ss, nullptr);
-        t_alt_owned = false;
     }
-    t_alt_installed = false;
 }
 
 WriteResult capture_dump(const DumpNote& /*note*/, const char** /*out_path*/) noexcept
@@ -1610,29 +1615,23 @@ void guard_current_thread_stack(std::uint32_t /*reserve_bytes*/) noexcept
     // here the alt stack is a fixed kAltStackBytes thread_local buffer). Idempotent per thread. Every thread that may
     // fault -- workers/fibers included (wired in a later sub-unit) -- must call this, or a stack-exhausted fault on it
     // cannot be recorded (there is no separate handler thread as on Windows).
-    if (t_alt_installed)
-    {
-        return;
-    }
-    // Keep an alternate stack another runtime already installed on this thread: it owns that stack's lifetime.
-    // AddressSanitizer gives every thread an mmap'ed alternate stack and munmaps whatever stack is current at thread
-    // exit, so replacing it with t_alt_stack made ASan die with "Failed to munmap" on every worker exit (hosted
-    // linux-gcc-asan, 2026-10-04, listing crd-stress-tests). SA_ONSTACK runs our handler on the existing stack.
+    //
+    // Keep an alternate stack already registered on this thread, ours or another runtime's (it owns that stack's
+    // lifetime). AddressSanitizer gives every thread an mmap'ed alternate stack and munmaps whatever stack is current
+    // at thread exit, so replacing it with t_alt_stack made ASan die with "Failed to munmap" on every worker exit
+    // (hosted linux-gcc-asan, 2026-10-04, listing crd-stress-tests). SA_ONSTACK runs our handler on the existing
+    // stack. Asked on every call: an owner may take its stack away while the thread lives (Catch2 registers one for
+    // each test case and restores the previous one after it), and the thread then gets its own.
     stack_t current{};
-    if (sigaltstack(nullptr, &current) == 0 && (current.ss_flags & SS_DISABLE) == 0 && current.ss_sp != nullptr)
+    if (current_alt_stack(current))
     {
-        t_alt_installed = true; // borrowed: uninstall() leaves it to its owner
         return;
     }
     stack_t ss{};
     ss.ss_sp    = t_alt_stack;
     ss.ss_size  = kAltStackBytes;
     ss.ss_flags = 0;
-    if (sigaltstack(&ss, nullptr) == 0)
-    {
-        t_alt_installed = true;
-        t_alt_owned     = true;
-    }
+    (void)sigaltstack(&ss, nullptr);
 }
 
 #if CRD_ENABLE_ASSERTS

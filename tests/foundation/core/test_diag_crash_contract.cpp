@@ -24,14 +24,16 @@
 #else
 #include <unistd.h> // getpid
 #if defined(__linux__)
-#include <signal.h> // sigaction/sigaltstack/SIG_* -- uninstall-restoration contract
+#include <csignal> // sigaction/sigaltstack/SIG_* -- uninstall-restoration contract
 #endif
 #endif
 
 #include "minidump_probe.hpp" // Windows-only dump content probe (no-op off Windows)
 
-namespace cont = crd::containers;
-namespace fs   = std::filesystem;
+#if defined(_WIN32)
+namespace cont = crd::containers; // the dump-stream cases
+#endif
+namespace fs = std::filesystem;
 
 using crd::crash::InstallResult;
 using crd::crash::WriteResult;
@@ -588,6 +590,43 @@ TEST_CASE("crash contract: uninstall restores the previous handler and disables 
 
     std::error_code ec;
     fs::remove_all(dir, ec);
+}
+
+TEST_CASE("crash contract: a borrowed alternate stack its owner took away is replaced by the thread's own",
+          "[core][diag][crash]")
+{
+    // Catch2 registers an alternate stack for each test case and restores the previous one after it: a thread that
+    // borrowed the case's stack keeps no stack for SA_ONSTACK unless the guard asks the kernel again.
+    crd::crash::uninstall();
+    stack_t before{};
+    REQUIRE(sigaltstack(nullptr, &before) == 0);
+
+    alignas(64) static unsigned char owner_memory[64U * 1024U];
+    stack_t                          owner{};
+    owner.ss_sp    = owner_memory;
+    owner.ss_size  = sizeof(owner_memory);
+    owner.ss_flags = 0;
+    REQUIRE(sigaltstack(&owner, nullptr) == 0);
+    crd::crash::guard_current_thread_stack();
+    stack_t now{};
+    REQUIRE(sigaltstack(nullptr, &now) == 0);
+    CHECK(now.ss_sp == owner_memory); // borrowed, not replaced
+
+    stack_t off{};
+    off.ss_flags = SS_DISABLE;
+    REQUIRE(sigaltstack(&off, nullptr) == 0); // the owner takes its stack away
+    crd::crash::guard_current_thread_stack();
+    REQUIRE(sigaltstack(nullptr, &now) == 0);
+    CHECK((now.ss_flags & SS_DISABLE) == 0);
+    CHECK(now.ss_sp != nullptr);
+    CHECK(now.ss_sp != owner_memory);
+
+    crd::crash::uninstall(); // disables the thread's own stack
+    REQUIRE(sigaltstack(nullptr, &now) == 0);
+    CHECK((now.ss_flags & SS_DISABLE) != 0);
+
+    before.ss_flags &= SS_DISABLE; // give the case its stack back as it was
+    REQUIRE(sigaltstack(&before, nullptr) == 0);
 }
 #endif // defined(__linux__)
 
