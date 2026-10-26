@@ -83,6 +83,25 @@ real completion across queues/windows, not an assumed number of application fram
 and per-technique cook tags with registered generic recipes. Test unaffected programs retain identity, failed reloads
 do not advance the visible generation, and graph/material/frame edits propagate along the exact dependency closure.
 
+### GPU capability tiers and fallback
+
+Adopted 2026-10-27 from the approved [research](../research/2026-10-26-state-of-the-art-2026-comparison.md#gaps-in-area-1);
+the user chose older-GPU fallbacks over a modern-only floor. GPU-TIER.0 owns the ladder decision:
+
+| Tier | Vulkan | DX12 | Features |
+|---|---|---|---|
+| T0 legacy | 1.1/1.2 | FL 11_x, SM 6.0 | bounded descriptor sets; no mesh shaders, no ray tracing |
+| T1 | 1.3, descriptor indexing, BDA | FL 12_1, SM 6.6 | dynamic resources |
+| T2 | 1.3 plus mesh/RT extensions | DX12 Ultimate | mesh shaders, DXR 1.1, VRS, sampler feedback |
+| T3 | Roadmap 2026, descriptor heap | SM 6.9, DXR 1.2 | cluster AS, partitioned TLAS, SER, OMM |
+
+Every asset declares the tiers it runs on and an authored fallback. Every RAH child's acceptance includes this clause:
+the declared fallback tier executes on a real or software adapter, and unsupported features are rejected before
+recording. Tier, backend and adapter switches are transactional RAH-7 replacements. RAH-SYNC gives every tier one
+access/layout model (enhanced barriers, legacy `ResourceBarrier`, synchronization2). RAH-7 covers structural graph
+edits and per-part pipelines; RAH-7.e draws a fallback while a variant compiles, and RAH-7.f measures the live-edit
+budget.
+
 ## Renderer library and qualification
 
 Every inherited family and technique remains in scope. The catalogue is normative, including the full OFF-1…9 offline
