@@ -274,7 +274,9 @@ private:
     std::optional<crd::memory::TlsfAllocator> m_tlsf;
     crd::memory::IAllocator*                  m_alloc      = nullptr;
     u64                                       m_expected   = 0U;
-    crd::u32                                  m_registered = 0xFFFFFFFFU; // the profiler's slot (--memory, full)
+#if CRD_PERF_ENABLED
+    crd::u32 m_registered = 0xFFFFFFFFU; // the profiler's slot (--memory, full)
+#endif
 };
 
 // ---- jobs -------------------------------------------------------------------------------------------------------
