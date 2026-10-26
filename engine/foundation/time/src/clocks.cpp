@@ -186,7 +186,8 @@ TickMap g_tick_map;
 // is not inlined into a unit built for the baseline ISA, such as this one. std::atomic's load then stayed an
 // out-of-line call, six of them in the mapped read, which made TickClock slower than steady_clock on the four-thread
 // jobs frame although it is the cheaper read (DIAG.11b (q2), docs/bench/2026-10-26-diag-11b-tick-clock-inlining.md).
-// Everywhere else (GCC and Clang inline std::atomic across their link-time optimisation) std::atomic's own loads.
+// Everywhere else std::atomic's own loads: GCC's link-time optimisation inlines them (checked on linux-gcc-shipping);
+// clang-cl takes the MSVC path above; Clang's own link-time optimisation on Linux was not inspected.
 #if defined(_MSC_VER) && defined(_M_X64)
 static_assert(sizeof(std::atomic<crd::u32>) == sizeof(crd::u32) && std::atomic<crd::u32>::is_always_lock_free,
               "a std::atomic<u32> is its value");

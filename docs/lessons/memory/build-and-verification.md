@@ -4134,8 +4134,9 @@ metadata:
 header-defined helper) that units of different `/arch` levels both use gets one body for the whole program, and LTCG
 does not inline an `/arch:AVX2` body into a function compiled for the baseline ISA. Which body wins follows the link
 order, and an executable's own units come first. A baseline-ISA library on a hot path then calls trivial functions
-(`mov eax,[rcx]; ret`, often ICF-folded under another name such as `basic_string_view::data`). GCC and Clang inline
-`std::atomic`'s loads across their LTO; the effect was seen on MSVC only.
+(`mov eax,[rcx]; ret`, often ICF-folded under another name such as `basic_string_view::data`). GCC's LTO inlined
+`std::atomic`'s loads on linux-gcc-shipping (checked with objdump); clang-cl was not disassembled and Clang's LTO on
+Linux was not inspected.
 
 **Why.** 2026-10-26, DIAG.11b follow-up (q) ([bench](../../bench/2026-10-26-diag-11b-tick-clock-inlining.md)): the
 cycle-counter `TickClock` made the four-thread jobs frame 2.9% slower than `steady_clock` in one binary although a
