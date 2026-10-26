@@ -16,6 +16,7 @@ and verification evidence in the linked note; its live status belongs only to th
 | [Large C++ development and CI](2026-09-12-large-cpp-development-and-ci.md) | Current CI evidence, seven-project research, fast local workflow and proposed finite repository loop; REPO.DEV and REPO.3c own state |
 | [Whole-system architecture review](2026-09-12-cerid-whole-system-review.md) | G01–G30 source-backed gaps, primary research and domain qualification; owner state only in ROADMAP |
 | [2026 state-of-the-art comparison](2026-10-26-state-of-the-art-2026-comparison.md) | Cerid versus 2026 engines, APIs and libraries in eleven areas plus runtime changeability; ranked gaps and proposed rows awaiting user approval |
+| [2026 comparison beyond games](2026-10-26-beyond-games-2026-comparison.md) | Part 2: audio/DAW, media/cinematics, engineering simulation, CAD, scientific computing, web, networking/collaboration and robotics/embedded versus 2026 peers; ranked gaps and proposed rows awaiting user approval |
 | [2026-07-06-v15-forward-ad-crush](2026-07-06-v15-forward-ad-crush.md) | Research — 2026-07-06 — v15 forward-mode AD: the frontier crush levers + reconstruct-verify tables |
 | [2026-07-06-v16-reverse-ad-crush](2026-07-06-v16-reverse-ad-crush.md) | v16 — reverse-mode AD + differentiable solvers: the crush reference (2026-07-06) |
 | [2026-07-07-v17-gpu-crush](2026-07-07-v17-gpu-crush.md) | v17 GPU compute compiler — research + crush dossier (2026-07-07) |
