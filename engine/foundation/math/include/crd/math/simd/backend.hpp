@@ -1,93 +1,88 @@
-// SIMD backend selection — Phase 3.1 v0a (ADR-0063 + ADR-0065 substrate).
+// SIMD backend selection (ADR-0063, ADR-0065, ADR-0134 §5).
 //
-// Backend is decided by `CRD_SIMD_TARGET`, which the CMake module
-// `cmake/CrdSimd.cmake` defines on the `crd-simd-flags` interface target.
-// Anything that links `crd-math` (transitively almost everything) inherits
-// the macro along with the matching `/arch:AVX2` / `-mavx2` / NEON flag.
+// A kernel unit (CRD_KERNEL_LEVEL, compiled once per CPU level by crd_add_cpu_kernels in cmake/CrdSimd.cmake) gets
+// the backend of its own level: portable is the scalar reference, sse2 and sse4.2 the 128-bit backends, avx2 and
+// avx512 the 256-bit one (no type uses 512-bit registers yet). General code gets CRD_SIMD_TARGET, which
+// crd-simd-flags defines with the matching ISA flags; it is never read from compiler ISA macros (`__AVX2__`), which
+// MSVC defines only under /arch.
 //
-// We do NOT auto-detect from compiler-defined ISA macros (`__AVX2__` etc.)
-// because MSVC does not define those unless the user passes `/arch:AVX2`,
-// which made earlier versions of this header silently fall back to SSE2 on
-// every non-shipping config. Going through the CMake module forces an
-// explicit, reportable choice.
+// Every type and function of these headers lives in the unit's level namespace (CRD_MATH_LEVEL_NS,
+// crd/math/kernel_level.hpp), so a copy compiled for one level never provides another level's symbol. The headers
+// therefore call no inline function of the standard library: lane math goes through crd/math/libm.hpp.
 
 #pragma once
 
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
+#include <crd/math/kernel_level.hpp>
 
-#define CRD_SIMD_BACKEND_SCALAR 0
-#define CRD_SIMD_BACKEND_SSE2   1
-#define CRD_SIMD_BACKEND_AVX2   2
-#define CRD_SIMD_BACKEND_NEON   3
-
-#if defined(CRD_SIMD_FORCE_SCALAR) && CRD_SIMD_FORCE_SCALAR
-    #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_SCALAR
+// CRD_SIMD_UNIT_LEVEL: the CRD_KERNEL_LEVEL_* value whose backend this unit's types use.
+#if defined(CRD_KERNEL_LEVEL)
+    #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL
 #elif defined(CRD_SIMD_TARGET)
-    // Defined by cmake/CrdSimd.cmake. Authoritative source.
-    #if   CRD_SIMD_TARGET == CRD_SIMD_BACKEND_AVX2
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_AVX2
-    #elif CRD_SIMD_TARGET == CRD_SIMD_BACKEND_SSE2
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_SSE2
-    #elif CRD_SIMD_TARGET == CRD_SIMD_BACKEND_NEON
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_NEON
+    // Defined by cmake/CrdSimd.cmake (0 scalar, 1 sse2, 2 avx2, 3 neon). Authoritative source.
+    #if CRD_SIMD_TARGET == 2
+        #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_AVX2
+    #elif CRD_SIMD_TARGET == 1
+        #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_SSE2
+    #elif CRD_SIMD_TARGET == 3
+        #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_NEON
     #else
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_SCALAR
+        #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_PORTABLE
     #endif
+#elif CRD_ARCH_X64
+    // Only when crd-simd-flags is not linked: the architecture's baseline.
+    #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_SSE2
+#elif CRD_ARCH_ARM64
+    #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_NEON
 #else
-    // Fallback only fires when `crd-simd-flags` is somehow not linked. We
-    // pick the safest baseline per arch and emit a one-time compiler note
-    // so the configure summary is the canonical source of truth.
-    #if CRD_ARCH_X64
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_SSE2
-    #elif CRD_ARCH_ARM64
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_NEON
-    #else
-        #define CRD_SIMD_BACKEND CRD_SIMD_BACKEND_SCALAR
-    #endif
+    #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_PORTABLE
 #endif
 
-#define CRD_SIMD_HAS_SSE2  (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SSE2 || CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2)
-#define CRD_SIMD_HAS_AVX2  (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2)
-#define CRD_SIMD_HAS_NEON  (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_NEON)
-#define CRD_SIMD_IS_SCALAR (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR)
+// The backend rungs; each holds on the rungs above it (HAS_SSE2 on the SSE4.2 and AVX2 backends, HAS_SSE42 on AVX2).
+// The avx512 level uses the AVX2 backend: no type uses 512-bit registers yet.
+#define CRD_SIMD_HAS_AVX2  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX2 || CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX512)
+#define CRD_SIMD_HAS_SSE42 (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_SSE42 || CRD_SIMD_HAS_AVX2)
+#define CRD_SIMD_HAS_SSE2  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_SSE2 || CRD_SIMD_HAS_SSE42)
+#define CRD_SIMD_HAS_NEON  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_NEON)
+#define CRD_SIMD_IS_SCALAR (!CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_NEON)
 
 #if CRD_SIMD_HAS_AVX2
     #include <immintrin.h>
+#elif CRD_SIMD_HAS_SSE42
+    #include <nmmintrin.h>
 #elif CRD_SIMD_HAS_SSE2
     #include <emmintrin.h>
 #elif CRD_SIMD_HAS_NEON
     #include <arm_neon.h>
 #endif
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 using crd::f32;
 using crd::f64;
 using crd::usize;
 
 // Lane widths for the SIMD types. Vec4f is 4 lanes on every backend (one
-// 128-bit register on SSE2/AVX2/NEON, four-element array on scalar).
+// 128-bit register on SSE2/SSE4.2/AVX2/NEON, four-element array on scalar).
 // Vec8f is 8 lanes (one 256-bit register on AVX2; two 128-bit registers
-// composed on SSE2/NEON; eight-element array on scalar).
-inline constexpr usize k_vec4f_lanes = 4;
-inline constexpr usize k_vec8f_lanes = 8;
+// composed on SSE2/SSE4.2/NEON; two four-element arrays on scalar).
+inline constexpr usize kVec4fLanes = 4;
+inline constexpr usize kVec8fLanes = 8;
 
-// Native lane width for the host: AVX2 → 8, others → 4. Drives AoSoA
-// layout choices in v0b.
-#if CRD_SIMD_HAS_AVX2
-inline constexpr usize k_native_lane_width = 8;
-#else
-inline constexpr usize k_native_lane_width = 4;
-#endif
+// The AoSoA lane width (Soa chunks, eylem body and collider columns). It is a data layout, so it is the same on every
+// level and backend (ADR-0134 §5): one binary and the data it cooks agree whichever level a CPU runs. Eight is the
+// widest level's f32 register; the 128-bit backends process a chunk column as two halves.
+inline constexpr usize kNativeLaneWidth = 8;
 
-// Compile-time-known backend name. Used by smokes / startup logs to verify
-// the binary was actually compiled with the SIMD level the configure
-// summary advertised.
-[[nodiscard]] inline constexpr const char* backend_name() noexcept
+// The backend this unit's types compiled for. Smokes and startup logs check it against the configure summary, and
+// the cross-level tests against each kernel unit's level.
+[[nodiscard]] constexpr const char* backend_name() noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     return "AVX2";
+#elif CRD_SIMD_HAS_SSE42
+    return "SSE4.2";
 #elif CRD_SIMD_HAS_SSE2
     return "SSE2";
 #elif CRD_SIMD_HAS_NEON
@@ -99,7 +94,7 @@ inline constexpr usize k_native_lane_width = 4;
 
 // Whether the binary was compiled under the ADR-0063 deterministic FP
 // contract. CrdSimd.cmake defines CRD_DETERMINISTIC_FP=1 in that mode.
-[[nodiscard]] inline constexpr bool deterministic_fp() noexcept
+[[nodiscard]] constexpr bool deterministic_fp() noexcept
 {
 #if defined(CRD_DETERMINISTIC_FP) && CRD_DETERMINISTIC_FP
     return true;
@@ -108,10 +103,8 @@ inline constexpr usize k_native_lane_width = 4;
 #endif
 }
 
-// Determinism contract (ADR-0063): SIMD ops must produce bit-exact same
-// results vs scalar reference for ADD / SUB / MUL / NEG / SQRT / MIN / MAX.
-// Hardware FMA (single rounding) is deliberately NOT used in mul_add — we
-// emit (a*b) + c with two roundings on every backend so SIMD/scalar parity
-// holds. Reductions (dot, horizontal_sum) use a fixed pairwise tree that
-// matches the scalar reference order.
-}
+// Determinism contract (ADR-0063, ADR-0134 §7): every operation of these types gives the same bits on every backend
+// for every input, NaN payloads aside (IEEE 754 leaves the payload of a two-NaN operation open). Hardware FMA is
+// used only by fma()/fnmadd()/fmaddsub(), which are single-rounded on every backend; mul_add is (a*b) + c with two
+// roundings. Reductions (dot, horizontal_sum) use a fixed pairwise tree that matches the scalar reference order.
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

@@ -116,7 +116,7 @@ void erfcinv_batch(T* out, const T* in, crd::usize n) noexcept
 // the Stirling form whose per-lane shift count defeated SIMD at 0.65×).
 inline void lgamma_lz_range_f64(double* out, const double* in, crd::u32 b, crd::u32 e) noexcept
 {
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     crd::u32 i = b;
     for (; i + 4U <= e; i += 4U)
     {
@@ -163,7 +163,7 @@ void lgamma_batch(T* out, const T* in, crd::usize n) noexcept
 // SIMD Lanczos tgamma over [b,e): full quads via crd_tgamma_lz4, scalar crd_tgamma_lz1 tail (bit-identical twins).
 inline void tgamma_lz_range_f64(double* out, const double* in, crd::u32 b, crd::u32 e) noexcept
 {
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     crd::u32 i = b;
     for (; i + 4U <= e; i += 4U)
     {

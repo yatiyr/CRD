@@ -9,7 +9,7 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4i.hpp>
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(32) Vec8i
 {
@@ -192,4 +192,4 @@ CRD_FORCEINLINE Vec8i cmp_gt(Vec8i a, Vec8i b) noexcept
 #endif
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

@@ -11,12 +11,10 @@
 #pragma once
 
 #include <crd/core/types.hpp>
+#include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
 
-#include <cmath>
-#include <cstring>
-
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(32) Vec4d
 {
@@ -197,7 +195,17 @@ CRD_FORCEINLINE Vec4d operator/(Vec4d a, Vec4d b) noexcept
 #endif
 }
 
-CRD_FORCEINLINE Vec4d operator-(Vec4d a) noexcept { return Vec4d::zero() - a; }
+// IEEE negation (the sign bit flips), like Vec4f's.
+CRD_FORCEINLINE Vec4d operator-(Vec4d a) noexcept
+{
+#if CRD_SIMD_HAS_AVX2
+    Vec4d r;
+    r.v = _mm256_xor_pd(a.v, _mm256_set1_pd(-0.0));
+    return r;
+#else
+    return Vec4d(-a.lanes[0], -a.lanes[1], -a.lanes[2], -a.lanes[3]);
+#endif
+}
 CRD_FORCEINLINE Vec4d operator*(Vec4d a, f64 s) noexcept { return a * Vec4d(s); }
 CRD_FORCEINLINE Vec4d operator*(f64 s, Vec4d a) noexcept { return Vec4d(s) * a; }
 CRD_FORCEINLINE Vec4d operator/(Vec4d a, f64 s) noexcept { return a / Vec4d(s); }
@@ -219,7 +227,7 @@ CRD_FORCEINLINE Vec4d fma(Vec4d a, Vec4d b, Vec4d c) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        r.lanes[i] = std::fma(a.lanes[i], b.lanes[i], c.lanes[i]);
+        r.lanes[i] = libm::fma(a.lanes[i], b.lanes[i], c.lanes[i]);
     }
     return r;
 #endif
@@ -237,7 +245,7 @@ CRD_FORCEINLINE Vec4d fnmadd(Vec4d a, Vec4d b, Vec4d c) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        r.lanes[i] = std::fma(-a.lanes[i], b.lanes[i], c.lanes[i]);
+        r.lanes[i] = libm::fma(-a.lanes[i], b.lanes[i], c.lanes[i]);
     }
     return r;
 #endif
@@ -289,7 +297,8 @@ CRD_FORCEINLINE Vec4d abs(Vec4d a) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        r.lanes[i] = a.lanes[i] < 0.0 ? -a.lanes[i] : a.lanes[i];
+        // Clear the sign bit, as the AVX2 backend does (NaN and -0.0 included).
+        r.lanes[i] = __builtin_bit_cast(f64, __builtin_bit_cast(u64, a.lanes[i]) & 0x7FFFFFFFFFFFFFFFULL);
     }
     return r;
 #endif
@@ -307,7 +316,7 @@ CRD_FORCEINLINE Vec4d sqrt(Vec4d a) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        r.lanes[i] = std::sqrt(a.lanes[i]);
+        r.lanes[i] = libm::sqrt(a.lanes[i]);
     }
     return r;
 #endif
@@ -338,12 +347,8 @@ CRD_FORCEINLINE Vec4d cmp_lt(Vec4d a, Vec4d b) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        // True mask = all-ones bit pattern as f64 (the canonical SIMD form).
-        // Encode by reinterpreting an all-ones u64 as f64 (NaN bit pattern).
-        const u64 all_ones = 0xFFFFFFFFFFFFFFFFULL;
-        f64 true_mask;
-        std::memcpy(&true_mask, &all_ones, sizeof(true_mask));
-        r.lanes[i] = (a.lanes[i] < b.lanes[i]) ? true_mask : 0.0;
+        // True mask = all-ones bit pattern as f64 (the canonical SIMD form, a NaN pattern).
+        r.lanes[i] = (a.lanes[i] < b.lanes[i]) ? __builtin_bit_cast(f64, ~u64{0}) : 0.0;
     }
     return r;
 #endif
@@ -359,10 +364,7 @@ CRD_FORCEINLINE Vec4d cmp_le(Vec4d a, Vec4d b) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        const u64 all_ones = 0xFFFFFFFFFFFFFFFFULL;
-        f64 true_mask;
-        std::memcpy(&true_mask, &all_ones, sizeof(true_mask));
-        r.lanes[i] = (a.lanes[i] <= b.lanes[i]) ? true_mask : 0.0;
+        r.lanes[i] = (a.lanes[i] <= b.lanes[i]) ? __builtin_bit_cast(f64, ~u64{0}) : 0.0;
     }
     return r;
 #endif
@@ -378,10 +380,7 @@ CRD_FORCEINLINE Vec4d cmp_eq(Vec4d a, Vec4d b) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        const u64 all_ones = 0xFFFFFFFFFFFFFFFFULL;
-        f64 true_mask;
-        std::memcpy(&true_mask, &all_ones, sizeof(true_mask));
-        r.lanes[i] = (a.lanes[i] == b.lanes[i]) ? true_mask : 0.0;
+        r.lanes[i] = (a.lanes[i] == b.lanes[i]) ? __builtin_bit_cast(f64, ~u64{0}) : 0.0;
     }
     return r;
 #endif
@@ -390,12 +389,12 @@ CRD_FORCEINLINE Vec4d cmp_eq(Vec4d a, Vec4d b) noexcept
 CRD_FORCEINLINE Vec4d cmp_gt(Vec4d a, Vec4d b) noexcept { return cmp_lt(b, a); }
 CRD_FORCEINLINE Vec4d cmp_ge(Vec4d a, Vec4d b) noexcept { return cmp_le(b, a); }
 
+// The mask is a comparison result (each lane all-bits-set or zero): the blend reads its sign bits.
 CRD_FORCEINLINE Vec4d select(Vec4d mask, Vec4d true_v, Vec4d false_v) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     Vec4d r;
-    r.v = _mm256_or_pd(_mm256_and_pd(mask.v, true_v.v),
-                       _mm256_andnot_pd(mask.v, false_v.v));
+    r.v = _mm256_blendv_pd(false_v.v, true_v.v, mask.v);
     return r;
 #else
     Vec4d r;
@@ -403,9 +402,7 @@ CRD_FORCEINLINE Vec4d select(Vec4d mask, Vec4d true_v, Vec4d false_v) noexcept
     // round-tripping through u64.
     for (usize i = 0; i < 4; ++i)
     {
-        u64 mask_bits;
-        std::memcpy(&mask_bits, &mask.lanes[i], sizeof(mask_bits));
-        r.lanes[i] = (mask_bits != 0) ? true_v.lanes[i] : false_v.lanes[i];
+        r.lanes[i] = __builtin_bit_cast(u64, mask.lanes[i]) != 0 ? true_v.lanes[i] : false_v.lanes[i];
     }
     return r;
 #endif
@@ -489,7 +486,7 @@ CRD_FORCEINLINE Vec4d fmaddsub(Vec4d a, Vec4d b, Vec4d c) noexcept
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
     {
-        r.lanes[i] = std::fma(a.lanes[i], b.lanes[i], (i & 1U) ? c.lanes[i] : -c.lanes[i]);
+        r.lanes[i] = libm::fma(a.lanes[i], b.lanes[i], (i & 1U) != 0U ? c.lanes[i] : -c.lanes[i]);
     }
     return r;
 #endif
@@ -578,4 +575,4 @@ CRD_FORCEINLINE void transpose4x4(Vec4d& r0, Vec4d& r1, Vec4d& r2, Vec4d& r3) no
 #endif
 }
 
-} // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

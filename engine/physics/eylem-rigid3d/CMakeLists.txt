@@ -11,7 +11,7 @@ target_include_directories(crd-eylem-rigid3d
 # v1b-a deps:
 #   crd-core / crd-memory:   IAllocator, types, asserts
 #   crd-containers:          Array (free-list side-table)
-#   crd-math:                Vec/Quat AoS + simd::Soa + Vec8f/Vec4f columns
+#   crd-math:                Vec/Quat AoS + simd::Soa + Vec8f columns
 #   crd-eylem:               public RigidBody + BodyId + PhysicsConfig contract
 # v1b-c added crd-scene PUBLIC: EylemSystem inherits ISystem, queries
 # (Transform, RigidBodyComponent), calls World setters. Component types

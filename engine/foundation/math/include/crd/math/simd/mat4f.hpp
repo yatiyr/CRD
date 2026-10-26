@@ -10,7 +10,7 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4f.hpp>
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(16) Mat4f
 {
@@ -142,4 +142,4 @@ CRD_FORCEINLINE Vec4f transform_vector(const Mat4f& m, f32 x, f32 y, f32 z) noex
     return m * Vec4f(x, y, z, 0.0F);
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

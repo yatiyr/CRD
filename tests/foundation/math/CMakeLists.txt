@@ -8,6 +8,7 @@ add_executable(crd-math-tests
     test_simd_transcendental.cpp
     test_transcendental.cpp
     test_kernel_dispatch.cpp
+    test_simd_levels.cpp
 )
 
 target_link_libraries(crd-math-tests PRIVATE
@@ -21,6 +22,10 @@ target_link_libraries(crd-math-tests PRIVATE
 # The highest CPU level this configuration compiles kernel units for (cmake/CrdSimd.cmake).
 list(GET CRD_KERNEL_LEVELS -1 _kernel_top)
 target_compile_definitions(crd-math-tests PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${_kernel_top}})
+
+# The SIMD-type probe, one unit per CPU level the build compiles (ADR-0134 §5, §7); test_simd_levels.cpp lists them.
+crd_add_cpu_kernels(crd-math-tests NAME simd_probe LEVELS portable sse2 sse42 avx2 avx512 neon INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/simd_level_probe.cpp")
 
 crd_enable_default_pch(crd-math-tests)
 

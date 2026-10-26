@@ -41,7 +41,6 @@
 #include <crd/eylem/types.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/soa.hpp>
-#include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -67,19 +66,19 @@ inline constexpr crd::u32 kColliderKindShift  = 20U;
 inline constexpr crd::u32 kColliderKindMask   = (1U << kColliderKindBits) - 1U;
 inline constexpr crd::u32 kColliderPerKindMax = (1U << kColliderKindShift) - 1U; // 1,048,575
 
-[[nodiscard]] inline constexpr crd::u32 encode_collider_index(ColliderShape kind,
+[[nodiscard]] constexpr crd::u32 encode_collider_index(ColliderShape kind,
                                                               crd::u32      per_kind_idx) noexcept
 {
     return ((static_cast<crd::u32>(kind) & kColliderKindMask) << kColliderKindShift)
          | (per_kind_idx & kColliderPerKindMax);
 }
 
-[[nodiscard]] inline constexpr ColliderShape decode_collider_kind(crd::u32 index) noexcept
+[[nodiscard]] constexpr ColliderShape decode_collider_kind(crd::u32 index) noexcept
 {
     return static_cast<ColliderShape>((index >> kColliderKindShift) & kColliderKindMask);
 }
 
-[[nodiscard]] inline constexpr crd::u32 decode_collider_per_kind_idx(crd::u32 index) noexcept
+[[nodiscard]] constexpr crd::u32 decode_collider_per_kind_idx(crd::u32 index) noexcept
 {
     return index & kColliderPerKindMax;
 }
@@ -105,18 +104,6 @@ struct alignas(32) SphereChunkT<8>
     crd::u8  live[8]{};
 };
 
-template <>
-struct alignas(16) SphereChunkT<4>
-{
-    using Col = crd::math::simd::Vec4f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col radius{};
-    crd::u32 body_idx[4]{};
-    crd::u8  generation[4]{};
-    crd::u8  live[4]{};
-};
-
 template <crd::usize Lane> struct BoxChunkT;
 
 template <>
@@ -129,18 +116,6 @@ struct alignas(32) BoxChunkT<8>
     crd::u32 body_idx[8]{};
     crd::u8  generation[8]{};
     crd::u8  live[8]{};
-};
-
-template <>
-struct alignas(16) BoxChunkT<4>
-{
-    using Col = crd::math::simd::Vec4f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col half_x{};  Col half_y{};  Col half_z{};
-    crd::u32 body_idx[4]{};
-    crd::u8  generation[4]{};
-    crd::u8  live[4]{};
 };
 
 template <crd::usize Lane> struct CapsuleChunkT;
@@ -157,26 +132,14 @@ struct alignas(32) CapsuleChunkT<8>
     crd::u8  live[8]{};
 };
 
-template <>
-struct alignas(16) CapsuleChunkT<4>
-{
-    using Col = crd::math::simd::Vec4f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col radius{};  Col half_height{};
-    crd::u32 body_idx[4]{};
-    crd::u8  generation[4]{};
-    crd::u8  live[4]{};
-};
-
-using SphereChunk  = SphereChunkT <crd::math::simd::k_native_lane_width>;
-using BoxChunk     = BoxChunkT    <crd::math::simd::k_native_lane_width>;
-using CapsuleChunk = CapsuleChunkT<crd::math::simd::k_native_lane_width>;
+using SphereChunk = SphereChunkT<crd::math::simd::kNativeLaneWidth>;
+using BoxChunk = BoxChunkT<crd::math::simd::kNativeLaneWidth>;
+using CapsuleChunk = CapsuleChunkT<crd::math::simd::kNativeLaneWidth>;
 
 class ColliderPool
 {
 public:
-    static constexpr crd::usize kLane = crd::math::simd::k_native_lane_width;
+    static constexpr crd::usize kLane = crd::math::simd::kNativeLaneWidth;
     using SphereStorage  = crd::math::simd::Soa<SphereChunk,  kLane>;
     using BoxStorage     = crd::math::simd::Soa<BoxChunk,     kLane>;
     using CapsuleStorage = crd::math::simd::Soa<CapsuleChunk, kLane>;

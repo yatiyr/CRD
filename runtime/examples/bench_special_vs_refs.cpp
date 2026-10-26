@@ -208,7 +208,7 @@ int main()
     }
 
     // ---- compute-bound microbench: raw primitive throughput, in-cache, single-thread (no memory floor) ----
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     {
         namespace dd = crd::hesap::special::detail;
         constexpr int kM = 8192; // 64 KB ⇒ L2-resident

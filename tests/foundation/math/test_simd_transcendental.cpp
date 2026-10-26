@@ -90,7 +90,7 @@ TEST_CASE("simd transcendental: crd_exp1 accuracy vs std::exp + edges", "[math][
     CHECK(std::isnan(d::crd_exp1(std::numeric_limits<f64>::quiet_NaN())));
 }
 
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 TEST_CASE("simd transcendental: crd_exp4 BIT-IDENTICAL to crd_exp1", "[math][simd][transcendental][moat]")
 {
     std::uint64_t s = 0x99CC33ULL;

@@ -41,7 +41,6 @@
 #include <crd/eylem/types.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/soa.hpp>
-#include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
@@ -53,9 +52,8 @@ namespace crd::eylem_rigid3d
 using crd::eylem::BodyId;
 using crd::eylem::RigidBody;
 
-// Pick the column type by lane width. Win + Linux production builds use
-// AVX2 (Lane=8 → Vec8f columns); win-debug-scalar uses scalar fallback
-// (Lane=4 → Vec4f columns). The struct shape is identical either way.
+// The chunk of Lane bodies. The AoSoA lane width is one data layout for every
+// build and CPU level (kNativeLaneWidth = 8, ADR-0134 §5): Vec8f columns.
 template <crd::usize Lane>
 struct BodyChunkT;
 
@@ -94,31 +92,12 @@ struct alignas(32) BodyChunkT<8>
     crd::u8  live[8]{}; // 0 = free slot, 1 = currently allocated
 };
 
-template <>
-struct alignas(16) BodyChunkT<4>
-{
-    using Col = crd::math::simd::Vec4f;
-    Col pos_x{};         Col pos_y{};         Col pos_z{};
-    Col rot_x{};         Col rot_y{};         Col rot_z{};         Col rot_w{};
-    Col linvel_x{};      Col linvel_y{};      Col linvel_z{};
-    Col angvel_x{};      Col angvel_y{};      Col angvel_z{};
-    Col inv_mass{};
-    Col inv_inertia_x{}; Col inv_inertia_y{}; Col inv_inertia_z{};
-    Col linear_damping{};
-    Col angular_damping{};
-    Col prev_pos_x{};    Col prev_pos_y{};    Col prev_pos_z{};
-    Col prev_rot_x{};    Col prev_rot_y{};    Col prev_rot_z{};    Col prev_rot_w{};
-    crd::u32 flags[4]{};
-    crd::u8  generation[4]{};
-    crd::u8  live[4]{};
-};
-
-using BodyChunk = BodyChunkT<crd::math::simd::k_native_lane_width>;
+using BodyChunk = BodyChunkT<crd::math::simd::kNativeLaneWidth>;
 
 class BodyPool
 {
 public:
-    static constexpr crd::usize kLane = crd::math::simd::k_native_lane_width;
+    static constexpr crd::usize kLane = crd::math::simd::kNativeLaneWidth;
     using Storage                     = crd::math::simd::Soa<BodyChunk, kLane>;
 
     // BodyId index field is 24 bits, so the absolute hard ceiling is

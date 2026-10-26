@@ -12,25 +12,17 @@ namespace crd::eylem_rigid3d
 {
 namespace
 {
-// Per-column store: read existing 8/4-lane Vec, overwrite the lane, write
+// Per-column store: read the 8-lane column, overwrite the lane, write it
 // back. Mirrors crd::math::simd::soa.hpp's scatter helper but localised so
-// we don't pay the indirection cost in the hot insert/write path.
-//
-// Vec8f / Vec4f don't expose a per-lane write directly. The store/modify/
-// load round-trip is the canonical pattern (also used by gather4/scatter8
-// in crd-math::simd::soa).
-// Per-lane scalar write into a SIMD column. Templated on column type so
-// exactly one specialisation gets emitted per build (Vec8f on AVX2,
-// Vec4f on scalar fallback) — no unused-function warnings under
-// -Werror,-Wunused-function.
-template <typename ColT>
-CRD_FORCEINLINE void put_lane(ColT& col, crd::usize lane_idx, crd::f32 value) noexcept
+// we don't pay the indirection cost in the hot insert/write path. Vec8f
+// exposes no per-lane write; the store/modify/load round trip is the
+// canonical pattern (also used by gather4/scatter8 in crd-math::simd::soa).
+CRD_FORCEINLINE void put_lane(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
 {
-    constexpr crd::usize k_lanes = sizeof(ColT) / sizeof(crd::f32);
-    crd::f32 buf[k_lanes];
+    crd::f32 buf[crd::math::simd::kVec8fLanes];
     col.store(buf);
     buf[lane_idx] = value;
-    col = ColT::load(buf);
+    col = crd::math::simd::Vec8f::load(buf);
 }
 } // namespace
 
@@ -203,7 +195,7 @@ void BodyPool::snapshot_state_to_prev() noexcept
 {
     // Whole-column copy across every chunk. The Soa storage hands out
     // chunks that are contiguous and ABI-aligned; SIMD `=` is one mov
-    // per column on AVX2 (Vec8f) / SSE (Vec4f). Free-slot lanes get
+    // per column on AVX2 and two on the 128-bit backends. Free-slot lanes get
     // copied too, but that is harmless: live[lane]==0 guards every
     // consumer that reads prev_*.
     const crd::usize n = m_storage.chunk_count();

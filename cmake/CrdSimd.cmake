@@ -229,17 +229,19 @@ elseif(_crd_arch_x64)
     set(_CRD_KERNEL_FLAGS_avx512 -march=x86-64-v4)
 endif()
 
-# crd_add_cpu_kernels(<archive> NAME <family> LEVELS portable [<level> ...] SOURCES <source> ...)
+# crd_add_cpu_kernels(<archive> NAME <family> LEVELS portable [<level> ...] [INCLUDES <target> ...]
+#                     SOURCES <source> ...)
 #
 # Compiles a kernel family's sources once for each of its LEVELS that CRD_KERNEL_LEVELS holds, as one object library
 # per level (<archive>-<family>-<level>) with that level's ISA flags, CRD_KERNEL_LEVEL and the ADR-0063 contract, and
 # never crd-simd-flags' global ISA. The objects join the archive, which gets CRD_KERNELS_<FAMILY>: the mask of the
 # built levels (bit n is CpuLevel n). LEVELS names the levels the sources have a body for; a CPU between two of them
-# runs the lower one. The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS
-# (crd/math/kernel_level.hpp), plain declarations and intrinsics: an inline function compiled at a higher level and
-# shared with general code is the defect class this rule removes. Kernel sources live outside the archive's src/.
+# runs the lower one. The units see the archive's interface include directories and those of the INCLUDES targets.
+# The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS (crd/math/kernel_level.hpp),
+# plain declarations and intrinsics: an inline function compiled at a higher level and shared with general code is the
+# defect class this rule removes. Kernel sources live outside the archive's src/.
 function(crd_add_cpu_kernels archive)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "LEVELS;SOURCES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "LEVELS;INCLUDES;SOURCES")
     if(NOT arg_NAME OR NOT arg_SOURCES OR NOT "portable" IN_LIST arg_LEVELS)
         message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): NAME, SOURCES and LEVELS with portable are required")
     endif()
@@ -254,6 +256,9 @@ function(crd_add_cpu_kernels archive)
         set(objects ${archive}-${arg_NAME}-${level})
         add_library(${objects} OBJECT ${arg_SOURCES})
         target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${archive},INTERFACE_INCLUDE_DIRECTORIES>)
+        foreach(target IN LISTS arg_INCLUDES)
+            target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${target},INTERFACE_INCLUDE_DIRECTORIES>)
+        endforeach()
         target_link_libraries(${objects} PRIVATE crd-core)
         target_compile_features(${objects} PRIVATE cxx_std_20)
         target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}

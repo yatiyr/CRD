@@ -8,8 +8,9 @@
 amendment (Highway 1.3 as a design peer, AVX10 version and APX detection, SME beside SVE, one OWN.1 capability)
 ([research](../research/2026-10-26-state-of-the-art-2026-comparison.md)). Detection and selection landed on
 2026-10-26 ([session](../sessions/2026-10-26-simd-dispatch-cpu-detection.md)), then the kernel units, the dispatch
-table and the first family ([session](../sessions/2026-10-26-simd-dispatch-kernel-units.md)); the other clauses are
-open in the row.
+table and the first family ([session](../sessions/2026-10-26-simd-dispatch-kernel-units.md)), then the level-aware
+SIMD types ([session](../sessions/2026-10-27-simd-dispatch-level-aware-types.md)); the other clauses are open in the
+row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
@@ -49,11 +50,11 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    `/arch:AVX2`, `/arch:AVX512`; GCC/Clang `-march=x86-64-v2`/`-v3`/`-v4`), its code inside a per-level namespace (the
    Highway pattern), so no inline function or template instantiated there shares a mangled name, and so a COMDAT
    body, with baseline code or another level. The crd-math SIMD types follow the unit's level, not a global macro;
-   raw `__AVX2__` tests go. Layout constants that reach data (`k_native_lane_width` for AoSoA) become
-   level-independent, so one binary and its cooked data agree on every level. Dispatch is one indirect call per
-   kernel invocation at the routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured
-   loss). Each table is resolved once from `cpu_selection().selected`, and every level's entry stays callable for the
-   differential tests.
+   raw `__AVX2__` tests go. Headers shared with kernel units call no inline function of the standard library
+   (`crd/math/libm.hpp`). Layout constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent,
+   so one binary and its cooked data agree on every level. Dispatch is one indirect call per kernel invocation at the
+   routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured loss). Each table is resolved
+   once from `cpu_selection().selected`, and every level's entry stays callable for the differential tests.
 6. **Isolation guard.** A CTest on every lane disassembles the baseline code and fails on any instruction above the
    floor (VEX or EVEX encodings on x64) outside the per-level namespaces, and on any per-level symbol a baseline unit
    defines. LTCG objects hold IL, so MSVC trees are judged on the linked executables with their PDB symbols.

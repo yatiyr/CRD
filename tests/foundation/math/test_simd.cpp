@@ -462,15 +462,14 @@ TEST_CASE("simd Quatf alignment is 16 bytes", "[simd][quatf]")
 
 TEST_CASE("simd backend macros define exactly one path", "[simd][backend]")
 {
-    // The ACTIVE backend's comparison is X==X by design -- this counts how many backend
-    // macros match (must be exactly 1). clang-tidy flags the active one as "redundant";
-    // that equivalence is precisely what the test verifies. (Wrapped because which line is
+    // Counts the backend rungs that hold exclusively (must be exactly 1). After macro
+    // expansion each term compares constants, which clang-tidy reads as "redundant"; that
+    // equivalence is precisely what the test verifies. (Wrapped because which line is
     // flagged depends on the active backend.)
     // NOLINTBEGIN(misc-redundant-expression)
-    constexpr int k_picked = (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SCALAR ? 1 : 0)
-                         + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_SSE2   ? 1 : 0)
-                         + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2   ? 1 : 0)
-                         + (CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_NEON   ? 1 : 0);
+    constexpr int k_picked = (CRD_SIMD_IS_SCALAR ? 1 : 0) + (CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_SSE42 ? 1 : 0) +
+                             (CRD_SIMD_HAS_SSE42 && !CRD_SIMD_HAS_AVX2 ? 1 : 0) + (CRD_SIMD_HAS_AVX2 ? 1 : 0) +
+                             (CRD_SIMD_HAS_NEON ? 1 : 0);
     // NOLINTEND(misc-redundant-expression)
     STATIC_REQUIRE(k_picked == 1);
 }
@@ -483,7 +482,7 @@ TEST_CASE("simd backend reports its compile-time identity", "[simd][backend][!ma
     // level the configure summary advertised.
     INFO("crd::math::simd::backend_name()      = " << crd::math::simd::backend_name());
     INFO("crd::math::simd::deterministic_fp()  = " << (crd::math::simd::deterministic_fp() ? "true" : "false"));
-    INFO("crd::math::simd::k_native_lane_width = " << crd::math::simd::k_native_lane_width);
+    INFO("crd::math::simd::kNativeLaneWidth = " << crd::math::simd::kNativeLaneWidth);
 
     // Always succeeds; the INFO above carries the payload.
     REQUIRE(crd::math::simd::backend_name() != nullptr);
@@ -626,4 +625,58 @@ TEST_CASE("Vec4d sizeof + alignment", "[simd][vec4d]")
 {
     STATIC_REQUIRE(sizeof(Vec4d) == 32);
     STATIC_REQUIRE(alignof(Vec4d) == 32);
+}
+
+// ===========================================================================
+// IEEE semantics of the rounding, conversion and sign operations (ADR-0134 §7: test_simd_levels.cpp proves every
+// level gives these bits; this proves the bits are IEEE 754's).
+// ===========================================================================
+
+TEST_CASE("simd round_nearest and truncate are IEEE roundToIntegral on every class", "[simd][determinism]")
+{
+    const f32 values[] = {0.0F,     -0.0F,         0.3F,           -0.3F,        0.5F,        -0.5F,      1.5F,
+                          2.5F,     -2.5F,         3.7F,           -3.7F,        8388607.5F,  8388608.0F, -8388609.0F,
+                          2.1e9F,   2147483648.0F, -2147483904.0F, 3.0e9F,       -1.0e30F,    1.0e-40F,   -1.0e-40F,
+                          INFINITY, -INFINITY,     0.49999997F,    -0.49999997F, 16777215.0F, 1234.5F,    -1234.5F};
+    for (const f32 x : values)
+    {
+        INFO("x = " << x);
+        const Vec8f v(x);
+        CHECK(bit_eq(crd::math::simd::round_nearest(Vec4f(x)).lane(0), std::nearbyint(x)));
+        CHECK(bit_eq(crd::math::simd::round_nearest(v).lane(7), std::nearbyint(x)));
+        CHECK(bit_eq(crd::math::simd::truncate(Vec4f(x)).lane(1), std::trunc(x)));
+        CHECK(bit_eq(crd::math::simd::truncate(v).lane(6), std::trunc(x)));
+    }
+    const f32 quiet = std::bit_cast<f32>(0x7FC12345U);
+    const f32 signalling = std::bit_cast<f32>(0xFF812345U);
+    CHECK(std::bit_cast<crd::u32>(crd::math::simd::round_nearest(Vec4f(quiet)).lane(2)) == 0x7FC12345U);
+    CHECK(std::bit_cast<crd::u32>(crd::math::simd::truncate(Vec8f(signalling)).lane(3)) == 0xFFC12345U);
+}
+
+TEST_CASE("simd convert_truncate gives INT32_MIN for NaN and out-of-range lanes", "[simd][determinism]")
+{
+    const Vec4f in(2147483520.0F, -2147483648.0F, 2147483648.0F, std::bit_cast<f32>(0x7FC00000U));
+    const crd::math::simd::Vec4i narrow = crd::math::simd::convert_truncate(in);
+    CHECK(narrow.lane(0) == 2147483520);
+    CHECK(narrow.lane(1) == std::bit_cast<crd::i32>(0x80000000U));
+    CHECK(narrow.lane(2) == std::bit_cast<crd::i32>(0x80000000U));
+    CHECK(narrow.lane(3) == std::bit_cast<crd::i32>(0x80000000U));
+    const crd::math::simd::Vec8i wide = crd::math::simd::convert_truncate(Vec8f(in, Vec4f(-3.9F)));
+    CHECK(wide.lane(2) == std::bit_cast<crd::i32>(0x80000000U));
+    CHECK(wide.lane(7) == -3);
+}
+
+TEST_CASE("simd negation flips the sign bit and fnmadd is single-rounded", "[simd][determinism]")
+{
+    CHECK(std::bit_cast<crd::u32>((-Vec4f(0.0F)).lane(0)) == 0x80000000U);
+    CHECK(std::bit_cast<crd::u32>((-Vec8f(-0.0F)).lane(5)) == 0x00000000U);
+    CHECK(std::bit_cast<crd::u64>((-Vec4d(0.0)).lane(3)) == 0x8000000000000000ULL);
+    CHECK(std::bit_cast<crd::u32>((-Vec4f(std::bit_cast<f32>(0x7FC00001U))).lane(1)) == 0xFFC00001U);
+    // c - a*b with one rounding: a*a = 1 + 2^-11 + 2^-24 rounds to 1 + 2^-11, so the two-rounded form differs.
+    const f32 a = 1.0F + 0x1.0p-12F;
+    const f32 fused = crd::math::simd::fnmadd(Vec8f(a), Vec8f(a), Vec8f(1.0F)).lane(4);
+    CHECK(bit_eq(fused, -(0x1.0p-11F + 0x1.0p-24F)));
+    CHECK(!bit_eq(fused, 1.0F - (a * a)));
+    const f64 d = 1.0 + 0x1.0p-27;
+    CHECK(bit_eq_f64(crd::math::simd::fnmadd(Vec4d(d), Vec4d(d), Vec4d(1.0)).lane(0), -(0x1.0p-26 + 0x1.0p-54)));
 }

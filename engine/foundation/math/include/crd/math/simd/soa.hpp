@@ -1,10 +1,11 @@
 // Soa<TChunk, Lane> — AoSoA storage substrate. Phase 3.1 v0b.
 //
 // User defines TChunk explicitly as a SIMD-friendly struct holding columns
-// of Lane f32s (typically Vec8f columns for Lane=8 on AVX2, Vec4f columns
-// for Lane=4 elsewhere). Soa stores Array<TChunk> with chunk-aligned
-// growth + tracks the logical entity count separately so the last chunk
-// can be partially populated without breaking iteration.
+// of Lane f32s (Vec8f columns for the default Lane, kNativeLaneWidth = 8 on
+// every build and CPU level; Vec4f columns for Lane=4). Soa stores
+// Array<TChunk> with chunk-aligned growth + tracks the logical entity count
+// separately so the last chunk can be partially populated without breaking
+// iteration.
 //
 // SIMD path:  soa_for_each_chunk — lambda gets (chunk&, active_lane_count).
 // Slow path:  soa_for_each_lane  — lambda gets (chunk&, lane_idx) per entity.
@@ -21,9 +22,9 @@
 #include <crd/containers/span.hpp>
 #include <crd/memory/allocator.hpp>
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
-template <typename TChunk, usize Lane = k_native_lane_width>
+template <typename TChunk, usize Lane = kNativeLaneWidth>
 class Soa
 {
 public:
@@ -34,7 +35,7 @@ public:
     static_assert(alignof(TChunk) >= 16,
                   "Soa TChunk must be at least 16-byte aligned (SIMD requirement)");
 
-    static constexpr usize lanes_per_chunk = Lane;
+    static constexpr usize kLanesPerChunk = Lane;
     using ChunkType = TChunk;
 
     explicit Soa(crd::memory::IAllocator* alloc = crd::memory::default_allocator()) noexcept
@@ -124,7 +125,7 @@ private:
 // actual active lane count (1..Lane) so callers can mask off the partial
 // tail when correctness requires it.
 template <typename TChunk, usize Lane, typename Fn>
-CRD_FORCEINLINE void soa_for_each_chunk(Soa<TChunk, Lane>& soa, Fn&& fn)
+CRD_FORCEINLINE void soa_for_each_chunk(Soa<TChunk, Lane>& soa, Fn fn)
 {
     const usize n = soa.chunk_count();
     if (n == 0)
@@ -139,7 +140,7 @@ CRD_FORCEINLINE void soa_for_each_chunk(Soa<TChunk, Lane>& soa, Fn&& fn)
 }
 
 template <typename TChunk, usize Lane, typename Fn>
-CRD_FORCEINLINE void soa_for_each_chunk(const Soa<TChunk, Lane>& soa, Fn&& fn)
+CRD_FORCEINLINE void soa_for_each_chunk(const Soa<TChunk, Lane>& soa, Fn fn)
 {
     const usize n = soa.chunk_count();
     if (n == 0)
@@ -157,7 +158,7 @@ CRD_FORCEINLINE void soa_for_each_chunk(const Soa<TChunk, Lane>& soa, Fn&& fn)
 // (chunk_ref, lane_idx). For ad-hoc lookups, debug inspection, and
 // small-N code paths where SIMD setup overhead exceeds the work.
 template <typename TChunk, usize Lane, typename Fn>
-void soa_for_each_lane(Soa<TChunk, Lane>& soa, Fn&& fn)
+void soa_for_each_lane(Soa<TChunk, Lane>& soa, Fn fn)
 {
     using SoaT = Soa<TChunk, Lane>;
     const usize n = soa.size();
@@ -168,7 +169,7 @@ void soa_for_each_lane(Soa<TChunk, Lane>& soa, Fn&& fn)
 }
 
 template <typename TChunk, usize Lane, typename Fn>
-void soa_for_each_lane(const Soa<TChunk, Lane>& soa, Fn&& fn)
+void soa_for_each_lane(const Soa<TChunk, Lane>& soa, Fn fn)
 {
     using SoaT = Soa<TChunk, Lane>;
     const usize n = soa.size();
@@ -269,4 +270,4 @@ CRD_FORCEINLINE void scatter4(
     }
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

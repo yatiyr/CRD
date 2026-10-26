@@ -736,7 +736,7 @@ void ncf_grad_all(const NoncentralF<T>& d, T x, double out[4]) noexcept
     double sx = 0.0;
     double s1 = 0.0;
     double s2 = 0.0;
-    double sl = 0.0;
+    double s_lambda = 0.0;
     double logw = -l2;
     for (int j = 0; j < 1000; ++j)
     {
@@ -748,7 +748,7 @@ void ncf_grad_all(const NoncentralF<T>& d, T x, double out[4]) noexcept
         sx += term * (br * dydx - 2.0 * d1 / dpx);
         s1 += term * (0.5 * ly + br * dyd1 - 0.5 * (special::digamma(a) - psi_ab) + 1.0 / d1 - 2.0 * xd / dpx);
         s2 += term * (br * dyd2 + 0.5 * l1my - 0.5 * (psi_b - psi_ab) + 1.0 / d2 - 2.0 / dpx);
-        sl += term * (static_cast<double>(j) / ld - 0.5);
+        s_lambda += term * (static_cast<double>(j) / ld - 0.5);
         if (j > static_cast<int>(l2) + 5 && term < 1e-17 * s)
         {
             break;
@@ -758,7 +758,7 @@ void ncf_grad_all(const NoncentralF<T>& d, T x, double out[4]) noexcept
     out[0] = sx / s;
     out[1] = s1 / s;
     out[2] = s2 / s;
-    out[3] = sl / s;
+    out[3] = s_lambda / s;
 }
 template <Real T>
 [[nodiscard]] constexpr int theta_dim(const NoncentralF<T>&) noexcept
@@ -888,7 +888,7 @@ void loglik_grad(const StudentT<T>& d, const T* xs, crd::usize n, crd::container
                   static_cast<T>(0.5) / d.nu;
     T s = static_cast<T>(0);
     crd::usize i = 0;
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     if constexpr (std::is_same_v<T, double>)
     {
         // SIMD the ν-dependent log1p reduction (4 doubles/iter) — matches/beats XLA's vectorized gradient.

@@ -1,17 +1,16 @@
 // Vec8f — 8-lane f32 SIMD wrapper. Phase 3.1 v0a.
 //
-// AVX2: one 256-bit register. SSE2/NEON: two Vec4f composed (lo + hi).
-// Scalar: eight-element array. Same determinism contract as Vec4f
-// (no hardware FMA; fixed pairwise reduction; hardware sqrt).
+// AVX2: one 256-bit register. SSE2/SSE4.2/NEON/scalar: two Vec4f composed (lo + hi).
+// Same determinism contract as Vec4f (no hardware FMA in mul_add; fixed pairwise
+// reduction; hardware sqrt).
 
 #pragma once
 
+#include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4f.hpp>
 
-#include <cmath>
-
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(32) Vec8f
 {
@@ -148,21 +147,14 @@ struct alignas(32) Vec8f
     }
 };
 
-#if CRD_SIMD_HAS_AVX2
-#define CRD_SIMD_VEC8_BIN_AVX2(OP, INTRIN)                                                                             \
-    Vec8f r;                                                                                                           \
-    r.v = INTRIN(a.v, b.v);                                                                                            \
-    return r;
-#else
-#define CRD_SIMD_VEC8_BIN_FALLBACK(OP) return Vec8f(a.lo OP b.lo, a.hi OP b.hi);
-#endif
-
 // ---- arithmetic ------------------------------------------------------------
 
 CRD_FORCEINLINE Vec8f operator+(Vec8f a, Vec8f b) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
-    CRD_SIMD_VEC8_BIN_AVX2(+, _mm256_add_ps)
+    Vec8f r;
+    r.v = _mm256_add_ps(a.v, b.v);
+    return r;
 #else
     return Vec8f(a.lo + b.lo, a.hi + b.hi);
 #endif
@@ -171,7 +163,9 @@ CRD_FORCEINLINE Vec8f operator+(Vec8f a, Vec8f b) noexcept
 CRD_FORCEINLINE Vec8f operator-(Vec8f a, Vec8f b) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
-    CRD_SIMD_VEC8_BIN_AVX2(-, _mm256_sub_ps)
+    Vec8f r;
+    r.v = _mm256_sub_ps(a.v, b.v);
+    return r;
 #else
     return Vec8f(a.lo - b.lo, a.hi - b.hi);
 #endif
@@ -180,7 +174,9 @@ CRD_FORCEINLINE Vec8f operator-(Vec8f a, Vec8f b) noexcept
 CRD_FORCEINLINE Vec8f operator*(Vec8f a, Vec8f b) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
-    CRD_SIMD_VEC8_BIN_AVX2(*, _mm256_mul_ps)
+    Vec8f r;
+    r.v = _mm256_mul_ps(a.v, b.v);
+    return r;
 #else
     return Vec8f(a.lo * b.lo, a.hi * b.hi);
 #endif
@@ -189,15 +185,24 @@ CRD_FORCEINLINE Vec8f operator*(Vec8f a, Vec8f b) noexcept
 CRD_FORCEINLINE Vec8f operator/(Vec8f a, Vec8f b) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
-    CRD_SIMD_VEC8_BIN_AVX2(/, _mm256_div_ps)
+    Vec8f r;
+    r.v = _mm256_div_ps(a.v, b.v);
+    return r;
 #else
     return Vec8f(a.lo / b.lo, a.hi / b.hi);
 #endif
 }
 
+// IEEE negation (the sign bit flips), like Vec4f's.
 CRD_FORCEINLINE Vec8f operator-(Vec8f a) noexcept
 {
-    return Vec8f::zero() - a;
+#if CRD_SIMD_HAS_AVX2
+    Vec8f r;
+    r.v = _mm256_xor_ps(a.v, _mm256_set1_ps(-0.0F));
+    return r;
+#else
+    return Vec8f(-a.lo, -a.hi);
+#endif
 }
 CRD_FORCEINLINE Vec8f operator*(Vec8f a, f32 s) noexcept
 {
@@ -226,8 +231,8 @@ CRD_FORCEINLINE Vec8f mul_sub(Vec8f a, Vec8f b, Vec8f c) noexcept
 // numerical-computing consumer (crd-hesap microkernels per ADR-0082)
 // wants ~2x throughput on AVX2-FMA hardware AND accepts the single-rounded
 // arithmetic. Bit-exact across SIMD widths only when ALL lanes/widths use
-// fma() (NOT mixed with mul_add). Scalar fallback uses std::fma which is
-// IEEE 754-2008 mandated to match the hardware FMA bit-for-bit.
+// fma() (NOT mixed with mul_add). Below AVX2 it fuses per lane through the C
+// library's fma, which IEEE 754-2008 requires to match the hardware FMA.
 CRD_FORCEINLINE Vec8f fma(Vec8f a, Vec8f b, Vec8f c) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
@@ -247,7 +252,7 @@ CRD_FORCEINLINE Vec8f fnmadd(Vec8f a, Vec8f b, Vec8f c) noexcept
     r.v = _mm256_fnmadd_ps(a.v, b.v, c.v);
     return r;
 #else
-    return c - (a * b); // scalar fallback (non-AVX2); the AVX2 build uses the fused op
+    return fma(-a, b, c); // single-rounded like the AVX2 instruction: -(a*b) + c, negation exact
 #endif
 }
 
@@ -367,11 +372,12 @@ CRD_FORCEINLINE Vec8f cmp_ge(Vec8f a, Vec8f b) noexcept
     return cmp_le(b, a);
 }
 
+// The mask is a comparison result, as for Vec4f's select.
 CRD_FORCEINLINE Vec8f select(Vec8f mask, Vec8f true_v, Vec8f false_v) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     Vec8f r;
-    r.v = _mm256_or_ps(_mm256_and_ps(mask.v, true_v.v), _mm256_andnot_ps(mask.v, false_v.v));
+    r.v = _mm256_blendv_ps(false_v.v, true_v.v, mask.v);
     return r;
 #else
     return Vec8f(select(mask.lo, true_v.lo, false_v.lo), select(mask.hi, true_v.hi, false_v.hi));
@@ -467,7 +473,7 @@ CRD_FORCEINLINE Vec8f fmaddsub(Vec8f a, Vec8f b, Vec8f c) noexcept
     alignas(32) f32 o[8];
     for (usize i = 0; i < 8; ++i)
     {
-        o[i] = std::fma(x[i], y[i], (i & 1U) ? z[i] : -z[i]);
+        o[i] = libm::fma(x[i], y[i], (i & 1U) != 0U ? z[i] : -z[i]);
     }
     return Vec8f::load(o);
 #endif
@@ -622,4 +628,4 @@ CRD_FORCEINLINE void transpose8x8(Vec8f& r0, Vec8f& r1, Vec8f& r2, Vec8f& r3, Ve
 #endif
 }
 
-} // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

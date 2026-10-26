@@ -14,13 +14,13 @@
 #include <crd/math/exp_log_core.hpp> // crd_log1 / crd_exp1, the scalar cores these twins reproduce
 #include <crd/math/simd/backend.hpp>
 
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 #include <immintrin.h>
 #endif
 
-namespace crd::math
+namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 // AVX2/FMA log twin — bit-identical to crd_log1 on normal-positive lanes; abnormal lanes fall back to crd_log1.
 [[nodiscard]] inline __m256d crd_log4(__m256d x) noexcept
 {
@@ -121,4 +121,4 @@ namespace crd::math
 }
 #endif // AVX2
 
-} // namespace crd::math
+} // namespace crd::math::inline CRD_MATH_LEVEL_NS

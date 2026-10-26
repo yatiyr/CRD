@@ -9,7 +9,7 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4f.hpp>
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(16) Quatf
 {
@@ -89,4 +89,4 @@ CRD_FORCEINLINE Quatf operator*(f32 s, Quatf a)   noexcept { return Quatf(s * a.
     return rotated.xyzw;  // w lane is ~0 (drift; caller can ignore)
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

@@ -38,7 +38,7 @@ namespace crd::math
 // is included from mat.hpp's tail so the templates are already visible by
 // the time these specializations are seen.
 
-#if CRD_SIMD_BACKEND != CRD_SIMD_BACKEND_SCALAR
+#if !CRD_SIMD_IS_SCALAR
 
 // Mat4<f32> * Vec4<f32> — non-template overload, picked over the template
 // for the exact `Mat4<f32> * Vec4<f32>` match. Other `Mat4<T> * Vec4<T>`
@@ -94,6 +94,6 @@ namespace crd::math
                           mul_col(rhs.c2), mul_col(rhs.c3));
 }
 
-#endif // CRD_SIMD_BACKEND != CRD_SIMD_BACKEND_SCALAR
+#endif // !CRD_SIMD_IS_SCALAR
 
 } // namespace crd::math

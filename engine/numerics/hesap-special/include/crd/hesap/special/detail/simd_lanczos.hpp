@@ -21,7 +21,7 @@ namespace crd::hesap::special::detail
 {
 using crd::math::crd_exp1;
 using crd::math::crd_log1;
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 using crd::math::crd_exp4;
 using crd::math::crd_log4;
 #endif
@@ -90,7 +90,7 @@ inline constexpr double kLanczosC[9] = {0.99999999999980993,     676.52036812188
     return kPiLz / (s * crd_exp1(crd_lgamma_lz_half(1.0 - x)));
 }
 
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 // AVX2 Lanczos lgamma for x ≥ 0.5 — bit-identical to crd_lgamma_lz_half (same order, crd_log4 ≡ crd_log1).
 [[nodiscard]] inline __m256d crd_lgamma_lz_half4(__m256d x) noexcept
 {

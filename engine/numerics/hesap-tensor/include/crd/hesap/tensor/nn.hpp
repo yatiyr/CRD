@@ -347,7 +347,7 @@ inline void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
         m = x[j] > m ? x[j] : m;
     }
     crd::u64 j = 0;
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     for (; j + 4U <= d; j += 4U)
     {
         const __m128 xf = _mm_sub_ps(_mm_loadu_ps(x + j), _mm_set1_ps(m));
@@ -885,7 +885,7 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
                         crd::f32* yrow, bool relu) noexcept
 {
     constexpr crd::u32 t = T;
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     __m256 acc[kNnQ8OutTile];
     for (crd::u32 r = 0; r < kNnQ8OutTile; ++r)
     {
@@ -1018,7 +1018,7 @@ inline void q8_dot_tile_any(crd::u32 t, const BlockQ8_0* xrow, const crd::f32* x
 // to quantize_q8_0 itself; move it there on the next dtypes touch.
 inline void quantize_q8_0_fast(const crd::f32* x, BlockQ8_0* out, crd::u64 nblocks) noexcept
 {
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
     const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
     const __m256 half = _mm256_set1_ps(0.5F);
@@ -1118,7 +1118,7 @@ inline void linear_q8_run(const LinQ8Ctx& c, crd::u32 lo, crd::u32 hi)
 inline void quantize_row_u8(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale,
                             crd::i32& zero_point) noexcept
 {
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     __m256 vmin = _mm256_setzero_ps(); // the range is 0-extended (the ort convention)
     __m256 vmax = _mm256_setzero_ps();
     for (crd::u64 i = 0; i < k; i += 8U)
@@ -1177,7 +1177,7 @@ inline void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* 
                         bool relu) noexcept
 {
     constexpr crd::u32 t = T;
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
     __m256i acc[8];
     for (crd::u32 r = 0; r < 8U; ++r)
     {
@@ -1330,7 +1330,7 @@ inline void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd
                            crd::f32* yrows, bool relu) noexcept
 {
     const crd::u64 n8 = (n + 7U) & ~crd::u64{7};
-#if CRD_SIMD_BACKEND == CRD_SIMD_BACKEND_AVX2
+#if CRD_SIMD_HAS_AVX2
 #if !defined(__AVXVNNI__)
     const __m256i ones16 = _mm256_set1_epi16(1);
     const __m256i low7 = _mm256_set1_epi8(0x7F);

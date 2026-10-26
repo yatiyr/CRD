@@ -1,18 +1,16 @@
 // Vec4f — 4-lane f32 SIMD wrapper. Phase 3.1 v0a.
 //
 // Lives in crd::math::simd to keep clear of crd::math::Vec4f (the 4D math
-// vector). Storage is one 128-bit register on SSE2/AVX2/NEON, four-element
+// vector). Storage is one 128-bit register on SSE2/SSE4.2/AVX2/NEON, a four-element
 // array on the scalar fallback. All operators are bit-exact across backends
 // per ADR-0063 (no hardware FMA, fixed pairwise reductions, hardware sqrt).
 
 #pragma once
 
+#include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
 
-#include <bit>
-#include <cmath>
-
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 struct alignas(16) Vec4f
 {
@@ -153,7 +151,21 @@ CRD_FORCEINLINE Vec4f operator/(Vec4f a, Vec4f b) noexcept
 #endif
 }
 
-CRD_FORCEINLINE Vec4f operator-(Vec4f a) noexcept { return Vec4f::zero() - a; }
+// IEEE negation: the sign bit flips, as scalar `-x` does (0 - x would give +0 for +0).
+CRD_FORCEINLINE Vec4f operator-(Vec4f a) noexcept
+{
+#if CRD_SIMD_HAS_SSE2
+    Vec4f r;
+    r.v = _mm_xor_ps(a.v, _mm_set1_ps(-0.0F));
+    return r;
+#elif CRD_SIMD_HAS_NEON
+    Vec4f r;
+    r.v = vnegq_f32(a.v);
+    return r;
+#else
+    return Vec4f(-a.v[0], -a.v[1], -a.v[2], -a.v[3]);
+#endif
+}
 
 CRD_FORCEINLINE Vec4f operator*(Vec4f a, f32 s) noexcept { return a * Vec4f(s); }
 CRD_FORCEINLINE Vec4f operator*(f32 s, Vec4f a) noexcept { return Vec4f(s) * a; }
@@ -165,20 +177,26 @@ CRD_FORCEINLINE Vec4f mul_add(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * 
 CRD_FORCEINLINE Vec4f mul_sub(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * b) - c; }
 
 // Single-rounded IEEE 754 FMA (a*b + c with one rounding). Distinct from mul_add
-// (two roundings, ADR-0063 default). Vec4f has no 256-bit hardware FMA path of
-// its own — it is the half-decomposition of Vec8f::fma on the scalar / SSE2 /
-// NEON backends (none of which expose a 256-bit float FMA). Per-lane std::fma is
-// IEEE 754-2008 mandated to match the hardware FMA bit-for-bit, so Vec8f stays
-// width-parity-exact. Do NOT rewrite as (a*b)+c — that is two-rounded and would
-// break parity with Vec8f's AVX2 _mm256_fmadd_ps path.
+// (two roundings, ADR-0063 default). The AVX2 backend has the instruction; the others
+// fuse per lane through the C library's fma, which IEEE 754-2008 requires to give the
+// same bits, so Vec8f (two Vec4f halves below AVX2) stays width- and level-exact.
+// Do NOT rewrite as (a*b)+c: that is two-rounded.
 CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
 {
-    f32 af[4], bf[4], cf[4];
+#if CRD_SIMD_HAS_AVX2
+    Vec4f r;
+    r.v = _mm_fmadd_ps(a.v, b.v, c.v);
+    return r;
+#else
+    f32 af[4];
+    f32 bf[4];
+    f32 cf[4];
     a.store(af);
     b.store(bf);
     c.store(cf);
-    return Vec4f(std::fma(af[0], bf[0], cf[0]), std::fma(af[1], bf[1], cf[1]),
-                 std::fma(af[2], bf[2], cf[2]), std::fma(af[3], bf[3], cf[3]));
+    return Vec4f(libm::fma(af[0], bf[0], cf[0]), libm::fma(af[1], bf[1], cf[1]), libm::fma(af[2], bf[2], cf[2]),
+                 libm::fma(af[3], bf[3], cf[3]));
+#endif
 }
 
 // ---- min / max / abs / sqrt -----------------------------------------------
@@ -220,7 +238,13 @@ CRD_FORCEINLINE Vec4f abs(Vec4f a) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4f r; r.v = vabsq_f32(a.v); return r;
 #else
-    return Vec4f(std::fabs(a.v[0]), std::fabs(a.v[1]), std::fabs(a.v[2]), std::fabs(a.v[3]));
+    // Clear the sign bit, as the vector backends do (NaN and -0.0 included).
+    Vec4f r;
+    for (int i = 0; i < 4; ++i)
+    {
+        r.v[i] = __builtin_bit_cast(f32, __builtin_bit_cast(crd::u32, a.v[i]) & 0x7FFFFFFFU);
+    }
+    return r;
 #endif
 }
 
@@ -238,7 +262,7 @@ CRD_FORCEINLINE Vec4f sqrt(Vec4f a) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4f r; r.v = vsqrtq_f32(a.v); return r;
 #else
-    return Vec4f(std::sqrt(a.v[0]), std::sqrt(a.v[1]), std::sqrt(a.v[2]), std::sqrt(a.v[3]));
+    return Vec4f(libm::sqrt(a.v[0]), libm::sqrt(a.v[1]), libm::sqrt(a.v[2]), libm::sqrt(a.v[3]));
 #endif
 }
 
@@ -268,7 +292,7 @@ CRD_FORCEINLINE f32 dot(Vec4f a, Vec4f b) noexcept { return horizontal_sum(a * b
 // `bitcast_to_int(mask)` (proper -1 / 0 in integer arithmetic).
 namespace detail
 {
-inline constexpr f32 k_mask_true_f32 = std::bit_cast<f32>(crd::u32{0xFFFFFFFFU});
+inline constexpr f32 kMaskTrueF32 = __builtin_bit_cast(f32, crd::u32{0xFFFFFFFFU});
 }  // namespace detail
 
 CRD_FORCEINLINE Vec4f cmp_lt(Vec4f a, Vec4f b) noexcept
@@ -278,7 +302,7 @@ CRD_FORCEINLINE Vec4f cmp_lt(Vec4f a, Vec4f b) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4f r; r.v = vreinterpretq_f32_u32(vcltq_f32(a.v, b.v)); return r;
 #else
-    constexpr f32 t = detail::k_mask_true_f32;
+    constexpr f32 t = detail::kMaskTrueF32;
     return Vec4f(a.v[0] < b.v[0] ? t : 0.0F,
                  a.v[1] < b.v[1] ? t : 0.0F,
                  a.v[2] < b.v[2] ? t : 0.0F,
@@ -293,7 +317,7 @@ CRD_FORCEINLINE Vec4f cmp_le(Vec4f a, Vec4f b) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4f r; r.v = vreinterpretq_f32_u32(vcleq_f32(a.v, b.v)); return r;
 #else
-    constexpr f32 t = detail::k_mask_true_f32;
+    constexpr f32 t = detail::kMaskTrueF32;
     return Vec4f(a.v[0] <= b.v[0] ? t : 0.0F, a.v[1] <= b.v[1] ? t : 0.0F,
                  a.v[2] <= b.v[2] ? t : 0.0F, a.v[3] <= b.v[3] ? t : 0.0F);
 #endif
@@ -306,7 +330,7 @@ CRD_FORCEINLINE Vec4f cmp_eq(Vec4f a, Vec4f b) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4f r; r.v = vreinterpretq_f32_u32(vceqq_f32(a.v, b.v)); return r;
 #else
-    constexpr f32 t = detail::k_mask_true_f32;
+    constexpr f32 t = detail::kMaskTrueF32;
     return Vec4f(a.v[0] == b.v[0] ? t : 0.0F, a.v[1] == b.v[1] ? t : 0.0F,
                  a.v[2] == b.v[2] ? t : 0.0F, a.v[3] == b.v[3] ? t : 0.0F);
 #endif
@@ -315,9 +339,15 @@ CRD_FORCEINLINE Vec4f cmp_eq(Vec4f a, Vec4f b) noexcept
 CRD_FORCEINLINE Vec4f cmp_gt(Vec4f a, Vec4f b) noexcept { return cmp_lt(b, a); }
 CRD_FORCEINLINE Vec4f cmp_ge(Vec4f a, Vec4f b) noexcept { return cmp_le(b, a); }
 
+// The mask is a comparison result: each lane all-bits-set or zero. SSE4.1's blend reads only each lane's sign bit,
+// which for such masks is the same choice.
 CRD_FORCEINLINE Vec4f select(Vec4f mask, Vec4f true_v, Vec4f false_v) noexcept
 {
-#if CRD_SIMD_HAS_SSE2
+#if CRD_SIMD_HAS_SSE42
+    Vec4f r;
+    r.v = _mm_blendv_ps(false_v.v, true_v.v, mask.v);
+    return r;
+#elif CRD_SIMD_HAS_SSE2
     // (mask & true_v) | (~mask & false_v)
     Vec4f r;
     r.v = _mm_or_ps(_mm_and_ps(mask.v, true_v.v),
@@ -338,4 +368,4 @@ CRD_FORCEINLINE Vec4f select(Vec4f mask, Vec4f true_v, Vec4f false_v) noexcept
 #endif
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

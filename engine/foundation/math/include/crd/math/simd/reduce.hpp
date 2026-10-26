@@ -15,12 +15,11 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>
+#include <crd/math/libm.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec8f.hpp>
 
-#include <limits>
-
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
 // A candidate / running-best for the argmax-with-lex-tiebreak reduction:
 // `index` is the global element index (`< 0` ⇒ "no candidate yet"), `score` the
@@ -28,7 +27,7 @@ namespace crd::math::simd
 struct ArgmaxLex
 {
     crd::i32 index{-1};
-    crd::f32 score{-std::numeric_limits<crd::f32>::infinity()};
+    crd::f32 score = __builtin_bit_cast(crd::f32, 0xFF800000U); // -infinity
     crd::f32 x{0.0F};
     crd::f32 y{0.0F};
     crd::f32 z{0.0F};
@@ -56,8 +55,8 @@ struct ArgmaxLex
     {
         return true;
     }
-    const bool a_nan = a.score != a.score;
-    const bool b_nan = b.score != b.score;
+    const bool a_nan = libm::is_nan(a.score);
+    const bool b_nan = libm::is_nan(b.score);
     if (a_nan)
     {
         return false;
@@ -137,4 +136,4 @@ struct ArgmaxLex
     return running;
 }
 
-} // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

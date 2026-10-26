@@ -8,8 +8,21 @@
 
 #include <crd/math/simd/backend.hpp>
 
-namespace crd::math::simd
+namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
+namespace detail
+{
+// Two's-complement wrap of the scalar fallback, as the vector instructions wrap (signed overflow is undefined in C++).
+[[nodiscard]] CRD_FORCEINLINE crd::i32 wrap_add(crd::i32 a, crd::i32 b) noexcept
+{
+    return static_cast<crd::i32>(static_cast<crd::u32>(a) + static_cast<crd::u32>(b));
+}
+[[nodiscard]] CRD_FORCEINLINE crd::i32 wrap_sub(crd::i32 a, crd::i32 b) noexcept
+{
+    return static_cast<crd::i32>(static_cast<crd::u32>(a) - static_cast<crd::u32>(b));
+}
+} // namespace detail
+
 struct alignas(16) Vec4i
 {
 #if CRD_SIMD_HAS_SSE2
@@ -72,7 +85,8 @@ CRD_FORCEINLINE Vec4i operator+(Vec4i a, Vec4i b) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4i r; r.v = vaddq_s32(a.v, b.v); return r;
 #else
-    return Vec4i(a.v[0] + b.v[0], a.v[1] + b.v[1], a.v[2] + b.v[2], a.v[3] + b.v[3]);
+    return Vec4i(detail::wrap_add(a.v[0], b.v[0]), detail::wrap_add(a.v[1], b.v[1]), detail::wrap_add(a.v[2], b.v[2]),
+                 detail::wrap_add(a.v[3], b.v[3]));
 #endif
 }
 
@@ -83,7 +97,8 @@ CRD_FORCEINLINE Vec4i operator-(Vec4i a, Vec4i b) noexcept
 #elif CRD_SIMD_HAS_NEON
     Vec4i r; r.v = vsubq_s32(a.v, b.v); return r;
 #else
-    return Vec4i(a.v[0] - b.v[0], a.v[1] - b.v[1], a.v[2] - b.v[2], a.v[3] - b.v[3]);
+    return Vec4i(detail::wrap_sub(a.v[0], b.v[0]), detail::wrap_sub(a.v[1], b.v[1]), detail::wrap_sub(a.v[2], b.v[2]),
+                 detail::wrap_sub(a.v[3], b.v[3]));
 #endif
 }
 
@@ -202,4 +217,4 @@ CRD_FORCEINLINE Vec4i cmp_gt(Vec4i a, Vec4i b) noexcept
 #endif
 }
 
-}  // namespace crd::math::simd
+} // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

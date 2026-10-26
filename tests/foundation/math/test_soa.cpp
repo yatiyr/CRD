@@ -57,7 +57,7 @@ TEST_CASE("soa Lane=8 chunk is 32-byte aligned and Vec8f-sized columns",
 {
     STATIC_REQUIRE(alignof(Body8) >= 32);
     STATIC_REQUIRE(sizeof(Body8) == 64);  // 2 × 32 B columns
-    STATIC_REQUIRE(Soa<Body8, 8>::lanes_per_chunk == 8);
+    STATIC_REQUIRE(Soa<Body8, 8>::kLanesPerChunk == 8);
 }
 
 TEST_CASE("soa Lane=4 chunk is 16-byte aligned and Vec4f-sized columns",
@@ -65,7 +65,7 @@ TEST_CASE("soa Lane=4 chunk is 16-byte aligned and Vec4f-sized columns",
 {
     STATIC_REQUIRE(alignof(Body4) >= 16);
     STATIC_REQUIRE(sizeof(Body4) == 32);  // 2 × 16 B columns
-    STATIC_REQUIRE(Soa<Body4, 4>::lanes_per_chunk == 4);
+    STATIC_REQUIRE(Soa<Body4, 4>::kLanesPerChunk == 4);
 }
 
 // ===========================================================================
