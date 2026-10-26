@@ -1298,7 +1298,9 @@ Settled (2026-10-10, [session](../sessions/2026-10-10-diag-9b-flight-recorder.md
   `post_events`, `post_window_ns` at most 60 s, a trigger mask, `hitch_threshold_ns`). `pre_events + post_events <=
   capacity`, so the post window can never overwrite the pre window it keeps. A rejected candidate (or a reload while a
   capture is pending, or a generation that would wrap) leaves the active policy, its generation and the ring as they
-  were. Defaults: 1024 events (152 KiB), 768 before, 256 after, 2 s, every trigger, 50 ms hitch.
+  were. Defaults: 1024 events (152 KiB), 768 before, 256 after, 2 s, every trigger, 50 ms hitch. Since DIAG.11b
+  (q1) (2026-10-26, below) `capacity` is what each thread's ring holds, and the storage is 64 such rings (at most
+  65,536 events together) plus a shared ring.
 - A trigger takes only its own mutex, never the collection lock, and a record takes none (DIAG.11b, 2026-10-24). The
   first trigger opens the post window; any trigger while a capture is pending is suppressed and counted with its kind,
   never replacing it. The window closes when
@@ -2810,7 +2812,7 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   percentiles, pairs per-repetition median ratios and takes a seeded bootstrap 95% interval; within (upper end at or
   below the budget), over (lower end above it) or unresolved (a loss, never a pass). Each budget is judged on the
   frame time and on the CPU per frame (every thread's CPU over the timed frames: `QueryProcessCycleTime` cycles on
-  Windows, `CLOCK_PROCESS_CPUTIME_ID` nanoseconds on POSIX), the worse verdict deciding. Storage: the recorder's ring
+  Windows, `CLOCK_PROCESS_CPUTIME_ID` nanoseconds on POSIX), the worse verdict deciding. Storage: the recorder's rings
   and the resident growth over off, against 32 MiB. The per-event clock (follow-up (q), 2026-10-26): `tick-clock`,
   full over `full-system-clock` (the same binary's full mode with `--clock system`, crd-time's
   `TickClock::prefer_system`), is judged at 0% on a frame of work: TickClock replaced `steady_clock` and may cost no
@@ -2850,6 +2852,28 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   sequence is the exact boundary. A slot's sequence is its release-stored publication stamp; collectors and a policy
   reload wait for every claimed slot. A record waits only when the ring laps a claim stalled before its publication,
   or while a reload swaps the ring.
+- Per-thread rings under one global sequence (2026-10-26, DIAG.11b (q1), the user's decision C2,
+  [session](../sessions/2026-10-26-flight-recorder-c2.md), [board](../bench/2026-10-26-diag-11b-flight-recorder-c2.md),
+  ADR-0133 ID-7). The order and the window are as above: a kept event takes the next sequence of the recording word,
+  now with one `fetch_add`, and the state it returns decides it (Armed: pre window; Triggered below `post_end`: post
+  window, the claim of `post_end - 1` closing it). A claim that finds Complete, FatalEntered, a sequence past
+  `post_end` or a reload under way is void and writes nothing (a reload's claims claim again after it); re-arming and
+  a reload's end give the void sequences back (`exchange(make_word(end, kStateArmed))`), so the kept sequences stay
+  dense, `dropped_while_complete` is the given-back count and the CFR1 record is unchanged. The event and its
+  sequence go into the recording thread's ring: 64 rings, each of `capacity` events with storage for
+  `flight_thread_rings(capacity)` of them (at most 65,536 events together: all 64 at the default 1024, 9.65 MiB with
+  the shared ring), and one shared ring of `capacity` slots indexed by sequence (the global ring's stamp protocol) for
+  a thread whose ring has no storage or that finds all 64 taken. A ring's owner marks it odd before its `fetch_add`
+  and even after; a collector waits for every odd mark, then places each ring's window events at their sequence's
+  position (then the shared ring's), so every capture reader gets the one global order; the fatal path waits within
+  its budget. Every ring holds the whole window and nothing is written after the window freezes, so no window event
+  is lost. A thread takes a ring on its first kept event (a scan and one compare-exchange, no allocation) and gives it
+  back at exit (a thread-local destructor on Windows, a pthread key destructor elsewhere, through a never-destroyed
+  mutex over the live recorders); its events stay. `record()` is never inlined, so the thread-local binding is not
+  cached across a job fiber's switch. `flight.status` adds `thread_rings`, `threads_bound`, `ring_bytes` and
+  `shared_ring_events`; `FlightRecorder::test_refuse_ring_storage` (asserts builds) makes `RejectedOutOfMemory`
+  reachable. Measured: the four-thread jobs frame in full mode 5.8% faster than the global ring and 4.2% under Tracy
+  connected (30 processes); basic within 2% everywhere; resident growth unchanged.
 - The focused local plan (2026-10-19, [contract](developer-workflow.md#risk-routes)): `dev.py plan` selects the
   affected targets and tests and prints each risk gate's route, the local commands and the hosted lanes.
 - The investigation runbooks (2026-10-19, [runbooks](diagnostic-runbooks.md), ADR-0133 ID-6): one entry per symptom

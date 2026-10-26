@@ -199,3 +199,20 @@ that owns no entry and is not listed with its reason. Publication stays the user
 evidence but never commits, pushes, releases, opens an issue or pull request, dispatches a workflow, writes through
 `gh api` or grants the service's `upload` or `remote-enable` class. Each capability's Adopt row is the one step that
 switches it on for a new module, test or application, so the renderer and execution rows ahead inherit them.
+
+### ID-7 (2026-10-26, DIAG.11b (q1)) — the flight recorder's storage changed; its order did not
+
+By the user's decision of 2026-10-26 (option C2 of the [brief](../sessions/2026-10-26-flight-recorder-per-thread-rings-decision.md);
+[session](../sessions/2026-10-26-flight-recorder-c2.md), [board](../bench/2026-10-26-diag-11b-flight-recorder-c2.md)):
+the flight recorder keeps each thread's events in that thread's own ring instead of one ring every thread writes.
+**The order guarantee is unchanged** (Decision 6): every kept event still takes the next sequence of the one
+recording word, so the events of a capture are one total order that agrees with happens-before, and the trigger's
+boundary and the post window are exact in claim order. A capture places each ring's events at their sequence's
+position. Claims that find the window frozen, past its end or a reload under way are void and their sequences are
+given back, so the kept sequences stay dense and the capture record (CFR1) is unchanged.
+
+The storage bound changed: a recorder has 64 thread rings of the policy's `capacity` (together at most 65,536
+events, about 9.5 MiB) and one shared ring of `capacity` for a thread whose ring has no storage or that finds every
+ring taken; 9.65 MiB at the default policy (one 152 KiB ring before), at most about 19 MiB, within the 32 MiB
+storage budget. A thread takes a ring on its first kept event without allocating and gives it back when it exits.
+Measured on the four-thread jobs frame, full mode: 5.8% faster than the global ring and 4.2% under Tracy connected.

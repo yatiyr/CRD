@@ -6,7 +6,7 @@
 kind           = "flight-policy"
 schema_version = 1
 
-capacity    = 1024 # ring events, 152 bytes each (152 KiB)
+capacity    = 1024 # events each thread ring holds, 152 bytes each (64 rings and a shared one: 9.65 MiB)
 pre_events  = 768  # kept from before the trigger
 post_events = 256  # recorded after it at most; pre_events + post_events <= capacity
 

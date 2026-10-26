@@ -6,6 +6,8 @@
 > [flight recorder](../design/runtime-diagnostics.md) (DIAG.9b, settled 2026-10-10). Boards it builds on:
 > [Tracy peer](../bench/2026-10-26-diag-11b-tracy-peer.md), [tick clock](../bench/2026-10-26-diag-11b-tick-clock-inlining.md).
 > Rules: [AGENTS](../../AGENTS.md).
+> **Decided 2026-10-26:** the user chose C2; implemented in [the C2 session](2026-10-26-flight-recorder-c2.md)
+> ([board](../bench/2026-10-26-diag-11b-flight-recorder-c2.md)). The text below is the brief as written.
 
 ## The question
 
