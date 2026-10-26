@@ -1,5 +1,6 @@
 // crd-time -- MonotonicClock / WallClock / CycleCounter / TickClock tests.
 
+#include <crd/core/platform.hpp>
 #include <crd/time/clocks.hpp>
 #include <crd/units/literals.hpp>
 
@@ -7,6 +8,18 @@
 
 #include <atomic>
 #include <thread>
+
+#if CRD_OS_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // GetProcessAffinityMask, SetThreadAffinityMask
+#elif CRD_OS_LINUX
+#include <sched.h> // sched_getaffinity, sched_setaffinity
+#endif
 
 namespace
 {
@@ -154,43 +167,204 @@ TEST_CASE("TickClock: reads stay on MonotonicClock's timeline through calibratio
     CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
 }
 
-TEST_CASE("TickClock: no thread's reads step back while any thread re-anchors", "[diag11b][clocks][tick]")
+namespace
 {
-    constexpr int thread_count = 4;
-    std::atomic<int> stepped_back{0};
-    std::atomic<crd::u64> reads{0U};
-    const crd::i64 end = MonotonicClock::now().ns_since_epoch() + (3 * TickClock::kReanchorNs);
-    std::thread workers[thread_count]; // NOLINT(modernize-avoid-c-arrays)
-    for (std::thread& worker : workers)
+// The processors this process may run on (at most 64), for a reader that moves itself between them.
+struct Processors
+{
+    crd::u32 ids[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    crd::u32 count   = 0U;
+};
+
+Processors allowed_processors()
+{
+    Processors p;
+#if CRD_OS_WINDOWS
+    DWORD_PTR process = 0U;
+    DWORD_PTR system  = 0U;
+    if (::GetProcessAffinityMask(::GetCurrentProcess(), &process, &system) == 0)
     {
-        worker = std::thread(
-            [&]
+        return p;
+    }
+    static_assert(sizeof(DWORD_PTR) * 8U <= 64U, "a process affinity mask fits the list");
+    for (crd::u32 id = 0U; id < sizeof(DWORD_PTR) * 8U; ++id)
+    {
+        if (((process >> id) & 1U) != 0U)
+        {
+            p.ids[p.count++] = id;
+        }
+    }
+#elif CRD_OS_LINUX
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (::sched_getaffinity(0, sizeof(set), &set) != 0)
+    {
+        return p;
+    }
+    for (crd::u32 id = 0U; id < 64U; ++id)
+    {
+        if (CPU_ISSET(static_cast<int>(id), &set))
+        {
+            p.ids[p.count++] = id;
+        }
+    }
+#endif
+    return p;
+}
+
+// Move the calling thread onto processor `id` alone; true when the OS took it (the thread then runs there).
+bool move_to(crd::u32 id)
+{
+#if CRD_OS_WINDOWS
+    return ::SetThreadAffinityMask(::GetCurrentThread(), static_cast<DWORD_PTR>(1) << id) != 0U;
+#elif CRD_OS_LINUX
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(static_cast<int>(id), &set);
+    return ::sched_setaffinity(0, sizeof(set), &set) == 0;
+#else
+    (void)id;
+    return false;
+#endif
+}
+
+struct ConcurrentReads
+{
+    crd::u64 reads = 0U;
+    crd::u64 steps = 0U; // a thread's reading below its previous one
+    crd::u64 moves = 0U; // the readers' moves to another processor
+};
+
+// `threads` readers read TickClock for `span_ns` of MonotonicClock time from their start, and on until the first map is
+// published where the counter may be mapped (at most 10 s: a reader that waited long for a processor must still cross
+// the hand-off); each counts its own readings that lie below its previous one. With `migrate`, every 64 reads a reader
+// moves itself to the next processor this process may run on (reader i starts on the i-th), so consecutive reads of
+// one thread come from different processors' counters and the calibration's hand-off and the re-anchors happen while
+// threads move.
+ConcurrentReads concurrent_reads(int threads, crd::i64 span_ns, bool migrate)
+{
+    constexpr int         max_threads = 8;
+    const Processors      processors  = allowed_processors();
+    std::atomic<crd::u64> reads{0U};
+    std::atomic<crd::u64> steps{0U};
+    std::atomic<crd::u64> moves{0U};
+    const bool            usable  = TickClock::counter_usable();
+    const crd::i64        start   = MonotonicClock::now().ns_since_epoch();
+    const crd::i64        end     = start + span_ns;
+    const crd::i64        give_up = start + 10'000'000'000;
+    std::thread           workers[max_threads]; // NOLINT(modernize-avoid-c-arrays)
+    const int             count = threads < max_threads ? threads : max_threads;
+    for (int t = 0; t < count; ++t)
+    {
+        workers[t] = std::thread(
+            [&, t]
             {
-                crd::i64 last  = TickClock::now_ns();
-                crd::u64 count = 0U;
-                while (MonotonicClock::now().ns_since_epoch() < end)
+                crd::u32 next      = processors.count > 0U ? static_cast<crd::u32>(t) % processors.count : 0U;
+                crd::u64 own_moves = 0U;
+                if (migrate && processors.count > 1U && move_to(processors.ids[next]))
                 {
-                    for (int i = 0; i < 256; ++i)
+                    ++own_moves;
+                }
+                crd::i64 last      = TickClock::now_ns();
+                crd::u64 own_reads = 0U;
+                crd::u64 own_steps = 0U;
+                for (;;)
+                {
+                    const crd::i64 mono = MonotonicClock::now().ns_since_epoch();
+                    if (mono >= give_up || (mono >= end && (!usable || TickClock::counter_mapped())))
+                    {
+                        break;
+                    }
+                    for (int i = 0; i < 64; ++i)
                     {
                         const crd::i64 now = TickClock::now_ns();
                         if (now < last)
                         {
-                            stepped_back.fetch_add(1, std::memory_order_relaxed);
+                            ++own_steps;
                         }
                         last = now;
-                        ++count;
+                        ++own_reads;
+                    }
+                    if (migrate && processors.count > 1U)
+                    {
+                        next = (next + 1U) % processors.count;
+                        if (move_to(processors.ids[next]))
+                        {
+                            ++own_moves;
+                        }
                     }
                 }
-                reads.fetch_add(count, std::memory_order_relaxed);
+                reads.fetch_add(own_reads, std::memory_order_relaxed);
+                steps.fetch_add(own_steps, std::memory_order_relaxed);
+                moves.fetch_add(own_moves, std::memory_order_relaxed);
             });
     }
-    for (std::thread& worker : workers)
+    for (int t = 0; t < count; ++t)
     {
-        worker.join();
+        workers[t].join();
     }
-    CHECK(reads.load() > 0U);
-    CHECK(stepped_back.load() == 0);
+    return ConcurrentReads{reads.load(), steps.load(), moves.load()};
 }
+} // namespace
+
+// A fresh process (CTest runs each case in its own) calibrates inside this case: the readers cross the hand-off from
+// MonotonicClock to the first map and three re-anchors (the windows-shipping step of 2026-10-26 was at the hand-off).
+TEST_CASE("TickClock: no thread's reads step back while any thread re-anchors", "[diag11b][clocks][tick]")
+{
+#if CRD_ENABLE_ASSERTS
+    TickClock::test_reset(); // calibrate from here, whatever ran before in this process
+#endif
+    const ConcurrentReads r = concurrent_reads(4, 3 * TickClock::kReanchorNs, false);
+    CHECK(r.reads > 0U);
+    CHECK(r.steps == 0U);
+    // The case crossed the hand-off: the counter is mapped exactly where it may be.
+    CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
+}
+
+TEST_CASE("TickClock: no thread's reads step back while threads move between processors", "[diag11b][clocks][tick]")
+{
+#if CRD_ENABLE_ASSERTS
+    TickClock::test_reset();
+#endif
+    // Every 64 reads a reader moves to another processor: a counter that disagreed between processors by more than
+    // 64 reads' worth would step the mover back, through the hand-off and three re-anchors.
+    const ConcurrentReads r = concurrent_reads(4, 3 * TickClock::kReanchorNs, true);
+    INFO("moves between processors: " << r.moves << ", reads: " << r.reads);
+    CHECK(r.reads > 0U);
+    CHECK(r.steps == 0U);
+    if (allowed_processors().count > 1U)
+    {
+        CHECK(r.moves > 0U);
+    }
+    CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
+}
+
+#if CRD_ENABLE_ASSERTS
+TEST_CASE("TickClock: no thread's reads step back across many hand-offs to the first map", "[diag11b][clocks][tick]")
+{
+    // The hand-off happens once a process; here it is repeated: each round starts the clock over with no reader
+    // running, then four readers read through the calibration and past the first map. With readers returning
+    // MonotonicClock readings during the publication (the fault of 2026-10-26, restored as a test of this case) 200
+    // rounds stepped back 3.9 times on average on the i9-14900K, so 400 rounds miss it with odds under one in a
+    // thousand.
+    constexpr int rounds = 400;
+    crd::u64      steps   = 0U;
+    crd::u64      reads   = 0U;
+    int           mapped  = 0;
+    for (int round = 0; round < rounds; ++round)
+    {
+        TickClock::test_reset();
+        const ConcurrentReads r = concurrent_reads(4, TickClock::kCalibrationNs + 1'000'000, false);
+        steps += r.steps;
+        reads += r.reads;
+        mapped += TickClock::counter_mapped() ? 1 : 0;
+    }
+    TickClock::test_reset();
+    CHECK(reads > 0U);
+    CHECK(steps == 0U);
+    CHECK(mapped == (TickClock::counter_usable() ? rounds : 0));
+}
+#endif
 
 #if CRD_ENABLE_ASSERTS
 TEST_CASE("TickClock: a read is the counter scaled from the anchor", "[diag11b][clocks][tick]")

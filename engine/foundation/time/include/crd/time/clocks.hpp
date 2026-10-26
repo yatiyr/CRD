@@ -66,8 +66,17 @@ public:
 //     kReanchorNs re-anchors it at MonotonicClock (one MonotonicClock read per period, whichever thread reads), with
 //     the slope measured over everything since the calibration began, so the map stays within the slope's error of
 //     MonotonicClock and that error shrinks as the baseline grows.
-//   - It never steps back: a re-anchor never moves the map below where it stood, and when the map ran ahead of
-//     MonotonicClock the next period runs slower until MonotonicClock catches up.
+//   - It never steps back for any thread: a thread's reading is never below its previous one, through the
+//     calibration, the hand-off to the first map and every re-anchor. The first map is anchored at or above every
+//     MonotonicClock reading a read returned before it (a reader whose reading raced the publication reads again);
+//     a re-anchor never moves the map below where it stood, and when the map ran ahead of MonotonicClock the next
+//     period runs slower until MonotonicClock catches up. A read that meets a publication (the first map's or a
+//     re-anchor's, one MonotonicClock read beside the counter) waits for it; none waits for the calibration.
+//   - Every thread reads one map, so readings of different threads agree as far as the processors' counters do
+//     (the invariant-counter bit is the host's, or hypervisor's, promise that they run together). It is a clock, not
+//     an order: the counter's read is not ordered with memory operations, so of two events tens of nanoseconds apart
+//     on different threads the later may carry the lower reading (the flight recorder orders events by its claim
+//     word, not by this clock).
 // ===========================================================================
 
 class TickClock

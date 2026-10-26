@@ -1,6 +1,7 @@
 // crd-time -- clock implementations (Detour D-006).
 
 #include <crd/time/clocks.hpp>
+#include <crd/time/deadline.hpp> // yield_thread
 
 #include <crd/core/platform.hpp> // CRD_NOINLINE
 
@@ -173,7 +174,9 @@ struct alignas(64) TickMap
     std::atomic<crd::u64> period_ticks{0U}; // the anchor's lifetime, kReanchorNs in ticks
     std::atomic<crd::u64> origin_ticks{0U}; // the calibration's start, the slope's baseline
     std::atomic<crd::i64> origin_ns{0};
-    char                  pad[64U - (2U * sizeof(std::atomic<crd::u32>)) - (6U * sizeof(std::atomic<crd::u64>))]{};
+    // The latest MonotonicClock reading an unmapped read may have returned: the first map's anchor never lies below it
+    // (written only before the first map, so the mapped reads share the line with no writer).
+    std::atomic<crd::i64> floor_ns{0};
 };
 static_assert(sizeof(TickMap) == 64U, "the map is one cache line, shared by nothing else");
 
@@ -286,54 +289,56 @@ crd::f64 measured_slope(const Pair& now) noexcept
     return static_cast<crd::f64>(now.ns - n0) / static_cast<crd::f64>(now.ticks - t0);
 }
 
-// The reads before the first map: MonotonicClock's, while this moves the state on. Out of line, as the re-anchor is,
-// so the mapped read keeps no frame for the calibration it never runs.
-CRD_NOINLINE crd::i64 unmapped_now(crd::u32 state) noexcept
+// One turn of a reader's wait for a publisher (the first map's or a re-anchor's: a read_pair and a few stores): the
+// core's spin-wait hint for the first turns, then the rest of the time slice, so a publisher that lost its processor to
+// the waiting readers gets one back.
+void wait_turn(crd::u32 turn) noexcept
 {
-    if (state == System)
+    if (turn >= 64U)
     {
-        return MonotonicClock::now().ns_since_epoch();
+        yield_thread();
+        return;
     }
-    if (state == Unstarted)
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+    _mm_pause();
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    __yield();
+#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+// Wait while a re-anchor writes the map (the sequence is odd). Out of line: the mapped read keeps only the call.
+CRD_NOINLINE void wait_for_reanchor() noexcept
+{
+    for (crd::u32 turn = 0U; (load_relaxed(g_tick_map.seq) & 1U) != 0U; ++turn)
     {
-        crd::u32 expected = Unstarted;
-        const bool invariant = counter_invariant();
-        if (g_tick_map.state.compare_exchange_strong(expected, Mapping, std::memory_order_acq_rel))
-        {
-            const Pair origin = read_pair();
-            g_tick_map.origin_ticks.store(origin.ticks, std::memory_order_relaxed);
-            g_tick_map.origin_ns.store(origin.ns, std::memory_order_relaxed);
-            g_tick_map.state.store(invariant ? Calibrating : System, std::memory_order_release);
-            return origin.ns;
-        }
-        return MonotonicClock::now().ns_since_epoch();
+        wait_turn(turn);
     }
-    // Calibrating: MonotonicClock alone until the span has passed, then the counter is read beside it.
-    const crd::i64 mono   = MonotonicClock::now().ns_since_epoch();
-    const crd::i64 origin = g_tick_map.origin_ns.load(std::memory_order_relaxed);
-    if (state != Calibrating || mono - origin < TickClock::kCalibrationNs)
+}
+
+// Wait while a publisher holds the state at Mapping (the origin's read_pair, or the first map's).
+void wait_for_mapping() noexcept
+{
+    for (crd::u32 turn = 0U; load_relaxed(g_tick_map.state) == Mapping; ++turn)
     {
-        return mono;
+        wait_turn(turn);
     }
-    const Pair now      = read_pair();
-    crd::u32   expected = Calibrating;
-    if (!g_tick_map.state.compare_exchange_strong(expected, Mapping, std::memory_order_acq_rel))
+}
+
+// Raise the floor to `ns`, by a read-modify-write even when the floor is already higher: the first map's publisher
+// reads the floor after its exchange of the state, and the sequentially consistent order places a reader's
+// read-modify-write, then its re-read of the state, before that exchange whenever the re-read still finds Calibrating.
+void raise_floor(crd::i64 ns) noexcept
+{
+    crd::i64 floor = g_tick_map.floor_ns.load(std::memory_order_relaxed);
+    while (!g_tick_map.floor_ns.compare_exchange_weak(floor, floor > ns ? floor : ns, std::memory_order_seq_cst,
+                                                      std::memory_order_relaxed))
     {
-        return now.ns;
+        // `floor` now holds the value another reader raised it to: try again from there.
     }
-    const crd::f64 slope = measured_slope(now);
-    if (slope <= 0.0)
-    {
-        g_tick_map.state.store(Calibrating, std::memory_order_release);
-        return now.ns;
-    }
-    g_tick_map.anchor_ticks.store(now.ticks, std::memory_order_relaxed);
-    g_tick_map.anchor_ns.store(now.ns, std::memory_order_relaxed);
-    g_tick_map.rate_q32.store(to_q32(slope), std::memory_order_relaxed);
-    g_tick_map.period_ticks.store(static_cast<crd::u64>(static_cast<crd::f64>(TickClock::kReanchorNs) / slope),
-                                  std::memory_order_relaxed);
-    g_tick_map.state.store(Mapped, std::memory_order_release);
-    return now.ns;
 }
 
 // Re-anchor at MonotonicClock, by the reader that found the anchor `seq` older than its period; another reader
@@ -366,20 +371,16 @@ CRD_NOINLINE void reanchor(crd::u32 seq) noexcept
     g_tick_map.seq.store(seq + 2U, std::memory_order_release);
 }
 
-} // namespace
-
-crd::i64 TickClock::now_ns() noexcept
+// The mapped read: the counter scaled from the anchor of one map, re-anchored by the reader that finds the anchor's
+// period over.
+CRD_FORCEINLINE crd::i64 mapped_now() noexcept
 {
-    const crd::u32 state = load_acquire(g_tick_map.state);
-    if (state != Mapped)
-    {
-        return unmapped_now(state);
-    }
     for (;;)
     {
         const crd::u32 seq = load_acquire(g_tick_map.seq);
-        if ((seq & 1U) != 0U) // a re-anchor is writing: it takes a MonotonicClock read
+        if ((seq & 1U) != 0U) // a re-anchor is writing: it takes a read_pair
         {
+            wait_for_reanchor();
             continue;
         }
         const crd::u64 at     = load_relaxed(g_tick_map.anchor_ticks);
@@ -399,6 +400,103 @@ crd::i64 TickClock::now_ns() noexcept
         }
         return ns_at + scale(elapsed, rate);
     }
+}
+
+// The reads before the first map: MonotonicClock's, while this moves the state on. Out of line, as the re-anchor is,
+// so the mapped read keeps no frame for the calibration it never runs.
+//
+// The hand-off to the first map must not step any reader back (2026-10-26: a thread's last MonotonicClock reading,
+// on the 100 ns grid of QueryPerformanceCounter, lay up to 37 ns past its first mapped read when the publisher read its
+// pair before taking the state, and other threads went on returning MonotonicClock readings until the map was stored;
+// docs/sessions/2026-10-26-tick-clock-cross-thread.md). So a MonotonicClock reading is returned only after it raised the
+// floor and the state, re-read, still says Calibrating; the publisher takes the state first, then reads its pair and
+// the floor, and anchors at the later of the two. Whenever a reader's re-read found Calibrating, its raise comes
+// before the publisher's exchange in the sequentially consistent order and the publisher's read of the floor after it,
+// so every reading returned lies at or below the anchor, and a mapped read never below the anchor. A reader that finds
+// the state taken waits for the publication (one read_pair) instead of returning a reading.
+CRD_NOINLINE crd::i64 unmapped_now(crd::u32 state) noexcept
+{
+    for (;;)
+    {
+        if (state == Mapped)
+        {
+            return mapped_now();
+        }
+        if (state == System)
+        {
+            return MonotonicClock::now().ns_since_epoch();
+        }
+        if (state == Mapping)
+        {
+            wait_for_mapping();
+            state = g_tick_map.state.load(std::memory_order_acquire);
+            continue;
+        }
+        if (state == Unstarted)
+        {
+            crd::u32   expected  = Unstarted;
+            const bool invariant = counter_invariant();
+            if (g_tick_map.state.compare_exchange_strong(expected, Mapping, std::memory_order_acq_rel))
+            {
+                const Pair origin = read_pair();
+                g_tick_map.origin_ticks.store(origin.ticks, std::memory_order_relaxed);
+                g_tick_map.origin_ns.store(origin.ns, std::memory_order_relaxed);
+                raise_floor(origin.ns);
+                g_tick_map.state.store(invariant ? Calibrating : System, std::memory_order_release);
+                return origin.ns;
+            }
+            state = expected;
+            continue;
+        }
+        // Calibrating: MonotonicClock alone until the span has passed, then the first map.
+        const crd::i64 mono   = MonotonicClock::now().ns_since_epoch();
+        const crd::i64 origin = g_tick_map.origin_ns.load(std::memory_order_relaxed);
+        if (mono - origin < TickClock::kCalibrationNs)
+        {
+            raise_floor(mono);
+            state = g_tick_map.state.load(std::memory_order_seq_cst);
+            if (state == Calibrating)
+            {
+                return mono;
+            }
+            continue; // a publisher took the state: this reading may lie past its anchor
+        }
+        crd::u32 expected = Calibrating;
+        if (!g_tick_map.state.compare_exchange_strong(expected, Mapping, std::memory_order_seq_cst))
+        {
+            state = expected;
+            continue;
+        }
+        const Pair     now   = read_pair();
+        const crd::f64 slope = measured_slope(now);
+        if (slope <= 0.0)
+        {
+            raise_floor(now.ns);
+            g_tick_map.state.store(Calibrating, std::memory_order_release);
+            return now.ns;
+        }
+        const crd::i64 floor  = g_tick_map.floor_ns.load(std::memory_order_seq_cst);
+        const crd::i64 anchor = now.ns > floor ? now.ns : floor;
+        g_tick_map.anchor_ticks.store(now.ticks, std::memory_order_relaxed);
+        g_tick_map.anchor_ns.store(anchor, std::memory_order_relaxed);
+        g_tick_map.rate_q32.store(to_q32(slope), std::memory_order_relaxed);
+        g_tick_map.period_ticks.store(static_cast<crd::u64>(static_cast<crd::f64>(TickClock::kReanchorNs) / slope),
+                                      std::memory_order_relaxed);
+        g_tick_map.state.store(Mapped, std::memory_order_release);
+        return anchor;
+    }
+}
+
+} // namespace
+
+crd::i64 TickClock::now_ns() noexcept
+{
+    const crd::u32 state = load_acquire(g_tick_map.state);
+    if (state != Mapped)
+    {
+        return unmapped_now(state);
+    }
+    return mapped_now();
 }
 
 void TickClock::warm() noexcept
@@ -449,6 +547,7 @@ void TickClock::test_reset() noexcept
 {
     g_tick_map.seq.store(0U, std::memory_order_relaxed);
     g_tick_map.period_ticks.store(0U, std::memory_order_relaxed);
+    g_tick_map.floor_ns.store(0, std::memory_order_relaxed);
     g_tick_map.state.store(Unstarted, std::memory_order_release);
 }
 #endif
