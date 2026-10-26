@@ -1,6 +1,7 @@
 // JOBS-HARD.3: the kept fiber. A thread keeps the fiber of the job it completed, still acquired from the FiberPool,
 // and reuses it for its next new job of the same tier; it returns it before a resume, before a job of another tier,
-// before it blocks waiting for work or leaves its dispatch loop, and when the main thread's wait() or pump returns.
+// before it blocks waiting for work (a worker first spins a little for the next job's token) or leaves its dispatch
+// loop, and when the main thread's wait() or pump returns.
 // The pool's readings count the kept fiber (no other job can have it), so they stay exact, and a refusal still needs
 // every other fiber running, parked or kept: the sizing bound (parked fibers + threads) is unchanged.
 //
@@ -13,6 +14,7 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/core/lifetime_ledger.hpp>
+#include <crd/core/platform.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/jobs/observer.hpp>
 
@@ -21,6 +23,18 @@
 #include <atomic>
 #include <chrono>
 #include <thread>
+
+#if CRD_OS_WINDOWS
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h> // GetProcessAffinityMask, SetProcessAffinityMask
+#elif CRD_OS_LINUX
+#include <sched.h> // sched_getaffinity, sched_setaffinity
+#endif
 
 using crd::jobs::detail::Fiber;
 using crd::jobs::detail::FiberTier;
@@ -561,8 +575,9 @@ TEST_CASE("fiber keep: while tiny jobs stream the readings stay exact and bounde
 
 namespace
 {
-// A short job (a few microseconds of arithmetic), so the producer's pushes stay ahead of the consumers and a
-// thread's run of jobs lasts the frame on any lane.
+// A short job (a few microseconds of arithmetic). One thread pushing them one at a time is often slower than the
+// workers that run them (a slow host, or more threads than processors): a worker then finds the queues empty between
+// nearly every two jobs, which is the gap the kept fiber has to survive.
 struct Frame
 {
     std::atomic<crd::u32> done{0U};
@@ -577,13 +592,100 @@ void short_job(void* data) noexcept
     }
     static_cast<Frame*>(data)->done.fetch_add(1U, std::memory_order_release);
 }
-} // namespace
 
-TEST_CASE("fiber keep: frames of short jobs reach the pool's shared free list only as threads start and stop",
-          "[jobs][fiber_keep]")
+// Limits the process to the first `wanted` processors it may run on, for one scope, so a pool started inside it has
+// more threads than processors. Windows: the process mask, which every thread follows; Linux: the calling thread's
+// set, which the workers WorkerPool::init() starts inherit. processors() is the count limited to, or 0 when the OS
+// refused (a case that needs the limit requires it).
+class ScopedProcessorLimit
 {
-    // The free list is LIFO, so a fiber's identity cannot tell a kept fiber from one released and acquired again on
-    // the same thread; the pool's own tally of acquisitions from the list can.
+public:
+    explicit ScopedProcessorLimit(crd::u32 wanted) noexcept
+    {
+#if CRD_OS_WINDOWS
+        DWORD_PTR process = 0U;
+        DWORD_PTR system  = 0U;
+        if (::GetProcessAffinityMask(::GetCurrentProcess(), &process, &system) == 0)
+        {
+            return;
+        }
+        DWORD_PTR limited = 0U;
+        crd::u32  count   = 0U;
+        for (crd::u32 bit = 0U; bit < sizeof(DWORD_PTR) * 8U && count < wanted; ++bit)
+        {
+            const DWORD_PTR one = DWORD_PTR{1} << bit;
+            if ((process & one) != 0U)
+            {
+                limited |= one;
+                ++count;
+            }
+        }
+        if (::SetProcessAffinityMask(::GetCurrentProcess(), limited) != 0)
+        {
+            m_saved      = process;
+            m_processors = count;
+        }
+#elif CRD_OS_LINUX
+        cpu_set_t current;
+        CPU_ZERO(&current);
+        if (::sched_getaffinity(0, sizeof(current), &current) != 0)
+        {
+            return;
+        }
+        cpu_set_t limited;
+        CPU_ZERO(&limited);
+        crd::u32 count = 0U;
+        for (int cpu = 0; cpu < CPU_SETSIZE && count < wanted; ++cpu)
+        {
+            if (CPU_ISSET(cpu, &current))
+            {
+                CPU_SET(cpu, &limited);
+                ++count;
+            }
+        }
+        if (::sched_setaffinity(0, sizeof(limited), &limited) == 0)
+        {
+            m_saved      = current;
+            m_processors = count;
+        }
+#endif
+    }
+
+    ~ScopedProcessorLimit()
+    {
+        if (m_processors == 0U)
+        {
+            return;
+        }
+#if CRD_OS_WINDOWS
+        (void)::SetProcessAffinityMask(::GetCurrentProcess(), m_saved);
+#elif CRD_OS_LINUX
+        (void)::sched_setaffinity(0, sizeof(m_saved), &m_saved);
+#endif
+    }
+
+    ScopedProcessorLimit(const ScopedProcessorLimit&)            = delete;
+    ScopedProcessorLimit& operator=(const ScopedProcessorLimit&) = delete;
+    ScopedProcessorLimit(ScopedProcessorLimit&&)                 = delete;
+    ScopedProcessorLimit& operator=(ScopedProcessorLimit&&)      = delete;
+
+    [[nodiscard]] crd::u32 processors() const noexcept { return m_processors; }
+
+private:
+#if CRD_OS_WINDOWS
+    DWORD_PTR m_saved = 0U;
+#elif CRD_OS_LINUX
+    cpu_set_t m_saved{};
+#endif
+    crd::u32 m_processors = 0U;
+};
+
+// Fifty frames of 512 short jobs, each pushed on its own (one token and one wake a job), on a pool of four threads
+// with the calling thread helping as wait() does, then the free-list traffic is checked. The free list is LIFO, so a
+// fiber's identity cannot tell a kept fiber from one released and acquired again on the same thread; the pool's own
+// tally of acquisitions from the list can.
+void short_frames_reach_the_free_list_rarely()
+{
     constexpr crd::u32 job_count   = 512U;
     constexpr crd::u32 frame_count = 50U;
     WorkerPool         pool;
@@ -619,6 +721,30 @@ TEST_CASE("fiber keep: frames of short jobs reach the pool's shared free list on
     CHECK(acquisitions * 8U <= crd::u64{job_count} * frame_count);
     CHECK(pool.fiber_pool().available_count(FiberTier::Small) == 128U);
     pool.shutdown();
+}
+} // namespace
+
+TEST_CASE("fiber keep: frames of short jobs reach the pool's shared free list only as threads start and stop",
+          "[jobs][fiber_keep]")
+{
+    short_frames_reach_the_free_list_rarely();
+}
+
+TEST_CASE("fiber keep: with fewer processors than threads a worker keeps its fiber between pushed jobs",
+          "[jobs][fiber_keep]")
+{
+    // The hosted 4-vCPU Windows runner (2026-10-26): workers faster than the one pushing thread slept between nearly
+    // every two jobs and gave the fiber back before each sleep, 17,524 acquisitions for 25,600 jobs. The pool's four
+    // threads on one processor and on two reproduce that on any host: with the spin removed, linux-gcc-debug failed on
+    // one processor (7,281 to 8,991 acquisitions, eight runs of eight) and win-debug on two (3,106 to 23,905, seven of
+    // eight). A worker that keeps a fiber now spins for the next job's token before it sleeps.
+    for (const crd::u32 wanted : {1U, 2U})
+    {
+        const ScopedProcessorLimit limit(wanted);
+        INFO("processors " << limit.processors() << " (asked for " << wanted << ")");
+        REQUIRE(limit.processors() >= 1U);
+        short_frames_reach_the_free_list_rarely();
+    }
 }
 
 TEST_CASE("fiber keep: the main thread's pumps return its kept fiber when they stop", "[jobs][fiber_keep][diag10c]")

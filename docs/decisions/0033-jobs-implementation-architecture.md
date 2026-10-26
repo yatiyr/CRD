@@ -165,6 +165,21 @@ found a token as well. A run of jobs that do not park then reaches the free list
 instead of twice per job. The slot is a plain pointer that only its thread touches, so no hand-off between threads
 exists. A fiber parked on one thread and completed on another is kept by the thread that completed it.
 
+**The spin before the sleep (2026-10-26).** One thread pushing jobs one at a time can be slower than the workers that
+run them (a slow host, or more threads than processors). A worker then found the queues empty and no token between
+nearly every two jobs, gave its fiber back, slept a few microseconds until the next push woke it and took a fiber
+again: the hosted 4-vCPU Windows runner showed 17,524 acquisitions for 25,600 such jobs. The sleeps were real (the
+hook never fired without a kernel wait following), so the rule above held; the gap was too short to sleep through. A
+worker that keeps a fiber now looks for a token first, for 128 turns of 16 pauses and a yield
+(`Semaphore::spin_for_token`, `kKeptFiberSpinRounds`), and gives the fiber back only if none comes. The spin only reads
+the count; the semaphore and token protocol run after it unchanged. The yield is required: a spin of pauses alone kept
+the pusher off the processors it needed. A worker that keeps no fiber does not spin, so an idle pool spins once after
+its last job. The readings and the sizing rule are unchanged (a spinning worker is running and holds its one kept
+fiber). Measured: about one acquisition a thread a frame again at one to eight processors on Windows and at two or more
+on Linux, one for 30 to 45 jobs at four threads on one Linux processor; the case up to 3.5x faster on Windows at two
+processors, and 1.6x slower on Linux at one processor, where a runnable spinner takes the pusher's share and the
+futex wake costs a syscall either way ([session](../sessions/2026-10-26-jobs-fiber-keep-oversubscription.md)).
+
 **Why this and not a cache of idle fibers in front of the free list.** A per-thread cache of idle fibers, filled
 and drained in batches, makes acquire and release local too, but then a fiber in a cache is not in use. The pool's
 in-use count would be the sum of per-thread counts. Its high water would be the peak of that sum, and that peak

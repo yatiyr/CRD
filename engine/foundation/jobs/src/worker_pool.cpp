@@ -278,6 +278,16 @@ void WorkerPool::keep_fiber(crd::u32 thread_index, Fiber* fiber) noexcept
     }
 }
 
+// The spin of a worker that keeps a fiber, before it gives the fiber back and sleeps (Semaphore::spin_for_token): 128
+// turns of 16 pauses and a yield, about 70 us (win-debug) to 120 us (linux-gcc-debug) on an idle host when no token
+// comes. One thread pushing jobs one at a time is slower than the workers that run them, so a worker that slept as
+// soon as the queues were empty was woken for nearly every job and gave its fiber back before each sleep: 17,524
+// free-list acquisitions for 25,600 jobs on the hosted 4-vCPU Windows runner, against about one a thread a frame.
+// Sixteen turns covered the pushing thread's gap from two processors up; with four threads on one processor a turn's
+// yield may run the other spinners instead, and 128 keeps that case under one acquisition for 35 jobs
+// (docs/sessions/2026-10-26-jobs-fiber-keep-oversubscription.md).
+constexpr crd::u32 kKeptFiberSpinRounds = 128U;
+
 // The worker's SleepHook: the thread is about to block in wait_for_work, so it holds no fiber while it sleeps. A thread
 // that finds its queues empty but a token posted loops instead, keeping its fiber: work is coming.
 static void release_kept_before_sleep(void* pool) noexcept
@@ -501,8 +511,12 @@ void WorkerPool::worker_loop(WorkerPool* self, crd::u32 thread_index)
         }
         else
         {
-            // A worker that is about to block returns its kept fiber first (release_kept_before_sleep).
-            self->m_scheduler.wait_for_work(thread_index, &release_kept_before_sleep, self);
+            // A worker that is about to block returns its kept fiber first (release_kept_before_sleep). One that
+            // keeps a fiber first spins for a token (kKeptFiberSpinRounds), so a job pushed just after it found the
+            // queues empty finds it awake and still holding the fiber; one that keeps none sleeps at once.
+            const bool     keeps = self->m_kept[thread_index].fiber != nullptr; // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+            const crd::u32 spin  = keeps ? kKeptFiberSpinRounds : 0U;
+            self->m_scheduler.wait_for_work(thread_index, &release_kept_before_sleep, self, spin);
         }
     }
     self->release_kept_fiber(thread_index); // a stopping worker returns its kept fiber before it is joined

@@ -403,11 +403,16 @@ std::optional<crd::jobs::JobDecl> Scheduler::try_pop(crd::u32 thread_idx)
 // wait_for_work
 // ---------------------------------------------------------------------------
 
-void Scheduler::wait_for_work(crd::u32 thread_index, SleepHook before_sleep, void* user)
+void Scheduler::wait_for_work(crd::u32 thread_index, SleepHook before_sleep, void* user, crd::u32 spin_rounds)
 {
     CRD_ASSERT_MSG(m_initialized, "Scheduler::wait_for_work called before init");
     if (!m_targeted_wake)
     {
+        // The spin only reads the count; the protocol below runs after it unchanged, and takes the token it saw.
+        if (spin_rounds != 0U)
+        {
+            (void)m_semaphore.spin_for_token(spin_rounds);
+        }
         // DEFAULT PATH. Return to the worker loop after every wake, not only after taking a token: a broadcast
         // (wake_all, e.g. a worker_snapshot request) must bring EVERY sleeper back to its loop-top ack, and with
         // acquire() one worker could drain all the broadcast's tokens while the rest re-slept inside it unacknowledged
@@ -436,6 +441,11 @@ void Scheduler::wait_for_work(crd::u32 thread_index, SleepHook before_sleep, voi
     // execute_one). In the common case wake_worker/wake_one_idle posts this semaphore and the wait returns at once.
     const crd::u64 bit = crd::u64{1} << thread_index;
     m_idle_mask.fetch_or(bit, std::memory_order_seq_cst);
+    // Marked idle first, so wake_one_idle can pick this worker and post the token the spin looks for.
+    if (spin_rounds != 0U)
+    {
+        (void)m_thread_states[thread_index]->wake.spin_for_token(spin_rounds);
+    }
     (void)m_thread_states[thread_index]->wake.try_acquire_for_ms(1U, before_sleep, user);
     m_idle_mask.fetch_and(~bit, std::memory_order_seq_cst);
 }

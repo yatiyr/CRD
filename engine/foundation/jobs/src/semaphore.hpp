@@ -116,6 +116,13 @@ public:
         wake_all();
     }
 
+    // Look for a posted token for up to `rounds` turns, each a short pause and a yield of the processor, without
+    // taking one: a read of the count, so the protocol below is unchanged. True when a token showed. A caller that
+    // gives something back before it blocks spins first, so the token of a job pushed microseconds later finds it
+    // still awake and still holding it (the worker's kept fiber, WorkerPool::worker_loop). The yield lets the thread
+    // that pushes that job run where the threads outnumber the processors.
+    [[nodiscard]] bool spin_for_token(crd::u32 rounds) const noexcept;
+
     // Block until a token is consumed.
     void acquire() noexcept
     {

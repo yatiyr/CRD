@@ -160,8 +160,11 @@ public:
     // Default path: acquire the shared semaphore (unchanged). Targeted path: park on this worker's own semaphore
     // with a short timeout safety-net (a missed wake self-heals within the timeout ⇒ no deadlock possible).
     // `before_sleep(user)` runs on the calling thread just before it would block (no token was left for it); a wait
-    // that returns at once, with a token or a job in its pinned lane, does not call it.
-    void wait_for_work(crd::u32 thread_index, SleepHook before_sleep = nullptr, void* user = nullptr);
+    // that returns at once, with a token or a job in its pinned lane, does not call it. A caller with something to give
+    // back in `before_sleep` passes `spin_rounds`: the wait first looks for a token that long (Semaphore::spin_for_token,
+    // on the semaphore its path sleeps on), so a job pushed just after the caller found the queues empty finds it awake.
+    void wait_for_work(crd::u32 thread_index, SleepHook before_sleep = nullptr, void* user = nullptr,
+                       crd::u32 spin_rounds = 0U);
 
     // Release count units on the semaphore to wake up to count sleeping workers.
     // Called by WorkerPool::shutdown() to unblock workers that are in wait_for_work().

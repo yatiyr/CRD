@@ -321,3 +321,73 @@ The fiber pool's free list is reached about once per thread per frame at every s
 frame time and in CPU per frame in off, basic and full at four, eight and sixteen threads on both platforms, and 13.0%
 fewer instructions a frame at one thread (55% to 56% at four). Off over compiled-out stays within the 1% budget in
 instructions (+0.00%) and in the four-thread boards (Windows -0.80%, Linux -0.31%).
+
+## 2026-10-26: the spin before the sleep
+
+[Session](../sessions/2026-10-26-jobs-fiber-keep-oversubscription.md). A worker that keeps a fiber now spins for a
+token (128 turns of 16 pauses and a yield) before it gives the fiber back and sleeps; the hosted 4-vCPU Windows runner
+had shown 17,524 free-list acquisitions for 25,600 one-at-a-time pushed jobs because the workers slept between nearly
+every two jobs.
+
+- **Machine/config:** as above (i9-14900K, Windows 11 10.0.26200, MSVC 19.51, win-shipping-profile). Host idle
+  (`build-bench.py host`: 0.3 cores of other load).
+- **Harness:** `scripts/diag-overhead.py run --before-exe`, the jobs workload, arms off, basic, full and their before
+  arms, 12 processes per arm of 2000 timed frames after 50 warmup, `--threads` and `--affinity` per shape.
+- **Binaries (SHA-256 prefixes):** before, 1cb54d07: `9ef907677bd3`; after: `12f44c8765bf`.
+- **Peers:** none, as above (an internal change measured against the same harness before it).
+
+Summary: neutral where every thread has a processor (four threads on 5555: off -1.20%, CPU -1.35%; eight on FFFF:
+-1.10%, +1.54%; every interval spans zero), and with four threads on two processors (affinity 5) the frame is 12.8%
+faster and costs 17.6% more CPU, the spin's own CPU. The free-list tally and the case's wall times per processor count
+are in the session.
+
+#### win-shipping-profile, jobs, 4 threads on 5555
+
+Windows 11 (AMD64), 32 logical processors; 12 processes per arm, 2000 timed frames after 50 warmup each; affinity 5555.
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | off | 204.9 | 237.6 | 340.1 | 100.0 | reference | 2.61 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | basic | 207.2 | 234.1 | 247.6 | 101.2 | +1.95% vs off (-1.61% .. +2.87%) | 2.68 Mcycles | +2.65% (-0.91% .. +4.42%) | unresolved (2%) | 0 / 0 / 50405400 | 36 of 36 (103860) | 3.9 MiB |
+| jobs | full | 309.1 | 338.2 | 369.2 | 150.9 | +51.26% vs off (+47.57% .. +55.17%) | 3.93 Mcycles | +52.53% (+47.42% .. +54.52%) | reported | 50380800 / 50405400 / 0 | 36 of 36 (1955484) | 5.3 MiB |
+| jobs | before-off | 204.9 | 233.4 | 248.1 | 100.1 | reference | 2.64 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | before-basic | 207.1 | 234.5 | 249.1 | 101.1 | reference | 2.66 Mcycles |  |  | 0 / 0 / 50405400 | 36 of 36 (103860) | 3.9 MiB |
+| jobs | before-full | 313.6 | 340.9 | 363.4 | 153.1 | reference | 3.99 Mcycles |  |  | 50380800 / 50405400 / 0 | 36 of 36 (1955484) | 5.3 MiB |
+| jobs | off vs before-off |  |  |  |  | -1.20% (-2.50% .. +2.40%) |  | -1.35% (-2.89% .. +1.22%) | reported |  |  |  |
+| jobs | basic vs before-basic |  |  |  |  | -0.01% (-0.37% .. +0.54%) |  | +0.43% (-0.26% .. +0.90%) | reported |  |  |  |
+| jobs | full vs before-full |  |  |  |  | -1.69% (-2.25% .. -0.32%) |  | -1.44% (-2.17% .. -0.02%) | reported |  |  |  |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.55 MiB | | | within (32 MiB) | | | |
+
+#### win-shipping-profile, jobs, 8 threads on FFFF
+
+Windows 11 (AMD64), 32 logical processors; 12 processes per arm, 2000 timed frames after 50 warmup each; affinity FFFF.
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | off | 181.0 | 219.7 | 234.1 | 88.4 | reference | 4.61 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.7 MiB |
+| jobs | basic | 172.3 | 204.5 | 219.3 | 84.1 | -1.94% vs off (-9.44% .. -1.00%) | 4.35 Mcycles | -2.32% (-9.23% .. -0.98%) | within (2%) | 0 / 0 / 50405400 | 36 of 36 (103860) | 4.3 MiB |
+| jobs | full | 203.7 | 224.9 | 242.6 | 99.5 | +11.72% vs off (+4.52% .. +20.60%) | 5.17 Mcycles | +11.66% (+4.95% .. +19.78%) | reported | 50380800 / 50405400 / 0 | 36 of 36 (1955484) | 6.2 MiB |
+| jobs | before-off | 182.1 | 225.9 | 243.7 | 88.9 | reference | 4.46 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.7 MiB |
+| jobs | before-basic | 180.2 | 216.9 | 230.2 | 88.0 | reference | 4.43 Mcycles |  |  | 0 / 0 / 50405400 | 36 of 36 (103860) | 4.3 MiB |
+| jobs | before-full | 204.5 | 231.9 | 270.8 | 99.9 | reference | 5.14 Mcycles |  |  | 50380800 / 50405400 / 0 | 36 of 36 (1955484) | 6.3 MiB |
+| jobs | off vs before-off |  |  |  |  | -1.10% (-5.51% .. +6.14%) |  | +1.54% (-2.80% .. +8.83%) | reported |  |  |  |
+| jobs | basic vs before-basic |  |  |  |  | -4.08% (-7.96% .. +0.07%) |  | -2.02% (-5.51% .. +0.66%) | reported |  |  |  |
+| jobs | full vs before-full |  |  |  |  | +0.21% (-1.74% .. +1.03%) |  | +0.92% (-0.56% .. +2.77%) | reported |  |  |  |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.54 MiB | | | within (32 MiB) | | | |
+
+#### win-shipping-profile, jobs, 4 threads on 5
+
+Windows 11 (AMD64), 32 logical processors; 12 processes per arm, 2000 timed frames after 50 warmup each; affinity 5.
+
+| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | Captures (bytes) | Resident growth |
+|---|---|---:|---:|---:|---:|---|---:|---|---|---|---|---:|
+| jobs | off | 360.0 | 400.1 | 471.1 | 175.8 | reference | 2.25 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | basic | 359.9 | 396.0 | 454.5 | 175.7 | -0.32% vs off (-1.69% .. +0.57%) | 2.26 Mcycles | +0.47% (-0.70% .. +2.71%) | unresolved (2%) | 0 / 0 / 50405400 | 36 of 36 (103860) | 3.9 MiB |
+| jobs | full | 565.0 | 619.1 | 716.4 | 275.9 | +56.79% vs off (+54.42% .. +58.56%) | 3.57 Mcycles | +57.80% (+55.30% .. +61.75%) | reported | 50380800 / 50405400 / 0 | 36 of 36 (1955484) | 5.3 MiB |
+| jobs | before-off | 401.1 | 476.6 | 576.0 | 195.9 | reference | 1.88 Mcycles |  |  | 0 / 0 / 0 | 0 of 0 (0) | 3.3 MiB |
+| jobs | before-basic | 414.9 | 488.0 | 595.4 | 202.6 | reference | 1.84 Mcycles |  |  | 0 / 0 / 50405400 | 36 of 36 (103860) | 3.9 MiB |
+| jobs | before-full | 604.3 | 768.7 | 877.7 | 295.1 | reference | 3.36 Mcycles |  |  | 50380800 / 50405400 / 0 | 36 of 36 (1955469) | 5.3 MiB |
+| jobs | off vs before-off |  |  |  |  | -12.79% (-15.94% .. -5.60%) |  | +17.61% (+9.62% .. +27.01%) | reported |  |  |  |
+| jobs | basic vs before-basic |  |  |  |  | -12.80% (-17.50% .. -3.94%) |  | +23.80% (+10.22% .. +35.28%) | reported |  |  |  |
+| jobs | full vs before-full |  |  |  |  | -7.16% (-17.79% .. -4.17%) |  | +5.75% (+3.57% .. +21.65%) | reported |  |  |  |
+| jobs | basic storage | | | | | ring 152 KiB, resident growth over off 0.55 MiB | | | within (32 MiB) | | | |

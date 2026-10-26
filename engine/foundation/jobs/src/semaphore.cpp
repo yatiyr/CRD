@@ -15,6 +15,7 @@
 #include <climits>
 #include <ctime>
 #include <linux/futex.h>
+#include <sched.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #else
@@ -23,6 +24,43 @@
 
 namespace crd::jobs::detail
 {
+
+namespace
+{
+// One turn of Semaphore::spin_for_token: a few pause instructions (the core's spin-wait hint), then the rest of the
+// time slice to a thread that is ready to run. The yield is what lets a pushing thread run where the threads
+// outnumber the processors; pausing alone kept the workers off the processors the pushing thread needed
+// (docs/sessions/2026-10-26-jobs-fiber-keep-oversubscription.md).
+void spin_turn() noexcept
+{
+    for (crd::u32 i = 0U; i < 16U; ++i)
+    {
+#if CRD_OS_WINDOWS
+        YieldProcessor();
+#else
+        __builtin_ia32_pause();
+#endif
+    }
+#if CRD_OS_WINDOWS
+    (void)::SwitchToThread();
+#else
+    (void)::sched_yield();
+#endif
+}
+} // namespace
+
+bool Semaphore::spin_for_token(crd::u32 rounds) const noexcept
+{
+    for (crd::u32 r = 0U; r < rounds; ++r)
+    {
+        if (m_count.load(std::memory_order_relaxed) != 0U)
+        {
+            return true;
+        }
+        spin_turn();
+    }
+    return m_count.load(std::memory_order_relaxed) != 0U;
+}
 
 // The futex / WaitOnAddress word is the atomic count itself. Both kernels
 // atomically re-check the word against the expected value (0) under their
