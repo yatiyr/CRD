@@ -179,6 +179,70 @@ static_assert(sizeof(TickMap) == 64U, "the map is one cache line, shared by noth
 
 TickMap g_tick_map;
 
+// The mapped read's loads: functions of this unit, so every read inlines them. With MSVC on x64 they are the
+// compiler's own volatile loads (what std::atomic's acquire and relaxed loads are there) and a compiler barrier, not
+// std::atomic's load: link-time code generation keeps one body of each inline function for the whole program, and when
+// that body came from a unit compiled with /arch:AVX2 (every consumer of crd-math, the executable's own units first) it
+// is not inlined into a unit built for the baseline ISA, such as this one. std::atomic's load then stayed an
+// out-of-line call, six of them in the mapped read, which made TickClock slower than steady_clock on the four-thread
+// jobs frame although it is the cheaper read (DIAG.11b (q2), docs/bench/2026-10-26-diag-11b-tick-clock-inlining.md).
+// Everywhere else (GCC and Clang inline std::atomic across their link-time optimisation) std::atomic's own loads.
+#if defined(_MSC_VER) && defined(_M_X64)
+static_assert(sizeof(std::atomic<crd::u32>) == sizeof(crd::u32) && std::atomic<crd::u32>::is_always_lock_free,
+              "a std::atomic<u32> is its value");
+static_assert(sizeof(std::atomic<crd::u64>) == sizeof(crd::u64) && std::atomic<crd::u64>::is_always_lock_free,
+              "a std::atomic<u64> is its value");
+static_assert(sizeof(std::atomic<crd::i64>) == sizeof(crd::i64) && std::atomic<crd::i64>::is_always_lock_free,
+              "a std::atomic<i64> is its value");
+
+// An acquire fence: on x64 only the compiler may reorder loads, so it is a compiler barrier (std::atomic_thread_fence's
+// acquire there).
+CRD_FORCEINLINE void acquire_fence() noexcept
+{
+#pragma warning(suppress : 4996) // deprecated as a hardware fence; it is used here only as the compiler barrier it is
+    _ReadWriteBarrier();
+}
+
+CRD_FORCEINLINE crd::u32 load_acquire(const std::atomic<crd::u32>& a) noexcept
+{
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the atomic's storage, as std::atomic reads it
+    const crd::u32 value = static_cast<crd::u32>(__iso_volatile_load32(reinterpret_cast<const volatile int*>(&a)));
+    acquire_fence(); // x64 loads are acquire loads; later accesses stay after this one
+    return value;
+}
+
+CRD_FORCEINLINE crd::u32 load_relaxed(const std::atomic<crd::u32>& a) noexcept
+{
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the atomic's storage, as std::atomic reads it
+    return static_cast<crd::u32>(__iso_volatile_load32(reinterpret_cast<const volatile int*>(&a)));
+}
+
+template <typename T>
+CRD_FORCEINLINE T load_relaxed(const std::atomic<T>& a) noexcept
+{
+    static_assert(sizeof(T) == 8U, "the map's 64-bit words");
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast): the atomic's storage, as std::atomic reads it
+    return static_cast<T>(__iso_volatile_load64(reinterpret_cast<const volatile __int64*>(&a)));
+}
+#else
+CRD_FORCEINLINE void acquire_fence() noexcept
+{
+    std::atomic_thread_fence(std::memory_order_acquire);
+}
+
+template <typename T>
+CRD_FORCEINLINE T load_acquire(const std::atomic<T>& a) noexcept
+{
+    return a.load(std::memory_order_acquire);
+}
+
+template <typename T>
+CRD_FORCEINLINE T load_relaxed(const std::atomic<T>& a) noexcept
+{
+    return a.load(std::memory_order_relaxed);
+}
+#endif
+
 // A tick reading paired with MonotonicClock: the counter read on both sides of the clock, their midpoint kept.
 struct Pair
 {
@@ -221,8 +285,9 @@ crd::f64 measured_slope(const Pair& now) noexcept
     return static_cast<crd::f64>(now.ns - n0) / static_cast<crd::f64>(now.ticks - t0);
 }
 
-// The reads before the first map: MonotonicClock's, while this moves the state on.
-crd::i64 unmapped_now(crd::u32 state) noexcept
+// The reads before the first map: MonotonicClock's, while this moves the state on. Out of line, as the re-anchor is,
+// so the mapped read keeps no frame for the calibration it never runs.
+CRD_NOINLINE crd::i64 unmapped_now(crd::u32 state) noexcept
 {
     if (state == System)
     {
@@ -304,25 +369,25 @@ CRD_NOINLINE void reanchor(crd::u32 seq) noexcept
 
 crd::i64 TickClock::now_ns() noexcept
 {
-    const crd::u32 state = g_tick_map.state.load(std::memory_order_acquire);
+    const crd::u32 state = load_acquire(g_tick_map.state);
     if (state != Mapped)
     {
         return unmapped_now(state);
     }
     for (;;)
     {
-        const crd::u32 seq = g_tick_map.seq.load(std::memory_order_acquire);
+        const crd::u32 seq = load_acquire(g_tick_map.seq);
         if ((seq & 1U) != 0U) // a re-anchor is writing: it takes a MonotonicClock read
         {
             continue;
         }
-        const crd::u64 at     = g_tick_map.anchor_ticks.load(std::memory_order_relaxed);
-        const crd::i64 ns_at  = g_tick_map.anchor_ns.load(std::memory_order_relaxed);
-        const crd::u64 rate   = g_tick_map.rate_q32.load(std::memory_order_relaxed);
-        const crd::u64 period = g_tick_map.period_ticks.load(std::memory_order_relaxed);
+        const crd::u64 at     = load_relaxed(g_tick_map.anchor_ticks);
+        const crd::i64 ns_at  = load_relaxed(g_tick_map.anchor_ns);
+        const crd::u64 rate   = load_relaxed(g_tick_map.rate_q32);
+        const crd::u64 period = load_relaxed(g_tick_map.period_ticks);
         const crd::u64 ticks  = CycleCounter::now();
-        std::atomic_thread_fence(std::memory_order_acquire);
-        if (g_tick_map.seq.load(std::memory_order_relaxed) != seq)
+        acquire_fence(); // the map's loads above stay before the sequence's re-read
+        if (load_relaxed(g_tick_map.seq) != seq)
         {
             continue;
         }
@@ -344,6 +409,18 @@ void TickClock::warm() noexcept
         (void)TickClock::now_ns();
         state = g_tick_map.state.load(std::memory_order_acquire);
     }
+}
+
+bool TickClock::prefer_system() noexcept
+{
+    // Only before the first read: a mapped clock may run ahead of MonotonicClock by its slope's error, so moving its
+    // readers onto MonotonicClock afterwards could step them back.
+    crd::u32 expected = Unstarted;
+    if (g_tick_map.state.compare_exchange_strong(expected, System, std::memory_order_acq_rel))
+    {
+        return true;
+    }
+    return expected == System;
 }
 
 bool TickClock::counter_usable() noexcept

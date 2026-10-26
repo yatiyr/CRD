@@ -76,6 +76,13 @@ add_test(NAME crd-diag-overhead-alloc-full-memory
     COMMAND crd-diag-overhead --workload alloc --mode full --memory --iterations 6 --warmup 2 --captures 2 --check
             --scratch "${_crd_overhead_scratch}/alloc-full-memory")
 list(APPEND _crd_overhead_tests crd-diag-overhead-alloc-full-memory)
+# The system clock (--clock system, DIAG.11b (q2)): every per-event timestamp from MonotonicClock, as on a CPU whose
+# counter may not be mapped; the board's full-system-clock arm. The check holds the clock to the one asked for.
+file(MAKE_DIRECTORY "${_crd_overhead_scratch}/jobs-full-system-clock")
+add_test(NAME crd-diag-overhead-jobs-full-system-clock
+    COMMAND crd-diag-overhead --workload jobs --mode full --clock system --iterations 6 --warmup 2 --captures 2
+            --threads 4 --check --scratch "${_crd_overhead_scratch}/jobs-full-system-clock")
+list(APPEND _crd_overhead_tests crd-diag-overhead-jobs-full-system-clock)
 # The render workload under device validation (D3D12 has no synchronization validation): the requested modes active on
 # the device it draws with and no validation message over the run (GPU-assisted validation's notices of its own cost
 # are reported, not failed).

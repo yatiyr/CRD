@@ -84,6 +84,11 @@ public:
     // turns per-event timestamps on calls it (the profiler's init, the diagnostic host's start).
     static void warm() noexcept;
     [[nodiscard]] static Instant  now() noexcept { return Instant{now_ns()}; }
+    // Read MonotonicClock for good, as on a CPU whose counter is not invariant: for a host whose counter is not to be
+    // trusted, and for a board that measures what the counter saves (crd-diag-overhead --clock system). It takes
+    // effect only before the first read of the process (a mapped clock could step back if moved later) and returns
+    // whether reads are MonotonicClock's for good afterwards.
+    static bool prefer_system() noexcept;
 
     // Whether this CPU's counter may be mapped (invariant), and whether reads come from it now (false while it is
     // calibrated, and for good where it may not be).

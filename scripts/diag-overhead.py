@@ -53,6 +53,13 @@ site workloads (events, zones, marks) each also as nanoseconds per event over it
 harness's --memory to the alloc workload: full counts the heap's statistics, the tracy arms report every operation.
 `instructions` counts the same arms under cachegrind (`--arms`; tracy-connected with a client as above).
 
+The clock (DIAG.11b (q2)): `full-system-clock` is the measured binary's full mode with `--clock system`, every per-event
+timestamp read from MonotonicClock (steady_clock) instead of crd-time's TickClock; a record whose clock is not the one
+its arm asks (build.clock, build.tick_clock_mapped) is an instrument failure. `tick-clock` (full over
+full-system-clock) is judged with a budget of 0%: TickClock replaced steady_clock as the per-event clock, so on a frame
+of work it may cost no more than steady_clock did (within, over or unresolved as above); on the site workloads it is
+reported, per event.
+
 `render` turns boards into the markdown of docs/bench. Contract: docs/design/runtime-diagnostics.md (DIAG.11b).
 """
 from pathlib import Path
@@ -90,6 +97,8 @@ TRACY_FRAME_OFFSET = 3
 VALIDATIONS = ('core', 'sync', 'gpu') # device validation arms, `validation-<name>`: render's off mode, reported
 VALIDATION_COUNTS = ('errors', 'warnings', 'lost', 'instrumentation_failures')
 BUDGETS = {'disabled': ('off', 'compiled-out', 0.01), 'basic': ('basic', 'off', 0.02)}
+# TickClock against the system clock it replaced (DIAG.11b (q2)): judged where both arms ran, at 0%.
+CLOCK_COMPARISON = ('tick-clock', 'full', 'full-system-clock', 0.0)
 STORAGE_BUDGET = 32 * 1024 * 1024
 BOOTSTRAP = 2000
 SEED = 0x11B
@@ -186,6 +195,17 @@ def tracy_problem(record, connected):
         return 'the Tracy client was %s' % ('not connected throughout' if connected else 'connected')
     if tracy.get('unmatched'):
         return '%s zones did not close where they began' % tracy['unmatched']
+    return None
+
+
+def clock_problem(record, system):
+    """Why a record did not run the clock its arm asks (`system`: MonotonicClock for good), or None."""
+    build = record.get('build') or {}
+    if build.get('clock') != ('system' if system else 'tick'):
+        return 'the record names clock %s, not the %s clock its arm asks' % (build.get('clock'),
+                                                                           'system' if system else 'tick')
+    if system and build.get('tick_clock_mapped'):
+        return 'the per-event clock was the cycle counter, not the system clock'
     return None
 
 
@@ -288,6 +308,7 @@ def arm_specs(args):
     arms = [('off', args.exe, 'off', [], False), ('basic', args.exe, 'basic', [], False),
             ('full', args.exe, 'full', [], False)]
     arms += [('validation-' + v, args.exe, 'off', ['--validation', v], False) for v in VALIDATIONS]
+    arms += [('full-system-clock', args.exe, 'full', ['--clock', 'system'], False)]
     arms += [('tracy', args.exe, 'tracy', [], False),
              ('tracy-connected', args.exe, 'tracy', ['--tracy-connect', str(TRACY_CONNECT_MS)], True)]
     if args.baseline_exe:
@@ -410,7 +431,9 @@ def judge(arms, budgeted=True, events_per_frame=None):
              for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)] + [
                  ('validation-' + v, 'validation-' + v, 'off', None) for v in VALIDATIONS] + [
                  ('change-' + m, m, 'before-' + m, None) for m in MODES] + [
-                 (name, candidate, reference, None) for name, candidate, reference in PEER_COMPARISONS]
+                 (name, candidate, reference, None) for name, candidate, reference in PEER_COMPARISONS] + [
+                 (CLOCK_COMPARISON[0], CLOCK_COMPARISON[1], CLOCK_COMPARISON[2],
+                  CLOCK_COMPARISON[3] if budgeted else None)]
     for name, candidate, reference, budget in pairs:
         if candidate not in arms or reference not in arms:
             if name in BUDGETS:
@@ -560,6 +583,8 @@ def usable_record(name, mode, connected, frames, code, stdout, stderr, capture_p
     problem = ('exit %s: %s' % (code, (stderr or '').strip()[-300:])) if code != 0 else record_problem(record, frames)
     if not problem and mode == 'tracy':
         problem = tracy_problem(record, connected) or capture_problem
+    if not problem and name == 'full-system-clock':
+        problem = clock_problem(record, True)
     return (None if problem else record), problem
 
 
@@ -663,7 +688,7 @@ def render(boards):
                        '%s of %s (%s)' % (captures['delivered'], captures['requested'], captures['bytes_written']),
                        'n/a' if growth is None else '%.1f MiB' % (growth / 1048576.0))
                 lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
-            for name in ['change-' + m for m in MODES] + ['full-vs-tracy-connected']:
+            for name in ['change-' + m for m in MODES] + ['full-vs-tracy-connected', CLOCK_COMPARISON[0]]:
                 change = verdicts.get(name)
                 if change and change.get('cost') is not None:
                     cpu = change.get('cpu') or {}
@@ -671,7 +696,8 @@ def render(boards):
                            '%s (%s .. %s)' % (percent(change['cost']), percent(change['low']), percent(change['high'])),
                            '', 'n/a' if cpu.get('cost') is None else '%s (%s .. %s)' % (
                                percent(cpu['cost']), percent(cpu['low']), percent(cpu['high'])),
-                           change['verdict'], '', '', '')
+                           change['verdict'] + ('' if change.get('budget') is None
+                                                else ' (%.0f%%)' % (100.0 * change['budget'])), '', '', '')
                     lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
             storage = verdicts.get('storage')
             if storage:

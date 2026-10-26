@@ -12,7 +12,10 @@ setup cancels between the two frame counts, that repeats which disagree widen th
 failed run takes the verdict. The peer (DIAG.11b clause (8)): the tracy arms are reported over off and full over
 tracy-connected, per event on the site workloads; a connected process whose client's capture misses an event, a
 record whose client was not there as the arm asks or whose zones did not close, and tools whose digests are not the
-pinned ones each fail; the instruction board counts the same arms and their per-event instructions.
+pinned ones each fail; the instruction board counts the same arms and their per-event instructions. The clock
+(DIAG.11b (q2)): full over full-system-clock is judged at 0% on a frame of work (within, over and unresolved) and
+reported per event on a site workload, the system arm runs with --clock system, and a record that did not run the
+system clock fails its process.
 Run: python scripts/test-diag-overhead.py
 """
 import importlib.util
@@ -28,7 +31,7 @@ _spec.loader.exec_module(mod)
 
 
 def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None,
-           warmup=1, validation='none', errors=0, tracy=None):
+           warmup=1, validation='none', errors=0, tracy=None, clock='tick'):
     """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
     False when it was not read. `tracy` is its tracy object (the tracy mode's)."""
     per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
@@ -43,7 +46,7 @@ def record(workload, mode, samples, wrong=0, captures=3, delivered=None, residen
                        'resident_peak': resident[1], 'recorder_ring_bytes': ring},
             'validation': {'requested': validation} if validation == 'none' else {
                 'requested': validation, 'errors': errors, 'warnings': 0, 'lost': 0, 'instrumentation_failures': 0},
-            'lifetime': {}, 'host': {}, 'build': {}}
+            'lifetime': {}, 'host': {}, 'build': {'clock': clock, 'tick_clock_mapped': clock == 'tick'}}
 
 
 class Args:
@@ -84,6 +87,8 @@ class FakeRunner:
         arm = 'compiled-out' if exe == 'compiled-out' else ('before-' + mode if exe == 'before' else mode)
         validation = command[command.index('--validation') + 1] if '--validation' in command else 'none'
         arm = arm if validation == 'none' else 'validation-' + validation
+        clock = command[command.index('--clock') + 1] if '--clock' in command else 'tick'
+        arm = 'full-system-clock' if clock == 'system' else arm
         connected = '--tracy-connect' in command
         if connected:
             arm = 'tracy-connected'
@@ -92,15 +97,17 @@ class FakeRunner:
         self.calls.append(arm)
         if (arm, repetition) in self.special:
             return self.special[(arm, repetition)]
-        # Jitter moves the reference and the candidates of one repetition in opposite directions, alternately.
-        sign = 1.0 if (repetition + (arm == 'off')) % 2 else -1.0
+        # Jitter moves the references (off, and the system clock's arm) and the candidates of one repetition in
+        # opposite directions, alternately.
+        sign = 1.0 if (repetition + (arm in ('off', 'full-system-clock'))) % 2 else -1.0
         base = self.medians[arm] * (1.0 + sign * self.jitter)
         samples = [int(base) - 2, int(base) - 1, int(base), int(base) + 1, int(base) + 2]
         cpu = None if self.cpu is None else self.cpu[arm] * (1.0 + sign * self.cpu_jitter)
         ring = 155648 if arm in ('basic', 'full') else 0
         tracy = None if mode != 'tracy' else {'started': True, 'connected': connected, 'connected_at_end': connected,
                                               'zones': 7, 'messages': 5, 'frame_marks': 6, 'unmatched': 0}
-        text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation, tracy=tracy))
+        text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation, tracy=tracy,
+                                 clock=clock))
         return 0, 'noise line\n' + text + '\n', ''
 
 
@@ -269,6 +276,60 @@ class Boards(unittest.TestCase):
         plain = self.measure(FakeRunner(medians), baseline_exe=None, arms=['off', 'basic', 'full'])
         self.assertFalse([name for name in plain['workloads']['alloc']['verdicts'] if name.startswith('change-')])
         self.assertNotIn('vs before', mod.render([plain]))
+
+    def test_the_tick_clock_is_judged_against_the_system_clock_at_zero(self):
+        arms = ['off', 'full', 'full-system-clock']
+        cheaper = FakeRunner({'off': 100000, 'full': 150000, 'full-system-clock': 154500})
+        board = self.measure(cheaper, baseline_exe=None, arms=arms)
+        clock = board['workloads']['alloc']['verdicts']['tick-clock']
+        self.assertEqual((clock['candidate'], clock['reference'], clock['budget']), ('full', 'full-system-clock', 0.0))
+        self.assertAlmostEqual(clock['cost'], 150000 / 154500.0 - 1.0, places=6)
+        self.assertEqual(clock['verdict'], 'within')
+        self.assertEqual(clock['cpu']['verdict'], 'within', 'the CPU per frame is judged too')
+        text = mod.render([board])
+        self.assertIn('| alloc | full vs full-system-clock |', text)
+        self.assertIn('within (0%)', text)
+        self.assertTrue(all(line.count('|') == 14 for line in text.splitlines() if line.startswith('|')))
+        dearer = self.measure(FakeRunner({'off': 100000, 'full': 150000, 'full-system-clock': 147000}),
+                              baseline_exe=None, arms=arms)
+        self.assertEqual(dearer['workloads']['alloc']['verdicts']['tick-clock']['verdict'], 'over')
+        noisy = self.measure(FakeRunner({'off': 100000, 'full': 150000, 'full-system-clock': 150300}, jitter=0.03),
+                             baseline_exe=None, arms=arms, processes=8)
+        self.assertEqual(noisy['workloads']['alloc']['verdicts']['tick-clock']['verdict'], 'unresolved')
+        plain = self.measure(FakeRunner({'off': 100000, 'full': 150000}), baseline_exe=None, arms=['off', 'full'])
+        self.assertNotIn('tick-clock', plain['workloads']['alloc']['verdicts'], 'judged only where both arms ran')
+
+    def test_the_system_clock_arm_runs_the_system_clock(self):
+        commands = []
+
+        def runner(command, timeout, env=None):
+            commands.append(command)
+            return FakeRunner({'off': 100000, 'full': 150000, 'full-system-clock': 154500})(command, timeout, env)
+
+        self.measure(runner, baseline_exe=None, arms=['full', 'full-system-clock'], processes=2)
+        system = [c for c in commands if '--clock' in c]
+        self.assertEqual(len(system), 2)
+        self.assertTrue(all(c[c.index('--clock') + 1] == 'system' and c[c.index('--mode') + 1] == 'full'
+                            for c in system))
+        self.assertIsNone(mod.clock_problem(record('alloc', 'full', [1, 2], clock='system'), True))
+        self.assertIn('names clock tick', mod.clock_problem(record('alloc', 'full', [1, 2]), True))
+        counter = record('alloc', 'full', [1, 2], clock='system')
+        counter['build']['tick_clock_mapped'] = True
+        self.assertIn('cycle counter', mod.clock_problem(counter, True))
+        medians = {'off': 100000, 'full': 150000, 'full-system-clock': 154500}
+        board = self.measure(FakeRunner(medians, {('full-system-clock', 1): (0, json.dumps(record(
+            'alloc', 'full', [1, 2, 3, 4, 5])), '')}), baseline_exe=None, arms=['full', 'full-system-clock'])
+        entry = board['workloads']['alloc']
+        self.assertEqual(entry['failures'][0]['arm'], 'full-system-clock')
+        self.assertEqual(entry['verdicts'], {})
+
+    def test_on_a_site_workload_the_tick_clock_is_reported_per_event(self):
+        board = self.measure(FakeRunner({'off': 1000, 'full': 300000, 'full-system-clock': 328672}),
+                             baseline_exe=None, arms=['off', 'full', 'full-system-clock'], workloads=['zones'])
+        clock = board['workloads']['zones']['verdicts']['tick-clock']
+        self.assertEqual(clock['verdict'], 'reported')
+        self.assertIsNone(clock['budget'])
+        self.assertAlmostEqual(clock['per_event_ns']['cost'], -28672 / 2048.0, places=6)
 
     def test_render_is_stable_and_names_every_arm(self):
         board = self.measure(FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000}))

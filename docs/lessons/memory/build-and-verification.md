@@ -4117,3 +4117,37 @@ A REPO row closes only when every finding it owned is fixed, declared or routed 
 resume.
 
 <!-- end-memory:feedback_a_fuzz_finding_that_does_not_replay_alone_is_adopted_with_its_repetition_evidence_and_generated_source_statuses_are_declared_properties -->
+
+<a id="memory-feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library"></a>
+## feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library
+
+---
+name: feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library
+description: "MSVC link-time code generation keeps one body of each inline function for the program; when that body came from a unit compiled with /arch:AVX2 (the executable's own units link first and carry crd-simd-flags) it is not inlined into a library compiled for the baseline ISA, so std::atomic's loads stayed out-of-line calls in crd-time's TickClock and crd-perf's hot paths and made the cycle-counter clock slower than steady_clock on the four-thread jobs frame (DIAG.11b (q), 2026-10-26). Read a hot path's shipping code with cdb, and keep a hot read's loads to the compiler's own operations or the ISA consistent."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-10-26
+---
+
+**Rule.** Under MSVC `/GL` + `/LTCG`, an inline function (a `std::atomic` member, a `std::chrono` accessor, any
+header-defined helper) that units of different `/arch` levels both use gets one body for the whole program, and LTCG
+does not inline an `/arch:AVX2` body into a function compiled for the baseline ISA. Which body wins follows the link
+order, and an executable's own units come first. A baseline-ISA library on a hot path then calls trivial functions
+(`mov eax,[rcx]; ret`, often ICF-folded under another name such as `basic_string_view::data`). GCC and Clang inline
+`std::atomic`'s loads across their LTO; the effect was seen on MSVC only.
+
+**Why.** 2026-10-26, DIAG.11b follow-up (q) ([bench](../../bench/2026-10-26-diag-11b-tick-clock-inlining.md)): the
+cycle-counter `TickClock` made the four-thread jobs frame 2.9% slower than `steady_clock` in one binary although a
+read loop found it 5 ns cheaper. cdb showed six out-of-line `std::atomic` loads in its mapped read; a two-file probe
+reproduced it (an `/arch:AVX2 /GL` unit linked first: calls; linked last: inlined); compiling crd-time and crd-perf at
+`/arch:AVX2` inlined them and TickClock came out cheaper. At four threads each job's path is bounded by locked
+operations on contended lines, so a read's latency reaches the frame where a throughput loop hides it.
+
+**How to apply.** Before explaining a hot-path cost on MSVC, read the shipping binary's code (`cdb -z <exe> -c
+'uf <fn>; q'`; an inline copy needs its address) and look for calls to trivial `std::` members. A per-event read in a
+baseline library reads through functions of its own unit (with MSVC on x64 the compiler's `__iso_volatile_load32/64`
+and a compiler barrier, as `TickClock::now_ns` does) or the program is built at one ISA level. Compare such a fix
+inside one binary (the harness's `--clock system` arm), never across rebuilds.
+
+<!-- end-memory:feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library -->

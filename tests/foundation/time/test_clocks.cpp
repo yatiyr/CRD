@@ -208,4 +208,30 @@ TEST_CASE("TickClock: a read is the counter scaled from the anchor", "[diag11b][
     // The second read came after `ticks` had passed: at least that many microseconds past the anchor.
     CHECK(second - 1'000'000'000'000'000 >= static_cast<crd::i64>(ticks) * 1000);
 }
+
+TEST_CASE("TickClock: prefer_system before the first read keeps every read on MonotonicClock",
+          "[diag11b][clocks][tick]")
+{
+    TickClock::test_reset();
+    CHECK(TickClock::prefer_system());
+    CHECK(TickClock::prefer_system()); // asked again: still MonotonicClock's
+    TickClock::warm();                 // nothing to calibrate: returns at once
+    CHECK_FALSE(TickClock::counter_mapped());
+    // Past a calibration and a re-anchor period every read is a MonotonicClock read: inside its bracket exactly.
+    crd::i64       worst = 0;
+    bool           back  = false;
+    const crd::u64 reads = bracket_reads(TickClock::kCalibrationNs + TickClock::kReanchorNs, 0, worst, back);
+    INFO("worst distance from the MonotonicClock bracket: " << worst << " ns");
+    CHECK(reads > 0U);
+    CHECK_FALSE(back);
+    CHECK_FALSE(TickClock::counter_mapped());
+    // Once the clock was read it stays the clock it is (a mapped clock moved to MonotonicClock could step back): only
+    // a counter that may not be mapped leaves it on MonotonicClock.
+    TickClock::test_reset();
+    (void)TickClock::now_ns();
+    CHECK(TickClock::prefer_system() == !TickClock::counter_usable());
+    TickClock::warm();
+    CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
+    TickClock::test_reset();
+}
 #endif

@@ -3782,6 +3782,11 @@
       "path": "docs/lessons/memory/workflow-and-correctness.md",
       "anchor": "memory-feedback_autotuner_interleave_and_pair_under_dvfs",
       "description": "Time autotune configs interleaved and judge them paired within a round: GPU clocks drift (DVFS), so block-ordered timing compares clock states, not configs."
+    },
+    "feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library",
+      "description": "MSVC link-time code generation keeps one body of each inline function for the program; when that body came from a unit compiled with /arch:AVX2 (the executable's own units link first and carry crd-simd-flags) it is not inlined into a library compiled for the baseline ISA, so std::atomic's loads stayed out-of-line calls in crd-time's TickClock and crd-perf's hot paths and made the cycle-counter clock slower than steady_clock on the four-thread jobs frame (DIAG.11b (q), 2026-10-26). Read a hot path's shipping code with cdb, and keep a hot read's loads to the compiler's own operations or the ISA consistent."
     }
   },
   "aliases": {

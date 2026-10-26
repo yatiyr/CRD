@@ -2798,7 +2798,9 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   and the microbenchmarks, reported per event, never judged: `events` (sites), `zones` (2,048 `CRD_PERF_SCOPE` a frame)
   and `marks` (64 frame marks a frame; both since 2026-10-26). Every frame has a known answer.
 - What holds on every lane: the `crd-diag-overhead-*` CTests (27 on Windows, 28 on Linux since 2026-10-26: every
-  workload in every mode, `alloc-full-memory`, and the render validation arms) run with `--check`: off
+  workload in every mode, `alloc-full-memory`, and the render validation arms; 28 and 29 with
+  `jobs-full-system-clock`, `--clock system`, since follow-up (q)) run with `--check`: the per-event clock is the
+  cycle counter wherever it may be mapped and MonotonicClock with `--clock system`; off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
   written; the lifetime ledger balances. `render-validation-core` (and `-sync` on Linux) runs `render` with device
@@ -2809,7 +2811,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   below the budget), over (lower end above it) or unresolved (a loss, never a pass). Each budget is judged on the
   frame time and on the CPU per frame (every thread's CPU over the timed frames: `QueryProcessCycleTime` cycles on
   Windows, `CLOCK_PROCESS_CPUTIME_ID` nanoseconds on POSIX), the worse verdict deciding. Storage: the recorder's ring
-  and the resident growth over off, against 32 MiB.
+  and the resident growth over off, against 32 MiB. The per-event clock (follow-up (q), 2026-10-26): `tick-clock`,
+  full over `full-system-clock` (the same binary's full mode with `--clock system`, crd-time's
+  `TickClock::prefer_system`), is judged at 0% on a frame of work: TickClock replaced `steady_clock` and may cost no
+  more ([board](../bench/2026-10-26-diag-11b-tick-clock-inlining.md): jobs −2.22% on Windows, −1.22% on Linux).
 - The first boards (Windows win-shipping-profile against win-shipping; Linux linux-gcc-shipping and
   linux-gcc-relwithdebinfo under WSL2): storage within everywhere (152 KiB ring, at most 0.60 MiB growth); basic within
   on offline where resolved. Violated and open: the disabled mode on allocation-heavy frames (+37.7%, the allocator
@@ -2946,8 +2951,12 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   build-to-build variation of Tracy's (+1.4 to −0.8 ns), a kept site within a few nanoseconds and cheaper in CPU, a
   mark 4 ns over (the lifetime pin and history).
   The four-thread jobs frame stays over Tracy's: the flight recorder's one claim word and shared slots, the price of
-  its single total order (DIAG.11b follow-up (q), a design decision).
-- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-up (q);
+  its single total order (DIAG.11b follow-up (q), a design decision). The cycle-counter clock's +2.9% on
+  that frame was MSVC LTCG leaving `std::atomic`'s loads out of line in its read (an `/arch:AVX2` unit's inline
+  bodies are not inlined into baseline-ISA libraries); the read uses the compiler's own loads and is judged against
+  the system clock (above). The same defect in every baseline library is follow-up (r), a decision.
+- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-ups (q)
+  and (r), each awaiting the user's decision;
   the cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
   counts on a run of the current head.
 

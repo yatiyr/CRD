@@ -3,7 +3,7 @@
 //   crd-diag-overhead --workload <alloc|jobs|offline|io|render|events|zones|marks> --mode <off|basic|full>
 //                     [--iterations N] [--warmup N] [--captures K] [--threads T] [--affinity <hex mask>]
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
-//                     [--validation <core|sync|gpu>] [--memory]
+//                     [--validation <core|sync|gpu>] [--memory] [--clock <tick|system>]
 //   crd-diag-overhead-tracy  the same, and --mode tracy [--tracy-connect <ms>] (CRD_DIAG_PEER_TRACY)
 //
 // One process measures one workload in one mode and prints one JSON record (schema cerid-diag-overhead/1) on stdout:
@@ -21,7 +21,8 @@
 // --check holds what must hold whatever the timing (exit 1 when one fails):
 //   every mode   every timed and warmup iteration ran and produced the known answer; the process CPU time over the
 //                timed iterations was read; every class of the lifetime ledger is balanced from before the mode was
-//                set up to after it was torn down.
+//                set up to after it was torn down; the per-event clock is the cycle counter wherever it may be mapped
+//                and MonotonicClock with --clock system.
 //   off          no payload evaluated; setting the mode up acquired nothing (no thread, callback, file or mapping);
 //                no recorder and no profiler run.
 //   basic        no payload evaluated (every application site is informational); every site and frame event counted
@@ -37,6 +38,10 @@
 //                the last with --tracy-connect, none at either end without it; every payload formatted once per site
 //                while connected and none otherwise. What a connected client received is the driver's to hold
 //                (scripts/diag-overhead.py reads the capture's zones, frames and messages).
+//
+// --clock system reads MonotonicClock (steady_clock) for every per-event timestamp and the frames' timing, as on a CPU
+// whose counter is not invariant (crd-time's TickClock::prefer_system, before the first read); the record's
+// build.tick_clock_mapped and build.clock say which clock ran. The driver's full-system-clock arm is full on it.
 //
 // Exit codes: 0 measured (and checked), 1 a check failed, 2 usage, 3 the mode or the workload could not be set up.
 
@@ -125,6 +130,7 @@ struct Options
     const char*     program    = nullptr;
     bool            keep       = false;
     bool            check      = false;
+    bool            system_clock = false; // --clock system: the per-event clock is MonotonicClock for the whole run
     dov::Validation validation = dov::Validation::None;
 };
 
@@ -151,7 +157,8 @@ int usage(const char* why)
                  "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload "
                  "<alloc|jobs|offline|io|render|events|zones|marks> --mode <off|basic|full%s> [--iterations N] "
                  "[--warmup N] [--captures K] [--threads T] [--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] "
-                 "[--program <file>] [--keep] [--check] [--validation <core|sync|gpu>] [--memory]%s\n",
+                 "[--program <file>] [--keep] [--check] [--validation <core|sync|gpu>] [--memory] "
+                 "[--clock <tick|system>]%s\n",
                  why, CRD_DIAG_OVERHEAD_TRACY ? "|tracy" : "",
                  CRD_DIAG_OVERHEAD_TRACY ? " [--tracy-connect <ms>]" : "");
     return 2;
@@ -250,6 +257,11 @@ bool parse(int argc, char** argv, Options& o, const char*& error)
         else if (same(a, "--tracy-connect"))
         {
             ok = parse_u32(value, 600000U, o.tracy_connect_ms) && o.tracy_connect_ms > 0U;
+        }
+        else if (same(a, "--clock"))
+        {
+            ok             = value != nullptr && (same(value, "tick") || same(value, "system"));
+            o.system_clock = ok && same(value, "system");
         }
         else if (same(a, "--validation"))
         {
@@ -489,15 +501,21 @@ struct Checks
 int main(int argc, char** argv)
 {
     run_headless();
-    // The frames are timed with the diagnostic clock (TickClock): calibrated before anything, so every arm's frames are
-    // timed by the same mapped counter from the first (a mode's start would otherwise calibrate it in some arms only).
-    crd::time::TickClock::warm();
     Options     o;
     const char* error = nullptr;
     if (!parse(argc, argv, o, error))
     {
         return usage(error);
     }
+    // --clock system: MonotonicClock for good, decided before the first read (nothing above reads the clock).
+    if (o.system_clock && !crd::time::TickClock::prefer_system())
+    {
+        std::fprintf(stderr, "crd-diag-overhead: the clock was read before --clock system could take effect\n");
+        return 3;
+    }
+    // The frames are timed with the diagnostic clock (TickClock): calibrated before anything, so every arm's frames are
+    // timed by the same mapped counter from the first (a mode's start would otherwise calibrate it in some arms only).
+    crd::time::TickClock::warm();
     dov::Workload* const workload = dov::find_workload(o.workload);
     if (workload == nullptr)
     {
@@ -796,6 +814,11 @@ int main(int argc, char** argv)
         checks.expect(wrong == 0U, "a frame computed the wrong answer");
         checks.expect(cpu_read, "the process CPU time over the timed frames was not read");
         checks.expect(balance.verdict == crd::LifetimeVerdict::Balanced, "the lifetime ledger is not balanced");
+        // The clock the run asked for: the cycle counter wherever it may be mapped, MonotonicClock with --clock system.
+        checks.expect(crd::time::TickClock::counter_mapped() ==
+                          (!o.system_clock && crd::time::TickClock::counter_usable()),
+                      o.system_clock ? "--clock system: the per-event clock was the cycle counter"
+                                     : "the per-event clock is not the cycle counter where it may be");
         checks.expect(setup_threads == workload->own_threads(o.threads) + workload->diagnostic_threads(o.mode),
                       "the workload's setup started another number of threads than the mode adds to its own");
         if (measured != nullptr)
@@ -881,6 +904,7 @@ int main(int argc, char** argv)
     j.b("asserts", CRD_ENABLE_ASSERTS != 0);
     j.b("shipping", CRD_DIAG_OVERHEAD_SHIPPING);
     j.b("tick_clock_mapped", crd::time::TickClock::counter_mapped()); // the per-event clock was the cycle counter
+    j.str("clock", o.system_clock ? "system" : "tick");               // --clock
     j.str("config", CRD_DIAG_OVERHEAD_CONFIG);
 #if defined(_MSC_VER) && !defined(__clang__)
     j.str("compiler", "msvc");
