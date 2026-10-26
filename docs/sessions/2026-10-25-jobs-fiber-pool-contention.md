@@ -155,7 +155,8 @@ The pin did not end the TSan fault of "fiber keep: while tiny jobs stream ...". 
   The fault came inside `__tsan_atomic32_store`; Catch2's handler then called `sigaction`, whose TSan interceptor
   blocked in `SlotLock`, and the main thread blocked in `SlotAttachAndLock`: that is the hang signature, and
   `timeout`'s SIGTERM could not end it. Almost every unattended fault reads an address shaped
-  `{pid, uid}` (`0x03e8` with the process id), which no Cerid code stores.
+  `{pid, uid}` (`0x03e8` with the process id), which no Cerid code stores (2026-10-26: Catch2's re-raise of the
+  fault puts that word in place of the address, [session](2026-10-26-catch2-fault-address.md)).
 - A Cerid-free control. `scripts/tsan_host_control.cpp` has the case's shape at `-O0`: three workers
   and the main thread run frames of tiny jobs, an outside reader walks owned arrays through `unique_ptr` and `vector`
   getters, every getter result is checked, mode `fiber` runs each job on a TSan-announced fiber as the pool does and

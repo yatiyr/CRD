@@ -115,7 +115,7 @@ A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patc
 steps, and writes the result under `${CMAKE_BINARY_DIR}/patched/<package>/` only when its content changes; the
 target compiles that copy. An anchor that no longer matches upstream is a configure error naming the patch, where
 the former in-place `file(WRITE)` into the source tree silently did nothing on drift. Each patch is listed under its
-package's `patches` in the registry (check-pins fails a listed patch without its spec). Seven exist (the two of the opt-in Tracy peer are described above). Two are Catch2
+package's `patches` in the registry (check-pins fails a listed patch without its spec). Eight exist (the two of the opt-in Tracy peer are described above). Two are Catch2
 headers that every assertion reaches (2026-10-18): in C++20 `<chrono>` was the build's most expensive header, almost
 all of it through them ([board](../bench/2026-10-18-build-speed-compile-time.md)). `catch2-chrono-stringmaker-opt-in`
 puts `catch_tostring.hpp`'s `std::chrono` printers and their `<chrono>` behind `CATCH_CONFIG_ENABLE_CHRONO_STRINGMAKER`
@@ -126,7 +126,12 @@ reaches through `IResultCapture`'s benchmark types, the standard library's own d
 `<chrono>`: the same declarations. A header has no target source to swap, so the copies' directory comes first on
 Catch2's include path, as a system directory like Catch2's own, and `crd-check-include-budget` fails when the
 assertion path reaches `<chrono>` or `<format>` again. CMake writes the copies with CRLF on Windows (the zstd copies
-too); compilers accept it, and an unchanged patch is not rewritten by a reconfigure (checked). The others are the imgui Vulkan
+too); compilers accept it, and an unchanged patch is not rewritten by a reconfigure (checked). The third Catch2 patch,
+`catch2-posix-signal-refault` (2026-10-26), is a source: Catch2's POSIX fatal-condition handler re-raised every signal,
+so a sanitizer reported a fault inside a test case at the sender's `{pid, uid}`. A fault the kernel raised now
+re-executes under the restored handler, and the library compiles the copy in place of the upstream source (exactly
+one, or the configure fails); ThreadSanitizer trees set `CATCH_CONFIG_NO_POSIX_SIGNALS`
+([session](../sessions/2026-10-26-catch2-fault-address.md)). The others are the imgui Vulkan
 backend (`imgui-vulkan-whole-size`), and zstd's `huf_compress.c` and `zstd_lazy.c` (`zstd-huf-is-sorted-unused`,
 `zstd-lazy-is-aligned-unused`), which give an assert-only `MEM_STATIC` helper the unused attribute upstream gives it
 under GCC but not under clang-cl, whose `-Wunused-function` was the one third-party warning win-clang-cl-shipping

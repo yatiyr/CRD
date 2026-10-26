@@ -3787,6 +3787,11 @@
       "path": "docs/lessons/memory/build-and-verification.md",
       "anchor": "memory-feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library",
       "description": "MSVC link-time code generation keeps one body of each inline function for the program; when that body came from a unit compiled with /arch:AVX2 (the executable's own units link first and carry crd-simd-flags) it is not inlined into a library compiled for the baseline ISA, so std::atomic's loads stayed out-of-line calls in crd-time's TickClock and crd-perf's hot paths and made the cycle-counter clock slower than steady_clock on the four-thread jobs frame (DIAG.11b (q), 2026-10-26). Read a hot path's shipping code with cdb, and keep a hot read's loads to the compiler's own operations or the ISA consistent."
+    },
+    "feedback_a_pid_uid_fault_address_is_a_re_raised_signal": {
+      "path": "docs/lessons/memory/build-and-verification.md",
+      "anchor": "memory-feedback_a_pid_uid_fault_address_is_a_re_raised_signal",
+      "description": "A sanitizer report of SEGV at an address like 0x03e800000a89 (uid 1000 in the high half, the process's own pid in the low) names a sent signal: si_addr shares its slot with si_pid and si_uid, and Catch2's POSIX fatal-condition handler re-raised every fault, so every fault inside a test case on a sanitizer lane read this way and the real address was lost (2026-10-26; fixed by the catch2-posix-signal-refault patch). Read the report's ==pid== prefix before suspecting memory or the host."
     }
   },
   "aliases": {

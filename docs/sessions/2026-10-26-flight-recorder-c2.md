@@ -122,7 +122,9 @@ One linux-gcc-asan full run of crd-perf-tests stopped with a SEGV in `test_diag_
 `/proc/self/maps` into an `Array`), at `0x03e800000a89`: the `{uid, pid}` shape of the host faults of 2026-10-25,
 in a case the recorder change does not reach. It did not come back in three more full runs and five runs of the
 `[identity]` cases on the same binary. Recorded, not chased: if it is seen again on this host after the microcode
-update, the host check needs repeating.
+update, the host check needs repeating. Settled the same day ([session](2026-10-26-catch2-fault-address.md)):
+the word is Catch2's re-raise of the fault (a sent signal's `si_pid` and `si_uid`); the fault was real and its
+address was lost.
 
 tidy (LLVM 20.1.8) is clean on every changed C++ file; the guards, the documentation validator and the repository
 check ran on win-debug before the push.

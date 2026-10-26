@@ -4152,3 +4152,33 @@ and a compiler barrier, as `TickClock::now_ns` does) or the program is built at 
 inside one binary (the harness's `--clock system` arm), never across rebuilds.
 
 <!-- end-memory:feedback_msvc_ltcg_does_not_inline_an_avx2_unit_s_inline_body_into_a_baseline_isa_library -->
+
+<a id="memory-feedback_a_pid_uid_fault_address_is_a_re_raised_signal"></a>
+## feedback_a_pid_uid_fault_address_is_a_re_raised_signal
+
+---
+name: feedback_a_pid_uid_fault_address_is_a_re_raised_signal
+description: "A sanitizer report of SEGV at an address like 0x03e800000a89 (uid 1000 in the high half, the process's own pid in the low) names a sent signal: si_addr shares its slot with si_pid and si_uid, and Catch2's POSIX fatal-condition handler re-raised every fault, so every fault inside a test case on a sanitizer lane read this way and the real address was lost (2026-10-26; fixed by the catch2-posix-signal-refault patch). Read the report's ==pid== prefix before suspecting memory or the host."
+metadata:
+  node_type: memory
+  type: feedback
+  recorded: 2026-10-26
+---
+
+**Rule.** A fault address whose high 32 bits are the user id (`0x03e8`) and whose low 32 bits are the reporting
+process's id is not a pointer anyone loaded: it is the siginfo of a signal sent by `raise`, `kill` or `tkill`, whose
+`si_pid` and `si_uid` sit where a fault's `si_addr` would. The fault that came before it is real, and its address was
+lost on the way.
+
+**Why.** 2026-10-26 ([session](../../sessions/2026-10-26-catch2-fault-address.md)): one linux-gcc-asan run of
+crd-perf-tests stopped at `0x03e800000a89`, the same shape as the 2026-10-25 TSan host faults, which had been read as
+a value no Cerid code stores. Catch2 3.7.1 reports a fatal signal and re-raises it; the sanitizer then reports the sent
+signal with the original stack. A probe wild read of `0x5a5a00001000` in a Catch2 case was reported at
+`0x03e80000091d` from process `==2333==` (0x91d).
+
+**How to apply.** Compare the low half with the report's `==<pid>==` prefix. If it matches, the address is a re-raise
+artifact and only the stack is evidence. Any handler that chains to another returns for a fault the kernel raised
+(`si_code > 0`) and re-raises only a sent signal (crd's crash handler, and Catch2 through its patch); under
+ThreadSanitizer no Catch2 handler is compiled, because its in-handler report ends a `halt_on_error` run first.
+
+<!-- end-memory:feedback_a_pid_uid_fault_address_is_a_re_raised_signal -->
