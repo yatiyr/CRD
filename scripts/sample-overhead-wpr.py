@@ -122,9 +122,12 @@ CLASSES = (
 )
 # Functions of the image that run on behalf of their caller: the standard library and the C runtime's formatting and
 # memory functions compiled into it (`snprintf` is an inline wrapper of the UCRT's; full mode's payload formatting at
-# the sites in the jobs workload's job body decided 3,883 jobs full samples as `snprintf`, 2026-10-25).
+# the sites in the jobs workload's job body decided 3,883 jobs full samples as `snprintf`, 2026-10-25), and crd-time's
+# clocks, which a zone, a site or a frame mark reads as steady_clock was read before them (TickClock::now_ns and its
+# re-anchor since 2026-10-26: the profiler's and the diagnostics' per-event clock, DIAG.11b clause (8)).
 RUNS_FOR_CALLER = re.compile(r'^(?:std::|_*(?:v?s?n?printf(?:_s)?|v?f?printf|mem(?:cpy|move|set|cmp)|'
-                             r'str(?:len|cmp|ncmp|cpy|ncpy|chr)|_*stdio_common_\w+)$)')
+                             r'str(?:len|cmp|ncmp|cpy|ncpy|chr)|_*stdio_common_\w+)$|'
+                             r"crd::time::(?:TickClock|MonotonicClock|CycleCounter|`anonymous namespace')::\w+$)")
 
 
 # ---- recording ------------------------------------------------------------------------------------------------------

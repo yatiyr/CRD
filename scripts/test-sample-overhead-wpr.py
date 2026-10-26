@@ -121,15 +121,26 @@ class Dumper(unittest.TestCase):
                         [exe + '!memcpy', exe + '!crd::perf::FlightRecorder::record',
                          exe + "!crd::perf::`anonymous namespace'::cb_on_job_end",
                          exe + '!crd::jobs::detail::WorkerPool::run_job_in_fiber', exe + '!main'])
+        # crd-time's clock read by a zone, and its re-anchor read by a kept event: the zone and the recorder decide
+        # (TickClock is the per-event clock since 2026-10-26, as steady_clock was before it)
+        lines += sample(4, exe, 100, 7, exe + '!crd::time::TickClock::now_ns',
+                        [exe + '!crd::time::TickClock::now_ns', exe + '!crd::perf::pop_region',
+                         exe + "!diag_overhead::`anonymous namespace'::ZonesWorkload::iterate", exe + '!main'])
+        lines += sample(5, exe, 100, 7, exe + "!crd::time::`anonymous namespace'::reanchor",
+                        [exe + "!crd::time::`anonymous namespace'::reanchor", exe + '!crd::time::TickClock::now_ns',
+                         exe + '!crd::perf::FlightRecorder::record', exe + '!main'])
         counter = wpr.count_samples(lines, {100: exe})
         self.assertEqual(counter.functions[100], {
             exe + "!diag_overhead::`anonymous namespace'::sum_slice": 1,
             exe + "!crd::ceir::host::`anonymous namespace'::adapter_pre": 1,
-            exe + '!crd::perf::FlightRecorder::record': 1})
-        self.assertEqual(counter.classes[100], {'ceir-bridge': 1, 'flight-recorder': 1})
+            exe + '!crd::perf::FlightRecorder::record': 2, exe + '!crd::perf::pop_region': 1})
+        self.assertEqual(counter.classes[100], {'ceir-bridge': 1, 'flight-recorder': 2, 'perf': 1})
         self.assertEqual(counter.callers[100], {
             exe + "!crd::ceir::plan::`anonymous namespace'::run_seq": 1,
-            exe + '!crd::jobs::detail::WorkerPool::run_job_in_fiber': 1})
+            exe + '!crd::jobs::detail::WorkerPool::run_job_in_fiber': 1,
+            exe + "!diag_overhead::`anonymous namespace'::ZonesWorkload::iterate": 1, exe + '!main': 1})
+        self.assertIsNotNone(wpr.RUNS_FOR_CALLER.match('crd::time::MonotonicClock::now'))
+        self.assertIsNone(wpr.RUNS_FOR_CALLER.match('crd::time::FrameClock::tick'), 'only the clocks run for a caller')
         self.assertIsNotNone(wpr.RUNS_FOR_CALLER.match('vsnprintf'))
         self.assertIsNone(wpr.RUNS_FOR_CALLER.match('fiber_switch'), "the image's own assembly decides")
         self.assertIsNone(wpr.RUNS_FOR_CALLER.match('main'))

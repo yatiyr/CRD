@@ -29,6 +29,8 @@
 #include <crd/perf/sample.hpp>
 #include <crd/time/clocks.hpp>
 
+#include <atomic>
+
 namespace crd::perf
 {
 
@@ -168,6 +170,19 @@ static_assert(sizeof(BeginToken) == 16, "BeginToken is 16 bytes; lives on the st
                                      crd::u32 color_rgba = 0U) noexcept;
 void pop_region(NameId id, BeginToken begin, Category cat = Category::User,
                 crd::u32 color_rgba = 0U) noexcept;
+
+namespace detail
+{
+// Whether a profiler runs (init() sets it once its state is published, shutdown() clears it before retiring the
+// state): a zone's inline gate, so a zone with no profiler makes no call (DIAG.11b clause (8): against Tracy's zone
+// with no client, a Cerid zone with the profiler off spent its difference on two out-of-line calls). push_region
+// still decides for its thread.
+extern std::atomic<bool> g_profiler_running;
+[[nodiscard]] inline bool profiler_running() noexcept
+{
+    return g_profiler_running.load(std::memory_order_relaxed);
+}
+} // namespace detail
 #else
 [[nodiscard]] inline BeginToken push_region(NameId, Category = Category::User,
                                             crd::u32 = 0U) noexcept
@@ -186,7 +201,8 @@ inline void pop_region(NameId, BeginToken, Category = Category::User,
 // back frame-snapshot buffers, advances the rolling history ring, and
 // signals to any attached file capture that a frame boundary has passed.
 //
-// Cheap; safe to call once per Application::tick().
+// Cheap; safe to call once per Application::tick(). One thread marks frames at a time (the frame loop): two
+// concurrent marks would write the same history slot.
 #if CRD_PERF_ENABLED
 void frame_mark() noexcept;
 #else

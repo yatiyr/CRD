@@ -10,8 +10,10 @@
 //
 //   1. Read thread-local m_state_ptr (one indirect load; cached on the
 //      thread the first time push_region is called).
-//   2. Read MonotonicClock::now() (one std::chrono::steady_clock::now()
-//      via crd-time -- ~30-100 ns on Windows / Linux).
+//   2. Read TickClock::now_ns() (crd-time: the cycle counter mapped onto
+//      MonotonicClock's nanoseconds; MonotonicClock itself, a
+//      steady_clock read, cost the zone its difference against Tracy's
+//      -- DIAG.11b clause (8), docs/bench/2026-10-26-diag-11b-tracy-peer.md).
 //   3. Write a 32-byte Sample to the per-thread ring at the SPSC writer
 //      position. Wraparound is mod by the constant-power-of-two slot
 //      count -- one mask operation.
@@ -231,6 +233,9 @@ std::atomic<ProfilerState*> g_state{nullptr};
 // this guards, one level up. shutdown() retires g_state then drains this to zero before delete.
 std::atomic<crd::u32> g_in_flight{0U};
 
+// The zones' inline gate (profiler.hpp): true from the publication of a state to its retirement.
+std::atomic<bool> g_profiler_running{false};
+
 // DIAG.6a(e): monotonic profiler-lifetime counter. init() stamps (this + 1) into ProfilerState::generation, so every
 // live state has a non-zero, distinct generation and the default t_state_gen == 0 never matches one.
 std::atomic<crd::u32> g_state_gen{0U};
@@ -241,6 +246,13 @@ std::atomic<crd::u32> g_state_gen{0U};
 // exchange is counted (shutdown waits for it) and one that begins after loads nullptr (backs out, touches nothing).
 [[nodiscard]] ProfilerState* reader_enter() noexcept
 {
+    // No profiler: nothing to pin. A relaxed look first, so an entry point of a stopped profiler (a frame mark of the
+    // runtime-disabled mode) takes no read-modify-write; a state published meanwhile is the next entry's (DIAG.11b
+    // clause (8): the pin's two RMWs were a disabled mark's whole difference against Tracy's with no client).
+    if (g_state.load(std::memory_order_relaxed) == nullptr)
+    {
+        return nullptr;
+    }
     g_in_flight.fetch_add(1U, std::memory_order_seq_cst);
     ProfilerState* const s = g_state.load(std::memory_order_seq_cst);
     if (s == nullptr)
@@ -426,6 +438,7 @@ void init(const InitConfig& cfg)
         return; // idempotent
     }
 
+    crd::time::TickClock::warm(); // the zones' clock is calibrated before the first zone, once per process
     auto* state = new detail::ProfilerState();
 
     state->per_thread_ring_slots = cfg.per_thread_ring_slots != 0U ? cfg.per_thread_ring_slots
@@ -463,7 +476,7 @@ void init(const InitConfig& cfg)
     state->frame_history = new FrameRecord[state->frame_history_slots]{};
     state->frame_history_seq = new std::atomic<crd::u32>[state->frame_history_slots]{}; // 0 = even = stable
     state->frame_history_head.store(0U, std::memory_order_relaxed);
-    state->last_frame_end_ns = crd::time::MonotonicClock::now().ns_since_epoch();
+    state->last_frame_end_ns = crd::time::TickClock::now_ns();
 
     // Allocate per-thread rings lazily on register_thread(); leave them
     // nullptr here so unregistered slots are visibly inert.
@@ -475,6 +488,7 @@ void init(const InitConfig& cfg)
     // Publish (seq_cst) so a reader that enters after this observes the fully-built state; register_thread below then
     // takes its own StateGuard against the now-visible pointer.
     detail::g_state.store(state, std::memory_order_seq_cst);
+    detail::g_profiler_running.store(true, std::memory_order_release);
 
     // Auto-register the calling thread as "main".
     (void)register_thread("main");
@@ -495,6 +509,7 @@ void shutdown()
 {
     // DIAG.6a(e): retire the state pointer FIRST (seq_cst exchange) so every reader that enters from now on loads
     // nullptr and touches nothing. Idempotent: a second shutdown exchanges nullptr for nullptr and returns.
+    detail::g_profiler_running.store(false, std::memory_order_release);
     detail::ProfilerState* state = detail::g_state.exchange(nullptr, std::memory_order_seq_cst);
     if (state == nullptr)
     {
@@ -750,7 +765,7 @@ void set_current_fiber_id(crd::u32 fiber_id) noexcept
     {
         return token;
     }
-    token.begin_ns     = crd::time::MonotonicClock::now().ns_since_epoch();
+    token.begin_ns     = crd::time::TickClock::now_ns();
     token.begin_fiber  = ring->fiber_id_current;
     token.begin_thread = t_thread_index;
     token.depth        = static_cast<crd::u8>(ring->depth);
@@ -767,7 +782,7 @@ void pop_region(NameId id, BeginToken begin, Category cat, crd::u32 color_rgba) 
         return;
     }
 
-    const crd::i64 end_ns     = crd::time::MonotonicClock::now().ns_since_epoch();
+    const crd::i64 end_ns     = crd::time::TickClock::now_ns();
     const crd::u8  end_thread = t_thread_index; // catches fiber migration if differs from begin.begin_thread
     const crd::u32 end_fiber  = ring->fiber_id_current;
     (void)end_fiber; // reserved for split BEGIN/END events in v0c
@@ -845,24 +860,6 @@ void move_allocator_record(AllocatorRecord& dst, AllocatorRecord& src, bool publ
     }
 }
 
-// Publish the members frame_mark filled (the header, then the counted values and allocators) into the shared slot.
-void publish_frame_record(FrameRecord& slot, FrameRecord& rec) noexcept
-{
-    relaxed_store(slot.frame_index, rec.frame_index);
-    relaxed_store(slot.frame_begin_ns, rec.frame_begin_ns);
-    relaxed_store(slot.frame_end_ns, rec.frame_end_ns);
-    relaxed_store(slot.counter_count, rec.counter_count);
-    relaxed_store(slot.allocator_count, rec.allocator_count);
-    for (crd::u32 i = 0U; i < rec.counter_count; ++i)
-    {
-        relaxed_store(slot.values[i].bits, rec.values[i].bits);
-    }
-    for (crd::u32 i = 0U; i < rec.allocator_count; ++i)
-    {
-        move_allocator_record(slot.allocators[i], rec.allocators[i], true);
-    }
-}
-
 // Copy a whole shared slot into `out` (as the former memcpy did); valid only if the sequence check then passes.
 void read_frame_record(FrameRecord& out, FrameRecord& slot) noexcept
 {
@@ -894,8 +891,12 @@ void frame_mark() noexcept
     }
     detail::ProfilerState& state = *g_state;
 
-    const crd::u64 frame_index = state.frame_count.fetch_add(1U, std::memory_order_acq_rel);
-    const crd::i64 end_ns      = crd::time::MonotonicClock::now().ns_since_epoch();
+    // One frame loop marks frames (a second concurrent caller would write the same history slot), so the frame count
+    // and the history head have a single writer: plain stores, which their readers' acquire loads see in order. A
+    // read-modify-write of each cost every mark about 8 ns (DIAG.11b clause (8)).
+    const crd::u64 frame_index = state.frame_count.load(std::memory_order_relaxed);
+    state.frame_count.store(frame_index + 1U, std::memory_order_release);
+    const crd::i64 end_ns = crd::time::TickClock::now_ns();
 
     // Snapshot counters into the rolling history ring.
     const crd::u32 history_head_idx = static_cast<crd::u32>(
@@ -906,19 +907,22 @@ void frame_mark() noexcept
     const crd::u32         seq_begin = seq.load(std::memory_order_relaxed);
     seq.store(seq_begin + 1U, std::memory_order_relaxed); // odd
     std::atomic_thread_fence(std::memory_order_release);  // record writes below stay after the odd marker
-    FrameRecord& slot     = state.frame_history[history_head_idx];
-    FrameRecord  rec{};   // built locally, then published into the slot word by word (see publish_frame_record)
-    rec.frame_index       = frame_index;
-    rec.frame_begin_ns    = state.last_frame_end_ns;
-    rec.frame_end_ns      = end_ns;
-    const crd::u32 n_counters = state.counter_count_atomic.load(std::memory_order_acquire);
-    rec.counter_count     = n_counters > kMaxCounters ? kMaxCounters : n_counters;
+    // The record is written into the slot word by word (relaxed atomic stores, which the seqlock orders), header and
+    // only the counted values and allocators: the slot is 3.6 KiB, and building a zeroed copy of all of it first cost
+    // every mark more than Tracy's whole FrameMark (DIAG.11b clause (8)). Readers use the counts.
+    FrameRecord& slot = state.frame_history[history_head_idx];
+    relaxed_store(slot.frame_index, frame_index);
+    relaxed_store(slot.frame_begin_ns, state.last_frame_end_ns);
+    relaxed_store(slot.frame_end_ns, end_ns);
+    const crd::u32 n_counters    = state.counter_count_atomic.load(std::memory_order_acquire);
+    const crd::u32 counter_count = n_counters > kMaxCounters ? kMaxCounters : n_counters;
+    relaxed_store(slot.counter_count, counter_count);
 
-    for (crd::u32 i = 0U; i < rec.counter_count; ++i)
+    for (crd::u32 i = 0U; i < counter_count; ++i)
     {
         detail::CounterEntry& c = state.counters[i];
         const crd::u64 bits = c.bits.load(std::memory_order_relaxed);
-        rec.values[i].bits = bits;
+        relaxed_store(slot.values[i].bits, bits);
         if (c.kind == CounterKind::Add)
         {
             c.bits.store(0U, std::memory_order_relaxed);
@@ -930,18 +934,23 @@ void frame_mark() noexcept
     // boundary" (allocators bumping during the snapshot still settle into
     // the next frame). The allocator slot can be empty (unregistered) --
     // we leave the AllocatorRecord zeroed in that case.
-    const crd::u32 n_allocs = state.allocator_count_atomic.load(std::memory_order_acquire);
-    rec.allocator_count     = n_allocs > kMaxAllocators ? kMaxAllocators : n_allocs;
+    const crd::u32 n_allocs        = state.allocator_count_atomic.load(std::memory_order_acquire);
+    const crd::u32 allocator_count = n_allocs > kMaxAllocators ? kMaxAllocators : n_allocs;
+    relaxed_store(slot.allocator_count, allocator_count);
     // DIAG.6a(b): mark a snapshot in flight so a concurrent unregister_allocator waits before its owner destroys the
     // allocator; load each slot pointer exactly once (seq_cst) and deref only that local -- never re-read the slot.
-    state.snapshot_in_flight.fetch_add(1U, std::memory_order_seq_cst);
-    for (crd::u32 i = 0U; i < rec.allocator_count; ++i)
+    // With no allocator slot in use none is dereferenced, and the mark is not needed.
+    if (allocator_count != 0U)
+    {
+        state.snapshot_in_flight.fetch_add(1U, std::memory_order_seq_cst);
+    }
+    for (crd::u32 i = 0U; i < allocator_count; ++i)
     {
         crd::memory::IAllocator* const alloc = state.allocators[i].allocator.load(std::memory_order_seq_cst);
-        AllocatorRecord&               ar    = rec.allocators[i];
+        AllocatorRecord                ar{};
         if (alloc == nullptr)
         {
-            ar = AllocatorRecord{};
+            move_allocator_record(slot.allocators[i], ar, true);
             continue;
         }
         // DIAG.6a(d2): stamp the slot's interned name identity into this record as name_id + 1 (0 = unset). The
@@ -956,16 +965,20 @@ void frame_mark() noexcept
         ar.peak_bytes      = snap.peak_bytes;
         ar.total_bytes     = snap.total_bytes;
         ar.stamps = allocator_record_stamps(nid, alloc->stats().coverage()); // name + coverage
+        move_allocator_record(slot.allocators[i], ar, true);
     }
-    state.snapshot_in_flight.fetch_sub(1U, std::memory_order_seq_cst);
+    if (allocator_count != 0U)
+    {
+        state.snapshot_in_flight.fetch_sub(1U, std::memory_order_seq_cst);
+    }
 
-    // DIAG.6a(c1) seqlock: copy the record into the slot, then publish it by returning the sequence to even (release).
-    publish_frame_record(slot, rec);
+    // DIAG.6a(c1) seqlock: publish the record by returning the sequence to even (release).
     seq.store(seq_begin + 2U, std::memory_order_release);
 
     // Retire the slot -- readers see this frame's record once the head
     // advances past it (release ordering on the head store).
-    state.frame_history_head.fetch_add(1U, std::memory_order_acq_rel);
+    state.frame_history_head.store(state.frame_history_head.load(std::memory_order_relaxed) + 1U,
+                                   std::memory_order_release);
     state.last_frame_end_ns = end_ns;
 
     // DIAG.6b(e): drive the GPU frame lifecycle -- close the frame that just ended, resolve completed GPU frames, and

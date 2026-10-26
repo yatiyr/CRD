@@ -14,6 +14,9 @@
 //     Use for: log timestamps, save-file timestamps, "what time is it now"
 //     UI display. Backed by std::chrono::system_clock.
 //
+//   TickClock -- MonotonicClock's timeline read from the cycle counter: for
+//     the profiler's and the diagnostics' per-event timestamps (below).
+//
 //   CycleCounter -- the CPU cycle counter (rdtsc on x86, cntvct_el0 on
 //     ARM64). ~1 ns resolution but caveats: NOT monotonic across cores on
 //     older CPUs; can vary with CPU frequency on cores without
@@ -22,11 +25,12 @@
 //     much. Caller is responsible for pinning the measurement to a single
 //     core for correctness on non-invariant-TSC hardware.
 //
-// All three return `Instant` (monotonic-clock-relative absolute time),
+// Every clock returns `Instant` (monotonic-clock-relative absolute time),
 // EXCEPT CycleCounter which returns raw `u64` cycles + a one-time
 // calibration to convert to Duration.
 // ---------------------------------------------------------------------------
 
+#include <crd/core/build_config.hpp>
 #include <crd/core/types.hpp>
 #include <crd/time/duration.hpp>
 #include <crd/time/instant.hpp>
@@ -44,6 +48,56 @@ public:
     // Get the current monotonic time. Never jumps. Resolution: ~100 ns on
     // Windows (QueryPerformanceCounter), ~1 ns on Linux (clock_gettime).
     [[nodiscard]] static Instant now() noexcept;
+};
+
+// ===========================================================================
+// TickClock -- MonotonicClock's timeline, read from the cycle counter.
+//
+// The profiler's zones and frame marks and the diagnostic clock read the time at every event (DIAG.11b clause (8):
+// against Tracy's zones, a Cerid zone spent its difference on its two MonotonicClock reads). MonotonicClock is
+// std::chrono::steady_clock: QueryPerformanceCounter and a division on Windows (10 MHz there), clock_gettime on Linux.
+// TickClock reads the cycle counter (one instruction, the CPU's resolution) and maps it onto MonotonicClock's
+// nanoseconds: an anchor (ticks, nanoseconds) and a slope, both measured against MonotonicClock.
+//
+//   - The first reads return MonotonicClock itself while the counter is calibrated against it (kCalibrationNs of
+//     MonotonicClock time from the first read); so does every read on a CPU whose counter is not invariant (x86-64
+//     without CPUID's invariant-TSC bit; on ARM64 the generic timer always is). No read waits for a calibration.
+//   - Afterwards a read is the counter scaled from the anchor. The reader that finds the anchor older than
+//     kReanchorNs re-anchors it at MonotonicClock (one MonotonicClock read per period, whichever thread reads), with
+//     the slope measured over everything since the calibration began, so the map stays within the slope's error of
+//     MonotonicClock and that error shrinks as the baseline grows.
+//   - It never steps back: a re-anchor never moves the map below where it stood, and when the map ran ahead of
+//     MonotonicClock the next period runs slower until MonotonicClock catches up.
+// ===========================================================================
+
+class TickClock
+{
+public:
+    // MonotonicClock's calibration span before the counter is used, and the longest an anchor serves.
+    static constexpr crd::i64 kCalibrationNs = 2'000'000;
+    static constexpr crd::i64 kReanchorNs    = 8'000'000;
+
+    // Nanoseconds on MonotonicClock's timeline (Instant::ns_since_epoch's).
+    [[nodiscard]] static crd::i64 now_ns() noexcept;
+    // Calibrate now rather than on the first reads: returns once reads come from the counter (or never can), after at
+    // most kCalibrationNs of MonotonicClock reads the first time in a process and at once afterwards. A run that
+    // turns per-event timestamps on calls it (the profiler's init, the diagnostic host's start).
+    static void warm() noexcept;
+    [[nodiscard]] static Instant  now() noexcept { return Instant{now_ns()}; }
+
+    // Whether this CPU's counter may be mapped (invariant), and whether reads come from it now (false while it is
+    // calibrated, and for good where it may not be).
+    [[nodiscard]] static bool counter_usable() noexcept;
+    [[nodiscard]] static bool counter_mapped() noexcept;
+
+#if CRD_ENABLE_ASSERTS
+    // Test seams, compiled only where asserts are (never in a shipping build), for a single-threaded test.
+    // Map the counter as `ns = ns_at + (ticks - ticks_at) * ns_per_tick`, re-anchoring no more (a deliberately wrong
+    // slope shows whether a consumer reads this clock).
+    static void test_force_map(crd::u64 ticks_at, crd::i64 ns_at, crd::f64 ns_per_tick) noexcept;
+    // Start over: the next read calibrates again.
+    static void test_reset() noexcept;
+#endif
 };
 
 // ===========================================================================

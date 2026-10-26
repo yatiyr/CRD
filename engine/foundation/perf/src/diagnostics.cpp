@@ -4,11 +4,11 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
+#include <crd/time/clocks.hpp>
 
 #include "json_writer.hpp" // DIAG.6c(c): shared locale-safe JSON-append helpers (also used by capture_export.cpp)
 
 #include <atomic>
-#include <chrono>
 #include <cstdlib>
 #include <mutex>
 
@@ -85,8 +85,9 @@ cont::StringView severity_name(Severity s) noexcept
 
 crd::u64 diagnostic_now_ns() noexcept
 {
-    const auto t = std::chrono::steady_clock::now().time_since_epoch();
-    return static_cast<crd::u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t).count());
+    // crd-time's TickClock: MonotonicClock's (steady_clock's) timeline from the cycle counter, the event sites' clock
+    // (DIAG.11b clause (8): a steady_clock read was most of a kept event's cost over Tracy's message).
+    return static_cast<crd::u64>(crd::time::TickClock::now_ns());
 }
 
 bool policy_admits(const DiagnosticPolicy& p, Severity s) noexcept

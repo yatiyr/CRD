@@ -79,7 +79,8 @@ struct DiagnosticEvent
     bool           message_truncated = false;
 };
 
-// Monotonic nanosecond clock for event timestamps (steady, never wall-clock).
+// Monotonic nanosecond clock for event timestamps (steady, never wall-clock): crd-time's TickClock, MonotonicClock's
+// timeline read from the cycle counter.
 [[nodiscard]] crd::u64 diagnostic_now_ns() noexcept;
 
 // ---------------------------------------------------------------------------
