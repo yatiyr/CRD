@@ -12,6 +12,7 @@ Existing dated decisions are amended explicitly, not silently rewritten as a dif
 
 | Reference | Purpose |
 |---|---|
+| [0134-runtime-cpu-dispatch](0134-runtime-cpu-dispatch.md) | SSE2 x64 floor; one CPU detection and selection, per-level kernel units, isolation guard, forced-level arms |
 | [0133-runtime-diagnostics-and-instrumentation](0133-runtime-diagnostics-and-instrumentation.md) | Authorized DIAG foundation immediately after REPO.DEV; bounded evidence, existing modules and platform qualification |
 | [0132-visual-studio-configuration-matrix](0132-visual-studio-configuration-matrix.md) | Canonical presets plus complete native MSVC configurations; user-selected workflow |
 | [0131-project-structure-synchronization](0131-project-structure-synchronization.md) | Durable Visual Studio/source/CMake edits, selectable removal and physical module moves |

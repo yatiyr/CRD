@@ -3,6 +3,7 @@
 #include <crd/time/clocks.hpp>
 #include <crd/time/deadline.hpp> // yield_thread
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/core/platform.hpp> // CRD_NOINLINE
 
 #include <atomic>
@@ -10,8 +11,6 @@
 
 #if defined(_MSC_VER)
     #include <intrin.h>
-#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
-    #include <cpuid.h>
 #endif
 
 namespace crd::time
@@ -96,37 +95,14 @@ crd::f64 CycleCounter::calibrate(Duration calibration_window) noexcept
 namespace
 {
 
-// The counter where TickClock may map it: x86-64's TSC when CPUID reports it invariant (constant rate in every
+// The counter where TickClock may map it: x86-64's TSC when every CPU reports it invariant (constant rate in every
 // P-, C- and T-state), ARM64's generic timer (a constant frequency by architecture); nowhere else.
 bool counter_invariant() noexcept
 {
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
-    int regs[4] = {}; // NOLINT(modernize-avoid-c-arrays): __cpuid's out-parameter
-    __cpuid(regs, static_cast<int>(0x80000000U));
-    if (static_cast<unsigned>(regs[0]) < 0x80000007U)
-    {
-        return false;
-    }
-    __cpuid(regs, static_cast<int>(0x80000007U));
-    return (static_cast<unsigned>(regs[3]) & (1U << 8U)) != 0U;
-#elif defined(__GNUC__) && (defined(__x86_64__) || defined(__i386__))
-    unsigned eax = 0U;
-    unsigned ebx = 0U;
-    unsigned ecx = 0U;
-    unsigned edx = 0U;
-    if (__get_cpuid(0x80000000U, &eax, &ebx, &ecx, &edx) == 0 || eax < 0x80000007U)
-    {
-        return false;
-    }
-    if (__get_cpuid(0x80000007U, &eax, &ebx, &ecx, &edx) == 0)
-    {
-        return false;
-    }
-    return (edx & (1U << 8U)) != 0U;
-#elif defined(__aarch64__)
+#if defined(__aarch64__) || defined(_M_ARM64)
     return true;
 #else
-    return false;
+    return crd::cpu_selection().features.usable.has(crd::CpuFeature::InvariantTsc);
 #endif
 }
 

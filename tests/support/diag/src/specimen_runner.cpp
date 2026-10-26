@@ -533,6 +533,19 @@ crd::containers::String host_tuple()
     return t;
 }
 
+crd::containers::String self_executable()
+{
+    char path[4096] = {}; // NOLINT(modernize-avoid-c-arrays): the OS call's out-buffer
+#if defined(_WIN32)
+    const DWORD n = ::GetModuleFileNameA(nullptr, path, sizeof(path));
+    const bool read = n > 0U && n < sizeof(path);
+#else
+    const ssize_t n = ::readlink("/proc/self/exe", path, sizeof(path) - 1U);
+    const bool read = n > 0 && static_cast<std::size_t>(n) < sizeof(path) - 1U;
+#endif
+    return read ? cont::String{path} : cont::String{};
+}
+
 Outcome run_specimen(const crd::containers::String& exe_path,
                      const crd::containers::Array<crd::containers::String>& args,
                      const Expectation& expect)

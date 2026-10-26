@@ -121,4 +121,7 @@ Outcome select_and_run(const crd::containers::Array<crd::containers::String>& ca
 // OS/ISA/compiler tuple recorded on every run.
 crd::containers::String host_tuple();
 
+// The running executable's path, for a test that re-enters itself on a hidden child case; empty when unreadable.
+crd::containers::String self_executable();
+
 } // namespace crd::diag

@@ -27,7 +27,6 @@
 #else
 #include <csignal>
 #include <sys/resource.h>
-#include <unistd.h>
 #endif
 
 namespace
@@ -61,19 +60,6 @@ void headless_child()
 #endif
 }
 
-cont::String self_path()
-{
-    char path[4096] = {};
-#if defined(_WIN32)
-    const DWORD n = ::GetModuleFileNameA(nullptr, path, sizeof(path));
-    REQUIRE((n > 0U && n < sizeof(path)));
-#else
-    const ssize_t n = ::readlink("/proc/self/exe", path, sizeof(path) - 1U);
-    REQUIRE((n > 0 && static_cast<std::size_t>(n) < sizeof(path) - 1U));
-#endif
-    return cont::String{path};
-}
-
 cd::Outcome run_child(const char* tag)
 {
     cont::Array<cont::String> args;
@@ -81,7 +67,9 @@ cd::Outcome run_child(const char* tag)
     cd::Expectation e;
     e.want       = cd::Expectation::Want::Crash;
     e.timeout_ms = 30000U;
-    return cd::run_specimen(self_path(), args, e);
+    const cont::String self = cd::self_executable();
+    REQUIRE_FALSE(self.empty());
+    return cd::run_specimen(self, args, e);
 }
 
 bool sanitized()

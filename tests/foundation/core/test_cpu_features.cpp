@@ -1,0 +1,713 @@
+// CPU instruction-set detection and the dispatch-level selection (crd/core/cpu_features.hpp, SIMD-DISPATCH).
+//
+// The decode is judged on CPUID words built here (each level's features, the OS-saved state gates, AVX10, APX and
+// hybrid core types); the selection on this host is judged against the operating system's own view of the CPUs
+// (Windows IsProcessorFeaturePresent, Linux /proc/cpuinfo of every processor), and the CRD_CPU_LEVEL override both as
+// a pure function and in a child process that reads it at startup.
+
+#include <crd/containers/array.hpp>
+#include <crd/containers/string.hpp>
+#include <crd/core/cpu_features.hpp>
+#include <crd/diag/specimen_runner.hpp>
+
+#include <catch2/catch_test_macros.hpp>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string_view>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#else
+#include <sched.h>
+#include <unistd.h>
+#endif
+
+namespace
+{
+namespace cont = crd::containers;
+namespace cd = crd::diag;
+using crd::CpuFeature;
+using crd::CpuLevel;
+using crd::CpuOverride;
+
+constexpr crd::u32 bit(crd::u32 b) noexcept
+{
+    return 1U << b;
+}
+
+// A Haswell-class x86-64-v3 CPU under an OS that saves the x87, SSE and AVX state.
+crd::CpuidWords v3_words()
+{
+    crd::CpuidWords w;
+    w.max_leaf = 0x20U;
+    w.max_extended_leaf = 0x80000008U;
+    w.leaf1_ecx = bit(0U) | bit(9U) | bit(12U) | bit(13U) | bit(19U) | bit(20U) | bit(22U) | bit(23U) | bit(26U) |
+                  bit(27U) | bit(28U) | bit(29U);
+    w.leaf1_edx = bit(25U) | bit(26U);
+    w.leaf7_ebx = bit(3U) | bit(5U) | bit(8U);
+    w.ext1_ecx = bit(0U) | bit(5U);
+    w.ext7_edx = bit(8U);
+    w.xcr0 = 0x7U;
+    return w;
+}
+
+// v3 plus AVX-512 F, DQ, CD, BW and VL; the OS state is left to the case.
+crd::CpuidWords v4_words()
+{
+    crd::CpuidWords w = v3_words();
+    w.leaf7_ebx |= bit(16U) | bit(17U) | bit(28U) | bit(30U) | bit(31U);
+    return w;
+}
+
+CpuLevel level_of(const crd::CpuidWords& w)
+{
+    return crd::cpu_level_of(crd::CpuArch::X64, crd::decode_cpuid(w));
+}
+
+crd::CpuSelection detected_at(CpuLevel level)
+{
+    crd::CpuSelection s;
+    s.arch = crd::CpuArch::X64;
+    s.detected = level;
+    s.selected = level;
+    return s;
+}
+
+bool contains(const cd::Outcome& o, std::string_view text)
+{
+    return std::string_view{o.output.data(), o.output.size()}.find(text) != std::string_view::npos;
+}
+
+// Sets an environment variable for the children this process starts, and puts the old value back.
+class ScopedEnv
+{
+public:
+    ScopedEnv(const char* name, const char* value) : m_name(name)
+    {
+        char old[256] = {}; // NOLINT(modernize-avoid-c-arrays)
+#if defined(_WIN32)
+        const DWORD n = ::GetEnvironmentVariableA(name, old, sizeof(old));
+        m_had = n > 0U && n < sizeof(old);
+        (void)_putenv_s(name, value);
+#else
+        const char* v = std::getenv(name); // NOLINT(concurrency-mt-unsafe): the test is single-threaded here
+        m_had = v != nullptr && std::strlen(v) < sizeof(old);
+        if (m_had)
+        {
+            std::memcpy(old, v, std::strlen(v) + 1U);
+        }
+        (void)::setenv(name, value, 1);
+#endif
+        if (m_had)
+        {
+            m_old = cont::String{old};
+        }
+    }
+    ~ScopedEnv()
+    {
+#if defined(_WIN32)
+        (void)_putenv_s(m_name, m_had ? m_old.c_str() : "");
+#else
+        if (m_had)
+        {
+            (void)::setenv(m_name, m_old.c_str(), 1);
+        }
+        else
+        {
+            (void)::unsetenv(m_name);
+        }
+#endif
+    }
+    ScopedEnv(const ScopedEnv&) = delete;
+    ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+    const char* m_name;
+    bool m_had = false;
+    cont::String m_old;
+};
+
+cd::Outcome run_level_child(const char* level)
+{
+    const ScopedEnv env{"CRD_CPU_LEVEL", level};
+    cont::Array<cont::String> args;
+    args.push_back(cont::String{"[.cpu-level-child]"});
+    cd::Expectation e;
+    e.want = cd::Expectation::Want::CleanExit;
+    e.timeout_ms = 30000U;
+    const cont::String self = cd::self_executable();
+    REQUIRE_FALSE(self.empty());
+    return cd::run_specimen(self, args, e);
+}
+
+#if !defined(_WIN32)
+// The flags every processor in /proc/cpuinfo lists, as a mask over the features the kernel names.
+struct KernelView
+{
+    crd::u32 processors = 0U;
+    crd::u64 all = 0U;   // features every processor lists
+    crd::u64 named = 0U; // features the kernel has a flag name for
+};
+
+const char* kernel_flag(CpuFeature f)
+{
+    switch (f)
+    {
+        case CpuFeature::Sse2:
+            return "sse2";
+        case CpuFeature::Sse3:
+            return "pni";
+        case CpuFeature::Ssse3:
+            return "ssse3";
+        case CpuFeature::Sse41:
+            return "sse4_1";
+        case CpuFeature::Sse42:
+            return "sse4_2";
+        case CpuFeature::Popcnt:
+            return "popcnt";
+        case CpuFeature::Cx16:
+            return "cx16";
+        case CpuFeature::LahfSahf:
+            return "lahf_lm";
+        case CpuFeature::Movbe:
+            return "movbe";
+        case CpuFeature::Aes:
+            return "aes";
+        case CpuFeature::Pclmulqdq:
+            return "pclmulqdq";
+        case CpuFeature::Xsave:
+            return "xsave";
+        case CpuFeature::Avx:
+            return "avx";
+        case CpuFeature::Fma:
+            return "fma";
+        case CpuFeature::F16c:
+            return "f16c";
+        case CpuFeature::Avx2:
+            return "avx2";
+        case CpuFeature::Bmi1:
+            return "bmi1";
+        case CpuFeature::Bmi2:
+            return "bmi2";
+        case CpuFeature::Lzcnt:
+            return "abm";
+        case CpuFeature::Sha:
+            return "sha_ni";
+        case CpuFeature::Gfni:
+            return "gfni";
+        case CpuFeature::Vaes:
+            return "vaes";
+        case CpuFeature::Vpclmulqdq:
+            return "vpclmulqdq";
+        case CpuFeature::AvxVnni:
+            return "avx_vnni";
+        case CpuFeature::Avx512F:
+            return "avx512f";
+        case CpuFeature::Avx512Cd:
+            return "avx512cd";
+        case CpuFeature::Avx512Bw:
+            return "avx512bw";
+        case CpuFeature::Avx512Dq:
+            return "avx512dq";
+        case CpuFeature::Avx512Vl:
+            return "avx512vl";
+        case CpuFeature::Avx512Ifma:
+            return "avx512ifma";
+        case CpuFeature::Avx512Vbmi:
+            return "avx512vbmi";
+        case CpuFeature::Avx512Vbmi2:
+            return "avx512_vbmi2";
+        case CpuFeature::Avx512Vnni:
+            return "avx512_vnni";
+        case CpuFeature::Avx512Bitalg:
+            return "avx512_bitalg";
+        case CpuFeature::Avx512Vpopcntdq:
+            return "avx512_vpopcntdq";
+        case CpuFeature::Avx512Bf16:
+            return "avx512_bf16";
+        case CpuFeature::Avx512Fp16:
+            return "avx512_fp16";
+        case CpuFeature::AmxTile:
+            return "amx_tile";
+        case CpuFeature::AmxBf16:
+            return "amx_bf16";
+        case CpuFeature::AmxInt8:
+            return "amx_int8";
+        case CpuFeature::InvariantTsc:
+            return "nonstop_tsc"; // set from CPUID 0x80000007 EDX bit 8 on Intel and AMD
+        default:
+            return nullptr; // OSXSAVE, AVX10, APX and hybrid have no flag name every kernel prints
+    }
+}
+
+bool has_word(std::string_view line, std::string_view word)
+{
+    for (crd::usize at = line.find(word); at != std::string_view::npos; at = line.find(word, at + 1U))
+    {
+        const bool starts = at == 0U || line[at - 1U] == ' ' || line[at - 1U] == '\t';
+        const crd::usize end = at + word.size();
+        const bool ends = end == line.size() || line[end] == ' ' || line[end] == '\n';
+        if (starts && ends)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+KernelView read_kernel_view()
+{
+    KernelView v;
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        if (kernel_flag(static_cast<CpuFeature>(i)) != nullptr)
+        {
+            v.named |= crd::u64{1} << i;
+        }
+    }
+    v.all = v.named;
+    std::FILE* f = std::fopen("/proc/cpuinfo", "r");
+    REQUIRE(f != nullptr);
+    char line[16384] = {}; // NOLINT(modernize-avoid-c-arrays): one flags line
+    while (std::fgets(line, sizeof(line), f) != nullptr)
+    {
+        const std::string_view l{line};
+        if (l.rfind("flags", 0U) != 0U)
+        {
+            continue;
+        }
+        ++v.processors;
+        for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+        {
+            const char* name = kernel_flag(static_cast<CpuFeature>(i));
+            if (name != nullptr && !has_word(l.substr(l.find(':') + 1U), name))
+            {
+                v.all &= ~(crd::u64{1} << i);
+            }
+        }
+    }
+    (void)std::fclose(f);
+    return v;
+}
+#endif
+} // namespace
+
+TEST_CASE("cpu features: each level needs its features and the OS-saved state they use", "[core][cpu]")
+{
+    const crd::CpuReport v3 = crd::decode_cpuid(v3_words());
+    CHECK(v3.usable.has(CpuFeature::Avx2));
+    CHECK(v3.usable.has(CpuFeature::Fma));
+    CHECK(v3.usable.has(CpuFeature::InvariantTsc));
+    CHECK_FALSE(v3.reported.has(CpuFeature::Avx512F));
+    CHECK(v3.xcr0 == 0x7U);
+    CHECK(level_of(v3_words()) == CpuLevel::Avx2);
+
+    // Each x86-64-v3 feature is needed for the level: without it the CPU is v2.
+    constexpr crd::u32 v3_leaf1_ecx_bits[] = {12U, 22U, 28U, 29U}; // NOLINT(modernize-avoid-c-arrays): FMA..F16C
+    for (const crd::u32 b : v3_leaf1_ecx_bits)
+    {
+        crd::CpuidWords w = v3_words();
+        w.leaf1_ecx &= ~bit(b);
+        INFO("leaf 1 ECX bit " << b);
+        CHECK(level_of(w) == CpuLevel::Sse42);
+    }
+    for (const crd::u32 b : {3U, 5U, 8U})
+    {
+        crd::CpuidWords w = v3_words();
+        w.leaf7_ebx &= ~bit(b);
+        INFO("leaf 7 EBX bit " << b);
+        CHECK(level_of(w) == CpuLevel::Sse42);
+    }
+    {
+        crd::CpuidWords w = v3_words();
+        w.ext1_ecx &= ~bit(5U); // LZCNT
+        CHECK(level_of(w) == CpuLevel::Sse42);
+    }
+    // Each x86-64-v2 feature is needed for that level.
+    for (const crd::u32 b : {0U, 9U, 13U, 19U, 20U, 23U})
+    {
+        crd::CpuidWords w = v3_words();
+        w.leaf1_ecx &= ~bit(b);
+        INFO("leaf 1 ECX bit " << b);
+        CHECK(level_of(w) == CpuLevel::Sse2);
+    }
+    {
+        crd::CpuidWords w = v3_words();
+        w.ext1_ecx &= ~bit(0U); // LAHF/SAHF
+        CHECK(level_of(w) == CpuLevel::Sse2);
+    }
+
+    // The OS does not save the YMM state: AVX is reported and not usable.
+    {
+        crd::CpuidWords w = v3_words();
+        w.xcr0 = 0x3U;
+        const crd::CpuReport r = crd::decode_cpuid(w);
+        CHECK(r.reported.has(CpuFeature::Avx2));
+        CHECK_FALSE(r.usable.has(CpuFeature::Avx2));
+        CHECK_FALSE(r.usable.has(CpuFeature::Avx));
+        CHECK(r.usable.has(CpuFeature::Bmi2)); // a general-register feature needs no saved state
+        CHECK(level_of(w) == CpuLevel::Sse42);
+    }
+    // Without OSXSAVE the XCR0 word is never trusted.
+    {
+        crd::CpuidWords w = v3_words();
+        w.leaf1_ecx &= ~bit(27U);
+        const crd::CpuReport r = crd::decode_cpuid(w);
+        CHECK(r.xcr0 == 0U);
+        CHECK_FALSE(r.usable.has(CpuFeature::Avx));
+        CHECK(level_of(w) == CpuLevel::Sse42);
+    }
+    // A leaf above the reported maximum is not read.
+    {
+        crd::CpuidWords w = v3_words();
+        w.max_leaf = 6U;
+        CHECK_FALSE(crd::decode_cpuid(w).reported.has(CpuFeature::Avx2));
+        w = v3_words();
+        w.max_extended_leaf = 0x80000000U;
+        CHECK_FALSE(crd::decode_cpuid(w).reported.has(CpuFeature::Lzcnt));
+        CHECK_FALSE(crd::decode_cpuid(w).reported.has(CpuFeature::InvariantTsc));
+    }
+}
+
+TEST_CASE("cpu features: AVX-512, AVX10 and APX count only with their register state saved", "[core][cpu]")
+{
+    crd::CpuidWords w = v4_words();
+    CHECK(crd::decode_cpuid(w).reported.has(CpuFeature::Avx512Vl));
+    CHECK(level_of(w) == CpuLevel::Avx2); // no opmask or ZMM state
+    for (const crd::u64 missing : {0x20U, 0x40U, 0x80U})
+    {
+        w.xcr0 = 0xE7U & ~missing;
+        INFO("XCR0 without " << missing);
+        CHECK_FALSE(crd::decode_cpuid(w).usable.has(CpuFeature::Avx512F));
+        CHECK(level_of(w) == CpuLevel::Avx2);
+    }
+    w.xcr0 = 0xE7U;
+    CHECK(level_of(w) == CpuLevel::Avx512);
+    for (const crd::u32 b : {16U, 17U, 28U, 30U, 31U})
+    {
+        crd::CpuidWords missing = w;
+        missing.leaf7_ebx &= ~bit(b);
+        INFO("leaf 7 EBX bit " << b);
+        CHECK(level_of(missing) == CpuLevel::Avx2);
+    }
+
+    // AVX10.2 at 512 bits is the v4 level without the separate AVX-512 bits.
+    crd::CpuidWords a = v3_words();
+    a.max_leaf = 0x24U;
+    a.leaf7_1_edx = bit(19U);
+    a.leaf24_ebx = 2U | bit(16U) | bit(17U) | bit(18U);
+    a.xcr0 = 0xE7U;
+    crd::CpuReport r = crd::decode_cpuid(a);
+    CHECK(r.usable.has(CpuFeature::Avx10));
+    CHECK(r.avx10_version == 2U);
+    CHECK(r.avx10_vector_bits == 512U);
+    CHECK(level_of(a) == CpuLevel::Avx512);
+    a.leaf24_ebx = 1U | bit(16U) | bit(17U); // AVX10.1 limited to 256 bits
+    r = crd::decode_cpuid(a);
+    CHECK(r.avx10_vector_bits == 256U);
+    CHECK(level_of(a) == CpuLevel::Avx2);
+    a.leaf24_ebx = 2U | bit(16U) | bit(17U) | bit(18U);
+    a.xcr0 = 0x7U;
+    r = crd::decode_cpuid(a);
+    CHECK(r.reported.has(CpuFeature::Avx10));
+    CHECK_FALSE(r.usable.has(CpuFeature::Avx10));
+    CHECK(r.avx10_vector_bits == 0U);
+    CHECK(level_of(a) == CpuLevel::Avx2);
+    a.max_leaf = 0x23U; // no AVX10 leaf: no version
+    CHECK(crd::decode_cpuid(a).avx10_version == 0U);
+
+    // APX needs its own extended-GPR state component.
+    crd::CpuidWords p = v4_words();
+    p.leaf7_1_edx = bit(21U);
+    p.xcr0 = 0xE7U;
+    CHECK(crd::decode_cpuid(p).reported.has(CpuFeature::Apx));
+    CHECK_FALSE(crd::decode_cpuid(p).usable.has(CpuFeature::Apx));
+    p.xcr0 |= 0x80000U;
+    CHECK(crd::decode_cpuid(p).usable.has(CpuFeature::Apx));
+
+    // AMX needs the tile configuration and tile data state.
+    crd::CpuidWords t = v4_words();
+    t.leaf7_edx = bit(24U);
+    t.xcr0 = 0xE7U | 0x20000U;
+    CHECK_FALSE(crd::decode_cpuid(t).usable.has(CpuFeature::AmxTile));
+    t.xcr0 |= 0x40000U;
+    CHECK(crd::decode_cpuid(t).usable.has(CpuFeature::AmxTile));
+}
+
+TEST_CASE("cpu features: a hybrid CPU reports its core type, and features and names are one table", "[core][cpu]")
+{
+    crd::CpuidWords w = v3_words();
+    w.leaf1a_eax = 0x40000001U;
+    CHECK(crd::decode_cpuid(w).core_type == 0U); // not hybrid: leaf 0x1A is not read
+    w.leaf7_edx = bit(15U);
+    CHECK(crd::decode_cpuid(w).core_type == 0x40U);
+    w.max_leaf = 0x19U;
+    CHECK(crd::decode_cpuid(w).core_type == 0U);
+
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        const char* name = crd::cpu_feature_name(static_cast<CpuFeature>(i));
+        INFO("feature " << i);
+        CHECK(std::strcmp(name, "?") != 0);
+        for (crd::u32 j = 0U; j < i; ++j)
+        {
+            CHECK(std::strcmp(name, crd::cpu_feature_name(static_cast<CpuFeature>(j))) != 0);
+        }
+    }
+    for (const CpuLevel level :
+         {CpuLevel::Portable, CpuLevel::Sse2, CpuLevel::Sse42, CpuLevel::Avx2, CpuLevel::Avx512, CpuLevel::Neon})
+    {
+        CpuLevel back = CpuLevel::Portable;
+        REQUIRE(crd::cpu_level_from_name(crd::cpu_level_name(level), back));
+        CHECK(back == level);
+    }
+}
+
+TEST_CASE("cpu features: the selection keeps only what every visited CPU executes", "[core][cpu]")
+{
+    // A performance core with AVX-512 and AVX10.2 at 512 bits, an efficiency core with neither.
+    crd::CpuidWords p = v4_words();
+    p.max_leaf = 0x24U;
+    p.leaf7_edx = bit(15U);
+    p.leaf7_1_edx = bit(19U);
+    p.leaf24_ebx = 2U | bit(16U) | bit(17U) | bit(18U);
+    p.leaf1a_eax = 0x40000000U;
+    p.xcr0 = 0xE7U;
+    crd::CpuidWords e = v3_words();
+    e.max_leaf = 0x24U;
+    e.leaf7_edx = bit(15U);
+    e.leaf1a_eax = 0x20000000U;
+    e.xcr0 = 0xE7U;
+
+    crd::CpuSelection s;
+    s.arch = crd::CpuArch::X64;
+    crd::add_cpu_report(s, crd::decode_cpuid(p));
+    CHECK(s.uniform);
+    CHECK(crd::cpu_level_of(s.arch, s.features) == CpuLevel::Avx512);
+    crd::add_cpu_report(s, crd::decode_cpuid(p));
+    CHECK(s.uniform);
+    crd::add_cpu_report(s, crd::decode_cpuid(e));
+    crd::add_cpu_report(s, crd::decode_cpuid(p));
+    CHECK(s.cpus_visited == 4U);
+    CHECK_FALSE(s.uniform);
+    CHECK(s.core_types_seen == (crd::kCpuCoreEfficiency | crd::kCpuCorePerformance));
+    CHECK(s.features.core_type == 0U);
+    CHECK_FALSE(s.features.usable.has(CpuFeature::Avx512F));
+    CHECK_FALSE(s.features.reported.has(CpuFeature::Avx10));
+    CHECK(s.features.avx10_version == 0U);
+    CHECK(s.features.avx10_vector_bits == 0U);
+    CHECK(s.features.usable.has(CpuFeature::Avx2));
+    CHECK(crd::cpu_level_of(s.arch, s.features) == CpuLevel::Avx2);
+}
+
+TEST_CASE("cpu features: CRD_CPU_LEVEL lowers the level and refuses one the CPUs cannot run", "[core][cpu]")
+{
+    const crd::CpuSelection avx2 = detected_at(CpuLevel::Avx2);
+    CHECK(crd::apply_cpu_override(avx2, nullptr).override_status == CpuOverride::None);
+    CHECK(crd::apply_cpu_override(avx2, "").selected == CpuLevel::Avx2);
+    for (const CpuLevel lower : {CpuLevel::Sse2, CpuLevel::Sse42, CpuLevel::Avx2})
+    {
+        const crd::CpuSelection s = crd::apply_cpu_override(avx2, crd::cpu_level_name(lower));
+        CHECK(s.override_status == CpuOverride::Applied);
+        CHECK(s.selected == lower);
+        CHECK(s.detected == CpuLevel::Avx2);
+    }
+    const crd::CpuSelection above = crd::apply_cpu_override(avx2, "avx512");
+    CHECK(above.override_status == CpuOverride::AboveHardware);
+    CHECK(above.selected == CpuLevel::Avx2);
+    for (const char* other : {"neon", "portable"})
+    {
+        INFO(other);
+        const crd::CpuSelection s = crd::apply_cpu_override(avx2, other);
+        CHECK(s.override_status == CpuOverride::OtherArch);
+        CHECK(s.selected == CpuLevel::Avx2);
+    }
+    for (const char* unknown : {"AVX2", "avx", "fast", "?"})
+    {
+        INFO(unknown);
+        CHECK(crd::apply_cpu_override(avx2, unknown).override_status == CpuOverride::Unknown);
+        CHECK(crd::apply_cpu_override(avx2, unknown).selected == CpuLevel::Avx2);
+    }
+    // An earlier override never carries into a later one.
+    const crd::CpuSelection lowered = crd::apply_cpu_override(avx2, "sse2");
+    CHECK(crd::apply_cpu_override(lowered, nullptr).selected == CpuLevel::Avx2);
+
+    CHECK(crd::cpu_level_includes(CpuLevel::Avx512, CpuLevel::Sse2));
+    CHECK(crd::cpu_level_includes(CpuLevel::Neon, CpuLevel::Portable));
+    CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Sse42, CpuLevel::Avx2));
+    CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Avx512, CpuLevel::Neon));
+    CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Neon, CpuLevel::Sse2));
+    CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Portable, CpuLevel::Sse2));
+}
+
+TEST_CASE("cpu features: the selection is what every CPU of the process executes, as the OS reports it", "[core][cpu]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    INFO("detected " << crd::cpu_level_name(s.detected) << ", selected " << crd::cpu_level_name(s.selected) << ", "
+                     << s.cpus_visited << " CPUs visited, " << s.cpus_refused << " refused, note '" << s.walk_note
+                     << "'");
+    CHECK(s.detected == crd::cpu_level_of(s.arch, s.features));
+    if (s.arch != crd::CpuArch::X64)
+    {
+        CHECK(s.cpus_visited == 0U);
+        return;
+    }
+    CHECK(std::strlen(s.walk_note) == 0U);
+    CHECK(s.uniform);
+    CHECK(s.features.usable.has(CpuFeature::Sse2));
+    if (s.features.reported.has(CpuFeature::Hybrid))
+    {
+        CHECK(s.core_types_seen != 0U); // every CPU of a hybrid part names its core type
+    }
+
+#if defined(_WIN32)
+    CHECK(s.cpus_visited + s.cpus_refused == ::GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+    if (::GetActiveProcessorGroupCount() == 1U)
+    {
+        DWORD_PTR process = 0U;
+        DWORD_PTR system = 0U;
+        REQUIRE(::GetProcessAffinityMask(::GetCurrentProcess(), &process, &system) != 0);
+        crd::u32 allowed = 0U;
+        for (DWORD_PTR m = process; m != 0U; m &= m - 1U)
+        {
+            ++allowed;
+        }
+        CHECK(s.cpus_visited == allowed);
+    }
+    struct Os
+    {
+        CpuFeature feature;
+        DWORD pf;
+    };
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays)
+    constexpr Os os[] = {
+        {CpuFeature::Sse2, PF_XMMI64_INSTRUCTIONS_AVAILABLE},     {CpuFeature::Sse3, PF_SSE3_INSTRUCTIONS_AVAILABLE},
+        {CpuFeature::Ssse3, PF_SSSE3_INSTRUCTIONS_AVAILABLE},     {CpuFeature::Sse41, PF_SSE4_1_INSTRUCTIONS_AVAILABLE},
+        {CpuFeature::Sse42, PF_SSE4_2_INSTRUCTIONS_AVAILABLE},    {CpuFeature::Cx16, PF_COMPARE_EXCHANGE128},
+        {CpuFeature::Avx, PF_AVX_INSTRUCTIONS_AVAILABLE},         {CpuFeature::Avx2, PF_AVX2_INSTRUCTIONS_AVAILABLE},
+        {CpuFeature::Avx512F, PF_AVX512F_INSTRUCTIONS_AVAILABLE},
+    };
+    for (const Os& o : os)
+    {
+        INFO(crd::cpu_feature_name(o.feature));
+        CHECK(s.features.usable.has(o.feature) == (::IsProcessorFeaturePresent(o.pf) != 0));
+    }
+#else
+    const long configured = ::sysconf(_SC_NPROCESSORS_CONF);
+    CHECK(s.cpus_visited + s.cpus_refused == static_cast<crd::u32>(configured));
+    cpu_set_t mine[8] = {}; // NOLINT(modernize-avoid-c-arrays)
+    REQUIRE(::sched_getaffinity(0, sizeof(mine), mine) == 0);
+    CHECK(s.cpus_visited >= static_cast<crd::u32>(CPU_COUNT_S(sizeof(mine), mine)));
+
+    const KernelView kernel = read_kernel_view();
+    REQUIRE(kernel.processors >= s.cpus_visited);
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        if (((kernel.named >> i) & 1U) == 0U)
+        {
+            continue;
+        }
+        INFO(crd::cpu_feature_name(static_cast<CpuFeature>(i)));
+        CHECK(s.features.usable.has(static_cast<CpuFeature>(i)) == (((kernel.all >> i) & 1U) != 0U));
+    }
+#endif
+}
+
+TEST_CASE("cpu features: the walk gives the calling thread its own affinity back", "[core][cpu]")
+{
+    // The process's own walk (cpu_selection) ran on this thread: its affinity is still the process's. Then a thread
+    // narrowed to one CPU keeps exactly that CPU through a second walk.
+    const crd::CpuSelection& first = crd::cpu_selection();
+#if defined(_WIN32)
+    const HANDLE thread = ::GetCurrentThread();
+    GROUP_AFFINITY entry = {};
+    REQUIRE(::GetThreadGroupAffinity(thread, &entry) != 0);
+    if (::GetActiveProcessorGroupCount() == 1U)
+    {
+        DWORD_PTR process = 0U;
+        DWORD_PTR system = 0U;
+        REQUIRE(::GetProcessAffinityMask(::GetCurrentProcess(), &process, &system) != 0);
+        CHECK(entry.Mask == static_cast<KAFFINITY>(process));
+    }
+    GROUP_AFFINITY narrow = entry;
+    narrow.Mask = entry.Mask & (~entry.Mask + 1U); // its lowest CPU
+    REQUIRE(::SetThreadGroupAffinity(thread, &narrow, nullptr) != 0);
+    const crd::CpuSelection s = crd::detect_cpus();
+    GROUP_AFFINITY after = {};
+    REQUIRE(::GetThreadGroupAffinity(thread, &after) != 0);
+    REQUIRE(::SetThreadGroupAffinity(thread, &entry, nullptr) != 0);
+    CHECK(after.Group == narrow.Group);
+    CHECK(after.Mask == narrow.Mask);
+#else
+    cpu_set_t entry[8] = {}; // NOLINT(modernize-avoid-c-arrays)
+    REQUIRE(::sched_getaffinity(0, sizeof(entry), entry) == 0);
+    cpu_set_t narrow[8] = {}; // NOLINT(modernize-avoid-c-arrays)
+    for (crd::usize cpu = 0U; cpu < sizeof(entry) * 8U; ++cpu)
+    {
+        if (CPU_ISSET_S(cpu, sizeof(entry), entry))
+        {
+            CPU_SET_S(cpu, sizeof(narrow), narrow);
+            break;
+        }
+    }
+    REQUIRE(::sched_setaffinity(0, sizeof(narrow), narrow) == 0);
+    const crd::CpuSelection s = crd::detect_cpus();
+    cpu_set_t after[8] = {}; // NOLINT(modernize-avoid-c-arrays)
+    REQUIRE(::sched_getaffinity(0, sizeof(after), after) == 0);
+    REQUIRE(::sched_setaffinity(0, sizeof(entry), entry) == 0);
+    CHECK(CPU_EQUAL_S(sizeof(narrow), narrow, after));
+#endif
+    CHECK(s.cpus_visited == first.cpus_visited); // a narrowed thread still walks every CPU of the process
+    CHECK(s.features == first.features);
+}
+
+TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    std::printf("cpu level: detected %s selected %s override %s\n", crd::cpu_level_name(s.detected),
+                crd::cpu_level_name(s.selected), crd::cpu_override_name(s.override_status));
+    std::printf("cpu walk: %u visited %u refused, core types 0x%x, uniform %d, xcr0 0x%llx, avx10 %u/%u\n",
+                s.cpus_visited, s.cpus_refused, static_cast<unsigned>(s.core_types_seen), s.uniform ? 1 : 0,
+                static_cast<unsigned long long>(s.features.xcr0), static_cast<unsigned>(s.features.avx10_version),
+                static_cast<unsigned>(s.features.avx10_vector_bits));
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        const auto f = static_cast<CpuFeature>(i);
+        if (s.features.reported.has(f))
+        {
+            std::printf(" %s%s", crd::cpu_feature_name(f), s.features.usable.has(f) ? "" : "(not usable)");
+        }
+    }
+    std::printf("\n");
+    (void)std::fflush(stdout);
+}
+
+TEST_CASE("cpu features: a process started with CRD_CPU_LEVEL selects that level", "[core][cpu]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    if (s.arch != crd::CpuArch::X64)
+    {
+        return;
+    }
+    const cd::Outcome lowered = run_level_child("sse2");
+    INFO(lowered.output.c_str());
+    CHECK(lowered.verdict == cd::Verdict::Clean);
+    CHECK(contains(lowered, "selected sse2 override applied"));
+
+    cont::String refused{"selected "};
+    refused.append(crd::cpu_level_name(s.detected));
+    refused.append(" override other-arch");
+    const cd::Outcome other = run_level_child("neon");
+    INFO(other.output.c_str());
+    CHECK(contains(other, refused.c_str()));
+
+    if (s.detected != CpuLevel::Avx512)
+    {
+        const cd::Outcome above = run_level_child("avx512");
+        INFO(above.output.c_str());
+        CHECK(contains(above, "override above-hardware"));
+    }
+}
