@@ -48,6 +48,13 @@
       "why": "its Vec4f and Vec8f overloads only name the vector types, so the types are declared, not included; crd/hesap/complex.hpp brings it into about 330 units"
     },
     {
+      "include": "crd/math/float_convert.hpp",
+      "flags_of": "tests/foundation/math/test_kernel_dispatch.cpp",
+      "forbid": ["chrono", "format", "sstream", "iostream"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the batch small-float conversions behind every crd-hesap-tensor storage dtype; their F16C and AVX2 bodies are per-level kernel units (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

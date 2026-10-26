@@ -508,7 +508,7 @@ TEST_CASE("cpu features: CRD_CPU_LEVEL lowers the level and refuses one the CPUs
     const crd::CpuSelection avx2 = detected_at(CpuLevel::Avx2);
     CHECK(crd::apply_cpu_override(avx2, nullptr).override_status == CpuOverride::None);
     CHECK(crd::apply_cpu_override(avx2, "").selected == CpuLevel::Avx2);
-    for (const CpuLevel lower : {CpuLevel::Sse2, CpuLevel::Sse42, CpuLevel::Avx2})
+    for (const CpuLevel lower : {CpuLevel::Portable, CpuLevel::Sse2, CpuLevel::Sse42, CpuLevel::Avx2})
     {
         const crd::CpuSelection s = crd::apply_cpu_override(avx2, crd::cpu_level_name(lower));
         CHECK(s.override_status == CpuOverride::Applied);
@@ -518,13 +518,9 @@ TEST_CASE("cpu features: CRD_CPU_LEVEL lowers the level and refuses one the CPUs
     const crd::CpuSelection above = crd::apply_cpu_override(avx2, "avx512");
     CHECK(above.override_status == CpuOverride::AboveHardware);
     CHECK(above.selected == CpuLevel::Avx2);
-    for (const char* other : {"neon", "portable"})
-    {
-        INFO(other);
-        const crd::CpuSelection s = crd::apply_cpu_override(avx2, other);
-        CHECK(s.override_status == CpuOverride::OtherArch);
-        CHECK(s.selected == CpuLevel::Avx2);
-    }
+    const crd::CpuSelection other = crd::apply_cpu_override(avx2, "neon");
+    CHECK(other.override_status == CpuOverride::OtherArch);
+    CHECK(other.selected == CpuLevel::Avx2);
     for (const char* unknown : {"AVX2", "avx", "fast", "?"})
     {
         INFO(unknown);

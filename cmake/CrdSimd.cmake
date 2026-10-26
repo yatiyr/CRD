@@ -170,6 +170,109 @@ if(CRD_NATIVE_PROFILES)
 endif()
 target_compile_definitions(crd-simd-flags INTERFACE CRD_SIMD_TARGET=${_crd_simd_definition})
 
+# ---- Per-level kernel units (SIMD-DISPATCH, ADR-0134 §4-5) ------------------
+#
+# CRD_KERNEL_LEVELS: the CPU levels this build compiles kernel units for, lowest first (the names are the CpuLevel
+# spellings of crd/core/cpu_features.hpp without the dot). CRD_KERNEL_LEVEL_CAP, on crd-simd-flags, is the CpuLevel
+# value of the highest one: the dispatcher never selects above it (crd::math::kernel_level_cap()). Under the native
+# Visual Studio profiles every configuration compiles the auto set and a scalar or sse2 configuration caps lower.
+set(_CRD_KERNEL_LEVEL_portable 0)
+set(_CRD_KERNEL_LEVEL_sse2 1)
+set(_CRD_KERNEL_LEVEL_sse42 2)
+set(_CRD_KERNEL_LEVEL_avx2 3)
+set(_CRD_KERNEL_LEVEL_avx512 4)
+set(_CRD_KERNEL_LEVEL_neon 5)
+if(_crd_simd_resolved STREQUAL "scalar")
+    set(CRD_KERNEL_LEVELS portable)
+elseif(_crd_simd_resolved STREQUAL "sse2")
+    set(CRD_KERNEL_LEVELS portable sse2)
+elseif(CRD_SIMD_LEVEL STREQUAL "avx2")
+    set(CRD_KERNEL_LEVELS portable sse2 sse42 avx2)
+elseif(_crd_arch_x64)
+    set(CRD_KERNEL_LEVELS portable sse2 sse42 avx2 avx512)
+elseif(_crd_arch_arm64)
+    set(CRD_KERNEL_LEVELS portable neon)
+else()
+    set(CRD_KERNEL_LEVELS portable)
+endif()
+list(GET CRD_KERNEL_LEVELS -1 _crd_kernel_top)
+set(_crd_kernel_cap ${_CRD_KERNEL_LEVEL_${_crd_kernel_top}})
+if(CRD_NATIVE_PROFILES)
+    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
+        if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "scalar")
+            set(_crd_kernel_cap "$<IF:$<CONFIG:${config}>,${_CRD_KERNEL_LEVEL_portable},${_crd_kernel_cap}>")
+        elseif(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "sse2")
+            set(_crd_kernel_cap "$<IF:$<CONFIG:${config}>,${_CRD_KERNEL_LEVEL_sse2},${_crd_kernel_cap}>")
+        endif()
+    endforeach()
+endif()
+target_compile_definitions(crd-simd-flags INTERFACE CRD_KERNEL_LEVEL_CAP=${_crd_kernel_cap})
+
+# Each level's ISA flags (x86-64 psABI levels; MSVC's /arch, which clang-cl spells for AVX2 and AVX-512 only).
+# Portable and sse2 units are pinned to the x86-64 baseline on GCC and Clang, whatever CMAKE_CXX_FLAGS adds.
+set(_CRD_KERNEL_FLAGS_portable "")
+set(_CRD_KERNEL_FLAGS_sse2 "")
+set(_CRD_KERNEL_FLAGS_neon "")
+if(MSVC)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        set(_CRD_KERNEL_FLAGS_sse42 /clang:-march=x86-64-v2)
+    else()
+        set(_CRD_KERNEL_FLAGS_sse42 /arch:SSE4.2)
+    endif()
+    set(_CRD_KERNEL_FLAGS_avx2 /arch:AVX2)
+    set(_CRD_KERNEL_FLAGS_avx512 /arch:AVX512)
+elseif(_crd_arch_x64)
+    set(_CRD_KERNEL_FLAGS_portable -march=x86-64)
+    set(_CRD_KERNEL_FLAGS_sse2 -march=x86-64)
+    set(_CRD_KERNEL_FLAGS_sse42 -march=x86-64-v2)
+    set(_CRD_KERNEL_FLAGS_avx2 -march=x86-64-v3)
+    set(_CRD_KERNEL_FLAGS_avx512 -march=x86-64-v4)
+endif()
+
+# crd_add_cpu_kernels(<archive> NAME <family> LEVELS portable [<level> ...] SOURCES <source> ...)
+#
+# Compiles a kernel family's sources once for each of its LEVELS that CRD_KERNEL_LEVELS holds, as one object library
+# per level (<archive>-<family>-<level>) with that level's ISA flags, CRD_KERNEL_LEVEL and the ADR-0063 contract, and
+# never crd-simd-flags' global ISA. The objects join the archive, which gets CRD_KERNELS_<FAMILY>: the mask of the
+# built levels (bit n is CpuLevel n). LEVELS names the levels the sources have a body for; a CPU between two of them
+# runs the lower one. The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS
+# (crd/math/kernel_level.hpp), plain declarations and intrinsics: an inline function compiled at a higher level and
+# shared with general code is the defect class this rule removes. Kernel sources live outside the archive's src/.
+function(crd_add_cpu_kernels archive)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "LEVELS;SOURCES")
+    if(NOT arg_NAME OR NOT arg_SOURCES OR NOT "portable" IN_LIST arg_LEVELS)
+        message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): NAME, SOURCES and LEVELS with portable are required")
+    endif()
+    set(mask 0)
+    foreach(level IN LISTS arg_LEVELS)
+        if(NOT DEFINED _CRD_KERNEL_LEVEL_${level})
+            message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): unknown level '${level}'")
+        endif()
+        if(NOT level IN_LIST CRD_KERNEL_LEVELS)
+            continue()
+        endif()
+        set(objects ${archive}-${arg_NAME}-${level})
+        add_library(${objects} OBJECT ${arg_SOURCES})
+        target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${archive},INTERFACE_INCLUDE_DIRECTORIES>)
+        target_link_libraries(${objects} PRIVATE crd-core)
+        target_compile_features(${objects} PRIVATE cxx_std_20)
+        target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}
+                                   ${CRD_FP_CONTRACT_DEFINITION})
+        target_compile_options(${objects} PRIVATE ${CRD_FP_CONTRACT_OPTIONS} ${_CRD_KERNEL_FLAGS_${level}})
+        if(NOT CMAKE_CONFIGURATION_TYPES)
+            # The debug types go to the archive's compile PDB, the one the relocatable package installs.
+            get_target_property(archive_binary_dir ${archive} BINARY_DIR)
+            set_target_properties(${objects} PROPERTIES
+                COMPILE_PDB_NAME ${archive}
+                COMPILE_PDB_OUTPUT_DIRECTORY "${archive_binary_dir}/CMakeFiles/${archive}.dir")
+        endif()
+        target_sources(${archive} PRIVATE $<TARGET_OBJECTS:${objects}>)
+        math(EXPR mask "${mask} | (1 << ${_CRD_KERNEL_LEVEL_${level}})")
+    endforeach()
+    string(TOUPPER "${arg_NAME}" family)
+    target_compile_definitions(${archive} PRIVATE CRD_KERNELS_${family}=${mask})
+endfunction()
+
 # ---- Determinism: ADR-0063 FP contract -------------------------------------
 #
 # The contract bans:
@@ -196,27 +299,27 @@ if(CRD_DETERMINISTIC_FP)
         # with separate mul+sub but ~2.2e-16 under FMA, which made the LU
         # exact-singular `== 0` detector miss on win-clang-cl-shipping.
         # (Explicit simd::fma() still emits a hardware FMA — that is intended.)
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:/clang:-ffp-contract=off>)
+        set(CRD_FP_CONTRACT_OPTIONS $<$<COMPILE_LANGUAGE:CXX,C>:/clang:-ffp-contract=off>)
     elseif(MSVC)
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:/fp:precise>)
+        set(CRD_FP_CONTRACT_OPTIONS $<$<COMPILE_LANGUAGE:CXX,C>:/fp:precise>)
     else()
-        target_compile_options(crd-simd-flags INTERFACE
+        set(CRD_FP_CONTRACT_OPTIONS
             $<$<COMPILE_LANGUAGE:CXX,C>:-fno-fast-math>
             $<$<COMPILE_LANGUAGE:CXX,C>:-ffp-contract=off>)
         if(_crd_arch_x64)
             # SSE2-or-better math (no x87 80-bit intermediates).
-            target_compile_options(crd-simd-flags INTERFACE
-                $<$<COMPILE_LANGUAGE:CXX,C>:-mfpmath=sse>)
+            list(APPEND CRD_FP_CONTRACT_OPTIONS $<$<COMPILE_LANGUAGE:CXX,C>:-mfpmath=sse>)
         endif()
     endif()
-    target_compile_definitions(crd-simd-flags INTERFACE
-        CRD_DETERMINISTIC_FP=1)
+    set(CRD_FP_CONTRACT_DEFINITION CRD_DETERMINISTIC_FP=1)
 else()
-    target_compile_definitions(crd-simd-flags INTERFACE
-        CRD_DETERMINISTIC_FP=0)
+    set(CRD_FP_CONTRACT_OPTIONS "")
+    set(CRD_FP_CONTRACT_DEFINITION CRD_DETERMINISTIC_FP=0)
 endif()
+# The contract's options and definition, which the per-level kernel units take as well (crd_add_cpu_kernels).
+target_compile_options(crd-simd-flags INTERFACE ${CRD_FP_CONTRACT_OPTIONS})
+target_compile_definitions(crd-simd-flags INTERFACE ${CRD_FP_CONTRACT_DEFINITION})
+
 
 # ---- Configure summary -----------------------------------------------------
 
@@ -224,6 +327,7 @@ string(TOUPPER "${_crd_simd_resolved}" _crd_simd_summary)
 message(STATUS "[crd-simd] CRD_SIMD_LEVEL    = ${CRD_SIMD_LEVEL} -> ${_crd_simd_summary}")
 message(STATUS "[crd-simd] CRD_SIMD_TARGET   = ${_crd_simd_target_value} (0=scalar, 1=sse2, 2=avx2, 3=neon)")
 message(STATUS "[crd-simd] DETERMINISTIC_FP  = ${CRD_DETERMINISTIC_FP}")
+message(STATUS "[crd-simd] KERNEL_LEVELS     = ${CRD_KERNEL_LEVELS}")
 message(STATUS "[crd-simd] host SYSTEM_PROC  = ${CMAKE_SYSTEM_PROCESSOR}")
 
 # Persist resolution for downstream code that wants to query it.

@@ -9,9 +9,10 @@
 // thread is pinned to each in turn and given back its own affinity) and keeps what all of them can execute, so a
 // hybrid part or a mixed virtual machine never selects code one of its cores faults on.
 //
-// `CRD_CPU_LEVEL` (sse2, sse4.2, avx2, avx512, neon, portable) lowers the level for tests and qualification; a level
-// above what every CPU executes, or of another architecture, is refused and the detected level stays. It is read once,
-// with the detection, at the first `cpu_selection()` call. No heap memory is allocated.
+// `CRD_CPU_LEVEL` (sse2, sse4.2, avx2, avx512, neon, portable) lowers the level for tests and qualification (portable,
+// the kernels' scalar reference, on every architecture); a level above what every CPU executes, or of another
+// architecture, is refused and the detected level stays. It is read once, with the detection, at the first
+// `cpu_selection()` call. No heap memory is allocated.
 
 #include <crd/core/types.hpp>
 

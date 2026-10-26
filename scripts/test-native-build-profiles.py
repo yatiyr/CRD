@@ -17,12 +17,13 @@ from native_build_profiles import VENDOR, cmake_text, profiles, resolve
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENT = json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))
-# Independent expected public behaviour: assertions, profiling, debug macro, log threshold, ISA, NDEBUG.
+# Independent expected public behaviour: assertions, profiling, debug macro, log threshold, ISA, NDEBUG, and the
+# kernel dispatch cap (the CpuLevel value: 0 portable, 1 sse2, 4 avx512).
 EXPECTED = {
-    'Debug': (1, 1, 1, 0, 2, 0), 'Release': (0, 0, 0, 2, 2, 1),
-    'RelWithDebInfo': (1, 1, 1, 0, 2, 1), 'ASan': (1, 1, 1, 0, 2, 0),
-    'Shipping': (0, 0, 0, 2, 2, 1), 'ShippingProfile': (0, 1, 0, 2, 2, 1),
-    'DebugScalar': (1, 1, 1, 0, 0, 0), 'DebugSSE2': (1, 1, 1, 0, 1, 0),
+    'Debug': (1, 1, 1, 0, 2, 0, 4), 'Release': (0, 0, 0, 2, 2, 1, 4),
+    'RelWithDebInfo': (1, 1, 1, 0, 2, 1, 4), 'ASan': (1, 1, 1, 0, 2, 0, 4),
+    'Shipping': (0, 0, 0, 2, 2, 1, 4), 'ShippingProfile': (0, 1, 0, 2, 2, 1, 4),
+    'DebugScalar': (1, 1, 1, 0, 0, 0, 0), 'DebugSSE2': (1, 1, 1, 0, 1, 0, 1),
 }
 
 
@@ -121,6 +122,7 @@ static_assert(PROBE_DEBUG == EXPECT_DEBUG);
 static_assert(CRD_LOG_MIN_LEVEL_NUM == EXPECT_LOG);
 static_assert(CRD_SIMD_TARGET == EXPECT_ISA);
 static_assert(PROBE_NDEBUG == EXPECT_NDEBUG);
+static_assert(CRD_KERNEL_LEVEL_CAP == EXPECT_CAP);
 int main() { return 0; }
 '''
         (root / 'probe.cpp').write_text(source, encoding='utf-8')
@@ -151,7 +153,7 @@ enable_testing()
 add_test(NAME profile-probe COMMAND probe)
 '''
         for config, expected in EXPECTED.items():
-            for key, value in zip(('ASSERTS', 'PROFILE', 'DEBUG', 'LOG', 'ISA', 'NDEBUG'), expected):
+            for key, value in zip(('ASSERTS', 'PROFILE', 'DEBUG', 'LOG', 'ISA', 'NDEBUG', 'CAP'), expected):
                 text += f'target_compile_definitions(probe PRIVATE $<$<CONFIG:{config}>:EXPECT_{key}={value}>)\n'
         (root / 'CMakeLists.txt').write_text(text, encoding='utf-8')
         build = root / 'build'

@@ -534,7 +534,7 @@ CpuSelection apply_cpu_override(const CpuSelection& detected, const char* overri
     {
         s.override_status = CpuOverride::Unknown;
     }
-    else if (arch_of(want) != detected.arch)
+    else if (want != CpuLevel::Portable && arch_of(want) != detected.arch) // every architecture runs portable
     {
         s.override_status = CpuOverride::OtherArch;
     }

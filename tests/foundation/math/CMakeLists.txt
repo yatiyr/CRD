@@ -7,6 +7,7 @@ add_executable(crd-math-tests
     test_reduce.cpp
     test_simd_transcendental.cpp
     test_transcendental.cpp
+    test_kernel_dispatch.cpp
 )
 
 target_link_libraries(crd-math-tests PRIVATE
@@ -17,9 +18,22 @@ target_link_libraries(crd-math-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+# The highest CPU level this configuration compiles kernel units for (cmake/CrdSimd.cmake).
+list(GET CRD_KERNEL_LEVELS -1 _kernel_top)
+target_compile_definitions(crd-math-tests PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${_kernel_top}})
+
 crd_enable_default_pch(crd-math-tests)
 
 crd_discover_tests(crd-math-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level, with CRD_CPU_LEVEL forcing the selection in the one binary
+# (a level above the host is refused, and that arm runs at the detected level).
+foreach(level IN LISTS CRD_KERNEL_LEVELS)
+    string(REPLACE "sse42" "sse4.2" spelling "${level}")
+    add_test(NAME crd-math-kernels-at-${level} COMMAND crd-math-tests "[kernels]")
+    set_tests_properties(crd-math-kernels-at-${level} PROPERTIES
+        ENVIRONMENT "CRD_CPU_LEVEL=${spelling}" LABELS "cerid.test.target=crd-math-tests")
+endforeach()
 
 # ---- SIMD-emission regression check ---------------------------------------
 # Disassembles the test_simd.cpp obj and verifies the actual machine code
