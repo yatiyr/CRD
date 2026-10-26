@@ -30,6 +30,11 @@ misses no feature. Recommendations lead with the gold-standard option, never the
   exists and RAH-7 owns live replacement.
 - **Numerics and REPL.** crd-hesap covers what MATLAB's core does (CHIR-SCI, NOTEBOOK); an interactive REPL follows the
   UI system ([ADR-0065](../decisions/0065-hesap-numerical-substrate.md) section 9 names `crd-hesap-repl`).
+- **Capability ownership.** Every engine capability is implemented in its one correct module; crd-hesap is the
+  computational base for every solver and matrix need in any system, so nothing is duplicated. The
+  [OWN.1](../ROADMAP.md#slice-own.1) registry and audit and the [OWN.2](../ROADMAP.md#slice-own.2) guard carry it, after
+  HESAP-JOBS-RETUNE. Mods, plugins, user projects and CHIR/CEIR scripts stay free to implement anything; the guard covers
+  engine sources only.
 - **Research.** Three serial research parts (engine/GPU/rendering plus computational geometry and navigation; domains
   beyond games; how agents and people build with Cerid), each a dated docs/research document whose proposed rows the
   user approves before the roadmap changes.
