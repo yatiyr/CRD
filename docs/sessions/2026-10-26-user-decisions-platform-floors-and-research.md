@@ -37,11 +37,11 @@ misses no feature. Recommendations lead with the gold-standard option, never the
   engine sources only.
 - **Research adopted.** After reading the three research parts' proposals (about 110 new rows and 50 amendments), the
   user approved all of them on 2026-10-26. [RESEARCH-ADOPT](../ROADMAP.md#slice-research-adopt) adds them to the
-  table in full, right after SIMD-DISPATCH.
+  table in full; on 2026-10-27 the user moved it ahead of SIMD-DISPATCH so it runs next.
 - **Hardware-fault resilience.** This host's i9-14900K still misexecutes rarely after the BIOS update; users will
   have such machines too. Cerid must work gracefully on faulty hardware, with every behaviour explained:
   [HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1) to .4 (integrity and retry, hardware identity and
-  classification, self-checks and degradation, documentation), right after RESEARCH-ADOPT.
+  classification, self-checks and degradation, documentation), right after SIMD-DISPATCH.
 - **Research.** Three serial research parts (engine/GPU/rendering plus computational geometry and navigation; domains
   beyond games; how agents and people build with Cerid), each a dated docs/research document whose proposed rows the
   user approves before the roadmap changes.
