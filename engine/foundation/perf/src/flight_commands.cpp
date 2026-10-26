@@ -185,7 +185,8 @@ void append_generation_kept(cont::String& reason, const FlightRecorder& recorder
 // The recorder's state and active policy, as summary fields.
 void write_recorder_fields(FlightRecorder& recorder, DiagFields& fields, cont::String& scratch)
 {
-    const FlightPolicy policy = recorder.policy();
+    const FlightPolicy    policy = recorder.policy();
+    const FlightRingStats rings  = recorder.ring_stats();
     scratch.clear();
     append_trigger_names(scratch, policy.trigger_mask);
     fields.boolean("initialized", recorder.is_initialized())
@@ -199,6 +200,10 @@ void write_recorder_fields(FlightRecorder& recorder, DiagFields& fields, cont::S
         .str("detail", flight_detail_name(policy.detail))
         .u64("recorded", recorder.total_recorded())
         .u64("filtered", recorder.total_filtered())
+        .u64("thread_rings", rings.thread_rings)
+        .u64("threads_bound", rings.threads_bound)
+        .u64("ring_bytes", rings.ring_bytes)
+        .u64("shared_ring_events", rings.shared_events)
         .boolean("pending", recorder.capture_pending())
         .boolean("fatal", recorder.fatal_entered())
         .u64("delivered", recorder.captures_delivered());

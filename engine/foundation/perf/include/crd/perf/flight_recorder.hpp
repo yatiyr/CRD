@@ -14,20 +14,37 @@
 // when `post_window_ns` elapsed (checked by poll()), at shutdown, or on the fatal path. Shutdown and the fatal path
 // end it early; the capture then says which, and that the post window is truncated.
 //
-// Recording and triggering never allocate. record() takes no lock (DIAG.11b): it claims the next sequence with one
-// compare-exchange of the recorder's recording word (total and state), copies into that sequence's ring slot and
-// publishes the slot with a release store; it waits only when the ring laps a claim stalled between its claim and its
-// publication, or while a policy reload swaps the ring. An event the policy's detail leaves out is counted and dropped
-// before the clock is read or a sequence claimed. CRD_FLIGHT_RECORD (below) is the site form: its message and scalars
+// Order and storage (DIAG.11b (q1), 2026-10-26). Every kept event takes the next sequence of one recording word (total
+// and state) with one fetch_add, so the sequences are one total order that agrees with happens-before: an event that
+// happens before another on any thread has the lower sequence. The event and its sequence go into the recording
+// thread's own ring, so no two threads write the same slot. A claim that finds the window frozen (complete, after a
+// fatal capture) or past the post window's end, or a policy reload under way, is void: nothing is written, the reload's
+// claims claim again after it, and the sequences void claims took are given back when the recorder re-arms or the
+// reload ends, so the kept sequences stay dense (every sequence below the total is one kept event). A recorder holds
+// kFlightThreadRings rings; a thread takes a free one on its first kept event (no allocation, no lock) and gives it
+// back when it exits, its events staying in the ring for the captures that cover them. Every ring holds `capacity`
+// events, and together they hold at most kFlightRingPoolEvents (flight_thread_rings()); a thread whose ring has no
+// storage under the policy, or that finds every ring taken, records into one shared ring of `capacity` slots indexed by
+// sequence, the global ring this recorder had before. Nothing is written after the window freezes, so every event of
+// the window is among its ring's newest `capacity` and the capture is complete: no event of the window is ever lost.
+//
+// Recording and triggering never allocate. record() takes no lock (DIAG.11b): it marks its ring busy, claims the next
+// sequence, copies into its ring's next slot and marks the ring idle with a release store; it waits only while a policy
+// reload swaps the rings, or in the shared ring for a slot another thread is writing. An event the policy's detail
+// leaves out is counted and dropped before the clock is read or a sequence claimed. record() is never inlined: it reads
+// the thread's ring binding from thread-local storage, which must not be cached across a job fiber's switch to another
+// thread. CRD_FLIGHT_RECORD (below) is the site form: its message and scalars
 // are not evaluated when no recorder runs or the detail leaves the event out. trigger() takes only its own mutex,
 // never the collection lock, so a trigger fired on a thread that something else is blocking (or from a handler that
 // runs while another thread records) still lands. While a capture is pending (the post window is open,
 // or it is complete and not yet collected), a further trigger is suppressed and counted, with its kind; it never
 // replaces the first. Events that arrive after the post window closed and before the capture is collected are not
-// recorded (the ring is frozen so the windows stay intact) and are counted.
+// recorded (the rings are frozen so the windows stay intact) and are counted.
 //
 // Collection. poll() (the host calls it, e.g. once per frame) closes a post window whose time ran out and delivers a
-// complete capture to the sink; take_capture() does the same without a sink. finish() closes a pending window early
+// complete capture to the sink; take_capture() does the same without a sink. A capture waits for every ring's claim in
+// flight, then places each ring's events of the window at their sequence's position, so its events are in the one
+// global order whichever threads recorded them. finish() closes a pending window early
 // (Shutdown or Fatal) and delivers it. A capture that ended Fatal is terminal: the recorder does not re-arm, so a
 // second fatal path in the same failure (check_invariant's default reaches CRD_FATAL, which reaches the assert
 // trigger) cannot replace the capture already delivered. shutdown() calls finish(Shutdown) first, so a pending
@@ -112,6 +129,23 @@ inline constexpr crd::u32 kFlightTriggerMessageBytes = 192U;
 inline constexpr crd::u32 kFlightRecipeBytes         = 256U;
 inline constexpr crd::u32 kFlightMaxEvents           = 65536U; // hard capacity bound: 65536 * 152 B ~ 9.5 MiB
 inline constexpr crd::u64 kFlightMaxPostWindowNs     = 60ULL * 1000ULL * 1000ULL * 1000ULL;
+
+// The per-thread rings (DIAG.11b (q1)): a recorder has kFlightThreadRings of them, and the ones with storage hold
+// kFlightRingPoolEvents events together at most (about 9.5 MiB), beside the shared ring's `capacity`.
+inline constexpr crd::u32 kFlightThreadRings    = 64U;
+inline constexpr crd::u32 kFlightRingPoolEvents = 65536U;
+
+// The thread rings with storage under a policy of `capacity` events, each holding `capacity`: all 64 up to 1024 events
+// (the default: 64 * 1024 * 152 B ~ 9.5 MiB, plus the shared ring's 152 KiB), one at the maximum 65536.
+[[nodiscard]] constexpr crd::u32 flight_thread_rings(crd::u32 capacity) noexcept
+{
+    const crd::u32 fit = (capacity == 0U) ? kFlightThreadRings : kFlightRingPoolEvents / capacity;
+    if (fit < 1U)
+    {
+        return 1U;
+    }
+    return (fit > kFlightThreadRings) ? kFlightThreadRings : fit;
+}
 
 // One recorded event. Fixed size, no owned storage: copying it never allocates. `message_truncated` is set when the
 // message was clipped to kFlightMessageBytes - 1 bytes; truncation is never silent. A Restricted event keeps no
@@ -199,7 +233,7 @@ enum class FlightPolicyStatus : crd::u8
     RejectedOutOfBounds,    // a bound is zero, over its hard limit, or pre + post exceeds the capacity
     RejectedBusy,           // a capture is pending; the active policy stays until it is collected
     RejectedNotInitialized, // reload before init
-    RejectedOutOfMemory,    // the ring could not be allocated (a reload keeps the old ring)
+    RejectedOutOfMemory,    // the rings could not be allocated (a reload keeps the old rings)
     RejectedGenerationWrap, // the policy generation would wrap; the active policy stays
 };
 
@@ -251,6 +285,15 @@ struct FlightTriggerInput
     RedactionClass   redaction = RedactionClass::Public; // Restricted: the trigger keeps no message
 };
 
+// Where a recorder keeps its events (DIAG.11b (q1)), for flight.status and tests.
+struct FlightRingStats
+{
+    crd::u32 thread_rings  = 0U; // rings with storage under the active policy (flight_thread_rings())
+    crd::u32 threads_bound = 0U; // rings a live thread holds, with storage or without
+    crd::u64 ring_bytes    = 0U; // the storage of the thread rings and the shared ring
+    crd::u64 shared_events = 0U; // events kept in the shared ring since init (their thread had no ring storage)
+};
+
 enum class FlightTriggerResult : crd::u8
 {
     Started,        // the trigger was recorded and the post window opened
@@ -276,8 +319,8 @@ public:
     void shutdown() noexcept;
     [[nodiscard]] bool is_initialized() const noexcept;
 
-    // Replace the active policy while no capture is pending. The ring is reallocated and cleared (its events belong to
-    // the old bounds); a rejected candidate changes nothing.
+    // Replace the active policy while no capture is pending. The rings are reallocated and cleared (their events belong
+    // to the old bounds) while every claim waits; a thread keeps its ring. A rejected candidate changes nothing.
     FlightPolicyStatus reload_policy(const FlightPolicy& candidate) noexcept;
     [[nodiscard]] FlightPolicy policy() const noexcept;
     [[nodiscard]] crd::u32     policy_generation() const noexcept;
@@ -290,8 +333,8 @@ public:
     void set_replay_recipe(cont::StringView recipe) noexcept;
     void set_replay_unavailable(cont::StringView reason) noexcept;
 
-    // Record one event (thread-safe, no allocation). A no-op before init and after shutdown. A Restricted event keeps
-    // its code, severity and scalars, never its message.
+    // Record one event (thread-safe, no allocation, never inlined). A no-op before init and after shutdown. A
+    // Restricted event keeps its code, severity and scalars, never its message.
     void record(EventCode code, Severity severity, cont::StringView message, crd::u64 value_a = 0U,
                 crd::u64 value_b = 0U, RedactionClass redaction = RedactionClass::Public) noexcept;
     void record(const DiagnosticEvent& e) noexcept;
@@ -314,18 +357,20 @@ public:
     bool take_capture(FlightCapture& out) noexcept;
 
     // End an open post window early with `reason` (Shutdown or Fatal) and deliver the capture. On the fatal path the
-    // collection lock is taken with a bounded try-lock and claims still publishing are waited for within the same
-    // bound; if either runs out, the capture carries the trigger alone and says ring_unavailable. Returns true when a
-    // capture was delivered.
+    // collection lock is taken with a bounded try-lock and claims still publishing (in any thread's ring or the shared
+    // ring) are waited for within the same bound; if either runs out, the capture carries the trigger alone and says
+    // ring_unavailable. Returns true when a capture was delivered.
     bool finish(FlightEnd reason) noexcept;
 
-    // Counters for tests and the doctor. total_filtered() counts the events a Basic policy did not record (over the
-    // recorder's life, across policy reloads).
+    // Counters for tests and the doctor. total_recorded() counts the kept events (the dense sequences; void claims are
+    // not in it); total_filtered() counts the events a Basic policy did not record (over the recorder's life, across
+    // policy reloads).
     [[nodiscard]] crd::u64 total_recorded() const noexcept;
     [[nodiscard]] crd::u64 total_filtered() const noexcept;
     [[nodiscard]] bool     capture_pending() const noexcept; // a post window is open or a capture awaits collection
     [[nodiscard]] bool     fatal_entered() const noexcept;   // a capture ended Fatal; the recorder records no more
     [[nodiscard]] crd::u64 captures_delivered() const noexcept;
+    [[nodiscard]] FlightRingStats ring_stats() const noexcept;
 
 #if CRD_ENABLE_ASSERTS
     // Test-only seams, compiled only where asserts are (never in a shipping build).
@@ -345,6 +390,10 @@ public:
     // for the claim, and finish(Fatal) only within its bound. Returns false without calling `fn` before init, when `fn`
     // is null or while the ring is frozen (the event is then counted as dropped).
     bool test_with_claim_unpublished(void (*fn)(void* user), void* user) noexcept;
+
+    // Refuse the next `count` ring allocations of any recorder in the process (init's and reload_policy()'s), as an
+    // exhausted allocator would, so RejectedOutOfMemory is reachable; 0 stops refusing.
+    static void test_refuse_ring_storage(crd::u32 count) noexcept;
 #endif
 
     struct Impl; // opaque; public only so the implementation's helpers can name it

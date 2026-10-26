@@ -6,14 +6,23 @@
 #include <crd/perf/bundle.hpp>
 #include <crd/perf/bundle_manifest.hpp>
 
+#include <crd/core/platform.hpp>
+#include <crd/memory/asan_poison.hpp>
+
 #include "json_writer.hpp"
 #include "striped_count.hpp"
 
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <mutex>
 #include <new>
 #include <thread>
+
+#if !defined(_WIN32)
+#include <pthread.h>
+#endif
 
 namespace crd::perf
 {
@@ -22,8 +31,8 @@ namespace
 using detail::append_json_escaped;
 using detail::append_u64;
 
-// Armed -> Triggered (trigger(), under the trigger mutex) -> Complete (the claim that fills the post window, or a
-// collector) -> Armed (collection, under both mutexes). A capture that ended Fatal moves to FatalEntered instead of
+// Armed -> Triggered (trigger(), under the trigger mutex) -> Complete (the claim of the post window's last sequence,
+// or a collector) -> Armed (collection, under both mutexes). A capture that ended Fatal moves to FatalEntered instead of
 // re-arming: the process is ending, and a later fatal path (check_invariant's default reaches CRD_FATAL, which reaches
 // the assert trigger) must not replace the capture that was already delivered. Triggers are then suppressed and events
 // dropped; nothing more is delivered.
@@ -33,16 +42,21 @@ constexpr crd::u32 kStateComplete     = 2U;
 constexpr crd::u32 kStateFatalEntered = 3U;
 
 // The recording word: the total above kStateBits; below it the state and, apart from it, the reloading flag, set
-// while a policy reload swaps the ring (claims wait). A flag, not a state, so a fatal path's move to FatalEntered and
-// the reload's end each keep the other's bits.
-constexpr crd::u32 kStateBits = 3U;
-constexpr crd::u64 kStateMask = 3U;
+// while a policy reload swaps the rings (claims wait). A flag, not a state, so a fatal path's move to FatalEntered and
+// the reload's end each keep the other's bits. A claim adds kClaimOne.
+constexpr crd::u32 kStateBits    = 3U;
+constexpr crd::u64 kStateMask    = 3U;
 constexpr crd::u64 kReloadingBit = 4U;
+constexpr crd::u64 kClaimOne     = crd::u64{1} << kStateBits;
 
-// A slot no claim has published since its ring was allocated.
+// An atomic u64 that holds no total yet (the frozen window's end, a reload's base).
+constexpr crd::u64 kNoTotal = ~crd::u64{0};
+
+// A shared-ring slot no claim has published since its ring was allocated, and one a claim is writing.
 constexpr crd::u64 kSlotEmpty = ~crd::u64{0};
+constexpr crd::u64 kSlotBusy  = kSlotEmpty - 1U;
 static_assert(alignof(FlightEvent) >= std::atomic_ref<crd::u64>::required_alignment,
-              "a slot's sequence is its publication stamp");
+              "a shared slot's sequence is its publication stamp");
 
 constexpr cont::StringView kNoRecipe{"no replay recipe was registered with the flight recorder"};
 
@@ -173,32 +187,84 @@ FlightPolicyStatus validate_flight_policy(const FlightPolicy& p) noexcept
     return FlightPolicyStatus::Committed;
 }
 
+namespace
+{
+// One thread's ring (DIAG.11b (q1)). Only the thread whose token is in `owner` writes `claims`, `head`, `next` and the
+// slots; a collector reads them after an acquire load of `claims` that finds no claim in flight, while recording is
+// frozen. `claims` is odd while the owner is inside a claim: it is marked before the claim's fetch_add, so a collector
+// that saw the frozen word also sees every earlier claim's mark. The storage changes only in a policy reload, with
+// every claim waiting; a thread keeps its ring across reloads and gives it back when it exits.
+struct alignas(64) ThreadRing
+{
+    std::atomic<crd::u64> owner{0U};  // the bound thread's token; 0: free
+    std::atomic<crd::u64> claims{0U}; // the owner's claims, twice each: odd while one is in flight
+    crd::u64              head     = 0U;      // events written since the storage was allocated
+    crd::u32              next     = 0U;      // the slot the next event takes
+    crd::u32              capacity = 0U;      // slots, or 0 without storage (the thread records into the shared ring)
+    FlightEvent*          events   = nullptr; // `capacity` slots; slot i is constructed when head first passes it
+    char                  pad[24]  = {};      // the rest of the line, so no other ring's owner writes it
+};
+static_assert(sizeof(ThreadRing) == 64U, "a thread ring's header is one cache line");
+
+// The storage of one policy: flight_thread_rings(capacity) rings of `capacity` slots, each starting on a cache line,
+// then the shared ring's `capacity` slots, in one block from the default allocator.
+struct RingStorage
+{
+    void*        block       = nullptr;
+    crd::usize   bytes       = 0U;
+    crd::usize   ring_stride = 0U; // bytes from one thread ring's storage to the next
+    crd::u32     rings       = 0U;
+    crd::u32     capacity    = 0U;
+    FlightEvent* shared      = nullptr;
+};
+} // namespace
+
+// MSVC C4324: structure padded due to alignment specifier. Expected: the recording word's and the read-mostly fields'
+// cache lines are deliberate (the profiler's and crd-jobs' ThreadState's suppression).
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable : 4324)
+#endif
 struct FlightRecorder::Impl
 {
     // The recording state is one word: the total recorded above kStateBits, the state below. record() claims a
-    // sequence with one compare-exchange of it, only while Armed or Triggered, so no event is claimed after the window
-    // closed and the trigger's boundary is exact in claim order. The record path takes no lock (DIAG.11b).
-    std::atomic<crd::u64> word{kStateArmed};
-    // Where the open post window ends (the trigger's sequence plus post_events); the claim that reaches it moves the
-    // state to Complete in the same exchange. trigger() writes it before its exchange publishes Triggered.
+    // sequence with one fetch_add of it; the state it returns decides whether the claim is kept, so the trigger's
+    // boundary is exact in claim order and the order agrees with happens-before. The record path takes no lock
+    // (DIAG.11b). Alone on its line: every kept event writes it.
+    alignas(64) std::atomic<crd::u64> word{kStateArmed};
+
+    // Read by every event: the recorder's identity (the threads' ring bindings name it) and the lowest severity the
+    // active detail keeps, as its u8 value. A claim that finds Triggered reads post_end: where the open post window
+    // ends (the trigger's sequence plus post_events). trigger() writes it before its exchange publishes Triggered.
+    alignas(64) crd::u64  id = 0U;
+    std::atomic<crd::u8>  keep_from{0U};
     std::atomic<crd::u64> post_end{0U};
-    // The ring. A slot's `sequence` is its publication stamp: kSlotEmpty, or the sequence whose payload the slot holds,
-    // stored with release after the payload. The ring, `base` and the policy change only in reload_policy(), once
-    // every claimed slot is published and further claims wait.
-    cont::Array<FlightEvent> ring;
-    crd::u64                 base = 0U; // the total at the ring's allocation: sequence s is slot (s - base) % capacity
-    std::atomic<crd::u64>    dropped_while_complete{0U};
-    // The lowest severity the active detail keeps, as its u8 value, and the events the detail left out, striped: one
-    // counter was a line every thread wrote at every left-out site, beside `keep_from`, which every site reads
-    // (DIAG.11b: 1.2 points of a four-thread jobs frame on linux-gcc-relwithdebinfo).
-    std::atomic<crd::u8>     keep_from{0U};
-    detail::StripedCount     filtered;
+    // The sequence the frozen window ends at, once frozen (kNoTotal while armed or triggered): post_end when the claim
+    // of its last sequence closed it, else the total at a collector's close. Kept while FatalEntered.
+    std::atomic<crd::u64> frozen_end{kNoTotal};
+    // A reload's base while it runs (kNoTotal otherwise), for total_recorded().
+    std::atomic<crd::u64> reload_base{kNoTotal};
+    // Bumped when a thread gives its ring back or a reload changes the storage, so a thread bound to the shared ring
+    // looks for a ring again.
+    std::atomic<crd::u64> release_epoch{0U};
+    // The thread rings with storage (a binding prefers them), the claims through the shared ring by threads that hold
+    // no ring (a reload waits for them) and the events kept in the shared ring.
+    std::atomic<crd::u32> storage_rings{0U};
+    std::atomic<crd::u64> shared_inflight{0U};
+    std::atomic<crd::u64> shared_events{0U};
+    // The events the detail left out, striped: one counter was a line every thread wrote at every left-out site, beside
+    // `keep_from`, which every site reads (DIAG.11b: 1.2 points of a four-thread jobs frame on linux-gcc-relwithdebinfo).
+    detail::StripedCount filtered;
+
+    ThreadRing  rings[kFlightThreadRings];
+    RingStorage storage;
+    crd::u64    base = 0U; // the total at the storage's allocation: no capture reaches below it
 
     // Collection: poll(), take_capture(), finish() and reload_policy() hold collect_mutex; record() never takes it.
-    // `end` is how a collector closed the window; None means the claim that reached post_end closed it.
+    // `end` is how a collector closed the window; None means the claim of its last sequence closed it.
     std::mutex collect_mutex;
-    FlightEnd end = FlightEnd::None;
-    crd::u64 end_ns = 0U;
+    FlightEnd  end    = FlightEnd::None;
+    crd::u64   end_ns = 0U;
 
     // The trigger and the replay recipe: trigger_mutex. The trigger record is written only while Armed, before the
     // exchange that publishes Triggered, so a thread that observes Triggered or Complete reads it safely.
@@ -213,15 +279,19 @@ struct FlightRecorder::Impl
     crd::u64            suppressed                          = 0U;
     crd::u32            suppressed_kinds                    = 0U;
 
-    // The policy is written under both mutexes with no claim in flight, so a holder of either reads it safely, and so
-    // does a claim holder (its capacity).
+    // The policy is written under both mutexes with no claim in flight, so a holder of either reads it safely.
     FlightPolicy policy;
     crd::u32     policy_generation = 1U;
 
     std::atomic<FlightCaptureSink> sink{nullptr};
     std::atomic<void*>             sink_user{nullptr};
     std::atomic<crd::u64>          delivered{0U};
+
+    Impl* next_live = nullptr; // the live-recorder list (the thread-exit release walks it)
 };
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 namespace
 {
@@ -242,6 +312,11 @@ crd::u64 make_word(crd::u64 total, crd::u32 state) noexcept
     return (total << kStateBits) | state;
 }
 
+crd::u64 lesser(crd::u64 a, crd::u64 b) noexcept
+{
+    return (a < b) ? a : b;
+}
+
 // The lowest severity `detail` keeps: Full keeps every event, Basic Warning and above.
 crd::u8 keep_from_of(FlightDetail detail) noexcept
 {
@@ -249,110 +324,537 @@ crd::u8 keep_from_of(FlightDetail detail) noexcept
     return static_cast<crd::u8>(lowest);
 }
 
-bool allocate_ring(cont::Array<FlightEvent>& ring, crd::u32 capacity) noexcept
+// One yield of a bounded wait: false once `budget` (nullptr: unbounded) ran out.
+bool spend(crd::u32* budget) noexcept
 {
-    ring.clear();
-    ring.resize(capacity);
-    if (ring.size() != capacity)
+    if (budget != nullptr)
     {
-        return false;
+        if (*budget == 0U)
+        {
+            return false;
+        }
+        --*budget;
     }
-    for (FlightEvent& slot : ring)
-    {
-        slot.sequence = kSlotEmpty;
-    }
+    std::this_thread::yield();
     return true;
 }
 
-FlightEvent& slot_of(Impl& impl, crd::u64 s) noexcept
-{
-    return impl.ring[static_cast<crd::usize>((s - impl.base) % impl.policy.capacity)];
-}
+// ---- Ring storage --------------------------------------------------------------------------------------------------
 
-// The oldest sequence the ring still holds when `total` events were claimed.
-crd::u64 oldest_held(const Impl& impl, crd::u64 total) noexcept
-{
-    const crd::u64 cap = impl.policy.capacity;
-    return (total - impl.base > cap) ? total - cap : impl.base;
-}
+#if CRD_ENABLE_ASSERTS
+std::atomic<crd::u32> g_refuse_storage{0U}; // FlightRecorder::test_refuse_ring_storage
 
-// Claim the next sequence into `seq`; the claim that fills the post window closes it in the same exchange. Returns
-// false, counting the event, while the ring is frozen.
-bool claim(Impl& impl, crd::u64& seq) noexcept
+bool storage_refused() noexcept
 {
-    crd::u64 word = impl.word.load(std::memory_order_acquire);
-    for (;;)
+    crd::u32 left = g_refuse_storage.load(std::memory_order_relaxed);
+    while (left > 0U)
     {
-        if ((word & kReloadingBit) != 0U)
-        {
-            std::this_thread::yield();
-            word = impl.word.load(std::memory_order_acquire);
-            continue;
-        }
-        const crd::u32 state = state_of(word);
-        if (state == kStateComplete || state == kStateFatalEntered)
-        {
-            // Frozen until collected (for good after a fatal): the windows stay intact.
-            impl.dropped_while_complete.fetch_add(1U, std::memory_order_relaxed);
-            return false;
-        }
-        seq = total_of(word);
-        const bool fills = state == kStateTriggered && seq + 1U >= impl.post_end.load(std::memory_order_relaxed);
-        const crd::u64 next = make_word(seq + 1U, fills ? kStateComplete : state);
-        if (impl.word.compare_exchange_weak(word, next, std::memory_order_acq_rel, std::memory_order_acquire))
+        if (g_refuse_storage.compare_exchange_weak(left, left - 1U, std::memory_order_relaxed))
         {
             return true;
         }
     }
+    return false;
 }
+#endif
 
-// Fill the slot of claimed sequence `seq` and publish it. The slot is this claim's once its previous occupant, a full
-// ring earlier, is published: the wait is reached only when the ring laps a claim stalled before its publication.
-void publish(Impl& impl, crd::u64 seq, crd::u64 now, EventCode code, Severity severity, cont::StringView message,
-             crd::u64 value_a, crd::u64 value_b, RedactionClass redaction = RedactionClass::Public) noexcept
+bool allocate_storage(RingStorage& out, crd::u32 capacity) noexcept
 {
-    const crd::u64 capacity = impl.policy.capacity;
-    FlightEvent& slot = slot_of(impl, seq);
-    const std::atomic_ref<crd::u64> stamp(slot.sequence);
-    const crd::u64 previous = (seq - impl.base >= capacity) ? seq - capacity : kSlotEmpty;
-    while (stamp.load(std::memory_order_acquire) != previous)
+#if CRD_ENABLE_ASSERTS
+    if (storage_refused())
     {
-        std::this_thread::yield();
+        return false;
     }
-    slot.timestamp_ns = now;
-    slot.value_a = value_a;
-    slot.value_b = value_b;
-    slot.code = code;
-    slot.severity = severity;
-    slot.redaction = redaction;
-    // A restricted event's message is never copied, so no route out of the ring can carry it.
-    const cont::StringView kept = redaction == RedactionClass::Restricted ? cont::StringView{} : message;
-    slot.message_length =
-        static_cast<crd::u8>(copy_clipped(slot.message, kFlightMessageBytes, kept, &slot.message_truncated));
-    stamp.store(seq, std::memory_order_release);
-}
-
-// Wait until the claim of sequence `s` published its slot. `budget` (yields left, shared by the caller's waits)
-// bounds the fatal path; nullptr waits as long as the claim holder takes. Returns false when the budget ran out.
-bool wait_published(Impl& impl, crd::u64 s, crd::u32* budget) noexcept
-{
-    const std::atomic_ref<crd::u64> stamp(slot_of(impl, s).sequence);
-    while (stamp.load(std::memory_order_acquire) != s)
+#endif
+    const crd::u32   rings  = flight_thread_rings(capacity);
+    const crd::usize slots  = static_cast<crd::usize>(capacity) * sizeof(FlightEvent);
+    const crd::usize stride = (slots + 63U) & ~crd::usize{63U};
+    const crd::usize bytes  = stride * rings + slots;
+    void* const      block  = crd::memory::default_allocator()->try_allocate(bytes, 64U);
+    if (block == nullptr)
     {
-        if (budget != nullptr)
-        {
-            if (*budget == 0U)
-            {
-                return false;
-            }
-            --*budget;
-        }
-        std::this_thread::yield();
+        return false;
+    }
+    out.block       = block;
+    out.bytes       = bytes;
+    out.ring_stride = stride;
+    out.rings       = rings;
+    out.capacity    = capacity;
+    out.shared      = reinterpret_cast<FlightEvent*>(static_cast<char*>(block) + stride * rings);
+    // A thread ring's slot is constructed when its ring first reaches it and read only after; until then the slots stay
+    // poisoned, so a collector reading one it never wrote is reported. The shared ring's stamps are read before a
+    // slot's first write, so its slots are constructed empty now.
+    crd::memory::asan_poison(block, stride * rings);
+    for (crd::u32 i = 0U; i < capacity; ++i)
+    {
+        FlightEvent* const slot = new (&out.shared[i]) FlightEvent{};
+        slot->sequence          = kSlotEmpty;
     }
     return true;
 }
 
-// With the trigger mutex held: the capture of the trigger alone, said so (the fatal path could not read the ring).
+void free_storage(RingStorage& s) noexcept
+{
+    if (s.block != nullptr)
+    {
+        crd::memory::asan_unpoison(s.block, s.bytes); // the allocator gets back exactly what it handed out
+        crd::memory::default_allocator()->deallocate(s.block);
+    }
+    s = RingStorage{};
+}
+
+// With every claim waiting (init, or a reload with every ring idle): hand `s` to the rings, which start empty.
+void install_storage(Impl& impl, const RingStorage& s) noexcept
+{
+    impl.storage = s;
+    for (crd::u32 i = 0U; i < kFlightThreadRings; ++i)
+    {
+        ThreadRing& r = impl.rings[i];
+        r.head        = 0U;
+        r.next        = 0U;
+        r.capacity    = (i < s.rings) ? s.capacity : 0U;
+        r.events      = (i < s.rings) ? reinterpret_cast<FlightEvent*>(static_cast<char*>(s.block) + s.ring_stride * i)
+                                      : nullptr;
+    }
+    impl.storage_rings.store(s.rings, std::memory_order_relaxed);
+}
+
+// ---- Thread binding and lifetime -----------------------------------------------------------------------------------
+
+std::atomic<crd::u64> g_next_recorder{1U}; // recorder ids (0 names none)
+std::atomic<crd::u64> g_next_token{1U};    // thread tokens (0 names no thread); never an OS thread id, which is reused
+
+// The live recorders, for the thread-exit release: a spinlock and an intrusive list, both trivially destructible, so
+// a thread that exits after static destruction still finds them. A recorder leaves the list before it is freed, so
+// the release never touches one that shut down.
+std::atomic<bool> g_live_lock{false};
+Impl*             g_live = nullptr;
+
+void lock_live() noexcept
+{
+    while (g_live_lock.exchange(true, std::memory_order_acquire))
+    {
+        std::this_thread::yield();
+    }
+}
+
+void unlock_live() noexcept
+{
+    g_live_lock.store(false, std::memory_order_release);
+}
+
+void add_live(Impl* impl) noexcept
+{
+    lock_live();
+    impl->next_live = g_live;
+    g_live          = impl;
+    unlock_live();
+}
+
+void remove_live(Impl* impl) noexcept
+{
+    lock_live();
+    for (Impl** at = &g_live; *at != nullptr; at = &(*at)->next_live)
+    {
+        if (*at == impl)
+        {
+            *at = impl->next_live;
+            break;
+        }
+    }
+    unlock_live();
+}
+
+// A thread that exits gives back every ring it holds in a live recorder; the ring's events stay for the captures that
+// cover them, and the next thread to take the ring continues after them.
+void release_thread_rings(crd::u64 token) noexcept
+{
+    if (token == 0U)
+    {
+        return;
+    }
+    lock_live();
+    for (Impl* impl = g_live; impl != nullptr; impl = impl->next_live)
+    {
+        bool released = false;
+        for (ThreadRing& r : impl->rings)
+        {
+            crd::u64 expected = token;
+            released = r.owner.compare_exchange_strong(expected, 0U, std::memory_order_release,
+                                                       std::memory_order_relaxed) || released;
+        }
+        if (released)
+        {
+            impl->release_epoch.fetch_add(1U, std::memory_order_release);
+        }
+    }
+    unlock_live();
+}
+
+// A thread's ring in the recorder it last recorded into. Trivially constructible thread-local state: reading it needs
+// no initialisation guard. `ring` null is the shared ring, looked for again once the recorder's release epoch moves.
+struct FlightBinding
+{
+    crd::u64    recorder = 0U;
+    ThreadRing* ring     = nullptr;
+    crd::u64    epoch    = 0U;
+};
+
+thread_local FlightBinding t_binding;
+thread_local crd::u64      t_token      = 0U;
+thread_local bool          t_exit_armed = false;
+
+// The thread-exit hook, armed when a thread first binds. Windows: a thread-local object's destructor (the CRT keeps
+// the first 30 of a thread's in thread-local storage, without allocating). Elsewhere: a pthread key's destructor
+// (glibc keeps a low key's value in the thread descriptor, without allocating; its thread_local destructor list
+// allocates, and aborts when that fails). A thread whose hook could not be armed keeps its rings until the recorder
+// shuts down.
+#if defined(_WIN32)
+struct ThreadExitRelease
+{
+    bool armed = true;
+    ThreadExitRelease() noexcept = default;
+    ~ThreadExitRelease() { release_thread_rings(t_token); }
+    ThreadExitRelease(const ThreadExitRelease&)            = delete;
+    ThreadExitRelease& operator=(const ThreadExitRelease&) = delete;
+};
+
+thread_local ThreadExitRelease t_exit_release;
+
+void arm_thread_exit() noexcept
+{
+    t_exit_armed = t_exit_release.armed;
+}
+#else
+void release_on_thread_exit(void* value)
+{
+    release_thread_rings(static_cast<crd::u64>(reinterpret_cast<std::uintptr_t>(value)));
+}
+
+struct ExitKey
+{
+    pthread_key_t key{};
+    bool          ok = false;
+};
+
+ExitKey make_exit_key() noexcept
+{
+    ExitKey k;
+    k.ok = pthread_key_create(&k.key, &release_on_thread_exit) == 0;
+    return k;
+}
+
+void arm_thread_exit() noexcept
+{
+    static const ExitKey key = make_exit_key();
+    t_exit_armed             = true;
+    if (key.ok)
+    {
+        (void)pthread_setspecific(key.key, reinterpret_cast<void*>(static_cast<std::uintptr_t>(t_token)));
+    }
+}
+#endif
+
+// The slow path of a thread's first event in a recorder: its own ring if it still holds one, else a free ring (one
+// with storage first; one without still gives the thread its own claim mark, its events going to the shared ring),
+// else the shared ring. No allocation and no lock: a scan of the ring headers and one compare-exchange.
+ThreadRing* bind_thread(Impl& impl) noexcept
+{
+    if (t_token == 0U)
+    {
+        t_token = g_next_token.fetch_add(1U, std::memory_order_relaxed);
+    }
+    if (!t_exit_armed)
+    {
+        arm_thread_exit();
+    }
+    const crd::u64 token = t_token;
+    const crd::u64 epoch = impl.release_epoch.load(std::memory_order_acquire);
+    ThreadRing*    found = nullptr;
+    for (ThreadRing& r : impl.rings)
+    {
+        if (r.owner.load(std::memory_order_acquire) == token)
+        {
+            found = &r;
+            break;
+        }
+    }
+    const crd::u32 with_storage = impl.storage_rings.load(std::memory_order_relaxed); // a preference only
+    for (crd::u32 pass = 0U; found == nullptr && pass < 2U; ++pass)
+    {
+        const crd::u32 from = (pass == 0U) ? 0U : with_storage;
+        const crd::u32 to   = (pass == 0U) ? with_storage : kFlightThreadRings;
+        for (crd::u32 i = from; i < to && found == nullptr; ++i)
+        {
+            ThreadRing& r        = impl.rings[i];
+            crd::u64    expected = 0U;
+            if (r.owner.load(std::memory_order_relaxed) == 0U &&
+                r.owner.compare_exchange_strong(expected, token, std::memory_order_acquire, std::memory_order_relaxed))
+            {
+                found = &r;
+            }
+        }
+    }
+    t_binding = FlightBinding{impl.id, found, epoch};
+    return found;
+}
+
+// The calling thread's ring in `impl` (nullptr: the shared ring).
+ThreadRing* thread_ring(Impl& impl) noexcept
+{
+    const FlightBinding& b = t_binding;
+    if (b.recorder == impl.id &&
+        (b.ring != nullptr || b.epoch == impl.release_epoch.load(std::memory_order_relaxed)))
+    {
+        return b.ring;
+    }
+    return bind_thread(impl);
+}
+
+// ---- Claims ---------------------------------------------------------------------------------------------------------
+
+struct Claim
+{
+    crd::u64 seq  = 0U;
+    crd::u64 mark = 0U; // the ring's odd claim mark
+    bool     kept = false;
+};
+
+void wait_reload(const Impl& impl) noexcept
+{
+    while ((impl.word.load(std::memory_order_acquire) & kReloadingBit) != 0U)
+    {
+        std::this_thread::yield();
+    }
+}
+
+// The claim of the post window's last sequence closes the window: its end is post_end whoever moves the state (a
+// collector that closes it at the same time read a total past it), and every later claim is void.
+void close_by_claim(Impl& impl, crd::u64 end) noexcept
+{
+    impl.frozen_end.store(end, std::memory_order_relaxed);
+    crd::u64 word = impl.word.load(std::memory_order_acquire);
+    while (state_of(word) == kStateTriggered)
+    {
+        if (impl.word.compare_exchange_weak(word, make_word(total_of(word), kStateComplete), std::memory_order_acq_rel,
+                                            std::memory_order_acquire))
+        {
+            return;
+        }
+    }
+}
+
+// Claim the next sequence. The ring is marked busy first, so a collector or reload that saw the word after this
+// claim's fetch_add sees the mark. A claim that finds a reload under way waits for it and claims again; one that finds
+// the window frozen or past its end is void (kept false) and writes nothing.
+Claim begin_claim(Impl& impl, ThreadRing* ring) noexcept
+{
+    for (;;)
+    {
+        Claim c;
+        if (ring != nullptr)
+        {
+            c.mark = ring->claims.load(std::memory_order_relaxed) + 1U;
+            ring->claims.store(c.mark, std::memory_order_relaxed);
+        }
+        else
+        {
+            impl.shared_inflight.fetch_add(1U, std::memory_order_acq_rel);
+        }
+        const crd::u64 word = impl.word.fetch_add(kClaimOne, std::memory_order_acq_rel);
+        if ((word & kReloadingBit) != 0U)
+        {
+            if (ring != nullptr)
+            {
+                ring->claims.store(c.mark + 1U, std::memory_order_release);
+            }
+            else
+            {
+                impl.shared_inflight.fetch_sub(1U, std::memory_order_release);
+            }
+            wait_reload(impl);
+            continue;
+        }
+        c.seq                = total_of(word);
+        const crd::u32 state = state_of(word);
+        if (state == kStateArmed)
+        {
+            c.kept = true;
+        }
+        else if (state == kStateTriggered)
+        {
+            const crd::u64 end = impl.post_end.load(std::memory_order_relaxed);
+            c.kept             = c.seq < end;
+            if (c.seq + 1U == end)
+            {
+                close_by_claim(impl, end);
+            }
+        }
+        return c;
+    }
+}
+
+void end_claim(Impl& impl, ThreadRing* ring, const Claim& c) noexcept
+{
+    if (ring != nullptr)
+    {
+        ring->claims.store(c.mark + 1U, std::memory_order_release);
+    }
+    else
+    {
+        impl.shared_inflight.fetch_sub(1U, std::memory_order_release);
+    }
+}
+
+void fill(FlightEvent& slot, crd::u64 now, EventCode code, Severity severity, cont::StringView message,
+          crd::u64 value_a, crd::u64 value_b, RedactionClass redaction) noexcept
+{
+    slot.timestamp_ns = now;
+    slot.value_a      = value_a;
+    slot.value_b      = value_b;
+    slot.code         = code;
+    slot.severity     = severity;
+    slot.redaction    = redaction;
+    // A restricted event's message is never copied, so no route out of the ring can carry it.
+    const cont::StringView kept = redaction == RedactionClass::Restricted ? cont::StringView{} : message;
+    slot.message_length =
+        static_cast<crd::u8>(copy_clipped(slot.message, kFlightMessageBytes, kept, &slot.message_truncated));
+}
+
+// A kept claim's event into the shared ring's slot of its sequence. The window holds at most `capacity` consecutive
+// sequences, so its events have distinct slots; a slot that already holds a later sequence (one `capacity` or more
+// after this one) means this event is outside every window, and is not written.
+void publish_shared(Impl& impl, crd::u64 seq, crd::u64 now, EventCode code, Severity severity,
+                    cont::StringView message, crd::u64 value_a, crd::u64 value_b, RedactionClass redaction) noexcept
+{
+    FlightEvent&                    slot = impl.storage.shared[seq % impl.storage.capacity];
+    const std::atomic_ref<crd::u64> stamp(slot.sequence);
+    crd::u64                        seen = stamp.load(std::memory_order_acquire);
+    for (;;)
+    {
+        if (seen == kSlotBusy)
+        {
+            std::this_thread::yield();
+            seen = stamp.load(std::memory_order_acquire);
+            continue;
+        }
+        if (seen != kSlotEmpty && seen > seq)
+        {
+            return;
+        }
+        if (stamp.compare_exchange_weak(seen, kSlotBusy, std::memory_order_acquire, std::memory_order_acquire))
+        {
+            break;
+        }
+    }
+    fill(slot, now, code, severity, message, value_a, value_b, redaction);
+    stamp.store(seq, std::memory_order_release);
+    impl.shared_events.fetch_add(1U, std::memory_order_relaxed);
+}
+
+// A kept claim's event into the thread's ring, or the shared ring when the thread has none with storage.
+void publish(Impl& impl, ThreadRing* ring, crd::u64 seq, crd::u64 now, EventCode code, Severity severity,
+             cont::StringView message, crd::u64 value_a, crd::u64 value_b,
+             RedactionClass redaction = RedactionClass::Public) noexcept
+{
+    if (ring == nullptr || ring->events == nullptr)
+    {
+        publish_shared(impl, seq, now, code, severity, message, value_a, value_b, redaction);
+        return;
+    }
+    FlightEvent* slot = &ring->events[ring->next];
+    if (ring->head < ring->capacity)
+    {
+        crd::memory::asan_unpoison(slot, sizeof(FlightEvent));
+        slot = new (slot) FlightEvent{};
+    }
+    fill(*slot, now, code, severity, message, value_a, value_b, redaction);
+    slot->sequence = seq;
+    ring->next     = (ring->next + 1U == ring->capacity) ? 0U : ring->next + 1U;
+    ++ring->head;
+}
+
+// ---- Collection -----------------------------------------------------------------------------------------------------
+
+// Wait until no ring has a claim in flight that it had when called. Recording is frozen, so a claim that starts later
+// is void. `budget` bounds the fatal path; returns false when it ran out.
+bool wait_rings_idle(Impl& impl, crd::u32* budget) noexcept
+{
+    return std::ranges::all_of(impl.rings,
+                               [budget](const ThreadRing& r)
+                               {
+                                   const crd::u64 mark = r.claims.load(std::memory_order_acquire);
+                                   if ((mark & 1U) == 0U)
+                                   {
+                                       return true;
+                                   }
+                                   while (r.claims.load(std::memory_order_acquire) == mark)
+                                   {
+                                       if (!spend(budget))
+                                       {
+                                           return false;
+                                       }
+                                   }
+                                   return true;
+                               });
+}
+
+// The events of sequences [first, end) in sequence order: each ring's newest events back to `first`, placed at their
+// sequence's position, then the shared ring's for the positions left (waiting for a claim still writing one). Every
+// sequence below the total is a kept event and nothing is written after the window froze, so every position is filled.
+// Returns false when `budget` ran out.
+bool gather(Impl& impl, crd::u64 first, crd::u64 end, cont::Array<FlightEvent>& out, crd::u32* budget) noexcept
+{
+    out.clear();
+    out.resize(static_cast<crd::usize>(end - first));
+    for (FlightEvent& e : out)
+    {
+        e.sequence = kSlotEmpty;
+    }
+    for (const ThreadRing& r : impl.rings)
+    {
+        if (r.events == nullptr)
+        {
+            continue;
+        }
+        const crd::u64 held = lesser(r.head, r.capacity);
+        crd::u32       slot = r.next;
+        for (crd::u64 i = 0U; i < held; ++i)
+        {
+            slot                 = (slot == 0U) ? r.capacity - 1U : slot - 1U;
+            const FlightEvent& e = r.events[slot];
+            if (e.sequence < first)
+            {
+                break; // a ring's sequences rise from its oldest event to its newest
+            }
+            if (e.sequence < end)
+            {
+                out[static_cast<crd::usize>(e.sequence - first)] = e;
+            }
+        }
+    }
+    for (crd::usize p = 0U; p < out.size(); ++p)
+    {
+        if (out[p].sequence != kSlotEmpty)
+        {
+            continue;
+        }
+        const crd::u64                  s    = first + p;
+        FlightEvent&                    slot = impl.storage.shared[s % impl.storage.capacity];
+        const std::atomic_ref<crd::u64> stamp(slot.sequence);
+        while (stamp.load(std::memory_order_acquire) != s)
+        {
+            if (!spend(budget))
+            {
+                return false;
+            }
+        }
+        out[p] = slot;
+    }
+    return true;
+}
+
+// With the trigger mutex held: the capture of the trigger alone, said so (the fatal path could not read the rings).
 // Terminal, as after any Fatal capture.
 void trigger_only_capture(Impl& impl, FlightCapture& out, crd::u64 now) noexcept
 {
@@ -373,8 +875,14 @@ void trigger_only_capture(Impl& impl, FlightCapture& out, crd::u64 now) noexcept
     out.dropped_while_complete = 0U;
     out.ring_unavailable = true;
     out.post_truncated = true;
-    // From Triggered (1) or Complete (2) to FatalEntered (3); record() and the collectors leave that state alone.
-    impl.word.fetch_or(kStateFatalEntered, std::memory_order_acq_rel);
+    // From Triggered (1) or Complete (2) to FatalEntered (3); record() and the collectors leave that state alone. From
+    // Triggered the window freezes where the total was (or at post_end, past which claims were already void).
+    const crd::u64 word = impl.word.fetch_or(kStateFatalEntered, std::memory_order_acq_rel);
+    if (state_of(word) == kStateTriggered)
+    {
+        impl.frozen_end.store(lesser(total_of(word), impl.post_end.load(std::memory_order_relaxed)),
+                              std::memory_order_release);
+    }
 }
 
 // With the collect mutex held: when the state is Complete, build `out` and re-arm. `budget` bounds the wait for
@@ -382,56 +890,37 @@ void trigger_only_capture(Impl& impl, FlightCapture& out, crd::u64 now) noexcept
 // is complete.
 bool build_capture(Impl& impl, FlightCapture& out, crd::u32* budget) noexcept
 {
-    const crd::u64 word = impl.word.load(std::memory_order_acquire);
-    if (state_of(word) != kStateComplete)
+    if (state_of(impl.word.load(std::memory_order_acquire)) != kStateComplete)
     {
         return false;
     }
-    const crd::u64 total = total_of(word); // no claim moves it while Complete
 
     std::lock_guard<std::mutex> trigger_guard(impl.trigger_mutex);
-    const crd::u64 trig = impl.trigger.sequence;
-    const crd::u64 want = (trig > impl.policy.pre_events) ? trig - impl.policy.pre_events : 0U;
-    const crd::u64 old = oldest_held(impl, total);
-    const crd::u64 first = (want > old) ? want : old;
-    for (crd::u64 s = first; s < total; ++s)
+    const crd::u64 end   = impl.frozen_end.load(std::memory_order_acquire); // no claim moves it while Complete
+    const crd::u64 trig  = impl.trigger.sequence;
+    const crd::u64 want  = (trig > impl.policy.pre_events) ? trig - impl.policy.pre_events : 0U;
+    const crd::u64 first = (want > impl.base) ? want : impl.base;
+    if (!wait_rings_idle(impl, budget) || !gather(impl, first, end, out.events, budget))
     {
-        if (!wait_published(impl, s, budget))
-        {
-            trigger_only_capture(impl, out, diagnostic_now_ns());
-            return true;
-        }
+        trigger_only_capture(impl, out, diagnostic_now_ns());
+        return true;
     }
 
-    out.trigger             = impl.trigger;
-    out.end                 = impl.end;
-    out.end_ns              = impl.end_ns;
-    out.policy              = impl.policy;
-    out.policy_generation   = impl.policy_generation;
-    out.suppressed_triggers = impl.suppressed;
-    out.suppressed_kinds    = impl.suppressed_kinds;
-    out.replay_available    = impl.trigger_replay_available;
+    out.trigger                 = impl.trigger;
+    out.end                     = impl.end;
+    out.end_ns                  = impl.end_ns;
+    out.policy                  = impl.policy;
+    out.policy_generation       = impl.policy_generation;
+    out.suppressed_triggers     = impl.suppressed;
+    out.suppressed_kinds        = impl.suppressed_kinds;
+    out.replay_available        = impl.trigger_replay_available;
     out.replay.clear();
     out.replay.append(cont::StringView{impl.trigger_replay, impl.trigger_replay_length});
     out.recorded_before_trigger = trig;
-    out.pre_retained            = 0U;
-    out.post_retained           = 0U;
+    out.pre_retained            = static_cast<crd::u32>(trig - first);
+    out.post_retained           = static_cast<crd::u32>(end - trig);
     out.ring_unavailable        = false;
-    out.events.clear();
-    out.events.reserve(static_cast<crd::usize>(total - first));
-    for (crd::u64 s = first; s < total; ++s)
-    {
-        out.events.push_back(slot_of(impl, s));
-        if (s < trig)
-        {
-            ++out.pre_retained;
-        }
-        else
-        {
-            ++out.post_retained;
-        }
-    }
-    if (out.end == FlightEnd::None) // the claim that filled the post window closed it, at its own time
+    if (out.end == FlightEnd::None) // the claim of the window's last sequence closed it, at its own time
     {
         out.end = FlightEnd::PostEventsFull;
         out.end_ns = out.events.empty() ? 0U : out.events[out.events.size() - 1U].timestamp_ns;
@@ -439,22 +928,22 @@ bool build_capture(Impl& impl, FlightCapture& out, crd::u32* budget) noexcept
     out.post_truncated = (out.end == FlightEnd::Shutdown || out.end == FlightEnd::Fatal) &&
                          out.post_retained < impl.policy.post_events;
 
-    // Re-arm, unless the capture ended Fatal (terminal). A drop is counted once, by the first capture collected after
-    // it: one whose thread saw the ring frozen but counted only after this exchange belongs to the next capture.
+    // Re-arm at the window's end, unless the capture ended Fatal (terminal). The exchange gives back the sequences the
+    // void claims took while the window was frozen (each one a dropped event), so the next kept event is `end`.
     impl.end = FlightEnd::None;
     impl.end_ns = 0U;
     impl.suppressed = 0U;
     impl.suppressed_kinds = 0U;
-    crd::u64 expected = word;
-    (void)impl.word.compare_exchange_strong(
-        expected, make_word(total, out.end == FlightEnd::Fatal ? kStateFatalEntered : kStateArmed),
-        std::memory_order_acq_rel, std::memory_order_acquire);
-    out.dropped_while_complete = impl.dropped_while_complete.exchange(0U, std::memory_order_relaxed);
+    const bool fatal = out.end == FlightEnd::Fatal;
+    impl.frozen_end.store(fatal ? end : kNoTotal, std::memory_order_relaxed);
+    const crd::u64 frozen =
+        impl.word.exchange(make_word(end, fatal ? kStateFatalEntered : kStateArmed), std::memory_order_acq_rel);
+    out.dropped_while_complete = total_of(frozen) - end;
     return true;
 }
 
-// With the collect mutex held: close an open window with `reason`. A claim that fills the window at the same time
-// wins, and the capture ends PostEventsFull.
+// With the collect mutex held: close an open window with `reason` at the current total. A claim that reaches the
+// window's last sequence first wins, and the capture ends PostEventsFull.
 void close_window(Impl& impl, FlightEnd reason, crd::u64 now_ns) noexcept
 {
     crd::u64 word = impl.word.load(std::memory_order_acquire);
@@ -463,8 +952,14 @@ void close_window(Impl& impl, FlightEnd reason, crd::u64 now_ns) noexcept
         if (impl.word.compare_exchange_weak(word, make_word(total_of(word), kStateComplete), std::memory_order_acq_rel,
                                             std::memory_order_acquire))
         {
-            impl.end = reason;
-            impl.end_ns = now_ns;
+            const crd::u64 post_end = impl.post_end.load(std::memory_order_relaxed);
+            const crd::u64 end      = lesser(total_of(word), post_end);
+            impl.frozen_end.store(end, std::memory_order_release);
+            if (end < post_end)
+            {
+                impl.end    = reason;
+                impl.end_ns = now_ns;
+            }
             return;
         }
     }
@@ -498,15 +993,19 @@ FlightPolicyStatus FlightRecorder::init(const FlightPolicy& policy) noexcept
     {
         return FlightPolicyStatus::RejectedOutOfMemory;
     }
-    impl->policy = policy;
-    impl->keep_from.store(keep_from_of(policy.detail), std::memory_order_release);
-    if (!allocate_ring(impl->ring, policy.capacity))
+    RingStorage storage;
+    if (!allocate_storage(storage, policy.capacity))
     {
         delete impl;
         return FlightPolicyStatus::RejectedOutOfMemory;
     }
+    impl->id     = g_next_recorder.fetch_add(1U, std::memory_order_relaxed);
+    impl->policy = policy;
+    impl->keep_from.store(keep_from_of(policy.detail), std::memory_order_release);
+    install_storage(*impl, storage);
     impl->replay_length = copy_clipped(impl->replay, kFlightRecipeBytes, kNoRecipe, nullptr);
-    m_impl              = impl;
+    add_live(impl);
+    m_impl = impl;
     return FlightPolicyStatus::Committed;
 }
 
@@ -517,6 +1016,8 @@ void FlightRecorder::shutdown() noexcept
         return;
     }
     (void)finish(FlightEnd::Shutdown);
+    remove_live(m_impl);
+    free_storage(m_impl->storage);
     delete m_impl;
     m_impl = nullptr;
 }
@@ -541,8 +1042,7 @@ FlightPolicyStatus FlightRecorder::reload_policy(const FlightPolicy& candidate) 
 
     std::lock_guard<std::mutex> collect_guard(impl->collect_mutex);
     std::lock_guard<std::mutex> trigger_guard(impl->trigger_mutex);
-    crd::u64 word = impl->word.load(std::memory_order_acquire);
-    if (state_of(word) != kStateArmed)
+    if (state_of(impl->word.load(std::memory_order_acquire)) != kStateArmed)
     {
         return FlightPolicyStatus::RejectedBusy;
     }
@@ -551,25 +1051,31 @@ FlightPolicyStatus FlightRecorder::reload_policy(const FlightPolicy& candidate) 
         return FlightPolicyStatus::RejectedGenerationWrap;
     }
 
-    cont::Array<FlightEvent> ring;
-    if (!allocate_ring(ring, candidate.capacity))
+    RingStorage fresh;
+    if (!allocate_storage(fresh, candidate.capacity))
     {
         return FlightPolicyStatus::RejectedOutOfMemory;
     }
-    // Further claims wait, and every claimed slot of the old ring is published, so no claim holder touches the ring,
-    // `base` or the capacity while they change. The flag leaves the state alone and the total no longer moves.
-    word = impl->word.fetch_or(kReloadingBit, std::memory_order_acq_rel);
-    const crd::u64 total = total_of(word);
-    for (crd::u64 s = oldest_held(*impl, total); s < total; ++s)
+    // Further claims wait, and every claim in flight finishes, so no claimer touches the rings, `base` or the capacity
+    // while they change. The flag leaves the state alone; the claims that meet it claim again after the reload, whose
+    // exchange gives back the sequences they took.
+    const crd::u64 total = total_of(impl->word.fetch_or(kReloadingBit, std::memory_order_acq_rel));
+    impl->reload_base.store(total, std::memory_order_release);
+    (void)wait_rings_idle(*impl, nullptr);
+    while (impl->shared_inflight.load(std::memory_order_acquire) != 0U)
     {
-        (void)wait_published(*impl, s, nullptr);
+        std::this_thread::yield();
     }
-    impl->ring   = static_cast<cont::Array<FlightEvent>&&>(ring);
+    RingStorage old = impl->storage;
+    install_storage(*impl, fresh);
+    free_storage(old);
     impl->base   = total;
     impl->policy = candidate;
     impl->keep_from.store(keep_from_of(candidate.detail), std::memory_order_release);
     ++impl->policy_generation;
-    impl->word.fetch_and(~kReloadingBit, std::memory_order_acq_rel);
+    impl->release_epoch.fetch_add(1U, std::memory_order_release); // a thread on the shared ring may now find storage
+    impl->reload_base.store(kNoTotal, std::memory_order_relaxed);
+    (void)impl->word.exchange(make_word(total, kStateArmed), std::memory_order_acq_rel);
     return FlightPolicyStatus::Committed;
 }
 
@@ -631,8 +1137,10 @@ void FlightRecorder::set_replay_unavailable(cont::StringView reason) noexcept
     impl->replay_available = false;
 }
 
-void FlightRecorder::record(EventCode code, Severity severity, cont::StringView message, crd::u64 value_a,
-                            crd::u64 value_b, RedactionClass redaction) noexcept
+// Never inlined: the thread's ring binding is a thread-local read, which a caller that switches job fibers between two
+// events must not keep across the switch (the fiber may resume on another thread).
+CRD_NOINLINE void FlightRecorder::record(EventCode code, Severity severity, cont::StringView message, crd::u64 value_a,
+                                         crd::u64 value_b, RedactionClass redaction) noexcept
 {
     Impl* impl = m_impl;
     if (impl == nullptr) // early-init / late-shutdown: a no-op, never a fault
@@ -646,12 +1154,14 @@ void FlightRecorder::record(EventCode code, Severity severity, cont::StringView 
         impl->filtered.add();
         return;
     }
-    const crd::u64 now = diagnostic_now_ns();
-    crd::u64 seq = 0U;
-    if (claim(*impl, seq))
+    const crd::u64 now   = diagnostic_now_ns();
+    ThreadRing*    ring  = thread_ring(*impl);
+    const Claim    claim = begin_claim(*impl, ring);
+    if (claim.kept)
     {
-        publish(*impl, seq, now, code, severity, message, value_a, value_b, redaction);
+        publish(*impl, ring, claim.seq, now, code, severity, message, value_a, value_b, redaction);
     }
+    end_claim(*impl, ring, claim);
 }
 
 void FlightRecorder::record(const DiagnosticEvent& e) noexcept
@@ -689,7 +1199,7 @@ FlightTriggerResult FlightRecorder::trigger(const FlightTriggerInput& input) noe
     {
         return FlightTriggerResult::Masked;
     }
-    // Only claims move the word while Armed and this mutex is held (a reload holds it too).
+    // Only claims move the word while Armed and this mutex is held (a reload holds it too), and they only add.
     crd::u64 word = impl->word.load(std::memory_order_acquire);
     if (state_of(word) != kStateArmed)
     {
@@ -832,7 +1342,38 @@ bool FlightRecorder::finish(FlightEnd reason) noexcept
 crd::u64 FlightRecorder::total_recorded() const noexcept
 {
     Impl* impl = m_impl;
-    return (impl != nullptr) ? total_of(impl->word.load(std::memory_order_acquire)) : 0U;
+    if (impl == nullptr)
+    {
+        return 0U;
+    }
+    // The kept events: the total while armed, up to the post window's end while triggered, the window's end once
+    // frozen, a reload's base while it runs (void claims add to the word's total until they are given back).
+    for (;;)
+    {
+        const crd::u64 word = impl->word.load(std::memory_order_acquire);
+        crd::u64       kept = kNoTotal;
+        if ((word & kReloadingBit) != 0U)
+        {
+            kept = impl->reload_base.load(std::memory_order_acquire);
+        }
+        else if (state_of(word) == kStateArmed)
+        {
+            kept = total_of(word);
+        }
+        else if (state_of(word) == kStateTriggered)
+        {
+            kept = lesser(total_of(word), impl->post_end.load(std::memory_order_relaxed));
+        }
+        else
+        {
+            kept = impl->frozen_end.load(std::memory_order_acquire);
+        }
+        if (kept != kNoTotal)
+        {
+            return kept;
+        }
+        std::this_thread::yield(); // the thread that froze the window or started the reload is storing it
+    }
 }
 
 crd::u64 FlightRecorder::total_filtered() const noexcept
@@ -868,6 +1409,27 @@ crd::u64 FlightRecorder::captures_delivered() const noexcept
     return (impl != nullptr) ? impl->delivered.load(std::memory_order_relaxed) : 0U;
 }
 
+FlightRingStats FlightRecorder::ring_stats() const noexcept
+{
+    FlightRingStats stats;
+    Impl*           impl = m_impl;
+    if (impl == nullptr)
+    {
+        return stats;
+    }
+    {
+        std::lock_guard<std::mutex> guard(impl->trigger_mutex); // a reload swaps the storage under it
+        stats.thread_rings = impl->storage.rings;
+        stats.ring_bytes   = impl->storage.bytes;
+    }
+    for (const ThreadRing& r : impl->rings)
+    {
+        stats.threads_bound += (r.owner.load(std::memory_order_relaxed) != 0U) ? 1U : 0U;
+    }
+    stats.shared_events = impl->shared_events.load(std::memory_order_relaxed);
+    return stats;
+}
+
 #if CRD_ENABLE_ASSERTS
 bool FlightRecorder::test_set_policy_generation(crd::u32 generation) noexcept
 {
@@ -897,15 +1459,27 @@ bool FlightRecorder::test_with_ring_held(void (*fn)(void* user), void* user) noe
 bool FlightRecorder::test_with_claim_unpublished(void (*fn)(void* user), void* user) noexcept
 {
     Impl* impl = m_impl;
-    crd::u64 seq = 0U;
-    if (impl == nullptr || fn == nullptr || !claim(*impl, seq))
+    if (impl == nullptr || fn == nullptr)
     {
         return false;
     }
+    ThreadRing* const ring  = thread_ring(*impl);
+    const Claim       claim = begin_claim(*impl, ring);
+    if (!claim.kept)
+    {
+        end_claim(*impl, ring, claim);
+        return false;
+    }
     fn(user);
-    publish(*impl, seq, diagnostic_now_ns(), kFlightCodeManual, Severity::Info, cont::StringView{"claim held"}, seq,
-            0U);
+    publish(*impl, ring, claim.seq, diagnostic_now_ns(), kFlightCodeManual, Severity::Info,
+            cont::StringView{"claim held"}, claim.seq, 0U);
+    end_claim(*impl, ring, claim);
     return true;
+}
+
+void FlightRecorder::test_refuse_ring_storage(crd::u32 count) noexcept
+{
+    g_refuse_storage.store(count, std::memory_order_relaxed);
 }
 #endif
 

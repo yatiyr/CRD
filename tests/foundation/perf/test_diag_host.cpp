@@ -734,6 +734,18 @@ TEST_CASE("diagnostic host: refused starts install nothing, and stop restores ev
         CHECK(refused.start(no_dir, reason) == DiagHostStart::DirectoryMissing);
         CHECK_FALSE(refused.recorder().is_initialized());
         CHECK(crd::get_assert_handler() == previous_assert);
+#if CRD_ENABLE_ASSERTS
+        // The recorder cannot allocate its rings (the test-only seam): refused, by the recorder's own status.
+        reason.clear();
+        cp::FlightRecorder::test_refuse_ring_storage(1U);
+        CHECK(refused.start(host_profile(cont::String{}), reason) == DiagHostStart::RecorderRefused);
+        cp::FlightRecorder::test_refuse_ring_storage(0U);
+        CHECK(contains(reason, "rejected-out-of-memory"));
+        CHECK_FALSE(refused.recorder().is_initialized());
+        CHECK_FALSE(refused.started());
+        CHECK(crd::get_assert_handler() == previous_assert);
+        CHECK(cp::get_fatal_invariant_handler() == previous_fatal);
+#endif
     }
 
     const cont::String dir = scratch.text();
