@@ -1,9 +1,10 @@
 // crd-diag-overhead -- the DIAG.11b measurement harness (see overhead.hpp).
 //
-//   crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> --mode <off|basic|full>
+//   crd-diag-overhead --workload <alloc|jobs|offline|io|render|events|zones|marks> --mode <off|basic|full>
 //                     [--iterations N] [--warmup N] [--captures K] [--threads T] [--affinity <hex mask>]
 //                     [--scratch <existing dir>] [--policy-dir <dir>] [--program <file.ceir>] [--keep] [--check]
-//                     [--validation <core|sync|gpu>]
+//                     [--validation <core|sync|gpu>] [--memory]
+//   crd-diag-overhead-tracy  the same, and --mode tracy [--tracy-connect <ms>] (CRD_DIAG_PEER_TRACY)
 //
 // One process measures one workload in one mode and prints one JSON record (schema cerid-diag-overhead/1) on stdout:
 // the build, the host's modes, every timed iteration in nanoseconds, the CPU every thread used over the timed
@@ -30,6 +31,12 @@
 //   --validation (render only) the device validation saw the whole run and reported no error, warning or lost
 //                message; the layer's notices of its own cost are counted (cost_notices), not failed. Its cost is
 //                reported, not budgeted (ADR-0133: GPU-assisted validation accounts separately).
+//   zones, marks the full mode's profiler recorded every zone (none dropped) and counted every mark as a frame.
+//   --memory     (alloc only) full: the heap's statistics are complete and balance where the build counts them.
+//   tracy        no Cerid diagnostic runs; Tracy started; a client connected from before the first frame to after
+//                the last with --tracy-connect, none at either end without it; every payload formatted once per site
+//                while connected and none otherwise. What a connected client received is the driver's to hold
+//                (scripts/diag-overhead.py reads the capture's zones, frames and messages).
 //
 // Exit codes: 0 measured (and checked), 1 a check failed, 2 usage, 3 the mode or the workload could not be set up.
 
@@ -44,6 +51,7 @@
 #include <crd/perf/config.hpp>
 #include <crd/perf/diagnostics.hpp>
 #include <crd/perf/profiler.hpp>
+#include <crd/time/clocks.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -103,6 +111,8 @@ constexpr crd::memory::StatisticsCoverage kUnaskedCoverage = crd::memory::Statis
 struct Options
 {
     const char*     workload   = nullptr;
+    bool            memory     = false;
+    u32             tracy_connect_ms = 0U; // the tracy mode: wait this long for a client before the frames
     dov::Mode       mode       = dov::Mode::Off;
     bool            mode_given = false;
     u32             iterations = kDefaultIters;
@@ -138,11 +148,12 @@ bool parse_u32(const char* text, u32 limit, u32& out)
 int usage(const char* why)
 {
     std::fprintf(stderr,
-                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload <alloc|jobs|offline|io|render|events> "
-                 "--mode <off|basic|full> [--iterations N] [--warmup N] [--captures K] [--threads T] "
-                 "[--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] [--program <file>] [--keep] [--check] "
-                 "[--validation <core|sync|gpu>]\n",
-                 why);
+                 "crd-diag-overhead: %s\nusage: crd-diag-overhead --workload "
+                 "<alloc|jobs|offline|io|render|events|zones|marks> --mode <off|basic|full%s> [--iterations N] "
+                 "[--warmup N] [--captures K] [--threads T] [--affinity <hex>] [--scratch <dir>] [--policy-dir <dir>] "
+                 "[--program <file>] [--keep] [--check] [--validation <core|sync|gpu>] [--memory]%s\n",
+                 why, CRD_DIAG_OVERHEAD_TRACY ? "|tracy" : "",
+                 CRD_DIAG_OVERHEAD_TRACY ? " [--tracy-connect <ms>]" : "");
     return 2;
 }
 
@@ -160,6 +171,11 @@ bool parse(int argc, char** argv, Options& o, const char*& error)
         if (same(a, "--check"))
         {
             o.check = true;
+            continue;
+        }
+        if (same(a, "--memory"))
+        {
+            o.memory = true;
             continue;
         }
         if (value == nullptr)
@@ -187,6 +203,10 @@ bool parse(int argc, char** argv, Options& o, const char*& error)
             else if (same(value, "full"))
             {
                 o.mode = dov::Mode::Full;
+            }
+            else if (CRD_DIAG_OVERHEAD_TRACY && same(value, "tracy"))
+            {
+                o.mode = dov::Mode::Tracy;
             }
             else
             {
@@ -226,6 +246,10 @@ bool parse(int argc, char** argv, Options& o, const char*& error)
         else if (same(a, "--program"))
         {
             o.program = value;
+        }
+        else if (same(a, "--tracy-connect"))
+        {
+            ok = parse_u32(value, 600000U, o.tracy_connect_ms) && o.tracy_connect_ms > 0U;
         }
         else if (same(a, "--validation"))
         {
@@ -465,6 +489,9 @@ struct Checks
 int main(int argc, char** argv)
 {
     run_headless();
+    // The frames are timed with the diagnostic clock (TickClock): calibrated before anything, so every arm's frames are
+    // timed by the same mapped counter from the first (a mode's start would otherwise calibrate it in some arms only).
+    crd::time::TickClock::warm();
     Options     o;
     const char* error = nullptr;
     if (!parse(argc, argv, o, error))
@@ -480,9 +507,18 @@ int main(int argc, char** argv)
     {
         return usage("--validation applies to the render workload");
     }
-    if (o.mode != dov::Mode::Off && o.scratch == nullptr)
+    const bool cerid_host = o.mode == dov::Mode::Basic || o.mode == dov::Mode::Full;
+    if (cerid_host && o.scratch == nullptr)
     {
         return usage("basic and full need --scratch <existing dir> (crash and capture directory)");
+    }
+    if (o.memory && !same(workload->name(), "alloc"))
+    {
+        return usage("--memory applies to the alloc workload");
+    }
+    if (o.tracy_connect_ms != 0U && o.mode != dov::Mode::Tracy)
+    {
+        return usage("--tracy-connect applies to the tracy mode");
     }
     char program_path[1024];
     if (o.program == nullptr)
@@ -510,7 +546,7 @@ int main(int argc, char** argv)
     bool               host_started = false;
     bool               perf_started = false;
     char               policy_path[1024];
-    if (o.mode != dov::Mode::Off)
+    if (cerid_host)
     {
         (void)std::snprintf(policy_path, sizeof(policy_path), "%s/overhead_%s.flight.toml", o.policy_dir,
                             dov::mode_name(o.mode));
@@ -537,6 +573,25 @@ int main(int argc, char** argv)
         perf_started = cp::is_active();
     }
 #endif
+    // The peer: Tracy started (its threads are its own, outside the lifetime ledger), every site its counterpart.
+    bool tracy_started       = false;
+    bool tracy_connected     = false;
+    bool tracy_connected_end = false;
+#if CRD_DIAG_OVERHEAD_TRACY
+    if (o.mode == dov::Mode::Tracy)
+    {
+        dov::tracy_peer::start();
+        tracy_started = true;
+        sites.tracy   = true;
+        if (o.tracy_connect_ms != 0U && !dov::tracy_peer::wait_connected(o.tracy_connect_ms))
+        {
+            std::fprintf(stderr, "crd-diag-overhead: no Tracy client connected within %u ms\n", o.tracy_connect_ms);
+            dov::tracy_peer::stop();
+            return 3;
+        }
+        tracy_connected = dov::tracy_peer::connected();
+    }
+#endif
     const crd::LifetimeSnapshot  after_mode   = crd::lifetime_ledger().snapshot();
     const crd::HostMemoryReading memory_mode  = crd::read_host_memory();
 
@@ -550,10 +605,17 @@ int main(int argc, char** argv)
     setup.scratch    = o.scratch;
     setup.assets     = CRD_DIAG_OVERHEAD_ENGINE_ASSETS;
     setup.validation = o.validation;
+    setup.memory     = o.memory;
     if (!workload->setup(setup, reason))
     {
         std::fprintf(stderr, "crd-diag-overhead: the workload did not set up: %s\n", reason.c_str());
         host.stop();
+#if CRD_DIAG_OVERHEAD_TRACY
+        if (tracy_started)
+        {
+            dov::tracy_peer::stop();
+        }
+#endif
         return 3;
     }
     const crd::LifetimeSnapshot after_setup = crd::lifetime_ledger().snapshot();
@@ -586,6 +648,12 @@ int main(int argc, char** argv)
             cp::clear_samples(); // the full mode's consumer drains every frame
         }
 #endif
+#if CRD_DIAG_OVERHEAD_TRACY
+        if (tracy_started)
+        {
+            FrameMark; // Tracy's consumer is its own worker thread, which streams to a connected client
+        }
+#endif
         const u64 end = cp::diagnostic_now_ns();
         ++executed;
         if (!ok || signature != workload->expected())
@@ -598,6 +666,9 @@ int main(int argc, char** argv)
         }
     }
     cpu_read = cpu_read && read_process_cpu(cpu_end) && cpu_end > cpu_begin;
+#if CRD_DIAG_OVERHEAD_TRACY
+    tracy_connected_end = tracy_started && dov::tracy_peer::connected();
+#endif
     const crd::HostMemoryReading memory_frames = crd::read_host_memory();
     const u64                    recorded      = host_started ? host.recorder().total_recorded() : 0U;
     const u64                    filtered      = host_started ? host.recorder().total_filtered() : 0U;
@@ -672,14 +743,32 @@ int main(int argc, char** argv)
 
     // ---- the measured allocator's statistics, read before teardown destroys it -----------------------------------
     const crd::memory::IAllocator* const measured = workload->measured_allocator();
+    // --memory's full mode requests them before the heap's first allocation; what that yields is the build's.
+    const bool requested_stats = o.memory && o.mode == dov::Mode::Full && CRD_ENABLE_PROFILING != 0;
+    const crd::memory::StatisticsCoverage expected_coverage =
+        requested_stats && CRD_MEMORY_STATS_TRACKING ? crd::memory::StatisticsCoverage::Complete : kUnaskedCoverage;
     const crd::memory::StatisticsCoverage stats_coverage =
-        measured != nullptr ? measured->stats().coverage() : kUnaskedCoverage;
+        measured != nullptr ? measured->stats().coverage() : expected_coverage;
+    const u64 zones_recorded = workload->zones_recorded();
+    const u64 tracy_zones    = workload->tracy_zones();
+#if CRD_DIAG_OVERHEAD_TRACY
+    const u64 tracy_unmatched =
+        tracy_started ? dov::tracy_peer::jobs_unmatched() + dov::tracy_peer::ops_unmatched() : 0U;
+#else
+    const u64 tracy_unmatched = 0U;
+#endif
     const crd::memory::MemoryStats::Snapshot stats =
         measured != nullptr ? measured->stats().snapshot() : crd::memory::MemoryStats::Snapshot{};
 
     // ---- teardown ------------------------------------------------------------------------------------------------
     workload->teardown();
     const dov::ValidationOutcome* const validated = workload->validation();
+#if CRD_DIAG_OVERHEAD_TRACY
+    if (tracy_started) // after every instrumented thread has ended (the pool joined its workers in teardown)
+    {
+        dov::tracy_peer::stop();
+    }
+#endif
 #if CRD_PERF_ENABLED
     if (perf_started)
     {
@@ -696,6 +785,7 @@ int main(int argc, char** argv)
     // ---- checks --------------------------------------------------------------------------------------------------
     const u64 frames_total = total;
     const u64 sites_total  = workload->sites_per_iteration() * frames_total;
+    const u64 marks_total  = frames_total * (1U + workload->marks_per_iteration());
     const u64 payloads     = sites.payloads.load(std::memory_order_relaxed);
     const u64 setup_threads =
         after_setup.of(crd::LifetimeClass::Thread).acquired - after_mode.of(crd::LifetimeClass::Thread).acquired;
@@ -710,9 +800,11 @@ int main(int argc, char** argv)
                       "the workload's setup started another number of threads than the mode adds to its own");
         if (measured != nullptr)
         {
-            checks.expect(stats_coverage == kUnaskedCoverage,
-                          "the measured allocator's statistics cover something other than this build counts unasked");
-            if constexpr (kUnaskedCoverage == crd::memory::StatisticsCoverage::Complete)
+            checks.expect(stats_coverage == expected_coverage,
+                          requested_stats ? "the requested statistics of the measured allocator are not complete"
+                                          : "the measured allocator's statistics cover something other than this "
+                                            "build counts unasked");
+            if (expected_coverage == crd::memory::StatisticsCoverage::Complete)
             {
                 checks.expect(stats.alloc_count >= frames_total && stats.alloc_count == stats.dealloc_count &&
                                   stats.bytes_in_use == 0U,
@@ -733,6 +825,20 @@ int main(int argc, char** argv)
             checks.expect(!perf_started, "off: the profiler runs");
             checks.expect(requested == 0U && io_bytes == 0U, "off: a capture was asked for or written");
         }
+        else if (o.mode == dov::Mode::Tracy)
+        {
+            checks.expect(tracy_started, "tracy: Tracy did not start");
+            checks.expect(!recorder_running && !perf_started && requested == 0U && io_bytes == 0U,
+                          "tracy: a Cerid diagnostic ran");
+            const bool expect_client = o.tracy_connect_ms != 0U;
+            checks.expect(tracy_connected == expect_client && tracy_connected_end == expect_client,
+                          expect_client ? "tracy: the client was not connected from the first frame to the last"
+                                        : "tracy: a client connected although none was asked for");
+            checks.expect(payloads == (expect_client ? sites_total : 0U),
+                          "tracy: not every payload was formatted once while connected, or one was without a client");
+            checks.expect(tracy_unmatched == 0U, "tracy: a job's or an op's zone did not close where it began");
+            checks.expect(expect_client || tracy_zones == 0U, "tracy: a zone was emitted without a client");
+        }
         else if (o.mode == dov::Mode::Basic)
         {
             checks.expect(payloads == 0U, "basic: an informational payload was evaluated");
@@ -746,7 +852,15 @@ int main(int argc, char** argv)
             checks.expect(recorded == sites_total + frames_total, "full: not every site and frame was recorded");
             checks.expect(filtered == 0U, "full: an event was filtered");
             checks.expect(delivered == o.captures && failures == 0U, "full: a capture was not delivered");
-            checks.expect(!CRD_PERF_ENABLED || profiler_frames == frames_total, "full: the profiler missed a frame");
+            checks.expect(!CRD_PERF_ENABLED || profiler_frames == marks_total,
+                          "full: the profiler did not count every frame and mark");
+            checks.expect(!CRD_PERF_ENABLED || zones_recorded == workload->zones_per_iteration() * frames_total,
+                          "full: the profiler did not record every zone");
+            checks.expect(profiler_drops == 0U, "full: the profiler dropped a sample");
+        }
+        if (o.mode != dov::Mode::Full)
+        {
+            checks.expect(zones_recorded == 0U, "a mode without the profiler recorded a zone");
         }
         if (o.validation != dov::Validation::None)
         {
@@ -766,6 +880,7 @@ int main(int argc, char** argv)
     j.b("profiling", CRD_ENABLE_PROFILING != 0);
     j.b("asserts", CRD_ENABLE_ASSERTS != 0);
     j.b("shipping", CRD_DIAG_OVERHEAD_SHIPPING);
+    j.b("tick_clock_mapped", crd::time::TickClock::counter_mapped()); // the per-event clock was the cycle counter
     j.str("config", CRD_DIAG_OVERHEAD_CONFIG);
 #if defined(_MSC_VER) && !defined(__clang__)
     j.str("compiler", "msvc");
@@ -790,6 +905,7 @@ int main(int argc, char** argv)
         j.str("policy", policy_path);
     }
     j.b("profiler", perf_started);
+    j.b("memory", o.memory);
     j.u("affinity", o.affinity);
     j.b("pinned", pinned);
     j.u("threads", o.threads);
@@ -818,6 +934,18 @@ int main(int argc, char** argv)
     j.u("filtered", filtered);
     j.u("profiler_frames", profiler_frames);
     j.u("profiler_drops", profiler_drops);
+    j.u("zones_recorded", zones_recorded);
+    j.u("marks", marks_total);
+    j.close('}');
+    j.open("tracy", '{');
+    j.b("started", tracy_started);
+    j.u("connect_wait_ms", o.tracy_connect_ms);
+    j.b("connected", tracy_connected);
+    j.b("connected_at_end", tracy_connected_end);
+    j.u("zones", tracy_zones);
+    j.u("messages", tracy_started ? payloads : 0U);
+    j.u("frame_marks", tracy_started ? marks_total : 0U);
+    j.u("unmatched", tracy_unmatched);
     j.close('}');
     j.open("captures", '{');
     j.u("requested", requested);

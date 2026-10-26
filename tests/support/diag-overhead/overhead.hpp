@@ -12,6 +12,11 @@
 //          jobs watchdog window, the allocator watch and one host frame per iteration.
 //   full   the same host with the authored full flight policy (every event kept), plus the profiler started, the jobs
 //          adapter installed, the CEIR plan profiled and the profiler's rings drained each frame.
+//   tracy  crd-diag-overhead-tracy only (CRD_DIAG_PEER_TRACY): no Cerid diagnostic; Tracy Profiler started instead,
+//          with its counterparts at the same sites (DIAG.11b clause (8), the peer on comparable features): a message
+//          per site, a zone per zone site, per job and per dispatched CEIR op, a frame mark per frame and per mark
+//          site, memory events with --memory. Tracy runs on demand: with no client connected every site checks the
+//          connection and does nothing; --tracy-connect waits for a client (tracy-capture) before the frames.
 //
 // Each iteration is one frame of the workload's own work, timed from its start to the end of the host's frame call;
 // the workload's application event sites are CRD_FLIGHT_RECORD sites with formatted payloads (the site form the
@@ -26,6 +31,15 @@
 
 #include <atomic>
 #include <cstdio>
+
+#ifndef CRD_DIAG_OVERHEAD_TRACY
+#define CRD_DIAG_OVERHEAD_TRACY 0 // NOLINT(cppcoreguidelines-macro-usage): set by the peer harness's target
+#endif
+#if CRD_DIAG_OVERHEAD_TRACY
+#include <crd/ceir/plan.hpp>
+
+#include <tracy/Tracy.hpp> // the pinned client's C++ macros; tracy-client's definitions configure them
+#endif
 
 namespace crd::memory
 {
@@ -43,9 +57,10 @@ enum class Mode : crd::u8
     Off,
     Basic,
     Full,
+    Tracy, // the peer: crd-diag-overhead-tracy only
 };
 
-// "off", "basic", "full".
+// "off", "basic", "full", "tracy".
 [[nodiscard]] const char* mode_name(Mode m) noexcept;
 
 // The device validation the render workload's device runs with (--validation): none, the core layer, or the core
@@ -85,7 +100,36 @@ struct Sites
 {
     cp::FlightRecorder*   recorder = nullptr; // null in the off mode
     std::atomic<crd::u64> payloads{0U};
+    bool                  tracy = false; // the tracy mode: every site is Tracy's counterpart
 };
+
+// An application event site. In the Cerid modes exactly CRD_FLIGHT_RECORD (the payload is evaluated only when the
+// recorder keeps the event). In the tracy mode Tracy's message at the same site, guarded by the manual's connection
+// status (TracyIsConnected), so its text is formatted only while a client is connected, as Cerid's is only for a kept
+// event; a bare TracyMessage would format every text. Tracy keeps no scalars and filters no severity in the client.
+#if CRD_DIAG_OVERHEAD_TRACY
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): only a macro leaves the payload unevaluated when the site is off.
+#define DOV_SITE(sites, code, severity, message, value_a, value_b)                                                     \
+    do                                                                                                                 \
+    {                                                                                                                  \
+        if ((sites).tracy)                                                                                             \
+        {                                                                                                              \
+            if (TracyIsConnected)                                                                                      \
+            {                                                                                                          \
+                const ::crd::containers::StringView dov_site_text_ = (message);                                        \
+                TracyMessage(dov_site_text_.data(), dov_site_text_.size());                                            \
+            }                                                                                                          \
+        }                                                                                                              \
+        else                                                                                                           \
+        {                                                                                                              \
+            CRD_FLIGHT_RECORD((sites).recorder, code, severity, message, value_a, value_b);                            \
+        }                                                                                                              \
+    } while (false)
+#else
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage): only a macro leaves the payload unevaluated when the site is off.
+#define DOV_SITE(sites, code, severity, message, value_a, value_b)                                                     \
+    CRD_FLIGHT_RECORD((sites).recorder, code, severity, message, value_a, value_b)
+#endif
 
 struct WorkloadSetup
 {
@@ -97,6 +141,8 @@ struct WorkloadSetup
     const char*         scratch    = nullptr; // io and render: the directory their files are written to (--scratch)
     const char*         assets     = nullptr; // render workload: the engine asset root its authored frame graph is in
     Validation          validation = Validation::None; // render workload: its device's validation (--validation)
+    bool                memory     = false; // alloc workload (--memory): full counts the heap's statistics through
+                                            // the profiler's allocator registry, tracy reports every operation
 };
 
 class Workload
@@ -143,6 +189,15 @@ public:
     [[nodiscard]] virtual const crd::memory::IAllocator* measured_allocator() const noexcept { return nullptr; }
     // After teardown: what the device validation the setup asked for saw; null when none was asked for.
     [[nodiscard]] virtual const ValidationOutcome* validation() const noexcept { return nullptr; }
+    // The frame marks one iteration makes besides the harness's own one per frame (the marks workload).
+    [[nodiscard]] virtual crd::u64 marks_per_iteration() const noexcept { return 0U; }
+    // The profiler zones the workload's own zone sites recorded over the run, read before the full mode's consumer
+    // drains them each frame, and the zones one iteration opens (the zones workload).
+    [[nodiscard]] virtual crd::u64 zones_recorded() const noexcept { return 0U; }
+    [[nodiscard]] virtual crd::u64 zones_per_iteration() const noexcept { return 0U; }
+    // The tracy mode: the Tracy zones the workload emitted while a client was connected (its zone sites, its jobs and
+    // its CEIR ops), which a connected capture must hold.
+    [[nodiscard]] virtual crd::u64 tracy_zones() const noexcept { return 0U; }
 };
 
 // The workloads by name ("alloc", "jobs", "offline", "io", "render", "events"); null for an unknown name. The object is
@@ -151,5 +206,32 @@ public:
 
 // Open `path` for binary reading (fopen_s where the CRT deprecates fopen); null when it cannot be opened.
 [[nodiscard]] std::FILE* open_for_reading(const char* path) noexcept;
+
+#if CRD_DIAG_OVERHEAD_TRACY
+// The peer's out-of-line half (tracy_peer.cpp): Tracy's lifetime and connection, and its counterparts of the two
+// Cerid observers that are callbacks (the jobs adapter's JobObserver and the CEIR bridge's RunHooks).
+namespace tracy_peer
+{
+void start() noexcept;
+void stop() noexcept;
+[[nodiscard]] bool connected() noexcept;
+// Wait up to `ms` milliseconds for a client; true once one is connected.
+[[nodiscard]] bool wait_connected(crd::u32 ms) noexcept;
+// A Tracy zone per job through crd-jobs' observer seam, as the jobs adapter's region per job. The jobs zoned while
+// connected are counted, so a capture can be held to them; a job that ends with no zone open on its thread (none here:
+// no job of these workloads waits, so none moves) is counted apart.
+void install_jobs_observer() noexcept;
+void uninstall_jobs_observer() noexcept;
+[[nodiscard]] crd::u64 jobs_zoned() noexcept;
+[[nodiscard]] crd::u64 jobs_unmatched() noexcept;
+// A Tracy zone per dispatched CEIR op, named by its op class, through the plan's RunHooks as the profiling bridge's
+// hooks run (the bridge aggregates a dispatch count and self time per op class instead; Tracy derives both from the
+// zones). One run at a time, on the offline workload's thread; ops nested past the bridge's 256 levels are not zoned
+// and counted apart, as a post with no open zone is.
+[[nodiscard]] crd::ceir::plan::RunHooks op_zone_hooks() noexcept;
+[[nodiscard]] crd::u64 ops_zoned() noexcept;     // ops zoned while connected
+[[nodiscard]] crd::u64 ops_unmatched() noexcept; // unzoned nesting, unmatched posts and zones still open
+} // namespace tracy_peer
+#endif
 
 } // namespace diag_overhead

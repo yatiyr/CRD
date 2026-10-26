@@ -9,7 +9,10 @@ wrong answer or loses a capture (an instrument failure that takes the workload's
 validation arm reported over off and failed by any message it saw, and a board rendered twice the same way (the
 bootstrap seed is fixed). The instruction board's fake cachegrind files check that
 setup cancels between the two frame counts, that repeats which disagree widen the interval to unresolved, and that a
-failed run takes the verdict.
+failed run takes the verdict. The peer (DIAG.11b clause (8)): the tracy arms are reported over off and full over
+tracy-connected, per event on the site workloads; a connected process whose client's capture misses an event, a
+record whose client was not there as the arm asks or whose zones did not close, and tools whose digests are not the
+pinned ones each fail; the instruction board counts the same arms and their per-event instructions.
 Run: python scripts/test-diag-overhead.py
 """
 import importlib.util
@@ -25,11 +28,12 @@ _spec.loader.exec_module(mod)
 
 
 def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None,
-           warmup=1, validation='none', errors=0):
+           warmup=1, validation='none', errors=0, tracy=None):
     """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
-    False when it was not read."""
+    False when it was not read. `tracy` is its tracy object (the tracy mode's)."""
     per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
-    return {'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': warmup,
+    return {'tracy': tracy or {'started': False},
+            'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': warmup,
             'iterations': len(samples), 'executed': len(samples) + warmup, 'wrong': wrong, 'samples_ns': samples,
             'cpu': {'read': cpu is not False, 'unit': 'cycles', 'timed': int(per_frame * len(samples))},
             'events': {'sites': 4, 'frames': 2, 'payloads': 0, 'recorded': 0, 'filtered': 6, 'profiler_drops': 0},
@@ -72,13 +76,18 @@ class FakeRunner:
         self.cpu = cpu
         self.cpu_jitter = cpu_jitter
         self.calls = []
+        self.ports = []
 
-    def __call__(self, command, timeout):
+    def __call__(self, command, timeout, env=None):
         exe = command[0]
         mode = command[command.index('--mode') + 1]
         arm = 'compiled-out' if exe == 'compiled-out' else ('before-' + mode if exe == 'before' else mode)
         validation = command[command.index('--validation') + 1] if '--validation' in command else 'none'
         arm = arm if validation == 'none' else 'validation-' + validation
+        connected = '--tracy-connect' in command
+        if connected:
+            arm = 'tracy-connected'
+            self.ports.append((env or {}).get('TRACY_PORT'))
         repetition = sum(1 for c in self.calls if c == arm)
         self.calls.append(arm)
         if (arm, repetition) in self.special:
@@ -89,7 +98,9 @@ class FakeRunner:
         samples = [int(base) - 2, int(base) - 1, int(base), int(base) + 1, int(base) + 2]
         cpu = None if self.cpu is None else self.cpu[arm] * (1.0 + sign * self.cpu_jitter)
         ring = 155648 if arm in ('basic', 'full') else 0
-        text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation))
+        tracy = None if mode != 'tracy' else {'started': True, 'connected': connected, 'connected_at_end': connected,
+                                              'zones': 7, 'messages': 5, 'frame_marks': 6, 'unmatched': 0}
+        text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation, tracy=tracy))
         return 0, 'noise line\n' + text + '\n', ''
 
 
@@ -270,6 +281,109 @@ class Boards(unittest.TestCase):
         self.assertTrue(all(line.count('|') == 14 for line in text.splitlines() if line.startswith('|')))
 
 
+class FakeCapture:
+    """A connected process's client: `problems` maps the n-th client (0-based) to the problem its capture finds."""
+    started = []
+    problems = {}
+
+    def __init__(self, tools, directory, port, timeout):
+        self.port = port
+        self.index = len(FakeCapture.started)
+        FakeCapture.started.append(port)
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def finish(self, record):
+        return FakeCapture.problems.get(self.index)
+
+
+class Peer(unittest.TestCase):
+    MEDIANS = {'off': 100000, 'full': 300000, 'tracy': 100500, 'tracy-connected': 280000}
+
+    def measure(self, runner, problems=None, **kw):
+        FakeCapture.started = []
+        FakeCapture.problems = problems or {}
+        options = dict(baseline_exe=None, arms=['off', 'full', 'tracy', 'tracy-connected'], tracy_tools='unused')
+        options.update(kw)
+        with tempfile.TemporaryDirectory() as scratch:
+            return mod.measure(Args(scratch, **options), runner=runner, capture=FakeCapture)
+
+    def setUp(self):
+        self.tools = mod.tracy_tools
+        mod.tracy_tools = lambda source, scratch: {'capture': 'capture', 'csvexport': 'csvexport'}
+
+    def tearDown(self):
+        mod.tracy_tools = self.tools
+
+    def test_the_peer_comparisons_are_reported_and_cost_per_event_on_a_site_workload(self):
+        runner = FakeRunner(self.MEDIANS)
+        board = self.measure(runner, workloads=['events'])
+        verdicts = board['workloads']['events']['verdicts']
+        for name, cost in (('tracy', 100500 / 100000.0), ('tracy-connected', 2.8),
+                           ('full-vs-tracy-connected', 300000 / 280000.0)):
+            self.assertEqual(verdicts[name]['verdict'], 'reported', name)
+            self.assertIsNone(verdicts[name]['budget'], name)
+            self.assertAlmostEqual(verdicts[name]['cost'], cost - 1.0, places=6, msg=name)
+        self.assertEqual((verdicts['full-vs-tracy-connected']['candidate'],
+                          verdicts['full-vs-tracy-connected']['reference']), ('full', 'tracy-connected'))
+        self.assertAlmostEqual(verdicts['full-vs-tracy-connected']['per_event_ns']['cost'], 20000 / 4096.0, places=6)
+        self.assertAlmostEqual(verdicts['tracy']['per_event_ns']['cost'], 500 / 4096.0, places=6)
+        # every connected process had its own client on its own port, passed to it as TRACY_PORT
+        self.assertEqual(len(FakeCapture.started), 6)
+        self.assertEqual(len(set(FakeCapture.started)), 6)
+        self.assertEqual(runner.ports, [str(port) for port in FakeCapture.started])
+        text = mod.render([board])
+        self.assertIn('| events | full vs tracy-connected |', text)
+        self.assertIn('| events | full vs tracy-connected | +4.9 ns (', text)
+        self.assertIn('| events | tracy |', text)
+        alloc = self.measure(FakeRunner(self.MEDIANS), workloads=['alloc'])
+        self.assertNotIn('per_event_ns', alloc['workloads']['alloc']['verdicts']['tracy'], 'not a site workload')
+
+    def test_a_capture_that_misses_an_event_is_an_instrument_failure(self):
+        board = self.measure(FakeRunner(self.MEDIANS), {2: 'the capture holds zones 6 of 7'}, workloads=['events'])
+        entry = board['workloads']['events']
+        self.assertEqual(entry['failures'], [{'arm': 'tracy-connected', 'repetition': 2,
+                                              'problem': 'the capture holds zones 6 of 7'}])
+        self.assertEqual(entry['verdicts'], {})
+
+    def test_a_tracy_record_is_held_to_its_arm(self):
+        tracy = {'started': True, 'connected': True, 'connected_at_end': True, 'unmatched': 0}
+        good = record('events', 'tracy', [1, 2], tracy=tracy)
+        self.assertIsNone(mod.tracy_problem(good, True))
+        self.assertIn('connected', mod.tracy_problem(good, False))
+        self.assertIn('not connected throughout', mod.tracy_problem(
+            record('events', 'tracy', [1, 2], tracy=dict(tracy, connected_at_end=False)), True))
+        self.assertIn('did not close', mod.tracy_problem(record('events', 'tracy', [1, 2],
+                                                                tracy=dict(tracy, unmatched=3)), True))
+        self.assertIn('did not start', mod.tracy_problem(record('events', 'off', [1, 2]), False))
+        unconnected = dict(tracy, connected=False, connected_at_end=False)
+        board = self.measure(FakeRunner(self.MEDIANS, {('tracy', 1): (0, json.dumps(record(
+            'alloc', 'tracy', [1, 2, 3, 4, 5], tracy=dict(unconnected, unmatched=1))), '')}), workloads=['alloc'])
+        self.assertEqual(board['workloads']['alloc']['failures'][0]['arm'], 'tracy')
+
+    def test_a_connected_arm_needs_the_tools(self):
+        with self.assertRaises(mod.OverheadError):
+            self.measure(FakeRunner(self.MEDIANS), tracy_tools=None)
+
+    def test_the_capture_summary_is_read_with_its_digit_grouping(self):
+        text = 'Connecting to 127.0.0.1:8086...\nFrames: 11\nTime span: 4.22 ms\nZones: 1,234,567\n'
+        self.assertEqual(mod.capture_number(text, 'Zones:'), 1234567)
+        self.assertEqual(mod.capture_number(text, 'Frames:'), 11)
+        self.assertIsNone(mod.capture_number(text, 'Messages:'))
+
+    def test_tools_whose_digests_are_not_the_pinned_ones_are_refused(self):
+        mod.tracy_tools = self.tools
+        with tempfile.TemporaryDirectory() as raw:
+            for name in ('tracy-capture.exe', 'tracy-csvexport.exe'):
+                (Path(raw) / name).write_bytes(b'not the release')
+            with self.assertRaises(ValueError): # pins.PinError
+                mod.tracy_tools(raw, raw)
+
+
 class FakeCachegrind:
     """Writes each run's cachegrind file: a setup cost plus a per-frame cost per arm (`frame`, instructions; the
     misses a hundredth of them in every column), the instructions moved by `wobble` on every second repeat;
@@ -282,9 +396,11 @@ class FakeCachegrind:
         self.special = special or {}
         self.seen = {}
 
-    def __call__(self, command, timeout):
+    def __call__(self, command, timeout, env=None):
         exe = command[command.index('--workload') - 1]
-        arm = {'compiled-out': 'compiled-out', 'before': 'before-off'}.get(exe, 'off')
+        mode = command[command.index('--mode') + 1]
+        arm = {'compiled-out': 'compiled-out', 'before': 'before-off'}.get(exe, mode)
+        arm = 'tracy-connected' if '--tracy-connect' in command else arm
         frames = int(command[command.index('--iterations') + 1])
         repeat = self.seen.get((arm, frames), 0)
         self.seen[(arm, frames)] = repeat + 1
@@ -295,7 +411,9 @@ class FakeCachegrind:
         misses = ' '.join([str(instructions // 100)] * 8)
         output.write_text('desc: I1 cache\ncmd: x\nevents: Ir I1mr ILmr Dr D1mr DLmr Dw D1mw DLmw\nfl=a\n'
                           'summary: %d %s\n' % (instructions, misses), encoding='utf-8')
-        return 0, json.dumps(record('offline', 'off', [100] * frames, captures=0, warmup=20)) + '\n', ''
+        tracy = None if mode != 'tracy' else {'started': True, 'connected': arm == 'tracy-connected',
+                                              'connected_at_end': arm == 'tracy-connected', 'unmatched': 0}
+        return 0, json.dumps(record('offline', mode, [100] * frames, captures=0, warmup=20, tracy=tracy)) + '\n', ''
 
 
 class CountArgs:
@@ -368,6 +486,31 @@ class Instructions(unittest.TestCase):
         self.assertEqual(self.count(FakeCachegrind(frame))['workloads']['offline']['change'], {})
         self.assertEqual(mod.main(['instructions', '--exe', __file__, '--scratch', '.', '--label', 'x',
                                    '--output', 'unused.json']), 2, 'nothing to compare with')
+
+    def test_the_peer_arms_are_counted_with_their_instructions_per_event(self):
+        FakeCapture.started = []
+        FakeCapture.problems = {}
+        frame = {'off': 1000000, 'full': 1409600, 'tracy': 1004096, 'tracy-connected': 1307200}
+        tools = mod.tracy_tools
+        mod.tracy_tools = lambda source, scratch: {'capture': 'capture', 'csvexport': 'csvexport'}
+        try:
+            with tempfile.TemporaryDirectory() as scratch:
+                board = mod.count(CountArgs(scratch, workloads=['events'], baseline_exe=None, tracy_tools='unused',
+                                            arms=['off', 'full', 'tracy', 'tracy-connected']),
+                                  runner=FakeCachegrind(frame), capture=FakeCapture)
+        finally:
+            mod.tracy_tools = tools
+        peers = board['workloads']['events']['peers']
+        self.assertEqual(sorted(peers), ['full', 'full-vs-tracy-connected', 'tracy', 'tracy-connected'])
+        self.assertEqual(peers['full-vs-tracy-connected']['per_event'], {'low': 25.0, 'high': 25.0})
+        self.assertEqual(peers['tracy']['per_event'], {'low': 1.0, 'high': 1.0})
+        self.assertAlmostEqual(peers['full']['instructions']['low'], 0.4096, places=9)
+        self.assertEqual(len(FakeCapture.started), 4,
+                         'a client for each connected count (two frame counts, two repeats)')
+        text = mod.render_counts(board)
+        self.assertIn('| events | full vs tracy-connected | +7.83% | +7.83% | +7.83% | reported; 25 instructions per '
+                      'event |', text)
+        self.assertTrue(all(line.count('|') == 7 for line in text.splitlines() if line.startswith('|')))
 
     def test_render_is_stable_and_names_the_verdict(self):
         board = self.count(FakeCachegrind({'compiled-out': 10000000, 'off': 10008000}))

@@ -129,6 +129,11 @@
       "why": "The shootouts against Eigen and OpenBLAS, fetched at configure time only when the option is on."
     },
     {
+      "paths": ["tests/support/diag-overhead/tracy_peer.cpp"],
+      "built_when": {"option": "CRD_DIAG_PEER_TRACY"},
+      "why": "The overhead harness's Tracy peer (crd-diag-overhead-tracy, DIAG.11b clause (8)), against the pinned Tracy client fetched at configure time only when the option is on."
+    },
+    {
       "paths": ["runtime/examples/bench_hesap_lbfgs_vs_reference.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_LBFGS"},
       "why": "The L-BFGS bench against liblbfgs, a local oracle (scripts/setup-lbfgs-ref.sh)."

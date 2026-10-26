@@ -1,10 +1,12 @@
-// crd-diag-overhead -- the six workloads (DIAG.11b). See overhead.hpp for the modes.
+// crd-diag-overhead -- the eight workloads (DIAG.11b). See overhead.hpp for the modes.
 //
 // Each is a production path an acceptance workload of ADR-0133 ID-5 names, driven the way an application drives it:
 //
 //   alloc    allocation-heavy: 4096 allocate/free operations per frame on a TLSF heap over a static arena (sizes
 //            16..2048 bytes from a fixed generator, 64 blocks live at a time), handed to its owner through the host's
-//            allocator watch in basic and full. One site every 256 operations.
+//            allocator watch in basic and full. One site every 256 operations. With --memory the full mode counts
+//            the heap's statistics (registered with the profiler before its first allocation, snapshotted at every
+//            frame mark) and the tracy mode reports each allocation and free to Tracy (TracyAllocN/TracyFreeN).
 //   jobs     tiny jobs: 2048 jobs per frame on the crd-jobs pool, each summing 512 squares (the scheduler
 //            workload), the pool configured by the host (its watchdog window) and observed by the profiler's jobs
 //            adapter in full. One site per job, recorded from whichever worker ran it.
@@ -20,6 +22,14 @@
 //            by the host in basic and full. One site per frame. With --validation the device runs that validation
 //            under a message capture, and a mode the device does not run refuses the run.
 //   events   the site itself: 4096 sites per frame on one thread, the per-event cost of each mode.
+//   zones    the profiler zone itself: 2048 CRD_PERF_SCOPE zones per frame on one thread (Tracy: ZoneScopedN), the
+//            per-zone cost; a frame's zones fit the profiler's per-thread ring, which the full mode drains each frame.
+//   marks    the frame mark itself: 64 CRD_PERF_FRAME_MARK per frame besides the harness's own (Tracy: FrameMark),
+//            the per-mark cost.
+//
+// In the tracy mode (crd-diag-overhead-tracy) every site, zone and mark is Tracy's counterpart, the jobs pool's jobs
+// are zoned through crd-jobs' observer as the jobs adapter's are, and the CEIR plan's ops through its RunHooks as the
+// profiling bridge's are (tracy_peer.cpp).
 //
 // Every workload knows its answer: an iteration that computes anything else fails the run.
 
@@ -40,6 +50,9 @@
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/perf/config.hpp>
+#include <crd/perf/memory.hpp>
+#include <crd/perf/profiler.hpp>
+#include <crd/perf/scope.hpp>
 #include <crd/platform/async_file.hpp>
 #include <crd/platform/filesystem.hpp>
 #include <crd/resources/resource_manager.hpp>
@@ -129,6 +142,20 @@ public:
                 return false;
             }
         }
+#if CRD_PERF_ENABLED
+        if (setup.memory && setup.mode == Mode::Full)
+        {
+            m_registered = cp::register_allocator("diag-overhead", &*m_tlsf); // before the heap's first allocation
+            if (m_registered == cp::kInvalidAllocatorIdx)
+            {
+                reason.append("the profiler did not register the heap");
+                return false;
+            }
+        }
+#endif
+#if CRD_DIAG_OVERHEAD_TRACY
+        m_tracy_memory = setup.memory && setup.mode == Mode::Tracy;
+#endif
         u64 state = kAllocSeed;
         m_expected = 0U;
         for (u32 op = 0U; op < kAllocOps; ++op)
@@ -139,6 +166,41 @@ public:
     }
 
     bool iterate(u64& signature) override
+    {
+#if CRD_DIAG_OVERHEAD_TRACY
+        if (m_tracy_memory)
+        {
+            return frame<true>(signature);
+        }
+#endif
+        return frame<false>(signature);
+    }
+
+    void teardown() override
+    {
+#if CRD_PERF_ENABLED
+        if (m_registered != cp::kInvalidAllocatorIdx)
+        {
+            cp::unregister_allocator(m_registered);
+            m_registered = cp::kInvalidAllocatorIdx;
+        }
+#endif
+        m_alloc = nullptr;
+        m_tlsf.reset();
+    }
+
+    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return kAllocOps / kAllocBatch; }
+    [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
+    [[nodiscard]] const crd::memory::IAllocator* measured_allocator() const noexcept override
+    {
+        return m_tlsf.has_value() ? &*m_tlsf : nullptr;
+    }
+
+private:
+    // One frame; with TracyMemory every allocation and free is reported to Tracy as well, next to the operation (one
+    // thread, so the reports keep the operations' order, as Tracy requires).
+    template <bool TracyMemory>
+    bool frame(u64& signature)
     {
         void* live[kAllocSlots] = {}; // NOLINT(modernize-avoid-c-arrays)
         u64   live_bytes        = 0U;
@@ -152,6 +214,12 @@ public:
             const u32 slot = op % kAllocSlots;
             if (live[slot] != nullptr)
             {
+#if CRD_DIAG_OVERHEAD_TRACY
+                if constexpr (TracyMemory)
+                {
+                    TracyFreeN(live[slot], kTracyPool);
+                }
+#endif
                 m_alloc->deallocate(live[slot]);
                 live_bytes -= sizes[slot];
                 live[slot] = nullptr;
@@ -163,6 +231,12 @@ public:
                 ok = false;
                 break;
             }
+#if CRD_DIAG_OVERHEAD_TRACY
+            if constexpr (TracyMemory)
+            {
+                TracyAllocN(p, static_cast<usize>(size), kTracyPool);
+            }
+#endif
             static_cast<crd::u8*>(p)[0] = static_cast<crd::u8>(op);
             live[slot]                  = p;
             sizes[slot]                 = size;
@@ -170,15 +244,21 @@ public:
             sum += size;
             if (((op + 1U) % kAllocBatch) == 0U)
             {
-                CRD_FLIGHT_RECORD(m_sites->recorder, kCodeAllocBatch, cp::Severity::Info,
-                                  payload(*m_sites, buffer, kPayloadBytes, "alloc batch", op + 1U, live_bytes), op + 1U,
-                                  live_bytes);
+                DOV_SITE(*m_sites, kCodeAllocBatch, cp::Severity::Info,
+                         payload(*m_sites, buffer, kPayloadBytes, "alloc batch", op + 1U, live_bytes), op + 1U,
+                         live_bytes);
             }
         }
         for (void* p : live)
         {
             if (p != nullptr)
             {
+#if CRD_DIAG_OVERHEAD_TRACY
+                if constexpr (TracyMemory)
+                {
+                    TracyFreeN(p, kTracyPool);
+                }
+#endif
                 m_alloc->deallocate(p);
             }
         }
@@ -186,24 +266,15 @@ public:
         return ok;
     }
 
-    void teardown() override
-    {
-        m_alloc = nullptr;
-        m_tlsf.reset();
-    }
-
-    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return kAllocOps / kAllocBatch; }
-    [[nodiscard]] u64 expected() const noexcept override { return m_expected; }
-    [[nodiscard]] const crd::memory::IAllocator* measured_allocator() const noexcept override
-    {
-        return m_tlsf.has_value() ? &*m_tlsf : nullptr;
-    }
-
-private:
+#if CRD_DIAG_OVERHEAD_TRACY
+    static constexpr const char* kTracyPool = "diag-overhead"; // Tracy names a pool by the pointer
+    bool                         m_tracy_memory = false;
+#endif
     Sites*                                    m_sites = nullptr;
     std::optional<crd::memory::TlsfAllocator> m_tlsf;
-    crd::memory::IAllocator*                  m_alloc    = nullptr;
-    u64                                       m_expected = 0U;
+    crd::memory::IAllocator*                  m_alloc      = nullptr;
+    u64                                       m_expected   = 0U;
+    crd::u32                                  m_registered = 0xFFFFFFFFU; // the profiler's slot (--memory, full)
 };
 
 // ---- jobs -------------------------------------------------------------------------------------------------------
@@ -251,8 +322,8 @@ void sum_slice(void* data)
     }
     slice->sum = sum;
     char buffer[kPayloadBytes];
-    CRD_FLIGHT_RECORD(slice->sites->recorder, kCodeJobDone, cp::Severity::Info,
-                      payload(*slice->sites, buffer, kPayloadBytes, "job", slice->index, sum), slice->index, sum);
+    DOV_SITE(*slice->sites, kCodeJobDone, cp::Severity::Info,
+             payload(*slice->sites, buffer, kPayloadBytes, "job", slice->index, sum), slice->index, sum);
 }
 
 // The crd-jobs pool the jobs and io workloads run on (the calling thread is worker 0, the pool starts the others),
@@ -262,7 +333,10 @@ class PooledWorkload : public Workload
 {
 public:
     [[nodiscard]] u64 own_threads(u32 threads) const noexcept override { return pool_threads(threads) - 1U; }
-    [[nodiscard]] u64 diagnostic_threads(Mode mode) const noexcept override { return mode == Mode::Off ? 0U : 1U; }
+    [[nodiscard]] u64 diagnostic_threads(Mode mode) const noexcept override
+    {
+        return mode == Mode::Basic || mode == Mode::Full ? 1U : 0U; // the host's jobs watchdog
+    }
 
 protected:
     // The pool's threads, the calling thread included, for --threads `requested`.
@@ -277,6 +351,13 @@ protected:
             setup.host->configure_jobs(config); // the profile's watchdog window, before the pool exists
         }
         m_adapter = setup.mode == Mode::Full && set_jobs_adapter(true); // the profiler observes every job
+#if CRD_DIAG_OVERHEAD_TRACY
+        m_tracy_observer = setup.mode == Mode::Tracy; // Tracy zones every job at the same seam
+        if (m_tracy_observer)
+        {
+            tracy_peer::install_jobs_observer();
+        }
+#endif
         crd::jobs::init(config);
     }
 
@@ -288,10 +369,30 @@ protected:
             (void)set_jobs_adapter(false);
             m_adapter = false;
         }
+#if CRD_DIAG_OVERHEAD_TRACY
+        if (m_tracy_observer)
+        {
+            tracy_peer::uninstall_jobs_observer();
+            m_tracy_observer = false;
+        }
+#endif
+    }
+
+public:
+    [[nodiscard]] u64 tracy_zones() const noexcept override
+    {
+#if CRD_DIAG_OVERHEAD_TRACY
+        return tracy_peer::jobs_zoned();
+#else
+        return 0U;
+#endif
     }
 
 private:
     bool m_adapter = false;
+#if CRD_DIAG_OVERHEAD_TRACY
+    bool m_tracy_observer = false;
+#endif
 };
 
 class JobsWorkload final : public PooledWorkload
@@ -360,6 +461,9 @@ public:
     {
         m_sites = setup.sites;
         m_full  = setup.mode == Mode::Full;
+#if CRD_DIAG_OVERHEAD_TRACY
+        m_tracy = setup.mode == Mode::Tracy;
+#endif
         if (setup.program == nullptr)
         {
             reason.append("no program (--program)");
@@ -434,6 +538,17 @@ public:
             }
             result = ran.values[0];
         }
+#if CRD_DIAG_OVERHEAD_TRACY
+        else if (m_tracy)
+        {
+            // The bridge's counterpart: a zone around the compile and the run (its CRD_PERF_SCOPE regions), the plan's
+            // shape and the run's dispatch total as plots (its counters), and a zone per dispatched op.
+            if (!tracy_run(run_ctx, *loaded.module, arguments, arena, result))
+            {
+                return false;
+            }
+        }
+#endif
         else
         {
             const crd::ceir::plan::CompileResult compiled =
@@ -450,10 +565,10 @@ public:
             result = ran.values[0];
         }
         char buffer[kPayloadBytes];
-        CRD_FLIGHT_RECORD(m_sites->recorder, kCodeProgramRan, cp::Severity::Info,
-                          payload(*m_sites, buffer, kPayloadBytes, "program ran", static_cast<u64>(result),
-                                  static_cast<u64>(kProgramSteps)),
-                          ++m_runs, static_cast<u64>(result));
+        DOV_SITE(*m_sites, kCodeProgramRan, cp::Severity::Info,
+                 payload(*m_sites, buffer, kPayloadBytes, "program ran", static_cast<u64>(result),
+                         static_cast<u64>(kProgramSteps)),
+                 ++m_runs, static_cast<u64>(result));
         signature = static_cast<u64>(result);
         return true;
     }
@@ -462,8 +577,54 @@ public:
 
     [[nodiscard]] u64 sites_per_iteration() const noexcept override { return 1U; }
     [[nodiscard]] u64 expected() const noexcept override { return static_cast<u64>(kProgramSteps) + 1U; }
+    [[nodiscard]] u64 tracy_zones() const noexcept override
+    {
+#if CRD_DIAG_OVERHEAD_TRACY
+        return m_tracy_regions + tracy_peer::ops_zoned();
+#else
+        return 0U;
+#endif
+    }
 
 private:
+#if CRD_DIAG_OVERHEAD_TRACY
+    bool tracy_run(crd::ceir::Context& ctx, const crd::ceir::Module& module, cont::ConstSpan<crd::i64> arguments,
+                   crd::memory::IAllocator& arena, crd::i64& result)
+    {
+        const bool regions = TracyIsConnected;
+        const crd::ceir::plan::CompileResult compiled = [&]
+        {
+            ZoneScopedN("ceir.plan.compile");
+            return crd::ceir::plan::compile(ctx, module, "main", &arena);
+        }();
+        if (!compiled.ok())
+        {
+            return false;
+        }
+        TracyPlot("ceir.plan.compile.instrs", static_cast<int64_t>(compiled.stats.num_instrs));
+        TracyPlot("ceir.plan.compile.seqs", static_cast<int64_t>(compiled.stats.num_seqs));
+        TracyPlot("ceir.plan.compile.funcs", static_cast<int64_t>(compiled.stats.num_funcs));
+        TracyPlot("ceir.plan.compile.cells", static_cast<int64_t>(compiled.stats.num_cells));
+        TracyPlot("ceir.plan.compile.maps", static_cast<int64_t>(compiled.stats.num_maps));
+        const u64 zoned_before = tracy_peer::ops_zoned();
+        {
+            ZoneScopedN("ceir.plan.run");
+            const crd::ceir::plan::RunResult ran =
+                crd::ceir::plan::run(compiled.plan, arguments, &arena, tracy_peer::op_zone_hooks());
+            if (!ran.ok() || ran.values.size() != 1U)
+            {
+                return false;
+            }
+            result = ran.values[0];
+        }
+        TracyPlot("ceir.plan.dispatch_total", static_cast<int64_t>(tracy_peer::ops_zoned() - zoned_before));
+        m_tracy_regions += regions ? 2U : 0U;
+        return true;
+    }
+
+    bool         m_tracy         = false;
+    u64          m_tracy_regions = 0U; // the compile and run zones opened while connected
+#endif
     Sites*       m_sites = nullptr;
     bool         m_full  = false;
     u64          m_runs  = 0U;
@@ -659,8 +820,8 @@ private:
     void site(u32 read, u64 bytes)
     {
         char buffer[kPayloadBytes];
-        CRD_FLIGHT_RECORD(m_sites->recorder, kCodeRead, cp::Severity::Info,
-                          payload(*m_sites, buffer, kPayloadBytes, "read", read, bytes), read, bytes);
+        DOV_SITE(*m_sites, kCodeRead, cp::Severity::Info,
+                 payload(*m_sites, buffer, kPayloadBytes, "read", read, bytes), read, bytes);
     }
 
     void remove_files()
@@ -737,9 +898,9 @@ public:
         const crd::scenerender::SyncStats   synced = m_renderer->sync(*m_world);
         const crd::scenerender::RenderStats st     = draw();
         char                                buffer[kPayloadBytes];
-        CRD_FLIGHT_RECORD(m_sites->recorder, kCodeFrame, cp::Severity::Info,
-                          payload(*m_sites, buffer, kPayloadBytes, "frame drew", st.drawn_instances, st.draws),
-                          st.drawn_instances, st.draws);
+        DOV_SITE(*m_sites, kCodeFrame, cp::Severity::Info,
+                 payload(*m_sites, buffer, kPayloadBytes, "frame drew", st.drawn_instances, st.draws),
+                 st.drawn_instances, st.draws);
         signature = signature_of(st);
         return synced.dirty_runs > 0U && st.timed_passes > 0U;
     }
@@ -1055,8 +1216,8 @@ public:
         ++m_iteration;
         for (u32 i = 0U; i < kEvents; ++i)
         {
-            CRD_FLIGHT_RECORD(m_sites->recorder, kCodeEvent, cp::Severity::Info,
-                              payload(*m_sites, buffer, kPayloadBytes, "event", i, m_iteration), i, m_iteration);
+            DOV_SITE(*m_sites, kCodeEvent, cp::Severity::Info,
+                     payload(*m_sites, buffer, kPayloadBytes, "event", i, m_iteration), i, m_iteration);
             sum += i;
         }
         signature = sum;
@@ -1073,12 +1234,142 @@ private:
     u64    m_iteration = 0U;
 };
 
+// ---- zones ------------------------------------------------------------------------------------------------------
+
+constexpr u32 kZones = 2048U;
+static_assert(kZones < cp::kPerThreadRingSlots, "a frame's zones must fit the ring the full mode drains each frame");
+
+class ZonesWorkload final : public Workload
+{
+public:
+    [[nodiscard]] const char* name() const noexcept override { return "zones"; }
+
+    bool setup(const WorkloadSetup& setup, cont::String& reason) override
+    {
+        (void)reason;
+        m_full     = setup.mode == Mode::Full;
+        m_tracy    = setup.mode == Mode::Tracy;
+        m_recorded = 0U;
+        return true;
+    }
+
+    bool iterate(u64& signature) override
+    {
+#if CRD_DIAG_OVERHEAD_TRACY
+        signature = m_tracy ? tracy_frame() : cerid_frame();
+#else
+        signature = cerid_frame();
+#endif
+#if CRD_PERF_ENABLED
+        if (m_full) // this frame's zones, before the full mode's consumer drains the ring
+        {
+            m_recorded += cp::thread_samples(cp::current_thread_index()).size;
+        }
+#endif
+        return true;
+    }
+
+    void teardown() override {}
+
+    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return 0U; }
+    [[nodiscard]] u64 expected() const noexcept override { return (static_cast<u64>(kZones) * (kZones - 1U)) / 2U; }
+    [[nodiscard]] u64 zones_recorded() const noexcept override { return m_recorded; }
+    [[nodiscard]] u64 zones_per_iteration() const noexcept override { return kZones; }
+    [[nodiscard]] u64 tracy_zones() const noexcept override { return m_tracy_frames * kZones; }
+
+private:
+    static u64 cerid_frame() noexcept
+    {
+        u64 sum = 0U;
+        for (u32 i = 0U; i < kZones; ++i)
+        {
+            CRD_PERF_SCOPE("diag-overhead.zone");
+            sum += i;
+        }
+        return sum;
+    }
+
+#if CRD_DIAG_OVERHEAD_TRACY
+    u64 tracy_frame() noexcept
+    {
+        if (TracyIsConnected) // the frames whose zones a connected client receives
+        {
+            ++m_tracy_frames;
+        }
+        u64 sum = 0U;
+        for (u32 i = 0U; i < kZones; ++i)
+        {
+            ZoneScopedN("diag-overhead.zone");
+            sum += i;
+        }
+        return sum;
+    }
+#endif
+
+    bool m_full         = false;
+    bool m_tracy        = false;
+    u64  m_recorded     = 0U;
+    u64  m_tracy_frames = 0U;
+};
+
+// ---- marks ------------------------------------------------------------------------------------------------------
+
+constexpr u32 kMarks = 64U;
+
+class MarksWorkload final : public Workload
+{
+public:
+    [[nodiscard]] const char* name() const noexcept override { return "marks"; }
+
+    bool setup(const WorkloadSetup& setup, cont::String& reason) override
+    {
+        (void)reason;
+        m_tracy = setup.mode == Mode::Tracy;
+        return true;
+    }
+
+    bool iterate(u64& signature) override
+    {
+        u64 sum = 0U;
+#if CRD_DIAG_OVERHEAD_TRACY
+        if (m_tracy)
+        {
+            for (u32 i = 0U; i < kMarks; ++i)
+            {
+                FrameMark;
+                sum += i;
+            }
+            signature = sum;
+            return true;
+        }
+#endif
+        for (u32 i = 0U; i < kMarks; ++i)
+        {
+            CRD_PERF_FRAME_MARK();
+            sum += i;
+        }
+        signature = sum;
+        return true;
+    }
+
+    void teardown() override {}
+
+    [[nodiscard]] u64 sites_per_iteration() const noexcept override { return 0U; }
+    [[nodiscard]] u64 expected() const noexcept override { return (static_cast<u64>(kMarks) * (kMarks - 1U)) / 2U; }
+    [[nodiscard]] u64 marks_per_iteration() const noexcept override { return kMarks; }
+
+private:
+    bool m_tracy = false;
+};
+
 AllocWorkload   g_alloc;
 JobsWorkload    g_jobs;
 OfflineWorkload g_offline;
 IoWorkload      g_io;
 RenderWorkload  g_render;
 EventsWorkload  g_events;
+ZonesWorkload   g_zones;
+MarksWorkload   g_marks;
 
 } // namespace
 
@@ -1092,6 +1383,8 @@ const char* mode_name(Mode m) noexcept
         return "basic";
     case Mode::Full:
         return "full";
+    case Mode::Tracy:
+        return "tracy";
     }
     return "?";
 }
@@ -1124,8 +1417,8 @@ std::FILE* open_for_reading(const char* path) noexcept
 
 Workload* find_workload(const char* name) noexcept
 {
-    Workload* const all[] = {&g_alloc, &g_jobs, &g_offline, &g_io, &g_render, // NOLINT(modernize-avoid-c-arrays)
-                             &g_events};
+    Workload* const all[] = {&g_alloc, &g_jobs,   &g_offline, &g_io, // NOLINT(modernize-avoid-c-arrays)
+                             &g_render, &g_events, &g_zones,   &g_marks};
     for (Workload* w : all)
     {
         const char* a = w->name();

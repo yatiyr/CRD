@@ -40,6 +40,19 @@ that moves between runs widens it. The jobs pool runs one thread by default: wai
 scheduler; io runs its own two-thread pool. With `--before-exe` the off mode of the build made before a change is
 counted too and the change reported (`off vs before-off`); either comparison binary may be left out, not both.
 
+The peer (DIAG.11b clause (8)): with `--exe` the peer harness crd-diag-overhead-tracy (CRD_DIAG_PEER_TRACY), one
+binary holds the Cerid modes and Tracy's counterparts at the same sites, so `tracy` (Tracy started, no client: every
+site checks the connection and does nothing) and `tracy-connected` (a tracy-capture client on localhost from before
+the first frame to after the last, `--tracy-tools`: the pinned Windows release archive or a directory holding its
+two programs, each member checked against cmake/pins.json) are arms of the same binary as off, basic and full. Each
+connected process gets its own client on its own port (TRACY_PORT); the run is an instrument failure unless the
+client's capture holds every zone, frame mark and message the process emitted (its "Zones:" and "Frames:" lines and
+tracy-csvexport's message list). The peer comparisons are reported, never budgeted: tracy over off, tracy-connected
+over off, and full over tracy-connected (Cerid's recording against Tracy's, positive when Cerid costs more); on the
+site workloads (events, zones, marks) each also as nanoseconds per event over its reference. `--memory` passes the
+harness's --memory to the alloc workload: full counts the heap's statistics, the tracy arms report every operation.
+`instructions` counts the same arms under cachegrind (`--arms`; tracy-connected with a client as above).
+
 `render` turns boards into the markdown of docs/bench. Contract: docs/design/runtime-diagnostics.md (DIAG.11b).
 """
 from pathlib import Path
@@ -58,9 +71,22 @@ COUNT_SCHEMA = 'cerid-diag-overhead-instructions/1'
 RECORD_SCHEMA = 'cerid-diag-overhead/1'
 # cachegrind's events, summed into what a board shows: instructions (judged), first-level and last-level misses.
 COUNTED = {'instructions': ('Ir',), 'L1 misses': ('I1mr', 'D1mr', 'D1mw'), 'LL misses': ('ILmr', 'DLmr', 'DLmw')}
-WORKLOADS = ('alloc', 'jobs', 'offline', 'io', 'render', 'events')
-SITE_WORKLOADS = ('events',) # site microbenchmarks: their cost per site is reported, no budget judges them
+WORKLOADS = ('alloc', 'jobs', 'offline', 'io', 'render', 'events', 'zones', 'marks')
+# Site microbenchmarks: their cost per event is reported, no budget judges them. The events one frame makes: a
+# workload's sites (`sites` per frame), its zones (the harness's zones_per_iteration) or its marks beyond the frame's
+# own.
+SITE_WORKLOADS = ('events', 'zones', 'marks')
+EVENTS_PER_FRAME = {'events': 4096, 'zones': 2048, 'marks': 64}
 MODES = ('off', 'basic', 'full')
+TRACY_ARMS = ('tracy', 'tracy-connected')
+# The peer comparisons (name, candidate, reference), reported only.
+PEER_COMPARISONS = (('tracy', 'tracy', 'off'), ('tracy-connected', 'tracy-connected', 'off'),
+                    ('full-vs-tracy-connected', 'full', 'tracy-connected'))
+TRACY_CONNECT_MS = 30000
+TRACY_PORT_BASE = 18086
+# The capture client's frame count over the frame marks it received: an on-demand client's trace opens with the
+# profiler's start, the end of its initialisation and the connection (Tracy's Worker::Exec), measured 2026-10-26.
+TRACY_FRAME_OFFSET = 3
 VALIDATIONS = ('core', 'sync', 'gpu') # device validation arms, `validation-<name>`: render's off mode, reported
 VALIDATION_COUNTS = ('errors', 'warnings', 'lost', 'instrumentation_failures')
 BUDGETS = {'disabled': ('off', 'compiled-out', 0.01), 'basic': ('basic', 'off', 0.02)}
@@ -151,16 +177,154 @@ def record_problem(record, expected_frames):
     return None
 
 
-def run_process(command, timeout):
-    """Run one measurement process; (exit code, stdout, stderr)."""
+def tracy_problem(record, connected):
+    """Why a tracy arm's record cannot be used (the client's presence as the arm asks, every zone closed), or None."""
+    tracy = record.get('tracy') or {}
+    if not tracy.get('started'):
+        return 'Tracy did not start (not the peer harness?)'
+    if bool(tracy.get('connected')) != connected or bool(tracy.get('connected_at_end')) != connected:
+        return 'the Tracy client was %s' % ('not connected throughout' if connected else 'connected')
+    if tracy.get('unmatched'):
+        return '%s zones did not close where they began' % tracy['unmatched']
+    return None
+
+
+def run_process(command, timeout, env=None):
+    """Run one measurement process; (exit code, stdout, stderr). `env` adds variables to the inherited ones."""
     try:
         completed = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace',
-                                   timeout=timeout, check=False)
+                                   timeout=timeout, check=False, env=dict(os.environ, **env) if env else None)
     except subprocess.TimeoutExpired:
         return None, '', 'timed out after %s s' % timeout
     except OSError as error:
         return None, '', str(error)
     return completed.returncode, completed.stdout, completed.stderr
+
+
+def tracy_tools(source, scratch):
+    """The verified tracy-capture and tracy-csvexport: extracted from the pinned release archive (`source` a .zip) or
+    found in a directory, each checked against its member digest in cmake/pins.json."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import pins # noqa: E402 (the registry helper beside this script)
+    tools = {}
+    for name in ('tracy-capture-windows', 'tracy-csvexport-windows'):
+        pin = pins.entry('tools', name)
+        source_path = Path(source)
+        if source_path.is_dir():
+            tool = source_path / pin['member']
+            pins.verify(tool, pin['member_sha256'], pin['member'])
+        else:
+            tool = pins.install_member(pin, Path(scratch) / 'tracy-tools', archive=source_path)
+        tools[name.split('-')[1]] = str(tool)
+    return tools
+
+
+def host_path(path, exe):
+    """`path` as `exe` reads it: a Windows path for a Windows program run from WSL (through its interop)."""
+    if platform.system() == 'Linux' and str(exe).lower().endswith('.exe'):
+        return subprocess.run(['wslpath', '-w', str(path)], capture_output=True, text=True, check=True).stdout.strip()
+    return str(path)
+
+
+def capture_number(text, label):
+    """The integer tracy-capture printed after `label` (its digit grouping removed), or None."""
+    for line in text.splitlines():
+        if line.strip().startswith(label):
+            digits = ''.join(c for c in line.split(':', 1)[1] if c.isdigit())
+            return int(digits) if digits else None
+    return None
+
+
+class TracyCapture:
+    """One connected process's client: tracy-capture connecting to it on localhost at `port` (it retries until the
+    process listens), then its capture held to what the process emitted."""
+
+    def __init__(self, tools, directory, port, timeout):
+        self.tools = tools
+        self.trace = Path(directory) / 'capture.tracy'
+        self.port = port
+        self.timeout = timeout
+        self.process = None
+
+    def start(self):
+        capture = self.tools['capture']
+        self.process = subprocess.Popen([capture, '-o', host_path(self.trace, capture), '-a', '127.0.0.1', '-p',
+                                         str(self.port), '-f'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        text=True, encoding='utf-8', errors='replace')
+
+    def stop(self):
+        """End a client whose process never connected; nothing to judge."""
+        if self.process is not None and self.process.poll() is None:
+            self.process.kill()
+            self.process.communicate()
+
+    def finish(self, record):
+        """None when the capture holds every zone, frame mark and message `record` says the process emitted."""
+        try:
+            output, _ = self.process.communicate(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            self.stop()
+            return 'tracy-capture did not finish within %s s' % self.timeout
+        if self.process.returncode != 0 or not self.trace.is_file():
+            return 'tracy-capture exited %s without a trace: %s' % (self.process.returncode, output.strip()[-300:])
+        csvexport = self.tools['csvexport']
+        listed = subprocess.run([csvexport, '-m', host_path(self.trace, csvexport)], capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=self.timeout, check=False)
+        lines = [line for line in listed.stdout.splitlines() if line.strip()]
+        messages = 0 if lines[:1] == ['There are currently no messages!'] else max(len(lines) - 1, 0)
+        counts = {'zones': capture_number(output, 'Zones:'), 'frames': capture_number(output, 'Frames:'),
+                  'messages': messages if listed.returncode == 0 else None}
+        tracy = record.get('tracy') or {}
+        expected = {'zones': tracy.get('zones'), 'messages': tracy.get('messages'),
+                    'frames': (tracy.get('frame_marks') or 0) + TRACY_FRAME_OFFSET}
+        wrong = ['%s %s of %s' % (key, counts[key], expected[key]) for key in ('zones', 'frames', 'messages')
+                 if counts[key] != expected[key]]
+        self.trace.unlink(missing_ok=True)
+        return ('the capture holds ' + ', '.join(wrong)) if wrong else None
+
+
+def arm_specs(args):
+    """Every selectable arm: (name, program, mode, extra arguments, connected)."""
+    arms = [('off', args.exe, 'off', [], False), ('basic', args.exe, 'basic', [], False),
+            ('full', args.exe, 'full', [], False)]
+    arms += [('validation-' + v, args.exe, 'off', ['--validation', v], False) for v in VALIDATIONS]
+    arms += [('tracy', args.exe, 'tracy', [], False),
+             ('tracy-connected', args.exe, 'tracy', ['--tracy-connect', str(TRACY_CONNECT_MS)], True)]
+    if args.baseline_exe:
+        arms.insert(0, ('compiled-out', args.baseline_exe, 'off', [], False))
+    if getattr(args, 'before_exe', None):
+        arms += [('before-' + m, args.before_exe, m, [], False) for m in MODES]
+    return arms
+
+
+class Processes:
+    """Runs one arm's process, with its own Tracy client when the arm is connected (each on the next port)."""
+
+    def __init__(self, args, runner, capture):
+        self.args = args
+        self.runner = runner
+        self.capture = capture
+        self.port = TRACY_PORT_BASE
+        self.tools = None
+
+    def run(self, command, connected, directory, timeout):
+        """(exit code, stdout, stderr, problem): a connected process's capture problem, else None."""
+        if not connected:
+            code, stdout, stderr = self.runner(command, timeout)
+            return code, stdout, stderr, None
+        if self.tools is None:
+            if not getattr(self.args, 'tracy_tools', None):
+                raise OverheadError('tracy-connected needs --tracy-tools (the pinned Tracy release archive)')
+            self.tools = tracy_tools(self.args.tracy_tools, self.args.scratch)
+        self.port += 1
+        client = self.capture(self.tools, directory, self.port, timeout)
+        client.start()
+        code, stdout, stderr = self.runner(command, timeout, {'TRACY_PORT': str(self.port)})
+        record = parse_record(stdout) if code == 0 else None
+        if record is None:
+            client.stop()
+            return code, stdout, stderr, None
+        return code, stdout, stderr, client.finish(record)
 
 
 def file_identity(path):
@@ -225,15 +389,28 @@ def worse(first, second):
     return first
 
 
-def judge(arms, budgeted=True):
+def per_event(candidate_runs, reference_runs, events, value=frame_wall):
+    """The paired difference of a per-process value (same repetition) over `events` events per frame: its median and
+    95% interval, in the value's unit per event."""
+    differences = [(value(c) - value(r)) / float(events) for c, r in zip(candidate_runs, reference_runs)
+                   if c is not None and r is not None]
+    if not differences:
+        return {'pairs': 0, 'cost': None, 'low': None, 'high': None}
+    low, high = bootstrap_interval(differences)
+    return {'pairs': len(differences), 'cost': median(differences), 'low': low, 'high': high}
+
+
+def judge(arms, budgeted=True, events_per_frame=None):
     """Comparisons and verdicts of one workload's arms: each budget is judged on the frame time and on the CPU per
     frame, and its verdict is the worse of the two. A site microbenchmark (`budgeted` false) is reported, never
-    judged: the budgets bound the cost of a frame of work, not of an empty loop of sites."""
+    judged: the budgets bound the cost of a frame of work, not of an empty loop of sites; its comparisons also give the
+    cost per event (`events_per_frame`). The peer comparisons are reported only."""
     result = {}
     pairs = [(name, candidate, reference, budget if budgeted else None)
              for name, (candidate, reference, budget) in BUDGETS.items()] + [('full', 'full', 'off', None)] + [
                  ('validation-' + v, 'validation-' + v, 'off', None) for v in VALIDATIONS] + [
-                 ('change-' + m, m, 'before-' + m, None) for m in MODES]
+                 ('change-' + m, m, 'before-' + m, None) for m in MODES] + [
+                 (name, candidate, reference, None) for name, candidate, reference in PEER_COMPARISONS]
     for name, candidate, reference, budget in pairs:
         if candidate not in arms or reference not in arms:
             if name in BUDGETS:
@@ -241,6 +418,10 @@ def judge(arms, budgeted=True):
             continue
         comparison = compare(arms[candidate]['runs'], arms[reference]['runs'])
         cpu = compare(arms[candidate]['runs'], arms[reference]['runs'], frame_cpu)
+        if events_per_frame:
+            comparison['per_event_ns'] = per_event(arms[candidate]['runs'], arms[reference]['runs'], events_per_frame)
+            cpu['per_event'] = per_event(arms[candidate]['runs'], arms[reference]['runs'], events_per_frame,
+                                         frame_cpu)
         wall_verdict, cpu['verdict'] = ('reported', 'reported') if budget is None else (
             verdict(comparison['low'], comparison['high'], budget), verdict(cpu['low'], cpu['high'], budget))
         comparison.update({'budget': budget, 'candidate': candidate, 'reference': reference, 'cpu': cpu,
@@ -290,36 +471,40 @@ def per_frame(short_runs, long_runs, frames):
     return (min(deltas), max(deltas)) if deltas else (None, None)
 
 
-def count(args, runner=run_process):
+def count(args, runner=run_process, capture=TracyCapture):
     """The instruction board: each arm's events per frame under cachegrind, and the disabled budget judged on the
-    instructions (the misses are reported). With `before_exe` (the same build made before a change) the off mode's
-    change is reported too."""
-    arms = [('off', args.exe)]
-    if args.baseline_exe:
-        arms.insert(0, ('compiled-out', args.baseline_exe))
-    if getattr(args, 'before_exe', None):
-        arms.append(('before-off', args.before_exe))
+    instructions (the misses are reported). By default the off mode of the measured build, of the compiled-out one and,
+    with `before_exe` (the same build made before a change), of the build before it, whose change is reported; `arms`
+    selects others (basic, full, the tracy arms), whose comparisons with off and the peer comparisons are reported."""
+    names = getattr(args, 'arms', None) or ['compiled-out', 'off', 'before-off']
+    arms = [a for a in arm_specs(args) if a[0] in names and not a[0].startswith('validation-')]
+    if not arms:
+        raise OverheadError('no arm selected')
     short, long = args.frames
     scratch = Path(args.scratch).resolve()
-    board = board_head(COUNT_SCHEMA, args, dict(arms),
+    memory = getattr(args, 'memory', False)
+    board = board_head(COUNT_SCHEMA, args, {name: exe for name, exe, _, _, _ in arms},
                        {'frames': [short, long], 'warmup': args.warmup, 'threads': args.threads,
-                        'repeats': args.repeats, 'tool': [args.valgrind, '--tool=cachegrind', '--cache-sim=yes']})
+                        'repeats': args.repeats, 'memory': memory,
+                        'tool': [args.valgrind, '--tool=cachegrind', '--cache-sim=yes']})
+    processes = Processes(args, runner, capture)
     for workload in args.workloads:
-        totals = {name: {short: [], long: []} for name, _ in arms}
+        totals = {name: {short: [], long: []} for name, _, _, _, _ in arms}
         failures = []
         for repeat in range(args.repeats):
-            for name, exe in arm_order(arms, repeat):
+            for name, exe, mode, extra, connected in arm_order(arms, repeat):
                 for frames in (short, long):
                     directory = scratch / ('%s-%s-%d-%d' % (workload, name, frames, repeat))
                     directory.mkdir(parents=True, exist_ok=True)
                     output = directory / 'cachegrind.out'
                     command = [args.valgrind, '--tool=cachegrind', '--cache-sim=yes',
                                '--cachegrind-out-file=' + str(output), str(exe), '--workload', workload, '--mode',
-                               'off', '--iterations', str(frames), '--warmup', str(args.warmup), '--captures', '0',
-                               '--threads', str(args.threads), '--scratch', str(directory)]
-                    code, stdout, stderr = runner(command, args.timeout)
-                    problem = ('exit %s: %s' % (code, stderr.strip()[-300:])) if code != 0 else record_problem(
-                        parse_record(stdout), frames + args.warmup)
+                               mode, '--iterations', str(frames), '--warmup', str(args.warmup), '--captures', '0',
+                               '--threads', str(args.threads), '--scratch', str(directory)] + extra
+                    if memory and workload == 'alloc':
+                        command.append('--memory')
+                    outcome = processes.run(command, connected, directory, args.timeout)
+                    _, problem = usable_record(name, mode, connected, frames + args.warmup, *outcome)
                     if not problem:
                         try:
                             totals[name][frames].append(parse_cachegrind(output.read_text(encoding='utf-8')))
@@ -332,17 +517,29 @@ def count(args, runner=run_process):
                               file=sys.stderr, flush=True)
         rates = {name: {event: per_frame([t[event] for t in totals[name][short]],
                                          [t[event] for t in totals[name][long]], long - short)
-                        for event in COUNTED} for name, _ in arms}
+                        for event in COUNTED} for name, _, _, _, _ in arms}
         costs = {}
         change = {}
-        if not failures and 'compiled-out' in rates:
+        peers = {}
+        if not failures and 'compiled-out' in rates and 'off' in rates:
             costs = relative_rates(rates['off'], rates['compiled-out'])
             _, _, budget = BUDGETS['disabled']
             costs['verdict'] = verdict(costs['instructions']['low'], costs['instructions']['high'], budget)
-        if not failures and 'before-off' in rates:
+        if not failures and 'before-off' in rates and 'off' in rates:
             change = relative_rates(rates['off'], rates['before-off'])
             change['verdict'] = 'reported'
-        board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'change': change,
+        if not failures:
+            for name, candidate, reference in (('basic', 'basic', 'off'), ('full', 'full', 'off')) + PEER_COMPARISONS:
+                if candidate in rates and reference in rates:
+                    peers[name] = relative_rates(rates[candidate], rates[reference])
+                    peers[name].update({'candidate': candidate, 'reference': reference, 'verdict': 'reported'})
+                    events = EVENTS_PER_FRAME.get(workload)
+                    if events:
+                        (least, most), (ref_least, ref_most) = (rates[candidate]['instructions'],
+                                                                rates[reference]['instructions'])
+                        peers[name]['per_event'] = {'low': (least - ref_most) / events,
+                                                    'high': (most - ref_least) / events}
+        board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'change': change, 'peers': peers,
                                         'failures': failures}
     return board
 
@@ -357,50 +554,55 @@ def relative_rates(candidate, reference):
     return costs
 
 
-def measure(args, runner=run_process):
-    arms = [('off', args.exe, 'off', []), ('basic', args.exe, 'basic', []), ('full', args.exe, 'full', [])]
-    arms += [('validation-' + v, args.exe, 'off', ['--validation', v]) for v in VALIDATIONS]
-    if args.baseline_exe:
-        arms.insert(0, ('compiled-out', args.baseline_exe, 'off', []))
-    if getattr(args, 'before_exe', None):
-        arms += [('before-' + m, args.before_exe, m, []) for m in MODES]
-    arms = [a for a in arms if a[0] in args.arms]
+def usable_record(name, mode, connected, frames, code, stdout, stderr, capture_problem):
+    """(record, problem) of one process: its record when nothing is wrong with it."""
+    record = parse_record(stdout) if code == 0 else None
+    problem = ('exit %s: %s' % (code, (stderr or '').strip()[-300:])) if code != 0 else record_problem(record, frames)
+    if not problem and mode == 'tracy':
+        problem = tracy_problem(record, connected) or capture_problem
+    return (None if problem else record), problem
+
+
+def measure(args, runner=run_process, capture=TracyCapture):
+    arms = [a for a in arm_specs(args) if a[0] in args.arms]
     if not arms:
         raise OverheadError('no arm selected')
-    if any(extra for _, _, _, extra in arms) and args.workloads != ['render']:
+    if any(name.startswith('validation-') for name, _, _, _, _ in arms) and args.workloads != ['render']:
         raise OverheadError('the validation arms measure the render workload alone')
     scratch = Path(args.scratch).resolve()
     frames = args.iterations + args.warmup
-    board = board_head(SCHEMA, args, {name: exe for name, exe, _, _ in arms},
+    memory = getattr(args, 'memory', False)
+    board = board_head(SCHEMA, args, {name: exe for name, exe, _, _, _ in arms},
                        {'processes': args.processes, 'iterations': args.iterations, 'warmup': args.warmup,
                         'captures': args.captures, 'threads': args.threads, 'affinity': args.affinity,
-                        'bootstrap': BOOTSTRAP, 'seed': SEED})
+                        'memory': memory, 'bootstrap': BOOTSTRAP, 'seed': SEED})
+    processes = Processes(args, runner, capture)
     for workload in args.workloads:
-        runs = {name: [] for name, _, _, _ in arms}
+        runs = {name: [] for name, _, _, _, _ in arms}
         failures = []
         for repetition in range(args.processes):
-            for name, exe, mode, extra in arm_order(arms, repetition):
+            for name, exe, mode, extra, connected in arm_order(arms, repetition):
                 directory = scratch / ('%s-%s-%d' % (workload, name, repetition))
                 directory.mkdir(parents=True, exist_ok=True)
                 command = [str(exe), '--workload', workload, '--mode', mode, '--iterations', str(args.iterations),
                            '--warmup', str(args.warmup), '--captures', str(args.captures), '--threads',
                            str(args.threads), '--scratch', str(directory)] + extra
+                if memory and workload == 'alloc':
+                    command.append('--memory')
                 if args.affinity:
                     command += ['--affinity', args.affinity]
-                code, stdout, stderr = runner(command, args.timeout)
-                record = parse_record(stdout) if code == 0 else None
-                problem = ('exit %s: %s' % (code, stderr.strip()[-300:])) if code != 0 else record_problem(record,
-                                                                                                          frames)
+                outcome = processes.run(command, connected, directory, args.timeout)
+                record, problem = usable_record(name, mode, connected, frames, *outcome)
                 if problem:
                     failures.append({'arm': name, 'repetition': repetition, 'problem': problem})
-                    record = None
                 runs[name].append(record)
                 if args.progress:
                     print('%s %s #%d: %s' % (workload, name, repetition, problem or 'ok'), file=sys.stderr, flush=True)
         entry = {name: {'runs': runs[name], 'summary': summarize_arm(runs[name])} for name in runs}
+        site = workload in SITE_WORKLOADS
         board['workloads'][workload] = {'arms': {name: entry[name]['summary'] for name in entry},
-                                        'verdicts': judge(entry, workload not in SITE_WORKLOADS) if not failures
-                                        else {}, 'failures': failures}
+                                        'verdicts': judge(entry, not site, EVENTS_PER_FRAME.get(workload))
+                                        if not failures else {}, 'failures': failures}
     return board
 
 
@@ -461,7 +663,7 @@ def render(boards):
                        '%s of %s (%s)' % (captures['delivered'], captures['requested'], captures['bytes_written']),
                        'n/a' if growth is None else '%.1f MiB' % (growth / 1048576.0))
                 lines.append('| %s |' % ' | '.join(str(cell) for cell in row))
-            for name in ('change-' + m for m in MODES):
+            for name in ['change-' + m for m in MODES] + ['full-vs-tracy-connected']:
                 change = verdicts.get(name)
                 if change and change.get('cost') is not None:
                     cpu = change.get('cpu') or {}
@@ -482,7 +684,32 @@ def render(boards):
                 lines.append('| %s | %s | | | | | instrument failure #%d: %s | | | | | | |' % (
                     workload, failure['arm'], failure['repetition'], failure['problem'].replace('|', '/')))
         lines.append('')
+        events = [(workload, entry['verdicts']) for workload, entry in board['workloads'].items()
+                  if any('per_event_ns' in v for v in entry['verdicts'].values() if isinstance(v, dict))]
+        if events:
+            lines += ['Per event (the paired difference of the frame medians, and of the CPU per frame, over the '
+                      'events one frame makes):', '',
+                      '| Workload | Comparison | ns per event (95% interval) | CPU per event (95% interval) |',
+                      '|---|---|---:|---:|']
+            for workload, verdicts in events:
+                for name, judged in verdicts.items():
+                    if not isinstance(judged, dict) or 'per_event_ns' not in judged:
+                        continue
+                    wall, cpu = judged['per_event_ns'], (judged.get('cpu') or {}).get('per_event') or {}
+                    unit = board['workloads'][workload]['arms'][judged['candidate']].get('cpu_unit') or ''
+                    lines.append('| %s | %s vs %s | %s | %s |' % (workload, judged['candidate'], judged['reference'],
+                                                                 interval(wall, 'ns'), interval(cpu, unit)))
+            lines.append('')
     return '\n'.join(lines)
+
+
+def interval(entry, unit):
+    """An absolute cost and its interval: `+12.3 ns (+11.0 .. +13.1)`."""
+    if not entry or entry.get('cost') is None:
+        return 'n/a'
+    if entry.get('low') is None:
+        return '%+.1f %s' % (entry['cost'], unit)
+    return '%+.1f %s (%+.1f .. %+.1f)' % (entry['cost'], unit, entry['low'], entry['high'])
 
 
 def render_counts(board):
@@ -513,6 +740,11 @@ def render_counts(board):
         if change:
             lines.append('| %s | off vs before-off | %s | %s |' % (
                 workload, ' | '.join(cost(change[e]) for e in COUNTED), change['verdict']))
+        for peer in (entry.get('peers') or {}).values():
+            each = peer.get('per_event')
+            lines.append('| %s | %s vs %s | %s | %s%s |' % (
+                workload, peer['candidate'], peer['reference'], ' | '.join(cost(peer[e]) for e in COUNTED),
+                peer['verdict'], '' if not each else '; %s instructions per event' % rate(each['low'], each['high'])))
         for failure in entry['failures']:
             lines.append('| %s | %s | instrument failure #%d: %s |%s |' % (
                 workload, failure['arm'], failure['repetition'], failure['problem'].replace('|', '/'),
@@ -543,6 +775,9 @@ def main(argv=None):
     run.add_argument('--label', required=True, help='the lane and host the board names')
     run.add_argument('--output', required=True)
     run.add_argument('--progress', action='store_true')
+    run.add_argument('--memory', action='store_true', help="the harness's --memory for the alloc workload")
+    run.add_argument('--tracy-tools', help='the pinned Tracy release archive (or a directory of its tracy-capture and '
+                     'tracy-csvexport): the client of the tracy-connected arm')
     counted = commands.add_parser('instructions', help='judge the disabled budget on counts under cachegrind')
     counted.add_argument('--exe', required=True, help='crd-diag-overhead of the measured build (its off mode)')
     counted.add_argument('--baseline-exe', help='crd-diag-overhead built with profiling compiled out')
@@ -558,6 +793,9 @@ def main(argv=None):
     counted.add_argument('--label', required=True, help='the lane and host the board names')
     counted.add_argument('--output', required=True)
     counted.add_argument('--progress', action='store_true')
+    counted.add_argument('--arms', help='the counted arms (default compiled-out,off,before-off: the ones given)')
+    counted.add_argument('--memory', action='store_true', help="the harness's --memory for the alloc workload")
+    counted.add_argument('--tracy-tools', help='as for run: the client of the tracy-connected arm')
     show = commands.add_parser('render', help='markdown of one or more boards')
     show.add_argument('boards', nargs='+')
     args = parser.parse_args(argv)
@@ -571,6 +809,7 @@ def main(argv=None):
         args.workloads = [w for w in args.workloads.split(',') if w]
         unknown = [w for w in args.workloads if w not in WORKLOADS]
         if args.command == 'instructions':
+            args.arms = [a for a in (args.arms or '').split(',') if a] or None
             args.frames = [int(f) for f in args.frames.split(',') if f]
             if unknown or len(args.frames) != 2 or not 0 < args.frames[0] < args.frames[1] or args.repeats < 1:
                 raise OverheadError('bad workloads %s, or not two increasing frame counts, or no repeat' % unknown)
@@ -578,8 +817,8 @@ def main(argv=None):
             args.arms = [a for a in args.arms.split(',') if a]
             if unknown or args.processes < 2 or args.iterations < 1:
                 raise OverheadError('bad workloads %s, or fewer than two processes or one frame' % unknown)
-        if args.command == 'instructions' and not args.baseline_exe and not args.before_exe:
-            raise OverheadError('instructions needs --baseline-exe or --before-exe to compare with')
+        if args.command == 'instructions' and not args.baseline_exe and not args.before_exe and not args.arms:
+            raise OverheadError('instructions needs --baseline-exe, --before-exe or --arms to compare with')
         for name in ('exe', 'baseline_exe', 'before_exe'):
             if getattr(args, name):
                 path = Path(getattr(args, name)).resolve()
