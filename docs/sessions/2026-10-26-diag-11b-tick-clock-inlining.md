@@ -8,7 +8,7 @@
 The user's assignment had two parts in order: explain and fix (or disprove) the unexplained +2.9% of the four-thread
 jobs frame with crd-time's `TickClock` against `steady_clock`, confirm it on linux-gcc-shipping and give it a board
 or test with teeth; then write the per-thread-ring design brief of follow-up (q) without implementing it on main
-(its own record). Complete-tier run 40255964357 was in flight on
+([brief](2026-10-26-flight-recorder-per-thread-rings-decision.md)). Complete-tier run 40255964357 was in flight on
 `82ed7559` and was not touched; no workflow was started. The advisor was consulted before the experiments and before
 the fix.
 

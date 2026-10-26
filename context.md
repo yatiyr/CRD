@@ -5,7 +5,7 @@
 
 <!-- current-slice: DIAG.11b -->
 **Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (Partial), first unfinished row: measured overhead,
-focused local routes, tiered sanitizer/race/fuzz CI and runbooks. Left: the user's (8) and decision (q);
+focused local routes, tiered sanitizer/race/fuzz CI and runbooks. Left: the user's (8) and decisions (q) and (r);
 [DIAG.11c](docs/ROADMAP.md#slice-diag.11c) and [DIAG.12](docs/ROADMAP.md#slice-diag.12) are Needs CI: the
 final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).

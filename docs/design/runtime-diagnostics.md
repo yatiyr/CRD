@@ -2951,7 +2951,8 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   build-to-build variation of Tracy's (+1.4 to −0.8 ns), a kept site within a few nanoseconds and cheaper in CPU, a
   mark 4 ns over (the lifetime pin and history).
   The four-thread jobs frame stays over Tracy's: the flight recorder's one claim word and shared slots, the price of
-  its single total order (DIAG.11b follow-up (q), a design decision). The cycle-counter clock's +2.9% on
+  its single total order (DIAG.11b follow-up (q), a design decision awaiting the user,
+  [brief](../sessions/2026-10-26-flight-recorder-per-thread-rings-decision.md)). The cycle-counter clock's +2.9% on
   that frame was MSVC LTCG leaving `std::atomic`'s loads out of line in its read (an `/arch:AVX2` unit's inline
   bodies are not inlined into baseline-ISA libraries); the read uses the compiler's own loads and is judged against
   the system clock (above). The same defect in every baseline library is follow-up (r), a decision.
