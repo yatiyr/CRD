@@ -103,6 +103,22 @@
       "sha256": "fab73d732f1063b93d1aa96f024d7e8258c22a7eff86ca2a5a771614d54c6224",
       "license": "BSD-3-Clause",
       "gated": "CRD_BUILD_HESAP_VS_REFERENCE"
+    },
+    "tracy": {
+      "version": "0.14.1",
+      "repository": "wolfpld/tracy",
+      "ref": "v0.14.1",
+      "commit": "30997d5ca6bb632cc10807a1da8a6d3de0aeeb3c",
+      "url": "https://github.com/wolfpld/tracy/archive/30997d5ca6bb632cc10807a1da8a6d3de0aeeb3c.tar.gz",
+      "file": "tracy-30997d5c.tar.gz",
+      "sha256": "e9d527343623435de954a72ad211a1ae4b205cb877d5cc81b8bd505aac0a2cde",
+      "license": "BSD-3-Clause",
+      "gated": "CRD_DIAG_PEER_TRACY",
+      "patches": [
+        "tracy-profiler-checked-calls",
+        "tracy-syspower-checked-scan"
+      ],
+      "note": "Tracy Profiler's client (public/TracyClient.cpp), compiled only into crd-diag-overhead-tracy, the DIAG.11b peer harness (docs/bench/2026-10-26-diag-11b-tracy-peer.md); never into an engine module or a default build. LICENSE read from the archive: BSD-3-Clause, (c) 2017-2026 Bartosz Taudul. The client bundles rpmalloc (public domain), moodycamel's concurrentqueue (Simplified BSD), Erik Rigtorp's SPSCQueue (MIT), LZ4 (BSD-2-Clause) and libbacktrace (BSD-3-Clause, Free Software Foundation)."
     }
   },
   "tools": {
@@ -239,6 +255,26 @@
       "header_count": 273,
       "license": "Apache-2.0 WITH LLVM-exception AND Apache-2.0",
       "note": "PyPI's clang-tidy wheel (ssciwr/clang-tidy-wheel); 20.1.0 is its only LLVM 20 release. The strict-analysis gate checks the LLVM major only (scripts/cerid_dev/environment.py), so it stands in for the hosted lanes' 20.1.8 on Linux developer hosts; installed into a user directory by scripts/install-clang-tidy.py (the binary and clang's builtin headers, laid out as bin/ and lib/clang/20/include so the binary finds its resource directory); a developer tool, never a lane step and never shipped. The binary and headers are LLVM's (Apache-2.0 WITH LLVM-exception), the wheel's packaging Apache-2.0."
+    },
+    "tracy-capture-windows": {
+      "version": "0.14.1",
+      "url": "https://github.com/wolfpld/tracy/releases/download/v0.14.1/windows-0.14.1.zip",
+      "file": "windows-0.14.1.zip",
+      "sha256": "f7499d74914aa3ba94a2c1ce72f36477d7b61d9d0f7c9790e05274c258c97fb5",
+      "member": "tracy-capture.exe",
+      "member_sha256": "f3de8feb2276c773937a00d3df1046a41065787d81efa17c07fb2795ddb361cf",
+      "license": "BSD-3-Clause",
+      "note": "The v0.14.1 release's Windows tools (tag commit 30997d5ca6bb632cc10807a1da8a6d3de0aeeb3c, the tracy package's), the peer board's capture client: scripts/diag-overhead.py --tracy-tools extracts and verifies it and connects it to a crd-diag-overhead-tracy process on localhost (the Linux lane's through WSL2's localhost relay). A measurement tool, never a lane step and never shipped."
+    },
+    "tracy-csvexport-windows": {
+      "version": "0.14.1",
+      "url": "https://github.com/wolfpld/tracy/releases/download/v0.14.1/windows-0.14.1.zip",
+      "file": "windows-0.14.1.zip",
+      "sha256": "f7499d74914aa3ba94a2c1ce72f36477d7b61d9d0f7c9790e05274c258c97fb5",
+      "member": "tracy-csvexport.exe",
+      "member_sha256": "f0620b4daa98d810c2892c175ac38549adbc23ac78923103d98b645eff07648d",
+      "license": "BSD-3-Clause",
+      "note": "The same release archive's trace reader: scripts/diag-overhead.py counts each connected capture's zones and messages with it, so a connected arm is held to every event it emitted."
     },
     "llvm": {
       "version": "20.1.8",

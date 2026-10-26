@@ -16,8 +16,8 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 
 | Section | Entries | Fields |
 |---|---|---|
-| `packages` | the nine CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, and the gated Eigen and OpenBLAS) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
-| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
+| `packages` | the ten CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, the gated Eigen and OpenBLAS, and the gated Tracy client) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
+| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major), the Tracy 0.14.1 Windows release archive with its `tracy-capture` and `tracy-csvexport` members (the peer board's capture client and trace reader) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
 | `actions` | the eight workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
 | `unpinned` | the apt packages of the Linux image | recorded by `dpkg-query` into every Linux lane's census; the MSVC toolset of the Windows image is recorded by the evidence bundle |
@@ -73,7 +73,7 @@ On those lanes:
   is empty;
 - the configure downloads every package and verifies each `URL_HASH`;
 - `--after` reads the configure's own `CPM_PACKAGES` and fails unless every one is pinned and now in the cache. It
-  names the pins the configuration did not select (the opt-in `eigen` and `OpenBLAS` bench). With
+  names the pins the configuration did not select (the opt-in `eigen` and `OpenBLAS` bench, the opt-in `tracy` peer). With
   `--fetch-unselected DIR` (both cold lanes pass it) it then downloads each of those archives through `pins.download`
   and fails on a SHA-256 mismatch or a download error. No hosted preset builds them, but their pinned bytes are proven
   acquirable on every complete run.
@@ -82,6 +82,28 @@ The Windows cold lane also installs the Vulkan SDK and the pinned WARP through t
 download the Vulkan headers and the validation layer fresh on every run. A real cold configure on the WSL reference
 host acquired all seven selected packages and passed both checks.
 
+## The Tracy peer (opt-in)
+
+`tracy` (Tracy Profiler 0.14.1, tag commit `30997d5c…`, BSD-3-Clause read from the archive's LICENSE; its client
+bundles rpmalloc, moodycamel's concurrentqueue, SPSCQueue, LZ4 and libbacktrace under their own permissive terms, named
+in the entry's note) is gated by `CRD_DIAG_PEER_TRACY`, off in every preset and every hosted lane. When it is on, the
+root build file adds the archive `DOWNLOAD_ONLY` and builds the client's one unit (`public/TracyClient.cpp`) as
+`tracy-client` (and `tracy-client-osclock`, the same client timed by the operating system's clock), without
+link-time optimization and outside the engine's warning set; only `crd-diag-overhead-tracy` and
+`crd-diag-overhead-tracy-osclock` link it (`tests/support/diag-overhead`), never an engine module. The client's
+definitions are the comparison's: on demand, manual lifetime (with `TRACY_DELAYED_INIT`, which 0.14.1 still reads;
+without it the constructor and `StartupProfiler` would both start the worker threads), localhost and IPv4 only, no
+broadcast, sampling, system tracing, call stacks, frame images, code transfer or crash handler. The client compiles
+from a build-owned copy of the archive's `public/` tree (its unity unit includes its siblings by relative path) with
+two registered patches, `tracy-profiler-checked-calls` (a checked `pipe()` and bounded host-description writes in
+`TracyProfiler.cpp`) and `tracy-syspower-checked-scan` (a checked `fscanf` in `TracySysPower.cpp`): the three GCC 13
+warnings the pristine unit drew on linux-gcc-shipping, each a defect 0.14.1 still has. The Windows tools are
+two `tools` entries over the one release archive (`tracy-capture-windows`, `tracy-csvexport-windows`), each with its
+member digest: `scripts/diag-overhead.py --tracy-tools <archive or directory>` extracts or checks them through
+`pins.install_member`/`pins.verify` and refuses any other bytes. Offline, `CRD_INPUT_ARCHIVES` names the directory
+holding `tracy-30997d5c.tar.gz` (the operator's download of 2026-10-25 under `build/pin-tracy`), as for every pin
+([bench](../bench/2026-10-26-diag-11b-tracy-peer.md)).
+
 ## Patches on a build-owned copy
 
 A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patch_replace(<from> <to>)` steps.
@@ -89,7 +111,7 @@ A patch is a versioned spec in `cmake/patches/<name>.cmake`, a list of `crd_patc
 steps, and writes the result under `${CMAKE_BINARY_DIR}/patched/<package>/` only when its content changes; the
 target compiles that copy. An anchor that no longer matches upstream is a configure error naming the patch, where
 the former in-place `file(WRITE)` into the source tree silently did nothing on drift. Each patch is listed under its
-package's `patches` in the registry (check-pins fails a listed patch without its spec). Five exist. Two are Catch2
+package's `patches` in the registry (check-pins fails a listed patch without its spec). Seven exist (the two of the opt-in Tracy peer are described above). Two are Catch2
 headers that every assertion reaches (2026-10-18): in C++20 `<chrono>` was the build's most expensive header, almost
 all of it through them ([board](../bench/2026-10-18-build-speed-compile-time.md)). `catch2-chrono-stringmaker-opt-in`
 puts `catch_tostring.hpp`'s `std::chrono` printers and their `<chrono>` behind `CATCH_CONFIG_ENABLE_CHRONO_STRINGMAKER`

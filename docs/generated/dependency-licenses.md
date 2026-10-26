@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **9** · tools: **15** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
+- packages: **10** · tools: **17** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -24,6 +24,7 @@
 | imgui | 1.92.0-docking | MIT | ocornut/imgui @ `v1.92.0-docking` (adfa5364cd84) | `imgui-adfa5364.tar.gz` |
 | eigen | 3.4.0 | MPL-2.0 | gitlab.com/libeigen/eigen @ `3.4.0` | `eigen-3.4.0.tar.gz` |
 | OpenBLAS | 0.3.27 | BSD-3-Clause | OpenMathLib/OpenBLAS @ `v0.3.27` (ce3f668c992c) | `OpenBLAS-ce3f668c.tar.gz` |
+| tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |
 
 ## Tools (installers, SDK members and helpers, verified by digest)
 
@@ -42,6 +43,8 @@
 | mold-linux | 3.0.0 | MIT | github.com | `mold-3.0.0-x86_64-linux.tar.gz` |
 | clang-build-analyzer | 1.6.0 | Unlicense | aras-p/ClangBuildAnalyzer (bae0cb488cce) | `ClangBuildAnalyzer-bae0cb48.tar.gz` |
 | clang-tidy-linux | 20.1.0 | Apache-2.0 WITH LLVM-exception AND Apache-2.0 | files.pythonhosted.org | `clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` |
+| tracy-capture-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
+| tracy-csvexport-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
 | llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | pinned action KyleMayes/install-llvm-action | installed by the action |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 

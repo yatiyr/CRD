@@ -28,6 +28,10 @@ option(CRD_BUILD_SANDBOX    "Build crd-sandbox interactive app" ON)
 # build/_deps/ (gitignored), never vendored into the repo. OFF by default — opt in
 # via -DCRD_BUILD_HESAP_VS_REFERENCE=ON at configure time.
 option(CRD_BUILD_HESAP_VS_REFERENCE "Build hesap-vs-Eigen/OpenBLAS comparison bench" OFF)
+# DIAG.11b clause (8): the peer harness crd-diag-overhead-tracy, crd-diag-overhead's workloads with Tracy Profiler's
+# zones, messages, frame marks and memory events at the same sites, against the pinned Tracy client. Never in an
+# engine module or a default build; no hosted lane turns it on (docs/bench/2026-10-26-diag-11b-tracy-peer.md).
+option(CRD_DIAG_PEER_TRACY "Build crd-diag-overhead-tracy, the diagnostic overhead harness with Tracy as its peer" OFF)
 # v4j-2a: Cerid InverseBasedIlu vs ILUPACK V2.4 head-to-head. ILUPACK is non-
 # commercial/binary-only ⇒ NOT a CPM dep; a precompiled lib under the gitignored
 # external/ilupack (run scripts/setup-ilupack-ref.sh). WSL/Linux only (gfortran
@@ -893,6 +897,54 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     crd_add_pinned_package(OpenBLAS)
     set(BUILD_SHARED_LIBS ${_crd_saved_BUILD_SHARED_LIBS} CACHE BOOL "" FORCE)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
+endif()
+
+# ----- The diagnostic overhead harness's peer (DIAG.11b clause 8) -----
+# Tracy's client is one unit (public/TracyClient.cpp) built here from the pinned archive; only crd-diag-overhead-tracy
+# links it (tests/support/diag-overhead). Its configuration is the comparison's: on demand (a site checks for a
+# connected client and does nothing without one, as Cerid's runtime-disabled mode does), started and stopped by the
+# harness (manual lifetime, so a Cerid mode of the same binary runs no Tracy thread), on localhost only, and without
+# the features no Cerid mode has a counterpart for (sampling, system tracing, call stacks, frame images, the crash
+# handler, the presence broadcast). Tracy 0.14.1 still reads TRACY_DELAYED_INIT: with manual lifetime alone the
+# constructor and StartupProfiler would both start the worker threads, and the header would not declare
+# StartupProfiler. No link-time optimization: its objects never meet the link line's warning set. The client compiles
+# from a build-owned copy of the archive's public/ tree with two registered patches (cmake/patches/tracy-*.cmake): a
+# checked pipe() and bounded host-description writes in TracyProfiler.cpp, a checked fscanf in TracySysPower.cpp, the
+# three GCC warnings the pristine unit drew on linux-gcc-shipping, each a defect 0.14.1 still has.
+#
+# tracy-client-osclock is the same client timed by the operating system's clock instead of the cycle counter, the clock
+# Cerid's profiler zones read; crd-diag-overhead-tracy-osclock links it to tell a zone's clock from the rest of its
+# cost. TRACY_DISALLOW_HW_TIMER with TRACY_TIMER_FALLBACK reads std::chrono::high_resolution_clock, which is
+# steady_clock (QueryPerformanceCounter) under MSVC, and clock_gettime(CLOCK_MONOTONIC_RAW) on Linux. (The fallback
+# alone still reads the cycle counter wherever it is invariant; TRACY_TIMER_QPC leaves an unreachable return in
+# GetTime that MSVC's link-time code generation reports as C4702.)
+if(CRD_DIAG_PEER_TRACY)
+    crd_add_pinned_package(tracy DOWNLOAD_ONLY YES)
+    find_package(Threads REQUIRED)
+    # The copy: the unit includes its siblings by relative path, so the whole public/ tree is copied (only files whose
+    # time changed), the two patched files excepted, which crd_patched_copy writes into the same tree.
+    set(_crd_tracy_public "${CMAKE_BINARY_DIR}/patched/tracy/public")
+    file(COPY "${tracy_SOURCE_DIR}/public/" DESTINATION "${_crd_tracy_public}"
+         PATTERN "TracyProfiler.cpp" EXCLUDE PATTERN "TracySysPower.cpp" EXCLUDE)
+    crd_patched_copy(_crd_tracy_profiler tracy public/client/TracyProfiler.cpp tracy-profiler-checked-calls)
+    crd_patched_copy(_crd_tracy_syspower tracy public/client/TracySysPower.cpp tracy-syspower-checked-scan)
+    foreach(_crd_tracy_client tracy-client tracy-client-osclock)
+        add_library(${_crd_tracy_client} STATIC EXCLUDE_FROM_ALL "${_crd_tracy_public}/TracyClient.cpp")
+        target_include_directories(${_crd_tracy_client} SYSTEM PUBLIC "${_crd_tracy_public}")
+        target_compile_definitions(${_crd_tracy_client} PUBLIC
+            TRACY_ENABLE TRACY_ON_DEMAND TRACY_MANUAL_LIFETIME TRACY_DELAYED_INIT TRACY_ONLY_LOCALHOST TRACY_ONLY_IPV4
+            TRACY_NO_BROADCAST TRACY_NO_SAMPLING TRACY_NO_SYSTEM_TRACING TRACY_NO_CONTEXT_SWITCH TRACY_NO_CALLSTACK
+            TRACY_NO_VSYNC_CAPTURE TRACY_NO_FRAME_IMAGE TRACY_NO_CODE_TRANSFER TRACY_NO_CRASH_HANDLER)
+        target_compile_features(${_crd_tracy_client} PUBLIC cxx_std_11)
+        set_target_properties(${_crd_tracy_client} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+        target_link_libraries(${_crd_tracy_client} PUBLIC Threads::Threads)
+        if(WIN32)
+            target_link_libraries(${_crd_tracy_client} PUBLIC ws2_32 dbghelp)
+        else()
+            target_link_libraries(${_crd_tracy_client} PUBLIC ${CMAKE_DL_LIBS})
+        endif()
+    endforeach()
+    target_compile_definitions(tracy-client-osclock PUBLIC TRACY_DISALLOW_HW_TIMER TRACY_TIMER_FALLBACK)
 endif()
 
 # ----- Helper: auto-collect sources with CONFIGURE_DEPENDS -----------------
