@@ -75,15 +75,33 @@ CRD_FORCEINLINE Vec8f bitcast_to_float(Vec8i a) noexcept
 // Numerical conversion — float ↔ int (rounding/truncating semantics).
 // ===========================================================================
 
-// Truncate float toward zero, return as Vec*i (e.g., 3.7 → 3, -2.3 → -2).
-// Truncate toward zero to i32. A NaN or a value outside the i32 range gives INT32_MIN on every backend (the x86
-// "integer indefinite" result).
+namespace detail
+{
+// GCC (13.3 observed) folds cvttps2dq on known operands as a C conversion: an out-of-range lane saturates and a NaN
+// gives 0, where the instruction gives INT32_MIN. An empty asm on the operand blocks only that fold; it emits nothing.
+template <typename V> CRD_FORCEINLINE V fold_barrier(V v) noexcept
+{
+#if defined(__GNUC__) && !defined(__clang__)
+    __asm__("" : "+x"(v));
+#endif
+    return v;
+}
+} // namespace detail
+
+// Truncate toward zero to i32 (3.7 gives 3, -2.3 gives -2). A NaN or a value outside the i32 range gives INT32_MIN
+// on every backend (the x86 "integer indefinite" result), also when the compiler folds a known operand.
 CRD_FORCEINLINE Vec4i convert_truncate(Vec4f a) noexcept
 {
 #if CRD_SIMD_HAS_SSE2
-    Vec4i r; r.v = _mm_cvttps_epi32(a.v); return r;
+    Vec4i r;
+    r.v = _mm_cvttps_epi32(detail::fold_barrier(a.v));
+    return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4i r; r.v = vcvtq_s32_f32(a.v); return r;  // NEON cvtq rounds toward zero
+    // FCVTZS saturates and gives 0 for a NaN; a lane that is not below 2^31 takes INT32_MIN instead.
+    Vec4i r;
+    r.v = vbslq_s32(vcltq_f32(a.v, vdupq_n_f32(2147483648.0F)), vcvtq_s32_f32(a.v),
+                    vdupq_n_s32(static_cast<crd::i32>(0x80000000U)));
+    return r;
 #else
     Vec4i r;
     for (int i = 0; i < 4; ++i)
@@ -99,7 +117,9 @@ CRD_FORCEINLINE Vec4i convert_truncate(Vec4f a) noexcept
 CRD_FORCEINLINE Vec8i convert_truncate(Vec8f a) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
-    Vec8i r; r.v = _mm256_cvttps_epi32(a.v); return r;
+    Vec8i r;
+    r.v = _mm256_cvttps_epi32(detail::fold_barrier(a.v));
+    return r;
 #else
     return Vec8i(convert_truncate(a.lo), convert_truncate(a.hi));
 #endif
