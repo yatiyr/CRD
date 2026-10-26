@@ -21,7 +21,7 @@ DEFAULT_TIERS = ROOT / '.github/ci-tiers.json'
 HELPERS = ('cmake/CPM.cmake', 'scripts/install-vulkan-sdk.py', 'scripts/install-vulkan-headers.py',
            'scripts/install-vulkan-validation.py', 'scripts/install-warp.py', 'scripts/install-sccache.py',
            'scripts/install-mold.py', 'scripts/install-genmc.py', 'scripts/install-clang-build-analyzer.py',
-           'scripts/install-clang-tidy.py', 'scripts/pins.py')
+           'scripts/install-clang-tidy.py', 'scripts/install-ninja.py', 'scripts/msvc-dev-env.py', 'scripts/pins.py')
 SCHEMA = 'cerid-pins/1'
 HEX64 = re.compile(r'^[0-9a-f]{64}$')
 HEX40 = re.compile(r'^[0-9a-f]{40}$')
@@ -125,8 +125,11 @@ def validate_workflow(pins, text):
     problems = validate_workflow_inputs(pins, text)
     tools = pins.get('tools', {})
     llvm = tools.get('llvm', {}).get('version')
-    if llvm and ("version: '%s'" % llvm) not in text:
-        problems.append('workflow does not install LLVM %s' % llvm)
+    if llvm and ('scripts/install-clang-tidy.py' not in text or ('LLVM %s' % llvm) not in text):
+        problems.append('workflow does not install clang-tidy (LLVM %s) through scripts/install-clang-tidy.py' % llvm)
+    ninja = tools.get('ninja-windows', {}).get('version')
+    if ninja and ('scripts/install-ninja.py' not in text or ('Ninja %s' % ninja) not in text):
+        problems.append('workflow does not install Ninja %s through scripts/install-ninja.py' % ninja)
     actionlint = tools.get('actionlint', {})
     if actionlint and (actionlint.get('file', '') not in text or ('actionlint %s' % actionlint.get('version')) not in text):
         problems.append('workflow does not run actionlint %s from the pinned archive' % actionlint.get('version'))

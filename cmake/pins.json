@@ -276,10 +276,38 @@
       "license": "BSD-3-Clause",
       "note": "The same release archive's trace reader: scripts/diag-overhead.py counts each connected capture's zones and messages with it, so a connected arm is held to every event it emitted."
     },
+    "ninja-windows": {
+      "version": "1.11.1",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-win.zip",
+      "file": "ninja-win.zip",
+      "sha256": "524b344a1a9a55005eaf868d991e090ab8ce07fa109f1820d40e74642e289abc",
+      "member": "ninja.exe",
+      "member_sha256": "23e7d60c17b3fcd42d9c00d49eca3c3771b04d7ccb13e49836b06b34e20211c7",
+      "license": "Apache-2.0",
+      "note": "Ninja 1.11.1, the version seanmiddleditch/gha-setup-ninja v5 installed by default before the workflow replaced that Node 20 action (2026-10-26); installed by scripts/install-ninja.py, which checks the archive, the binary and `ninja --version`. The release assets predate GitHub's recorded digests; the SHA-256 values were computed from the downloaded release files."
+    },
+    "ninja-linux": {
+      "version": "1.11.1",
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-linux.zip",
+      "file": "ninja-linux.zip",
+      "sha256": "b901ba96e486dce377f9a070ed4ef3f79deb45f4ffe2938f8e7ddc69cfb3df77",
+      "member": "ninja",
+      "member_sha256": "ac35c7992e95c5f2cadb44097d9988bcc71e5e39d9908ec312eb46872844f2e8",
+      "license": "Apache-2.0",
+      "note": "Ninja 1.11.1, the version seanmiddleditch/gha-setup-ninja v5 installed by default before the workflow replaced that Node 20 action (2026-10-26); installed by scripts/install-ninja.py, which checks the archive, the binary and `ninja --version`. The release assets predate GitHub's recorded digests; the SHA-256 values were computed from the downloaded release files."
+    },
     "llvm": {
       "version": "20.1.8",
-      "acquired_by": "KyleMayes/install-llvm-action",
-      "license": "Apache-2.0 WITH LLVM-exception"
+      "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-20.1.8/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
+      "file": "clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz",
+      "sha256": "f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f",
+      "root": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/",
+      "member": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/bin/clang-tidy.exe",
+      "member_sha256": "da206027b04525459f4eca441838a24e379e5237c3b9c861c586ebc5fa4c6c8f",
+      "headers": "clang+llvm-20.1.8-x86_64-pc-windows-msvc/lib/clang/20/include/",
+      "header_count": 294,
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "note": "LLVM's Windows x64 release archive (GitHub's recorded digest matches); the hosted clang-tidy lane's strict-analysis tool, installed by scripts/install-clang-tidy.py: only bin/clang-tidy.exe and clang's builtin headers, laid out as bin/ and lib/clang/20/include. Its clang-tidy.exe is byte-identical to the developer host's C:/LLVM-20.1.8 (checked 2026-10-26). Replaced KyleMayes/install-llvm-action, which has no Node 24 release."
     },
     "genmc": {
       "version": "0.19.0",
@@ -295,36 +323,24 @@
   },
   "actions": {
     "actions/checkout": {
-      "ref": "v4",
-      "sha": "11d5960a326750d5838078e36cf38b85af677262"
+      "ref": "v7.0.1",
+      "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1"
     },
     "actions/setup-python": {
-      "ref": "v5",
-      "sha": "a26af69be951a213d495a4c3e4e4022e16d87065"
+      "ref": "v7.1.0",
+      "sha": "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
     },
     "actions/cache": {
-      "ref": "v4",
-      "sha": "0057852bfaa89a56745cba8c7296529d2fc39830"
+      "ref": "v6.1.0",
+      "sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
     },
     "actions/upload-artifact": {
-      "ref": "v4",
-      "sha": "ea165f8d65b6e75b540449e92b4886f43607fa02"
+      "ref": "v7.0.2",
+      "sha": "cf430e030ddbb5b0abf93d22962f4752f3646cd9"
     },
     "actions/github-script": {
       "ref": "v8",
       "sha": "ed597411d8f924073f98dfc5c65a23a2325f34cd"
-    },
-    "seanmiddleditch/gha-setup-ninja": {
-      "ref": "v5",
-      "sha": "96bed6edff20d1dd61ecff9b75cc519d516e6401"
-    },
-    "ilammy/msvc-dev-cmd": {
-      "ref": "v1",
-      "sha": "0b201ec74fa43914dc39ae48a89fd1d8cb592756"
-    },
-    "KyleMayes/install-llvm-action": {
-      "ref": "v2.0.9",
-      "sha": "ebc0426251bc40c7cd31162802432c68818ab8f0"
     }
   },
   "runners": {

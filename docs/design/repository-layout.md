@@ -103,8 +103,8 @@ is explicit. A passing CTest summary cannot conceal initialization diagnostics e
 - [Git ignore semantics](https://git-scm.com/docs/gitignore): ignore rules apply to untracked files; adding a rule
   does not remove an already tracked artifact.
 
-- [Ninja action inputs](https://github.com/seanmiddleditch/gha-setup-ninja/blob/v5/action.yml) expose `destination`;
-  CI uses runner temporary storage so tools do not pollute the checked source root.
+- The pinned Ninja ([install-ninja.py](../../scripts/install-ninja.py), `cmake/pins.json` tools/ninja-windows and
+  ninja-linux) installs into the runner's temporary directory so tools do not pollute the checked source root.
 - [actionlint 1.7.12](https://github.com/rhysd/actionlint/releases/tag/v1.7.12) validates workflow syntax and
   expressions before a full build; the Linux CI tool archive is pinned by SHA-256.
 - [LunarG Linux SDK setup](https://vulkan.lunarg.com/doc/view/latest/linux/getting_started.html) documents the

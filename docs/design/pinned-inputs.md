@@ -17,8 +17,8 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 | Section | Entries | Fields |
 |---|---|---|
 | `packages` | the ten CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, the gated Eigen and OpenBLAS, and the gated Tracy client) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
-| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM, the GenMC source archive (commit-addressed, built against the pinned LLVM major), the Tracy 0.14.1 Windows release archive with its `tracy-capture` and `tracy-csvexport` members (the peer board's capture client and trace reader) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
-| `actions` | the eight workflow actions | tag `ref` and the 40-hex commit `sha` the workflow must use |
+| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM 20.1.8 (the Windows release archive: the hosted clang-tidy lane's `clang-tidy.exe` member and builtin-header directory), Ninja 1.11.1 (Windows and Linux archives with the binary member), the GenMC source archive (commit-addressed, built against the pinned LLVM major), the Tracy 0.14.1 Windows release archive with its `tracy-capture` and `tracy-csvexport` members (the peer board's capture client and trace reader) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
+| `actions` | the five workflow actions, every one on Node 24 (2026-10-26) | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
 | `unpinned` | the apt packages of the Linux image | recorded by `dpkg-query` into every Linux lane's census; the MSVC toolset of the Windows image is recorded by the evidence bundle |
 
@@ -58,8 +58,12 @@ copy instead. [install-vulkan-sdk.py](../../scripts/install-vulkan-sdk.py) runs 
 checks the installed layout; [install-vulkan-headers.py](../../scripts/install-vulkan-headers.py) assembles the
 Linux header tree from the Vulkan-Headers archive (only its `include/` subtree, every member path validated) and the
 three SPIRV-Reflect files; [install-vulkan-validation.py](../../scripts/install-vulkan-validation.py) and
-[install-warp.py](../../scripts/install-warp.py) read their pins from the registry. Every hosted lane installs
-Python 3.12 before calling them.
+[install-warp.py](../../scripts/install-warp.py) read their pins from the registry;
+[install-ninja.py](../../scripts/install-ninja.py) puts the pinned Ninja on every lane's `PATH` (its binary member
+verified and its `--version` checked), and [install-clang-tidy.py](../../scripts/install-clang-tidy.py) installs the
+clang-tidy lane's LLVM 20.1.8 `clang-tidy.exe` and builtin headers from LLVM's release archive in one pass over the
+tar (the binary's digest, the header count and the reported version checked). Every hosted lane installs Python 3.12
+before calling them.
 
 ### Cold acquisition on every complete run
 
@@ -149,7 +153,11 @@ fail before anything is extracted, and a drifted anchor fails naming the patch.
 
 `permissions` stays `contents: read`; every checkout passes `persist-credentials: false`, so no step and no build
 product holds a token; every `uses:` names a commit with its tag in a comment; every job runs on an explicit image
-label. Pull-request caches are isolated by GitHub (a pull request may read the default branch's caches, never the
+label. Only GitHub's own actions remain (checkout v7.0.1, setup-python v7.1.0, cache v6.1.0, upload-artifact v7.0.2,
+github-script v8), all on Node 24; the three third-party actions that had no Node 24 release were replaced on
+2026-10-26 by the repository's own steps: Ninja and clang-tidy by the pinned helpers above, and the Visual Studio
+developer environment by [msvc-dev-env.py](../../scripts/msvc-dev-env.py) (vswhere, `vcvars64.bat`, every changed
+variable to `$GITHUB_ENV`) ([session](../sessions/2026-10-26-actions-node24.md)). Pull-request caches are isolated by GitHub (a pull request may read the default branch's caches, never the
 reverse), the `restore-keys` prefixes only reach caches written on the same branch or the default branch, no job uses
 `pull_request_target`, and no consumer of an artifact holds more than read access. There are no self-hosted runners;
 the development workstation is never connected as a runner for public pull requests. Hardware workers, when they
@@ -159,8 +167,8 @@ come, need their own trust boundary and cleanup before they qualify anything.
 
 The apt packages of the Linux image are not pinned; their installed versions are part of every Linux lane's
 evidence. GitHub generates commit archives on demand; their digests have been stable since 2023, and a change would
-fail the configure loudly rather than substitute bytes. LLVM 20.1.8 is acquired by a pinned action rather than by
-digest.
+fail the configure loudly rather than substitute bytes. The Ninja 1.11.1 release assets predate GitHub's recorded
+asset digests, so their SHA-256 values were computed from the downloaded files (LLVM's matches GitHub's record).
 
 ## Not in scope
 

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **10** · tools: **17** · workflow actions: **8** · runner images: **3** · unpinned apt packages: **18**
+- packages: **10** · tools: **19** · workflow actions: **5** · runner images: **3** · unpinned apt packages: **18**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -45,21 +45,20 @@
 | clang-tidy-linux | 20.1.0 | Apache-2.0 WITH LLVM-exception AND Apache-2.0 | files.pythonhosted.org | `clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` |
 | tracy-capture-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
 | tracy-csvexport-windows | 0.14.1 | BSD-3-Clause | github.com | `windows-0.14.1.zip` |
-| llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | pinned action KyleMayes/install-llvm-action | installed by the action |
+| ninja-windows | 1.11.1 | Apache-2.0 | github.com | `ninja-win.zip` |
+| ninja-linux | 1.11.1 | Apache-2.0 | github.com | `ninja-linux.zip` |
+| llvm | 20.1.8 | Apache-2.0 WITH LLVM-exception | github.com | `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` |
 | genmc | 0.19.0 | Apache-2.0 OR MIT | MPI-SWS/genmc (9f6c4c0772d0) | `genmc-9f6c4c07.tar.gz` |
 
 ## Workflow actions (pinned to a reviewed commit)
 
 | Action | Tag | Commit |
 |---|---|---|
-| actions/checkout | `v4` | `11d5960a326750d5838078e36cf38b85af677262` |
-| actions/setup-python | `v5` | `a26af69be951a213d495a4c3e4e4022e16d87065` |
-| actions/cache | `v4` | `0057852bfaa89a56745cba8c7296529d2fc39830` |
-| actions/upload-artifact | `v4` | `ea165f8d65b6e75b540449e92b4886f43607fa02` |
+| actions/checkout | `v7.0.1` | `3d3c42e5aac5ba805825da76410c181273ba90b1` |
+| actions/setup-python | `v7.1.0` | `6d4fd22b20465ccc0f7354476588e8df7c9ca0e0` |
+| actions/cache | `v6.1.0` | `55cc8345863c7cc4c66a329aec7e433d2d1c52a9` |
+| actions/upload-artifact | `v7.0.2` | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
 | actions/github-script | `v8` | `ed597411d8f924073f98dfc5c65a23a2325f34cd` |
-| seanmiddleditch/gha-setup-ninja | `v5` | `96bed6edff20d1dd61ecff9b75cc519d516e6401` |
-| ilammy/msvc-dev-cmd | `v1` | `0b201ec74fa43914dc39ae48a89fd1d8cb592756` |
-| KyleMayes/install-llvm-action | `v2.0.9` | `ebc0426251bc40c7cd31162802432c68818ab8f0` |
 
 ## Runner images
 

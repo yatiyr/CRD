@@ -56,6 +56,12 @@ cba_spec.loader.exec_module(install_cba)
 tidy_spec = importlib.util.spec_from_file_location('install_tidy', ROOT / 'scripts/install-clang-tidy.py')
 install_tidy = importlib.util.module_from_spec(tidy_spec)
 tidy_spec.loader.exec_module(install_tidy)
+ninja_spec = importlib.util.spec_from_file_location('install_ninja', ROOT / 'scripts/install-ninja.py')
+install_ninja = importlib.util.module_from_spec(ninja_spec)
+ninja_spec.loader.exec_module(install_ninja)
+msvc_spec = importlib.util.spec_from_file_location('msvc_dev_env', ROOT / 'scripts/msvc-dev-env.py')
+msvc_dev_env = importlib.util.module_from_spec(msvc_spec)
+msvc_spec.loader.exec_module(msvc_dev_env)
 profile_spec = importlib.util.spec_from_file_location('build_profile', ROOT / 'scripts/build-profile.py')
 build_profile = importlib.util.module_from_spec(profile_spec)
 profile_spec.loader.exec_module(build_profile)
@@ -1609,6 +1615,116 @@ class BuildPerformance(unittest.TestCase):
         self.assertEqual(pin['headers'], 'clang_tidy/data/lib/clang/%d/include/' % tidy_gate.REQUIRED_TIDY_MAJOR)
         self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('scripts/install-clang-tidy.py', check_pins.HELPERS)
+
+    def test_ninja_installer_extracts_only_the_pinned_member_and_checks_digest_and_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            binary = b'#!/bin/sh\necho 1.11.1\n'
+            archive = root / 'ninja-linux.zip'
+            with zipfile.ZipFile(archive, 'w') as package:
+                package.writestr('ninja', binary)
+                package.writestr('README', b'not extracted')
+            pin = {'version': '1.11.1', 'url': 'https://example.invalid/ninja-linux.zip', 'file': archive.name,
+                   'sha256': pins_registry.sha256(archive), 'member': 'ninja',
+                   'member_sha256': hashlib.sha256(binary).hexdigest()}
+            with patch.object(install_ninja.subprocess, 'run', return_value=SimpleNamespace(stdout='1.11.1\n')):
+                installed = install_ninja.install(root / 'tools', archive=archive, pin=pin)
+            self.assertEqual(installed.read_bytes(), binary)
+            self.assertEqual(sorted(p.name for p in (root / 'tools').iterdir()), ['ninja'])
+            with self.assertRaisesRegex(pins_registry.PinError, 'binary checksum mismatch'):
+                install_ninja.install(root / 'wrong', archive=archive, pin=dict(pin, member_sha256='0' * 64),
+                                      check=False)
+            self.assertEqual(list((root / 'wrong').iterdir()), [])
+            with patch.object(install_ninja.subprocess, 'run', return_value=SimpleNamespace(stdout='1.13.2\n')):
+                with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                    install_ninja.install(root / 'version', archive=archive, pin=pin)
+            self.assertEqual(list((root / 'version').iterdir()), [], 'a wrong version leaves nothing installed')
+        for name, member in (('ninja-windows', 'ninja.exe'), ('ninja-linux', 'ninja')):
+            pin = pins_registry.entry('tools', name)
+            self.assertEqual(pin['member'], member)
+            self.assertIn('/v%s/' % pin['version'], pin['url'])
+            self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
+        self.assertEqual(pins_registry.entry('tools', 'ninja-windows')['version'],
+                         pins_registry.entry('tools', 'ninja-linux')['version'])
+        self.assertIn('scripts/install-ninja.py', check_pins.HELPERS)
+
+    def test_msvc_environment_exports_only_what_vcvars_changed(self):
+        before = {'PATH': r'C:\Windows', 'TEMP': r'C:\Temp', 'PROMPT': '$P$G'}
+        after = {'Path': r'C:\VC\bin;C:\Windows', 'TEMP': r'C:\Temp', 'INCLUDE': r'C:\VC\include',
+                 'PROMPT': '$P$G$_', 'VCToolsVersion': '14.51.36231'}
+        self.assertEqual(msvc_dev_env.changed(before, after),
+                         {'Path': r'C:\VC\bin;C:\Windows', 'INCLUDE': r'C:\VC\include',
+                          'VCToolsVersion': '14.51.36231'},
+                         'names compare case-insensitively; an unchanged value and the prompt are not exported')
+        self.assertEqual(msvc_dev_env.github_env_lines({'B': 'two', 'A': 'one'}), ['A=one', 'B=two'])
+        self.assertEqual(msvc_dev_env.github_env_lines({'M': 'x\nCRD_MSVC_ENV_EOF'}),
+                         ['M<<CRD_MSVC_ENV_EOF_', 'x\nCRD_MSVC_ENV_EOF', 'CRD_MSVC_ENV_EOF_'],
+                         'a value with a line break takes a delimiter it does not contain')
+        self.assertIn('scripts/msvc-dev-env.py', check_pins.HELPERS)
+
+    def test_clang_tidy_installer_reads_the_windows_release_archive_in_one_pass(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            top = 'clang+llvm-20.1.8-x86_64-pc-windows-msvc/'
+            binary = b'MZ clang-tidy'
+            headers = {'stddef.h': b'/* stddef */', 'cuda_wrappers/new': b'//'}
+            archive = root / 'clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz'
+
+            def add(package, name, data=None, kind=tarfile.REGTYPE, target=''):
+                info = tarfile.TarInfo(name)
+                info.type = kind
+                info.linkname = target
+                if data is not None:
+                    info.size = len(data)
+                package.addfile(info, io.BytesIO(data) if data is not None else None)
+
+            def build(path, extra=None):
+                with tarfile.open(path, 'w:xz') as package:
+                    add(package, top + 'bin/clang.exe', b'not extracted')
+                    add(package, top + 'bin/clang-tidy.exe', binary)
+                    add(package, top + 'lib/clang/20/include', kind=tarfile.DIRTYPE)
+                    for name, data in headers.items():
+                        add(package, top + 'lib/clang/20/include/' + name, data)
+                    if extra is not None:
+                        extra(package)
+                return path
+
+            build(archive)
+            pin = {'version': '20.1.8', 'url': 'https://example.invalid/llvm.tar.xz', 'file': archive.name,
+                   'sha256': pins_registry.sha256(archive), 'root': top, 'member': top + 'bin/clang-tidy.exe',
+                   'member_sha256': hashlib.sha256(binary).hexdigest(), 'headers': top + 'lib/clang/20/include/',
+                   'header_count': len(headers)}
+            destination = root / 'tools' / 'clang-tidy'
+            installed = install_tidy.install(destination, archive=archive, pin=pin, check=False)
+            self.assertEqual(installed, destination / 'bin' / 'clang-tidy.exe')
+            self.assertEqual(installed.read_bytes(), binary)
+            files = sorted(p.relative_to(destination).as_posix() for p in destination.rglob('*') if p.is_file())
+            self.assertEqual(files, ['bin/clang-tidy.exe', 'cerid-clang-tidy.json',
+                                     *sorted('lib/clang/20/include/' + name for name in headers)])
+            with patch.object(install_tidy.pins, 'fetch', side_effect=AssertionError('refetched')):
+                self.assertEqual(install_tidy.install(destination, archive=archive, pin=pin, check=False), installed)
+            for name, changed, message in (('binary', dict(pin, member_sha256='0' * 64), 'binary checksum mismatch'),
+                                           ('count', dict(pin, header_count=3), '2 files under'),
+                                           ('missing', dict(pin, member=top + 'bin/clang-tidy-20.exe'),
+                                            'bin/clang-tidy'),
+                                           ('escape', dict(pin, member=top + 'x/../bin/clang-tidy.exe'), 'escapes')):
+                target = root / 'refused' / name
+                with self.assertRaisesRegex(pins_registry.PinError, message):
+                    install_tidy.install(target, archive=archive, pin=changed, check=False)
+                self.assertFalse(target.exists(), f'{name}: a refused install leaves nothing in place')
+            linked = build(root / 'linked.tar.xz',
+                           lambda package: add(package, top + 'lib/clang/20/include/escape.h', kind=tarfile.SYMTYPE,
+                                               target='../../../../../etc/passwd'))
+            with self.assertRaisesRegex(pins_registry.PinError, 'not a regular file'):
+                install_tidy.install(root / 'refused' / 'link', archive=linked, check=False,
+                                     pin=dict(pin, sha256=pins_registry.sha256(linked)))
+            self.assertFalse((root / 'refused' / 'link').exists())
+        pin = pins_registry.entry('tools', 'llvm')
+        self.assertEqual(pin['file'], pin['url'].rsplit('/', 1)[-1])
+        self.assertIn('/llvmorg-%s/' % pin['version'], pin['url'])
+        self.assertEqual(pin['member'], pin['root'] + 'bin/clang-tidy.exe')
+        self.assertEqual(pin['headers'], pin['root'] + 'lib/clang/%d/include/' % tidy_gate.REQUIRED_TIDY_MAJOR)
+        self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
 
     MSVC_PROFILE = (
         '[1/3] Building CXX object engine/a.cpp.obj\n'
