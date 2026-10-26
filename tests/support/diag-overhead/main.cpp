@@ -755,8 +755,8 @@ int main(int argc, char** argv)
         }
     }
     const u64 failures   = host_started ? host.bundle_failures() : 0U;
-    const u64 ring_bytes =
-        host_started ? static_cast<u64>(host.recorder().policy().capacity) * sizeof(cp::FlightEvent) : 0U;
+    // The recorder's storage: every thread ring and the shared ring (DIAG.11b (q1)), whether a thread touched it or not.
+    const u64 ring_bytes = host_started ? host.recorder().ring_stats().ring_bytes : 0U;
     const bool recorder_running = host_started && host.recorder().is_initialized();
 
     // ---- the measured allocator's statistics, read before teardown destroys it -----------------------------------
