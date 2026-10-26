@@ -29,18 +29,25 @@ gold-standard implementation, never the "modern only" or easy option.
 
 ## The user's 2026-10-26 decisions that shape this comparison
 
-Recorded by the coordinator for this research; they answer the open questions in the two briefs. Where a brief
-recommended otherwise, the decision below wins.
+Recorded in the [user decisions session](../sessions/2026-10-26-user-decisions-platform-floors-and-research.md); they
+answer the open questions in the two briefs. Where a brief recommended otherwise, the decision wins. That session also
+asks for three serial research parts; this document is the first (engine, GPU, rendering, computational geometry and
+navigation) and also covers the other engine areas the coordinator listed.
 
 1. **x64 SSE2 floor stays supported** (QUAL.0 question 1, option b). CMake picks one SIMD level at compile time
    (`cmake/CrdSimd.cmake`, `CRD_SIMD_LEVEL` = auto/scalar/sse2/avx2/neon/native, default AVX2), and outside
    `engine/foundation/time` there is no CPUID/XGETBV feature detection. Runtime dispatch with per-ISA kernels is
-   therefore required and does not exist yet.
+   required and not implemented; the new [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) row (Order 093, added
+   2026-10-26) owns it.
 2. **Older-GPU fallbacks** (RAH-0 question 2, option b, against the brief's recommendation a). Every RAH row must
    carry an explicitly authored fallback path, not only a modern floor.
-3. **Peer-relative budgets** (QUAL.0 question 5, option c) with the approved peers Tracy, Eigen, cuBLAS, MKL/OpenBLAS,
-   Mitsuba 3/pbrt-v4, Filament, Jolt and PhysX.
-4. **All nine RAH breaking changes** (RAH-0 question 1) are accepted.
+3. **Peer-relative budgets** (QUAL.0 question 5, option c): beat the best peer; parity only when no lever remains, with
+   that evidence recorded. Approved peers: Tracy, Eigen, cuBLAS, MKL/OpenBLAS, Mitsuba 3/pbrt-v4, Filament, Jolt and
+   PhysX; each download is approved separately.
+4. **All nine RAH breaking changes** (RAH-0 question 1) are accepted; every asset is re-cooked under new format
+   versions; RAH-1 first; the refreshed no-loss census is the gate.
+5. **Runtime changeability** of frame graphs, pipelines, shaders, materials and every GPU program, and **capability
+   ownership** (one owning module per capability, [OWN.1](../ROADMAP.md#slice-own.1)), both recorded the same day.
 
 ## Highest-impact gaps first
 
@@ -49,7 +56,7 @@ Details and placements are in [Gaps and proposed roadmap changes](#gaps-and-prop
 
 | Rank | Gap | Cerid today | Proposed owner |
 |---:|---|---|---|
-| 1 | Runtime CPU ISA detection and per-ISA kernel dispatch (SSE2 to AVX-512/AVX10.2, NEON/SVE2) | Missing; compile-time level only | New CPU-ISA.0 to CPU-ISA.3 |
+| 1 | Runtime CPU ISA detection and per-ISA kernel dispatch (SSE2 to AVX-512/AVX10.2, NEON/SVE2) | Missing in source; planned by SIMD-DISPATCH (Order 093, added 2026-10-26) | Amend SIMD-DISPATCH |
 | 2 | Authored GPU feature tiers with older-GPU fallbacks in every RAH row | Partial: capability probes and registry, no tier ladder | New GPU-TIER.0; amend RAH-1 to RAH-8 |
 | 2a | Fine-grained live replacement of every GPU program and frame graph with no visible hitch (fallback while compiling, staged pipeline parts, generation-safe retirement) | Partial: frame reload shipped, program reload coarse (retire-all), async compute warmup; RAH-7 Open | Amend RAH-7.a to 7.d; new RAH-7.e, RAH-7.f |
 | 3 | One sync model over DX12 enhanced barriers and Vulkan synchronization2, legacy fallback | Missing on DX12 (legacy `ResourceBarrier` in all three DX12 contexts) | New RAH-SYNC |
@@ -205,7 +212,7 @@ of the art on three questions: how live it is, what a change costs, and how it s
 | Feature | Best-in-class 2026 reference | Cerid status |
 |---|---|---|
 | Fiber job system | Naughty Dog fibers (GDC 2015) [W47](#w47); UE Tasks with prerequisites and pipes [W46](#w46) | Shipped fiber pool (ADR-0015, ADR-0033), repaired and measured in Oct 2026 sessions; hardening [JOBS-HARD](../ROADMAP.md#slice-jobs-hard) Later |
-| Runtime ISA dispatch | Highway `HWY_DYNAMIC_DISPATCH`, targets to AVX3_SPR and AVX10_2, SVE/SVE2 (1.3.0, late 2025) [W43](#w43); GCC/Clang function multiversioning (K) | Missing: compile-time `CRD_SIMD_LEVEL` only; ADR-0088 asm runtime dispatch was reverted (asm only); no CPUID outside `time/clocks` |
+| Runtime ISA dispatch | Highway `HWY_DYNAMIC_DISPATCH`, targets to AVX3_SPR and AVX10_2, SVE/SVE2 (1.3.0, late 2025) [W43](#w43); GCC/Clang function multiversioning (K) | Missing in source: compile-time `CRD_SIMD_LEVEL` only; owner [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch); ADR-0088 asm runtime dispatch was reverted (asm only); no CPUID outside `time/clocks` |
 | AVX-512 / AVX10.2 / APX | Intel Nova Lake (late 2026) and Diamond Rapids list AVX10.2 and APX [W44](#w44); AMD Zen 4/5 AVX-512 (K) | Missing: no AVX-512 kernels (one unrelated grep hit) |
 | ARM64 SVE/SME | Highway SVE/SVE2 targets [W43](#w43); Apple M4 SME (K) | NEON level only; [JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2) native ARM64 open |
 | Hybrid P/E cores and QoS | Windows `SetThreadInformation` power throttling (EcoQoS) and process QoS [W45](#w45); Thread Director (K) | Partial: P-core counting by EfficiencyClass and opt-in P-core routing (ADR-0094, `topology.cpp`); no QoS classes, no NUMA |
@@ -214,7 +221,9 @@ of the art on three questions: how live it is, what a change costs, and how it s
 
 ### Gaps in area 3
 
-- **Runtime dispatch is the largest CPU gap.** The SSE2 floor plus an AVX2 default needs per-ISA compilation units,
+- **Runtime dispatch is the largest CPU gap** (owned since 2026-10-26 by SIMD-DISPATCH, whose text already covers
+  per-level kernel units, CPUID plus XCR0, a forced-level override, the LTCG inlining guard, Intel SDE and per-level
+  boards). The SSE2 floor plus an AVX2 default needs per-ISA compilation units,
   a detection layer (CPUID leaves, XGETBV/OS XSAVE state, AVX-512/AVX10 version leaf, ARM64 HWCAP/ID registers),
   dispatch tables resolved once, per-tier determinism rules (ADR-0063), forced-tier test lanes and per-tier peer
   boards. Highway is the reference design and a measured peer; Cerid keeps its intrinsics-first kernels (ADR-0082).
@@ -384,6 +393,10 @@ Clipper2 as algorithm references.
   sums, straight skeletons, 3D exact mesh Booleans (EMBER/indirect-predicate class), snap rounding, 3D CDT and alpha
   wrapping.
 - **Navigation does not exist.** It is a core game system in every peer engine.
+- **Consumers, not gates.** [GVA-5.runtime](../ROADMAP.md#slice-gva-5.runtime) (terrain, foliage, splats), the
+  [PROCGEN](../ROADMAP.md#slice-procgen) rows, tilemaps and CAD/CAM consume GEOM-K.4 and NAV.1 when they arrive; they do
+  not wait for them, so the proposals below do not list them as Requires. [OWN.1](../ROADMAP.md#slice-own.1) already
+  assigns predicates and spatial queries to the geometry modules, which is where the kernel lives.
 - **No geometry qualification board** with peers (CGAL, Clipper2, Manifold, libigl, Geogram, Boost.Geometry, GEOS,
   Recast/Detour, RVO2, GeographicLib) and adversarial corpora (Thingi10K, degenerate and near-degenerate sets).
 - **Runtime changeability.** Navigation build settings, area costs and agent profiles are authored assets; a change
@@ -394,33 +407,29 @@ Clipper2 as algorithm references.
 ## Gaps and proposed roadmap changes
 
 Proposals only; the user approves before any [ROADMAP](../ROADMAP.md) edit. "After" names the existing row (and its
-Order number on 2026-10-26) that the new row should follow; the validator's order rule means a row's Requires must sit
+Order number after the 2026-10-26 SIMD-DISPATCH and OWN insertions) that the new row should follow; the validator's order rule means a row's Requires must sit
 earlier in the table. Highest impact first, matching the ranking above.
 
 | # | Proposed ID | Kind | Placement | Requires | Content and acceptance |
 |---:|---|---|---|---|---|
-| 1 | CPU-ISA.0 | New | After [QUAL.0](../ROADMAP.md#slice-qual.0) (102) | QUAL.0 | ADR: ISA tiers (x64 SSE2, SSE4.2, AVX2+FMA, AVX-512 (Skylake-X, Ice Lake, Zen 4), AVX10.2; ARM64 NEON, SVE2, SME), detection rules, determinism per tier under ADR-0063, which modules dispatch, binary layout |
-| 1 | CPU-ISA.1 | New | After CPU-ISA.0 | CPU-ISA.0 | Detection in core/platform (CPUID leaves incl. AVX10 version, XGETBV/OS state, ARM64 HWCAP/ID registers), one-time resolved dispatch tables, `CRD_FORCE_ISA` override, CMake per-ISA object libraries; refusal below SSE2 |
-| 1 | CPU-ISA.2 | New | After CPU-ISA.1 | CPU-ISA.1 | Migrate math, hesap dense/FFT/sparse, geometry and media hot kernels to per-ISA bodies; AVX-512/AVX10.2 kernels where they win; Highway as a measured peer |
-| 1 | CPU-ISA.3 | New | After CPU-ISA.2 | CPU-ISA.2 | Forced-tier CI lanes (each tier executes, nonzero counts), cross-tier result agreement within declared tolerances, per-tier peer boards (Eigen, MKL/OpenBLAS), Intel SDE emulation for absent hardware (needs a download) |
-| 1 | HESAP-JOBS-RETUNE | Amend | Stays at 100, or move after CPU-ISA.2 (user choice) | CPU-ISA.2 if moved | A retune before dispatch exists must be repeated per tier; record which |
-| 2 | GPU-TIER.0 | New | After [RAH-0](../ROADMAP.md#slice-rah-0) (108) | RAH-0 | Tier ladder decision: T0 legacy (Vulkan 1.1/1.2, DX12 FL 11_x, SM 6.0, bounded descriptor sets, no mesh/RT), T1 (Vulkan 1.3 + indexing + BDA, FL 12_1 + SM 6.6), T2 (DX12 Ultimate class: mesh, RT 1.1, VRS, sampler feedback), T3 (Roadmap 2026, descriptor heap, DXR 1.2, SM 6.9); each asset declares tiers and an authored fallback |
+| 1 | SIMD-DISPATCH | Amend | In place (093) | DIAG.11a | Name Google Highway 1.3 as a measured design peer; detect the AVX10 version leaf and APX; place ARM64 SME beside SVE/SVE2 under the ARM release rows; register kernel units and dispatch as one capability in OWN.1 |
+| 2 | GPU-TIER.0 | New | After [RAH-0](../ROADMAP.md#slice-rah-0) (112) | RAH-0 | Tier ladder decision: T0 legacy (Vulkan 1.1/1.2, DX12 FL 11_x, SM 6.0, bounded descriptor sets, no mesh/RT), T1 (Vulkan 1.3 + indexing + BDA, FL 12_1 + SM 6.6), T2 (DX12 Ultimate class: mesh, RT 1.1, VRS, sampler feedback), T3 (Roadmap 2026, descriptor heap, DXR 1.2, SM 6.9); each asset declares tiers and an authored fallback |
 | 2 | RAH-1 to RAH-8 | Amend | In place | GPU-TIER.0 | Every child's acceptance adds: the declared fallback tier executes on a real or software adapter and rejects unsupported features before recording |
 | 2a | RAH-7.a to RAH-7.d | Amend | In place | RAH-7 | Registry covers frame-graph structure (pass add/remove/reorder, resource re-realization) and per-part pipelines (shader objects, graphics pipeline libraries, DX12 pipeline libraries and partial programs, incremental RT/work-graph state objects); in-flight frames keep the old plan until their fences complete |
-| 2a | RAH-7.e | New | After [RAH-7.d](../ROADMAP.md#slice-rah-7.d) (141) | RAH-7.b | No-hitch replacement: per-asset authored fallback while compiling (last-good generation, generic specialization-constant variant, or explicit diagnosed skip), compile-job QoS and admission limits, first-use pipeline collection and warm-up for shipping builds |
+| 2a | RAH-7.e | New | After [RAH-7.d](../ROADMAP.md#slice-rah-7.d) (144) | RAH-7.b | No-hitch replacement: per-asset authored fallback while compiling (last-good generation, generic specialization-constant variant, or explicit diagnosed skip), compile-job QoS and admission limits, first-use pipeline collection and warm-up for shipping builds |
 | 2a | RAH-7.f | New | After RAH-7.e | RAH-7.e, DIAG | Live-edit budget board: save-to-visible latency, worst swap frame spike and compile CPU per backend and tier, peer-relative where a peer exists, otherwise baseline plus stated margin; adversarial soak of rapid successive edits |
 | 3 | RAH-SYNC | New | After GPU-TIER.0 | GPU-TIER.0 | One access/layout/sync model: DX12 enhanced barriers (fence barriers when retail), legacy `ResourceBarrier` path for older drivers, Vulkan synchronization2; replace legacy DX12 barriers in compute, raster and RT contexts; hazard tests feed RAH-6.b |
 | 4 | RAH-2.a/RAH-2.c | Amend | In place | RAH-SYNC | Name the realizations: SM 6.6 `ResourceDescriptorHeap`, `VK_EXT_descriptor_heap` with `VK_EXT_descriptor_buffer` and descriptor-indexing paths, and a bounded descriptor-set path for T0 |
 | 5 | DX12-AGILITY | New | After RAH-SYNC | GPU-TIER.0 | Agility SDK export and redistributable deployment, pinned DXC, shader-model ladder SM 6.0 to 6.9 per tier (6.10 LinAlg when retail), GPU upload heaps, revised view APIs; work graphs move from mechanic to tiered feature |
 | 6 | VK-PROFILE | New | After DX12-AGILITY | GPU-TIER.0 | Vulkan 1.4 device creation where available, Khronos profiles as machine-readable tier definitions (Roadmap 2022/2024/2026), EXT successors for NV-only probes (SER), host image copy, maintenance 6+ |
 | 6 | RAH-8.a | Amend | In place | VK-PROFILE, DX12-AGILITY | Capability manifest derives from the profiles and DX feature queries; tier selection and fallback reporting are commands |
-| 7 | RAH-5.d | New | After [RAH-5.c](../ROADMAP.md#slice-rah-5.c) (132) | RAH-5.b | Direct I/O (DirectStorage 1.4 on Windows; io_uring and the platform async FS on Linux), GPU decompression as authored CKIR (GDeflate and Zstd) with CPU fallback, CRDR compression decision; consumers VGE-1, TXS-3 |
-| 8 | GPU-FORENSICS | New | After [RAH-8](../ROADMAP.md#slice-rah-8) (144) | RAH-8, DIAG | Aftermath, RGD and DirectX Dump Files capture and import into the existing crash bundle schema; shader debug info and redaction; one adversarial page-fault per vendor tool available |
+| 7 | RAH-5.d | New | After [RAH-5.c](../ROADMAP.md#slice-rah-5.c) (136) | RAH-5.b | Direct I/O (DirectStorage 1.4 on Windows; io_uring and the platform async FS on Linux), GPU decompression as authored CKIR (GDeflate and Zstd) with CPU fallback, CRDR compression decision; consumers VGE-1, TXS-3 |
+| 8 | GPU-FORENSICS | New | After [RAH-8](../ROADMAP.md#slice-rah-8) (148) | RAH-8, DIAG | Aftermath, RGD and DirectX Dump Files capture and import into the existing crash bundle schema; shader debug info and redaction; one adversarial page-fault per vendor tool available |
 | 9 | MLR-render.1/.2, MLR-2.runtime | Amend | In place | DX12-AGILITY, VK-PROFILE | Provider targets DX LinAlg and Vulkan cooperative matrix; NV cooperative vector as vendor seam; name NTC (with BC fallback), neural materials and NRC as assets with quality oracles against non-neural references |
 | 10 | TPR-1.runtime, PRESENT.2 | Amend | In place | RAH-1 | Own frame interpolation and upscaler as fallback and reference; vendor seams (DLSS 4.5, FSR Redstone, XeSS 3, MetalFX); latency reduction and frame pacing (present wait/id, swapchain maintenance) measured in DIAG latency |
 | 11 | RAH-4.c, RTX-0.runtime, RTX-4.runtime | Amend | In place | RAH-4.b | SER on `VK_EXT_ray_tracing_invocation_reorder` and DXR 1.2; OMM on both APIs; cluster AS and partitioned TLAS as T3 features with standard BLAS/TLAS fallback; swept-sphere curves for hair |
 | 12 | RAH-7.a, PQP-4.renderer | Amend | In place | RAH-7 | Driver pipeline caches as cache tiers: `VK_KHR_pipeline_binary`, DX12 PSO libraries, partial graphics programs (when retail), SODB authoring for Advanced Shader Delivery |
-| 13 | GEOM-K.0 | New | After [WORLD.1](../ROADMAP.md#slice-world.1) (601); alternative: right after [RENDERER-RUNTIME](../ROADMAP.md#slice-renderer-runtime) (235) if the user wants it before the editor | SCI-CONTRACT.1 | ADR: kernel concept (predicates, constructions, number types), per-algorithm kernel requirement, determinism tiers, migration plan; no geometry code change before acceptance |
+| 13 | GEOM-K.0 | New | After [WORLD.1](../ROADMAP.md#slice-world.1) (605); alternative: right after [RENDERER-RUNTIME](../ROADMAP.md#slice-renderer-runtime) (239) if the user wants it before the editor | SCI-CONTRACT.1, OWN | ADR: kernel concept (predicates, constructions, number types), per-algorithm kernel requirement, determinism tiers, migration plan; no geometry code change before acceptance |
 | 13 | GEOM-K.1 | New | After GEOM-K.0 | GEOM-K.0 | Filtered exact predicates for float and double (static, interval, expansion), indirect predicates, exact integer predicates with bit budgets |
 | 13 | GEOM-K.2 | New | After GEOM-K.1 | GEOM-K.1 | Owned big integer and rational, lazy exact constructions, snap rounding, fixed-point Q formats for lockstep |
 | 13 | GEOM-K.3 | New | After GEOM-K.2 | GEOM-K.2 | Retarget hull, Delaunay, CDT, polygon Boolean, BVH queries and repair to the kernel; byte-identical results where the old path was already exact |
@@ -435,9 +444,9 @@ earlier in the table. Highest impact first, matching the ranking above.
 | 14 | NAV.3 | New | After NAV.2 | GEOM-K.4 | Grid and graph search: A*, JPS/JPS+, HPA*, flow fields, D* Lite on the lattice family |
 | 14 | NAV.5 | New | After NAV.3 | NAV.2, WORLD.1 | 3D/flying navigation (sparse voxel octree) and large-world origins |
 | 14 | NAV.6 | New | After NAV.5 | SCI-CONTRACT.3, WORLD.1 | Road routing (contraction hierarchies, CRP) and geodesy (Karney geodesics, projections) for maps and digital twins |
-| 14 | NAV.4 | New | After [EYLEM-v1k](../ROADMAP.md#slice-eylem-v1k) (634) | NAV.2, EYLEM-v1i | Crowds (ORCA, steering, formations) coupled to the character controller and physics queries |
+| 14 | NAV.4 | New | After [EYLEM-v1k](../ROADMAP.md#slice-eylem-v1k) (638) | NAV.2, EYLEM-v1i | Crowds (ORCA, steering, formations) coupled to the character controller and physics queries |
 | 14 | NAV.7 | New | After NAV.4 | NAV.4, NAV.6 | Qualification against Recast/Detour, RVO2 and GeographicLib; editor work stays in DEBT-2 and EDITOR |
-| - | JOBS-QOS | New | After [CORE-USE](../ROADMAP.md#slice-core-use) (107); else amend JOBS-HARD.2 | CORE-USE | Thread QoS classes (Windows power throttling/QoS, Linux scheduler hints), P/E placement for frame, audio and background work, NUMA awareness |
+| - | JOBS-QOS | New | After [CORE-USE](../ROADMAP.md#slice-core-use) (111); else amend JOBS-HARD.2 | CORE-USE | Thread QoS classes (Windows power throttling/QoS, Linux scheduler hints), P/E placement for frame, audio and background work, NUMA awareness |
 | - | TPR-2.runtime | Amend | In place | - | ACES 2.0 output transforms and OCIO 2.5 config interop (own implementation; OCIO as peer) |
 | - | INTEROP.1, MAT-0.runtime, GVA-5.runtime | Amend | In place | - | Pin OpenUSD Core Spec 1.0, OpenPBR 1.1 and `KHR_gaussian_splatting` |
 | - | ANIM.2 | Amend | In place | - | Motion matching and learned motion matching with a non-learned fallback |
@@ -459,8 +468,8 @@ approval before it is fetched.
 | DXC 1.9.2602.17 | SM 6.9 compile | https://github.com/microsoft/DirectXShaderCompiler/releases | not checked |
 | Vulkan SDK 1.4.341 or later | descriptor heap, Roadmap 2026 profile | https://vulkan.lunarg.com/sdk/home | not checked |
 | DirectStorage 1.4 preview and GACL | RAH-5.d | https://github.com/microsoft/DirectStorage | not checked |
-| Intel SDE | CPU-ISA.3 emulation of AVX-512/AVX10 | https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html | not checked |
-| Google Highway 1.3.0 | CPU-ISA peer | https://github.com/google/highway/releases | not checked |
+| Intel SDE | SIMD-DISPATCH emulation of AVX-512/AVX10 (already named in that row) | https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html | not checked |
+| Google Highway 1.3.0 | SIMD-DISPATCH design peer | https://github.com/google/highway/releases | not checked |
 | Nsight Aftermath SDK 2026.3; Radeon GPU Detective 1.6.3 | GPU-FORENSICS | https://developer.nvidia.com/nsight-aftermath ; https://gpuopen.com/rgd | not checked |
 | DLSS, FSR (Redstone), XeSS 3 SDKs | TPR-1 vendor seams | vendor developer portals ([W38](#w38) [W37](#w37) [W39](#w39)) | not checked |
 | RTX Kit (NTC 0.10, Neural Shading 1.4) | MLR quality peers | https://developer.nvidia.com/blog/get-started-with-neural-rendering-using-nvidia-rtx-kit/ | not checked |
