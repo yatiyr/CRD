@@ -35,6 +35,9 @@ misses no feature. Recommendations lead with the gold-standard option, never the
   [OWN.1](../ROADMAP.md#slice-own.1) registry and audit and the [OWN.2](../ROADMAP.md#slice-own.2) guard carry it, after
   HESAP-JOBS-RETUNE. Mods, plugins, user projects and CHIR/CEIR scripts stay free to implement anything; the guard covers
   engine sources only.
+- **Research adopted.** After reading the three research parts' proposals (about 110 new rows and 50 amendments), the
+  user approved all of them on 2026-10-26. [RESEARCH-ADOPT](../ROADMAP.md#slice-research-adopt) adds them to the
+  table in full, right after SIMD-DISPATCH.
 - **Research.** Three serial research parts (engine/GPU/rendering plus computational geometry and navigation; domains
   beyond games; how agents and people build with Cerid), each a dated docs/research document whose proposed rows the
   user approves before the roadmap changes.
