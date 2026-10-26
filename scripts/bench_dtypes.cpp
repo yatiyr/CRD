@@ -16,7 +16,7 @@ int main()
     auto* x = static_cast<crd::f32*>(alloc.allocate(kN * sizeof(crd::f32), 64U));
     auto* h = static_cast<crd::u16*>(alloc.allocate(kN * sizeof(crd::u16), 64U));
     auto* b = static_cast<crd::u8*>(alloc.allocate(kN, 64U));
-    auto* q8 = static_cast<BlockQ8_0*>(alloc.allocate((kN / 32U) * sizeof(BlockQ8_0), 64U));
+    auto* q8 = static_cast<BlockQ8Zero*>(alloc.allocate((kN / 32U) * sizeof(BlockQ8Zero), 64U));
     for (crd::u32 i = 0; i < kN; ++i)
     {
         x[i] = 0.001F * static_cast<crd::f32>(i % 9973U) - 3.3F;

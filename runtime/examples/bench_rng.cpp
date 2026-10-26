@@ -42,7 +42,7 @@ void row(const char* name, Gen make) // scalar generic fill
 }
 
 template <class Gen>
-void row_simd(const char* name, Gen make) // AVX2 member fill (counter engines)
+void row_simd(const char* name, Gen make) // member fill: the stats kernel level (counter engines)
 {
     row_impl(name, make, [](auto& g, crd::containers::Span<u64> s) { g.fill(s); });
 }
@@ -57,7 +57,7 @@ int main()
     row("pcg64-dxsm", [] { return st::Pcg64Dxsm(12345); });
     row("splitmix64", [] { return st::SplitMix64(12345); });
     row("mt19937", [] { return st::Mt19937(12345U); });
-    row_simd("threefry4x64", [] { return st::ThreefryRng(12345); }); // AVX2 4-block
-    row_simd("philox4x32", [] { return st::PhiloxRng(12345); });     // AVX2 8-block
+    row_simd("threefry4x64", [] { return st::ThreefryRng(12345); }); // 4 blocks per AVX2 step
+    row_simd("philox4x32", [] { return st::PhiloxRng(12345); });     // 8 blocks per AVX2 step
     return 0;
 }

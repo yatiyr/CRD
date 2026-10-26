@@ -139,7 +139,7 @@ TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the refere
         src[i] = std::bit_cast<crd::f32>(kGgmlSrcF32[i]);
     }
 
-    BlockQ8_0 q8[4];
+    BlockQ8Zero q8[4];
     quantize_q8_0({src, 128U}, {q8, 4U});
     for (crd::u32 b = 0; b < 4U; ++b)
     {
@@ -164,7 +164,7 @@ TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the refere
         }
     }
 
-    BlockQ4_0 q4[4];
+    BlockQ4Zero q4[4];
     quantize_q4_0({src, 128U}, {q4, 4U});
     for (crd::u32 b = 0; b < 4U; ++b)
     {
@@ -212,7 +212,7 @@ TEST_CASE("ceir 23c-e: quantize_q8_0 rounding cross-check - amax scale, half-awa
     ctrl[9]  = 1.6F; // ⇒ 1, 2
     ctrl[10] = 3.49F;
     ctrl[11] = 3.51F; // ⇒ 3, 4
-    BlockQ8_0 cb[1];
+    BlockQ8Zero cb[1];
     quantize_q8_0({ctrl, 32U}, {cb, 1U});
     CHECK(cb[0].d == f32_to_f16_bits(1.0F)); // d = amax/127 = 1.0, f16-exact
     const crd::i8 exp[12] = {127, -127, 3, -3, 2, -2, 1, -1, 1, 2, 3, 4};
@@ -241,7 +241,7 @@ TEST_CASE("ceir 23c-e: quantize_q8_0 rounding cross-check - amax scale, half-awa
         }
         x[b * 32U + 0] = (b % 2U == 0U) ? amp : -amp; // guarantee the block amax == amp
     }
-    BlockQ8_0 blk[nblk];
+    BlockQ8Zero blk[nblk];
     quantize_q8_0({x, n}, {blk, nblk});
     crd::f32 recon[n];
     dequantize_q8_0({blk, nblk}, {recon, n});

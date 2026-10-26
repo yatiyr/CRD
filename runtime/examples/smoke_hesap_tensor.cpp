@@ -53,7 +53,7 @@ int main()
     {
         x[i] = 0.25F * static_cast<crd::f32>(i) - 3.0F;
     }
-    BlockQ8_0 q8[1];
+    BlockQ8Zero q8[1];
     quantize_q8_0({x, 32U}, {q8, 1U});
     crd::f32 back[32];
     dequantize_q8_0({q8, 1U}, {back, 32U});

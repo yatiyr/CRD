@@ -4,7 +4,7 @@
 #   crd-core / crd-containers / crd-memory — types, Span, IAllocator (PUBLIC: on the API surface)
 #   Later slices add PRIVATE TU-local edges (hesap-sparse for sparse tensors, hesap-dense for
 #   decompositions) — NEVER PUBLIC, gated by the link-isolation smoke. The Philox counter-RNG
-#   (deterministic SR) is consumed include-only (header-only constexpr) — no link edge.
+#   (deterministic SR, sketches) is consumed include-only (header-only constexpr) — no link edge.
 
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -14,10 +14,10 @@ add_library(crd-hesap-tensor STATIC ${SOURCES} ${HEADERS})
 target_include_directories(crd-hesap-tensor
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        # Include-ONLY Philox edge (ADR-0096 §1): dtypes.hpp consumes the header-only
-        # constexpr counter-RNG for deterministic SR without link-dragging the
-        # hesap-stats -> hesap-special stack into every tensor consumer (the
-        # units->math precedent). philox.hpp includes only leaf headers.
+        # Include-ONLY Philox edge (ADR-0096 §1): dtypes.hpp (deterministic SR) and decomp.hpp (sketches) consume
+        # the header-only block function and block loop (counter_rng_core.hpp, philox_blocks.hpp) without
+        # link-dragging the hesap-stats -> hesap-special stack into every tensor consumer (the units->math
+        # precedent). PhiloxRng's bulk fill runs the hesap-stats kernels, so the substrate never calls it.
         "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
         # Include-ONLY hesap-dense edge (ADR-0096 section 1): batched / einsum_exec / tt / decomp / nn / sparse_cp
         # are public header-only surfaces over the v0d GEMM, so the consumer view must see the headers; the

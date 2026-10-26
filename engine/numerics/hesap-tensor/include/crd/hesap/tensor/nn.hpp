@@ -32,7 +32,7 @@
 //                                       (C*OH + 17) * (OW + 10))  3x3 staging
 //                  (zero row + C*H padded rows + 16 pool-fusion row buffers;
 //                  one slot per worker; OH/OW are the CONV output dims)
-//       Q8 linear: align64(max_batch * (K/32) * sizeof(BlockQ8_0))
+//       Q8 linear: align64(max_batch * (K/32) * sizeof(BlockQ8Zero))
 //                  + align64(max_batch * (K/32) * 4)
 //                  (per-row quantized-activation blocks + their f32 scales)
 //       i8 linear: align64(max_batch * K) + 2 * align64(max_batch * 4)
@@ -63,7 +63,7 @@
 // ---------------------------------------------------------------------------
 
 #include "batched.hpp" // batcheddetail::direct_gemm_tiny — the v14-h allocation-free tiny GEMM (+ jobs + simd)
-#include "dtypes.hpp"  // BlockQ8_0 + f16 converts + quantize_q8_0 (activations)
+#include "dtypes.hpp"  // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
 #include "io.hpp"      // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
 
@@ -100,7 +100,7 @@ inline constexpr crd::f32 kNnLayerNormEps = 1e-5F;           // torch nn.LayerNo
 // weights flatten to non-multiples); out.size() must be ceil(x.size()/32).
 // =======================================================================
 inline void nn_quantize_q8_0_rint(crd::containers::ConstSpan<crd::f32> x,
-                                  crd::containers::Span<BlockQ8_0> out) noexcept
+                                  crd::containers::Span<BlockQ8Zero> out) noexcept
 {
     CRD_ASSERT_MSG(out.size() * kQuantBlock >= x.size() &&
                        out.size() * kQuantBlock < x.size() + kQuantBlock,
@@ -133,11 +133,11 @@ inline void nn_quantize_q8_0_rint(crd::containers::ConstSpan<crd::f32> x,
     }
 }
 
-// Assemble BlockQ8_0 storage from the raw ref streams (.q8 = int8 values,
+// Assemble BlockQ8Zero storage from the raw ref streams (.q8 = int8 values,
 // .q8s = f16 scale bits) — the frozen-reference weight-load path.
 [[nodiscard]] inline TensorStatus nn_q8_blocks_from_raw(crd::containers::ConstSpan<crd::i8> qs,
                                                         crd::containers::ConstSpan<crd::u16> scales,
-                                                        crd::containers::Span<BlockQ8_0> out) noexcept
+                                                        crd::containers::Span<BlockQ8Zero> out) noexcept
 {
     if (qs.size() != out.size() * kQuantBlock || scales.size() != out.size())
     {
@@ -880,7 +880,7 @@ inline constexpr crd::u32 kNnQ8OutTile = 8U; // outputs sharing one activation-b
 // inner loop is fully unrolled straight-line (a runtime bound costs 2-3 loop
 // micro-ops per 3-instruction iteration — measured as the issue-width wall).
 template <crd::u32 T>
-inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ8_0* wq,
+inline void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero* wq,
                         const crd::f32* wscale, crd::u64 nb, crd::u64 o0, const crd::f32* bias,
                         crd::f32* yrow, bool relu) noexcept
 {
@@ -901,7 +901,7 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
         const __m256 vdx = _mm256_set1_ps(xsc[bi]);
         for (crd::u32 r = 0; r < t; ++r)
         {
-            const BlockQ8_0* wrow = wq + (o0 + r) * nb;
+            const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wrow[bi].qs));
             const __m256i sw = _mm256_sign_epi8(vw, vx); // w * sign(x)
 #if defined(__AVXVNNI__)
@@ -949,7 +949,7 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
     for (crd::u32 r = 0; r < t; ++r)
     {
         crd::f32 accl[8] = {};
-        const BlockQ8_0* wrow = wq + (o0 + r) * nb;
+        const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
         for (crd::u64 bi = 0; bi < nb; ++bi)
         {
             const crd::f32 scale = xsc[bi] * wscale[(o0 + r) * nb + bi];
@@ -974,7 +974,7 @@ inline void q8_dot_tile(const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ
 #endif
 }
 
-inline void q8_dot_tile_any(crd::u32 t, const BlockQ8_0* xrow, const crd::f32* xsc, const BlockQ8_0* wq,
+inline void q8_dot_tile_any(crd::u32 t, const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero* wq,
                             const crd::f32* wscale, crd::u64 nb, crd::u64 o0, const crd::f32* bias,
                             crd::f32* yrow, bool relu) noexcept
 {
@@ -1016,7 +1016,7 @@ inline void q8_dot_tile_any(crd::u32 t, const BlockQ8_0* xrow, const crd::f32* x
 // lane for lane (including -0, which is >= 0 in both forms).
 // HOME-> crd/hesap/tensor/dtypes.hpp: this AVX2 batch quantizer belongs next
 // to quantize_q8_0 itself; move it there on the next dtypes touch.
-inline void quantize_q8_0_fast(const crd::f32* x, BlockQ8_0* out, crd::u64 nblocks) noexcept
+inline void quantize_q8_0_fast(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
@@ -1059,11 +1059,11 @@ inline void quantize_q8_0_fast(const crd::f32* x, BlockQ8_0* out, crd::u64 nbloc
 struct LinQ8Ctx
 {
     const crd::f32* x;      // [M, K], K % 32 == 0
-    const BlockQ8_0* wq;    // [N * (K/32)]
+    const BlockQ8Zero* wq;  // [N * (K/32)]
     const crd::f32* wscale; // [N * (K/32)] the weight block scales pre-widened to f32 at LOAD
     const crd::f32* bias;   // [N]
     crd::f32* y;            // [M, N]
-    BlockQ8_0* xq;          // scratch: [M * (K/32)] quantized activation rows
+    BlockQ8Zero* xq;        // scratch: [M * (K/32)] quantized activation rows
     crd::f32* xscale;       // scratch: [M * (K/32)] activation block scales (f32, per row)
     crd::u64 k;
     crd::u64 n;
@@ -1075,7 +1075,7 @@ inline void linear_q8_run(const LinQ8Ctx& c, crd::u32 lo, crd::u32 hi)
     const crd::u64 nb = c.k / kQuantBlock;
     for (crd::u32 m = lo; m < hi; ++m)
     {
-        BlockQ8_0* xrow = c.xq + static_cast<crd::u64>(m) * nb;
+        BlockQ8Zero* xrow = c.xq + static_cast<crd::u64>(m) * nb;
         crd::f32* xsc = c.xscale + static_cast<crd::u64>(m) * nb;
         // activation quantization = dtypes.hpp's ggml transcription semantics
         // (the vector path is gate-enforced bit-identical to the scalar)
@@ -1719,10 +1719,10 @@ namespace nndetail
 // (the widened weight scales, then the per-row activation scales). K must be
 // a multiple of 32.
 [[nodiscard]] inline TensorStatus nn_linear_q8(TensorView<const crd::f32> x,
-                                               crd::containers::ConstSpan<BlockQ8_0> wq,
+                                               crd::containers::ConstSpan<BlockQ8Zero> wq,
                                                crd::containers::ConstSpan<crd::f32> bias,
                                                TensorView<crd::f32> y,
-                                               crd::containers::Span<BlockQ8_0> xq_scratch,
+                                               crd::containers::Span<BlockQ8Zero> xq_scratch,
                                                crd::containers::Span<crd::f32> scale_scratch) noexcept
 {
     if (x.rank() != 2U || y.rank() != 2U)
@@ -1899,7 +1899,7 @@ public:
             return st;
         }
         return push(rec, static_cast<Tensor<crd::f32>&&>(wt), static_cast<Tensor<crd::f32>&&>(bias),
-                    Tensor<BlockQ8_0>{});
+                    Tensor<BlockQ8Zero>{});
     }
 
     // Q8 linear, quantize-on-load from f32 (the frozen-corpus semantics —
@@ -1912,7 +1912,7 @@ public:
             return TensorStatus::BadInput;
         }
         const crd::u64 nblocks = w.shape(0) * w.shape(1) / kQuantBlock;
-        Tensor<BlockQ8_0> q(m_alloc);
+        Tensor<BlockQ8Zero> q(m_alloc);
         const crd::u64 qshp[1] = {nblocks};
         TensorStatus st = q.resize({qshp, 1});
         if (st != TensorStatus::Ok)
@@ -1921,7 +1921,7 @@ public:
         }
         nn_quantize_q8_0_rint({w.data(), static_cast<crd::usize>(w.size())},
                               {q.data(), static_cast<crd::usize>(nblocks)});
-        return add_linear_q8_blocks(static_cast<Tensor<BlockQ8_0>&&>(q), w.shape(0), w.shape(1), b);
+        return add_linear_q8_blocks(static_cast<Tensor<BlockQ8Zero>&&>(q), w.shape(0), w.shape(1), b);
     }
 
     // Q8 linear from the raw frozen refs (.q8 int8 values + .q8s f16 scales).
@@ -1934,7 +1934,7 @@ public:
             return TensorStatus::BadInput;
         }
         const crd::u64 nblocks = out * in / kQuantBlock;
-        Tensor<BlockQ8_0> q(m_alloc);
+        Tensor<BlockQ8Zero> q(m_alloc);
         const crd::u64 qshp[1] = {nblocks};
         TensorStatus st = q.resize({qshp, 1});
         if (st != TensorStatus::Ok)
@@ -1946,7 +1946,7 @@ public:
         {
             return st;
         }
-        return add_linear_q8_blocks(static_cast<Tensor<BlockQ8_0>&&>(q), out, in, b);
+        return add_linear_q8_blocks(static_cast<Tensor<BlockQ8Zero>&&>(q), out, in, b);
     }
 
     // per-tensor int8 linear (the throughput tier): ONE weight scale,
@@ -2023,7 +2023,7 @@ public:
         rec.dim_out = n;
         rec.dim_in = k;
         st = push(rec, static_cast<Tensor<crd::f32>&&>(wsc), static_cast<Tensor<crd::f32>&&>(bias),
-                  Tensor<BlockQ8_0>{});
+                  Tensor<BlockQ8Zero>{});
         if (st != TensorStatus::Ok)
         {
             return st;
@@ -2081,7 +2081,7 @@ public:
         rec.pad = pad;
         rec.stride = stride;
         st = push(rec, static_cast<Tensor<crd::f32>&&>(wf), static_cast<Tensor<crd::f32>&&>(bias),
-                  Tensor<BlockQ8_0>{});
+                  Tensor<BlockQ8Zero>{});
         if (st != TensorStatus::Ok)
         {
             return st;
@@ -2122,7 +2122,7 @@ public:
         rec.pad = pad;
         rec.stride = stride;
         return push(rec, static_cast<Tensor<crd::f32>&&>(wf), static_cast<Tensor<crd::f32>&&>(bias),
-                    Tensor<BlockQ8_0>{});
+                    Tensor<BlockQ8Zero>{});
     }
 
     // conv2d for the QUANTIZED model: quantize-on-load (whole-tensor flatten,
@@ -2138,7 +2138,7 @@ public:
         }
         const crd::u64 numel = w.size();
         const crd::u64 nblocks = (numel + kQuantBlock - 1U) / kQuantBlock;
-        Tensor<BlockQ8_0> q(m_alloc);
+        Tensor<BlockQ8Zero> q(m_alloc);
         const crd::u64 qshp[1] = {nblocks};
         const TensorStatus st = q.resize({qshp, 1});
         if (st != TensorStatus::Ok)
@@ -2147,7 +2147,7 @@ public:
         }
         nn_quantize_q8_0_rint({w.data(), static_cast<crd::usize>(numel)},
                               {q.data(), static_cast<crd::usize>(nblocks)});
-        return add_conv2d_from_blocks(static_cast<Tensor<BlockQ8_0>&&>(q), w.shape(0), w.shape(1),
+        return add_conv2d_from_blocks(static_cast<Tensor<BlockQ8Zero>&&>(q), w.shape(0), w.shape(1),
                                       w.shape(2), w.shape(3), b, pad, stride);
     }
 
@@ -2159,7 +2159,7 @@ public:
     {
         const crd::u64 numel = oc * chans * kh * kw;
         const crd::u64 nblocks = (numel + kQuantBlock - 1U) / kQuantBlock;
-        Tensor<BlockQ8_0> q(m_alloc);
+        Tensor<BlockQ8Zero> q(m_alloc);
         const crd::u64 qshp[1] = {nblocks};
         TensorStatus st = q.resize({qshp, 1});
         if (st != TensorStatus::Ok)
@@ -2171,7 +2171,7 @@ public:
         {
             return st;
         }
-        return add_conv2d_from_blocks(static_cast<Tensor<BlockQ8_0>&&>(q), oc, chans, kh, kw, b, pad,
+        return add_conv2d_from_blocks(static_cast<Tensor<BlockQ8Zero>&&>(q), oc, chans, kh, kw, b, pad,
                                       stride);
     }
 
@@ -2216,7 +2216,7 @@ public:
         rec.dim_in = gamma.shape(0);
         rec.eps = eps;
         return push(rec, static_cast<Tensor<crd::f32>&&>(g), static_cast<Tensor<crd::f32>&&>(bt),
-                    Tensor<BlockQ8_0>{});
+                    Tensor<BlockQ8Zero>{});
     }
 
     // ---- finalize: shape propagation + the workspace formula ---------------
@@ -2410,7 +2410,7 @@ public:
         CRD_ASSERT_MSG(i < m_count, "NnSequential::op: index out of range");
         return m_ops[i];
     }
-    [[nodiscard]] crd::containers::ConstSpan<BlockQ8_0> q8_blocks(crd::u32 i) const noexcept
+    [[nodiscard]] crd::containers::ConstSpan<BlockQ8Zero> q8_blocks(crd::u32 i) const noexcept
     {
         CRD_ASSERT_MSG(i < m_count, "NnSequential::q8_blocks: index out of range");
         return {m_q[i].data(), static_cast<crd::usize>(m_q[i].size())};
@@ -2453,7 +2453,7 @@ private:
     }
 
     [[nodiscard]] TensorStatus push(const NnOpRec& rec, Tensor<crd::f32>&& w, Tensor<crd::f32>&& b,
-                                    Tensor<BlockQ8_0>&& q)
+                                    Tensor<BlockQ8Zero>&& q)
     {
         if (m_count >= kNnMaxOps)
         {
@@ -2475,7 +2475,7 @@ private:
     {
         NnOpRec rec;
         rec.kind = kind;
-        return push(rec, Tensor<crd::f32>{}, Tensor<crd::f32>{}, Tensor<BlockQ8_0>{});
+        return push(rec, Tensor<crd::f32>{}, Tensor<crd::f32>{}, Tensor<BlockQ8Zero>{});
     }
 
     [[nodiscard]] TensorStatus push_pool(NnOpKind kind, crd::u64 k, crd::u64 s)
@@ -2488,10 +2488,10 @@ private:
         rec.kind = kind;
         rec.pool_k = k;
         rec.pool_s = s;
-        return push(rec, Tensor<crd::f32>{}, Tensor<crd::f32>{}, Tensor<BlockQ8_0>{});
+        return push(rec, Tensor<crd::f32>{}, Tensor<crd::f32>{}, Tensor<BlockQ8Zero>{});
     }
 
-    [[nodiscard]] TensorStatus add_linear_q8_blocks(Tensor<BlockQ8_0>&& q, crd::u64 out, crd::u64 in,
+    [[nodiscard]] TensorStatus add_linear_q8_blocks(Tensor<BlockQ8Zero>&& q, crd::u64 out, crd::u64 in,
                                                     TensorView<const crd::f32> b)
     {
         if (b.rank() != 1U || b.shape(0) != out || !b.is_contiguous())
@@ -2524,7 +2524,7 @@ private:
         return push(rec, static_cast<Tensor<crd::f32>&&>(wscale), static_cast<Tensor<crd::f32>&&>(bias), std::move(q));
     }
 
-    [[nodiscard]] TensorStatus add_conv2d_from_blocks(Tensor<BlockQ8_0>&& q, crd::u64 oc, crd::u64 chans,
+    [[nodiscard]] TensorStatus add_conv2d_from_blocks(Tensor<BlockQ8Zero>&& q, crd::u64 oc, crd::u64 chans,
                                                       crd::u64 kh, crd::u64 kw, TensorView<const crd::f32> b,
                                                       crd::u64 pad, crd::u64 stride)
     {
@@ -2667,7 +2667,7 @@ private:
         case NnOpKind::LinearQ8:
         {
             const crd::u64 nb = op.dim_in / kQuantBlock;
-            return nn_align64(max_batch * nb * sizeof(BlockQ8_0)) +
+            return nn_align64(max_batch * nb * sizeof(BlockQ8Zero)) +
                    nn_align64(max_batch * nb * sizeof(crd::f32));
         }
         case NnOpKind::LinearI8:
@@ -2705,13 +2705,13 @@ private:
         {
             // scratch layout (fixed offsets — max_batch): [xq blocks][x scales]
             const crd::u64 nb = op.dim_in / kQuantBlock;
-            const crd::u64 xq_bytes = nn_align64(m_in_shape[0] * nb * sizeof(BlockQ8_0));
+            const crd::u64 xq_bytes = nn_align64(m_in_shape[0] * nb * sizeof(BlockQ8Zero));
             const nndetail::LinQ8Ctx ctx{in,
                                          q8_ptr(op),
                                          weight_ptr(op), // the pre-widened f32 block scales
                                          bias_ptr(op),
                                          out,
-                                         reinterpret_cast<BlockQ8_0*>(scratch),
+                                         reinterpret_cast<BlockQ8Zero*>(scratch),
                                          reinterpret_cast<crd::f32*>(scratch + xq_bytes),
                                          op.dim_in,
                                          op.dim_out,
@@ -2877,7 +2877,7 @@ private:
     {
         return m_b[op_index(op)].data();
     }
-    [[nodiscard]] const BlockQ8_0* q8_ptr(const NnOpRec& op) const noexcept
+    [[nodiscard]] const BlockQ8Zero* q8_ptr(const NnOpRec& op) const noexcept
     {
         return m_q[op_index(op)].data();
     }
@@ -2892,7 +2892,7 @@ private:
     NnOpRec m_ops[kNnMaxOps];
     Tensor<crd::f32> m_w[kNnMaxOps];
     Tensor<crd::f32> m_b[kNnMaxOps];
-    Tensor<BlockQ8_0> m_q[kNnMaxOps];
+    Tensor<BlockQ8Zero> m_q[kNnMaxOps];
     Tensor<crd::i8> m_wi8[kNnMaxOps];      // per-tensor int8 weights (the throughput tier)
     Tensor<crd::i32> m_wcolsum[kNnMaxOps]; // per-output weight column sums (zero-point correction)
     crd::u32 m_count = 0;

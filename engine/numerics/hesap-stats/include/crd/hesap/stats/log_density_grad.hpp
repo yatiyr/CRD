@@ -17,11 +17,11 @@
 #include <crd/hesap/stats/continuous.hpp>
 #include <crd/hesap/stats/discrete.hpp>
 #include <crd/hesap/stats/heavy_tail.hpp>
+#include <crd/hesap/stats/stats_dispatch.hpp> // the Student-t score reduction
 
 #include <crd/core/types.hpp>
 
 #include <crd/containers/span.hpp>
-#include <crd/math/simd/transcendental.hpp> // crd_log4 (AVX2 SIMD log) for the O(N) loglik_grad hot loops
 
 #include <type_traits>
 
@@ -887,36 +887,19 @@ void loglik_grad(const StudentT<T>& d, const T* xs, crd::usize n, crd::container
     const T cst = static_cast<T>(0.5) * (special::digamma(h + static_cast<T>(0.5)) - special::digamma(h)) -
                   static_cast<T>(0.5) / d.nu;
     T s = static_cast<T>(0);
-    crd::usize i = 0;
-#if CRD_SIMD_HAS_AVX2
     if constexpr (std::is_same_v<T, double>)
     {
-        // SIMD the ν-dependent log1p reduction (4 doubles/iter) — matches/beats XLA's vectorized gradient.
-        const double nu = d.nu;
-        const __m256d vnu = _mm256_set1_pd(nu);
-        const __m256d vone = _mm256_set1_pd(1.0);
-        const __m256d vinv_nu = _mm256_set1_pd(1.0 / nu);          // x²/ν via reciprocal-multiply (no per-iter div)
-        const __m256d vneg_half = _mm256_set1_pd(-0.5);
-        const __m256d vk = _mm256_set1_pd((nu + 1.0) / (2.0 * nu)); // (ν+1)/(2ν), folded constant
-        __m256d acc = _mm256_setzero_pd();
-        for (; i + 4 <= n; i += 4)
-        {
-            const __m256d vx = _mm256_loadu_pd(xs + i);
-            const __m256d vx2 = _mm256_mul_pd(vx, vx);
-            const __m256d vlog = crd::math::crd_log4(_mm256_fmadd_pd(vx2, vinv_nu, vone));        // log(1 + x²/ν)
-            const __m256d vrat = _mm256_div_pd(_mm256_mul_pd(vk, vx2), _mm256_add_pd(vnu, vx2)); // (ν+1)x²/(2ν(ν+x²))
-            acc = _mm256_add_pd(acc, _mm256_fmadd_pd(vneg_half, vlog, vrat));
-        }
-        alignas(32) double tmp[4];
-        _mm256_store_pd(tmp, acc);
-        s += (tmp[0] + tmp[1]) + (tmp[2] + tmp[3]);
+        // The O(N) reduction runs the stats kernel level (four lanes, the same bits on every level).
+        s = stats_kernels().table->student_t_nu_score_sum(xs, n, d.nu);
     }
-#endif
-    for (; i < n; ++i) // scalar tail (and the whole loop on non-AVX2 / f32)
+    else
     {
-        const T x2 = xs[i] * xs[i];
-        s += -static_cast<T>(0.5) * crd::math::log1p(x2 / d.nu) +
-             (d.nu + static_cast<T>(1)) * x2 / (static_cast<T>(2) * d.nu * (d.nu + x2));
+        for (crd::usize i = 0; i < n; ++i)
+        {
+            const T x2 = xs[i] * xs[i];
+            s += -static_cast<T>(0.5) * crd::math::log1p(x2 / d.nu) +
+                 (d.nu + static_cast<T>(1)) * x2 / (static_cast<T>(2) * d.nu * (d.nu + x2));
+        }
     }
     grad[0] = static_cast<T>(n) * cst + s;
 }

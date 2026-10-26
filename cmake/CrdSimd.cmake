@@ -278,6 +278,24 @@ function(crd_add_cpu_kernels archive)
     target_compile_definitions(${archive} PRIVATE CRD_KERNELS_${family}=${mask})
 endfunction()
 
+# crd_add_kernel_level_tests(<test-executable> <filter>)
+#
+# ADR-0134 §8: <prefix>-kernels-at-<level> runs the executable's <filter> once per level CRD_KERNEL_LEVELS holds, with
+# CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is refused, and that arm runs at the
+# detected level); <prefix> is the executable's name without "-tests". The executable gets
+# CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
+function(crd_add_kernel_level_tests executable filter)
+    list(GET CRD_KERNEL_LEVELS -1 top)
+    target_compile_definitions(${executable} PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${top}})
+    string(REGEX REPLACE "-tests$" "" prefix "${executable}")
+    foreach(level IN LISTS CRD_KERNEL_LEVELS)
+        string(REPLACE "sse42" "sse4.2" spelling "${level}")
+        add_test(NAME ${prefix}-kernels-at-${level} COMMAND ${executable} "${filter}")
+        set_tests_properties(${prefix}-kernels-at-${level} PROPERTIES
+            ENVIRONMENT "CRD_CPU_LEVEL=${spelling}" LABELS "cerid.test.target=${executable}")
+    endforeach()
+endfunction()
+
 # ---- Determinism: ADR-0063 FP contract -------------------------------------
 #
 # The contract bans:

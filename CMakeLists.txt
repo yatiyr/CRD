@@ -554,7 +554,7 @@ crd_module(engine/numerics/hesap-opt engine/hesap-opt
     TESTS numerics/hesap-opt TEST_DEPENDS hesap-ordering)
 # v12 cluster (created early as a v12-pull: Philox counter-RNG for v7-i)
 crd_module(engine/numerics/hesap-stats engine/hesap-stats
-    DEPENDS containers core hesap-dense hesap-quadrature hesap-special jobs memory TESTS numerics/hesap-stats)
+    DEPENDS containers core hesap-dense hesap-quadrature hesap-special jobs math memory TESTS numerics/hesap-stats)
 # v9; ODE/DAE — stepper kernel headers + driver substrate; ADR-0091
 crd_module(engine/numerics/hesap-ode engine/hesap-ode
     DEPENDS containers core hesap hesap-dense hesap-direct hesap-iterative hesap-sparse memory

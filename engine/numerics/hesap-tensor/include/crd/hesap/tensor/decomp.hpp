@@ -72,6 +72,7 @@
 #include <crd/hesap/dense/eig_sym.hpp>
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/hesap/stats/philox.hpp>
+#include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/memory/allocator.hpp>
 
 #include <cmath>  // std::sqrt, std::fma (single-rounded chains — the codelet rule)
@@ -166,21 +167,20 @@ template <typename T>
 
 // Batched sketch fill: dst[idx] == philox_gaussian(seed, stream, idx) BIT-
 // EXACTLY for every idx (gated) — sample idx consumes u64 lanes [12*idx,
-// 12*idx+12) of the (seed, stream) Philox stream either way — but rides
-// PhiloxRng::fill's AVX2 8-block path (the per-sample scalar draw measured as
-// the dominant randomized-tier cost). The keyed-counter moat is unchanged:
-// still a pure function of (seed, stream).
+// 12*idx+12) of the (seed, stream) Philox stream either way — but rides the
+// hesap-stats Philox block loop, include-only (ADR-0096 §1; the per-sample
+// scalar draw measured as the dominant randomized-tier cost). The keyed-counter
+// moat is unchanged: still a pure function of (seed, stream).
 template <typename T>
 inline void philox_gaussian_fill(crd::u64 seed, crd::u64 stream, T* dst, crd::u64 count) noexcept
 {
-    crd::hesap::stats::PhiloxRng rng(seed, stream);
     constexpr crd::u64 chunk = 256U; // samples per fill: 24 KB stack buffer
     crd::u64 buf[chunk * 12U];
     crd::u64 done = 0;
     while (done < count)
     {
         const crd::u64 n = count - done < chunk ? count - done : chunk;
-        rng.fill({buf, static_cast<crd::usize>(n * 12U)});
+        crd::hesap::stats::philox4x32_fill_blocks(seed, stream, done * 6U, buf, static_cast<crd::usize>(n * 6U));
         for (crd::u64 s = 0; s < n; ++s)
         {
             crd::f64 acc = 0.0;

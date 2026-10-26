@@ -18,6 +18,7 @@ add_executable(crd-hesap-stats-tests
     test_mcmc.cpp
     test_regression.cpp
     test_cli.cpp
+    test_stats_kernels.cpp
 )
 
 target_link_libraries(crd-hesap-stats-tests PRIVATE
@@ -33,3 +34,6 @@ target_link_libraries(crd-hesap-stats-tests PRIVATE
 crd_enable_default_pch(crd-hesap-stats-tests)
 
 crd_discover_tests(crd-hesap-stats-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-hesap-stats-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-stats-tests "[kernels]")

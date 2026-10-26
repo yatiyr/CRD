@@ -5,7 +5,8 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-#include <crd/hesap/stats/philox.hpp> // include-only (header-only constexpr) — NO link edge (ADR-0096 §1)
+#include <crd/hesap/stats/counter_rng_core.hpp> // include-only (header-only constexpr) — NO link edge (ADR-0096 §1)
+#include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/math/float_convert.hpp> // the format primitives — MIGRATED to crd-math (owning module, SANITY #8)
 
 #include <bit>
@@ -94,10 +95,9 @@ inline constexpr crd::u32 kSrTag = 0x53525F31U; // 'SR_1' domain tag
 }
 
 // =======================================================================
-// Batch SR converts — the crush path: draws come 32-at-a-time from the
-// hesap-stats AVX2 8-block Philox kernel (one u32[32] chunk = blocks
-// idx>>2 .. +7, lane-ordered exactly as the pinned keying), then the
-// crd-math SIMD SR narrowers consume them. Bit-identical to the
+// Batch SR converts — the crush path: draws come in whole Philox blocks from
+// the hesap-stats block loop (eight blocks at a time on AVX2, lane-ordered
+// exactly as the pinned keying), then the crd-math SR narrowers consume them. Bit-identical to the
 // per-element scalar wrappers on every input (gated). Zero heap: a fixed
 // stack chunk of draws.
 // =======================================================================
@@ -105,31 +105,16 @@ inline constexpr crd::u32 kSrTag = 0x53525F31U; // 'SR_1' domain tag
 namespace detail
 {
 
-// Fill draws for elements [base, base+count) under the pinned keying.
-// base must be 4-aligned (block-aligned) for the vector path.
+// Fill draws for elements [base, base+count) under the pinned keying: element base + t reads word t of the
+// blocks from base >> 2, so a 4-aligned base reads whole blocks.
 inline void fill_sr_draws(crd::u64 seed, crd::u64 base, crd::u32 step, crd::u32* draws, crd::usize count) noexcept
 {
-    crd::usize t = 0;
-#if defined(__AVX2__)
-    // Cross-module detail:: use, deliberate (SANITY #8 — reuse over a 40-line
-    // Philox duplicate); the batch≡scalar bit-identity gate pins the contract.
-    const auto key0 = static_cast<crd::u32>(seed);
-    const auto key1 = static_cast<crd::u32>(seed >> 32U);
-    for (; t + 32U <= count; t += 32U)
-    {
-        crd::u32 c0s[8];
-        crd::u32 c1s[8];
-        const crd::u64 b0 = (base + t) >> 2U;
-        for (crd::u32 j = 0; j < 8U; ++j)
-        {
-            c0s[j] = static_cast<crd::u32>(b0 + j);
-            c1s[j] = static_cast<crd::u32>((b0 + j) >> 32U);
-        }
-        crd::hesap::stats::detail::philox4x32_avx2_8(c0s, c1s, step, kSrTag, key0, key1,
-                                                     reinterpret_cast<crd::u64*>(draws + t));
-    }
-#endif
-    for (; t < count; ++t)
+    // Philox include-only (ADR-0096 §1): the block loop the hesap-stats kernels run; the batch≡scalar bit-identity
+    // gate pins the contract.
+    const crd::usize blocks = (base & 3U) == 0U ? count / 4U : 0U;
+    crd::hesap::stats::philox4x32_fill_blocks(seed, (static_cast<crd::u64>(kSrTag) << 32U) | step, base >> 2U, draws,
+                                              blocks);
+    for (crd::usize t = 4U * blocks; t < count; ++t)
     {
         draws[t] = sr_draw(seed, base + t, step);
     }
@@ -139,7 +124,7 @@ inline constexpr crd::usize kSrChunk = 256U; // stack draw buffer (zero heap per
 
 template <typename Bits, typename BatchFn>
 inline void convert_sr_chunked(crd::containers::ConstSpan<crd::f32> src, crd::containers::Span<Bits> dst, crd::u64 seed,
-                               crd::u64 base_index, crd::u32 step, BatchFn&& batch) noexcept
+                               crd::u64 base_index, crd::u32 step, const BatchFn& batch) noexcept
 {
     CRD_ASSERT_MSG(src.size() == dst.size(), "convert_sr: size mismatch");
     CRD_ASSERT_MSG((base_index & 3U) == 0U, "convert_sr: base_index must be 4-aligned (Philox block boundary)");
@@ -192,22 +177,22 @@ inline void convert_f32_to_fp8_e5m2_sr(crd::containers::ConstSpan<crd::f32> src,
 
 inline constexpr crd::u32 kQuantBlock = 32U;
 
-struct BlockQ8_0
+struct BlockQ8Zero
 {
     crd::u16 d;     // f16-encoded scale (amax/127)
     crd::i8 qs[32]; // q[j] = roundf(x[j]/d)
 };
-static_assert(sizeof(BlockQ8_0) == 34U, "BlockQ8_0 must match the ggml block_q8_0 layout");
+static_assert(sizeof(BlockQ8Zero) == 34U, "BlockQ8Zero must match the ggml block_q8_0 layout");
 
-struct BlockQ4_0
+struct BlockQ4Zero
 {
     crd::u16 d;     // f16-encoded scale (signed-max/-8)
     crd::u8 qs[16]; // low nibble = element j, high nibble = element j+16; stored value = q+8
 };
-static_assert(sizeof(BlockQ4_0) == 18U, "BlockQ4_0 must match the ggml block_q4_0 layout");
+static_assert(sizeof(BlockQ4Zero) == 18U, "BlockQ4Zero must match the ggml block_q4_0 layout");
 
 // x.size() must be a multiple of 32; out.size() == x.size()/32.
-inline void quantize_q8_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ8_0> out) noexcept
+inline void quantize_q8_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ8Zero> out) noexcept
 {
     CRD_ASSERT_MSG(x.size() % kQuantBlock == 0U, "quantize_q8_0: size must be a multiple of 32");
     CRD_ASSERT_MSG(out.size() == x.size() / kQuantBlock, "quantize_q8_0: bad output block count");
@@ -232,7 +217,7 @@ inline void quantize_q8_0(crd::containers::ConstSpan<crd::f32> x, crd::container
     }
 }
 
-inline void dequantize_q8_0(crd::containers::ConstSpan<BlockQ8_0> in, crd::containers::Span<crd::f32> out) noexcept
+inline void dequantize_q8_0(crd::containers::ConstSpan<BlockQ8Zero> in, crd::containers::Span<crd::f32> out) noexcept
 {
     CRD_ASSERT_MSG(out.size() == in.size() * kQuantBlock, "dequantize_q8_0: bad output size");
     for (crd::usize i = 0; i < in.size(); ++i)
@@ -245,7 +230,7 @@ inline void dequantize_q8_0(crd::containers::ConstSpan<BlockQ8_0> in, crd::conta
     }
 }
 
-inline void quantize_q4_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ4_0> out) noexcept
+inline void quantize_q4_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ4Zero> out) noexcept
 {
     CRD_ASSERT_MSG(x.size() % kQuantBlock == 0U, "quantize_q4_0: size must be a multiple of 32");
     CRD_ASSERT_MSG(out.size() == x.size() / kQuantBlock, "quantize_q4_0: bad output block count");
@@ -277,7 +262,7 @@ inline void quantize_q4_0(crd::containers::ConstSpan<crd::f32> x, crd::container
     }
 }
 
-inline void dequantize_q4_0(crd::containers::ConstSpan<BlockQ4_0> in, crd::containers::Span<crd::f32> out) noexcept
+inline void dequantize_q4_0(crd::containers::ConstSpan<BlockQ4Zero> in, crd::containers::Span<crd::f32> out) noexcept
 {
     CRD_ASSERT_MSG(out.size() == in.size() * kQuantBlock, "dequantize_q4_0: bad output size");
     for (crd::usize i = 0; i < in.size(); ++i)

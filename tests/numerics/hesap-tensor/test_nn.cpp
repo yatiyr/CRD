@@ -18,7 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 
-using crd::hesap::tensor::BlockQ8_0;
+using crd::hesap::tensor::BlockQ8Zero;
 using crd::hesap::tensor::build_cnn_from_safetensors;
 using crd::hesap::tensor::build_mlp_from_safetensors;
 using crd::hesap::tensor::kQuantBlock;
@@ -573,15 +573,15 @@ TEST_CASE("nn: the vectorized activation quantizer is bit-identical to dtypes qu
         x.data()[2U * kQuantBlock + j] = (j % 2U == 0U) ? 3.4e37F : -3.4e37F;
         x.data()[3U * kQuantBlock + j] = static_cast<crd::f32>(j) * 1e-30F; // tiny-scale block
     }
-    Tensor<BlockQ8_0> qa(&alloc);
-    Tensor<BlockQ8_0> qb(&alloc);
+    Tensor<BlockQ8Zero> qa(&alloc);
+    Tensor<BlockQ8Zero> qb(&alloc);
     const crd::u64 qshp[1] = {nblocks};
     REQUIRE(qa.resize({qshp, 1}) == TensorStatus::Ok);
     REQUIRE(qb.resize({qshp, 1}) == TensorStatus::Ok);
     crd::hesap::tensor::nndetail::quantize_q8_0_fast(x.data(), qa.data(), nblocks);
     crd::hesap::tensor::quantize_q8_0({x.data(), static_cast<crd::usize>(n)},
                                       {qb.data(), static_cast<crd::usize>(nblocks)});
-    REQUIRE(std::memcmp(qa.data(), qb.data(), static_cast<crd::usize>(nblocks) * sizeof(BlockQ8_0)) == 0);
+    REQUIRE(std::memcmp(qa.data(), qb.data(), static_cast<crd::usize>(nblocks) * sizeof(BlockQ8Zero)) == 0);
 }
 
 TEST_CASE("nn: q8 quantize-on-load is byte-exact vs the frozen q8 refs for every weight", "[v14m][nn][q8]")
@@ -607,7 +607,7 @@ TEST_CASE("nn: q8 quantize-on-load is byte-exact vs the frozen q8 refs for every
         Tensor<crd::f32> w(&alloc);
         REQUIRE(crd::hesap::tensor::nndetail::st_read_f32(m.st, &alloc, wk.key, w) == TensorStatus::Ok);
         const crd::u64 nblocks = (w.size() + kQuantBlock - 1U) / kQuantBlock;
-        Tensor<BlockQ8_0> q(&alloc);
+        Tensor<BlockQ8Zero> q(&alloc);
         const crd::u64 qshp[1] = {nblocks};
         REQUIRE(q.resize({qshp, 1}) == TensorStatus::Ok);
         crd::hesap::tensor::nn_quantize_q8_0_rint({w.data(), static_cast<crd::usize>(w.size())},
@@ -677,7 +677,7 @@ TEST_CASE("nn: q8 quantize-on-load and raw-ref weight loading are bit-exact agai
         const auto qav = qa.q8_blocks(opi);
         const auto qbv = qb.q8_blocks(opi);
         REQUIRE(qav.size() == qbv.size());
-        REQUIRE(std::memcmp(qav.data(), qbv.data(), qav.size() * sizeof(BlockQ8_0)) == 0);
+        REQUIRE(std::memcmp(qav.data(), qbv.data(), qav.size() * sizeof(BlockQ8Zero)) == 0);
     }
     const crd::u64 wsa[1] = {qa.workspace_bytes()};
     Tensor<crd::u8> ws(&alloc, {wsa, 1});
@@ -724,7 +724,7 @@ TEST_CASE("nn: q8 quantize-on-load and raw-ref weight loading are bit-exact agai
         const auto qbv = cb.q8_blocks(opi);
         REQUIRE(qav.size() == qbv.size());
         REQUIRE(qav.size() > 0U);
-        REQUIRE(std::memcmp(qav.data(), qbv.data(), qav.size() * sizeof(BlockQ8_0)) == 0);
+        REQUIRE(std::memcmp(qav.data(), qbv.data(), qav.size() * sizeof(BlockQ8Zero)) == 0);
         // conv ops: the dequantized f32 weights must also be bit-identical
         const auto wav = ca.weight_f32(opi);
         const auto wbv = cb.weight_f32(opi);

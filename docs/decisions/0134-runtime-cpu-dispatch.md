@@ -9,8 +9,8 @@ amendment (Highway 1.3 as a design peer, AVX10 version and APX detection, SME be
 ([research](../research/2026-10-26-state-of-the-art-2026-comparison.md)). Detection and selection landed on
 2026-10-26 ([session](../sessions/2026-10-26-simd-dispatch-cpu-detection.md)), then the kernel units, the dispatch
 table and the first family ([session](../sessions/2026-10-26-simd-dispatch-kernel-units.md)), then the level-aware
-SIMD types ([session](../sessions/2026-10-27-simd-dispatch-level-aware-types.md)); the other clauses are open in the
-row.
+SIMD types ([session](../sessions/2026-10-27-simd-dispatch-level-aware-types.md)), then the hesap-stats family
+([session](../sessions/2026-10-27-simd-dispatch-hesap-stats-kernels.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),

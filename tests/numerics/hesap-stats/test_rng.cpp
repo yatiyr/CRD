@@ -83,6 +83,38 @@ TEST_CASE("rng: Threefry4x64-20 vs Random123 published KAT", "[v12-e][stats][rng
     CHECK(r2.next_u64() == seq[3]);
 }
 
+TEST_CASE("rng: Threefry seek continues the sequential stream past the sought block", "[v12-e][stats][rng]")
+{
+    u64 seq[40];
+    st::ThreefryRng r(0xABCDEF, 0x12345);
+    for (u64& x : seq)
+    {
+        x = r.next_u64();
+    }
+    for (u64 n = 0; n < 12U; ++n)
+    {
+        st::ThreefryRng a(0xABCDEF, 0x12345);
+        a.seek(n);
+        u64 drawn = 0;
+        for (u64 i = n; i < 40U; ++i)
+        {
+            drawn += a.next_u64() == seq[i] ? 0U : 1U;
+        }
+        st::ThreefryRng b(0xABCDEF, 0x12345);
+        b.seek(n);
+        u64 filled[40];
+        b.fill(crd::containers::Span<u64>(filled, 40U - n));
+        u64 bulk = 0;
+        for (u64 i = n; i < 40U; ++i)
+        {
+            bulk += filled[i - n] == seq[i] ? 0U : 1U;
+        }
+        INFO("seek " << n);
+        CHECK(drawn == 0U);
+        CHECK(bulk == 0U);
+    }
+}
+
 TEST_CASE("rng: MT19937 vs canonical mt19937ar init_by_array KAT", "[v12-e][stats][rng]")
 {
     const u32 key[4] = {0x123, 0x234, 0x345, 0x456};
@@ -93,10 +125,49 @@ TEST_CASE("rng: MT19937 vs canonical mt19937ar init_by_array KAT", "[v12-e][stat
     }
 }
 
-TEST_CASE("rng: SIMD bulk fill is bit-identical to scalar next_u64", "[v12-e][stats][rng][moat]")
+TEST_CASE("rng: SIMD bulk fill is bit-identical to scalar next_u64", "[v12-e][stats][rng][moat][kernels]")
 {
     constexpr int n = 1003; // not a multiple of 16 ⇒ exercises the scalar tail too
     u64 buf[n];
+
+    SECTION("every length to 40, after every partial consumption")
+    {
+        u64 bad = 0;
+        for (u32 consumed = 0; consumed < 9U; ++consumed)
+        {
+            for (int len = 0; len <= 40; ++len)
+            {
+                st::PhiloxRng pa(11, 0xFFFFFFFFULL);
+                st::PhiloxRng pb(11, 0xFFFFFFFFULL);
+                pa.jump_to_block(0xFFFFFFFDULL); // the fill crosses the 2^32 word wrap of the position
+                pb.jump_to_block(0xFFFFFFFDULL);
+                st::ThreefryRng ta(12, 13);
+                st::ThreefryRng tb(12, 13);
+                ta.seek(0xFFFFFFFFFFFFFFF5ULL); // the last blocks seek reaches (the kernel case tests the carries)
+                tb.seek(0xFFFFFFFFFFFFFFF5ULL);
+                for (u32 c = 0; c < consumed; ++c)
+                {
+                    (void)pa.next_u32(); // an odd number of u32 draws leaves Philox mid-u64
+                    (void)pb.next_u32();
+                    (void)ta.next_u64();
+                    (void)tb.next_u64();
+                }
+                pa.fill(crd::containers::Span<u64>(buf, static_cast<crd::usize>(len)));
+                for (int i = 0; i < len; ++i)
+                {
+                    bad += buf[i] == pb.next_u64() ? 0U : 1U;
+                }
+                CHECK(pa.next_u64() == pb.next_u64()); // and both continue from the same place
+                ta.fill(crd::containers::Span<u64>(buf, static_cast<crd::usize>(len)));
+                for (int i = 0; i < len; ++i)
+                {
+                    bad += buf[i] == tb.next_u64() ? 0U : 1U;
+                }
+                CHECK(ta.next_u64() == tb.next_u64());
+            }
+        }
+        CHECK(bad == 0U);
+    }
 
     SECTION("Philox")
     {

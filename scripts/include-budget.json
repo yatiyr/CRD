@@ -55,6 +55,20 @@
       "why": "the batch small-float conversions behind every crd-hesap-tensor storage dtype; their F16C and AVX2 bodies are per-level kernel units (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/stats/philox.hpp",
+      "flags_of": "tests/numerics/hesap-stats/test_philox.cpp",
+      "forbid": ["chrono", "format", "sstream", "iostream"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the counter RNG of hesap-opt, hesap-tensor and the stats samplers; its bulk fill runs the per-level stats kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
+      "include": "crd/hesap/stats/threefry.hpp",
+      "flags_of": "tests/numerics/hesap-stats/test_rng.cpp",
+      "forbid": ["chrono", "format", "sstream", "iostream"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "every unit of crd/hesap/stats/stats.hpp; its bulk fill runs the per-level stats kernels (SIMD-DISPATCH), so the header brings no intrinsics header"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],
