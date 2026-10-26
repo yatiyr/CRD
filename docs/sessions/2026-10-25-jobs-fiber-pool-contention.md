@@ -180,6 +180,13 @@ other machines is the question the new host-check legs answer: `host-check.yml` 
 loops, failing on any event. The workflow is dispatch-only; it was not started here. The case stays as it is and no
 test was skipped or loosened.
 
+Settled (2026-10-26). Hosted run [40241945293](https://github.com/yatiyr/CRD/actions/runs/40241945293) (AMD EPYC 7763,
+the same Ubuntu clang 18.1.3): both legs 0 events in 150 rounds of every arm. The user then updated this host's BIOS
+from 2001 to 2202 (CPU microcode 0x12F to 0x133). The same driver here afterwards, 60 rounds, every process pinned to
+CPUs 0 and 1 beside busy loops: jobs 0, control-fiber 0, control-plain 0, control-unsanitized 0 events, where the same
+arms faulted about one run in ten before. The fault was this host's microcode-era CPU behaviour, not Cerid's or
+ThreadSanitizer's.
+
 ## Verification and housekeeping
 
 - `tidy-files.py` clean on every changed file (it also flagged the pre-existing `for_each_fiber` forwarding reference,
