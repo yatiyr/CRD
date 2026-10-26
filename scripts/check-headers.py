@@ -6,9 +6,9 @@ header through its module's consumer view; this is the local changed-surface cou
 (or name) are compiled as their own translation unit with the command of a sibling unit taken from the compile
 database of an existing build directory, so a header that only compiled because an earlier include happened to
 provide a declaration fails here before a push. The synthesis is the tidy gate's (scripts/cerid_dev/tidy.py): the
-precompiled-header inputs are stripped and the header becomes the main file; on top of that every output the
-command names (object, program database, dependency file) is redirected into a scratch directory, so the build
-tree is read and never written.
+precompiled-header inputs are stripped and the header becomes the main file (on GCC and Clang drivers through a
+one-line unit that includes it); on top of that every output the command names (object, program database, dependency
+file) is redirected into a scratch directory, so the build tree is read and never written.
 
     python scripts/check-headers.py --build build/win-debug --changed
     python scripts/check-headers.py --build build/linux-gcc-debug engine/foundation/log/include/crd/log/log.hpp
@@ -108,6 +108,18 @@ def redirect_outputs(arguments, family, scratch, stem):
     return result, outputs
 
 
+def include_unit(arguments, family, header, scratch, stem):
+    """On GNU drivers the header is compiled through a one-line unit that includes it: GCC reports `#pragma once in
+    main file` for a header that is its own main file, an error under -Werror that no option turns off. Returns the
+    arguments and the unit's path and text, which the caller writes (None on MSVC drivers, where the header compiles
+    as the main file)."""
+    if family != 'gnu':
+        return arguments, None, None
+    unit = Path(scratch) / f'{stem}.cpp'
+    text = f'#include "{Path(header).as_posix()}"\n'
+    return [str(unit) if token == header else token for token in arguments], unit, text
+
+
 def outputs_named(arguments, family):
     """Every path an argument list writes, for the proof that a redirected command names none inside the build tree."""
     named = []
@@ -155,6 +167,9 @@ def compile_job(job, scratch, environment, timeout):
     family = job['family']
     stem = re.sub(r'[^A-Za-z0-9_]+', '_', job['path'])
     arguments, outputs = redirect_outputs(arguments_of(entry), family, scratch, stem)
+    arguments, unit, unit_text = include_unit(arguments, family, entry['file'], scratch, stem)
+    if unit is not None:
+        unit.write_text(unit_text, encoding='utf-8')
     started = time.monotonic()
     try:
         result = subprocess.run(arguments, cwd=entry.get('directory') or str(scratch), capture_output=True,

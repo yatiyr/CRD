@@ -3119,6 +3119,14 @@ class PublicConsumption(unittest.TestCase):
             self.assertNotIn(flag, arguments)
         self.assertEqual(arguments[-1], '/repo/include/crd/y.hpp')
         self.assertIn('-x', arguments)
+        # GCC cannot compile a header with #pragma once as its main file under -Werror: a unit includes it.
+        through, unit, text = check_headers.include_unit(arguments, 'gnu', '/repo/include/crd/y.hpp', scratch, 'y_hpp')
+        self.assertEqual(unit, scratch / 'y_hpp.cpp')
+        self.assertEqual(through[-1], str(unit))
+        self.assertNotIn('/repo/include/crd/y.hpp', through)
+        self.assertEqual(text, '#include "/repo/include/crd/y.hpp"\n')
+        self.assertEqual(check_headers.include_unit(['cl.exe', 'x.hpp'], 'msvc', 'x.hpp', scratch, 'x_hpp'),
+                         (['cl.exe', 'x.hpp'], None, None))
 
 
 class TestInstruments(unittest.TestCase):
