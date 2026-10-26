@@ -212,22 +212,39 @@ TEST_CASE("flight rings: the trigger boundary is exact in the trigger's own thre
     REQUIRE(r.ring_stats().thread_rings == 4U);
     r.record(kMarkerCode, cp::Severity::Info, cont::StringView{"main first"}, 0U, 99U);
 
-    std::thread workers[k_workers];
+    // Every worker records half its events, waits until all five threads hold their rings, records the other half
+    // across the trigger, and stays alive until main has counted them.
+    std::atomic<u32> halfway{0U};
+    std::atomic<u32> finished{0U};
+    std::atomic<bool> go{false};
+    std::atomic<bool> leave{false};
+    std::thread       workers[k_workers];
     for (u32 w = 0U; w < k_workers; ++w)
     {
         workers[w] = std::thread(
-            [&r, w]
+            [&, w]
             {
                 for (u64 i = 0U; i < k_each; ++i)
                 {
+                    if (i == k_each / 2U)
+                    {
+                        halfway.fetch_add(1U);
+                        (void)wait_until([&] { return go.load(std::memory_order_acquire); });
+                    }
                     r.record(kNoiseCode, cp::Severity::Info, cont::StringView{"worker"}, i, w);
                 }
+                finished.fetch_add(1U);
+                (void)wait_until([&] { return leave.load(std::memory_order_acquire); });
             });
     }
-    REQUIRE(wait_until([&] { return r.total_recorded() > 1500U; }));
+    REQUIRE(wait_until([&] { return halfway.load() == k_workers; }));
+    go.store(true, std::memory_order_release);
     r.record(kMarkerCode, cp::Severity::Info, cont::StringView{"before trigger"}, 1U, 99U);
     REQUIRE(r.trigger(manual("exact")) == cp::FlightTriggerResult::Started);
     r.record(kMarkerCode, cp::Severity::Info, cont::StringView{"after trigger"}, 2U, 99U);
+    REQUIRE(wait_until([&] { return finished.load() == k_workers; }));
+    const cp::FlightRingStats alive = r.ring_stats();
+    leave.store(true, std::memory_order_release);
     for (auto& t : workers)
     {
         t.join();
@@ -241,7 +258,8 @@ TEST_CASE("flight rings: the trigger boundary is exact in the trigger's own thre
     CHECK(c.end == cp::FlightEnd::PostWindowElapsed);
     REQUIRE(c.events.size() == k_workers * k_each + 3U); // every event, from four threads' rings and the shared ring
     CHECK(c.pre_retained == c.trigger.sequence);
-    CHECK(r.ring_stats().shared_events > 0U);
+    CHECK(alive.threads_bound == k_workers + 1U);
+    CHECK(alive.shared_events > 0U); // the fifth thread's ring has no storage
     crd::usize before = c.events.size();
     crd::usize after  = c.events.size();
     for (crd::usize i = 0U; i < c.events.size(); ++i)
@@ -427,11 +445,12 @@ TEST_CASE("flight rings: late and exiting threads, rings without storage and thr
         std::atomic<u32>  token{0U};
         std::atomic<bool> stalled{false};
         std::atomic<u32>  bound{0U};
+        std::atomic<bool> leave{false};
         std::thread       hoppers[k_threads];
         for (u32 t = 0U; t < k_threads; ++t)
         {
             hoppers[t] = std::thread(
-                [&r, &token, &stalled, &bound, t]
+                [&r, &token, &stalled, &bound, &leave, t]
                 {
                     for (u32 h = t; h < k_hops; h += k_threads)
                     {
@@ -444,12 +463,12 @@ TEST_CASE("flight rings: late and exiting threads, rings without storage and thr
                         token.store(h + 1U, std::memory_order_release);
                     }
                     bound.fetch_add(1U);
-                    (void)wait_until([&] { return bound.load() == k_threads + 1U; }); // stay alive until counted
+                    (void)wait_until([&] { return leave.load(std::memory_order_acquire); }); // alive until counted
                 });
         }
         REQUIRE(wait_until([&] { return bound.load() == k_threads; }));
         const cp::FlightRingStats alive = r.ring_stats();
-        bound.fetch_add(1U);
+        leave.store(true, std::memory_order_release);
         for (auto& t : hoppers)
         {
             t.join();
@@ -479,10 +498,13 @@ TEST_CASE("flight rings: late and exiting threads, rings without storage and thr
         constexpr u32 k_threads = cp::kFlightThreadRings + 6U;
         cp::FlightRecorder r;
         REQUIRE(r.init(policy(1024U, 512U, 4U)) == cp::FlightPolicyStatus::Committed);
-        std::atomic<u32> token{0U};
-        std::atomic<u32> done{0U};
+        // A thread that recorded waits on `leave`, not on `done`: under ThreadSanitizer, threads spinning on the atomic
+        // others must write starve the writers (the race detector's per-address lock), and the case timed out.
+        std::atomic<u32>  token{0U};
+        std::atomic<u32>  done{0U};
         std::atomic<bool> stalled{false};
-        std::thread      threads[k_threads];
+        std::atomic<bool> leave{false};
+        std::thread       threads[k_threads];
         for (u32 t = 0U; t < k_threads; ++t)
         {
             threads[t] = std::thread(
@@ -497,12 +519,14 @@ TEST_CASE("flight rings: late and exiting threads, rings without storage and thr
                     r.record(kHopCode, cp::Severity::Info, cont::StringView{"one"}, t, t);
                     token.store(t + 1U, std::memory_order_release);
                     done.fetch_add(1U);
-                    (void)wait_until([&] { return done.load() > k_threads; });
+                    (void)wait_until([&] { return leave.load(std::memory_order_acquire); });
                 });
         }
-        REQUIRE(wait_until([&] { return done.load() == k_threads; }));
+        const bool all_done = wait_until([&] { return done.load() == k_threads; });
+        INFO("token " << token.load() << " done " << done.load() << " stalled " << stalled.load());
+        REQUIRE(all_done);
         const cp::FlightRingStats alive = r.ring_stats();
-        done.fetch_add(1U);
+        leave.store(true, std::memory_order_release);
         for (auto& t : threads)
         {
             t.join();

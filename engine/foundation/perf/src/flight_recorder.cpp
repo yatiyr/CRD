@@ -424,23 +424,27 @@ void install_storage(Impl& impl, const RingStorage& s) noexcept
 std::atomic<crd::u64> g_next_recorder{1U}; // recorder ids (0 names none)
 std::atomic<crd::u64> g_next_token{1U};    // thread tokens (0 names no thread); never an OS thread id, which is reused
 
-// The live recorders, for the thread-exit release: a spinlock and an intrusive list, both trivially destructible, so
-// a thread that exits after static destruction still finds them. A recorder leaves the list before it is freed, so
-// the release never touches one that shut down.
-std::atomic<bool> g_live_lock{false};
-Impl*             g_live = nullptr;
+// The live recorders, for the thread-exit release: a mutex that is never destroyed and an intrusive list, so a thread
+// that exits after static destruction still finds them. A blocking lock, not a spinlock: many threads exiting at once
+// spun on one, and under ThreadSanitizer the holder's release starved behind the spinners' exchanges. A recorder leaves
+// the list before it is freed, so the release never touches one that shut down.
+Impl* g_live = nullptr;
+
+std::mutex& live_mutex() noexcept
+{
+    alignas(std::mutex) static unsigned char storage[sizeof(std::mutex)];
+    static std::mutex* const kLive = new (storage) std::mutex(); // never destroyed (above)
+    return *kLive;
+}
 
 void lock_live() noexcept
 {
-    while (g_live_lock.exchange(true, std::memory_order_acquire))
-    {
-        std::this_thread::yield();
-    }
+    live_mutex().lock();
 }
 
 void unlock_live() noexcept
 {
-    g_live_lock.store(false, std::memory_order_release);
+    live_mutex().unlock();
 }
 
 void add_live(Impl* impl) noexcept
