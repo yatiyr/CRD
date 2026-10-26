@@ -22,8 +22,9 @@
   bit-exact across levels: the Philox and Threefry whole-block fills and the Student-t score reduction in nu.
 - `counter_rng_core.hpp` holds `philox4x32`, `threefry4x64` and the 256-bit `threefry_counter_add` in
   `CRD_MATH_LEVEL_NS`; `philox_blocks.hpp` holds the block loop (`philox4x32_fill_blocks`, eight blocks per AVX2
-  step). `PhiloxRng::fill` and `ThreefryRng::fill` drain the buffered block, call the kernel for whole blocks and draw
-  the tail; philox.hpp, threefry.hpp and log_density_grad.hpp no longer test `__AVX2__` or include intrinsics (two
+  step). `PhiloxRng::fill` writes the buffered words, the kernel's whole blocks at the word offset they leave and the
+  next block's leading words, so a fill after an odd number of `next_u32` draws also runs the kernel (it used to
+  drain the whole span one draw at a time); `ThreefryRng::fill` drains its buffer, calls the kernel and draws the tail; philox.hpp, threefry.hpp and log_density_grad.hpp no longer test `__AVX2__` or include intrinsics (two
   include-budget entries hold the RNG headers).
 - crd-hesap-tensor consumes Philox include-only (ADR-0096 §1, amended in place): `dtypes.hpp` SR draws and the
   `decomp.hpp` sketch fill call the block loop, so the substrate never links hesap-stats; their own per-level unit
@@ -69,7 +70,8 @@ seek then draws and fills against the sequential stream.
 | Student-t `fma` split into mul and add | Student-t differential |
 | table resolved from `detected` | resolved-level case at `CRD_CPU_LEVEL=sse2` |
 | seek fix reverted | seek case |
-| odd Philox tail skipped | fill cases |
+| buffered Philox words copied from lane 0 | fill cases |
+| Philox tail block's lane left empty | fill continuation |
 
 linux-gcc-debug: the multiplier, per-lane carry and Student-t teeth failed the same cases; each restore was rebuilt
 and passed. Both lanes pass the stats, tensor, tensor-nn, decomp and cli suites, `smoke_hesap_tensor` (the ADR-0096
@@ -87,6 +89,10 @@ sources with HEAD's three headers first and link the same archives (SHA prefixes
 | Philox fill, ns/u64 | 2.107 | 1.197 | 2.476 | NumPy 2.4.6 Philox 2.483; MATLAB R2026a philox 11.85 ns/double |
 | Threefry fill, ns/u64 | 2.123 | 1.147 | 5.209 | MATLAB threefry 7.02 ns/double |
 | Student-t score, 1M points, ms | 0.951 | 0.951 | 17.93 | JAX 0.10.2 jit 2.41; PyTorch 2.12.1 22.44 |
+
+`scripts/run_dtype_bench.sh` now compiles its probe with the tree's `CRD_SIMD_TARGET` (without it the tensor SR
+draws fell to the baseline loop); the seeded SR batch converts at the detected level are f16 1.067, bf16 0.748 and
+e4m3 1.037 ns/element (1.199, 0.847, 1.182 on the previous board), portable 1.729, 1.157, 1.922.
 
 The portable column is what an SSE2-only CPU runs today: Philox is at NumPy parity, the Student-t log core pays a
 software `fma` per step (the ADR-0063 single-rounded cores below FMA hardware) and loses to JAX by 7.4x.

@@ -18,8 +18,11 @@ for d in numerics/hesap-tensor numerics/hesap-stats foundation/core foundation/m
          foundation/memory foundation/log foundation/units; do
     inc+=(-I "$S/engine/$d/include")
 done
-# The probe is release code like the engine; the conversions come from libcrd-math.a (the dispatched kernels).
-g++ -O3 -march=native -std=c++20 -DNDEBUG "${inc[@]}" -I "$B/engine/core/include" "$S/scripts/bench_dtypes.cpp" \
+# The probe is release code like the engine, with its general-code SIMD target (the tensor SR draws run the
+# include-only Philox block loop at that level); the conversions come from libcrd-math.a (the dispatched kernels).
+target=$(grep -o -m1 -- "-DCRD_SIMD_TARGET=[0-9]" "$B/compile_commands.json")
+g++ -O3 -march=native -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/core/include" \
+    "$S/scripts/bench_dtypes.cpp" \
     "$B/engine/memory/libcrd-memory.a" "$B/engine/vm/libcrd-vm.a" "$B/engine/log/libcrd-log.a" \
     "$B/engine/math/libcrd-math.a" "$B/engine/core/libcrd-core.a" -o bench_dtypes_bin
 for level in '"${LEVELS[*]}"'; do

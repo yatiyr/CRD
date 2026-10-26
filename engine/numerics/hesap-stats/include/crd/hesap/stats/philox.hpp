@@ -24,6 +24,8 @@
 #include <crd/hesap/stats/counter_rng_core.hpp> // PhiloxBlock, philox4x32
 #include <crd/hesap/stats/stats_dispatch.hpp>
 
+#include <cstring>
+
 namespace crd::hesap::stats
 {
 
@@ -90,25 +92,34 @@ public:
     [[nodiscard]] crd::u64 seed() const noexcept { return m_seed; }
     [[nodiscard]] crd::u64 stream() const noexcept { return m_stream; }
 
-    // Bulk fill, bit-identical to repeated next_u64(): whole blocks come from the stats kernel level the process runs
-    // (crd/hesap/stats/stats_dispatch.hpp). The crush path vs NumPy/MATLAB.
+    // Bulk fill, bit-identical to repeated next_u64(): out is the u32 word stream from the next draw on (little-endian
+    // pairs), so the buffered words come first, whole blocks from the stats kernel level the process runs
+    // (crd/hesap/stats/stats_dispatch.hpp) at whatever word offset they leave, then the next block's leading words.
+    // The crush path vs NumPy/MATLAB.
     void fill(crd::containers::Span<crd::u64> out) noexcept
     {
-        crd::usize i = 0;
-        while (m_lane != 4U && i < out.size()) // drain a partial buffered block first
+        const crd::usize words = 2U * out.size();
+        const crd::usize buffered = 4U - m_lane;
+        if (words <= buffered)
         {
-            out[i++] = next_u64();
+            for (crd::usize i = 0; i < out.size(); ++i)
+            {
+                out[i] = next_u64();
+            }
+            return;
         }
-        const crd::usize blocks = (out.size() - i) / 2U;
-        if (blocks != 0U)
+        auto* bytes = reinterpret_cast<unsigned char*>(out.data()); // byte access to the u64 storage
+        std::memcpy(bytes, m_block.v + m_lane, 4U * buffered);
+        const crd::usize blocks = (words - buffered) / 4U;
+        const crd::usize tail = (words - buffered) % 4U;
+        stats_kernels().table->philox4x32_blocks(m_seed, m_stream, m_pos, bytes + 4U * buffered, blocks);
+        m_pos += blocks;
+        m_lane = 4U;
+        if (tail != 0U)
         {
-            stats_kernels().table->philox4x32_blocks(m_seed, m_stream, m_pos, &out[i], blocks);
-            m_pos += blocks;
-            i += 2U * blocks;
-        }
-        if (i < out.size()) // an odd tail: the first half of the next block
-        {
-            out[i] = next_u64();
+            refill();
+            std::memcpy(bytes + 4U * (buffered + 4U * blocks), m_block.v, 4U * tail);
+            m_lane = static_cast<crd::u32>(tail);
         }
     }
 
