@@ -23,11 +23,12 @@
 - `the post window holds exactly post_events and void claims are given back` failed `REQUIRE(r.take_capture(c))` on
   win-debug, win-release, win-clang-cl and win-clang-cl-shipping. Each worker recorded a fixed 20,000 events, and the
   main thread triggered once 1,000 were kept. When the workers finished first, nothing was recorded after the
-  trigger, so the post window never filled. Reproduced on win-debug with eight copies pinned to four CPUs: 5 of 200 runs. A probe printed
-  `at_trigger 80001 frozen 80001` in each failure (every event before the trigger).
+  trigger, so the post window never filled. Reproduced on win-debug with eight copies pinned to four CPUs: 5 of 200
+  runs. A probe printed `at_trigger 80001 frozen 80001` in each failure (every event before the trigger).
 - `the trigger boundary is exact in the trigger's own thread while other threads record` failed
   `CHECK(r.ring_stats().shared_events > 0U)` on linux-gcc-release, linux-gcc-shipping and linux-gcc-asan. The
-  workers had exited and given their rings back before the read. `1df6bdd1` already reads the stats while every thread is alive.
+  workers had exited and given their rings back before the read. `1df6bdd1` already reads the stats while every
+  thread is alive.
 - The fix: each worker of the post-window case records until it has seen the trigger, then 2,000 more. The
   accounting check sums the counts the workers report. The causal-order case had the same race (a fixed hop count),
   so its hops go on until the capture is taken.
