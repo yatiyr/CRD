@@ -950,7 +950,7 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 11)
-        for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS'):
+        for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'tracy'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):
@@ -3523,7 +3523,8 @@ class DiagRunbooks(unittest.TestCase):
             ('| Owner | DIAG.10a |', '| Owner | DIAG.10b |', 'DIAG.10a has no runbook entry'),
             ('| DIAG.12 | The independent', '| DIAG.10a | x |\n| DIAG.12 | The independent',
              'DIAG.10a is listed without an entry but owns one'),
-            ('| Cost | Measured: [overhead board](../bench/2026-10-16-diag-11b-overhead.md#verdicts). |',
+            ('| Cost | Measured: [overhead board](../bench/2026-10-16-diag-11b-overhead.md#verdicts); against Tracy: '
+             '[peer board](../bench/2026-10-26-diag-11b-tracy-peer.md). |',
              '| Cost | Measured somewhere. |', 'names no measurement or owner'),
             ('| Hosted | linux-clang-tsan. The', '| Hostd | linux-clang-tsan. The', 'no Hosted row'),
             ('`python scripts/debugger-recipes.py --probe`', '`make crash`', 'not a command form the guard knows'),

@@ -2795,8 +2795,10 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   pool of `--threads`, the main thread included), `offline` (cook, load, compile and run an authored CEIR program),
   `io` (mixed I/O: 50 whole-file, range and `AsyncFile` reads a frame, 1.25 MiB, on a two-thread pool), `render`
   (the scene renderer draws 4096 instances through the authored `engine://frame/forward_csm` graph on a headless device)
-  and `events` (a site microbenchmark, reported per site, never judged). Every frame has a known answer.
-- What holds on every lane: the 18 `crd-diag-overhead-*` CTests run every workload in every mode with `--check`: off
+  and the microbenchmarks, reported per event, never judged: `events` (sites), `zones` (2,048 `CRD_PERF_SCOPE` a frame)
+  and `marks` (64 frame marks a frame; both since 2026-10-26). Every frame has a known answer.
+- What holds on every lane: the `crd-diag-overhead-*` CTests (27 on Windows, 28 on Linux since 2026-10-26: every
+  workload in every mode, `alloc-full-memory`, and the render validation arms) run with `--check`: off
   evaluates no payload, starts no diagnostic thread and acquires nothing; basic filters every site and frame event and
   records none; full records every one and evaluates each payload once; every requested capture is delivered and
   written; the lifetime ledger balances. `render-validation-core` (and `-sync` on Linux) runs `render` with device
@@ -2931,9 +2933,21 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   only on the out-of-line diagnostic code off runs (none, within 2%), the two binaries' gap staying with the
   instruction count. The 2026-10-25 capture, recorded before these repairs at eight jobs threads, agrees on ten
   rows; jobs basic is unresolved and jobs full disagrees because its frame there is the fiber pool's contention.
-- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling and peer
-  tools; the
-  cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
+- The peer on comparable features (2026-10-26, [session](../sessions/2026-10-26-diag-11b-tracy-peer.md),
+  [board](../bench/2026-10-26-diag-11b-tracy-peer.md)): Tracy Profiler 0.14.1, pinned and gated by
+  `CRD_DIAG_PEER_TRACY` (never an engine module or a default build). `crd-diag-overhead-tracy` holds the Cerid modes and
+  Tracy's counterparts at the same sites in one binary, run with no client (`tracy`) and with a `tracy-capture` client
+  held to every event it was sent (`tracy-connected`). Comparable: zones, frame marks (partial), kept sites, the jobs
+  adapter, the CEIR bridge (closest), counters, allocator statistics (partial); no peer: basic's severity filter, the
+  allocator watch, crash capture, triggers and bundles, replay, device validation, the host frame; GPU scopes not
+  measured. The losses it found were repaired: the profiler's and the diagnostics' per-event clock is crd-time's
+  `TickClock` (MonotonicClock's timeline read from the cycle counter), the frame mark writes its history slot directly,
+  a stopped profiler's entry points take no pin and a zone with no profiler makes no call. Zones are at parity with
+  Tracy's, a kept site within a few nanoseconds and cheaper in CPU, a mark 4 ns over (the lifetime pin and history).
+  The four-thread jobs frame stays over Tracy's: the flight recorder's one claim word and shared slots, the price of
+  its single total order (DIAG.11b follow-up (q), a design decision).
+- Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-up (q);
+  the cost of device validation and of the generation checks, recording and probes, and the hosted audit's per-label
   counts on a run of the current head.
 
 <a id="diag-11c"></a>
