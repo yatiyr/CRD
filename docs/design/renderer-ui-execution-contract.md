@@ -85,8 +85,9 @@ do not advance the visible generation, and graph/material/frame edits propagate 
 
 ### GPU capability tiers and fallback
 
-Adopted 2026-10-27 from the approved [research](../research/2026-10-26-state-of-the-art-2026-comparison.md#gaps-in-area-1);
-the user chose older-GPU fallbacks over a modern-only floor. GPU-TIER.0 owns the ladder decision:
+Adopted 2026-10-27 from the approved
+[research](../research/2026-10-26-state-of-the-art-2026-comparison.md#gaps-in-area-1); the user chose older-GPU
+fallbacks over a modern-only floor. GPU-TIER.0 owns the ladder decision:
 
 | Tier | Vulkan | DX12 | Features |
 |---|---|---|---|

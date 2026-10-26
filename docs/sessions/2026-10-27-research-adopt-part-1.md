@@ -71,6 +71,7 @@ peer and import route (area 1) is Part 3's CKIR-LANG.1.
 ## Left
 
 Part 2 ([beyond games](../research/2026-10-26-beyond-games-2026-comparison.md#gaps-and-proposed-roadmap-changes)) and
-Part 3 ([building with Cerid](../research/2026-10-26-building-with-cerid-2026-comparison.md#gaps-and-proposed-roadmap-changes)):
+Part 3
+([building with Cerid](../research/2026-10-26-building-with-cerid-2026-comparison.md#gaps-and-proposed-roadmap-changes)):
 every new row and amendment, plus the design references and ADR notes they cite. Their "(P1)" references now resolve
 to GEOM-K.3, JOBS-QOS, GPU-TIER.0 and NAV.3.
