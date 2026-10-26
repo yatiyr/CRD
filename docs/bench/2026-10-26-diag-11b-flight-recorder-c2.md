@@ -12,8 +12,9 @@
   board (39.8 to 43.8 GiB free, other processes at most 0.4 cores).
 - **Binaries:** win-shipping-profile (MSVC 19.51, `/O2 /GL`, profiling compiled in) with `-DCRD_DIAG_PEER_TRACY=ON`.
   *Before* is HEAD `41dd04b5` (the global ring, option A), built before any edit: `crd-diag-overhead` `5e1ae565…`,
-  `crd-diag-overhead-tracy` `f86098d5…`. *After* is C2 at `f7083103` plus the harness's storage report (the only
-  harness change; it reads `ring_stats()` instead of `capacity × 152`): `crd-diag-overhead` `08134774…`,
+  `crd-diag-overhead-tracy` `f86098d5…`. *After* is C2 (the fix commit `f7083103`): peer board 1 ran its first build
+  (`crd-diag-overhead-tracy` `754e8c0d…`); peer boards 2 and 3 and every modes board ran the second, which adds only the
+  harness's storage report (it reads `ring_stats()` instead of `capacity × 152`): `crd-diag-overhead` `08134774…`,
   `crd-diag-overhead-tracy` `f0c19672…`. Linux: linux-gcc-shipping (GCC 13.3, LTO) and its profiling-on scratch tree.
 - **Method:** `scripts/diag-overhead.py run`, 200 timed frames after 20 warm-up, four jobs threads (the main thread
   included), affinity `5555`, interleaved processes, the after binary's arms and the before binary's (`--before-exe`)
