@@ -3,11 +3,11 @@
 <!-- doc-role: pointer -->
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
-<!-- current-slice: DIAG.11b -->
-**Current work:** [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (Partial), first unfinished row: measured overhead,
-focused local routes, tiered sanitizer/race/fuzz CI and runbooks. Left: the user's (8) and decisions (q) and (r);
-[DIAG.11c](docs/ROADMAP.md#slice-diag.11c) and [DIAG.12](docs/ROADMAP.md#slice-diag.12) are Needs CI: the
-final complete-tier run.
+<!-- current-slice: SIMD-DISPATCH -->
+**Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Open), first unfinished: SSE2 floor
+with runtime CPU dispatch, after C2 lands in [DIAG.11b](docs/ROADMAP.md#slice-diag.11b) (left: the user's
+re-record (8)). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c) and [DIAG.12](docs/ROADMAP.md#slice-diag.12)
+await the final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).
 [Contract](docs/design/runtime-diagnostics.md); [runbooks](docs/design/diagnostic-runbooks.md).
 **Only tracker:** [ROADMAP](docs/ROADMAP.md). Rules: [AGENTS](AGENTS.md); lessons: [MEMORY](MEMORY.md).
