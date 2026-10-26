@@ -60,9 +60,9 @@ sites, 2,048 zones, 64 marks), CPU in `QueryProcessCycleTime` cycles (every thre
 The zone and site rows move by about ±1.5 ns between builds of the same source (code layout of a two-instruction
 loop): over four builds the zone read −0.8, −0.5, −0.8 and +1.4 ns against Tracy connected and its off cost 0.5 to
 1.5 ns, the site +1.2 to +3.9 ns. In one binary the last change (the zone site's name, below) costs nothing: the old
-and the new site form side by side read +0.000 ns per zone off and +0.08 ns (−0.06 .. +0.14) full. So: **zones at
-parity with Tracy connected; a kept site within a few nanoseconds of Tracy's message in time and 55 to 66 cycles
-cheaper in CPU (Tracy's worker compresses and sends each message); Cerid's frame mark 4.3 ns over Tracy's**, which
+and the new site form side by side read +0.000 ns per zone off and +0.08 ns (−0.06 .. +0.14) full. So: **zones
+within the build-to-build variation of Tracy connected (+1.4 ns on this board); a kept site within a few
+nanoseconds of Tracy's message in time and 55 to 66 cycles cheaper in CPU (Tracy's worker compresses and sends each message); Cerid's frame mark 4.3 ns over Tracy's**, which
 is the lifetime pin's two read-modify-writes and the history slot Tracy's mark does not keep. Not connected, Cerid's
 off site equals Tracy's no-client site, Cerid's off mark is 4 ns cheaper, and Cerid's off zone is 0.1 to 1.1 ns over
 Tracy's no-client zone (build to build).
@@ -115,7 +115,8 @@ Cost over the same binary's off; the last two columns are Cerid full over Tracy 
 Tracy with no client still costs CPU where its hooks run (offline: the per-op hooks are installed and called with no
 client, +59%; Cerid's off installs none) and in its idle worker (alloc +16.7% CPU at an unchanged frame). The offline
 row is the bridge's design: aggregated in process it costs 42% less frame time and 70% less CPU than a zone per op.
-Earlier builds read jobs +4.8% to +12.6%; this board's +15.9% is the latest.
+Two earlier boards of the same workload (before the last source changes, idle host) read jobs +4.8% and +12.6%;
+this board's +15.9% is the final one.
 
 **The loss: jobs.** Attributed in one binary by switching each off in turn (a one-off build that gates them by environment, 7 interleaved
 processes each):
@@ -181,11 +182,13 @@ The connected counts include Tracy's worker thread (compression and sending), wh
 
 ## Verdict
 
-Comparable features measured on both lanes, connected and not connected. After the repairs Cerid's zone is at parity
-with Tracy's, its kept event within a few nanoseconds in time and cheaper in CPU (cheaper in both on Linux), its
-aggregated CEIR profile and allocator totals far cheaper than Tracy's per-event equivalents, and its disabled sites,
-zones and marks at or below Tracy's no-client cost; its frame mark costs 4 ns more (the lifetime pin and the history
-Tracy's mark does not keep). **Loss:** the four-thread jobs frame on Windows, 5 to 16% over Tracy connected, from the
-flight recorder's shared claim and slots (and an unexplained 2.9% from the cycle-counter clock at four threads), owned
-as follow-up (q). No peer: basic's severity filter, the allocator watch, crash capture, triggers and bundles, replay,
-device validation, the host frame; GPU scopes not measured.
+Comparable features measured on both lanes, connected and not connected. After the repairs Cerid's zone is within the
+build-to-build variation of Tracy's (+1.4 ns on the final board, −0.8 to −0.5 ns on three earlier builds), its kept
+event within a few nanoseconds in time and cheaper in CPU (cheaper in both on Linux), its aggregated CEIR profile and
+allocator totals far cheaper than Tracy's per-event equivalents, and its disabled sites, zones and marks at or below
+Tracy's no-client cost; its frame mark costs 4 ns more (the lifetime pin and the history Tracy's mark does not keep).
+**Loss:** the four-thread jobs frame on Windows, +15.9% (+14.6 .. +17.3) over Tracy connected on the final board (+4.8%
+and +12.6% on two earlier boards of the same workload before the last source changes), from the flight recorder's shared
+claim and slots (and an unexplained 2.9% from the cycle-counter clock at four threads), owned as follow-up (q). No peer:
+basic's severity filter, the allocator watch, crash capture, triggers and bundles, replay, device validation, the host
+frame; GPU scopes not measured.

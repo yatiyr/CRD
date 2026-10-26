@@ -2942,8 +2942,9 @@ Settled (2026-10-16, [session](../sessions/2026-10-16-diag-11b-overhead-harness.
   allocator watch, crash capture, triggers and bundles, replay, device validation, the host frame; GPU scopes not
   measured. The losses it found were repaired: the profiler's and the diagnostics' per-event clock is crd-time's
   `TickClock` (MonotonicClock's timeline read from the cycle counter), the frame mark writes its history slot directly,
-  a stopped profiler's entry points take no pin and a zone with no profiler makes no call. Zones are at parity with
-  Tracy's, a kept site within a few nanoseconds and cheaper in CPU, a mark 4 ns over (the lifetime pin and history).
+  a stopped profiler's entry points take no pin and a zone with no profiler makes no call. Zones are within the
+  build-to-build variation of Tracy's (+1.4 to −0.8 ns), a kept site within a few nanoseconds and cheaper in CPU, a
+  mark 4 ns over (the lifetime pin and history).
   The four-thread jobs frame stays over Tracy's: the flight recorder's one claim word and shared slots, the price of
   its single total order (DIAG.11b follow-up (q), a design decision).
 - Not settled here: the repairs and the measurement gaps above; a recording of the repaired sampling; follow-up (q);
