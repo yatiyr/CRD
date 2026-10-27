@@ -67,8 +67,8 @@ bodies build results with `Complex<T>{re, im}`, an inline member of `crd::hesap`
   `transpose_simd_c64`, `radix2_pass` and `butterfly_row`.
 - `fft.hpp` is the plan: the ctor (now building the IP4-AoS tables on every build, so the plan no longer depends on
   the general code's ISA), `execute_reference`, and `execute`/`execute_batched` as one table call. It includes no
-  codelet and no SIMD header; a new include-budget entry keeps `<immintrin.h>` out of it on GCC and Clang. The 35
-  units that parsed the codelets now parse none; only the three kernel units do.
+  codelet and no SIMD header; a new include-budget entry keeps `<immintrin.h>` out of it on GCC and Clang. A unit
+  that includes only `fft.hpp` no longer parses the codelets; the three kernel units do.
 - `CRD_FFT_PROFILE` stays: the counters are plain data in `src/fft.cpp`, the kernels read `__rdtsc`.
 - Determinism: bit-identical run to run on a level; across levels tolerance-declared (ADR-0134 §7, ADR-0092 §1)
   while the avx2 level keeps the paths its `CRD_SIMD_HAS_AVX2` gates select.
