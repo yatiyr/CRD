@@ -406,7 +406,7 @@ void pack_i8(const crd::i8* w, u64 n, u64 k, crd::i8* packed)
 
 TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u8 quantizer bytes", "[tensor][kernels]")
 {
-    constexpr u64 blocks = 23U;
+    constexpr u64 blocks = 25U;
     constexpr u64 total = blocks * tn::kQuantBlock;
     static f32 x[total];
     fill_uniform(x, total, 0xA11CEU, 100.0F);
@@ -424,6 +424,11 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
         x[8U * 32U + j] = j == 3U ? -kInf : 1.0F;              // both infinities (+inf below)
     }
     x[8U * 32U + 9U] = kInf;
+    for (u64 j = 0; j < tn::kQuantBlock; ++j) // subnormal scales: 1/d and 1/s overflow, every scaled value is +-inf
+    {
+        x[23U * 32U + j] = static_cast<f32>(j) * 1e-39F;
+        x[24U * 32U + j] = static_cast<f32>(j) * -1e-40F; // u8: rmin < 0, so the zero point is 255
+    }
     for (u64 j = 0; j < 4U * 32U; ++j) // post-ReLU, all-negative and constant rows for the u8 range
     {
         x[9U * 32U + j] = x[9U * 32U + j] < 0.0F ? 0.0F : x[9U * 32U + j];
@@ -442,6 +447,11 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
     }
     CHECK(want[4].qs[1] == -15); // -14.5 rounds away from zero
     CHECK(want[4].qs[16] == 1);  // 0.5 rounds away from zero
+    for (u64 j = 0; j < tn::kQuantBlock; ++j)
+    {
+        CHECK(want[23].qs[j] == 0);
+        CHECK(want[24].qs[j] == 0);
+    }
     // u8 rows over the same inputs: each 32-value block on its own, then four 128-value rows.
     struct Row
     {
@@ -492,6 +502,14 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
             if (r.offset == 8U * 32U && r.k == 32U)
             {
                 CHECK(zw == 0); // inf/inf: no zero point
+            }
+            if (r.offset == 24U * 32U && r.k == 32U)
+            {
+                CHECK(zw == 255);
+                for (u64 j = 0; j < 32U; ++j)
+                {
+                    CHECK(qw[j] == 255U); // every scaled value is -inf (NaN at 0): the zero point
+                }
             }
         }
     }

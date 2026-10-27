@@ -5,8 +5,9 @@
 // the quantizers, so they live in the unit's level namespace (CRD_MATH_LEVEL_NS, ADR-0134 §5) and call only
 // crd/math/libm.hpp. The blocks are one plain type on every level.
 //
-// A NaN element quantizes as zero (Q8_0: q = 0; u8: q = the zero point) and never enters a range or an amax, so every
-// level gives the same bytes for every input; an infinite range gives the scale infinity and every element zero.
+// A NaN element never enters a range or an amax. An element whose scaled value is not finite (a NaN; an infinity
+// times a zero inverse scale; any non-zero element when the scale is subnormal and its inverse overflows) quantizes as
+// zero (Q8_0: q = 0; u8: q = the zero point), so every level gives the same bytes for every input.
 
 #include <crd/core/types.hpp>
 #include <crd/math/float_convert_scalar.hpp>
@@ -60,7 +61,7 @@ inline void quantize_q8_0_blocks(const crd::f32* x, BlockQ8Zero* out, crd::u64 n
         {
             const crd::f32 v = blk[j] * id;
             crd::i8 q = 0;
-            if (!crd::math::libm::is_nan(v))
+            if (crd::math::libm::is_finite(v))
             {
                 q = static_cast<crd::i8>(static_cast<crd::i32>(v >= 0.0F ? v + 0.5F : v - 0.5F));
             }
@@ -101,7 +102,7 @@ inline void quantize_u8_asym_row(const crd::f32* x, crd::u64 n, crd::u8* out, cr
     {
         const crd::f32 t = x[i] * inv;
         crd::i32 q = zp;
-        if (!crd::math::libm::is_nan(t))
+        if (crd::math::libm::is_finite(t))
         {
             q += static_cast<crd::i32>(t >= 0.0F ? t + 0.5F : t - 0.5F);
         }

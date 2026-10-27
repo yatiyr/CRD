@@ -561,14 +561,14 @@ void q8_dot_tile_any(crd::u32 t, const BlockQ8Zero* xrow, const crd::f32* xsc, c
 
 // The Q8_0 quantizer, bit-identical to quantize_q8_0_blocks (quant_core.hpp) on every input: the lane maxima keep the
 // scalar's a > amax ? a : amax (a NaN never wins), the per-lane f32 multiply matches, roundf's half-away form is
-// trunc(t + copysign(0.5, t)) (-0 included), and a NaN lane quantizes as 0.
+// trunc(t + copysign(0.5, t)) (-0 included), and a lane whose scaled value is not finite quantizes as 0.
 void quantize_q8_0(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
     const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
     const __m256 half = _mm256_set1_ps(0.5F);
-    const __m256i nan_q = _mm256_set1_epi8(-128); // a NaN lane converts to INT32_MIN, which packs to -128
+    const __m256i nan_q = _mm256_set1_epi8(-128); // a non-finite lane converts to INT32_MIN, which packs to -128
     const auto away = [&](__m256 t)
     {
         return _mm256_cvttps_epi32(_mm256_add_ps(t, _mm256_or_ps(_mm256_and_ps(t, sign_mask), half)));
@@ -597,7 +597,8 @@ void quantize_q8_0(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexce
         const __m256i q01 = _mm256_packs_epi32(away(_mm256_mul_ps(v0, vid)), away(_mm256_mul_ps(v1, vid)));
         const __m256i q23 = _mm256_packs_epi32(away(_mm256_mul_ps(v2, vid)), away(_mm256_mul_ps(v3, vid)));
         const __m256i packed = _mm256_packs_epi16(q01, q23); // i8, order 0,1|2,3 per 128-bit half
-        // |t| <= 127 rounds into [-127, 127], so -128 is exactly the NaN lanes: they quantize as 0
+        // a finite t has |t| <= 127 and rounds into [-127, 127], so -128 is exactly the non-finite lanes (a NaN, or
+        // +-inf when d is subnormal and id overflows): they quantize as 0
         const __m256i q = _mm256_andnot_si256(_mm256_cmpeq_epi8(packed, nan_q), packed);
         const __m256i fixed = _mm256_permutevar8x32_epi32(q, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[i].qs), fixed);
@@ -641,7 +642,7 @@ void nn_linear_q8_rows(const NnLinearQ8& c, crd::u32 lo, crd::u32 hi) noexcept
 
 // The per-row u8 quantizer, bit-identical to quantize_u8_asym_row (quant_core.hpp) on every input: the lane minima and
 // maxima keep the scalar's comparisons (a NaN never enters the range), the same f32 operations, the half-away
-// trunc(t + copysign(0.5, t)) form lane for lane with a NaN lane at the zero point, and packus saturation == the
+// trunc(t + copysign(0.5, t)) form lane for lane with a non-finite lane at the zero point, and packus saturation == the
 // scalar [0, 255] clamp. k must be a multiple of 32.
 void quantize_u8_row(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale, crd::i32& zero_point) noexcept
 {
@@ -668,12 +669,14 @@ void quantize_u8_row(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scal
     const __m256 vinv = _mm256_set1_ps(inv);
     const __m256i vzp = _mm256_set1_epi32(zp);
     const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
+    const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
+    const __m256 inf = _mm256_castsi256_ps(_mm256_set1_epi32(0x7F800000));
     const __m256 half = _mm256_set1_ps(0.5F);
     const auto away_zp = [&](__m256 t)
     {
-        const __m256 ordered = _mm256_and_ps(t, _mm256_cmp_ps(t, t, _CMP_ORD_Q)); // a NaN lane becomes +0
+        const __m256 finite = _mm256_and_ps(t, _mm256_cmp_ps(_mm256_and_ps(t, abs_mask), inf, _CMP_LT_OQ)); // else +0
         const __m256i q =
-            _mm256_cvttps_epi32(_mm256_add_ps(ordered, _mm256_or_ps(_mm256_and_ps(ordered, sign_mask), half)));
+            _mm256_cvttps_epi32(_mm256_add_ps(finite, _mm256_or_ps(_mm256_and_ps(finite, sign_mask), half)));
         return _mm256_add_epi32(q, vzp);
     };
     for (crd::u64 i = 0; i < k; i += 32U)

@@ -86,6 +86,10 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS::libm
 {
     return (__builtin_bit_cast(crd::u64, x) & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL;
 }
+[[nodiscard]] constexpr bool is_finite(crd::f32 x) noexcept
+{
+    return (__builtin_bit_cast(crd::u32, x) & 0x7F800000U) != 0x7F800000U;
+}
 [[nodiscard]] constexpr bool is_finite(crd::f64 x) noexcept
 {
     return (__builtin_bit_cast(crd::u64, x) & 0x7FF0000000000000ULL) != 0x7FF0000000000000ULL;
