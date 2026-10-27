@@ -3,7 +3,8 @@
 <!-- doc-role: decision -->
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-**Status:** Accepted; amended 2026-10-27 ([below](#amendment-2026-10-27-the-foundation-window-and-the-layers-above))  
+**Status:** Accepted; amended 2026-10-27 ([below](#amendment-2026-10-27-the-foundation-window-and-the-layers-above),
+[Part 4](#amendment-2026-10-27-part-4-path-reachability-time-standards-and-law))  
 **Date:** 2026-05-02  
 **Tags:** arch, networking, determinism, simulation
 
@@ -165,3 +166,36 @@ handshake. Compression, filtering and lag-compensation math use crd-hesap.
 
 **Consequences.** Every networked row carries the NET-SIM gate and the NET-DEBUG tooling as acceptance; the security
 baseline costs a formal model, a fuzzing budget and an external review before the first networked release.
+
+## Amendment 2026-10-27 (Part 4): path, reachability, time, standards and law
+
+The user approved every proposal ("Gaps and proposed roadmap changes") of the
+[networking and crash-pipeline research](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md)
+and a legal register on 2026-10-27 ([adoption](../sessions/2026-10-27-research-adopt-part-4.md)).
+
+**Window additions.** NETCRASH also holds [NET-STD](../ROADMAP.md#slice-net-std) (standards register, version and
+extension negotiation, GREASE, crypto agility by signed policy generation),
+[COMPLY.0](../ROADMAP.md#slice-comply.0) (the legal and regulatory register, Turkish law first-class, in place before
+any data leaves a machine), [HESAP-NET](../ROADMAP.md#slice-hesap-net) (erasure codes, network estimators,
+dead reckoning and quantisation in crd-hesap), [NET-PATH](../ROADMAP.md#slice-net-path) (PMTU, ECN, pacing,
+pluggable congestion control, migration and kernel fast paths with portable fallbacks) and
+[NET-REACH](../ROADMAP.md#slice-net-reach) (ICE, STUN, TURN, MASQUE and Cerid relays). Layer 1 keeps its sockets and
+channels; path behaviour moves from 4.2a and NET.3 to NET-PATH, and the browser-facing HTTP/3, WebTransport and
+WebSocket endpoint is part of `crd-net` (4.2a).
+
+**Security.** NET.2 pins RFC 10024 hybrid groups, RFC 9881 ML-DSA for Cerid-issued certificates, ECH on public
+endpoints and a dated refusal of classical-only key exchange; handshakes stay within QUIC's amplification limit; the
+verified model is bound to the code; verified primitives sit behind the provider interface; key logging and capture
+keys never ship. Wire formats are generated from the shared schema model with authorisation and size limits before
+decode (NET.3). No layer is described as exploit-proof: defence in depth, continuous and differential fuzzing, state
+learning, an external review, coordinated disclosure and fast signed fixes are the commitment.
+
+**Integrity under encryption.** An AEAD tag already detects corruption in flight; HW-RESILIENCE.1 adds a plaintext
+integrity hash at serialisation, verified after decryption, plus lockstep and rollback state hashes, from one
+foundation-owned checksum family.
+
+**Above the foundation.** [NET-TIME](../ROADMAP.md#slice-net-time) (NTP-class, PTP and gPTP clocks with one
+published clock quality) precedes 4.2c, whose policies are specified by technique; NET-LIVE, 4.2e, VPROD and digital
+twins read the same clock. NET-SCALE names its mechanisms (authority leases, exactly-once handoff, an event-sourced
+journal, an overload mode), NET-SERVER its fleet adapters, ANTICHEAT ships no kernel component, and the crash rows
+carry network context, consent tiers and the CRA Article 14 workflow.

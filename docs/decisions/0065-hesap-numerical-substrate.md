@@ -1520,3 +1520,20 @@ The 2026-10-26 research
   accepted, §8 and §9 stand.
 - [IMG-ORACLE](../ROADMAP.md#slice-img-oracle): the perceptual image metric for golden tests is recommended as a
   crd-hesap module beside hesap-dsp, built on hesap-fft and hesap-stats; [OWN.1](../ROADMAP.md#slice-own.1) decides.
+
+## §29 Amendment (2026-10-27) — network and media math
+
+The 2026-10-27 research
+([proposal](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md#p-2),
+[adoption](../sessions/2026-10-27-research-adopt-part-4.md)) adds [HESAP-NET](../ROADMAP.md#slice-hesap-net):
+- `hesap-comms` grows from the physical layer into packet erasure coding: XOR/FlexFEC parity (RFC 8627), Reed-Solomon
+  over GF(2^8) with dispatched kernels and an SSE2 floor, RaptorQ-class fountain codes (RFC 6330) and interleavers.
+  This amends §27's "hesap-comms stays modulation and OFDM"; HESAP-DIST's communication interface stays its own.
+- `hesap-stats`: bandwidth, RTT, jitter and delay-trend estimators (Kalman and trendline filters), clock-offset and
+  drift filters, and the seeded loss and delay models NET-DEBUG conditions links with.
+- `hesap-interp`: interpolation, extrapolation, dead reckoning and rewind history sampling; quantisation helpers
+  (bounded floats, smallest-three quaternions) are numeric kernels.
+
+`crd-net`, NET-TIME, NET-LIVE and 4.2c consume them and add no numerics of their own. Checksums are not hesap's: the
+CRC-32/IEEE, CRC32C and 64-bit hash family is foundation-owned (HW-RESILIENCE.1, OWN.1), because crd-perf, a
+foundation module, needs it and may not depend on crd-hesap.

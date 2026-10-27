@@ -3130,6 +3130,9 @@ DIAG.1a. MEM-HARD/JOBS-HARD retain broader product/peer/performance/new-platform
 diagnostic mechanisms and add evidence as consumers grow. SANITY-TLSF retains later newly introduced consumer audits.
 RAH-6.b owns new frame recording/access contracts using DIAG's validation surface. D7E-7/D7E-10/I2D-9.e own the polished
 crd-ui views of existing diagnostics. LANG owns full CHIR/native scripting and future compiler/debugger integration.
-OPS.1/OPS.2 extend DIAG to future distributed/product deployments and migration matrices. No existing requirement is
+OPS.1/OPS.2 extend DIAG to future distributed/product deployments and migration matrices (OPS.1 also exports DIAG over
+OTLP with pseudonymised attributes). CRASH-FIX.1 adds network context and consent tiers to bundles, and CRASH-FIX.2
+owns grouping, the symbol store and the CRA Article 14 workflow
+([Part 4](../sessions/2026-10-27-research-adopt-part-4.md)). No existing requirement is
 deleted, and no duplicate live bug owner remains for the early mechanism. Record new gaps in ROADMAP under the earliest
 responsible child; this document must not accumulate an independent Next list.

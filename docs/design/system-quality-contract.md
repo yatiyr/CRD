@@ -109,6 +109,15 @@ Reject invalid input before application deserialization or expensive work; heade
 bounded resources. Publish offered-load, packet/byte rates, CPU/memory and legitimate-client latency under attack.
 DDoS resistance also needs deployment capacity/upstream mitigation; no "DDoS-proof" claim is permitted.
 
+Encryption does not replace integrity checks: an AEAD tag detects corruption in flight, so a sender's own memory or
+pipeline fault is caught by a plaintext integrity hash taken at serialisation and verified after decryption
+(HW-RESILIENCE.1). No component is called exploit-proof; the commitment is defence in depth: memory-safe parsers,
+fuzzing, verified state machines, sandboxing, least privilege, external review, coordinated disclosure and fast,
+signed fixes. Every legal duty that touches data, children, accessibility, export control, AI or content is an entry
+of the [COMPLY.0](../ROADMAP.md#slice-comply.0) register with its primary source, date read, owning row, check and
+review cadence; Turkish law is a first-class jurisdiction, and interpretation that needs counsel is a review item,
+never a guess.
+
 Durable project collaboration, live game simulation and audio timing use separate semantic contracts. Test concurrent
 delete/edit/undo, schema migration, offline reconnect, retries, stale authorization, failover and corrupt history.
 Convergence alone does not guarantee a valid CAD feature graph or preserve the user's intended edit.
