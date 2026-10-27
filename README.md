@@ -72,3 +72,13 @@ order plus a map of every doc area. Quick links:
 - **Architecture decisions (ADRs)** — [`docs/decisions/`](docs/decisions)
 - **Benchmark results** — [`docs/bench/`](docs/bench)
 - **Session history** — [`docs/sessions/`](docs/sessions)
+
+## License
+
+Copyright (c) 2026 Burak Eren Dere. All rights reserved.
+
+Cerid is proprietary software, not open source. The repository is public for viewing only; using, building,
+copying, modifying, distributing, or using it for machine-learning training or text and data mining requires
+the owner's prior written permission. The full terms, in English and Turkish, are in [`LICENSE`](LICENSE);
+permission requests go to dereeren@yahoo.com. Third-party components keep their own licenses
+([`cmake/pins.json`](cmake/pins.json), [`assets/source/LICENSES.md`](assets/source/LICENSES.md)).

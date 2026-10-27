@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
     '.clang-format', '.clang-tidy', '.gitattributes', '.gitignore', '.natvis',
     'AGENTS.md', 'CLAUDE.md', 'CMakeLists.txt', 'CMakePresets.json', 'CMakeUserPresets.json',
-    'context.md', 'MEMORY.md', 'opencode.json', 'README.md', 'START_HERE.md',
+    'context.md', 'LICENSE', 'MEMORY.md', 'opencode.json', 'README.md', 'START_HERE.md',
 }
 ROOT_DIRS = {
     '.git', '.github', '.vs', '.vscode', '.idea', '.claude', '.codex', '.agents',

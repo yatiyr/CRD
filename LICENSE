@@ -1,0 +1,143 @@
+Cerid Engine - Proprietary License
+Cerid Engine - Tescilli Lisans
+
+Copyright (c) 2026 Burak Eren Dere. All rights reserved.
+Telif Hakkı (c) 2026 Burak Eren Dere. Tüm hakları saklıdır.
+
+This file contains the same license in English (Part A) and Turkish (Part B). For any matter governed by the laws of
+the Republic of Türkiye or brought before a Turkish court or authority, the Turkish text prevails; in every other case
+the English text prevails.
+
+Bu dosya aynı lisansı İngilizce (Bölüm A) ve Türkçe (Bölüm B) olarak içerir. Türkiye Cumhuriyeti hukukuna tabi olan
+veya bir Türk mahkemesi ya da makamı önüne getirilen her konuda Türkçe metin, diğer tüm hâllerde İngilizce metin esas
+alınır.
+
+===================================================================================================================
+PART A - ENGLISH
+===================================================================================================================
+
+1. Owner and protected work
+   "Cerid Engine" (the "Software") means all source code, object code, build scripts, tools, shaders, tests,
+   benchmarks, documentation, designs, data formats, assets and other material in this repository and in any
+   earlier or later version of it, except the third-party material described in section 6. The Software is a
+   work protected under Law No. 5846 on Intellectual and Artistic Works of the Republic of Türkiye and under
+   international copyright treaties. All rights in the Software, including all economic rights (reproduction,
+   adaptation, distribution, performance and communication to the public) and all moral rights, belong
+   exclusively to Burak Eren Dere (the "Owner").
+
+2. No license is granted
+   Except as stated in section 3, no right or license of any kind, express or implied, is granted to anyone.
+   Publishing the Software in a publicly visible repository does not place it in the public domain, does not
+   make it open source, and does not grant any permission under copyright, patent, trademark or any other right.
+
+3. Viewing only
+   You may view the Software on the hosting platform where the Owner publishes it, and use the platform's own
+   features to the extent that platform's terms of service require, solely for the purpose of reading it.
+   Any copy made through those features is subject to this License and confers no further right.
+
+4. Prohibited acts
+   Without the Owner's prior written permission you may not, in whole or in part:
+   (a) use, run, compile or install the Software, or any program built from it;
+   (b) copy, reproduce or store it outside the hosting platform, except the transient copies your viewing
+       device makes;
+   (c) modify, adapt, translate, port or create derivative works of it;
+   (d) distribute, publish, sell, rent, lend, sublicense or otherwise make it available to any third party;
+   (e) incorporate it, or any part of it, into any other software, product or service;
+   (f) use it, or any part of it, to train, fine-tune, evaluate or build any machine-learning or artificial-
+       intelligence system, or subject it to text and data mining; the Owner expressly reserves this right,
+       including under Article 4(3) of Directive (EU) 2019/790;
+   (g) remove or alter any copyright, license or ownership notice.
+
+5. Permission requests
+   Any permission beyond section 3 requires a separate written license agreement signed by the Owner. Requests:
+   dereeren@yahoo.com.
+
+6. Third-party material
+   Third-party libraries, tools, assets and data used by or distributed with the Software remain under their own
+   licenses, which govern them and are not changed by this License. They are identified in cmake/pins.json,
+   assets/source/LICENSES.md and the notices next to that material.
+
+7. Contributions
+   The Owner does not accept contributions (code, documentation, issues containing code or other material)
+   unless a written contribution agreement has been signed first. Submitting material without such an agreement
+   grants no right to the submitter and creates no obligation for the Owner.
+
+8. Termination
+   Any act in breach of this License ends, immediately and without notice, the permission in section 3 for the
+   person in breach. The Owner's rights and remedies under Law No. 5846 and other applicable law, including
+   injunctions, damages and criminal complaints, are reserved.
+
+9. No warranty; limitation of liability
+   The Software is provided "as is", without warranty of any kind. To the maximum extent permitted by applicable
+   law, the Owner is not liable for any damage arising from viewing or any use of the Software. Nothing in this
+   License limits liability that cannot be limited under applicable law, including liability for intent or gross
+   negligence.
+
+10. Governing law
+   This License is governed by the laws of the Republic of Türkiye. Disputes are resolved by the courts and
+   enforcement offices of the Republic of Türkiye competent under Turkish law.
+
+===================================================================================================================
+BÖLÜM B - TÜRKÇE
+===================================================================================================================
+
+1. Hak sahibi ve korunan eser
+   "Cerid Engine" ("Yazılım"); bu depodaki ve onun önceki veya sonraki her sürümündeki tüm kaynak kodu, nesne
+   kodu, derleme betikleri, araçlar, gölgelendiriciler (shader), testler, ölçümler (benchmark), belgeler,
+   tasarımlar, veri biçimleri, varlıklar (asset) ve diğer tüm materyal anlamına gelir; 6. maddede belirtilen
+   üçüncü taraf materyali bunun dışındadır. Yazılım, 5846 sayılı Fikir ve Sanat Eserleri Kanunu ve uluslararası
+   telif hakkı antlaşmaları kapsamında korunan bir eserdir. Yazılım üzerindeki tüm haklar; tüm mali haklar
+   (çoğaltma, işleme, yayma, temsil ve umuma iletim) ve tüm manevi haklar dâhil olmak üzere münhasıran Burak Eren Dere
+   ("Hak Sahibi") adlı kişiye aittir.
+
+2. Lisans verilmemesi
+   3. maddede belirtilen hâl dışında hiç kimseye açık veya örtülü hiçbir hak veya lisans verilmemektedir.
+   Yazılımın herkese açık görünen bir depoda yayımlanması onu kamu malı yapmaz, açık kaynak yapmaz ve telif,
+   patent, marka veya başka herhangi bir hak kapsamında izin vermez.
+
+3. Yalnızca görüntüleme
+   Yazılımı, Hak Sahibinin onu yayımladığı barındırma platformunda görüntüleyebilir ve o platformun kullanım
+   koşullarının gerektirdiği ölçüde platformun kendi özelliklerini, yalnızca okuma amacıyla kullanabilirsiniz.
+   Bu özelliklerle oluşan her kopya bu Lisansa tabidir ve başkaca hak sağlamaz.
+
+4. Yasak fiiller
+   Hak Sahibinin önceden yazılı izni olmadan Yazılımın tamamı veya bir kısmı üzerinde şunları yapamazsınız:
+   (a) Yazılımı veya ondan üretilen herhangi bir programı kullanmak, çalıştırmak, derlemek veya kurmak;
+   (b) görüntüleme cihazınızın oluşturduğu geçici kopyalar dışında, barındırma platformu dışında kopyalamak,
+       çoğaltmak veya saklamak;
+   (c) değiştirmek, işlemek, çevirmek, başka bir platforma aktarmak veya ondan türev eser oluşturmak;
+   (d) üçüncü kişilere yaymak, yayımlamak, satmak, kiralamak, ödünç vermek, alt lisans vermek veya başka bir
+       yolla erişimine sunmak;
+   (e) başka bir yazılıma, ürüne veya hizmete dâhil etmek;
+   (f) herhangi bir makine öğrenmesi veya yapay zekâ sistemini eğitmek, ince ayar yapmak, değerlendirmek veya
+       oluşturmak için kullanmak ya da metin ve veri madenciliğine konu etmek; Hak Sahibi bu hakkı, (AB)
+       2019/790 sayılı Direktifin 4(3). maddesi kapsamındaki saklı tutma dâhil, açıkça saklı tutar;
+   (g) herhangi bir telif, lisans veya mülkiyet bildirimini kaldırmak veya değiştirmek.
+
+5. İzin talepleri
+   3. maddenin ötesindeki her izin, Hak Sahibinin imzaladığı ayrı ve yazılı bir lisans sözleşmesi gerektirir.
+   Talepler: dereeren@yahoo.com.
+
+6. Üçüncü taraf materyali
+   Yazılım tarafından kullanılan veya onunla birlikte dağıtılan üçüncü taraf kütüphaneleri, araçları, varlıkları
+   ve verileri kendi lisanslarına tabidir; bu Lisans onları değiştirmez. Bunlar cmake/pins.json,
+   assets/source/LICENSES.md ve ilgili materyalin yanındaki bildirimlerde belirtilmiştir.
+
+7. Katkılar
+   Hak Sahibi, önceden yazılı bir katkı sözleşmesi imzalanmadıkça katkı (kod, belge, kod veya başka materyal
+   içeren talepler) kabul etmez. Böyle bir sözleşme olmadan gönderilen materyal gönderene hak sağlamaz ve Hak
+   Sahibine yükümlülük doğurmaz.
+
+8. Sona erme
+   Bu Lisansa aykırı her fiil, aykırılığı yapan kişi bakımından 3. maddedeki izni bildirim gerekmeksizin derhâl
+   sona erdirir. Hak Sahibinin 5846 sayılı Kanun ve ilgili diğer mevzuat kapsamındaki ihtiyati tedbir, tazminat
+   ve şikâyet dâhil tüm hak ve talepleri saklıdır.
+
+9. Garanti verilmemesi; sorumluluğun sınırlandırılması
+   Yazılım "olduğu gibi" sunulur ve hiçbir garanti verilmez. Yürürlükteki hukukun izin verdiği azami ölçüde Hak
+   Sahibi, Yazılımın görüntülenmesinden veya herhangi bir kullanımından doğan zarardan sorumlu değildir. Bu Lisans,
+   kast ve ağır ihmal dâhil olmak üzere yürürlükteki hukuka göre sınırlandırılamayan sorumluluğu sınırlamaz.
+
+10. Uygulanacak hukuk
+   Bu Lisans Türkiye Cumhuriyeti hukukuna tabidir. Uyuşmazlıklar, Türk hukukuna göre yetkili Türkiye Cumhuriyeti
+   mahkemeleri ve icra daireleri tarafından çözülür.
