@@ -10,6 +10,12 @@ HEAD before: `59c79f2f`.
   failed in Preflight with every job unstarted. GitHub's annotation: "recent account payments have failed or your
   spending limit needs to be increased". No job ran, so there is no log to fix from. The account owner must fix the
   Actions billing; then rerun 40578927592 and the latest push run.
+- Billing then came back: attempt 2 of 40581144513 ran, and every GCC and Clang lane (linux-gcc-*, linux-clang-tsan,
+  win-clang-cl, win-clang-cl-shipping) failed to compile `cholesky.cpp`: `syrk_microkernel.hpp` and the two
+  `supernodal_cholesky.cpp` merges built `GemmBlock` without the `beta` that `fold beta into the first GEMM depth
+  group` added (`-Wmissing-field-initializers` / `-Wmissing-designated-field-initializers`; MSVC has no such
+  warning). Fixed by giving them `.beta = T{}`; the local clang-cl tree builds crd-hesap-dense, crd-hesap-direct and
+  both tensor test programs, whose `[kernels]` and `[permute]` cases pass there too.
 - Needs CI audit: no new hosted evidence; DIAG.11c and DIAG.12 stay Needs CI.
 
 ## What changed

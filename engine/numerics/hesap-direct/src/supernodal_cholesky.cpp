@@ -1467,6 +1467,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                                             .row0 = 0,
                                                             .col0 = 0,
                                                             .alpha = T{},
+                                                            .beta = T{},
                                                             .update = dense::GemmUpdate::Subtract,
                                                             .col_major = false,
                                                             .lower = false});
@@ -1499,6 +1500,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                                                                   .row0 = 0,
                                                                                   .col0 = 0,
                                                                                   .alpha = T{},
+                                                                                  .beta = T{},
                                                                                   .update = dense::GemmUpdate::Assign,
                                                                                   .col_major = false,
                                                                                   .lower = false});

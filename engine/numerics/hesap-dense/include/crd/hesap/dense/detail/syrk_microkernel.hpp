@@ -77,6 +77,7 @@ inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc,
                                 .row0 = ic,
                                 .col0 = col0,
                                 .alpha = T{},
+                                .beta = T{},
                                 .update = GemmUpdate::Subtract,
                                 .col_major = col_indexed_out,
                                 .lower = true});
