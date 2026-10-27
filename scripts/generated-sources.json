@@ -931,17 +931,6 @@
       "sha256": "56c29006e23abc25a50a61c40c0bddc5d5ae92b35ad854df0271594177c371f5"
     },
     {
-      "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/aos_codelets.hpp",
-      "generator": "scripts/gen_aos_codelets.py",
-      "status": "hand-maintained",
-      "command": [
-        "python3",
-        "scripts/gen_aos_codelets.py"
-      ],
-      "note": "The generator was the origin; the committed header is the truth (a different butterfly formulation, no _c variants; the generator emits 98,309 bytes against 57,899 committed). A regeneration is an FFT decision recorded against its row.",
-      "sha256": "cacc364342922bab34b44f6b92cdbc780fb9d67785c0ad0feed3c8c4b1496dc5"
-    },
-    {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/batched_codelets_gen.hpp",
       "generator": "scripts/gen_fft_batched.py",
       "status": "host-dependent",
@@ -974,8 +963,8 @@
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12).",
-      "sha256": "e1207fdf07da0a3a5e13995dee57ed77811cb3e2b7a39e401b270adb783f89b3"
+      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted.",
+      "sha256": "7ada72776794dadb6896b1f2edc9b67bbdca0e6ca16d7e439594e214acbb1081"
     },
     {
       "path": "engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp",

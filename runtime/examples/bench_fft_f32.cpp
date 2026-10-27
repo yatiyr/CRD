@@ -1,5 +1,4 @@
-// f32 forward FFT probe: Cerid (this build's default path) vs MKL f32, 1T.
-// Build twice (with/without -DCRD_FFT_M16B_FUSED_BRIDGE_POC) to A/B the POC.
+// f32 forward FFT probe: Cerid vs MKL f32, 1T.
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 

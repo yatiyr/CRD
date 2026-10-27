@@ -94,7 +94,7 @@ Generated codelets emit to `engine/numerics/hesap-fft/include/crd/hesap/fft/deta
   (~0.94× MKL), 4M 1.13–1.24× (~0.95–0.99× MKL), 16M unchanged-by-construction, all machine-eps** — the ≥1.05× gate
   cleared. See §15.6 + the session log. Default-enable candidate (gated OFF pending the M4 DoD).
 - **M4 ✅ (2026-06-17, enable done; multi-config sweep + commit pending the user):** the hier path is now the
-  **default** f64 forward sub-FFT for n∈{2048,4096} (`#ifndef CRD_FFT_DISABLE_HIER`; inverse/f32 → radix-8). Verified
+  **default** f64 forward sub-FFT for n∈{2048,4096} (inverse/f32 → radix-8). Verified
   4 win-configs FFT-scope + ASan-clean + LTCG + clang-tidy + gcc; **`ctest --preset win-debug` GREEN 3935/3935 incl.
   guards**; 8M ~1.13–1.21× → ~0.90–0.94× MKL, 4M near parity, machine-eps. Hit 2 pre-existing env landmines (C1853
   stale-PCH from an MSVC update; the dumpbin-guard needing vcvars). Session `2026-06-17-fft-m4-enable-default.md`.
@@ -209,7 +209,9 @@ half the shuffle+spill overhead. Hard but not absurd.
 
 ## 18. M16–M19 contract-breaking fused-codelet campaign (2026-06-19) — status
 
-All gated, **default-OFF**; the banked **gather fusion remains the shipped default for every size**. Honest
+Removed 2026-10-27 at SIMD-DISPATCH with every other never-defined `CRD_FFT_*` experiment gate (recover from git;
+the M18 lever is named in the row). All gated, **default-OFF**; the banked **gather fusion remains the shipped
+default for every size**. Honest
 **same-harness** f32 1M (MIN metric — medians were host-contention-noisy): MKL 1.71 / gather 2.49 / M17 2.08 /
 **M18 2.01 ms = 0.85× MKL, 19% faster than gather**, all maxrel vs MKL ~2.6e-7.
 

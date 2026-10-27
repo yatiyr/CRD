@@ -266,7 +266,7 @@ TEST_CASE("fft: four-step path (large n, f32) matches the radix-2 reference orac
     // M7 Phase 5: f32 FORWARD now uses the Vec8f hierarchical sub-FFTs by default (1024=32×32, 2048=64×32,
     // 4096=64×64). Gate the crossover band 2^19..2^23 against the f32 radix-2 oracle in the f32 tolerance class
     // (~1e-3 — the hier and the oracle are different f32 summation orders; both ≈f32-eps vs the exact DFT). 2^20
-    // exercises 1024 (both sub-FFTs), 2^21/2^22 the 2048, 2^23 the 4096. Disable with -DCRD_FFT_DISABLE_F32_HIER.
+    // exercises 1024 (both sub-FFTs), 2^21/2^22 the 2048, 2^23 the 4096.
     for (usize n : {1U << 19, 1U << 20, 1U << 21, 1U << 22, 1U << 23})
     {
         cont::Array<Complex<f32>> x(&alloc);
