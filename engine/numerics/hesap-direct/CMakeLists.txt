@@ -40,3 +40,7 @@ target_link_libraries(crd-hesap-direct
 
 target_compile_features(crd-hesap-direct PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-direct)
+
+# The supernodal Cholesky solve loops, one body per CPU level (ADR-0134); src/direct_kernel_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-hesap-direct NAME direct LEVELS portable sse2 avx2 INCLUDES crd-math crd-hesap-dense
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/direct_kernels.cpp")

@@ -1,6 +1,7 @@
 add_executable(crd-hesap-direct-tests
     test_blr.cpp
     test_cli.cpp
+    test_direct_kernels.cpp
     test_frontal.cpp
     test_gmres_refine.cpp
     test_hss.cpp
@@ -31,3 +32,6 @@ target_link_libraries(crd-hesap-direct-tests PRIVATE
 crd_enable_default_pch(crd-hesap-direct-tests)
 
 crd_discover_tests(crd-hesap-direct-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-hesap-direct-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-direct-tests "[kernels]")

@@ -270,7 +270,7 @@ void spmv_sym(const sp::SparsePattern& pat, const crd::containers::Array<crd::f6
 }
 } // namespace
 
-TEST_CASE("supernodal Cholesky factor+solve: residual ~0 on a 2D-grid SPD", "[hesap][direct][v5a-1b][numeric]")
+TEST_CASE("supernodal Cholesky factor+solve: residual ~0 on a 2D-grid SPD", "[hesap][direct][v5a-1b][numeric][kernels]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     auto m = grid2d(&alloc, 7, 6); // 42-node Laplacian-like SPD
@@ -332,7 +332,7 @@ TEST_CASE("supernodal Cholesky: dense SPD factor+solve matches the system", "[he
 }
 
 TEST_CASE("supernodal Cholesky: TREE-PARALLEL factor is bit-identical to serial (determinism moat)",
-          "[hesap][direct][v5a-3][determinism]")
+          "[hesap][direct][v5a-3][determinism][kernels]")
 {
     crd::memory::TlsfAllocator alloc(256 << 20);
     auto m = grid2d(&alloc, 12, 12); // 144-node SPD → multi-level supernode etree (real parallelism)
@@ -525,7 +525,7 @@ TEST_CASE("supernodal Cholesky: refactorize (reuse symbolic) == fresh factorize,
 // factor (hence the solve) bit-identical across {1,2,4,8} workers. Capped at 8 workers (i9-14900K
 // host). Both shape guards (maxnc ≥ 512, nsuper ≥ min) fail loudly if the coverage ever narrows.
 TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical to serial (v5a-4 moat)",
-          "[hesap][direct][v5a-4][determinism]")
+          "[hesap][direct][v5a-4][determinism][kernels]")
 {
     crd::memory::TlsfAllocator alloc(512 << 20);
     crd::jobs::Config cfg;
@@ -667,7 +667,7 @@ TEST_CASE("supernodal Cholesky: fat-front NODE-PARALLEL factor is bit-identical 
     crd::jobs::shutdown();
 }
 
-TEST_CASE("supernodal Cholesky: multi-RHS solve (column-major B)", "[hesap][direct][v5a-1b][numeric]")
+TEST_CASE("supernodal Cholesky: multi-RHS solve (column-major B)", "[hesap][direct][v5a-1b][numeric][kernels]")
 {
     crd::memory::TlsfAllocator alloc(64 << 20);
     auto m = grid2d(&alloc, 6, 6); // 36 SPD
@@ -707,7 +707,7 @@ TEST_CASE("supernodal Cholesky: multi-RHS solve (column-major B)", "[hesap][dire
 }
 
 TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker counts",
-          "[hesap][direct][v5a-5][determinism]")
+          "[hesap][direct][v5a-5][determinism][kernels]")
 {
     // v5a-5: single-RHS (nrhs==1) solve must be bit-identical across worker counts. nw=1 takes the
     // dedicated SERIAL hand-axpy path; nw>1 takes the level-parallel hand-axpy path in fwd_one/back_one
@@ -769,7 +769,7 @@ TEST_CASE("supernodal Cholesky: single-RHS solve bit-identical across worker cou
 }
 
 TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced worker counts",
-          "[hesap][direct][v5a-4][numeric]")
+          "[hesap][direct][v5a-4][numeric][kernels]")
 {
     // The two-path forward (nw<=1 RIGHT-looking serial, nw>1 LEFT-looking parallel) + the level-parallel
     // backward must produce BIT-IDENTICAL x at EVERY forced worker count, INCLUDING intermediate
@@ -832,7 +832,8 @@ TEST_CASE("supernodal Cholesky: solve_with_workers bit-identical across forced w
     crd::jobs::shutdown();
 }
 
-TEST_CASE("supernodal Cholesky: wide-front multi-RHS solve (batched diagonal path)", "[hesap][direct][v5a-4][numeric]")
+TEST_CASE("supernodal Cholesky: wide-front multi-RHS solve (batched diagonal path)",
+          "[hesap][direct][v5a-4][numeric][kernels]")
 {
     // dense_spd(80) = ONE supernode nc=80 >= solve_batch_min_nc (48) -> exercises the BATCHED
     // multi-RHS diagonal solve (forward + backward), the path the grid2d test (small nc) does not

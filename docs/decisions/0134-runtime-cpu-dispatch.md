@@ -22,7 +22,10 @@ blocks ([session](../sessions/2026-10-27-simd-dispatch-sse2-threefry.md)), then 
 ([session](../sessions/2026-10-27-simd-dispatch-dense-kernels.md)), then its BLAS-1/2 and Cholesky kernels on an SSE2
 `Vec4d` ([session](../sessions/2026-10-27-simd-dispatch-dense-vector-kernels.md)), then its axpy, gemvt, ger,
 rotation, reflector and LDLT updates behind one typed table
-([session](../sessions/2026-10-27-simd-dispatch-dense-update-kernels.md)); the other clauses are open in the row.
+([session](../sessions/2026-10-27-simd-dispatch-dense-update-kernels.md)), then its split-complex sweeps
+([session](../sessions/2026-10-27-simd-dispatch-dense-split-complex-kernels.md)), then the hesap-direct supernodal
+solve family ([session](../sessions/2026-10-27-simd-dispatch-direct-kernels.md)); the other clauses are open in the
+row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
