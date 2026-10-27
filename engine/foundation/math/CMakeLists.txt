@@ -19,7 +19,7 @@ target_compile_features(crd-math PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-math)
 
 # The batch small-float conversions, one body per CPU level (ADR-0134); src/float_convert_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-math NAME float_convert LEVELS portable avx2
+crd_add_cpu_kernels(crd-math NAME float_convert LEVELS portable sse2 sse42 avx2
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/float_convert_kernels.cpp")
 
 # Cerid::math of the relocatable package, with the SIMD and floating-point contract flags its consumers must compile

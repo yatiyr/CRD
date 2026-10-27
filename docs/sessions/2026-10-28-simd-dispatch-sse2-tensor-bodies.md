@@ -1,4 +1,4 @@
-# 2026-10-28 — SIMD-DISPATCH: SSE2 bodies of the hesap-tensor family
+# 2026-10-28 — SIMD-DISPATCH: SSE2 and SSE4.2 bodies of the tensor and conversion families
 
 <!-- doc-role: session -->
 Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch). Decision: [ADR-0134](../decisions/0134-runtime-cpu-dispatch.md).
@@ -40,6 +40,22 @@ HEAD before: `342ff7da`.
   win-debug: the tensor `[kernels]` cases pass forced at portable, sse2, sse4.2 and avx2 (each run compares every level
   the host runs, the VNNI variant included), and every `crd-hesap-tensor-nn-kernels-at-<level>` arm passes.
 
+## SSE2 and SSE4.2 conversions
+
+- crd-math's float_convert family builds `portable sse2 sse42 avx2`. `I32Lanes` is the level's i32 lane set (eight on
+  AVX2, four on the 128-bit levels), and the RNE and stochastic narrowings are one transcription of `narrow_rne` and
+  `narrow_sr` over it (the AVX2 bodies moved onto it unchanged).
+- The 128-bit levels have no per-lane shift. `pow2(s)` converts 2^(s & 15) exactly from f32 and moves it up 16 bits
+  where s & 16; `srlv(a, s)` is the high half of a * 2^(32 - s) through `pmuludq` (a + r reaches 2^31 in the
+  stochastic path, so an f32 route would not be exact). SSE4.2 selects with `pblendvb` and takes `pminsd`; SSE2 uses
+  and/andnot/or and a compare.
+- f16 narrows through the transcription (no F16C below AVX2) and widens with integer operations: a NaN keeps its
+  payload set quiet, a subnormal is tman * 2^-24, exact in f32. The rare deep-underflow and NaN lanes patch from a
+  lane loop (no `tzcnt` below AVX2).
+- Tests: the dispatch case checks the sse2 and sse4.2 tables; the conversion differential already runs every level
+  the host runs over the specials, 2^16 random patterns, every tail and all 65,536 f16 patterns. Local, win-debug:
+  `[kernels]` of crd-math-tests and every `crd-math-kernels-at-<level>` arm pass.
+
 ## Board candidates (row-close pass)
 
 - The sse2 Tier R ladder against portable and ReproBLAS (portable was 6.5x behind ReproBLAS); the stream count is a
@@ -47,3 +63,5 @@ HEAD before: `342ff7da`.
 - The sse2 and sse4.2 nn bodies against portable (portable Q8_0 was 13x behind avx2); the Q8_0 tile (eight outputs
   hold sixteen accumulators, more than the sixteen xmm registers with temporaries) and whether the sse4.2 unit beats
   sse2; the avx2 Q8_0 dot's extra `pabsb` per weight against HEAD.
+- The sse2 and sse4.2 conversions against portable (whose bf16 loop the compiler vectorizes) and whether the sse4.2
+  unit beats sse2.

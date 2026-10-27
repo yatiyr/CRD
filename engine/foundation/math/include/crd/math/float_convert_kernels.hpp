@@ -26,6 +26,8 @@ struct FloatConvertKernels
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.
 extern const FloatConvertKernels kFloatConvertKernelsPortable;
+extern const FloatConvertKernels kFloatConvertKernelsSse2;
+extern const FloatConvertKernels kFloatConvertKernelsSse42;
 extern const FloatConvertKernels kFloatConvertKernelsAvx2;
 
 } // namespace crd::math

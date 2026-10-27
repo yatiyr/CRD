@@ -144,6 +144,8 @@ TEST_CASE("float conversion kernels: the archive holds portable and each body le
     const auto levels = crd::math::float_convert_levels();
     REQUIRE(!levels.empty());
     CHECK(levels[0].level == CpuLevel::Portable);
+    bool sse2 = false;
+    bool sse42 = false;
     bool avx2 = false;
     for (crd::usize i = 0; i < levels.size(); ++i)
     {
@@ -153,9 +155,13 @@ TEST_CASE("float conversion kernels: the archive holds portable and each body le
         {
             CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
         }
+        sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
+        sse42 = sse42 || levels[i].level == CpuLevel::Sse42;
         avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+    CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
+    CHECK(sse42 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse42)));
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
 }
 
