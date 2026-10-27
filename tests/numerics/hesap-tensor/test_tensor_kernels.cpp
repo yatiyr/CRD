@@ -133,6 +133,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     CHECK(levels[0].level == CpuLevel::Portable);
     CHECK(levels[0].features == crd::CpuFeatureSet{});
     const crd::CpuFeatureSet vnni = crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni);
+    usize sse2 = 0;
     usize avx2 = 0;
     usize avx2_vnni = 0;
     for (usize i = 0; i < levels.size(); ++i)
@@ -148,10 +149,12 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
                                  levels[i].features != levels[i - 1U].features;
             CHECK((higher || variant));
         }
+        sse2 += levels[i].level == CpuLevel::Sse2 ? 1U : 0U;
         avx2 += levels[i].level == CpuLevel::Avx2 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
         avx2_vnni += levels[i].level == CpuLevel::Avx2 && levels[i].features == vnni ? 1U : 0U;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+    CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2) ? 1U : 0U));
     const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
     CHECK(avx2 == built);
     CHECK(avx2_vnni == built);
@@ -791,10 +794,11 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar softmax bi
 TEST_CASE("tensor kernels: every level the host runs gives the scalar Philox blocks", "[tensor][kernels]")
 {
     // Positions straddling the 2^32 word wrap of the Philox counter and the 2^64 wrap of the position; the SR stream
-    // (domain tag over step) and one with both words set; block counts past two eight-block vectors.
+    // (domain tag over step) and one with both words set; block counts through every body's whole groups, single
+    // groups and scalar tail (AVX2 24 + 8, SSE2 16, then 4 and 3).
     const u64 firsts[] = {0U, 1U, 0xFFFFFFFCULL, 0xFFFFFFFFFFFFFFFAULL, 0x123456789ABCDEFULL};
     const u64 streams[] = {(static_cast<u64>(tn::detail::kSrTag) << 32U) | 7U, 0x0123456789ABCDEFULL};
-    constexpr usize max_blocks = 19;
+    constexpr usize max_blocks = 39;
     const u64 seed = 0xDEADBEEFCAFEF00DULL;
     const u32 key[2] = {static_cast<u32>(seed), static_cast<u32>(seed >> 32U)};
     usize ran = 0;

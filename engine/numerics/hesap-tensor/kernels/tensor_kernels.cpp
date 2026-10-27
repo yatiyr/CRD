@@ -4,10 +4,11 @@
 // The portable bodies are the scalar loops; the AVX2 bodies run the 8x8 in-register f32 transpose (with non-temporal
 // stores for the multithreaded DRAM-sized permutes), twelve binned accumulators, the nn quantizers eight lanes at a
 // time, the quantized dots on maddubs/madd integer lanes, softmax's exp four lanes at a time and the Philox block loop
-// eight blocks at a time; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every
-// body gives the same bits: the permute is element copies and IEEE multiplies, the binned representation is
-// partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
-// f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
+// 24 blocks at a time (16 on SSE2, whose other bodies are the portable loops); the avx2 level's AVX-VNNI variant
+// (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the permute is element copies and
+// IEEE multiplies, the binned representation is partition-independent, the quantizers are per-element IEEE operations,
+// the dots are exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are
+// integer operations.
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>

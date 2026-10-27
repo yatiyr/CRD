@@ -12,12 +12,16 @@ using crd::math::KernelLevel;
 
 // CRD_KERNELS_TENSOR: the levels crd_add_cpu_kernels built (../CMakeLists.txt), and CRD_KERNELS_TENSOR_AVX2_AVXVNNI
 // its variant. Each needs its entry below.
-constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_AVX2);
+constexpr int kLevelsWithBody =
+    (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) | (1 << CRD_KERNEL_LEVEL_AVX2);
 static_assert((CRD_KERNELS_TENSOR & ~kLevelsWithBody) == 0, "a built level has no table entry here");
 static_assert(CRD_KERNEL_BUILT(CRD_KERNELS_TENSOR, PORTABLE), "the portable level is always built");
 
 constexpr KernelLevel<TensorKernels> kLevels[] = {
     {crd::CpuLevel::Portable, &kTensorKernelsPortable, {}},
+#if CRD_KERNEL_BUILT(CRD_KERNELS_TENSOR, SSE2)
+    {crd::CpuLevel::Sse2, &kTensorKernelsSse2, {}},
+#endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_TENSOR, AVX2)
     {crd::CpuLevel::Avx2, &kTensorKernelsAvx2, {}},
 #endif

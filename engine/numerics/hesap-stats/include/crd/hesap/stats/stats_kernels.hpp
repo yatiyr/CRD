@@ -28,6 +28,7 @@ struct StatsKernels
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.
 extern const StatsKernels kStatsKernelsPortable;
+extern const StatsKernels kStatsKernelsSse2;
 extern const StatsKernels kStatsKernelsAvx2;
 
 } // namespace crd::hesap::stats

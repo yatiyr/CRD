@@ -111,6 +111,7 @@ struct TensorKernels
 // The levels with a body and the avx2 level's AVX-VNNI variant (the integer dots on dpbusd); the dispatcher refuses a
 // build that compiles any other.
 extern const TensorKernels kTensorKernelsPortable;
+extern const TensorKernels kTensorKernelsSse2;
 extern const TensorKernels kTensorKernelsAvx2;
 extern const TensorKernels kTensorKernelsAvx2AvxVnni;
 

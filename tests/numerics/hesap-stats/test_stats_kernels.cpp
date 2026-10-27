@@ -20,7 +20,9 @@ using st::StatsKernels;
 namespace
 {
 
-constexpr usize kMaxBlocks = 37; // every block count 0..37 meets each body's vector loop and its remainder
+// Every block count 0..39 meets each body's whole groups, single groups and scalar remainder (Philox AVX2 24 + 8,
+// SSE2 16, then 4 and 3; Threefry 4).
+constexpr usize kMaxBlocks = 39;
 
 bool runs_here(const KernelLevel<StatsKernels>& level)
 {
@@ -68,6 +70,7 @@ TEST_CASE("stats kernels: the archive holds portable and each body level the bui
     const auto levels = st::stats_kernel_levels();
     REQUIRE(!levels.empty());
     CHECK(levels[0].level == CpuLevel::Portable);
+    bool sse2 = false;
     bool avx2 = false;
     for (usize i = 0; i < levels.size(); ++i)
     {
@@ -77,9 +80,11 @@ TEST_CASE("stats kernels: the archive holds portable and each body level the bui
         {
             CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
         }
+        sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
         avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+    CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
 }
 

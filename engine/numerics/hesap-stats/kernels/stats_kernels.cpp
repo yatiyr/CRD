@@ -1,10 +1,10 @@
 // The hesap-stats kernels of crd/hesap/stats/stats_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS), the block
-// functions and the log core included, so no function of this unit is shared with general code or with another
-// level. The portable bodies are the scalar loops; the AVX2 bodies run eight Philox blocks, four Threefry blocks or
-// four Student-t lanes at a time. Every body gives the same bits: the generators are integer arithmetic, and both
-// Student-t bodies keep four lane sums in the same order, with single-rounded FMAs and the log core that crd_log4
-// reproduces lane for lane.
+// functions and the log core included, so no function of this unit is shared with general code or with another level.
+// The portable bodies are the scalar loops; the SSE2 body runs 16 Philox blocks at a time, and the AVX2 bodies 24
+// Philox blocks, four Threefry blocks or four Student-t lanes. Every body gives the same bits: the generators are
+// integer arithmetic, and both Student-t bodies keep four lane sums in the same order, with single-rounded FMAs and the
+// log core that crd_log4 reproduces lane for lane.
 
 #include <crd/hesap/stats/counter_rng_core.hpp>
 #include <crd/hesap/stats/philox_blocks.hpp>

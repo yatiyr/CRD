@@ -35,5 +35,5 @@ crd_enable_default_pch(crd-hesap-stats)
 
 # The Philox and Threefry bulk fills and the Student-t score reduction, one body per CPU level (ADR-0134);
 # src/stats_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-hesap-stats NAME stats LEVELS portable avx2 INCLUDES crd-math
+crd_add_cpu_kernels(crd-hesap-stats NAME stats LEVELS portable sse2 avx2 INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/stats_kernels.cpp")

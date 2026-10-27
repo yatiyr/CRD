@@ -14,8 +14,8 @@ SIMD types ([session](../sessions/2026-10-27-simd-dispatch-level-aware-types.md)
 family ([session](../sessions/2026-10-27-simd-dispatch-hesap-tensor-kernels.md)) and its nn routines
 ([session](../sessions/2026-10-27-simd-dispatch-hesap-tensor-nn-kernels.md)), then the feature variants with AVX-VNNI on
 avx2 ([session](../sessions/2026-10-27-simd-dispatch-avx-vnni-variant.md)), then the tensor SR draws and sketches on a
-kernel Philox block loop ([session](../sessions/2026-10-27-simd-dispatch-tensor-philox-blocks.md)); the other clauses
-are open in the row.
+kernel Philox block loop ([session](../sessions/2026-10-27-simd-dispatch-tensor-philox-blocks.md)), then its SSE2
+body ([session](../sessions/2026-10-27-simd-dispatch-sse2-philox.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
