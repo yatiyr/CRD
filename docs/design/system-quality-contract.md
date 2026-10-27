@@ -116,7 +116,9 @@ fuzzing, verified state machines, sandboxing, least privilege, external review, 
 signed fixes. Every legal duty that touches data, children, accessibility, export control, AI or content is an entry
 of the [COMPLY.0](../ROADMAP.md#slice-comply.0) register with its primary source, date read, owning row, check and
 review cadence; Turkish law is a first-class jurisdiction, and interpretation that needs counsel is a review item,
-never a guess.
+never a guess. Its children own the domains (COMPLY.1 export control, .2 privacy, .3 security duties, .4 licences,
+.5 online safety and children, .6 AI, .7 accessibility, .8 store compliance, .9 communications) and sit before the rows
+they govern.
 
 Durable project collaboration, live game simulation and audio timing use separate semantic contracts. Test concurrent
 delete/edit/undo, schema migration, offline reconnect, retries, stale authorization, failover and corrupt history.
