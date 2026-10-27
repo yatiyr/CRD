@@ -326,7 +326,7 @@ TEST_CASE("nn: linear f32 is bit-exact vs the k-ordered fma-chain reference", "[
     REQUIRE(mism == 0U);
 }
 
-TEST_CASE("nn: softmax rows sum to one and the all-equal-logits row is exactly uniform", "[v14m][nn]")
+TEST_CASE("nn: softmax rows sum to one and the all-equal-logits row is exactly uniform", "[v14m][nn][softmax]")
 {
     crd::memory::TlsfAllocator alloc(kPool);
     const crd::u64 shp[2] = {17U, 10U};
@@ -552,8 +552,7 @@ bool load_q8_ref(crd::memory::IAllocator* alloc, const char* model, const char* 
 
 } // namespace
 
-TEST_CASE("nn: the vectorized activation quantizer is bit-identical to dtypes quantize_q8_0",
-          "[v14m][nn][q8]")
+TEST_CASE("nn: the selected activation quantizer is bit-identical to dtypes quantize_q8_0", "[v14m][nn][q8]")
 {
     crd::memory::TlsfAllocator alloc(kPool);
     const crd::u64 nblocks = 257U; // odd count, vector body exercised block by block
@@ -578,7 +577,7 @@ TEST_CASE("nn: the vectorized activation quantizer is bit-identical to dtypes qu
     const crd::u64 qshp[1] = {nblocks};
     REQUIRE(qa.resize({qshp, 1}) == TensorStatus::Ok);
     REQUIRE(qb.resize({qshp, 1}) == TensorStatus::Ok);
-    crd::hesap::tensor::nndetail::quantize_q8_0_fast(x.data(), qa.data(), nblocks);
+    crd::hesap::tensor::tensor_kernels().table->quantize_q8_0(x.data(), qa.data(), nblocks);
     crd::hesap::tensor::quantize_q8_0({x.data(), static_cast<crd::usize>(n)},
                                       {qb.data(), static_cast<crd::usize>(nblocks)});
     REQUIRE(std::memcmp(qa.data(), qb.data(), static_cast<crd::usize>(nblocks) * sizeof(BlockQ8Zero)) == 0);

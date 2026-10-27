@@ -38,6 +38,10 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS::libm
 {
     return __builtin_floor(x);
 }
+[[nodiscard]] inline crd::f32 rint(crd::f32 x) noexcept
+{
+    return __builtin_rintf(x);
+}
 [[nodiscard]] inline crd::f64 log(crd::f64 x) noexcept
 {
     return __builtin_log(x);
@@ -62,6 +66,10 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS::libm
 [[nodiscard]] inline crd::f64 floor(crd::f64 x) noexcept
 {
     return ::floor(x);
+}
+[[nodiscard]] inline crd::f32 rint(crd::f32 x) noexcept
+{
+    return ::rintf(x);
 }
 [[nodiscard]] inline crd::f64 log(crd::f64 x) noexcept
 {

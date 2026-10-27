@@ -1,5 +1,6 @@
 #pragma once
 
+#include "quant_core.hpp"
 #include "tensor.hpp"
 
 #include <crd/containers/span.hpp>
@@ -8,6 +9,7 @@
 #include <crd/hesap/stats/counter_rng_core.hpp> // include-only (header-only constexpr) — NO link edge (ADR-0096 §1)
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/math/float_convert.hpp> // the format primitives — MIGRATED to crd-math (owning module, SANITY #8)
+#include <crd/math/select.hpp>        // crd::math::clamp
 
 #include <bit>
 
@@ -169,52 +171,52 @@ inline void convert_f32_to_fp8_e5m2_sr(crd::containers::ConstSpan<crd::f32> src,
 }
 
 // =======================================================================
-// ggml-compatible block quantization (Q8_0 / Q4_0) — OPAQUE blocked storage
-// (ADR-0096 §2: no element strides). Layouts + arithmetic are exact
-// transcriptions of ggml's quantize_row_{q8_0,q4_0}_ref / dequantize_row_*
-// (ggml-org/ggml src/ggml-quants.c) so cooked weights interop byte-for-byte.
+// Block quantization (Q8_0 / Q4_0, the ggml layouts in quant_core.hpp) and
+// the per-tensor quantizers of the nn throughput tier.
 // =======================================================================
 
-inline constexpr crd::u32 kQuantBlock = 32U;
-
-struct BlockQ8Zero
-{
-    crd::u16 d;     // f16-encoded scale (amax/127)
-    crd::i8 qs[32]; // q[j] = roundf(x[j]/d)
-};
-static_assert(sizeof(BlockQ8Zero) == 34U, "BlockQ8Zero must match the ggml block_q8_0 layout");
-
-struct BlockQ4Zero
-{
-    crd::u16 d;     // f16-encoded scale (signed-max/-8)
-    crd::u8 qs[16]; // low nibble = element j, high nibble = element j+16; stored value = q+8
-};
-static_assert(sizeof(BlockQ4Zero) == 18U, "BlockQ4Zero must match the ggml block_q4_0 layout");
-
-// x.size() must be a multiple of 32; out.size() == x.size()/32.
+// x.size() must be a multiple of 32; out.size() == x.size()/32. The scalar
+// reference of the tensor kernels' Q8_0 quantizer (quant_core.hpp).
 inline void quantize_q8_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ8Zero> out) noexcept
 {
     CRD_ASSERT_MSG(x.size() % kQuantBlock == 0U, "quantize_q8_0: size must be a multiple of 32");
     CRD_ASSERT_MSG(out.size() == x.size() / kQuantBlock, "quantize_q8_0: bad output block count");
-    for (crd::usize i = 0; i < out.size(); ++i)
+    detail::quantize_q8_0_blocks(x.data(), out.data(), out.size());
+}
+
+// Per-tensor symmetric i8 quantization (the nn throughput tier's weights,
+// at load): ONE f32 scale = amax/127, roundf-style half-away rounding, +-127
+// clamp, no f16 round-trip.
+inline void nn_quantize_i8_per_tensor(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::i8> out,
+                                      crd::f32& scale) noexcept
+{
+    CRD_ASSERT_MSG(x.size() == out.size(), "nn_quantize_i8_per_tensor: size mismatch");
+    crd::f32 amax = 0.0F;
+    for (crd::usize i = 0; i < x.size(); ++i)
     {
-        const crd::f32* blk = x.data() + i * kQuantBlock;
-        crd::f32 amax = 0.0F;
-        for (crd::u32 j = 0; j < kQuantBlock; ++j)
-        {
-            const crd::f32 a = blk[j] < 0.0F ? -blk[j] : blk[j];
-            amax = a > amax ? a : amax;
-        }
-        const crd::f32 d = amax / 127.0F;
-        const crd::f32 id = d != 0.0F ? 1.0F / d : 0.0F;
-        out[i].d = f32_to_f16_bits(d);
-        for (crd::u32 j = 0; j < kQuantBlock; ++j)
-        {
-            const crd::f32 v = blk[j] * id;
-            // roundf (half away from zero), exact for |v| <= 127
-            out[i].qs[j] = static_cast<crd::i8>(static_cast<crd::i32>(v >= 0.0F ? v + 0.5F : v - 0.5F));
-        }
+        const crd::f32 a = x[i] < 0.0F ? -x[i] : x[i];
+        amax = a > amax ? a : amax;
     }
+    const crd::f32 s = amax / 127.0F;
+    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
+    for (crd::usize i = 0; i < x.size(); ++i)
+    {
+        const crd::f32 t = x[i] * inv;
+        const crd::f32 r = t >= 0.0F ? t + 0.5F : t - 0.5F; // roundf half-away (the dtypes form)
+        const crd::f32 c = crd::math::clamp(r, -127.0F, 127.0F);
+        out[i] = static_cast<crd::i8>(static_cast<crd::i32>(c));
+    }
+    scale = s;
+}
+
+// Per-tensor asymmetric u8 quantization (the nn throughput tier's
+// activations, the ort DynamicQuantizeLinear convention): the scalar
+// reference of the tensor kernels' row quantizer (quant_core.hpp).
+inline void nn_quantize_u8_asym(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::u8> out,
+                                crd::f32& scale, crd::i32& zero_point) noexcept
+{
+    CRD_ASSERT_MSG(x.size() == out.size(), "nn_quantize_u8_asym: size mismatch");
+    detail::quantize_u8_asym_row(x.data(), x.size(), out.data(), scale, zero_point);
 }
 
 inline void dequantize_q8_0(crd::containers::ConstSpan<BlockQ8Zero> in, crd::containers::Span<crd::f32> out) noexcept

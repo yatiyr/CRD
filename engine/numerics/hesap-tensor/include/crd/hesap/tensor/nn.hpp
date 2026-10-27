@@ -13,7 +13,7 @@
 // dtypes.hpp): int8 x int8 -> EXACT i32 lane partials per block, combined by
 // a fixed per-lane fma with the f16-scale-pair product and a fixed horizontal
 // tree — the INTEGER stage is bit-exact on every backend (the certification
-// tier) and the whole sequence is a pinned op order (see q8_dot_tile).
+// tier) and the whole sequence is a pinned op order (tensor_kernels.cpp).
 //
 // NnSequential — a fixed op list (bounded kNnMaxOps) with OWNED weights
 // (loaders copy out of the call-scoped safetensors payload spans — never a
@@ -66,10 +66,10 @@
 #include "dtypes.hpp"  // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
 #include "io.hpp"      // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
+#include "tensor_dispatch.hpp" // the quantized dots, quantizers and softmax: the per-level tensor kernels
 
 #include <crd/math/cmath.hpp>               // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
 #include <crd/math/deterministic.hpp>       // crd::math::deterministic::erf — the exact (erf-form) gelu
-#include <crd/math/simd/transcendental.hpp> // crd::math::crd_exp4 — the AVX2 softmax exp, crd_exp1's twin
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
@@ -149,70 +149,6 @@ inline void nn_quantize_q8_0_rint(crd::containers::ConstSpan<crd::f32> x,
         std::memcpy(out[i].qs, qs.data() + i * kQuantBlock, kQuantBlock);
     }
     return TensorStatus::Ok;
-}
-
-// =======================================================================
-// Per-tensor symmetric i8 quantization — the THROUGHPUT tier's scalar
-// reference semantics (ONE f32 scale = amax/127, roundf-style half-away
-// rounding, +-127 clamp; NO f16 round-trip). Used for weight quantization
-// at load; the vectorized per-row twin (nndetail::quantize_row_i8) is
-// gate-enforced bit-identical.
-// HOME-> crd/hesap/tensor/dtypes.hpp: this quantizer pair belongs beside
-// quantize_q8_0 when dtypes is next touched.
-// =======================================================================
-inline void nn_quantize_i8_per_tensor(crd::containers::ConstSpan<crd::f32> x,
-                                      crd::containers::Span<crd::i8> out, crd::f32& scale) noexcept
-{
-    CRD_ASSERT_MSG(x.size() == out.size(), "nn_quantize_i8_per_tensor: size mismatch");
-    crd::f32 amax = 0.0F;
-    for (crd::usize i = 0; i < x.size(); ++i)
-    {
-        const crd::f32 a = x[i] < 0.0F ? -x[i] : x[i];
-        amax = a > amax ? a : amax;
-    }
-    const crd::f32 s = amax / 127.0F;
-    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
-    for (crd::usize i = 0; i < x.size(); ++i)
-    {
-        const crd::f32 t = x[i] * inv;
-        const crd::f32 r = t >= 0.0F ? t + 0.5F : t - 0.5F; // roundf half-away (the dtypes form)
-        const crd::f32 c = crd::math::clamp(r, -127.0F, 127.0F);
-        out[i] = static_cast<crd::i8>(static_cast<crd::i32>(c));
-    }
-    scale = s;
-}
-
-// Per-tensor ASYMMETRIC u8 quantization — the throughput tier's ACTIVATION
-// reference semantics (the ort DynamicQuantizeLinear convention): the range
-// is 0-extended (rmin = min(0, min x), rmax = max(0, max x)), one f32 scale
-// (rmax - rmin)/255 + an integer zero point (RNE of -rmin/s, clamped to
-// [0, 255]); values round half-away, add the zero point, clamp to [0, 255].
-// The vectorized per-row twin (nndetail::quantize_row_u8) is gate-enforced
-// bit-identical.
-inline void nn_quantize_u8_asym(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<crd::u8> out,
-                                crd::f32& scale, crd::i32& zero_point) noexcept
-{
-    CRD_ASSERT_MSG(x.size() == out.size(), "nn_quantize_u8_asym: size mismatch");
-    crd::f32 rmin = 0.0F;
-    crd::f32 rmax = 0.0F;
-    for (crd::usize i = 0; i < x.size(); ++i)
-    {
-        rmin = x[i] < rmin ? x[i] : rmin;
-        rmax = x[i] > rmax ? x[i] : rmax;
-    }
-    const crd::f32 s = (rmax - rmin) / 255.0F;
-    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
-    const crd::f32 zp_f = s != 0.0F ? crd::math::clamp(-rmin / s, 0.0F, 255.0F) : 0.0F;
-    const crd::i32 zp = static_cast<crd::i32>(crd::math::nearbyint(zp_f));
-    for (crd::usize i = 0; i < x.size(); ++i)
-    {
-        const crd::f32 t = x[i] * inv;
-        const crd::f32 r = t >= 0.0F ? t + 0.5F : t - 0.5F; // half-away (the house quantizer form)
-        const crd::i32 q = static_cast<crd::i32>(r) + zp;
-        out[i] = static_cast<crd::u8>(crd::math::clamp(q, 0, 255));
-    }
-    scale = s;
-    zero_point = zp;
 }
 
 namespace nndetail
@@ -333,56 +269,6 @@ inline void ew_run(const EwCtx& c, crd::u32 lo, crd::u32 hi)
     const crd::u64 n0 = static_cast<crd::u64>(lo) * c.per;
     const crd::u64 n1 = static_cast<crd::u64>(hi) * c.per;
     act_span(c.act, c.x + n0, c.y + n0, n1 - n0);
-}
-
-// ---- softmax (last dim, stable) --------------------------------------------
-// exp rides the deterministic crd_exp1 core; the AVX2 4-lane widen path uses
-// crd_exp4 which is BIT-IDENTICAL to crd_exp1 on every input, so the
-// vector/tail split cannot perturb results.
-inline void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
-{
-    crd::f32 m = x[0];
-    for (crd::u64 j = 1; j < d; ++j)
-    {
-        m = x[j] > m ? x[j] : m;
-    }
-    crd::u64 j = 0;
-#if CRD_SIMD_HAS_AVX2
-    for (; j + 4U <= d; j += 4U)
-    {
-        const __m128 xf = _mm_sub_ps(_mm_loadu_ps(x + j), _mm_set1_ps(m));
-        const __m128 ef = _mm256_cvtpd_ps(crd::math::crd_exp4(_mm256_cvtps_pd(xf)));
-        _mm_storeu_ps(y + j, ef);
-    }
-#endif
-    for (; j < d; ++j)
-    {
-        y[j] = static_cast<crd::f32>(crd::math::exp(static_cast<crd::f64>(x[j] - m)));
-    }
-    crd::f32 s = 0.0F;
-    for (crd::u64 t = 0; t < d; ++t)
-    {
-        s += y[t];
-    }
-    for (crd::u64 t = 0; t < d; ++t)
-    {
-        y[t] /= s;
-    }
-}
-
-struct SoftmaxCtx
-{
-    const crd::f32* x;
-    crd::f32* y;
-    crd::u64 d;
-};
-
-inline void softmax_run(const SoftmaxCtx& c, crd::u32 lo, crd::u32 hi)
-{
-    for (crd::u32 r = lo; r < hi; ++r)
-    {
-        softmax_row(c.x + static_cast<crd::u64>(r) * c.d, c.y + static_cast<crd::u64>(r) * c.d, c.d);
-    }
 }
 
 // ---- layernorm (torch semantics: biased variance, affine) ------------------
@@ -861,446 +747,13 @@ inline void prefill_run(const PrefillCtx& c, crd::u32 lo, crd::u32 hi)
     }
 }
 
-// ---- the Q8_0 linear --------------------------------------------------------
-// The lane-parallel Q8_0 kernel (PINNED semantics, both backends identical):
-// each block's int8 x int8 products land in EIGHT exact i32 lane partials
-// (lane k = products 4k..4k+3 — the maddubs/madd pair structure; every lane
-// value is exact integer arithmetic, |lane| <= 64516 so the f32 convert is
-// also exact). The per-block f32 combine is one fma per lane
-// (acc_k = fma(dx*dw, f32(lane_k), acc_k)), and the per-output horizontal sum
-// is the fixed hadd tree ((l0+l1)+(l2+l3)) + ((l4+l5)+(l6+l7)) — one 4-output
-// hadd reduction per tile. Everything is a fixed operation sequence ->
-// bit-exact across worker counts, runs, and backends; the INTEGER stage is
-// bit-exact across all hardware (the certification tier). The scalar fallback
-// mirrors the lane structure and the sum tree exactly.
-inline constexpr crd::u32 kNnQ8OutTile = 8U; // outputs sharing one activation-block load
-                                             // (8 independent acc chains hide the fma latency)
-
-// y[o0..o0+T) outputs over nb blocks. T is a COMPILE-TIME tile size so the
-// inner loop is fully unrolled straight-line (a runtime bound costs 2-3 loop
-// micro-ops per 3-instruction iteration — measured as the issue-width wall).
-template <crd::u32 T>
-inline void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero* wq,
-                        const crd::f32* wscale, crd::u64 nb, crd::u64 o0, const crd::f32* bias,
-                        crd::f32* yrow, bool relu) noexcept
-{
-    constexpr crd::u32 t = T;
-#if CRD_SIMD_HAS_AVX2
-    __m256 acc[kNnQ8OutTile];
-    for (crd::u32 r = 0; r < kNnQ8OutTile; ++r)
-    {
-        acc[r] = _mm256_setzero_ps();
-    }
-#if !defined(__AVXVNNI__)
-    const __m256i ones16 = _mm256_set1_epi16(1);
-#endif
-    for (crd::u64 bi = 0; bi < nb; ++bi)
-    {
-        const __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(xrow[bi].qs));
-        const __m256i ax = _mm256_sign_epi8(vx, vx); // |x| (u8 <= 127), shared by the tile
-        const __m256 vdx = _mm256_set1_ps(xsc[bi]);
-        for (crd::u32 r = 0; r < t; ++r)
-        {
-            const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
-            const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wrow[bi].qs));
-            const __m256i sw = _mm256_sign_epi8(vw, vx); // w * sign(x)
-#if defined(__AVXVNNI__)
-            // dpbusd accumulates the same 4-product i32 lanes exactly (no
-            // intermediate saturation is reachable at |q| <= 127) — the
-            // integer lane values are BIT-IDENTICAL to the maddubs/madd pair
-            const __m256i p32 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax, sw);
-#else
-            const __m256i p16 = _mm256_maddubs_epi16(ax, sw); // pairs -> i16 (no saturation reachable)
-            const __m256i p32 = _mm256_madd_epi16(p16, ones16); // 4-product i32 lanes
-#endif
-            const __m256 scale = _mm256_mul_ps(vdx, _mm256_broadcast_ss(wscale + (o0 + r) * nb + bi));
-            acc[r] = _mm256_fmadd_ps(scale, _mm256_cvtepi32_ps(p32), acc[r]);
-        }
-    }
-    // 4-output horizontal reductions (the pinned hadd tree, unchanged per
-    // output — outputs group by (index mod 4) exactly as the 4-wide tile did)
-    for (crd::u32 g = 0; g < t; g += 4U)
-    {
-        const crd::u32 tg = t - g < 4U ? t - g : 4U;
-        const __m256 h0 = _mm256_hadd_ps(acc[g], acc[g + 1U]);
-        const __m256 h1 = _mm256_hadd_ps(acc[g + 2U], acc[g + 3U]);
-        const __m256 hh = _mm256_hadd_ps(h0, h1);
-        const __m128 r4 = _mm_add_ps(_mm256_castps256_ps128(hh), _mm256_extractf128_ps(hh, 1));
-        if (tg == 4U)
-        {
-            __m128 v = _mm_add_ps(r4, _mm_loadu_ps(bias + o0 + g));
-            if (relu)
-            {
-                v = _mm_max_ps(v, _mm_setzero_ps()); // lane semantics == the ternary form
-            }
-            _mm_storeu_ps(yrow + o0 + g, v);
-            continue;
-        }
-        alignas(16) crd::f32 d4[4];
-        _mm_store_ps(d4, r4);
-        for (crd::u32 r = 0; r < tg; ++r)
-        {
-            const crd::f32 v = d4[r] + bias[o0 + g + r];
-            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
-            yrow[o0 + g + r] = relu ? rectified : v;
-        }
-    }
-#else
-    for (crd::u32 r = 0; r < t; ++r)
-    {
-        crd::f32 accl[8] = {};
-        const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
-        for (crd::u64 bi = 0; bi < nb; ++bi)
-        {
-            const crd::f32 scale = xsc[bi] * wscale[(o0 + r) * nb + bi];
-            for (crd::u32 k = 0; k < 8U; ++k) // the exact i32 lane partials (maddubs/madd structure)
-            {
-                crd::i32 lane = 0;
-                for (crd::u32 j = 0; j < 4U; ++j)
-                {
-                    lane += static_cast<crd::i32>(xrow[bi].qs[4U * k + j]) *
-                            static_cast<crd::i32>(wrow[bi].qs[4U * k + j]);
-                }
-                accl[k] = std::fma(scale, static_cast<crd::f32>(lane), accl[k]);
-            }
-        }
-        // the fixed horizontal tree — mirrors the AVX2 hadd reduction exactly
-        const crd::f32 q0 = (accl[0] + accl[1]) + (accl[2] + accl[3]);
-        const crd::f32 q1 = (accl[4] + accl[5]) + (accl[6] + accl[7]);
-        const crd::f32 v = (q0 + q1) + bias[o0 + r];
-        const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
-        yrow[o0 + r] = relu ? rectified : v;
-    }
-#endif
-}
-
-inline void q8_dot_tile_any(crd::u32 t, const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero* wq,
-                            const crd::f32* wscale, crd::u64 nb, crd::u64 o0, const crd::f32* bias,
-                            crd::f32* yrow, bool relu) noexcept
-{
-    switch (t)
-    {
-    case 8U:
-        q8_dot_tile<8U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 7U:
-        q8_dot_tile<7U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 6U:
-        q8_dot_tile<6U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 5U:
-        q8_dot_tile<5U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 4U:
-        q8_dot_tile<4U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 3U:
-        q8_dot_tile<3U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 2U:
-        q8_dot_tile<2U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    case 1U:
-        q8_dot_tile<1U>(xrow, xsc, wq, wscale, nb, o0, bias, yrow, relu);
-        return;
-    default:
-        return;
-    }
-}
-
-// Vectorized Q8_0 activation quantizer — BIT-IDENTICAL to dtypes.hpp's scalar
-// quantize_q8_0 on every input (gate-enforced): amax is exact (order-free),
-// the per-lane f32 mul matches, and roundf's half-away form is reproduced as
-// trunc(t + copysign(0.5, t)) — the scalar's `t >= 0 ? t+0.5 : t-0.5` cast,
-// lane for lane (including -0, which is >= 0 in both forms).
-// HOME-> crd/hesap/tensor/dtypes.hpp: this AVX2 batch quantizer belongs next
-// to quantize_q8_0 itself; move it there on the next dtypes touch.
-inline void quantize_q8_0_fast(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
-    const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
-    const __m256 half = _mm256_set1_ps(0.5F);
-    for (crd::u64 i = 0; i < nblocks; ++i)
-    {
-        const crd::f32* blk = x + i * kQuantBlock;
-        const __m256 v0 = _mm256_loadu_ps(blk);
-        const __m256 v1 = _mm256_loadu_ps(blk + 8);
-        const __m256 v2 = _mm256_loadu_ps(blk + 16);
-        const __m256 v3 = _mm256_loadu_ps(blk + 24);
-        __m256 am = _mm256_max_ps(_mm256_max_ps(_mm256_and_ps(v0, abs_mask), _mm256_and_ps(v1, abs_mask)),
-                                  _mm256_max_ps(_mm256_and_ps(v2, abs_mask), _mm256_and_ps(v3, abs_mask)));
-        __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(am), _mm256_extractf128_ps(am, 1));
-        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0x4E));
-        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0xB1));
-        const crd::f32 amax = _mm_cvtss_f32(m4);
-        const crd::f32 d = amax / 127.0F;
-        const crd::f32 id = d != 0.0F ? 1.0F / d : 0.0F;
-        out[i].d = f32_to_f16_bits(d);
-        const __m256 vid = _mm256_set1_ps(id);
-        const __m256 t0 = _mm256_mul_ps(v0, vid);
-        const __m256 t1 = _mm256_mul_ps(v1, vid);
-        const __m256 t2 = _mm256_mul_ps(v2, vid);
-        const __m256 t3 = _mm256_mul_ps(v3, vid);
-        const auto away = [&](__m256 t)
-        { return _mm256_cvttps_epi32(_mm256_add_ps(t, _mm256_or_ps(_mm256_and_ps(t, sign_mask), half))); };
-        const __m256i q01 = _mm256_packs_epi32(away(t0), away(t1)); // i16, 128-lane interleaved
-        const __m256i q23 = _mm256_packs_epi32(away(t2), away(t3));
-        const __m256i q = _mm256_packs_epi16(q01, q23); // i8, order 0,1|2,3 per 128 half
-        const __m256i fixed = _mm256_permutevar8x32_epi32(q, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[i].qs), fixed);
-    }
-#else
-    quantize_q8_0({x, static_cast<crd::usize>(nblocks * kQuantBlock)}, {out, static_cast<crd::usize>(nblocks)});
-#endif
-}
-
-struct LinQ8Ctx
-{
-    const crd::f32* x;      // [M, K], K % 32 == 0
-    const BlockQ8Zero* wq;  // [N * (K/32)]
-    const crd::f32* wscale; // [N * (K/32)] the weight block scales pre-widened to f32 at LOAD
-    const crd::f32* bias;   // [N]
-    crd::f32* y;            // [M, N]
-    BlockQ8Zero* xq;        // scratch: [M * (K/32)] quantized activation rows
-    crd::f32* xscale;       // scratch: [M * (K/32)] activation block scales (f32, per row)
-    crd::u64 k;
-    crd::u64 n;
-    bool relu;
-};
-
-inline void linear_q8_run(const LinQ8Ctx& c, crd::u32 lo, crd::u32 hi)
-{
-    const crd::u64 nb = c.k / kQuantBlock;
-    for (crd::u32 m = lo; m < hi; ++m)
-    {
-        BlockQ8Zero* xrow = c.xq + static_cast<crd::u64>(m) * nb;
-        crd::f32* xsc = c.xscale + static_cast<crd::u64>(m) * nb;
-        // activation quantization = dtypes.hpp's ggml transcription semantics
-        // (the vector path is gate-enforced bit-identical to the scalar)
-        quantize_q8_0_fast(c.x + static_cast<crd::u64>(m) * c.k, xrow, nb);
-        for (crd::u64 bi = 0; bi < nb; ++bi) // widen the row scales ONCE (never in the o loop)
-        {
-            xsc[bi] = f16_bits_to_f32(xrow[bi].d);
-        }
-        crd::f32* yrow = c.y + static_cast<crd::u64>(m) * c.n;
-        for (crd::u64 o0 = 0; o0 < c.n; o0 += kNnQ8OutTile)
-        {
-            const crd::u32 t = c.n - o0 < kNnQ8OutTile ? static_cast<crd::u32>(c.n - o0)
-                                                       : kNnQ8OutTile;
-            q8_dot_tile_any(t, xrow, xsc, c.wq, c.wscale, nb, o0, c.bias, yrow, c.relu);
-        }
-    }
-}
-
-// ---- the per-tensor int8 linear (the THROUGHPUT tier) ----------------------
-// Scheme (the ort DynamicQuantizeLinear + MatMulInteger class): weights are
-// per-tensor SYMMETRIC i8 (one f32 scale, quantized at load, with precomputed
-// per-output column sums); activations are per-row ASYMMETRIC u8 (dynamic
-// scale + zero point over the 0-extended row range, computed inside the row
-// task — single pass, partition-local, so the moat holds by construction; u8
-// captures the full range of post-relu rows). The inner kernel is a pure
-// u8 x i8 -> i32 dot over the whole row (ONE dpbusd per 32 values under
-// AVX-VNNI — no sign fixup, no per-block scale application), and the epilogue
-// is integer zero-point correction (idot - zp*colsum, exact i32) + ONE fma:
-// y = fma(sx*sw, f32(idot - zp*colsum), bias). Integer stages are EXACT in
-// any summation order on every backend (vector, VNNI, and scalar produce
-// identical integers by arithmetic identity); the f32 convert is exact for
-// K <= 516 worst-case and correctly-rounded (still deterministic) above.
-// Q8_0 block-32 stays the DEFAULT tier (certified / ggml byte-interop).
-
-// Vectorized per-row asymmetric u8 quantizer — BIT-IDENTICAL to
-// nn_quantize_u8_asym (the pinned scalar reference) on every input: exact
-// min/max over the 0-extended range, the same f32 ops, the half-away
-// trunc(t + copysign(0.5, t)) form lane for lane, packus saturation == the
-// scalar [0, 255] clamp. k must be a multiple of 32.
-inline void quantize_row_u8(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale,
-                            crd::i32& zero_point) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    __m256 vmin = _mm256_setzero_ps(); // the range is 0-extended (the ort convention)
-    __m256 vmax = _mm256_setzero_ps();
-    for (crd::u64 i = 0; i < k; i += 8U)
-    {
-        const __m256 v = _mm256_loadu_ps(x + i);
-        vmin = _mm256_min_ps(vmin, v);
-        vmax = _mm256_max_ps(vmax, v);
-    }
-    __m128 lo4 = _mm_min_ps(_mm256_castps256_ps128(vmin), _mm256_extractf128_ps(vmin, 1));
-    lo4 = _mm_min_ps(lo4, _mm_shuffle_ps(lo4, lo4, 0x4E));
-    lo4 = _mm_min_ps(lo4, _mm_shuffle_ps(lo4, lo4, 0xB1));
-    __m128 hi4 = _mm_max_ps(_mm256_castps256_ps128(vmax), _mm256_extractf128_ps(vmax, 1));
-    hi4 = _mm_max_ps(hi4, _mm_shuffle_ps(hi4, hi4, 0x4E));
-    hi4 = _mm_max_ps(hi4, _mm_shuffle_ps(hi4, hi4, 0xB1));
-    const crd::f32 rmin = _mm_cvtss_f32(lo4);
-    const crd::f32 rmax = _mm_cvtss_f32(hi4);
-    const crd::f32 s = (rmax - rmin) / 255.0F;
-    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
-    const crd::f32 zp_f = s != 0.0F ? crd::math::clamp(-rmin / s, 0.0F, 255.0F) : 0.0F;
-    const crd::i32 zp = static_cast<crd::i32>(crd::math::nearbyint(zp_f));
-    const __m256 vinv = _mm256_set1_ps(inv);
-    const __m256i vzp = _mm256_set1_epi32(zp);
-    const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
-    const __m256 half = _mm256_set1_ps(0.5F);
-    const auto away_zp = [&](__m256 t)
-    {
-        const __m256i q = _mm256_cvttps_epi32(_mm256_add_ps(t, _mm256_or_ps(_mm256_and_ps(t, sign_mask), half)));
-        return _mm256_add_epi32(q, vzp);
-    };
-    for (crd::u64 i = 0; i < k; i += 32U)
-    {
-        const __m256i q0 = away_zp(_mm256_mul_ps(_mm256_loadu_ps(x + i), vinv));
-        const __m256i q1 = away_zp(_mm256_mul_ps(_mm256_loadu_ps(x + i + 8), vinv));
-        const __m256i q2 = away_zp(_mm256_mul_ps(_mm256_loadu_ps(x + i + 16), vinv));
-        const __m256i q3 = away_zp(_mm256_mul_ps(_mm256_loadu_ps(x + i + 24), vinv));
-        const __m256i q01 = _mm256_packus_epi32(q0, q1); // unsigned saturate == clamp [0, 255]
-        const __m256i q23 = _mm256_packus_epi32(q2, q3);
-        const __m256i q = _mm256_packus_epi16(q01, q23);
-        const __m256i fixed = _mm256_permutevar8x32_epi32(q, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
-        _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + i), fixed);
-    }
-    scale = s;
-    zero_point = zp;
-#else
-    nn_quantize_u8_asym({x, static_cast<crd::usize>(k)}, {out, static_cast<crd::usize>(k)}, scale,
-                        zero_point);
-#endif
-}
-
-// y[o0..o0+T) over the whole K in exact i32; integer zero-point correction +
-// ONE fma per output. 8 independent i32 accumulator chains hide the dpbusd /
-// madd latency; T is COMPILE-TIME so the inner loop is fully unrolled.
-template <crd::u32 T>
-inline void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum, crd::u64 k,
-                        crd::u64 o0, crd::f32 scale_m, crd::i32 zp, const crd::f32* bias, crd::f32* yrow,
-                        bool relu) noexcept
-{
-    constexpr crd::u32 t = T;
-#if CRD_SIMD_HAS_AVX2
-    __m256i acc[8];
-    for (crd::u32 r = 0; r < 8U; ++r)
-    {
-        acc[r] = _mm256_setzero_si256();
-    }
-#if !defined(__AVXVNNI__)
-    const __m256i ones16 = _mm256_set1_epi16(1);
-    const __m256i low7 = _mm256_set1_epi8(0x7F);
-    const __m256i one8 = _mm256_set1_epi8(1);
-#endif
-    for (crd::u64 c = 0; c < k; c += 32U)
-    {
-        const __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(xrow + c)); // u8
-#if !defined(__AVXVNNI__)
-        // u8 x i8 without VNNI: split x = xl + 128*xh (xl <= 127, xh in {0,1})
-        // so the maddubs i16 pair sums can never saturate; exact i32 either way
-        const __m256i xl = _mm256_and_si256(vx, low7);
-        const __m256i xh = _mm256_and_si256(_mm256_srli_epi16(vx, 7), one8);
-#endif
-        for (crd::u32 r = 0; r < t; ++r)
-        {
-            const __m256i vw =
-                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wq + (o0 + r) * k + c));
-#if defined(__AVXVNNI__)
-            acc[r] = _mm256_dpbusd_avx_epi32(acc[r], vx, vw); // u8 x i8, exact i32 accumulate
-#else
-            const __m256i pl = _mm256_madd_epi16(_mm256_maddubs_epi16(xl, vw), ones16);
-            const __m256i ph = _mm256_madd_epi16(_mm256_maddubs_epi16(xh, vw), ones16);
-            acc[r] = _mm256_add_epi32(acc[r], _mm256_add_epi32(pl, _mm256_slli_epi32(ph, 7)));
-#endif
-        }
-    }
-    // 4-output integer horizontal reductions + zero-point correction (exact)
-    for (crd::u32 g = 0; g < t; g += 4U)
-    {
-        const crd::u32 tg = t - g < 4U ? t - g : 4U;
-        const __m256i h0 = _mm256_hadd_epi32(acc[g], acc[g + 1U]);
-        const __m256i h1 = _mm256_hadd_epi32(acc[g + 2U], acc[g + 3U]);
-        const __m256i hh = _mm256_hadd_epi32(h0, h1);
-        const __m128i r4 = _mm_add_epi32(_mm256_castsi256_si128(hh), _mm256_extracti128_si256(hh, 1));
-        if (tg == 4U)
-        {
-            const __m128i corr = _mm_mullo_epi32(
-                _mm_set1_epi32(zp), _mm_loadu_si128(reinterpret_cast<const __m128i*>(colsum + o0 + g)));
-            __m128 v = _mm_fmadd_ps(_mm_set1_ps(scale_m), _mm_cvtepi32_ps(_mm_sub_epi32(r4, corr)),
-                                    _mm_loadu_ps(bias + o0 + g));
-            if (relu)
-            {
-                v = _mm_max_ps(v, _mm_setzero_ps()); // lane semantics == the ternary form
-            }
-            _mm_storeu_ps(yrow + o0 + g, v);
-            continue;
-        }
-        alignas(16) crd::i32 d4[4]; // tail: scalar correction (no 4-wide colsum read past N)
-        _mm_store_si128(reinterpret_cast<__m128i*>(d4), r4);
-        for (crd::u32 r = 0; r < tg; ++r)
-        {
-            const crd::i32 dc = d4[r] - zp * colsum[o0 + g + r];
-            const crd::f32 v = std::fma(scale_m, static_cast<crd::f32>(dc), bias[o0 + g + r]);
-            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
-            yrow[o0 + g + r] = relu ? rectified : v;
-        }
-    }
-#else
-    for (crd::u32 r = 0; r < t; ++r)
-    {
-        crd::i32 idot = 0; // exact integer — order-free, identical to the vector path by arithmetic
-        const crd::i8* wrow = wq + (o0 + r) * k;
-        for (crd::u64 j = 0; j < k; ++j)
-        {
-            idot += static_cast<crd::i32>(xrow[j]) * static_cast<crd::i32>(wrow[j]);
-        }
-        idot -= zp * colsum[o0 + r]; // exact zero-point correction
-        const crd::f32 v = std::fma(scale_m, static_cast<crd::f32>(idot), bias[o0 + r]);
-        const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
-        yrow[o0 + r] = relu ? rectified : v;
-    }
-#endif
-}
-
-inline void i8_dot_tile_any(crd::u32 t, const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
-                            crd::u64 k, crd::u64 o0, crd::f32 scale_m, crd::i32 zp, const crd::f32* bias,
-                            crd::f32* yrow, bool relu) noexcept
-{
-    switch (t)
-    {
-    case 8U:
-        i8_dot_tile<8U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 7U:
-        i8_dot_tile<7U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 6U:
-        i8_dot_tile<6U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 5U:
-        i8_dot_tile<5U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 4U:
-        i8_dot_tile<4U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 3U:
-        i8_dot_tile<3U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 2U:
-        i8_dot_tile<2U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    case 1U:
-        i8_dot_tile<1U>(xrow, wq, colsum, k, o0, scale_m, zp, bias, yrow, relu);
-        return;
-    default:
-        return;
-    }
-}
-
-// ---- the PACKED runner kernel (the MLAS structure) --------------------------
-// Weights are repacked at LOAD to [ceil(N/8) blocks][K/4 slices][8 outputs x
-// 4 k-bytes] so ONE dpbusd accumulates 4 k-steps for 8 OUTPUTS at once — the
-// accumulator vector IS 8 outputs (no horizontal reduction, no per-output
-// accumulator chains), activations broadcast 4 bytes at a time, and R rows
-// share every weight load. Integer results are the exact whole-row dots —
-// identical to the row-major reference kernel and the scalar formula by
-// arithmetic identity (gate-enforced).
+// ---- the quantized linears and softmax -------------------------------------
+// The pinned lane-parallel Q8_0 dot, the int8 dots, the activation quantizers
+// and softmax are the tensor kernels (tensor_kernels.hpp,
+// kernels/tensor_kernels.cpp): one body per CPU level, every level
+// bit-identical (ADR-0134 §7). The runner's int8 linear rides the packed
+// kernel (nn_linear_i8_packed_rows) over this load-time layout:
+// [ceil(N/8) blocks][K/4 slices][8 outputs x 4 k-bytes].
 
 // pack row-major [n, k] i8 weights (k % 4 == 0) into [n8 * k] bytes; the
 // n..n8-1 padding columns are zero (colsum/bias pad likewise).
@@ -1317,161 +770,6 @@ inline void i8_pack_weights(const crd::i8* wq, crd::u64 n, crd::u64 k, crd::i8* 
                     o < n ? wq[o * k + c + j] : static_cast<crd::i8>(0);
             }
         }
-    }
-}
-
-alignas(32) inline constexpr crd::i32 kNnTailMask[16] = {-1, -1, -1, -1, -1, -1, -1, -1,
-                                                         0,  0,  0,  0,  0,  0,  0,  0};
-
-// R rows (R <= 4) against the packed weights; colsum/bias are n8-padded.
-template <crd::u32 R>
-inline void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* colsum, crd::u64 k,
-                           crd::u64 n, const crd::f32* scale_m, const crd::i32* zp, const crd::f32* bias,
-                           crd::f32* yrows, bool relu) noexcept
-{
-    const crd::u64 n8 = (n + 7U) & ~crd::u64{7};
-#if CRD_SIMD_HAS_AVX2
-#if !defined(__AVXVNNI__)
-    const __m256i ones16 = _mm256_set1_epi16(1);
-    const __m256i low7 = _mm256_set1_epi8(0x7F);
-    const __m256i one8 = _mm256_set1_epi8(1);
-#endif
-    const __m256 zero = _mm256_setzero_ps();
-    for (crd::u64 b = 0; b < n8; b += 8U)
-    {
-        __m256i acc[R];
-        for (crd::u32 r = 0; r < R; ++r)
-        {
-            acc[r] = _mm256_setzero_si256();
-        }
-        const crd::i8* wp = wpack + b * k; // this block: k/4 slices of 8x4 bytes
-        for (crd::u64 c = 0; c < k; c += 4U)
-        {
-            const __m256i vb = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wp + c * 8U));
-            for (crd::u32 r = 0; r < R; ++r)
-            {
-                crd::i32 xw = 0; // 4 u8 activation bytes, broadcast to every lane
-                std::memcpy(&xw, xrows + static_cast<crd::u64>(r) * k + c, 4U);
-                const __m256i va = _mm256_set1_epi32(xw);
-#if defined(__AVXVNNI__)
-                acc[r] = _mm256_dpbusd_avx_epi32(acc[r], va, vb); // u8 x i8, exact i32
-#else
-                // u8 x i8 without VNNI: split x = xl + 128*xh so the maddubs
-                // i16 pair sums can never saturate; exact i32 either way
-                const __m256i xl = _mm256_and_si256(va, low7);
-                const __m256i xh = _mm256_and_si256(_mm256_srli_epi16(va, 7), one8);
-                const __m256i pl = _mm256_madd_epi16(_mm256_maddubs_epi16(xl, vb), ones16);
-                const __m256i ph = _mm256_madd_epi16(_mm256_maddubs_epi16(xh, vb), ones16);
-                acc[r] = _mm256_add_epi32(acc[r], _mm256_add_epi32(pl, _mm256_slli_epi32(ph, 7)));
-#endif
-            }
-        }
-        const crd::u64 valid = n - b < 8U ? n - b : 8U;
-        const __m256i cs8 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(colsum + b));
-        const __m256 b8 = _mm256_loadu_ps(bias + b);
-        for (crd::u32 r = 0; r < R; ++r)
-        {
-            const __m256i corr = _mm256_mullo_epi32(_mm256_set1_epi32(zp[r]), cs8);
-            __m256 v = _mm256_fmadd_ps(_mm256_set1_ps(scale_m[r]),
-                                       _mm256_cvtepi32_ps(_mm256_sub_epi32(acc[r], corr)), b8);
-            if (relu)
-            {
-                v = _mm256_max_ps(v, zero); // lane semantics == the ternary form
-            }
-            crd::f32* dst = yrows + static_cast<crd::u64>(r) * n + b;
-            if (valid == 8U)
-            {
-                _mm256_storeu_ps(dst, v);
-            }
-            else
-            {
-                const __m256i vmask = _mm256_loadu_si256(
-                    reinterpret_cast<const __m256i*>(kNnTailMask + (8U - valid)));
-                _mm256_maskstore_ps(dst, vmask, v);
-            }
-        }
-    }
-#else
-    for (crd::u32 r = 0; r < R; ++r)
-    {
-        for (crd::u64 o = 0; o < n; ++o)
-        {
-            crd::i32 idot = 0; // exact integer over the packed layout — order-free
-            for (crd::u64 c = 0; c < k; c += 4U)
-            {
-                for (crd::u64 j = 0; j < 4U; ++j)
-                {
-                    const crd::i8 wv =
-                        wpack[(o / 8U) * (k * 8U) + (c / 4U) * 32U + (o % 8U) * 4U + j];
-                    idot += static_cast<crd::i32>(xrows[static_cast<crd::u64>(r) * k + c + j]) *
-                            static_cast<crd::i32>(wv);
-                }
-            }
-            idot -= zp[r] * colsum[o];
-            const crd::f32 v = std::fma(scale_m[r], static_cast<crd::f32>(idot), bias[o]);
-            const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
-            yrows[static_cast<crd::u64>(r) * n + o] = relu ? rectified : v;
-        }
-    }
-    (void)n8;
-#endif
-}
-
-struct LinI8Ctx
-{
-    const crd::f32* x;      // [M, K], K % 32 == 0
-    const crd::i8* wq;      // PACKED [n8 * K] weights (i8_pack_weights layout)
-    const crd::i32* colsum; // [n8] per-output weight column sums (zero-point correction)
-    const crd::f32* bias;   // [n8] (padded)
-    crd::f32* y;            // [M, N]
-    crd::u8* xq;            // scratch: [M, K] asymmetric u8 activation rows
-    crd::f32* xscale;       // scratch: [M] per-row activation scales
-    crd::i32* xzp;          // scratch: [M] per-row activation zero points
-    crd::f32 wscale;        // the ONE weight scale
-    crd::u64 k;
-    crd::u64 n;
-    bool relu;
-};
-
-inline void linear_i8_run(const LinI8Ctx& c, crd::u32 lo, crd::u32 hi)
-{
-    // 4-row groups amortize the weight-block loads; grouping cannot perturb
-    // results (each row's accumulator and math are its own — bit-identical for
-    // any grouping, so task partitions stay moat-safe)
-    crd::u32 m0 = lo;
-    while (m0 < hi)
-    {
-        const crd::u32 rr = hi - m0 < 4U ? hi - m0 : 4U;
-        crd::f32 scale_m[4];
-        crd::i32 zp[4];
-        for (crd::u32 r = 0; r < rr; ++r)
-        {
-            const crd::u32 m = m0 + r;
-            quantize_row_u8(c.x + static_cast<crd::u64>(m) * c.k, c.k,
-                            c.xq + static_cast<crd::u64>(m) * c.k, c.xscale[m], c.xzp[m]);
-            scale_m[r] = c.xscale[m] * c.wscale;
-            zp[r] = c.xzp[m];
-        }
-        const crd::u8* xrows = c.xq + static_cast<crd::u64>(m0) * c.k;
-        crd::f32* yrows = c.y + static_cast<crd::u64>(m0) * c.n;
-        switch (rr)
-        {
-        case 4U:
-            i8_packed_rows<4U>(xrows, c.wq, c.colsum, c.k, c.n, scale_m, zp, c.bias, yrows, c.relu);
-            break;
-        case 3U:
-            i8_packed_rows<3U>(xrows, c.wq, c.colsum, c.k, c.n, scale_m, zp, c.bias, yrows, c.relu);
-            break;
-        case 2U:
-            i8_packed_rows<2U>(xrows, c.wq, c.colsum, c.k, c.n, scale_m, zp, c.bias, yrows, c.relu);
-            break;
-        case 1U:
-            i8_packed_rows<1U>(xrows, c.wq, c.colsum, c.k, c.n, scale_m, zp, c.bias, yrows, c.relu);
-            break;
-        default:
-            break;
-        }
-        m0 += rr;
     }
 }
 
@@ -1555,8 +853,8 @@ inline void nn_sigmoid(crd::containers::ConstSpan<crd::f32> x, crd::containers::
         return TensorStatus::BadInput;
     }
     const crd::u64 rows = x.size() / d;
-    const nndetail::SoftmaxCtx ctx{x.data(), y.data(), d};
-    nndetail::nn_parallel(static_cast<crd::u32>(rows), 1U, &ctx, nndetail::softmax_run);
+    const NnSoftmaxF32 ctx{x.data(), y.data(), d};
+    nndetail::nn_parallel(static_cast<crd::u32>(rows), 1U, &ctx, tensor_kernels().table->nn_softmax_rows);
     return TensorStatus::Ok;
 }
 
@@ -1751,9 +1049,8 @@ namespace nndetail
     {
         wsc[i] = crd::hesap::tensor::f16_bits_to_f32(wq[i].d);
     }
-    const nndetail::LinQ8Ctx ctx{x.data(), wq.data(),         wsc, bias.data(), y.data(),
-                                 xq_scratch.data(), wsc + n * nb, k,   n,           false};
-    nndetail::nn_parallel(static_cast<crd::u32>(m), 1U, &ctx, nndetail::linear_q8_run);
+    const NnLinearQ8 ctx{x.data(), wq.data(), wsc, bias.data(), y.data(), xq_scratch.data(), wsc + n * nb, k, n, false};
+    nndetail::nn_parallel(static_cast<crd::u32>(m), 1U, &ctx, tensor_kernels().table->nn_linear_q8_rows);
     return TensorStatus::Ok;
 }
 
@@ -1791,22 +1088,21 @@ namespace nndetail
     {
         return TensorStatus::NotContiguous;
     }
-    // the ROW-MAJOR reference path (unit surface; the NnSequential runner rides
-    // the packed kernel, gated bit-identical against this and the scalar formula)
-    for (crd::u64 r = 0; r < m; ++r)
-    {
-        crd::u8* xrow = xq_scratch.data() + r * k;
-        nndetail::quantize_row_u8(x.data() + r * k, k, xrow, xscale_scratch[static_cast<crd::usize>(r)],
-                                  xzp_scratch[static_cast<crd::usize>(r)]);
-        const crd::f32 scale_m = xscale_scratch[static_cast<crd::usize>(r)] * wscale;
-        crd::f32* yrow = y.data() + r * n;
-        for (crd::u64 o0 = 0; o0 < n; o0 += 8U)
-        {
-            const crd::u32 t = n - o0 < 8U ? static_cast<crd::u32>(n - o0) : 8U;
-            nndetail::i8_dot_tile_any(t, xrow, wq.data(), colsum.data(), k, o0, scale_m,
-                                      xzp_scratch[static_cast<crd::usize>(r)], bias.data(), yrow, false);
-        }
-    }
+    // the row-major reference path (the unit surface; the NnSequential runner rides the packed kernel, gated
+    // bit-identical against this and the scalar formula)
+    const NnLinearI8 ctx{x.data(),
+                         wq.data(),
+                         colsum.data(),
+                         bias.data(),
+                         y.data(),
+                         xq_scratch.data(),
+                         xscale_scratch.data(),
+                         xzp_scratch.data(),
+                         wscale,
+                         k,
+                         n,
+                         false};
+    nndetail::nn_parallel(static_cast<crd::u32>(m), 1U, &ctx, tensor_kernels().table->nn_linear_i8_rows);
     return TensorStatus::Ok;
 }
 
@@ -2706,17 +2002,17 @@ private:
             // scratch layout (fixed offsets — max_batch): [xq blocks][x scales]
             const crd::u64 nb = op.dim_in / kQuantBlock;
             const crd::u64 xq_bytes = nn_align64(m_in_shape[0] * nb * sizeof(BlockQ8Zero));
-            const nndetail::LinQ8Ctx ctx{in,
-                                         q8_ptr(op),
-                                         weight_ptr(op), // the pre-widened f32 block scales
-                                         bias_ptr(op),
-                                         out,
-                                         reinterpret_cast<BlockQ8Zero*>(scratch),
-                                         reinterpret_cast<crd::f32*>(scratch + xq_bytes),
-                                         op.dim_in,
-                                         op.dim_out,
-                                         op.fuse_relu};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, nndetail::linear_q8_run);
+            const NnLinearQ8 ctx{in,
+                                 q8_ptr(op),
+                                 weight_ptr(op), // the pre-widened f32 block scales
+                                 bias_ptr(op),
+                                 out,
+                                 reinterpret_cast<BlockQ8Zero*>(scratch),
+                                 reinterpret_cast<crd::f32*>(scratch + xq_bytes),
+                                 op.dim_in,
+                                 op.dim_out,
+                                 op.fuse_relu};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, tensor_kernels().table->nn_linear_q8_rows);
             return;
         }
         case NnOpKind::LinearI8:
@@ -2724,19 +2020,20 @@ private:
             // scratch layout (fixed offsets — max_batch): [xq rows][row scales][row zero points]
             const crd::u64 xq_bytes = nn_align64(m_in_shape[0] * op.dim_in);
             const crd::u64 xsc_bytes = nn_align64(m_in_shape[0] * sizeof(crd::f32));
-            const nndetail::LinI8Ctx ctx{in,
-                                         m_wi8[op_index(op)].data(),
-                                         m_wcolsum[op_index(op)].data(),
-                                         bias_ptr(op),
-                                         out,
-                                         scratch, // u8 activation rows
-                                         reinterpret_cast<crd::f32*>(scratch + xq_bytes),
-                                         reinterpret_cast<crd::i32*>(scratch + xq_bytes + xsc_bytes),
-                                         weight_ptr(op)[0], // the ONE weight scale
-                                         op.dim_in,
-                                         op.dim_out,
-                                         op.fuse_relu};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, nndetail::linear_i8_run);
+            const NnLinearI8 ctx{in,
+                                 m_wi8[op_index(op)].data(),
+                                 m_wcolsum[op_index(op)].data(),
+                                 bias_ptr(op),
+                                 out,
+                                 scratch, // u8 activation rows
+                                 reinterpret_cast<crd::f32*>(scratch + xq_bytes),
+                                 reinterpret_cast<crd::i32*>(scratch + xq_bytes + xsc_bytes),
+                                 weight_ptr(op)[0], // the ONE weight scale
+                                 op.dim_in,
+                                 op.dim_out,
+                                 op.fuse_relu};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx,
+                                  tensor_kernels().table->nn_linear_i8_packed_rows);
             return;
         }
         case NnOpKind::Conv2dF32:
@@ -2821,8 +2118,8 @@ private:
         }
         case NnOpKind::Softmax:
         {
-            const nndetail::SoftmaxCtx ctx{in, out, op.in_shape[op.in_rank - 1U]};
-            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, nndetail::softmax_run);
+            const NnSoftmaxF32 ctx{in, out, op.in_shape[op.in_rank - 1U]};
+            nndetail::nn_parallel(static_cast<crd::u32>(batch), nw, &ctx, tensor_kernels().table->nn_softmax_rows);
             return;
         }
         case NnOpKind::Flatten:

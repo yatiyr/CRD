@@ -171,6 +171,10 @@ crd_discover_tests(crd-hesap-tensor-nn-tests
     PROPERTIES ENVIRONMENT "CRD_NN_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/nn_corpus"
 )
 
+# ADR-0134 §8: the quantized tiers and softmax once per compiled level (crd-hesap-tensor-nn-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-nn-tests "[q8],[i8],[softmax]"
+    ENVIRONMENT "CRD_NN_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/nn_corpus")
+
 # --- v14-z CLI gates (pulls the anchor => needs the full anchor-gated edge set) ---
 add_executable(crd-hesap-tensor-cli-tests
     test_cli.cpp
