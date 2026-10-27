@@ -1,6 +1,7 @@
 // crd-hesap-sparse v1b-2 -- parallel SELL spmv: bit-exact with serial across
 // worker / job counts (deterministic, thread-count-independent).
 
+#include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/hesap/sparse/sparse.hpp>
@@ -8,7 +9,9 @@
 
 #include "sparse_jobs_fixture.hpp"
 
+#include <bit>
 #include <cstdint>
+#include <type_traits>
 
 namespace sp = crd::hesap::sparse;
 
@@ -110,5 +113,65 @@ TEST_CASE("parallel SELL spmv auto job count matches serial", "[hesap][sparse][s
     for (crd::u32 i = 0; i < 2000; ++i)
     {
         CHECK(y_par[i] == y_serial[i]);
+    }
+}
+
+TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR at any job count",
+                   "[hesap][sparse][sell][parallel][complex]", crd::f64, crd::f32)
+{
+    using C = crd::hesap::Complex<TestType>;
+    using Bits = std::conditional_t<sizeof(TestType) == 8, std::uint64_t, std::uint32_t>;
+    jobs_listener();
+    crd::memory::TlsfAllocator alloc(16 << 20);
+    constexpr crd::u32 n = 517;
+    std::uint64_t s = 0xC0FFEEULL;
+    auto next = [&]()
+    {
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<crd::u32>(s >> 33);
+    };
+    auto part = [&]()
+    {
+        return static_cast<TestType>(static_cast<int>(next() % 17U) - 8) / TestType(5);
+    };
+    sp::TripletBuilder<C> b(&alloc, n, n);
+    for (crd::u32 r = 0; r < n; ++r)
+    {
+        const crd::u32 deg = (r % 13U == 0U) ? 30U : (next() % 7U); // σ-sorted wide rows and short ones
+        for (crd::u32 k = 0; k < deg; ++k)
+        {
+            b.add(r, next() % n, C{part(), part()});
+        }
+    }
+    const auto csr = b.compress();
+    const auto sell = sp::to_sell(csr, &alloc);
+    crd::containers::Array<C> x(&alloc);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        x.push_back(C{part(), part()});
+    }
+    const C alpha{TestType(1.25), TestType(-0.5)};
+    const C beta{TestType(0), TestType(1)};
+    crd::containers::Array<C> want(&alloc);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        want.push_back(C{part(), part()});
+    }
+    crd::containers::Array<C> y0 = want;
+    sp::spmv<C>(alpha, csr, sp::Trans::None, cspan(x), beta, mspan(want));
+    for (crd::u32 jobs : {1U, 3U, 7U})
+    {
+        crd::containers::Array<C> y = y0;
+        sp::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs);
+        crd::jobs::frame_reset();
+        crd::u32 wrong = 0;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            const bool same = std::bit_cast<Bits>(y[i].re) == std::bit_cast<Bits>(want[i].re) &&
+                              std::bit_cast<Bits>(y[i].im) == std::bit_cast<Bits>(want[i].im); // finite parts
+            wrong += same ? 0U : 1U;
+        }
+        INFO("jobs=" << jobs);
+        CHECK(wrong == 0U);
     }
 }

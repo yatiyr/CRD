@@ -871,9 +871,11 @@ are now **formally locked**, plus one added at v1g:
 - **D(sparse)-3** spmv per-row reduction is **two-rounded** (`mul_add`, NOT
   single-rounded `simd::fma`) and bit-exact across the CSR scalar baseline and
   the SELL SIMD primary; width-independent; compressed-CSR only.
-- **D(sparse)-4** SELL-C-σ: slice height `C` per-T (f32→8 / f64→4 / complex→4
-  scalar); σ row-length sort (global default; identity fast-path for
-  uniform/banded); within-row columns stay ascending → bit-exact with CSR.
+- **D(sparse)-4** SELL-C-σ: slice height `C` per-T (f32→8 / f64→4 / complex→4,
+  every type on the per-level kernels of ADR-0134); σ row-length sort (global
+  default; identity fast-path for uniform/banded); within-row columns stay
+  ascending → bit-exact with CSR. Per-row lengths keep padding unread (a pad
+  never multiplies x, so a non-finite x[0] reaches only rows storing column 0).
 - **D(sparse)-5** Element-wise (`add`/`subtract`/`hadamard`): `a OP b`
   left-first single-rounded; topology-hash fast-path + symbolic-union merge.
 - **D(sparse)-6** BSR block-spmv uses a **dedicated fully-unrolled small-block

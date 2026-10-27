@@ -27,16 +27,42 @@ namespace crd::hesap::sparse
 //
 // v1b-2 ships σ=1 (no row reordering) per D(sparse)-4: within-row columns
 // stay ascending, so per-row reduction order == CSR -> bit-exact with the
-// v1b-1 baseline. Pad slots are value 0 at column 0 (a + 0 == a no-op).
+// v1b-1 baseline. Pad slots are value 0 at column 0; row_len keeps each row's
+// own length, so the kernels never multiply a pad by x (an infinite or NaN
+// x[0] reaches only the rows that store column 0, as in CSR).
 //
-// Slice height C is per-T (D(sparse)-4): f32->8, f64->4, complex->4 (scalar).
-// f64 and f32 run per-level kernels (SIMD-DISPATCH, crd/hesap/sparse/sparse_kernels.hpp).
+// Slice height C is per-T (D(sparse)-4): f32->8, f64->4, complex->4. Every
+// type runs per-level kernels (SIMD-DISPATCH, crd/hesap/sparse/sparse_kernels.hpp).
 // -----------------------------------------------------------------------
 
 namespace detail
 {
-template <typename T> inline constexpr crd::u32 kSellC = kSellSliceF64; // f64 + complex
+template <typename T> inline constexpr crd::u32 kSellC = kSellSliceF64;
 template <> inline constexpr crd::u32 kSellC<crd::f32> = kSellSliceF32;
+template <> inline constexpr crd::u32 kSellC<Complex<crd::f64>> = kSellSliceComplex;
+template <> inline constexpr crd::u32 kSellC<Complex<crd::f32>> = kSellSliceComplex;
+
+// The real scalar of a SELL value type, in which the kernels read it: a complex value is its (re, im) pair.
+template <typename T> struct SellScalar
+{
+    using Type = T;
+};
+template <typename U> struct SellScalar<Complex<U>>
+{
+    static_assert(std::is_standard_layout_v<Complex<U>> && sizeof(Complex<U>) == 2 * sizeof(U),
+                  "the kernels read Complex<U> as (re, im) pairs");
+    using Type = U;
+};
+template <typename T> using SellScalarT = typename SellScalar<T>::Type;
+
+template <typename T> const SellScalarT<T>* sell_scalars(const T* p) noexcept
+{
+    return reinterpret_cast<const SellScalarT<T>*>(p);
+}
+template <typename T> SellScalarT<T>* sell_scalars(T* p) noexcept
+{
+    return reinterpret_cast<SellScalarT<T>*>(p);
+}
 } // namespace detail
 
 template <typename T>
@@ -49,13 +75,14 @@ struct SellMatrix
     crd::u32                         num_slices = 0;
     crd::containers::Array<crd::u32> slice_ptr;    // length num_slices+1; element offset of each slice
     crd::containers::Array<crd::u32> slice_width;  // length num_slices; padded column count of each slice
+    crd::containers::Array<crd::u32> row_len;      // length num_slices*kC; stored count of each σ row (0 = pad row)
     crd::containers::Array<T>        vals;         // column-major within slice; pad = 0
     crd::containers::Array<crd::u32> col_idx;      // parallel to vals; pad col = 0
     crd::containers::Array<crd::u32> perm;         // length rows; perm[slice-row] = original row (σ row sort)
     bool perm_is_identity = true;                  // true when the σ sort reordered no rows (uniform/banded)
 
     explicit SellMatrix(crd::memory::IAllocator* alloc)
-        : slice_ptr(alloc), slice_width(alloc), vals(alloc), col_idx(alloc), perm(alloc)
+        : slice_ptr(alloc), slice_width(alloc), row_len(alloc), vals(alloc), col_idx(alloc), perm(alloc)
     {
     }
 
@@ -117,8 +144,9 @@ template <typename T>
         }
     }
 
-    // 1. per-slice width = max length over the slice's permuted rows.
+    // 1. per-row length and per-slice width = max length over the slice's permuted rows.
     out.slice_width.resize(out.num_slices);
+    out.row_len.resize(static_cast<crd::usize>(out.num_slices) * height); // pad rows stay 0
     out.slice_ptr.resize(static_cast<crd::usize>(out.num_slices) + 1);
     out.slice_ptr[0] = 0;
     for (crd::u32 s = 0; s < out.num_slices; ++s)
@@ -129,6 +157,7 @@ template <typename T>
         {
             const crd::u32 r   = perm[sr];
             const crd::u32 len = outer[r + 1] - outer[r];
+            out.row_len[sr] = len;
             w = len > w ? len : w;
         }
         out.slice_width[s]   = w;
@@ -169,55 +198,40 @@ namespace detail
 // lanes into y[perm[...]] -- and since perm is a bijection and slices partition
 // rows, disjoint slice ranges write disjoint y rows, so the parallel driver can
 // run ranges concurrently with no races (deterministic, bit-exact vs serial).
-// f64 and f32 run the hesap-sparse kernels of the process's CPU level
-// (crd/hesap/sparse/sparse_kernels.hpp); complex runs C scalar accumulators.
+// Every type runs the hesap-sparse kernels of the process's CPU level
+// (crd/hesap/sparse/sparse_kernels.hpp), complex values as (re, im) pairs.
 template <typename T>
 void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end)
 {
-    if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
+    using U = SellScalarT<T>;
+    const SellSlices<U> slices{a.slice_ptr.data(),
+                               a.slice_width.data(),
+                               a.row_len.data(),
+                               sell_scalars(a.vals.data()),
+                               a.col_idx.data(),
+                               a.perm_is_identity ? nullptr : a.perm.data(),
+                               a.rows};
+    const SparseKernels& k = *sparse_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f64>)
     {
-        const SellSlices<T> slices{a.slice_ptr.data(),
-                                   a.slice_width.data(),
-                                   a.vals.data(),
-                                   a.col_idx.data(),
-                                   a.perm_is_identity ? nullptr : a.perm.data(),
-                                   a.rows};
-        const SparseKernels& k = *sparse_kernels().table;
-        if constexpr (std::is_same_v<T, crd::f64>)
-        {
-            k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end);
-        }
-        else
-        {
-            k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end);
-        }
+        k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end);
+    }
+    else if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end);
     }
     else
     {
-        constexpr crd::u32 height = SellMatrix<T>::kC;
-        const bool bzero = detail::spmv_is_zero(beta);
-        for (crd::u32 s = s_begin; s < s_end; ++s)
+        static_assert(std::is_same_v<T, Complex<crd::f64>> || std::is_same_v<T, Complex<crd::f32>>,
+                      "SELL holds f64, f32, Complex<f64> or Complex<f32>");
+        const SellComplexScales<U> scales{alpha.re, alpha.im, beta.re, beta.im};
+        if constexpr (std::is_same_v<U, crd::f64>)
         {
-            const crd::u32 base = a.slice_ptr[s];
-            const crd::u32 r_end = (s * height + height < a.rows) ? height : (a.rows - s * height);
-            T acc[height];
-            for (crd::u32 lane = 0; lane < height; ++lane)
-            {
-                acc[lane] = T{};
-            }
-            for (crd::u32 w = 0; w < a.slice_width[s]; ++w)
-            {
-                const crd::u32 off = base + w * height;
-                for (crd::u32 lane = 0; lane < height; ++lane)
-                {
-                    acc[lane] = acc[lane] + a.vals[off + lane] * xp[a.col_idx[off + lane]];
-                }
-            }
-            for (crd::u32 lane = 0; lane < r_end; ++lane)
-            {
-                const crd::u32 r = a.perm_is_identity ? (s * height + lane) : a.perm[s * height + lane]; // de-permute (σ)
-                y[r] = bzero ? (alpha * acc[lane]) : (alpha * acc[lane] + beta * y[r]);
-            }
+            k.sell_spmv_c64(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end);
+        }
+        else
+        {
+            k.sell_spmv_c32(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end);
         }
     }
 }
@@ -225,8 +239,8 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
 
 // y = alpha * A * x + beta * y  (SELL, Trans::None). Bit-exact with the CSR
 // baseline: each lane accumulates its row left-to-right in column order via
-// the two-rounded `acc + val*x` (D(sparse)-3). beta == 0 is NaN-safe. f64 and
-// f32 run the slice-pair kernels of the CPU level; complex is scalar.
+// the two-rounded `acc + val*x` (D(sparse)-3). beta == 0 is NaN-safe. Every
+// type runs the slice-pair kernels of the CPU level.
 template <typename T>
 void spmv_sell(T alpha, const SellMatrix<T>& a, crd::containers::ConstSpan<T> x, T beta, crd::containers::Span<T> y)
 {

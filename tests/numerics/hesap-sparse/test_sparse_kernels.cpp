@@ -1,7 +1,8 @@
 // The hesap-sparse kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs gives the CSR spmv's
-// bits for the f64 and f32 SELL-C-σ spmv, over slices that run as a pair and alone, empty and long rows, rows past the
-// last full slice, a σ order and the identity, any slice range, both beta paths (beta == 0 never reads y) and IEEE
-// special values. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases under each forced level.
+// bits for the f64, f32, Complex<f64> and Complex<f32> SELL-C-σ spmv, over slices that run as a pair and alone, empty
+// and long rows, rows past the last full slice, a σ order and the identity, any slice range, both beta paths (beta == 0
+// never reads y), IEEE special values in A and an infinite or NaN x[0] (padding never multiplies x).
+// crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
@@ -18,6 +19,7 @@ using crd::CpuLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
+using crd::hesap::Complex;
 using crd::math::KernelLevel;
 using sp::SparseKernels;
 
@@ -29,10 +31,40 @@ bool runs_here(const KernelLevel<SparseKernels>& level)
     return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
 }
 
+template <typename T> inline constexpr bool kIsComplex = false;
+template <typename U> inline constexpr bool kIsComplex<Complex<U>> = true;
+template <typename T> using Scalar = sp::detail::SellScalarT<T>;
+
+// A value of T from its parts (a real T keeps re).
+template <typename T> T value(Scalar<T> re, Scalar<T> im)
+{
+    if constexpr (kIsComplex<T>)
+    {
+        return T{re, im};
+    }
+    else
+    {
+        (void)im;
+        return re;
+    }
+}
+
+template <typename U> bool same_scalar(U a, U b)
+{
+    using Bits = std::conditional_t<sizeof(U) == 8, u64, u32>;
+    return (std::isnan(a) && std::isnan(b)) || std::bit_cast<Bits>(a) == std::bit_cast<Bits>(b); // any NaN, any NaN
+}
+
 template <typename T> bool same_bits(T a, T b)
 {
-    using Bits = std::conditional_t<sizeof(T) == 8, u64, u32>;
-    return (std::isnan(a) && std::isnan(b)) || std::bit_cast<Bits>(a) == std::bit_cast<Bits>(b); // any NaN, any NaN
+    if constexpr (kIsComplex<T>)
+    {
+        return same_scalar(a.re, b.re) && same_scalar(a.im, b.im);
+    }
+    else
+    {
+        return same_scalar(a, b);
+    }
 }
 
 struct Lcg
@@ -43,16 +75,23 @@ struct Lcg
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
         return static_cast<u32>(s >> 33);
     }
+    // One of span evenly spaced values around 0, over den.
+    template <typename U> U fraction(u32 span, U den)
+    {
+        return static_cast<U>(static_cast<int>(next() % span) - static_cast<int>(span / 2U)) / den;
+    }
 };
 
 // Rows of 0 to 5 entries, every fifth row empty, runs of three rows of 8 to 12 and every seventeenth row 25 long, so
 // neighbouring slices are wide enough to run as a pair (with unequal widths) or too narrow, and a σ sort reorders the
-// rows; the values are small fractions of both signs with a signed zero, a subnormal, both infinities and a NaN.
+// rows; the values are small fractions of both signs with a signed zero, a subnormal, both infinities and a NaN (in
+// the real or the imaginary part of a complex value).
 template <typename T>
 sp::SparseMatrix<T, sp::SparseFormat::Csr> test_matrix(crd::memory::IAllocator* alloc, u32 rows, u32 cols, u64 seed)
 {
-    const T specials[] = {T(-0.0), std::numeric_limits<T>::denorm_min(), std::numeric_limits<T>::infinity(),
-                          -std::numeric_limits<T>::infinity(), std::numeric_limits<T>::quiet_NaN()};
+    using U = Scalar<T>;
+    const U specials[] = {U(-0.0), std::numeric_limits<U>::denorm_min(), std::numeric_limits<U>::infinity(),
+                          -std::numeric_limits<U>::infinity(), std::numeric_limits<U>::quiet_NaN()};
     Lcg g{seed};
     sp::TripletBuilder<T> b(alloc, rows, cols);
     usize at = 0;
@@ -64,38 +103,54 @@ sp::SparseMatrix<T, sp::SparseFormat::Csr> test_matrix(crd::memory::IAllocator* 
         for (u32 k = 0; k < len; ++k)
         {
             const u32 c = g.next() % cols;
-            T v = static_cast<T>(static_cast<int>(g.next() % 19U) - 9) / T(7);
+            U re = g.fraction<U>(19U, U(7));
+            U im = g.fraction<U>(19U, U(7));
             if (++at % 41U == 0U)
             {
-                v = specials[(at / 41U) % 5U];
+                ((at / 41U) % 2U == 0U ? re : im) = specials[(at / 41U) % 5U];
             }
-            b.add(r, c, v);
+            b.add(r, c, value<T>(re, im));
         }
     }
     return b.compress();
 }
 
-template <typename T> sp::SellSlices<T> slices_of(const sp::SellMatrix<T>& a)
+template <typename T> sp::SellSlices<Scalar<T>> slices_of(const sp::SellMatrix<T>& a)
 {
     return {a.slice_ptr.data(),
             a.slice_width.data(),
-            a.vals.data(),
+            a.row_len.data(),
+            sp::detail::sell_scalars(a.vals.data()),
             a.col_idx.data(),
             a.perm_is_identity ? nullptr : a.perm.data(),
             a.rows};
 }
 
 template <typename T>
-void run_kernel(const SparseKernels& k, const sp::SellSlices<T>& a, T alpha, T beta, const T* x, T* y, u32 s_begin,
-                u32 s_end)
+void run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T alpha, T beta, const T* x, T* y,
+                u32 s_begin, u32 s_end)
 {
     if constexpr (std::is_same_v<T, crd::f64>)
     {
         k.sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end);
     }
-    else
+    else if constexpr (std::is_same_v<T, crd::f32>)
     {
         k.sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end);
+    }
+    else
+    {
+        const sp::SellComplexScales<Scalar<T>> scales{alpha.re, alpha.im, beta.re, beta.im};
+        const auto* xs = sp::detail::sell_scalars(x);
+        auto* ys = sp::detail::sell_scalars(y);
+        if constexpr (std::is_same_v<T, Complex<crd::f64>>)
+        {
+            k.sell_spmv_c64(a, scales, xs, ys, s_begin, s_end);
+        }
+        else
+        {
+            k.sell_spmv_c32(a, scales, xs, ys, s_begin, s_end);
+        }
     }
 }
 
@@ -106,37 +161,50 @@ struct Counts
     usize touched = 0; // a row outside the range, or the guard past y, written
 };
 
-// Every slice range of one matrix and level at three alpha/beta pairs against the CSR spmv.
+inline constexpr usize kScalePairs = 5;
+inline constexpr usize kFirstColumns = 3;
+
+// Every slice range of one matrix and level at five alpha/beta pairs and three x[0] against the CSR spmv.
 template <typename T>
 void check_level(const SparseKernels& k, crd::memory::IAllocator* alloc, u32 rows, u32 sigma, Counts& counts)
 {
+    using U = Scalar<T>;
     const u32 cols = rows + 3U;
     const auto csr = test_matrix<T>(alloc, rows, cols, 0x51ULL + rows * 977ULL + sigma);
     const sp::SellMatrix<T> sell = sp::to_sell(csr, alloc, sigma);
-    const sp::SellSlices<T> slices = slices_of(sell);
+    const sp::SellSlices<U> slices = slices_of(sell);
     constexpr u32 height = sp::SellMatrix<T>::kC;
 
     crd::containers::Array<T> x(alloc);
     Lcg g{0x77ULL + rows};
     for (u32 i = 0; i < cols; ++i)
     {
-        x.push_back(static_cast<T>(static_cast<int>(g.next() % 23U) - 11) / T(13));
+        x.push_back(value<T>(g.fraction<U>(23U, U(13)), g.fraction<U>(23U, U(11))));
     }
-    x[cols / 2U] = T(-0.0);
+    x[cols / 2U] = value<T>(U(-0.0), U(-0.0));
 
-    const T nan = std::numeric_limits<T>::quiet_NaN();
-    const T guard = T(12345.5);
-    const T pairs[][2] = {{T(1), T(0)}, {T(0.75), T(-1.25)}, {T(2), T(1)}};
+    const U nan = std::numeric_limits<U>::quiet_NaN();
+    const T guard = value<T>(U(12345.5), U(-6789.25));
+    // Real types keep the real parts: beta 0, -1.25, 0, -0 and 1. Complex beta (0, 1) and (-0, 0): zero is both parts.
+    const T pairs[kScalePairs][2] = {{value<T>(1, 0), value<T>(0, 0)},
+                                     {value<T>(U(0.75), U(-0.5)), value<T>(U(-1.25), U(0.25))},
+                                     {value<T>(2, 1), value<T>(0, 1)},
+                                     {value<T>(U(-0.5), 2), value<T>(U(-0.0), 0)},
+                                     {value<T>(U(1.5), 0), value<T>(1, -2)}};
+    // Padding never reads x[0]: a CSR row that stores column 0 alone sees it.
+    const T x0s[kFirstColumns] = {x[0], value<T>(std::numeric_limits<U>::infinity(), 0), value<T>(nan, 1)};
     crd::containers::Array<T> y0(alloc);
     crd::containers::Array<T> want(alloc);
     crd::containers::Array<T> y(alloc);
-    for (const auto& ab : pairs)
+    for (usize v = 0; v < kScalePairs * kFirstColumns; ++v)
     {
-        const bool beta_zero = ab[1] == T(0);
+        const auto& ab = pairs[v % kScalePairs];
+        x[0] = x0s[v / kScalePairs];
+        const bool beta_zero = sp::detail::spmv_is_zero(ab[1]);
         y0.resize(rows + 1U);
         for (u32 r = 0; r < rows; ++r)
         {
-            y0[r] = beta_zero ? nan : static_cast<T>(static_cast<int>(g.next() % 9U) - 4) / T(3); // NaN: never read
+            y0[r] = beta_zero ? value<T>(nan, nan) : value<T>(g.fraction<U>(9U, U(3)), g.fraction<U>(9U, U(5)));
         }
         y0[rows] = guard;
         want = y0;
@@ -185,7 +253,8 @@ template <typename T> void check_every_level()
             continue;
         }
         ++ran;
-        INFO("level " << crd::cpu_level_name(level.level) << ", " << sizeof(T) * 8U << "-bit");
+        INFO("level " << crd::cpu_level_name(level.level) << ", " << sizeof(T) * 8U << "-bit"
+                      << (kIsComplex<T> ? " complex" : ""));
         Counts counts;
         for (const u32 rows : {0U, 1U, 3U, 4U, 7U, 8U, 9U, 12U, 16U, 17U, 33U, 70U, 129U, 300U})
         {
@@ -194,7 +263,7 @@ template <typename T> void check_every_level()
                 check_level<T>(*level.table, &alloc, rows, sigma, counts);
             }
         }
-        CHECK(counts.cases == 14U * 3U * 3U * 6U);
+        CHECK(counts.cases == 14U * 3U * kScalePairs * kFirstColumns * 6U);
         CHECK(counts.wrong == 0U);
         CHECK(counts.touched == 0U);
     }
@@ -234,6 +303,32 @@ TEST_CASE("sparse kernels: every level the host runs gives the CSR spmv bits (f6
 TEST_CASE("sparse kernels: every level the host runs gives the CSR spmv bits (f32)", "[sparse][kernels]")
 {
     check_every_level<crd::f32>();
+}
+
+TEST_CASE("sparse kernels: every level the host runs gives the CSR spmv bits (c64)", "[sparse][kernels]")
+{
+    check_every_level<Complex<crd::f64>>();
+}
+
+TEST_CASE("sparse kernels: every level the host runs gives the CSR spmv bits (c32)", "[sparse][kernels]")
+{
+    check_every_level<Complex<crd::f32>>();
+}
+
+TEST_CASE("sparse kernels: to_sell records each sigma row's length and zero past the last row", "[sparse][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(8U << 20);
+    const auto csr = test_matrix<crd::f64>(&alloc, 70U, 73U, 0x5EEDULL);
+    const auto sell = sp::to_sell(csr, &alloc, 6U);
+    REQUIRE(sell.row_len.size() == static_cast<usize>(sell.num_slices) * sp::SellMatrix<crd::f64>::kC);
+    const u32* outer = csr.pattern().outer_ptr.data();
+    usize wrong = 0;
+    for (u32 sr = 0; sr < sell.row_len.size(); ++sr)
+    {
+        const u32 want = sr < 70U ? outer[sell.perm[sr] + 1U] - outer[sell.perm[sr]] : 0U;
+        wrong += sell.row_len[sr] == want ? 0U : 1U;
+    }
+    CHECK(wrong == 0U);
 }
 
 TEST_CASE("sparse kernels: spmv_sell runs the selected level and gives the CSR bits", "[sparse][kernels]")

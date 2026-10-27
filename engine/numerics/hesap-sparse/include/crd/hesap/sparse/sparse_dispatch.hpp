@@ -1,5 +1,5 @@
-// The hesap-sparse kernel level the process runs (SIMD-DISPATCH, ADR-0134 §5): the f64 and f32 SELL-C-σ spmv
-// (crd/hesap/sparse/sparse_kernels.hpp).
+// The hesap-sparse kernel level the process runs (SIMD-DISPATCH, ADR-0134 §5): the SELL-C-σ spmv of every
+// value type (crd/hesap/sparse/sparse_kernels.hpp).
 
 #pragma once
 
