@@ -431,4 +431,9 @@ guard's rules each fail its cases in `test-repository-tools.py`
 
 REPO.DEV.9 remains the bounded ingestion baseline. DIAG now owns the immediate diagnostic extensions above;
 clang++ as a full Linux compiler and not-yet-existing product consumers retain their respective qualification rows.
-The original templates/routes contribution work remains REPO.DEV.10.
+The original templates/routes contribution work remains REPO.DEV.10. Random program generators, differentials and a
+reducer for CEIR, CKIR and CHIR, with Centipede/FuzzTest and AFL++ beside libFuzzer, are
+[IR-FUZZ](../ROADMAP.md#slice-ir-fuzz)'s; property-based and mutation testing are
+[TEST-METH](../ROADMAP.md#slice-test-meth)'s; the perceptual golden metric is
+[IMG-ORACLE](../ROADMAP.md#slice-img-oracle)'s; TLA+ models and error bounds are
+[FORMAL.1](../ROADMAP.md#slice-formal.1)'s.

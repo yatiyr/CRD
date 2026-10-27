@@ -233,6 +233,17 @@ MCP spec evolves (stabilized late 2024; ecosystem accelerating
 through 2025-2026); `crd-rpc` keeps spec compliance in a thin adapter
 layer, so spec drift is one-module work.
 
+**Amendment (2026-10-27,
+[adoption](../sessions/2026-10-27-research-adopt-part-3.md)).** The
+shipped `ceridc mcp` loop answers revision `2024-11-05` with tools only.
+[MCP-ADAPT.0](../ROADMAP.md#slice-mcp-adapt.0) brings it to `2026-07-28`
+with `2025-11-25` handshake compatibility.
+[MCP-ADAPT](../ROADMAP.md#slice-mcp-adapt) is the one adapter module
+over the command service. It tracks the current revision with N-1
+support and generates tools, resources and prompts from the command
+schemas. It owns the MCP clause of CMD.4. The capability boundary above
+is the DIAG.8c host grant, and an agent never raises its own grant.
+
 ### 7. Module surface (registration pattern)
 
 Every Cerid module registers CLI commands via a static-init hook:

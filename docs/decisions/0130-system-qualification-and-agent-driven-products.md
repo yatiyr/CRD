@@ -50,5 +50,10 @@ detail lives in references. Full-victory physics gates supersede weaker historic
 preserving its scenes and correctness tests. Training is no longer excluded by the older inference-only phase contract.
 Use domain adapters for interchange; Cerid's runtime ownership remains CEIR/CHIR/CKIR and native public modules.
 
+Amended 2026-10-27 ([adoption](../sessions/2026-10-27-research-adopt-part-3.md)): agent control qualifies only with
+a recorded [AGENT-BENCH](../ROADMAP.md#slice-agent-bench) board. Every build and export carries an SBOM, provenance,
+signatures and a reproducibility check ([SUPPLY.1](../ROADMAP.md#slice-supply.1) to
+[SUPPLY.4](../ROADMAP.md#slice-supply.4)). Its cryptography uses item 3's maintained implementations.
+
 Before a slice closes, it must leave current docs accurate, a dated session and relevant tests/benchmarks/recipes linked.
 Passing documentation validation establishes consistency of the plan, not correctness, security or performance of code.

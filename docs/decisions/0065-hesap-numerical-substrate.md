@@ -1508,3 +1508,15 @@ The 2026-10-26 research
   graph AD, lowering to CEIR.
 
 FE-CORE, FV-CORE, VV-UQ and SIM.4 solve through crd-hesap and add no numerics of their own.
+
+## §28 Amendment (2026-10-27) — the interactive kernel and the image metric
+
+The 2026-10-26 research
+([proposals](../research/2026-10-26-building-with-cerid-2026-comparison.md#gaps-and-proposed-roadmap-changes),
+[adoption](../sessions/2026-10-27-research-adopt-part-3.md)) moves two placements:
+- §8 and §9 (`crd-hesap-repl`): [REPL.0](../ROADMAP.md#slice-repl.0) decides the one interactive kernel shared by the
+  REPL, notebook, game console and MCP, with its module name and placement. The recommendation is a CHIR-level
+  `crd-repl` in `engine/execution`; crd-hesap keeps the display formats and variable inspection. Until REPL.0 is
+  accepted, §8 and §9 stand.
+- [IMG-ORACLE](../ROADMAP.md#slice-img-oracle): the perceptual image metric for golden tests is recommended as a
+  crd-hesap module beside hesap-dsp, built on hesap-fft and hesap-stats; [OWN.1](../ROADMAP.md#slice-own.1) decides.

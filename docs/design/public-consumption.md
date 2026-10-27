@@ -146,4 +146,5 @@ floating-point options every consumer of the math headers must compile with). Ev
 Exporting families beyond `core`, an include-only edge notion in the registry, shared-library builds, a
 multi-configuration install contract, and the fuzz and sanitizer instruments (REPO.DEV.9) are separate rows.
 (Amended 2026-10-12: the diagnostic family above is now exported; families beyond it, the registry's include-only
-edges, shared libraries and the multi-configuration install remain out of scope.)
+edges, shared libraries and the multi-configuration install remain out of scope.) Semver, deprecation and ABI rules
+are [API-STAB.0](../ROADMAP.md#slice-api-stab.0)'s; the package's SBOM is [SUPPLY.1](../ROADMAP.md#slice-supply.1)'s.

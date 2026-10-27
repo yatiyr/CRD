@@ -150,6 +150,14 @@ and a compiler/IR is a different engineering discipline than the kernel work Cer
 - **On the first CEIR vertical slice:** execute the four deferred edits above as one coordinated commit; no further
   ADR status change (this ADR is already Accepted).
 
+## 7a. Amendment (2026-10-27) — native code generation below CEIR
+
+Clause 2.3 forbids an external IR as the internal architecture. It does not forbid an external code generator below
+CEIR. [CEIR-JIT.0](../ROADMAP.md#slice-ceir-jit.0) decides the native tiers
+([adoption](../sessions/2026-10-27-research-adopt-part-3.md)). It leads with an owned copy-and-patch baseline and an
+owned optimizing tier on ADR-0117. Cranelift and LLVM ORC are measured peers and fallbacks. CEIR stays the only
+semantics. The tiers are keyed by program generation and emit code for every runtime-dispatch level (ADR-0134).
+
 ## 8. References
 
 - `docs/research/2026-08-07-ceir-universal-programming-master-roadmap.md` — §5 (this ADR's mandate), §98 (language

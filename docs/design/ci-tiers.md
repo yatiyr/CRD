@@ -137,4 +137,5 @@ resource lock stays as it is.
 
 Immutable action hashes, cache trust and token policy belong to REPO.DEV.6; compiler caching to
 [build performance](build-performance.md) (REPO.DEV.7); affected
-target selection inside a lane to the developer-workflow rows.
+target selection inside a lane to the developer-workflow rows. SBOMs, the double-build reproducibility lane, SLSA
+provenance and signing belong to [SUPPLY.1](../ROADMAP.md#slice-supply.1) to [SUPPLY.4](../ROADMAP.md#slice-supply.4).

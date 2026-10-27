@@ -204,3 +204,14 @@ The 0e §98 / §8 surface minus what D1 binds. Each deferred to its first corpus
 ACCEPTED under the CEIR gold-standard autonomous cadence (the ADR-0114 mold); the user's commit is the ratification
 gate (ADR-0108 §7). No consent gate, no AI co-author trailer. Supersedes the DEFERRAL clause of CEIR-0e §8 (the note's
 binding decisions now live here); the 0e note carries a pointer to this ADR.
+
+## 9. Amendment (2026-10-27) — the full language is pinned before LANG.1
+
+The 2026-10-26 research
+([proposals](../research/2026-10-26-building-with-cerid-2026-comparison.md#gaps-and-proposed-roadmap-changes),
+[adoption](../sessions/2026-10-27-research-adopt-part-3.md)) replaces the "first consumer" triggers of §7 for the
+language surface. [LANG.0](../ROADMAP.md#slice-lang.0) writes the CHIR 1 reference (generics with a hot-reload-safe
+instantiation strategy, ADTs over `core.match`, modules, the async surface, the error model, effects, editions and an
+explicit dynamic type for interactive tiers) and its conformance suite. The user accepts it before any LANG row writes
+code. D1 to D6 stand. The rejected borrow checker stays rejected. The §7 Q5 landmine (variant-cache agreement) is
+[CKIR-LANG.1](../ROADMAP.md#slice-ckir-lang.1)'s.
