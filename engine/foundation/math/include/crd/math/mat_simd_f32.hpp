@@ -14,8 +14,9 @@
 //     stack-roundtrip overhead.
 //   - Compiler auto-vec already SIMDifies tight loops over scalar Vec3f
 //     / Quatf; we don't lose anything by keeping them scalar.
-//   - For batched physics, eylem v1+ uses `simd::Soa<BodyChunk8>` with
-//     `Vec8f` columns — 8 bodies per AVX op, zero waste.
+//   - For batched physics, eylem v1+ keeps `simd::Soa<BodyChunk>` chunks of
+//     plain f32 columns that a per-CPU-level kernel steps eight bodies at a
+//     time on Vec8f (eylem_rigid3d/rigid3d_kernels.hpp) — zero waste.
 //
 // See `docs/sessions/2026-05-10-v0e-bench-harness.md` for benchmark data
 // and ADR-0066 §13 for the wider AoSoA-vs-AoS-SIMD architectural call.

@@ -1,6 +1,6 @@
 #pragma once
 
-// BodyPool — AoSoA-8 (or 4 on non-AVX2) rigid-body storage for the eylem
+// BodyPool — AoSoA-8 rigid-body storage for the eylem
 // rigid-3D scene. Phase 3.1 v1b-a (ADR-0062 §6, §15).
 //
 // Architecture decisions locked at v1b-a:
@@ -27,11 +27,10 @@
 //
 //   4. AoS RigidBody POD is the public read/write contract. `read()` packs
 //      lanes back into `RigidBody`, `write()` fans the AoS into columns.
-//      The hot solver loop (v1e+) bypasses this and iterates chunks
-//      directly via `storage()`.
+//      The integrator (rigid3d_kernels.hpp) and the v1e+ solver bypass this
+//      and iterate chunks directly via `storage()`.
 //
-// Determinism: all per-lane writes go through scalar `store()`/`load()`
-// per-column; insertion order is preserved within a tile; remove +
+// Determinism: per-lane reads and writes index the plain columns; insertion order is preserved within a tile; remove +
 // re-insert reuses the lowest-index free slot so the slot-allocation
 // sequence is deterministic given a deterministic call sequence.
 
@@ -39,9 +38,8 @@
 #include <crd/core/types.hpp>
 #include <crd/eylem/rigid_body.hpp>
 #include <crd/eylem/types.hpp>
-#include <crd/math/simd/backend.hpp>
+#include <crd/eylem_rigid3d/rigid3d_kernels.hpp>
 #include <crd/math/simd/soa.hpp>
-#include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
 namespace crd::eylem_rigid3d
@@ -52,52 +50,13 @@ namespace crd::eylem_rigid3d
 using crd::eylem::BodyId;
 using crd::eylem::RigidBody;
 
-// The chunk of Lane bodies. The AoSoA lane width is one data layout for every
-// build and CPU level (kNativeLaneWidth = 8, ADR-0134 §5): Vec8f columns.
-template <crd::usize Lane>
-struct BodyChunkT;
-
-template <>
-struct alignas(32) BodyChunkT<8>
-{
-    using Col = crd::math::simd::Vec8f;
-    // ── State columns (current-frame integrated values) ────────────────
-    // 3 + 4 + 3 + 3 + 1 + 3 + 1 + 1 = 19 columns × 32 B = 608 B
-    Col pos_x{};         Col pos_y{};         Col pos_z{};
-    Col rot_x{};         Col rot_y{};         Col rot_z{};         Col rot_w{};
-    Col linvel_x{};      Col linvel_y{};      Col linvel_z{};
-    Col angvel_x{};      Col angvel_y{};      Col angvel_z{};
-    Col inv_mass{};
-    Col inv_inertia_x{}; Col inv_inertia_y{}; Col inv_inertia_z{};
-    Col linear_damping{};
-    Col angular_damping{};
-    // ── Previous-frame snapshot columns (added v1b-e) ──────────────────
-    // Used by RigidBodyInterpolationSystem for "fixed timestep with
-    // interpolation" per Glenn Fiedler. EylemSystem snapshots curr→prev
-    // at the START of each substep (before integrating), then writes
-    // new curr values. The InterpolationSystem (variable-rate) reads
-    // both and lerps with alpha = world.fixed_step_alpha(fixed_dt).
-    // 3 (pos) + 4 (rot) = 7 extra columns × 32 B = 224 B → chunk grows
-    // from 608 B to 832 B (~37% memory bump; acceptable for the
-    // smooth-render gain on every dynamic body).
-    Col prev_pos_x{};    Col prev_pos_y{};    Col prev_pos_z{};
-    Col prev_rot_x{};    Col prev_rot_y{};    Col prev_rot_z{};    Col prev_rot_w{};
-    // ── Per-lane integer side-bands (kept in same chunk for cache locality) ──
-    crd::u32 flags[8]{};
-    // generation = the BodyId generation last issued for this slot.
-    // 0 = slot has never been allocated. Slot is "live" iff `live[i]` is true.
-    // The two arrays could be packed together; keeping them parallel makes
-    // the validity check branch-free and easy to vectorise later.
-    crd::u8  generation[8]{};
-    crd::u8  live[8]{}; // 0 = free slot, 1 = currently allocated
-};
-
-using BodyChunk = BodyChunkT<crd::math::simd::kNativeLaneWidth>;
+// BodyChunk (rigid3d_kernels.hpp): kChunkLanes bodies as plain f32 columns, the layout every CPU level's kernel
+// reads.
 
 class BodyPool
 {
 public:
-    static constexpr crd::usize kLane = crd::math::simd::kNativeLaneWidth;
+    static constexpr crd::usize kLane = kChunkLanes;
     using Storage                     = crd::math::simd::Soa<BodyChunk, kLane>;
 
     // BodyId index field is 24 bits, so the absolute hard ceiling is
@@ -120,35 +79,25 @@ public:
     // snap corrections).
     void                    write(BodyId id, const RigidBody& state) noexcept;
     // INTEGRATOR semantics: writes only the curr columns and leaves
-    // prev untouched. Use this from the physics integrator step where
-    // the prev snapshot was already captured by snapshot_state_to_prev()
-    // earlier in the substep — overwriting prev here would destroy the
+    // prev untouched. Use this from a physics step where the prev
+    // snapshot was already captured earlier in the substep (the body
+    // step kernel does) — overwriting prev here would destroy the
     // interpolation source.
     void                    write_curr_only(BodyId id, const RigidBody& state) noexcept;
 
-    // Read just the previous-frame snapshot pos+rot for `id`. Used by
-    // RigidBodyInterpolationSystem to lerp between prev and curr at
-    // alpha = world.fixed_step_alpha(fixed_dt). Returns (pos=zero,
-    // rot=identity) if `id` is invalid — callers normally guarantee
-    // validity via component-storage iteration.
-    struct PrevState
+    // Read just the current pos+rot (`read_pose`) or the previous-frame
+    // snapshot pos+rot (`read_prev`) for `id`, one chunk lookup each.
+    // EylemSystem syncs Transform from the first; RigidBodyInterpolationSystem
+    // lerps between the two at alpha = world.fixed_step_alpha(fixed_dt).
+    // Return (pos=zero, rot=identity) if `id` is invalid — callers normally
+    // guarantee validity via component-storage iteration.
+    struct Pose
     {
         crd::math::Vec3<crd::units::Length32> position;
         crd::math::Quatf                       rotation;
     };
-    [[nodiscard]] PrevState read_prev(BodyId id) const noexcept;
-
-    // Copy ALL current-frame columns (pos, rot) into the prev-frame
-    // columns across every live chunk. Called by EylemSystem at the
-    // START of each fixed substep, BEFORE integrating, so the prev
-    // snapshot captures the exact state the renderer was last shown.
-    // After this call, the integration step writes new curr values;
-    // prev stays frozen for the duration of the substep.
-    //
-    // O(chunk_count) — full SIMD column assignment, no per-lane loop.
-    // Touches free slots too; harmless because their lanes are unused
-    // and read by no one (live[lane]==0 guards every consumer path).
-    void snapshot_state_to_prev() noexcept;
+    [[nodiscard]] Pose read_pose(BodyId id) const noexcept;
+    [[nodiscard]] Pose read_prev(BodyId id) const noexcept;
 
     // Number of currently-live bodies (excluding the null sentinel).
     [[nodiscard]] crd::usize size() const noexcept { return m_live_count; }
@@ -156,8 +105,8 @@ public:
     // Maximum bodies this pool can ever hold (capacity hint at ctor, clamped).
     [[nodiscard]] crd::u32 capacity() const noexcept { return m_capacity; }
 
-    // Direct chunk-storage access for the v1c+ broadphase / v1e+ solver
-    // hot path. Caller is expected to use `live[lane]` to skip free
+    // Direct chunk-storage access for the body step kernel and the v1c+
+    // broadphase / v1e+ solver hot path. Caller is expected to use `live[lane]` to skip free
     // slots when iterating partial tiles.
     [[nodiscard]] Storage&       storage()       noexcept { return m_storage; }
     [[nodiscard]] const Storage& storage() const noexcept { return m_storage; }
@@ -184,7 +133,7 @@ private:
     // `store_lane` writes curr cols AND mirrors pos/rot into prev cols
     // (teleport semantics). `store_curr_only_lane` writes curr cols and
     // leaves prev untouched (integrator semantics — prev was snapshotted
-    // earlier in the substep by snapshot_state_to_prev()).
+    // earlier in the substep).
     void store_lane           (crd::u32 idx, const RigidBody& body) noexcept;
     void store_curr_only_lane (crd::u32 idx, const RigidBody& body) noexcept;
     void load_lane            (crd::u32 idx, RigidBody& body) const noexcept;

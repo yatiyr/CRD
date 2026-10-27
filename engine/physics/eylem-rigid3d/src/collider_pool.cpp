@@ -14,15 +14,6 @@ namespace crd::eylem_rigid3d
 {
 namespace
 {
-// Same store/modify/load pattern as BodyPool's put_lane.
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    crd::f32 buf[crd::math::simd::kVec8fLanes];
-    col.store(buf);
-    buf[lane_idx] = value;
-    col = crd::math::simd::Vec8f::load(buf);
-}
-
 // Bump generation, wrapping 0xFF -> 1 (0 stays reserved as "never allocated").
 [[nodiscard]] CRD_FORCEINLINE crd::u32 next_generation(crd::u8 prev) noexcept
 {
@@ -254,30 +245,30 @@ Collider ColliderPool::read(ColliderId id) const noexcept
         case ColliderShape::Sphere:
         {
             const auto& tile = m_spheres.storage.chunk(ch);
-            out.local_position = {tile.lpos_x.lane(lane), tile.lpos_y.lane(lane), tile.lpos_z.lane(lane)};
-            out.local_rotation = {tile.lrot_x.lane(lane), tile.lrot_y.lane(lane),
-                                  tile.lrot_z.lane(lane), tile.lrot_w.lane(lane)};
-            out.sphere = crd::eylem::ColliderSphere{tile.radius.lane(lane)};
+            out.local_position = {tile.lpos_x[lane], tile.lpos_y[lane], tile.lpos_z[lane]};
+            out.local_rotation = {tile.lrot_x[lane], tile.lrot_y[lane],
+                                  tile.lrot_z[lane], tile.lrot_w[lane]};
+            out.sphere = crd::eylem::ColliderSphere{tile.radius[lane]};
             break;
         }
         case ColliderShape::Box:
         {
             const auto& tile = m_boxes.storage.chunk(ch);
-            out.local_position = {tile.lpos_x.lane(lane), tile.lpos_y.lane(lane), tile.lpos_z.lane(lane)};
-            out.local_rotation = {tile.lrot_x.lane(lane), tile.lrot_y.lane(lane),
-                                  tile.lrot_z.lane(lane), tile.lrot_w.lane(lane)};
+            out.local_position = {tile.lpos_x[lane], tile.lpos_y[lane], tile.lpos_z[lane]};
+            out.local_rotation = {tile.lrot_x[lane], tile.lrot_y[lane],
+                                  tile.lrot_z[lane], tile.lrot_w[lane]};
             out.box = crd::eylem::ColliderBox{
-                {tile.half_x.lane(lane), tile.half_y.lane(lane), tile.half_z.lane(lane)}};
+                {tile.half_x[lane], tile.half_y[lane], tile.half_z[lane]}};
             break;
         }
         case ColliderShape::Capsule:
         {
             const auto& tile = m_capsules.storage.chunk(ch);
-            out.local_position = {tile.lpos_x.lane(lane), tile.lpos_y.lane(lane), tile.lpos_z.lane(lane)};
-            out.local_rotation = {tile.lrot_x.lane(lane), tile.lrot_y.lane(lane),
-                                  tile.lrot_z.lane(lane), tile.lrot_w.lane(lane)};
+            out.local_position = {tile.lpos_x[lane], tile.lpos_y[lane], tile.lpos_z[lane]};
+            out.local_rotation = {tile.lrot_x[lane], tile.lrot_y[lane],
+                                  tile.lrot_z[lane], tile.lrot_w[lane]};
             out.capsule = crd::eylem::ColliderCapsule{
-                tile.radius.lane(lane), tile.half_height.lane(lane)};
+                tile.radius[lane], tile.half_height[lane]};
             break;
         }
         default: break;
@@ -337,14 +328,14 @@ crd::u32 ColliderPool::insert_sphere(BodyId body, const Collider& c)
 
     const crd::u32 next_gen = next_generation(tile.generation[lane]);
 
-    put_lane(tile.lpos_x, lane, c.local_position.x);
-    put_lane(tile.lpos_y, lane, c.local_position.y);
-    put_lane(tile.lpos_z, lane, c.local_position.z);
-    put_lane(tile.lrot_x, lane, c.local_rotation.x);
-    put_lane(tile.lrot_y, lane, c.local_rotation.y);
-    put_lane(tile.lrot_z, lane, c.local_rotation.z);
-    put_lane(tile.lrot_w, lane, c.local_rotation.w);
-    put_lane(tile.radius, lane, c.sphere.radius);
+    tile.lpos_x[lane] = c.local_position.x;
+    tile.lpos_y[lane] = c.local_position.y;
+    tile.lpos_z[lane] = c.local_position.z;
+    tile.lrot_x[lane] = c.local_rotation.x;
+    tile.lrot_y[lane] = c.local_rotation.y;
+    tile.lrot_z[lane] = c.local_rotation.z;
+    tile.lrot_w[lane] = c.local_rotation.w;
+    tile.radius[lane] = c.sphere.radius;
     tile.body_idx[lane] = body.raw;
 
     tile.generation[lane] = static_cast<crd::u8>(next_gen);
@@ -367,16 +358,16 @@ crd::u32 ColliderPool::insert_box(BodyId body, const Collider& c)
 
     const crd::u32 next_gen = next_generation(tile.generation[lane]);
 
-    put_lane(tile.lpos_x, lane, c.local_position.x);
-    put_lane(tile.lpos_y, lane, c.local_position.y);
-    put_lane(tile.lpos_z, lane, c.local_position.z);
-    put_lane(tile.lrot_x, lane, c.local_rotation.x);
-    put_lane(tile.lrot_y, lane, c.local_rotation.y);
-    put_lane(tile.lrot_z, lane, c.local_rotation.z);
-    put_lane(tile.lrot_w, lane, c.local_rotation.w);
-    put_lane(tile.half_x, lane, c.box.half_extents.x);
-    put_lane(tile.half_y, lane, c.box.half_extents.y);
-    put_lane(tile.half_z, lane, c.box.half_extents.z);
+    tile.lpos_x[lane] = c.local_position.x;
+    tile.lpos_y[lane] = c.local_position.y;
+    tile.lpos_z[lane] = c.local_position.z;
+    tile.lrot_x[lane] = c.local_rotation.x;
+    tile.lrot_y[lane] = c.local_rotation.y;
+    tile.lrot_z[lane] = c.local_rotation.z;
+    tile.lrot_w[lane] = c.local_rotation.w;
+    tile.half_x[lane] = c.box.half_extents.x;
+    tile.half_y[lane] = c.box.half_extents.y;
+    tile.half_z[lane] = c.box.half_extents.z;
     tile.body_idx[lane] = body.raw;
 
     tile.generation[lane] = static_cast<crd::u8>(next_gen);
@@ -399,15 +390,15 @@ crd::u32 ColliderPool::insert_capsule(BodyId body, const Collider& c)
 
     const crd::u32 next_gen = next_generation(tile.generation[lane]);
 
-    put_lane(tile.lpos_x,      lane, c.local_position.x);
-    put_lane(tile.lpos_y,      lane, c.local_position.y);
-    put_lane(tile.lpos_z,      lane, c.local_position.z);
-    put_lane(tile.lrot_x,      lane, c.local_rotation.x);
-    put_lane(tile.lrot_y,      lane, c.local_rotation.y);
-    put_lane(tile.lrot_z,      lane, c.local_rotation.z);
-    put_lane(tile.lrot_w,      lane, c.local_rotation.w);
-    put_lane(tile.radius,      lane, c.capsule.radius);
-    put_lane(tile.half_height, lane, c.capsule.half_height);
+    tile.lpos_x[lane] = c.local_position.x;
+    tile.lpos_y[lane] = c.local_position.y;
+    tile.lpos_z[lane] = c.local_position.z;
+    tile.lrot_x[lane] = c.local_rotation.x;
+    tile.lrot_y[lane] = c.local_rotation.y;
+    tile.lrot_z[lane] = c.local_rotation.z;
+    tile.lrot_w[lane] = c.local_rotation.w;
+    tile.radius[lane] = c.capsule.radius;
+    tile.half_height[lane] = c.capsule.half_height;
     tile.body_idx[lane] = body.raw;
 
     tile.generation[lane] = static_cast<crd::u8>(next_gen);

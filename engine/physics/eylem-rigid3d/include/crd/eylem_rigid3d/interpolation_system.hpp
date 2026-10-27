@@ -28,9 +28,9 @@
 //     visible_pose = lerp(prev_pose, curr_pose, alpha)
 //
 // `prev_pose` and `curr_pose` are the integrator's poses BEFORE and
-// AFTER the most recent substep. EylemSystem snapshots curr→prev at
-// the START of each substep (via BodyPool::snapshot_state_to_prev),
-// then integrates and writes new curr. This system reads both columns
+// AFTER the most recent substep. EylemSystem's body-step kernel copies
+// curr→prev at the START of each substep, then integrates and writes new
+// curr. This system reads both columns
 // and lerps — World::fixed_step_alpha(fixed_dt) provides alpha.
 //
 // Architecture decisions locked at v1b-e:

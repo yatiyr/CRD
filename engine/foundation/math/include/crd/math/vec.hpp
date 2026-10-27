@@ -13,8 +13,8 @@
 //
 // For batched workloads (physics, animation, particles), use the
 // `crd::math::simd::Soa<TChunk, Lane>` AoSoA substrate from v0b — the
-// `BodyChunk8`-style pattern processes 8 entities × 3 axes per AVX op
-// with zero waste. That's the SIMD path for Vec3-shaped data; do NOT
+// eylem `BodyChunk` pattern (plain f32 columns a per-CPU-level kernel loads
+// as Vec8f) processes 8 entities × 3 axes per AVX op with zero waste. That's the SIMD path for Vec3-shaped data; do NOT
 // reach for Vec3-as-__m128 (that's the Bullet btVector3 mistake).
 //
 // Mat4f IS SIMD-ified internally — it fills the SIMD register

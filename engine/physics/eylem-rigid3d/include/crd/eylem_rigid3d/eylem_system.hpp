@@ -33,11 +33,11 @@
 //      bypass dirty-marking and the world matrix would not refresh.
 //      Per-entity opt-out via `RigidBodyComponent::sync_to_transform = 0`.
 //
-//   5. Iteration order is deterministic by construction — `Query<Transform,
-//      RigidBodyComponent>` visits entities in EntityId order (per the v1f
-//      query DSL contract); the per-entity integration is a pure function
-//      of (state, dt, gravity); the BodyPool's `write_lane` does scalar
-//      stores in a fixed lane order. Per ADR-0063 §4.
+//   5. Deterministic by construction (ADR-0063 §4): the integration is one
+//      body-step kernel call over the whole pool (rigid3d_kernels.hpp), a
+//      pure function of (state, dt, gravity) that every CPU level computes
+//      to the same bits; the Transform sync then visits entities in EntityId
+//      order (per the v1f query DSL contract).
 
 #include <crd/containers/string_view.hpp>
 #include <crd/core/types.hpp>
@@ -72,9 +72,10 @@ public:
     }
 
     // Run one fixed substep. The schedule guarantees `fixed_dt` cadence
-    // when invoked via `step_fixed`. Iterates entities with both
-    // `Transform` and `RigidBodyComponent`, integrates motion, syncs the
-    // result back to `Transform` (per the `sync_to_transform` flag).
+    // when invoked via `step_fixed`. Integrates every live body of the
+    // pool once, then syncs the pose of each entity with both `Transform`
+    // and `RigidBodyComponent` back to `Transform` (per the
+    // `sync_to_transform` flag).
     void run(crd::scene::World& world) override;
 
 private:

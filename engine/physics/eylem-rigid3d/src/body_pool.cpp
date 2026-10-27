@@ -10,22 +10,6 @@
 
 namespace crd::eylem_rigid3d
 {
-namespace
-{
-// Per-column store: read the 8-lane column, overwrite the lane, write it
-// back. Mirrors crd::math::simd::soa.hpp's scatter helper but localised so
-// we don't pay the indirection cost in the hot insert/write path. Vec8f
-// exposes no per-lane write; the store/modify/load round trip is the
-// canonical pattern (also used by gather4/scatter8 in crd-math::simd::soa).
-CRD_FORCEINLINE void put_lane(crd::math::simd::Vec8f& col, crd::usize lane_idx, crd::f32 value) noexcept
-{
-    crd::f32 buf[crd::math::simd::kVec8fLanes];
-    col.store(buf);
-    buf[lane_idx] = value;
-    col = crd::math::simd::Vec8f::load(buf);
-}
-} // namespace
-
 BodyPool::BodyPool(crd::memory::IAllocator* persistent_alloc, crd::u32 max_bodies)
     : m_storage(persistent_alloc != nullptr ? persistent_alloc : crd::memory::default_allocator())
     , m_capacity(std::min(max_bodies, kIndexMax))
@@ -167,9 +151,9 @@ void BodyPool::write_curr_only(BodyId id, const RigidBody& state) noexcept
     store_curr_only_lane(id.index(), state);
 }
 
-BodyPool::PrevState BodyPool::read_prev(BodyId id) const noexcept
+BodyPool::Pose BodyPool::read_pose(BodyId id) const noexcept
 {
-    PrevState out{};
+    Pose out{};
     out.rotation = crd::math::Quatf{0.0F, 0.0F, 0.0F, 1.0F};
     if (!contains(id))
     {
@@ -179,37 +163,31 @@ BodyPool::PrevState BodyPool::read_prev(BodyId id) const noexcept
     const BodyChunk& tile = m_storage.chunk(chunk_of(id.index()));
     const crd::u32   lane = lane_of(id.index());
 
-    out.position.x = crd::units::Length32{tile.prev_pos_x.lane(lane)};
-    out.position.y = crd::units::Length32{tile.prev_pos_y.lane(lane)};
-    out.position.z = crd::units::Length32{tile.prev_pos_z.lane(lane)};
-
-    out.rotation.x = tile.prev_rot_x.lane(lane);
-    out.rotation.y = tile.prev_rot_y.lane(lane);
-    out.rotation.z = tile.prev_rot_z.lane(lane);
-    out.rotation.w = tile.prev_rot_w.lane(lane);
-
+    out.position.x = crd::units::Length32{tile.pos_x[lane]};
+    out.position.y = crd::units::Length32{tile.pos_y[lane]};
+    out.position.z = crd::units::Length32{tile.pos_z[lane]};
+    out.rotation   = crd::math::Quatf{tile.rot_x[lane], tile.rot_y[lane], tile.rot_z[lane], tile.rot_w[lane]};
     return out;
 }
 
-void BodyPool::snapshot_state_to_prev() noexcept
+BodyPool::Pose BodyPool::read_prev(BodyId id) const noexcept
 {
-    // Whole-column copy across every chunk. The Soa storage hands out
-    // chunks that are contiguous and ABI-aligned; SIMD `=` is one mov
-    // per column on AVX2 and two on the 128-bit backends. Free-slot lanes get
-    // copied too, but that is harmless: live[lane]==0 guards every
-    // consumer that reads prev_*.
-    const crd::usize n = m_storage.chunk_count();
-    for (crd::usize c = 0; c < n; ++c)
+    Pose out{};
+    out.rotation = crd::math::Quatf{0.0F, 0.0F, 0.0F, 1.0F};
+    if (!contains(id))
     {
-        BodyChunk& tile = m_storage.chunk(c);
-        tile.prev_pos_x = tile.pos_x;
-        tile.prev_pos_y = tile.pos_y;
-        tile.prev_pos_z = tile.pos_z;
-        tile.prev_rot_x = tile.rot_x;
-        tile.prev_rot_y = tile.rot_y;
-        tile.prev_rot_z = tile.rot_z;
-        tile.prev_rot_w = tile.rot_w;
+        return out;
     }
+
+    const BodyChunk& tile = m_storage.chunk(chunk_of(id.index()));
+    const crd::u32   lane = lane_of(id.index());
+
+    out.position.x = crd::units::Length32{tile.prev_pos_x[lane]};
+    out.position.y = crd::units::Length32{tile.prev_pos_y[lane]};
+    out.position.z = crd::units::Length32{tile.prev_pos_z[lane]};
+    out.rotation   = crd::math::Quatf{tile.prev_rot_x[lane], tile.prev_rot_y[lane], tile.prev_rot_z[lane],
+                                      tile.prev_rot_w[lane]};
+    return out;
 }
 
 BodyPool::Slot BodyPool::resolve(BodyId id) const noexcept
@@ -235,30 +213,30 @@ void BodyPool::store_curr_only_lane(crd::u32 idx, const RigidBody& body) noexcep
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
     const crd::u32 lane = lane_of(idx);
 
-    put_lane(tile.pos_x, lane, body.position.x.value);
-    put_lane(tile.pos_y, lane, body.position.y.value);
-    put_lane(tile.pos_z, lane, body.position.z.value);
+    tile.pos_x[lane] = body.position.x.value;
+    tile.pos_y[lane] = body.position.y.value;
+    tile.pos_z[lane] = body.position.z.value;
 
-    put_lane(tile.rot_x, lane, body.rotation.x);
-    put_lane(tile.rot_y, lane, body.rotation.y);
-    put_lane(tile.rot_z, lane, body.rotation.z);
-    put_lane(tile.rot_w, lane, body.rotation.w);
+    tile.rot_x[lane] = body.rotation.x;
+    tile.rot_y[lane] = body.rotation.y;
+    tile.rot_z[lane] = body.rotation.z;
+    tile.rot_w[lane] = body.rotation.w;
 
-    put_lane(tile.linvel_x, lane, body.linear_velocity.x.value);
-    put_lane(tile.linvel_y, lane, body.linear_velocity.y.value);
-    put_lane(tile.linvel_z, lane, body.linear_velocity.z.value);
+    tile.linvel_x[lane] = body.linear_velocity.x.value;
+    tile.linvel_y[lane] = body.linear_velocity.y.value;
+    tile.linvel_z[lane] = body.linear_velocity.z.value;
 
-    put_lane(tile.angvel_x, lane, body.angular_velocity.x.value);
-    put_lane(tile.angvel_y, lane, body.angular_velocity.y.value);
-    put_lane(tile.angvel_z, lane, body.angular_velocity.z.value);
+    tile.angvel_x[lane] = body.angular_velocity.x.value;
+    tile.angvel_y[lane] = body.angular_velocity.y.value;
+    tile.angvel_z[lane] = body.angular_velocity.z.value;
 
-    put_lane(tile.inv_mass,        lane, body.inv_mass.value);
-    put_lane(tile.inv_inertia_x,   lane, body.inv_inertia.x.value);
-    put_lane(tile.inv_inertia_y,   lane, body.inv_inertia.y.value);
-    put_lane(tile.inv_inertia_z,   lane, body.inv_inertia.z.value);
+    tile.inv_mass[lane] = body.inv_mass.value;
+    tile.inv_inertia_x[lane] = body.inv_inertia.x.value;
+    tile.inv_inertia_y[lane] = body.inv_inertia.y.value;
+    tile.inv_inertia_z[lane] = body.inv_inertia.z.value;
 
-    put_lane(tile.linear_damping,  lane, body.linear_damping);
-    put_lane(tile.angular_damping, lane, body.angular_damping);
+    tile.linear_damping[lane] = body.linear_damping;
+    tile.angular_damping[lane] = body.angular_damping;
 
     // Bit-copy the flags struct to avoid bitfield-direct dependence (the
     // compiler may emit different load patterns across platforms).
@@ -279,14 +257,14 @@ void BodyPool::store_lane(crd::u32 idx, const RigidBody& body) noexcept
     BodyChunk&     tile = m_storage.chunk(chunk_of(idx));
     const crd::u32 lane = lane_of(idx);
 
-    put_lane(tile.prev_pos_x, lane, body.position.x.value);
-    put_lane(tile.prev_pos_y, lane, body.position.y.value);
-    put_lane(tile.prev_pos_z, lane, body.position.z.value);
+    tile.prev_pos_x[lane] = body.position.x.value;
+    tile.prev_pos_y[lane] = body.position.y.value;
+    tile.prev_pos_z[lane] = body.position.z.value;
 
-    put_lane(tile.prev_rot_x, lane, body.rotation.x);
-    put_lane(tile.prev_rot_y, lane, body.rotation.y);
-    put_lane(tile.prev_rot_z, lane, body.rotation.z);
-    put_lane(tile.prev_rot_w, lane, body.rotation.w);
+    tile.prev_rot_x[lane] = body.rotation.x;
+    tile.prev_rot_y[lane] = body.rotation.y;
+    tile.prev_rot_z[lane] = body.rotation.z;
+    tile.prev_rot_w[lane] = body.rotation.w;
 }
 
 void BodyPool::load_lane(crd::u32 idx, RigidBody& body) const noexcept
@@ -294,30 +272,30 @@ void BodyPool::load_lane(crd::u32 idx, RigidBody& body) const noexcept
     const BodyChunk& tile = m_storage.chunk(chunk_of(idx));
     const crd::u32   lane = lane_of(idx);
 
-    body.position.x = crd::units::Length32{tile.pos_x.lane(lane)};
-    body.position.y = crd::units::Length32{tile.pos_y.lane(lane)};
-    body.position.z = crd::units::Length32{tile.pos_z.lane(lane)};
+    body.position.x = crd::units::Length32{tile.pos_x[lane]};
+    body.position.y = crd::units::Length32{tile.pos_y[lane]};
+    body.position.z = crd::units::Length32{tile.pos_z[lane]};
 
-    body.rotation.x = tile.rot_x.lane(lane);
-    body.rotation.y = tile.rot_y.lane(lane);
-    body.rotation.z = tile.rot_z.lane(lane);
-    body.rotation.w = tile.rot_w.lane(lane);
+    body.rotation.x = tile.rot_x[lane];
+    body.rotation.y = tile.rot_y[lane];
+    body.rotation.z = tile.rot_z[lane];
+    body.rotation.w = tile.rot_w[lane];
 
-    body.linear_velocity.x = crd::units::Velocity32{tile.linvel_x.lane(lane)};
-    body.linear_velocity.y = crd::units::Velocity32{tile.linvel_y.lane(lane)};
-    body.linear_velocity.z = crd::units::Velocity32{tile.linvel_z.lane(lane)};
+    body.linear_velocity.x = crd::units::Velocity32{tile.linvel_x[lane]};
+    body.linear_velocity.y = crd::units::Velocity32{tile.linvel_y[lane]};
+    body.linear_velocity.z = crd::units::Velocity32{tile.linvel_z[lane]};
 
-    body.angular_velocity.x = crd::units::AngularVelocity32{tile.angvel_x.lane(lane)};
-    body.angular_velocity.y = crd::units::AngularVelocity32{tile.angvel_y.lane(lane)};
-    body.angular_velocity.z = crd::units::AngularVelocity32{tile.angvel_z.lane(lane)};
+    body.angular_velocity.x = crd::units::AngularVelocity32{tile.angvel_x[lane]};
+    body.angular_velocity.y = crd::units::AngularVelocity32{tile.angvel_y[lane]};
+    body.angular_velocity.z = crd::units::AngularVelocity32{tile.angvel_z[lane]};
 
-    body.inv_mass      = crd::units::InverseMass32{tile.inv_mass.lane(lane)};
-    body.inv_inertia.x = crd::units::InverseMomentOfInertia32{tile.inv_inertia_x.lane(lane)};
-    body.inv_inertia.y = crd::units::InverseMomentOfInertia32{tile.inv_inertia_y.lane(lane)};
-    body.inv_inertia.z = crd::units::InverseMomentOfInertia32{tile.inv_inertia_z.lane(lane)};
+    body.inv_mass      = crd::units::InverseMass32{tile.inv_mass[lane]};
+    body.inv_inertia.x = crd::units::InverseMomentOfInertia32{tile.inv_inertia_x[lane]};
+    body.inv_inertia.y = crd::units::InverseMomentOfInertia32{tile.inv_inertia_y[lane]};
+    body.inv_inertia.z = crd::units::InverseMomentOfInertia32{tile.inv_inertia_z[lane]};
 
-    body.linear_damping  = tile.linear_damping.lane(lane);
-    body.angular_damping = tile.angular_damping.lane(lane);
+    body.linear_damping  = tile.linear_damping[lane];
+    body.angular_damping = tile.angular_damping[lane];
 
     const crd::u32 flags_raw = tile.flags[lane];
     std::memcpy(&body.flags, &flags_raw, sizeof(flags_raw));

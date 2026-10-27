@@ -9,7 +9,8 @@
 //
 // For batched quaternion work (eylem v4 articulation joint composition,
 // animation skinning, particle orientations), use `simd::Soa<TChunk>` with
-// `Vec8f qx, qy, qz, qw` columns — 8 quaternions per AVX op, zero waste.
+// plain f32 qx, qy, qz, qw columns that a per-CPU-level kernel loads as Vec8f
+// (eylem_rigid3d/rigid3d_kernels.hpp) — 8 quaternions per AVX op, zero waste.
 //
 // See vec.hpp + mat_simd_f32.hpp for the wider SIMD-vs-scalar architectural
 // rationale.

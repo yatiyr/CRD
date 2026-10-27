@@ -39,9 +39,8 @@
 #include <crd/core/types.hpp>
 #include <crd/eylem/collider.hpp>
 #include <crd/eylem/types.hpp>
-#include <crd/math/simd/backend.hpp>
+#include <crd/eylem_rigid3d/rigid3d_kernels.hpp>
 #include <crd/math/simd/soa.hpp>
-#include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
 namespace crd::eylem_rigid3d
@@ -85,61 +84,64 @@ inline constexpr crd::u32 kColliderPerKindMax = (1U << kColliderKindShift) - 1U;
 
 // ---- Per-kind chunk layouts -----------------------------------------------
 //
-// Each chunk holds Lane colliders. Common columns (body_idx, local_pos,
+// Each chunk holds kChunkLanes colliders as plain f32 columns (the layout
+// every CPU level's kernel reads, as BodyChunk): common columns (local_pos,
 // local_rot) plus kind-specific shape columns. The integer side-bands
-// (body_idx, generation, live) sit alongside the SIMD float columns in
-// the same chunk for cache locality.
+// (body_idx, generation, live) sit alongside the float columns in the same
+// chunk for cache locality.
 
-template <crd::usize Lane> struct SphereChunkT;
-
-template <>
-struct alignas(32) SphereChunkT<8>
+struct alignas(32) SphereChunk
 {
-    using Col = crd::math::simd::Vec8f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col radius{};
-    crd::u32 body_idx[8]{};
-    crd::u8  generation[8]{};
-    crd::u8  live[8]{};
+    alignas(32) crd::f32 lpos_x[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_y[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_x[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_y[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_w[kChunkLanes]{};
+    alignas(32) crd::f32 radius[kChunkLanes]{};
+    crd::u32 body_idx[kChunkLanes]{};
+    crd::u8 generation[kChunkLanes]{};
+    crd::u8 live[kChunkLanes]{};
 };
 
-template <crd::usize Lane> struct BoxChunkT;
-
-template <>
-struct alignas(32) BoxChunkT<8>
+struct alignas(32) BoxChunk
 {
-    using Col = crd::math::simd::Vec8f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col half_x{};  Col half_y{};  Col half_z{};
-    crd::u32 body_idx[8]{};
-    crd::u8  generation[8]{};
-    crd::u8  live[8]{};
+    alignas(32) crd::f32 lpos_x[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_y[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_x[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_y[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_w[kChunkLanes]{};
+    alignas(32) crd::f32 half_x[kChunkLanes]{};
+    alignas(32) crd::f32 half_y[kChunkLanes]{};
+    alignas(32) crd::f32 half_z[kChunkLanes]{};
+    crd::u32 body_idx[kChunkLanes]{};
+    crd::u8 generation[kChunkLanes]{};
+    crd::u8 live[kChunkLanes]{};
 };
 
-template <crd::usize Lane> struct CapsuleChunkT;
-
-template <>
-struct alignas(32) CapsuleChunkT<8>
+struct alignas(32) CapsuleChunk
 {
-    using Col = crd::math::simd::Vec8f;
-    Col lpos_x{};  Col lpos_y{};  Col lpos_z{};
-    Col lrot_x{};  Col lrot_y{};  Col lrot_z{};  Col lrot_w{};
-    Col radius{};  Col half_height{};
-    crd::u32 body_idx[8]{};
-    crd::u8  generation[8]{};
-    crd::u8  live[8]{};
+    alignas(32) crd::f32 lpos_x[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_y[kChunkLanes]{};
+    alignas(32) crd::f32 lpos_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_x[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_y[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_z[kChunkLanes]{};
+    alignas(32) crd::f32 lrot_w[kChunkLanes]{};
+    alignas(32) crd::f32 radius[kChunkLanes]{};
+    alignas(32) crd::f32 half_height[kChunkLanes]{};
+    crd::u32 body_idx[kChunkLanes]{};
+    crd::u8 generation[kChunkLanes]{};
+    crd::u8 live[kChunkLanes]{};
 };
-
-using SphereChunk = SphereChunkT<crd::math::simd::kNativeLaneWidth>;
-using BoxChunk = BoxChunkT<crd::math::simd::kNativeLaneWidth>;
-using CapsuleChunk = CapsuleChunkT<crd::math::simd::kNativeLaneWidth>;
 
 class ColliderPool
 {
 public:
-    static constexpr crd::usize kLane = crd::math::simd::kNativeLaneWidth;
+    static constexpr crd::usize kLane = kChunkLanes;
     using SphereStorage  = crd::math::simd::Soa<SphereChunk,  kLane>;
     using BoxStorage     = crd::math::simd::Soa<BoxChunk,     kLane>;
     using CapsuleStorage = crd::math::simd::Soa<CapsuleChunk, kLane>;

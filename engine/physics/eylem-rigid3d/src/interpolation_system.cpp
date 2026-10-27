@@ -52,14 +52,9 @@ void RigidBodyInterpolationSystem::run(crd::scene::World& world)
             continue;
         }
 
-        // Read both states. The full RigidBody read is wasteful for
-        // pure pos+rot interpolation (one extra chunk-cache line of
-        // velocity / inertia data); the v1c+ broadphase will
-        // optimise this with a typed `read_pose` helper that returns
-        // only pos+rot from a single chunk lookup. For v1b-e's small
-        // body counts this cost is negligible.
-        const crd::eylem::RigidBody  curr = m_body_pool->read(rbc.body_id);
-        const BodyPool::PrevState    prev = m_body_pool->read_prev(rbc.body_id);
+        // Read both poses, one chunk lookup each.
+        const BodyPool::Pose curr = m_body_pool->read_pose(rbc.body_id);
+        const BodyPool::Pose prev = m_body_pool->read_prev(rbc.body_id);
 
         // crd::math::lerp is MathScalar-only by ADR-0078 §2 D2 (reductions
         // and t-parameter scaling stay raw). Bridge typed Length32 vecs
