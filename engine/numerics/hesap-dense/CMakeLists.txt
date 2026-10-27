@@ -29,7 +29,7 @@ target_link_libraries(crd-hesap-dense
         crd-core
         crd-containers
         crd-memory
-        crd-math       # v0d: gemm AVX2 microkernel uses crd-math::simd::Vec8f/Vec4d
+        crd-math       # the SIMD types and the GEMM kernel dispatch (crd/math/kernel_dispatch.hpp)
         crd-hesap
         crd-jobs       # v0d-parallelism: gemm_parallel uses crd::jobs::parallel_for
     PRIVATE
@@ -38,3 +38,7 @@ target_link_libraries(crd-hesap-dense
 
 target_compile_features(crd-hesap-dense PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-dense)
+
+# The f64 and f32 GEMM blocks, one body per CPU level (ADR-0134); src/dense_kernel_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-hesap-dense NAME dense LEVELS portable sse2 avx2 INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dense_kernels.cpp")

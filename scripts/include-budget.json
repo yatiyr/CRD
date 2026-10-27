@@ -76,6 +76,13 @@
       "why": "the special functions of hesap-stats, hesap-quadrature and the distributions; the Lanczos lgamma and tgamma batches run the per-level special kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers (its <complex> reaches <sstream>, as crd/math/cmath.hpp does)"
     },
     {
+      "include": "crd/hesap/dense/detail/gemm_pack.hpp",
+      "flags_of": "tests/numerics/hesap-dense/test_blas3_real.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the GEMM packing and block dispatch behind gemm, syrk and the supernodal factor walks; its f64 and f32 register tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "crd/hesap/sparse/sell.hpp",
       "flags_of": "tests/numerics/hesap-sparse/test_sell.cpp",
       "forbid": ["chrono", "format"],

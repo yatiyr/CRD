@@ -2,9 +2,13 @@
 
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
-#include <crd/hesap/dense/detail/gemm_microkernel.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
+#include <crd/hesap/dense/dense_kernels.hpp>
+#include <crd/hesap/dense/detail/gemm_block.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>
+
+#include <type_traits>
 
 namespace crd::hesap::dense::detail
 {
@@ -16,10 +20,8 @@ inline constexpr const char* kGemmPackOutOfMemory = "hesap::dense: out of memory
 // -----------------------------------------------------------------------
 // Goto/BLIS Ac / Bc packing layers. Phase 3.1.6 v0d-perf.
 //
-// Packing is part of the INTRINSICS backend (ADR-0082): the per-backend
-// packed-layout contract is coupled to the microkernel that consumes it.
-// When the future ASM backend lands, BLIS-convention packing comes with it.
-// For today's intrinsics microkernel the packed layout is:
+// The packed layout is the same on every kernel level (GemmTraits in
+// crd/hesap/dense/dense_kernels.hpp, ADR-0134 §5):
 //
 //   Ac: MR contiguous rows × K cols (row-major) per "row-panel" of MR rows.
 //       Full Ac = ceil(Mc / MR) row-panels stacked vertically.
@@ -29,7 +31,7 @@ inline constexpr const char* kGemmPackOutOfMemory = "hesap::dense: out of memory
 //       Full Bc = ceil(Nc / NR) col-panels stacked horizontally.
 //       Block (Kc × nc_block) → ceil(nc_block / NR) panels.
 //
-// Each microkernel call consumes ONE row-panel of Ac (MR × Kc) and ONE
+// Each register tile consumes ONE row-panel of Ac (MR × Kc) and ONE
 // col-panel of Bc (Kc × NR), producing an MR × NR tile of C.
 //
 // Trans handling: the pack functions take the EFFECTIVE source index
@@ -196,109 +198,45 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
     }
 }
 
-// gemm_packed_inner: the inner mr × nr loops that call the microkernel
-// for each (panel_a, panel_b) pair within the current (Mc × Nc) macro
-// tile of C. Writes alpha-scaled microkernel output into a local
-// register-resident C accumulator, then merges into the destination C
-// tile (which already holds beta * C from the driver's initial scaling
-// pass).
-//
-// The microkernel itself ACCUMULATES into C — so we use a fresh zeroed
-// micro-tile as a temp, run the microkernel into it, then add alpha *
-// micro_tile to C.
+// One GEMM block on the level the process runs (f64, f32) or on the portable tile (the complex types).
+template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        dense_kernels().table->gemm_block_f64(block);
+    }
+    else if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        dense_kernels().table->gemm_block_f32(block);
+    }
+    else
+    {
+        gemm_block<PortableTile<T>>(block);
+    }
+}
+
+// C[ic .. ic + mc, jc .. jc + nc) += alpha * the product of the packed Ac (mc by kc) and Bc (kc by nc) blocks; C
+// already holds beta * C from the driver's scaling pass.
 template <typename T, Layout L>
 inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
                               const T* a_packed, const T* b_packed, MatrixView<T, L> c) noexcept
 {
-    const crd::usize num_panels_m = (mc + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
-    const crd::usize num_panels_n = (nc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
-
-    for (crd::usize pa = 0; pa < num_panels_m; ++pa)
-    {
-        const T* a_panel = a_packed + pa * GemmTraits<T>::MR * kc;
-        const crd::usize i_global = ic + pa * GemmTraits<T>::MR;
-        const crd::usize rows_in_panel = std::min(GemmTraits<T>::MR, mc - pa * GemmTraits<T>::MR);
-
-        for (crd::usize pb = 0; pb < num_panels_n; ++pb)
-        {
-            const T* b_panel = b_packed + pb * kc * GemmTraits<T>::NR;
-            const crd::usize j_global = jc + pb * GemmTraits<T>::NR;
-            const crd::usize cols_in_panel = std::min(GemmTraits<T>::NR, nc - pb * GemmTraits<T>::NR);
-
-            // FULL RowMajor tiles: the fused kernel updates C directly from
-            // the accumulator registers (same elementwise op sequence as the
-            // merge loop => identical bits; no stack round-trip). Edges and
-            // ColMajor keep the micro+merge path.
-            if constexpr (L == Layout::RowMajor && kHasFusedMicrokernel<T>)
-            {
-                if (rows_in_panel == GemmTraits<T>::MR && cols_in_panel == GemmTraits<T>::NR)
-                {
-                    T* ctile = c.data() + i_global * c.ld() + j_global;
-                    if (alpha == T{1})
-                    {
-                        gemm_microkernel_fused<T, true>(kc, a_panel, b_panel, ctile, c.ld(), alpha);
-                    }
-                    else
-                    {
-                        gemm_microkernel_fused<T, false>(kc, a_panel, b_panel, ctile, c.ld(), alpha);
-                    }
-                    continue;
-                }
-            }
-            // Micro-tile of size MR × NR; the ZeroInit kernel starts its
-            // accumulators at 0 in REGISTERS (identical bits) — no zero-fill
-            // pass, no zero-load pass. ldc = GemmTraits<T>::NR (contiguous).
-            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR];
-            gemm_microkernel<T, true>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
-
-            // Merge alpha * micro into C; only the rows_in_panel × cols_in_panel
-            // sub-tile (the rest of the micro tile came from zero-padded A/B
-            // and is itself zero, but we skip it to avoid touching C outside
-            // the [ic, ic+mc) × [jc, jc+nc) macro tile). The inner loop walks
-            // C's CONTIGUOUS index per layout (j for RowMajor, i for ColMajor —
-            // the ColMajor i-inner order is the lattice-crush merge fix 2026-06-11:
-            // the old j-inner walk strided EVERY ColMajor write by ld). Pure
-            // reordering of independent element writes ⇒ bit-identical.
-            if constexpr (L == Layout::RowMajor)
-            {
-                if (alpha == T{1}) // IEEE: 1*m == m exactly — skip the multiply (bit-identical)
-                {
-                    for (crd::usize i = 0; i < rows_in_panel; ++i)
-                    {
-                        T* crow = c.data() + (i_global + i) * c.ld() + j_global;
-                        const T* mrow = micro + i * GemmTraits<T>::NR;
-                        for (crd::usize j = 0; j < cols_in_panel; ++j)
-                        {
-                            crow[j] += mrow[j];
-                        }
-                    }
-                }
-                else
-                {
-                    for (crd::usize i = 0; i < rows_in_panel; ++i)
-                    {
-                        T* crow = c.data() + (i_global + i) * c.ld() + j_global;
-                        const T* mrow = micro + i * GemmTraits<T>::NR;
-                        for (crd::usize j = 0; j < cols_in_panel; ++j)
-                        {
-                            crow[j] += alpha * mrow[j];
-                        }
-                    }
-                }
-            }
-            else
-            {
-                for (crd::usize j = 0; j < cols_in_panel; ++j)
-                {
-                    T* ccol = c.data() + (j_global + j) * c.ld() + i_global;
-                    for (crd::usize i = 0; i < rows_in_panel; ++i)
-                    {
-                        ccol[i] += alpha * micro[i * GemmTraits<T>::NR + j];
-                    }
-                }
-            }
-        }
-    }
+    constexpr bool col_major = L == Layout::ColMajor;
+    T* corner = col_major ? c.data() + jc * c.ld() + ic : c.data() + ic * c.ld() + jc;
+    run_gemm_block(GemmBlock<T>{.a = a_packed,
+                                .b = b_packed,
+                                .c = corner,
+                                .lda = kc,
+                                .ldc = c.ld(),
+                                .rows = mc,
+                                .cols = nc,
+                                .depth = kc,
+                                .row0 = ic,
+                                .col0 = jc,
+                                .alpha = alpha,
+                                .update = GemmUpdate::Add,
+                                .col_major = col_major,
+                                .lower = false});
 }
 
 } // namespace crd::hesap::dense::detail

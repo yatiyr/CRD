@@ -9,6 +9,7 @@
 // Eigen + OpenBLAS are fetched into build/_deps/ on first configure.
 
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/simd/backend.hpp>
@@ -149,45 +150,10 @@ template <typename Op> crd::f64 time_loop(Op&& op, int& iters_out)
     return best_elapsed;
 }
 
-// Cerid: try multiple worker counts and pick the best — i9-14900K has 8 P-cores
-// + 16 E-cores, so 32-fiber static partition often loses to ~16 workers.
-template <typename T>
-crd::f64 run_cerid_best(crd::usize n, crd::memory::IAllocator* alloc, int& best_iters_out, crd::u32& best_nw_out)
-{
-    using namespace crd::hesap::dense;
-    Matrix<T> a(alloc, n, n);
-    Matrix<T> b(alloc, n, n);
-    Matrix<T> c(alloc, n, n);
-    fill(a.data(), n * n, 11U);
-    fill(b.data(), n * n, 22U);
-    fill(c.data(), n * n, 0U);
-
-    crd::f64 best_gflops = 0.0;
-    crd::u32 best_nw = 1U;
-    int best_iters = 0;
-    for (crd::u32 nw : {8U, 16U, 24U, 32U})
-    {
-        int iters = 0;
-        const crd::f64 elapsed = time_loop(
-            [&]()
-            {
-                std::memset(c.data(), 0, n * n * sizeof(T));
-                gemm_parallel<T, Layout::RowMajor>(nw, T{1}, a, b, T{}, c);
-            },
-            iters);
-        const crd::f64 nd = static_cast<crd::f64>(n);
-        const crd::f64 g = (2.0 * nd * nd * nd * iters) / (elapsed * 1e9);
-        if (g > best_gflops)
-        {
-            best_gflops = g;
-            best_nw = nw;
-            best_iters = iters;
-        }
-    }
-    best_nw_out = best_nw;
-    best_iters_out = best_iters;
-    return best_gflops;
-}
+// --one-thread: every library on one thread at 64 to 1024 (the per-level kernel board); the default is the
+// multithreaded shootout at 256 to 4096, where Cerid takes its best worker count.
+bool g_one_thread = false;
+constexpr crd::u32 kWorkerCounts[] = {1U, 8U, 16U, 24U, 32U};
 
 template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd::memory::IAllocator* alloc)
 {
@@ -207,8 +173,12 @@ template <typename T> Bench<T> run_at_n(crd::usize n, crd::u32 num_workers, crd:
     crd::u32 best_nw = num_workers;
     int cerid_iters = 0;
     crd::f64 best_gflops = 0.0;
-    for (crd::u32 nw : {1U, 8U, 16U, 24U, 32U})
+    for (const crd::u32 nw : kWorkerCounts)
     {
+        if (g_one_thread && nw != 1U)
+        {
+            continue;
+        }
         int iters = 0;
         const crd::f64 elapsed = time_loop(
             [&]()
@@ -296,8 +266,13 @@ void shootout(const char* label, crd::f64 peak_per_core, crd::u32 nw, crd::memor
     std::fprintf(stdout, "%s\n",
                  "----------------------------------------------------------------------------"
                  "------------------------------------------------------------");
-    for (crd::usize n : {crd::usize{256}, crd::usize{512}, crd::usize{1024}, crd::usize{2048}, crd::usize{4096}})
+    constexpr crd::usize kSizes[] = {64, 256, 512, 1024, 2048, 4096};
+    for (const crd::usize n : kSizes)
     {
+        if ((g_one_thread && n > 1024) || (!g_one_thread && n == 64))
+        {
+            continue;
+        }
         const auto r = run_at_n<T>(n, nw, alloc);
         const char* eigen_pass = (r.max_rel_err_eigen < 1e-3) ? "" : " !MISMATCH!";
         const char* ob_pass = (r.max_rel_err_openblas < 1e-3) ? "" : " !MISMATCH!";
@@ -434,6 +409,10 @@ int main(int argc, char** argv)
         {
             p_cores_only = false;
         }
+        if (std::strcmp(argv[i], "--one-thread") == 0)
+        {
+            g_one_thread = true;
+        }
     }
 #ifdef _WIN32
     if (p_cores_only)
@@ -454,7 +433,7 @@ int main(int argc, char** argv)
     // Match jobs worker count to actual usable threads. 16 fibers on 16
     // P-threads avoids the worker-vs-affinity-slot contention.
     crd::jobs::Config jobs_cfg;
-    jobs_cfg.num_threads = p_cores_only ? 16U : 0U;
+    jobs_cfg.num_threads = g_one_thread ? 1U : (p_cores_only ? 16U : 0U);
     crd::jobs::init(jobs_cfg);
     const crd::f64 ghz = measure_clock_ghz();
     const crd::f64 peak_f32 = peak_gflops_per_core_f32(ghz);
@@ -471,14 +450,15 @@ int main(int argc, char** argv)
     std::fprintf(stdout,
                  "==== bench_hesap_gemm_vs_reference (v0d-parallelism-scaling) ====\n"
                  "  SIMD backend  : %s\n"
+                 "  Dense kernels : %s level (CRD_CPU_LEVEL forces it)\n"
                  "  Clock         : %.2f GHz\n"
                  "  Per-core peak : f32 = %.1f GFLOPS, f64 = %.1f GFLOPS\n"
                  "  Cerid jobs    : %u workers (incl. main)\n"
                  "  Eigen threads : Eigen::nbThreads() = %d %s\n"
                  "  OpenBLAS thr. : openblas_get_num_threads() = %d %s\n"
                  "  Goal          : Cerid >= Eigen-MT AND Cerid >= OpenBLAS at every N\n",
-                 crd::math::simd::backend_name(), ghz, peak_f32, peak_f64, nw, eigen_nb,
-                 (eigen_nb > 1 ? "(MT)" : "(SERIAL — Eigen will not scale!)"), ob_nb,
+                 crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level), ghz,
+                 peak_f32, peak_f64, nw, eigen_nb, (eigen_nb > 1 ? "(MT)" : "(SERIAL — Eigen will not scale!)"), ob_nb,
                  (ob_nb > 1 ? "(MT)" : "(SERIAL — OpenBLAS will not scale!)"));
 
     {
@@ -495,7 +475,10 @@ int main(int argc, char** argv)
         // slow f2c accuracy-oracle build (BLAS ~27 GF/s) — for the real per-phase headroom number,
         // run via the cholmod bench (WSL system libopenblas) instead.
         crd::memory::TlsfAllocator alloc(1024ULL * 1024ULL * 1024ULL);
-        probe_openblas_kernel_shapes(&alloc);
+        if (!g_one_thread)
+        {
+            probe_openblas_kernel_shapes(&alloc);
+        }
     }
 
     std::fprintf(stdout, "\nDone.\n");

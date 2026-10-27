@@ -14,9 +14,9 @@ namespace crd::hesap::dense
 // -----------------------------------------------------------------------
 // BLAS Level 3 — matrix-matrix operations. Phase 3.1.6 v0d.
 //
-// v0d ships the FOUNDATION: Goto/BLIS 5-loop GEMM with scalar +
-// AVX2 microkernels (Vec8f based) as compile-time-dispatched hot-swap
-// points (`detail::gemm_microkernel<T>`). The 7-op surface — gemm /
+// v0d ships the FOUNDATION: Goto/BLIS 5-loop GEMM whose f32 and f64
+// register tiles run on the CPU level the process selects
+// (crd/hesap/dense/dense_kernels.hpp, ADR-0134). The 7-op surface — gemm /
 // syrk / herk / syr2k / her2k / trmm / trsm — is implemented across
 // f32 / f64 / Complex32 / Complex64. Mixed-precision dispatch helper
 // for HPL-AI iterative-refinement pattern.
@@ -27,11 +27,11 @@ namespace crd::hesap::dense
 //   - `v0d-formal-dag`: PLASMA / PaRSEC-style task DAG via
 //     `crd-hesap-sched` formal dep tracking.
 //
-// Determinism (ADR-0063): tile-summation order is fixed at compile time
-// by the Mc/Kc/Nc block sizes. Bit-exact across SIMD widths AS LONG AS
-// the chosen microkernel walks the same accumulation order (scalar +
-// AVX2 already match because Vec8f operations are deterministic via
-// crd-math::simd's no-FMA contract).
+// Determinism (ADR-0063, ADR-0134 §7): tile-summation order is fixed by
+// the Mc/Kc/Nc block sizes, the same on every level and worker count.
+// Each kernel level is bit-exact with its declared arithmetic (two
+// roundings on portable, a fused multiply-add on avx2); across levels an
+// element stays within the inner-product bound (dense_kernels.hpp).
 // -----------------------------------------------------------------------
 
 // ---- gemm: C = alpha * op(A) * op(B) + beta * C ----------------------

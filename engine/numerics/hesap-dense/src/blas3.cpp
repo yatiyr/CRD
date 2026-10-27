@@ -2,7 +2,6 @@
 
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas2.hpp>
-#include <crd/hesap/dense/detail/gemm_microkernel.hpp>
 #include <crd/hesap/dense/detail/gemm_pack.hpp>
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -89,7 +88,7 @@ template <typename T, Layout L>
 //   ic: outer row slab (Mc-tall)            — cache A panel into L2
 //     pack Ac panel (mc × kc) into a_pack
 //     pack Bc panel (kc × nc) into b_pack
-//     gemm_packed_inner: mr × nr loops calling gemm_microkernel<T> on
+//     gemm_packed_inner: the GEMM block (mr × nr register tiles) on
 //                       (Ac panel, Bc panel) → produces mr × nr C tile
 //
 // Pack buffers come from the `scratch` IAllocator (Matrix overload passes
@@ -305,15 +304,13 @@ crd::memory::IAllocator* alloc = scratch;
     const crd::usize frame_mark = crd::jobs::frame_get_mark();
     auto* counter = crd::jobs::parallel_for(
         num_panels, num_workers, [sp](crd::u32 begin, crd::u32 end) {
-            for (crd::u32 panel = begin; panel < end; ++panel)
-            {
-                const crd::usize i_start = static_cast<crd::usize>(panel) * detail::GemmTraits<T>::MR;
-                // a_panel: source A row-panel, treated as if packed (works
-                // because a.ld() == k, asserted via small_gemm_eligible).
-                const T* a_panel = sp->a.data() + i_start * sp->a.ld();
-                detail::gemm_packed_inner(sp->alpha, i_start, 0, detail::GemmTraits<T>::MR, sp->n, sp->k,
-                                          a_panel, sp->b_pack, sp->c);
-            }
+            // The worker's row panels as one GEMM block (one kernel call): the source A rows read as packed
+            // panels, which holds because a.ld() == k (small_gemm_eligible).
+            const crd::usize i_start = static_cast<crd::usize>(begin) * detail::GemmTraits<T>::MR;
+            const T* a_panel = sp->a.data() + i_start * sp->a.ld();
+            detail::gemm_packed_inner(sp->alpha, i_start, 0,
+                                      static_cast<crd::usize>(end - begin) * detail::GemmTraits<T>::MR, sp->n, sp->k,
+                                      a_panel, sp->b_pack, sp->c);
         });
     crd::jobs::wait(counter);
     crd::jobs::frame_set_mark(frame_mark); // reclaim the parallel_for JobDecls in place (leak fix)

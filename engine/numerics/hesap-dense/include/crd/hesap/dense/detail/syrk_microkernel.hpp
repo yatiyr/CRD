@@ -2,7 +2,6 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
-#include <crd/hesap/dense/detail/gemm_microkernel.hpp>
 #include <crd/hesap/dense/detail/gemm_pack.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>
@@ -25,13 +24,13 @@ namespace crd::hesap::dense::detail
 // MEASURED 3.4 GF/s standalone (20× under OpenBLAS dsyrk) while the gemm
 // driver's pack_a/pack_b run stride-friendly. This version reuses the gemm
 // driver's EXACT machinery — pack_a / pack_b, the kGemmMc/Kc/Nc cache
-// blocking, gemm_microkernel — and only changes which C tiles are visited
+// blocking, the GEMM block — and only changes which C tiles are visited
 // (strict-upper tiles skipped, diagonal-crossing tiles masked to i ≥ j).
 //
 // DETERMINISM / VALUE CONTRACT: the per-element reduction is the SAME
 // K-grouping as dense::gemm (kKc chunks accumulated into C memory in
-// ascending-pc order, zero-initialised micro tile per chunk, the same
-// microkernel p-order within a chunk). Negation symmetry is exact in IEEE
+// ascending-pc order, each tile summed from zero per chunk, the same
+// p-order within a chunk). Negation symmetry is exact in IEEE
 // (−(x+y) = (−x)+(−y); a −= b ≡ a += (−b)), so the lower-triangle values
 // this produces are BIT-IDENTICAL to computing the full update with
 // dense::gemm and subtracting — which is what the supernodal cmod's
@@ -39,94 +38,48 @@ namespace crd::hesap::dense::detail
 // bit-exactly for ANY k (the old full-k-per-tile reduction diverged from
 // the gemm path once k > kGemmKc).
 //
-// Multi-platform: the microkernel is built on crd::math::simd Vec types
-// (scalar / AVX2 / NEON backends) — never raw intrinsics (ADR-0082).
+// The block runs on the kernel level the process selects
+// (crd/hesap/dense/dense_kernels.hpp, ADR-0134).
 //
 // This is a reusable primitive: future eigensolvers, sparse direct, and
 // optimization (normal equations AᵀA) all want syrk.
 // -----------------------------------------------------------------------
 
-// The inner tile sweep for one (ic, jc, pc) macro block: identical loop structure to gemm_packed_inner,
-// but strict-upper tiles are skipped (break: j ascending), fully-lower tiles merge unmasked, and
-// diagonal-crossing tiles mask to i ≥ j. C indexing per `col_indexed_out`: false ⇒ the original
-// row-major-indexed scratch contract (c_data[i*ldc + j], read back the same way by the cmod scatter);
-// true ⇒ ColMajor in-place output (c_data[j*ldc + i] = element (row i, col j) of a ColMajor matrix —
-// the supernodal trailing-Schur panel merge; i-inner is the contiguous walk there). The merged VALUE per
-// (i ≥ j) pair is identical either way — only the destination address changes.
-// `pb_begin/pb_end` bound the visited col-panels so the parallel path can split them across workers
-// (each pb writes a disjoint C column range ⇒ race-free). `nc` bounds the real (non-padded) columns —
-// the zero-padded tail of the final panel is never merged (it would be a `-= 0` out of the block).
+// The inner tile sweep for one (ic, jc, pc) macro block: gemm_packed_inner's block subtracted (C -= A Aᵀ) and
+// restricted to the lower triangle (GemmBlock::lower: strict-upper tiles are skipped, tiles that cross the diagonal
+// keep i >= j). C indexing per `col_indexed_out`: false => the row-major-indexed scratch contract (c_data[i*ldc + j],
+// read back the same way by the cmod scatter); true => ColMajor in-place output (c_data[j*ldc + i], the supernodal
+// trailing-Schur panel merge). The merged value per (i >= j) pair is the same either way. `pb_begin/pb_end` bound the
+// visited col-panels so the parallel path can split them across workers (each pb writes a disjoint C column range =>
+// race-free). `nc` bounds the real columns; the zero-padded tail of the final panel is never merged.
 template <typename T>
 inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
                                     crd::usize pb_begin, crd::usize pb_end, const T* a_packed, const T* b_packed,
                                     T* c_data, crd::usize ldc, bool col_indexed_out) noexcept
 {
-    const crd::usize num_panels_m = (mc + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
-    for (crd::usize pa = 0; pa < num_panels_m; ++pa)
+    constexpr crd::usize nr = GemmTraits<T>::NR;
+    const crd::usize col_first = pb_begin * nr;
+    const crd::usize col_end = std::min(nc, pb_end * nr);
+    if (col_end <= col_first)
     {
-        const T* a_panel = a_packed + pa * GemmTraits<T>::MR * kc;
-        const crd::usize i_global = ic + pa * GemmTraits<T>::MR;
-        const crd::usize rows_in = std::min(GemmTraits<T>::MR, mc - pa * GemmTraits<T>::MR);
-        for (crd::usize pb = pb_begin; pb < pb_end; ++pb)
-        {
-            const crd::usize j_global = jc + pb * GemmTraits<T>::NR;
-            if (i_global + rows_in <= j_global)
-            {
-                break; // this and all later tiles in the row are strict-upper (j ascending)
-            }
-            const T* b_panel = b_packed + pb * kc * GemmTraits<T>::NR;
-            const crd::usize cols_in = std::min(GemmTraits<T>::NR, nc - pb * GemmTraits<T>::NR);
-            T micro[GemmTraits<T>::MR * GemmTraits<T>::NR]; // ZeroInit kernel: no zero pass (identical bits)
-            gemm_microkernel<T, true>(kc, a_panel, b_panel, micro, GemmTraits<T>::NR);
-            const bool fully_lower = i_global >= j_global + cols_in - 1; // min i ≥ max real j
-            if (col_indexed_out)
-            {
-                for (crd::usize j = 0; j < cols_in; ++j)
-                {
-                    const crd::usize jg = j_global + j;
-                    T* ccol = c_data + jg * ldc;
-                    crd::usize i_lo = 0;
-                    if (!fully_lower && jg > i_global)
-                    {
-                        i_lo = jg - i_global;
-                    }
-                    for (crd::usize i = i_lo; i < rows_in; ++i)
-                    {
-                        ccol[i_global + i] -= micro[i * GemmTraits<T>::NR + j];
-                    }
-                }
-            }
-            else if (fully_lower)
-            {
-                for (crd::usize i = 0; i < rows_in; ++i)
-                {
-                    T* crow = c_data + (i_global + i) * ldc + j_global;
-                    const T* mrow = micro + i * GemmTraits<T>::NR;
-                    for (crd::usize j = 0; j < cols_in; ++j)
-                    {
-                        crow[j] -= mrow[j];
-                    }
-                }
-            }
-            else // diagonal-crossing: mask to i ≥ j
-            {
-                for (crd::usize i = 0; i < rows_in; ++i)
-                {
-                    const crd::usize ig = i_global + i;
-                    T* crow = c_data + ig * ldc;
-                    const T* mrow = micro + i * GemmTraits<T>::NR;
-                    for (crd::usize j = 0; j < cols_in; ++j)
-                    {
-                        const crd::usize jg = j_global + j;
-                        if (ig >= jg)
-                        {
-                            crow[jg] -= mrow[j];
-                        }
-                    }
-                }
-            }
-        }
+        return;
     }
+    const crd::usize col0 = jc + col_first;
+    T* corner = col_indexed_out ? c_data + col0 * ldc + ic : c_data + ic * ldc + col0;
+    run_gemm_block(GemmBlock<T>{.a = a_packed,
+                                .b = b_packed + col_first * kc,
+                                .c = corner,
+                                .lda = kc,
+                                .ldc = ldc,
+                                .rows = mc,
+                                .cols = col_end - col_first,
+                                .depth = kc,
+                                .row0 = ic,
+                                .col0 = col0,
+                                .alpha = T{},
+                                .update = GemmUpdate::Subtract,
+                                .col_major = col_indexed_out,
+                                .lower = true});
 }
 
 // `allow_parallel` (default true): self-parallelize over col-panels when large. Pass FALSE when calling from a hot

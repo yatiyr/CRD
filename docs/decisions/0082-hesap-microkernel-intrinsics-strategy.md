@@ -4,7 +4,9 @@
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
 **Date:** 2026-05-19
-**Status:** **Accepted**
+**Status:** **Accepted**; the hot-swap point and the cross-width bit-exact claim are struck 2026-10-27 by
+[ADR-0134](0134-runtime-cpu-dispatch.md) (SIMD-DISPATCH,
+[session](../sessions/2026-10-27-simd-dispatch-dense-kernels.md)).
 **Tags:** [arch] [hesap] [blas3] [microkernel] [perf] [simd]
 **Supersedes:** (none — refines ADR-0065 §13 D4 microkernel discipline + ADR-0078 §5 two-layer architecture)
 
@@ -110,6 +112,11 @@ trade-off in the same direction Cerid does here.
    LLVM. Asm kernels age the opposite way.
 
 ## Hot-swap architecture (open door for future ASM)
+
+Struck 2026-10-27: the swap point is the hesap-dense kernel table (`crd/hesap/dense/dense_kernels.hpp`, ADR-0134 §5),
+one GEMM block per CPU level; an asm body would be a level's (or a feature variant's) table entry. The
+`gemm_microkernel<T>` dispatcher and `CRD_HESAP_MICROKERNEL_BACKEND` are deleted, and the packed layout is the same on
+every level. The rest of this section is the 2026-05-19 record.
 
 The decision keeps a **clean swap point** so a future architect can flip
 on asm-class kernels without rewriting the rest of hesap-dense.
@@ -218,9 +225,14 @@ reference-class shootout vs Eigen-MT (see
   rounded IEEE 754 FMA** via `_mm256_fmadd_ps` / `_mm256_fmadd_pd`
   (AVX2 path) with `std::fma` scalar fallback. This is ~2× the throughput
   of the two-rounded `mul_add` path on AVX2-FMA hardware.
-- **Determinism contract for hesap**: bit-exact across SIMD widths AND
+- ~~**Determinism contract for hesap**: bit-exact across SIMD widths AND
   scalar paths because `std::fma` and hardware FMA are IEEE 754-2008
-  mandated to produce identical results.
+  mandated to produce identical results.~~ Struck 2026-10-27: the scalar
+  microkernel always summed with two roundings, so the scalar and AVX2
+  builds never agreed bit for bit. Under ADR-0134 §7 each GEMM kernel
+  level is bit-exact with its declared arithmetic (two roundings on
+  portable, where SSE2 has no FMA; single-rounded FMA from avx2), and the
+  levels agree within the inner-product bound.
 - **ADR-0063 (eylem determinism contract) continues to use `mul_add`**
   with two roundings — that's a physics-replay requirement and a
   different contract. The two coexist: hesap is numerical computing

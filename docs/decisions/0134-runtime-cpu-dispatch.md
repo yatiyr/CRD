@@ -18,7 +18,8 @@ kernel Philox block loop ([session](../sessions/2026-10-27-simd-dispatch-tensor-
 body ([session](../sessions/2026-10-27-simd-dispatch-sse2-philox.md)), then the SSE2 Threefry body beside scalar
 blocks ([session](../sessions/2026-10-27-simd-dispatch-sse2-threefry.md)), then the hesap-special Lanczos family
 ([session](../sessions/2026-10-27-simd-dispatch-special-kernels.md)), then the hesap-sparse SELL family
-([session](../sessions/2026-10-27-simd-dispatch-sparse-kernels.md)); the other clauses are open in the row.
+([session](../sessions/2026-10-27-simd-dispatch-sparse-kernels.md)), then the hesap-dense GEMM blocks
+([session](../sessions/2026-10-27-simd-dispatch-dense-kernels.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
@@ -75,6 +76,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
    order, and single-rounded FMA only where every level computes it single-rounded. The others declare tolerances
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.
+   The hesap-dense GEMM blocks are the first tolerance-declared family: each level is bit-exact with its declared
+   arithmetic (two roundings on portable, where SSE2 has no FMA; single-rounded FMA from avx2, ADR-0082's 2026-05-20
+   choice), and the levels agree within the inner-product bound.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE (a download the user approves) until such
    hardware exists. The doctor, the specimen harness's host tuple and every board record the detected and selected
