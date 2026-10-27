@@ -82,13 +82,15 @@ void step_bodies(BodyChunk* chunks, usize count, const f32 gravity[3], f32 dt) n
         const Vec8f nqz = qz + half_dt * dz;
         const Vec8f nqw = qw + half_dt * dw;
 
-        // try_normalize: a length at most epsilon keeps the quaternion; a NaN length divides.
+        // try_normalize: a length at most epsilon keeps the quaternion; a NaN length divides. A kept lane divides by
+        // one, so no lane divides by a zero (or underflowed) length the scalar body never divides by.
         const Vec8f len = sqrt(((nqx * nqx + nqy * nqy) + nqz * nqz) + nqw * nqw);
         const Vec8f keep = cmp_le(len, eps);
-        const Vec8f rx = select(keep, nqx, nqx / len);
-        const Vec8f ry = select(keep, nqy, nqy / len);
-        const Vec8f rz = select(keep, nqz, nqz / len);
-        const Vec8f rw = select(keep, nqw, nqw / len);
+        const Vec8f divisor = select(keep, one, len);
+        const Vec8f rx = select(keep, nqx, nqx / divisor);
+        const Vec8f ry = select(keep, nqy, nqy / divisor);
+        const Vec8f rz = select(keep, nqz, nqz / divisor);
+        const Vec8f rw = select(keep, nqw, nqw / divisor);
 
         select(active, vx, Vec8f::load_aligned(b.linvel_x)).store_aligned(b.linvel_x);
         select(active, vy, Vec8f::load_aligned(b.linvel_y)).store_aligned(b.linvel_y);

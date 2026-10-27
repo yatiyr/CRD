@@ -22,6 +22,9 @@ HEAD before: `90a87169`.
   `inv_mass > 0` in the scalar body's operation order: `v + g dt`, `* (1 - ld dt)`, `p + v dt`, `w * (1 - ad dt)`,
   `(w, 0) q` with its zero terms left to right, `q + (dt / 2) q_dot`, then `try_normalize`'s length test (at most
   1e-5 keeps q) and true divisions. No fma, so the family is bit-exact across levels and with the old body.
+- Every lane computes and `select` keeps the inactive lanes' old values, so masked lanes may set sticky FP status
+  flags the scalar body never set (nothing in the engine reads or unmasks them; the AoSoA trade-off). A kept lane
+  divides by one, so no lane divides by a zero length.
 - `EylemSystem::run`: one table call over the pool, then the entity loop only syncs Transform from `read_pose` (new;
   `PrevState` is now `Pose`). `RigidBodyInterpolationSystem` reads `read_pose` as well, instead of a full `read`.
 
