@@ -38,6 +38,12 @@ misses no feature. Recommendations lead with the gold-standard option, never the
 - **Research adopted.** After reading the three research parts' proposals (about 110 new rows and 50 amendments), the
   user approved all of them on 2026-10-26. [RESEARCH-ADOPT](../ROADMAP.md#slice-research-adopt) adds them to the
   table in full; on 2026-10-27 the user moved it ahead of SIMD-DISPATCH so it runs next.
+- **Part 4.** On 2026-10-27 the user approved every proposal of the
+  [networking and crash-pipeline research](../research/2026-10-27-networking-and-crash-pipeline-2026-comparison.md)
+  and a legal and regulatory register (COMPLY); RESEARCH-ADOPT reopened to add them in full. Standing order: completely secured against malicious
+  attacks, robust, and obeying every applicable law, with no shortcuts. Turkish law is a first-class
+  jurisdiction in COMPLY (KVKK, the Cybersecurity Law, internet, communications, e-commerce and consumer
+  law), never omitted.
 - **Hardware-fault resilience.** This host's i9-14900K still misexecutes rarely after the BIOS update; users will
   have such machines too. Cerid must work gracefully on faulty hardware, with every behaviour explained:
   [HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1) to .4 (integrity and retry, hardware identity and
