@@ -772,7 +772,9 @@ validated empirically and the scope deltas taken along the way.
   `n > 512`. Residual 5–25% gaps vs Eigen filed `vs-ref-blas2-followups`
   (need asm or AVX-512). *(2026-10-27: gemv, symv and trsv run on the hesap-dense per-level kernels: one accumulator
   per gemv row in eight-row tiles from avx2 and four-row tiles below, the symv and trsv rows on the dot product's
-  shape, any gemv row stride.)*
+  shape, any gemv row stride. Later that day ger, a row-ordered gemvt, xROT, the xLARF reflector and the xSYTF2
+  trailing update joined them, and the QR, LDLT, eigen, bidiagonal and hesap-direct LDLT sweeps run on them
+  ([session](../sessions/2026-10-27-simd-dispatch-dense-update-kernels.md)).)*
 - **L53 (BLAS L3 = Goto/BLIS layered gemm, intrinsics microkernel).** 5-loop
   layered gemm + scalar/AVX2 microkernel hot-swap behind
   `CRD_HESAP_MICROKERNEL_BACKEND`; **per-µarch asm deferred indefinitely**

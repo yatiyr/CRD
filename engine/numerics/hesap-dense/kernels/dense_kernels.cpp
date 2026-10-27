@@ -484,12 +484,12 @@ template <crd::usize N, crd::usize Q = 0, typename F> CRD_FORCEINLINE void unrol
 // The first `count` values (1 to w) of p as a vector, and the store of its first `count` lanes.
 template <typename V, typename T> CRD_FORCEINLINE V load_n(const T* p, crd::usize count) noexcept
 {
-    return count == sizeof(V) / sizeof(T) ? V::load(p) : V::load_partial(p, count);
+    return count == VectorOf<T>::kWidth ? V::load(p) : V::load_partial(p, count);
 }
 
 template <typename V, typename T> CRD_FORCEINLINE void store_n(V v, T* p, crd::usize count) noexcept
 {
-    if (count == sizeof(V) / sizeof(T))
+    if (count == VectorOf<T>::kWidth)
     {
         v.store(p);
     }

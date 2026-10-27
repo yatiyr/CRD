@@ -77,7 +77,10 @@ void panel_factor_qr_transposed(T* pt, crd::usize pt_ld, crd::usize panel_rows, 
         taus_arr[k + j] = tau;
 
         // Apply H_j to the remaining panel columns (pt rows j + 1 to nb - 1, each from element j; v_j[j] = 1).
-        kernels.reflect(ReflectorRows<T>{vj + j + 1, pt + (j + 1) * pt_ld + j, pt_ld, nb - j - 1, tail, tau});
+        if (j + 1 < nb)
+        {
+            kernels.reflect(ReflectorRows<T>{vj + j + 1, pt + (j + 1) * pt_ld + j, pt_ld, nb - j - 1, tail, tau});
+        }
     }
 }
 
