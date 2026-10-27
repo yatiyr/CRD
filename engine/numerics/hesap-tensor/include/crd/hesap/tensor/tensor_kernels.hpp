@@ -20,6 +20,20 @@ struct BinnedRungs; // crd/hesap/tensor/binned_core.hpp
 
 struct BlockQ8Zero; // crd/hesap/tensor/quant_core.hpp
 
+// The largest rank a permute walks (kMaxRank of crd/hesap/tensor/tensor.hpp, which permute.hpp asserts).
+inline constexpr crd::u32 kPermuteMaxRank = 8U;
+
+// The region (or tile) after this one, which the kernel prefetches while it copies this one: its origin in elements
+// from this one's (src and dst) and its na x nb extents, 0 x 0 when there is none. The kernel prefetches only elements
+// inside those extents, so it forms no pointer outside the arrays.
+struct PermuteNext
+{
+    crd::i64 src;
+    crd::i64 dst;
+    crd::u64 na;
+    crd::u64 nb;
+};
+
 // One (a, b) region of an f32 permute: dst(ia, ib) = src(ia, ib) (scale: alpha * src(ia, ib)) over [0, na) x [0, nb),
 // with dst(ia, ib) at dst + ia*ra + ib and src(ia, ib) at src + ia*sa + ib*sb, in tile_a x tile_b tiles, a-tiles outer.
 // stream asks for non-temporal stores (the region origin dst 32-byte aligned, ra and tile_b multiples of 8),
@@ -38,6 +52,25 @@ struct PermuteRegionF32
     crd::f32 alpha;
     bool scale;
     bool stream;
+    PermuteNext next{};
+};
+
+// A whole serial tiled f32 permute (permute.hpp permute_tiled), one call per transform: the m collapsed dims in dst
+// order (dst dim d has extent shp[d], src stride s_in[d] and dst stride s_out[d]; m <= kPermuteMaxRank), a the
+// src-fastest dim and m - 1 the dst-fastest. Every (a, m - 1) plane is one region in tile x tile tiles; the planes
+// follow permute_outer_order (permute_tiles.hpp), and each region prefetches the next plane.
+struct PermuteWalkF32
+{
+    crd::f32* dst;
+    const crd::f32* src;
+    const crd::u64* shp;
+    const crd::i64* s_in;
+    const crd::i64* s_out;
+    crd::u32 m;
+    crd::u32 a;
+    crd::u64 tile;
+    crd::f32 alpha;
+    bool scale;
 };
 
 // The rows [lo, hi) of a last-dimension softmax over [rows, d] (nn.hpp nn_softmax): max-subtract, exp, sum in index
@@ -85,8 +118,10 @@ struct NnLinearI8
 
 struct TensorKernels
 {
-    // The f32 region of a permute (PermuteRegionF32).
+    // The f32 region of a permute (PermuteRegionF32): one multithreaded permute task.
     void (*permute_region_f32)(const PermuteRegionF32& region) noexcept;
+    // The serial tiled f32 permute (PermuteWalkF32).
+    void (*permute_walk_f32)(const PermuteWalkF32& walk) noexcept;
     // The Tier R sum: deposit p[0..n) into acc (the binnedBLAS dbdsum protocol), bit-identical to the scalar
     // deposits in any partition.
     void (*binned_sum_f64)(detail::BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept;

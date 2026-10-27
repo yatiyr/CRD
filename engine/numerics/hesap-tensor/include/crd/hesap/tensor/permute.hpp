@@ -35,11 +35,13 @@
 //        src-fastest dim, b = the dst-fastest dim — in kPermuteTile edges so
 //        both the read and the write stream stay inside L1 for the duration
 //        of a tile; all remaining dims are an outer odometer around the tiled
-//        2-D kernel. f32 regions run the per-level tensor kernels
-//        (tensor_kernels.hpp, SIMD-DISPATCH): on AVX2, tiles with a unit
-//        source stride run the 8x8 in-register transpose microkernel
-//        (unpack/shuffle/permute2f128); everything else runs the scalar tile
-//        loop with the write stream contiguous.
+//        2-D kernel. f32 runs the per-level tensor kernels (tensor_kernels.hpp,
+//        SIMD-DISPATCH): the serial walk is one call, a multithreaded task one
+//        call per region; tiles with a unit source stride run the in-register
+//        transpose (8x8 on AVX2, 4x4 on SSE2) over 16-row blocks, one source
+//        line each, and prefetch the next tile (across planes and tasks);
+//        everything else runs the scalar tile loop with the write stream
+//        contiguous.
 //      - tiny inner extents fall back to the simple strided row loop (tile
 //        machinery is pure overhead below kPermuteTinyDim).
 //
@@ -98,24 +100,27 @@ inline void permute_row(T* dst, const T* src, crd::u64 count, crd::i64 s_in, T a
     }
 }
 
+static_assert(kPermuteMaxRank == kMaxRank, "the permute kernels walk every rank a tensor has");
+
 // One (a, b) region [0, na) x [0, nb) in tile_a x tile_b tiles: dst(ia, ib)
-// at ia*ra + ib, src(ia, ib) at ia*sa + ib*sb. f32 runs the per-level tensor
-// kernel (the 8x8 in-register transpose on AVX2, non-temporal stores when
-// stream is set; one call per region); every other type runs the scalar tiles.
+// at ia*ra + ib, src(ia, ib) at ia*sa + ib*sb; next locates the region after
+// it (the kernels prefetch it). f32 runs the per-level tensor kernel (the
+// in-register transposes on SSE2 and AVX2, non-temporal stores when stream is
+// set; one call per region); every other type runs the scalar tiles.
 template <bool Scale, typename T>
 inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
-                           crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream) noexcept
+                           crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream, PermuteNext next) noexcept
 {
     if constexpr (std::is_same_v<T, crd::f32>)
     {
         tensor_kernels().table->permute_region_f32(
-            {dst, ra, src, sa, sb, na, nb, tile_a, tile_b, alpha, Scale, stream});
+            {dst, ra, src, sa, sb, na, nb, tile_a, tile_b, alpha, Scale, stream, next});
     }
     else
     {
         (void)stream;
-        permute_region_tiles(na, nb, tile_a, tile_b,
-                             [&](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb)
+        permute_region_tiles(na, nb, tile_a, tile_b, sa, sb, ra, next,
+                             [&](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext /*next*/)
                              {
                                  permute_tile_scalar<Scale>(
                                      dst + static_cast<crd::i64>(ta) * ra + static_cast<crd::i64>(tb), ra,
@@ -156,61 +161,17 @@ inline void permute_rows(T* dst, const T* src, const crd::u64* shp, const crd::i
     }
 }
 
-// The outer odometer of the tiled transpose: every dim except a (the
-// src-fastest dim) and b = m-1 (the dst-fastest dim), INNERMOST-first by
-// ascending |src stride|, so consecutive plane visits move the scattered
-// source stream by its smallest step (page/TLB locality on the stream that
-// has none inside the tile; the dst side is contiguous per row regardless).
-// Writes the dims to ord and returns their count and (through outer) the
-// number of planes.
-inline crd::u32 permute_outer_order(const crd::u64* shp, const crd::i64* s_in, crd::u32 m, crd::u32 a, crd::u32* ord,
-                                    crd::u64& outer) noexcept
-{
-    crd::u32 nout = 0;
-    for (crd::u32 d = 0; d < m; ++d)
-    {
-        if (d != a && d != m - 1U)
-        {
-            ord[nout++] = d;
-        }
-    }
-    for (crd::u32 i = 1; i < nout; ++i) // insertion sort, ascending |s_in| = innermost first
-    {
-        const crd::u32 v = ord[i];
-        const crd::i64 mv = s_in[v] < 0 ? -s_in[v] : s_in[v];
-        crd::u32 j = i;
-        while (j > 0U)
-        {
-            const crd::i64 mj = s_in[ord[j - 1U]] < 0 ? -s_in[ord[j - 1U]] : s_in[ord[j - 1U]];
-            if (mj <= mv)
-            {
-                break;
-            }
-            ord[j] = ord[j - 1U];
-            --j;
-        }
-        ord[j] = v;
-    }
-    outer = 1;
-    for (crd::u32 i = 0; i < nout; ++i)
-    {
-        outer *= shp[ord[i]];
-    }
-    return nout;
-}
-
-// Tiled-transpose kernel: the outer odometer around one square-tiled 2-D
-// transpose of the (a, b) plane per step.
+// Tiled-transpose kernel: the outer odometer (permute_outer_order) around one
+// square-tiled 2-D transpose of the (a, b) plane per step. f32 runs the whole
+// walk in the per-level tensor kernel (one call per transform, so each plane
+// prefetches the next); every other type walks here on the scalar tiles.
 template <bool Scale, typename T>
 inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
                           crd::u32 m, crd::u32 a, T alpha) noexcept
 {
     const crd::u32 b = m - 1U;
-    const crd::u64 na = shp[a];
     const crd::u64 nb = shp[b];
-    const crd::i64 sa_in = s_in[a];
     const crd::i64 sb_in = s_in[b];
-    const crd::i64 ra = s_out[a]; // dst stride of a (dst stride of b is 1)
     // Stride-aware tile edge (measured on the HPTT board): 64 keeps both
     // streams hot when the scattered-stream step is small (fewer boundary
     // crossings); when each tile column lands on a fresh page region
@@ -222,29 +183,21 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
     // 0.44 ns/elem at 64 vs 0.51 at 32).
     const crd::u64 tile =
         (static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U || nb <= kPermuteTile) ? kPermuteTile : 32U;
-
-    crd::u32 ord[kMaxRank];
-    crd::u64 outer = 1;
-    const crd::u32 nout = permute_outer_order(shp, s_in, m, a, ord, outer);
-    crd::u64 idx[kMaxRank] = {};
-    crd::i64 soff = 0;
-    crd::i64 doff = 0;
-    for (crd::u64 it = 0; it < outer; ++it)
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        permute_region<Scale>(dst + doff, ra, src + soff, sa_in, sb_in, na, nb, tile, tile, alpha, false);
-        for (crd::u32 i = 0; i < nout; ++i) // ord[0] = the innermost (smallest src step)
-        {
-            const crd::u32 d = ord[i];
-            soff += s_in[d];
-            doff += s_out[d];
-            if (++idx[d] < shp[d])
-            {
-                break;
-            }
-            soff -= s_in[d] * static_cast<crd::i64>(shp[d]);
-            doff -= s_out[d] * static_cast<crd::i64>(shp[d]);
-            idx[d] = 0;
-        }
+        tensor_kernels().table->permute_walk_f32({dst, src, shp, s_in, s_out, m, a, tile, alpha, Scale});
+    }
+    else
+    {
+        const crd::u64 na = shp[a];
+        const crd::i64 sa_in = s_in[a];
+        const crd::i64 ra = s_out[a]; // dst stride of a (dst stride of b is 1)
+        permute_walk_planes(shp, s_in, s_out, m, a,
+                            [&](crd::i64 soff, crd::i64 doff, PermuteNext next)
+                            {
+                                permute_region<Scale>(dst + doff, ra, src + soff, sa_in, sb_in, na, nb, tile, tile,
+                                                      alpha, false, next);
+                            });
     }
 }
 
@@ -326,28 +279,45 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
             const crd::i64 sb_in = prm.s_in[prm.b];
             const crd::i64 ra = prm.s_out[prm.a];
             const crd::u64 n_tb_sup = (nb + prm.sup_b - 1U) / prm.sup_b;
-            for (crd::u32 t = t0; t < t1; ++t)
+            // Task t's super-block: its origin offsets in src and dst and its extents.
+            struct Task
+            {
+                crd::i64 soff;
+                crd::i64 doff;
+                crd::u64 na;
+                crd::u64 nb;
+            };
+            const auto task = [&](crd::u32 t)
             {
                 crd::u64 outer_it = t / prm.n_sup;
                 const crd::u64 sup = t % prm.n_sup;
                 const crd::u64 ta0 = (sup / n_tb_sup) * prm.sup_a;
                 const crd::u64 tb0 = (sup % n_tb_sup) * prm.sup_b;
-                crd::i64 soff = 0;
-                crd::i64 doff = 0;
+                Task k{static_cast<crd::i64>(ta0) * sa_in + static_cast<crd::i64>(tb0) * sb_in,
+                       static_cast<crd::i64>(ta0) * ra + static_cast<crd::i64>(tb0),
+                       (ta0 + prm.sup_a < na ? ta0 + prm.sup_a : na) - ta0,
+                       (tb0 + prm.sup_b < nb ? tb0 + prm.sup_b : nb) - tb0};
                 for (crd::u32 i = 0; i < prm.nout; ++i) // ord[0] = fastest digit (serial-order match)
                 {
                     const crd::u32 d = prm.ord[i];
                     const crd::u64 digit = outer_it % prm.shp[d];
                     outer_it /= prm.shp[d];
-                    soff += static_cast<crd::i64>(digit) * prm.s_in[d];
-                    doff += static_cast<crd::i64>(digit) * prm.s_out[d];
+                    k.soff += static_cast<crd::i64>(digit) * prm.s_in[d];
+                    k.doff += static_cast<crd::i64>(digit) * prm.s_out[d];
                 }
-                const crd::u64 ta1 = ta0 + prm.sup_a < na ? ta0 + prm.sup_a : na;
-                const crd::u64 tb1 = tb0 + prm.sup_b < nb ? tb0 + prm.sup_b : nb;
-                permute_region<Scale>(
-                    prm.dst + doff + static_cast<crd::i64>(ta0) * ra + static_cast<crd::i64>(tb0), ra,
-                    prm.src + soff + static_cast<crd::i64>(ta0) * sa_in + static_cast<crd::i64>(tb0) * sb_in, sa_in,
-                    sb_in, ta1 - ta0, tb1 - tb0, prm.tile_a, prm.tile_b, prm.alpha, prm.stream);
+                return k;
+            };
+            Task cur = task(t0);
+            for (crd::u32 t = t0; t < t1; ++t)
+            {
+                // The worker's next task is the region its kernel prefetches.
+                const bool has_next = t + 1U < t1;
+                const Task nxt = has_next ? task(t + 1U) : cur;
+                permute_region<Scale>(prm.dst + cur.doff, ra, prm.src + cur.soff, sa_in, sb_in, cur.na, cur.nb,
+                                      prm.tile_a, prm.tile_b, prm.alpha, prm.stream,
+                                      PermuteNext{nxt.soff - cur.soff, nxt.doff - cur.doff, has_next ? nxt.na : 0U,
+                                                  has_next ? nxt.nb : 0U});
+                cur = nxt;
             }
         });
     crd::jobs::wait(c);

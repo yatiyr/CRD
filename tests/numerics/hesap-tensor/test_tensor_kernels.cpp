@@ -1,13 +1,15 @@
 // The hesap-tensor kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs (the avx2 level's AVX-VNNI
 // variant included, where the host has the feature) gives the scalar oracle's bits for the f32 permute regions (unit
 // and other source strides, edge strips, negative and broadcast strides, the scaled and non-temporal variants, NaN
-// payloads, nothing written outside the region), the portable level's bits for the Tier R binned sum (around the vector
-// threshold and the endurance window, the speculative widening, the near-DBL_MAX compression regime, non-finite inputs,
-// a non-empty accumulator), the scalar quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned
-// order of the Q8_0 and int8 linears (every tile width, the saturating and zero-point extremes, row ranges), the scalar
-// softmax (vector tails, crd_exp4's scalar lanes, non-finite logits) and the scalar Philox blocks (counter and position
-// wraps, partial vectors). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and
-// the sketch fill under each forced level.
+// payloads, nothing written outside the region, with and without a next region to prefetch) and serial walks (ranks 2
+// to 5, a-extents that cut the 16-row block, tiles below the micro transpose, signed-zero and infinite scales), the
+// portable level's bits for the Tier R binned sum (around the vector threshold and the endurance window, the
+// speculative widening, the near-DBL_MAX compression regime, non-finite inputs, a non-empty accumulator), the scalar
+// quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned order of the Q8_0 and int8 linears (every
+// tile width, the saturating and zero-point extremes, row ranges), the scalar softmax (vector tails, crd_exp4's scalar
+// lanes, non-finite logits) and the scalar Philox blocks (counter and position wraps, partial vectors).
+// crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
+// level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/tensor/dtypes.hpp>
@@ -34,6 +36,7 @@ using crd::usize;
 using crd::math::KernelLevel;
 using tn::BlockQ8Zero;
 using tn::PermuteRegionF32;
+using tn::PermuteWalkF32;
 using tn::Tensor;
 using tn::TensorKernels;
 using tn::detail::BinnedRungs;
@@ -164,12 +167,15 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permut
 {
     crd::memory::TlsfAllocator alloc(1U << 26U);
     // Unit source strides with extents on and off the 8x8 grid (both edge strips), tiles that cut the grid, a
-    // region smaller than one microkernel, non-unit, negative and broadcast strides.
+    // region smaller than one microkernel, non-unit, negative and broadcast strides; then a-extents around the 16-row
+    // block (one short of it, one block, one past, a block and a half, two and one past) and tiles that cut a block.
     const RegionCase cases[] = {
         {64U, 64U, 1, 64, 64U, 64U},    {67U, 61U, 1, 70, 64U, 64U},  {130U, 75U, 1, 131, 32U, 32U},
         {512U, 40U, 1, 512, 512U, 32U}, {7U, 5U, 1, 7, 64U, 64U},     {9U, 17U, 1, 9, 5U, 3U},
         {40U, 24U, 3, 121, 64U, 64U},   {33U, 16U, 1, -40, 64U, 64U}, {16U, 40U, 1, 0, 64U, 64U},
         {24U, 24U, -1, 30, 64U, 64U},   {8U, 8U, 1, 8, 8U, 8U},       {1U, 1U, 1, 1, 64U, 64U},
+        {15U, 16U, 1, 16, 64U, 64U},    {16U, 24U, 1, 33, 64U, 64U},  {17U, 24U, 1, 17, 64U, 64U},
+        {24U, 9U, 1, 30, 16U, 8U},      {33U, 40U, 1, 40, 64U, 64U},  {40U, 32U, 1, 48, 24U, 16U},
     };
     const f32 alphas[] = {1.0F, -0.5F, 3.0F};
     const u64 src_n = 1U << 20U;
@@ -207,7 +213,6 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permut
                     for (u64 i = 0; i < dst_n; ++i)
                     {
                         want.data()[i] = std::bit_cast<f32>(kSentinel);
-                        got.data()[i] = std::bit_cast<f32>(kSentinel);
                     }
                     if (stream && c.tile_b % 8U != 0U)
                     {
@@ -216,19 +221,167 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permut
                     const bool scale = alpha != 1.0F;
                     region_reference(
                         {want.data(), ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a, c.tile_b, alpha, scale, stream});
-                    level.table->permute_region_f32(
-                        {got.data(), ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a, c.tile_b, alpha, scale, stream});
-                    u64 mismatches = 0;
-                    for (u64 i = 0; i < dst_n; ++i)
+                    // Without a next region, and with the region itself as the next one (its prefetches run and
+                    // stay inside it).
+                    for (const bool next : {false, true})
                     {
-                        mismatches += std::bit_cast<u32>(want.data()[i]) != std::bit_cast<u32>(got.data()[i]) ? 1U : 0U;
+                        const tn::PermuteNext hint{0, 0, next ? c.na : 0U, next ? c.nb : 0U};
+                        for (u64 i = 0; i < dst_n; ++i)
+                        {
+                            got.data()[i] = std::bit_cast<f32>(kSentinel);
+                        }
+                        level.table->permute_region_f32({got.data(), ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a,
+                                                         c.tile_b, alpha, scale, stream, hint});
+                        u64 mismatches = 0;
+                        for (u64 i = 0; i < dst_n; ++i)
+                        {
+                            mismatches +=
+                                std::bit_cast<u32>(want.data()[i]) != std::bit_cast<u32>(got.data()[i]) ? 1U : 0U;
+                        }
+                        INFO(crd::cpu_level_name(level.level)
+                             << variant_suffix(level) << " na " << c.na << " nb " << c.nb << " sa " << c.sa << " sb "
+                             << c.sb << " tiles " << c.tile_a << "x" << c.tile_b << " alpha " << alpha << " stream "
+                             << stream << " next " << next);
+                        CHECK(mismatches == 0U);
                     }
-                    INFO(crd::cpu_level_name(level.level)
-                         << variant_suffix(level) << " na " << c.na << " nb " << c.nb << " sa " << c.sa << " sb "
-                         << c.sb << " tiles " << c.tile_a << "x" << c.tile_b << " alpha " << alpha << " stream "
-                         << stream);
-                    CHECK(mismatches == 0U);
                 }
+            }
+        }
+    }
+    CHECK(ran >= 1U);
+}
+
+namespace
+{
+
+// A serial tiled walk (PermuteWalkF32): the collapsed dims in dst order, their source strides, the src-fastest dim a
+// and the tile edge.
+struct WalkCase
+{
+    u32 m;
+    u64 shp[5];
+    i64 s_in[5];
+    u32 a;
+    u64 tile;
+};
+
+// The scalar oracle: every dst element in row-major order over shp, read through s_in.
+void walk_reference(const PermuteWalkF32& w)
+{
+    u64 idx[tn::kPermuteMaxRank] = {};
+    u64 total = 1;
+    for (u32 d = 0; d < w.m; ++d)
+    {
+        total *= w.shp[d];
+    }
+    for (u64 e = 0; e < total; ++e)
+    {
+        i64 soff = 0;
+        i64 doff = 0;
+        for (u32 d = 0; d < w.m; ++d)
+        {
+            soff += static_cast<i64>(idx[d]) * w.s_in[d];
+            doff += static_cast<i64>(idx[d]) * w.s_out[d];
+        }
+        const f32 v = w.src[soff];
+        w.dst[doff] = w.scale ? w.alpha * v : v;
+        for (u32 d = w.m; d-- > 0U;)
+        {
+            if (++idx[d] < w.shp[d])
+            {
+                break;
+            }
+            idx[d] = 0;
+        }
+    }
+}
+
+} // namespace
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permute walk bits", "[tensor][kernels]")
+{
+    crd::memory::TlsfAllocator alloc(1U << 25U);
+    // A 16^4 reversal (one tile per plane, the next plane prefetched), rank-4 walks whose a-extent cuts the 16-row
+    // block (17, 33) with one and several tiles per plane, a source stride of 2 on a (the scalar tiles), a flipped b,
+    // tiles smaller than and cutting the micro transpose, a single plane and a rank-5 walk.
+    const WalkCase cases[] = {
+        {4U, {16U, 16U, 16U, 16U}, {1, 16, 256, 4096}, 0U, 64U},
+        {4U, {17U, 9U, 11U, 24U}, {1, 4488, 408, 17}, 0U, 64U},
+        {4U, {33U, 12U, 10U, 40U}, {1, 1320, 15840, 33}, 0U, 32U},
+        {3U, {20U, 6U, 24U}, {2, 960, 40}, 0U, 64U},
+        {3U, {24U, 5U, 32U}, {1, 768, -24}, 0U, 64U},
+        {3U, {40U, 7U, 37U}, {1, 1480, 40}, 0U, 5U},
+        {3U, {40U, 7U, 37U}, {1, 1480, 40}, 0U, 24U},
+        {2U, {64U, 72U}, {1, 64}, 0U, 64U},
+        {5U, {9U, 3U, 2U, 4U, 16U}, {1, 144, 432, 864, 9}, 0U, 64U},
+    };
+    const f32 inf = std::numeric_limits<f32>::infinity();
+    const f32 alphas[] = {1.0F, -0.5F, 3.0F, -0.0F, inf};
+    const u64 src_n = 1U << 19U;
+    const u64 shape_src[] = {src_n};
+    Tensor<f32> src(&alloc, shape_src);
+    fill_f32(src.data(), src_n, 0xC0FFEEU);
+    for (u64 i = 0; i < src_n; ++i) // signed zeros, so an infinite alpha gives the default NaN
+    {
+        if (i % 7U == 3U)
+        {
+            src.data()[i] = 0.0F;
+        }
+        else if (i % 11U == 4U)
+        {
+            src.data()[i] = -0.0F;
+        }
+    }
+    const u64 dst_n = 1U << 18U;
+    const u64 shape_dst[] = {dst_n};
+    Tensor<f32> want(&alloc, shape_dst);
+    Tensor<f32> got(&alloc, shape_dst);
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        for (const WalkCase& c : cases)
+        {
+            i64 s_out[5] = {};
+            s_out[c.m - 1U] = 1;
+            for (u32 d = c.m - 1U; d-- > 0U;)
+            {
+                s_out[d] = s_out[d + 1U] * static_cast<i64>(c.shp[d + 1U]);
+            }
+            i64 lo = 0;
+            i64 hi = 0;
+            for (u32 d = 0; d < c.m; ++d)
+            {
+                const i64 span = (static_cast<i64>(c.shp[d]) - 1) * c.s_in[d];
+                lo += span < 0 ? -span : 0;
+                hi += span > 0 ? span : 0;
+            }
+            const f32* base = src.data() + lo + 3; // 3: off the 32-byte grid
+            REQUIRE(static_cast<u64>(lo + hi + 4) < src_n);
+            REQUIRE(static_cast<u64>(s_out[0]) * c.shp[0] + 64U <= dst_n); // sentinels after the last element
+            for (const f32 alpha : alphas)
+            {
+                for (u64 i = 0; i < dst_n; ++i)
+                {
+                    want.data()[i] = std::bit_cast<f32>(kSentinel);
+                    got.data()[i] = std::bit_cast<f32>(kSentinel);
+                }
+                const bool scale = alpha != 1.0F; // -0 scales too
+                walk_reference({want.data(), base, c.shp, c.s_in, s_out, c.m, c.a, c.tile, alpha, scale});
+                level.table->permute_walk_f32({got.data(), base, c.shp, c.s_in, s_out, c.m, c.a, c.tile, alpha, scale});
+                u64 mismatches = 0;
+                for (u64 i = 0; i < dst_n; ++i)
+                {
+                    mismatches += std::bit_cast<u32>(want.data()[i]) != std::bit_cast<u32>(got.data()[i]) ? 1U : 0U;
+                }
+                INFO(crd::cpu_level_name(level.level)
+                     << variant_suffix(level) << " rank " << c.m << " extents " << c.shp[0] << "x" << c.shp[c.m - 1U]
+                     << " tile " << c.tile << " alpha " << alpha);
+                CHECK(mismatches == 0U);
             }
         }
     }

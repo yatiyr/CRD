@@ -147,6 +147,30 @@ TEST_CASE("v14-d permute_copy: every order of a 5x6x7x8 and of a 4x5x6", "[hesap
     }
 }
 
+TEST_CASE("v14-d permute_copy: rank-4 tiled walks with every extent past the row path", "[hesap][tensor][v14][permute]")
+{
+    // Every extent >= kPermuteTinyDim, so each order that moves the fastest dim takes the tiled walk: a 16^4 (one
+    // tile per plane), a-extents that cut the 16-row block (17, 33) and planes of several tiles (40), unscaled, scaled
+    // and by -0.
+    crd::memory::TlsfAllocator alloc(64U << 20U);
+    const crd::u64 shapes[][4] = {{16U, 16U, 16U, 16U}, {17U, 9U, 11U, 24U}, {33U, 12U, 10U, 40U}};
+    for (const auto& shape : shapes)
+    {
+        Tensor<crd::f32> tf(&alloc, shape);
+        Tensor<crd::f64> td(&alloc, shape);
+        fill_pattern(tf);
+        fill_pattern(td);
+        crd::u32 perm[] = {0U, 1U, 2U, 3U};
+        do
+        {
+            check_permute_case<crd::f32>(&alloc, tf.view(), perm);
+            check_permute_case<crd::f32>(&alloc, tf.view(), perm, -0.5F);
+            check_permute_case<crd::f32>(&alloc, tf.view(), perm, -0.0F);
+            check_permute_case<crd::f64>(&alloc, td.view(), perm);
+        } while (std::next_permutation(perm, perm + 4));
+    }
+}
+
 TEST_CASE("v14-d permute_copy: rank-1 identity and rank-0 scalar", "[hesap][tensor][v14][permute]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20U);
@@ -464,7 +488,7 @@ TEST_CASE("v14-d MT: a streamed reversal whose dst-fastest extent is not a multi
     CHECK(same_scaled);
 }
 
-TEST_CASE("v14-d MT: {1,2,4,8,16} workers produce bit-identical permutes", "[hesap][tensor][v14][permute][moat]")
+TEST_CASE("v14-d MT: {1,2,3,4,7,8,16} workers produce bit-identical permutes", "[hesap][tensor][v14][permute][moat]")
 {
     crd::memory::TlsfAllocator alloc(1ULL << 28U);
     // Big enough to cross kPermuteMtBytes on both cases; adversarial shapes.
@@ -491,7 +515,7 @@ TEST_CASE("v14-d MT: {1,2,4,8,16} workers produce bit-identical permutes", "[hes
 
     Tensor<crd::f32> out2(&alloc);
     Tensor<crd::f32> out4(&alloc);
-    for (crd::u32 nw : {1U, 2U, 4U, 8U, 16U})
+    for (crd::u32 nw : {1U, 2U, 3U, 4U, 7U, 8U, 16U}) // 3 and 7 split the tasks unevenly (each prefetches its next)
     {
         crd::jobs::Config cfg;
         cfg.num_threads = nw;

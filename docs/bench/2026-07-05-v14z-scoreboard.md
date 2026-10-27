@@ -339,7 +339,7 @@ All gates are Catch2 TEST_CASEs under `tests/hesap-tensor/`, ctest-registered vi
 |---|---|
 | reductions (full) | `test_reduce.cpp` — "v14-c Tier D: the {1,2,4,8,16} moat - serial == parallel, bit-identical" |
 | axis reductions (vertical + row parallel paths) | `test_reduce_axes.cpp` — "v14-c axes: the {1,2,4,8,16} moat on vertical + row paths" |
-| permute (MT super-block tasks) | `test_permute.cpp` — "v14-d MT: {1,2,4,8,16} workers produce bit-identical permutes" |
+| permute (MT super-block tasks) | `test_permute.cpp` — "v14-d MT: {1,2,3,4,7,8,16} workers produce bit-identical permutes" |
 | einsum execution (through `gemm_parallel`) | `test_einsum_exec.cpp` — "v14-f exec: run-twice + the {1,2,4,8,16} moat" |
 | hyper-optimizer (plans + winner trial) | `test_hyperopt.cpp` — "hyperopt: the {1,2,4,8,16} moat - bit-identical plans at every worker count" |
 | batched GEMM | `test_batched.cpp` — "batched: the {1,2,4,8,16} moat - gemm bit-identical at every worker count" |
