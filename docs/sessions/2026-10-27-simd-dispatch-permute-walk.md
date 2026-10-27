@@ -17,6 +17,9 @@ HEAD before: `06789737`.
   run 40578927592, dispatched at `06789737`, decides it.
 - Needs CI audit: DIAG.11c and DIAG.12 stay Needs CI. 40515770381 predates `7eec1bf7` and `14840123`, so it serves
   neither; 40578927592 is the candidate.
+- Hosted CI stopped: push runs 40576452112 (`06789737`) and 40580987094 (this batch) and complete run 40578927592
+  failed in seconds, every job unstarted with GitHub's annotation that recent account payments failed or the spending
+  limit needs raising. The account owner must fix the Actions billing; then rerun 40578927592 and the push run.
 
 ## What changed
 
