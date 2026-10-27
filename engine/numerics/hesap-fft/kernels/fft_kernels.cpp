@@ -3,9 +3,9 @@
 // the generated codelets and the SIMD types it runs on. The plan (FftPlanState) comes from general code; a sub-plan
 // runs on the same level, never through the table.
 //
-// The avx2 level takes paths of its own on some sizes (the f64 small-N lane-trick codelets, IP4-AoS, the
-// standalone-hier and deep-split bands, the AVX2 four-step twiddle blocks); the other levels run the SoA Stockham and
-// four-step paths, so the family is tolerance-declared across levels.
+// Every level runs one algorithm per size on the level's SIMD types (Vec4d, Vec8f) and the generated codelets, whose
+// operations each give the same bits on every backend, so the family is bit-exact across levels. Only memory hints
+// (prefetch, non-temporal stores, the store fence) depend on the level; they change no value.
 
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
@@ -67,8 +67,8 @@ template <typename T> struct Engine
 {
     const FftPlanState<T>& plan;
 
-    // The PRODUCTION transform: Stockham autosort radix-2 on split SoA buffers, AVX2-vectorized over the
-    // unit-stride butterfly index. In-place from the caller's view (deinterleave → SoA → reinterleave).
+    // The PRODUCTION transform: Stockham autosort radix-2 on split SoA buffers, vectorized over the unit-stride
+    // butterfly index. In-place from the caller's view (deinterleave → SoA → reinterleave).
     void execute(Complex<T>* data, FftDirection dir) const
     {
         if (plan.n <= 1)
@@ -77,11 +77,9 @@ template <typename T> struct Engine
         }
         if (plan.n <= 32) // leaf-codelet fast path: one straight-line block, zero loop overhead (L1-resident)
         {
-#if CRD_SIMD_HAS_AVX2
             // f64 N∈{8,16,32}: the AoS lane-trick codelet operates in place on the interleaved data (exactly its
             // [re,im,…] layout), avoiding the SoA deinterleave/reinterleave round-trip — faster than the SoA leaf
-            // it replaces at these sizes. The SoA path below stays the fallback for n=2/4, f32, and non-AVX2
-            // backends. → small_n_codelets.hpp.
+            // it replaces at these sizes. The SoA path below stays for n=2/4 and f32. → small_n_codelets.hpp.
             if constexpr (std::is_same_v<T, crd::f64>)
             {
                 if (plan.n == 8 || plan.n == 16 || plan.n == 32)
@@ -90,7 +88,6 @@ template <typename T> struct Engine
                     return;
                 }
             }
-#endif
             T* re = plan.re0;
             T* im = plan.im0;
             for (crd::usize i = 0; i < plan.n; ++i)
@@ -106,7 +103,6 @@ template <typename T> struct Engine
             }
             return;
         }
-#if CRD_SIMD_HAS_AVX2
         // IP4-AoS (PROMOTED 2026-07-04, the VTune-guided strided-v3 engine): interleaved in-place
         // radix-4 with COBRA gather + 3-layer fold; f64 1K..64K, forward AND inverse. Beats the
         // prior sh/ds paths on every row (see docs/research/fft-stockham-v2.md rounds 7-17).
@@ -125,8 +121,6 @@ template <typename T> struct Engine
                 return;
             }
         }
-#endif
-#if CRD_SIMD_HAS_AVX2
         // FFT-CRUSH 2026-07-03 DEEP-SPLIT (forward, 128K/256K): n = A·B·C, three generated passes —
         // S1 leaf+W_n+transpose → S2 leaf+broadcast-W_{BC} → S3 strided leaf, natural order out
         // (d[kA + A·kB + AB·kC]; derivation at the ctor). Inverse falls through to the four-step.
@@ -291,7 +285,6 @@ template <typename T> struct Engine
                 return;
             }
         }
-#endif
         // SIX-STEP v2 forward (square 1M/4M): SIMD micro-tile in-place transposes (v1's
         // element-scalar swaps were the measured wall: f64 1M 8.8 vs 6.3 ms) + contiguous
         // L1-resident row FFTs. See docs/research/fft-stockham-v2.md.
@@ -312,7 +305,6 @@ template <typename T> struct Engine
             execute_four_step(data, dir);
             return;
         }
-#if CRD_SIMD_HAS_AVX2
         // FFT-CRUSH 2026-07-03 standalone-HIER (forward, 1024..65536, f64 Vec4d + f32 Vec8f): one
         // stage-1-fused pass (leaf + twiddle + transposed store) + one batched-leaf pass — TWO passes
         // total, replacing ~log4(n) Stockham passes. Natural-order output by the four-step identity.
@@ -386,7 +378,6 @@ template <typename T> struct Engine
                 return;
             }
         }
-#endif
         // NB (2026-06-14): the depth-first recursion (rec_fft_soa) was MEASURED for the mid-band and is dead —
         // worse than this Stockham path at every size (8192 −6%, 65536 −27%, 131072 −33% collapsing). Decisive:
         // even fully L1-resident at n=1024 (ZERO cache penalty) this codelet path leaves throughput on the table,
@@ -496,11 +487,10 @@ template <typename T> struct Engine
             return;
         }
         Complex<T>* d = data;
-#if CRD_SIMD_HAS_AVX2
         // f64 N=8, even batch: the AoS over-2 codelet is register-resident with no per-pass memory traffic (the
         // SoA path below pays log₂(n) passes). Adjacent transforms (t,t+1) are contiguous in element-major layout
-        // = the over-2 ymm. four-step never calls this with n≤32 (it splits n≥2¹⁹ into ~2⁹ factors), so this fast
-        // path is reached only by direct small-N batched callers (v10-e). N=16/32 batched stay on the SoA path.
+        // = the over-2 vector. four-step never calls this with n≤32 (it splits n≥2¹⁹ into ~2⁹ factors), so this
+        // fast path is reached only by direct small-N batched callers (v10-e). N=32 batched stays on the SoA path.
         if constexpr (std::is_same_v<T, crd::f64>)
         {
             if (plan.n == 8 && (b & 1U) == 0U)
@@ -519,7 +509,6 @@ template <typename T> struct Engine
                 return;
             }
         }
-#endif
         // The hierarchical generated-codelet sub-FFTs replace the
         // radix-8 path for the f64 four-step sub-FFTs — 4096 = 64×64 (b==16: 8M-n1 + both 16M), 2048 = 64×32
         // (b==32: 8M-n2 + both 4M), 1024 = 32×32 (b==64: M5, 2M-n2 + both 1M). Stage-1 FUSED (split-radix leaf +
@@ -1546,7 +1535,6 @@ template <typename T> struct Engine
         fs6_transpose_inplace(x, m, false); // T3 -> natural order
     }
 
-#if CRD_SIMD_HAS_AVX2
     // IP4-AoS (PROMOTED): the INTERLEAVED in-place radix-4 DIT engine, f64 1K..64K both parities
     // and both DIRECTIONS. INV = inverse: conjugated twiddles throughout — folded into the fold's
     // sgn vector (zero extra ops: only t.hi feeds mix_lo_hi), compile-time-negated fold constants,
@@ -2199,7 +2187,6 @@ template <typename T> struct Engine
         ++prof::g_ip_calls;
 #endif
     }
-#endif
 
     void execute_four_step(Complex<T>* data, FftDirection dir) const
     {
@@ -2284,77 +2271,71 @@ template <typename T> struct Engine
 #ifdef CRD_FFT_PROFILE
             const unsigned long long pt0 = prof::rdtsc();
 #endif
-#if CRD_SIMD_HAS_AVX2
-            // f32 SIMD twiddle (Vec8f over the bb axis = contiguous scratch read; transposed tbuf write hits
-            // 8-row L2-resident bands). Twiddle by recurrence (w*=W_n^col), reseeded from the factored table every
-            // K=8 to bound f32 drift (~1.5e-7, in class). Measured 2.15× on the f32 twiddle phase. f64 stays scalar.
-            if constexpr (std::is_same_v<T, crd::f32>)
+            // SIMD twiddle over the bb axis (Vec8f for f32, Vec4d for f64: a contiguous scratch read; the
+            // transposed tbuf write hits L2-resident bands of `lanes` rows). Twiddle by recurrence (w*=W_n^col),
+            // reseeded from the factored table every `period` steps to bound the drift (f32 ~1.5e-7, f64 ~1e-15,
+            // in class). Measured 2.15x on the f32 twiddle phase and +5.6% on f64 8M (the twiddle ~1.5x).
             {
-                constexpr crd::usize period = 8;
-                const crd::f32 fis = static_cast<crd::f32>(isign);
-                const __m256i didx = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
+                namespace simd = crd::math::simd;
+                constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
+                using V = std::conditional_t<is_f32, simd::Vec8f, simd::Vec4d>;
+                constexpr crd::usize lanes = is_f32 ? 8 : 4;
+                constexpr crd::usize period = is_f32 ? 8 : 32;
                 crd::usize g = 0;
-                for (; g + 8 <= bw; g += 8)
+                for (; g + lanes <= bw; g += lanes)
                 {
-                    alignas(32) crd::f32 wsr[8];
-                    alignas(32) crd::f32 wsi[8];
-                    for (int l = 0; l < 8; ++l)
+                    alignas(32) T wsr[lanes];
+                    alignas(32) T wsi[lanes];
+                    for (crd::usize l = 0; l < lanes; ++l)
                     {
-                        const crd::usize c = i2 + g + (crd::usize)l;
+                        const crd::usize c = i2 + g + l;
                         const crd::usize hh = c >> plan.ftw_h;
                         const crd::usize ll = c & mmask;
                         wsr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                        wsi[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                        wsi[l] = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
                     }
-                    const __m256 wsrv = _mm256_load_ps(wsr);
-                    const __m256 wsiv = _mm256_load_ps(wsi);
-                    __m256 wr = _mm256_setzero_ps();
-                    __m256 wi = _mm256_setzero_ps();
+                    const V wsrv = V::load_aligned(wsr);
+                    const V wsiv = V::load_aligned(wsi);
+                    V wr = V::zero();
+                    V wi = V::zero();
                     for (crd::usize k1 = 0; k1 < n1; ++k1)
                     {
                         if ((k1 & (period - 1)) == 0) // reseed from the exact factored table (bounds recurrence drift)
                         {
-                            alignas(32) crd::f32 sr[8];
-                            alignas(32) crd::f32 si[8];
-                            for (int l = 0; l < 8; ++l)
+                            alignas(32) T sr[lanes];
+                            alignas(32) T si[lanes];
+                            for (crd::usize l = 0; l < lanes; ++l)
                             {
-                                const crd::usize a = (i2 + g + (crd::usize)l) * k1;
+                                const crd::usize a = (i2 + g + l) * k1;
                                 const crd::usize hh = a >> plan.ftw_h;
                                 const crd::usize ll = a & mmask;
                                 sr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                                si[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                                si[l] = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
                             }
-                            wr = _mm256_load_ps(sr);
-                            wi = _mm256_load_ps(si);
+                            wr = V::load_aligned(sr);
+                            wi = V::load_aligned(si);
                         }
-                        const crd::f32* const zp = reinterpret_cast<const crd::f32*>(scratch + k1 * bw + g);
-                        const __m256 a0 = _mm256_loadu_ps(zp);
-                        const __m256 b0 = _mm256_loadu_ps(zp + 8);
-                        const __m256 ev = _mm256_shuffle_ps(a0, b0, _MM_SHUFFLE(2, 0, 2, 0));
-                        const __m256 od = _mm256_shuffle_ps(a0, b0, _MM_SHUFFLE(3, 1, 3, 1));
-                        const __m256 zr = _mm256_permutevar8x32_ps(ev, didx);
-                        const __m256 zi = _mm256_permutevar8x32_ps(od, didx);
-                        const __m256 outr = _mm256_sub_ps(_mm256_mul_ps(zr, wr), _mm256_mul_ps(zi, wi));
-                        const __m256 outi = _mm256_add_ps(_mm256_mul_ps(zr, wi), _mm256_mul_ps(zi, wr));
-                        alignas(32) crd::f32 orr[8];
-                        alignas(32) crd::f32 oii[8];
-                        _mm256_store_ps(orr, outr);
-                        _mm256_store_ps(oii, outi);
-                        for (int l = 0; l < 8; ++l)
+                        V zr;
+                        V zi;
+                        simd::load_complex_deinterleaved(reinterpret_cast<const T*>(scratch + k1 * bw + g), zr, zi);
+                        alignas(32) T orr[lanes];
+                        alignas(32) T oii[lanes];
+                        (zr * wr - zi * wi).store_aligned(orr);
+                        (zr * wi + zi * wr).store_aligned(oii);
+                        for (crd::usize l = 0; l < lanes; ++l)
                         {
-                            (tbuf + (i2 + g + (crd::usize)l) * n1)[k1].re = orr[l];
-                            (tbuf + (i2 + g + (crd::usize)l) * n1)[k1].im = oii[l];
+                            store_complex(tbuf + (i2 + g + l) * n1 + k1, orr[l], oii[l], true);
                         }
                         if ((k1 & (period - 1)) != period - 1) // advance recurrence: w *= W_n^col
                         {
-                            const __m256 nr = _mm256_sub_ps(_mm256_mul_ps(wr, wsrv), _mm256_mul_ps(wi, wsiv));
-                            const __m256 ni = _mm256_add_ps(_mm256_mul_ps(wr, wsiv), _mm256_mul_ps(wi, wsrv));
+                            const V nr = wr * wsrv - wi * wsiv;
+                            const V ni = wr * wsiv + wi * wsrv;
                             wr = nr;
                             wi = ni;
                         }
                     }
                 }
-                for (; g < bw; ++g) // bw-tail (bw multiple of 8 at 8M, but keep correct)
+                for (; g < bw; ++g) // bw-tail (bw is a multiple of `lanes` at the four-step sizes, but keep correct)
                 {
                     const crd::usize col = i2 + g;
                     Complex<T>* const trow = tbuf + col * n1;
@@ -2370,112 +2351,6 @@ template <typename T> struct Engine
                     }
                 }
             }
-            else if constexpr (std::is_same_v<T, crd::f64>)
-            {
-                // f64 bb-axis Vec4d twiddle (4 cols/lane), recurrence reseeded every K=32 (f64 drift ~1e-15). NT
-                // per-lane store (matches the f64 NT path); transposed tbuf write hits L2-resident 4-row bands.
-                // Measured +5.6% f64 8M (twiddle ~1.5×), checksum bit-identical — the f64 mirror of the f32 win.
-                constexpr crd::usize period = 32;
-                const double fis = static_cast<double>(isign);
-                crd::usize g = 0;
-                for (; g + 4 <= bw; g += 4)
-                {
-                    alignas(32) double wsr[4];
-                    alignas(32) double wsi[4];
-                    for (int l = 0; l < 4; ++l)
-                    {
-                        const crd::usize c = i2 + g + (crd::usize)l;
-                        const crd::usize hh = c >> plan.ftw_h;
-                        const crd::usize ll = c & mmask;
-                        wsr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                        wsi[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
-                    }
-                    const __m256d wsrv = _mm256_load_pd(wsr);
-                    const __m256d wsiv = _mm256_load_pd(wsi);
-                    __m256d wr = _mm256_setzero_pd();
-                    __m256d wi = _mm256_setzero_pd();
-                    for (crd::usize k1 = 0; k1 < n1; ++k1)
-                    {
-                        if ((k1 & (period - 1)) == 0)
-                        {
-                            alignas(32) double sr[4];
-                            alignas(32) double si[4];
-                            for (int l = 0; l < 4; ++l)
-                            {
-                                const crd::usize a = (i2 + g + (crd::usize)l) * k1;
-                                const crd::usize hh = a >> plan.ftw_h;
-                                const crd::usize ll = a & mmask;
-                                sr[l] = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                                si[l] = fis * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
-                            }
-                            wr = _mm256_load_pd(sr);
-                            wi = _mm256_load_pd(si);
-                        }
-                        const double* const zp = reinterpret_cast<const double*>(scratch + k1 * bw + g);
-                        const __m256d a0 = _mm256_loadu_pd(zp);
-                        const __m256d b0 = _mm256_loadu_pd(zp + 4);
-                        const __m256d zr = _mm256_permute4x64_pd(_mm256_unpacklo_pd(a0, b0), _MM_SHUFFLE(3, 1, 2, 0));
-                        const __m256d zi = _mm256_permute4x64_pd(_mm256_unpackhi_pd(a0, b0), _MM_SHUFFLE(3, 1, 2, 0));
-                        const __m256d outr = _mm256_sub_pd(_mm256_mul_pd(zr, wr), _mm256_mul_pd(zi, wi));
-                        const __m256d outi = _mm256_add_pd(_mm256_mul_pd(zr, wi), _mm256_mul_pd(zi, wr));
-                        alignas(32) double orr[4];
-                        alignas(32) double oii[4];
-                        _mm256_store_pd(orr, outr);
-                        _mm256_store_pd(oii, outi);
-                        for (int l = 0; l < 4; ++l)
-                        {
-                            _mm_stream_pd(reinterpret_cast<double*>((tbuf + (i2 + g + (crd::usize)l) * n1) + k1),
-                                          _mm_set_pd(oii[l], orr[l]));
-                        }
-                        if ((k1 & (period - 1)) != period - 1)
-                        {
-                            const __m256d nr = _mm256_sub_pd(_mm256_mul_pd(wr, wsrv), _mm256_mul_pd(wi, wsiv));
-                            const __m256d ni = _mm256_add_pd(_mm256_mul_pd(wr, wsiv), _mm256_mul_pd(wi, wsrv));
-                            wr = nr;
-                            wi = ni;
-                        }
-                    }
-                }
-                for (; g < bw; ++g)
-                {
-                    const crd::usize col = i2 + g;
-                    Complex<T>* const trow = tbuf + col * n1;
-                    for (crd::usize k1 = 0; k1 < n1; ++k1)
-                    {
-                        const crd::usize a = col * k1;
-                        const crd::usize hh = a >> plan.ftw_h;
-                        const crd::usize ll = a & mmask;
-                        const T wr = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                        const T wi = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
-                        const Complex<T> z = scratch[k1 * bw + g];
-                        store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true);
-                    }
-                }
-            }
-            else
-#endif
-            {
-                {
-                    for (crd::usize bb = 0; bb < bw; ++bb)
-                    {
-                        const crd::usize col = i2 + bb;
-                        Complex<T>* const trow = tbuf + col * n1;
-                        for (crd::usize k1 = 0; k1 < n1; ++k1)
-                        {
-                            const crd::usize a = col * k1; // < n
-                            const T hr = hir[a >> plan.ftw_h];
-                            const T hi = hii[a >> plan.ftw_h];
-                            const T lr = lor[a & mmask];
-                            const T li = loi[a & mmask];
-                            const T wr = hr * lr - hi * li;  // Re W_n^a
-                            const T wim = hr * li + hi * lr; // Im W_n^a  (cos,−sin convention preserved by the product)
-                            const T wi = isign * wim;
-                            const Complex<T> z = scratch[k1 * bw + bb];
-                            store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true); // tbuf 64B
-                        }
-                    }
-                }
-            } // close Lane A1 block
 #ifdef CRD_FFT_PROFILE
             prof::g_p1_tw += prof::rdtsc() - pt0;
 #endif
@@ -2556,7 +2431,6 @@ template <typename T> struct Engine
                 const Complex<T>* const srow = scratch + k2 * bw;
                 Complex<T>* const drow = din + k2 * n1 + k1;
                 crd::usize bb = 0;
-#if CRD_SIMD_HAS_AVX2
                 // f32: 1 complex = 8B < 16B NT minimum ⇒ pair two complex into one 16B NT store (drow 16B-aligned:
                 // k2·n1+k1 even, bb steps 2). Gives the f32 scatter the RFO-skipping store f64 already had — the
                 // store-bound f32 scatter phase HALVES (measured 18.0→10.8 Mcyc @8M). Found by f32 phase archaeology.
@@ -2566,12 +2440,10 @@ template <typename T> struct Engine
                     {
                         for (; bb + 2 <= bw; bb += 2)
                         {
-                            const __m128 v = _mm_set_ps(srow[bb + 1].im, srow[bb + 1].re, srow[bb].im, srow[bb].re);
-                            _mm_stream_pd(reinterpret_cast<double*>(drow + bb), _mm_castps_pd(v));
+                            store_complex_pair_nt(drow + bb, srow + bb);
                         }
                     }
                 }
-#endif
                 for (; bb < bw; ++bb)
                 {
                     store_complex(drow + bb, srow[bb].re, srow[bb].im, nt_out);
@@ -2605,6 +2477,21 @@ template <typename T> struct Engine
 #endif
         dst->re = re;
         dst->im = im;
+    }
+
+    // Store two adjacent Complex<f32> as one 16-byte non-temporal store (dst 16B-aligned) on the levels with SSE2;
+    // plain stores elsewhere (the same values).
+    static void store_complex_pair_nt(Complex<crd::f32>* dst, const Complex<crd::f32>* src) noexcept
+    {
+#if CRD_SIMD_HAS_SSE2
+        const __m128 v = _mm_set_ps(src[1].im, src[1].re, src[0].im, src[0].re);
+        _mm_stream_pd(reinterpret_cast<double*>(dst), _mm_castps_pd(v));
+#else
+        dst[0].re = src[0].re;
+        dst[0].im = src[0].im;
+        dst[1].re = src[1].re;
+        dst[1].im = src[1].im;
+#endif
     }
 
     // One radix-4 Stockham pass: lq (j) groups, each r unit-stride radix-4 butterflies. r = n/L, L = 4·lq.

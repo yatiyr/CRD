@@ -88,8 +88,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    choice), and the levels agree within the inner-product bound. Its vector kernels add a reduction shape per level
    (the accumulator and row counts), which `dense_kernels.hpp` declares and the differential tests model; its
    elementwise kernels give every element the level's step, and its rotation rounds twice on every level. The
-   hesap-fft transform is bit-identical run to run on a level and tolerance-declared across levels (ADR-0092 §5)
-   while its avx2 level still takes algorithms of its own on some sizes.
+   hesap-fft transform is bit-exact: every level runs one algorithm per size on the level-aware SIMD types, whose
+   single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside).
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE (a download the user approves) until such
    hardware exists. The doctor, the specimen harness's host tuple and every board record the detected and selected

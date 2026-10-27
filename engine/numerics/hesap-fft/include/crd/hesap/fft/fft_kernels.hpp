@@ -4,8 +4,9 @@
 //
 // FftPlan (crd/hesap/fft/fft.hpp) builds the plan in general code and hands the kernels its FftPlanState: the sizes
 // the planner chose, its tables and its scratch. A kernel runs the transform at its own level, sub-plans included.
-// Determinism (ADR-0134 §7): bit-identical across runs and threads on one level; across levels the family is
-// tolerance-declared (ADR-0092 §5), because the avx2 level runs algorithms of its own on some sizes.
+// Determinism (ADR-0134 §7): bit-exact, portable the reference. Every level runs one algorithm per size on SIMD types
+// whose operations give the same bits on every backend (single-rounded fma, two-rounded products elsewhere), so a
+// transform gives the same bits on every level, run and thread; only NaN payloads may differ.
 
 #pragma once
 
@@ -80,7 +81,7 @@ template <typename T> struct FftPlanState
 };
 
 // The twiddles of the f64 small-N lane-trick codelets (detail/small_n_codelets.hpp, N 8, 16 and 32), each entry the
-// four lanes of a 256-bit register. small_n_twiddles() builds them once in general code.
+// four lanes of a Vec4d. small_n_twiddles() builds them once in general code.
 struct SmallNTwiddles
 {
     alignas(32) crd::f64 w81r[4]; // size-8 split-radix leaf twiddles (W8^1, W8^3)

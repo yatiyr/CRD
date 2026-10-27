@@ -32,7 +32,7 @@ Three things had to be settled.
    measurement; one precomputed twiddle table per plan, read-only after construction ⇒ a fixed per-element FP
    order ⇒ output **bit-identical across runs and threads** (each thread its own plan / the batched axis; per-plan
    execute scratch is not shared concurrently). The plan is general code and the transform a per-CPU-level kernel
-   ([ADR-0134](0134-runtime-cpu-dispatch.md)): bit-identical on one level, within the §5 tolerance across levels.
+   ([ADR-0134](0134-runtime-cpu-dispatch.md)): one algorithm per size on every level, bit-identical across levels.
    Lead with this + zero planning overhead + typed zero-dependency
    integration — NOT a beat-MKL speed claim.
 

@@ -86,3 +86,33 @@ AVX2 twiddle blocks to `Vec4d`/`Vec8f`, drop the remaining `CRD_SIMD_HAS_AVX2` g
 declaration; the bench scripts (`run_bench_fft*.sh`, `run_bench_dct.sh`, `run_bench_nufft.sh`,
 `prof_fft_kernel.sh`) link the fft, hesap and math archives for the row-close boards.
 
+
+## CI read (slice D)
+
+- No completed run has a new failed job. 40515770381 (`31e2b9ce`) is still running; its four failed jobs were fixed by
+  `b306e2ea` and `14840123`. 40548005123, 40539013278, 40537963527, 40533607455, 40531277767, 40530655387 and
+  40526567620 were cancelled before any job ran (zero jobs); 40548341193 (`18e78475`) is pending. Nothing dispatched.
+- Needs CI audit: [DIAG.11c](../ROADMAP.md#slice-diag.11c) and [DIAG.12](../ROADMAP.md#slice-diag.12) stay Needs CI.
+
+## Slice D: one algorithm per size on every level, bit-exact
+
+- The f64 small-N lane-trick codelets (N 8, 16, 32 and the batched N 8 and 16) run on `Vec4d` (`fmaddsub`,
+  `swap_pairs`, `concat_lo`/`concat_hi`) instead of raw AVX2, so `small_n_codelets.hpp` is compiled by every unit.
+- The `CRD_SIMD_HAS_AVX2` gates around IP4-AoS, the deep-split and standalone-hier bands and the small-N paths are
+  gone: their bodies already ran on `Vec4d`/`Vec8f` and the generated codelets.
+- The four-step twiddle is one `Vec8f`/`Vec4d` body (`load_complex_deinterleaved`, the recurrence reseeded every 8
+  (f32) or 32 (f64) steps) instead of two raw AVX2 blocks and a scalar loop, which is deleted; its f64 lane stores go
+  through `store_complex`'s non-temporal branch. The f32 paired non-temporal scatter moved into
+  `store_complex_pair_nt`. Only memory hints stay level-gated (`CRD_SIMD_HAS_SSE2`: prefetch, non-temporal stores, the
+  fence; plain accesses on portable), and they change no value; hesap-fft has no `CRD_SIMD_HAS_AVX2` test left.
+- The avx2 level keeps HEAD's operations and bits; the portable and sse2 levels change on the sizes those paths cover.
+- Declaration: the family is bit-exact, portable the reference (`fft_kernels.hpp`, ADR-0134 §7, ADR-0092 §1), NaN
+  payloads aside.
+
+Verification: `test_fft_kernels.cpp` now also compares every level's output with portable's, bit for bit, for every
+size 2^0 to 2^21, both types, directions and alignments, every batched shape and the zero/subnormal inputs. win-debug:
+the [kernels] cases pass (2,915 assertions; the generated codelets run their lane-scalar edition there, the small-N
+codelets and the four-step twiddle their `Vec` bodies), the other 281 pass. The optimized codelet bodies are proved by
+the hosted release lanes and the `crd-hesap-fft-kernels-at-<level>` arms.
+
+Left of the fft item: the f32 1M forward where MKL leads, and the bench scripts linking the fft archives.
