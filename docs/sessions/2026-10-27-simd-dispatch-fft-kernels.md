@@ -151,3 +151,23 @@ on the WSL host, where FFTW 3.3.10, MKL (`/usr/include/mkl`), `~/fft_refs/pocket
 `~/finufft/lib-static/libfinufft.a` are present.
 
 Left of the fft item: the f32 1M forward where MKL leads.
+
+## Slice F: the f32 1M forward question, corrected
+
+The row named "the gather fusion 0.69x MKL" as the f32 1M forward and the removed M18 chain (0.85x) as its lever. That
+is the 2026-06 state. Since 2026-07-04 the f32 1M forward runs the 4-stage deep-split 32·32·32·32 (`fft.hpp` 1M case,
+entered first in `execute` for a forward plan with `ds_b`): 2.24 ms, 0.91x MKL on its session's harness, 0.80x on the
+session-9 one-run board ([stockham v2](../research/fft-stockham-v2.md)); the inverse runs the four-step. M18 was never
+measured against the deep-split, so porting it as the default would replace a measured path with an unmeasured one,
+and a non-default port would be untested code; the port was written, found unreachable behind the deep-split, and
+reverted. The question moves to the row-close board: the deep-split, the M18 tiled four-step and MKL at every level.
+
+Recovery recipe for that board: from `359f0156^`, `detail/hier_codelets.hpp`'s `codelet32_batched_tiled_bb128` and
+`codelet32_p2_fused_tile64` (their only raw intrinsics are `m16tr::transpose8x8`, the same full 8x8 transpose as
+`simd::transpose8x8`); HEAD's f32 `codelet32_stage1_fused_32x32_gather` equals the old one once the
+`CRD_FFT_M18_ABLATE_SMALLBBUF` gates are resolved. Tables: `base[g·1024 + (i2 mod 32)·32 + i2/32] = W_n^{8·g·i2}`,
+`lane[i2·8 + l] = W_n^{i2·l}` (g < 128, l < 8, each rounded once from the angle of its exponent mod n). P1 = for each
+of 8 blocks the gather (`din + 128·blk`, the 1024 sub-plan's block buffer and inner twiddle) and the producer into
+`tbuf + blk·16·8192`, no twiddle pass; P2 = for k1 in steps of 128 the fused codelet into `data`, no scatter. The A/B
+disables the 1M deep-split through a scratch include override of `fft.hpp` (lesson
+ab-compile-header-override-not-swap), never a tree option.
