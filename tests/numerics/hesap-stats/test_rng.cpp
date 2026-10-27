@@ -66,11 +66,26 @@ TEST_CASE("rng: PCG64-DXSM vs NumPy random_raw (set state)", "[v12-e][stats][rng
 TEST_CASE("rng: Threefry4x64-20 vs Random123 published KAT", "[v12-e][stats][rng]")
 {
     constexpr u64 zero[4] = {0, 0, 0, 0};
-    const auto b0 = st::threefry4x64(zero, zero);
+    constexpr auto b0 = st::threefry4x64(zero, zero); // constant-evaluated: the block function stays constexpr
     CHECK(b0.v[0] == 0x09218EBDE6C85537ULL);
     CHECK(b0.v[1] == 0x55941F5266D86105ULL);
     CHECK(b0.v[2] == 0x4BD25E16282434DCULL);
     CHECK(b0.v[3] == 0xEE29EC846BD2E40BULL);
+    constexpr u64 ones[4] = {~0ULL, ~0ULL, ~0ULL, ~0ULL};
+    const auto b1 = st::threefry4x64(ones, ones);
+    CHECK(b1.v[0] == 0x29C24097942BBA1BULL);
+    CHECK(b1.v[1] == 0x0371BBFB0F6F4E11ULL);
+    CHECK(b1.v[2] == 0x3C231FFA33F83A1CULL);
+    CHECK(b1.v[3] == 0xCD29113FDE32D168ULL);
+    constexpr u64 pi_ctr[4] = {0x243F6A8885A308D3ULL, 0x13198A2E03707344ULL, 0xA4093822299F31D0ULL,
+                               0x082EFA98EC4E6C89ULL};
+    constexpr u64 pi_key[4] = {0x452821E638D01377ULL, 0xBE5466CF34E90C6CULL, 0xBE5466CF34E90C6CULL,
+                               0xC0AC29B7C97C50DDULL};
+    const auto b2 = st::threefry4x64(pi_ctr, pi_key);
+    CHECK(b2.v[0] == 0xA7E8FDE591651BD9ULL);
+    CHECK(b2.v[1] == 0xBAAFD0C30138319BULL);
+    CHECK(b2.v[2] == 0x84A5C1A729E685B9ULL);
+    CHECK(b2.v[3] == 0x901D406CCEBC1BA4ULL);
     // Counter-RNG wrapper: seek(n) must equal sequential draws.
     st::ThreefryRng r(0xABCDEF, 0x12345);
     u64 seq[6];

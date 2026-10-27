@@ -21,7 +21,7 @@ namespace
 {
 
 // Every block count 0..39 meets each body's whole groups, single groups and scalar remainder (Philox AVX2 24 + 8,
-// SSE2 16, then 4 and 3; Threefry 4).
+// SSE2 16, then 4 and 3; Threefry AVX2 12 + 4, SSE2 7, then 3 and 1).
 constexpr usize kMaxBlocks = 39;
 
 bool runs_here(const KernelLevel<StatsKernels>& level)
@@ -92,12 +92,20 @@ TEST_CASE("stats kernels: every level the host runs gives the scalar Philox and 
 {
     // Positions straddling the 2^32 word wrap of the Philox counter and the 2^64 wrap of the position.
     const u64 philox_firsts[] = {0U, 1U, 0xFFFFFFFCULL, 0xFFFFFFFFFFFFFFFAULL, 0x123456789ABCDEFULL};
-    // Threefry counters straddling the carries out of word 0, of words 0 and 1, and of words 0 to 2.
-    const u64 threefry_counters[][4] = {{0U, 0U, 0U, 0U},
-                                        {0xFFFFFFFFFFFFFFFEULL, 0U, 0U, 0U},
-                                        {0xFFFFFFFFFFFFFFFDULL, 0xFFFFFFFFFFFFFFFFULL, 7U, 0U},
-                                        {0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 3U},
-                                        {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL, 1U, 2U}};
+    // Threefry counters straddling the carries out of word 0, of words 0 and 1, and of words 0 to 2, and counters
+    // whose word 0 wraps at block 4 to 15: inside every vector group and scalar block of a step.
+    u64 threefry_counters[17][4] = {{0U, 0U, 0U, 0U},
+                                    {0xFFFFFFFFFFFFFFFEULL, 0U, 0U, 0U},
+                                    {0xFFFFFFFFFFFFFFFDULL, 0xFFFFFFFFFFFFFFFFULL, 7U, 0U},
+                                    {0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 0xFFFFFFFFFFFFFFFFULL, 3U},
+                                    {0x0123456789ABCDEFULL, 0xFEDCBA9876543210ULL, 1U, 2U}};
+    for (usize i = 5; i < 17U; ++i)
+    {
+        threefry_counters[i][0] = 0U - static_cast<u64>(i - 1U); // block i - 1 carries out of word 0
+        threefry_counters[i][1] = (i & 1U) != 0U ? 0xFFFFFFFFFFFFFFFFULL : 5U;
+        threefry_counters[i][2] = (i & 2U) != 0U ? 0xFFFFFFFFFFFFFFFFULL : 0U;
+        threefry_counters[i][3] = i;
+    }
     const u64 key[4] = {0xABCDEF0123456789ULL, 0x0F1E2D3C4B5A6978ULL, 0x1111111111111111ULL, 0x9E3779B97F4A7C15ULL};
     usize ran = 0;
     for (const KernelLevel<StatsKernels>& level : st::stats_kernel_levels())

@@ -57,7 +57,7 @@ int main()
     row("pcg64-dxsm", [] { return st::Pcg64Dxsm(12345); });
     row("splitmix64", [] { return st::SplitMix64(12345); });
     row("mt19937", [] { return st::Mt19937(12345U); });
-    row_simd("threefry4x64", [] { return st::ThreefryRng(12345); }); // 4 blocks per AVX2 step
-    row_simd("philox4x32", [] { return st::PhiloxRng(12345); });     // 8 blocks per AVX2 step
+    row_simd("threefry4x64", [] { return st::ThreefryRng(12345); }); // 12 blocks per AVX2 step, 7 per SSE2
+    row_simd("philox4x32", [] { return st::PhiloxRng(12345); });     // 24 blocks per AVX2 step, 16 per SSE2
     return 0;
 }

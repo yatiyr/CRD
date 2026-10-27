@@ -70,36 +70,94 @@ inline constexpr int kThreefryRot[8][2] = {{14, 16}, {52, 57}, {23, 40}, {5, 37}
 // The Skein key-schedule parity word.
 inline constexpr crd::u64 kThreefryParity = 0x1BD11BDAA9FC1A22ULL;
 
+// The key schedule: the four key words and their parity word.
+constexpr void threefry_key_schedule(const crd::u64 (&key)[4], crd::u64 (&ks)[5]) noexcept
+{
+    for (int w = 0; w < 4; ++w)
+    {
+        ks[w] = key[w];
+    }
+    ks[4] = kThreefryParity ^ key[0] ^ key[1] ^ key[2] ^ key[3];
+}
+
+template <int R> constexpr crd::u64 threefry_rotl(crd::u64 x) noexcept
+{
+    return (x << R) | (x >> (64 - R));
+}
+
+// One round on one block with the rotation pair of round M mod 8, then the word permutation (0, 3, 2, 1): swap x1 and
+// x3. The rounds are templates so every rotation is an immediate: a runtime round loop shifted by a register and ran
+// 2.5x slower.
+template <int M> constexpr void threefry_round_block(crd::u64 (&x)[4]) noexcept
+{
+    x[0] += x[1];
+    const crd::u64 x1 = threefry_rotl<kThreefryRot[M][0]>(x[1]) ^ x[0];
+    x[2] += x[3];
+    x[1] = threefry_rotl<kThreefryRot[M][1]>(x[3]) ^ x[2];
+    x[3] = x1;
+}
+
+// Key injection number S (0 before the first round, then every four rounds) into one block.
+template <int S> constexpr void threefry_inject_block(crd::u64 (&x)[4], const crd::u64 (&ks)[5]) noexcept
+{
+    x[0] += ks[S % 5];
+    x[1] += ks[(S + 1) % 5];
+    x[2] += ks[(S + 2) % 5];
+    x[3] += ks[(S + 3) % 5] + static_cast<crd::u64>(S);
+}
+
+// One round on blocks B .. G - 1 of G independent blocks. The blocks unfold by template recursion, not a loop: GCC 13
+// vectorizes a loop over the blocks at -O3 into shuffled 128-bit registers, 3.7x slower than the scalar blocks.
+template <int M, int G, int B = 0> constexpr void threefry_round(crd::u64 (&x)[G][4]) noexcept
+{
+    if constexpr (B < G)
+    {
+        threefry_round_block<M>(x[B]);
+        threefry_round<M, G, B + 1>(x);
+    }
+}
+
+// Key injection S into blocks B .. G - 1.
+template <int S, int G, int B = 0> constexpr void threefry_inject(crd::u64 (&x)[G][4], const crd::u64 (&ks)[5]) noexcept
+{
+    if constexpr (B < G)
+    {
+        threefry_inject_block<S>(x[B], ks);
+        threefry_inject<S, G, B + 1>(x, ks);
+    }
+}
+
+// Four rounds from round M mod 8, then key injection S.
+template <int M, int S, int G> constexpr void threefry_rounds(crd::u64 (&x)[G][4], const crd::u64 (&ks)[5]) noexcept
+{
+    threefry_round<M, G>(x);
+    threefry_round<M + 1, G>(x);
+    threefry_round<M + 2, G>(x);
+    threefry_round<M + 3, G>(x);
+    threefry_inject<S, G>(x, ks);
+}
+
+// The 20 rounds of Threefry4x64-20 on G independent blocks after the first key injection: x holds each block's
+// counter plus the key on entry and the block on return. Several blocks give the out-of-order core independent chains
+// to overlap; adding the key to the counters before the rounds, not as a first injection, lets the compiler share the
+// words the blocks have in common (1.06x on three blocks).
+template <int G> constexpr void threefry4x64_rounds_of(crd::u64 (&x)[G][4], const crd::u64 (&ks)[5]) noexcept
+{
+    threefry_rounds<0, 1, G>(x, ks);
+    threefry_rounds<4, 2, G>(x, ks);
+    threefry_rounds<0, 3, G>(x, ks);
+    threefry_rounds<4, 4, G>(x, ks);
+    threefry_rounds<0, 5, G>(x, ks);
+}
+
 // Threefry4x64-20.
 [[nodiscard]] constexpr ThreefryBlock threefry4x64(const crd::u64 (&ctr)[4], const crd::u64 (&key)[4]) noexcept
 {
-    const crd::u64 ks[5] = {key[0], key[1], key[2], key[3], kThreefryParity ^ key[0] ^ key[1] ^ key[2] ^ key[3]};
-    crd::u64 x0 = ctr[0] + ks[0];
-    crd::u64 x1 = ctr[1] + ks[1];
-    crd::u64 x2 = ctr[2] + ks[2];
-    crd::u64 x3 = ctr[3] + ks[3];
-    for (int r = 0; r < 20; ++r)
-    {
-        const int m = r & 7;
-        x0 += x1;
-        x1 = (x1 << kThreefryRot[m][0]) | (x1 >> (64 - kThreefryRot[m][0]));
-        x1 ^= x0;
-        x2 += x3;
-        x3 = (x3 << kThreefryRot[m][1]) | (x3 >> (64 - kThreefryRot[m][1]));
-        x3 ^= x2;
-        const crd::u64 t = x1; // the N=4 word permutation (0,3,2,1): swap x1 and x3
-        x1 = x3;
-        x3 = t;
-        if ((r & 3) == 3) // key injection every 4 rounds
-        {
-            const int inj = (r + 1) / 4;
-            x0 += ks[inj % 5];
-            x1 += ks[(inj + 1) % 5];
-            x2 += ks[(inj + 2) % 5];
-            x3 += ks[(inj + 3) % 5] + static_cast<crd::u64>(inj);
-        }
-    }
-    return ThreefryBlock{{x0, x1, x2, x3}};
+    crd::u64 ks[5] = {};
+    threefry_key_schedule(key, ks);
+    crd::u64 x[1][4] = {{ctr[0] + ks[0], ctr[1] + ks[1], ctr[2] + ks[2], ctr[3] + ks[3]}};
+    threefry4x64_rounds_of<1>(x, ks);
+    return ThreefryBlock{{x[0][0], x[0][1], x[0][2], x[0][3]}};
 }
 
 // Advances a 256-bit Threefry counter (little-endian words) by n blocks, carrying through every word.
