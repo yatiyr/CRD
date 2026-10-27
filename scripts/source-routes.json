@@ -53,7 +53,6 @@
     },
     {
       "paths": [
-        "runtime/examples/bench_bessel_batch.cpp",
         "runtime/examples/bench_comms_vs_refs.cpp",
         "runtime/examples/bench_decomp.cpp",
         "runtime/examples/bench_distributions.cpp",
@@ -80,6 +79,7 @@
         "runtime/examples/bench_rng.cpp",
         "runtime/examples/bench_samplers.cpp",
         "runtime/examples/bench_sparse_tensor.cpp",
+        "runtime/examples/bench_special_batch.cpp",
         "runtime/examples/bench_tensor_io.cpp",
         "runtime/examples/bench_tt.cpp",
         "runtime/examples/bench_wavelet_vs_refs.cpp",

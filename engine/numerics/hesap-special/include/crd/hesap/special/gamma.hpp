@@ -62,11 +62,11 @@ template <Real T>
 }
 } // namespace detail
 
-// ln|Γ(x)|.
+// ln|Γ(x)|: +inf at the poles (the non-positive integers) and at both infinities.
 template <Real T>
 [[nodiscard]] T lgamma(T x) noexcept
 {
-    if (std::isnan(x))
+    if (std::isnan(x) || x == std::numeric_limits<T>::infinity())
     {
         return x;
     }
@@ -74,7 +74,7 @@ template <Real T>
     {
         return detail::lgamma_pos(x);
     }
-    // Poles at the non-positive integers.
+    // Poles at the non-positive integers (and -inf).
     if (x == crd::math::floor(x))
     {
         return std::numeric_limits<T>::infinity();
@@ -97,13 +97,17 @@ template <Real T>
     return ((fl % 2) == 0) ? static_cast<T>(-1) : static_cast<T>(1);
 }
 
-// Γ(x).
+// Γ(x): ±inf at ±0, +inf at +inf, NaN at the negative integers and -inf (C's tgamma).
 template <Real T>
 [[nodiscard]] T gamma(T x) noexcept
 {
-    if (std::isnan(x))
+    if (std::isnan(x) || x == std::numeric_limits<T>::infinity())
     {
         return x;
+    }
+    if (x == static_cast<T>(0))
+    {
+        return crd::math::copysign(std::numeric_limits<T>::infinity(), x); // the pole keeps the zero's sign
     }
     if (x > static_cast<T>(0))
     {
@@ -111,7 +115,7 @@ template <Real T>
     }
     if (x == crd::math::floor(x))
     {
-        return std::numeric_limits<T>::quiet_NaN(); // pole
+        return std::numeric_limits<T>::quiet_NaN(); // pole at −1, −2, …
     }
     // Reflection: Γ(x) = π / (sin(πx)·Γ(1−x)).
     const T s = crd::math::sin(detail::kPi<T> * x);

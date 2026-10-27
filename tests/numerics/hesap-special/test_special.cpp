@@ -2,12 +2,14 @@
 // (special_refs.inc, plain C arrays) + an independent std:: cross-check (lgamma/tgamma/erf/erfc) + run-twice
 // determinism + an f32 accuracy probe. Gate: f64 ≤ 1e-12 (closed-form) / ≤ 1e-9 (Halley inverses).
 
+#include <crd/hesap/special/detail/lanczos_core.hpp>
 #include <crd/hesap/special/special.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
 #include <cmath>
+#include <limits>
 
 namespace sf = crd::hesap::special;
 using crd::f64;
@@ -48,6 +50,35 @@ TEST_CASE("special gamma: lgamma/tgamma/digamma/trigamma vs scipy", "[v12-a][spe
     {
         chk(sf::polygamma(static_cast<int>(ref_polygamma_n[i]), ref_polygamma_x[i]), ref_polygamma_y[i], 1e-9, 1e-11,
             "polygamma", i);
+    }
+}
+
+TEST_CASE("special gamma: the poles, signed zeros, infinities and NaN follow C's lgamma and tgamma",
+          "[v12-a][special][gamma]")
+{
+    const f64 inf = std::numeric_limits<f64>::infinity();
+    const f64 nan = std::numeric_limits<f64>::quiet_NaN();
+    // The public generic functions and the out-of-line Lanczos scalars the batch kernels reproduce.
+    f64 (*const lgammas[2])(f64) = {&sf::lgamma<f64>, &sf::detail::lanczos_lgamma};
+    f64 (*const gammas[2])(f64) = {&sf::gamma<f64>, &sf::detail::lanczos_tgamma};
+    for (int f = 0; f < 2; ++f)
+    {
+        INFO((f == 0 ? "public" : "lanczos"));
+        CHECK(lgammas[f](inf) == inf);
+        CHECK(lgammas[f](-inf) == inf);
+        CHECK(lgammas[f](0.0) == inf);
+        CHECK(lgammas[f](-0.0) == inf);
+        CHECK(lgammas[f](-3.0) == inf);
+        CHECK(std::isnan(lgammas[f](nan)));
+        CHECK(lgammas[f](1.0e306) == inf); // ln Gamma overflows past about 2.55e305
+        CHECK(gammas[f](inf) == inf);
+        CHECK(std::isnan(gammas[f](-inf)));
+        CHECK(gammas[f](0.0) == inf);
+        CHECK(gammas[f](-0.0) == -inf);
+        CHECK(std::isnan(gammas[f](-2.0)));
+        CHECK(std::isnan(gammas[f](nan)));
+        CHECK(gammas[f](172.0) == inf);
+        CHECK(gammas[f](5.0e-324) == inf); // Gamma(x) ~ 1/x overflows for the smallest subnormal
     }
 }
 

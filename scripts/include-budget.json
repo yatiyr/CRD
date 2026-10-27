@@ -69,6 +69,13 @@
       "why": "every unit of crd/hesap/stats/stats.hpp; its bulk fill runs the per-level stats kernels (SIMD-DISPATCH), so the header brings no intrinsics header"
     },
     {
+      "include": "crd/hesap/special/special.hpp",
+      "flags_of": "tests/numerics/hesap-special/test_batch.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the special functions of hesap-stats, hesap-quadrature and the distributions; the Lanczos lgamma and tgamma batches run the per-level special kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers (its <complex> reaches <sstream>, as crd/math/cmath.hpp does)"
+    },
+    {
       "include": "crd/hesap/tensor/permute.hpp",
       "flags_of": "tests/numerics/hesap-tensor/test_permute.cpp",
       "forbid": ["chrono", "format"],

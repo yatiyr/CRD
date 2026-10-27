@@ -1,6 +1,7 @@
 // crd-hesap-special v12-a — parallel batch determinism moat. The batch result must be BIT-IDENTICAL to the scalar
 // loop AND identical across {1,4,16} thread counts (disjoint-range write, no reduction ⇒ true by construction).
 
+#include <crd/hesap/special/detail/lanczos_core.hpp>
 #include <crd/hesap/special/special.hpp>
 
 #include <crd/containers/array.hpp>
@@ -79,18 +80,18 @@ TEST_CASE("special batch: parallel == scalar + {1,4,16}-thread bit-identity (moa
     for (usize i = 0; i < n; ++i)
     {
         ref_erf[i] = sf::erf(in[i]);
-        ref_lg[i] = sf::detail::crd_lgamma_lz1(in[i]); // the batch uses the SIMD Lanczos twins
+        ref_lg[i] = sf::detail::lanczos_lgamma(in[i]); // the batch runs the Lanczos kernels
         ref_gp[i] = sf::gammainc_p(2.5, in[i]);
-        ref_tg[i] = sf::detail::crd_tgamma_lz1(in[i]);
+        ref_tg[i] = sf::detail::lanczos_tgamma(in[i]);
         ref_bj[i] = sf::cyl_bessel_j(2.5, in[i]);
         ref_aa[i] = sf::airy_ai(in[i]);
     }
-    // The Lanczos lgamma/tgamma twins are accurate vs the public std::-based sf::lgamma/sf::gamma (≤ a few ulp).
+    // The Lanczos lgamma/tgamma are accurate vs the public std::-based sf::lgamma/sf::gamma (≤ a few ulp).
     for (usize i = 0; i < n; ++i)
     {
-        REQUIRE(std::abs(sf::detail::crd_lgamma_lz1(in[i]) - sf::lgamma(in[i])) <=
+        REQUIRE(std::abs(sf::detail::lanczos_lgamma(in[i]) - sf::lgamma(in[i])) <=
                 1e-12 + 1e-12 * std::abs(sf::lgamma(in[i])));
-        REQUIRE(std::abs(sf::detail::crd_tgamma_lz1(in[i]) - sf::gamma(in[i])) <= 1e-11 * std::abs(sf::gamma(in[i])));
+        REQUIRE(std::abs(sf::detail::lanczos_tgamma(in[i]) - sf::gamma(in[i])) <= 1e-11 * std::abs(sf::gamma(in[i])));
     }
 
     cont::Array<f64> out(&alloc);

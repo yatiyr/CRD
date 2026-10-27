@@ -7,16 +7,16 @@
 // cross-thread reduction). This is what MATLAB's auto-multithreaded elementwise array ops give on perf but NOT on
 // reproducibility. Below kBatchParallelThreshold (or with jobs uninitialised) the serial path runs — same bytes.
 //
-// SIMD: the scalar kernels (Cody calerf erf/erfc, Stirling lgamma, digamma) auto-vectorise well under -O3; an
-// explicit Vec4d path is added per-function only where a measurement shows the compiler left throughput on the
-// table (the bench is the gate, not assumption).
+// SIMD: the f64 lgamma and gamma batches run the per-CPU-level Lanczos kernels (special_kernels.hpp); the others
+// are scalar loops over the public functions, and a vector body is added per function only where a measurement shows
+// the compiler left throughput on the table (the bench is the gate, not assumption).
 
 #include <crd/hesap/special/airy.hpp>
 #include <crd/hesap/special/bessel.hpp>
-#include <crd/hesap/special/detail/simd_lanczos.hpp>
 #include <crd/hesap/special/erf.hpp>
 #include <crd/hesap/special/gamma.hpp>
 #include <crd/hesap/special/incomplete.hpp>
+#include <crd/hesap/special/special_dispatch.hpp>
 
 #include <crd/jobs/jobs.hpp>
 
@@ -32,9 +32,7 @@ inline constexpr crd::usize kBatchParallelThreshold = 16384;
 // memory-bound floor (memfloor 1.46→0.41) but STARVES the compute-bound batches (gammainc_p 5.4→12.4) because the
 // surplus workers spin idle instead of computing. No single cap is optimal for both regimes on a 32-thread pool
 // (8 P + 16 E + HT); the right lever is the GLOBAL pool size (a P-core-sized pool wins both — sweep: 16 workers →
-// memfloor 0.31, lgamma 0.97), which is the app's jobs::init decision, not the batch's. So: njobs = nw. The
-// lgamma/tgamma gap to MATLAB-MT (MKL-VML) on the as-given 32-thread pool needs a SIMD lgamma (Vec4d log) to go
-// memory-bound; tracked, not faked.
+// memfloor 0.31, lgamma 0.97), which is the app's jobs::init decision, not the batch's. So: njobs = nw.
 
 // Core: apply f to every element, parallel over the job pool when worth it (disjoint index ranges ⇒ bit-identical
 // across thread counts by construction = the determinism moat). F must be trivially copyable (stateless lambda, or
@@ -111,94 +109,50 @@ void erfcinv_batch(T* out, const T* in, crd::usize n) noexcept
 {
     batch_apply<T>(out, in, n, [](T y) { return erfcinv(y); });
 }
-// SIMD Lanczos lgamma over [b,e): full quads via crd_lgamma_lz4, scalar crd_lgamma_lz1 tail (bit-identical twins ⇒
-// partition-independent ⇒ the {1,4,16} moat holds). The Lanczos sum is recurrence-free so it vectorizes (unlike
-// the Stirling form whose per-lane shift count defeated SIMD at 0.65×).
-inline void lgamma_lz_range_f64(double* out, const double* in, crd::u32 b, crd::u32 e) noexcept
+// The Lanczos lgamma and tgamma batches for f64 run the hesap-special kernel level the process selected
+// (crd/hesap/special/special_dispatch.hpp), one call per job range; every level gives detail::lanczos_lgamma's and
+// lanczos_tgamma's bits, so the result is partition- and level-independent (the {1,4,16} moat). With the fast Lanczos
+// compute the batch is bandwidth-bound, so the gain comes from a P-core-sized pool (ADR-0094 policy at init), not from
+// fewer jobs (which would mis-place on E-cores).
+inline void lanczos_batch_f64(double* out, const double* in, crd::usize n,
+                              void (*range)(double*, const double*, crd::usize) noexcept) noexcept
 {
-#if CRD_SIMD_HAS_AVX2
-    crd::u32 i = b;
-    for (; i + 4U <= e; i += 4U)
+    const crd::u32 nw = crd::jobs::num_workers();
+    if (n < kBatchParallelThreshold || nw <= 1U)
     {
-        _mm256_storeu_pd(out + i, detail::crd_lgamma_lz4(_mm256_loadu_pd(in + i)));
+        range(out, in, n);
+        return;
     }
-    for (; i < e; ++i)
-    {
-        out[i] = detail::crd_lgamma_lz1(in[i]);
-    }
-#else
-    for (crd::u32 i = b; i < e; ++i)
-    {
-        out[i] = detail::crd_lgamma_lz1(in[i]);
-    }
-#endif
+    const auto rf = [out, in, range](crd::u32 b, crd::u32 e) { range(out + b, in + b, e - b); };
+    crd::jobs::Counter* const c = crd::jobs::is_pcore_routing()
+                                      ? crd::jobs::parallel_for_pcores(static_cast<crd::u32>(n), rf)
+                                      : crd::jobs::parallel_for(static_cast<crd::u32>(n), nw, rf);
+    crd::jobs::wait(c);
 }
 
-// lgamma over a batch — SIMD Lanczos + parallel for f64; scalar generic otherwise. Default worker preference: with
-// fast Lanczos compute this is bandwidth-bound, so the WIN comes from a P-core-sized pool (ADR-0094 policy at init),
-// not from reducing njobs (which would mis-place on E-cores). Deterministic ⇒ the moat holds. This is the crd_log
-// Lanczos lgamma; it agrees with the public sf::lgamma to <1e-13 (≤ a few ulp).
+// lgamma over a batch: the Lanczos kernels for f64 (within 1e-13 of the public lgamma, a few ulp), the scalar
+// generic otherwise.
 template <Real T>
 void lgamma_batch(T* out, const T* in, crd::usize n) noexcept
 {
     if constexpr (std::is_same_v<T, double>)
     {
-        const crd::u32 nw = crd::jobs::num_workers();
-        if (n < kBatchParallelThreshold || nw <= 1U)
-        {
-            lgamma_lz_range_f64(out, in, 0U, static_cast<crd::u32>(n));
-            return;
-        }
-        const auto rf = [out, in](crd::u32 b, crd::u32 e) { lgamma_lz_range_f64(out, in, b, e); };
-        crd::jobs::Counter* const c = crd::jobs::is_pcore_routing()
-                                          ? crd::jobs::parallel_for_pcores(static_cast<crd::u32>(n), rf)
-                                          : crd::jobs::parallel_for(static_cast<crd::u32>(n), nw, rf);
-        crd::jobs::wait(c);
+        lanczos_batch_f64(out, in, n, special_kernels().table->lgamma_lanczos);
     }
     else
     {
         batch_apply<T>(out, in, n, [](T x) { return lgamma(x); });
     }
 }
-// SIMD Lanczos tgamma over [b,e): full quads via crd_tgamma_lz4, scalar crd_tgamma_lz1 tail (bit-identical twins).
-inline void tgamma_lz_range_f64(double* out, const double* in, crd::u32 b, crd::u32 e) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    crd::u32 i = b;
-    for (; i + 4U <= e; i += 4U)
-    {
-        _mm256_storeu_pd(out + i, detail::crd_tgamma_lz4(_mm256_loadu_pd(in + i)));
-    }
-    for (; i < e; ++i)
-    {
-        out[i] = detail::crd_tgamma_lz1(in[i]);
-    }
-#else
-    for (crd::u32 i = b; i < e; ++i)
-    {
-        out[i] = detail::crd_tgamma_lz1(in[i]);
-    }
-#endif
-}
 
-// tgamma over a batch — SIMD Lanczos-exp + parallel for f64 (= exp(lgamma); the SIMD log + SIMD exp primitives both
-// apply). Scalar generic otherwise. Deterministic ⇒ moat holds; agrees with public sf::gamma to <1e-12.
+// tgamma over a batch: the Lanczos kernels for f64 (exp of the Lanczos lgamma; within 1e-12 of the public gamma), the
+// scalar generic otherwise.
 template <Real T>
 void gamma_batch(T* out, const T* in, crd::usize n) noexcept
 {
     if constexpr (std::is_same_v<T, double>)
     {
-        const crd::u32 nw = crd::jobs::num_workers();
-        if (n < kBatchParallelThreshold || nw <= 1U)
-        {
-            tgamma_lz_range_f64(out, in, 0U, static_cast<crd::u32>(n));
-            return;
-        }
-        const auto rf = [out, in](crd::u32 b, crd::u32 e) { tgamma_lz_range_f64(out, in, b, e); };
-        crd::jobs::Counter* const c = crd::jobs::is_pcore_routing()
-                                          ? crd::jobs::parallel_for_pcores(static_cast<crd::u32>(n), rf)
-                                          : crd::jobs::parallel_for(static_cast<crd::u32>(n), nw, rf);
-        crd::jobs::wait(c);
+        lanczos_batch_f64(out, in, n, special_kernels().table->tgamma_lanczos);
     }
     else
     {

@@ -27,8 +27,9 @@
 // REUSABLE SIMD PRIMITIVES (compute-bound in-cache microbench, 1 thread):
 //  - SIMD log (crd_log4): 3.11× scalar (0.68 vs 2.11 ns). REAL, reusable (distribution logpdf).
 //  - SIMD exp (crd_exp4): bit-identical scalar twin, accurate <1e-13 (degree-11 Taylor on the reduced interval).
-//  - Lanczos SIMD lgamma (crd_lgamma_lz4): 2.07× scalar (3.73 vs 7.74 ns) — VECTORIZES (recurrence-free), unlike
-//    the Stirling masked-recurrence form (0.65×, rejected). scalar crd_log1 also took scalar lgamma 8.1→5.3 ns.
+//  - Lanczos SIMD lgamma (the hesap-special kernels' avx2 level): 2.07× scalar (3.73 vs 7.74 ns) — VECTORIZES
+//    (recurrence-free), unlike the Stirling masked-recurrence form (0.65×, rejected). scalar crd_log1 also took
+//    scalar lgamma 8.1→5.3 ns.
 //
 // THE lgamma/tgamma WIN (2026-06-22): Lanczos SIMD lgamma + SIMD exp tgamma + the ADR-0094 P-core-pool policy.
 //  Board on a P-core pool (8 workers, jobs::init policy) vs MATLAB-MT (ns/elem):
@@ -47,6 +48,7 @@
 // Build (WSL): g++ -O3 -march=native -std=c++20 -I engine/core/include -I engine/hesap-special/include \
 //                  runtime/examples/bench_special_vs_refs.cpp -o /tmp/bench_special && /tmp/bench_special
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/special/special.hpp>
 
 #include <boost/math/special_functions/digamma.hpp>
@@ -207,63 +209,35 @@ int main()
         crd::jobs::shutdown();
     }
 
-    // ---- compute-bound microbench: raw primitive throughput, in-cache, single-thread (no memory floor) ----
-#if CRD_SIMD_HAS_AVX2
+    // ---- compute-bound microbench: the Lanczos lgamma kernel of every level the host runs, in-cache, 1 thread ----
     {
-        namespace dd = crd::hesap::special::detail;
-        constexpr int kM = 8192; // 64 KB ⇒ L2-resident
+        constexpr int kM = 8192; // 64 KB: L2-resident
         alignas(64) static double a[kM];
         alignas(64) static double b[kM];
         for (int i = 0; i < kM; ++i)
         {
             a[i] = 0.3 + static_cast<double>(i % 60);
         }
-        auto tloop = [&](auto fn) {
+        std::printf("\n# compute-bound microbench (in-cache, 1 thread) ns/elem: the Lanczos lgamma kernel per level\n");
+        for (const auto& level : sf::special_kernel_levels())
+        {
+            if (!crd::cpu_level_includes(crd::cpu_selection().detected, level.level))
+            {
+                continue;
+            }
             double best = 1e300;
             for (int r = 0; r < 4000; ++r)
             {
                 const auto t0 = clk::now();
-                fn();
+                level.table->lgamma_lanczos(b, a, kM);
                 const auto t1 = clk::now();
                 g_cs += b[0];
                 const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / kM;
                 best = ns < best ? ns : best;
             }
-            return best;
-        };
-        const double slog = tloop([&]
-        {
-            for (int i = 0; i < kM; ++i)
-            {
-                b[i] = dd::crd_log1(a[i]);
-            }
-        });
-        const double vlog = tloop([&]
-        {
-            for (int i = 0; i < kM; i += 4)
-            {
-                _mm256_store_pd(b + i, dd::crd_log4(_mm256_load_pd(a + i)));
-            }
-        });
-        const double slg = tloop([&]
-        {
-            for (int i = 0; i < kM; ++i)
-            {
-                b[i] = dd::crd_lgamma_lz1(a[i]);
-            }
-        });
-        const double vlg = tloop([&]
-        {
-            for (int i = 0; i < kM; i += 4)
-            {
-                _mm256_store_pd(b + i, dd::crd_lgamma_lz4(_mm256_load_pd(a + i)));
-            }
-        });
-        std::printf("\n# compute-bound microbench (in-cache, 1 thread) ns/elem — raw SIMD primitive throughput\n");
-        std::printf("log             scalar %6.3f   simd %6.3f   speedup %.2fx\n", slog, vlog, slog / vlog);
-        std::printf("lgamma(Lanczos) scalar %6.3f   simd %6.3f   speedup %.2fx\n", slg, vlg, slg / vlg);
+            std::printf("lgamma(Lanczos) %-8s %6.3f\n", crd::cpu_level_name(level.level), best);
+        }
     }
-#endif
 
     // ---- thread-count sweep: is the floor an E-core oversubscription artefact or a true bandwidth wall? ----
     std::printf("\n# thread-count sweep (ns/elem) — lgamma + memfloor vs MATLAB-MT lgamma 0.74\n");
