@@ -2,6 +2,7 @@ add_executable(crd-geometry-mesh-tests
     test_mesh_closest_point.cpp
     test_mesh_raycast.cpp
     test_mesh_raycast_simd.cpp
+    test_mesh_kernels.cpp
     test_mesh_validate.cpp
     test_mesh_winding_number.cpp
 )
@@ -20,3 +21,6 @@ target_link_libraries(crd-geometry-mesh-tests PRIVATE
 crd_enable_default_pch(crd-geometry-mesh-tests)
 
 crd_discover_tests(crd-geometry-mesh-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-geometry-mesh-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-geometry-mesh-tests "[kernels]")

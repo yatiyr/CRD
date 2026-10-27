@@ -5,8 +5,9 @@
 //
 // Alternative entry point to v4b's `mesh_raycast`. Same BVH traversal +
 // AABB slab pruning; differs only at the leaf inner loop, where it processes
-// 8 triangles at a time via AVX2 SoA-batched Möller-Trumbore (Möller &
-// Trumbore 1997).
+// 8 triangles at a time via SoA-batched Möller-Trumbore (Möller &
+// Trumbore 1997), in one call of the per-CPU-level raycast kernel
+// (crd/geometry/mesh/mesh_kernels.hpp) per ray.
 //
 // **When to use**:
 //   * Hot raycast workloads against meshes with average-leaf-size ≥ 4
@@ -48,10 +49,9 @@
 // `Ray3T<Length32>` consumers reuse the same `mesh_queries_typed.hpp`
 // wrapper via a `Backend::Simd` selector (TBD in `mesh_queries_typed.hpp`).
 //
-// **Platform**: SIMD path is AVX2 (`Vec8f`). Non-AVX2 builds fall back
-// to two `Vec4f`-batched halves under the hood (the same `Vec8f`
-// abstraction); on win-debug-scalar (no SIMD at all) the test still
-// runs correctly via the scalar fallback in the Vec8f shim.
+// **Levels** (ADR-0134): the kernel runs one 256-bit `Vec8f` on avx2,
+// two 128-bit halves on sse2 and scalar lanes on portable, with the same
+// bits on every level.
 // ---------------------------------------------------------------------------
 
 #include <crd/core/types.hpp>

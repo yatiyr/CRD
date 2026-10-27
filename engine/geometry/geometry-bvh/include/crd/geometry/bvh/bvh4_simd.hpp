@@ -10,10 +10,10 @@
 // versus four sequential scalar slab tests. Bit-identical (for finite/well-
 // formed inputs) to four `intersect_ray_aabb_robust` calls — the Tavianator
 // `min`/`max` form picks the same near/far plane the Williams `sign`-bit form
-// does. Out-of-line in `src/bvh4_simd.cpp` (a real TU) — `Vec4f` is 128-bit
-// (`xmm`) at every SIMD level, so it isn't wired into the AVX2-`ymm`-expecting
-// `crd-simd-emission-check` yet (a 128-bit-aware variant is a follow-up, same as
-// the `simd_batch.cpp` one).
+// does. Out-of-line in `src/bvh4_simd.cpp`, general code: `Vec4f` is one
+// 128-bit register on every x64 level from SSE2 up, so a per-level kernel unit
+// (ADR-0134 §5) would compile the same operations (VEX-encoded); the traversal
+// stays at the baseline ISA.
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/primitives/primitives.hpp>      // Ray3

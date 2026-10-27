@@ -22,6 +22,7 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/primitives/constants.hpp>
+#include <crd/geometry/primitives/detail/slab_core.hpp>
 #include <crd/geometry/primitives/primitives.hpp>
 
 #include <limits>
@@ -72,48 +73,12 @@ template <MathScalar T>
 [[nodiscard]] inline bool intersect_ray_aabb_robust(const Ray3<T>& ray, const RayAABBPrecompute<T>& p,
                                                     const AABB3<T>& box, T t0, T t1, T& out_t) noexcept
 {
-    const Vec3<T> b[2] = {box.min, box.max};
-
-    T tmin = (b[p.sign[0]].x - ray.origin.x) * p.inv_dir.x;
-    T tmax = (b[1U - p.sign[0]].x - ray.origin.x) * p.inv_dir.x;
-    const T tymin = (b[p.sign[1]].y - ray.origin.y) * p.inv_dir.y;
-    const T tymax = (b[1U - p.sign[1]].y - ray.origin.y) * p.inv_dir.y;
-    if (tmin > tymax || tymin > tmax)
-    {
-        return false;
-    }
-    if (tymin > tmin)
-    {
-        tmin = tymin;
-    }
-    if (tymax < tmax)
-    {
-        tmax = tymax;
-    }
-    const T tzmin = (b[p.sign[2]].z - ray.origin.z) * p.inv_dir.z;
-    const T tzmax = (b[1U - p.sign[2]].z - ray.origin.z) * p.inv_dir.z;
-    if (tmin > tzmax || tzmin > tmax)
-    {
-        return false;
-    }
-    if (tzmin > tmin)
-    {
-        tmin = tzmin;
-    }
-    if (tzmax < tmax)
-    {
-        tmax = tzmax;
-    }
-    tmax *= ray_aabb_robust_pad<T>(); // Ize 2013 — conservative
-    // Overlap with [t0, t1]?
-    const T lo = tmin > t0 ? tmin : t0;
-    const T hi = tmax < t1 ? tmax : t1;
-    if (lo > hi)
-    {
-        return false;
-    }
-    out_t = lo;
-    return true;
+    const T o[3] = {ray.origin.x, ray.origin.y, ray.origin.z};
+    const T inv[3] = {p.inv_dir.x, p.inv_dir.y, p.inv_dir.z};
+    const bool neg[3] = {p.sign[0] != 0U, p.sign[1] != 0U, p.sign[2] != 0U};
+    const T lo[3] = {box.min.x, box.min.y, box.min.z};
+    const T hi[3] = {box.max.x, box.max.y, box.max.z};
+    return detail::ray_aabb_slab(o, inv, neg, lo, hi, ray_aabb_robust_pad<T>(), t0, t1, out_t);
 }
 
 // Convenience: builds the per-ray precompute inline (use the precomputed form

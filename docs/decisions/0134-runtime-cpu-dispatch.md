@@ -25,8 +25,9 @@ rotation, reflector and LDLT updates behind one typed table
 ([session](../sessions/2026-10-27-simd-dispatch-dense-update-kernels.md)), then its split-complex sweeps
 ([session](../sessions/2026-10-27-simd-dispatch-dense-split-complex-kernels.md)), then the hesap-direct supernodal
 solve family ([session](../sessions/2026-10-27-simd-dispatch-direct-kernels.md)), then the hesap-fft transform on the
-plan's plain state ([session](../sessions/2026-10-27-simd-dispatch-fft-kernels.md)); the other clauses are open in the
-row.
+plan's plain state ([session](../sessions/2026-10-27-simd-dispatch-fft-kernels.md)), then the geometry batch kernels,
+hull support scan and mesh raycast on plain columns
+([session](../sessions/2026-10-27-simd-dispatch-geometry-kernels.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
@@ -89,7 +90,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    (the accumulator and row counts), which `dense_kernels.hpp` declares and the differential tests model; its
    elementwise kernels give every element the level's step, and its rotation rounds twice on every level. The
    hesap-fft transform is bit-exact: every level runs one algorithm per size on the level-aware SIMD types, whose
-   single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside).
+   single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside). The geometry
+   families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE (a download the user approves) until such
    hardware exists. The doctor, the specimen harness's host tuple and every board record the detected and selected
