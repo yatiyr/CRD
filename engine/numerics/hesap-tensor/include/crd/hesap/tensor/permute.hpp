@@ -206,7 +206,7 @@ inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::
     else
     {
         (void)stream;
-        const auto put = [&alpha](T* d, const T* s)
+        const auto put = [&](T* d, const T* s)
         {
             if constexpr (Scale)
             {

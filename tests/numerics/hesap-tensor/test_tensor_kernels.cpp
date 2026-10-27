@@ -271,8 +271,8 @@ template <typename E> void check_permute_regions()
         const S* base = src.data() + (lo + 3) * step; // 3: off the 32-byte grid
         REQUIRE(static_cast<u64>(lo + 3 + (static_cast<i64>(c.na) * (c.sa < 0 ? 0 : c.sa)) +
                                  static_cast<i64>(c.nb) * (c.sb < 0 ? 0 : c.sb) + 8) < src_n);
-        REQUIRE(static_cast<u64>(ra) * c.na <= dst_n);
-        const u64 used = static_cast<u64>(ra) * c.na * E::kParts;
+        REQUIRE(static_cast<u64>(ra) * c.na + 64U <= dst_n);              // sentinels after the last row too
+        const u64 used = (static_cast<u64>(ra) * c.na + 64U) * E::kParts; // the region and its sentinels
         for (const Alpha<S> alpha : alphas)
         {
             const bool scale = scaled(alpha);
