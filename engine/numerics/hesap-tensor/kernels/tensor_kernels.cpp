@@ -5,12 +5,13 @@
 // complex elements (8x8 f32, 4x4 64-bit and 2x2 128-bit squares; 4x4, 2x2 and single elements on SSE2; with next-tile
 // prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators (six on
 // SSE2), the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four
-// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2). The SSE2 and SSE4.2 nn bodies run four
-// lanes: the quantizers on SSE2 operations, the dots on even/odd madd lanes (SSE2) or maddubs (SSE4.2), every f32
-// combine through the exact fma; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd.
-// Every body gives the same bits: the permute is element copies and the IEEE operations of a real or complex product,
-// the binned representation is partition-independent, the quantizers are per-element IEEE operations, the dots are
-// exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
+// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2 and SSE4.2). The SSE2 and SSE4.2 nn bodies
+// run four lanes: the quantizers on SSE2 operations, the dots on even/odd madd lanes (SSE2) or maddubs (SSE4.2), every
+// f32 combine through the exact fma; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on
+// dpbusd. Every body gives the same bits: the permute is element copies and the IEEE operations of a real or complex
+// product, the binned representation is partition-independent, the quantizers are per-element IEEE operations, the dots
+// are exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer
+// operations.
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
