@@ -40,3 +40,16 @@ NaN equal, complex part by part) over 14 sizes, three σ, six slice ranges, five
 and (-0, 0)) and x[0] finite, +inf and NaN, plus the row lengths `to_sell` records; `test_sell_parallel.cpp` checks
 complex `spmv_sell_parallel` at 1, 3 and 7 jobs against CSR. The [kernels] cases pass at portable, sse2 and avx2 and
 the whole program passes; `crd-hesap-iterative-tests` builds. Boards: the row-close pass.
+
+## Cache sizes for the SELL policy
+
+The policy's resident size needs the caches, and nothing read them. `cpu_features` (the one CPUID site) now decodes
+the data and unified caches of every visited CPU from leaf 4 (Intel) or 0x8000001D (AMD topology extensions), else
+the legacy 0x80000005/6 leaves, into `CpuReport::caches` (line, L1d, L2, L3 bytes, source); the selection keeps the
+smallest of each over the CPUs (a hybrid part's efficiency cores set L1d). CPUID's sharing word bounds addressable
+IDs, not sharers (on this host it gave a 256 KiB L2 share where each core has 1 MiB), so no share is derived.
+
+Verification (win-debug): decode cases for leaf 4, 0x8000001D, the legacy leaves and none, the intersection over a
+performance and an efficiency core, and the host against the OS (`RelationCache` on Windows, sysfs `cache/index*` on
+Linux: each level's smallest size and L1's line, where the OS reports them). This host: line 64, L1d 32 KiB, L2
+2 MiB, L3 36 MiB, as Windows reports; the child prints the caches for the CI logs.

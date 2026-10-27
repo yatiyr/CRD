@@ -345,6 +345,59 @@ const char* read_override(char (&buffer)[32]) noexcept // NOLINT(modernize-avoid
 #endif
 }
 
+// The data caches the words describe: the deterministic leaf's data and unified caches, else the legacy leaves.
+CpuCaches decode_caches(const CpuidWords& words) noexcept
+{
+    CpuCaches c;
+    const auto clamp = [](crd::u64 bytes) noexcept
+    {
+        return static_cast<crd::u32>(bytes < 0xFFFFFFFFULL ? bytes : 0xFFFFFFFFULL);
+    };
+    if (words.cache_leaf != 0U)
+    {
+        for (const CpuidCacheWords& d : words.cache)
+        {
+            const crd::u32 type = d.eax & 0x1FU; // 1 data, 2 instruction, 3 unified
+            if (type == 0U)
+            {
+                break;
+            }
+            if (type == 2U)
+            {
+                continue;
+            }
+            const crd::u64 line = (d.ebx & 0xFFFU) + 1U;
+            const crd::u64 bytes = (((d.ebx >> 22U) & 0x3FFU) + 1U) * (((d.ebx >> 12U) & 0x3FFU) + 1U) * line *
+                                   (static_cast<crd::u64>(d.ecx) + 1U);
+            switch ((d.eax >> 5U) & 0x7U)
+            {
+                case 1U:
+                    c.l1d_bytes = clamp(bytes);
+                    c.line_bytes = static_cast<crd::u32>(line);
+                    break;
+                case 2U:
+                    c.l2_bytes = clamp(bytes);
+                    break;
+                case 3U:
+                    c.l3_bytes = clamp(bytes);
+                    break;
+                default:
+                    break;
+            }
+        }
+        c.source = CpuCacheSource::Deterministic;
+    }
+    else if (words.max_extended_leaf >= 0x80000006U && words.ext6_ecx != 0U)
+    {
+        c.l1d_bytes = (words.ext5_ecx >> 24U) * 1024U;
+        c.line_bytes = words.ext5_ecx != 0U ? (words.ext5_ecx & 0xFFU) : (words.ext6_ecx & 0xFFU);
+        c.l2_bytes = (words.ext6_ecx >> 16U) * 1024U;
+        c.l3_bytes = clamp(static_cast<crd::u64>(words.ext6_edx >> 18U) * 512U * 1024U);
+        c.source = CpuCacheSource::Legacy;
+    }
+    return c;
+}
+
 } // namespace
 
 CpuReport decode_cpuid(const CpuidWords& words) noexcept
@@ -381,6 +434,7 @@ CpuReport decode_cpuid(const CpuidWords& words) noexcept
     {
         r.core_type = static_cast<crd::u8>(words.leaf1a_eax >> 24U);
     }
+    r.caches = decode_caches(words);
     return r;
 }
 
@@ -432,6 +486,36 @@ CpuidWords read_cpuid_here() noexcept
     {
         cpuid(0x80000007U, 0U, r);
         w.ext7_edx = r[3];
+    }
+    // Leaf 4 (Intel; AMD returns a null type there), else 0x8000001D under AMD's topology extensions.
+    if (w.max_leaf >= 4U)
+    {
+        cpuid(4U, 0U, r);
+        w.cache_leaf = (r[0] & 0x1FU) != 0U ? 4U : 0U;
+    }
+    if (w.cache_leaf == 0U && w.max_extended_leaf >= 0x8000001DU && ((w.ext1_ecx >> 22U) & 1U) != 0U)
+    {
+        w.cache_leaf = 0x8000001DU;
+    }
+    for (crd::u32 i = 0U; w.cache_leaf != 0U && i < kCpuidCacheSubleaves; ++i)
+    {
+        cpuid(w.cache_leaf, i, r);
+        if ((r[0] & 0x1FU) == 0U)
+        {
+            break;
+        }
+        w.cache[i] = CpuidCacheWords{r[0], r[1], r[2]};
+    }
+    if (w.max_extended_leaf >= 0x80000005U)
+    {
+        cpuid(0x80000005U, 0U, r);
+        w.ext5_ecx = r[2];
+    }
+    if (w.max_extended_leaf >= 0x80000006U)
+    {
+        cpuid(0x80000006U, 0U, r);
+        w.ext6_ecx = r[2];
+        w.ext6_edx = r[3];
     }
     if (((w.leaf1_ecx >> 27U) & 1U) != 0U)
     {
@@ -517,6 +601,20 @@ void add_cpu_report(CpuSelection& s, const CpuReport& r) noexcept
     acc.xcr0 &= r.xcr0;
     acc.avx10_version = r.avx10_version < acc.avx10_version ? r.avx10_version : acc.avx10_version;
     acc.avx10_vector_bits = r.avx10_vector_bits < acc.avx10_vector_bits ? r.avx10_vector_bits : acc.avx10_vector_bits;
+    const auto smaller = [](crd::u32 a, crd::u32 b) noexcept
+    {
+        return a < b ? a : b;
+    };
+    CpuCaches& c = acc.caches;
+    c.line_bytes = smaller(c.line_bytes, r.caches.line_bytes);
+    c.l1d_bytes = smaller(c.l1d_bytes, r.caches.l1d_bytes);
+    c.l2_bytes = smaller(c.l2_bytes, r.caches.l2_bytes);
+    c.l3_bytes = smaller(c.l3_bytes, r.caches.l3_bytes);
+    c.source = r.caches.source == c.source ? c.source : CpuCacheSource::None;
+    if (c.source == CpuCacheSource::None)
+    {
+        c = CpuCaches{};
+    }
     ++s.cpus_visited;
 }
 

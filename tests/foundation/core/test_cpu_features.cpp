@@ -716,6 +716,195 @@ TEST_CASE("cpu features: the walk gives the calling thread its own affinity back
     CHECK(s.features == first.features);
 }
 
+namespace
+{
+// One deterministic cache subleaf: type (1 data, 2 instruction, 3 unified), level, sharers, ways, line bytes, sets.
+crd::CpuidCacheWords cache_words(crd::u32 type, crd::u32 level, crd::u32 sharers, crd::u32 ways, crd::u32 line,
+                                 crd::u32 sets)
+{
+    return {type | (level << 5U) | ((sharers - 1U) << 14U), (line - 1U) | ((ways - 1U) << 22U), sets - 1U};
+}
+
+// A performance core's leaf 4: 48 KiB L1 data, an instruction cache, 2 MiB L2 for two threads, 36 MiB L3 for 32.
+crd::CpuidWords performance_core_words()
+{
+    crd::CpuidWords w = v3_words();
+    w.cache_leaf = 4U;
+    w.cache[0] = cache_words(1U, 1U, 2U, 12U, 64U, 64U);
+    w.cache[1] = cache_words(2U, 1U, 2U, 8U, 64U, 64U);
+    w.cache[2] = cache_words(3U, 2U, 2U, 16U, 64U, 2048U);
+    w.cache[3] = cache_words(3U, 3U, 32U, 12U, 64U, 49152U);
+    w.cache[5] = cache_words(3U, 4U, 1U, 16U, 64U, 65536U); // past the null subleaf: never read
+    return w;
+}
+} // namespace
+
+TEST_CASE("cpu features: the cache leaves give each data cache's size and line", "[core][cpu]")
+{
+    CHECK(crd::decode_cpuid(v3_words()).caches == crd::CpuCaches{}); // no leaf describes them
+
+    crd::CpuidWords w = performance_core_words();
+    const crd::CpuCaches p = crd::decode_cpuid(w).caches;
+    CHECK(p.source == crd::CpuCacheSource::Deterministic);
+    CHECK(p.line_bytes == 64U);
+    CHECK(p.l1d_bytes == 48U * 1024U);
+    CHECK(p.l2_bytes == 2U * 1024U * 1024U);
+    CHECK(p.l3_bytes == 36U * 1024U * 1024U);
+    w.cache_leaf = 0x8000001DU; // AMD's leaf has the same layout
+    CHECK(crd::decode_cpuid(w).caches == p);
+
+    crd::CpuidWords legacy = v3_words();
+    legacy.ext5_ecx = (32U << 24U) | 64U;
+    legacy.ext6_ecx = (512U << 16U) | 64U;
+    legacy.ext6_edx = 16U << 18U;
+    const crd::CpuCaches l = crd::decode_cpuid(legacy).caches;
+    CHECK(l.source == crd::CpuCacheSource::Legacy);
+    CHECK(l.line_bytes == 64U);
+    CHECK(l.l1d_bytes == 32U * 1024U);
+    CHECK(l.l2_bytes == 512U * 1024U);
+    CHECK(l.l3_bytes == 8U * 1024U * 1024U);
+    legacy.max_extended_leaf = 0x80000005U;
+    CHECK(crd::decode_cpuid(legacy).caches == crd::CpuCaches{});
+}
+
+TEST_CASE("cpu features: the selection keeps each cache's smallest size over the CPUs", "[core][cpu]")
+{
+    // An efficiency core: 32 KiB L1 data, 4 MiB L2 for a cluster of four, the same L3.
+    crd::CpuidWords e = performance_core_words();
+    e.cache[0] = cache_words(1U, 1U, 1U, 8U, 64U, 64U);
+    e.cache[2] = cache_words(3U, 2U, 4U, 16U, 64U, 4096U);
+    crd::CpuSelection s;
+    s.arch = crd::CpuArch::X64;
+    crd::add_cpu_report(s, crd::decode_cpuid(performance_core_words()));
+    crd::add_cpu_report(s, crd::decode_cpuid(e));
+    crd::add_cpu_report(s, crd::decode_cpuid(performance_core_words()));
+    CHECK(s.uniform); // the features agree
+    const crd::CpuCaches& c = s.features.caches;
+    CHECK(c.source == crd::CpuCacheSource::Deterministic);
+    CHECK(c.l1d_bytes == 32U * 1024U);
+    CHECK(c.l2_bytes == 2U * 1024U * 1024U);
+    CHECK(c.l3_bytes == 36U * 1024U * 1024U);
+    crd::add_cpu_report(s, crd::decode_cpuid(v3_words())); // a CPU that describes none
+    CHECK(s.features.caches == crd::CpuCaches{});
+}
+
+namespace
+{
+// The smallest data or unified cache of levels 1 to 3 the OS reports for any CPU (0: none reported), and L1's line.
+struct OsCaches
+{
+    crd::u32 bytes[4] = {}; // NOLINT(modernize-avoid-c-arrays): by level
+    crd::u32 line = 0U;
+    void add(crd::u32 level, crd::u32 size, crd::u32 line_bytes)
+    {
+        if (level < 1U || level > 3U)
+        {
+            return;
+        }
+        bytes[level] = bytes[level] == 0U || size < bytes[level] ? size : bytes[level];
+        if (level == 1U)
+        {
+            line = line == 0U || line_bytes < line ? line_bytes : line;
+        }
+    }
+};
+
+#if !defined(_WIN32)
+// The first line of one sysfs cache attribute of a CPU; false when the file is absent.
+bool read_cache_attribute(long cpu, int index, const char* name, char (&out)[32]) // NOLINT(modernize-avoid-c-arrays)
+{
+    char path[128] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cache/index%d/%s", cpu, index, name);
+    std::FILE* f = std::fopen(path, "r");
+    if (f == nullptr)
+    {
+        return false;
+    }
+    const bool ok = std::fgets(out, sizeof(out), f) != nullptr;
+    (void)std::fclose(f);
+    return ok;
+}
+#endif
+
+OsCaches read_os_caches()
+{
+    OsCaches os;
+#if defined(_WIN32)
+    DWORD len = 0U;
+    (void)::GetLogicalProcessorInformationEx(RelationCache, nullptr, &len);
+    cont::Array<unsigned char> buf;
+    buf.resize(len);
+    auto* first = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buf.data());
+    REQUIRE(::GetLogicalProcessorInformationEx(RelationCache, first, &len) != 0);
+    for (DWORD off = 0U; off < len;)
+    {
+        const auto* p = reinterpret_cast<const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*>(buf.data() + off);
+        if (p->Relationship == RelationCache && (p->Cache.Type == CacheData || p->Cache.Type == CacheUnified))
+        {
+            os.add(p->Cache.Level, p->Cache.CacheSize, p->Cache.LineSize);
+        }
+        off += p->Size;
+    }
+#else
+    const long configured = ::sysconf(_SC_NPROCESSORS_CONF);
+    for (long cpu = 0; cpu < configured; ++cpu)
+    {
+        for (int index = 0; index < 10; ++index)
+        {
+            char level[32] = {}; // NOLINT(modernize-avoid-c-arrays)
+            char type[32] = {};  // NOLINT(modernize-avoid-c-arrays)
+            char size[32] = {};  // NOLINT(modernize-avoid-c-arrays)
+            char line[32] = {};  // NOLINT(modernize-avoid-c-arrays)
+            if (!read_cache_attribute(cpu, index, "level", level) || !read_cache_attribute(cpu, index, "type", type) ||
+                !read_cache_attribute(cpu, index, "size", size) ||
+                !read_cache_attribute(cpu, index, "coherency_line_size", line))
+            {
+                break;
+            }
+            if (std::strncmp(type, "Instruction", 11U) == 0)
+            {
+                continue;
+            }
+            char* unit = nullptr;
+            unsigned long bytes = std::strtoul(size, &unit, 10);
+            bytes *= *unit == 'K' ? 1024UL : (*unit == 'M' ? 1024UL * 1024UL : 1UL);
+            os.add(static_cast<crd::u32>(std::strtoul(level, nullptr, 10)), static_cast<crd::u32>(bytes),
+                   static_cast<crd::u32>(std::strtoul(line, nullptr, 10)));
+        }
+    }
+#endif
+    return os;
+}
+} // namespace
+
+TEST_CASE("cpu features: the caches are the smallest of each level the OS reports", "[core][cpu]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const crd::CpuCaches& c = s.features.caches;
+    if (s.arch != crd::CpuArch::X64)
+    {
+        CHECK(c == crd::CpuCaches{}); // no CPUID
+        return;
+    }
+    INFO("line " << c.line_bytes << ", L1d " << c.l1d_bytes << ", L2 " << c.l2_bytes << ", L3 " << c.l3_bytes);
+    REQUIRE(c.source != crd::CpuCacheSource::None);
+    CHECK(c.line_bytes >= 32U);
+    CHECK(c.line_bytes <= 256U);
+    CHECK((c.line_bytes & (c.line_bytes - 1U)) == 0U);
+    CHECK(c.l1d_bytes > 0U);
+    CHECK(c.l2_bytes > c.l1d_bytes);
+    CHECK((c.l3_bytes == 0U || c.l3_bytes > c.l2_bytes));
+
+    const OsCaches os = read_os_caches();
+    const crd::u32 mine[4] = {0U, c.l1d_bytes, c.l2_bytes, c.l3_bytes}; // NOLINT(modernize-avoid-c-arrays)
+    for (crd::u32 level = 1U; level <= 3U; ++level)
+    {
+        INFO("L" << level << ": OS " << os.bytes[level]);
+        CHECK((os.bytes[level] == 0U || os.bytes[level] == mine[level])); // 0: the OS hides it (some sandboxes)
+    }
+    CHECK((os.line == 0U || os.line == c.line_bytes));
+}
+
 TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
@@ -725,6 +914,9 @@ TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
                 s.cpus_visited, s.cpus_refused, static_cast<unsigned>(s.core_types_seen), s.uniform ? 1 : 0,
                 static_cast<unsigned long long>(s.features.xcr0), static_cast<unsigned>(s.features.avx10_version),
                 static_cast<unsigned>(s.features.avx10_vector_bits));
+    const crd::CpuCaches& c = s.features.caches;
+    std::printf("cpu caches: line %u, L1d %u, L2 %u, L3 %u, source %u\n", c.line_bytes, c.l1d_bytes, c.l2_bytes,
+                c.l3_bytes, static_cast<unsigned>(c.source));
     for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
     {
         const auto f = static_cast<CpuFeature>(i);

@@ -1,6 +1,6 @@
 #pragma once
 
-// CPU instruction-set detection and the process's one dispatch level (SIMD-DISPATCH, ADR-0134).
+// CPU instruction-set detection, the process's one dispatch level and its data cache sizes (SIMD-DISPATCH, ADR-0134).
 //
 // General engine code builds at the architecture's baseline (x64: SSE2); hot kernels build once per level and are
 // chosen at startup from `cpu_selection()`. A feature counts only when the CPU reports it and the OS saves the
@@ -108,6 +108,17 @@ struct CpuFeatureSet
     [[nodiscard]] constexpr bool operator==(const CpuFeatureSet&) const noexcept = default;
 };
 
+// One subleaf of the deterministic cache leaf (4, or 0x8000001D on AMD): type and level; ways, partitions and line;
+// sets.
+struct CpuidCacheWords
+{
+    crd::u32 eax = 0U;
+    crd::u32 ebx = 0U;
+    crd::u32 ecx = 0U;
+};
+
+inline constexpr crd::u32 kCpuidCacheSubleaves = 8U; // read until a null type or this many
+
 // The CPUID words and XCR0 the decode reads, as one CPU returned them. Leaves above the reported maximum read zero.
 struct CpuidWords
 {
@@ -125,6 +136,32 @@ struct CpuidWords
     crd::u32 ext1_ecx = 0U;   // leaf 0x80000001
     crd::u32 ext7_edx = 0U;   // leaf 0x80000007
     crd::u64 xcr0 = 0U;       // XGETBV(0); 0 unless OSXSAVE
+    crd::u32 cache_leaf = 0U; // 4 or 0x8000001D when that leaf describes the caches, else 0
+    // NOLINTNEXTLINE(modernize-avoid-c-arrays): that leaf's subleaves in order
+    CpuidCacheWords cache[kCpuidCacheSubleaves] = {};
+    crd::u32 ext5_ecx = 0U; // leaf 0x80000005: L1 data cache
+    crd::u32 ext6_ecx = 0U; // leaf 0x80000006: L2 cache
+    crd::u32 ext6_edx = 0U; // and L3 cache
+};
+
+enum class CpuCacheSource : crd::u8
+{
+    None,          // no leaf describes the caches: every size is 0
+    Deterministic, // leaf 4 or 0x8000001D
+    Legacy,        // leaves 0x80000005 and 0x80000006
+};
+
+// The data caches one CPU sees, or the smallest of each over CPUs, in bytes; 0 where unknown. CPUID's sharing word
+// bounds the addressable IDs, not the CPUs sharing a cache, so no per-CPU share is derived from it.
+struct CpuCaches
+{
+    crd::u32 line_bytes = 0U;
+    crd::u32 l1d_bytes = 0U;
+    crd::u32 l2_bytes = 0U;
+    crd::u32 l3_bytes = 0U;
+    CpuCacheSource source = CpuCacheSource::None;
+
+    [[nodiscard]] constexpr bool operator==(const CpuCaches&) const noexcept = default;
 };
 
 // What one CPU, or the intersection over CPUs, can do.
@@ -137,6 +174,8 @@ struct CpuReport
     crd::u16 avx10_vector_bits = 0U; // the widest usable AVX10 vector, 0 when none
     crd::u8 core_type = 0U;          // CPUID 0x1A: 0x20 efficiency, 0x40 performance; 0 when not hybrid and
                                      // in an intersection (CpuSelection::core_types_seen)
+    CpuCaches caches;                // in an intersection the smallest of each over the CPUs (a hybrid part's
+                                     // efficiency cores), None when any CPU described none
 
     [[nodiscard]] constexpr bool operator==(const CpuReport&) const noexcept = default;
 };
@@ -184,8 +223,8 @@ struct CpuSelection
 // The features `level` is defined by, its lower levels' included (empty for portable and neon).
 [[nodiscard]] CpuFeatureSet cpu_level_features(CpuLevel level) noexcept;
 
-// Adds one visited CPU's report to `into`: features, XCR0 and AVX10 shape are intersected, its core type is recorded,
-// and `uniform` falls when it differs from the CPUs before it.
+// Adds one visited CPU's report to `into`: features, XCR0 and AVX10 shape are intersected, each cache size takes its
+// minimum, its core type is recorded, and `uniform` falls when its features differ from the CPUs before it.
 void add_cpu_report(CpuSelection& into, const CpuReport& cpu) noexcept;
 
 // Every logical CPU visited and intersected, with the detected level; selected == detected, no override applied.
