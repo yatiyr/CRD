@@ -52,7 +52,9 @@ template <typename T> struct PortableTile
     }
 };
 
-template <GemmMerge M, typename T> inline void merge_element(T& c, T p, T alpha) noexcept
+// p and alpha by reference: MSVC 14.51's LTCG code generation crashes (C1001) on the by-value Complex<f32> copy loop
+// of an Assign merge inlined into hesap-direct's supernodal row-block solve.
+template <GemmMerge M, typename T> inline void merge_element(T& c, const T& p, const T& alpha) noexcept
 {
     if constexpr (M == GemmMerge::Assign)
     {

@@ -62,3 +62,13 @@ dense trsv on the panel is exactly L^T.
 
 Board the solve single- and 16-RHS (bench_hesap_cholesky_vs_cholmod, _vs_reference) per level against HEAD, and the
 trsv backward diagonal against HEAD's 4-column far dots; gemvt against `forward_below` on the forward.
+
+## CI fix: MSVC LTCG crash
+
+Complete run 40515770381 (`31e2b9ce`) failed win-release, win-shipping and win-shipping-profile at the link of
+`crd-hesap-direct-tests`: LTCG code generation crashed (C1001, `p2/main.cpp` 262) at `merge_element`'s `c = p`
+(`detail/gemm_block.hpp`). It reproduces at HEAD on the local win-release tree. Bisected by relinking with one swapped
+object: a non-LTCG `supernodal_cholesky.cpp` links; dropping its `Complex<f32>` instantiations links, `Complex<f64>`
+does not matter; forcing every block to one merge crashes only for Assign (the row-block solve's assign block, the
+only complex Assign GEMM block in the tree). Taking `p` and `alpha` by const reference instead of by value links; the
+release direct program then passes (195 cases). The same expression, so the same bits.
