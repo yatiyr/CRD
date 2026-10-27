@@ -87,6 +87,21 @@ struct SellMatrix
     }
 
     [[nodiscard]] crd::usize stored() const noexcept { return vals.size(); }
+
+    // The bytes an spmv over slices [s_begin, s_end) streams from the matrix: values, columns and row lengths.
+    [[nodiscard]] crd::usize range_bytes(crd::u32 s_begin, crd::u32 s_end) const noexcept
+    {
+        const crd::usize elements = slice_ptr.empty() ? 0U : crd::usize{slice_ptr[s_end]} - slice_ptr[s_begin];
+        return elements * (sizeof(T) + sizeof(crd::u32)) + crd::usize{s_end - s_begin} * kC * sizeof(crd::u32);
+    }
+
+    // The bytes of every array the matrix holds.
+    [[nodiscard]] crd::usize stored_bytes() const noexcept
+    {
+        return vals.size() * sizeof(T) +
+               (col_idx.size() + row_len.size() + slice_ptr.size() + slice_width.size() + perm.size()) *
+                   sizeof(crd::u32);
+    }
 };
 
 // Build a SELL-C-σ matrix from a compressed CSR matrix. `sigma` is the
@@ -210,15 +225,22 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
                                sell_scalars(a.vals.data()),
                                a.col_idx.data(),
                                a.perm_is_identity ? nullptr : a.perm.data(),
-                               a.rows};
+                               a.rows,
+                               a.cols};
+    // Resident when the range's matrix bytes, all of x and its rows of y fit the L2 (sparse_resident_bytes()).
+    constexpr crd::u32 height = SellMatrix<T>::kC;
+    const crd::u32 row_end = s_end * height < a.rows ? s_end * height : a.rows;
+    const crd::u32 row_begin = s_begin * height < row_end ? s_begin * height : row_end;
+    const crd::usize bytes = a.range_bytes(s_begin, s_end) + (crd::usize{a.cols} + (row_end - row_begin)) * sizeof(T);
+    const SellSweep sweep = bytes <= sparse_resident_bytes() ? SellSweep::Resident : SellSweep::Streaming;
     const SparseKernels& k = *sparse_kernels().table;
     if constexpr (std::is_same_v<T, crd::f64>)
     {
-        k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end);
+        k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end, sweep);
     }
     else if constexpr (std::is_same_v<T, crd::f32>)
     {
-        k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end);
+        k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end, sweep);
     }
     else
     {
@@ -227,11 +249,11 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
         const SellComplexScales<U> scales{alpha.re, alpha.im, beta.re, beta.im};
         if constexpr (std::is_same_v<U, crd::f64>)
         {
-            k.sell_spmv_c64(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end);
+            k.sell_spmv_c64(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, sweep);
         }
         else
         {
-            k.sell_spmv_c32(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end);
+            k.sell_spmv_c32(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, sweep);
         }
     }
 }

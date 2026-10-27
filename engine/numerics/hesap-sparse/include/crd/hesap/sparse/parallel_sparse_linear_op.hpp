@@ -36,13 +36,13 @@ public:
     // `parallel_min_stored_bytes` is the working-set threshold above which apply
     // dispatches the parallel spmv; at or below it (a cache-resident matrix) the
     // serial spmv wins because per-call job dispatch costs more than it saves
-    // (the v1b spmv regime, confirmed by the CG-vs-Eigen bench). Default ≈ L2.
+    // (the v1b spmv regime, confirmed by the CG-vs-Eigen bench). Default: the L2 (sparse_resident_bytes()).
     explicit ParallelSparseLinearOp(const SparseMatrix<T, SparseFormat::Csr>& matrix, crd::memory::IAllocator* alloc,
-                                    crd::usize parallel_min_stored_bytes = (crd::usize{1} << 21))
+                                    crd::usize parallel_min_stored_bytes = sparse_resident_bytes())
         : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/false), m_sell(to_sell<T>(matrix, alloc))
     {
         CRD_ASSERT_MSG(matrix.rows() == matrix.cols(), "ParallelSparseLinearOp: matrix must be square");
-        m_parallel = m_sell.stored() * sizeof(T) >= parallel_min_stored_bytes;
+        m_parallel = m_sell.stored_bytes() >= parallel_min_stored_bytes;
     }
 
     [[nodiscard]] bool apply(crd::containers::ConstSpan<T> x, crd::containers::Span<T> y) const override
@@ -91,14 +91,14 @@ class ParallelSpmvLeastSquaresOp final : public crd::hesap::LinearOp<T>
 {
 public:
     explicit ParallelSpmvLeastSquaresOp(const SparseMatrix<T, SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
-                                        crd::usize parallel_min_stored_bytes = (crd::usize{1} << 21))
+                                        crd::usize parallel_min_stored_bytes = sparse_resident_bytes())
         : crd::hesap::LinearOp<T>(/*has_transpose=*/false, /*has_adjoint=*/true)
         , m_a(to_sell<T>(a, alloc))
         , m_ah(build_adjoint_sell(a, alloc))
         , m_rows(a.rows())
         , m_cols(a.cols())
     {
-        const crd::usize bytes = (m_a.stored() > m_ah.stored() ? m_a.stored() : m_ah.stored()) * sizeof(T);
+        const crd::usize bytes = m_a.stored_bytes() > m_ah.stored_bytes() ? m_a.stored_bytes() : m_ah.stored_bytes();
         m_parallel             = bytes >= parallel_min_stored_bytes;
     }
 

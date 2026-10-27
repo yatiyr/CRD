@@ -1,8 +1,9 @@
 // The hesap-sparse kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs gives the CSR spmv's
 // bits for the f64, f32, Complex<f64> and Complex<f32> SELL-C-σ spmv, over slices that run as a pair and alone, empty
 // and long rows, rows past the last full slice, a σ order and the identity, any slice range, both beta paths (beta == 0
-// never reads y), IEEE special values in A and an infinite or NaN x[0] (padding never multiplies x).
-// crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases under each forced level.
+// never reads y), IEEE special values in A, an infinite or NaN x[0] (padding never multiplies x) and both sweeps, one
+// with x declared wider than a gather's index reaches. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases
+// under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
@@ -123,20 +124,21 @@ template <typename T> sp::SellSlices<Scalar<T>> slices_of(const sp::SellMatrix<T
             sp::detail::sell_scalars(a.vals.data()),
             a.col_idx.data(),
             a.perm_is_identity ? nullptr : a.perm.data(),
-            a.rows};
+            a.rows,
+            a.cols};
 }
 
 template <typename T>
 void run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T alpha, T beta, const T* x, T* y,
-                u32 s_begin, u32 s_end)
+                u32 s_begin, u32 s_end, sp::SellSweep sweep)
 {
     if constexpr (std::is_same_v<T, crd::f64>)
     {
-        k.sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end);
+        k.sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end, sweep);
     }
     else if constexpr (std::is_same_v<T, crd::f32>)
     {
-        k.sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end);
+        k.sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end, sweep);
     }
     else
     {
@@ -145,11 +147,11 @@ void run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T al
         auto* ys = sp::detail::sell_scalars(y);
         if constexpr (std::is_same_v<T, Complex<crd::f64>>)
         {
-            k.sell_spmv_c64(a, scales, xs, ys, s_begin, s_end);
+            k.sell_spmv_c64(a, scales, xs, ys, s_begin, s_end, sweep);
         }
         else
         {
-            k.sell_spmv_c32(a, scales, xs, ys, s_begin, s_end);
+            k.sell_spmv_c32(a, scales, xs, ys, s_begin, s_end, sweep);
         }
     }
 }
@@ -163,6 +165,8 @@ struct Counts
 
 inline constexpr usize kScalePairs = 5;
 inline constexpr usize kFirstColumns = 3;
+inline constexpr usize kSweeps = 3; // resident, streaming, and streaming with x past a gather's 2^31 columns
+inline constexpr usize kRanges = 6;
 
 // Every slice range of one matrix and level at five alpha/beta pairs and three x[0] against the CSR spmv.
 template <typename T>
@@ -212,17 +216,21 @@ void check_level(const SparseKernels& k, crd::memory::IAllocator* alloc, u32 row
                     crd::containers::Span<T>{want.data(), rows});
 
         const u32 n = sell.num_slices;
-        const u32 ranges[][2] = {{0, n},
-                                 {n > 0U ? 1U : 0U, n},
-                                 {0, n > 0U ? n - 1U : 0U},
-                                 {n / 2U, n / 2U + (n > 0U ? 1U : 0U)},
-                                 {n / 3U, n - n / 3U},
-                                 {n, n}};
-        for (const auto& range : ranges)
+        const u32 ranges[kRanges][2] = {{0, n},
+                                        {n > 0U ? 1U : 0U, n},
+                                        {0, n > 0U ? n - 1U : 0U},
+                                        {n / 2U, n / 2U + (n > 0U ? 1U : 0U)},
+                                        {n / 3U, n - n / 3U},
+                                        {n, n}};
+        for (usize c = 0; c < kRanges * kSweeps; ++c)
         {
+            const auto& range = ranges[c % kRanges];
+            sp::SellSlices<U> swept = slices;
+            swept.cols = c / kRanges == 2U ? 0x80000001U : slices.cols; // the scalar-load form of a gathering body
+            const sp::SellSweep sweep = c / kRanges == 0U ? sp::SellSweep::Resident : sp::SellSweep::Streaming;
             ++counts.cases;
             y = y0;
-            run_kernel<T>(k, slices, ab[0], ab[1], x.data(), y.data(), range[0], range[1]);
+            run_kernel<T>(k, swept, ab[0], ab[1], x.data(), y.data(), range[0], range[1], sweep);
             const u32 first = range[0] * height;
             const u32 last = range[1] * height < rows ? range[1] * height : rows;
             for (u32 sr = 0; sr < rows; ++sr)
@@ -263,7 +271,7 @@ template <typename T> void check_every_level()
                 check_level<T>(*level.table, &alloc, rows, sigma, counts);
             }
         }
-        CHECK(counts.cases == 14U * 3U * kScalePairs * kFirstColumns * 6U);
+        CHECK(counts.cases == 14U * 3U * kScalePairs * kFirstColumns * kRanges * kSweeps);
         CHECK(counts.wrong == 0U);
         CHECK(counts.touched == 0U);
     }
@@ -315,7 +323,7 @@ TEST_CASE("sparse kernels: every level the host runs gives the CSR spmv bits (c3
     check_every_level<Complex<crd::f32>>();
 }
 
-TEST_CASE("sparse kernels: to_sell records each sigma row's length and zero past the last row", "[sparse][kernels]")
+TEST_CASE("sparse kernels: to_sell records each sigma row's length, and the bytes a sweep judges", "[sparse][kernels]")
 {
     crd::memory::TlsfAllocator alloc(8U << 20);
     const auto csr = test_matrix<crd::f64>(&alloc, 70U, 73U, 0x5EEDULL);
@@ -329,6 +337,15 @@ TEST_CASE("sparse kernels: to_sell records each sigma row's length and zero past
         wrong += sell.row_len[sr] == want ? 0U : 1U;
     }
     CHECK(wrong == 0U);
+
+    const usize elements = sell.vals.size();
+    CHECK(sell.range_bytes(0U, sell.num_slices) == elements * 12U + sell.row_len.size() * 4U);
+    CHECK(sell.range_bytes(3U, 3U) == 0U);
+    CHECK(sell.stored_bytes() ==
+          elements * 12U +
+              (sell.row_len.size() + sell.slice_ptr.size() + sell.slice_width.size() + sell.perm.size()) * 4U);
+    const u32 l2 = crd::cpu_selection().features.caches.l2_bytes;
+    CHECK(sp::sparse_resident_bytes() == (l2 != 0U ? usize{l2} : usize{1} << 21U)); // the sweep's and operators' cut
 }
 
 TEST_CASE("sparse kernels: spmv_sell runs the selected level and gives the CSR bits", "[sparse][kernels]")

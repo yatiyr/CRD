@@ -53,3 +53,23 @@ Verification (win-debug): decode cases for leaf 4, 0x8000001D, the legacy leaves
 performance and an efficiency core, and the host against the OS (`RelationCache` on Windows, sysfs `cache/index*` on
 Linux: each level's smallest size and L1's line, where the OS reports them). This host: line 64, L1d 32 KiB, L2
 2 MiB, L3 36 MiB, as Windows reports; the child prints the caches for the CI logs.
+
+## The SELL pairing and gather policy
+
+- `sell.hpp` gives every kernel call a `SellSweep`: Resident when the range's matrix bytes (`range_bytes`: values,
+  columns, row lengths), all of x and its rows of y fit `sparse_resident_bytes()` (the smallest L2, 2 MiB where no
+  CPUID leaf describes the caches), else Streaming. Serial calls and each parallel job judge their own range.
+- Each level and type picks a body and a pair width per sweep (`SellPolicy`), seeded from the 2026-10-27 board:
+  avx2 f64 scalar loads in L2 and `vgatherdpd` beyond it; avx2 f32 `vgatherdps` both; sse2 f32 runs every slice alone
+  from DRAM (pairs cost its power-law rows 9%); the rest keep HEAD's forms. Every pick gives the CSR bits.
+- Found in passing: a vector gather's index is signed, so a matrix past 2^31 columns would have gathered below x. A
+  gathering body now takes its scalar-load form there (`SellSlices::cols`).
+- The operators' serial-or-parallel cut (`ParallelSparseLinearOp`, the least-squares and spmm operators) defaults to
+  the same `sparse_resident_bytes()` instead of a fixed 2 MiB, judged on `stored_bytes()` (every array) instead of
+  the values alone.
+- Row-close board candidates: the sse2 f32 pairing trade (uniform-16 1M gains from pairs), complex gather forms, and
+  whether a job's cut should be its core's share of L2 rather than the whole.
+
+Verification (win-debug): the [kernels] differential runs every entry at both sweeps and at Streaming with `cols`
+past 2^31 (the scalar-load fallback) for all four types at portable, sse2 and avx2, bit for bit with CSR; the byte
+counts and the resident cut are checked; the whole sparse program passes; iterative and eigen tests build.

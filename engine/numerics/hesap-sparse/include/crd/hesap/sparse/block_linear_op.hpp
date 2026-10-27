@@ -3,6 +3,7 @@
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/sparse/sparse_dispatch.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/hesap/sparse/spmm.hpp>
 #include <crd/jobs/jobs.hpp>
@@ -47,7 +48,7 @@ class ParallelSpmmLinearOp final : public BlockLinearOp<T>
 {
 public:
     explicit ParallelSpmmLinearOp(const SparseMatrix<T, SparseFormat::Csr>& a,
-                                  crd::usize parallel_min_stored_bytes = (crd::usize{1} << 21))
+                                  crd::usize parallel_min_stored_bytes = sparse_resident_bytes())
         : m_a(&a), m_n(a.rows())
     {
         CRD_ASSERT_MSG(a.rows() == a.cols(), "ParallelSpmmLinearOp: matrix must be square");

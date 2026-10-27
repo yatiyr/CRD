@@ -28,6 +28,15 @@ template <typename T> struct SellSlices
     const crd::u32* col_idx;
     const crd::u32* perm; // perm[σ row] = original row; nullptr when the σ order is the identity
     crd::u32 rows;
+    crd::u32 cols; // of the matrix: x's length
+};
+
+// Where a call's data sits (crd/hesap/sparse/sell.hpp decides it from the range's bytes and the L2): each level and
+// type picks its slice pairing and x gather per sweep, and every pick gives the same bits.
+enum class SellSweep : crd::u8
+{
+    Resident,  // the range's matrix, x and y fit the L2
+    Streaming, // they come from beyond it
 };
 
 // The complex alpha and beta of y = alpha A x + beta y as their parts.
@@ -44,15 +53,15 @@ struct SparseKernels
     // y[r] = alpha * sum_w vals * x[col] + beta * y[r] for the rows of slices [s_begin, s_end); each row sums its
     // columns in order, two roundings a step from +0, and beta == 0 never reads y.
     void (*sell_spmv_f64)(const SellSlices<crd::f64>& a, crd::f64 alpha, crd::f64 beta, const crd::f64* x, crd::f64* y,
-                          crd::u32 s_begin, crd::u32 s_end) noexcept;
+                          crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
     void (*sell_spmv_f32)(const SellSlices<crd::f32>& a, crd::f32 alpha, crd::f32 beta, const crd::f32* x, crd::f32* y,
-                          crd::u32 s_begin, crd::u32 s_end) noexcept;
+                          crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
     // The same over (re, im) pairs, x and y included, in the operators of Complex<T> (crd/hesap/complex.hpp): each step
     // adds (vr xr - vi xi, vr xi + vi xr) part by part, y = alpha sum + beta y, and beta == (0, 0) never reads y.
     void (*sell_spmv_c64)(const SellSlices<crd::f64>& a, const SellComplexScales<crd::f64>& scales, const crd::f64* x,
-                          crd::f64* y, crd::u32 s_begin, crd::u32 s_end) noexcept;
+                          crd::f64* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
     void (*sell_spmv_c32)(const SellSlices<crd::f32>& a, const SellComplexScales<crd::f32>& scales, const crd::f32* x,
-                          crd::f32* y, crd::u32 s_begin, crd::u32 s_end) noexcept;
+                          crd::f32* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
 };
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.

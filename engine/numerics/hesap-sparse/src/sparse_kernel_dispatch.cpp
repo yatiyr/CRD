@@ -1,5 +1,6 @@
 // The hesap-sparse kernels of this archive and the level the process runs (SIMD-DISPATCH).
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/sparse/sparse_dispatch.hpp>
 #include <crd/math/kernel_level.hpp>
 
@@ -37,6 +38,12 @@ const KernelLevel<SparseKernels>& sparse_kernels() noexcept
 {
     static const KernelLevel<SparseKernels>& selected = crd::math::process_kernel_level<SparseKernels>(kLevels);
     return selected;
+}
+
+crd::usize sparse_resident_bytes() noexcept
+{
+    const crd::u32 l2 = crd::cpu_selection().features.caches.l2_bytes;
+    return l2 != 0U ? crd::usize{l2} : (crd::usize{1} << 21);
 }
 
 } // namespace crd::hesap::sparse
