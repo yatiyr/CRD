@@ -98,8 +98,8 @@ enum class GemmMerge : crd::u8
     AddAlpha, // c + alpha * p
     Subtract, // c - p
     Assign,   // p
-    Zero,     // +0 + alpha * p
-    Scale,    // beta * c + alpha * p
+    Zero,     // +0 + alpha * p (alpha == 1: +0 + p)
+    Scale,    // beta * c + alpha * p (alpha == 1: beta * c + p)
 };
 
 // p, alpha and beta by reference: MSVC 14.51's LTCG code generation crashes (C1001) on the by-value Complex<f32> copy
@@ -112,11 +112,25 @@ template <GemmMerge M, typename T> inline void merge_element(T& c, const T& p, c
     }
     else if constexpr (M == GemmMerge::Zero)
     {
-        c = T{} + alpha * p;
+        if (alpha == T{1}) // a complex (1, 0) * p is not p where a part of p is infinite
+        {
+            c = T{} + p;
+        }
+        else
+        {
+            c = T{} + alpha * p;
+        }
     }
     else if constexpr (M == GemmMerge::Scale)
     {
-        c = beta * c + alpha * p;
+        if (alpha == T{1})
+        {
+            c = beta * c + p;
+        }
+        else
+        {
+            c = beta * c + alpha * p;
+        }
     }
     else if constexpr (M == GemmMerge::Add)
     {

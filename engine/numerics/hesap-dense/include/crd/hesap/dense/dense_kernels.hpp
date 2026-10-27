@@ -11,8 +11,8 @@
 // classical inner-product bound, depth * eps * sum |a| |b|. The merge into C rounds alike on every level. A GEMM sums
 // its depth in groups of kGemmKc (256, detail/gemm_pack.hpp) values, one group after another on every path (gemm, its
 // parallel and small-GEMM paths, syrk): the first merges as beta c + alpha p (beta 0: +0 + alpha p, C unread), each
-// later one as c + alpha p (alpha 1: c + p), so neither the path nor the worker count nor a level's tile shape changes
-// an element's bits.
+// later one as c + alpha p, alpha p being p at alpha 1, so neither the path nor the worker count nor a level's tile
+// shape changes an element's bits.
 
 #pragma once
 

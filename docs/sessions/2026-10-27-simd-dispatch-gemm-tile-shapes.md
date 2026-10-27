@@ -42,9 +42,14 @@ group). Small-path bits for k > 256 change from HEAD.
 
 - Beta folds into the first depth group: `GemmUpdate::Scale` merges beta c + alpha p (beta 0: +0 + alpha p, C
   unread), so C is read and written once there instead of a separate beta pass first. The bits are HEAD's (the pass
-  stored +0 or beta c and the group added alpha p); only k = 0 keeps the pass.
+  stored +0 or beta c and the group added alpha p, or p at alpha 1: the merge adds p there too, since a complex
+  (1, 0) p is not p where a part of p is infinite); only k = 0 keeps the pass.
 - The serial `gemm()` takes the resident-A path too when op(A) is row-major and m n k is below the parallel path's
   200M threshold: no A packing, one buffer. Whether that threshold holds on one thread is a row-close board question.
+- The resident path also needs the whole packed B within the packed path's Kc by Nc budget: HEAD's `m % 8` and
+  RowMajor fences kept skinny products out, and without them m = 1, n = k = 10^4 (under the threshold) would pack
+  800 MB of f64 B where the packed path packs 8 MB. A one-row 1536 by 1536 product through an 8 MB scratch allocator
+  holds it (it was a fatal out-of-memory before the bound).
 - The `gemm-pack-refused` fatal mode now transposes A, so it still reaches gemm's packed path.
 
 Verification: `test_dense_kernels.cpp` ([kernels]) runs each level's block on panels of its own shape against the

@@ -133,15 +133,20 @@ template <typename T> [[nodiscard]] T* allocate_packs(crd::memory::IAllocator& a
 //   - sums the depth in the kKc groups gemm() sums by, beta folded into the first, so its bits equal the packed
 //     path's at every worker count.
 // Threshold tuned on the 14900K vs-reference shootout (parallel): 200M elements catches the N=512 cube (134M,
-// 0.95x→1.0x+); from N=1024 (1G) the packed path wins (better cache reuse via packed Ac).
+// 0.95x→1.0x+); from N=1024 (1G) the packed path wins (better cache reuse via packed Ac). The whole packed B must also
+// fit the packed path's Bc budget (Kc by Nc), so a skinny product (m = 1, n = k = 10^4: 800 MB of f64) never packs a
+// large B whole; every cube the threshold admits (k n <= 342K) fits.
 // =======================================================================
 constexpr crd::usize kSmallGemmThreshold = 200ULL * 1024ULL * 1024ULL;
 
-template <typename T, Layout L> [[nodiscard]] constexpr bool small_gemm_eligible(Trans trans_a) noexcept
+template <typename T, Layout L>
+[[nodiscard]] bool takes_small_gemm(Trans trans_a, crd::usize m, crd::usize n, crd::usize k) noexcept
 {
     if constexpr (kHasDenseKernels<T>)
     {
-        return (L == Layout::RowMajor) == (trans_a == Trans::None);
+        const GemmShape shape = detail::gemm_shape_of<T>();
+        return (L == Layout::RowMajor) == (trans_a == Trans::None) && m * n * k < kSmallGemmThreshold &&
+               detail::packed_b_size(shape, k, n) <= kKc * (kNc + shape.nr);
     }
     else
     {
@@ -263,7 +268,7 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
         scale_by_beta(c, m, n, beta); // no depth group to fold beta into
         return;
     }
-    if (small_gemm_eligible<T, L>(trans_a) && m * n * k < kSmallGemmThreshold)
+    if (takes_small_gemm<T, L>(trans_a, m, n, k))
     {
         small_gemm<T, L>(1U, alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;
@@ -334,7 +339,7 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
         scale_by_beta(c, m, n, beta); // no depth group to fold beta into
         return;
     }
-    if (small_gemm_eligible<T, L>(trans_a) && m * n * k < kSmallGemmThreshold)
+    if (takes_small_gemm<T, L>(trans_a, m, n, k))
     {
         small_gemm<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;

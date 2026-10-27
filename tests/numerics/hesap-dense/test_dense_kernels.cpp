@@ -578,6 +578,45 @@ TEST_CASE("dense kernels: every GEMM path and worker count gives the grouped bit
     check_paths<crd::f32>();
 }
 
+// A skinny product (one row, n = k = 1536: 18 MB of packed B whole) is small by m n k, yet packs B in Kc by Nc blocks
+// (3 MB), so an 8 MB scratch allocator serves it on one worker and on three.
+TEST_CASE("dense kernels: a skinny GEMM packs B within the blocked budget", "[dense][kernels]")
+{
+    crd_hesap_dense_tests::hesap_jobs_listener();
+    constexpr usize n = 1536;
+    crd::containers::Array<crd::f64> a(crd::memory::default_allocator());
+    crd::containers::Array<crd::f64> b(crd::memory::default_allocator());
+    crd::containers::Array<crd::f64> c(crd::memory::default_allocator());
+    a.resize(n);
+    b.resize(n * n);
+    c.resize(n);
+    Lcg g{0x51ULL};
+    for (usize e = 0; e < n * n; ++e)
+    {
+        b[e] = g.value<crd::f64>();
+    }
+    for (usize e = 0; e < n; ++e)
+    {
+        a[e] = g.value<crd::f64>();
+    }
+    const bool fma = sums_by_fma(dn::dense_kernels().level);
+    crd::memory::TlsfAllocator scratch(8U << 20);
+    using View = dn::MatrixView<const crd::f64, dn::Layout::RowMajor>;
+    usize wrong = 0;
+    for (const u32 workers : {1U, 3U})
+    {
+        dn::gemm_parallel<crd::f64, dn::Layout::RowMajor>(
+            workers, 1.0, View(a.data(), 1, n, n), View(b.data(), n, n, n), 0.0,
+            dn::MatrixView<crd::f64, dn::Layout::RowMajor>(c.data(), 1, n, n), dn::Trans::None, dn::Trans::None,
+            &scratch);
+        for (usize j = 0; j < n; ++j)
+        {
+            wrong += same_bits(c[j], grouped(1.0, 0.0, 0.0, 0, j, n, a, b, n, fma)) ? 0U : 1U;
+        }
+    }
+    CHECK(wrong == 0U);
+}
+
 TEST_CASE("dense kernels: the process runs the level its CPU selection resolves", "[dense][kernels]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
