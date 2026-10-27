@@ -91,22 +91,32 @@ void pack_b_panels(Read read, crd::usize depth, crd::usize cols, T* out) noexcep
     }
 }
 
-// How a tile reaches C: GemmUpdate with Add split at alpha == 1.
+// How a tile reaches C: GemmUpdate with Add split at alpha == 1 and Scale at beta == 0.
 enum class GemmMerge : crd::u8
 {
     Add,      // c + p
     AddAlpha, // c + alpha * p
     Subtract, // c - p
     Assign,   // p
+    Zero,     // +0 + alpha * p
+    Scale,    // beta * c + alpha * p
 };
 
-// p and alpha by reference: MSVC 14.51's LTCG code generation crashes (C1001) on the by-value Complex<f32> copy loop
-// of an Assign merge inlined into hesap-direct's supernodal row-block solve.
-template <GemmMerge M, typename T> inline void merge_element(T& c, const T& p, const T& alpha) noexcept
+// p, alpha and beta by reference: MSVC 14.51's LTCG code generation crashes (C1001) on the by-value Complex<f32> copy
+// loop of an Assign merge inlined into hesap-direct's supernodal row-block solve.
+template <GemmMerge M, typename T> inline void merge_element(T& c, const T& p, const T& alpha, const T& beta) noexcept
 {
     if constexpr (M == GemmMerge::Assign)
     {
         c = p;
+    }
+    else if constexpr (M == GemmMerge::Zero)
+    {
+        c = T{} + alpha * p;
+    }
+    else if constexpr (M == GemmMerge::Scale)
+    {
+        c = beta * c + alpha * p;
     }
     else if constexpr (M == GemmMerge::Add)
     {
@@ -160,7 +170,8 @@ template <typename T, crd::usize MR, crd::usize NR, bool Fused> struct PortableT
     }
 
     template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha) noexcept
+    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha,
+                      T beta) noexcept
     {
         T acc[MR][NR]{};
         sum(depth, lda, a, b, acc);
@@ -168,7 +179,7 @@ template <typename T, crd::usize MR, crd::usize NR, bool Fused> struct PortableT
         {
             for (crd::usize j = 0; j < NR; ++j)
             {
-                merge_element<M>(c[i * ldc + j], acc[i][j], alpha);
+                merge_element<M>(c[i * ldc + j], acc[i][j], alpha, beta);
             }
         }
     }
@@ -190,7 +201,7 @@ void merge_tile(const GemmBlock<T>& g, const T* out, crd::usize i0, crd::usize j
             const crd::usize first = masked && col_index > row_index ? col_index - row_index : 0;
             for (crd::usize i = first; i < rows_in; ++i)
             {
-                merge_element<M>(col[i], out[i * NR + j], g.alpha);
+                merge_element<M>(col[i], out[i * NR + j], g.alpha, g.beta);
             }
         }
         return;
@@ -209,7 +220,7 @@ void merge_tile(const GemmBlock<T>& g, const T* out, crd::usize i0, crd::usize j
         }
         for (crd::usize j = 0; j < end; ++j)
         {
-            merge_element<M>(row[j], p[j], g.alpha);
+            merge_element<M>(row[j], p[j], g.alpha, g.beta);
         }
     }
 }
@@ -237,7 +248,7 @@ template <typename Tile, GemmMerge M, typename T> void gemm_block_merged(const G
             {
                 if (!g.col_major && !masked && rows_in == mr && cols_in == nr)
                 {
-                    Tile::template fused<M>(g.depth, g.lda, a, b, g.c + i0 * g.ldc + j0, g.ldc, g.alpha);
+                    Tile::template fused<M>(g.depth, g.lda, a, b, g.c + i0 * g.ldc + j0, g.ldc, g.alpha, g.beta);
                     continue;
                 }
             }
@@ -249,13 +260,24 @@ template <typename Tile, GemmMerge M, typename T> void gemm_block_merged(const G
 }
 
 // The block on Tile (shape kMr by kNr): product(depth, lda, a, b, out) as PortableTile's, and, when Tile::kFused,
-// fused<M>(depth, lda, a, b, c, ldc, alpha), which merges a full row-major tile from its registers with merge_element's
-// expression (the same bits, no stored tile).
+// fused<M>(depth, lda, a, b, c, ldc, alpha, beta), which merges a full row-major tile from its registers with
+// merge_element's expression (the same bits, no stored tile).
 template <typename Tile, typename T> void gemm_block(const GemmBlock<T>& g) noexcept
 {
     if (g.update == GemmUpdate::Assign)
     {
         gemm_block_merged<Tile, GemmMerge::Assign>(g);
+    }
+    else if (g.update == GemmUpdate::Scale)
+    {
+        if (g.beta == T{0})
+        {
+            gemm_block_merged<Tile, GemmMerge::Zero>(g);
+        }
+        else
+        {
+            gemm_block_merged<Tile, GemmMerge::Scale>(g);
+        }
     }
     else if (g.update == GemmUpdate::Subtract)
     {

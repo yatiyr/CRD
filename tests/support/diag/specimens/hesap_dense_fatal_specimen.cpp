@@ -116,8 +116,9 @@ using crd_diag_fatal::RefusingAllocator;
     scratch.refuse_all();
     if (gemm)
     {
-        dense::gemm<crd::f64, dense::Layout::RowMajor>(1.0, a.cview(), b.cview(), 0.0, c.view(), dense::Trans::None,
-                                                       dense::Trans::None, &scratch);
+        // op(A) of a transposed RowMajor A is not row-major, so gemm packs it (the small mode is the resident path).
+        dense::gemm<crd::f64, dense::Layout::RowMajor>(1.0, a.cview(), b.cview(), 0.0, c.view(),
+                                                       dense::Trans::Transpose, dense::Trans::None, &scratch);
     }
     else if (small)
     {

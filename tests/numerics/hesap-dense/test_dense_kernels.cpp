@@ -3,10 +3,10 @@
 // each multiply and add on portable and sse2, by single-rounded fused multiply-add from avx2) and the levels agree
 // within the inner-product bound. Each level has its own tile shape (GemmShape), so the blocks run on panels of that
 // shape and cover partial and full tiles, depth 0 to 33, an A row stride wider than the depth, every update (add at
-// alpha 1 and otherwise, subtract, assign), both C layouts and lower blocks whose diagonal crosses, skips or covers
-// tiles; panel padding and A columns past the depth hold NaN, which no written element may reach. Each level's packers
-// write the panels a scalar model does from every source stride. crd-hesap-dense-kernels-at-<level> runs these
-// [kernels] cases under each forced level.
+// alpha 1 and otherwise, subtract, assign, the first group's beta merge at beta 0 and otherwise), both C layouts and
+// lower blocks whose diagonal crosses, skips or covers tiles; panel padding and A columns past the depth hold NaN,
+// which no written element may reach. Each level's packers write the panels a scalar model does from every source
+// stride. crd-hesap-dense-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include "hesap_jobs_fixture.hpp"
 
@@ -83,11 +83,15 @@ template <typename T> T inner(const T* a, const T* b, usize b_stride, usize dept
     return acc;
 }
 
-template <typename T> T updated(GemmUpdate update, T alpha, T c, T p)
+template <typename T> T updated(GemmUpdate update, T alpha, T beta, T c, T p)
 {
     if (update == GemmUpdate::Assign)
     {
         return p;
+    }
+    if (update == GemmUpdate::Scale)
+    {
+        return (beta == T(0) ? T(0) : beta * c) + alpha * p;
     }
     if (update == GemmUpdate::Subtract)
     {
@@ -112,8 +116,11 @@ struct Shape
 
 template <typename T> struct Buffers
 {
-    crd::containers::Array<T> a, b, logical_b, c0, c;
-    explicit Buffers(crd::memory::IAllocator* alloc) : a(alloc), b(alloc), logical_b(alloc), c0(alloc), c(alloc) {}
+    crd::containers::Array<T> a, b, logical_b, c0, c_nan, c;
+    explicit Buffers(crd::memory::IAllocator* alloc)
+        : a(alloc), b(alloc), logical_b(alloc), c0(alloc), c_nan(alloc), c(alloc)
+    {
+    }
 };
 
 // One shape at every update and layout on one level, on panels of the level's tile shape.
@@ -154,8 +161,10 @@ void check_shape(const DenseKernels& k, CpuLevel level, const Shape& s, Buffers<
     }
     const usize ldc = (s.rows > s.cols ? s.rows : s.cols) + 3U;
     buf.c0.resize(ldc * ldc);
+    buf.c_nan.resize(ldc * ldc);
     for (usize e = 0; e < ldc * ldc; ++e)
     {
+        buf.c_nan[e] = nan; // beta 0 reads no C: an uninitialized C gives finite elements
         buf.c0[e] = g.value<T>();
     }
     const bool fma = sums_by_fma(level);
@@ -164,14 +173,19 @@ void check_shape(const DenseKernels& k, CpuLevel level, const Shape& s, Buffers<
     {
         GemmUpdate update;
         T alpha;
-    } updates[] = {
-        {GemmUpdate::Add, T(1)}, {GemmUpdate::Add, T(0.75)}, {GemmUpdate::Subtract, T(0)}, {GemmUpdate::Assign, T(0)}};
+        T beta;
+    } updates[] = {{GemmUpdate::Add, T(1), T(0)},        {GemmUpdate::Add, T(0.75), T(0)},
+                   {GemmUpdate::Subtract, T(0), T(0)},   {GemmUpdate::Assign, T(0), T(0)},
+                   {GemmUpdate::Scale, T(1), T(0)},      {GemmUpdate::Scale, T(-0.75), T(0)},
+                   {GemmUpdate::Scale, T(0.75), T(-0.5)}};
     for (const auto& u : updates)
     {
         for (const bool col_major : {false, true})
         {
             ++counts.cases;
-            buf.c = buf.c0;
+            const bool unread = u.update == GemmUpdate::Scale && u.beta == T(0);
+            const crd::containers::Array<T>& start = unread ? buf.c_nan : buf.c0;
+            buf.c = start;
             dn::kernels_of<T>(k).gemm_block(GemmBlock<T>{.a = buf.a.data(),
                                                          .b = buf.b.data(),
                                                          .c = buf.c.data(),
@@ -183,6 +197,7 @@ void check_shape(const DenseKernels& k, CpuLevel level, const Shape& s, Buffers<
                                                          .row0 = s.row0,
                                                          .col0 = s.col0,
                                                          .alpha = u.alpha,
+                                                         .beta = u.beta,
                                                          .update = u.update,
                                                          .col_major = col_major,
                                                          .lower = s.lower});
@@ -194,13 +209,14 @@ void check_shape(const DenseKernels& k, CpuLevel level, const Shape& s, Buffers<
                     const bool written = i < s.rows && j < s.cols && (!s.lower || s.row0 + i >= s.col0 + j);
                     if (!written)
                     {
-                        counts.touched += same_bits(buf.c[at], buf.c0[at]) ? 0U : 1U;
+                        counts.touched += same_bits(buf.c[at], start[at]) ? 0U : 1U;
                         continue;
                     }
                     const T* a_row = buf.a.data() + i * s.lda;
                     const T* b_col = buf.logical_b.data() + j;
                     const T p = inner(a_row, b_col, s.cols, s.depth, fma);
-                    counts.wrong += same_bits(buf.c[at], updated(u.update, u.alpha, buf.c0[at], p)) ? 0U : 1U;
+                    const T want = updated(u.update, u.alpha, u.beta, start[at], p);
+                    counts.wrong += (unread ? exact_bits(buf.c[at], want) : same_bits(buf.c[at], want)) ? 0U : 1U;
                     T bound = T(0);
                     for (usize q = 0; q < s.depth; ++q)
                     {
@@ -261,7 +277,7 @@ template <typename T> void check_every_level()
                 }
             }
         }
-        CHECK(counts.cases == shapes * 5U * 4U * 2U);
+        CHECK(counts.cases == shapes * 5U * 7U * 2U);
         CHECK(counts.wrong == 0U);
         CHECK(counts.touched == 0U);
         CHECK(counts.apart == 0U);
@@ -362,18 +378,25 @@ template <typename T> void check_packers()
     CHECK(wrong == 0U);
 }
 
-// C = alpha op(A) B + beta C in the declared arithmetic: beta C (beta 0 stores +0), then each kKc group's sum from
-// +0 merged in depth order (dense_kernels.hpp).
+// C = alpha op(A) B + beta C in the declared arithmetic: each kKc group's sum from +0, the first merged as
+// beta c + alpha p (beta 0: +0 + alpha p), the later ones as c + alpha p (alpha 1: c + p) (dense_kernels.hpp).
 template <typename T>
 T grouped(T alpha, T beta, T c, usize i, usize j, usize k, const crd::containers::Array<T>& a,
           const crd::containers::Array<T>& b, usize n, bool fma)
 {
-    T out = beta == T(0) ? T(0) : beta * c;
+    T out = c;
     for (usize pc = 0; pc < k; pc += dn::detail::kGemmKc)
     {
         const usize kc = k - pc < dn::detail::kGemmKc ? k - pc : dn::detail::kGemmKc;
         const T p = inner(a.data() + i * k + pc, b.data() + pc * n + j, n, kc, fma);
-        out = alpha == T(1) ? out + p : out + alpha * p;
+        if (pc == 0)
+        {
+            out = (beta == T(0) ? T(0) : beta * out) + alpha * p;
+        }
+        else
+        {
+            out = alpha == T(1) ? out + p : out + alpha * p;
+        }
     }
     return out;
 }

@@ -158,11 +158,13 @@ template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noex
     }
 }
 
-// C[ic .. ic + mc, jc .. jc + nc) += alpha * the product of the Ac rows (mc by kc, row stride lda: packed panels or
-// resident whole panels) and the packed Bc (kc by nc) block; C already holds beta * C from the driver's scaling pass.
+// C[ic .. ic + mc, jc .. jc + nc) merged with alpha * the product of the Ac rows (mc by kc, row stride lda: packed
+// panels or resident whole panels) and the packed Bc (kc by nc) block: GemmUpdate::Scale for a GEMM's first depth group
+// (beta C folded in), Add for the later ones.
 template <typename T, Layout L>
-inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
-                              const T* a_rows, crd::usize lda, const T* b_packed, MatrixView<T, L> c) noexcept
+inline void gemm_packed_inner(T alpha, T beta, GemmUpdate update, crd::usize ic, crd::usize jc, crd::usize mc,
+                              crd::usize nc, crd::usize kc, const T* a_rows, crd::usize lda, const T* b_packed,
+                              MatrixView<T, L> c) noexcept
 {
     constexpr bool col_major = L == Layout::ColMajor;
     T* corner = col_major ? c.data() + jc * c.ld() + ic : c.data() + ic * c.ld() + jc;
@@ -177,7 +179,8 @@ inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize 
                                 .row0 = ic,
                                 .col0 = jc,
                                 .alpha = alpha,
-                                .update = GemmUpdate::Add,
+                                .beta = beta,
+                                .update = update,
                                 .col_major = col_major,
                                 .lower = false});
 }

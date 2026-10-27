@@ -122,6 +122,114 @@ template <typename T> [[nodiscard]] T* allocate_packs(crd::memory::IAllocator& a
 } // namespace
 
 // =======================================================================
+// small_gemm — the resident-A path for small f32/f64 GEMM, serial or parallel.
+//
+// v0d-small-gemm-fastpath: at small M*N*K, the Goto/BLIS pipeline's per-(jc, pc) A packing and its Mc-tile
+// parallelism dominate the compute (~290 us of overhead against ~40 us at N=256 f64 on 16 P-threads). This path:
+//   - reads A's whole row panels in place (op(A) effectively row-major: its rows at a + i * ld), packing only the
+//     last partial panel, which the tile would otherwise read past the matrix;
+//   - packs B once, every depth group of it (any layout and transpose), in one buffer with that panel;
+//   - parallelizes over the row panels, not Mc tiles, so the work scales with m / mr (load balance on a hybrid CPU);
+//   - sums the depth in the kKc groups gemm() sums by, beta folded into the first, so its bits equal the packed
+//     path's at every worker count.
+// Threshold tuned on the 14900K vs-reference shootout (parallel): 200M elements catches the N=512 cube (134M,
+// 0.95x→1.0x+); from N=1024 (1G) the packed path wins (better cache reuse via packed Ac).
+// =======================================================================
+constexpr crd::usize kSmallGemmThreshold = 200ULL * 1024ULL * 1024ULL;
+
+template <typename T, Layout L> [[nodiscard]] constexpr bool small_gemm_eligible(Trans trans_a) noexcept
+{
+    if constexpr (kHasDenseKernels<T>)
+    {
+        return (L == Layout::RowMajor) == (trans_a == Trans::None);
+    }
+    else
+    {
+        return false;
+    }
+}
+
+template <typename T, Layout L> struct SmallGemm
+{
+    GemmSource<T> a; // op(A): row i at a.data + i * a.row_stride
+    MatrixView<T, L> c;
+    const T* b_pack; // depth group pc at b_pack + pc * b_row: its kc by n panels
+    const T* a_tail; // the last partial row panel, packed (row stride k)
+    T alpha;
+    T beta;
+    crd::usize m, n, k, mr, full, b_row; // rows [0, full) are read in place
+};
+
+// Rows [r0, r1) of C, r0 on a panel boundary: the whole panels as one block and the packed partial panel, per group.
+template <typename T, Layout L> void small_gemm_rows(const SmallGemm<T, L>& s, crd::usize r0, crd::usize r1) noexcept
+{
+    const crd::usize resident_end = std::min(r1, s.full);
+    for (crd::usize pc = 0; pc < s.k; pc += kKc)
+    {
+        const crd::usize kc = (pc + kKc < s.k) ? kKc : (s.k - pc);
+        const GemmUpdate update = pc == 0 ? GemmUpdate::Scale : GemmUpdate::Add;
+        const T* bg = s.b_pack + pc * s.b_row;
+        if (resident_end > r0)
+        {
+            detail::gemm_packed_inner(s.alpha, s.beta, update, r0, 0, resident_end - r0, s.n, kc,
+                                      s.a.data + r0 * s.a.row_stride + pc, s.a.row_stride, bg, s.c);
+        }
+        if (r1 > s.full)
+        {
+            detail::gemm_packed_inner(s.alpha, s.beta, update, s.full, 0, s.m - s.full, s.n, kc, s.a_tail + pc, s.k, bg,
+                                      s.c);
+        }
+    }
+}
+
+// m, n and k are nonzero; num_workers <= 1 runs on the calling thread without crd::jobs.
+template <typename T, Layout L>
+void small_gemm(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
+                MatrixView<T, L> c, Trans trans_a, Trans trans_b, crd::memory::IAllocator* scratch)
+{
+    const crd::usize m = c.rows();
+    const crd::usize n = c.cols();
+    const crd::usize k = (trans_a == Trans::None) ? a.cols() : a.rows();
+    crd::memory::IAllocator& alloc = pack_allocator(scratch);
+    const GemmShape shape = detail::gemm_shape_of<T>();
+    const crd::usize b_row = detail::packed_b_size(shape, 1U, n);
+    const crd::usize full = m - m % shape.mr;
+    const crd::usize b_capacity = whole_lines<T>(b_row * k);
+    T* b_pack = allocate_packs<T>(alloc, b_capacity + detail::packed_a_size(shape, m - full, k));
+    T* a_tail = b_pack + b_capacity;
+    for (crd::usize pc = 0; pc < k; pc += kKc)
+    {
+        detail::pack_b(b, pc, 0, (pc + kKc < k) ? kKc : (k - pc), n, trans_b, b_pack + pc * b_row);
+    }
+    if (full < m)
+    {
+        detail::pack_a(a, full, 0, m - full, k, trans_a, a_tail);
+    }
+    const SmallGemm<T, L> s{
+        detail::gemm_source(a, 0, 0, trans_a), c, b_pack, a_tail, alpha, beta, m, n, k, shape.mr, full, b_row};
+    if (num_workers <= 1)
+    {
+        small_gemm_rows(s, 0, m);
+    }
+    else
+    {
+        const SmallGemm<T, L>* sp = &s;
+        // v5f-c (gemm-parallel-frame-arena-leak fix): reclaim this parallel_for's JobDecl array in place.
+        const crd::usize frame_mark = crd::jobs::frame_get_mark();
+        auto* counter =
+            crd::jobs::parallel_for(static_cast<crd::u32>((m + shape.mr - 1U) / shape.mr), num_workers,
+                                    [sp](crd::u32 begin, crd::u32 end)
+                                    {
+                                        small_gemm_rows(*sp, static_cast<crd::usize>(begin) * sp->mr,
+                                                        std::min(static_cast<crd::usize>(end) * sp->mr, sp->m));
+                                    });
+        crd::jobs::wait(counter);
+        crd::jobs::frame_set_mark(frame_mark); // reclaim the parallel_for JobDecls in place (leak fix)
+    }
+    alloc.deallocate(b_pack);
+}
+
+// =======================================================================
 // gemm — Goto/BLIS 5-loop. v0d-perf (ADR-0082 intrinsics backend).
 //
 // Loop structure (outer-to-inner):
@@ -129,10 +237,12 @@ template <typename T> [[nodiscard]] T* allocate_packs(crd::memory::IAllocator& a
 //   pc: outer K slab (Kc-deep)              — cache the K dimension; the depth grouping every path sums by
 //   ic: outer row slab (Mc-tall)            — cache A panel into L2
 //     pack Ac panel (mc × kc) and Bc panel (kc × nc) on the level's tile shape (detail::gemm_shape_of)
-//     gemm_packed_inner: the GEMM block (mr × nr register tiles) on (Ac panel, Bc panel)
+//     gemm_packed_inner: the GEMM block (mr × nr register tiles) on (Ac panel, Bc panel); the first group merges
+//                        beta C in (GemmUpdate::Scale), so C is read and written once there
 //
 // Both packs come from one buffer of the `scratch` IAllocator (Matrix overload passes `a.allocator()`), sized to
-// MIN(actual dim, cache block): at most (Mc + mr) Kc values of Ac and (Nc + nr) Kc of Bc.
+// MIN(actual dim, cache block): at most (Mc + mr) Kc values of Ac and (Nc + nr) Kc of Bc. A small product whose
+// op(A) is row-major takes small_gemm on this thread instead.
 // =======================================================================
 template <typename T, Layout L>
 void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
@@ -144,8 +254,20 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
     const crd::usize n = (trans_b == Trans::None) ? b.cols() : b.rows();
     CRD_ASSERT_MSG(k == k2, "gemm: inner dimensions of A and B must match");
     CRD_ASSERT_MSG(c.rows() == m && c.cols() == n, "gemm: C must be m*n");
-
-    scale_by_beta(c, m, n, beta);
+    if (m == 0 || n == 0)
+    {
+        return;
+    }
+    if (k == 0)
+    {
+        scale_by_beta(c, m, n, beta); // no depth group to fold beta into
+        return;
+    }
+    if (small_gemm_eligible<T, L>(trans_a) && m * n * k < kSmallGemmThreshold)
+    {
+        small_gemm<T, L>(1U, alpha, a, b, beta, c, trans_a, trans_b, scratch);
+        return;
+    }
 
     crd::memory::IAllocator& alloc = pack_allocator(scratch);
     const GemmShape shape = detail::gemm_shape_of<T>();
@@ -162,6 +284,7 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
         for (crd::usize pc = 0; pc < k; pc += kKc)
         {
             const crd::usize kc = (pc + kKc < k) ? kKc : (k - pc);
+            const GemmUpdate update = pc == 0 ? GemmUpdate::Scale : GemmUpdate::Add;
 
             // Pack Bc panel once per (jc, pc) — reused across all ic blocks.
             // No explicit template args: T/L are deduced from b's MatrixView<const T, L>
@@ -174,109 +297,12 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
                 const crd::usize mc = (ic + kMc < m) ? kMc : (m - ic);
 
                 detail::pack_a(a, ic, pc, mc, kc, trans_a, a_pack);
-                detail::gemm_packed_inner(alpha, ic, jc, mc, nc, kc, a_pack, kc, b_pack, c);
+                detail::gemm_packed_inner(alpha, beta, update, ic, jc, mc, nc, kc, a_pack, kc, b_pack, c);
             }
         }
     }
 
     alloc.deallocate(a_pack);
-}
-
-// =======================================================================
-// small_gemm — the resident-A fast path for small f32/f64 GEMM.
-//
-// v0d-small-gemm-fastpath: at small M*N*K, the Goto/BLIS pipeline's per-(jc, pc) A packing and its Mc-tile
-// parallelism dominate the compute (~290 us of overhead against ~40 us at N=256 f64 on 16 P-threads). This path:
-//   - reads A's whole row panels in place (op(A) effectively row-major: its rows at a + i * ld), packing only the
-//     last partial panel, which the tile would otherwise read past the matrix;
-//   - packs B once, every depth group of it (any layout and transpose);
-//   - parallelizes over the row panels, not Mc tiles, so the work scales with m / mr (load balance on a hybrid CPU);
-//   - sums the depth in the kKc groups gemm() sums by, so its bits equal gemm()'s at every worker count.
-// =======================================================================
-template <typename T, Layout L> [[nodiscard]] constexpr bool small_gemm_eligible(Trans trans_a) noexcept
-{
-    if constexpr (kHasDenseKernels<T>)
-    {
-        return (L == Layout::RowMajor) == (trans_a == Trans::None);
-    }
-    else
-    {
-        return false;
-    }
-}
-
-template <typename T, Layout L>
-void small_gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
-                         MatrixView<T, L> c, Trans trans_a, Trans trans_b, crd::memory::IAllocator* scratch)
-{
-    const crd::usize m = c.rows();
-    const crd::usize n = c.cols();
-    const crd::usize k = (trans_a == Trans::None) ? a.cols() : a.rows();
-    scale_by_beta(c, m, n, beta);
-    if (m == 0 || n == 0 || k == 0)
-    {
-        return;
-    }
-
-    // One buffer: B's depth groups (group pc at pc * b_row: its kc by n panels), then the last partial A panel.
-    crd::memory::IAllocator& alloc = pack_allocator(scratch);
-    const GemmShape shape = detail::gemm_shape_of<T>();
-    const crd::usize b_row = detail::packed_b_size(shape, 1U, n);
-    const crd::usize full = m - m % shape.mr; // rows read in place
-    const crd::usize b_capacity = whole_lines<T>(b_row * k);
-    T* b_pack = allocate_packs<T>(alloc, b_capacity + detail::packed_a_size(shape, m - full, k));
-    T* a_tail = b_pack + b_capacity;
-    for (crd::usize pc = 0; pc < k; pc += kKc)
-    {
-        detail::pack_b(b, pc, 0, (pc + kKc < k) ? kKc : (k - pc), n, trans_b, b_pack + pc * b_row);
-    }
-    if (full < m)
-    {
-        detail::pack_a(a, full, 0, m - full, k, trans_a, a_tail);
-    }
-
-    struct State
-    {
-        GemmSource<T> a; // op(A): row i at a.data + i * a.row_stride
-        MatrixView<T, L> c;
-        const T* b_pack;
-        const T* a_tail;
-        T alpha;
-        crd::usize m, n, k, mr, full, b_row;
-    };
-    State s{detail::gemm_source(a, 0, 0, trans_a), c, b_pack, a_tail, alpha, m, n, k, shape.mr, full, b_row};
-    State* sp = &s;
-
-    // v5f-c (gemm-parallel-frame-arena-leak fix): reclaim this parallel_for's JobDecl array in place.
-    const crd::usize frame_mark = crd::jobs::frame_get_mark();
-    auto* counter = crd::jobs::parallel_for(
-        static_cast<crd::u32>((m + shape.mr - 1U) / shape.mr), num_workers,
-        [sp](crd::u32 begin, crd::u32 end)
-        {
-            // The worker's whole panels as one block and, on the last range, the packed partial panel, per group.
-            const crd::usize r0 = static_cast<crd::usize>(begin) * sp->mr;
-            const crd::usize r1 = std::min(static_cast<crd::usize>(end) * sp->mr, sp->m);
-            const crd::usize resident_end = std::min(r1, sp->full);
-            for (crd::usize pc = 0; pc < sp->k; pc += kKc)
-            {
-                const crd::usize kc = (pc + kKc < sp->k) ? kKc : (sp->k - pc);
-                const T* bg = sp->b_pack + pc * sp->b_row;
-                if (resident_end > r0)
-                {
-                    detail::gemm_packed_inner(sp->alpha, r0, 0, resident_end - r0, sp->n, kc,
-                                              sp->a.data + r0 * sp->a.row_stride + pc, sp->a.row_stride, bg, sp->c);
-                }
-                if (r1 > sp->full)
-                {
-                    detail::gemm_packed_inner(sp->alpha, sp->full, 0, sp->m - sp->full, sp->n, kc, sp->a_tail + pc,
-                                              sp->k, bg, sp->c);
-                }
-            }
-        });
-    crd::jobs::wait(counter);
-    crd::jobs::frame_set_mark(frame_mark); // reclaim the parallel_for JobDecls in place (leak fix)
-
-    alloc.deallocate(b_pack);
 }
 
 // =======================================================================
@@ -299,20 +325,20 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     const crd::usize n = (trans_b == Trans::None) ? b.cols() : b.rows();
     CRD_ASSERT_MSG(k == k2, "gemm_parallel: inner dimensions must match");
     CRD_ASSERT_MSG(c.rows() == m && c.cols() == n, "gemm_parallel: C must be m*n");
-
-    // v0d-small-gemm-fastpath: the resident-A path where Goto/BLIS overhead dominates the compute. Threshold tuned on
-    // the 14900K vs-reference shootout: 200M elements catches the N=512 cube (134M, 0.95x→1.0x+); from N=1024 (1G)
-    // the packed path wins (better cache reuse via packed Ac).
-    constexpr crd::usize small_gemm_threshold = 200ULL * 1024ULL * 1024ULL;
-    if (small_gemm_eligible<T, L>(trans_a) && m * n * k < small_gemm_threshold)
+    if (m == 0 || n == 0)
     {
-        small_gemm_parallel<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
         return;
     }
-
-    // Scale C by beta on the calling thread: parallel beta scaling measured net-negative at every size (the
-    // parallel_for fiber overhead matches the memory-bound scale work, at most O(m*n) against O(m*n*k)).
-    scale_by_beta(c, m, n, beta);
+    if (k == 0)
+    {
+        scale_by_beta(c, m, n, beta); // no depth group to fold beta into
+        return;
+    }
+    if (small_gemm_eligible<T, L>(trans_a) && m * n * k < kSmallGemmThreshold)
+    {
+        small_gemm<T, L>(num_workers, alpha, a, b, beta, c, trans_a, trans_b, scratch);
+        return;
+    }
 
     // Auto-tune Mc (v0d-small-gemm-fastpath): kMc gives `num_ic = ceil(m / kMc)` chunks per (jc, pc), which leaves
     // workers idle when m is small. Pick a smaller Mc such that num_ic >= num_workers (capped above by kMc to keep
@@ -358,6 +384,8 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
         crd::usize m, kc, pc, jc, nc;
         crd::usize eff_mc;
         T alpha;
+        T beta;
+        GemmUpdate update;
         Trans trans_a;
     };
     IcLoopState state{};
@@ -368,6 +396,7 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     state.a_pack_per_worker = a_pack_per_worker;
     state.m = m;
     state.alpha = alpha;
+    state.beta = beta;
     state.trans_a = trans_a;
 
     // Outer jc + pc loops sequential; ic loop parallelized inside.
@@ -402,6 +431,7 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
             state.jc = jc;
             state.nc = nc;
             state.eff_mc = eff_mc;
+            state.update = pc == 0 ? GemmUpdate::Scale : GemmUpdate::Add; // the first group merges beta C in
 
             IcLoopState* st = &state;
             auto* counter = crd::jobs::parallel_for(
@@ -417,8 +447,8 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
                         const crd::usize mc = (ic_local + st->eff_mc < st->m) ? st->eff_mc
                                                                               : (st->m - ic_local);
                         detail::pack_a(st->a, ic_local, st->pc, mc, st->kc, st->trans_a, a_pack);
-                        detail::gemm_packed_inner(st->alpha, ic_local, st->jc, mc, st->nc, st->kc, a_pack, st->kc,
-                                                  st->b_pack, st->c);
+                        detail::gemm_packed_inner(st->alpha, st->beta, st->update, ic_local, st->jc, mc, st->nc, st->kc,
+                                                  a_pack, st->kc, st->b_pack, st->c);
                     }
                 });
             crd::jobs::wait(counter);

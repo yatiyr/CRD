@@ -82,11 +82,20 @@ template <> struct Reg<crd::f32>
 #endif
 
 // One register of a full tile merged into C with merge_element's expression (gemm_block.hpp).
-template <GemmMerge M, typename R, typename T, typename V> CRD_FORCEINLINE void merge_into(T* c, V p, V alpha) noexcept
+template <GemmMerge M, typename R, typename T, typename V>
+CRD_FORCEINLINE void merge_into(T* c, V p, V alpha, V beta) noexcept
 {
     if constexpr (M == GemmMerge::Assign)
     {
         R::store(c, p);
+    }
+    else if constexpr (M == GemmMerge::Zero)
+    {
+        R::store(c, R::add(R::zero(), R::mul(alpha, p)));
+    }
+    else if constexpr (M == GemmMerge::Scale)
+    {
+        R::store(c, R::add(R::mul(beta, R::load(c)), R::mul(alpha, p)));
     }
     else if constexpr (M == GemmMerge::Add)
     {
@@ -175,7 +184,8 @@ template <typename T> struct SixRowTile
     }
 
     template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha) noexcept
+    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha,
+                      T beta) noexcept
     {
         for (crd::usize i = 0; i < kMr; ++i) // C is read after the depth loop: request its lines now
         {
@@ -183,11 +193,12 @@ template <typename T> struct SixRowTile
             prefetch(c, i * ldc + kNr - 1U);
         }
         const V av = R::splat(alpha);
+        const V bv = R::splat(beta);
         six_row_tile(depth, lda, a, b,
-                     [c, ldc, av](crd::usize i, V lo, V hi)
+                     [c, ldc, av, bv](crd::usize i, V lo, V hi)
                      {
-                         merge_into<M, R>(c + i * ldc, lo, av);
-                         merge_into<M, R>(c + i * ldc + R::kWidth, hi, av);
+                         merge_into<M, R>(c + i * ldc, lo, av, bv);
+                         merge_into<M, R>(c + i * ldc + R::kWidth, hi, av, bv);
                      });
     }
 };

@@ -9,9 +9,10 @@
 // bit), the avx2 level uses a single-rounded fused multiply-add per step, as hesap's GEMM has since ADR-0082's
 // 2026-05-20 update. Across that boundary the family is tolerance-declared: an element differs by at most the
 // classical inner-product bound, depth * eps * sum |a| |b|. The merge into C rounds alike on every level. A GEMM sums
-// its depth in groups of kGemmKc (256, detail/gemm_pack.hpp) values: C takes beta C, then each group's sum, one group
-// after another, on every path (gemm, its parallel and small-GEMM paths, syrk), so neither the path nor the worker
-// count nor a level's tile shape changes an element's bits.
+// its depth in groups of kGemmKc (256, detail/gemm_pack.hpp) values, one group after another on every path (gemm, its
+// parallel and small-GEMM paths, syrk): the first merges as beta c + alpha p (beta 0: +0 + alpha p, C unread), each
+// later one as c + alpha p (alpha 1: c + p), so neither the path nor the worker count nor a level's tile shape changes
+// an element's bits.
 
 #pragma once
 
@@ -42,6 +43,7 @@ enum class GemmUpdate : crd::u8
     Add,      // c + alpha * p (alpha == 1: c + p, the same bits)
     Subtract, // c - p
     Assign,   // p
+    Scale,    // beta * c + alpha * p, a GEMM's first depth group; beta == 0 reads no c: +0 + alpha * p
 };
 
 // One block of C updated by the product of packed panels.
@@ -57,7 +59,8 @@ template <typename T> struct GemmBlock
     crd::usize depth;
     crd::usize row0; // the block's first row and column in the matrix that lower refers to
     crd::usize col0;
-    T alpha; // GemmUpdate::Add only
+    T alpha; // GemmUpdate::Add and Scale
+    T beta;  // GemmUpdate::Scale only
     GemmUpdate update;
     bool col_major;
     bool lower; // only the elements with row0 + i >= col0 + j (a symmetric update's lower triangle)

@@ -34,16 +34,26 @@ group). Small-path bits for k > 256 change from HEAD.
 - The prefetch of the next B panel's line forms an integer address, never a pointer past the buffer.
 - The small path reads op(A)'s whole row panels in place whenever op(A) is row-major (both layouts, any lda) and
   packs only the last partial panel, so it needs no `m % mr` or tight-stride condition; gemm, gemm_parallel and the
-  small path each allocate one buffer; the three beta passes are one helper.
+  small path each allocate one buffer; the beta pass is one helper.
 - Consumers read the shape at run time: blas3, syrk, the supernodal TRSM walk (its 96-row block rounds down to whole
   panels of the level's mr), the fatal specimen.
 
+## The small-size fixed cost
+
+- Beta folds into the first depth group: `GemmUpdate::Scale` merges beta c + alpha p (beta 0: +0 + alpha p, C
+  unread), so C is read and written once there instead of a separate beta pass first. The bits are HEAD's (the pass
+  stored +0 or beta c and the group added alpha p); only k = 0 keeps the pass.
+- The serial `gemm()` takes the resident-A path too when op(A) is row-major and m n k is below the parallel path's
+  200M threshold: no A packing, one buffer. Whether that threshold holds on one thread is a row-close board question.
+- The `gemm-pack-refused` fatal mode now transposes A, so it still reaches gemm's packed path.
+
 Verification: `test_dense_kernels.cpp` ([kernels]) runs each level's block on panels of its own shape against the
-declared arithmetic from the logical operands (the bound check against the two-rounding sum), each level's packers
-against a scalar model from three stride pairings with a NaN guard word, and every GEMM path (gemm, the small and
-packed parallel paths at 1, 2 and 3 workers, both layouts and transposes, syrk) at k = 9 and 300 and m off the tile
-against the grouped model bit for bit. win-debug: the dense tests, direct tests and fatal specimen build; the
-[kernels] cases pass at the detected level and forced to sse2 and portable; the dense fatal modes, include budget and
-`crd-no-*` guards pass; `llvm-nm` on the three kernel objects shows no symbol outside the level namespace. Tests on
-hosted CI; the one-thread board (6 by 16 against OpenBLAS and Eigen, portable 2 by 4 against 4 by 4) in the row-close
-pass.
+declared arithmetic from the logical operands (the bound check against the two-rounding sum; the Scale merge at beta 0
+over a NaN C with a negative alpha gives exact +0 and finite bits), each level's packers against a scalar model from
+three stride pairings with a NaN guard word, and every GEMM path (gemm, the small and packed parallel paths at 1, 2
+and 3 workers, both layouts and transposes, syrk) at k = 9 and 300 and m off the tile against the grouped model bit
+for bit. win-debug: the dense tests, direct tests and fatal specimen build; the [kernels] cases pass at the detected
+level and forced to sse2 and portable, the [gemm], [blas3] and [gemm_parallel] cases at the detected level; the dense
+fatal modes, include budget and `crd-no-*` guards pass; `llvm-nm` on the three kernel objects shows no symbol outside
+the level namespace. Tests on hosted CI; the one-thread board (6 by 16 against OpenBLAS and Eigen, portable 2 by 4
+against 4 by 4, the serial resident threshold) in the row-close pass.
