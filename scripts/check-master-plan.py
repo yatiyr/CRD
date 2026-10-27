@@ -15,7 +15,7 @@ from urllib.parse import unquote
 ROOT = Path(__file__).resolve().parents[1]
 BUDGETS = {'START_HERE.md': 4500, 'AGENTS.md': 8000, 'docs/PRINCIPLES.md': 6500, 'docs/SANITY.md': 4500,
            'docs/BUILDING.md': 7000, 'MEMORY.md': 3000, 'context.md': 2500, 'docs/README.md': 6000}
-STATES = {'Done', 'In progress', 'Blocked', 'Needs CI', 'Recorded', 'Review', 'Open', 'Partial', 'Later'}
+STATES = {'Done', 'In progress', 'Blocked', 'Needs CI', 'Recorded', 'Review', 'Open', 'Partial'}
 COMPLETE = {'Done', 'Recorded'}
 
 
@@ -297,7 +297,9 @@ def main():
     if len(re.findall(r'^\|\s*:?-{3,}', text, flags=re.M)) != 1:
         errors.append('ROADMAP must contain exactly one table')
     for i, (name, cells) in enumerate(rows):
-        if cells[2] not in STATES:
+        if cells[2] == 'Later':
+            errors.append('Later is retired (user decision 2026-10-27); plan the row in its exact position: ' + name)
+        elif cells[2] not in STATES:
             errors.append('Unknown state: ' + name)
         if cells[2] == 'Done' and not re.search(r'\]\((?:sessions|bench)/', cells[5]):
             errors.append('Done requires session/benchmark evidence: ' + name)

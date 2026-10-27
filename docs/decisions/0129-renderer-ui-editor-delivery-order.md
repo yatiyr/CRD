@@ -43,6 +43,19 @@ Earlier notebook-first, eylem-before-UI and parallel-renderer/UI scheduling clau
 The complete inherited scope is retained. This ADR does **not** accept the whole Proposed ADR-0107, approve an
 unreviewed breaking canonical model, reinstate the completed CEIR autonomous loop or claim new runtime tests.
 
+**2026-10-27 amendment (user decision, [delivery plan](../design/delivery-plan.md)):** backbones precede their
+consumers. After the RAH redesign and the computational geometry backbone, the table runs foundation hardening and
+the ARM64 port; the CHIR language, reflection, command, scene/ECS/world, document, scripting, extension and agent
+backbone; hesap CPU and GPU, the GPU compute programs and the machine-learning core; SDF, B-rep, analysis meshing and
+the FE/FV cores; the animation core; and the physics engine EYLEM with its numeric qualification, all before the
+renderer runtime library. The sentence above that supersedes "eylem-before-UI" clauses no longer applies: physics
+now precedes the renderer and the UI because the renderer consumes it (GVA-3.runtime qualifies cloth and soft-body
+input from a real producer). The renderer runtime library still completes before any UI implementation
+(RENDERER-RUNTIME), CR-D007 still precedes the notebook, and the notebook still follows as a CR-D007 workspace.
+Media, audio, the macOS and web releases and the product verticals follow in the plan's order. A row that needs
+hardware or SDK access the project does not have qualifies on emulators, simulators and software adapters at its
+place, and its real-hardware half runs at the end of the table. No row is Later.
+
 ## References
 
 - [Execution contract](../design/renderer-ui-execution-contract.md)
