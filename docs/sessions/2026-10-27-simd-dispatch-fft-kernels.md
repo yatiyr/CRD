@@ -40,3 +40,49 @@ another level's. The lane-scalar bodies call `crd::math::libm::fma` instead of `
 same bits; `<cmath>` is gone), and the generator no longer emits the four unreferenced f64 `stage1_fused_sh`
 codelets. The fft program passes on win-debug (the lane-scalar bodies). Left for the kernel unit: the lane-scalar
 bodies build results with `Complex<T>{re, im}`, an inline member of `crd::hesap` outside the level namespace.
+
+## CI read (slice C)
+
+- No completed run since the last read has a new failed job. 40515770381 (`31e2b9ce`) is still running; its four
+  failed jobs are the ones `b306e2ea` (linux-gcc-asan disk) and `14840123` (the MSVC LTCG crash) fixed. 40537963527,
+  40533607455, 40531277767, 40530655387 and 40526567620 were cancelled with no failed job; 40539013278 (`c855a5a7`) is
+  pending. Nothing was dispatched.
+- Needs CI audit: [DIAG.11c](../ROADMAP.md#slice-diag.11c) and [DIAG.12](../ROADMAP.md#slice-diag.12) stay Needs CI;
+  no complete run at or after `14840123` has finished.
+
+## Slice C: the transform as a per-level kernel family
+
+- `b59d0510`: the generated lane-scalar bodies stored each output as a `Complex<T>{re, im}` value, whose constructor
+  is an inline `crd::hesap` function outside the level namespace; they now write `.re` and `.im` (2,224 stores, the
+  same bits; regenerated in WSL).
+- `crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2)`. `fft_kernels.hpp` holds only data: the
+  `FftPlanState` the plan fills (sizes, raw tables, the arrays' and sub-plans' views), the small-N twiddles as plain
+  lanes, the table (`execute`, `execute_batched`, both types) and the profile counters' declarations.
+  `fft_dispatch.hpp` and `src/fft_kernel_dispatch.cpp` resolve the level once.
+- `kernels/fft_kernels.cpp` is the engine moved out of `fft.hpp` (3,016 lines, `m_x` read as `plan.x`): one
+  `Engine<T>` over the state, sub-plans run on the same level, the 22 `Complex` constructions became component
+  stores, the four-step's prefetch, streaming store and fence take plain accesses on the portable level, and
+  `small_n_codelets.hpp` lives in the level namespace on twiddles `src/fft.cpp` builds once with `crd::math::cos`
+  and `sin` (the same values). Dead code went with the move: the uncalled `transpose`, `transpose_blocked`,
+  `transpose_simd_c64`, `radix2_pass` and `butterfly_row`.
+- `fft.hpp` is the plan: the ctor (now building the IP4-AoS tables on every build, so the plan no longer depends on
+  the general code's ISA), `execute_reference`, and `execute`/`execute_batched` as one table call. It includes no
+  codelet and no SIMD header; a new include-budget entry keeps `<immintrin.h>` out of it on GCC and Clang. The 35
+  units that parsed the codelets now parse none; only the three kernel units do.
+- `CRD_FFT_PROFILE` stays: the counters are plain data in `src/fft.cpp`, the kernels read `__rdtsc`.
+- Determinism: bit-identical run to run on a level; across levels tolerance-declared (ADR-0134 §7, ADR-0092 §1)
+  while the avx2 level keeps the paths its `CRD_SIMD_HAS_AVX2` gates select.
+
+Verification: `test_fft_kernels.cpp` ([kernels], with `crd-hesap-fft-kernels-at-<level>`): every level the host runs
+against `execute_reference` at the test_fft.cpp tolerances for every size 2^0 to 2^21, both types and directions,
+aligned and one word off, with guard words and a run-to-run bit check; the batched paths per column (N=8 even and
+odd, N=16 inside and past the over-2 budget, the leaves, the hier sub-FFTs at their block width); zeros and
+subnormals (no flush), one infinity or NaN; the process level. win-debug: the program passes (2,039 assertions in
+the [kernels] cases, the rest 281), the eight fatal specimens pass (on win-debug the larger `FftPlan` collides with no request),
+and `llvm-nm` on the three kernel objects shows no code symbol outside the level namespace.
+
+Left of the fft item: one algorithm per size on every level (port the small-N lane-trick codelets and the four-step
+AVX2 twiddle blocks to `Vec4d`/`Vec8f`, drop the remaining `CRD_SIMD_HAS_AVX2` gates) and then the bit-exact
+declaration; the bench scripts (`run_bench_fft*.sh`, `run_bench_dct.sh`, `run_bench_nufft.sh`,
+`prof_fft_kernel.sh`) link the fft, hesap and math archives for the row-close boards.
+

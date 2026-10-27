@@ -24,7 +24,8 @@ blocks ([session](../sessions/2026-10-27-simd-dispatch-sse2-threefry.md)), then 
 rotation, reflector and LDLT updates behind one typed table
 ([session](../sessions/2026-10-27-simd-dispatch-dense-update-kernels.md)), then its split-complex sweeps
 ([session](../sessions/2026-10-27-simd-dispatch-dense-split-complex-kernels.md)), then the hesap-direct supernodal
-solve family ([session](../sessions/2026-10-27-simd-dispatch-direct-kernels.md)); the other clauses are open in the
+solve family ([session](../sessions/2026-10-27-simd-dispatch-direct-kernels.md)), then the hesap-fft transform on the
+plan's plain state ([session](../sessions/2026-10-27-simd-dispatch-fft-kernels.md)); the other clauses are open in the
 row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
@@ -86,7 +87,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    arithmetic (two roundings on portable, where SSE2 has no FMA; single-rounded FMA from avx2, ADR-0082's 2026-05-20
    choice), and the levels agree within the inner-product bound. Its vector kernels add a reduction shape per level
    (the accumulator and row counts), which `dense_kernels.hpp` declares and the differential tests model; its
-   elementwise kernels give every element the level's step, and its rotation rounds twice on every level.
+   elementwise kernels give every element the level's step, and its rotation rounds twice on every level. The
+   hesap-fft transform is bit-identical run to run on a level and tolerance-declared across levels (ADR-0092 §5)
+   while its avx2 level still takes algorithms of its own on some sizes.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE (a download the user approves) until such
    hardware exists. The doctor, the specimen harness's host tuple and every board record the detected and selected

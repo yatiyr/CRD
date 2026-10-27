@@ -1,5 +1,6 @@
 add_executable(crd-hesap-fft-tests
     test_fft.cpp
+    test_fft_kernels.cpp
     test_nufft.cpp
     test_dct.cpp
     test_cli.cpp
@@ -17,6 +18,9 @@ target_link_libraries(crd-hesap-fft-tests PRIVATE
 crd_enable_default_pch(crd-hesap-fft-tests)
 
 crd_discover_tests(crd-hesap-fft-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-hesap-fft-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-fft-tests "[kernels]")
 
 # The plans' out-of-memory fatals, one child process per mode (a fatal cannot run in-process): an allocator that
 # refuses a plan's table or sub-plan leaves it out of memory, fatal in every build, never a null table written.

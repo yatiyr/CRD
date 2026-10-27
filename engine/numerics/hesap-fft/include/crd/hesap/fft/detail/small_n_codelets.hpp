@@ -19,68 +19,18 @@
 //   forward path (forward twiddles unchanged), so the inverse inherits the forward's correctness. Unnormalized
 //   to match the engine's codelet convention (the caller scales by 1/N).
 //
-// Lower-layer RAW f64 by ADR-0078 §5 (SIMD kernel; no Dim tag rides an _mm256 intrinsic). Guarded by the
-// CrdSimd AVX2 backend; the SoA codelet path in fft.hpp is the fallback for SSE2/scalar/NEON and for f32.
+// Lower-layer RAW f64 by ADR-0078 §5 (SIMD kernel; no Dim tag rides an _mm256 intrinsic). Compiled by the avx2 kernel
+// unit only (kernels/fft_kernels.cpp); the SoA codelet path is the other levels' and f32's. The twiddles are plain data
+// (SmallNTwiddles, fft_kernels.hpp) built once in general code.
 
 #include <crd/core/types.hpp>
+#include <crd/hesap/fft/fft_kernels.hpp>
+#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/backend.hpp>
 
-#include <crd/math/cmath.hpp>
-
-namespace crd::hesap::fft::detail
+namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS
 {
 #if CRD_SIMD_HAS_AVX2
-
-// Precomputed twiddles for the lane-trick codelets. One shared, immutable, read-only table (cross-THREAD
-// bit-identical by construction; not cross-compiler — sin/cos differ ±1 ULP). Built once via a magic static.
-struct SmallNTwiddles
-{
-    __m256d w81r, w81i, w83r, w83i;               // size-8 split-radix leaf twiddles (W8^1, W8^3)
-    __m256d w16r[4], w16i[4], w163r[4], w163i[4]; // size-16 split-radix leaf twiddles (W16^k, W16^3k)
-    __m256d wp8r[2], wp8i[2];                     // N=8  combine pairs  [W8^{2j},  W8^{2j+1}]
-    __m256d wp16r[4], wp16i[4];                   // N=16 combine pairs  [W16^{2j}, W16^{2j+1}]
-    __m256d wp32r[8], wp32i[8];                   // N=32 combine pairs  [W32^{2j}, W32^{2j+1}]
-};
-
-[[nodiscard]] inline SmallNTwiddles make_small_n_twiddles() noexcept
-{
-    constexpr double pi = 3.141592653589793238;
-    SmallNTwiddles t{};
-    t.w81r = _mm256_set1_pd(crd::math::cos(-2.0 * pi / 8.0));
-    t.w81i = _mm256_set1_pd(crd::math::sin(-2.0 * pi / 8.0));
-    t.w83r = _mm256_set1_pd(crd::math::cos(-2.0 * pi * 3.0 / 8.0));
-    t.w83i = _mm256_set1_pd(crd::math::sin(-2.0 * pi * 3.0 / 8.0));
-    for (int k = 0; k < 4; ++k)
-    {
-        t.w16r[k] = _mm256_set1_pd(crd::math::cos(-2.0 * pi * k / 16.0));
-        t.w16i[k] = _mm256_set1_pd(crd::math::sin(-2.0 * pi * k / 16.0));
-        t.w163r[k] = _mm256_set1_pd(crd::math::cos(-2.0 * pi * 3.0 * k / 16.0));
-        t.w163i[k] = _mm256_set1_pd(crd::math::sin(-2.0 * pi * 3.0 * k / 16.0));
-    }
-    // Combine pair j packs [W_N^{2j} | W_N^{2j+1}] across the two 128-bit lanes (set_pd is high→low).
-    auto fill = [](int n, int count, __m256d* wr, __m256d* wi)
-    {
-        for (int j = 0; j < count; ++j)
-        {
-            const double c0 = crd::math::cos(-2.0 * pi * (2 * j) / n);
-            const double s0 = crd::math::sin(-2.0 * pi * (2 * j) / n);
-            const double c1 = crd::math::cos(-2.0 * pi * (2 * j + 1) / n);
-            const double s1 = crd::math::sin(-2.0 * pi * (2 * j + 1) / n);
-            wr[j] = _mm256_set_pd(c1, c1, c0, c0);
-            wi[j] = _mm256_set_pd(s1, s1, s0, s0);
-        }
-    };
-    fill(8, 2, t.wp8r, t.wp8i);
-    fill(16, 4, t.wp16r, t.wp16i);
-    fill(32, 8, t.wp32r, t.wp32i);
-    return t;
-}
-
-[[nodiscard]] inline const SmallNTwiddles& small_n_twiddles() noexcept
-{
-    static const SmallNTwiddles kTw = make_small_n_twiddles();
-    return kTw;
-}
 
 // Complex multiply of two interleaved [re,im|re,im] lanes by a broadcast/paired twiddle (wr,wi).
 [[nodiscard]] inline __m256d vcmul(__m256d x, __m256d wr, __m256d wi) noexcept
@@ -139,8 +89,8 @@ inline void dft8_over2(__m256d* d, const SmallNTwiddles& tw) noexcept
     d[4] = _mm256_sub_pd(e0, s0);
     d[2] = _mm256_add_pd(e2, vmul_neg_i(p0));
     d[6] = _mm256_sub_pd(e2, vmul_neg_i(p0));
-    const __m256d t1 = vcmul(z11, tw.w81r, tw.w81i);
-    const __m256d t3 = vcmul(z31, tw.w83r, tw.w83i);
+    const __m256d t1 = vcmul(z11, _mm256_load_pd(tw.w81r), _mm256_load_pd(tw.w81i));
+    const __m256d t3 = vcmul(z31, _mm256_load_pd(tw.w83r), _mm256_load_pd(tw.w83i));
     const __m256d s1 = _mm256_add_pd(t1, t3);
     const __m256d p1 = _mm256_sub_pd(t1, t3);
     d[1] = _mm256_add_pd(e1, s1);
@@ -181,8 +131,8 @@ inline void dft16_over2(const __m256d* in, __m256d* out, const SmallNTwiddles& t
     dft4_over2(z3);
     for (int k = 0; k < 4; ++k)
     {
-        const __m256d t1 = vcmul(z1[k], tw.w16r[k], tw.w16i[k]);
-        const __m256d t3 = vcmul(z3[k], tw.w163r[k], tw.w163i[k]);
+        const __m256d t1 = vcmul(z1[k], _mm256_load_pd(tw.w16r[k]), _mm256_load_pd(tw.w16i[k]));
+        const __m256d t3 = vcmul(z3[k], _mm256_load_pd(tw.w163r[k]), _mm256_load_pd(tw.w163i[k]));
         const __m256d s = _mm256_add_pd(t1, t3);
         const __m256d p = _mm256_sub_pd(t1, t3);
         out[k] = _mm256_add_pd(u[k], s);
@@ -246,8 +196,8 @@ template <int N, bool INV> inline void srn_lane(const double* xt, double* outt, 
         dft16_over2(ig, df, tw);
     }
 
-    const __m256d* wr = nullptr;
-    const __m256d* wi = nullptr;
+    const crd::f64(*wr)[4] = nullptr;
+    const crd::f64(*wi)[4] = nullptr;
     if constexpr (N == 8)
     {
         wr = tw.wp8r;
@@ -270,7 +220,8 @@ template <int N, bool INV> inline void srn_lane(const double* xt, double* outt, 
         const __m256d b = df[2 * j + 1];                       // [E[2j+1] | O[2j+1]]
         const __m256d ep = _mm256_permute2f128_pd(a, b, 0x20); // [E[2j] | E[2j+1]]
         const __m256d op = _mm256_permute2f128_pd(a, b, 0x31); // [O[2j] | O[2j+1]]
-        const __m256d wo = vcmul(op, wr[j], wi[j]);            // forward twiddle (inverse uses conj-in/conj-out)
+        // forward twiddle (inverse uses conj-in/conj-out)
+        const __m256d wo = vcmul(op, _mm256_load_pd(wr[j]), _mm256_load_pd(wi[j]));
         const __m256d lo = _mm256_add_pd(ep, wo);
         const __m256d hi = _mm256_sub_pd(ep, wo);
         _mm256_storeu_pd(outt + (2 * j) * 2, INV ? vconj(lo) : lo);         // X[2j],   X[2j+1]
@@ -373,4 +324,4 @@ inline void small_n_batched16_f64(double* data, crd::usize b, bool forward) noex
 }
 
 #endif // CRD_SIMD_HAS_AVX2
-} // namespace crd::hesap::fft::detail
+} // namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS
