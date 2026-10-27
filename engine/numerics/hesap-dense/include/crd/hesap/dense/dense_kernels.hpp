@@ -8,7 +8,10 @@
 // summed in depth order from +0; the portable and sse2 levels round each multiply and each add (they agree bit for
 // bit), the avx2 level uses a single-rounded fused multiply-add per step, as hesap's GEMM has since ADR-0082's
 // 2026-05-20 update. Across that boundary the family is tolerance-declared: an element differs by at most the
-// classical inner-product bound, depth * eps * sum |a| |b|. The merge into C rounds alike on every level.
+// classical inner-product bound, depth * eps * sum |a| |b|. The merge into C rounds alike on every level. A GEMM sums
+// its depth in groups of kGemmKc (256, detail/gemm_pack.hpp) values: C takes beta C, then each group's sum, one group
+// after another, on every path (gemm, its parallel and small-GEMM paths, syrk), so neither the path nor the worker
+// count nor a level's tile shape changes an element's bits.
 
 #pragma once
 
@@ -17,25 +20,21 @@
 namespace crd::hesap::dense
 {
 
-namespace detail
+// A level's register tile: mr rows by nr columns of C. It shapes the packed panels, which are per-call scratch, so each
+// level packs with its own pack_a and pack_b (ADR-0082's backend-coupled packing) and the tile shape is free per level.
+struct GemmShape
 {
-
-// The register tile (MR rows by NR columns) of each type. It shapes the packed panels (detail/gemm_pack.hpp), so it is
-// a data layout and the same on every level: f64 6 by 8 (twelve AVX2 accumulators), the others 8 by 8.
-// NOLINTBEGIN(readability-identifier-naming): MR and NR are the BLIS register-blocking names the packing code follows.
-template <typename T> struct GemmTraits
-{
-    static constexpr crd::usize MR = 8;
-    static constexpr crd::usize NR = 8;
+    crd::usize mr;
+    crd::usize nr;
 };
-template <> struct GemmTraits<crd::f64>
-{
-    static constexpr crd::usize MR = 6;
-    static constexpr crd::usize NR = 8;
-};
-// NOLINTEND(readability-identifier-naming)
 
-} // namespace detail
+// op(X) read as a matrix: element (r, c) at data[r * row_stride + c * col_stride] (a layout and a transpose).
+template <typename T> struct GemmSource
+{
+    const T* data;
+    crd::usize row_stride;
+    crd::usize col_stride;
+};
 
 // How a GEMM block writes element (i, j) of the product p into C.
 enum class GemmUpdate : crd::u8
@@ -48,8 +47,8 @@ enum class GemmUpdate : crd::u8
 // One block of C updated by the product of packed panels.
 template <typename T> struct GemmBlock
 {
-    const T* a;     // ceil(rows / MR) row panels at a + panel * MR * lda: MR rows of depth values, row stride lda
-    const T* b;     // ceil(cols / NR) column panels at b + panel * depth * NR: depth rows of NR values
+    const T* a;     // ceil(rows / mr) row panels at a + panel * mr * lda: mr rows of depth values, row stride lda
+    const T* b;     // ceil(cols / nr) column panels at b + panel * depth * nr: depth rows of nr values
     T* c;           // element (i, j) at c[i * ldc + j], or c[j * ldc + i] when col_major
     crd::usize lda; // the A row stride: depth for packed panels, wider for a resident row panel
     crd::usize ldc;
@@ -274,7 +273,14 @@ template <typename T> struct SplitHer2Lower
 // The kernels of one element type.
 template <typename T> struct DenseTypeKernels
 {
+    GemmShape gemm_shape; // the shape gemm_block's panels have and pack_a and pack_b write
     void (*gemm_block)(const GemmBlock<T>& block) noexcept;
+    // Rows [0, rows) by columns [0, depth) of s as ceil(rows / mr) row panels (mr rows of depth values), the padding
+    // rows +0.
+    void (*pack_a)(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out) noexcept;
+    // Rows [0, depth) by columns [0, cols) of s as ceil(cols / nr) column panels (depth rows of nr values), the
+    // padding columns +0.
+    void (*pack_b)(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out) noexcept;
     T (*dot)(const T* x, const T* y, crd::usize n) noexcept;
     void (*axpy)(T* y, const T* x, T alpha, crd::usize n) noexcept; // y + alpha x
     void (*gemv)(const GemvRows<T>& g) noexcept;

@@ -1391,6 +1391,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                     // Shared per-block pack into the front worker's linv slot (capacity kCdivBlock²):
                     // for block q: wpack = conj(W)ᵀ in Bc col-panel format (kacc×qw) + lpack = conj(linv_q)ᵀ
                     // (qw×qw). Worst case Σ = obw²/2 + obw·ibw ≤ kCdivBlock² ✓. `ub` is free as invert tmp.
+                    const dense::GemmShape shape = dense::detail::gemm_shape_of<T>();
                     crd::usize off = 0;
                     crd::u32 t = 0;
                     for (crd::u32 q = 0; q < obw; q += inner_bw, ++t)
@@ -1403,28 +1404,23 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                             const T* wbase = panel + static_cast<crd::usize>(ko) * nr + (ko + q); // W rows at col ko
                             const dense::MatrixView<const T, dense::Layout::ColMajor> wv(wbase, qw, kacc, nr);
                             dense::detail::pack_b(wv, 0, 0, kacc, qw, kCholAdjoint<T>, linv + off);
-                            off += static_cast<crd::usize>((qw + dense::detail::GemmTraits<T>::NR - 1) /
-                                                           dense::detail::GemmTraits<T>::NR) *
-                                   dense::detail::GemmTraits<T>::NR * kacc;
+                            off += dense::detail::packed_b_size(shape, kacc, qw);
                         }
                         invert_lower_tri<T>(panel + static_cast<crd::usize>(ko + q) * nr + (ko + q), nr, qw, ub);
                         lpack_off[t] = off;
                         const dense::MatrixView<const T, dense::Layout::ColMajor> lv(ub, qw, qw, qw);
                         dense::detail::pack_b(lv, 0, 0, qw, qw, kCholAdjoint<T>, linv + off);
-                        off += static_cast<crd::usize>((qw + dense::detail::GemmTraits<T>::NR - 1) /
-                                                       dense::detail::GemmTraits<T>::NR) *
-                               dense::detail::GemmTraits<T>::NR * qw;
+                        off += dense::detail::packed_b_size(shape, qw, qw);
                     }
                 }
                 auto b_slab = [&](crd::u32 r0, crd::u32 r1, crd::u32 w)
                 {
-                    constexpr crd::usize mr = dense::detail::GemmTraits<T>::MR;
-                    // Row-block = 96 rows (16 f64 / 12 f32 micro-panels): big enough that each strided
-                    // column read/write streams 96 contiguous elements (the MR-sized block was 48 B per
-                    // 43 KB jump — pack-latency-bound, measured no gain), small enough that pbuf
+                    const crd::usize mr = dense::detail::gemm_shape_of<T>().mr;
+                    // Row-block = 96 rows, rounded down to whole micro-panels of the level's mr: big enough
+                    // that each strided column read/write streams 96 contiguous elements (the MR-sized block
+                    // was 48 B per 43 KB jump — pack-latency-bound, measured no gain), small enough that pbuf
                     // (96×obw ≤ 192 KB f64) stays L2-resident across the whole triangular walk.
-                    constexpr crd::u32 row_blk = 96;
-                    static_assert(row_blk % mr == 0, "row block must be a whole number of micro-panels");
+                    const crd::u32 row_blk = 96U - 96U % static_cast<crd::u32>(mr);
                     T* ub_w = ubufs[w].data();
                     T* pbuf = ub_w; // RB×obw resident row-block (row-major, lda=obw)
                     T* snap = ub_w + static_cast<crd::usize>(row_blk) * kCdivBlock; // MR×ibw pre-solve snapshot

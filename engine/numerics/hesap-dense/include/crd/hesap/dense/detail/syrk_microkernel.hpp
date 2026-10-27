@@ -50,14 +50,14 @@ namespace crd::hesap::dense::detail
 // keep i >= j). C indexing per `col_indexed_out`: false => the row-major-indexed scratch contract (c_data[i*ldc + j],
 // read back the same way by the cmod scatter); true => ColMajor in-place output (c_data[j*ldc + i], the supernodal
 // trailing-Schur panel merge). The merged value per (i >= j) pair is the same either way. `pb_begin/pb_end` bound the
-// visited col-panels so the parallel path can split them across workers (each pb writes a disjoint C column range =>
-// race-free). `nc` bounds the real columns; the zero-padded tail of the final panel is never merged.
+// visited col-panels of nr columns (the level's tile width) so the parallel path can split them across workers (each
+// pb writes a disjoint C column range => race-free). `nc` bounds the real columns; the zero-padded tail of the final
+// panel is never merged.
 template <typename T>
 inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
-                                    crd::usize pb_begin, crd::usize pb_end, const T* a_packed, const T* b_packed,
-                                    T* c_data, crd::usize ldc, bool col_indexed_out) noexcept
+                                    crd::usize pb_begin, crd::usize pb_end, crd::usize nr, const T* a_packed,
+                                    const T* b_packed, T* c_data, crd::usize ldc, bool col_indexed_out) noexcept
 {
-    constexpr crd::usize nr = GemmTraits<T>::NR;
     const crd::usize col_first = pb_begin * nr;
     const crd::usize col_end = std::min(nc, pb_end * nr);
     if (col_end <= col_first)
@@ -104,10 +104,10 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
     const crd::usize a_dim_m = std::min<crd::usize>(m, kGemmMc);
     const crd::usize a_dim_k = std::min<crd::usize>(k, kGemmKc);
     const crd::usize b_dim_n = std::min<crd::usize>(m, kGemmNc);
-    const crd::usize a_pack_capacity =
-        ((a_dim_m + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR) * GemmTraits<T>::MR * a_dim_k;
-    const crd::usize b_pack_capacity =
-        ((b_dim_n + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR) * a_dim_k * GemmTraits<T>::NR;
+    const GemmShape shape = gemm_shape_of<T>();
+    const crd::usize nr = shape.nr;
+    const crd::usize a_pack_capacity = packed_a_size(shape, a_dim_m, a_dim_k);
+    const crd::usize b_pack_capacity = packed_b_size(shape, a_dim_k, b_dim_n);
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
     auto* a_pack = crd::memory::allocate_array_or_fatal<T>(*alloc, a_pack_capacity, align, kGemmPackOutOfMemory);
     auto* b_pack = crd::memory::allocate_array_or_fatal<T>(*alloc, b_pack_capacity, align, kGemmPackOutOfMemory);
@@ -126,7 +126,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
             // The "B" role is Aᵀ: pack_b with Trans::Transpose reads the effective B(p, j) = A(j, p)
             // through the stride-friendly path (for ColMajor A that read is contiguous in j).
             pack_b(a, pc, jc, kc, nc, Trans::Transpose, b_pack);
-            const crd::usize num_panels_n = (nc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
+            const crd::usize num_panels_n = (nc + nr - 1) / nr;
 
             for (crd::usize ic = 0; ic < m; ic += kGemmMc)
             {
@@ -138,9 +138,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
                 pack_a(a, ic, pc, mc, kc, Trans::None, a_pack);
                 // Only col-panels with j ≤ max i of this block can carry lower-triangle work.
                 const crd::usize j_hi = ic + mc; // exclusive upper bound on relevant j
-                const crd::usize pb_end =
-                    j_hi > jc ? std::min(num_panels_n, (j_hi - jc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR)
-                              : crd::usize{0};
+                const crd::usize pb_end = j_hi > jc ? std::min(num_panels_n, (j_hi - jc + nr - 1) / nr) : crd::usize{0};
                 if (pb_end == 0)
                 {
                     continue;
@@ -156,23 +154,23 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
                         const T* b_pack;
                         T* c_data;
                         crd::usize ldc;
-                        crd::usize ic, jc, mc, nc, kc;
+                        crd::usize ic, jc, mc, nc, kc, nr;
                         bool col_out;
                     };
-                    State st{a_pack, b_pack, c_data, ldc, ic, jc, mc, nc, kc, col_indexed_out};
+                    State st{a_pack, b_pack, c_data, ldc, ic, jc, mc, nc, kc, nr, col_indexed_out};
                     State* sp = &st;
                     auto* counter = crd::jobs::parallel_for(
                         static_cast<crd::u32>(pb_end), nw,
                         [sp](crd::u32 begin, crd::u32 end)
                         {
-                            syrk_packed_inner_lower<T>(sp->ic, sp->jc, sp->mc, sp->nc, sp->kc, begin, end, sp->a_pack,
-                                                       sp->b_pack, sp->c_data, sp->ldc, sp->col_out);
+                            syrk_packed_inner_lower<T>(sp->ic, sp->jc, sp->mc, sp->nc, sp->kc, begin, end, sp->nr,
+                                                       sp->a_pack, sp->b_pack, sp->c_data, sp->ldc, sp->col_out);
                         });
                     crd::jobs::wait(counter);
                 }
                 else
                 {
-                    syrk_packed_inner_lower<T>(ic, jc, mc, nc, kc, 0, pb_end, a_pack, b_pack, c_data, ldc,
+                    syrk_packed_inner_lower<T>(ic, jc, mc, nc, kc, 0, pb_end, nr, a_pack, b_pack, c_data, ldc,
                                                col_indexed_out);
                 }
             }

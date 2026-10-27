@@ -9,9 +9,9 @@
 //   permutation-refused         Permutation(8): its pivots are refused
 //   structured-storage-refused  Symmetric<f64>(4): its storage is refused
 //   banded-height-overflow      Banded<f64>(4, 4, SIZE_MAX, 1): the band height overflows (it wraps to 1)
-//   gemm-pack-refused           gemm: the first packing buffer is refused
-//   gemm-small-pack-refused     gemm_parallel on the small direct path: its packed B is refused
-//   gemm-parallel-pack-refused  gemm_parallel on the packed path: the per-worker A pool is refused
+//   gemm-pack-refused           gemm: its packing buffer (Ac and Bc) is refused
+//   gemm-small-pack-refused     gemm_parallel on the resident-A path: its packed B is refused
+//   gemm-parallel-pack-refused  gemm_parallel on the packed path: the per-worker A pool (and Bc) is refused
 //   syrk-pack-refused           syrk_lower_minus: the first packing buffer is refused
 // The operands are built from the default allocator; the refusing allocator (refusing_allocator.hpp) refuses every
 // request from the call the mode is about on, whose first allocation is the one the mode names.
@@ -105,7 +105,7 @@ using crd_diag_fatal::RefusingAllocator;
     }
     crd_diag_fatal::arm(mode, dense::detail::kGemmPackOutOfMemory);
     crd::jobs::init(crd::jobs::Config{.num_threads = 2});
-    // 6 rows: a multiple of the f64 microkernel's MR, so the small direct path takes the RowMajor product.
+    // A RowMajor product without a transpose takes gemm_parallel's resident-A path.
     constexpr crd::usize n = 6U;
     dense::Matrix<crd::f64> a(crd::memory::default_allocator(), n, n);
     dense::Matrix<crd::f64> b(crd::memory::default_allocator(), n, n);
@@ -126,7 +126,7 @@ using crd_diag_fatal::RefusingAllocator;
     }
     else if (packed)
     {
-        // A transposed operand is not eligible for the small direct path, so the packed path runs.
+        // A transposed RowMajor A is not row-major as op(A), so the packed path runs.
         dense::gemm_parallel<crd::f64, dense::Layout::RowMajor>(2U, 1.0, a.cview(), b.cview(), 0.0, c.view(),
                                                                 dense::Trans::Transpose, dense::Trans::None, &scratch);
     }

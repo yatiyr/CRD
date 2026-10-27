@@ -1,14 +1,14 @@
 // The hesap-dense kernels of crd/hesap/dense/dense_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS).
 //
-// The portable level runs the block on the two-rounding PortableTile. The sse2 level sums with the same two roundings
-// in 128-bit registers, the f64 tile as two 6 by 4 halves (twelve accumulators, two B loads and one A broadcast a step:
-// 15 of 16 XMM) and the f32 tile as two 4 by 8 halves (eight accumulators); it gives the portable level's bits. The
-// avx2 level sums by single-rounded FMA: f64 6 by 8 in twelve Vec4d accumulators (15 of 16 YMM, about 98% of peak in
-// L1), f32 8 by 8 in eight Vec8f. Every tile hands each finished row to a sink while its accumulators are still in
-// registers: the product stores the tile, the fused path merges a full row-major tile straight into C with
-// merge_element's expression. The sse2 and avx2 tiles prefetch the next B panel one line a step, which hides its
-// re-stream from L3 at each panel boundary.
+// Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by
+// 4 PortableTile (two roundings, its accumulators in registers). The sse2 and avx2 levels run one 6-row tile of two
+// registers a row: twelve accumulators, two B registers and one A broadcast a step (15 of 16 vector registers). sse2
+// rounds twice in 128-bit registers (f64 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by
+// single-rounded FMA (f64 6 by 8, about 98% of peak in L1; f32 6 by 16). The tile hands each finished row to a sink
+// while its accumulators are still in registers: the product stores the tile, the fused path merges a full row-major
+// tile straight into C with merge_element's expression. It prefetches the next B panel one line a step, which hides
+// its re-stream from L3 at each panel boundary.
 
 //
 // The vector and matrix-vector kernels are written once over Vec4d and Vec8f, which every level backs with its own
@@ -27,398 +27,208 @@ namespace
 {
 
 #if CRD_SIMD_HAS_SSE2
-CRD_FORCEINLINE void prefetch(const void* p) noexcept
+// A hint to fetch the line of base[offset]. The address is formed as an integer: the next B panel's line lies past the
+// buffer after the last panel, where a pointer may not be formed.
+template <typename T> CRD_FORCEINLINE void prefetch(const T* base, crd::usize offset) noexcept
 {
-    _mm_prefetch(static_cast<const char*>(p), _MM_HINT_T0);
+    const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(base) + offset * sizeof(T);
+    _mm_prefetch(reinterpret_cast<const char*>(at), _MM_HINT_T0);
 }
-#endif
 
+// The registers of a tile: kWidth lanes of T, a step of acc + a b (fused from avx2, rounded twice on sse2) and the
+// operations of a merge.
 #if CRD_SIMD_HAS_AVX2
-
-// One register of a full tile merged into C with merge_element's expression (gemm_block.hpp).
-template <GemmMerge M, typename V, typename T> CRD_FORCEINLINE void merge_into(T* c, V p, V alpha) noexcept
+template <typename T> struct Reg
 {
-    if constexpr (M == GemmMerge::Assign)
-    {
-        p.store(c);
-    }
-    else if constexpr (M == GemmMerge::Add)
-    {
-        (V::load(c) + p).store(c);
-    }
-    else if constexpr (M == GemmMerge::Subtract)
-    {
-        (V::load(c) - p).store(c);
-    }
-    else
-    {
-        (V::load(c) + alpha * p).store(c);
-    }
-}
-
-// The 6 by 8 f64 tile: one A broadcast register reused per row keeps the live set at 12 accumulators, 2 B halves and
-// 1 A. sink(i, lo, hi) receives row i.
-template <typename Sink>
-CRD_FORCEINLINE void f64_tile(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b,
-                              Sink sink) noexcept
-{
-    simd::Vec4d c00(0.0);
-    simd::Vec4d c01(0.0);
-    simd::Vec4d c10(0.0);
-    simd::Vec4d c11(0.0);
-    simd::Vec4d c20(0.0);
-    simd::Vec4d c21(0.0);
-    simd::Vec4d c30(0.0);
-    simd::Vec4d c31(0.0);
-    simd::Vec4d c40(0.0);
-    simd::Vec4d c41(0.0);
-    simd::Vec4d c50(0.0);
-    simd::Vec4d c51(0.0);
-    for (crd::usize p = 0; p < depth; ++p)
-    {
-        const simd::Vec4d b0 = simd::Vec4d::load(b + p * 8U);
-        const simd::Vec4d b1 = simd::Vec4d::load(b + p * 8U + 4U);
-        prefetch(b + (depth + p) * 8U); // line p of the next B panel; past the last panel it is a no-op hint
-        simd::Vec4d ai(a[0 * lda + p]);
-        c00 = simd::fma(ai, b0, c00);
-        c01 = simd::fma(ai, b1, c01);
-        ai = simd::Vec4d(a[1 * lda + p]);
-        c10 = simd::fma(ai, b0, c10);
-        c11 = simd::fma(ai, b1, c11);
-        ai = simd::Vec4d(a[2 * lda + p]);
-        c20 = simd::fma(ai, b0, c20);
-        c21 = simd::fma(ai, b1, c21);
-        ai = simd::Vec4d(a[3 * lda + p]);
-        c30 = simd::fma(ai, b0, c30);
-        c31 = simd::fma(ai, b1, c31);
-        ai = simd::Vec4d(a[4 * lda + p]);
-        c40 = simd::fma(ai, b0, c40);
-        c41 = simd::fma(ai, b1, c41);
-        ai = simd::Vec4d(a[5 * lda + p]);
-        c50 = simd::fma(ai, b0, c50);
-        c51 = simd::fma(ai, b1, c51);
-    }
-    sink(0, c00, c01);
-    sink(1, c10, c11);
-    sink(2, c20, c21);
-    sink(3, c30, c31);
-    sink(4, c40, c41);
-    sink(5, c50, c51);
-}
-
-struct Avx2F64Tile
-{
-    static constexpr bool kFused = true;
-
-    static void product(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b, crd::f64* out) noexcept
-    {
-        f64_tile(depth, lda, a, b,
-                 [out](crd::usize i, simd::Vec4d lo, simd::Vec4d hi)
-                 {
-                     lo.store(out + i * 8U);
-                     hi.store(out + i * 8U + 4U);
-                 });
-    }
-
-    template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b, crd::f64* c,
-                      crd::usize ldc, crd::f64 alpha) noexcept
-    {
-        for (crd::usize i = 0; i < 6U; ++i) // C is read after the depth loop: request its lines now
-        {
-            prefetch(c + i * ldc);
-            prefetch(c + i * ldc + 4U);
-        }
-        const simd::Vec4d av(alpha);
-        f64_tile(depth, lda, a, b,
-                 [c, ldc, av](crd::usize i, simd::Vec4d lo, simd::Vec4d hi)
-                 {
-                     merge_into<M>(c + i * ldc, lo, av);
-                     merge_into<M>(c + i * ldc + 4U, hi, av);
-                 });
-    }
+    using V = typename VectorOf<T>::Type;
+    static constexpr crd::usize kWidth = VectorOf<T>::kWidth;
+    static CRD_FORCEINLINE V zero() noexcept { return V(T(0)); }
+    static CRD_FORCEINLINE V splat(T x) noexcept { return V(x); }
+    static CRD_FORCEINLINE V load(const T* p) noexcept { return V::load(p); }
+    static CRD_FORCEINLINE void store(T* p, V v) noexcept { v.store(p); }
+    static CRD_FORCEINLINE V step(V acc, V a, V b) noexcept { return simd::fma(a, b, acc); }
+    static CRD_FORCEINLINE V add(V x, V y) noexcept { return x + y; }
+    static CRD_FORCEINLINE V sub(V x, V y) noexcept { return x - y; }
+    static CRD_FORCEINLINE V mul(V x, V y) noexcept { return x * y; }
 };
-
-// The 8 by 8 f32 tile, one Vec8f accumulator a row. sink(i, row) receives row i.
-template <typename Sink>
-CRD_FORCEINLINE void f32_tile(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b,
-                              Sink sink) noexcept
-{
-    simd::Vec8f c0(0.0F);
-    simd::Vec8f c1(0.0F);
-    simd::Vec8f c2(0.0F);
-    simd::Vec8f c3(0.0F);
-    simd::Vec8f c4(0.0F);
-    simd::Vec8f c5(0.0F);
-    simd::Vec8f c6(0.0F);
-    simd::Vec8f c7(0.0F);
-    for (crd::usize p = 0; p < depth; ++p)
-    {
-        const simd::Vec8f bp = simd::Vec8f::load(b + p * 8U);
-        prefetch(b + (depth + p) * 8U);
-        c0 = simd::fma(simd::Vec8f(a[0 * lda + p]), bp, c0);
-        c1 = simd::fma(simd::Vec8f(a[1 * lda + p]), bp, c1);
-        c2 = simd::fma(simd::Vec8f(a[2 * lda + p]), bp, c2);
-        c3 = simd::fma(simd::Vec8f(a[3 * lda + p]), bp, c3);
-        c4 = simd::fma(simd::Vec8f(a[4 * lda + p]), bp, c4);
-        c5 = simd::fma(simd::Vec8f(a[5 * lda + p]), bp, c5);
-        c6 = simd::fma(simd::Vec8f(a[6 * lda + p]), bp, c6);
-        c7 = simd::fma(simd::Vec8f(a[7 * lda + p]), bp, c7);
-    }
-    sink(0, c0);
-    sink(1, c1);
-    sink(2, c2);
-    sink(3, c3);
-    sink(4, c4);
-    sink(5, c5);
-    sink(6, c6);
-    sink(7, c7);
-}
-
-struct Avx2F32Tile
-{
-    static constexpr bool kFused = true;
-
-    static void product(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b, crd::f32* out) noexcept
-    {
-        f32_tile(depth, lda, a, b, [out](crd::usize i, simd::Vec8f row) { row.store(out + i * 8U); });
-    }
-
-    template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b, crd::f32* c,
-                      crd::usize ldc, crd::f32 alpha) noexcept
-    {
-        for (crd::usize i = 0; i < 8U; ++i)
-        {
-            prefetch(c + i * ldc);
-        }
-        const simd::Vec8f av(alpha);
-        f32_tile(depth, lda, a, b,
-                 [c, ldc, av](crd::usize i, simd::Vec8f row) { merge_into<M>(c + i * ldc, row, av); });
-    }
-};
-
-using F64Tile = Avx2F64Tile;
-using F32Tile = Avx2F32Tile;
-#elif CRD_SIMD_HAS_SSE2
-// One register of a full tile merged into C with merge_element's expression (gemm_block.hpp).
-template <GemmMerge M> CRD_FORCEINLINE void merge_into(crd::f64* c, __m128d p, __m128d alpha) noexcept
-{
-    if constexpr (M == GemmMerge::Assign)
-    {
-        _mm_storeu_pd(c, p);
-    }
-    else if constexpr (M == GemmMerge::Add)
-    {
-        _mm_storeu_pd(c, _mm_add_pd(_mm_loadu_pd(c), p));
-    }
-    else if constexpr (M == GemmMerge::Subtract)
-    {
-        _mm_storeu_pd(c, _mm_sub_pd(_mm_loadu_pd(c), p));
-    }
-    else
-    {
-        _mm_storeu_pd(c, _mm_add_pd(_mm_loadu_pd(c), _mm_mul_pd(alpha, p)));
-    }
-}
-
-template <GemmMerge M> CRD_FORCEINLINE void merge_into(crd::f32* c, __m128 p, __m128 alpha) noexcept
-{
-    if constexpr (M == GemmMerge::Assign)
-    {
-        _mm_storeu_ps(c, p);
-    }
-    else if constexpr (M == GemmMerge::Add)
-    {
-        _mm_storeu_ps(c, _mm_add_ps(_mm_loadu_ps(c), p));
-    }
-    else if constexpr (M == GemmMerge::Subtract)
-    {
-        _mm_storeu_ps(c, _mm_sub_ps(_mm_loadu_ps(c), p));
-    }
-    else
-    {
-        _mm_storeu_ps(c, _mm_add_ps(_mm_loadu_ps(c), _mm_mul_ps(alpha, p)));
-    }
-}
-
-// acc + a * b, rounded twice, as PortableTile sums.
-CRD_FORCEINLINE __m128d step(__m128d acc, __m128d a, __m128d b) noexcept
-{
-    return _mm_add_pd(acc, _mm_mul_pd(a, b));
-}
-
-CRD_FORCEINLINE __m128 step(__m128 acc, __m128 a, __m128 b) noexcept
-{
-    return _mm_add_ps(acc, _mm_mul_ps(a, b));
-}
-
-// Columns [4 half, 4 half + 4) of the 6 by 8 f64 tile. sink(i, lo, hi) receives row i of the half.
-template <typename Sink>
-CRD_FORCEINLINE void f64_half(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b, crd::usize half,
-                              Sink sink) noexcept
-{
-    __m128d c00 = _mm_setzero_pd();
-    __m128d c01 = _mm_setzero_pd();
-    __m128d c10 = _mm_setzero_pd();
-    __m128d c11 = _mm_setzero_pd();
-    __m128d c20 = _mm_setzero_pd();
-    __m128d c21 = _mm_setzero_pd();
-    __m128d c30 = _mm_setzero_pd();
-    __m128d c31 = _mm_setzero_pd();
-    __m128d c40 = _mm_setzero_pd();
-    __m128d c41 = _mm_setzero_pd();
-    __m128d c50 = _mm_setzero_pd();
-    __m128d c51 = _mm_setzero_pd();
-    const crd::f64* bh = b + half * 4U;
-    for (crd::usize p = 0; p < depth; ++p)
-    {
-        const __m128d b0 = _mm_loadu_pd(bh + p * 8U);
-        const __m128d b1 = _mm_loadu_pd(bh + p * 8U + 2U);
-        prefetch(b + (depth + p) * 8U); // line p of the next B panel
-        __m128d ai = _mm_set1_pd(a[0 * lda + p]);
-        c00 = step(c00, ai, b0);
-        c01 = step(c01, ai, b1);
-        ai = _mm_set1_pd(a[1 * lda + p]);
-        c10 = step(c10, ai, b0);
-        c11 = step(c11, ai, b1);
-        ai = _mm_set1_pd(a[2 * lda + p]);
-        c20 = step(c20, ai, b0);
-        c21 = step(c21, ai, b1);
-        ai = _mm_set1_pd(a[3 * lda + p]);
-        c30 = step(c30, ai, b0);
-        c31 = step(c31, ai, b1);
-        ai = _mm_set1_pd(a[4 * lda + p]);
-        c40 = step(c40, ai, b0);
-        c41 = step(c41, ai, b1);
-        ai = _mm_set1_pd(a[5 * lda + p]);
-        c50 = step(c50, ai, b0);
-        c51 = step(c51, ai, b1);
-    }
-    sink(0, c00, c01);
-    sink(1, c10, c11);
-    sink(2, c20, c21);
-    sink(3, c30, c31);
-    sink(4, c40, c41);
-    sink(5, c50, c51);
-}
-
-struct Sse2F64Tile
-{
-    static constexpr bool kFused = true;
-
-    static void product(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b, crd::f64* out) noexcept
-    {
-        for (crd::usize half = 0; half < 2U; ++half)
-        {
-            crd::f64* o = out + half * 4U;
-            f64_half(depth, lda, a, b, half,
-                     [o](crd::usize i, __m128d lo, __m128d hi)
-                     {
-                         _mm_storeu_pd(o + i * 8U, lo);
-                         _mm_storeu_pd(o + i * 8U + 2U, hi);
-                     });
-        }
-    }
-
-    template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const crd::f64* a, const crd::f64* b, crd::f64* c,
-                      crd::usize ldc, crd::f64 alpha) noexcept
-    {
-        const __m128d av = _mm_set1_pd(alpha);
-        for (crd::usize half = 0; half < 2U; ++half)
-        {
-            crd::f64* ch = c + half * 4U;
-            f64_half(depth, lda, a, b, half,
-                     [ch, ldc, av](crd::usize i, __m128d lo, __m128d hi)
-                     {
-                         merge_into<M>(ch + i * ldc, lo, av);
-                         merge_into<M>(ch + i * ldc + 2U, hi, av);
-                     });
-        }
-    }
-};
-
-// Rows [4 half, 4 half + 4) of the 8 by 8 f32 tile. sink(i, lo, hi) receives row i of the half.
-template <typename Sink>
-CRD_FORCEINLINE void f32_half(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b, crd::usize half,
-                              Sink sink) noexcept
-{
-    __m128 c00 = _mm_setzero_ps();
-    __m128 c01 = _mm_setzero_ps();
-    __m128 c10 = _mm_setzero_ps();
-    __m128 c11 = _mm_setzero_ps();
-    __m128 c20 = _mm_setzero_ps();
-    __m128 c21 = _mm_setzero_ps();
-    __m128 c30 = _mm_setzero_ps();
-    __m128 c31 = _mm_setzero_ps();
-    const crd::f32* ah = a + half * 4U * lda;
-    for (crd::usize p = 0; p < depth; ++p)
-    {
-        const __m128 b0 = _mm_loadu_ps(b + p * 8U);
-        const __m128 b1 = _mm_loadu_ps(b + p * 8U + 4U);
-        prefetch(b + (depth + p) * 8U);
-        __m128 ai = _mm_set1_ps(ah[0 * lda + p]);
-        c00 = step(c00, ai, b0);
-        c01 = step(c01, ai, b1);
-        ai = _mm_set1_ps(ah[1 * lda + p]);
-        c10 = step(c10, ai, b0);
-        c11 = step(c11, ai, b1);
-        ai = _mm_set1_ps(ah[2 * lda + p]);
-        c20 = step(c20, ai, b0);
-        c21 = step(c21, ai, b1);
-        ai = _mm_set1_ps(ah[3 * lda + p]);
-        c30 = step(c30, ai, b0);
-        c31 = step(c31, ai, b1);
-    }
-    sink(0, c00, c01);
-    sink(1, c10, c11);
-    sink(2, c20, c21);
-    sink(3, c30, c31);
-}
-
-struct Sse2F32Tile
-{
-    static constexpr bool kFused = true;
-
-    static void product(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b, crd::f32* out) noexcept
-    {
-        for (crd::usize half = 0; half < 2U; ++half)
-        {
-            crd::f32* o = out + half * 4U * 8U;
-            f32_half(depth, lda, a, b, half,
-                     [o](crd::usize i, __m128 lo, __m128 hi)
-                     {
-                         _mm_storeu_ps(o + i * 8U, lo);
-                         _mm_storeu_ps(o + i * 8U + 4U, hi);
-                     });
-        }
-    }
-
-    template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const crd::f32* a, const crd::f32* b, crd::f32* c,
-                      crd::usize ldc, crd::f32 alpha) noexcept
-    {
-        const __m128 av = _mm_set1_ps(alpha);
-        for (crd::usize half = 0; half < 2U; ++half)
-        {
-            crd::f32* ch = c + half * 4U * ldc;
-            f32_half(depth, lda, a, b, half,
-                     [ch, ldc, av](crd::usize i, __m128 lo, __m128 hi)
-                     {
-                         merge_into<M>(ch + i * ldc, lo, av);
-                         merge_into<M>(ch + i * ldc + 4U, hi, av);
-                     });
-        }
-    }
-};
-
-using F64Tile = Sse2F64Tile;
-using F32Tile = Sse2F32Tile;
 #else
-using F64Tile = PortableTile<crd::f64>;
-using F32Tile = PortableTile<crd::f32>;
+template <typename T> struct Reg;
+template <> struct Reg<crd::f64>
+{
+    using V = __m128d;
+    static constexpr crd::usize kWidth = 2;
+    static CRD_FORCEINLINE V zero() noexcept { return _mm_setzero_pd(); }
+    static CRD_FORCEINLINE V splat(crd::f64 x) noexcept { return _mm_set1_pd(x); }
+    static CRD_FORCEINLINE V load(const crd::f64* p) noexcept { return _mm_loadu_pd(p); }
+    static CRD_FORCEINLINE void store(crd::f64* p, V v) noexcept { _mm_storeu_pd(p, v); }
+    static CRD_FORCEINLINE V step(V acc, V a, V b) noexcept { return _mm_add_pd(acc, _mm_mul_pd(a, b)); }
+    static CRD_FORCEINLINE V add(V x, V y) noexcept { return _mm_add_pd(x, y); }
+    static CRD_FORCEINLINE V sub(V x, V y) noexcept { return _mm_sub_pd(x, y); }
+    static CRD_FORCEINLINE V mul(V x, V y) noexcept { return _mm_mul_pd(x, y); }
+};
+template <> struct Reg<crd::f32>
+{
+    using V = __m128;
+    static constexpr crd::usize kWidth = 4;
+    static CRD_FORCEINLINE V zero() noexcept { return _mm_setzero_ps(); }
+    static CRD_FORCEINLINE V splat(crd::f32 x) noexcept { return _mm_set1_ps(x); }
+    static CRD_FORCEINLINE V load(const crd::f32* p) noexcept { return _mm_loadu_ps(p); }
+    static CRD_FORCEINLINE void store(crd::f32* p, V v) noexcept { _mm_storeu_ps(p, v); }
+    static CRD_FORCEINLINE V step(V acc, V a, V b) noexcept { return _mm_add_ps(acc, _mm_mul_ps(a, b)); }
+    static CRD_FORCEINLINE V add(V x, V y) noexcept { return _mm_add_ps(x, y); }
+    static CRD_FORCEINLINE V sub(V x, V y) noexcept { return _mm_sub_ps(x, y); }
+    static CRD_FORCEINLINE V mul(V x, V y) noexcept { return _mm_mul_ps(x, y); }
+};
 #endif
+
+// One register of a full tile merged into C with merge_element's expression (gemm_block.hpp).
+template <GemmMerge M, typename R, typename T, typename V> CRD_FORCEINLINE void merge_into(T* c, V p, V alpha) noexcept
+{
+    if constexpr (M == GemmMerge::Assign)
+    {
+        R::store(c, p);
+    }
+    else if constexpr (M == GemmMerge::Add)
+    {
+        R::store(c, R::add(R::load(c), p));
+    }
+    else if constexpr (M == GemmMerge::Subtract)
+    {
+        R::store(c, R::sub(R::load(c), p));
+    }
+    else
+    {
+        R::store(c, R::add(R::load(c), R::mul(alpha, p)));
+    }
+}
+
+// The 6 by 2w tile of T on the level's w-lane registers: twelve accumulators, two B registers and one A broadcast
+// reused row after row (15 of 16 vector registers), the next B panel prefetched one line a step. sink(i, lo, hi)
+// receives row i.
+template <typename T, typename Sink>
+CRD_FORCEINLINE void six_row_tile(crd::usize depth, crd::usize lda, const T* a, const T* b, Sink sink) noexcept
+{
+    using R = Reg<T>;
+    using V = typename R::V;
+    constexpr crd::usize w = R::kWidth;
+    constexpr crd::usize nr = 2U * w;
+    V c00 = R::zero();
+    V c01 = R::zero();
+    V c10 = R::zero();
+    V c11 = R::zero();
+    V c20 = R::zero();
+    V c21 = R::zero();
+    V c30 = R::zero();
+    V c31 = R::zero();
+    V c40 = R::zero();
+    V c41 = R::zero();
+    V c50 = R::zero();
+    V c51 = R::zero();
+    for (crd::usize p = 0; p < depth; ++p)
+    {
+        const V b0 = R::load(b + p * nr);
+        const V b1 = R::load(b + p * nr + w);
+        prefetch(b, (depth + p) * nr); // line p of the next B panel
+        V ai = R::splat(a[p]);
+        c00 = R::step(c00, ai, b0);
+        c01 = R::step(c01, ai, b1);
+        ai = R::splat(a[lda + p]);
+        c10 = R::step(c10, ai, b0);
+        c11 = R::step(c11, ai, b1);
+        ai = R::splat(a[2U * lda + p]);
+        c20 = R::step(c20, ai, b0);
+        c21 = R::step(c21, ai, b1);
+        ai = R::splat(a[3U * lda + p]);
+        c30 = R::step(c30, ai, b0);
+        c31 = R::step(c31, ai, b1);
+        ai = R::splat(a[4U * lda + p]);
+        c40 = R::step(c40, ai, b0);
+        c41 = R::step(c41, ai, b1);
+        ai = R::splat(a[5U * lda + p]);
+        c50 = R::step(c50, ai, b0);
+        c51 = R::step(c51, ai, b1);
+    }
+    sink(0, c00, c01);
+    sink(1, c10, c11);
+    sink(2, c20, c21);
+    sink(3, c30, c31);
+    sink(4, c40, c41);
+    sink(5, c50, c51);
+}
+
+template <typename T> struct SixRowTile
+{
+    using R = Reg<T>;
+    using V = typename R::V;
+    static constexpr bool kFused = true;
+    static constexpr crd::usize kMr = 6;
+    static constexpr crd::usize kNr = 2U * R::kWidth;
+
+    static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, T* out) noexcept
+    {
+        six_row_tile(depth, lda, a, b,
+                     [out](crd::usize i, V lo, V hi)
+                     {
+                         R::store(out + i * kNr, lo);
+                         R::store(out + i * kNr + R::kWidth, hi);
+                     });
+    }
+
+    template <GemmMerge M>
+    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha) noexcept
+    {
+        for (crd::usize i = 0; i < kMr; ++i) // C is read after the depth loop: request its lines now
+        {
+            prefetch(c, i * ldc);
+            prefetch(c, i * ldc + kNr - 1U);
+        }
+        const V av = R::splat(alpha);
+        six_row_tile(depth, lda, a, b,
+                     [c, ldc, av](crd::usize i, V lo, V hi)
+                     {
+                         merge_into<M, R>(c + i * ldc, lo, av);
+                         merge_into<M, R>(c + i * ldc + R::kWidth, hi, av);
+                     });
+    }
+};
+
+using F64Tile = SixRowTile<crd::f64>;
+using F32Tile = SixRowTile<crd::f32>;
+#else
+// 2 by 4: eight accumulators, two A and four B values a step (14 of 16 scalar registers on x64).
+using F64Tile = PortableTile<crd::f64, 2, 4, true>;
+using F32Tile = PortableTile<crd::f32, 2, 4, true>;
+#endif
+
+// The packers of a level's shape (dense_kernels.hpp) over a strided source; a unit column stride reads rows as runs.
+template <typename T, crd::usize MR>
+void pack_a_kernel(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out) noexcept
+{
+    const T* d = s.data;
+    const crd::usize rs = s.row_stride;
+    const crd::usize cs = s.col_stride;
+    if (cs == 1U)
+    {
+        pack_a_panels<MR>([d, rs](crd::usize r, crd::usize c) { return d[r * rs + c]; }, rows, depth, false, out);
+        return;
+    }
+    pack_a_panels<MR>([d, rs, cs](crd::usize r, crd::usize c) { return d[r * rs + c * cs]; }, rows, depth, rs == 1U,
+                      out);
+}
+
+template <typename T, crd::usize NR>
+void pack_b_kernel(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out) noexcept
+{
+    const T* d = s.data;
+    const crd::usize rs = s.row_stride;
+    const crd::usize cs = s.col_stride;
+    if (cs == 1U)
+    {
+        pack_b_panels<NR>([d, rs](crd::usize r, crd::usize c) { return d[r * rs + c]; }, depth, cols, out);
+        return;
+    }
+    pack_b_panels<NR>([d, rs, cs](crd::usize r, crd::usize c) { return d[r * rs + c * cs]; }, depth, cols, out);
+}
 
 // ---- the vector and matrix-vector kernels ----
 
@@ -1107,25 +917,29 @@ template <> struct TileOf<crd::f32>
 
 template <typename T> constexpr DenseTypeKernels<T> type_kernels() noexcept
 {
+    using Tile = typename TileOf<T>::Type;
     return {
-        &gemm_block<typename TileOf<T>::Type, T>,
-        &dot_kernel<T>,
-        &axpy_kernel<T>,
-        &gemv_kernel<T>,
-        &gemvt_kernel<T>,
-        &ger_kernel<T>,
-        &symv_kernel<T>,
-        &trsv_kernel<T>,
-        &rot_kernel<T>,
-        &reflect_kernel<T>,
-        &ldlt_update_kernel<T>,
-        &creflect_kernel<T>,
-        &cgemvt_kernel<T>,
-        &cger_kernel<T>,
-        &chemv_kernel<T>,
-        &cher2_kernel<T>,
-        &cholesky_kernel<T>,
-        &cholesky_trsm_kernel<T>,
+        .gemm_shape = {.mr = Tile::kMr, .nr = Tile::kNr},
+        .gemm_block = &gemm_block<Tile, T>,
+        .pack_a = &pack_a_kernel<T, Tile::kMr>,
+        .pack_b = &pack_b_kernel<T, Tile::kNr>,
+        .dot = &dot_kernel<T>,
+        .axpy = &axpy_kernel<T>,
+        .gemv = &gemv_kernel<T>,
+        .gemvt = &gemvt_kernel<T>,
+        .ger = &ger_kernel<T>,
+        .symv = &symv_kernel<T>,
+        .trsv = &trsv_kernel<T>,
+        .rot = &rot_kernel<T>,
+        .reflect = &reflect_kernel<T>,
+        .ldlt_update = &ldlt_update_kernel<T>,
+        .creflect = &creflect_kernel<T>,
+        .cgemvt = &cgemvt_kernel<T>,
+        .cger = &cger_kernel<T>,
+        .chemv = &chemv_kernel<T>,
+        .cher2 = &cher2_kernel<T>,
+        .cholesky = &cholesky_kernel<T>,
+        .cholesky_trsm = &cholesky_trsm_kernel<T>,
     };
 }
 

@@ -86,7 +86,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.
    The hesap-dense GEMM blocks are the first tolerance-declared family: each level is bit-exact with its declared
    arithmetic (two roundings on portable, where SSE2 has no FMA; single-rounded FMA from avx2, ADR-0082's 2026-05-20
-   choice), and the levels agree within the inner-product bound. Its vector kernels add a reduction shape per level
+   choice), and the levels agree within the inner-product bound. Its tile shape is per level, since packed panels are
+   per-call scratch that each level packs itself (ADR-0082's backend-coupled packing; cooked data stays
+   level-independent), and every GEMM path sums the depth in the same 256-value groups, so no path, worker count or
+   tile shape changes an element's bits. Its vector kernels add a reduction shape per level
    (the accumulator and row counts), which `dense_kernels.hpp` declares and the differential tests model; its
    elementwise kernels give every element the level's step, and its rotation rounds twice on every level. The
    hesap-fft transform is bit-exact: every level runs one algorithm per size on the level-aware SIMD types, whose

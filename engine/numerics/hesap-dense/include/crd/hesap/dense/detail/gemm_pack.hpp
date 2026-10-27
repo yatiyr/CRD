@@ -17,34 +17,17 @@ namespace crd::hesap::dense::detail
 // (crd-hesap-dense-fatal-* modes).
 inline constexpr const char* kGemmPackOutOfMemory = "hesap::dense: out of memory for a GEMM packing buffer";
 
-// -----------------------------------------------------------------------
-// Goto/BLIS Ac / Bc packing layers. Phase 3.1.6 v0d-perf.
-//
-// The packed layout is the same on every kernel level (GemmTraits in
-// crd/hesap/dense/dense_kernels.hpp, ADR-0134 §5):
-//
-//   Ac: MR contiguous rows × K cols (row-major) per "row-panel" of MR rows.
-//       Full Ac = ceil(Mc / MR) row-panels stacked vertically.
-//       Block (mc_block × Kc) → ceil(mc_block / MR) panels.
-//
-//   Bc: K rows × NR contiguous cols (row-major) per "col-panel" of NR cols.
-//       Full Bc = ceil(Nc / NR) col-panels stacked horizontally.
-//       Block (Kc × nc_block) → ceil(nc_block / NR) panels.
-//
-// Each register tile consumes ONE row-panel of Ac (MR × Kc) and ONE
-// col-panel of Bc (Kc × NR), producing an MR × NR tile of C.
-//
-// Trans handling: the pack functions take the EFFECTIVE source index
-// (i.e. callers pass `Trans` and the pack func reads A[i, p] when None,
-// A[p, i] when Transpose, conj(A[p, i]) when ConjTranspose). Complex
-// support added when those microkernels need it.
-// -----------------------------------------------------------------------
+// Goto/BLIS Ac / Bc packing. Each kernel level packs its own panels for its own register tile (GemmShape,
+// crd/hesap/dense/dense_kernels.hpp); the panels are per-call scratch, so the shape may differ per level:
+//   Ac: ceil(mc / mr) row panels of mr rows by kc values (row-major), the padding rows +0;
+//   Bc: ceil(nc / nr) column panels of kc rows by nr values (row-major), the padding columns +0.
+// Each register tile consumes one Ac row panel and one Bc column panel and produces an mr by nr tile of C. The pack
+// functions take the effective operand: op(A) reads A[i, p] (None), A[p, i] (Transpose) or conj(A[p, i])
+// (ConjTranspose). The complex types pack in general code for their portable tile (kComplexGemmShape).
 
-// v5a-4 gemm lift: Mc 120→480 — the Ac block (Mc·Kc·8 B) should fill the 14900K's 2MB-per-P-core
-// L2 (120 = 240KB badly underused it; 480 = 960KB ≈ half L2, leaving room for the streamed Bc
-// panel + C). Kc kept at 256 (the K-accumulation grouping ⇒ keeping it = ZERO value change vs the
-// current factor ⇒ moat/residual bit-identical; only Mc/Nc, which don't touch K-summation, move).
-// FLAWN #74 analytical-block-size model. Nc kept (Bc panel in L3).
+// The cache blocks (FLAWN #74's analytical model): an Mc by Kc Ac block (960 KB of f64) fills about half of the dev
+// host's 2 MB per-core L2 beside the streamed Bc panel and C (v5a-4); Nc keeps the Bc panel in L3. Kc is also the
+// depth grouping every GEMM path sums by (dense_kernels.hpp), so it is part of the declared arithmetic.
 inline constexpr crd::usize kGemmMc = 480;
 inline constexpr crd::usize kGemmKc = 256;
 inline constexpr crd::usize kGemmNc = 4080;
@@ -83,122 +66,86 @@ template <typename T, Layout L>
     return base(r, c);
 }
 
-// pack_a: copy an (mc × kc) block of the EFFECTIVE A (op-A) starting at
-// row `ic` of the effective shape into a packed buffer of size
-// `ceil(mc / GemmTraits<T>::MR) * GemmTraits<T>::MR * kc`. Row-panels are stacked vertically;
-// rows beyond `mc` within the final panel are zero-padded.
+// The complex types' tile: two roundings in general code, 8 by 8 (no fused merge; see merge_element).
+inline constexpr GemmShape kComplexGemmShape{.mr = 8, .nr = 8};
+template <typename T> using ComplexGemmTile = PortableTile<T, kComplexGemmShape.mr, kComplexGemmShape.nr, false>;
+
+// The tile shape of the level the process runs (f64, f32), or the complex types'.
+template <typename T> [[nodiscard]] inline GemmShape gemm_shape_of() noexcept
+{
+    if constexpr (kHasDenseKernels<T>)
+    {
+        return dense_kernels_of<T>().gemm_shape;
+    }
+    else
+    {
+        return kComplexGemmShape;
+    }
+}
+
+// The values of the packed Ac (rows by depth) and Bc (depth by cols) panels of a shape.
+[[nodiscard]] inline crd::usize packed_a_size(GemmShape s, crd::usize rows, crd::usize depth) noexcept
+{
+    return (rows + s.mr - 1U) / s.mr * s.mr * depth;
+}
+
+[[nodiscard]] inline crd::usize packed_b_size(GemmShape s, crd::usize depth, crd::usize cols) noexcept
+{
+    return (cols + s.nr - 1U) / s.nr * s.nr * depth;
+}
+
+// op(x) from element (r0, c0) on as a strided source (real types: ConjTranspose is Transpose).
+template <typename T, Layout L>
+[[nodiscard]] inline GemmSource<T> gemm_source(MatrixView<const T, L> x, crd::usize r0, crd::usize c0,
+                                               Trans tr) noexcept
+{
+    crd::usize rs = L == Layout::RowMajor ? x.ld() : 1U;
+    crd::usize cs = L == Layout::RowMajor ? 1U : x.ld();
+    if (tr != Trans::None)
+    {
+        const crd::usize t = rs;
+        rs = cs;
+        cs = t;
+    }
+    return GemmSource<T>{.data = x.data() + r0 * rs + c0 * cs, .row_stride = rs, .col_stride = cs};
+}
+
+// pack_a: the (mc by kc) block of op(A) at (ic, pc) as Ac panels into out (packed_a_size values).
 template <typename T, Layout L>
 inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::usize mc, crd::usize kc, Trans trans_a,
                    T* out) noexcept
 {
-    const crd::usize num_panels = (mc + GemmTraits<T>::MR - 1) / GemmTraits<T>::MR;
-    // op(A) is effective-COLUMN-major (source columns contiguous in memory) when the
-    // storage layout and the transpose flag disagree on row-major-ness. In that case the
-    // cold source read is contiguous in the ROW index for a fixed column, so we pack
-    // column-slices (p-outer, i-inner). Packing row-by-row there (the old order) reads with
-    // stride = leading dim — a measured chunk of the skinny ColMajor cmod/cdiv gemm cost.
-    // BIT-IDENTICAL: the same panel_out[i_local*kc+p] entries, just filled in a different
-    // order. The effective row-major case keeps the original row-by-row pack.
-    const bool eff_colmajor = (L == Layout::ColMajor) != (trans_a != Trans::None);
-    for (crd::usize panel = 0; panel < num_panels; ++panel)
+    if constexpr (kHasDenseKernels<T>)
     {
-        const crd::usize row_base = panel * GemmTraits<T>::MR;
-        T* panel_out = out + panel * GemmTraits<T>::MR * kc;
-        if (eff_colmajor)
-        {
-            // 4-way p-INTERLEAVE (2026-06-11 multi-stream dig): a cold source served one column at a
-            // time is a SINGLE DRAM stream (~22.7 GB/s on the dev host); four interleaved column
-            // streams reach ~36.9 GB/s (bank/page-level parallelism — the same measured mechanism that
-            // flipped the solve). Pure copy reordering ⇒ bit-identical packed bytes.
-            crd::usize p = 0;
-            for (; p + 4 <= kc; p += 4)
-            {
-                for (crd::usize i_local = 0; i_local < GemmTraits<T>::MR; ++i_local)
-                {
-                    const bool inside = (row_base + i_local) < mc;
-                    const crd::usize ig = ic + row_base + i_local;
-                    panel_out[i_local * kc + p + 0] = inside ? eff_a_read<T, L>(a, ig, pc + p + 0, trans_a) : T{};
-                    panel_out[i_local * kc + p + 1] = inside ? eff_a_read<T, L>(a, ig, pc + p + 1, trans_a) : T{};
-                    panel_out[i_local * kc + p + 2] = inside ? eff_a_read<T, L>(a, ig, pc + p + 2, trans_a) : T{};
-                    panel_out[i_local * kc + p + 3] = inside ? eff_a_read<T, L>(a, ig, pc + p + 3, trans_a) : T{};
-                }
-            }
-            for (; p < kc; ++p) // remainder columns
-            {
-                for (crd::usize i_local = 0; i_local < GemmTraits<T>::MR; ++i_local)
-                {
-                    const bool inside = (row_base + i_local) < mc;
-                    panel_out[i_local * kc + p] =
-                        inside ? eff_a_read<T, L>(a, ic + row_base + i_local, pc + p, trans_a) : T{};
-                }
-            }
-        }
-        else
-        {
-            for (crd::usize i_local = 0; i_local < GemmTraits<T>::MR; ++i_local)
-            {
-                const crd::usize i_global = ic + row_base + i_local;
-                const bool inside = (row_base + i_local) < mc;
-                for (crd::usize p = 0; p < kc; ++p)
-                {
-                    panel_out[i_local * kc + p] = inside ? eff_a_read<T, L>(a, i_global, pc + p, trans_a) : T{};
-                }
-            }
-        }
+        dense_kernels_of<T>().pack_a(gemm_source(a, ic, pc, trans_a), mc, kc, out);
+    }
+    else
+    {
+        // op(A) is column-contiguous when the layout and the transpose disagree on row-major-ness.
+        const bool rows_contiguous = (L == Layout::ColMajor) != (trans_a != Trans::None);
+        pack_a_panels<kComplexGemmShape.mr>([a, ic, pc, trans_a](crd::usize r, crd::usize c)
+                                            { return eff_a_read<T, L>(a, ic + r, pc + c, trans_a); }, mc, kc,
+                                            rows_contiguous, out);
     }
 }
 
-// pack_b: copy a (kc × nc) block of the EFFECTIVE B starting at col `jc`
-// into a packed buffer of size `ceil(nc / GemmTraits<T>::NR) * kc * GemmTraits<T>::NR`.
-// Col-panels are stacked horizontally; cols beyond `nc` within the final
-// panel are zero-padded.
+// pack_b: the (kc by nc) block of op(B) at (pc, jc) as Bc panels into out (packed_b_size values).
 template <typename T, Layout L>
 inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::usize kc, crd::usize nc, Trans trans_b,
                    T* out) noexcept
 {
-    const crd::usize num_panels = (nc + GemmTraits<T>::NR - 1) / GemmTraits<T>::NR;
-    for (crd::usize panel = 0; panel < num_panels; ++panel)
+    if constexpr (kHasDenseKernels<T>)
     {
-        const crd::usize col_base = panel * GemmTraits<T>::NR;
-        T* panel_out = out + panel * kc * GemmTraits<T>::NR;
-        // 4-way p-INTERLEAVE — for the hot effective-row-major cases (RowMajor/None, ColMajor/adjoint:
-        // the supernodal panels) each effective row p is a contiguous source run; reading rows one at a
-        // time is a single DRAM stream, four interleaved rows are four (the measured 22.7 → 36.9 GB/s
-        // mechanism). Pure copy reordering ⇒ bit-identical packed bytes. The interleaved rows end at a closed-form
-        // row, so the remainder provably runs fewer than four times (GCC's link-time ranges otherwise lose that and
-        // report -Waggressive-loop-optimizations on the remainder rows).
-        const crd::usize interleaved_end = kc - (kc % 4);
-        crd::usize p = 0;
-        for (; p < interleaved_end; p += 4)
-        {
-            for (crd::usize j_local = 0; j_local < GemmTraits<T>::NR; ++j_local)
-            {
-                const crd::usize j_global = jc + col_base + j_local;
-                const bool inside = (col_base + j_local) < nc;
-                panel_out[(p + 0) * GemmTraits<T>::NR + j_local] =
-                    inside ? eff_a_read<T, L>(b, pc + p + 0, j_global, trans_b) : T{};
-                panel_out[(p + 1) * GemmTraits<T>::NR + j_local] =
-                    inside ? eff_a_read<T, L>(b, pc + p + 1, j_global, trans_b) : T{};
-                panel_out[(p + 2) * GemmTraits<T>::NR + j_local] =
-                    inside ? eff_a_read<T, L>(b, pc + p + 2, j_global, trans_b) : T{};
-                panel_out[(p + 3) * GemmTraits<T>::NR + j_local] =
-                    inside ? eff_a_read<T, L>(b, pc + p + 3, j_global, trans_b) : T{};
-            }
-        }
-        for (; p < kc; ++p) // remainder rows
-        {
-            for (crd::usize j_local = 0; j_local < GemmTraits<T>::NR; ++j_local)
-            {
-                const crd::usize j_global = jc + col_base + j_local;
-                const bool inside = (col_base + j_local) < nc;
-                panel_out[p * GemmTraits<T>::NR + j_local] =
-                    inside ? eff_a_read<T, L>(b, pc + p, j_global, trans_b) : T{};
-            }
-        }
+        dense_kernels_of<T>().pack_b(gemm_source(b, pc, jc, trans_b), kc, nc, out);
+    }
+    else
+    {
+        pack_b_panels<kComplexGemmShape.nr>([b, pc, jc, trans_b](crd::usize r, crd::usize c)
+                                            { return eff_a_read<T, L>(b, pc + r, jc + c, trans_b); }, kc, nc, out);
     }
 }
 
-// One GEMM block on the level the process runs (f64, f32) or on the portable tile (the complex types).
+// One GEMM block on the level the process runs (f64, f32) or on the complex types' tile.
 template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noexcept
 {
     if constexpr (kHasDenseKernels<T>)
@@ -207,22 +154,22 @@ template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noex
     }
     else
     {
-        gemm_block<PortableTile<T>>(block);
+        gemm_block<ComplexGemmTile<T>>(block);
     }
 }
 
-// C[ic .. ic + mc, jc .. jc + nc) += alpha * the product of the packed Ac (mc by kc) and Bc (kc by nc) blocks; C
-// already holds beta * C from the driver's scaling pass.
+// C[ic .. ic + mc, jc .. jc + nc) += alpha * the product of the Ac rows (mc by kc, row stride lda: packed panels or
+// resident whole panels) and the packed Bc (kc by nc) block; C already holds beta * C from the driver's scaling pass.
 template <typename T, Layout L>
 inline void gemm_packed_inner(T alpha, crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
-                              const T* a_packed, const T* b_packed, MatrixView<T, L> c) noexcept
+                              const T* a_rows, crd::usize lda, const T* b_packed, MatrixView<T, L> c) noexcept
 {
     constexpr bool col_major = L == Layout::ColMajor;
     T* corner = col_major ? c.data() + jc * c.ld() + ic : c.data() + ic * c.ld() + jc;
-    run_gemm_block(GemmBlock<T>{.a = a_packed,
+    run_gemm_block(GemmBlock<T>{.a = a_rows,
                                 .b = b_packed,
                                 .c = corner,
-                                .lda = kc,
+                                .lda = lda,
                                 .ldc = c.ld(),
                                 .rows = mc,
                                 .cols = nc,
