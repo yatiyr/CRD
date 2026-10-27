@@ -343,24 +343,14 @@ void block_backward_diagonal_kernel(T* d, crd::usize nrhs, const T* panel, crd::
     for (crd::usize j0 = ((nc - 1U) / kStreams) * kStreams;; j0 -= kStreams)
     {
         const crd::usize end = j0 + kStreams <= nc ? j0 + kStreams : nc;
-        if (end < nc)
+        if (end < nc) // only the top block, which holds column nc - 1, can be partial
         {
             const T* col[kStreams];
-            for (crd::usize q = 0; q < end - j0; ++q)
+            for (crd::usize q = 0; q < kStreams; ++q)
             {
                 col[q] = panel + (j0 + q) * ld;
             }
-            if (end - j0 == kStreams)
-            {
-                far_terms<kStreams>(d, nrhs, col, j0, end, nc);
-            }
-            else
-            {
-                for (crd::usize q = 0; q < end - j0; ++q)
-                {
-                    far_terms<1>(d, nrhs, col + q, j0 + q, end, nc);
-                }
-            }
+            far_terms<kStreams>(d, nrhs, col, j0, end, nc);
         }
         for (crd::usize j = end; j-- > j0;)
         {
