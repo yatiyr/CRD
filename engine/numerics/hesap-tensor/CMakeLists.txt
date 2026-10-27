@@ -15,9 +15,10 @@ target_include_directories(crd-hesap-tensor
     PUBLIC
         "${CMAKE_CURRENT_SOURCE_DIR}/include"
         # Include-ONLY Philox edge (ADR-0096 §1): dtypes.hpp (deterministic SR) and decomp.hpp (sketches) consume
-        # the header-only block function and block loop (counter_rng_core.hpp, philox_blocks.hpp) without
-        # link-dragging the hesap-stats -> hesap-special stack into every tensor consumer (the units->math
-        # precedent). PhiloxRng's bulk fill runs the hesap-stats kernels, so the substrate never calls it.
+        # the header-only block function (counter_rng_core.hpp), and the tensor kernels compile the block loop
+        # (philox_blocks.hpp) per level, without link-dragging the hesap-stats -> hesap-special stack into every
+        # tensor consumer (the units->math precedent). PhiloxRng's bulk fill runs the hesap-stats kernels, so the
+        # substrate never calls it.
         "${CMAKE_SOURCE_DIR}/engine/numerics/hesap-stats/include"
         # Include-ONLY hesap-dense edge (ADR-0096 section 1): batched / einsum_exec / tt / decomp / nn / sparse_cp
         # are public header-only surfaces over the v0d GEMM, so the consumer view must see the headers; the
@@ -51,8 +52,9 @@ target_link_libraries(crd-hesap-tensor
 
 target_compile_features(crd-hesap-tensor PUBLIC cxx_std_20)
 
-# SIMD-DISPATCH (ADR-0134 §5): the f32 permute regions, the Tier R binned sum and the nn quantized linears,
-# quantizers and softmax, once per CPU level, and the avx2 level again with AVX-VNNI (the integer dots on dpbusd).
+# SIMD-DISPATCH (ADR-0134 §5): the f32 permute regions, the Tier R binned sum, the nn quantized linears, quantizers
+# and softmax and the Philox block loop, once per CPU level, and the avx2 level again with AVX-VNNI (the integer dots
+# on dpbusd).
 crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable avx2 VARIANTS avx2+avxvnni INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_kernels.cpp")
 

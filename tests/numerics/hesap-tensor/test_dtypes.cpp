@@ -131,7 +131,8 @@ TEST_CASE("v14-a dtypes: f16/bf16 widening matches the reference corpus", "[hesa
     }
 }
 
-TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the reference", "[hesap][tensor][v14][dtypes]")
+TEST_CASE("v14-a dtypes: ggml Q8_0/Q4_0 quantization is byte-exact vs the reference",
+          "[hesap][tensor][v14][dtypes][kernels]")
 {
     crd::f32 src[128];
     for (crd::u32 i = 0; i < 128U; ++i)
@@ -315,7 +316,7 @@ TEST_CASE("v14-a dtypes: deterministic SR - validity, unbiasedness, bit-identity
     CHECK((f32_to_fp8_e4m3_bits_sr(447.9F, seed, 7U) & 0x7FU) <= 0x7EU);
 }
 
-TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[hesap][tensor][v14][dtypes]")
+TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[hesap][tensor][v14][dtypes][kernels]")
 {
     // Corpus + a deterministic Philox-driven random-bit-pattern sweep covering
     // every f32 class (the SIMD==scalar contract on ALL inputs, NaN payloads included).
@@ -377,7 +378,7 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
         }
     }
 
-    // Batch SR (AVX2 Philox draws + SIMD SR narrowers) ≡ the per-element scalar
+    // Batch SR (the kernel Philox draws + the dispatched SR narrowers) ≡ the per-element scalar
     // wrappers, bit-for-bit — count is deliberately NOT a multiple of the chunk or
     // vector width, so tails and chunk seams are exercised.
     constexpr crd::u64 sr_seed = 0xFEEDFACE12345678ULL;
@@ -419,7 +420,8 @@ TEST_CASE("v14-a dtypes: batch (SIMD) converts are bit-identical to scalar", "[h
     }
 }
 
-TEST_CASE("v14-a StorageTensor: strided converts + SR chunk/stride independence", "[hesap][tensor][v14][dtypes]")
+TEST_CASE("v14-a StorageTensor: strided converts + SR chunk/stride independence",
+          "[hesap][tensor][v14][dtypes][kernels]")
 {
     crd::memory::TlsfAllocator alloc(1U << 20);
     const crd::u64 shape[] = {4U, 6U};

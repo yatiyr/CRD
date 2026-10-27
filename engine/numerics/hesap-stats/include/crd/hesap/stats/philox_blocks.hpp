@@ -2,9 +2,9 @@
 
 // The Philox4x32-10 block loop: blocks first .. first + n - 1 of (seed, stream), eight at a time on the AVX2 backend,
 // bit-identical to philox4x32 (counter_rng_core.hpp). The stats kernels run it per level
-// (../../../../kernels/stats_kernels.cpp), and crd-hesap-tensor's stochastic rounding and sketches consume it
-// include-only (ADR-0096 §1). It lives in the unit's level namespace and takes the unit's backend
-// (crd/math/simd/backend.hpp).
+// (../../../../kernels/stats_kernels.cpp), and so do the hesap-tensor kernels for the stochastic rounding and sketches,
+// which keep Philox include-only (ADR-0096 §1). It lives in the unit's level namespace and takes the unit's backend
+// (crd/math/simd/backend.hpp); only kernel units include it.
 
 #include <crd/core/types.hpp>
 #include <crd/hesap/stats/counter_rng_core.hpp>

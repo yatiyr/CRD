@@ -76,6 +76,13 @@
       "why": "the einsum and TTGT transpose; its f32 tile bodies are per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/tensor/dtypes.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_dtypes.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h"],
+      "why": "the storage dtypes and SR converts; the SR draws run the per-level tensor kernels' Philox block loop and the narrowers the crd-math kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

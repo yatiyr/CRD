@@ -1,5 +1,5 @@
-// The hesap-tensor kernel level the process runs (SIMD-DISPATCH, ADR-0134 §5): the f32 permute regions and the
-// Tier R binned sum (crd/hesap/tensor/tensor_kernels.hpp).
+// The hesap-tensor kernel level the process runs (SIMD-DISPATCH, ADR-0134 §5): the routines of
+// crd/hesap/tensor/tensor_kernels.hpp.
 
 #pragma once
 

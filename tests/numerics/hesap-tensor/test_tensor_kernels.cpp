@@ -4,9 +4,10 @@
 // payloads, nothing written outside the region), the portable level's bits for the Tier R binned sum (around the vector
 // threshold and the endurance window, the speculative widening, the near-DBL_MAX compression regime, non-finite inputs,
 // a non-empty accumulator), the scalar quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned
-// order of the Q8_0 and int8 linears (every tile width, the saturating and zero-point extremes, row ranges) and the
-// scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits). crd-hesap-tensor-kernels-at-<level> runs
-// these [kernels] cases under each forced level.
+// order of the Q8_0 and int8 linears (every tile width, the saturating and zero-point extremes, row ranges), the scalar
+// softmax (vector tails, crd_exp4's scalar lanes, non-finite logits) and the scalar Philox blocks (counter and position
+// wraps, partial vectors). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and
+// the sketch fill under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/tensor/dtypes.hpp>
@@ -461,7 +462,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
     }
     BlockQ8Zero want[blocks];
     BlockQ8Zero got[blocks];
-    tn::quantize_q8_0({x, total}, {want, blocks});
+    tn::detail::quantize_q8_0_blocks(x, want, blocks);
     for (u64 j = 0; j < tn::kQuantBlock; ++j) // the defined values: a NaN quantizes as 0, an infinite d zeroes
     {
         CHECK(want[0].qs[j] == 0);
@@ -582,7 +583,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the pinned Q8_0 linea
             {
                 x[k + j] = (j % 2U) == 0U ? 4.0F : -4.0F;
             }
-            tn::quantize_q8_0({x, batch * k}, {xq_want, batch * nb});
+            tn::detail::quantize_q8_0_blocks(x, xq_want, batch * nb);
             for (const u64 n : {1U, 2U, 3U, 4U, 5U, 7U, 8U, 9U, 13U, 16U, 19U})
             {
                 for (const bool relu : {false, true})
@@ -783,6 +784,54 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar softmax bi
                 CHECK(std::bit_cast<u32>(got[1U * d]) == std::bit_cast<u32>(0.25F));
             }
         }
+    }
+    CHECK(ran >= 1U);
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar Philox blocks", "[tensor][kernels]")
+{
+    // Positions straddling the 2^32 word wrap of the Philox counter and the 2^64 wrap of the position; the SR stream
+    // (domain tag over step) and one with both words set; block counts past two eight-block vectors.
+    const u64 firsts[] = {0U, 1U, 0xFFFFFFFCULL, 0xFFFFFFFFFFFFFFFAULL, 0x123456789ABCDEFULL};
+    const u64 streams[] = {(static_cast<u64>(tn::detail::kSrTag) << 32U) | 7U, 0x0123456789ABCDEFULL};
+    constexpr usize max_blocks = 19;
+    const u64 seed = 0xDEADBEEFCAFEF00DULL;
+    const u32 key[2] = {static_cast<u32>(seed), static_cast<u32>(seed >> 32U)};
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        usize bad = 0;
+        for (usize blocks = 0; blocks <= max_blocks; ++blocks)
+        {
+            for (const u64 stream : streams)
+            {
+                for (const u64 first : firsts)
+                {
+                    u32 got[4U * max_blocks + 1U];
+                    got[4U * blocks] = kSentinel; // a guard word past the blocks
+                    level.table->philox4x32_blocks(seed, stream, first, got, blocks);
+                    for (usize b = 0; b < blocks; ++b)
+                    {
+                        const u64 position = first + b; // mod 2^64
+                        const u32 counter[4] = {static_cast<u32>(position), static_cast<u32>(position >> 32U),
+                                                static_cast<u32>(stream), static_cast<u32>(stream >> 32U)};
+                        const crd::hesap::stats::PhiloxBlock want = crd::hesap::stats::philox4x32(counter, key);
+                        for (usize w = 0; w < 4U; ++w)
+                        {
+                            bad += got[4U * b + w] == want.v[w] ? 0U : 1U;
+                        }
+                    }
+                    bad += got[4U * blocks] == kSentinel ? 0U : 1U;
+                }
+            }
+        }
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(bad == 0U);
     }
     CHECK(ran >= 1U);
 }

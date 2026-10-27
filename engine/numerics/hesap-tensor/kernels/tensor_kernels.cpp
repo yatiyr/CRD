@@ -3,11 +3,13 @@
 // and the binned operations included, so no function of this unit is shared with general code or with another level.
 // The portable bodies are the scalar loops; the AVX2 bodies run the 8x8 in-register f32 transpose (with non-temporal
 // stores for the multithreaded DRAM-sized permutes), twelve binned accumulators, the nn quantizers eight lanes at a
-// time, the quantized dots on maddubs/madd integer lanes and softmax's exp four lanes at a time; the avx2 level's
-// AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the permute is
-// element copies and IEEE multiplies, the binned representation is partition-independent, the quantizers are
-// per-element IEEE operations, the dots are exact integers combined in one f32 order, and crd_exp4 reproduces crd_exp1.
+// time, the quantized dots on maddubs/madd integer lanes, softmax's exp four lanes at a time and the Philox block loop
+// eight blocks at a time; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every
+// body gives the same bits: the permute is element copies and IEEE multiplies, the binned representation is
+// partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
+// f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
 
+#include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
 #include <crd/hesap/tensor/permute_tiles.hpp>
 #include <crd/hesap/tensor/quant_core.hpp>
@@ -988,10 +990,15 @@ namespace crd::hesap::tensor
 {
 
 const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
-    &CRD_MATH_LEVEL_NS::permute_region_f32, &CRD_MATH_LEVEL_NS::binned_sum_f64,
-    &CRD_MATH_LEVEL_NS::quantize_q8_0,      &CRD_MATH_LEVEL_NS::quantize_u8_row,
-    &CRD_MATH_LEVEL_NS::nn_softmax_rows,    &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,
-    &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,  &CRD_MATH_LEVEL_NS::nn_linear_i8_packed_rows,
+    &CRD_MATH_LEVEL_NS::permute_region_f32,
+    &CRD_MATH_LEVEL_NS::binned_sum_f64,
+    &CRD_MATH_LEVEL_NS::quantize_q8_0,
+    &CRD_MATH_LEVEL_NS::quantize_u8_row,
+    &CRD_MATH_LEVEL_NS::nn_softmax_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_i8_packed_rows,
+    &crd::hesap::stats::CRD_MATH_LEVEL_NS::philox4x32_fill_blocks,
 };
 
 } // namespace crd::hesap::tensor

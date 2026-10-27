@@ -2,12 +2,12 @@
 
 #include "quant_core.hpp"
 #include "tensor.hpp"
+#include "tensor_dispatch.hpp" // the SR draws: the per-level tensor kernels' Philox block loop
 
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/stats/counter_rng_core.hpp> // include-only (header-only constexpr) — NO link edge (ADR-0096 §1)
-#include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/math/float_convert.hpp> // the format primitives — MIGRATED to crd-math (owning module, SANITY #8)
 #include <crd/math/select.hpp>        // crd::math::clamp
 
@@ -98,8 +98,9 @@ inline constexpr crd::u32 kSrTag = 0x53525F31U; // 'SR_1' domain tag
 
 // =======================================================================
 // Batch SR converts — the crush path: draws come in whole Philox blocks from
-// the hesap-stats block loop (eight blocks at a time on AVX2, lane-ordered
-// exactly as the pinned keying), then the crd-math SR narrowers consume them. Bit-identical to the
+// the tensor kernels' block loop (eight blocks at a time on the avx2 level,
+// lane-ordered exactly as the pinned keying), then the crd-math SR narrowers
+// consume them. Bit-identical to the
 // per-element scalar wrappers on every input (gated). Zero heap: a fixed
 // stack chunk of draws.
 // =======================================================================
@@ -111,10 +112,10 @@ namespace detail
 // blocks from base >> 2, so a 4-aligned base reads whole blocks.
 inline void fill_sr_draws(crd::u64 seed, crd::u64 base, crd::u32 step, crd::u32* draws, crd::usize count) noexcept
 {
-    // Philox include-only (ADR-0096 §1): the block loop the hesap-stats kernels run; the batch≡scalar bit-identity
-    // gate pins the contract.
+    // The block loop at the process's kernel level (Philox stays include-only, ADR-0096 §1); the batch≡scalar
+    // bit-identity gate pins the contract.
     const crd::usize blocks = (base & 3U) == 0U ? count / 4U : 0U;
-    crd::hesap::stats::philox4x32_fill_blocks(seed, (static_cast<crd::u64>(kSrTag) << 32U) | step, base >> 2U, draws,
+    tensor_kernels().table->philox4x32_blocks(seed, (static_cast<crd::u64>(kSrTag) << 32U) | step, base >> 2U, draws,
                                               blocks);
     for (crd::usize t = 4U * blocks; t < count; ++t)
     {
@@ -175,13 +176,14 @@ inline void convert_f32_to_fp8_e5m2_sr(crd::containers::ConstSpan<crd::f32> src,
 // the per-tensor quantizers of the nn throughput tier.
 // =======================================================================
 
-// x.size() must be a multiple of 32; out.size() == x.size()/32. The scalar
-// reference of the tensor kernels' Q8_0 quantizer (quant_core.hpp).
+// x.size() must be a multiple of 32; out.size() == x.size()/32. Runs the
+// tensor kernels' Q8_0 quantizer at the process's level, bit-identical to the
+// scalar reference detail::quantize_q8_0_blocks (quant_core.hpp).
 inline void quantize_q8_0(crd::containers::ConstSpan<crd::f32> x, crd::containers::Span<BlockQ8Zero> out) noexcept
 {
     CRD_ASSERT_MSG(x.size() % kQuantBlock == 0U, "quantize_q8_0: size must be a multiple of 32");
     CRD_ASSERT_MSG(out.size() == x.size() / kQuantBlock, "quantize_q8_0: bad output block count");
-    detail::quantize_q8_0_blocks(x.data(), out.data(), out.size());
+    tensor_kernels().table->quantize_q8_0(x.data(), out.data(), out.size());
 }
 
 // Per-tensor symmetric i8 quantization (the nn throughput tier's weights,
@@ -382,7 +384,7 @@ public:
         {
             return st;
         }
-        if (src.is_contiguous()) // batch path: AVX2 Philox draws + SIMD SR narrowers
+        if (src.is_contiguous()) // batch path: the kernel Philox draws + the dispatched SR narrowers
         {
             batch_narrow_sr({src.data(), static_cast<crd::usize>(src.size())},
                             {m_bits.data(), static_cast<crd::usize>(m_bits.size())}, seed);

@@ -499,6 +499,27 @@ TEST_CASE("decomp: MTTKRP seam - cp_als_generic with an explicit functor bit-mat
     REQUIRE(std::bit_cast<crd::u64>(ia.fit) == std::bit_cast<crd::u64>(ib.fit));
 }
 
+TEST_CASE("decomp: the batched sketch fill is bit-equal to the keyed per-index gaussian", "[v14j][decomp][sketch]")
+{
+    // The fill runs the tensor kernels' Philox block loop at the process's level (the forced-level arms
+    // crd-hesap-tensor-decomp-kernels-at-<level> run this case); the keyed definition draws PhiloxRng's scalar blocks.
+    namespace dd = crd::hesap::tensor::decompdetail;
+    constexpr crd::u64 count = 700U; // crosses the 256-sample chunk boundary twice
+    static crd::f64 batch64[count];
+    static crd::f32 batch32[count];
+    dd::philox_gaussian_fill<crd::f64>(42U, 7U, batch64, count);
+    dd::philox_gaussian_fill<crd::f32>(0xFEEDFACE12345678ULL, dd::kSketchStream + 2U, batch32, count);
+    crd::u64 mism = 0;
+    for (crd::u64 i = 0; i < count; ++i)
+    {
+        const crd::f64 keyed64 = dd::philox_gaussian<crd::f64>(42U, 7U, i);
+        const crd::f32 keyed32 = dd::philox_gaussian<crd::f32>(0xFEEDFACE12345678ULL, dd::kSketchStream + 2U, i);
+        mism += std::bit_cast<crd::u64>(batch64[i]) == std::bit_cast<crd::u64>(keyed64) ? 0U : 1U;
+        mism += std::bit_cast<crd::u32>(batch32[i]) == std::bit_cast<crd::u32>(keyed32) ? 0U : 1U;
+    }
+    CHECK(mism == 0U);
+}
+
 TEST_CASE("decomp: boundary adversaries - zeros, bad input, bounded iteration", "[v14j][decomp][boundary]")
 {
     crd::memory::TlsfAllocator alloc(1U << 26);
@@ -589,23 +610,6 @@ TEST_CASE("decomp: boundary adversaries - zeros, bad input, bounded iteration", 
         {
             REQUIRE(hist[i] >= hist[i - 1U] - 1e-12);
         }
-    }
-    // the batched sketch fill is bit-equal to the keyed per-index definition
-    {
-        crd::containers::Array<crd::f64> batch(&alloc);
-        const crd::u64 count = 700U; // crosses the 256-sample chunk boundary twice
-        batch.resize(count);
-        crd::hesap::tensor::decompdetail::philox_gaussian_fill<crd::f64>(42U, 7U, batch.data(), count);
-        crd::u64 mism = 0;
-        for (crd::u64 i = 0; i < count; ++i)
-        {
-            const crd::f64 keyed = crd::hesap::tensor::decompdetail::philox_gaussian<crd::f64>(42U, 7U, i);
-            if (std::bit_cast<crd::u64>(batch[i]) != std::bit_cast<crd::u64>(keyed))
-            {
-                ++mism;
-            }
-        }
-        REQUIRE(mism == 0U);
     }
     // fit floor sanity: rank-1 weights positive, factors unit-norm
     {

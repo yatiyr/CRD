@@ -3,8 +3,8 @@
 // crd/hesap/tensor/tensor_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing from
 // it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and IEEE multiplies, the
 // binned sum is partition-independent by construction, the quantizers are per-element IEEE operations, the quantized
-// dots are exact integers combined in one fixed f32 order (single-rounded FMAs), and softmax's exp core has a
-// bit-identical vector twin.
+// dots are exact integers combined in one fixed f32 order (single-rounded FMAs), softmax's exp core has a
+// bit-identical vector twin, and the Philox blocks are integer rounds.
 
 #pragma once
 
@@ -50,7 +50,7 @@ struct NnSoftmaxF32
 };
 
 // The Q8_0 linear y = x @ W^T + b (optionally ReLU) for the rows [lo, hi): each row's activations quantize to Q8_0
-// blocks (dtypes.hpp quantize_q8_0) and every output is the pinned lane-parallel dot (nn.hpp).
+// blocks (quant_core.hpp quantize_q8_0_blocks) and every output is the pinned lane-parallel dot (nn.hpp).
 struct NnLinearQ8
 {
     const crd::f32* x;      // [M, K], K % 32 == 0
@@ -90,7 +90,8 @@ struct TensorKernels
     // The Tier R sum: deposit p[0..n) into acc (the binnedBLAS dbdsum protocol), bit-identical to the scalar
     // deposits in any partition.
     void (*binned_sum_f64)(detail::BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept;
-    // Q8_0 over nblocks whole blocks of x, bit-identical to quantize_q8_0.
+    // Q8_0 over nblocks whole blocks of x (dtypes.hpp quantize_q8_0), bit-identical to the scalar reference
+    // detail::quantize_q8_0_blocks (quant_core.hpp).
     void (*quantize_q8_0)(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexcept;
     // Asymmetric u8 over one row of k values (k % 32 == 0), bit-identical to nn_quantize_u8_asym.
     void (*quantize_u8_row)(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale,
@@ -100,6 +101,11 @@ struct TensorKernels
     // The row-major weights of nn_linear_i8 and the packed weights of the NnSequential runner; the same bits.
     void (*nn_linear_i8_rows)(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noexcept;
     void (*nn_linear_i8_packed_rows)(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noexcept;
+    // Philox4x32-10 blocks first_block .. first_block + blocks - 1 of (seed, stream), their u32 words in block order at
+    // out (any alignment): the hesap-stats block loop (crd/hesap/stats/philox_blocks.hpp) compiled at this level, so
+    // the SR draws (dtypes.hpp) and the decomp sketches keep Philox include-only (ADR-0096 §1).
+    void (*philox4x32_blocks)(crd::u64 seed, crd::u64 stream, crd::u64 first_block, void* out,
+                              crd::usize blocks) noexcept;
 };
 
 // The levels with a body and the avx2 level's AVX-VNNI variant (the integer dots on dpbusd); the dispatcher refuses a

@@ -147,6 +147,10 @@ crd_enable_default_pch(crd-hesap-tensor-decomp-tests)
 
 crd_discover_tests(crd-hesap-tensor-decomp-tests)
 
+# ADR-0134 §8: the sketch fill and the randomized tier once per compiled level
+# (crd-hesap-tensor-decomp-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-decomp-tests "[sketch],[rand]")
+
 # --- v14-m NN-inference gates (separate executable: loads the safetensors ---
 # --- corpus via io.hpp => links platform)                                  ---
 add_executable(crd-hesap-tensor-nn-tests
