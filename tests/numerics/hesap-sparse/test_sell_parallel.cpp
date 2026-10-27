@@ -144,7 +144,6 @@ TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR a
         }
     }
     const auto csr = b.compress();
-    const auto sell = sp::to_sell(csr, &alloc);
     crd::containers::Array<C> x(&alloc);
     for (crd::u32 i = 0; i < n; ++i)
     {
@@ -159,19 +158,24 @@ TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR a
     }
     crd::containers::Array<C> y0 = want;
     sp::spmv<C>(alpha, csr, sp::Trans::None, cspan(x), beta, mspan(want));
-    for (crd::u32 jobs : {1U, 3U, 7U})
+    for (const sp::SellIndex form : {sp::SellIndex::U32, sp::SellIndex::Delta16})
     {
-        crd::containers::Array<C> y = y0;
-        sp::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs);
-        crd::jobs::frame_reset();
-        crd::u32 wrong = 0;
-        for (crd::u32 i = 0; i < n; ++i)
+        const auto sell = sp::to_sell(csr, &alloc, 0U, form);
+        REQUIRE((sell.delta_ptr[sell.num_slices] != 0U) == (form == sp::SellIndex::Delta16));
+        for (crd::u32 jobs : {1U, 3U, 7U})
         {
-            const bool same = std::bit_cast<Bits>(y[i].re) == std::bit_cast<Bits>(want[i].re) &&
-                              std::bit_cast<Bits>(y[i].im) == std::bit_cast<Bits>(want[i].im); // finite parts
-            wrong += same ? 0U : 1U;
+            crd::containers::Array<C> y = y0;
+            sp::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs);
+            crd::jobs::frame_reset();
+            crd::u32 wrong = 0;
+            for (crd::u32 i = 0; i < n; ++i)
+            {
+                const bool same = std::bit_cast<Bits>(y[i].re) == std::bit_cast<Bits>(want[i].re) &&
+                                  std::bit_cast<Bits>(y[i].im) == std::bit_cast<Bits>(want[i].im); // finite parts
+                wrong += same ? 0U : 1U;
+            }
+            INFO("Delta16 " << (form == sp::SellIndex::Delta16) << ", jobs=" << jobs);
+            CHECK(wrong == 0U);
         }
-        INFO("jobs=" << jobs);
-        CHECK(wrong == 0U);
     }
 }

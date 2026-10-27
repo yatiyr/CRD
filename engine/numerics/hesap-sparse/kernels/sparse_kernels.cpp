@@ -10,8 +10,10 @@
 // complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
 // vi xi as it has no addsub. The columns every row of a slice stores run unmasked; past the shortest row a padded
 // lane multiplies its padding 0 by a zero instead of x[0], so an infinite or NaN x[0] reaches only the rows that
-// store column 0, and adding that +0 leaves the sum's bits (a sum from +0 is never -0). The sums are written out by
-// one scalar expression on every level, so every level gives the CSR spmv's bits.
+// store column 0, and adding that +0 leaves the sum's bits (a sum from +0 is never -0). A Delta16 slice walks each
+// lane's column by its 16-bit gaps (scalar adds; the gathering AVX2 bodies widen eight or four gaps in one add) and a
+// pair runs two slices of one column form, so the column form changes only how the columns are read. The sums are
+// written out by one scalar expression on every level, so every level gives the CSR spmv's bits.
 
 #include <crd/hesap/sparse/sparse_kernels.hpp>
 #include <crd/math/simd/backend.hpp>
@@ -97,78 +99,6 @@ template <crd::u32 C> crd::u32 full_columns(const crd::u32* lens) noexcept
     return full;
 }
 
-// Columns [from, width) of slice s added to sums: unmasked up to `full`, masked after it.
-template <typename Body, typename T>
-typename Body::Sums finish(typename Body::Sums sums, const SellSlices<T>& a, const T* x, crd::u32 s, crd::u32 from,
-                           crd::u32 full) noexcept
-{
-    constexpr crd::u32 height = Body::kC;
-    const crd::u32 base = a.slice_ptr[s];
-    const crd::u32 width = a.slice_width[s];
-    const crd::u32* lens = a.row_len + static_cast<crd::usize>(s) * height;
-    for (crd::u32 w = from; w < full; ++w)
-    {
-        sums = Body::template step<false>(sums, a, x, base + w * height, w, lens);
-    }
-    for (crd::u32 w = full; w < width; ++w)
-    {
-        sums = Body::template step<true>(sums, a, x, base + w * height, w, lens);
-    }
-    return sums;
-}
-
-// Two slices both at least this wide run as a pair, two independent sets of sums in flight; narrower ones run alone,
-// where a pair lost 4% to 15% on DRAM-resident matrices and gained nothing in L2 (2026-10-27 board). kNoPairs: every
-// slice runs alone.
-inline constexpr crd::u32 kPairWidth = 8;
-inline constexpr crd::u32 kNoPairs = 0xFFFFFFFFU;
-
-// The driver. Body: the lane sums of one slice (Sums), zero(), step<Masked>(sums, a, x, offset, w, lens) for column w
-// of the C lanes at element offset, and store(sums, out) of its kOut values (C rows of Write::kParts).
-template <typename Body, crd::u32 PairWidth, typename T, typename Write>
-void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end) noexcept
-{
-    constexpr crd::u32 height = Body::kC;
-    static_assert(Body::kOut == height * Write::kParts, "a body stores one sum per part of each row");
-    T out0[Body::kOut];
-    T out1[Body::kOut];
-    crd::u32 s = s_begin;
-    while (s < s_end)
-    {
-        const crd::u32 full0 = full_columns<height>(a.row_len + static_cast<crd::usize>(s) * height);
-        const crd::u32 w0 = a.slice_width[s];
-        const crd::u32 w1 = s + 1U < s_end ? a.slice_width[s + 1U] : 0U;
-        if (PairWidth == kNoPairs || w0 < PairWidth || w1 < PairWidth)
-        {
-            Body::store(finish<Body>(Body::zero(), a, x, s, 0, full0), out0);
-            write_slice<height>(a, write, s, out0, y);
-            s += 1U;
-            continue;
-        }
-        const crd::u32 full1 = full_columns<height>(a.row_len + static_cast<crd::usize>(s + 1U) * height);
-        const crd::u32 b0 = a.slice_ptr[s];
-        const crd::u32 b1 = a.slice_ptr[s + 1U];
-        const crd::u32* lens0 = a.row_len + static_cast<crd::usize>(s) * height;
-        const crd::u32* lens1 = lens0 + height;
-        const crd::u32 both = full0 < full1 ? full0 : full1;
-        typename Body::Sums sum0 = Body::zero();
-        typename Body::Sums sum1 = Body::zero();
-        for (crd::u32 w = 0; w < both; ++w)
-        {
-            sum0 = Body::template step<false>(sum0, a, x, b0 + w * height, w, lens0);
-            sum1 = Body::template step<false>(sum1, a, x, b1 + w * height, w, lens1);
-        }
-        Body::store(finish<Body>(sum0, a, x, s, both, full0), out0);
-        Body::store(finish<Body>(sum1, a, x, s + 1U, both, full1), out1);
-        write_slice<height>(a, write, s, out0, y);
-        write_slice<height>(a, write, s + 1U, out1, y);
-        s += 2U;
-    }
-}
-
-// A vector gather's signed 32-bit index reaches the first 2^31 columns of x; a wider x takes the body's scalar loads.
-inline constexpr crd::u32 kGatherColumns = 0x80000000U;
-
 template <typename Body> constexpr bool gathers() noexcept
 {
     if constexpr (requires { Body::kGathers; })
@@ -180,6 +110,210 @@ template <typename Body> constexpr bool gathers() noexcept
         return false;
     }
 }
+
+// The columns of a slice, one column w after another: next() gives the C lanes' columns of the next w.
+// A U32 slice: its stored columns.
+template <crd::u32 C> struct U32Columns
+{
+    const crd::u32* at;
+    const crd::u32* next() noexcept
+    {
+        const crd::u32* c = at;
+        at += C;
+        return c;
+    }
+};
+
+// A Delta16 slice: each lane's running column, which next() moves by the lane's gap (a load and an add a lane).
+template <crd::u32 C> struct Delta16Columns
+{
+    alignas(32) crd::u32 col[C];
+    const crd::u16* gap;
+    const crd::u32* next() noexcept
+    {
+        for (crd::u32 lane = 0; lane < C; ++lane)
+        {
+            col[lane] += gap[lane];
+        }
+        gap += C;
+        return col;
+    }
+};
+
+#if CRD_SIMD_HAS_AVX2
+template <bool First, typename A, typename B> struct Pick
+{
+    using Type = A;
+};
+template <typename A, typename B> struct Pick<false, A, B>
+{
+    using Type = B;
+};
+
+// The same in one widening add, for the bodies that gather x with the columns as one vector index.
+template <crd::u32 C> struct VectorDelta16Columns
+{
+    static_assert(C == 4U || C == 8U, "a vector index of four or eight lanes");
+    alignas(32) crd::u32 col[C];
+    const crd::u16* gap;
+    const crd::u32* next() noexcept
+    {
+        if constexpr (C == 4U)
+        {
+            const __m128i g = _mm_cvtepu16_epi32(_mm_loadl_epi64(reinterpret_cast<const __m128i*>(gap)));
+            auto* run = reinterpret_cast<__m128i*>(col);
+            _mm_store_si128(run, _mm_add_epi32(_mm_load_si128(run), g));
+        }
+        else
+        {
+            const __m256i g = _mm256_cvtepu16_epi32(_mm_loadu_si128(reinterpret_cast<const __m128i*>(gap)));
+            auto* run = reinterpret_cast<__m256i*>(col);
+            _mm256_store_si256(run, _mm256_add_epi32(_mm256_load_si256(run), g));
+        }
+        gap += C;
+        return col;
+    }
+};
+#endif
+
+// Whether slice s stores its columns as Delta16.
+template <typename T> bool delta16(const SellSlices<T>& a, crd::u32 s) noexcept
+{
+    return a.delta_ptr[s + 1U] != a.delta_ptr[s];
+}
+
+// The column walk of slice s for Body: Delta16 or U32.
+template <typename Body, bool Delta, typename T> auto slice_columns(const SellSlices<T>& a, crd::u32 s) noexcept
+{
+    constexpr crd::u32 height = Body::kC;
+    if constexpr (!Delta)
+    {
+        return U32Columns<height>{a.col_idx + (a.slice_ptr[s] - a.delta_ptr[s])};
+    }
+    else
+    {
+#if CRD_SIMD_HAS_AVX2
+        using Walk = typename Pick<gathers<Body>(), VectorDelta16Columns<height>, Delta16Columns<height>>::Type;
+#else
+        using Walk = Delta16Columns<height>;
+#endif
+        Walk walk;
+        const crd::u32* first = a.col_first + static_cast<crd::usize>(s) * height;
+        for (crd::u32 lane = 0; lane < height; ++lane)
+        {
+            walk.col[lane] = first[lane];
+        }
+        walk.gap = a.col_delta + a.delta_ptr[s];
+        return walk;
+    }
+}
+
+// Columns [from, width) of slice s added to sums, the walk at column from: unmasked up to `full`, masked after it.
+template <typename Body, typename T, typename Walk>
+typename Body::Sums finish(typename Body::Sums sums, const SellSlices<T>& a, const T* x, crd::u32 s, crd::u32 from,
+                           crd::u32 full, Walk& walk) noexcept
+{
+    constexpr crd::u32 height = Body::kC;
+    const crd::u32 base = a.slice_ptr[s];
+    const crd::u32 width = a.slice_width[s];
+    const crd::u32* lens = a.row_len + static_cast<crd::usize>(s) * height;
+    for (crd::u32 w = from; w < full; ++w)
+    {
+        sums = Body::template step<false>(sums, a, x, base + w * height, walk.next(), w, lens);
+    }
+    for (crd::u32 w = full; w < width; ++w)
+    {
+        sums = Body::template step<true>(sums, a, x, base + w * height, walk.next(), w, lens);
+    }
+    return sums;
+}
+
+// Slice s alone, its sums stored to out.
+template <typename Body, bool Delta, typename T>
+void run_slice(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out)[Body::kOut]) noexcept
+{
+    constexpr crd::u32 height = Body::kC;
+    auto walk = slice_columns<Body, Delta>(a, s);
+    const crd::u32 full = full_columns<height>(a.row_len + static_cast<crd::usize>(s) * height);
+    Body::store(finish<Body>(Body::zero(), a, x, s, 0, full, walk), out);
+}
+
+// Slices s and s + 1 of one column form as a pair, two independent sets of sums in flight.
+template <typename Body, bool Delta, typename T>
+void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kOut], T (&out1)[Body::kOut]) noexcept
+{
+    constexpr crd::u32 height = Body::kC;
+    auto walk0 = slice_columns<Body, Delta>(a, s);
+    auto walk1 = slice_columns<Body, Delta>(a, s + 1U);
+    const crd::u32* lens0 = a.row_len + static_cast<crd::usize>(s) * height;
+    const crd::u32* lens1 = lens0 + height;
+    const crd::u32 full0 = full_columns<height>(lens0);
+    const crd::u32 full1 = full_columns<height>(lens1);
+    const crd::u32 b0 = a.slice_ptr[s];
+    const crd::u32 b1 = a.slice_ptr[s + 1U];
+    const crd::u32 both = full0 < full1 ? full0 : full1;
+    typename Body::Sums sum0 = Body::zero();
+    typename Body::Sums sum1 = Body::zero();
+    for (crd::u32 w = 0; w < both; ++w)
+    {
+        sum0 = Body::template step<false>(sum0, a, x, b0 + w * height, walk0.next(), w, lens0);
+        sum1 = Body::template step<false>(sum1, a, x, b1 + w * height, walk1.next(), w, lens1);
+    }
+    Body::store(finish<Body>(sum0, a, x, s, both, full0, walk0), out0);
+    Body::store(finish<Body>(sum1, a, x, s + 1U, both, full1, walk1), out1);
+}
+
+// Two slices of one column form both at least this wide run as a pair; narrower ones run alone, where a pair lost 4%
+// to 15% on DRAM-resident matrices and gained nothing in L2 (2026-10-27 board). kNoPairs: every slice runs alone.
+inline constexpr crd::u32 kPairWidth = 8;
+inline constexpr crd::u32 kNoPairs = 0xFFFFFFFFU;
+
+// The driver. Body: the lane sums of one slice (Sums), zero(), step<Masked>(sums, a, x, offset, c, w, lens) for column
+// w of the C lanes at element offset, their columns at c, and store(sums, out) of its kOut values (C rows of
+// Write::kParts).
+template <typename Body, crd::u32 PairWidth, typename T, typename Write>
+void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end) noexcept
+{
+    constexpr crd::u32 height = Body::kC;
+    static_assert(Body::kOut == height * Write::kParts, "a body stores one sum per part of each row");
+    T out0[Body::kOut];
+    T out1[Body::kOut];
+    crd::u32 s = s_begin;
+    while (s < s_end)
+    {
+        const bool delta = delta16(a, s);
+        const bool pair = PairWidth != kNoPairs && s + 1U < s_end && a.slice_width[s] >= PairWidth &&
+                          a.slice_width[s + 1U] >= PairWidth && delta16(a, s + 1U) == delta;
+        if (!pair)
+        {
+            if (delta)
+            {
+                run_slice<Body, true>(a, x, s, out0);
+            }
+            else
+            {
+                run_slice<Body, false>(a, x, s, out0);
+            }
+            write_slice<height>(a, write, s, out0, y);
+            s += 1U;
+            continue;
+        }
+        if (delta)
+        {
+            run_pair<Body, true>(a, x, s, out0, out1);
+        }
+        else
+        {
+            run_pair<Body, false>(a, x, s, out0, out1);
+        }
+        write_slice<height>(a, write, s, out0, y);
+        write_slice<height>(a, write, s + 1U, out1, y);
+        s += 2U;
+    }
+}
+
+// A vector gather's signed 32-bit index reaches the first 2^31 columns of x; a wider x takes the body's scalar loads.
+inline constexpr crd::u32 kGatherColumns = 0x80000000U;
 
 // One sweep's pick: Body at PairWidth, its scalar-load form where x is too wide for a gather.
 template <typename Body, crd::u32 PairWidth, typename T, typename Write>
@@ -225,12 +359,12 @@ template <typename T, crd::u32 C> struct ScalarBody
     };
     static Sums zero() noexcept { return Sums{}; }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<T>& a, const T* x, crd::u32 off, crd::u32 w,
+    static Sums step(Sums sums, const SellSlices<T>& a, const T* x, crd::u32 off, const crd::u32* c, crd::u32 w,
                      const crd::u32* lens) noexcept
     {
         for (crd::u32 lane = 0; lane < C; ++lane)
         {
-            const T xv = *x_of<Masked>(x, a.col_idx[off + lane], w, lens[lane]);
+            const T xv = *x_of<Masked>(x, c[lane], w, lens[lane]);
             sums.lane[lane] = sums.lane[lane] + a.vals[off + lane] * xv;
         }
         return sums;
@@ -255,13 +389,13 @@ template <typename T> struct ScalarComplexBody
     };
     static Sums zero() noexcept { return Sums{}; }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<T>& a, const T* x, crd::u32 off, crd::u32 w,
+    static Sums step(Sums sums, const SellSlices<T>& a, const T* x, crd::u32 off, const crd::u32* c, crd::u32 w,
                      const crd::u32* lens) noexcept
     {
         for (crd::u32 lane = 0; lane < kC; ++lane)
         {
             const T* v = a.vals + 2U * static_cast<crd::usize>(off + lane);
-            const T* xv = x_of<Masked>(x, 2U * static_cast<crd::usize>(a.col_idx[off + lane]), w, lens[lane]);
+            const T* xv = x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane]), w, lens[lane]);
             sums.re[lane] = sums.re[lane] + (v[0] * xv[0] - v[1] * xv[1]);
             sums.im[lane] = sums.im[lane] + (v[0] * xv[1] + v[1] * xv[0]);
         }
@@ -308,10 +442,9 @@ template <bool Gather> struct Avx2F64Body
     using Sums = __m256d;
     static Sums zero() noexcept { return _mm256_setzero_pd(); }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         __m256d xv;
         if constexpr (!Gather)
         {
@@ -343,10 +476,9 @@ template <bool Gather> struct Avx2F32Body
     using Sums = __m256;
     static Sums zero() noexcept { return _mm256_setzero_ps(); }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         __m256 xv;
         if constexpr (!Gather)
         {
@@ -401,10 +533,9 @@ struct Avx2C64Body
         return _mm256_insertf128_pd(_mm256_castpd128_pd256(lo), hi, 1);
     }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         const crd::f64* v = a.vals + 2U * static_cast<crd::usize>(off);
         sums.lo = _mm256_add_pd(sums.lo, mul(_mm256_loadu_pd(v), x_pair<Masked>(x, c, w, lens, 0)));
         sums.hi = _mm256_add_pd(sums.hi, mul(_mm256_loadu_pd(v + 4), x_pair<Masked>(x, c, w, lens, 2)));
@@ -425,10 +556,9 @@ struct Avx2C32Body
     using Sums = __m256;
     static Sums zero() noexcept { return _mm256_setzero_ps(); }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         const __m256 v = _mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off));
         const __m256 xv = _mm256_insertf128_ps(_mm256_castps128_ps256(c32_x_pair<Masked>(x, c, w, lens, 0)),
                                                c32_x_pair<Masked>(x, c, w, lens, 2), 1);
@@ -457,10 +587,9 @@ struct Sse2F64Body
     };
     static Sums zero() noexcept { return Sums{_mm_setzero_pd(), _mm_setzero_pd()}; }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         const __m128d x_lo =
             _mm_loadh_pd(_mm_load_sd(x_of<Masked>(x, c[0], w, lens[0])), x_of<Masked>(x, c[1], w, lens[1]));
         const __m128d x_hi =
@@ -487,10 +616,9 @@ struct Sse2F32Body
     };
     static Sums zero() noexcept { return Sums{_mm_setzero_ps(), _mm_setzero_ps()}; }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         alignas(16) crd::f32 xg[kC]; // scalar loads, then two vector loads: 2% ahead of four-lane shuffles in L2
         for (crd::u32 lane = 0; lane < kC; ++lane)
         {
@@ -521,15 +649,14 @@ struct Sse2C64Body
         return Sums{{_mm_setzero_pd(), _mm_setzero_pd(), _mm_setzero_pd(), _mm_setzero_pd()}};
     }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
         const __m128d negate_re = _mm_set_pd(0.0, -0.0);
         for (crd::u32 lane = 0; lane < kC; ++lane)
         {
             const __m128d v = _mm_loadu_pd(a.vals + 2U * static_cast<crd::usize>(off + lane));
-            const __m128d xv =
-                _mm_loadu_pd(x_of<Masked>(x, 2U * static_cast<crd::usize>(a.col_idx[off + lane]), w, lens[lane]));
+            const __m128d xv = _mm_loadu_pd(x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane]), w, lens[lane]));
             const __m128d re_im = _mm_mul_pd(_mm_unpacklo_pd(v, v), xv);
             const __m128d im_re = _mm_mul_pd(_mm_unpackhi_pd(v, v), _mm_shuffle_pd(xv, xv, 1));
             sums.lane[lane] = _mm_add_pd(sums.lane[lane], _mm_add_pd(re_im, _mm_xor_pd(im_re, negate_re)));
@@ -564,10 +691,9 @@ struct Sse2C32Body
         return _mm_add_ps(re_im, _mm_xor_ps(im_re, _mm_setr_ps(-0.0F, 0.0F, -0.0F, 0.0F)));
     }
     template <bool Masked>
-    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, crd::u32 w,
-                     const crd::u32* lens) noexcept
+    static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
     {
-        const crd::u32* c = a.col_idx + off;
         const crd::f32* v = a.vals + 2U * static_cast<crd::usize>(off);
         sums.lo = _mm_add_ps(sums.lo, mul(_mm_loadu_ps(v), c32_x_pair<Masked>(x, c, w, lens, 0)));
         sums.hi = _mm_add_ps(sums.hi, mul(_mm_loadu_ps(v + 4), c32_x_pair<Masked>(x, c, w, lens, 2)));

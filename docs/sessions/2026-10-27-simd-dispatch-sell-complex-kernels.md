@@ -73,3 +73,27 @@ Linux: each level's smallest size and L1's line, where the OS reports them). Thi
 Verification (win-debug): the [kernels] differential runs every entry at both sweeps and at Streaming with `cols`
 past 2^31 (the scalar-load fallback) for all four types at portable, sse2 and avx2, bit for bit with CSR; the byte
 counts and the resident cut are checked; the whole sparse program passes; iterative and eigen tests build.
+
+## SELL with 16-bit column deltas
+
+- CI read: no completed run has a new failed job; push runs 40573013280 back to 40539013278 were cancelled with no
+  failed job, 40573536615 (`db9692aa`) is pending, complete run 40515770381 is still running (win-relwithdebinfo).
+  DIAG.11c and DIAG.12 stay Needs CI.
+- Format: a slice stores its columns as u32 or Delta16, each σ row's first column (`col_first`, one u32 a row once any
+  slice is Delta16) plus a u16 gap a column (`col_delta`, 0 at w = 0 and in the padding). `delta_ptr` counts the
+  Delta16 elements before each slice, so a U32 slice's columns start at `slice_ptr[s] - delta_ptr[s]` and the kind is
+  `delta_ptr[s + 1] != delta_ptr[s]`; no array is stored twice.
+- `to_sell(..., SellIndex)`: U32, Delta16 (each slice wider than 2 whose gaps fit 16 bits, as u32 differences, so an
+  unsorted row stays u32) or Auto (Delta16 when a whole-matrix spmv's bytes exceed `sparse_resident_bytes()`). A
+  slice 2 wide or less reads fewer bytes as u32 (4 C first columns plus 2 C a column against 4 C a column).
+- Kernels: the driver walks a slice's columns (`U32Columns`, `Delta16Columns`: a load and an add a lane; the avx2
+  gathering bodies widen four or eight gaps in one `vpmovzxwd` add) and hands each step its C columns; a pair runs two
+  slices of one form. The bodies are unchanged apart from taking the columns, so every form gives the same bits.
+- `range_bytes`/`stored_bytes` count 2 bytes a gap and the first columns; the CLI `spmv_sell` and `to_sell` commands
+  take `index` (auto, u32, delta16).
+- Verification (win-debug): the [kernels] differential runs both forms at every level for all four types, adding
+  matrices of 200003 columns with gaps of exactly 65535 and 65536, columns 0 and cols - 1 and empty rows, each holding
+  both forms, and decodes every slice against the CSR rows; Auto's cut is checked at the resident size; the complex
+  parallel case runs Delta16 at 1, 3 and 7 jobs; the CLI case runs every `index`. The sparse program passes; the
+  iterative and eigen tests build. Board candidates for the row-close pass: the Auto cut (L2 or L3) and Delta16's
+  cost on L2-resident ranges.

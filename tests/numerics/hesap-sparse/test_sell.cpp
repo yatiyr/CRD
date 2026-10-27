@@ -11,6 +11,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <cstdint>
+#include <cstring>
 #include <variant>
 
 using crd::hesap::Complex64;
@@ -183,7 +184,7 @@ TEST_CASE("CLI spmv_sell.f64 matches spmv.f64 bit-for-bit", "[hesap][sparse][sel
     REQUIRE(sell_rec != nullptr);
     REQUIRE(csr_rec != nullptr);
 
-    crd::memory::TlsfAllocator alloc(64 * 1024);
+    crd::memory::TlsfAllocator alloc(256 * 1024);
     auto make_args = [&]() {
         crd::hesap::cli::CommandArgs args(&alloc);
         args.set_u64("rows", 3);
@@ -216,4 +217,22 @@ TEST_CASE("CLI spmv_sell.f64 matches spmv.f64 bit-for-bit", "[hesap][sparse][sel
     {
         CHECK(ys[i] == yc[i]);  // SELL CLI == CSR CLI, bit-for-bit
     }
+
+    // "index" picks the column form: every form gives the same bits; an unknown form is refused.
+    for (const char* form : {"auto", "u32", "delta16"})
+    {
+        auto args = make_args();
+        args.set_string("index", form);
+        const auto r = sell_rec->impl(args);
+        REQUIRE(r.ok);
+        const auto* b = std::get_if<crd::hesap::cli::ResultBinaryBlob>(&r.value);
+        REQUIRE(b != nullptr);
+        REQUIRE(b->bytes.size() == bc->bytes.size());
+        const bool same = std::memcmp(b->bytes.data(), bc->bytes.data(), bc->bytes.size()) == 0;
+        INFO("index " << form);
+        CHECK(same);
+    }
+    auto bad = make_args();
+    bad.set_string("index", "u16");
+    CHECK(!sell_rec->impl(bad).ok);
 }

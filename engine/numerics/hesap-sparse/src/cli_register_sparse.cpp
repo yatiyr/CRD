@@ -461,6 +461,32 @@ template <typename U, Trans Tr> CommandResult impl_spmv_complex(const CommandArg
 
 // ---- spmv_sell : y = alpha*A*x + beta*y via SELL-C-σ (None only) --------
 
+// The SELL column form a command names in "index": auto (the default), u32 or delta16.
+bool read_sell_index(const CommandArgs& args, SellIndex& out)
+{
+    const crd::containers::StringView name = args.get_string("index");
+    if (name.empty() || name == crd::containers::StringView{"auto"})
+    {
+        out = SellIndex::Auto;
+        return true;
+    }
+    if (name == crd::containers::StringView{"u32"})
+    {
+        out = SellIndex::U32;
+        return true;
+    }
+    if (name == crd::containers::StringView{"delta16"})
+    {
+        out = SellIndex::Delta16;
+        return true;
+    }
+    return false;
+}
+
+inline constexpr const char* kSellIndexError = "index must be auto, u32 or delta16";
+inline constexpr const char* kSellIndexParam =
+    "SELL column form: auto (default: delta16 when the spmv streams beyond L2) | u32 | delta16";
+
 template <typename T> CommandResult impl_spmv_sell_real(const CommandArgs& args)
 {
     TripletInputs in;
@@ -471,7 +497,12 @@ template <typename T> CommandResult impl_spmv_sell_real(const CommandArgs& args)
     }
     TripletBuilder<T> b(args.alloc, in.rows, in.cols);
     fill_builder_real<T>(b, in);
-    auto sell = to_sell(b.compress(), args.alloc);
+    SellIndex index = SellIndex::Auto;
+    if (!read_sell_index(args, index))
+    {
+        return error_result(args.alloc, kSellIndexError);
+    }
+    auto sell = to_sell(b.compress(), args.alloc, 0, index);
 
     const auto xs = args.get_f64_array("x");
     if (xs.size() != in.cols)
@@ -510,7 +541,12 @@ template <typename U> CommandResult impl_spmv_sell_complex(const CommandArgs& ar
     }
     TripletBuilder<Complex<U>> b(args.alloc, in.rows, in.cols);
     fill_builder_complex<U>(b, in);
-    auto sell = to_sell(b.compress(), args.alloc);
+    SellIndex index = SellIndex::Auto;
+    if (!read_sell_index(args, index))
+    {
+        return error_result(args.alloc, kSellIndexError);
+    }
+    auto sell = to_sell(b.compress(), args.alloc, 0, index);
 
     const auto xs = args.get_f64_array("x");
     if (xs.size() != static_cast<crd::usize>(in.cols) * 2)
@@ -1708,9 +1744,15 @@ template <typename T> CommandResult impl_to_sell_real(const CommandArgs& args)
         return error_result(args.alloc, err);
     }
     const crd::u32 sigma = static_cast<crd::u32>(args.get_u64("sigma").value_or(0));
+    SellIndex index = SellIndex::Auto;
+    if (!read_sell_index(args, index))
+    {
+        return error_result(args.alloc, kSellIndexError);
+    }
     TripletBuilder<T> tb(args.alloc, in.rows, in.cols);
     fill_builder_real<T>(tb, in);
-    return scalar_result(args.alloc, static_cast<crd::f64>(to_sell<T>(tb.compress(), args.alloc, sigma).num_slices));
+    const crd::u32 slices = to_sell<T>(tb.compress(), args.alloc, sigma, index).num_slices;
+    return scalar_result(args.alloc, static_cast<crd::f64>(slices));
 }
 
 template <typename U> CommandResult impl_to_sell_complex(const CommandArgs& args)
@@ -1722,10 +1764,15 @@ template <typename U> CommandResult impl_to_sell_complex(const CommandArgs& args
         return error_result(args.alloc, err);
     }
     const crd::u32 sigma = static_cast<crd::u32>(args.get_u64("sigma").value_or(0));
+    SellIndex index = SellIndex::Auto;
+    if (!read_sell_index(args, index))
+    {
+        return error_result(args.alloc, kSellIndexError);
+    }
     TripletBuilder<Complex<U>> tb(args.alloc, in.rows, in.cols);
     fill_builder_complex<U>(tb, in);
-    return scalar_result(args.alloc,
-                         static_cast<crd::f64>(to_sell<Complex<U>>(tb.compress(), args.alloc, sigma).num_slices));
+    const crd::u32 slices = to_sell<Complex<U>>(tb.compress(), args.alloc, sigma, index).num_slices;
+    return scalar_result(args.alloc, static_cast<crd::f64>(slices));
 }
 
 // Type-agnostic: row k's stored column indices (structure only).
@@ -1951,17 +1998,21 @@ CRD_HESAP_CLI_REGISTER_MODULE(
             &impl_spmv_complex<crd::f64, Trans::Transpose>);
 
         // spmv_sell.<T> : y = alpha*A*x + beta*y via the SELL-C-σ SIMD primary.
+        auto spmv_sell_schema = [&](const char* name, const char* desc)
+        {
+            CommandSchema s = make_spmv_schema(alloc, name, desc);
+            add_param(s, alloc, "index", kSellIndexParam, ParamKind::String, false);
+            return s;
+        };
+        reg.register_command(spmv_sell_schema("hesap.sparse.spmv_sell.f32", "y = alpha*A*x + beta*y via SELL (f32)."),
+                             &impl_spmv_sell_real<crd::f32>);
+        reg.register_command(spmv_sell_schema("hesap.sparse.spmv_sell.f64", "y = alpha*A*x + beta*y via SELL (f64)."),
+                             &impl_spmv_sell_real<crd::f64>);
         reg.register_command(
-            make_spmv_schema(alloc, "hesap.sparse.spmv_sell.f32", "y = alpha*A*x + beta*y via SELL (f32)."),
-            &impl_spmv_sell_real<crd::f32>);
-        reg.register_command(
-            make_spmv_schema(alloc, "hesap.sparse.spmv_sell.f64", "y = alpha*A*x + beta*y via SELL (f64)."),
-            &impl_spmv_sell_real<crd::f64>);
-        reg.register_command(
-            make_spmv_schema(alloc, "hesap.sparse.spmv_sell.c32", "y = alpha*A*x + beta*y via SELL (Complex<f32>)."),
+            spmv_sell_schema("hesap.sparse.spmv_sell.c32", "y = alpha*A*x + beta*y via SELL (Complex<f32>)."),
             &impl_spmv_sell_complex<crd::f32>);
         reg.register_command(
-            make_spmv_schema(alloc, "hesap.sparse.spmv_sell.c64", "y = alpha*A*x + beta*y via SELL (Complex<f64>)."),
+            spmv_sell_schema("hesap.sparse.spmv_sell.c64", "y = alpha*A*x + beta*y via SELL (Complex<f64>)."),
             &impl_spmv_sell_complex<crd::f64>);
 
         // transpose.<T> : returns A^T values (row-major of A^T).
@@ -2380,6 +2431,7 @@ CRD_HESAP_CLI_REGISTER_MODULE(
         {
             CommandSchema s = make_triplet_schema(alloc, name, desc, OutputKind::Scalar, false);
             add_param(s, alloc, "sigma", "Row-length sort window (0 = global sort; default 0)", ParamKind::U64, false);
+            add_param(s, alloc, "index", kSellIndexParam, ParamKind::String, false);
             return s;
         };
         reg.register_command(to_sell_schema("hesap.sparse.to_sell.f32", "CSR -> SELL; returns num_slices (f32)."),

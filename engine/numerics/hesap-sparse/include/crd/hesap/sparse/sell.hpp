@@ -29,7 +29,8 @@ namespace crd::hesap::sparse
 // stay ascending, so per-row reduction order == CSR -> bit-exact with the
 // v1b-1 baseline. Pad slots are value 0 at column 0; row_len keeps each row's
 // own length, so the kernels never multiply a pad by x (an infinite or NaN
-// x[0] reaches only the rows that store column 0, as in CSR).
+// x[0] reaches only the rows that store column 0, as in CSR). A slice stores its columns as u32 or as each row's
+// first column plus 16-bit gaps (SellIndex::Delta16, 2 index bytes an element where the spmv streams them).
 //
 // Slice height C is per-T (D(sparse)-4): f32->8, f64->4, complex->4. Every
 // type runs per-level kernels (SIMD-DISPATCH, crd/hesap/sparse/sparse_kernels.hpp).
@@ -65,6 +66,15 @@ template <typename T> SellScalarT<T>* sell_scalars(T* p) noexcept
 }
 } // namespace detail
 
+// How to_sell stores each slice's columns (crd/hesap/sparse/sparse_kernels.hpp, SellSlices): as u32, or as each row's
+// first column and 16-bit gaps (Delta16), which cuts an element's index bytes from 4 to 2 where the spmv streams them.
+enum class SellIndex : crd::u8
+{
+    Auto,    // Delta16 when a whole-matrix spmv would stream from beyond the L2 (sparse_resident_bytes()), else U32
+    U32,     // every slice as u32
+    Delta16, // every slice wider than 2 whose gaps fit 16 bits as Delta16, the others as u32
+};
+
 template <typename T>
 struct SellMatrix
 {
@@ -77,29 +87,44 @@ struct SellMatrix
     crd::containers::Array<crd::u32> slice_width;  // length num_slices; padded column count of each slice
     crd::containers::Array<crd::u32> row_len;      // length num_slices*kC; stored count of each σ row (0 = pad row)
     crd::containers::Array<T>        vals;         // column-major within slice; pad = 0
-    crd::containers::Array<crd::u32> col_idx;      // parallel to vals; pad col = 0
+    crd::containers::Array<crd::u32> col_idx;      // the U32 slices' columns, laid out as vals; pad col = 0
+    crd::containers::Array<crd::u32> delta_ptr;    // length num_slices+1; the Delta16 elements before each slice
+    crd::containers::Array<crd::u32> col_first;    // num_slices*kC when any slice is Delta16: each σ row's first column
+    crd::containers::Array<crd::u16> col_delta;    // the Delta16 slices' gaps, laid out as vals; 0 at w = 0 and pads
     crd::containers::Array<crd::u32> perm;         // length rows; perm[slice-row] = original row (σ row sort)
     bool perm_is_identity = true;                  // true when the σ sort reordered no rows (uniform/banded)
 
     explicit SellMatrix(crd::memory::IAllocator* alloc)
-        : slice_ptr(alloc), slice_width(alloc), row_len(alloc), vals(alloc), col_idx(alloc), perm(alloc)
+        : slice_ptr(alloc), slice_width(alloc), row_len(alloc), vals(alloc), col_idx(alloc), delta_ptr(alloc),
+          col_first(alloc), col_delta(alloc), perm(alloc)
     {
     }
 
     [[nodiscard]] crd::usize stored() const noexcept { return vals.size(); }
 
+    // Whether slice s stores its columns as Delta16 (a slice without columns is U32).
+    [[nodiscard]] bool slice_is_delta16(crd::u32 s) const noexcept { return delta_ptr[s + 1] != delta_ptr[s]; }
+
     // The bytes an spmv over slices [s_begin, s_end) streams from the matrix: values, columns and row lengths.
     [[nodiscard]] crd::usize range_bytes(crd::u32 s_begin, crd::u32 s_end) const noexcept
     {
-        const crd::usize elements = slice_ptr.empty() ? 0U : crd::usize{slice_ptr[s_end]} - slice_ptr[s_begin];
-        return elements * (sizeof(T) + sizeof(crd::u32)) + crd::usize{s_end - s_begin} * kC * sizeof(crd::u32);
+        if (slice_ptr.empty())
+        {
+            return 0U;
+        }
+        const crd::usize elements = crd::usize{slice_ptr[s_end]} - slice_ptr[s_begin];
+        const crd::usize deltas = crd::usize{delta_ptr[s_end]} - delta_ptr[s_begin];
+        const crd::usize row_words = col_first.empty() ? 1U : 2U; // row_len, and col_first where it exists
+        return elements * sizeof(T) + (elements - deltas) * sizeof(crd::u32) + deltas * sizeof(crd::u16) +
+               crd::usize{s_end - s_begin} * kC * row_words * sizeof(crd::u32);
     }
 
     // The bytes of every array the matrix holds.
     [[nodiscard]] crd::usize stored_bytes() const noexcept
     {
-        return vals.size() * sizeof(T) +
-               (col_idx.size() + row_len.size() + slice_ptr.size() + slice_width.size() + perm.size()) *
+        return vals.size() * sizeof(T) + col_delta.size() * sizeof(crd::u16) +
+               (col_idx.size() + row_len.size() + slice_ptr.size() + slice_width.size() + delta_ptr.size() +
+                col_first.size() + perm.size()) *
                    sizeof(crd::u32);
     }
 };
@@ -111,10 +136,11 @@ struct SellMatrix
 // row's entries keep their column-ascending order, so per-row reduction is
 // unchanged -> spmv stays bit-exact with the CSR baseline (D(sparse)-3). For
 // uniform / banded matrices (equal row lengths) the stable sort is the
-// identity permutation -> zero overhead and contiguous y writes.
+// identity permutation -> zero overhead and contiguous y writes. `index` picks each slice's column form; every form
+// gives the same bits.
 template <typename T>
 [[nodiscard]] SellMatrix<T> to_sell(const SparseMatrix<T, SparseFormat::Csr>& a, crd::memory::IAllocator* alloc,
-                                    crd::u32 sigma = 0)
+                                    crd::u32 sigma = 0, SellIndex index = SellIndex::Auto)
 {
     const SparsePattern& pat = a.pattern();
     CRD_ASSERT_MSG(pat.is_compressed(), "to_sell requires a compressed CSR matrix");
@@ -179,13 +205,47 @@ template <typename T>
         out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
     }
 
-    // 2. fill column-major within each slice; pad slots stay 0 (val) / 0 (col).
+    // 2. each slice's column form: Delta16 where asked (Auto: where a whole-matrix spmv streams), the slice is wider
+    //    than 2 (it then reads fewer index bytes: 4 C first columns plus 2 C a column against 4 C a column) and every
+    //    gap of its rows fits 16 bits (u32 differences, so an unsorted row takes U32); else U32.
     const crd::u32 total = out.slice_ptr[out.num_slices];
-    out.vals.resize(total);     // value-initialised to 0 -> padding is 0
-    out.col_idx.resize(total);  // 0 -> padding column 0
+    if (index == SellIndex::Auto)
+    {
+        const crd::usize spmv_bytes = crd::usize{total} * (sizeof(T) + sizeof(crd::u32)) +
+                                      out.row_len.size() * sizeof(crd::u32) +
+                                      (crd::usize{pat.rows} + pat.cols) * sizeof(T);
+        index = spmv_bytes > sparse_resident_bytes() ? SellIndex::Delta16 : SellIndex::U32;
+    }
+    out.delta_ptr.resize(static_cast<crd::usize>(out.num_slices) + 1); // 0: no slice is Delta16
+    for (crd::u32 s = 0; index == SellIndex::Delta16 && s < out.num_slices; ++s)
+    {
+        bool fits = out.slice_width[s] > 2U;
+        const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
+        for (crd::u32 sr = s * height; fits && sr < r_end; ++sr)
+        {
+            const crd::u32 r = perm[sr];
+            for (crd::u32 k = outer[r] + 1U; fits && k < outer[r + 1]; ++k)
+            {
+                fits = inner[k] - inner[k - 1U] <= 0xFFFFU;
+            }
+        }
+        out.delta_ptr[s + 1] = out.delta_ptr[s] + (fits ? height * out.slice_width[s] : 0U);
+    }
+    const crd::u32 deltas = out.delta_ptr[out.num_slices];
+    if (deltas != 0U)
+    {
+        out.col_first.resize(out.row_len.size()); // 0 for empty and pad rows
+    }
+
+    // 3. fill column-major within each slice; pad slots stay 0 (val) / 0 (col) / 0 (gap).
+    out.vals.resize(total);             // value-initialised to 0 -> padding is 0
+    out.col_idx.resize(total - deltas); // 0 -> padding column 0
+    out.col_delta.resize(deltas);
     for (crd::u32 s = 0; s < out.num_slices; ++s)
     {
         const crd::u32 base = out.slice_ptr[s];
+        const bool delta = out.slice_is_delta16(s);
+        const crd::u32 col_base = delta ? out.delta_ptr[s] : base - out.delta_ptr[s];
         for (crd::u32 lane = 0; lane < height; ++lane)
         {
             const crd::u32 sr = s * height + lane;
@@ -198,9 +258,20 @@ template <typename T>
             const crd::u32 len = outer[r + 1] - rs;
             for (crd::u32 w = 0; w < len; ++w)
             {
-                const crd::u32 dst = base + w * height + lane;
-                out.vals[dst]      = srcv[rs + w];
-                out.col_idx[dst]   = inner[rs + w];
+                out.vals[base + w * height + lane] = srcv[rs + w];
+                const crd::u32 at = col_base + w * height + lane;
+                if (!delta)
+                {
+                    out.col_idx[at] = inner[rs + w];
+                }
+                else if (w == 0U)
+                {
+                    out.col_first[sr] = inner[rs];
+                }
+                else
+                {
+                    out.col_delta[at] = static_cast<crd::u16>(inner[rs + w] - inner[rs + w - 1U]);
+                }
             }
         }
     }
@@ -224,6 +295,9 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
                                a.row_len.data(),
                                sell_scalars(a.vals.data()),
                                a.col_idx.data(),
+                               a.delta_ptr.data(),
+                               a.col_first.data(),
+                               a.col_delta.data(),
                                a.perm_is_identity ? nullptr : a.perm.data(),
                                a.rows,
                                a.cols};

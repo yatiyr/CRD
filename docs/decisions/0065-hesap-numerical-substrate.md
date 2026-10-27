@@ -876,6 +876,10 @@ are now **formally locked**, plus one added at v1g:
   default; identity fast-path for uniform/banded); within-row columns stay
   ascending → bit-exact with CSR. Per-row lengths keep padding unread (a pad
   never multiplies x, so a non-finite x[0] reaches only rows storing column 0).
+  Each slice stores its columns as u32 or Delta16 (each row's first column plus
+  u16 gaps; a slice of width ≤ 2 or with a gap ≥ 2^16 stays u32); `SellIndex`
+  Auto takes Delta16 when a whole-matrix spmv streams beyond the L2. The form
+  changes only how columns are read, so every form gives the CSR bits.
 - **D(sparse)-5** Element-wise (`add`/`subtract`/`hadamard`): `a OP b`
   left-first single-rounded; topology-hash fast-path + symbolic-union merge.
 - **D(sparse)-6** BSR block-spmv uses a **dedicated fully-unrolled small-block
