@@ -35,12 +35,13 @@
 //        src-fastest dim, b = the dst-fastest dim — in kPermuteTile edges so
 //        both the read and the write stream stay inside L1 for the duration
 //        of a tile; all remaining dims are an outer odometer around the tiled
-//        2-D kernel. f32 runs the per-level tensor kernels (tensor_kernels.hpp,
-//        SIMD-DISPATCH): the serial walk is one call, a multithreaded task one
-//        call per region; tiles with a unit source stride run the in-register
-//        transpose (8x8 on AVX2, 4x4 on SSE2) over 16-row blocks, one source
-//        line each, and prefetch the next tile (across planes and tasks);
-//        everything else runs the scalar tile loop with the write stream
+//        2-D kernel. f32, f64, Complex<f32> and Complex<f64> run the per-level
+//        tensor kernels (tensor_kernels.hpp, SIMD-DISPATCH): the serial walk is
+//        one call, a multithreaded task one call per region; tiles with a unit
+//        source stride run the in-register transposes (32-byte squares on
+//        AVX2, 16-byte on SSE2) over blocks of one 64-byte source line per
+//        column, and prefetch the next tile (across planes and tasks); every
+//        other element type runs the scalar tile loop with the write stream
 //        contiguous.
 //      - tiny inner extents fall back to the simple strided row loop (tile
 //        machinery is pure overhead below kPermuteTinyDim).
@@ -55,11 +56,85 @@
 // reallocates dst's storage before the copy runs.
 // ---------------------------------------------------------------------------
 
+namespace crd::hesap
+{
+template <typename T> struct Complex; // crd/hesap/complex.hpp: a permute moves its (re, im) pair
+} // namespace crd::hesap
+
 namespace crd::hesap::tensor
 {
 
 namespace detail
 {
+
+// The elements the per-level permute kernels move: f32 and f64, and Complex<f32> and Complex<f64> as their (re, im)
+// pairs of Scalar (Scalar void: every other type runs the scalar tiles here).
+template <typename T> struct PermuteKernelElem
+{
+    using Scalar = void;
+    static constexpr bool kComplex = false;
+};
+
+template <> struct PermuteKernelElem<crd::f32>
+{
+    using Scalar = crd::f32;
+    static constexpr bool kComplex = false;
+};
+
+template <> struct PermuteKernelElem<crd::f64>
+{
+    using Scalar = crd::f64;
+    static constexpr bool kComplex = false;
+};
+
+template <> struct PermuteKernelElem<Complex<crd::f32>>
+{
+    using Scalar = crd::f32;
+    static constexpr bool kComplex = true;
+};
+
+template <> struct PermuteKernelElem<Complex<crd::f64>>
+{
+    using Scalar = crd::f64;
+    static constexpr bool kComplex = true;
+};
+
+template <typename T>
+inline constexpr bool kPermuteKernel = !std::is_void_v<typename PermuteKernelElem<std::remove_const_t<T>>::Scalar>;
+
+// The kernel's view of an element array: its scalars, a complex element's (re, im) pair in order.
+template <typename T> inline auto* permute_scalars(T* p) noexcept
+{
+    using E = PermuteKernelElem<std::remove_const_t<T>>;
+    using S = typename E::Scalar;
+    static_assert(sizeof(T) == sizeof(S) * (E::kComplex ? 2U : 1U) && alignof(T) == alignof(S),
+                  "a permute element is its scalars");
+    if constexpr (std::is_const_v<T>)
+    {
+        return reinterpret_cast<const S*>(p);
+    }
+    else
+    {
+        return reinterpret_cast<S*>(p);
+    }
+}
+
+// A kernel request's element fields (PermuteRegion, PermuteWalk): alpha's (re, im) parts in the kernel's scalar (im 0
+// for a real element) and whether the element is complex.
+template <typename T, typename Request> inline void permute_kernel_alpha(Request& r, const T& alpha) noexcept
+{
+    r.complex = PermuteKernelElem<T>::kComplex;
+    if constexpr (PermuteKernelElem<T>::kComplex)
+    {
+        r.alpha_re = alpha.re;
+        r.alpha_im = alpha.im;
+    }
+    else
+    {
+        r.alpha_re = alpha;
+        r.alpha_im = 0;
+    }
+}
 
 // Tile edge (elements) for the blocked 2-D transpose. A 32x32 tile touches
 // 32*32*sizeof(T) bytes per stream (4 KB f32 / 8 KB f64, 2 streams) — well
@@ -104,28 +179,51 @@ static_assert(kPermuteMaxRank == kMaxRank, "the permute kernels walk every rank 
 
 // One (a, b) region [0, na) x [0, nb) in tile_a x tile_b tiles: dst(ia, ib)
 // at ia*ra + ib, src(ia, ib) at ia*sa + ib*sb; next locates the region after
-// it (the kernels prefetch it). f32 runs the per-level tensor kernel (the
-// in-register transposes on SSE2 and AVX2, non-temporal stores when stream is
-// set; one call per region); every other type runs the scalar tiles.
+// it (the kernels prefetch it). The kernel elements run the per-level tensor
+// kernel (the in-register transposes on SSE2 and AVX2, non-temporal stores
+// when stream is set; one call per region); every other type runs the scalar
+// tiles.
 template <bool Scale, typename T>
 inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
                            crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream, PermuteNext next) noexcept
 {
-    if constexpr (std::is_same_v<T, crd::f32>)
+    if constexpr (kPermuteKernel<T>)
     {
-        tensor_kernels().table->permute_region_f32(
-            {dst, ra, src, sa, sb, na, nb, tile_a, tile_b, alpha, Scale, stream, next});
+        using S = typename PermuteKernelElem<T>::Scalar;
+        S* const d = permute_scalars(dst);
+        const S* const s = permute_scalars(src);
+        PermuteRegion<S> r{d, ra, s, sa, sb, na, nb, tile_a, tile_b, S(0), S(0), false, Scale, stream, next};
+        permute_kernel_alpha(r, alpha);
+        if constexpr (std::is_same_v<S, crd::f32>)
+        {
+            tensor_kernels().table->permute_region_f32(r);
+        }
+        else
+        {
+            tensor_kernels().table->permute_region_f64(r);
+        }
     }
     else
     {
         (void)stream;
+        const auto put = [&alpha](T* d, const T* s)
+        {
+            if constexpr (Scale)
+            {
+                *d = alpha * *s;
+            }
+            else
+            {
+                *d = *s;
+            }
+        };
         permute_region_tiles(na, nb, tile_a, tile_b, sa, sb, ra, next,
                              [&](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext /*next*/)
                              {
-                                 permute_tile_scalar<Scale>(
+                                 permute_tile_scalar<1U>(
                                      dst + static_cast<crd::i64>(ta) * ra + static_cast<crd::i64>(tb), ra,
                                      src + static_cast<crd::i64>(ta) * sa + static_cast<crd::i64>(tb) * sb, sa, sb, ha,
-                                     hb, alpha);
+                                     hb, put);
                              });
     }
 }
@@ -162,9 +260,10 @@ inline void permute_rows(T* dst, const T* src, const crd::u64* shp, const crd::i
 }
 
 // Tiled-transpose kernel: the outer odometer (permute_outer_order) around one
-// square-tiled 2-D transpose of the (a, b) plane per step. f32 runs the whole
-// walk in the per-level tensor kernel (one call per transform, so each plane
-// prefetches the next); every other type walks here on the scalar tiles.
+// square-tiled 2-D transpose of the (a, b) plane per step. The kernel elements
+// run the whole walk in the per-level tensor kernel (one call per transform,
+// so each plane prefetches the next); every other type walks here on the
+// scalar tiles.
 template <bool Scale, typename T>
 inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
                           crd::u32 m, crd::u32 a, T alpha) noexcept
@@ -183,9 +282,20 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
     // 0.44 ns/elem at 64 vs 0.51 at 32).
     const crd::u64 tile =
         (static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U || nb <= kPermuteTile) ? kPermuteTile : 32U;
-    if constexpr (std::is_same_v<T, crd::f32>)
+    if constexpr (kPermuteKernel<T>)
     {
-        tensor_kernels().table->permute_walk_f32({dst, src, shp, s_in, s_out, m, a, tile, alpha, Scale});
+        using S = typename PermuteKernelElem<T>::Scalar;
+        PermuteWalk<S> w{
+            permute_scalars(dst), permute_scalars(src), shp, s_in, s_out, m, a, tile, S(0), S(0), false, Scale};
+        permute_kernel_alpha(w, alpha);
+        if constexpr (std::is_same_v<S, crd::f32>)
+        {
+            tensor_kernels().table->permute_walk_f32(w);
+        }
+        else
+        {
+            tensor_kernels().table->permute_walk_f64(w);
+        }
     }
     else
     {
@@ -421,14 +531,14 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
         permute_tiled<Scale>(dst, src, shp, s_in, s_out, m, a, alpha);
         return;
     }
-    // Streaming gate: DRAM-sized f32 dst + the alignment the NT stores require.
-    // The base is 64B-aligned (Tensor::resize); every region origin and
-    // microkernel row start is 32B-aligned iff the dst-fastest extent is a
-    // multiple of 8 f32, since every other dst stride is a multiple of it
-    // (the a-stride alone is not enough: an outer dim between a and b steps
-    // the origin by its own stride).
-    const bool stream = std::is_same_v<T, crd::f32> && total * sizeof(T) >= kPermuteMtStreamBytes &&
-                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && (shp[m - 1U] & 7U) == 0U;
+    // Streaming gate: a DRAM-sized dst of kernel elements + the alignment the NT
+    // stores require. The base is 64B-aligned (Tensor::resize); every region
+    // origin and microkernel row start is 32B-aligned iff the dst-fastest
+    // extent is a multiple of 32 bytes, since every other dst stride is a
+    // multiple of it (the a-stride alone is not enough: an outer dim between a
+    // and b steps the origin by its own stride).
+    const bool stream = kPermuteKernel<T> && total * sizeof(T) >= kPermuteMtStreamBytes &&
+                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && ((shp[m - 1U] * sizeof(T)) & 31U) == 0U;
     permute_tiled_mt<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, stream);
 }
 

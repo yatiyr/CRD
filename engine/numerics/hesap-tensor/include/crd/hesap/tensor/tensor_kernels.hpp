@@ -1,10 +1,10 @@
 // The table of the hesap-tensor kernels (SIMD-DISPATCH, ADR-0134 §5): one per CPU level the kernel unit is built for
 // (engine/numerics/hesap-tensor/kernels/tensor_kernels.cpp), resolved by tensor_kernels() in
 // crd/hesap/tensor/tensor_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing from
-// it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and IEEE multiplies, the
-// binned sum is partition-independent by construction, the quantizers are per-element IEEE operations, the quantized
-// dots are exact integers combined in one fixed f32 order (single-rounded FMAs), softmax's exp core has a
-// bit-identical vector twin, and the Philox blocks are integer rounds.
+// it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and the IEEE operations
+// of a real or Complex<T> product, the binned sum is partition-independent by construction, the quantizers are
+// per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order (single-rounded
+// FMAs), softmax's exp core has a bit-identical vector twin, and the Philox blocks are integer rounds.
 
 #pragma once
 
@@ -34,42 +34,49 @@ struct PermuteNext
     crd::u64 nb;
 };
 
-// One (a, b) region of an f32 permute: dst(ia, ib) = src(ia, ib) (scale: alpha * src(ia, ib)) over [0, na) x [0, nb),
-// with dst(ia, ib) at dst + ia*ra + ib and src(ia, ib) at src + ia*sa + ib*sb, in tile_a x tile_b tiles, a-tiles outer.
-// stream asks for non-temporal stores (the region origin dst 32-byte aligned, ra and tile_b multiples of 8),
-// published before the call returns; a level without them stores normally.
-struct PermuteRegionF32
+// One (a, b) region of a permute of f32 or f64 elements, or (complex) of Complex<T> elements (crd/hesap/complex.hpp)
+// as their (re, im) pairs: dst(ia, ib) = src(ia, ib) (scale: alpha * src(ia, ib), alpha = alpha_re + i alpha_im in
+// Complex<T>'s operator*; alpha_re alone for a real element) over [0, na) x [0, nb), with dst(ia, ib) at element
+// ia*ra + ib of dst and src(ia, ib) at element ia*sa + ib*sb of src, in tile_a x tile_b tiles, a-tiles outer. stream
+// asks for non-temporal stores (the region origin dst 32-byte aligned, ra and tile_b elements a multiple of 32
+// bytes), published before the call returns; a level without them stores normally.
+template <typename T> struct PermuteRegion
 {
-    crd::f32* dst;
+    T* dst;
     crd::i64 ra;
-    const crd::f32* src;
+    const T* src;
     crd::i64 sa;
     crd::i64 sb;
     crd::u64 na;
     crd::u64 nb;
     crd::u64 tile_a;
     crd::u64 tile_b;
-    crd::f32 alpha;
+    T alpha_re;
+    T alpha_im;
+    bool complex;
     bool scale;
     bool stream;
     PermuteNext next{};
 };
 
-// A whole serial tiled f32 permute (permute.hpp permute_tiled), one call per transform: the m collapsed dims in dst
-// order (dst dim d has extent shp[d], src stride s_in[d] and dst stride s_out[d]; m <= kPermuteMaxRank), a the
-// src-fastest dim and m - 1 the dst-fastest. Every (a, m - 1) plane is one region in tile x tile tiles; the planes
-// follow permute_outer_order (permute_tiles.hpp), and each region prefetches the next plane.
-struct PermuteWalkF32
+// A whole serial tiled permute (permute.hpp permute_tiled), one call per transform, of the elements of PermuteRegion:
+// the m collapsed dims in dst order (dst dim d has extent shp[d], src stride s_in[d] and dst stride s_out[d], in
+// elements; m <= kPermuteMaxRank), a the src-fastest dim and m - 1 the dst-fastest. Every (a, m - 1) plane is one
+// region in tile x tile tiles; the planes follow permute_outer_order (permute_tiles.hpp), and each region prefetches
+// the next plane.
+template <typename T> struct PermuteWalk
 {
-    crd::f32* dst;
-    const crd::f32* src;
+    T* dst;
+    const T* src;
     const crd::u64* shp;
     const crd::i64* s_in;
     const crd::i64* s_out;
     crd::u32 m;
     crd::u32 a;
     crd::u64 tile;
-    crd::f32 alpha;
+    T alpha_re;
+    T alpha_im;
+    bool complex;
     bool scale;
 };
 
@@ -118,10 +125,12 @@ struct NnLinearI8
 
 struct TensorKernels
 {
-    // The f32 region of a permute (PermuteRegionF32): one multithreaded permute task.
-    void (*permute_region_f32)(const PermuteRegionF32& region) noexcept;
-    // The serial tiled f32 permute (PermuteWalkF32).
-    void (*permute_walk_f32)(const PermuteWalkF32& walk) noexcept;
+    // The region of a permute of f32 or Complex<f32> (f64, Complex<f64>) elements: one multithreaded permute task.
+    void (*permute_region_f32)(const PermuteRegion<crd::f32>& region) noexcept;
+    void (*permute_region_f64)(const PermuteRegion<crd::f64>& region) noexcept;
+    // The serial tiled permute of those elements (PermuteWalk).
+    void (*permute_walk_f32)(const PermuteWalk<crd::f32>& walk) noexcept;
+    void (*permute_walk_f64)(const PermuteWalk<crd::f64>& walk) noexcept;
     // The Tier R sum: deposit p[0..n) into acc (the binnedBLAS dbdsum protocol), bit-identical to the scalar
     // deposits in any partition.
     void (*binned_sum_f64)(detail::BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept;

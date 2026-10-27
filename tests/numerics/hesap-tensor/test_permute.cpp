@@ -10,6 +10,7 @@
 
 #include "ref_permute.inc"
 
+#include <crd/hesap/complex.hpp>
 #include <crd/hesap/tensor/permute.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -20,6 +21,7 @@
 #include <cstdio>
 #include <cstring>
 
+using crd::hesap::Complex;
 using crd::hesap::tensor::permute_copy;
 using crd::hesap::tensor::Tensor;
 using crd::hesap::tensor::TensorStatus;
@@ -36,6 +38,22 @@ template <typename T> void fill_pattern(Tensor<T>& t)
     {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
         t.data()[i] = static_cast<T>(static_cast<crd::i64>(s >> 20U)) / static_cast<T>(1U << 16U);
+    }
+}
+
+// The same for complex elements, the parts from separate draws.
+template <typename S> void fill_pattern(Tensor<Complex<S>>& t)
+{
+    crd::u64 s = 0x9E3779B97F4A7C15ULL;
+    const auto draw = [&s]
+    {
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<S>(static_cast<crd::i64>(s >> 20U)) / static_cast<S>(1U << 16U);
+    };
+    for (crd::u64 i = 0; i < t.size(); ++i)
+    {
+        const S re = draw();
+        t.data()[i] = Complex<S>{re, draw()};
     }
 }
 
@@ -116,6 +134,8 @@ TEST_CASE("v14-d permute_copy: 2-D transposes bit-exact vs the reference walk", 
     crd::memory::TlsfAllocator alloc(8U << 20U);
     run_2d_transpose_corpus<crd::f32>(&alloc);
     run_2d_transpose_corpus<crd::f64>(&alloc);
+    run_2d_transpose_corpus<Complex<crd::f32>>(&alloc);
+    run_2d_transpose_corpus<Complex<crd::f64>>(&alloc);
 }
 
 TEST_CASE("v14-d permute_copy: every order of a 5x6x7x8 and of a 4x5x6", "[hesap][tensor][v14][permute]")
@@ -151,15 +171,19 @@ TEST_CASE("v14-d permute_copy: rank-4 tiled walks with every extent past the row
 {
     // Every extent >= kPermuteTinyDim, so each order that moves the fastest dim takes the tiled walk: a 16^4 (one
     // tile per plane), a-extents that cut the 16-row block (17, 33) and planes of several tiles (40), unscaled, scaled
-    // and by -0.
+    // and by -0, for f32, f64 and both complex elements.
     crd::memory::TlsfAllocator alloc(64U << 20U);
     const crd::u64 shapes[][4] = {{16U, 16U, 16U, 16U}, {17U, 9U, 11U, 24U}, {33U, 12U, 10U, 40U}};
     for (const auto& shape : shapes)
     {
         Tensor<crd::f32> tf(&alloc, shape);
         Tensor<crd::f64> td(&alloc, shape);
+        Tensor<Complex<crd::f32>> tcf(&alloc, shape);
+        Tensor<Complex<crd::f64>> tcd(&alloc, shape);
         fill_pattern(tf);
         fill_pattern(td);
+        fill_pattern(tcf);
+        fill_pattern(tcd);
         crd::u32 perm[] = {0U, 1U, 2U, 3U};
         do
         {
@@ -167,6 +191,11 @@ TEST_CASE("v14-d permute_copy: rank-4 tiled walks with every extent past the row
             check_permute_case<crd::f32>(&alloc, tf.view(), perm, -0.5F);
             check_permute_case<crd::f32>(&alloc, tf.view(), perm, -0.0F);
             check_permute_case<crd::f64>(&alloc, td.view(), perm);
+            check_permute_case<crd::f64>(&alloc, td.view(), perm, -0.375);
+            check_permute_case<Complex<crd::f32>>(&alloc, tcf.view(), perm);
+            check_permute_case<Complex<crd::f32>>(&alloc, tcf.view(), perm, Complex<crd::f32>{-0.5F, 0.25F});
+            check_permute_case<Complex<crd::f64>>(&alloc, tcd.view(), perm);
+            check_permute_case<Complex<crd::f64>>(&alloc, tcd.view(), perm, Complex<crd::f64>{0.0, -1.5});
         } while (std::next_permutation(perm, perm + 4));
     }
 }
@@ -321,6 +350,18 @@ TEST_CASE("v14-d permute_copy: fused alpha scale", "[hesap][tensor][v14][permute
         fill_pattern(t);
         const crd::u32 order[] = {3U, 1U, 0U, 2U};
         check_permute_case<crd::f32>(&alloc, t.view(), order, 2.0F);
+    }
+    {
+        const crd::u64 shape[] = {129U, 65U};
+        Tensor<Complex<crd::f32>> tf(&alloc, shape);
+        Tensor<Complex<crd::f64>> td(&alloc, shape);
+        fill_pattern(tf);
+        fill_pattern(td);
+        const crd::u32 transpose[] = {1U, 0U};
+        check_permute_case<Complex<crd::f32>>(&alloc, tf.view(), transpose, Complex<crd::f32>{1.5F, -0.25F});
+        check_permute_case<Complex<crd::f32>>(&alloc, tf.view(), transpose, Complex<crd::f32>{-0.0F, 0.0F});
+        check_permute_case<Complex<crd::f64>>(&alloc, td.view(), transpose, Complex<crd::f64>{0.0, 1.0});
+        check_permute_case<Complex<crd::f64>>(&alloc, td.view(), transpose, Complex<crd::f64>{-3.0, 2.0});
     }
 }
 
@@ -537,4 +578,62 @@ TEST_CASE("v14-d MT: {1,2,3,4,7,8,16} workers produce bit-identical permutes", "
         CHECK(same2);
         CHECK(same4);
     }
+}
+
+namespace
+{
+
+// The multithreaded permute of src by order (unscaled and by alpha) at 2, 3, 7 and 8 workers against the serial one.
+template <typename T>
+void check_mt_matches_serial(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::u64> shape,
+                             crd::containers::ConstSpan<crd::u32> order, T alpha)
+{
+    Tensor<T> src(alloc, shape);
+    fill_pattern(src);
+    Tensor<T> ref(alloc);
+    Tensor<T> ref_scaled(alloc);
+    REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref) == TensorStatus::Ok); // serial
+    REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref_scaled, alpha) == TensorStatus::Ok);
+    for (crd::u32 nw : {2U, 3U, 7U, 8U})
+    {
+        crd::jobs::Config cfg;
+        cfg.num_threads = nw;
+        crd::jobs::init(cfg);
+        Tensor<T> out(alloc);
+        Tensor<T> out_scaled(alloc);
+        const TensorStatus st = permute_copy(TensorView<const T>(src.view()), order, out);
+        const TensorStatus st_scaled = permute_copy(TensorView<const T>(src.view()), order, out_scaled, alpha);
+        crd::jobs::shutdown();
+        REQUIRE(st == TensorStatus::Ok);
+        REQUIRE(st_scaled == TensorStatus::Ok);
+        REQUIRE(out.size() == ref.size());
+        INFO("workers " << nw << " element bytes " << sizeof(T));
+        CHECK(std::memcmp(out.data(), ref.data(), ref.size() * sizeof(T)) == 0);
+        CHECK(std::memcmp(out_scaled.data(), ref_scaled.data(), ref.size() * sizeof(T)) == 0);
+    }
+}
+
+// A transpose the stream gate admits (dst rows of 1024 elements) and a reversal it refuses: dst-fastest rows of 34
+// eight-byte or 33 sixteen-byte elements (16 bytes past a 32-byte multiple), whose a-stride is a 32-byte multiple
+// while the middle dim steps each task's region origin by one row.
+template <typename T> void check_mt_element(crd::memory::IAllocator* alloc, T alpha)
+{
+    const crd::u64 transpose_shape[] = {1024U, 1536U};
+    const crd::u32 transpose[] = {1U, 0U};
+    check_mt_matches_serial<T>(alloc, transpose_shape, transpose, alpha);
+    const crd::u64 row = sizeof(T) == 16U ? 33U : 34U;
+    const crd::u64 reversal_shape[] = {row, 8U, 4096U};
+    const crd::u32 reversal[] = {2U, 1U, 0U};
+    check_mt_matches_serial<T>(alloc, reversal_shape, reversal, alpha);
+}
+
+} // namespace
+
+TEST_CASE("v14-d MT: f64 and complex permutes, streamed or not, match serial at every worker count",
+          "[hesap][tensor][v14][permute][moat]")
+{
+    crd::memory::TlsfAllocator alloc(1ULL << 28U);
+    check_mt_element<crd::f64>(&alloc, -2.0);
+    check_mt_element<Complex<crd::f32>>(&alloc, Complex<crd::f32>{-2.0F, 0.5F});
+    check_mt_element<Complex<crd::f64>>(&alloc, Complex<crd::f64>{0.75, -1.25});
 }

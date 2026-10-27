@@ -1,15 +1,15 @@
 // The hesap-tensor kernels of crd/hesap/tensor/tensor_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS), the tile loops
 // and the binned operations included, so no function of this unit is shared with general code or with another level.
-// The portable bodies are the scalar loops; the AVX2 bodies run the 8x8 in-register f32 transpose (4x4 on SSE2; with
-// next-tile prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators,
-// the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four lanes
-// at a time and the Philox block loop 24 blocks at a time (16 on SSE2, whose other bodies are the portable loops); the
-// avx2 level's AVX-VNNI variant
-// (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the permute is element copies and
-// IEEE multiplies, the binned representation is partition-independent, the quantizers are per-element IEEE operations,
-// the dots are exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are
-// integer operations.
+// The portable bodies are the scalar loops; the AVX2 bodies run the in-register permute transposes of f32, f64 and
+// complex elements (8x8 f32, 4x4 64-bit and 2x2 128-bit squares; 4x4, 2x2 and single elements on SSE2; with next-tile
+// prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators, the nn
+// quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four lanes at a
+// time and the Philox block loop 24 blocks at a time (16 on SSE2, whose other bodies are the portable loops); the avx2
+// level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the
+// permute is element copies and the IEEE operations of a real or complex product, the binned representation is
+// partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
+// f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
@@ -29,238 +29,426 @@ namespace
 
 using detail::BinnedRungs;
 
-#if CRD_SIMD_HAS_SSE2
-// The in-register f32 transposes. Source column j is kMicro contiguous floats at src + j*src_stride (the a dim is
-// stride-1 in the source); destination row i is kMicro contiguous floats at dst + i*dst_stride (the b dim is stride-1
-// in the destination). Both memory streams stay unit-stride. Stream stores non-temporally (dst 16-byte aligned on
-// SSE2, 32-byte on AVX2).
-#if CRD_SIMD_HAS_AVX2
-constexpr crd::u64 kMicro = 8U;
-
-// The classic unpack/shuffle/permute2f128 8x8.
-template <bool Scale, bool Stream>
-void transpose_micro_f32(const crd::f32* src, crd::i64 src_stride, crd::f32* dst, crd::i64 dst_stride,
-                         crd::f32 alpha) noexcept
+// A permute element: Parts scalars S, one real value or (Parts 2) the (re, im) pair of a Complex<S>
+// (crd/hesap/complex.hpp, which this unit never includes: general code passes the pairs as scalars).
+template <typename S, crd::u64 Parts> struct Elem
 {
-    __m256 r0 = _mm256_loadu_ps(src + 0 * src_stride);
-    __m256 r1 = _mm256_loadu_ps(src + 1 * src_stride);
-    __m256 r2 = _mm256_loadu_ps(src + 2 * src_stride);
-    __m256 r3 = _mm256_loadu_ps(src + 3 * src_stride);
-    __m256 r4 = _mm256_loadu_ps(src + 4 * src_stride);
-    __m256 r5 = _mm256_loadu_ps(src + 5 * src_stride);
-    __m256 r6 = _mm256_loadu_ps(src + 6 * src_stride);
-    __m256 r7 = _mm256_loadu_ps(src + 7 * src_stride);
+    using Scalar = S;
+    static constexpr crd::u64 kParts = Parts;
+    static constexpr crd::i64 kStep = static_cast<crd::i64>(Parts); // the scalars from one element to the next
+    static constexpr crd::u64 kBytes = sizeof(S) * Parts;
+    // The elements in a 64-byte line: a tile runs its micro transposes over blocks of this many rows of a, so each
+    // source line is read in one visit.
+    static constexpr crd::u64 kBlockRows = 64U / kBytes;
+};
 
-    const __m256 t0 = _mm256_unpacklo_ps(r0, r1);
-    const __m256 t1 = _mm256_unpackhi_ps(r0, r1);
-    const __m256 t2 = _mm256_unpacklo_ps(r2, r3);
-    const __m256 t3 = _mm256_unpackhi_ps(r2, r3);
-    const __m256 t4 = _mm256_unpacklo_ps(r4, r5);
-    const __m256 t5 = _mm256_unpackhi_ps(r4, r5);
-    const __m256 t6 = _mm256_unpacklo_ps(r6, r7);
-    const __m256 t7 = _mm256_unpackhi_ps(r6, r7);
-
-    const __m256 s0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
-
-    r0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-    r1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-    r2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-    r3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-    r4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-    r5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-    r6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-    r7 = _mm256_permute2f128_ps(s3, s7, 0x31);
-
-    if constexpr (Scale)
+// One element: a bit copy, or alpha times it in the operations of Complex<S>'s operator* (re = ar*xr - ai*xi,
+// im = ar*xi + ai*xr; ar*x for a real element).
+template <typename E, bool Scale, typename S> inline void put_element(S* d, const S* s, S ar, S ai) noexcept
+{
+    if constexpr (!Scale)
     {
-        const __m256 va = _mm256_set1_ps(alpha);
-        r0 = _mm256_mul_ps(r0, va);
-        r1 = _mm256_mul_ps(r1, va);
-        r2 = _mm256_mul_ps(r2, va);
-        r3 = _mm256_mul_ps(r3, va);
-        r4 = _mm256_mul_ps(r4, va);
-        r5 = _mm256_mul_ps(r5, va);
-        r6 = _mm256_mul_ps(r6, va);
-        r7 = _mm256_mul_ps(r7, va);
+        (void)ar;
+        (void)ai;
+        for (crd::u64 p = 0; p < E::kParts; ++p)
+        {
+            d[p] = s[p];
+        }
     }
-
-    if constexpr (Stream)
+    else if constexpr (E::kParts == 1U)
     {
-        // Non-temporal stores: no read-for-ownership, no cache pollution (the DRAM-bound permute; the write-combining
-        // buffers pair consecutive ib tiles into full lines).
-        _mm256_stream_ps(dst + 0 * dst_stride, r0);
-        _mm256_stream_ps(dst + 1 * dst_stride, r1);
-        _mm256_stream_ps(dst + 2 * dst_stride, r2);
-        _mm256_stream_ps(dst + 3 * dst_stride, r3);
-        _mm256_stream_ps(dst + 4 * dst_stride, r4);
-        _mm256_stream_ps(dst + 5 * dst_stride, r5);
-        _mm256_stream_ps(dst + 6 * dst_stride, r6);
-        _mm256_stream_ps(dst + 7 * dst_stride, r7);
+        (void)ai;
+        d[0] = ar * s[0];
     }
     else
     {
-        _mm256_storeu_ps(dst + 0 * dst_stride, r0);
-        _mm256_storeu_ps(dst + 1 * dst_stride, r1);
-        _mm256_storeu_ps(dst + 2 * dst_stride, r2);
-        _mm256_storeu_ps(dst + 3 * dst_stride, r3);
-        _mm256_storeu_ps(dst + 4 * dst_stride, r4);
-        _mm256_storeu_ps(dst + 5 * dst_stride, r5);
-        _mm256_storeu_ps(dst + 6 * dst_stride, r6);
-        _mm256_storeu_ps(dst + 7 * dst_stride, r7);
+        const S re = s[0];
+        const S im = s[1];
+        d[0] = ar * re - ai * im;
+        d[1] = ar * im + ai * re;
     }
 }
-#else
-constexpr crd::u64 kMicro = 4U;
 
-// The unpack/movelh/movehl 4x4 (_MM_TRANSPOSE4_PS).
-template <bool Scale, bool Stream>
-void transpose_micro_f32(const crd::f32* src, crd::i64 src_stride, crd::f32* dst, crd::i64 dst_stride,
-                         crd::f32 alpha) noexcept
+// The scalar tile of put_element: the edge strips, the non-unit source strides and the portable level.
+template <typename E, bool Scale, typename S>
+void scalar_tile(S* dst, crd::i64 ra, const S* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb, S ar,
+                 S ai) noexcept
 {
-    const __m128 r0 = _mm_loadu_ps(src + 0 * src_stride);
-    const __m128 r1 = _mm_loadu_ps(src + 1 * src_stride);
-    const __m128 r2 = _mm_loadu_ps(src + 2 * src_stride);
-    const __m128 r3 = _mm_loadu_ps(src + 3 * src_stride);
+    detail::permute_tile_scalar<E::kParts>(dst, ra, src, sa, sb, na, nb,
+                                           [ar, ai](S* d, const S* s) { put_element<E, Scale>(d, s, ar, ai); });
+}
 
-    const __m128 t0 = _mm_unpacklo_ps(r0, r1);
-    const __m128 t1 = _mm_unpackhi_ps(r0, r1);
-    const __m128 t2 = _mm_unpacklo_ps(r2, r3);
-    const __m128 t3 = _mm_unpackhi_ps(r2, r3);
+#if CRD_SIMD_HAS_SSE2
+// The in-register transposes: a register holds kRegBytes of elements, and a micro transpose moves a square of
+// kRegBytes / E::kBytes elements on a side. Source column j is that many contiguous elements at src + j*src_stride
+// (the a dim is stride-1 in the source); destination row i is that many contiguous elements at dst + i*dst_stride
+// (the b dim is stride-1 in the destination), so both memory streams stay unit-stride. The shuffles move bits only;
+// a scale is applied to each destination row register. Stream stores non-temporally (dst register-aligned).
+#if CRD_SIMD_HAS_AVX2
+using Reg = __m256d;
+constexpr crd::u64 kRegBytes = 32U;
 
-    __m128 o0 = _mm_movelh_ps(t0, t2);
-    __m128 o1 = _mm_movehl_ps(t2, t0);
-    __m128 o2 = _mm_movelh_ps(t1, t3);
-    __m128 o3 = _mm_movehl_ps(t3, t1);
+inline Reg load_reg(const crd::f32* p) noexcept
+{
+    return _mm256_castps_pd(_mm256_loadu_ps(p));
+}
 
-    if constexpr (Scale)
-    {
-        const __m128 va = _mm_set1_ps(alpha);
-        o0 = _mm_mul_ps(o0, va);
-        o1 = _mm_mul_ps(o1, va);
-        o2 = _mm_mul_ps(o2, va);
-        o3 = _mm_mul_ps(o3, va);
-    }
+inline Reg load_reg(const crd::f64* p) noexcept
+{
+    return _mm256_loadu_pd(p);
+}
 
+template <bool Stream> inline void store_reg(crd::f32* p, Reg v) noexcept
+{
     if constexpr (Stream)
     {
-        _mm_stream_ps(dst + 0 * dst_stride, o0);
-        _mm_stream_ps(dst + 1 * dst_stride, o1);
-        _mm_stream_ps(dst + 2 * dst_stride, o2);
-        _mm_stream_ps(dst + 3 * dst_stride, o3);
+        _mm256_stream_ps(p, _mm256_castpd_ps(v));
     }
     else
     {
-        _mm_storeu_ps(dst + 0 * dst_stride, o0);
-        _mm_storeu_ps(dst + 1 * dst_stride, o1);
-        _mm_storeu_ps(dst + 2 * dst_stride, o2);
-        _mm_storeu_ps(dst + 3 * dst_stride, o3);
+        _mm256_storeu_ps(p, _mm256_castpd_ps(v));
     }
+}
+
+template <bool Stream> inline void store_reg(crd::f64* p, Reg v) noexcept
+{
+    if constexpr (Stream)
+    {
+        _mm256_stream_pd(p, v);
+    }
+    else
+    {
+        _mm256_storeu_pd(p, v);
+    }
+}
+
+inline Reg broadcast(crd::f32 v) noexcept
+{
+    return _mm256_castps_pd(_mm256_set1_ps(v));
+}
+
+inline Reg broadcast(crd::f64 v) noexcept
+{
+    return _mm256_set1_pd(v);
+}
+#else
+using Reg = __m128d;
+constexpr crd::u64 kRegBytes = 16U;
+
+inline Reg load_reg(const crd::f32* p) noexcept
+{
+    return _mm_castps_pd(_mm_loadu_ps(p));
+}
+
+inline Reg load_reg(const crd::f64* p) noexcept
+{
+    return _mm_loadu_pd(p);
+}
+
+template <bool Stream> inline void store_reg(crd::f32* p, Reg v) noexcept
+{
+    if constexpr (Stream)
+    {
+        _mm_stream_ps(p, _mm_castpd_ps(v));
+    }
+    else
+    {
+        _mm_storeu_ps(p, _mm_castpd_ps(v));
+    }
+}
+
+template <bool Stream> inline void store_reg(crd::f64* p, Reg v) noexcept
+{
+    if constexpr (Stream)
+    {
+        _mm_stream_pd(p, v);
+    }
+    else
+    {
+        _mm_storeu_pd(p, v);
+    }
+}
+
+inline Reg broadcast(crd::f32 v) noexcept
+{
+    return _mm_castps_pd(_mm_set1_ps(v));
+}
+
+inline Reg broadcast(crd::f64 v) noexcept
+{
+    return _mm_set1_pd(v);
 }
 #endif
 
-// The f32 in a 64-byte line: a tile runs its micro transposes over blocks of this many rows of a, so each source line
-// is read in one visit.
-constexpr crd::u64 kBlockRows = 16U;
-
-// One tile. With a unit source stride the micro transposes cover the tile's kMicro grid in blocks of kBlockRows rows
-// of a (ib outer within a block), and the right and bottom strips finish scalar; any other source stride is the
-// scalar tile. Each block step prefetches into L2 (HPTT's T2 hint) the same block step of the next tile (next, inside
-// its extents only): one line of each source column and, unless the stores are non-temporal, the destination rows
-// once per line of them. On the streamed path with near columns (<= 64 KB apart) it also prefetches the next step's
-// source columns into L1: it hides strided-read latency the streamer cannot track in the multithreaded regime (2D 46.8
-// -> 51.2 GB/s); on page-scattered columns those TLB walks cost more than they hide.
-template <bool Scale, bool Stream>
-void permute_tile_f32(crd::f32* dst, crd::i64 ra, const crd::f32* src, crd::i64 sa, crd::i64 sb, crd::u64 na,
-                      crd::u64 nb, crd::f32 alpha, PermuteNext next) noexcept
+// alpha's parts in every lane of their scalar type.
+struct RegScale
 {
+    Reg re;
+    Reg im;
+};
+
+// alpha * v per element, the operations of put_element lane by lane: the products in its operand order, then a true
+// subtract on the re lanes and an add on the im lanes (addsub on AVX2, both and a select on SSE2), so a propagated
+// NaN keeps its sign.
+template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
+{
+    using S = typename E::Scalar;
+    if constexpr (E::kParts == 1U && sizeof(S) == 4U)
+    {
+#if CRD_SIMD_HAS_AVX2
+        return _mm256_castps_pd(_mm256_mul_ps(_mm256_castpd_ps(k.re), _mm256_castpd_ps(v)));
+#else
+        return _mm_castps_pd(_mm_mul_ps(_mm_castpd_ps(k.re), _mm_castpd_ps(v)));
+#endif
+    }
+    else if constexpr (E::kParts == 1U)
+    {
+#if CRD_SIMD_HAS_AVX2
+        return _mm256_mul_pd(k.re, v);
+#else
+        return _mm_mul_pd(k.re, v);
+#endif
+    }
+    else if constexpr (sizeof(S) == 4U)
+    {
+#if CRD_SIMD_HAS_AVX2
+        const __m256 x = _mm256_castpd_ps(v);
+        const __m256 t1 = _mm256_mul_ps(_mm256_castpd_ps(k.re), x);
+        const __m256 t2 = _mm256_mul_ps(_mm256_castpd_ps(k.im), _mm256_permute_ps(x, _MM_SHUFFLE(2, 3, 0, 1)));
+        return _mm256_castps_pd(_mm256_addsub_ps(t1, t2));
+#else
+        const __m128 x = _mm_castpd_ps(v);
+        const __m128 t1 = _mm_mul_ps(_mm_castpd_ps(k.re), x);
+        const __m128 t2 = _mm_mul_ps(_mm_castpd_ps(k.im), _mm_shuffle_ps(x, x, _MM_SHUFFLE(2, 3, 0, 1)));
+        const __m128 re_lanes = _mm_castsi128_ps(_mm_set_epi32(0, -1, 0, -1));
+        return _mm_castps_pd(
+            _mm_or_ps(_mm_and_ps(re_lanes, _mm_sub_ps(t1, t2)), _mm_andnot_ps(re_lanes, _mm_add_ps(t1, t2))));
+#endif
+    }
+    else
+    {
+#if CRD_SIMD_HAS_AVX2
+        const __m256d t1 = _mm256_mul_pd(k.re, v);
+        const __m256d t2 = _mm256_mul_pd(k.im, _mm256_permute_pd(v, 0x5));
+        return _mm256_addsub_pd(t1, t2);
+#else
+        const __m128d t1 = _mm_mul_pd(k.re, v);
+        const __m128d t2 = _mm_mul_pd(k.im, _mm_shuffle_pd(v, v, 1));
+        return _mm_move_sd(_mm_add_pd(t1, t2), _mm_sub_pd(t1, t2));
+#endif
+    }
+}
+
+// One square of the in-register transpose: 32-bit elements the unpack/shuffle/permute2f128 8x8 (the unpack/movelh/
+// movehl 4x4 on SSE2), 64-bit ones the unpack/permute2f128 4x4 (the unpack 2x2), 128-bit ones the permute2f128 2x2
+// (one element on SSE2). Strides are in scalars.
+template <typename E, bool Scale, bool Stream>
+void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typename E::Scalar* dst, crd::i64 dst_stride,
+                     const RegScale& k) noexcept
+{
+    (void)k;
+    const auto put = [&](crd::i64 i, Reg v)
+    {
+        if constexpr (Scale)
+        {
+            v = scale_reg<E>(v, k);
+        }
+        store_reg<Stream>(dst + i * dst_stride, v);
+    };
+    if constexpr (E::kBytes == 4U)
+    {
+#if CRD_SIMD_HAS_AVX2
+        const __m256 r0 = _mm256_loadu_ps(src + 0 * src_stride);
+        const __m256 r1 = _mm256_loadu_ps(src + 1 * src_stride);
+        const __m256 r2 = _mm256_loadu_ps(src + 2 * src_stride);
+        const __m256 r3 = _mm256_loadu_ps(src + 3 * src_stride);
+        const __m256 r4 = _mm256_loadu_ps(src + 4 * src_stride);
+        const __m256 r5 = _mm256_loadu_ps(src + 5 * src_stride);
+        const __m256 r6 = _mm256_loadu_ps(src + 6 * src_stride);
+        const __m256 r7 = _mm256_loadu_ps(src + 7 * src_stride);
+
+        const __m256 t0 = _mm256_unpacklo_ps(r0, r1);
+        const __m256 t1 = _mm256_unpackhi_ps(r0, r1);
+        const __m256 t2 = _mm256_unpacklo_ps(r2, r3);
+        const __m256 t3 = _mm256_unpackhi_ps(r2, r3);
+        const __m256 t4 = _mm256_unpacklo_ps(r4, r5);
+        const __m256 t5 = _mm256_unpackhi_ps(r4, r5);
+        const __m256 t6 = _mm256_unpacklo_ps(r6, r7);
+        const __m256 t7 = _mm256_unpackhi_ps(r6, r7);
+
+        const __m256 s0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m256 s1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+        const __m256 s2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m256 s3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+        const __m256 s4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m256 s5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
+        const __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
+
+        put(0, _mm256_castps_pd(_mm256_permute2f128_ps(s0, s4, 0x20)));
+        put(1, _mm256_castps_pd(_mm256_permute2f128_ps(s1, s5, 0x20)));
+        put(2, _mm256_castps_pd(_mm256_permute2f128_ps(s2, s6, 0x20)));
+        put(3, _mm256_castps_pd(_mm256_permute2f128_ps(s3, s7, 0x20)));
+        put(4, _mm256_castps_pd(_mm256_permute2f128_ps(s0, s4, 0x31)));
+        put(5, _mm256_castps_pd(_mm256_permute2f128_ps(s1, s5, 0x31)));
+        put(6, _mm256_castps_pd(_mm256_permute2f128_ps(s2, s6, 0x31)));
+        put(7, _mm256_castps_pd(_mm256_permute2f128_ps(s3, s7, 0x31)));
+#else
+        const __m128 r0 = _mm_loadu_ps(src + 0 * src_stride);
+        const __m128 r1 = _mm_loadu_ps(src + 1 * src_stride);
+        const __m128 r2 = _mm_loadu_ps(src + 2 * src_stride);
+        const __m128 r3 = _mm_loadu_ps(src + 3 * src_stride);
+
+        const __m128 t0 = _mm_unpacklo_ps(r0, r1);
+        const __m128 t1 = _mm_unpackhi_ps(r0, r1);
+        const __m128 t2 = _mm_unpacklo_ps(r2, r3);
+        const __m128 t3 = _mm_unpackhi_ps(r2, r3);
+
+        put(0, _mm_castps_pd(_mm_movelh_ps(t0, t2)));
+        put(1, _mm_castps_pd(_mm_movehl_ps(t2, t0)));
+        put(2, _mm_castps_pd(_mm_movelh_ps(t1, t3)));
+        put(3, _mm_castps_pd(_mm_movehl_ps(t3, t1)));
+#endif
+    }
+    else if constexpr (E::kBytes == 8U)
+    {
+#if CRD_SIMD_HAS_AVX2
+        const Reg r0 = load_reg(src + 0 * src_stride);
+        const Reg r1 = load_reg(src + 1 * src_stride);
+        const Reg r2 = load_reg(src + 2 * src_stride);
+        const Reg r3 = load_reg(src + 3 * src_stride);
+
+        const __m256d t0 = _mm256_unpacklo_pd(r0, r1);
+        const __m256d t1 = _mm256_unpackhi_pd(r0, r1);
+        const __m256d t2 = _mm256_unpacklo_pd(r2, r3);
+        const __m256d t3 = _mm256_unpackhi_pd(r2, r3);
+
+        put(0, _mm256_permute2f128_pd(t0, t2, 0x20));
+        put(1, _mm256_permute2f128_pd(t1, t3, 0x20));
+        put(2, _mm256_permute2f128_pd(t0, t2, 0x31));
+        put(3, _mm256_permute2f128_pd(t1, t3, 0x31));
+#else
+        const Reg r0 = load_reg(src + 0 * src_stride);
+        const Reg r1 = load_reg(src + 1 * src_stride);
+
+        put(0, _mm_unpacklo_pd(r0, r1));
+        put(1, _mm_unpackhi_pd(r0, r1));
+#endif
+    }
+    else
+    {
+        static_assert(E::kBytes == 16U, "the permute elements are 4, 8 or 16 bytes");
+#if CRD_SIMD_HAS_AVX2
+        const Reg r0 = load_reg(src + 0 * src_stride);
+        const Reg r1 = load_reg(src + 1 * src_stride);
+
+        put(0, _mm256_permute2f128_pd(r0, r1, 0x20));
+        put(1, _mm256_permute2f128_pd(r0, r1, 0x31));
+#else
+        (void)src_stride;
+        put(0, load_reg(src));
+#endif
+    }
+}
+
+// One tile, strides and extents in elements. With a unit source stride the micro transposes cover the tile's grid in
+// blocks of E::kBlockRows rows of a (ib outer within a block), and the right and bottom strips finish scalar; any
+// other source stride is the scalar tile. Each block step prefetches into L2 (HPTT's T2 hint) the same block step of
+// the next tile (next, inside its extents only): one line of each source column and, unless the stores are
+// non-temporal, the destination rows once per line of them. On the streamed path with near columns (<= 64 KB apart)
+// it also prefetches the next step's source columns into L1: it hides strided-read latency the streamer cannot track
+// in the multithreaded regime (2D f32 46.8 -> 51.2 GB/s); on page-scattered columns those TLB walks cost more than
+// they hide.
+template <typename E, bool Scale, bool Stream>
+void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
+                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext next) noexcept
+{
+    using S = typename E::Scalar;
+    constexpr crd::i64 step = E::kStep;
+    constexpr crd::u64 micro = kRegBytes / E::kBytes;
     if (sa != 1)
     {
-        detail::permute_tile_scalar<Scale>(dst, ra, src, sa, sb, na, nb, alpha);
+        scalar_tile<E, Scale>(dst, ra, src, sa, sb, na, nb, ar, ai);
         return;
     }
-    const crd::u64 nam = na & ~(kMicro - 1U);
-    const crd::u64 nbm = nb & ~(kMicro - 1U);
+    const RegScale k{broadcast(ar), broadcast(ai)};
+    const crd::u64 nam = na & ~(micro - 1U);
+    const crd::u64 nbm = nb & ~(micro - 1U);
     const bool has_next = next.na != 0U && next.nb != 0U;
-    const crd::f32* next_src = has_next ? src + next.src : src;
-    const crd::f32* next_dst = has_next ? dst + next.dst : dst;
-    const bool near_cols = sb * static_cast<crd::i64>(sizeof(crd::f32)) <= 65536;
-    for (crd::u64 ia0 = 0; ia0 < nam; ia0 += kBlockRows)
+    const S* next_src = has_next ? src + next.src * step : src;
+    const S* next_dst = has_next ? dst + next.dst * step : dst;
+    const bool near_cols = (sb < 0 ? -sb : sb) * static_cast<crd::i64>(E::kBytes) <= 65536;
+    for (crd::u64 ia0 = 0; ia0 < nam; ia0 += E::kBlockRows)
     {
-        const crd::u64 ia1 = ia0 + kBlockRows < nam ? ia0 + kBlockRows : nam;
-        for (crd::u64 ib = 0; ib < nbm; ib += kMicro)
+        const crd::u64 ia1 = ia0 + E::kBlockRows < nam ? ia0 + E::kBlockRows : nam;
+        for (crd::u64 ib = 0; ib < nbm; ib += micro)
         {
             if (ia0 < next.na)
             {
-                for (crd::u64 k = ib; k < ib + kMicro && k < next.nb; ++k)
+                for (crd::u64 c = ib; c < ib + micro && c < next.nb; ++c)
                 {
-                    _mm_prefetch(reinterpret_cast<const char*>(next_src + static_cast<crd::i64>(ia0) +
-                                                               static_cast<crd::i64>(k) * sb),
+                    _mm_prefetch(reinterpret_cast<const char*>(
+                                     next_src + (static_cast<crd::i64>(ia0) + static_cast<crd::i64>(c) * sb) * step),
                                  _MM_HINT_T2);
                 }
-                if (!Stream && ib % kBlockRows == 0U && ib < next.nb)
+                if (!Stream && ib % E::kBlockRows == 0U && ib < next.nb)
                 {
                     for (crd::u64 i = ia0; i < ia1 && i < next.na; ++i)
                     {
-                        _mm_prefetch(reinterpret_cast<const char*>(next_dst + static_cast<crd::i64>(i) * ra +
-                                                                   static_cast<crd::i64>(ib)),
+                        _mm_prefetch(reinterpret_cast<const char*>(
+                                         next_dst + (static_cast<crd::i64>(i) * ra + static_cast<crd::i64>(ib)) * step),
                                      _MM_HINT_T2);
                     }
                 }
             }
-            if (Stream && near_cols && ib + kMicro < nbm)
+            if (Stream && near_cols && ib + micro < nbm)
             {
-                for (crd::u64 k = ib + kMicro; k < ib + 2U * kMicro && k < nbm; ++k)
+                for (crd::u64 c = ib + micro; c < ib + 2U * micro && c < nbm; ++c)
                 {
-                    _mm_prefetch(
-                        reinterpret_cast<const char*>(src + static_cast<crd::i64>(ia0) + static_cast<crd::i64>(k) * sb),
-                        _MM_HINT_T0);
+                    _mm_prefetch(reinterpret_cast<const char*>(
+                                     src + (static_cast<crd::i64>(ia0) + static_cast<crd::i64>(c) * sb) * step),
+                                 _MM_HINT_T0);
                 }
             }
-            for (crd::u64 ia = ia0; ia < ia1; ia += kMicro)
+            for (crd::u64 ia = ia0; ia < ia1; ia += micro)
             {
-                transpose_micro_f32<Scale, Stream>(src + static_cast<crd::i64>(ia) + static_cast<crd::i64>(ib) * sb, sb,
-                                                   dst + static_cast<crd::i64>(ia) * ra + static_cast<crd::i64>(ib), ra,
-                                                   alpha);
+                transpose_micro<E, Scale, Stream>(
+                    src + (static_cast<crd::i64>(ia) + static_cast<crd::i64>(ib) * sb) * step, sb * step,
+                    dst + (static_cast<crd::i64>(ia) * ra + static_cast<crd::i64>(ib)) * step, ra * step, k);
             }
         }
     }
     if (nbm < nb) // right strip: rows [0, nam), cols [nbm, nb)
     {
-        detail::permute_tile_scalar<Scale>(dst + static_cast<crd::i64>(nbm), ra, src + static_cast<crd::i64>(nbm) * sb,
-                                           sa, sb, nam, nb - nbm, alpha);
+        scalar_tile<E, Scale>(dst + static_cast<crd::i64>(nbm) * step, ra, src + static_cast<crd::i64>(nbm) * sb * step,
+                              sa, sb, nam, nb - nbm, ar, ai);
     }
     if (nam < na) // bottom strip: rows [nam, na), all cols
     {
-        detail::permute_tile_scalar<Scale>(dst + static_cast<crd::i64>(nam) * ra, ra,
-                                           src + static_cast<crd::i64>(nam) * sa, sa, sb, na - nam, nb, alpha);
+        scalar_tile<E, Scale>(dst + static_cast<crd::i64>(nam) * ra * step, ra,
+                              src + static_cast<crd::i64>(nam) * sa * step, sa, sb, na - nam, nb, ar, ai);
     }
 }
 #else
-template <bool Scale, bool Stream>
-void permute_tile_f32(crd::f32* dst, crd::i64 ra, const crd::f32* src, crd::i64 sa, crd::i64 sb, crd::u64 na,
-                      crd::u64 nb, crd::f32 alpha, PermuteNext /*next*/) noexcept
+template <typename E, bool Scale, bool Stream>
+void permute_tile(typename E::Scalar* dst, crd::i64 ra, const typename E::Scalar* src, crd::i64 sa, crd::i64 sb,
+                  crd::u64 na, crd::u64 nb, typename E::Scalar ar, typename E::Scalar ai, PermuteNext /*next*/) noexcept
 {
-    detail::permute_tile_scalar<Scale>(dst, ra, src, sa, sb, na, nb, alpha);
+    scalar_tile<E, Scale>(dst, ra, src, sa, sb, na, nb, ar, ai);
 }
 #endif
 
-template <bool Scale, bool Stream> void permute_region(const PermuteRegionF32& r) noexcept
+template <typename E, bool Scale, bool Stream> void permute_region(const PermuteRegion<typename E::Scalar>& r) noexcept
 {
-    detail::permute_region_tiles(r.na, r.nb, r.tile_a, r.tile_b, r.sa, r.sb, r.ra, r.next,
-                                 [&r](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext next)
-                                 {
-                                     permute_tile_f32<Scale, Stream>(
-                                         r.dst + static_cast<crd::i64>(ta) * r.ra + static_cast<crd::i64>(tb), r.ra,
-                                         r.src + static_cast<crd::i64>(ta) * r.sa + static_cast<crd::i64>(tb) * r.sb,
-                                         r.sa, r.sb, ha, hb, r.alpha, next);
-                                 });
+    detail::permute_region_tiles(
+        r.na, r.nb, r.tile_a, r.tile_b, r.sa, r.sb, r.ra, r.next,
+        [&r](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb, PermuteNext next)
+        {
+            permute_tile<E, Scale, Stream>(
+                r.dst + (static_cast<crd::i64>(ta) * r.ra + static_cast<crd::i64>(tb)) * E::kStep, r.ra,
+                r.src + (static_cast<crd::i64>(ta) * r.sa + static_cast<crd::i64>(tb) * r.sb) * E::kStep, r.sa, r.sb,
+                ha, hb, r.alpha_re, r.alpha_im, next);
+        });
 #if CRD_SIMD_HAS_SSE2
     if constexpr (Stream)
     {
@@ -269,54 +457,103 @@ template <bool Scale, bool Stream> void permute_region(const PermuteRegionF32& r
 #endif
 }
 
-void permute_region_f32(const PermuteRegionF32& r) noexcept
+template <typename E> void permute_region_element(const PermuteRegion<typename E::Scalar>& r) noexcept
 {
 #if CRD_SIMD_HAS_SSE2
     if (r.stream)
     {
         if (r.scale)
         {
-            permute_region<true, true>(r);
+            permute_region<E, true, true>(r);
         }
         else
         {
-            permute_region<false, true>(r);
+            permute_region<E, false, true>(r);
         }
         return;
     }
 #endif
     if (r.scale)
     {
-        permute_region<true, false>(r);
+        permute_region<E, true, false>(r);
     }
     else
     {
-        permute_region<false, false>(r);
+        permute_region<E, false, false>(r);
+    }
+}
+
+void permute_region_f32(const PermuteRegion<crd::f32>& r) noexcept
+{
+    if (r.complex)
+    {
+        permute_region_element<Elem<crd::f32, 2U>>(r);
+    }
+    else
+    {
+        permute_region_element<Elem<crd::f32, 1U>>(r);
+    }
+}
+
+void permute_region_f64(const PermuteRegion<crd::f64>& r) noexcept
+{
+    if (r.complex)
+    {
+        permute_region_element<Elem<crd::f64, 2U>>(r);
+    }
+    else
+    {
+        permute_region_element<Elem<crd::f64, 1U>>(r);
     }
 }
 
 // The serial walk: every plane one region, which prefetches the next plane.
-template <bool Scale> void permute_walk(const PermuteWalkF32& w) noexcept
+template <typename E, bool Scale> void permute_walk(const PermuteWalk<typename E::Scalar>& w) noexcept
 {
     const crd::u32 b = w.m - 1U;
     detail::permute_walk_planes(w.shp, w.s_in, w.s_out, w.m, w.a,
                                 [&w, b](crd::i64 soff, crd::i64 doff, PermuteNext next)
                                 {
-                                    permute_region<Scale, false>({w.dst + doff, w.s_out[w.a], w.src + soff, w.s_in[w.a],
-                                                                  w.s_in[b], w.shp[w.a], w.shp[b], w.tile, w.tile,
-                                                                  w.alpha, Scale, false, next});
+                                    permute_region<E, Scale, false>({w.dst + doff * E::kStep, w.s_out[w.a],
+                                                                     w.src + soff * E::kStep, w.s_in[w.a], w.s_in[b],
+                                                                     w.shp[w.a], w.shp[b], w.tile, w.tile, w.alpha_re,
+                                                                     w.alpha_im, w.complex, Scale, false, next});
                                 });
 }
 
-void permute_walk_f32(const PermuteWalkF32& w) noexcept
+template <typename E> void permute_walk_element(const PermuteWalk<typename E::Scalar>& w) noexcept
 {
     if (w.scale)
     {
-        permute_walk<true>(w);
+        permute_walk<E, true>(w);
     }
     else
     {
-        permute_walk<false>(w);
+        permute_walk<E, false>(w);
+    }
+}
+
+void permute_walk_f32(const PermuteWalk<crd::f32>& w) noexcept
+{
+    if (w.complex)
+    {
+        permute_walk_element<Elem<crd::f32, 2U>>(w);
+    }
+    else
+    {
+        permute_walk_element<Elem<crd::f32, 1U>>(w);
+    }
+}
+
+void permute_walk_f64(const PermuteWalk<crd::f64>& w) noexcept
+{
+    if (w.complex)
+    {
+        permute_walk_element<Elem<crd::f64, 2U>>(w);
+    }
+    else
+    {
+        permute_walk_element<Elem<crd::f64, 1U>>(w);
     }
 }
 
@@ -1101,7 +1338,8 @@ namespace crd::hesap::tensor
 {
 
 const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
-    &CRD_MATH_LEVEL_NS::permute_region_f32,       &CRD_MATH_LEVEL_NS::permute_walk_f32,
+    &CRD_MATH_LEVEL_NS::permute_region_f32,       &CRD_MATH_LEVEL_NS::permute_region_f64,
+    &CRD_MATH_LEVEL_NS::permute_walk_f32,         &CRD_MATH_LEVEL_NS::permute_walk_f64,
     &CRD_MATH_LEVEL_NS::binned_sum_f64,           &CRD_MATH_LEVEL_NS::quantize_q8_0,
     &CRD_MATH_LEVEL_NS::quantize_u8_row,          &CRD_MATH_LEVEL_NS::nn_softmax_rows,
     &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,        &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,

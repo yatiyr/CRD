@@ -13,6 +13,7 @@ target_link_libraries(crd-hesap-tensor-tests PRIVATE
     crd-core
     crd-containers
     crd-memory
+    crd-hesap  # complex.hpp: the oracle of the complex permute kernels
     crd-hesap-tensor
     Catch2::Catch2WithMain
 )
@@ -34,6 +35,7 @@ target_link_libraries(crd-hesap-tensor-permute-tests PRIVATE
     crd-core
     crd-containers
     crd-memory
+    crd-hesap  # complex.hpp: the Complex<f32> and Complex<f64> permutes
     crd-hesap-tensor
     Catch2::Catch2WithMain
 )
