@@ -9,6 +9,7 @@
 #include <crd/math/simd/convert.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/quatf.hpp>
+#include <crd/math/simd/transcendental.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec4i.hpp>
@@ -525,6 +526,45 @@ usize d_exp_log_core(const Input& in, u64* out) noexcept
     return n;
 }
 
+// The level's vector twins of those cores (four lanes on the 256-bit backends, two on SSE2 and SSE4.2; the cores
+// themselves elsewhere): exp over the raw inputs and over [-750, 750], log over the raw inputs and their magnitudes.
+usize d_exp_log_twins(const Input& in, u64* out) noexcept
+{
+    alignas(32) f64 x[4 * kLanes];
+    for (usize i = 0; i < kLanes; ++i)
+    {
+        x[i] = in.da[i];
+        x[kLanes + i] = (static_cast<f64>(__builtin_bit_cast(u64, in.dc[i]) % 3000001U) / 2000.0) - 750.0;
+        x[(2 * kLanes) + i] = in.db[i];
+        x[(3 * kLanes) + i] = __builtin_bit_cast(f64, __builtin_bit_cast(u64, in.db[i]) & ~(1ULL << 63U));
+    }
+    alignas(32) f64 r[4 * kLanes];
+#if CRD_SIMD_HAS_AVX2
+    for (usize i = 0; i < 4 * kLanes; i += 4)
+    {
+        const __m256d v = _mm256_load_pd(x + i);
+        _mm256_store_pd(r + i, i < 2 * kLanes ? crd::math::crd_exp4(v) : crd::math::crd_log4(v));
+    }
+#elif CRD_SIMD_HAS_SSE2
+    for (usize i = 0; i < 4 * kLanes; i += 2)
+    {
+        const __m128d v = _mm_load_pd(x + i);
+        _mm_store_pd(r + i, i < 2 * kLanes ? crd::math::crd_exp_x2(v) : crd::math::crd_log_x2(v));
+    }
+#else
+    for (usize i = 0; i < 4 * kLanes; ++i)
+    {
+        r[i] = i < 2 * kLanes ? crd::math::crd_exp1(x[i]) : crd::math::crd_log1(x[i]);
+    }
+#endif
+    usize n = 0;
+    for (const f64 value : r)
+    {
+        n += put(value, out + n);
+    }
+    return n;
+}
+
 // ---- Mat4f and Quatf ----
 
 usize mat4(const Input& in, u64* out) noexcept
@@ -651,6 +691,7 @@ constexpr Op kOps[] = {
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
     {"vec4d complex (de)interleave", Compare::Bits, &d_complex},
     {"crd_exp1/crd_log1", Compare::F64Value, &d_exp_log_core},
+    {"exp/log vector twins", Compare::F64Value, &d_exp_log_twins},
     {"mat4f", Compare::F32Value, &mat4},
     {"quatf", Compare::F32Value, &quat},
 };

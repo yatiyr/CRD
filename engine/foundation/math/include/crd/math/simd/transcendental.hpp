@@ -1,6 +1,8 @@
 #pragma once
 
-// crd-math — f64 SIMD transcendentals (natural log + exp), scalar + AVX2 twins that are BIT-IDENTICAL to each other.
+// crd-math — f64 SIMD transcendentals (natural log + exp): AVX2 four-lane and SSE2/SSE4.2 two-lane twins of the scalar
+// cores (crd/math/exp_log_core.hpp), BIT-IDENTICAL to them; the two-lane twins round each FMA once through
+// crd/math/simd/fma_exact.hpp.
 // The reusable home for these primitives (the f32 log/exp live in crd/math/deterministic.hpp; Vec4d in simd/vec4d.hpp;
 // these fill the f64 gap). Consumers: FFT, AD, and the hesap-special distribution/special-function hot paths.
 //
@@ -13,10 +15,7 @@
 
 #include <crd/math/exp_log_core.hpp> // crd_log1 / crd_exp1, the scalar cores these twins reproduce
 #include <crd/math/simd/backend.hpp>
-
-#if CRD_SIMD_HAS_AVX2
-#include <immintrin.h>
-#endif
+#include <crd/math/simd/fma_exact.hpp>
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
@@ -119,6 +118,110 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
     }
     return res;
 }
-#endif // AVX2
+#elif CRD_SIMD_HAS_SSE2
+// SSE2/SSE4.2 log twin — bit-identical to crd_log1 on normal-positive lanes; abnormal lanes fall back to crd_log1.
+[[nodiscard]] inline __m128d crd_log_x2(__m128d x) noexcept
+{
+    using simd::detail::fma_pd;
+    const __m128i bits = _mm_castpd_si128(x);
+    __m128i ei = _mm_sub_epi64(_mm_and_si128(_mm_srli_epi64(bits, 52), _mm_set1_epi64x(0x7FF)), _mm_set1_epi64x(1023));
+    const __m128i mbits =
+        _mm_or_si128(_mm_and_si128(bits, _mm_set1_epi64x(0x000FFFFFFFFFFFFF)), _mm_set1_epi64x(0x3FF0000000000000));
+    __m128d m = _mm_castsi128_pd(mbits);
+    const __m128d gt = _mm_cmpgt_pd(m, _mm_set1_pd(kSqrt2));
+    m = _mm_or_pd(_mm_and_pd(gt, _mm_mul_pd(m, _mm_set1_pd(0.5))), _mm_andnot_pd(gt, m));
+    ei = _mm_add_epi64(ei, _mm_and_si128(_mm_castpd_si128(gt), _mm_set1_epi64x(1)));
+    const __m128d magic = _mm_set1_pd(6755399441055744.0); // 0x4338000000000000
+    const __m128d ed = _mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(ei, _mm_castpd_si128(magic))), magic);
+    const __m128d one = _mm_set1_pd(1.0);
+    const __m128d t = _mm_div_pd(_mm_sub_pd(m, one), _mm_add_pd(m, one));
+    const __m128d s = _mm_mul_pd(t, t);
+    __m128d q = _mm_set1_pd(kC17);
+    q = fma_pd(q, s, _mm_set1_pd(kC15));
+    q = fma_pd(q, s, _mm_set1_pd(kC13));
+    q = fma_pd(q, s, _mm_set1_pd(kC11));
+    q = fma_pd(q, s, _mm_set1_pd(kC9));
+    q = fma_pd(q, s, _mm_set1_pd(kC7));
+    q = fma_pd(q, s, _mm_set1_pd(kC5));
+    q = fma_pd(q, s, _mm_set1_pd(kC3));
+    const __m128d tt = _mm_add_pd(t, t);
+    const __m128d logm = fma_pd(_mm_mul_pd(tt, s), q, tt);
+    __m128d r = fma_pd(ed, _mm_set1_pd(kLn2Hi), logm);
+    r = fma_pd(ed, _mm_set1_pd(kLn2Lo), r);
+    const __m128d le0 = _mm_cmple_pd(x, _mm_setzero_pd());
+    const __m128d unord = _mm_cmpunord_pd(x, x);
+    const __m128d big = _mm_cmpgt_pd(x, _mm_set1_pd(1.7976931348623157e308));
+    const __m128d sub = _mm_cmplt_pd(x, _mm_set1_pd(kMinNormal));
+    const int mask = _mm_movemask_pd(_mm_or_pd(_mm_or_pd(le0, unord), _mm_or_pd(big, sub)));
+    if (mask != 0)
+    {
+        alignas(16) double xa[2];
+        alignas(16) double ra[2];
+        _mm_store_pd(xa, x);
+        _mm_store_pd(ra, r);
+        for (int i = 0; i < 2; ++i)
+        {
+            if (((mask >> i) & 1) != 0)
+            {
+                ra[i] = crd_log1(xa[i]);
+            }
+        }
+        r = _mm_load_pd(ra);
+    }
+    return r;
+}
+
+// SSE2/SSE4.2 exp twin — bit-identical to crd_exp1 on the in-range fast path; over/underflow/NaN lanes via crd_exp1.
+[[nodiscard]] inline __m128d crd_exp_x2(__m128d x) noexcept
+{
+    using simd::detail::fma_pd;
+    const __m128d y = fma_pd(x, _mm_set1_pd(kLog2e), _mm_set1_pd(0.5));
+#if CRD_SIMD_HAS_SSE42
+    const __m128d kf = _mm_floor_pd(y);
+#else
+    // floor by truncation, one less where that rounded up: exact on the in-range lanes (|y| < 1100).
+    const __m128d truncated = _mm_cvtepi32_pd(_mm_cvttpd_epi32(y));
+    const __m128d kf = _mm_sub_pd(truncated, _mm_and_pd(_mm_cmpgt_pd(truncated, y), _mm_set1_pd(1.0)));
+#endif
+    __m128d r = fma_pd(kf, _mm_set1_pd(-kLn2HiE), x);
+    r = fma_pd(kf, _mm_set1_pd(-kLn2LoE), r);
+    __m128d p = _mm_set1_pd(kE11);
+    p = fma_pd(p, r, _mm_set1_pd(kE10));
+    p = fma_pd(p, r, _mm_set1_pd(kE9));
+    p = fma_pd(p, r, _mm_set1_pd(kE8));
+    p = fma_pd(p, r, _mm_set1_pd(kE7));
+    p = fma_pd(p, r, _mm_set1_pd(kE6));
+    p = fma_pd(p, r, _mm_set1_pd(kE5));
+    p = fma_pd(p, r, _mm_set1_pd(kE4));
+    p = fma_pd(p, r, _mm_set1_pd(kE3));
+    p = fma_pd(p, r, _mm_set1_pd(kE2));
+    p = fma_pd(p, r, _mm_set1_pd(1.0));
+    p = fma_pd(p, r, _mm_set1_pd(1.0));
+    // 2^k by one exponent injection, valid for the normal results (|x| <= 708): k + 1023 sits in the low bits of
+    // kf + 2^52 + 1023, and the shift drops that sum's exponent field.
+    const __m128i biased = _mm_castpd_si128(_mm_add_pd(kf, _mm_set1_pd(4503599627371519.0))); // 2^52 + 1023
+    __m128d res = _mm_mul_pd(p, _mm_castsi128_pd(_mm_slli_epi64(biased, 52)));
+    const __m128d hi = _mm_cmpgt_pd(x, _mm_set1_pd(709.0));
+    const __m128d lo = _mm_cmplt_pd(x, _mm_set1_pd(-708.0));
+    const __m128d unord = _mm_cmpunord_pd(x, x);
+    const int mask = _mm_movemask_pd(_mm_or_pd(_mm_or_pd(hi, lo), unord));
+    if (mask != 0)
+    {
+        alignas(16) double xa[2];
+        alignas(16) double ra[2];
+        _mm_store_pd(xa, x);
+        _mm_store_pd(ra, res);
+        for (int i = 0; i < 2; ++i)
+        {
+            if (((mask >> i) & 1) != 0)
+            {
+                ra[i] = crd_exp1(xa[i]);
+            }
+        }
+        res = _mm_load_pd(ra);
+    }
+    return res;
+}
+#endif
 
 } // namespace crd::math::inline CRD_MATH_LEVEL_NS

@@ -2,10 +2,10 @@
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS), the block
 // functions and the log core included, so no function of this unit is shared with general code or with another level.
 // The portable bodies are the scalar loops (Threefry three blocks at a time); the SSE2 bodies run 16 Philox blocks or
-// seven Threefry blocks (four in vector registers beside three scalar ones) at a time, and the AVX2 bodies 24 Philox
-// blocks, 12 Threefry blocks or four Student-t lanes. Every body gives the same bits: the generators are integer
-// arithmetic, and both Student-t bodies keep four lane sums in the same order, with single-rounded FMAs and the log
-// core that crd_log4 reproduces lane for lane.
+// seven Threefry blocks (four in vector registers beside three scalar ones) or four Student-t lanes in two registers
+// at a time, and the AVX2 bodies 24 Philox blocks, 12 Threefry blocks or four Student-t lanes. Every body gives the
+// same bits: the generators are integer arithmetic, and every Student-t body keeps four lane sums in the same order,
+// with single-rounded FMAs and the log core that crd_log4 and crd_log_x2 reproduce lane for lane.
 
 #include <crd/core/platform.hpp>
 #include <crd/hesap/stats/counter_rng_core.hpp>
@@ -345,6 +345,29 @@ crd::f64 student_t_nu_score_sum(const crd::f64* xs, crd::usize n, crd::f64 nu) n
         acc = _mm256_add_pd(acc, _mm256_fmadd_pd(vneg_half, vlog, vrat));
     }
     _mm256_storeu_pd(lanes, acc);
+#elif CRD_SIMD_HAS_SSE2
+    // Lanes 0 and 1 in one register, 2 and 3 in the other: element i still adds to lane i % 4.
+    const __m128d vnu = _mm_set1_pd(nu);
+    const __m128d vone = _mm_set1_pd(1.0);
+    const __m128d vinv_nu = _mm_set1_pd(inv_nu);
+    const __m128d vneg_half = _mm_set1_pd(-0.5);
+    const __m128d vk = _mm_set1_pd(k);
+    const auto term = [&](__m128d vx) noexcept
+    {
+        const __m128d vx2 = _mm_mul_pd(vx, vx);
+        const __m128d vlog = crd::math::crd_log_x2(crd::math::simd::detail::fma_pd(vx2, vinv_nu, vone));
+        const __m128d vrat = _mm_div_pd(_mm_mul_pd(vk, vx2), _mm_add_pd(vnu, vx2));
+        return crd::math::simd::detail::fma_pd(vneg_half, vlog, vrat);
+    };
+    __m128d acc_lo = _mm_setzero_pd();
+    __m128d acc_hi = _mm_setzero_pd();
+    for (; i + 4U <= n; i += 4U)
+    {
+        acc_lo = _mm_add_pd(acc_lo, term(_mm_loadu_pd(xs + i)));
+        acc_hi = _mm_add_pd(acc_hi, term(_mm_loadu_pd(xs + i + 2U)));
+    }
+    _mm_storeu_pd(lanes, acc_lo);
+    _mm_storeu_pd(lanes + 2, acc_hi);
 #else
     for (; i + 4U <= n; i += 4U)
     {

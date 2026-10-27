@@ -20,6 +20,7 @@ struct SpecialKernels
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.
 extern const SpecialKernels kSpecialKernelsPortable;
+extern const SpecialKernels kSpecialKernelsSse2;
 extern const SpecialKernels kSpecialKernelsAvx2;
 
 } // namespace crd::hesap::special
