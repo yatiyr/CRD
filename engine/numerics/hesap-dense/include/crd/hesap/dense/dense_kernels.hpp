@@ -1,6 +1,6 @@
 // The table of the hesap-dense kernels (SIMD-DISPATCH, ADR-0134 §5): the GEMM blocks, the BLAS-1 and BLAS-2 real
-// kernels and the unblocked Cholesky, one table per CPU level the kernel unit is built for
-// (engine/numerics/hesap-dense/kernels/dense_kernels.cpp), resolved by dense_kernels() in
+// kernels, the reflector, rotation and LDLT updates and the unblocked Cholesky, one table per CPU level the kernel
+// unit is built for (engine/numerics/hesap-dense/kernels/dense_kernels.cpp), resolved by dense_kernels() in
 // crd/hesap/dense/dense_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing
 // from it.
 //
@@ -65,17 +65,20 @@ template <typename T> struct GemmBlock
 };
 
 // The vector and matrix-vector kernels sum like the GEMM blocks: below avx2 each vector step rounds its multiply and
-// its add, from avx2 it is one fused multiply-add; the scalar tails round twice on every level. The vectors are
-// Vec4d (w = 4) and Vec8f (w = 8), and the reductions have a fixed shape:
-// - a dot product (dot_*, the Cholesky and triangular-solve rows): A accumulators (8 from avx2, 4 below); whole
-//   vector v (elements v w to v w + w - 1) goes to accumulator v % A, the accumulators sum as the tree
+// its add, from avx2 it is one fused multiply-add. The vectors are Vec4d (w = 4) and Vec8f (w = 8), and the
+// reductions have a fixed shape:
+// - a dot product (dot, the Cholesky, triangular-solve and reflector rows): A accumulators (8 from avx2, 4 below);
+//   whole vector v (elements v w to v w + w - 1) goes to accumulator v % A, the accumulators sum as the tree
 //   ((0 + 1) + (2 + 3)) + ((4 + 5) + (6 + 7)), its lanes as horizontal_sum's tree, then the remaining elements in
-//   order;
-// - a gemv row: one accumulator over the whole vectors, horizontal_sum, the remaining columns in order, then
-//   alpha * s + beta * y;
+//   order, each rounding twice;
+// - a gemv row: one accumulator over the whole vectors, horizontal_sum, the remaining columns in order (rounding
+//   twice), then alpha * s + beta * y;
 // - symv: beta * y first; then row i (columns k < i of the lower triangle) takes the dot product of the row with x
 //   as above and updates y[k] to y[k] + a_ik * (alpha * x[i]) at every column; then y[i] to
 //   y[i] + alpha * (dot + a_ii * x[i]).
+// The elementwise kernels (axpy, gemvt, ger, the reflector and LDLT updates) give every element, the last partial
+// vector included, the level's step: y + a x rounded twice below avx2 and fused from avx2. rot rounds each multiply
+// and add on every level, as LAPACK's xROT, so its levels agree bit for bit.
 
 // y = alpha * A x + beta * y over `rows` rows of `cols` values, row i at a + i * lda.
 template <typename T> struct GemvRows
@@ -88,6 +91,32 @@ template <typename T> struct GemvRows
     crd::usize cols;
     T alpha;
     T beta;
+};
+
+// y = y + A^T x over `rows` rows of `cols` values, row r at a + r * lda and x[r] at x[r * incx]: y takes the axpy of
+// each row with x[r] in row order (element j: y[j] + x[r] a_rj, r ascending).
+template <typename T> struct GemvtRows
+{
+    const T* a;
+    const T* x;
+    T* y;
+    crd::usize lda;
+    crd::usize incx;
+    crd::usize rows;
+    crd::usize cols;
+};
+
+// A = A + alpha x y^T over `rows` rows of `cols` values, row r at a + r * lda: row r takes the axpy of y with the
+// scale alpha * x[r] (one rounding).
+template <typename T> struct GerRows
+{
+    T* a;
+    const T* x;
+    const T* y;
+    crd::usize lda;
+    crd::usize rows;
+    crd::usize cols;
+    T alpha;
 };
 
 // y = alpha * A x + beta * y for a symmetric A of order n read from its lower triangle: (i, k), k <= i, at
@@ -115,27 +144,68 @@ template <typename T> struct TrsvRows
     bool unit;
 };
 
-struct DenseKernels
+// The reflector H = I - tau v v^T, v = (1, v[0], ..., v[len - 1]), applied to `count` vectors of len + 1 values,
+// vector r at c + r * ldc (LAPACK xLARF on rows): w = tau * (c_r[0] + dot(v, c_r + 1)) in the dot shape, then
+// c_r[0] - w and the axpy of v with -w into the remaining values.
+template <typename T> struct ReflectorRows
 {
-    void (*gemm_block_f64)(const GemmBlock<crd::f64>& block) noexcept;
-    void (*gemm_block_f32)(const GemmBlock<crd::f32>& block) noexcept;
-    crd::f64 (*dot_f64)(const crd::f64* x, const crd::f64* y, crd::usize n) noexcept;
-    crd::f32 (*dot_f32)(const crd::f32* x, const crd::f32* y, crd::usize n) noexcept;
-    void (*gemv_f64)(const GemvRows<crd::f64>& g) noexcept;
-    void (*gemv_f32)(const GemvRows<crd::f32>& g) noexcept;
-    void (*symv_f64)(const SymvLower<crd::f64>& s) noexcept;
-    void (*symv_f32)(const SymvLower<crd::f32>& s) noexcept;
-    void (*trsv_f64)(const TrsvRows<crd::f64>& t) noexcept;
-    void (*trsv_f32)(const TrsvRows<crd::f32>& t) noexcept;
+    const T* v;
+    T* c;
+    crd::usize ldc;
+    crd::usize count;
+    crd::usize len;
+    T tau;
+};
+
+// A Bunch-Kaufman trailing update of LDL^T (LAPACK xSYTF2): the lower triangle of the order-n block loses
+// U D^-1 U^T, for the one column u0 or the two columns u0 and u1 of U (n values each) and the pivot block D
+// (1 by 1: inv_d = 1 / d11; 2 by 2: d11, d21, d22 and inv_det = 1 / (d11 d22 - d21^2)). Segment s is row s (columns
+// 0 to s, at a + s * lda) of a row-major block, or with `trailing` column s (rows s to n - 1, at a + s * lda + s) of a
+// column-major one; element t of it pairs with u[t] or u[s + t]. Segments 0 to rows - 1 are updated (rows <= n). The
+// segment's factors are f0 = u0[s] inv_d, or f0 = (d22 u0[s] - d21 u1[s]) inv_det and
+// f1 = (d11 u1[s] - d21 u0[s]) inv_det; the segment takes the axpy of u0 with -f0, then of u1 with -f1, a zero
+// factor skipping its term.
+template <typename T> struct LdltUpdate
+{
+    T* a;
+    const T* u0;
+    const T* u1; // null for a 1 by 1 pivot
+    crd::usize lda;
+    crd::usize n;
+    crd::usize rows;
+    T inv_d; // 1 by 1: 1 / d11; 2 by 2: 1 / det
+    T d11;
+    T d21;
+    T d22;
+    bool trailing;
+};
+
+// The kernels of one element type.
+template <typename T> struct DenseTypeKernels
+{
+    void (*gemm_block)(const GemmBlock<T>& block) noexcept;
+    T (*dot)(const T* x, const T* y, crd::usize n) noexcept;
+    void (*axpy)(T* y, const T* x, T alpha, crd::usize n) noexcept; // y + alpha x
+    void (*gemv)(const GemvRows<T>& g) noexcept;
+    void (*gemvt)(const GemvtRows<T>& g) noexcept;
+    void (*ger)(const GerRows<T>& g) noexcept;
+    void (*symv)(const SymvLower<T>& s) noexcept;
+    void (*trsv)(const TrsvRows<T>& t) noexcept;
+    // x' = c x + s y, y' = c y - s x over n values (LAPACK xROT).
+    void (*rot)(T* x, T* y, T c, T s, crd::usize n) noexcept;
+    void (*reflect)(const ReflectorRows<T>& r) noexcept;
+    void (*ldlt_update)(const LdltUpdate<T>& u) noexcept;
     // The unblocked lower Cholesky of the n by n block at a (row stride ld), in place: 0, or k + 1 when column k is
     // not positive definite (the columns before it are factored).
-    crd::usize (*cholesky_f64)(crd::f64* a, crd::usize n, crd::usize ld) noexcept;
-    crd::usize (*cholesky_f32)(crd::f32* a, crd::usize n, crd::usize ld) noexcept;
+    crd::usize (*cholesky)(T* a, crd::usize n, crd::usize ld) noexcept;
     // L21 = A21 L11^-T for rows [first, end) of the panel at column k, width nb (L11 factored at (k, k)).
-    void (*cholesky_trsm_f64)(crd::f64* a, crd::usize ld, crd::usize k, crd::usize nb, crd::usize first,
-                              crd::usize end) noexcept;
-    void (*cholesky_trsm_f32)(crd::f32* a, crd::usize ld, crd::usize k, crd::usize nb, crd::usize first,
-                              crd::usize end) noexcept;
+    void (*cholesky_trsm)(T* a, crd::usize ld, crd::usize k, crd::usize nb, crd::usize first, crd::usize end) noexcept;
+};
+
+struct DenseKernels
+{
+    DenseTypeKernels<crd::f64> f64_kernels;
+    DenseTypeKernels<crd::f32> f32_kernels;
 };
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.

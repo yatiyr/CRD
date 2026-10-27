@@ -62,18 +62,6 @@ struct Lcg
     template <typename T> T value() { return static_cast<T>(static_cast<int>(next() % 19U) - 9) / T(7); }
 };
 
-template <typename T> void run_block(const DenseKernels& k, const GemmBlock<T>& g)
-{
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        k.gemm_block_f64(g);
-    }
-    else
-    {
-        k.gemm_block_f32(g);
-    }
-}
-
 // Element (i, j) of the block's product in the declared arithmetic.
 template <typename T> T product(const GemmBlock<T>& g, usize i, usize j, bool fma)
 {
@@ -184,12 +172,12 @@ void check_shape(const DenseKernels& k, CpuLevel level, const DenseKernels& port
                                    .update = u.update,
                                    .col_major = col_major,
                                    .lower = s.lower};
-            run_block(k, blk);
+            dn::kernels_of<T>(k).gemm_block(blk);
             buf.portable = buf.c0;
             GemmBlock<T> ref = blk;
             ref.c = buf.portable.data();
             ref.update = GemmUpdate::Assign;
-            run_block(portable_k, ref);
+            dn::kernels_of<T>(portable_k).gemm_block(ref);
             for (usize i = 0; i < ldc; ++i)
             {
                 for (usize j = 0; j < ldc; ++j)

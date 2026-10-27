@@ -68,17 +68,9 @@ void gemv(T alpha, MatrixView<const T, L> a, crd::containers::ConstSpan<T> x, T 
     if (trans == Trans::None)
     {
         CRD_ASSERT_MSG(x.size() == n && y.size() == m, "gemv(None): size mismatch");
-        if constexpr (L == Layout::RowMajor && (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>))
+        if constexpr (L == Layout::RowMajor && kHasDenseKernels<T>)
         {
-            const GemvRows<T> g{a.data(), x.data(), y.data(), a.ld(), m, n, alpha, beta};
-            if constexpr (std::is_same_v<T, crd::f64>)
-            {
-                dense_kernels().table->gemv_f64(g);
-            }
-            else
-            {
-                dense_kernels().table->gemv_f32(g);
-            }
+            dense_kernels_of<T>().gemv(GemvRows<T>{a.data(), x.data(), y.data(), a.ld(), m, n, alpha, beta});
         }
         else
         {
@@ -111,13 +103,14 @@ void ger(T alpha, crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T>
     const crd::usize m = a.rows();
     const crd::usize n = a.cols();
     CRD_ASSERT_MSG(x.size() == m && y.size() == n, "ger: size mismatch");
-    for (crd::usize i = 0; i < m; ++i)
+    // Column-major: the stored rows are the columns, so the kernel updates A^T + alpha y x^T.
+    if constexpr (L == Layout::RowMajor)
     {
-        const T axi = alpha * x[i];
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            mat_at_ref<T, L>(a, i, j) = mat_at_ref<T, L>(a, i, j) + axi * y[j];
-        }
+        dense_kernels_of<T>().ger(GerRows<T>{a.data(), x.data(), y.data(), a.ld(), m, n, alpha});
+    }
+    else
+    {
+        dense_kernels_of<T>().ger(GerRows<T>{a.data(), y.data(), x.data(), a.ld(), n, m, alpha});
     }
 }
 
@@ -218,17 +211,9 @@ void symv(T alpha, const Symmetric<T>& a, crd::containers::ConstSpan<T> x, T bet
     CRD_ASSERT_MSG(x.size() == n && y.size() == n, "symv: size mismatch");
     // Single-pass BLAS symv on the lower triangle: each element updates y[i] through the row's dot product and
     // y[k] through the symmetric term, half a gemv's memory traffic.
-    if constexpr (std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>)
+    if constexpr (kHasDenseKernels<T>)
     {
-        const SymvLower<T> s{a.data(), x.data(), y.data(), n, n, alpha, beta};
-        if constexpr (std::is_same_v<T, crd::f64>)
-        {
-            dense_kernels().table->symv_f64(s);
-        }
-        else
-        {
-            dense_kernels().table->symv_f32(s);
-        }
+        dense_kernels_of<T>().symv(SymvLower<T>{a.data(), x.data(), y.data(), n, n, alpha, beta});
     }
     else
     {
@@ -467,18 +452,10 @@ void trsv(const Triangular<T, Side, Diag>& a, crd::containers::Span<T> x, Trans 
 
     if (trans == Trans::None)
     {
-        if constexpr (std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>)
+        if constexpr (kHasDenseKernels<T>)
         {
-            const TrsvRows<T> t{
-                a.data(), x.data(), n, n, Side == TriangularSide::Lower, Diag == TriangularDiag::UnitDiag};
-            if constexpr (std::is_same_v<T, crd::f64>)
-            {
-                dense_kernels().table->trsv_f64(t);
-            }
-            else
-            {
-                dense_kernels().table->trsv_f32(t);
-            }
+            dense_kernels_of<T>().trsv(
+                TrsvRows<T>{a.data(), x.data(), n, n, Side == TriangularSide::Lower, Diag == TriangularDiag::UnitDiag});
         }
         else if constexpr (Side == TriangularSide::Lower)
         {

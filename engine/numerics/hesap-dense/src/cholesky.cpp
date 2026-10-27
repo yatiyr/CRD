@@ -23,14 +23,7 @@ constexpr crd::usize kBlockSize = 64;
 // GEMM). Returns 0, or k + 1 when column k is not positive definite.
 template <typename T> crd::usize unblocked_cholesky(T* data, crd::usize n, crd::usize ld) noexcept
 {
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        return dense_kernels().table->cholesky_f64(data, n, ld);
-    }
-    else
-    {
-        return dense_kernels().table->cholesky_f32(data, n, ld);
-    }
+    return dense_kernels_of<T>().cholesky(data, n, ld);
 }
 
 // L21 = A21 L11^-T for rows [first, end) of the panel at column k (each row a forward substitution of contiguous
@@ -38,14 +31,7 @@ template <typename T> crd::usize unblocked_cholesky(T* data, crd::usize n, crd::
 template <typename T>
 void trsm_rows(T* lu_data, crd::usize ld, crd::usize k, crd::usize nb, crd::usize first, crd::usize end) noexcept
 {
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        dense_kernels().table->cholesky_trsm_f64(lu_data, ld, k, nb, first, end);
-    }
-    else
-    {
-        dense_kernels().table->cholesky_trsm_f32(lu_data, ld, k, nb, first, end);
-    }
+    dense_kernels_of<T>().cholesky_trsm(lu_data, ld, k, nb, first, end);
 }
 
 // In-place trsm: L21 = A21 · L11^{-T}. Rows are independent → parallelizable.

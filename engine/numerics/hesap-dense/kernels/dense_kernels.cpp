@@ -481,6 +481,48 @@ template <crd::usize N, crd::usize Q = 0, typename F> CRD_FORCEINLINE void unrol
     }
 }
 
+// The first `count` values (1 to w) of p as a vector, and the store of its first `count` lanes.
+template <typename V, typename T> CRD_FORCEINLINE V load_n(const T* p, crd::usize count) noexcept
+{
+    return count == sizeof(V) / sizeof(T) ? V::load(p) : V::load_partial(p, count);
+}
+
+template <typename V, typename T> CRD_FORCEINLINE void store_n(V v, T* p, crd::usize count) noexcept
+{
+    if (count == sizeof(V) / sizeof(T))
+    {
+        v.store(p);
+    }
+    else
+    {
+        v.store_partial(p, count);
+    }
+}
+
+// f(k, count) for each whole vector of n elements (count w) and the partial one that ends them.
+template <typename T, typename F> CRD_FORCEINLINE void for_each_vector(crd::usize n, F f) noexcept
+{
+    constexpr crd::usize w = VectorOf<T>::kWidth;
+    crd::usize k = 0;
+    for (; k + w <= n; k += w)
+    {
+        f(k, w);
+    }
+    if (k < n)
+    {
+        f(k, n - k);
+    }
+}
+
+// y + alpha x as the level's step.
+template <typename T> CRD_FORCEINLINE void axpy(T* y, const T* x, T alpha, crd::usize n) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    // The lambdas capture scalars: a captured vector's alignment pads the closure (C4324).
+    for_each_vector<T>(n, [y, x, alpha](crd::usize k, crd::usize count)
+                       { store_n(madd(V(alpha), load_n<V>(x + k, count), load_n<V>(y + k, count)), y + k, count); });
+}
+
 // The dot product of a and x over n elements in the shape dense_kernels.hpp declares. on_vector(k, a_vector) and
 // on_element(k) see every whole vector and every remaining element of a (symv's symmetric update).
 template <typename T, typename OnVector, typename OnElement>
@@ -704,10 +746,170 @@ void cholesky_trsm_kernel(T* a, crd::usize ld, crd::usize k, crd::usize nb, crd:
     }
 }
 
+template <typename T> void axpy_kernel(T* y, const T* x, T alpha, crd::usize n) noexcept
+{
+    axpy(y, x, alpha, n);
+}
+
+// Column blocks of kDotAccumulators vectors stay in registers over every row; the remaining columns go one vector at a
+// time. Each element takes the rows in order either way.
+template <typename T> void gemvt_kernel(const GemvtRows<T>& view) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    constexpr crd::usize w = VectorOf<T>::kWidth;
+    constexpr crd::usize block = kDotAccumulators * w;
+    const GemvtRows<T> g = view;
+    crd::usize j = 0;
+    for (; j + block <= g.cols; j += block)
+    {
+        V acc[kDotAccumulators];
+        auto load = [&](auto q)
+        {
+            acc[decltype(q)::kValue] = V::load(g.y + j + decltype(q)::kValue * w);
+        };
+        unroll<kDotAccumulators>(load);
+        for (crd::usize r = 0; r < g.rows; ++r)
+        {
+            const V xr(g.x[r * g.incx]);
+            const T* row = g.a + r * g.lda + j;
+            auto step = [&](auto q)
+            {
+                constexpr crd::usize at = decltype(q)::kValue * w;
+                acc[decltype(q)::kValue] = madd(xr, V::load(row + at), acc[decltype(q)::kValue]);
+            };
+            unroll<kDotAccumulators>(step);
+        }
+        auto store = [&](auto q)
+        {
+            acc[decltype(q)::kValue].store(g.y + j + decltype(q)::kValue * w);
+        };
+        unroll<kDotAccumulators>(store);
+    }
+    for_each_vector<T>(g.cols - j,
+                       [&g, j](crd::usize k, crd::usize count)
+                       {
+                           T* y = g.y + j + k;
+                           V acc = load_n<V>(y, count);
+                           for (crd::usize r = 0; r < g.rows; ++r)
+                           {
+                               acc = madd(V(g.x[r * g.incx]), load_n<V>(g.a + r * g.lda + j + k, count), acc);
+                           }
+                           store_n(acc, y, count);
+                       });
+}
+
+template <typename T> void ger_kernel(const GerRows<T>& view) noexcept
+{
+    const GerRows<T> g = view;
+    for (crd::usize r = 0; r < g.rows; ++r)
+    {
+        axpy(g.a + r * g.lda, g.y, g.alpha * g.x[r], g.cols);
+    }
+}
+
+template <typename T> void rot_kernel(T* x, T* y, T c, T s, crd::usize n) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    for_each_vector<T>(n,
+                       [x, y, c, s](crd::usize k, crd::usize count)
+                       {
+                           const V xv = load_n<V>(x + k, count);
+                           const V yv = load_n<V>(y + k, count);
+                           store_n(V(c) * xv + V(s) * yv, x + k, count);
+                           store_n(V(c) * yv - V(s) * xv, y + k, count);
+                       });
+}
+
+template <typename T> void reflect_kernel(const ReflectorRows<T>& view) noexcept
+{
+    const ReflectorRows<T> h = view;
+    for (crd::usize r = 0; r < h.count; ++r)
+    {
+        T* c = h.c + r * h.ldc;
+        const T w = h.tau * (c[0] + dot(h.v, c + 1, h.len));
+        c[0] = c[0] - w;
+        axpy(c + 1, h.v, -w, h.len);
+    }
+}
+
+// Both terms of a segment in one pass: each element takes the step with -f0 u0, then the step with -f1 u1.
+template <typename T>
+CRD_FORCEINLINE void ldlt_two_terms(T* seg, const T* u0, const T* u1, T f0, T f1, crd::usize len) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    const T n0 = -f0;
+    const T n1 = -f1;
+    for_each_vector<T>(len,
+                       [seg, u0, u1, n0, n1](crd::usize k, crd::usize count)
+                       {
+                           const V s = madd(V(n0), load_n<V>(u0 + k, count), load_n<V>(seg + k, count));
+                           store_n(madd(V(n1), load_n<V>(u1 + k, count), s), seg + k, count);
+                       });
+}
+
+template <typename T> void ldlt_update_kernel(const LdltUpdate<T>& view) noexcept
+{
+    const LdltUpdate<T> u = view;
+    for (crd::usize s = 0; s < u.rows; ++s)
+    {
+        T* seg = u.a + s * u.lda + (u.trailing ? s : 0U);
+        const crd::usize from = u.trailing ? s : 0U;
+        const crd::usize len = u.trailing ? u.n - s : s + 1U;
+        if (u.u1 == nullptr)
+        {
+            const T f0 = u.u0[s] * u.inv_d;
+            if (f0 != T(0))
+            {
+                axpy(seg, u.u0 + from, -f0, len);
+            }
+            continue;
+        }
+        const T f0 = (u.d22 * u.u0[s] - u.d21 * u.u1[s]) * u.inv_d;
+        const T f1 = (u.d11 * u.u1[s] - u.d21 * u.u0[s]) * u.inv_d;
+        if (f0 != T(0) && f1 != T(0))
+        {
+            ldlt_two_terms(seg, u.u0 + from, u.u1 + from, f0, f1, len);
+        }
+        else if (f0 != T(0))
+        {
+            axpy(seg, u.u0 + from, -f0, len);
+        }
+        else if (f1 != T(0))
+        {
+            axpy(seg, u.u1 + from, -f1, len);
+        }
+    }
+}
+
+template <typename T> struct TileOf
+{
+    using Type = F64Tile;
+};
+template <> struct TileOf<crd::f32>
+{
+    using Type = F32Tile;
+};
+
 } // namespace
 
-constexpr auto kGemmBlockF64 = &gemm_block<F64Tile, crd::f64>;
-constexpr auto kGemmBlockF32 = &gemm_block<F32Tile, crd::f32>;
+template <typename T> constexpr DenseTypeKernels<T> type_kernels() noexcept
+{
+    return {
+        &gemm_block<typename TileOf<T>::Type, T>,
+        &dot_kernel<T>,
+        &axpy_kernel<T>,
+        &gemv_kernel<T>,
+        &gemvt_kernel<T>,
+        &ger_kernel<T>,
+        &symv_kernel<T>,
+        &trsv_kernel<T>,
+        &rot_kernel<T>,
+        &reflect_kernel<T>,
+        &ldlt_update_kernel<T>,
+        &cholesky_kernel<T>,
+        &cholesky_trsm_kernel<T>,
+    };
+}
 
 } // namespace crd::hesap::dense::detail::inline CRD_MATH_LEVEL_NS
 
@@ -717,20 +919,8 @@ namespace crd::hesap::dense
 namespace level = detail::CRD_MATH_LEVEL_NS;
 
 const DenseKernels CRD_KERNEL_TABLE(kDenseKernels) = {
-    level::kGemmBlockF64,
-    level::kGemmBlockF32,
-    &level::dot_kernel<crd::f64>,
-    &level::dot_kernel<crd::f32>,
-    &level::gemv_kernel<crd::f64>,
-    &level::gemv_kernel<crd::f32>,
-    &level::symv_kernel<crd::f64>,
-    &level::symv_kernel<crd::f32>,
-    &level::trsv_kernel<crd::f64>,
-    &level::trsv_kernel<crd::f32>,
-    &level::cholesky_kernel<crd::f64>,
-    &level::cholesky_kernel<crd::f32>,
-    &level::cholesky_trsm_kernel<crd::f64>,
-    &level::cholesky_trsm_kernel<crd::f32>,
+    level::type_kernels<crd::f64>(),
+    level::type_kernels<crd::f32>(),
 };
 
 } // namespace crd::hesap::dense

@@ -1,9 +1,9 @@
 #pragma once
 
-// The short contiguous dot and axpy of the blocked reductions (dsytrd, dgebrd, the nonsymmetric Hessenberg sweeps and
-// the supernodal back substitution), which call them once per panel row: two Vec4d (f64) or one Vec8f (f32)
-// accumulators and single-rounded fma. The BLAS-1 and BLAS-2 kernels and the Cholesky sweeps run on the per-level
-// kernels of crd/hesap/dense/dense_kernels.hpp; these loops follow them as per-level units (SIMD-DISPATCH).
+// The short contiguous dot and axpy of the split-complex sweeps (the Hermitian tridiagonalization in eig_sym.cpp
+// and detail/dot_simd_complex.hpp), which call them once per panel row: two Vec4d (f64) or one Vec8f (f32)
+// accumulators and single-rounded fma. Every real sweep runs on the per-level kernels of
+// crd/hesap/dense/dense_kernels.hpp; these follow them as per-level units (SIMD-DISPATCH).
 
 #include <crd/core/types.hpp>
 #include <crd/math/simd/vec4d.hpp>

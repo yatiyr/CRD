@@ -201,13 +201,9 @@ inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::
 // One GEMM block on the level the process runs (f64, f32) or on the portable tile (the complex types).
 template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noexcept
 {
-    if constexpr (std::is_same_v<T, crd::f64>)
+    if constexpr (kHasDenseKernels<T>)
     {
-        dense_kernels().table->gemm_block_f64(block);
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        dense_kernels().table->gemm_block_f32(block);
+        dense_kernels_of<T>().gemm_block(block);
     }
     else
     {

@@ -1,9 +1,8 @@
 #include <crd/hesap/dense/qr_colpiv.hpp>
 
 #include <crd/core/assert.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <crd/math/cmath.hpp>
 #include <limits>
@@ -13,77 +12,10 @@ namespace crd::hesap::dense
 {
 namespace
 {
-// Contiguous SIMD dot over [0, len).
-template <typename T>
-inline T cp_dot(const T* a, const T* b, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    T acc = T{0};
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        simd::Vec4d v0 = simd::Vec4d::zero();
-        simd::Vec4d v1 = simd::Vec4d::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            v0 = simd::fma(simd::Vec4d::load(a + p), simd::Vec4d::load(b + p), v0);
-            v1 = simd::fma(simd::Vec4d::load(a + p + 4), simd::Vec4d::load(b + p + 4), v1);
-        }
-        acc = simd::horizontal_sum(v0 + v1);
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        simd::Vec8f v0 = simd::Vec8f::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            v0 = simd::fma(simd::Vec8f::load(a + p), simd::Vec8f::load(b + p), v0);
-        }
-        acc = simd::horizontal_sum(v0);
-    }
-    for (; p < len; ++p)
-    {
-        acc += a[p] * b[p];
-    }
-    return acc;
-}
-
-// row[p] += s * col[p] over [0, len).
-template <typename T>
-inline void cp_axpy(T* row, const T* col, T s, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        const simd::Vec4d sv(s);
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::Vec4d r0 = simd::fma(sv, simd::Vec4d::load(col + p), simd::Vec4d::load(row + p));
-            simd::Vec4d r1 =
-                simd::fma(sv, simd::Vec4d::load(col + p + 4), simd::Vec4d::load(row + p + 4));
-            r0.store(row + p);
-            r1.store(row + p + 4);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        const simd::Vec8f sv(s);
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::Vec8f r = simd::fma(sv, simd::Vec8f::load(col + p), simd::Vec8f::load(row + p));
-            r.store(row + p);
-        }
-    }
-    for (; p < len; ++p)
-    {
-        row[p] += s * col[p];
-    }
-}
-
 template <typename T>
 inline T cp_nrm2(const T* a, crd::usize len) noexcept
 {
-    return crd::math::sqrt(cp_dot<T>(a, a, len));
+    return crd::math::sqrt(dense_kernels_of<T>().dot(a, a, len));
 }
 
 } // namespace
@@ -181,22 +113,15 @@ void factor_qr_colpiv(QRColPiv<T, L>& qr, RealType<T> rcond)
 
         const crd::usize tail = sub - (sub > 0 ? 1 : 0);  // = m-k-1 when sub>0
 
-        // Apply H_k to trailing columns j > k (implicit v[k]=1; tail = col[k+1..]).
+        // Apply H_k to the trailing columns j > k, each from element k (implicit v[k]=1; tail = col[k+1..]).
+        if (k + 1 < n)
+        {
+            dense_kernels_of<T>().reflect(
+                ReflectorRows<T>{col + k + 1, wt.data() + (k + 1) * m + k, m, n - k - 1, tail, h.tau});
+        }
         for (crd::usize j = k + 1; j < n; ++j)
         {
             T* cj = wt.data() + j * m;
-            T w = cj[k];
-            if (tail > 0)
-            {
-                w += cp_dot<T>(col + k + 1, cj + k + 1, tail);
-            }
-            w *= h.tau;
-            cj[k] -= w;
-            if (tail > 0)
-            {
-                cp_axpy<T>(cj + k + 1, col + k + 1, -w, tail);
-            }
-
             // DLAQP2 partial-norm downdate on column j.
             if (vn1[j] != T{0})
             {

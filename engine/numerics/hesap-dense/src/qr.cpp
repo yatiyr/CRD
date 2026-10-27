@@ -3,9 +3,8 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <crd/math/cmath.hpp>
 #include <type_traits>
@@ -27,95 +26,6 @@ constexpr crd::usize kQrBlockSize = 32;
 // n≈128 (and beats Eigen at n=64, parity at n=96). Square / very-tall shapes may
 // prefer a different threshold and will be revisited when a consumer hits it.
 constexpr crd::usize kQrUnblockedMax = 128;
-
-// SIMD axpy-negate-scaled: row[p] += s * col[p] over [0,len). f64/f32.
-template <typename T>
-inline void qr_axpy(T* row, const T* col, T s, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        const simd::Vec4d sv(s);
-        for (; p + 16 <= len; p += 16)
-        {
-            simd::Vec4d r0 = simd::fma(sv, simd::Vec4d::load(col + p), simd::Vec4d::load(row + p));
-            simd::Vec4d r1 =
-                simd::fma(sv, simd::Vec4d::load(col + p + 4), simd::Vec4d::load(row + p + 4));
-            simd::Vec4d r2 =
-                simd::fma(sv, simd::Vec4d::load(col + p + 8), simd::Vec4d::load(row + p + 8));
-            simd::Vec4d r3 =
-                simd::fma(sv, simd::Vec4d::load(col + p + 12), simd::Vec4d::load(row + p + 12));
-            r0.store(row + p);
-            r1.store(row + p + 4);
-            r2.store(row + p + 8);
-            r3.store(row + p + 12);
-        }
-        for (; p + 4 <= len; p += 4)
-        {
-            simd::Vec4d r = simd::fma(sv, simd::Vec4d::load(col + p), simd::Vec4d::load(row + p));
-            r.store(row + p);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        const simd::Vec8f sv(s);
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::Vec8f r = simd::fma(sv, simd::Vec8f::load(col + p), simd::Vec8f::load(row + p));
-            r.store(row + p);
-        }
-    }
-    for (; p < len; ++p)
-    {
-        row[p] += s * col[p];
-    }
-}
-
-// SIMD dot product over contiguous [0, len).
-template <typename T>
-inline T qr_dot(const T* a, const T* b, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    T acc = T{0};
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        simd::Vec4d v0 = simd::Vec4d::zero();
-        simd::Vec4d v1 = simd::Vec4d::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            v0 = simd::fma(simd::Vec4d::load(a + p), simd::Vec4d::load(b + p), v0);
-            v1 = simd::fma(simd::Vec4d::load(a + p + 4), simd::Vec4d::load(b + p + 4), v1);
-        }
-        acc = simd::horizontal_sum(v0 + v1);
-        for (; p < len; ++p)
-        {
-            acc += a[p] * b[p];
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        simd::Vec8f v0 = simd::Vec8f::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            v0 = simd::fma(simd::Vec8f::load(a + p), simd::Vec8f::load(b + p), v0);
-        }
-        acc = simd::horizontal_sum(v0);
-        for (; p < len; ++p)
-        {
-            acc += a[p] * b[p];
-        }
-    }
-    else
-    {
-        for (; p < len; ++p)
-        {
-            acc += a[p] * b[p];
-        }
-    }
-    return acc;
-}
 
 template <typename T>
 inline T sign_or_one(T x) noexcept
@@ -141,13 +51,14 @@ template <typename T>
 void panel_factor_qr_transposed(T* pt, crd::usize pt_ld, crd::usize panel_rows, crd::usize k,
                                 crd::usize nb, T* taus_arr)
 {
+    const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
     for (crd::usize j = 0; j < nb; ++j)
     {
         // Column j of the panel = pt row j, sub-diagonal part [j, panel_rows).
         T* vj = pt + j * pt_ld;  // contiguous row
         const T alpha_orig = vj[j];
         const crd::usize tail = panel_rows - j - 1;  // elements below diagonal
-        const T xnorm_sq = (tail > 0) ? qr_dot<T>(vj + j + 1, vj + j + 1, tail) : T{0};
+        const T xnorm_sq = kernels.dot(vj + j + 1, vj + j + 1, tail);
         if (xnorm_sq == T{0})
         {
             taus_arr[k + j] = T{0};
@@ -165,21 +76,8 @@ void panel_factor_qr_transposed(T* pt, crd::usize pt_ld, crd::usize panel_rows, 
         vj[j] = beta;
         taus_arr[k + j] = tau;
 
-        // Apply H_j to remaining panel columns jj (= pt rows jj).
-        for (crd::usize jj = j + 1; jj < nb; ++jj)
-        {
-            T* vjj = pt + jj * pt_ld;
-            // w = vjj[j] (the diagonal-aligned element, v_j[j]=1 implicit)
-            //   + sum_{r>j} vj[r] * vjj[r]  (contiguous dot)
-            T w = vjj[j] + ((tail > 0) ? qr_dot<T>(vj + j + 1, vjj + j + 1, tail) : T{0});
-            w *= tau;
-            vjj[j] -= w;
-            // vjj[r] -= w * vj[r] for r in (j, panel_rows)  (contiguous axpy)
-            if (tail > 0)
-            {
-                qr_axpy<T>(vjj + j + 1, vj + j + 1, -w, tail);
-            }
-        }
+        // Apply H_j to the remaining panel columns (pt rows j + 1 to nb - 1, each from element j; v_j[j] = 1).
+        kernels.reflect(ReflectorRows<T>{vj + j + 1, pt + (j + 1) * pt_ld + j, pt_ld, nb - j - 1, tail, tau});
     }
 }
 

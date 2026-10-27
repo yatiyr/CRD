@@ -1,12 +1,13 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
-#include <crd/hesap/dense/detail/dot_simd.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/parallel_triangular.hpp>
 #include <crd/hesap/dense/detail/syrk_microkernel.hpp>
 #include <crd/hesap/dense/layout.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/direct/supernodal_cholesky.hpp>
 #include <crd/jobs/jobs.hpp>
+#include <crd/math/simd/vec4d.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -321,15 +322,15 @@ template <typename T> inline void solve_acc_plus(T* y, const T* a, T s, crd::u32
     }
 }
 
-// Σ conj(a[i])·b[i] for the BACKWARD substitution: real types route to the canonical `simd_dot` (FMA +
-// the fixed 4-accumulator reduction tree — deterministic, and the SAME kernel runs in the serial and the
-// level-parallel backward ⇒ x stays bit-identical across worker counts; the dot's reduction order is a
-// kernel-version change like any other, residual-validated). Complex keeps the scalar conj chain.
+// Σ conj(a[i])·b[i] for the BACKWARD substitution: f64 and f32 run the dense dot kernel (its declared reduction
+// shape — deterministic, and the SAME kernel runs in the serial and the level-parallel backward ⇒ x stays
+// bit-identical across worker counts; the dot's reduction order is a kernel-version change like any other,
+// residual-validated). Complex keeps the scalar conj chain.
 template <typename T> [[nodiscard]] inline T solve_dot_conj(const T* a, const T* b, crd::u32 n) noexcept
 {
-    if constexpr (std::is_floating_point_v<T>)
+    if constexpr (dense::kHasDenseKernels<T>)
     {
-        return dense::detail::simd_dot(a, b, n);
+        return dense::dense_kernels_of<T>().dot(a, b, n);
     }
     else
     {

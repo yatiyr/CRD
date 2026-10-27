@@ -2,8 +2,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 
 #include <cmath>
 #include <type_traits>
@@ -73,80 +72,6 @@ void swap_sym(T* data, crd::usize n, crd::usize ld, crd::usize k1, crd::usize k2
         T t = data[i * ld + k1];
         data[i * ld + k1] = data[i * ld + k2];
         data[i * ld + k2] = t;
-    }
-}
-
-// SIMD axpy-negate: row[p] -= s * col[p] for p in [0, len). f32 / f64
-// fast paths via Vec8f / Vec4d + FMA; scalar tail.
-template <typename T>
-inline void axpy_negate(T* row, const T* col, T s, crd::usize len) noexcept
-{
-    crd::usize p = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        namespace simd = crd::math::simd;
-        const simd::Vec4d neg_s_v(-s);
-        for (; p + 16 <= len; p += 16)
-        {
-            simd::Vec4d r0 = simd::Vec4d::load(row + p);
-            simd::Vec4d r1 = simd::Vec4d::load(row + p + 4);
-            simd::Vec4d r2 = simd::Vec4d::load(row + p + 8);
-            simd::Vec4d r3 = simd::Vec4d::load(row + p + 12);
-            const simd::Vec4d c0 = simd::Vec4d::load(col + p);
-            const simd::Vec4d c1 = simd::Vec4d::load(col + p + 4);
-            const simd::Vec4d c2 = simd::Vec4d::load(col + p + 8);
-            const simd::Vec4d c3 = simd::Vec4d::load(col + p + 12);
-            r0 = simd::fma(neg_s_v, c0, r0);
-            r1 = simd::fma(neg_s_v, c1, r1);
-            r2 = simd::fma(neg_s_v, c2, r2);
-            r3 = simd::fma(neg_s_v, c3, r3);
-            r0.store(row + p);
-            r1.store(row + p + 4);
-            r2.store(row + p + 8);
-            r3.store(row + p + 12);
-        }
-        for (; p + 4 <= len; p += 4)
-        {
-            simd::Vec4d r = simd::Vec4d::load(row + p);
-            const simd::Vec4d c = simd::Vec4d::load(col + p);
-            r = simd::fma(neg_s_v, c, r);
-            r.store(row + p);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        namespace simd = crd::math::simd;
-        const simd::Vec8f neg_s_v(-s);
-        for (; p + 32 <= len; p += 32)
-        {
-            simd::Vec8f r0 = simd::Vec8f::load(row + p);
-            simd::Vec8f r1 = simd::Vec8f::load(row + p + 8);
-            simd::Vec8f r2 = simd::Vec8f::load(row + p + 16);
-            simd::Vec8f r3 = simd::Vec8f::load(row + p + 24);
-            const simd::Vec8f c0 = simd::Vec8f::load(col + p);
-            const simd::Vec8f c1 = simd::Vec8f::load(col + p + 8);
-            const simd::Vec8f c2 = simd::Vec8f::load(col + p + 16);
-            const simd::Vec8f c3 = simd::Vec8f::load(col + p + 24);
-            r0 = simd::fma(neg_s_v, c0, r0);
-            r1 = simd::fma(neg_s_v, c1, r1);
-            r2 = simd::fma(neg_s_v, c2, r2);
-            r3 = simd::fma(neg_s_v, c3, r3);
-            r0.store(row + p);
-            r1.store(row + p + 8);
-            r2.store(row + p + 16);
-            r3.store(row + p + 24);
-        }
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::Vec8f r = simd::Vec8f::load(row + p);
-            const simd::Vec8f c = simd::Vec8f::load(col + p);
-            r = simd::fma(neg_s_v, c, r);
-            r.store(row + p);
-        }
-    }
-    for (; p < len; ++p)
-    {
-        row[p] -= s * col[p];
     }
 }
 
@@ -295,20 +220,9 @@ void factor_ldlt(LDLT<T, L>& ldlt)
                 {
                     col_k_buf[i] = data[(k + 1 + i) * ld + k];
                 }
-                // Row-major sweep: for each row i in [k+1, n), apply rank-1
-                // update on row segment row_i[k+1..i] -= s_i * col_k_buf[0..i-k-1]
-                // where s_i = col_k_buf[i-k-1] * inv_d.
-                for (crd::usize i = k + 1; i < n; ++i)
-                {
-                    const crd::usize off = i - k - 1;
-                    const T s_i = col_k_buf[off] * inv_d;
-                    if (s_i == T{0})
-                    {
-                        continue;
-                    }
-                    T* row_i = data + i * ld + (k + 1);
-                    axpy_negate<T>(row_i, col_k_buf.data(), s_i, off + 1);
-                }
+                // Rank-1 update of the trailing lower triangle, row by row: row i loses (a_ik / d) a_k.
+                dense_kernels_of<T>().ldlt_update(LdltUpdate<T>{data + (k + 1) * ld + (k + 1), col_k_buf.data(),
+                                                                nullptr, ld, tail, tail, inv_d, T{}, T{}, T{}, false});
                 // Now normalize column k: write the L21 entries back.
                 for (crd::usize i = 0; i < tail; ++i)
                 {
@@ -344,9 +258,7 @@ void factor_ldlt(LDLT<T, L>& ldlt)
 
             // 2×2 trailing update: A[i, j] -= [A_orig[i,k], A_orig[i,k+1]]
             //                                · inv(D) · [A_orig[j,k], A_orig[j,k+1]]^T
-            // for i, j in [k+2, n), i >= j. Pack BOTH columns k and k+1
-            // below the 2×2 diagonal into contiguous buffers, then sweep
-            // rows with SIMD axpy-negate updates.
+            // for i, j in [k+2, n), i >= j, on contiguous copies of columns k and k+1 below the 2×2 diagonal.
             const crd::usize tail2 = (n > k + 2) ? (n - k - 2) : 0U;
             if (tail2 > 0)
             {
@@ -354,37 +266,20 @@ void factor_ldlt(LDLT<T, L>& ldlt)
                 col_a.resize(tail2);
                 crd::containers::Array<T> col_b(packed.allocator());
                 col_b.resize(tail2);
-                crd::containers::Array<T> fac_a(packed.allocator());
-                fac_a.resize(tail2);
-                crd::containers::Array<T> fac_b(packed.allocator());
-                fac_b.resize(tail2);
                 const T inv_det = T{1} / det;
                 for (crd::usize i = 0; i < tail2; ++i)
                 {
-                    const T ajk = data[(k + 2 + i) * ld + k];
-                    const T ajkp1 = data[(k + 2 + i) * ld + (k + 1)];
-                    col_a[i] = ajk;
-                    col_b[i] = ajkp1;
-                    // factor row j = inv(D) · [ajk, ajkp1]
-                    fac_a[i] = (d22 * ajk - d21 * ajkp1) * inv_det;
-                    fac_b[i] = (d11 * ajkp1 - d21 * ajk) * inv_det;
+                    col_a[i] = data[(k + 2 + i) * ld + k];
+                    col_b[i] = data[(k + 2 + i) * ld + (k + 1)];
                 }
-                // Row-major sweep: A[i, j] -= col_a[i_off] · fac_a[j_off]
-                //                            + col_b[i_off] · fac_b[j_off]
-                for (crd::usize i = k + 2; i < n; ++i)
-                {
-                    const crd::usize off = i - k - 2;
-                    const T aik = col_a[off];
-                    const T aikp1 = col_b[off];
-                    T* row_i = data + i * ld + (k + 2);
-                    axpy_negate<T>(row_i, fac_a.data(), aik, off + 1);
-                    axpy_negate<T>(row_i, fac_b.data(), aikp1, off + 1);
-                }
-                // Now normalize columns k and k+1 to L21.
+                dense_kernels_of<T>().ldlt_update(LdltUpdate<T>{data + (k + 2) * ld + (k + 2), col_a.data(),
+                                                                col_b.data(), ld, tail2, tail2, inv_det, d11, d21, d22,
+                                                                false});
+                // Now normalize columns k and k+1 to L21: row i = inv(D) · [a_ik, a_ik+1], the update's factors.
                 for (crd::usize i = 0; i < tail2; ++i)
                 {
-                    data[(k + 2 + i) * ld + k] = fac_a[i];
-                    data[(k + 2 + i) * ld + (k + 1)] = fac_b[i];
+                    data[(k + 2 + i) * ld + k] = (d22 * col_a[i] - d21 * col_b[i]) * inv_det;
+                    data[(k + 2 + i) * ld + (k + 1)] = (d11 * col_b[i] - d21 * col_a[i]) * inv_det;
                 }
             }
             k += 2;

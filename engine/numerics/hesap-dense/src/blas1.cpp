@@ -20,9 +20,16 @@ template <typename T>
 void axpy(T alpha, crd::containers::ConstSpan<T> x, crd::containers::Span<T> y)
 {
     CRD_ASSERT_MSG(x.size() == y.size(), "axpy: x.size() != y.size()");
-    for (crd::usize i = 0; i < x.size(); ++i)
+    if constexpr (kHasDenseKernels<T>)
     {
-        y[i] = y[i] + alpha * x[i];
+        dense_kernels_of<T>().axpy(y.data(), x.data(), alpha, x.size());
+    }
+    else
+    {
+        for (crd::usize i = 0; i < x.size(); ++i)
+        {
+            y[i] = y[i] + alpha * x[i];
+        }
     }
 }
 
@@ -36,13 +43,9 @@ T dot(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y)
     CRD_ASSERT_MSG(x.size() == y.size(), "dot: x.size() != y.size()");
     // f32 and f64 run the level's dot kernel (dense_kernels.hpp declares its reduction); other real types sum
     // pairwise.
-    if constexpr (std::is_same_v<T, crd::f32>)
+    if constexpr (kHasDenseKernels<T>)
     {
-        return dense_kernels().table->dot_f32(x.data(), y.data(), x.size());
-    }
-    else if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        return dense_kernels().table->dot_f64(x.data(), y.data(), x.size());
+        return dense_kernels_of<T>().dot(x.data(), y.data(), x.size());
     }
     else
     {
@@ -125,13 +128,9 @@ RealType<T> nrm2(crd::containers::ConstSpan<T> x)
     // under count * the least normal loses more than an ulp), is redone scaled by the largest magnitude, as LAPACK's
     // xNRM2 scales every input.
     R sum_sq;
-    if constexpr (std::is_same_v<T, crd::f32>)
+    if constexpr (kHasDenseKernels<T>)
     {
-        sum_sq = dense_kernels().table->dot_f32(x.data(), x.data(), x.size());
-    }
-    else if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        sum_sq = dense_kernels().table->dot_f64(x.data(), x.data(), x.size());
+        sum_sq = dense_kernels_of<T>().dot(x.data(), x.data(), x.size());
     }
     else
     {

@@ -4,8 +4,8 @@
 #include <crd/containers/sort.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/bdsqr.hpp>
-#include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/hesap/dense/detail/orgbr.hpp>
@@ -173,6 +173,7 @@ void dlabrd_upper(T* a, crd::usize lda, crd::usize k, crd::usize ms, crd::usize 
     auto a_sub = [&](crd::usize r, crd::usize c) -> T& { return a[(k + r) * lda + (k + c)]; };
     auto xmat = [&](crd::usize r, crd::usize c) -> T& { return xbuf[r * ldx + c]; };
     auto ymat = [&](crd::usize r, crd::usize c) -> T& { return ybuf[r * ldy + c]; };
+    const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
 
     for (crd::usize i = 0; i < nb; ++i)
     {
@@ -218,10 +219,8 @@ void dlabrd_upper(T* a, crd::usize lda, crd::usize k, crd::usize ms, crd::usize 
             {
                 yacc[t] = T{0};
             }
-            for (crd::usize r = i; r < ms; ++r)
-            {
-                detail::simd_axpy<T>(yacc, &a_sub(r, i + 1), a_sub(r, i), ylen);  // contiguous A(r, i+1:ns)
-            }
+            vcol[0] = T{1}; // vcol = A(i:m, i), the unit head included
+            kernels.gemvt(GemvtRows<T>{&a_sub(i, i + 1), vcol, yacc, lda, 1, ms - i, ylen});
             for (crd::usize jj = i + 1; jj < ns; ++jj)
             {
                 ymat(jj, i) = yacc[jj - (i + 1)];
@@ -298,11 +297,18 @@ void dlabrd_upper(T* a, crd::usize lda, crd::usize k, crd::usize ms, crd::usize 
             // --- Compute xmat(i+1:ms, i) (ref dlabrd 296-306). ---
             // X = A(i+1:m, i+1:n) * A(i, i+1:n)^T: each xmat(r,i) is a contiguous dot
             // of A-row r against A-row i over the tail columns (SIMD, 8-acc FMA).
+            // The gemv runs into vcol (free after Y), then scatters into X's strided column.
             const T* irow = &a_sub(i, i + 1);  // contiguous A(i, i+1:ns)
             const crd::usize xlen = ns - (i + 1);
+            const crd::usize xrows = ms - (i + 1);
+            for (crd::usize r = 0; r < xrows; ++r)
+            {
+                vcol[r] = T{0};
+            }
+            kernels.gemv(GemvRows<T>{&a_sub(i + 1, i + 1), irow, vcol, lda, xrows, xlen, T{1}, T{0}});
             for (crd::usize r = i + 1; r < ms; ++r)
             {
-                xmat(r, i) = detail::simd_dot<T>(&a_sub(r, i + 1), irow, xlen);
+                xmat(r, i) = vcol[r - (i + 1)];
             }
             for (crd::usize c = 0; c <= i; ++c)  // tmp = ymat(i+1:n,1:i)^T * A(i,i+1:n)^T -> xmat(0:i+1,i)
             {

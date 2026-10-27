@@ -4,9 +4,8 @@
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp> // crd::hesap::conj / abs / real (the complex variants, v5d-f)
 #include <crd/hesap/dense/blas3.hpp> // dense::gemm + MatrixView (the v5d-perf blocked-BLAS-3 front factor)
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/real_type.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 #include <crd/memory/allocator.hpp>
 
 #include <type_traits>
@@ -129,64 +128,11 @@ template <bool Hermitian, typename T> [[nodiscard]] inline dense::RealType<T> ld
     }
 }
 
-// SIMD axpy-negate: dst[p] -= s * src[p] for p in [0, len). f32 / f64 fast paths
-// via Vec8f / Vec4d + single-rounded FMA; scalar tail. (Mirror of dense ldlt.cpp.)
+// dst[p] -= s * src[p] for p in [0, len): the complex fronts' update (the real ones run the dense ldlt_update
+// kernel).
 template <typename T> inline void ldlt_axpy_negate(T* dst, const T* src, T s, crd::usize len) noexcept
 {
-    crd::usize p = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        namespace simd = crd::math::simd;
-        const simd::Vec4d neg_s(-s);
-        for (; p + 16 <= len; p += 16)
-        {
-            simd::Vec4d r0 = simd::Vec4d::load(dst + p);
-            simd::Vec4d r1 = simd::Vec4d::load(dst + p + 4);
-            simd::Vec4d r2 = simd::Vec4d::load(dst + p + 8);
-            simd::Vec4d r3 = simd::Vec4d::load(dst + p + 12);
-            r0 = simd::fma(neg_s, simd::Vec4d::load(src + p), r0);
-            r1 = simd::fma(neg_s, simd::Vec4d::load(src + p + 4), r1);
-            r2 = simd::fma(neg_s, simd::Vec4d::load(src + p + 8), r2);
-            r3 = simd::fma(neg_s, simd::Vec4d::load(src + p + 12), r3);
-            r0.store(dst + p);
-            r1.store(dst + p + 4);
-            r2.store(dst + p + 8);
-            r3.store(dst + p + 12);
-        }
-        for (; p + 4 <= len; p += 4)
-        {
-            simd::Vec4d r = simd::Vec4d::load(dst + p);
-            r = simd::fma(neg_s, simd::Vec4d::load(src + p), r);
-            r.store(dst + p);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        namespace simd = crd::math::simd;
-        const simd::Vec8f neg_s(-s);
-        for (; p + 32 <= len; p += 32)
-        {
-            simd::Vec8f r0 = simd::Vec8f::load(dst + p);
-            simd::Vec8f r1 = simd::Vec8f::load(dst + p + 8);
-            simd::Vec8f r2 = simd::Vec8f::load(dst + p + 16);
-            simd::Vec8f r3 = simd::Vec8f::load(dst + p + 24);
-            r0 = simd::fma(neg_s, simd::Vec8f::load(src + p), r0);
-            r1 = simd::fma(neg_s, simd::Vec8f::load(src + p + 8), r1);
-            r2 = simd::fma(neg_s, simd::Vec8f::load(src + p + 16), r2);
-            r3 = simd::fma(neg_s, simd::Vec8f::load(src + p + 24), r3);
-            r0.store(dst + p);
-            r1.store(dst + p + 8);
-            r2.store(dst + p + 16);
-            r3.store(dst + p + 24);
-        }
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::Vec8f r = simd::Vec8f::load(dst + p);
-            r = simd::fma(neg_s, simd::Vec8f::load(src + p), r);
-            r.store(dst + p);
-        }
-    }
-    for (; p < len; ++p)
+    for (crd::usize p = 0; p < len; ++p)
     {
         dst[p] -= s * src[p];
     }
@@ -351,14 +297,26 @@ template <typename T, bool Hermitian = false>
             const T inv_d = T{1} / d_kk;
             // Rank-1 trailing update (lower triangle, col-outer): A[i,j] -= L[i,k]·D·conjH(L[j,k]). Read the
             // still-original column k (only columns j > k are written), then normalize column k → L21 last.
-            for (crd::u32 j = k + 1; j < m; ++j)
+            if constexpr (dense::kHasDenseKernels<T>)
             {
-                const T s_j = ldlt_conjh<Hermitian, T>(el(j, k)) * inv_d; // conjH(A[j,k])/d ⇒ Hermitian Schur
-                if (s_j == T{0})
+                if (k + 1 < m)
                 {
-                    continue;
+                    const crd::usize n = m - k - 1;
+                    dense::dense_kernels_of<T>().ldlt_update(dense::LdltUpdate<T>{
+                        &el(k + 1, k + 1), &el(k + 1, k), nullptr, ldz, n, n, inv_d, T{}, T{}, T{}, true});
                 }
-                ldlt_axpy_negate<T>(&el(j, j), &el(j, k), s_j, m - j);
+            }
+            else
+            {
+                for (crd::u32 j = k + 1; j < m; ++j)
+                {
+                    const T s_j = ldlt_conjh<Hermitian, T>(el(j, k)) * inv_d; // conjH(A[j,k])/d ⇒ Hermitian Schur
+                    if (s_j == T{0})
+                    {
+                        continue;
+                    }
+                    ldlt_axpy_negate<T>(&el(j, j), &el(j, k), s_j, m - j);
+                }
             }
             for (crd::u32 i = k + 1; i < m; ++i)
             {
@@ -392,19 +350,31 @@ template <typename T, bool Hermitian = false>
             // Rank-2 trailing update: S[i,j] -= A[i,K]·inv(D)·conjH(A[j,K]). The "column-j" coefficients use
             // conjH(A[j,k]),conjH(A[j,k+1]) (Hermitian) so the Schur stays Hermitian. Read columns k,k+1
             // (only columns j ≥ k+2 are written), then normalize → L21 last.
-            for (crd::u32 j = k + 2; j < m; ++j)
+            if constexpr (dense::kHasDenseKernels<T>)
             {
-                const T ajk = ldlt_conjh<Hermitian, T>(el(j, k));
-                const T ajkp1 = ldlt_conjh<Hermitian, T>(el(j, k + 1));
-                const T tfa = (d22 * ajk - ldlt_conjh<Hermitian, T>(d21) * ajkp1) * inv_det;
-                const T tfb = (d11 * ajkp1 - d21 * ajk) * inv_det;
-                if (tfa != T{0})
+                if (k + 2 < m)
                 {
-                    ldlt_axpy_negate<T>(&el(j, j), &el(j, k), tfa, m - j);
+                    const crd::usize n = m - k - 2;
+                    dense::dense_kernels_of<T>().ldlt_update(dense::LdltUpdate<T>{
+                        &el(k + 2, k + 2), &el(k + 2, k), &el(k + 2, k + 1), ldz, n, n, inv_det, d11, d21, d22, true});
                 }
-                if (tfb != T{0})
+            }
+            else
+            {
+                for (crd::u32 j = k + 2; j < m; ++j)
                 {
-                    ldlt_axpy_negate<T>(&el(j, j), &el(j, k + 1), tfb, m - j);
+                    const T ajk = ldlt_conjh<Hermitian, T>(el(j, k));
+                    const T ajkp1 = ldlt_conjh<Hermitian, T>(el(j, k + 1));
+                    const T tfa = (d22 * ajk - ldlt_conjh<Hermitian, T>(d21) * ajkp1) * inv_det;
+                    const T tfb = (d11 * ajkp1 - d21 * ajk) * inv_det;
+                    if (tfa != T{0})
+                    {
+                        ldlt_axpy_negate<T>(&el(j, j), &el(j, k), tfa, m - j);
+                    }
+                    if (tfb != T{0})
+                    {
+                        ldlt_axpy_negate<T>(&el(j, j), &el(j, k + 1), tfb, m - j);
+                    }
                 }
             }
             // L21 = A21·inv(D) (A21 un-conjugated): L[i,k]=(d22·A[i,k]−d21·A[i,k+1])/det,
@@ -609,14 +579,11 @@ template <typename T>
                     return kk;
                 }
                 const T inv_d = T{1} / d_kk;
-                for (crd::u32 j = kk + 1; j < p1; ++j) // rank-1 within the PANEL columns + their foot
+                if (kk + 1 < p1) // rank-1 within the PANEL columns + their foot
                 {
-                    const T s = el(j, kk) * inv_d;
-                    if (s == T{0})
-                    {
-                        continue;
-                    }
-                    ldlt_axpy_negate<T>(&el(j, j), &el(j, kk), s, m - j);
+                    dense::dense_kernels_of<T>().ldlt_update(dense::LdltUpdate<T>{
+                        &el(kk + 1, kk + 1), &el(kk + 1, kk), nullptr, ldz, static_cast<crd::usize>(m - kk - 1),
+                        static_cast<crd::usize>(p1 - kk - 1), inv_d, T{}, T{}, T{}, true});
                 }
                 for (crd::u32 i = kk + 1; i < m; ++i)
                 {
@@ -644,20 +611,12 @@ template <typename T>
                     return kk;
                 }
                 const T inv_det = T{1} / det;
-                for (crd::u32 j = kk + 2; j < p1; ++j) // rank-2 within the PANEL columns + their foot
+                if (kk + 2 < p1) // rank-2 within the PANEL columns + their foot
                 {
-                    const T ajk = el(j, kk);
-                    const T ajkp1 = el(j, kk + 1);
-                    const T tfa = (d22 * ajk - d21 * ajkp1) * inv_det;
-                    const T tfb = (d11 * ajkp1 - d21 * ajk) * inv_det;
-                    if (tfa != T{0})
-                    {
-                        ldlt_axpy_negate<T>(&el(j, j), &el(j, kk), tfa, m - j);
-                    }
-                    if (tfb != T{0})
-                    {
-                        ldlt_axpy_negate<T>(&el(j, j), &el(j, kk + 1), tfb, m - j);
-                    }
+                    dense::dense_kernels_of<T>().ldlt_update(
+                        dense::LdltUpdate<T>{&el(kk + 2, kk + 2), &el(kk + 2, kk), &el(kk + 2, kk + 1), ldz,
+                                             static_cast<crd::usize>(m - kk - 2), static_cast<crd::usize>(p1 - kk - 2),
+                                             inv_det, d11, d21, d22, true});
                 }
                 for (crd::u32 i = kk + 2; i < m; ++i) // normalize cols kk, kk+1 → full L21
                 {

@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
@@ -10,8 +11,6 @@
 #include <crd/hesap/dense/detail/secular.hpp>
 #include <crd/hesap/dense/detail/sturm_count.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <crd/math/cmath.hpp>
 #include <limits>
@@ -251,37 +250,19 @@ inline void rot_cols(Z* z, crd::usize ldz, crd::usize n, crd::usize p, crd::usiz
 {
     Z* colp = z + p * ldz;
     Z* colq = z + q * ldz;
-    crd::usize r = 0;
-    if constexpr (std::is_same_v<Z, crd::f64> && std::is_same_v<R, crd::f64>)
+    if constexpr (std::is_same_v<Z, R> && kHasDenseKernels<R>)
     {
-        const crd::math::simd::Vec4d cc(ctemp);
-        const crd::math::simd::Vec4d ss(stemp);
-        for (; r + 4 <= n; r += 4)
-        {
-            const crd::math::simd::Vec4d tq = crd::math::simd::Vec4d::load(colq + r);
-            const crd::math::simd::Vec4d tp = crd::math::simd::Vec4d::load(colp + r);
-            (cc * tq - ss * tp).store(colq + r);
-            (ss * tq + cc * tp).store(colp + r);
-        }
+        dense_kernels_of<R>().rot(colp, colq, ctemp, stemp, n); // xROT with x = p, y = q
     }
-    else if constexpr (std::is_same_v<Z, crd::f32> && std::is_same_v<R, crd::f32>)
+    else
     {
-        const crd::math::simd::Vec8f cc(ctemp);
-        const crd::math::simd::Vec8f ss(stemp);
-        for (; r + 8 <= n; r += 8)
+        for (crd::usize r = 0; r < n; ++r)
         {
-            const crd::math::simd::Vec8f tq = crd::math::simd::Vec8f::load(colq + r);
-            const crd::math::simd::Vec8f tp = crd::math::simd::Vec8f::load(colp + r);
-            (cc * tq - ss * tp).store(colq + r);
-            (ss * tq + cc * tp).store(colp + r);
+            const Z tq = colq[r];
+            const Z tp = colp[r];
+            colq[r] = ctemp * tq - stemp * tp;
+            colp[r] = stemp * tq + ctemp * tp;
         }
-    }
-    for (; r < n; ++r)
-    {
-        const Z tq = colq[r];
-        const Z tp = colp[r];
-        colq[r] = ctemp * tq - stemp * tp;
-        colp[r] = stemp * tq + ctemp * tp;
     }
 }
 
@@ -809,13 +790,8 @@ void dlatrd_lower(T* a, crd::usize lda, crd::usize kk, crd::usize nn, crd::usize
         {
             wc[rp] = T{0};
         }
-        for (crd::usize rp = 0; rp < m; ++rp)
-        {
-            const T* row = &a[(kk + i + 1 + rp) * lda + (kk + i + 1)];  // lower row [0..rp]
-            const T vr = v[rp];
-            wc[rp] += simd_dot<T>(row, v, rp) + row[rp] * vr;  // lower-dot + diagonal
-            simd_axpy<T>(wc, row, vr, rp);                     // symmetric upper contributions
-        }
+        const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
+        kernels.symv(SymvLower<T>{&a[(kk + i + 1) * lda + (kk + i + 1)], v, wc, lda, m, T{1}, T{1}});
         if (i > 0)
         {
             // wc -= A_sub(i+1:nn, 0:i) * (W(i+1:nn, 0:i)^T * v)
@@ -862,9 +838,9 @@ void dlatrd_lower(T* a, crd::usize lda, crd::usize kk, crd::usize nn, crd::usize
         {
             wc[rp] *= tau_i;
         }
-        const T wv = simd_dot<T>(wc, v, m);
+        const T wv = kernels.dot(wc, v, m);
         const T alpha = T{-0.5} * tau_i * wv;
-        simd_axpy<T>(wc, v, alpha, m);
+        kernels.axpy(wc, v, alpha, m);
         // Scatter the finished w-column into W (strided column i).
         for (crd::usize rp = 0; rp < m; ++rp)
         {
@@ -978,11 +954,9 @@ void form_q(const T* a, crd::usize n, crd::usize lda, const T* tau, T* z, crd::u
     }
 
     crd::containers::Array<T> vv(scratch);
-    crd::containers::Array<T> ww(scratch);
     vv.resize(n);
-    ww.resize(n);
     T* v = vv.data();
-    T* w = ww.data();
+    const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
 
     for (crd::usize ii = n - 1; ii-- > 0;)  // ii = n-2 .. 0
     {
@@ -991,24 +965,14 @@ void form_q(const T* a, crd::usize n, crd::usize lda, const T* tau, T* z, crd::u
         {
             continue;
         }
-        // v: v[i+1]=1, v[i+2..n-1] from column i of the reflector store.
-        v[i + 1] = T{1};
+        // v = (1, v[i+2..n-1]) from column i of the reflector store, applied to rows i+1.. of every column of Q
+        // (column c contiguous).
         for (crd::usize r = i + 2; r < n; ++r)
         {
             v[r] = a[r * lda + i];
         }
         const crd::usize off = i + 1;
-        const crd::usize len = n - off;
-        // w[c] = v[off:]^T * Q[off:, c]  (column c contiguous).
-        for (crd::usize c = 0; c < n; ++c)
-        {
-            w[c] = simd_dot<T>(v + off, z + c * ldz + off, len);
-        }
-        // Q[off:, c] -= (tau[i] * w[c]) * v[off:]   (contiguous axpy per column).
-        for (crd::usize c = 0; c < n; ++c)
-        {
-            simd_axpy<T>(z + c * ldz + off, v + off, -(tau[i] * w[c]), len);
-        }
+        kernels.reflect(ReflectorRows<T>{v + off + 1, z + off, ldz, n, n - off - 1, tau[i]});
     }
 }
 

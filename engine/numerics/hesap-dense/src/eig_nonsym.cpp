@@ -3,11 +3,9 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
-#include <crd/hesap/dense/detail/dot_simd.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/dot_simd_complex.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <crd/math/cmath.hpp>
 #include <limits>
@@ -254,69 +252,6 @@ void balance(Matrix<T>& a, crd::containers::Array<RealType<T>>& scale, crd::usiz
 
 namespace
 {
-// SIMD contiguous dot product: Σ x[i]·y[i]  (f32/f64).
-template <typename T>
-inline T sdot(const T* x, const T* y, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    T acc{0};
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        simd::Vec4d a0 = simd::Vec4d::zero();
-        simd::Vec4d a1 = simd::Vec4d::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            a0 = simd::fma(simd::Vec4d::load(x + p), simd::Vec4d::load(y + p), a0);
-            a1 = simd::fma(simd::Vec4d::load(x + p + 4), simd::Vec4d::load(y + p + 4), a1);
-        }
-        acc = simd::horizontal_sum(a0 + a1);
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        simd::Vec8f a0 = simd::Vec8f::zero();
-        for (; p + 8 <= len; p += 8)
-        {
-            a0 = simd::fma(simd::Vec8f::load(x + p), simd::Vec8f::load(y + p), a0);
-        }
-        acc = simd::horizontal_sum(a0);
-    }
-    for (; p < len; ++p)
-    {
-        acc += x[p] * y[p];
-    }
-    return acc;
-}
-
-// SIMD contiguous axpy: y[i] += s·x[i]  (f32/f64).
-template <typename T>
-inline void saxpy(T* y, const T* x, T s, crd::usize len) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize p = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        const simd::Vec4d sv(s);
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::fma(sv, simd::Vec4d::load(x + p), simd::Vec4d::load(y + p)).store(y + p);
-            simd::fma(sv, simd::Vec4d::load(x + p + 4), simd::Vec4d::load(y + p + 4)).store(y + p + 4);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        const simd::Vec8f sv(s);
-        for (; p + 8 <= len; p += 8)
-        {
-            simd::fma(sv, simd::Vec8f::load(x + p), simd::Vec8f::load(y + p)).store(y + p);
-        }
-    }
-    for (; p < len; ++p)
-    {
-        y[p] += s * x[p];
-    }
-}
-
 // =======================================================================
 // v3d-2c-1 — complex Hessenberg reduction (zgehd2) on the two-real-array
 // (ar, ai) SIMD representation (the eig_herm v3a-2.5 idiom). Reduces the
@@ -557,6 +492,7 @@ void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::A
         crd::containers::Array<T> wbuf(alloc);  // left-update accumulation row
         vbuf.resize(n);
         wbuf.resize(n);
+        const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
 
         for (crd::usize i = ilo; i + 1 < ihi; ++i)
         {
@@ -582,30 +518,19 @@ void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::A
             //   w := vᵀ·A_trail (accumulate row by row), then A_trail -= tau·v·wᵀ.
             const crd::usize col_l = i + 1;
             const crd::usize ncol_l = n - col_l;
+            T* trail = data + (i + 1) * ld + col_l;
             if (ncol_l > 0)
             {
                 for (crd::usize jj = 0; jj < ncol_l; ++jj)
                 {
                     wbuf[jj] = T{0};
                 }
-                for (crd::usize r = 0; r < len; ++r)
-                {
-                    saxpy<T>(wbuf.data(), data + (i + 1 + r) * ld + col_l, vbuf[r], ncol_l);
-                }
-                for (crd::usize r = 0; r < len; ++r)
-                {
-                    saxpy<T>(data + (i + 1 + r) * ld + col_l, wbuf.data(), -h.tau * vbuf[r], ncol_l);
-                }
+                kernels.gemvt(GemvtRows<T>{trail, vbuf.data(), wbuf.data(), ld, 1, len, ncol_l});
+                kernels.ger(GerRows<T>{trail, vbuf.data(), wbuf.data(), ld, len, ncol_l, -h.tau});
             }
 
-            // Right: A(0:ihi, i+1:ihi) := A·(I - tau v vᵀ).  Row-wise per row rr:
-            //   wr := A[rr, i+1:ihi]·v;  A[rr, i+1:ihi] -= tau·wr·v.
-            for (crd::usize rr = 0; rr <= ihi; ++rr)
-            {
-                T* arow = data + rr * ld + (i + 1);
-                const T wr = sdot<T>(arow, vbuf.data(), len);
-                saxpy<T>(arow, vbuf.data(), -h.tau * wr, len);
-            }
+            // Right: A(0:ihi, i+1:ihi) := A·(I - tau v vᵀ), the reflector on each row rr's A[rr, i+1:ihi].
+            kernels.reflect(ReflectorRows<T>{vbuf.data() + 1, data + (i + 1), ld, ihi + 1, len - 1, h.tau});
         }
     }
 }
@@ -669,12 +594,13 @@ Matrix<T> form_hessenberg_q(crd::memory::IAllocator* alloc, const Matrix<T>& a_p
         crd::containers::Array<T> wrow(alloc);  // per-column reflector weights w[0..n-1]
         vfull.resize(n);
         wrow.resize(n);
+        const DenseTypeKernels<T>& kernels = dense_kernels_of<T>();
 
         // Q = H_ilo · … · H_{ihi-2}: build by left-applying H_i to I for i from
         // ihi-2 down to ilo (innermost reflector applied first).
         //
         // The reflector apply Q[i+1..ihi, :] := (I − τ v vᵀ)·Q[i+1..ihi, :] is done
-        // ROW-WISE (contiguous, SIMD via simd_axpy) rather than the naive column-
+        // ROW-WISE (contiguous, on the gemvt and ger kernels) rather than the naive column-
         // strided scalar form: accumulate w[:] = Σ_r v[r]·Q[row_r][:], scale by τ,
         // then Q[row_r][:] −= v[r]·w[:]. Same per-element accumulation order over r;
         // the dorghr cost drops to gemm-class (the v3d-1a SIMD-row-wise lever —
@@ -697,18 +623,13 @@ Matrix<T> form_hessenberg_q(crd::memory::IAllocator* alloc, const Matrix<T>& a_p
             {
                 wrow[j] = T{0};
             }
-            for (crd::usize r = 0; r < len; ++r)  // w += v[r]·Q[row_r][:]
-            {
-                detail::simd_axpy<T>(wrow.data(), qdata + (i + 1 + r) * qld, vfull[r], n);
-            }
+            T* qrows = qdata + (i + 1) * qld;
+            kernels.gemvt(GemvtRows<T>{qrows, vfull.data(), wrow.data(), qld, 1, len, n}); // w += v[r]·Q[row_r][:]
             for (crd::usize j = 0; j < n; ++j)
             {
                 wrow[j] *= taui;
             }
-            for (crd::usize r = 0; r < len; ++r)  // Q[row_r][:] −= v[r]·w[:]
-            {
-                detail::simd_axpy<T>(qdata + (i + 1 + r) * qld, wrow.data(), -vfull[r], n);
-            }
+            kernels.ger(GerRows<T>{qrows, vfull.data(), wrow.data(), qld, len, n, T{-1}}); // Q[row_r][:] −= v[r]·w[:]
         }
         return q;
     }
