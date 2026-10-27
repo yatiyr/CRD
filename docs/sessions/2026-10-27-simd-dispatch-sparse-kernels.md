@@ -110,15 +110,21 @@ dispatcher's level, which they do not call. Eigen 3 RowMajor, one thread, AVX2 f
 
 - In L2 avx2 leads HEAD 1.03x to 1.09x (f64) and 1.29x to 1.33x (f32), sse2 leads HEAD's sse2 lanes 1.22x to 1.26x
   (f64) and 1.06x to 1.10x (f32); avx2 leads Eigen 1.15x to 2.51x.
-- From DRAM the rows below 0.97x lie inside their round-to-round spread, which is 8% to 12% there: avx2 power-law
-  f64 1M 12.26 to 13.70 against HEAD's 12.07 to 13.24, uniform-16 f64 1M 22.10 to 23.55 against 21.66 to 23.26,
-  uniform-4 f64 2M 18.55 to 19.78 against 17.99 to 19.17, sse2 power-law f32 1M 8.64 to 9.75 against 8.32 to 9.58.
-  The same binaries two runs earlier gave sse2 power-law f32 1M 0.97x of HEAD's sse2.
+- From DRAM two 1M rows trail HEAD, both trade-offs of a measured choice rather than noise:
+  - sse2 power-law f32 1M (0.91x here, 0.89x and 0.97x of HEAD's sse2 on the two variant boards with the same sse2
+    body) pays for pairing its wide slices; without pairs it was 1.02x and 1.03x, at the cost of the uniform-16 gain
+    pairing gives on the same lane.
+  - avx2 power-law f64 1M (0.93x here, 0.94x on the variant board) pays for the scalar-load gather: `vgatherdpd` gave
+    12.49 against 13.52 to 13.67, at the cost of 6% to 20% in L2.
+  - uniform-16 f64 1M (0.96x) and uniform-4 f64 2M (0.96x) lie inside their round-to-round spread (22.10 to 23.55
+    against 21.66 to 23.26, 18.55 to 19.78 against 17.99 to 19.17).
+  The lever for both trade-offs is a pairing and gather policy per level and type, chosen by slice width and the
+  matrix's resident size, beside the compressed-index variant below.
 - avx2 leads Eigen in every row; from DRAM by 1.01x to 1.04x on the f64 power-law, banded and uniform-16 rows, where
   the product streams 12 bytes per entry from memory as Eigen's CSR does. The lever left there is fewer bytes per
   entry: a SELL variant with 16-bit column deltas per slice.
 
 ## Left in the row
 
-The fft, dense and geometry kernels as per-level units first; the complex SELL bodies and the compressed-index SELL
-variant join the rest the row lists.
+The fft, dense and geometry kernels as per-level units first; the complex SELL bodies, the pairing and gather policy
+and the compressed-index SELL variant join the rest the row lists.
