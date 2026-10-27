@@ -116,3 +116,38 @@ codelets and the four-step twiddle their `Vec` bodies), the other 281 pass. The 
 the hosted release lanes and the `crd-hesap-fft-kernels-at-<level>` arms.
 
 Left of the fft item: the f32 1M forward where MKL leads, and the bench scripts linking the fft archives.
+
+## CI read (slice E)
+
+- No completed run has a new failed job. 40515770381 (`31e2b9ce`) is still running; its four failed jobs were fixed by
+  `b306e2ea` and `14840123`. 40548341193, 40548005123, 40539013278 and the runs before them were cancelled before any
+  job ran (zero jobs); 40550831506 (`037cac74`) is pending. Nothing dispatched.
+- Needs CI audit: [DIAG.11c](../ROADMAP.md#slice-diag.11c) and [DIAG.12](../ROADMAP.md#slice-diag.12) stay Needs CI.
+
+## Slice E: the boards link through CMake
+
+The fft board scripts compiled a header-only engine by hand; since slice C the engine is `src/fft.cpp` plus three
+kernel objects, and their link lines (and those of the dsp, wavelet and comms boards, which also missed
+`libcrd-math.a` and `libcrd-units.a` or linked a stale `~/cerid-build` root) could no longer link it.
+
+- `scripts/run-lane-bench.sh <target> [-D<option>=ON ...]` builds a `runtime/examples` program in the linux-gcc-release
+  lane tree (configuring the options the cache lacks) and runs it per CPU level (`CRD_BENCH_LEVELS`, default
+  `detected sse2 portable`), pinned (`CRD_BENCH_CPUS`, default 4), the peers on one thread. No script keeps a link line.
+- `CRD_BUILD_HESAP_VS_FFT_REFS` (FFTW, MKL and pocketfft on the host: `bench_fft_vs_refs`, `bench_fft_f32`,
+  `bench_dct_vs_refs`) and `CRD_BUILD_HESAP_VS_FINUFFT` (`bench_nufft_vs_finufft`, with FINUFFT's single-precision and
+  OpenMP FFTW libraries) build the peer programs; `bench_fft_f32`, the only f32-against-MKL program, leaves the REPO.3
+  unrouted list. The other boards build their `CRD_BUILD_RETAINED_BENCHES` targets.
+- `CRD_HESAP_FFT_PROFILE` defines `CRD_FFT_PROFILE` and `CRD_NUFFT_PROFILE` for the archive, its kernel units and its
+  consumers, in a tree of its own (`~/cerid-mirror-build-fft-profile`): a define on the bench unit alone no longer
+  reached the counters. `prof_fft_kernel.sh` prints the counters per level there and runs perf stat on the
+  counter-free build; `run_bench_nufft.sh --profile` replaces `prof_nufft.sh`.
+- Deleted: `run_bench_fft_clang.sh` (its clang-vs-gcc result is recorded; with the engine in kernel units the bench
+  unit's compiler no longer decides the engine's code) and `prof_nufft.sh`.
+
+Verification: `bash -n` on every touched script; win-debug configures and builds `crd-hesap-fft`; `fft.cpp` and the
+three kernel units compile with both profile defines (MSVC, scratch objects); the ctest guards pass
+(`crd-check-source-routes` among them). The peer programs and the scripts first build and run at the row-close board
+on the WSL host, where FFTW 3.3.10, MKL (`/usr/include/mkl`), `~/fft_refs/pocketfft_hdronly.h` and
+`~/finufft/lib-static/libfinufft.a` are present.
+
+Left of the fft item: the f32 1M forward where MKL leads.

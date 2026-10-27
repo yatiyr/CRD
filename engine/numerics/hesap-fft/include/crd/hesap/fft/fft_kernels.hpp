@@ -122,8 +122,8 @@ extern const FftKernels kFftKernelsSse2;
 extern const FftKernels kFftKernelsAvx2;
 
 #ifdef CRD_FFT_PROFILE
-// Per-phase cycle counters of the kernels (scripts/prof_fft_kernel.sh builds them); src/fft.cpp defines and prints
-// them.
+// Per-phase cycle counters of the kernels (the CRD_HESAP_FFT_PROFILE tree, scripts/prof_fft_kernel.sh); src/fft.cpp
+// defines and prints them.
 namespace prof
 {
 extern unsigned long long g_first, g_combine, g_last;

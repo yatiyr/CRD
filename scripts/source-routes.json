@@ -194,19 +194,18 @@
       "why": "The liquid-dsp peer of the multirate bench."
     },
     {
-      "paths": ["runtime/examples/bench_dct_vs_refs.cpp"],
-      "built_by": "scripts/run_bench_dct.sh",
-      "why": "The DCT bench links FFTW and pocketfft."
-    },
-    {
-      "paths": ["runtime/examples/bench_fft_vs_refs.cpp"],
-      "built_by": "scripts/run_bench_fft.sh",
-      "why": "The FFT bench links FFTW, MKL and pocketfft."
+      "paths": [
+        "runtime/examples/bench_dct_vs_refs.cpp",
+        "runtime/examples/bench_fft_f32.cpp",
+        "runtime/examples/bench_fft_vs_refs.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_FFT_REFS"},
+      "why": "The FFT and DCT benches against FFTW, MKL and pocketfft installed on the measuring host (scripts/run_bench_fft.sh, scripts/run_bench_dct.sh)."
     },
     {
       "paths": ["runtime/examples/bench_nufft_vs_finufft.cpp"],
-      "built_by": "scripts/run_bench_nufft.sh",
-      "why": "The NUFFT bench links FINUFFT."
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_FINUFFT"},
+      "why": "The NUFFT bench against FINUFFT built on the measuring host (scripts/run_bench_nufft.sh)."
     },
     {
       "paths": ["runtime/examples/bench_ode_imex_vs_arkode.cpp"],
@@ -263,7 +262,6 @@
         "runtime/examples/bench_dist_boost.cpp",
         "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
         "runtime/examples/bench_dsp_windows_vs_liquid.c",
-        "runtime/examples/bench_fft_f32.cpp",
         "runtime/examples/bench_interp_boost.cpp",
         "runtime/examples/bench_ode_vs_refs.cpp",
         "runtime/examples/bench_special_v12d.cpp",

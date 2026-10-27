@@ -1,24 +1,9 @@
 #!/bin/bash
 # v11-t: build + run the adaptive-filter (NLMS/LMS) throughput bench (Cerid) then liquid-dsp eqlms. MATLAB runs on
-# Windows (tests/numerics/hesap-dsp/bench_adaptive_matlab.m). WSL, single-threaded, AVX2+FMA, m=32 taps, N=1M.
-set -e
-cd /mnt/d/Dev/cerid
-B=$HOME/cerid-build/linux-gcc-release/engine
-g++ -O3 -std=c++20 -mavx2 -mfma -DCRD_SIMD_TARGET=2 -DNDEBUG \
-  -I "$B/core/include" \
-  -I engine/numerics/hesap-dsp/include -I engine/numerics/hesap-fft/include -I engine/numerics/hesap-dense/include \
-  -I engine/numerics/hesap/include -I engine/foundation/core/include -I engine/foundation/containers/include -I engine/foundation/memory/include \
-  -I engine/foundation/log/include -I engine/foundation/vm/include -I engine/foundation/math/include -I engine/foundation/units/include \
-  runtime/examples/bench_dsp_adaptive_vs_refs.cpp \
-  -Wl,--start-group \
-    "$B/hesap-dsp/libcrd-hesap-dsp.a" "$B/hesap-fft/libcrd-hesap-fft.a" "$B/hesap-dense/libcrd-hesap-dense.a" \
-    "$B/hesap/libcrd-hesap.a" "$B/hesap-sched/libcrd-hesap-sched.a" "$B/jobs/libcrd-jobs.a" \
-    "$B/memory/libcrd-memory.a" "$B/vm/libcrd-vm.a" "$B/log/libcrd-log.a" \
-    "$B/core/libcrd-core.a" "$B/containers/libcrd-containers.a" \
-  -Wl,--end-group -lpthread -lm \
-  -o /tmp/bench_dsp_adaptive
-echo "BUILD OK"
-/tmp/bench_dsp_adaptive
+# Windows (tests/numerics/hesap-dsp/bench_adaptive_matlab.m). WSL, single-threaded, each CPU level, m=32 taps, N=1M.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+bash scripts/run-lane-bench.sh bench_dsp_adaptive_vs_refs -DCRD_BUILD_RETAINED_BENCHES=ON
 echo ""
 echo "--- liquid-dsp eqlms ---"
 gcc -O3 -mavx2 -mfma runtime/examples/bench_dsp_adaptive_liquid.c -lliquid -lm -o /tmp/bench_liquid_ad 2>/tmp/liquid_ad_err.log \

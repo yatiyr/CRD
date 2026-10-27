@@ -1112,7 +1112,8 @@ family + scheduler, de-risked because the objective is singular and the ceiling 
 - Codelet seeds: `build/sr16.cpp` (split-radix radix-16 AoS, +5%, gated), `build/sr32.cpp` (radix-32),
   `build/aos_probe.cpp` (the NOPERM/NOS0 shuffle-cost probes), `build/aos2.cpp` (over-2, dead).
 - Generator: `scripts/gen_aos_codelets.py` (AoS radix-8/16/32 fwd+inv+contiguous, numpy+emitted-C++ gated).
-- Benches: `runtime/examples/bench_fft_vs_refs.cpp` + `scripts/run_bench_fft.sh` (gcc) / `run_bench_fft_clang.sh`.
+- Benches: `runtime/examples/bench_fft_vs_refs.cpp` + `scripts/run_bench_fft.sh` (the lane tree, each CPU level); the
+  clang A/B script was retired on 2026-10-27, once the engine moved into the archive's kernel units.
 - `build/mkl_pin.cpp` (median+spread), `build/gather_probe.cpp` (NT-tile 25.7 GB/s), `build/aos_fft1024.cpp`
   (full-FFT four-step, 0.26×, reorder-bound).
 - Engine: `engine/hesap-fft/include/crd/hesap/fft/fft.hpp` (Stockham + four-step + fstw), `detail/codelets.hpp`

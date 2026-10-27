@@ -45,6 +45,14 @@ option(CRD_BUILD_HESAP_VS_STRUMPACK "Build hesap-vs-STRUMPACK HSS bench (local-o
 # compiled them before 2026-10-19 (crd-check-source-routes), so an API change broke them unseen; linux-gcc-debug and
 # the presets inheriting it turn this on, so a hosted lane compiles and links every one.
 option(CRD_BUILD_RETAINED_BENCHES "Build the peer-free retained benchmark programs of runtime/examples" OFF)
+# The hesap-fft boards' peers, installed on the measuring host and never fetched: FFTW 3, Intel MKL and the pocketfft
+# header (bench_fft_vs_refs, bench_fft_f32, bench_dct_vs_refs), and FINUFFT (bench_nufft_vs_finufft). Local only, never
+# in CI or a shipped build; scripts/run-lane-bench.sh builds and runs them per CPU level.
+option(CRD_BUILD_HESAP_VS_FFT_REFS "Build the FFT and DCT benches against FFTW, MKL and pocketfft (local-only)" OFF)
+option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-only)" OFF)
+# The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
+# consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
+option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
 option(CRD_ENABLE_ASSERTS   "Enable CRD_ASSERT macros"        ON)
 option(CRD_ENABLE_PROFILING "Enable profiling instrumentation" OFF)
 option(CRD_ENABLE_ASAN      "Enable Address Sanitizer"         OFF)

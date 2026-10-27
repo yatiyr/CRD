@@ -8,6 +8,11 @@
 #   crd-math  — crd::math::simd (the SIMD kernels land at v10-b)
 #   crd-hesap — Complex<T> (FFT is inherently complex; lower-layer raw per ADR-0078)
 
+if(CRD_HESAP_FFT_PROFILE)
+    # Directory scope, so the archive and the kernel units below count the same phases; INTERFACE below for consumers.
+    add_compile_definitions(CRD_FFT_PROFILE CRD_NUFFT_PROFILE)
+endif()
+
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -30,6 +35,9 @@ target_link_libraries(crd-hesap-fft
 )
 
 target_compile_features(crd-hesap-fft PUBLIC cxx_std_20)
+if(CRD_HESAP_FFT_PROFILE)
+    target_compile_definitions(crd-hesap-fft INTERFACE CRD_FFT_PROFILE CRD_NUFFT_PROFILE)
+endif()
 crd_enable_default_pch(crd-hesap-fft)
 
 # The transform engine, one body per CPU level (ADR-0134); src/fft_kernel_dispatch.cpp lists them.

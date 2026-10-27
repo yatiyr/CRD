@@ -908,6 +908,64 @@ if(CRD_BUILD_HESAP_VS_STRUMPACK)
     endif()
 endif()
 
+# --- The hesap-fft boards against peers installed on the measuring host (never fetched, never in CI) ---
+# FFTW 3 and Intel MKL from the system (libfftw3-dev, oneAPI MKL), the pocketfft header from CRD_POCKETFFT_DIR and
+# FINUFFT built from source in CRD_FINUFFT_DIR. scripts/run-lane-bench.sh builds and runs them at each CPU level.
+function(crd_add_fft_peer_bench name)
+    add_executable(${name} examples/${name}.cpp)
+    target_link_libraries(${name} PRIVATE crd-core crd-memory crd-containers crd-math crd-hesap crd-hesap-fft ${ARGN})
+    # As every peer bench: the peer headers are not clean under the tree's warnings as errors.
+    set_source_files_properties(examples/${name}.cpp PROPERTIES
+        COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/WX-,-Wno-error>")
+endfunction()
+if(CRD_BUILD_HESAP_VS_FFT_REFS OR CRD_BUILD_HESAP_VS_FINUFFT)
+    find_library(CRD_FFTW_LIB fftw3)
+    if(NOT CRD_FFTW_LIB)
+        message(FATAL_ERROR "[hesap-vs-fft] FFTW 3 not found (libfftw3-dev)")
+    endif()
+endif()
+if(CRD_BUILD_HESAP_VS_FFT_REFS)
+    set(CRD_POCKETFFT_DIR "$ENV{HOME}/fft_refs" CACHE PATH "The directory holding pocketfft_hdronly.h")
+    find_path(CRD_POCKETFFT_INCLUDE pocketfft_hdronly.h HINTS "${CRD_POCKETFFT_DIR}")
+    find_path(CRD_FFTW_INCLUDE fftw3.h)
+    find_path(CRD_MKL_INCLUDE mkl_dfti.h PATH_SUFFIXES mkl)
+    find_library(CRD_MKL_LIB mkl_rt)
+    foreach(found IN ITEMS CRD_POCKETFFT_INCLUDE CRD_FFTW_INCLUDE CRD_MKL_INCLUDE CRD_MKL_LIB)
+        if(NOT ${found})
+            message(FATAL_ERROR "[hesap-vs-fft-refs] ${found} not found (FFTW 3, Intel MKL, pocketfft_hdronly.h in "
+                                "CRD_POCKETFFT_DIR)")
+        endif()
+    endforeach()
+    add_library(crd-fft-peers INTERFACE)
+    target_include_directories(crd-fft-peers SYSTEM INTERFACE
+        "${CRD_POCKETFFT_INCLUDE}" "${CRD_FFTW_INCLUDE}" "${CRD_MKL_INCLUDE}")
+    target_link_libraries(crd-fft-peers INTERFACE "${CRD_FFTW_LIB}" "${CRD_MKL_LIB}")
+    crd_add_fft_peer_bench(bench_fft_vs_refs crd-fft-peers)
+    crd_add_fft_peer_bench(bench_fft_f32 crd-fft-peers)
+    crd_add_fft_peer_bench(bench_dct_vs_refs crd-fft-peers)
+    message(STATUS "[hesap-vs-fft-refs] FFTW ${CRD_FFTW_LIB}, MKL ${CRD_MKL_LIB}, pocketfft ${CRD_POCKETFFT_INCLUDE}")
+endif()
+if(CRD_BUILD_HESAP_VS_FINUFFT)
+    set(CRD_FINUFFT_DIR "$ENV{HOME}/finufft" CACHE PATH "The FINUFFT source tree, built (lib-static/libfinufft.a)")
+    find_library(CRD_FINUFFT_LIB NAMES libfinufft.a finufft
+                 HINTS "${CRD_FINUFFT_DIR}/lib-static" "${CRD_FINUFFT_DIR}/lib" NO_DEFAULT_PATH)
+    find_library(CRD_FFTW_OMP_LIB fftw3_omp)
+    find_library(CRD_FFTWF_LIB fftw3f)
+    find_library(CRD_FFTWF_OMP_LIB fftw3f_omp)
+    find_package(OpenMP COMPONENTS CXX)
+    foreach(found IN ITEMS CRD_FINUFFT_LIB CRD_FFTW_OMP_LIB CRD_FFTWF_LIB CRD_FFTWF_OMP_LIB OpenMP_CXX_FOUND)
+        if(NOT ${found})
+            message(FATAL_ERROR "[hesap-vs-finufft] ${found} not found (FINUFFT in CRD_FINUFFT_DIR, FFTW 3 with its "
+                                "single-precision and OpenMP libraries)")
+        endif()
+    endforeach()
+    # FINUFFT carries both precisions and plans through FFTW's OpenMP interface.
+    crd_add_fft_peer_bench(bench_nufft_vs_finufft "${CRD_FINUFFT_LIB}" "${CRD_FFTW_OMP_LIB}" "${CRD_FFTWF_OMP_LIB}"
+                           "${CRD_FFTW_LIB}" "${CRD_FFTWF_LIB}" OpenMP::OpenMP_CXX)
+    target_include_directories(bench_nufft_vs_finufft SYSTEM PRIVATE "${CRD_FINUFFT_DIR}/include")
+    message(STATUS "[hesap-vs-finufft] FINUFFT ${CRD_FINUFFT_LIB}")
+endif()
+
 # --- The retained programs that need no peer library (CRD_BUILD_RETAINED_BENCHES) ---
 # Measurement and differential-test programs of dated boards. Until 2026-10-19 no target compiled them (they were
 # built by hand or by the scripts that also run their peers, scripts/run_bench_*.sh and v14*_peers.py), so an API

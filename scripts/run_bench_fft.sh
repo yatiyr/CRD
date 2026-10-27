@@ -1,20 +1,11 @@
 #!/bin/bash
-# v10: build + run the FFT throughput shootout (Cerid vs FFTW / PocketFFT / MKL). WSL, single-threaded
-# (fair — Cerid v10-a/b are single-threaded; refs pinned to 1 thread). AVX2+FMA to match the 14900K.
-set -e
-cd /mnt/d/Dev/cerid
-B=build/linux-gcc-release/engine
-g++ -O3 -std=c++20 -mavx2 -mfma -DCRD_SIMD_TARGET=2 -DCRD_DETERMINISTIC_FP=1 \
-  -I build/linux-gcc-release/engine/core/include \
-  -I engine/numerics/hesap-fft/include -I engine/numerics/hesap/include -I engine/foundation/core/include \
-  -I engine/foundation/containers/include -I engine/foundation/memory/include -I engine/foundation/log/include -I engine/foundation/vm/include \
-  -I engine/foundation/math/include -I "$HOME/fft_refs" -I /usr/include/mkl \
-  runtime/examples/bench_fft_vs_refs.cpp \
-  -Wl,--start-group \
-    "$B/memory/libcrd-memory.a" "$B/vm/libcrd-vm.a" "$B/log/libcrd-log.a" \
-    "$B/core/libcrd-core.a" "$B/containers/libcrd-containers.a" \
-  -Wl,--end-group \
-  -lfftw3 -lmkl_rt \
-  -o /tmp/bench_fft
-echo "BUILD OK"
-MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 /tmp/bench_fft
+# The FFT boards: complex forward FFT throughput of Cerid against FFTW (FFTW_MEASURE), pocketfft and Intel MKL on
+# identical data (bench_fft_vs_refs, f64) and the f32 forward against MKL (bench_fft_f32), one thread, at each CPU level
+# (scripts/run-lane-bench.sh: CRD_BENCH_LEVELS, CRD_BENCH_CPUS). The peers are installed on the WSL host
+# (CRD_BUILD_HESAP_VS_FFT_REFS in runtime/CMakeLists.txt).
+#   bash scripts/run_bench_fft.sh
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+for bench in bench_fft_vs_refs bench_fft_f32; do
+    bash scripts/run-lane-bench.sh "$bench" -DCRD_BUILD_HESAP_VS_FFT_REFS=ON
+done
