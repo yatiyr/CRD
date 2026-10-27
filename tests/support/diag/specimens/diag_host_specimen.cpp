@@ -124,6 +124,7 @@ struct Shared
     std::atomic<crd::jobs::Counter*> second{nullptr};
     int                              plain = 0; // race: the defect adds to this with no ordering
     std::atomic<int>                 counted{0};
+    std::atomic<int>                 arrived{0}; // race: both jobs meet here before either adds
 };
 
 crd::jobs::Counter* published(const std::atomic<crd::jobs::Counter*>& c)
@@ -154,6 +155,13 @@ void second_job(void* data) noexcept
 void race_job(void* data) noexcept
 {
     auto* const s = static_cast<Shared*>(data);
+    // Without the meeting one thread could run both jobs (main helping in wait before a worker wakes) and nothing would
+    // race. Relaxed, so the meeting orders none of the additions after it.
+    s->arrived.fetch_add(1, std::memory_order_relaxed);
+    while (s->arrived.load(std::memory_order_relaxed) < 2)
+    {
+        std::this_thread::yield();
+    }
     for (int i = 0; i < 200000; ++i)
     {
         if (s->repaired)
