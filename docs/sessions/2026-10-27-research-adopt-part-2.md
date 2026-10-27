@@ -104,7 +104,7 @@ No row was invented for:
 
 ## CI at the start of the batch
 
-Every completed run from 40388755720 to 40421965175 was cancelled with no failed job. In-progress run 40409214033
+Every completed run from 40390536674 to 40421965175 was cancelled with no failed job. In-progress run 40409214033
 (head cf4b8a13) failed `simd convert_truncate gives INT32_MIN` on linux-gcc-relwithdebinfo, -release and -shipping;
 e9828cc2 already fixed that GCC fold. No complete-tier run was dispatched: push runs are pending, and this batch
 changed only documentation.
