@@ -30,3 +30,13 @@ decides where its counters live.
 The M18 fused chain (f32 1M forward, 0.85x MKL against the gather fusion's 0.69x on the 2026-06 harness, never made
 default; [design §18](../design/hesap_fft_generated_codelets.md)) went with the gates. The row names it as the
 f32 1M lever for the row-close board.
+
+## Slice B: the codelets in the level namespace
+
+`batched_codelets_gen.hpp` and `codelets.hpp` (their generators, regenerated in WSL, the reference host that
+reproduced both byte for byte before the edit) and the hand-maintained `hier_codelets.hpp` put their codelets in
+`gen::inline CRD_MATH_LEVEL_NS` and `detail::inline CRD_MATH_LEVEL_NS`, so a kernel unit's copy can never merge with
+another level's. The lane-scalar bodies call `crd::math::libm::fma` instead of `std::fma` (both single-rounded, the
+same bits; `<cmath>` is gone), and the generator no longer emits the four unreferenced f64 `stage1_fused_sh`
+codelets. The fft program passes on win-debug (the lane-scalar bodies). Left for the kernel unit: the lane-scalar
+bodies build results with `Complex<T>{re, im}`, an inline member of `crd::hesap` outside the level namespace.

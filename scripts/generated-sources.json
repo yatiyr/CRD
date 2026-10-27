@@ -943,7 +943,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs.",
-      "sha256": "4dfe32956bbde3fd7f5166d2555372bd7610c700a39b94b764baeadd95e72bf5"
+      "sha256": "1206059e640959218c3f0106cdd5d926b77fcb4e1f0596ed6cd4d2789ab46cab"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp",
@@ -957,14 +957,14 @@
         "numpy"
       ],
       "note": "Byte-identical on the reference host; on Windows the twiddle constants from the host cmath render one ulp apart, as for batched_codelets_gen.hpp.",
-      "sha256": "959f982515a19145939c4e1133e0e34fc739488f29fe4868fad488699f8761e8"
+      "sha256": "d0381e15479ececc1ac83000ac51ac480878c0e08354be9e73c24b180a532265"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted.",
-      "sha256": "7ada72776794dadb6896b1f2edc9b67bbdca0e6ca16d7e439594e214acbb1081"
+      "note": "build/gen_subfft_m3.py was a scratch generator that was never committed; the header is the surviving artifact (style-normalized by fft_codegen_style.py on 2026-09-12). On 2026-10-27 (SIMD-DISPATCH) its never-defined CRD_FFT_* experiment gates were resolved to their default branches and three unreferenced f64 stage-1 codelets (64x16, 16x64, 32x64) deleted, and the codelets moved into the level namespace (crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS).",
+      "sha256": "fbb1b60d98fe98ebd82fa88e04e5e9bdf17d8fdf2fc2dba4373d26ce1074d04c"
     },
     {
       "path": "engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp",

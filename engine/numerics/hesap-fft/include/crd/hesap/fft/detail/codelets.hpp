@@ -7,11 +7,12 @@
 
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
+#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/simd.hpp>
 
 #include <type_traits>
 
-namespace crd::hesap::fft::detail
+namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS
 {
     template <typename T> CRD_FORCEINLINE void codelet_2_fwd(const T* inre, const T* inim, crd::usize istride, T* outre, T* outim, crd::usize ostride) noexcept
     {
@@ -7821,4 +7822,4 @@ namespace crd::hesap::fft::detail
         }
     }
 
-} // namespace crd::hesap::fft::detail
+} // namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS

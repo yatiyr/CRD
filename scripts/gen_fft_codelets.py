@@ -366,11 +366,12 @@ def main():
     print()
     print("#include <crd/core/platform.hpp>")
     print("#include <crd/core/types.hpp>")
+    print("#include <crd/math/kernel_level.hpp>")
     print("#include <crd/math/simd/simd.hpp>")
     print()
     print("#include <type_traits>")
     print()
-    print("namespace crd::hesap::fft::detail")
+    print("namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS")
     print("{")
     for n in LEAF_SIZES:
         print(gen_codelet(n, inverse=False))
@@ -379,7 +380,7 @@ def main():
     for n in TWIDDLE_SIZES:
         print(gen_twiddle_codelet(n, inverse=False))
         print(gen_twiddle_codelet(n, inverse=True))
-    print("} // namespace crd::hesap::fft::detail")
+    print("} // namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS")
 
 
 if __name__ == "__main__":

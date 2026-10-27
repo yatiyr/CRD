@@ -7,8 +7,9 @@
 #include <crd/hesap/fft/detail/codelet_policy.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/simd.hpp>
-namespace crd::hesap::fft::gen {
+namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {
 // N=16 batched split-radix codelet (Vec4d over batch). GENERATED.
 // NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
 CRD_FFT_CODELET_INLINE void codelet16_batched(const crd::hesap::Complex<crd::f64>* in,
@@ -13345,4 +13346,4 @@ CRD_FFT_CODELET_INLINE void codelet32_stage1_fused_32x32_gather(const crd::hesap
           simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + n2v * 4096 + 0 * 128 + bb0), out_re, out_im); }
     }
 }
-} // namespace crd::hesap::fft::gen
+} // namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS

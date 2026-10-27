@@ -139,6 +139,8 @@ def _topo(outputs):
 # LOSES badly on the f64 deep-split kernels (256K −16%, 512K −68% — spill regime differs at 4 lanes).
 # ⇒ the tracked default is "hybrid": f32 emitters schedule belady, f64 emitters greedy.
 SCHED_VARIANT = "greedy"
+# The lane-scalar bodies' single-rounded multiply-add, in the unit's level namespace (ADR-0134 §5).
+FMA = "crd::math::libm::fma"
 
 
 def schedule(outputs):
@@ -516,12 +518,12 @@ def _render_node_scalar(nd, tname, batch_var, indent="            ", soa_in=0):
         elif nd.op == "cmul":
             a = f"n{nd.a.id}"
             wr, wi = nd.c
-            # FMA edition (2026-07-04 crush): scalar std::fma mirrors the simd fma/fnmadd fallbacks
-            # bit-for-bit (single-rounded IEEE; std::fma is deterministic like std::sqrt). The negated
+            # FMA edition (2026-07-04 crush): the scalar libm::fma mirrors the simd fma/fnmadd fallbacks
+            # bit-for-bit (single-rounded IEEE, the unit's level namespace). The negated
             # constant is parenthesized — `-` + a negative literal would lex as `--` (C2105).
             L.append(
-                f"{indent}const T {v}r = std::fma(-({cst(wi)}), {a}i, {cst(wr)} * {a}r), "
-                f"{v}i = std::fma({cst(wi)}, {a}r, {cst(wr)} * {a}i);"
+                f"{indent}const T {v}r = {FMA}(-({cst(wi)}), {a}i, {cst(wr)} * {a}r), "
+                f"{v}i = {FMA}({cst(wi)}, {a}r, {cst(wr)} * {a}i);"
             )
     return L
 
@@ -589,8 +591,8 @@ def _scalar_fused_sh(order, outs, tname, N1):
     for k, o in enumerate(outs):
         S.append(f"        {{ const T wr = twr[{k} * n2 + tl], wi = twi[{k} * n2 + tl];")
         S.append(
-            f"          out[tl * {N1} + {k}] = crd::hesap::Complex<T>{{std::fma(-wi, n{o.id}i, n{o.id}r * wr), "
-            f"std::fma(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
+            f"          out[tl * {N1} + {k}] = crd::hesap::Complex<T>{{{FMA}(-wi, n{o.id}i, n{o.id}r * wr), "
+            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
         )
     S.append("    }")
     return S
@@ -608,8 +610,8 @@ def _scalar_fused_notr(order, outs, tname):
     for k, o in enumerate(outs):
         S.append(f"        {{ const T wr = twr[{k} * vc + v], wi = twi[{k} * vc + v];")
         S.append(
-            f"          out[{k} * b + tl] = crd::hesap::Complex<T>{{std::fma(-wi, n{o.id}i, n{o.id}r * wr), "
-            f"std::fma(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
+            f"          out[{k} * b + tl] = crd::hesap::Complex<T>{{{FMA}(-wi, n{o.id}i, n{o.id}r * wr), "
+            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
         )
     S.append("    }")
     return S
@@ -810,8 +812,8 @@ def emit_stage1_fused_cs(N1, name, prec_key):
     for k, o in enumerate(outs):
         off = (k // lanes) * 2 * lanes + (k % lanes)
         S.append(f"        {{ const T wr = twr[{k} * n2 + tl], wi = twi[{k} * n2 + tl];")
-        S.append(f"          outb[tl * {2 * N1} + {off}] = std::fma(-wi, n{o.id}i, n{o.id}r * wr);")
-        S.append(f"          outb[tl * {2 * N1} + {off + lanes}] = std::fma(wi, n{o.id}r, n{o.id}i * wr); }}")
+        S.append(f"          outb[tl * {2 * N1} + {off}] = {FMA}(-wi, n{o.id}i, n{o.id}r * wr);")
+        S.append(f"          outb[tl * {2 * N1} + {off + lanes}] = {FMA}(wi, n{o.id}r, n{o.id}i * wr); }}")
     S.append("    }")
     return _assemble(sig, L, S)
 
@@ -889,9 +891,9 @@ def emit_stage1_fused_csf(N1, name, prec_key):
         off = (k // lanes) * 2 * lanes + (k % lanes)
         S.append(f"        {{ const T hr = hir[{k} * uhc + uh], hi_ = hii[{k} * uhc + uh];")
         S.append(f"          const T gr = lor[(crd::usize{{{k}}} << msh) + ul], gi = loi[(crd::usize{{{k}}} << msh) + ul];")
-        S.append(f"          const T wr = std::fma(-hi_, gi, hr * gr), wi = std::fma(hi_, gr, hr * gi);")
-        S.append(f"          outb[tl * {2 * N1} + {off}] = std::fma(-wi, n{o.id}i, n{o.id}r * wr);")
-        S.append(f"          outb[tl * {2 * N1} + {off + lanes}] = std::fma(wi, n{o.id}r, n{o.id}i * wr); }}")
+        S.append(f"          const T wr = {FMA}(-hi_, gi, hr * gr), wi = {FMA}(hi_, gr, hr * gi);")
+        S.append(f"          outb[tl * {2 * N1} + {off}] = {FMA}(-wi, n{o.id}i, n{o.id}r * wr);")
+        S.append(f"          outb[tl * {2 * N1} + {off + lanes}] = {FMA}(wi, n{o.id}r, n{o.id}i * wr); }}")
     S.append("    }")
     return _assemble(sig, L, S)
 
@@ -986,8 +988,8 @@ def emit_fused_notr_ss(N, name, prec_key):
     S += _emit_dag_body_scalar(order, tname, "b", "        ", soa_in=lanes)
     for k, o in enumerate(outs):
         S.append(f"        {{ const T wr = twr[{k} * vc + v], wi = twi[{k} * vc + v];")
-        S.append(f"          outb[{k} * b2 + ta] = std::fma(-wi, n{o.id}i, n{o.id}r * wr);")
-        S.append(f"          outb[{k} * b2 + ta + {lanes}] = std::fma(wi, n{o.id}r, n{o.id}i * wr); }}")
+        S.append(f"          outb[{k} * b2 + ta] = {FMA}(-wi, n{o.id}i, n{o.id}r * wr);")
+        S.append(f"          outb[{k} * b2 + ta + {lanes}] = {FMA}(wi, n{o.id}r, n{o.id}i * wr); }}")
     S.append("    }")
     return _assemble(sig, L, S)
 
@@ -1036,7 +1038,7 @@ def main(mode="hybrid"):
         "belady": {"f64": "belady", "f32": "belady"},
         "hybrid": {"f64": "greedy", "f32": "belady"},
         # hybrid2: additionally belady for the three f64 kernels the row-level A/B credited
-        # (codelet128_batched + codelet128/256_stage1_fused_sh — the 8K/16K/32K rows); everything
+        # (codelet128_batched + the since-pruned codelet128/256_stage1_fused_sh — the 8K/16K/32K rows); everything
         # else f64 stays greedy (256_batched + notr/strided regressed under belady).
         "hybrid2": {"f64": "greedy", "f32": "belady"},
     }[mode]
@@ -1048,8 +1050,9 @@ def main(mode="hybrid"):
     print("#include <crd/core/platform.hpp>")
     print("#include <crd/core/types.hpp>")
     print("#include <crd/hesap/complex.hpp>")
+    print("#include <crd/math/kernel_level.hpp>")
+    print("#include <crd/math/libm.hpp> // libm::fma in the lane-scalar bodies (single-rounded)")
     print("#include <crd/math/simd/simd.hpp>")
-    print("#include <cmath> // std::fma in the lane-scalar bodies (single-rounded, deterministic like std::sqrt)")
     print("// Unoptimized builds (/Od-class) give every expression temporary its OWN stack slot: the")
     print("// straight-line SIMD bodies then need 1.2-1.4 MB frames (MEASURED, MSVC /Od /RTC1) — past the")
     print("// 1 MB Windows default stack (C00000FD in win-debug, found 2026-07-03). Debug builds therefore")
@@ -1073,20 +1076,17 @@ def main(mode="hybrid"):
     print("#else")
     print("#define CRD_FFT_GEN_INLINE CRD_FORCEINLINE")
     print("#endif")
-    print("namespace crd::hesap::fft::gen {")
+    print("namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {")
     for n in (128, 256):
         SCHED_VARIANT = "belady" if (mode == "hybrid2" and n == 128) else sched_of["f64"]
         print(f"// N={n} batched split-radix codelet (Vec4d over batch). GENERATED.")
         print(emit_batched_f64(n, f"codelet{n}_batched"))
-    for n1 in (32, 64, 128, 256):
-        SCHED_VARIANT = "belady" if (mode == "hybrid2" and n1 >= 128) else sched_of["f64"]
-        print(f"// N1={n1} stage-1 FUSED (leaf + runtime twiddle + 4x4-transposed store). GENERATED.")
-        print(emit_stage1_fused_f64(n1, f"codelet{n1}_stage1_fused_sh"))
     SCHED_VARIANT = sched_of["f32"]
     for n in (128, 256):
         print(f"// N={n} batched split-radix codelet (f32, Vec8f over batch). GENERATED.")
         print(emit_batched_f32(n, f"codelet{n}_batched"))
-    # (The INTERLEAVED stage1_fused_sh / fused_notr / batched_strided editions were pruned 2026-07-04:
+    # (The INTERLEAVED stage1_fused_sh / fused_notr / batched_strided editions were pruned 2026-07-04, the
+    #  f64 stage1_fused_sh on 2026-10-27:
     #  the sh + deep-split pipelines run the AoSoA editions below; the emitters remain in this script.)
 
     # AoSoA (block-interleaved) pipeline editions (crush pass 2026-07-04): deinterleave once (stage-1),
@@ -1117,7 +1117,7 @@ def main(mode="hybrid"):
             print(emit_fused_notr_ss(n, f"codelet{n}_fused_notr_ss", prec))
             print(f"// N={n} SPLIT-LAYOUT deep-split S3 (plane in, strided complex out) ({prec}). GENERATED.")
             print(emit_batched_strided_sc(n, f"codelet{n}_batched_strided_sc", prec))
-    print("} // namespace crd::hesap::fft::gen")
+    print("} // namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS")
 
 
 if __name__ == "__main__":
