@@ -3,12 +3,13 @@
 // Lives in crd::math::simd to keep clear of crd::math::Vec4f (the 4D math
 // vector). Storage is one 128-bit register on SSE2/SSE4.2/AVX2/NEON, a four-element
 // array on the scalar fallback. All operators are bit-exact across backends
-// per ADR-0063 (no hardware FMA, fixed pairwise reductions, hardware sqrt).
+// per ADR-0063 (single-rounded fma only, fixed pairwise reductions, hardware sqrt).
 
 #pragma once
 
 #include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
+#include <crd/math/simd/fma_exact.hpp>
 
 namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
@@ -177,15 +178,19 @@ CRD_FORCEINLINE Vec4f mul_add(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * 
 CRD_FORCEINLINE Vec4f mul_sub(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * b) - c; }
 
 // Single-rounded IEEE 754 FMA (a*b + c with one rounding). Distinct from mul_add
-// (two roundings, ADR-0063 default). The AVX2 backend has the instruction; the others
-// fuse per lane through the C library's fma, which IEEE 754-2008 requires to give the
-// same bits, so Vec8f (two Vec4f halves below AVX2) stays width- and level-exact.
-// Do NOT rewrite as (a*b)+c: that is two-rounded.
+// (two roundings, ADR-0063 default). The AVX2 backend has the instruction, SSE2 and
+// SSE4.2 emulate it exactly (fma_exact.hpp), NEON and scalar fuse per lane through the
+// C library's fma; IEEE 754-2008 fixes the bits, so Vec8f (two Vec4f halves below AVX2)
+// stays width- and level-exact. Do NOT rewrite as (a*b)+c: that is two-rounded.
 CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     Vec4f r;
     r.v = _mm_fmadd_ps(a.v, b.v, c.v);
+    return r;
+#elif CRD_SIMD_HAS_SSE2
+    Vec4f r;
+    r.v = detail::fma_ps(a.v, b.v, c.v);
     return r;
 #else
     f32 af[4];

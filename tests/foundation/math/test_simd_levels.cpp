@@ -9,9 +9,12 @@
 #include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/backend.hpp>
 
+#include <algorithm>
 #include <bit>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace probe = crd::test::simd_probe;
 using crd::CpuLevel;
@@ -232,4 +235,309 @@ TEST_CASE("simd types: every level the host executes gives the portable level's 
     }
     // Every CPU of the architecture executes the level above portable (SSE2 on x64, NEON on ARM64).
     CHECK(ran >= (kLevelCount > 1U ? 2U : 1U));
+}
+
+namespace
+{
+
+// ---- the fused multiply-add's hard cases ----
+//
+// The sets above draw a, b and c independently, so a wrong fused multiply-add (one that rounds twice, or loses the
+// product's low half) rarely shows there. These lanes tie the operands: c cancelling the rounded product, products
+// that end on or beside a rounding midpoint of c, one addend far below the other, subnormal and overflowing products
+// and results, the bounds of the f64 emulated region (crd/math/simd/fma_exact.hpp) on both sides, infinities, NaNs
+// and signed zeros. Every level, portable included, must give the C library's fma, bit for bit apart from NaN
+// payloads.
+
+crd::f32 make_f32(crd::u64 r, int exponent)
+{
+    const crd::u32 sign = static_cast<crd::u32>(r >> 63U) << 31U;
+    const crd::u32 mantissa = static_cast<crd::u32>(r >> 20U) & 0x7FFFFFU;
+    const int biased = std::clamp(exponent + 127, 0, 254);
+    return std::bit_cast<crd::f32>(sign | (static_cast<crd::u32>(biased) << 23U) | mantissa);
+}
+
+crd::f64 make_f64(crd::u64 r, int exponent)
+{
+    const crd::u64 sign = (r >> 63U) << 63U;
+    const crd::u64 mantissa = (r >> 7U) & 0xFFFFFFFFFFFFFULL;
+    const int biased = std::clamp(exponent + 1023, 0, 2046);
+    return std::bit_cast<crd::f64>(sign | (static_cast<crd::u64>(biased) << 52U) | mantissa);
+}
+
+// x moved by `steps` units in the last place along its bit pattern; values next to zero or past the largest finite one
+// stay put.
+template <typename F, typename U> F nudge(F x, int steps)
+{
+    const U bits = std::bit_cast<U>(x);
+    const U magnitude = bits & static_cast<U>(~U{0} >> 1U);
+    if (magnitude < 4U || magnitude > static_cast<U>(std::bit_cast<U>(std::numeric_limits<F>::max()) - 4U))
+    {
+        return x;
+    }
+    return std::bit_cast<F>(static_cast<U>(bits + static_cast<U>(steps)));
+}
+
+int pick(crd::u64 r, int low, int high)
+{
+    return low + static_cast<int>(r % static_cast<crd::u64>(high - low + 1));
+}
+
+// One lane of related operands of the format with `Precision` significand bits.
+template <typename F, typename U, int Precision> void hard_lane(crd::u64& state, F& a, F& b, F& c)
+{
+    constexpr int emax = Precision == 24 ? 127 : 1023;
+    constexpr int emin = Precision == 24 ? -126 : -1022;
+    const auto make = [](crd::u64 r, int e)
+    {
+        if constexpr (Precision == 24)
+        {
+            return make_f32(r, e);
+        }
+        else
+        {
+            return make_f64(r, e);
+        }
+    };
+    const crd::u64 kind = next(state) % 11U;
+    const crd::u64 r0 = next(state);
+    const crd::u64 r1 = next(state);
+    const crd::u64 r2 = next(state);
+    const int ea = pick(r0 >> 8U, -Precision, Precision);
+    const int eb = pick(r1 >> 8U, -Precision, Precision);
+    switch (kind)
+    {
+        case 0: // c cancels the rounded product to within two units
+        {
+            a = make(r0, ea);
+            b = make(r1, eb);
+            c = nudge<F, U>(static_cast<F>(-(a * b)), pick(r2, -2, 2));
+            break;
+        }
+        case 1: // (1 + 2^-j)(1 +- 2^-j), so the product ends on or beside a midpoint of c
+        {
+            const int j = pick(r2 >> 8U, 1, Precision - 1);
+            const F step = static_cast<F>(std::ldexp(1.0, -j));
+            const F one{1};
+            a = std::ldexp(one + step, ea) * ((r0 & 1U) != 0U ? -one : one);
+            b = std::ldexp((r1 & 1U) != 0U ? one + step : one - step, eb);
+            c = make(r2, ea + eb + pick(r2 >> 32U, Precision - 2, Precision + 2));
+            break;
+        }
+        case 2: // c within a few binades of the product
+        {
+            a = make(r0, ea);
+            b = make(r1, eb);
+            c = make(r2, ea + eb + pick(r2 >> 32U, -3, 3));
+            break;
+        }
+        case 3: // one addend far below the other
+        {
+            a = make(r0, ea);
+            b = make(r1, eb);
+            c = make(r2, ea + eb + ((r2 & 1U) != 0U ? 1 : -1) * pick(r2 >> 32U, Precision + 1, 3 * Precision));
+            break;
+        }
+        case 4: // subnormal products and results
+        {
+            a = make(r0, (emin / 2) + pick(r0 >> 40U, -Precision, 2));
+            b = make(r1, (emin / 2) + pick(r1 >> 40U, -Precision, 2));
+            c = (r2 & 1U) != 0U ? nudge<F, U>(static_cast<F>(-(a * b)), pick(r2, -2, 2))
+                                : make(r2, emin + pick(r2, -Precision, 4));
+            break;
+        }
+        case 5: // products and sums at the top of the range, overflowing ones included
+        {
+            a = make(r0, (emax / 2) + pick(r0 >> 40U, -2, 2));
+            b = make(r1, (emax / 2) + pick(r1 >> 40U, -2, 2));
+            c = make(r2, emax - pick(r2 >> 40U, 0, 4));
+            break;
+        }
+        case 6: // the f64 region's bounds: |a| at 2^995, |ab| at 2^-900 and 2^1020, |c| at 2^1020
+        {
+            const int edges[] = {995, -900, 1020, 1020};
+            const int edge = pick(r2 >> 40U, 0, 3);
+            const int e = edges[edge];
+            a = make(r0, edge == 0 ? e + pick(r0 >> 40U, -1, 0) : (e / 2) + pick(r0 >> 40U, -1, 1));
+            b = make(r1, edge == 0 ? pick(r1 >> 40U, -3, 3) : e - (e / 2) + pick(r1 >> 40U, -1, 1));
+            c = edge == 3 ? make(r2, 1020 + pick(r2, -1, 0)) : make(r2, e + pick(r2, -60, 2));
+            break;
+        }
+        case 7: // signed zeros: zero products, zero addends and exact cancellation
+        {
+            const F zeros[] = {F{0}, -F{0}};
+            a = (r0 & 1U) != 0U ? zeros[(r0 >> 1U) & 1U] : make(r0, ea);
+            b = (r0 & 4U) != 0U ? zeros[(r0 >> 3U) & 1U] : make(r1, eb);
+            c = (r0 & 16U) != 0U ? zeros[(r0 >> 5U) & 1U] : static_cast<F>(-(a * b));
+            break;
+        }
+        case 8: // infinities and NaNs in each slot
+        {
+            const F special[] = {std::numeric_limits<F>::infinity(), -std::numeric_limits<F>::infinity(),
+                                 std::numeric_limits<F>::quiet_NaN(), F{0}, std::numeric_limits<F>::max()};
+            a = (r0 & 3U) == 0U ? special[(r0 >> 2U) % 5U] : make(r0, ea);
+            b = (r1 & 3U) == 0U ? special[(r1 >> 2U) % 5U] : make(r1, eb);
+            c = (r2 & 1U) == 0U ? special[(r2 >> 2U) % 5U] : make(r2, ea + eb);
+            break;
+        }
+        default: // random bit patterns
+        {
+            a = std::bit_cast<F>(static_cast<U>(r0));
+            b = std::bit_cast<F>(static_cast<U>(r1));
+            c = std::bit_cast<F>(static_cast<U>(r2));
+            break;
+        }
+    }
+}
+
+void fill_fma(probe::Input& in, crd::u64& state)
+{
+    for (crd::usize i = 0; i < probe::kLanes; ++i)
+    {
+        hard_lane<crd::f32, crd::u32, 24>(state, in.a[i], in.b[i], in.c[i]);
+        hard_lane<crd::f64, crd::u64, 53>(state, in.da[i], in.db[i], in.dc[i]);
+    }
+}
+
+enum class Fused : crd::u8
+{
+    Fma,
+    Fnmadd,
+    Fmaddsub, // subtracts c on the even lanes
+};
+
+template <typename F> F fused_reference(Fused op, F a, F b, F c, crd::usize lane)
+{
+    switch (op)
+    {
+        case Fused::Fnmadd:
+            return std::fma(-a, b, c);
+        case Fused::Fmaddsub:
+            return std::fma(a, b, (lane & 1U) != 0U ? c : -c);
+        case Fused::Fma:
+            break;
+    }
+    return std::fma(a, b, c);
+}
+
+struct FusedOp
+{
+    const char* name;
+    Fused op;
+    bool f64;
+};
+
+constexpr FusedOp kFusedOps[] = {
+    {"vec4f fma", Fused::Fma, false},          {"vec8f fma", Fused::Fma, false},
+    {"vec8f fnmadd", Fused::Fnmadd, false},    {"vec8f fmaddsub", Fused::Fmaddsub, false},
+    {"vec4d fma", Fused::Fma, true},           {"vec4d fnmadd", Fused::Fnmadd, true},
+    {"vec4d fmaddsub", Fused::Fmaddsub, true},
+};
+constexpr crd::usize kFusedCount = sizeof(kFusedOps) / sizeof(kFusedOps[0]);
+
+const probe::Op* find_op(const probe::Table& table, const char* name)
+{
+    for (crd::usize op = 0; op < table.op_count; ++op)
+    {
+        if (std::strcmp(table.ops[op].name, name) == 0)
+        {
+            return &table.ops[op];
+        }
+    }
+    return nullptr;
+}
+
+struct Tally
+{
+    crd::usize mismatches = 0;
+    crd::usize words = 0;
+    crd::u64 first[4] = {}; // a, b, c, the C library's result
+    crd::u64 first_got = 0;
+};
+
+} // namespace
+
+TEST_CASE("simd types: every level's fused multiply-add rounds once on hard cases", "[math][simd-levels]")
+{
+    constexpr crd::usize set_count = 16384; // 2^20 triples of each type
+    static probe::Input in;
+    static Tally tally[kLevelCount][kFusedCount];
+    const probe::Op* ops[kLevelCount][kFusedCount] = {};
+    bool runs[kLevelCount] = {};
+    for (crd::usize l = 0; l < kLevelCount; ++l)
+    {
+        runs[l] = crd::cpu_level_includes(crd::cpu_selection().detected, kLevels[l].level);
+        for (crd::usize f = 0; f < kFusedCount; ++f)
+        {
+            ops[l][f] = find_op(*kLevels[l].table, kFusedOps[f].name);
+            REQUIRE(ops[l][f] != nullptr);
+        }
+    }
+    crd::u64 state = 0xF0A5'ED00'0D0DULL;
+    for (crd::usize set = 0; set < set_count; ++set)
+    {
+        fill_fma(in, state);
+        for (crd::usize f = 0; f < kFusedCount; ++f)
+        {
+            crd::u64 expected[probe::kLanes];
+            crd::u64 operands[probe::kLanes][3];
+            for (crd::usize i = 0; i < probe::kLanes; ++i)
+            {
+                if (kFusedOps[f].f64)
+                {
+                    expected[i] =
+                        std::bit_cast<crd::u64>(fused_reference(kFusedOps[f].op, in.da[i], in.db[i], in.dc[i], i));
+                    operands[i][0] = std::bit_cast<crd::u64>(in.da[i]);
+                    operands[i][1] = std::bit_cast<crd::u64>(in.db[i]);
+                    operands[i][2] = std::bit_cast<crd::u64>(in.dc[i]);
+                }
+                else
+                {
+                    expected[i] =
+                        std::bit_cast<crd::u32>(fused_reference(kFusedOps[f].op, in.a[i], in.b[i], in.c[i], i));
+                    operands[i][0] = std::bit_cast<crd::u32>(in.a[i]);
+                    operands[i][1] = std::bit_cast<crd::u32>(in.b[i]);
+                    operands[i][2] = std::bit_cast<crd::u32>(in.c[i]);
+                }
+            }
+            for (crd::usize l = 0; l < kLevelCount; ++l)
+            {
+                if (!runs[l])
+                {
+                    continue;
+                }
+                crd::u64 got[probe::kMaxWords];
+                REQUIRE(ops[l][f]->run(in, got) == probe::kLanes);
+                Tally& t = tally[l][f];
+                t.words += probe::kLanes;
+                for (crd::usize i = 0; i < probe::kLanes; ++i)
+                {
+                    if (!same(ops[l][f]->compare, expected[i], got[i]))
+                    {
+                        if (t.mismatches == 0U)
+                        {
+                            t.first[0] = operands[i][0];
+                            t.first[1] = operands[i][1];
+                            t.first[2] = operands[i][2];
+                            t.first[3] = expected[i];
+                            t.first_got = got[i];
+                        }
+                        ++t.mismatches;
+                    }
+                }
+            }
+        }
+    }
+    for (crd::usize l = 0; l < kLevelCount; ++l)
+    {
+        for (crd::usize f = 0; runs[l] && f < kFusedCount; ++f)
+        {
+            const Tally& t = tally[l][f];
+            INFO("level " << crd::cpu_level_name(kLevels[l].level) << ", " << kFusedOps[f].name << ", " << t.words
+                          << " words");
+            INFO("first difference: a 0x" << std::hex << t.first[0] << " b 0x" << t.first[1] << " c 0x" << t.first[2]
+                                          << ", C library 0x" << t.first[3] << ", level 0x" << t.first_got << std::dec);
+            CHECK(t.mismatches == 0U);
+        }
+    }
 }

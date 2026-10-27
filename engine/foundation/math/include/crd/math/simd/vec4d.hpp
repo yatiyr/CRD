@@ -2,14 +2,16 @@
 //
 // AVX2: one 256-bit register (`__m256d`). SSE2 and SSE4.2: two 128-bit registers (`lo` holds lanes 0 and 1, `hi`
 // lanes 2 and 3). NEON and scalar: a 4-element f64 array. Every backend gives the scalar array's bits: IEEE lane
-// arithmetic, hardware `sqrt`, the fixed pairwise horizontal sum, and a single-rounded `fma` (per lane through the C
-// library's fma below AVX2). `mul_add` rounds twice on every backend (ADR-0063).
+// arithmetic, hardware `sqrt`, the fixed pairwise horizontal sum, and a single-rounded `fma` (exact emulation on SSE2
+// and SSE4.2, fma_exact.hpp; the C library's fma per lane on NEON and scalar). `mul_add` rounds twice on every backend
+// (ADR-0063).
 
 #pragma once
 
 #include <crd/core/types.hpp>
 #include <crd/math/libm.hpp>
 #include <crd/math/simd/backend.hpp>
+#include <crd/math/simd/fma_exact.hpp>
 
 namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
@@ -279,17 +281,7 @@ CRD_FORCEINLINE Vec4d fma(Vec4d a, Vec4d b, Vec4d c) noexcept
     r.v = _mm256_fmadd_pd(a.v, b.v, c.v);
     return r;
 #elif CRD_SIMD_HAS_SSE2
-    f64 x[4];
-    f64 y[4];
-    f64 z[4];
-    a.store(x);
-    b.store(y);
-    c.store(z);
-    for (usize i = 0; i < 4; ++i)
-    {
-        x[i] = libm::fma(x[i], y[i], z[i]);
-    }
-    return Vec4d::load(x);
+    return Vec4d(detail::fma_pd(a.lo, b.lo, c.lo), detail::fma_pd(a.hi, b.hi, c.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -588,17 +580,10 @@ CRD_FORCEINLINE Vec4d fmaddsub(Vec4d a, Vec4d b, Vec4d c) noexcept
     r.v = _mm256_fmaddsub_pd(a.v, b.v, c.v);
     return r;
 #elif CRD_SIMD_HAS_SSE2
-    f64 x[4];
-    f64 y[4];
-    f64 z[4];
-    a.store(x);
-    b.store(y);
-    c.store(z);
-    for (usize i = 0; i < 4; ++i)
-    {
-        x[i] = libm::fma(x[i], y[i], (i & 1U) != 0U ? z[i] : -z[i]);
-    }
-    return Vec4d::load(x);
+    // c negated (exactly) on the even lanes.
+    const __m128d even = _mm_set_pd(0.0, -0.0);
+    return Vec4d(detail::fma_pd(a.lo, b.lo, _mm_xor_pd(c.lo, even)),
+                 detail::fma_pd(a.hi, b.hi, _mm_xor_pd(c.hi, even)));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)

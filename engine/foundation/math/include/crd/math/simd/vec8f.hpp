@@ -231,8 +231,8 @@ CRD_FORCEINLINE Vec8f mul_sub(Vec8f a, Vec8f b, Vec8f c) noexcept
 // numerical-computing consumer (crd-hesap microkernels per ADR-0082)
 // wants ~2x throughput on AVX2-FMA hardware AND accepts the single-rounded
 // arithmetic. Bit-exact across SIMD widths only when ALL lanes/widths use
-// fma() (NOT mixed with mul_add). Below AVX2 it fuses per lane through the C
-// library's fma, which IEEE 754-2008 requires to match the hardware FMA.
+// fma() (NOT mixed with mul_add). Below AVX2 it runs on the Vec4f halves (an exact
+// emulation on SSE2 and SSE4.2, the C library's fma on NEON and scalar).
 CRD_FORCEINLINE Vec8f fma(Vec8f a, Vec8f b, Vec8f c) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
@@ -463,6 +463,14 @@ CRD_FORCEINLINE Vec8f fmaddsub(Vec8f a, Vec8f b, Vec8f c) noexcept
     Vec8f r;
     r.v = _mm256_fmaddsub_ps(a.v, b.v, c.v);
     return r;
+#elif CRD_SIMD_HAS_SSE2
+    // c negated (exactly) on the even lanes.
+    const __m128 even = _mm_set_ps(0.0F, -0.0F, 0.0F, -0.0F);
+    Vec4f lo;
+    Vec4f hi;
+    lo.v = _mm_xor_ps(c.lo.v, even);
+    hi.v = _mm_xor_ps(c.hi.v, even);
+    return Vec8f(fma(a.lo, b.lo, lo), fma(a.hi, b.hi, hi));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
