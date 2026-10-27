@@ -544,6 +544,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
 {
     crd::memory::TlsfAllocator alloc(1U << 24U);
     constexpr u64 window = 12U * tn::detail::kBinEndurance; // the AVX2 body's super-block
+    constexpr u64 half = 6U * tn::detail::kBinEndurance;    // the SSE2 body's
     const u64 n_max = 3U * window + 77U;
     const u64 shape[] = {n_max};
     Tensor<f64> x(&alloc, shape);
@@ -554,14 +555,17 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
         const f64 mag = 1.0 + 1e6 * static_cast<f64>(lcg(s) % 1000U) / 1000.0;
         x.data()[i] = ((i & 1U) != 0U ? -1.0 : 1.0) * mag * (static_cast<f64>(lcg(s) % 4096U) - 2048.0);
     }
-    const u64 lengths[] = {0U, 1U, 11U, 95U, 96U, 97U, 107U, window - 1U, window, window + 13U, n_max};
+    // Around each body's gate (8 steps of 12 or 6 elements), its step tails and super-blocks.
+    const u64 lengths[] = {0U,  1U,   5U,        11U,  47U,       48U,         49U,    53U,          95U,  96U,
+                           97U, 107U, half - 1U, half, half + 7U, window - 1U, window, window + 13U, n_max};
     const KernelLevel<TensorKernels>& portable = tn::tensor_kernel_levels()[0];
     REQUIRE(portable.level == CpuLevel::Portable);
 
-    // A late magnitude far above the first window's: the speculative pass rolls back and widens. A value near
-    // DBL_MAX in a later window moves the accumulator to index 0 (the compression regime the scalar deposits handle).
-    // An infinity is exact; NaNs with different payloads read out as the one quiet NaN. Powers of two from 2^30 down
-    // to 2^-58 land exactly halfway between two values of some rung: the deposit's sticky bit decides those ties.
+    // Late magnitudes far above the first window's (in the second super-block of each body): the speculative pass
+    // rolls back and widens. A value near DBL_MAX in a later window moves the accumulator to index 0 (the compression
+    // regime the scalar deposits handle). An infinity is exact; NaNs with different payloads read out as the one quiet
+    // NaN. Powers of two from 2^30 down to 2^-58 land exactly halfway between two values of some rung: the deposit's
+    // sticky bit decides those ties.
     Tensor<f64> ties(&alloc, shape);
     Tensor<f64> late(&alloc, shape);
     Tensor<f64> huge(&alloc, shape);
@@ -577,6 +581,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
         const f64 signed_power = (i & 8U) != 0U ? -power : power;
         ties.data()[i] = (i % 7U) == 3U ? signed_power : x.data()[i];
     }
+    late.data()[half + 5U] = 2.5e150;
     late.data()[window + 5U] = 3.5e200;
     late.data()[2U * window + 1U] = -3.5e200;
     huge.data()[window + 7U] = 1.6e308;

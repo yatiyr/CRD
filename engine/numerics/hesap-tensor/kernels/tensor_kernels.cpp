@@ -3,11 +3,11 @@
 // and the binned operations included, so no function of this unit is shared with general code or with another level.
 // The portable bodies are the scalar loops; the AVX2 bodies run the in-register permute transposes of f32, f64 and
 // complex elements (8x8 f32, 4x4 64-bit and 2x2 128-bit squares; 4x4, 2x2 and single elements on SSE2; with next-tile
-// prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators, the nn
-// quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four lanes at a
-// time and the Philox block loop 24 blocks at a time (16 on SSE2, whose other bodies are the portable loops); the avx2
-// level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the
-// permute is element copies and the IEEE operations of a real or complex product, the binned representation is
+// prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators (six on
+// SSE2), the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four
+// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2, whose nn bodies are the portable loops);
+// the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits:
+// the permute is element copies and the IEEE operations of a real or complex product, the binned representation is
 // partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
 // f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
 
@@ -557,75 +557,116 @@ void permute_walk_f64(const PermuteWalk<crd::f64>& w) noexcept
     }
 }
 
-#if CRD_SIMD_HAS_AVX2
-// TWELVE independent binned accumulators: 3 streams (breaking the rung-ladder latency chain) x 4 lanes, merged at the
-// end. Legal because the binned representation is partition-independent: the merged bits equal the scalar
-// whole-array sum. The per-element ladder is the scalar deposit (sticky-or, two-sum) per lane.
+#if CRD_SIMD_HAS_SSE2
+// Independent binned accumulators: kStreams streams (breaking the rung-ladder latency chain) x kLanes lanes, merged at
+// the end. Legal because the binned representation is partition-independent: the merged bits equal the scalar
+// whole-array sum at any lane or stream count. The per-element ladder is the scalar deposit (sticky-or, two-sum) per
+// lane. The level's register set: three streams of four lanes on AVX2, three of two on SSE2 (nine ladder registers
+// plus the constants and the deposit's temporaries fit both register files).
 using detail::kBinEndurance;
 using detail::kBinFold;
 
-constexpr crd::u64 kStreams = 3U;
-constexpr crd::u64 kLanes = 4U;
-constexpr crd::u64 kStep = kStreams * kLanes;
-
-// The larger of the four lanes of v.
-crd::f64 lane_max(__m256d v) noexcept
+#if CRD_SIMD_HAS_AVX2
+struct BinnedIsa
 {
-    alignas(32) crd::f64 mx[kLanes];
-    _mm256_store_pd(mx, v);
+    using V = __m256d;
+    static constexpr crd::u64 kLanes = 4U;
+    static constexpr crd::u64 kStreams = 3U;
+    static V load(const crd::f64* p) noexcept { return _mm256_loadu_pd(p); }
+    static void store(crd::f64* p, V v) noexcept { _mm256_storeu_pd(p, v); }
+    static V bits(crd::i64 b) noexcept { return _mm256_castsi256_pd(_mm256_set1_epi64x(b)); }
+    static V zero() noexcept { return _mm256_setzero_pd(); }
+    static V add(V a, V b) noexcept { return _mm256_add_pd(a, b); }
+    static V sub(V a, V b) noexcept { return _mm256_sub_pd(a, b); }
+    static V bit_or(V a, V b) noexcept { return _mm256_or_pd(a, b); }
+    static V bit_and(V a, V b) noexcept { return _mm256_and_pd(a, b); }
+    static V max(V a, V b) noexcept { return _mm256_max_pd(a, b); }
+};
+#else
+struct BinnedIsa
+{
+    using V = __m128d;
+    static constexpr crd::u64 kLanes = 2U;
+    static constexpr crd::u64 kStreams = 3U;
+    static V load(const crd::f64* p) noexcept { return _mm_loadu_pd(p); }
+    static void store(crd::f64* p, V v) noexcept { _mm_storeu_pd(p, v); }
+    static V bits(crd::i64 b) noexcept { return _mm_castsi128_pd(_mm_set1_epi64x(b)); }
+    static V zero() noexcept { return _mm_setzero_pd(); }
+    static V add(V a, V b) noexcept { return _mm_add_pd(a, b); }
+    static V sub(V a, V b) noexcept { return _mm_sub_pd(a, b); }
+    static V bit_or(V a, V b) noexcept { return _mm_or_pd(a, b); }
+    static V bit_and(V a, V b) noexcept { return _mm_and_pd(a, b); }
+    static V max(V a, V b) noexcept { return _mm_max_pd(a, b); }
+};
+#endif
+
+constexpr crd::u64 kBinLanes = BinnedIsa::kLanes;
+constexpr crd::u64 kBinStreams = BinnedIsa::kStreams;
+constexpr crd::u64 kBinStep = kBinStreams * kBinLanes;
+
+// The larger of the lanes of v.
+crd::f64 lane_max(BinnedIsa::V v) noexcept
+{
+    crd::f64 mx[kBinLanes];
+    BinnedIsa::store(mx, v);
     crd::f64 amax = mx[0];
-    for (crd::u64 l = 1; l < kLanes; ++l)
+    for (crd::u64 l = 1; l < kBinLanes; ++l)
     {
         amax = mx[l] > amax ? mx[l] : amax;
     }
     return amax;
 }
 
-// One super-block of deposits over the 12 accumulators. TrackMax fuses the |max| scan into the same pass (the
+// One super-block of deposits over the kBinStep accumulators. TrackMax fuses the |max| scan into the same pass (the
 // speculative single-DRAM-pass mode) and returns the block's abs-max (0 when not tracking).
 template <bool TrackMax>
-crd::f64 deposit_superblock(BinnedRungs (&lanes)[kStep], const crd::f64* p, crd::u64 len) noexcept
+crd::f64 deposit_superblock(BinnedRungs (&lanes)[kBinStep], const crd::f64* p, crd::u64 len) noexcept
 {
-    const __m256d sticky = _mm256_castsi256_pd(_mm256_set1_epi64x(1LL));
-    const __m256d absmask = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
-    __m256d pri[kStreams][kBinFold];
-    for (crd::u64 s = 0; s < kStreams; ++s)
+    using I = BinnedIsa;
+    const I::V sticky = I::bits(1LL);
+    const I::V absmask = I::bits(0x7FFFFFFFFFFFFFFFLL);
+    I::V pri[kBinStreams][kBinFold];
+    for (crd::u64 s = 0; s < kBinStreams; ++s)
     {
         for (crd::i32 k = 0; k < kBinFold; ++k)
         {
-            pri[s][k] = _mm256_set_pd(lanes[s * kLanes + 3U].pri[k], lanes[s * kLanes + 2U].pri[k],
-                                      lanes[s * kLanes + 1U].pri[k], lanes[s * kLanes + 0U].pri[k]);
+            crd::f64 lv[kBinLanes];
+            for (crd::u64 l = 0; l < kBinLanes; ++l)
+            {
+                lv[l] = lanes[s * kBinLanes + l].pri[k];
+            }
+            pri[s][k] = I::load(lv);
         }
     }
-    __m256d vmax = _mm256_setzero_pd();
-    for (crd::u64 k = 0; k < len; k += kStep)
+    I::V vmax = I::zero();
+    for (crd::u64 k = 0; k < len; k += kBinStep)
     {
-        for (crd::u64 s = 0; s < kStreams; ++s)
+        for (crd::u64 s = 0; s < kBinStreams; ++s)
         {
-            __m256d x = _mm256_loadu_pd(p + k + s * kLanes);
+            I::V x = I::load(p + k + s * kBinLanes);
             if constexpr (TrackMax)
             {
-                vmax = _mm256_max_pd(vmax, _mm256_and_pd(x, absmask));
+                vmax = I::max(vmax, I::bit_and(x, absmask));
             }
             for (crd::i32 r = 0; r < kBinFold - 1; ++r)
             {
-                const __m256d m = pri[s][r];
-                const __m256d snew = _mm256_add_pd(_mm256_or_pd(x, sticky), m);
+                const I::V m = pri[s][r];
+                const I::V snew = I::add(I::bit_or(x, sticky), m);
                 pri[s][r] = snew;
-                x = _mm256_add_pd(x, _mm256_sub_pd(m, snew));
+                x = I::add(x, I::sub(m, snew));
             }
-            pri[s][kBinFold - 1] = _mm256_add_pd(pri[s][kBinFold - 1], _mm256_or_pd(x, sticky));
+            pri[s][kBinFold - 1] = I::add(pri[s][kBinFold - 1], I::bit_or(x, sticky));
         }
     }
-    for (crd::u64 s = 0; s < kStreams; ++s)
+    for (crd::u64 s = 0; s < kBinStreams; ++s)
     {
         for (crd::i32 k = 0; k < kBinFold; ++k)
         {
-            alignas(32) crd::f64 lv[kLanes];
-            _mm256_store_pd(lv, pri[s][k]);
-            for (crd::u64 l = 0; l < kLanes; ++l)
+            crd::f64 lv[kBinLanes];
+            I::store(lv, pri[s][k]);
+            for (crd::u64 l = 0; l < kBinLanes; ++l)
             {
-                lanes[s * kLanes + l].pri[k] = lv[l];
+                lanes[s * kBinLanes + l].pri[k] = lv[l];
             }
         }
     }
@@ -639,24 +680,25 @@ crd::f64 deposit_superblock(BinnedRungs (&lanes)[kStep], const crd::f64* p, crd:
     }
 }
 
-void binned_sum_run_avx2(BinnedRungs& out, const crd::f64* p, crd::u64 n) noexcept
+void binned_sum_run_vector(BinnedRungs& out, const crd::f64* p, crd::u64 n) noexcept
 {
-    BinnedRungs lanes[kStep] = {};
+    using I = BinnedIsa;
+    BinnedRungs lanes[kBinStep] = {};
     crd::i32 cur_index = -1; // no window yet: the first block seeds it two-pass
     crd::u64 i = 0;
-    while (i + kStep <= n)
+    while (i + kBinStep <= n)
     {
-        const crd::u64 len0 = ((n - i) / kStep) * kStep;
-        const crd::u64 len = len0 < kBinEndurance * kStep ? len0 : kBinEndurance * kStep;
+        const crd::u64 len0 = ((n - i) / kBinStep) * kBinStep;
+        const crd::u64 len = len0 < kBinEndurance * kBinStep ? len0 : kBinEndurance * kBinStep;
 
         if (cur_index < 0)
         {
             // Seed pass: scan |max| first (reads once from DRAM, the deposit hits L2).
-            __m256d vmax = _mm256_setzero_pd();
-            const __m256d absmask = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
-            for (crd::u64 k = 0; k < len; k += kLanes)
+            I::V vmax = I::zero();
+            const I::V absmask = I::bits(0x7FFFFFFFFFFFFFFFLL);
+            for (crd::u64 k = 0; k < len; k += kBinLanes)
             {
-                vmax = _mm256_max_pd(vmax, _mm256_and_pd(_mm256_loadu_pd(p + i + k), absmask));
+                vmax = I::max(vmax, I::bit_and(I::load(p + i + k), absmask));
             }
             const crd::f64 amax = lane_max(vmax);
             if (detail::bin_index_of(amax) == 0) // near-DBL_MAX regime: the scalar run handles compression
@@ -675,8 +717,8 @@ void binned_sum_run_avx2(BinnedRungs& out, const crd::f64* p, crd::u64 n) noexce
             // SPECULATIVE single-DRAM-pass: deposit under the previous block's window while tracking |max| in the
             // same registers. On the rare violation (a bigger magnitude arrived: its index < the window's) restore
             // the snapshot, widen, and redo from L2. The result is bit-identical either way.
-            BinnedRungs snap[kStep];
-            for (crd::u64 l = 0; l < kStep; ++l)
+            BinnedRungs snap[kBinStep];
+            for (crd::u64 l = 0; l < kBinStep; ++l)
             {
                 snap[l] = lanes[l];
             }
@@ -684,7 +726,7 @@ void binned_sum_run_avx2(BinnedRungs& out, const crd::f64* p, crd::u64 n) noexce
             const crd::i32 amax_index = detail::bin_index_of(amax);
             if (amax_index == 0 || amax_index < cur_index)
             {
-                for (crd::u64 l = 0; l < kStep; ++l)
+                for (crd::u64 l = 0; l < kBinStep; ++l)
                 {
                     lanes[l] = snap[l];
                 }
@@ -719,10 +761,10 @@ void binned_sum_run_avx2(BinnedRungs& out, const crd::f64* p, crd::u64 n) noexce
 
 void binned_sum_f64(BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept
 {
-#if CRD_SIMD_HAS_AVX2
-    if (n >= 8U * kStep)
+#if CRD_SIMD_HAS_SSE2
+    if (n >= 8U * kBinStep)
     {
-        binned_sum_run_avx2(acc, p, n);
+        binned_sum_run_vector(acc, p, n);
         return;
     }
 #endif
