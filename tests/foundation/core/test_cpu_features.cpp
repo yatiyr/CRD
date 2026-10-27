@@ -891,7 +891,7 @@ TEST_CASE("cpu features: the caches are the smallest of each level the OS report
     CHECK(c.line_bytes >= 32U);
     CHECK(c.line_bytes <= 256U);
     CHECK((c.line_bytes & (c.line_bytes - 1U)) == 0U);
-    CHECK(c.l1d_bytes > 0U);
+    CHECK((c.source == crd::CpuCacheSource::Legacy || c.l1d_bytes > 0U)); // Intel reserves leaf 0x80000005's L1d
     CHECK(c.l2_bytes > c.l1d_bytes);
     CHECK((c.l3_bytes == 0U || c.l3_bytes > c.l2_bytes));
 
@@ -900,7 +900,9 @@ TEST_CASE("cpu features: the caches are the smallest of each level the OS report
     for (crd::u32 level = 1U; level <= 3U; ++level)
     {
         INFO("L" << level << ": OS " << os.bytes[level]);
-        CHECK((os.bytes[level] == 0U || os.bytes[level] == mine[level])); // 0: the OS hides it (some sandboxes)
+        // 0: the OS hides it (some sandboxes), or the legacy leaves do not describe it.
+        const bool unread = c.source == crd::CpuCacheSource::Legacy && mine[level] == 0U;
+        CHECK((os.bytes[level] == 0U || unread || os.bytes[level] == mine[level]));
     }
     CHECK((os.line == 0U || os.line == c.line_bytes));
 }
