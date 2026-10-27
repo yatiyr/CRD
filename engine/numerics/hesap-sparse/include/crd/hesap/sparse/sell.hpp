@@ -6,18 +6,12 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/sparse/sparse_dispatch.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/hesap/sparse/spmv.hpp>  // Trans, detail::spmv_is_zero / spmv_conj
-#include <crd/math/simd/backend.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <type_traits>
 #include <utility>
-
-#if CRD_SIMD_HAS_AVX2
-#include <immintrin.h>
-#endif
 
 namespace crd::hesap::sparse
 {
@@ -36,14 +30,13 @@ namespace crd::hesap::sparse
 // v1b-1 baseline. Pad slots are value 0 at column 0 (a + 0 == a no-op).
 //
 // Slice height C is per-T (D(sparse)-4): f32->8, f64->4, complex->4 (scalar).
+// f64 and f32 run per-level kernels (SIMD-DISPATCH, crd/hesap/sparse/sparse_kernels.hpp).
 // -----------------------------------------------------------------------
 
 namespace detail
 {
-template <typename T>
-inline constexpr crd::u32 kSellC = 4;  // f64 + complex
-template <>
-inline constexpr crd::u32 kSellC<crd::f32> = 8;
+template <typename T> inline constexpr crd::u32 kSellC = kSellSliceF64; // f64 + complex
+template <> inline constexpr crd::u32 kSellC<crd::f32> = kSellSliceF32;
 } // namespace detail
 
 template <typename T>
@@ -84,11 +77,11 @@ template <typename T>
     const SparsePattern& pat = a.pattern();
     CRD_ASSERT_MSG(pat.is_compressed(), "to_sell requires a compressed CSR matrix");
 
-    constexpr crd::u32 C = SellMatrix<T>::kC;
+    constexpr crd::u32 height = SellMatrix<T>::kC;
     SellMatrix<T>      out(alloc);
     out.rows       = pat.rows;
     out.cols       = pat.cols;
-    out.num_slices = (pat.rows + C - 1) / C;
+    out.num_slices = (pat.rows + height - 1) / height;
 
     const crd::u32* outer = pat.outer_ptr.data();
     const crd::u32* inner = pat.inner_idx.data();
@@ -131,15 +124,15 @@ template <typename T>
     for (crd::u32 s = 0; s < out.num_slices; ++s)
     {
         crd::u32       w     = 0;
-        const crd::u32 r_end = (s * C + C < pat.rows) ? (s * C + C) : pat.rows;
-        for (crd::u32 sr = s * C; sr < r_end; ++sr)
+        const crd::u32 r_end = (s * height + height < pat.rows) ? (s * height + height) : pat.rows;
+        for (crd::u32 sr = s * height; sr < r_end; ++sr)
         {
             const crd::u32 r   = perm[sr];
             const crd::u32 len = outer[r + 1] - outer[r];
             w = len > w ? len : w;
         }
         out.slice_width[s]   = w;
-        out.slice_ptr[s + 1] = out.slice_ptr[s] + C * w;
+        out.slice_ptr[s + 1] = out.slice_ptr[s] + height * w;
     }
 
     // 2. fill column-major within each slice; pad slots stay 0 (val) / 0 (col).
@@ -149,9 +142,9 @@ template <typename T>
     for (crd::u32 s = 0; s < out.num_slices; ++s)
     {
         const crd::u32 base = out.slice_ptr[s];
-        for (crd::u32 lane = 0; lane < C; ++lane)
+        for (crd::u32 lane = 0; lane < height; ++lane)
         {
-            const crd::u32 sr = s * C + lane;
+            const crd::u32 sr = s * height + lane;
             if (sr >= pat.rows)
             {
                 break;  // padding rows: already 0
@@ -161,7 +154,7 @@ template <typename T>
             const crd::u32 len = outer[r + 1] - rs;
             for (crd::u32 w = 0; w < len; ++w)
             {
-                const crd::u32 dst = base + w * C + lane;
+                const crd::u32 dst = base + w * height + lane;
                 out.vals[dst]      = srcv[rs + w];
                 out.col_idx[dst]   = inner[rs + w];
             }
@@ -176,151 +169,64 @@ namespace detail
 // lanes into y[perm[...]] -- and since perm is a bijection and slices partition
 // rows, disjoint slice ranges write disjoint y rows, so the parallel driver can
 // run ranges concurrently with no races (deterministic, bit-exact vs serial).
+// f64 and f32 run the hesap-sparse kernels of the process's CPU level
+// (crd/hesap/sparse/sparse_kernels.hpp); complex runs C scalar accumulators.
 template <typename T>
 void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end)
 {
-    constexpr crd::u32 C     = SellMatrix<T>::kC;
-    const bool         bzero = detail::spmv_is_zero(beta);
-    const bool         ident = a.perm_is_identity;  // skip perm[] indirection for uniform/banded
-    const T*           vals  = a.vals.data();
-    const crd::u32*    cols  = a.col_idx.data();
-    const crd::u32*    perm  = a.perm.data();
-
-    // Generic per-slice path: f32 via Vec8f; f64-without-AVX2 + complex via C
-    // independent scalar accumulators. (f64-with-AVX2 uses the slice-pair path
-    // below.) Factored into a lambda so the AVX2 branch needs no trailing
-    // unreachable code.
-    auto generic_path = [&]() {
-        for (crd::u32 s = s_begin; s < s_end; ++s)
-        {
-            const crd::u32 base  = a.slice_ptr[s];
-            const crd::u32 w_n   = a.slice_width[s];
-            const crd::u32 r_end = (s * C + C < a.rows) ? C : (a.rows - s * C);
-
-            T acc[C];
-            if constexpr (std::is_same_v<T, crd::f32>)  // C == 8
-            {
-                crd::math::simd::Vec8f accv(0.0F);
-                for (crd::u32 w = 0; w < w_n; ++w)
-                {
-                    const crd::u32 off = base + w * C;
-                    crd::f32       xg[8];
-                    for (crd::u32 lane = 0; lane < 8; ++lane)
-                    {
-                        xg[lane] = xp[cols[off + lane]];
-                    }
-                    accv = mul_add(crd::math::simd::Vec8f::load(&vals[off]), crd::math::simd::Vec8f::load(xg), accv);
-                }
-                accv.store(acc);
-            }
-            else  // f64 (no-AVX2 fallback) / complex
-            {
-                for (crd::u32 lane = 0; lane < C; ++lane)
-                {
-                    acc[lane] = T{};
-                }
-                for (crd::u32 w = 0; w < w_n; ++w)
-                {
-                    const crd::u32 off = base + w * C;
-                    for (crd::u32 lane = 0; lane < C; ++lane)
-                    {
-                        acc[lane] = acc[lane] + vals[off + lane] * xp[cols[off + lane]];
-                    }
-                }
-            }
-
-            for (crd::u32 lane = 0; lane < r_end; ++lane)
-            {
-                const crd::u32 r = ident ? (s * C + lane) : perm[s * C + lane];  // de-permute (σ)
-                y[r] = bzero ? (alpha * acc[lane]) : (alpha * acc[lane] + beta * y[r]);
-            }
-        }
-    };
-
-#if CRD_SIMD_HAS_AVX2
-    if constexpr (std::is_same_v<T, crd::f64>)  // C == 4
+    if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
     {
-        // Write the C accumulator lanes of slice s into y (alpha/beta, NaN-safe).
-        auto write_slice = [&](crd::u32 s, const crd::f64* acc) {
-            const crd::u32 r_end = (s * C + C < a.rows) ? C : (a.rows - s * C);
-            for (crd::u32 lane = 0; lane < r_end; ++lane)
-            {
-                const crd::u32 r = ident ? (s * C + lane) : perm[s * C + lane];  // de-permute (σ)
-                y[r] = bzero ? (alpha * acc[lane]) : (alpha * acc[lane] + beta * y[r]);
-            }
-        };
-        // One column step of a slice: acc += vals * gather(x). Two ops = two
-        // roundings (D(sparse)-3) -- NOT _mm256_fmadd (single-rounded).
-        auto step = [&](__m256d acc, crd::u32 off) -> __m256d {
-            const __m256d v = _mm256_loadu_pd(vals + off);
-            // Hardware gather: 4 contiguous u32 column indices -> 4 doubles of x
-            // (scale 8). Avoids the stack store-forward of a manual set_pd gather.
-            const __m128i idx = _mm_loadu_si128(reinterpret_cast<const __m128i*>(cols + off));
-            const __m256d xv  = _mm256_i32gather_pd(xp, idx, 8);
-            return _mm256_add_pd(acc, _mm256_mul_pd(v, xv));
-        };
-        constexpr crd::u32 kPf = 16U;  // prefetch distance (elements ahead)
-
-        crd::u32 s = s_begin;
-        for (; s + 1 < s_end; s += 2)  // slice-pair: two independent accumulator chains
+        const SellSlices<T> slices{a.slice_ptr.data(),
+                                   a.slice_width.data(),
+                                   a.vals.data(),
+                                   a.col_idx.data(),
+                                   a.perm_is_identity ? nullptr : a.perm.data(),
+                                   a.rows};
+        const SparseKernels& k = *sparse_kernels().table;
+        if constexpr (std::is_same_v<T, crd::f64>)
         {
-            const crd::u32 b0 = a.slice_ptr[s], w0 = a.slice_width[s];
-            const crd::u32 b1 = a.slice_ptr[s + 1], w1 = a.slice_width[s + 1];
-            __m256d        acc0 = _mm256_setzero_pd();
-            __m256d        acc1 = _mm256_setzero_pd();
-            const crd::u32 wm = w0 < w1 ? w0 : w1;
-            for (crd::u32 w = 0; w < wm; ++w)
-            {
-                const crd::u32 o0 = b0 + w * C;
-                const crd::u32 o1 = b1 + w * C;
-                _mm_prefetch(reinterpret_cast<const char*>(cols + o0 + kPf), _MM_HINT_T0);
-                _mm_prefetch(reinterpret_cast<const char*>(cols + o1 + kPf), _MM_HINT_T0);
-                acc0 = step(acc0, o0);
-                acc1 = step(acc1, o1);
-            }
-            for (crd::u32 w = wm; w < w0; ++w)
-            {
-                acc0 = step(acc0, b0 + w * C);
-            }
-            for (crd::u32 w = wm; w < w1; ++w)
-            {
-                acc1 = step(acc1, b1 + w * C);
-            }
-            crd::f64 a0[4];
-            crd::f64 a1[4];
-            _mm256_storeu_pd(a0, acc0);
-            _mm256_storeu_pd(a1, acc1);
-            write_slice(s, a0);
-            write_slice(s + 1, a1);
+            k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end);
         }
-        for (; s < s_end; ++s)  // trailing odd slice
+        else
         {
-            const crd::u32 b0 = a.slice_ptr[s], w0 = a.slice_width[s];
-            __m256d        acc0 = _mm256_setzero_pd();
-            for (crd::u32 w = 0; w < w0; ++w)
-            {
-                acc0 = step(acc0, b0 + w * C);
-            }
-            crd::f64 a0[4];
-            _mm256_storeu_pd(a0, acc0);
-            write_slice(s, a0);
+            k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end);
         }
     }
     else
     {
-        generic_path();  // f32 / complex under AVX2
+        constexpr crd::u32 height = SellMatrix<T>::kC;
+        const bool bzero = detail::spmv_is_zero(beta);
+        for (crd::u32 s = s_begin; s < s_end; ++s)
+        {
+            const crd::u32 base = a.slice_ptr[s];
+            const crd::u32 r_end = (s * height + height < a.rows) ? height : (a.rows - s * height);
+            T acc[height];
+            for (crd::u32 lane = 0; lane < height; ++lane)
+            {
+                acc[lane] = T{};
+            }
+            for (crd::u32 w = 0; w < a.slice_width[s]; ++w)
+            {
+                const crd::u32 off = base + w * height;
+                for (crd::u32 lane = 0; lane < height; ++lane)
+                {
+                    acc[lane] = acc[lane] + a.vals[off + lane] * xp[a.col_idx[off + lane]];
+                }
+            }
+            for (crd::u32 lane = 0; lane < r_end; ++lane)
+            {
+                const crd::u32 r = a.perm_is_identity ? (s * height + lane) : a.perm[s * height + lane]; // de-permute (σ)
+                y[r] = bzero ? (alpha * acc[lane]) : (alpha * acc[lane] + beta * y[r]);
+            }
+        }
     }
-#else
-    generic_path();  // no AVX2: all types
-#endif
 }
 } // namespace detail
 
 // y = alpha * A * x + beta * y  (SELL, Trans::None). Bit-exact with the CSR
 // baseline: each lane accumulates its row left-to-right in column order via
-// the two-rounded `acc + val*x` (D(sparse)-3). beta == 0 is NaN-safe. For f64
-// the kernel is slice-pair AVX2 (gather + prefetch); f32 uses Vec8f; complex
-// is scalar.
+// the two-rounded `acc + val*x` (D(sparse)-3). beta == 0 is NaN-safe. f64 and
+// f32 run the slice-pair kernels of the CPU level; complex is scalar.
 template <typename T>
 void spmv_sell(T alpha, const SellMatrix<T>& a, crd::containers::ConstSpan<T> x, T beta, crd::containers::Span<T> y)
 {

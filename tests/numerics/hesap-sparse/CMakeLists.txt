@@ -6,6 +6,7 @@ add_executable(crd-hesap-sparse-tests
     test_spmv.cpp
     test_sell.cpp
     test_sell_parallel.cpp
+    test_sparse_kernels.cpp
     test_convert.cpp
     test_element_wise.cpp
     test_structural.cpp
@@ -33,3 +34,6 @@ target_link_libraries(crd-hesap-sparse-tests PRIVATE
 crd_enable_default_pch(crd-hesap-sparse-tests)
 
 crd_discover_tests(crd-hesap-sparse-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-hesap-sparse-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-sparse-tests "[kernels]")

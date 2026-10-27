@@ -27,7 +27,7 @@ target_link_libraries(crd-hesap-sparse
         crd-core
         crd-containers
         crd-memory
-        crd-math       # Complex<T> values (c32/c64) + future SELL SIMD (v1b)
+        crd-math       # Complex<T> values (c32/c64) + the SELL kernel dispatch (crd/math/kernel_dispatch.hpp)
         crd-hesap      # SparseId sibling to MatrixId/VectorId; 'HSPM' CRDR pin
         crd-jobs       # future row-balanced parallel spmv/spgemm (v1b+)
     PRIVATE
@@ -36,3 +36,7 @@ target_link_libraries(crd-hesap-sparse
 
 target_compile_features(crd-hesap-sparse PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-sparse)
+
+# The f64 and f32 SELL-C-sigma spmv, one body per CPU level (ADR-0134); src/sparse_kernel_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-hesap-sparse NAME sparse LEVELS portable sse2 avx2 INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/sparse_kernels.cpp")

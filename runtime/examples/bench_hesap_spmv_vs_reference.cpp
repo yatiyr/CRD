@@ -1,7 +1,9 @@
-// bench_hesap_spmv_vs_reference -- Phase 3.1.6 v1b-1 / v1b-2.
+// bench_hesap_spmv_vs_reference -- Phase 3.1.6 v1b-1 / v1b-2, SIMD-DISPATCH.
 //
-// Single-thread y = A*x: Cerid CSR-scalar baseline + Cerid SELL-C-σ primary vs
-// Eigen RowMajor SparseMatrix * dense vector, identical pattern. The v1b-2 gate
+// y = A*x, f64 and f32: the Cerid SELL-C-σ primary at the hesap-sparse kernel level
+// the process selected (CRD_CPU_LEVEL forces one) vs Eigen RowMajor SparseMatrix *
+// dense vector, identical pattern, at an L2-resident size and two DRAM sizes. The
+// argument 1 stops after the one-thread columns (a run pinned to one core). The v1b-2 gate
 // is SELL-ST >= Eigen-ST on uniform-4 + banded-5 + uniform-16 (the cases SELL is
 // structurally faster or bandwidth-tied); power-law may lose until σ (v1b-2-sigma).
 // Eigen-ST spmv is largely memory-bandwidth bound -> SELL wins clearly on
@@ -16,8 +18,10 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
+#include <crd/hesap/sparse/sparse_dispatch.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/growable_tlsf_allocator.hpp>
 
@@ -115,77 +119,115 @@ template <typename Fn> crd::f64 best_ms(Fn&& fn)
     return best;
 }
 
-void run(const char* label, Pattern p, crd::u32 n, crd::u32 nnz_per_row)
+template <typename T> void run(const char* label, Pattern p, crd::u32 n, crd::u32 nnz_per_row, bool st_only)
 {
     const auto coords = generate(p, n, nnz_per_row, 0xBEEFULL ^ n ^ (static_cast<crd::u64>(nnz_per_row) << 20));
 
     crd::memory::IAllocator* alloc = &g_alloc;
-    crd::hesap::sparse::TripletBuilder<crd::f64> b(alloc, n, n);
+    crd::hesap::sparse::TripletBuilder<T> b(alloc, n, n);
     b.reserve(coords.size());
     for (const Coord& e : coords)
     {
-        b.add(e.r, e.c, e.v);
+        b.add(e.r, e.c, static_cast<T>(e.v));
     }
     auto csr = b.compress();
     auto sell = crd::hesap::sparse::to_sell(csr, alloc);
 
-    crd::containers::Array<crd::f64> x(alloc);
-    crd::containers::Array<crd::f64> y(alloc);
+    crd::containers::Array<T> x(alloc);
+    crd::containers::Array<T> y(alloc);
     x.resize(n);
-    y.resize(n, 0.0);
+    y.resize(n, T(0));
     for (crd::u32 i = 0; i < n; ++i)
     {
-        x[i] = 1.0 + static_cast<crd::f64>(i % 13) * 0.01;
+        x[i] = static_cast<T>(1.0 + static_cast<crd::f64>(i % 13) * 0.01);
     }
-    crd::containers::ConstSpan<crd::f64> xs{x.data(), x.size()};
-    crd::containers::Span<crd::f64> ys{y.data(), y.size()};
+    crd::containers::ConstSpan<T> xs{x.data(), x.size()};
+    crd::containers::Span<T> ys{y.data(), y.size()};
 
-    const crd::f64 t_sell_st = best_ms([&]() { crd::hesap::sparse::spmv_sell<crd::f64>(1.0, sell, xs, 0.0, ys); });
-    const crd::f64 t_sell_mt = best_ms(
-        [&]()
-        {
-            crd::hesap::sparse::spmv_sell_parallel<crd::f64>(1.0, sell, xs, 0.0, ys);
-            crd::jobs::frame_reset(); // reclaim the parallel_for JobDecl arena between reps
-        });
+    // An L2-resident matrix runs 64 products a timing, far above the clock's resolution.
+    const crd::i32 inner = n < 100000U ? 64 : 1;
+    const crd::f64 t_sell_st = best_ms(
+                                   [&]()
+                                   {
+                                       for (crd::i32 k = 0; k < inner; ++k)
+                                       {
+                                           crd::hesap::sparse::spmv_sell<T>(T(1), sell, xs, T(0), ys);
+                                       }
+                                   }) /
+                               inner;
 
-    crd::containers::Array<Eigen::Triplet<double>> trips(alloc);
+    crd::containers::Array<Eigen::Triplet<T>> trips(alloc);
     trips.reserve(coords.size());
     for (const Coord& e : coords)
     {
-        trips.push_back(Eigen::Triplet<double>(static_cast<int>(e.r), static_cast<int>(e.c), e.v));
+        trips.push_back(Eigen::Triplet<T>(static_cast<int>(e.r), static_cast<int>(e.c), static_cast<T>(e.v)));
     }
-    Eigen::SparseMatrix<double, Eigen::RowMajor> a(static_cast<int>(n), static_cast<int>(n));
+    Eigen::SparseMatrix<T, Eigen::RowMajor> a(static_cast<int>(n), static_cast<int>(n));
     a.setFromTriplets(trips.data(), trips.data() + trips.size());
-    Eigen::Map<const Eigen::VectorXd> xv(x.data(), n);
-    Eigen::VectorXd yv(n);
+    Eigen::Map<const Eigen::Matrix<T, Eigen::Dynamic, 1>> xv(x.data(), n);
+    Eigen::Matrix<T, Eigen::Dynamic, 1> yv(n);
 
     Eigen::setNbThreads(1);
-    const crd::f64 t_eigen_st = best_ms([&]() { yv.noalias() = a * xv; });
+    const crd::f64 t_eigen_st = best_ms(
+                                    [&]()
+                                    {
+                                        for (crd::i32 k = 0; k < inner; ++k)
+                                        {
+                                            yv.noalias() = a * xv;
+                                        }
+                                    }) /
+                                inner;
+    const crd::f64 st = t_eigen_st / t_sell_st;
+    std::printf("  %-11s %s N=%-8u nnz~%-3llu | ST SELL=%8.4f Eigen=%8.4f =%.2fx %-4s", label,
+                sizeof(T) == 8 ? "f64" : "f32", n, static_cast<unsigned long long>(coords.size() / n), t_sell_st,
+                t_eigen_st, st, (st >= 1.0 ? "WIN" : "loss"));
+    if (st_only)
+    {
+        std::printf("\n");
+        return;
+    }
+
+    const crd::f64 t_sell_mt = best_ms(
+        [&]()
+        {
+            crd::hesap::sparse::spmv_sell_parallel<T>(T(1), sell, xs, T(0), ys);
+            crd::jobs::frame_reset(); // reclaim the parallel_for JobDecl arena between reps
+        });
     Eigen::setNbThreads(0); // 0 => Eigen's default (all hardware threads)
     const crd::f64 t_eigen_mt = best_ms([&]() { yv.noalias() = a * xv; });
-
-    const crd::f64 st = t_eigen_st / t_sell_st;
     const crd::f64 mt = t_eigen_mt / t_sell_mt;
-    std::printf(
-        "  %-18s N=%-8u nnz~%-3llu | ST SELL=%7.3f Eigen=%7.3f =%.2fx %-4s | MT SELL=%7.3f Eigen=%7.3f =%.2fx %s\n",
-        label, n, static_cast<unsigned long long>(coords.size() / n), t_sell_st, t_eigen_st, st,
-        (st >= 1.0 ? "WIN" : "loss"), t_sell_mt, t_eigen_mt, mt, (mt >= 1.0 ? "WIN" : "loss"));
+    std::printf(" | MT SELL=%7.3f Eigen=%7.3f =%.2fx %s\n", t_sell_mt, t_eigen_mt, mt, (mt >= 1.0 ? "WIN" : "loss"));
+}
+
+template <typename T> void run_patterns(crd::u32 n, bool st_only)
+{
+    run<T>("uniform-16", Pattern::Uniform, n, 16, st_only);
+    run<T>("uniform-4", Pattern::Uniform, n, 4, st_only);
+    run<T>("banded-5", Pattern::Banded, n, 5, st_only);
+    run<T>("power-law", Pattern::PowerLaw, n, 0, st_only);
 }
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
-    crd::jobs::init();
-    Eigen::initParallel();
-    std::printf("[bench_hesap_spmv] y=A*x: Cerid SELL (ST + MT) vs Eigen (ST + MT), best-of-15 + warmup, f64, N=2M. "
-                "Gate: SELL/Eigen>=1 in both columns\n");
-    for (crd::u32 n : {1000000U, 2000000U}) // two cache regimes (x in L3 vs spilling)
+    const bool st_only = argc > 1 && argv[1][0] == '1';
+    if (!st_only)
     {
-        run("uniform-16", Pattern::Uniform, n, 16);
-        run("uniform-4", Pattern::Uniform, n, 4);
-        run("banded-5", Pattern::Banded, n, 5);
-        run("power-law", Pattern::PowerLaw, n, 0);
+        crd::jobs::init();
     }
-    crd::jobs::shutdown();
+    Eigen::initParallel();
+    std::printf("[bench_hesap_spmv] y=A*x: Cerid SELL vs Eigen, best-of-15 + warmup, ms, hesap-sparse kernel level %s "
+                "(selected %s). Gate: SELL/Eigen>=1 in every column\n",
+                crd::cpu_level_name(crd::hesap::sparse::sparse_kernels().level),
+                crd::cpu_level_name(crd::cpu_selection().selected));
+    for (crd::u32 n : {8000U, 1000000U, 2000000U}) // in L2, x in L3, x spilling to DRAM
+    {
+        run_patterns<crd::f64>(n, st_only);
+        run_patterns<crd::f32>(n, st_only);
+    }
+    if (!st_only)
+    {
+        crd::jobs::shutdown();
+    }
     return 0;
 }
