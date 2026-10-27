@@ -721,6 +721,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # A Linux tree links every kernel family once per CPU level into each test program; linux-gcc-asan ran out of
+      # root space at link (run 40515770381). Drop the image's preinstalled toolchains that no step here uses.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /usr/share/swift             /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - name: Setup Python 3.12
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -1300,6 +1308,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # A Linux tree links every kernel family once per CPU level into each test program; linux-gcc-asan ran out of
+      # root space at link (run 40515770381). Drop the image's preinstalled toolchains that no step here uses.
+      - name: Reclaim runner disk
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /usr/local/.ghcup /opt/ghc /usr/share/swift             /opt/hostedtoolcache/CodeQL
+          df -h /
 
       - name: Setup Python 3.12
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
