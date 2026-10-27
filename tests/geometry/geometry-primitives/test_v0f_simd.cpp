@@ -1,8 +1,8 @@
-// crd-geometry-primitives v0f -- the SIMD batch kernels, lane-by-lane against
+// crd-geometry-primitives v0f -- the batch kernels, lane-by-lane against
 // their scalar reference (ULP-conformance): ray_vs_8_aabb / ray_packet8_vs_aabb
 // vs the robust slab, ray_vs_8_triangle vs v0c Moller-Trumbore, aabb8/sphere8
 // overlap masks vs v0c `intersects`, segment8 squared-closest-distance vs v0b
-// `distance_squared(Segment3, Segment3)`. Plus the all-bits-set mask convention.
+// `distance_squared(Segment3, Segment3)`. Plus the all-ones mask convention.
 
 #include <crd/geometry/primitives/closest_point.hpp>
 #include <crd/geometry/primitives/intersect.hpp>
@@ -18,7 +18,6 @@
 using namespace crd;
 using namespace crd::math;
 using namespace crd::geometry::primitives;
-using crd::math::simd::Vec8f;
 
 namespace
 {
@@ -43,21 +42,27 @@ Vec3<f32> rnd3(Rng& r, f32 lo, f32 hi)
 {
     return Vec3<f32>(r.uni(lo, hi), r.uni(lo, hi), r.uni(lo, hi));
 }
-// Build a Vec8f from a generator(lane).
-template <typename F> Vec8f gather8(F gen)
+// Fill a column from a generator(lane).
+template <typename F> void gather8(f32 (&column)[8], F gen)
 {
-    return Vec8f(gen(0), gen(1), gen(2), gen(3), gen(4), gen(5), gen(6), gen(7));
+    for (int l = 0; l < 8; ++l)
+    {
+        column[l] = gen(l);
+    }
 }
-// Extract all 8 lanes.
-struct Lanes8
+bool lane_set(const u32 (&mask)[8], int i)
 {
-    alignas(32) f32 v[8];
-    explicit Lanes8(const Vec8f& x) noexcept { x.store(v); }
-};
-bool lane_set(const Vec8f& mask, int i)
+    REQUIRE((mask[i] == 0U || mask[i] == 0xFFFFFFFFU)); // all ones or zero
+    return mask[i] != 0U;
+}
+void fill_boxes(Aabb8& boxes, const AABB3<f32> (&b)[8])
 {
-    Lanes8 m(mask);
-    return m.v[i] != 0.0F; // all-bits-set (a NaN bit pattern) != 0; +0.0 (clear) == 0
+    gather8(boxes.min_x, [&](int l) { return b[l].min.x; });
+    gather8(boxes.min_y, [&](int l) { return b[l].min.y; });
+    gather8(boxes.min_z, [&](int l) { return b[l].min.z; });
+    gather8(boxes.max_x, [&](int l) { return b[l].max.x; });
+    gather8(boxes.max_y, [&](int l) { return b[l].max.y; });
+    gather8(boxes.max_z, [&](int l) { return b[l].max.z; });
 }
 } // namespace
 
@@ -74,13 +79,8 @@ TEST_CASE("v0f SIMD -- ray_vs_8_aabb lane-by-lane vs the robust scalar slab", "[
             const Vec3<f32> h(rng.uni(0.2F, 1.5F), rng.uni(0.2F, 1.5F), rng.uni(0.2F, 1.5F));
             box = AABB3<f32>(c - h, c + h);
         }
-        Aabb8 boxes;
-        boxes.min_x = gather8([&](int l) { return b[l].min.x; });
-        boxes.min_y = gather8([&](int l) { return b[l].min.y; });
-        boxes.min_z = gather8([&](int l) { return b[l].min.z; });
-        boxes.max_x = gather8([&](int l) { return b[l].max.x; });
-        boxes.max_y = gather8([&](int l) { return b[l].max.y; });
-        boxes.max_z = gather8([&](int l) { return b[l].max.z; });
+        Aabb8 boxes{};
+        fill_boxes(boxes, b);
 
         const Ray3<f32> ray(rnd3(rng, -5.0F, 5.0F), rnd3(rng, -1.0F, 1.0F));
         if (dot(ray.direction, ray.direction) < 1e-4F)
@@ -88,8 +88,8 @@ TEST_CASE("v0f SIMD -- ray_vs_8_aabb lane-by-lane vs the robust scalar slab", "[
             continue;
         }
         const auto pre = precompute_ray_aabb(ray);
-        const RayAabb8Result r = ray_vs_8_aabb(ray, pre, boxes, 0.0F, inf);
-        Lanes8 tlanes(r.t_enter);
+        RayAabb8Result r{};
+        ray_vs_8_aabb(ray, pre, {&boxes, 1}, 0.0F, inf, {&r, 1});
         for (int l = 0; l < 8; ++l)
         {
             f32 ts = 0.0F;
@@ -97,7 +97,7 @@ TEST_CASE("v0f SIMD -- ray_vs_8_aabb lane-by-lane vs the robust scalar slab", "[
             REQUIRE(lane_set(r.hit_mask, l) == hs);
             if (hs)
             {
-                REQUIRE(tlanes.v[l] == Catch::Approx(ts).margin(1e-3F));
+                REQUIRE(r.t_enter[l] == Catch::Approx(ts).margin(1e-3F));
             }
             // conservative wrt the v0c plain slab
             f32 tv = 0.0F;
@@ -128,12 +128,9 @@ TEST_CASE("v0f SIMD -- ray_packet8_vs_aabb (8 rays, 1 box) vs the robust scalar 
                 ray.direction = Vec3<f32>(1.0F, 0.5F, -0.3F);
             }
         }
-        const RayPacket8 pkt = precompute_ray_packet8(
-            gather8([&](int l) { return rays[l].origin.x; }), gather8([&](int l) { return rays[l].origin.y; }),
-            gather8([&](int l) { return rays[l].origin.z; }), gather8([&](int l) { return rays[l].direction.x; }),
-            gather8([&](int l) { return rays[l].direction.y; }), gather8([&](int l) { return rays[l].direction.z; }));
-        const RayAabb8Result r = ray_packet8_vs_aabb(pkt, box, 0.0F, inf);
-        Lanes8 tlanes(r.t_enter);
+        const RayPacket8 pkt = precompute_ray_packet8(rays);
+        RayAabb8Result r{};
+        ray_packet8_vs_aabb(pkt, {&box, 1}, 0.0F, inf, {&r, 1});
         for (int l = 0; l < 8; ++l)
         {
             f32 ts = 0.0F;
@@ -141,7 +138,7 @@ TEST_CASE("v0f SIMD -- ray_packet8_vs_aabb (8 rays, 1 box) vs the robust scalar 
             REQUIRE(lane_set(r.hit_mask, l) == hs);
             if (hs)
             {
-                REQUIRE(tlanes.v[l] == Catch::Approx(ts).margin(1e-3F));
+                REQUIRE(r.t_enter[l] == Catch::Approx(ts).margin(1e-3F));
             }
         }
     }
@@ -158,24 +155,24 @@ TEST_CASE("v0f SIMD -- ray_vs_8_triangle (Moller-Trumbore x 8) vs the v0c scalar
         {
             t = Triangle3<f32>(rnd3(rng, -3.0F, 3.0F), rnd3(rng, -3.0F, 3.0F), rnd3(rng, -3.0F, 3.0F));
         }
-        Triangle38 tris;
-        tris.ax = gather8([&](int l) { return tr[l].a.x; });
-        tris.ay = gather8([&](int l) { return tr[l].a.y; });
-        tris.az = gather8([&](int l) { return tr[l].a.z; });
-        tris.bx = gather8([&](int l) { return tr[l].b.x; });
-        tris.by = gather8([&](int l) { return tr[l].b.y; });
-        tris.bz = gather8([&](int l) { return tr[l].b.z; });
-        tris.cx = gather8([&](int l) { return tr[l].c.x; });
-        tris.cy = gather8([&](int l) { return tr[l].c.y; });
-        tris.cz = gather8([&](int l) { return tr[l].c.z; });
+        Triangle38 tris{};
+        gather8(tris.ax, [&](int l) { return tr[l].a.x; });
+        gather8(tris.ay, [&](int l) { return tr[l].a.y; });
+        gather8(tris.az, [&](int l) { return tr[l].a.z; });
+        gather8(tris.bx, [&](int l) { return tr[l].b.x; });
+        gather8(tris.by, [&](int l) { return tr[l].b.y; });
+        gather8(tris.bz, [&](int l) { return tr[l].b.z; });
+        gather8(tris.cx, [&](int l) { return tr[l].c.x; });
+        gather8(tris.cy, [&](int l) { return tr[l].c.y; });
+        gather8(tris.cz, [&](int l) { return tr[l].c.z; });
 
         const Ray3<f32> ray(rnd3(rng, -5.0F, 5.0F), rnd3(rng, -1.0F, 1.0F));
         if (dot(ray.direction, ray.direction) < 1e-3F)
         {
             continue;
         }
-        const RayTri8Result r = ray_vs_8_triangle(ray, tris);
-        Lanes8 tlanes(r.t);
+        RayTri8Result r{};
+        ray_vs_8_triangle(ray, {&tris, 1}, {&r, 1});
         for (int l = 0; l < 8; ++l)
         {
             // skip near-degenerate triangles for the exact comparison
@@ -192,7 +189,7 @@ TEST_CASE("v0f SIMD -- ray_vs_8_triangle (Moller-Trumbore x 8) vs the v0c scalar
                 ++compared;
                 if (hs)
                 {
-                    REQUIRE(tlanes.v[l] == Catch::Approx(ts).margin(5e-3F));
+                    REQUIRE(r.t[l] == Catch::Approx(ts).margin(5e-3F));
                 }
             }
         }
@@ -214,27 +211,24 @@ TEST_CASE("v0f SIMD -- aabb8 / sphere8 overlap masks vs the v0c scalar `intersec
             b[l] = AABB3<f32>(c - h, c + h);
             sp[l] = Sphere<f32>(rnd3(rng, -3.0F, 3.0F), rng.uni(0.2F, 1.5F));
         }
-        Aabb8 boxes;
-        boxes.min_x = gather8([&](int l) { return b[l].min.x; });
-        boxes.min_y = gather8([&](int l) { return b[l].min.y; });
-        boxes.min_z = gather8([&](int l) { return b[l].min.z; });
-        boxes.max_x = gather8([&](int l) { return b[l].max.x; });
-        boxes.max_y = gather8([&](int l) { return b[l].max.y; });
-        boxes.max_z = gather8([&](int l) { return b[l].max.z; });
-        Sphere8 spheres;
-        spheres.center_x = gather8([&](int l) { return sp[l].center.x; });
-        spheres.center_y = gather8([&](int l) { return sp[l].center.y; });
-        spheres.center_z = gather8([&](int l) { return sp[l].center.z; });
-        spheres.radius = gather8([&](int l) { return sp[l].radius; });
+        Aabb8 boxes{};
+        fill_boxes(boxes, b);
+        Sphere8 spheres{};
+        gather8(spheres.center_x, [&](int l) { return sp[l].center.x; });
+        gather8(spheres.center_y, [&](int l) { return sp[l].center.y; });
+        gather8(spheres.center_z, [&](int l) { return sp[l].center.z; });
+        gather8(spheres.radius, [&](int l) { return sp[l].radius; });
 
         const AABB3<f32> qbox(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1));
         const Sphere<f32> qsphere(Vec3<f32>(0.5F, 0.0F, 0.0F), 1.2F);
-        const Vec8f am = aabb8_vs_aabb(boxes, qbox);
-        const Vec8f smask = sphere8_vs_sphere(spheres, qsphere);
+        Mask8 am{};
+        Mask8 smask{};
+        aabb8_vs_aabb({&boxes, 1}, qbox, {&am, 1});
+        sphere8_vs_sphere({&spheres, 1}, qsphere, {&smask, 1});
         for (int l = 0; l < 8; ++l)
         {
-            REQUIRE(lane_set(am, l) == intersects(b[l], qbox));
-            REQUIRE(lane_set(smask, l) == intersects(sp[l], qsphere));
+            REQUIRE(lane_set(am.lane, l) == intersects(b[l], qbox));
+            REQUIRE(lane_set(smask.lane, l) == intersects(sp[l], qsphere));
         }
     }
 }
@@ -254,31 +248,31 @@ TEST_CASE("v0f SIMD -- segment8_vs_segment_distsq vs v0b distance_squared(Segmen
         // throw in a couple of degenerate pairs
         s1[2] = Segment3<f32>(Vec3<f32>(1, 1, 1), Vec3<f32>(1, 1, 1));   // seg1 a point
         s2[5] = Segment3<f32>(Vec3<f32>(-2, 0, 1), Vec3<f32>(-2, 0, 1)); // seg2 a point
-        Segment38Pair pairs;
-        pairs.p1x = gather8([&](int l) { return s1[l].a.x; });
-        pairs.p1y = gather8([&](int l) { return s1[l].a.y; });
-        pairs.p1z = gather8([&](int l) { return s1[l].a.z; });
-        pairs.q1x = gather8([&](int l) { return s1[l].b.x; });
-        pairs.q1y = gather8([&](int l) { return s1[l].b.y; });
-        pairs.q1z = gather8([&](int l) { return s1[l].b.z; });
-        pairs.p2x = gather8([&](int l) { return s2[l].a.x; });
-        pairs.p2y = gather8([&](int l) { return s2[l].a.y; });
-        pairs.p2z = gather8([&](int l) { return s2[l].a.z; });
-        pairs.q2x = gather8([&](int l) { return s2[l].b.x; });
-        pairs.q2y = gather8([&](int l) { return s2[l].b.y; });
-        pairs.q2z = gather8([&](int l) { return s2[l].b.z; });
+        Segment38Pair pairs{};
+        gather8(pairs.p1x, [&](int l) { return s1[l].a.x; });
+        gather8(pairs.p1y, [&](int l) { return s1[l].a.y; });
+        gather8(pairs.p1z, [&](int l) { return s1[l].a.z; });
+        gather8(pairs.q1x, [&](int l) { return s1[l].b.x; });
+        gather8(pairs.q1y, [&](int l) { return s1[l].b.y; });
+        gather8(pairs.q1z, [&](int l) { return s1[l].b.z; });
+        gather8(pairs.p2x, [&](int l) { return s2[l].a.x; });
+        gather8(pairs.p2y, [&](int l) { return s2[l].a.y; });
+        gather8(pairs.p2z, [&](int l) { return s2[l].a.z; });
+        gather8(pairs.q2x, [&](int l) { return s2[l].b.x; });
+        gather8(pairs.q2y, [&](int l) { return s2[l].b.y; });
+        gather8(pairs.q2z, [&](int l) { return s2[l].b.z; });
 
-        const Vec8f d2 = segment8_vs_segment_distsq(pairs);
-        Lanes8 lanes(d2);
+        Lanes8 d2{};
+        segment8_vs_segment_distsq({&pairs, 1}, {&d2, 1});
         for (int l = 0; l < 8; ++l)
         {
             const f32 scalar = distance_squared(s1[l], s2[l]);
-            REQUIRE(lanes.v[l] == Catch::Approx(scalar).margin(2e-3F));
+            REQUIRE(d2.lane[l] == Catch::Approx(scalar).margin(2e-3F));
         }
     }
 }
 
-TEST_CASE("v0f SIMD -- mask convention: hit lane != 0, miss lane == 0", "[geometry][v0f][simd]")
+TEST_CASE("v0f SIMD -- mask convention: hit lane all ones, miss lane zero", "[geometry][v0f][simd]")
 {
     // A box at +x; ray straight along +x from -5 hits, a parallel-offset ray misses.
     AABB3<f32> b[8];
@@ -287,26 +281,20 @@ TEST_CASE("v0f SIMD -- mask convention: hit lane != 0, miss lane == 0", "[geomet
         box = AABB3<f32>(Vec3<f32>(-1, -1, -1), Vec3<f32>(1, 1, 1));
     }
     b[3] = AABB3<f32>(Vec3<f32>(99, 99, 99), Vec3<f32>(100, 100, 100)); // far away -- lane 3 misses
-    Aabb8 boxes;
-    boxes.min_x = gather8([&](int l) { return b[l].min.x; });
-    boxes.min_y = gather8([&](int l) { return b[l].min.y; });
-    boxes.min_z = gather8([&](int l) { return b[l].min.z; });
-    boxes.max_x = gather8([&](int l) { return b[l].max.x; });
-    boxes.max_y = gather8([&](int l) { return b[l].max.y; });
-    boxes.max_z = gather8([&](int l) { return b[l].max.z; });
+    Aabb8 boxes{};
+    fill_boxes(boxes, b);
     const Ray3<f32> ray(Vec3<f32>(-5, 0, 0), Vec3<f32>(1, 0, 0));
-    const RayAabb8Result r =
-        ray_vs_8_aabb(ray, precompute_ray_aabb(ray), boxes, 0.0F, std::numeric_limits<f32>::infinity());
-    Lanes8 mask(r.hit_mask);
+    RayAabb8Result r{};
+    ray_vs_8_aabb(ray, precompute_ray_aabb(ray), {&boxes, 1}, 0.0F, std::numeric_limits<f32>::infinity(), {&r, 1});
     for (int l = 0; l < 8; ++l)
     {
         if (l == 3)
         {
-            REQUIRE(mask.v[l] == 0.0F); // miss -> all-zero lane
+            REQUIRE(r.hit_mask[l] == 0U); // miss -> all-zero lane
         }
         else
         {
-            REQUIRE(mask.v[l] != 0.0F); // hit -> all-bits-set lane (a NaN bit pattern)
+            REQUIRE(r.hit_mask[l] == 0xFFFFFFFFU); // hit -> all-ones lane
         }
     }
 }

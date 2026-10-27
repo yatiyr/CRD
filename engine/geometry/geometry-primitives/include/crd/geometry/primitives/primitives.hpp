@@ -259,8 +259,8 @@ template <MathValue T> struct ConvexHullView
     crd::containers::ConstSpan<crd::u32> vertex_adjacency_indices{};
     crd::containers::ConstSpan<crd::u32> vertex_adjacency_offsets{};
 
-    // v2h — OPTIONAL Structure-of-Arrays vertex layout for the AVX2 `Vec8f`
-    // SIMD-batched support path. Empty ⇒ no SoA, support() uses the AoS
+    // v2h — OPTIONAL Structure-of-Arrays vertex layout for the batched
+    // support scan (a per-level kernel). Empty ⇒ no SoA, support() uses the AoS
     // `vertices` array (linear-scan or hill-climb).
     //
     // Layout: three flat `ConstSpan<f32>` arrays, one per coordinate.
@@ -275,10 +275,7 @@ template <MathValue T> struct ConvexHullView
     // on the chunk-end: padded lanes contribute `dot(vertex_0, dir)` —
     // tied with lane 0 on `vertex_idx` 0 winning by lowest-index tiebreak.
     //
-    // **Alignment recommendation**: cookers should align SoA storage to 32
-    // bytes so `Vec8f::load_aligned` can be used. The current implementation
-    // uses unaligned loads (`Vec8f::load`) — alignment is a v2-close perf
-    // followup.
+    // **Alignment**: none required; the scan loads unaligned.
     //
     // **f32-only** for v2h. f64 hulls (v2i territory) fall through to the
     // AoS linear-scan path (the SIMD dispatch is `if constexpr (T == f32)`).
@@ -822,7 +819,7 @@ template <MathValue T>
 // ---- support(ConvexHullView): linear scan, strict-greater-wins, lowest-
 // index argmax on ties (the deterministic substrate-wide tiebreak rule).
 // O(n). The hill-climbing path (v2g) adds a warm-start `hint_vertex_idx`
-// overload; the SIMD-batched path (v2h) parallelises the scan with `Vec8f`.
+// overload; the batched path (v2h) runs the scan eight lanes a step.
 template <MathValue T>
 [[nodiscard]] inline SupportPoint<T> support(const ConvexHullView<T>& hull, const Vec3<T>& dir) noexcept
 {
@@ -971,14 +968,14 @@ template <MathScalar T, typename S>
     return support(s, dir);
 }
 
-// ---- v2h: SIMD-batched hull support (AVX2 Vec8f) ---------------------------
+// ---- v2h: batched hull support ----------------------------------------------
 //
-// `support_simd_f32(hull, dir)` — declared here, defined out-of-line in
-// `engine/geometry/geometry-primitives/src/hull_support_simd.cpp` so the AVX2 `Vec8f`
-// instructions are emitted into a real .obj (the same pattern as v0f's
-// `simd_batch.cpp`). Processes 8 vertices per `Vec8f` chunk; lane-wise dot
-// product; per-chunk scalar reducer with strict-greater + lowest-index
-// tiebreak — same determinism contract as `support(hull, dir)` linear scan.
+// `support_simd_f32(hull, dir)` — defined in
+// `engine/geometry/geometry-primitives/src/hull_support_simd.cpp`: one call of
+// the level's scan (crd/geometry/primitives/primitive_kernels.hpp), 8 vertices
+// a step, the projections reduced with strict-greater + lowest-index tiebreak
+// — the determinism contract of `support(hull, dir)`'s linear scan, the same
+// bits on every CPU level.
 //
 // **SoA padding contract** (v2h): the input hull's `vx_soa`/`vy_soa`/
 // `vz_soa` MUST be padded to multiple-of-8 by repeating vertex 0's
@@ -995,7 +992,7 @@ template <MathScalar T, typename S>
 
 // SIMD-vs-hill-climb dispatch threshold. Below this vertex count, SIMD-
 // linear-scan beats hill-climb (no walk overhead, branch-free, straight-
-// line Vec8f processing). Above, hill-climb wins (sub-linear in N with
+// line 8-wide steps). Above, hill-climb wins (sub-linear in N with
 // warm-start). Pinned at 32 per the v2h advisor's perf math (Zen 4
 // reference); v2-close bench can retune.
 inline constexpr crd::usize kSimdSupportThreshold = 32;
@@ -1005,7 +1002,7 @@ inline constexpr crd::usize kSimdSupportThreshold = 32;
 //
 //   * SoA present + N ≤ 32 + T == f32 → SIMD-linear-scan (v2h).
 //     SIMD wins on small hulls because there's no per-step branch and the
-//     8-wide dot fits in one Vec8f mul-add chain.
+//     8-wide dot is one multiply-add chain a step.
 //   * Adjacency present + valid hint → hill-climb (v2g).
 //     Wins on larger hulls (≥ ~32 verts) because the walk converges in
 //     O(diameter) ≈ O(log N) steps from a good warm-start.
@@ -1348,11 +1345,6 @@ using Tetrahedronf = Tetrahedron<crd::f32>;
 using Tetrahedrond = Tetrahedron<crd::f64>;
 using Frustumf = Frustum<crd::f32>;
 using Frustumd = Frustum<crd::f64>;
-
-// Force-link anchor — keeps the (otherwise header-only) static library a real
-// link target so ASan / the SIMD-emission checks have an .obj to inspect once
-// v0c+ adds out-of-line SIMD batch kernels. Defined in geometry_primitives.cpp.
-int force_link_geometry_primitives() noexcept;
 
 } // namespace crd::geometry::primitives
 

@@ -6,6 +6,7 @@ add_executable(crd-geometry-primitives-tests
     test_formulary.cpp
     test_v0f_corpus.cpp
     test_v0f_simd.cpp
+    test_primitive_kernels.cpp
     test_constants.cpp
     test_is_finite.cpp
     test_signed_distance.cpp
@@ -31,3 +32,6 @@ target_link_libraries(crd-geometry-primitives-tests PRIVATE
 crd_enable_default_pch(crd-geometry-primitives-tests)
 
 crd_discover_tests(crd-geometry-primitives-tests)
+
+# ADR-0134 §8: the [kernels] cases once per compiled level (crd-geometry-primitives-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-geometry-primitives-tests "[kernels]")

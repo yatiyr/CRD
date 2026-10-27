@@ -2,9 +2,8 @@
 #
 # First sub-module of crd-geometry (ADR-0076 §1). Primitive shape types +
 # closest-point / intersection / containment helpers (v0a parks the catalogue
-# migrated from the deleted crd/math/geometry.hpp; v0b–v0f extend it). Header-
-# only templates today; geometry_primitives.cpp is a force-link anchor that
-# becomes a real TU once v0c+ adds out-of-line SIMD batch kernels.
+# migrated from the deleted crd/math/geometry.hpp; v0b–v0f extend it). Header
+# templates plus the out-of-line predicates, batch kernels and hull support scan.
 crd_collect_sources(SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src")
 crd_collect_sources(HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
@@ -32,3 +31,8 @@ endif()
 
 target_compile_features(crd-geometry-primitives PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-geometry-primitives)
+
+# The batch intersection kernels and the hull support scan, one body per CPU level (ADR-0134);
+# src/primitive_kernel_dispatch.cpp lists them.
+crd_add_cpu_kernels(crd-geometry-primitives NAME primitives LEVELS portable sse2 avx2 INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/primitive_kernels.cpp")
