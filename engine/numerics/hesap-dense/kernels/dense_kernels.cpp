@@ -881,6 +881,300 @@ template <typename T> void ldlt_update_kernel(const LdltUpdate<T>& view) noexcep
     }
 }
 
+// ---- the split-complex kernels ----
+
+// The accumulators of each real product of a complex dot: the four products share the sixteen registers with their
+// loads, so two each from avx2 (eight FMA chains) and one below (a vector is two XMM there: eight adder chains).
+#if CRD_SIMD_HAS_AVX2
+constexpr crd::usize kSplitAccumulators = 2;
+#else
+constexpr crd::usize kSplitAccumulators = 1;
+#endif
+
+// cgemvt keeps a column block of y in registers over every row: re and im accumulators for kSplitBlock vectors.
+constexpr crd::usize kSplitBlock = kDotAccumulators / 2U;
+
+template <typename T> struct SplitValue
+{
+    T re;
+    T im;
+};
+
+template <typename V> CRD_FORCEINLINE V accumulator_sum(const V* acc) noexcept
+{
+    if constexpr (kSplitAccumulators == 2U)
+    {
+        return acc[0] + acc[1];
+    }
+    else
+    {
+        return acc[0];
+    }
+}
+
+// The complex dot product u = sum a_k v_k over n elements in the shape dense_kernels.hpp declares. on_vector(k, a_re,
+// a_im) and on_element(k) see every whole vector and every remaining element of a (chemv's column update).
+template <typename T, typename OnVector, typename OnElement>
+CRD_FORCEINLINE SplitValue<T> split_dot_walk(const T* ar, const T* ai, const T* vr, const T* vi, crd::usize n,
+                                             OnVector on_vector, OnElement on_element) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    constexpr crd::usize w = VectorOf<T>::kWidth;
+    constexpr crd::usize kA = kSplitAccumulators;
+    V rere[kA];
+    V imim[kA];
+    V reim[kA];
+    V imre[kA];
+    auto zero = [&](auto q)
+    {
+        constexpr crd::usize at = decltype(q)::kValue;
+        rere[at] = V::zero();
+        imim[at] = V::zero();
+        reim[at] = V::zero();
+        imre[at] = V::zero();
+    };
+    unroll<kA>(zero);
+    auto take = [&](auto q, crd::usize k)
+    {
+        constexpr crd::usize at = decltype(q)::kValue;
+        const V a = V::load(ar + k);
+        const V b = V::load(ai + k);
+        const V c = V::load(vr + k);
+        const V d = V::load(vi + k);
+        rere[at] = madd(a, c, rere[at]);
+        imim[at] = madd(b, d, imim[at]);
+        reim[at] = madd(a, d, reim[at]);
+        imre[at] = madd(b, c, imre[at]);
+        on_vector(k, a, b);
+    };
+    crd::usize k = 0;
+    for (; k + kA * w <= n; k += kA * w)
+    {
+        auto step = [&](auto q)
+        {
+            take(q, k + decltype(q)::kValue * w);
+        };
+        unroll<kA>(step);
+    }
+    // Fewer than kA whole vectors remain; they continue the rotation from accumulator 0.
+    bool more = true;
+    auto rest = [&](auto q)
+    {
+        more = more && k + w <= n;
+        if (more)
+        {
+            take(q, k);
+            k += w;
+        }
+    };
+    unroll<kA - 1U>(rest);
+    T s_rere = simd::horizontal_sum(accumulator_sum(rere));
+    T s_imim = simd::horizontal_sum(accumulator_sum(imim));
+    T s_reim = simd::horizontal_sum(accumulator_sum(reim));
+    T s_imre = simd::horizontal_sum(accumulator_sum(imre));
+    for (; k < n; ++k)
+    {
+        s_rere += ar[k] * vr[k];
+        s_imim += ai[k] * vi[k];
+        s_reim += ar[k] * vi[k];
+        s_imre += ai[k] * vr[k];
+        on_element(k);
+    }
+    return {s_rere - s_imim, s_reim + s_imre};
+}
+
+// The two steps of each part of y + s x (Conj: y + s conj(x)) on one vector, the s_re term first.
+template <bool Conj, typename V> CRD_FORCEINLINE void split_step(V& yr, V& yi, V xr, V xi, V sr, V si) noexcept
+{
+    yr = madd(sr, xr, yr);
+    if constexpr (Conj)
+    {
+        yi = madd(-sr, xi, yi);
+        yr = madd(si, xi, yr);
+    }
+    else
+    {
+        yi = madd(sr, xi, yi);
+        yr = madd(-si, xi, yr);
+    }
+    yi = madd(si, xr, yi);
+}
+
+// y + s x (Conj: y + s conj(x)) over n elements, every element the level's steps.
+template <bool Conj, typename T>
+CRD_FORCEINLINE void split_axpy(T* yr, T* yi, const T* xr, const T* xi, T sr, T si, crd::usize n) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    for_each_vector<T>(n,
+                       [yr, yi, xr, xi, sr, si](crd::usize k, crd::usize count)
+                       {
+                           V re = load_n<V>(yr + k, count);
+                           V im = load_n<V>(yi + k, count);
+                           split_step<Conj>(re, im, load_n<V>(xr + k, count), load_n<V>(xi + k, count), V(sr), V(si));
+                           store_n(re, yr + k, count);
+                           store_n(im, yi + k, count);
+                       });
+}
+
+template <typename T> CRD_FORCEINLINE SplitValue<T> complex_product(T are, T aim, T bre, T bim) noexcept
+{
+    return {are * bre - aim * bim, are * bim + aim * bre};
+}
+
+template <typename T> void creflect_kernel(const SplitReflectorRows<T>& view) noexcept
+{
+    const SplitReflectorRows<T> h = view;
+    for (crd::usize r = 0; r < h.count; ++r)
+    {
+        T* re = h.re + r * h.ld;
+        T* im = h.im + r * h.ld;
+        const SplitValue<T> u = split_dot_walk(
+            re, im, h.vr, h.vi, h.len, [](crd::usize, typename VectorOf<T>::Type, typename VectorOf<T>::Type) {},
+            [](crd::usize) {});
+        const SplitValue<T> s = complex_product(h.tau_re, h.tau_im, u.re, u.im);
+        split_axpy<true>(re, im, h.vr, h.vi, -s.re, -s.im, h.len);
+    }
+}
+
+template <typename T> void cgemvt_kernel(const SplitGemvtRows<T>& view) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    constexpr crd::usize w = VectorOf<T>::kWidth;
+    constexpr crd::usize block = kSplitBlock * w;
+    const SplitGemvtRows<T> g = view;
+    const T sign = g.conj_x ? T(-1) : T(1);
+    crd::usize j = 0;
+    for (; j + block <= g.cols; j += block)
+    {
+        V acc_re[kSplitBlock];
+        V acc_im[kSplitBlock];
+        auto load = [&](auto q)
+        {
+            constexpr crd::usize at = decltype(q)::kValue;
+            acc_re[at] = V::load(g.yr + j + at * w);
+            acc_im[at] = V::load(g.yi + j + at * w);
+        };
+        unroll<kSplitBlock>(load);
+        for (crd::usize r = 0; r < g.rows; ++r)
+        {
+            const V sr(g.xr[r]);
+            const V si(sign * g.xi[r]);
+            const T* re = g.re + r * g.ld + j;
+            const T* im = g.im + r * g.ld + j;
+            auto step = [&](auto q)
+            {
+                constexpr crd::usize at = decltype(q)::kValue;
+                split_step<false>(acc_re[at], acc_im[at], V::load(re + at * w), V::load(im + at * w), sr, si);
+            };
+            unroll<kSplitBlock>(step);
+        }
+        auto store = [&](auto q)
+        {
+            constexpr crd::usize at = decltype(q)::kValue;
+            acc_re[at].store(g.yr + j + at * w);
+            acc_im[at].store(g.yi + j + at * w);
+        };
+        unroll<kSplitBlock>(store);
+    }
+    for_each_vector<T>(g.cols - j,
+                       [&g, j, sign](crd::usize k, crd::usize count)
+                       {
+                           T* yr = g.yr + j + k;
+                           T* yi = g.yi + j + k;
+                           V acc_re = load_n<V>(yr, count);
+                           V acc_im = load_n<V>(yi, count);
+                           for (crd::usize r = 0; r < g.rows; ++r)
+                           {
+                               const crd::usize at = r * g.ld + j + k;
+                               split_step<false>(acc_re, acc_im, load_n<V>(g.re + at, count),
+                                                 load_n<V>(g.im + at, count), V(g.xr[r]), V(sign * g.xi[r]));
+                           }
+                           store_n(acc_re, yr, count);
+                           store_n(acc_im, yi, count);
+                       });
+}
+
+template <typename T> void cger_kernel(const SplitGerRows<T>& view) noexcept
+{
+    const SplitGerRows<T> g = view;
+    for (crd::usize r = 0; r < g.rows; ++r)
+    {
+        const SplitValue<T> s = complex_product(g.alpha_re, g.alpha_im, g.xr[r], g.xi[r]);
+        split_axpy<false>(g.re + r * g.ld, g.im + r * g.ld, g.yr, g.yi, s.re, s.im, g.cols);
+    }
+}
+
+template <typename T> void chemv_kernel(const SplitHemvLower<T>& view) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    const SplitHemvLower<T> h = view;
+    for (crd::usize i = 0; i < h.n; ++i)
+    {
+        h.xr[i] = T(0);
+        h.xi[i] = T(0);
+    }
+    for (crd::usize i = 0; i < h.n; ++i)
+    {
+        const T* re = h.re + i * h.ld;
+        const T* im = h.im + i * h.ld;
+        const T sr = h.vr[i];
+        const T si = h.vi[i];
+        T* xr = h.xr;
+        T* xi = h.xi;
+        // By value, the scalars rather than their broadcasts (see symv_kernel).
+        const SplitValue<T> u = split_dot_walk(
+            re, im, h.vr, h.vi, i,
+            [xr, xi, sr, si](crd::usize k, V are, V aim)
+            {
+                V yr = V::load(xr + k);
+                V yi = V::load(xi + k);
+                split_step<true>(yr, yi, are, aim, V(sr), V(si));
+                yr.store(xr + k);
+                yi.store(xi + k);
+            },
+            [xr, xi, re, im, sr, si](crd::usize k)
+            {
+                xr[k] = xr[k] + sr * re[k];
+                xi[k] = xi[k] + -sr * im[k];
+                xr[k] = xr[k] + si * im[k];
+                xi[k] = xi[k] + si * re[k];
+            });
+        h.xr[i] = h.xr[i] + (u.re + re[i] * sr);
+        h.xi[i] = h.xi[i] + (u.im + re[i] * si);
+    }
+}
+
+template <typename T> void cher2_kernel(const SplitHer2Lower<T>& view) noexcept
+{
+    using V = typename VectorOf<T>::Type;
+    const SplitHer2Lower<T> h = view;
+    for (crd::usize i = 0; i < h.n; ++i)
+    {
+        T* re = h.re + i * h.ld;
+        T* im = h.im + i * h.ld;
+        const T vr = -h.vr[i];
+        const T vi = -h.vi[i];
+        const T wr = -h.wr[i];
+        const T wi = -h.wi[i];
+        const T* xvr = h.vr;
+        const T* xvi = h.vi;
+        const T* xwr = h.wr;
+        const T* xwi = h.wi;
+        for_each_vector<T>(
+            i + 1U,
+            [re, im, xvr, xvi, xwr, xwi, vr, vi, wr, wi](crd::usize k, crd::usize count)
+            {
+                V yr = load_n<V>(re + k, count);
+                V yi = load_n<V>(im + k, count);
+                split_step<true>(yr, yi, load_n<V>(xwr + k, count), load_n<V>(xwi + k, count), V(vr), V(vi));
+                split_step<true>(yr, yi, load_n<V>(xvr + k, count), load_n<V>(xvi + k, count), V(wr), V(wi));
+                store_n(yr, re + k, count);
+                store_n(yi, im + k, count);
+            });
+        im[i] = T(0);
+    }
+}
+
 template <typename T> struct TileOf
 {
     using Type = F64Tile;
@@ -906,6 +1200,11 @@ template <typename T> constexpr DenseTypeKernels<T> type_kernels() noexcept
         &rot_kernel<T>,
         &reflect_kernel<T>,
         &ldlt_update_kernel<T>,
+        &creflect_kernel<T>,
+        &cgemvt_kernel<T>,
+        &cger_kernel<T>,
+        &chemv_kernel<T>,
+        &cher2_kernel<T>,
         &cholesky_kernel<T>,
         &cholesky_trsm_kernel<T>,
     };

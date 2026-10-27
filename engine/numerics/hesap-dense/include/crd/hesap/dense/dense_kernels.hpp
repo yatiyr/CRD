@@ -1,8 +1,8 @@
 // The table of the hesap-dense kernels (SIMD-DISPATCH, ADR-0134 §5): the GEMM blocks, the BLAS-1 and BLAS-2 real
-// kernels, the reflector, rotation and LDLT updates and the unblocked Cholesky, one table per CPU level the kernel
-// unit is built for (engine/numerics/hesap-dense/kernels/dense_kernels.cpp), resolved by dense_kernels() in
-// crd/hesap/dense/dense_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing
-// from it.
+// kernels, the reflector, rotation and LDLT updates, the split-complex sweeps and the unblocked Cholesky, one table
+// per CPU level the kernel unit is built for (engine/numerics/hesap-dense/kernels/dense_kernels.cpp), resolved by
+// dense_kernels() in crd/hesap/dense/dense_dispatch.hpp. The header holds only data declarations, so a kernel unit
+// compiles nothing from it.
 //
 // Determinism (ADR-0134 §7): each level is bit-exact with its declared arithmetic. Every element of a product is
 // summed in depth order from +0; the portable and sse2 levels round each multiply and each add (they agree bit for
@@ -180,6 +180,97 @@ template <typename T> struct LdltUpdate
     bool trailing;
 };
 
+// The split-complex kernels (the Hermitian tridiagonalization and the complex Hessenberg reduction) carry a complex
+// vector as two real arrays, re and im, and step like the real kernels (two roundings below avx2, fused from avx2):
+// - a complex dot product u = sum a_k v_k (no conjugation) sums its four real products (re re, im im, re im, im re)
+//   in one pass, each in A accumulators (2 from avx2, 1 below; four products share the registers): whole vector q goes
+//   to accumulator q % A, the accumulators sum (0 + 1), then horizontal_sum's tree, then the remaining elements in
+//   order, each rounding twice; u = (s_rere - s_imim, s_reim + s_imre);
+// - y + s x (or y + s conj(x)) gives each part two steps, the s_re term first: re takes s_re x_re, then -s_im x_im
+//   (conj: +s_im x_im); im takes s_re x_im (conj: -s_re x_im), then s_im x_re;
+// - a scalar complex product (tau u, alpha x_r) rounds each multiply and add: (a_re b_re - a_im b_im, a_re b_im +
+//   a_im b_re).
+// The elementwise kernels (creflect's row update, cgemvt, cger, cher2) give every element, the last partial vector
+// included, the level's steps; chemv's column update, as symv's, rounds twice on the elements after the last whole
+// vector.
+
+// H = I - tau v v^H applied from the right to `count` rows of len values (row r at re + r * ld and im + r * ld; v
+// explicit, its head included): u = row v in the complex dot shape, s = tau u, then row + (-s) conj(v).
+template <typename T> struct SplitReflectorRows
+{
+    T* re;
+    T* im;
+    const T* vr;
+    const T* vi;
+    crd::usize ld;
+    crd::usize count;
+    crd::usize len;
+    T tau_re;
+    T tau_im;
+};
+
+// y = y + A^T x over `rows` rows of `cols` values (row r at re + r * ld and im + r * ld): y takes the complex axpy of
+// each row with the scale x[r] (conj_x: conj(x[r])) in row order.
+template <typename T> struct SplitGemvtRows
+{
+    const T* re;
+    const T* im;
+    const T* xr;
+    const T* xi;
+    T* yr;
+    T* yi;
+    crd::usize ld;
+    crd::usize rows;
+    crd::usize cols;
+    bool conj_x;
+};
+
+// A = A + alpha x y^T over `rows` rows of `cols` values: row r takes the complex axpy of y with the scale alpha x[r].
+template <typename T> struct SplitGerRows
+{
+    T* re;
+    T* im;
+    const T* xr;
+    const T* xi;
+    const T* yr;
+    const T* yi;
+    crd::usize ld;
+    crd::usize rows;
+    crd::usize cols;
+    T alpha_re;
+    T alpha_im;
+};
+
+// x = A v for a Hermitian A of order n read from its lower triangle ((i, k), k <= i, at re[i * ld + k] and
+// im[i * ld + k]; the diagonal's real part only). x is written, never read: it starts at +0, then row i takes, as
+// symv, the complex dot u of its first i values with v, updates x[k] to x[k] + v[i] conj(a_ik) at every column k < i,
+// and sets x[i] to x[i] + (u + a_ii v[i]) (each part rounding the product and both adds).
+template <typename T> struct SplitHemvLower
+{
+    const T* re;
+    const T* im;
+    const T* vr;
+    const T* vi;
+    T* xr;
+    T* xi;
+    crd::usize ld;
+    crd::usize n;
+};
+
+// A = A - v w^H - w v^H on the lower triangle of a Hermitian A of order n: row i (columns 0 to i) takes the axpy of
+// conj(w) with -v[i], then of conj(v) with -w[i], and the diagonal's imaginary part is set to 0.
+template <typename T> struct SplitHer2Lower
+{
+    T* re;
+    T* im;
+    const T* vr;
+    const T* vi;
+    const T* wr;
+    const T* wi;
+    crd::usize ld;
+    crd::usize n;
+};
+
 // The kernels of one element type.
 template <typename T> struct DenseTypeKernels
 {
@@ -195,6 +286,11 @@ template <typename T> struct DenseTypeKernels
     void (*rot)(T* x, T* y, T c, T s, crd::usize n) noexcept;
     void (*reflect)(const ReflectorRows<T>& r) noexcept;
     void (*ldlt_update)(const LdltUpdate<T>& u) noexcept;
+    void (*creflect)(const SplitReflectorRows<T>& r) noexcept;
+    void (*cgemvt)(const SplitGemvtRows<T>& g) noexcept;
+    void (*cger)(const SplitGerRows<T>& g) noexcept;
+    void (*chemv)(const SplitHemvLower<T>& h) noexcept;
+    void (*cher2)(const SplitHer2Lower<T>& h) noexcept;
     // The unblocked lower Cholesky of the n by n block at a (row stride ld), in place: 0, or k + 1 when column k is
     // not positive definite (the columns before it are factored).
     crd::usize (*cholesky)(T* a, crd::usize n, crd::usize ld) noexcept;

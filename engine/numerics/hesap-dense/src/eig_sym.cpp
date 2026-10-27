@@ -4,7 +4,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
-#include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/hesap/dense/detail/mrrr_vectors.hpp>
@@ -265,9 +264,6 @@ inline void rot_cols(Z* z, crd::usize ldz, crd::usize n, crd::usize p, crd::usiz
         }
     }
 }
-
-using detail::simd_axpy;
-using detail::simd_dot;
 
 } // namespace
 
@@ -1687,8 +1683,8 @@ using HouseholderC = crd::hesap::dense::detail::HouseholderComplex<R>;
 // SIMD complex Hermitian tridiagonalization (zhetd2): reduce the Hermitian
 // matrix in the lower triangle to a REAL symmetric tridiagonal (d, e) by
 // Q^H A Q = T. The matrix is carried as two REAL arrays ar, ai (lower triangle,
-// n×n, ld) so the Hermitian matvec and rank-2 update are contiguous-row real
-// SIMD (simd_dot / simd_axpy) — no scalar complex arithmetic. Outputs real d, e
+// n×n, ld) so the Hermitian matvec and rank-2 update are the split-complex
+// dense kernels (chemv, cher2) over contiguous rows. Outputs real d, e
 // + complex reflectors (stored back into ar/ai) + complex tau + the last-
 // subdiagonal phase. `dphase` (length n, the diagonal-unitary phase) makes the
 // last sub-diagonal real: the final m=1 step has no reflector, so its complex
@@ -1756,26 +1752,11 @@ void tridiagonalize_hermitian_simd(R* ar, R* ai, crd::usize n, crd::usize lda, R
         }
         if (!(h.tau.re == R{0} && h.tau.im == R{0}))
         {
-            for (crd::usize r = 0; r < m; ++r)
-            {
-                xr[r] = R{0};
-                xi[r] = R{0};
-            }
-            // Av (single-pass Hermitian matvec on the lower triangle, SIMD rows).
-            for (crd::usize r = 0; r < m; ++r)
-            {
-                const R* arow = &ar[(i + 1 + r) * lda + (i + 1)];
-                const R* airow = &ai[(i + 1 + r) * lda + (i + 1)];
-                const R diag = arow[r];  // real diagonal
-                xr[r] += simd_dot<R>(arow, vr.data(), r) - simd_dot<R>(airow, vi.data(), r) +
-                         diag * vr[r];
-                xi[r] += simd_dot<R>(arow, vi.data(), r) + simd_dot<R>(airow, vr.data(), r) +
-                         diag * vi[r];
-                simd_axpy<R>(xr.data(), arow, vr[r], r);
-                simd_axpy<R>(xr.data(), airow, vi[r], r);
-                simd_axpy<R>(xi.data(), arow, vi[r], r);
-                simd_axpy<R>(xi.data(), airow, -vr[r], r);
-            }
+            // x = A v (single-pass Hermitian matvec on the trailing block's lower triangle).
+            const DenseTypeKernels<R>& kernels = dense_kernels_of<R>();
+            R* block_re = &ar[(i + 1) * lda + (i + 1)];
+            R* block_im = &ai[(i + 1) * lda + (i + 1)];
+            kernels.chemv(SplitHemvLower<R>{block_re, block_im, vr.data(), vi.data(), xr.data(), xi.data(), lda, m});
             // x := tau * (A v).
             for (crd::usize r = 0; r < m; ++r)
             {
@@ -1798,22 +1779,8 @@ void tridiagonalize_hermitian_simd(R* ar, R* ai, crd::usize n, crd::usize lda, R
                 wr[k] = xr[k] + alpha.re * vr[k] - alpha.im * vi[k];
                 wi[k] = xi[k] + alpha.re * vi[k] + alpha.im * vr[k];
             }
-            // Hermitian rank-2: A -= v w^H + w v^H (lower rows, SIMD).
-            for (crd::usize r = 0; r < m; ++r)
-            {
-                R* arow = &ar[(i + 1 + r) * lda + (i + 1)];
-                R* airow = &ai[(i + 1 + r) * lda + (i + 1)];
-                const crd::usize len = r + 1;
-                simd_axpy<R>(arow, wr.data(), -vr[r], len);
-                simd_axpy<R>(arow, wi.data(), -vi[r], len);
-                simd_axpy<R>(arow, vr.data(), -wr[r], len);
-                simd_axpy<R>(arow, vi.data(), -wi[r], len);
-                simd_axpy<R>(airow, wr.data(), -vi[r], len);
-                simd_axpy<R>(airow, wi.data(), vr[r], len);
-                simd_axpy<R>(airow, vr.data(), -wi[r], len);
-                simd_axpy<R>(airow, vi.data(), wr[r], len);
-                ai[(i + 1 + r) * lda + (i + 1 + r)] = R{0};  // keep diagonal real
-            }
+            // Hermitian rank-2: A -= v w^H + w v^H on the lower rows, the diagonal kept real.
+            kernels.cher2(SplitHer2Lower<R>{block_re, block_im, vr.data(), vi.data(), wr.data(), wi.data(), lda, m});
         }
         for (crd::usize k = 1; k < m; ++k)
         {

@@ -4,7 +4,6 @@
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
-#include <crd/hesap/dense/detail/dot_simd_complex.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 
 #include <crd/math/cmath.hpp>
@@ -255,9 +254,9 @@ namespace
 // =======================================================================
 // v3d-2c-1 — complex Hessenberg reduction (zgehd2) on the two-real-array
 // (ar, ai) SIMD representation (the eig_herm v3a-2.5 idiom). Reduces the
-// active block to upper Hessenberg by a UNITARY similarity Q^H A Q = H. Every
-// inner loop is a contiguous real-SIMD sweep (`sdot`/`saxpy`) over ar/ai — no
-// scalar complex arithmetic in the O(n³) updates. Reflector i (complex, v[0]=1
+// active block to upper Hessenberg by a UNITARY similarity Q^H A Q = H. The
+// O(n³) updates are the split-complex dense kernels (creflect, cgemvt, cger)
+// over contiguous ar/ai rows. Reflector i (complex, v[0]=1
 // implicit) annihilates A(i+2:ihi, i); its tail is stored in ar/ai below the
 // subdiagonal, the real beta on the subdiagonal, the complex `tau[i]` returned.
 //
@@ -317,23 +316,12 @@ void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::u
             continue;
         }
 
-        // RIGHT: A(0:ihi, i+1:ihi) := A − tau·(A·v)·v^H. Per row rr:
-        //   u = Σ_k A[rr, i+1+k]·v[k]   (complex dot, NO conj)
-        //   s = tau·u;  A[rr, i+1+j] −= s·conj(v[j]).  Fused single-pass kernels.
-        for (crd::usize rr = 0; rr <= ihi; ++rr)
-        {
-            R* arow = &ar[rr * lda + (i + 1)];
-            R* airow = &ai[rr * lda + (i + 1)];
-            R ur = R{0};
-            R ui = R{0};
-            detail::simd_cdot_nc<R>(arow, airow, vr.data(), vi.data(), len, ur, ui);
-            const R sr = h.tau.re * ur - h.tau.im * ui;
-            const R si = h.tau.re * ui + h.tau.im * ur;
-            // A += (−s)·conj(v).
-            detail::simd_caxpy_conjx<R>(arow, airow, -sr, -si, vr.data(), vi.data(), len);
-        }
+        // RIGHT: A(0:ihi, i+1:ihi) := A − tau·(A·v)·v^H, row by row: u = A_row·v (no conj), A_row −= (tau·u)·v^H.
+        const DenseTypeKernels<R>& kernels = dense_kernels_of<R>();
+        kernels.creflect(SplitReflectorRows<R>{&ar[i + 1], &ai[i + 1], vr.data(), vi.data(), lda, ihi + 1, len,
+                                               h.tau.re, h.tau.im});
 
-        // LEFT: A(i+1:ihi, i+1:n) := A − conj(tau)·v·(v^H·A). v^H·A = Σ_k conj(v[k])·A[i+1+k,:].
+        // LEFT: A(i+1:ihi, i+1:n) := A − conj(tau)·v·(v^H·A): w = Σ_k conj(v[k])·A_row(k), then the rank-1 update.
         const crd::usize col0 = i + 1;
         const crd::usize ncol = n - col0;
         for (crd::usize jj = 0; jj < ncol; ++jj)
@@ -341,28 +329,18 @@ void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::u
             wr[jj] = R{0};
             wi[jj] = R{0};
         }
-        for (crd::usize k = 0; k < len; ++k)  // w += conj(v[k])·A_row
-        {
-            const R* arow = &ar[(i + 1 + k) * lda + col0];
-            const R* airow = &ai[(i + 1 + k) * lda + col0];
-            detail::simd_caxpy<R>(wr.data(), wi.data(), vr[k], -vi[k], arow, airow, ncol);
-        }
-        const R ctr = h.tau.re;   // conj(tau).re
-        const R cti = -h.tau.im;  // conj(tau).im
-        for (crd::usize k = 0; k < len; ++k)  // A_row += (−conj(tau)·v[k])·w
-        {
-            const R sr = ctr * vr[k] - cti * vi[k];
-            const R si = ctr * vi[k] + cti * vr[k];
-            R* arow = &ar[(i + 1 + k) * lda + col0];
-            R* airow = &ai[(i + 1 + k) * lda + col0];
-            detail::simd_caxpy<R>(arow, airow, -sr, -si, wr.data(), wi.data(), ncol);
-        }
+        R* block_re = &ar[(i + 1) * lda + col0];
+        R* block_im = &ai[(i + 1) * lda + col0];
+        kernels.cgemvt(SplitGemvtRows<R>{block_re, block_im, vr.data(), vi.data(), wr.data(), wi.data(), lda, len,
+                                         ncol, true});
+        kernels.cger(SplitGerRows<R>{block_re, block_im, vr.data(), vi.data(), wr.data(), wi.data(), lda, len, ncol,
+                                     -h.tau.re, h.tau.im});
     }
 }
 
 // v3d-2c-1 — form the unitary Q (zunghr) of the complex Hessenberg reduction
 // into split arrays (qr, qi). Q = H(ilo)·…·H(ihi-2), built by left-applying
-// H_i to I from i = ihi-2 down to ilo: Q := (I − tau·v·v^H)·Q. Row-wise SIMD.
+// H_i to I from i = ihi-2 down to ilo: Q := (I − tau·v·v^H)·Q (cgemvt, cger).
 template <typename R>
 void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda, crd::usize ilo,
                           crd::usize ihi, const crd::hesap::Complex<R>* tau, R* qr, R* qi,
@@ -410,20 +388,13 @@ void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda
             wr[jj] = R{0};
             wi[jj] = R{0};
         }
-        for (crd::usize k = 0; k < len; ++k)  // w += conj(v[k])·Q_row
-        {
-            const R* qrow = &qr[(i + 1 + k) * ldq];
-            const R* qirow = &qi[(i + 1 + k) * ldq];
-            detail::simd_caxpy<R>(wr.data(), wi.data(), vr[k], -vi[k], qrow, qirow, n);
-        }
-        for (crd::usize k = 0; k < len; ++k)  // Q_row += (−tau·v[k])·w
-        {
-            const R sr = tau[i].re * vr[k] - tau[i].im * vi[k];
-            const R si = tau[i].re * vi[k] + tau[i].im * vr[k];
-            R* qrow = &qr[(i + 1 + k) * ldq];
-            R* qirow = &qi[(i + 1 + k) * ldq];
-            detail::simd_caxpy<R>(qrow, qirow, -sr, -si, wr.data(), wi.data(), n);
-        }
+        const DenseTypeKernels<R>& kernels = dense_kernels_of<R>();
+        R* block_re = &qr[(i + 1) * ldq];
+        R* block_im = &qi[(i + 1) * ldq];
+        kernels.cgemvt(SplitGemvtRows<R>{block_re, block_im, vr.data(), vi.data(), wr.data(), wi.data(), ldq, len, n,
+                                         true}); // w = Σ_k conj(v[k])·Q_row(k)
+        kernels.cger(SplitGerRows<R>{block_re, block_im, vr.data(), vi.data(), wr.data(), wi.data(), ldq, len, n,
+                                     -tau[i].re, -tau[i].im}); // Q_row(k) += (−tau·v[k])·w
     }
 }
 } // namespace

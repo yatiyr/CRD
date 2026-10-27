@@ -2,7 +2,8 @@
 // gives the bits of the reduction shape dense_kernels.hpp declares for dot, gemv, symv, trsv, the unblocked Cholesky
 // and its panel solve (rounding each multiply and add below avx2, fusing each vector step from avx2, the scalar tails
 // rounding twice), and the dot products of two levels agree within the inner-product bound; axpy, gemvt, ger, the
-// reflector and the LDLT update give every element the level's step, rot the two-rounding xROT on every level.
+// reflector and the LDLT update give every element the level's step, rot the two-rounding xROT on every level, and
+// the split-complex sweeps take their declared complex dot product and two steps a part.
 // Lengths cover every remainder of the accumulator rotation and of a vector, and the prefetching rows; elements a
 // kernel must not read (padding, the other triangle, a unit diagonal, past the end) hold NaN, and elements it must not
 // write are checked unchanged. crd-hesap-dense-kernels-at-<level> runs these [kernels] cases under each forced level.
@@ -891,6 +892,411 @@ template <typename T> void check_ldlt_update(crd::memory::IAllocator* alloc, Cou
     }
 }
 
+// ---- the split-complex kernels ----
+
+template <typename T> struct Cx
+{
+    T re;
+    T im;
+};
+
+// The complex dot product's shape: four real products in one pass, A accumulators each (2 from avx2, 1 below).
+template <typename T> Cx<T> model_cdot(const T* ar, const T* ai, const T* vr, const T* vi, usize n, CpuLevel level)
+{
+    constexpr usize w = kWidth<T>;
+    const bool fma = fuses(level);
+    const usize count = fma ? 2U : 1U;
+    T acc[4][2][8] = {};
+    usize k = 0;
+    for (usize v = 0; k + w <= n; k += w, ++v)
+    {
+        const usize q = v % count;
+        for (usize l = 0; l < w; ++l)
+        {
+            acc[0][q][l] = step(ar[k + l], vr[k + l], acc[0][q][l], fma);
+            acc[1][q][l] = step(ai[k + l], vi[k + l], acc[1][q][l], fma);
+            acc[2][q][l] = step(ar[k + l], vi[k + l], acc[2][q][l], fma);
+            acc[3][q][l] = step(ai[k + l], vr[k + l], acc[3][q][l], fma);
+        }
+    }
+    T s[4];
+    for (usize p = 0; p < 4U; ++p)
+    {
+        T total[8];
+        for (usize l = 0; l < w; ++l)
+        {
+            total[l] = count == 2U ? acc[p][0][l] + acc[p][1][l] : acc[p][0][l];
+        }
+        s[p] = lane_sum(total);
+    }
+    for (; k < n; ++k)
+    {
+        s[0] += ar[k] * vr[k];
+        s[1] += ai[k] * vi[k];
+        s[2] += ar[k] * vi[k];
+        s[3] += ai[k] * vr[k];
+    }
+    return {s[0] - s[1], s[2] + s[3]};
+}
+
+// y + s x (conj: y + s conj(x)) on one element: two steps a part, the s_re term first.
+template <typename T> void model_cstep(T& yr, T& yi, T xr, T xi, T sr, T si, bool conj, bool fma)
+{
+    yr = step(sr, xr, yr, fma);
+    yi = step(conj ? -sr : sr, xi, yi, fma);
+    yr = step(conj ? si : -si, xi, yr, fma);
+    yi = step(si, xr, yi, fma);
+}
+
+template <typename T> Cx<T> model_cmul(T are, T aim, T bre, T bim)
+{
+    return {are * bre - aim * bim, are * bim + aim * bre};
+}
+
+// Lengths across every remainder of a vector and of the two-accumulator rotation, and long rows.
+template <typename T>
+constexpr usize kSplitLengths[] = {0,
+                                   1,
+                                   2,
+                                   kWidth<T> - 1U,
+                                   kWidth<T>,
+                                   kWidth<T> + 1U,
+                                   2U * kWidth<T>,
+                                   2U * kWidth<T> + 1U,
+                                   3U * kWidth<T> + 2U,
+                                   4U * kWidth<T> + 5U,
+                                   40,
+                                   100};
+
+// A split vector of n random values and one NaN past its end (a kernel must not read it).
+template <typename T> void fill_split(crd::containers::Array<T>& re, crd::containers::Array<T>& im, usize n, Lcg& g)
+{
+    re.resize(n + 1U);
+    im.resize(n + 1U);
+    for (usize k = 0; k < n; ++k)
+    {
+        re[k] = g.value<T>();
+        im[k] = g.value<T>();
+    }
+    re[n] = std::numeric_limits<T>::quiet_NaN();
+    im[n] = std::numeric_limits<T>::quiet_NaN();
+}
+
+template <typename T> void check_creflect(crd::memory::IAllocator* alloc, Counts& c)
+{
+    crd::containers::Array<T> vr(alloc);
+    crd::containers::Array<T> vi(alloc);
+    crd::containers::Array<T> re(alloc);
+    crd::containers::Array<T> im(alloc);
+    crd::containers::Array<T> want_re(alloc);
+    crd::containers::Array<T> want_im(alloc);
+    Lcg g{0x5A1ULL};
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        const bool fma = fuses(level.level);
+        for (const usize count : {usize{0}, usize{1}, usize{3}})
+        {
+            for (const usize len : kSplitLengths<T>)
+            {
+                const Cx<T> tau{T(1.25), T(-0.5)};
+                const usize ld = len + 3U;
+                fill_split(vr, vi, len, g);
+                re.resize(count * ld + 1U);
+                im.resize(re.size());
+                want_re.resize(re.size());
+                want_im.resize(re.size());
+                for (usize i = 0; i < re.size(); ++i)
+                {
+                    const bool in = i < count * ld && i % ld < len;
+                    re[i] = in ? g.value<T>() : kKeep<T>; // the padding and the end: read as data, never written
+                    im[i] = in ? g.value<T>() : kKeep<T>;
+                    want_re[i] = re[i];
+                    want_im[i] = im[i];
+                }
+                for (usize r = 0; r < count; ++r)
+                {
+                    T* row_re = want_re.data() + r * ld;
+                    T* row_im = want_im.data() + r * ld;
+                    const Cx<T> u = model_cdot(row_re, row_im, vr.data(), vi.data(), len, level.level);
+                    const Cx<T> s = model_cmul(tau.re, tau.im, u.re, u.im);
+                    for (usize k = 0; k < len; ++k)
+                    {
+                        model_cstep(row_re[k], row_im[k], vr[k], vi[k], -s.re, -s.im, true, fma);
+                    }
+                }
+                dn::kernels_of<T>(*level.table)
+                    .creflect(dn::SplitReflectorRows<T>{re.data(), im.data(), vr.data(), vi.data(), ld, count, len,
+                                                        tau.re, tau.im});
+                ++c.cases;
+                for (usize i = 0; i < re.size(); ++i)
+                {
+                    c.wrong += same_bits(re[i], want_re[i]) && same_bits(im[i], want_im[i]) ? 0U : 1U;
+                }
+            }
+        }
+    }
+}
+
+template <typename T> void check_cgemvt(crd::memory::IAllocator* alloc, Counts& c)
+{
+    const T nan = std::numeric_limits<T>::quiet_NaN();
+    crd::containers::Array<T> re(alloc);
+    crd::containers::Array<T> im(alloc);
+    crd::containers::Array<T> xr(alloc);
+    crd::containers::Array<T> xi(alloc);
+    crd::containers::Array<T> yr(alloc);
+    crd::containers::Array<T> yi(alloc);
+    crd::containers::Array<T> want_re(alloc);
+    crd::containers::Array<T> want_im(alloc);
+    Lcg g{0x5B2ULL};
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        const bool fma = fuses(level.level);
+        for (const usize rows : {usize{0}, usize{1}, usize{3}, usize{9}})
+        {
+            for (const usize cols : kColumnCounts<T>)
+            {
+                for (const bool conj : {false, true})
+                {
+                    const usize ld = cols + 2U;
+                    re.resize(rows * ld + 1U);
+                    im.resize(re.size());
+                    for (usize i = 0; i < re.size(); ++i)
+                    {
+                        const bool in = i < rows * ld && i % ld < cols;
+                        re[i] = in ? g.value<T>() : nan; // padding and the end: NaN
+                        im[i] = in ? g.value<T>() : nan;
+                    }
+                    fill_split(xr, xi, rows, g);
+                    yr.resize(cols + 1U);
+                    yi.resize(cols + 1U);
+                    want_re.resize(cols);
+                    want_im.resize(cols);
+                    for (usize j = 0; j < cols; ++j)
+                    {
+                        yr[j] = g.value<T>();
+                        yi[j] = g.value<T>();
+                        want_re[j] = yr[j];
+                        want_im[j] = yi[j];
+                        for (usize r = 0; r < rows; ++r)
+                        {
+                            model_cstep(want_re[j], want_im[j], re[r * ld + j], im[r * ld + j], xr[r],
+                                        conj ? -xi[r] : xi[r], false, fma);
+                        }
+                    }
+                    yr[cols] = kKeep<T>;
+                    yi[cols] = kKeep<T>;
+                    dn::kernels_of<T>(*level.table)
+                        .cgemvt(dn::SplitGemvtRows<T>{re.data(), im.data(), xr.data(), xi.data(), yr.data(), yi.data(),
+                                                      ld, rows, cols, conj});
+                    ++c.cases;
+                    for (usize j = 0; j < cols; ++j)
+                    {
+                        c.wrong += same_bits(yr[j], want_re[j]) && same_bits(yi[j], want_im[j]) ? 0U : 1U;
+                    }
+                    c.touched += same_bits(yr[cols], kKeep<T>) && same_bits(yi[cols], kKeep<T>) ? 0U : 1U;
+                }
+            }
+        }
+    }
+}
+
+template <typename T> void check_cger(crd::memory::IAllocator* alloc, Counts& c)
+{
+    crd::containers::Array<T> re(alloc);
+    crd::containers::Array<T> im(alloc);
+    crd::containers::Array<T> want_re(alloc);
+    crd::containers::Array<T> want_im(alloc);
+    crd::containers::Array<T> xr(alloc);
+    crd::containers::Array<T> xi(alloc);
+    crd::containers::Array<T> yr(alloc);
+    crd::containers::Array<T> yi(alloc);
+    Lcg g{0x5C3ULL};
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        const bool fma = fuses(level.level);
+        for (const usize rows : {usize{0}, usize{1}, usize{5}})
+        {
+            for (const usize cols : kColumnCounts<T>)
+            {
+                for (const Cx<T> alpha : {Cx<T>{T(1), T(0)}, Cx<T>{T(-0.75), T(0.5)}})
+                {
+                    const usize ld = cols + 3U;
+                    fill_split(xr, xi, rows, g);
+                    fill_split(yr, yi, cols, g);
+                    re.resize(rows * ld + 1U);
+                    im.resize(re.size());
+                    want_re.resize(re.size());
+                    want_im.resize(re.size());
+                    for (usize i = 0; i < re.size(); ++i)
+                    {
+                        const bool in = i < rows * ld && i % ld < cols;
+                        re[i] = in ? g.value<T>() : kKeep<T>;
+                        im[i] = in ? g.value<T>() : kKeep<T>;
+                        want_re[i] = re[i];
+                        want_im[i] = im[i];
+                        if (in)
+                        {
+                            const Cx<T> s = model_cmul(alpha.re, alpha.im, xr[i / ld], xi[i / ld]);
+                            model_cstep(want_re[i], want_im[i], yr[i % ld], yi[i % ld], s.re, s.im, false, fma);
+                        }
+                    }
+                    dn::kernels_of<T>(*level.table)
+                        .cger(dn::SplitGerRows<T>{re.data(), im.data(), xr.data(), xi.data(), yr.data(), yi.data(), ld,
+                                                  rows, cols, alpha.re, alpha.im});
+                    ++c.cases;
+                    for (usize i = 0; i < re.size(); ++i)
+                    {
+                        c.wrong += same_bits(re[i], want_re[i]) && same_bits(im[i], want_im[i]) ? 0U : 1U;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The upper triangle, the padding and the diagonal's imaginary part hold NaN: chemv must read none of them.
+template <typename T> void check_chemv(crd::memory::IAllocator* alloc, Counts& c)
+{
+    constexpr usize w = kWidth<T>;
+    const T nan = std::numeric_limits<T>::quiet_NaN();
+    crd::containers::Array<T> re(alloc);
+    crd::containers::Array<T> im(alloc);
+    crd::containers::Array<T> vr(alloc);
+    crd::containers::Array<T> vi(alloc);
+    crd::containers::Array<T> xr(alloc);
+    crd::containers::Array<T> xi(alloc);
+    crd::containers::Array<T> want_re(alloc);
+    crd::containers::Array<T> want_im(alloc);
+    Lcg g{0x5D4ULL};
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        const bool fma = fuses(level.level);
+        for (const usize n : kSplitLengths<T>)
+        {
+            const usize ld = n + 2U;
+            re.resize(n * ld + 1U);
+            im.resize(re.size());
+            for (usize i = 0; i < re.size(); ++i)
+            {
+                const bool lower = i < n * ld && i % ld <= i / ld;
+                re[i] = lower ? g.value<T>() : nan;
+                im[i] = lower && i % ld < i / ld ? g.value<T>() : nan;
+            }
+            fill_split(vr, vi, n, g);
+            xr.resize(n + 1U);
+            xi.resize(n + 1U);
+            want_re.resize(n);
+            want_im.resize(n);
+            for (usize k = 0; k < n; ++k)
+            {
+                xr[k] = nan; // written, never read
+                xi[k] = nan;
+                want_re[k] = T(0);
+                want_im[k] = T(0);
+            }
+            xr[n] = kKeep<T>;
+            xi[n] = kKeep<T>;
+            for (usize i = 0; i < n; ++i)
+            {
+                const T* row_re = re.data() + i * ld;
+                const T* row_im = im.data() + i * ld;
+                const Cx<T> u = model_cdot(row_re, row_im, vr.data(), vi.data(), i, level.level);
+                const usize whole = i / w * w;
+                for (usize k = 0; k < i; ++k)
+                {
+                    model_cstep(want_re[k], want_im[k], row_re[k], row_im[k], vr[i], vi[i], true, fma && k < whole);
+                }
+                want_re[i] = want_re[i] + (u.re + row_re[i] * vr[i]);
+                want_im[i] = want_im[i] + (u.im + row_re[i] * vi[i]);
+            }
+            dn::kernels_of<T>(*level.table)
+                .chemv(dn::SplitHemvLower<T>{re.data(), im.data(), vr.data(), vi.data(), xr.data(), xi.data(), ld, n});
+            ++c.cases;
+            for (usize k = 0; k < n; ++k)
+            {
+                c.wrong += same_bits(xr[k], want_re[k]) && same_bits(xi[k], want_im[k]) ? 0U : 1U;
+            }
+            c.touched += same_bits(xr[n], kKeep<T>) && same_bits(xi[n], kKeep<T>) ? 0U : 1U;
+        }
+    }
+}
+
+template <typename T> void check_cher2(crd::memory::IAllocator* alloc, Counts& c)
+{
+    crd::containers::Array<T> re(alloc);
+    crd::containers::Array<T> im(alloc);
+    crd::containers::Array<T> want_re(alloc);
+    crd::containers::Array<T> want_im(alloc);
+    crd::containers::Array<T> vr(alloc);
+    crd::containers::Array<T> vi(alloc);
+    crd::containers::Array<T> wr(alloc);
+    crd::containers::Array<T> wi(alloc);
+    Lcg g{0x5E5ULL};
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        const bool fma = fuses(level.level);
+        for (const usize n : kSplitLengths<T>)
+        {
+            const usize ld = n + 2U;
+            fill_split(vr, vi, n, g);
+            fill_split(wr, wi, n, g);
+            re.resize(n * ld + 1U);
+            im.resize(re.size());
+            want_re.resize(re.size());
+            want_im.resize(re.size());
+            for (usize i = 0; i < re.size(); ++i)
+            {
+                const usize row = i / ld;
+                const usize col = i % ld;
+                const bool lower = i < n * ld && col <= row;
+                re[i] = lower ? g.value<T>() : kKeep<T>; // the upper triangle, the padding and the end: unchanged
+                im[i] = lower ? g.value<T>() : kKeep<T>;
+                want_re[i] = re[i];
+                want_im[i] = im[i];
+                if (lower)
+                {
+                    model_cstep(want_re[i], want_im[i], wr[col], wi[col], -vr[row], -vi[row], true, fma);
+                    model_cstep(want_re[i], want_im[i], vr[col], vi[col], -wr[row], -wi[row], true, fma);
+                    want_im[i] = col == row ? T(0) : want_im[i];
+                }
+            }
+            dn::kernels_of<T>(*level.table)
+                .cher2(dn::SplitHer2Lower<T>{re.data(), im.data(), vr.data(), vi.data(), wr.data(), wi.data(), ld, n});
+            ++c.cases;
+            for (usize i = 0; i < re.size(); ++i)
+            {
+                c.wrong += same_bits(re[i], want_re[i]) && same_bits(im[i], want_im[i]) ? 0U : 1U;
+            }
+        }
+    }
+}
+
 template <typename Check> Counts run(Check check)
 {
     crd::memory::TlsfAllocator alloc(16U << 20);
@@ -989,5 +1395,19 @@ TEST_CASE("dense kernels: every level the host runs gives its declared reflector
         CHECK(c.ran >= 1U);
         CHECK(c.cases > 0U);
         CHECK(c.wrong == 0U);
+    }
+}
+
+TEST_CASE("dense kernels: every level the host runs gives its declared split-complex sweep bits", "[dense][kernels]")
+{
+    for (const Counts& c :
+         {run(check_creflect<crd::f64>), run(check_creflect<crd::f32>), run(check_cgemvt<crd::f64>),
+          run(check_cgemvt<crd::f32>), run(check_cger<crd::f64>), run(check_cger<crd::f32>), run(check_chemv<crd::f64>),
+          run(check_chemv<crd::f32>), run(check_cher2<crd::f64>), run(check_cher2<crd::f32>)})
+    {
+        CHECK(c.ran >= 1U);
+        CHECK(c.cases > 0U);
+        CHECK(c.wrong == 0U);
+        CHECK(c.touched == 0U);
     }
 }
