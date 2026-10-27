@@ -3,7 +3,7 @@
 <!-- doc-role: decision -->
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
-**Status:** Accepted  
+**Status:** Accepted; amended 2026-10-27 ([below](#amendment-2026-10-27-the-foundation-window-and-the-layers-above))  
 **Date:** 2026-05-02  
 **Tags:** arch, networking, determinism, simulation
 
@@ -30,8 +30,9 @@ all consumers to carry weight they do not need.
 
 ### Layer 1 — Transport (`crd-net`, Phase 4.2a)
 
-A thin, platform-neutral socket abstraction:
-- Reliable ordered channel (sliding window retransmission).
+~~A thin, platform-neutral socket abstraction:~~ A platform-neutral transport, QUIC with unreliable datagrams first
+(struck and amended 2026-10-27, see [the amendment](#amendment-2026-10-27-the-foundation-window-and-the-layers-above)):
+- Reliable ordered channel ~~(sliding window retransmission)~~ (QUIC streams; the raw UDP path keeps its own).
 - Unreliable unordered channel (state snapshots, sensor feeds, position updates).
 - No dependency on scenes, job system, or any other Cerid module. The
   transport compiles and runs standalone. All higher layers are optional
@@ -64,8 +65,10 @@ Standard client-server model:
 - **Extrapolation mode**: server sends state at reduced rate; client
   dead-reckons. Suitable for strategy games, simulation viewers, and
   digital-twin dashboards where eventual consistency is acceptable.
-- Mode (rollback vs. extrapolation) is a per-session configuration
-  parameter, not a compile-time choice.
+- ~~Mode (rollback vs. extrapolation) is a per-session configuration
+  parameter, not a compile-time choice.~~ Struck 2026-10-27: replication is a set of selectable, authored policies,
+  still chosen per session and never at compile time
+  ([amendment](#amendment-2026-10-27-the-foundation-window-and-the-layers-above)).
 
 ### Layer 4 — Session / lobby API (Phase 4.2d)
 
@@ -103,6 +106,62 @@ Backend-neutral session management:
 - Phase 3.0 (scene/ECS) and Phase 3.1 (physics) must expose deterministic
   snapshot serialization before Phase 4.2b can include them in the
   full-engine snapshot.
-- Phase 4.2e (ROS2 bridge) depends on Phase 4.2a transport and Phase 8.0
-  robotics module.
-- Phase 8.0c (robotics ROS2 bridge) depends on Phase 4.2e.
+- Phase 4.2e (ROS2 bridge) depends on Phase 4.2a transport ~~and Phase 8.0
+  robotics module~~ (struck 2026-10-27: 4.2e follows NET.5, and the robotics rows consume it).
+- ~~Phase 8.0c (robotics ROS2 bridge) depends on Phase 4.2e.~~ Struck 2026-10-27: 8.0c folds into 4.2e, the one
+  ROS 2 bridge.
+
+## Amendment 2026-10-27: the foundation window and the layers above
+
+The user decided on 2026-10-27 ([decision](../sessions/2026-10-27-user-decision-network-foundation-window.md)) that
+Cerid gets one robust, secure network foundation used by every product class: games from duels to massively
+multiplayer worlds, collaborative editors, DAW live sessions, Zoom-class calls, the crash pool and agent hubs. The
+2026-10-26 research ([area 7](../research/2026-10-26-beyond-games-2026-comparison.md#gaps-in-area-7)) adds the layers
+above it ([adoption](../sessions/2026-10-27-research-adopt-part-2.md)).
+
+**The window.** [NETCRASH](../ROADMAP.md#slice-netcrash) runs directly after OWN and before AUD-2: NET.1 to NET.4,
+4.2a, 4.2b, NET-SIM, NET-DEBUG and NET.5 (Windows and Linux), with the crash pool rows. Every later networked row
+builds on it; browser channels qualify under WEB.5.
+
+**Transport (4.2a).** QUIC (RFC 9000) with unreliable datagrams (RFC 9221) is the primary transport, with raw UDP and
+TCP/TLS paths; browsers use WebTransport with a WebSocket fallback. Layer 1 stays standalone (no scene or job
+dependency).
+
+**Security baseline (NET.1 to NET.4).** A threat model covering every product class; authenticated encrypted sessions
+with hybrid post-quantum key exchange (X25519 with ML-KEM-768) and post-quantum-ready signatures with classical
+fallback; MLS (RFC 9420) for end-to-end encrypted groups that servers relay but cannot read; mutual authentication on
+every service link; key rotation, revocation and hardware-backed keys where available; a formally verified handshake
+and session state machine (model checked in CI); vetted cryptographic providers only. No expensive decode happens
+before authorization. Continuous fuzzing of every parser and protocol state machine, measured flood and amplification
+defence, and an independent security review before the first networked release.
+
+**Deterministic simulation (NET-SIM)** is a required gate for every layer and every networked row: components run
+with virtual clocks and sockets under injected loss, delay, reordering, duplication, partitions, clock skew, crashes and
+restarts over millions of seeded schedules, and a failure replays exactly from its seed. The determinism substrate
+(4.2b) and this simulator share the replay path.
+
+**Conditioning and debugging (NET-DEBUG)** live inside `crd-net`, with no OS driver or admin rights: per peer,
+channel and direction latency, jitter, random and bursty loss, duplication, reordering, corruption, bandwidth and
+queue limits, MTU changes, NAT rebinding and outages; named profiles and seeded CHIR timelines changed at runtime; a
+local cluster launcher with bot clients; qlog and pcapng capture correlated with DIAG; multi-peer record and replay with
+a packet and replication inspector.
+
+**Replication (Layer 3, 4.2c)** is a set of selectable, authored policies: lockstep, rollback, authoritative snapshot
+interpolation with prediction and reconciliation, lag compensation, and interest management with priority budgets.
+Rules and server logic are authored CEIR/CHIR; a server takes a new rule generation between ticks with a version
+handshake. Compression, filtering and lag-compensation math use crd-hesap.
+
+**Above the session API (Layer 4, 4.2d).**
+- NET-SERVER: headless dedicated servers, fleet orchestration, matchmaking and backend adapters, regions and
+  autoscaling; 4.2d keeps the backend-neutral session API and its local stubs.
+- ANTICHEAT: server validation first, statistical and replay detection, user-mode client integrity, optional vendor
+  adapters with Linux and Proton support, a privacy policy. It follows 4.2c and NET-SERVER.
+- NET-SCALE: sharded persistent worlds with seamless handoff and re-sharding on NET-SERVER's fleets.
+- NET-LIVE: Zoom-class real-time media (selective forwarding, NAT traversal, MLS group calls, WebRTC interop) on the
+  audio graph and media rows, with its forwarding servers deployed through NET-SERVER.
+- COLLAB: the authoritative project host on the same foundation; Automerge 3, Yjs and Loro are evaluated for text and
+  independent properties, while graphs and topology stay transactional (ADR-0130).
+- ROS 2: 4.2e is the one bridge.
+
+**Consequences.** Every networked row carries the NET-SIM gate and the NET-DEBUG tooling as acceptance; the security
+baseline costs a formal model, a fuzzing budget and an external review before the first networked release.

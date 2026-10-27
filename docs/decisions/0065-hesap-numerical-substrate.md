@@ -1494,3 +1494,17 @@ every op CLI-registered, the cross-thread determinism moat held end-to-end, beat
 overlapping surface and standing apart on the families Eigen lacks (Schwarz/SPAI/Chebyshev/AMG/
 multilevel-ILU — benched against the correct algorithm-class peer, `feedback_bench_against_the_correct_peer`).
 NEXT = v5 (sparse-direct factorization) per `docs/ROADMAP.md`.
+
+## §27 Amendment (2026-10-27) — distributed and symbolic numerics
+
+The 2026-10-26 research
+([proposals](../research/2026-10-26-beyond-games-2026-comparison.md#gaps-and-proposed-roadmap-changes),
+[adoption](../sessions/2026-10-27-research-adopt-part-2.md)) adds two capabilities to crd-hesap's scope:
+- [HESAP-DIST](../ROADMAP.md#slice-hesap-dist): one owned communication interface (an MPI adapter plus single-node
+  shared-memory and multi-GPU transports) under distributed vectors and sparse matrices, ghost exchange, graph
+  partitioning, parallel AMG, BDDC, FETI-DP and Schwarz, and a distributed sparse direct solver. `hesap-comms` stays
+  modulation and OFDM.
+- [HESAP-SYM](../ROADMAP.md#slice-hesap-sym): symbolic algebra on an expression DAG shared with `hesap-autodiff`'s
+  graph AD, lowering to CEIR.
+
+FE-CORE, FV-CORE, VV-UQ and SIM.4 solve through crd-hesap and add no numerics of their own.

@@ -12,6 +12,18 @@ ownership assumptions below. Model import/interoperability does not require maki
 Inference **and training** qualify together, including custom authored kernels, fine-tuning/distillation and specialized
 game/product brains. DAW/editor/modeling/PCB/embedded/collaboration consumers are explicit master rows. Original
 domain requirements remain retained; historical schedules, horizon estimates and exclusions cannot override that table.
+
+**2026-10-27 ownership amendment**
+([research](../research/2026-10-26-beyond-games-2026-comparison.md#gaps-and-proposed-roadmap-changes),
+[adoption](../sessions/2026-10-27-research-adopt-part-2.md)): each domain capability has one owner (OWN.1). Autodiff is
+`crd-hesap-autodiff` (8.2b retires into it; crd-math keeps fixed-size dual types only); the ROS 2 bridge is 4.2e (8.0c
+folds into it); robot-description import is the EYLEM-v6c importers and aero and atmosphere is EYLEM-v6f-aero (8.0a
+and 8.1a consume them); path planning is NAV.3 plus CONTROL.8 trajectory optimization. The plotting core
+(SCIVIZ-PLOT, `crd-sciviz`) moves before the notebook, which grows no plotting of its own. Engineering simulation
+shares analysis meshing (MESH-SIM), the FE and FV cores, distributed numerics (HESAP-DIST), symbolic algebra
+(HESAP-SYM) and one V&V and UQ harness (VV-UQ); audio gains a device layer, spatial and game audio rows, and production
+DSP in `crd-hesap-dsp`.
+
 **Supersedes:** none (extends the long-term outlook in `docs/ROADMAP.md`)
 **Cornerstones:**
 - `docs/PRINCIPLES.md` ("modular by default", "single-path", "substrate-first")

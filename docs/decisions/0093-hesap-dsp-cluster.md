@@ -75,3 +75,11 @@ Three things had to be settled before the first filter shipped.
 - Spectral confidence statistics (χ²/F CIs for multitaper/AR) defer to v12 (Statistics); estimators ship in v11
   without parametric CIs; AIC/MDL order-selection ships in v11 (log-likelihood only).
 - Extends ADR-0065; consumes ADR-0078 (two-layer + dB non-linear lens) and ADR-0092 (the FFT edge).
+
+## Amendment (2026-10-27) — production audio DSP
+
+[HESAP-AUDIO-DSP](../ROADMAP.md#slice-hesap-audio-dsp)
+([adoption](../sessions/2026-10-27-research-adopt-part-2.md)) puts the DSP that audio products need in
+`crd-hesap-dsp`: time-stretch and pitch-shift, BS.1770/R128 loudness and true peak, dither and noise shaping,
+non-uniform partitioned convolution and oversampling, on the two-layer contract above. Audio, spatial audio and the
+DAW consume them and own devices and scheduling only.
