@@ -276,6 +276,12 @@ asset closure, builtin/app override resolution, program variant/cache policy, bu
 pack assembly. An exported game runs on a clean Windows/Linux machine without editor/source/build-tree dependencies.
 CLI/MCP invokes the same export. A resource archive alone does not satisfy “publish a game.”
 
+Publishing is headless first (2026-10-27, [SHIP.0](../ROADMAP.md#slice-ship.0) to [SHIP](../ROADMAP.md#slice-ship)).
+`crd-ship` owns profiles, target descriptors, cook orchestration, package assembly, signing, store adapters,
+entitlements and the updater. `ceridc`, CI and agents drive it, and the editor's export is one client with no export
+logic of its own. Publishing a game means installing, updating, rolling back and uninstalling it from signed packages
+on a clean machine, not copying a folder.
+
 Sample acceptance includes a 3D game with viewport/gizmos/UI, a 2D scene with the SPR renderer, an engineering viewer,
 a frame/material/CKIR authoring workspace, a typed AI graph and a cinematic sequencer. Test scale, recovery and
 accessibility on real documents. Application packaging strips unused modules and editor tooling. Native extension

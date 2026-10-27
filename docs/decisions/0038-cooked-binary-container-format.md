@@ -11,6 +11,8 @@ tags: [resources, arch, cooker]
 <!-- doc-role: decision -->
 > Decision record; read status and supersession notes. Current work: [ROADMAP](../ROADMAP.md); current rules: [AGENTS](../../AGENTS.md).
 
+**Amended 2026-10-27:** [crdr v2 content packaging](#amendment-2026-10-27-crdr-v2-content-packaging).
+
 ## Context
 
 ADR-0013 mandates that the runtime never sees source assets — only cooked binary artifacts.
@@ -162,6 +164,28 @@ texture, scene), with explicit `version` fields and registered migration callbac
 - Hand-rolled per-loader `BLOB` schemas mean each loader pays a small evolution cost when its
   format changes (versioning is loader-private). Closed permanently by ADR-0055 — POD blobs
   are the engine-wide policy for cooked artifacts.
+
+## Amendment 2026-10-27: crdr v2 content packaging
+
+The user approved the
+[publishing research](../research/2026-10-27-publishing-packaging-and-app-management-2026-comparison.md#p-4) on
+2026-10-27 ([adoption](../sessions/2026-10-27-research-adopt-part-5.md)). [SHIP.2](../ROADMAP.md#slice-ship.2)
+builds crdr v2 in `crd-resources`. What v2 adds to this decision:
+
+- **Integrity.** Each chunk carries a checksum from the one dispatched family of
+  [HW-RESILIENCE.1](../ROADMAP.md#slice-hw-resilience.1); a Merkle root over the chunks sits in a manifest signed
+  through [SUPPLY.3](../ROADMAP.md#slice-supply.3). A corrupt chunk is re-fetched or repaired, never loaded.
+- **Layout.** Chunks align for unbuffered and DirectStorage I/O; large payloads get content-defined boundaries, so a
+  small edit yields a small patch; install priority classes allow play-while-installing and on-demand packs.
+- **Mounting.** Packs mount in layers with an explicit priority (base, patch, DLC, language, mod), and every conflict
+  is reported.
+- **Codecs.** Section 3's per-chunk choice widens: zstd with trained dictionaries stays the owned default, GDeflate and
+  DirectStorage 1.4 Zstd GPU paths are used where present, and a CPU path at the SSE2 floor always exists.
+  [OWN.1](../ROADMAP.md#slice-own.1) decides whether the codecs live here or in a foundation module.
+- **Protection.** Optional per-chunk AES-GCM, with keys delivered by [SHIP.7](../ROADMAP.md#slice-ship.7)
+  entitlements, is documented as a deterrent, not security against a determined user. No kernel component ships.
+- **Determinism.** Section 6 still holds: [SUPPLY.4](../ROADMAP.md#slice-supply.4)'s double build covers v2 packs and
+  update metadata.
 
 ## References
 

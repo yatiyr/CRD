@@ -4,7 +4,7 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: RESEARCH-ADOPT -->
-**Current work:** [RESEARCH-ADOPT](docs/ROADMAP.md#slice-research-adopt) Part 5 rows, then
+**Current work:** [RESEARCH-ADOPT](docs/ROADMAP.md#slice-research-adopt) STORE family, then
 [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): tensor nn, SR sites.
 [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.

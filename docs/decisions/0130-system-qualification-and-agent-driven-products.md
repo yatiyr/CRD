@@ -55,5 +55,12 @@ a recorded [AGENT-BENCH](../ROADMAP.md#slice-agent-bench) board. Every build and
 signatures and a reproducibility check ([SUPPLY.1](../ROADMAP.md#slice-supply.1) to
 [SUPPLY.4](../ROADMAP.md#slice-supply.4)). Its cryptography uses item 3's maintained implementations.
 
+Amended 2026-10-27 ([adoption](../sessions/2026-10-27-research-adopt-part-5.md)): a product qualifies as published
+only when it is installed, updated, rolled back and uninstalled through the [SHIP](../ROADMAP.md#slice-ship) rows on
+clean machines and real store branches. `crd-ship` owns publishing; its changeability matrix
+([SHIP.0](../ROADMAP.md#slice-ship.0)) decides which content may change live on each platform and store.
+Irreversible publication (submit, widen a rollout, change a price, delete) always needs a recorded human approval
+([AGENT.3](../ROADMAP.md#slice-agent.3)).
+
 Before a slice closes, it must leave current docs accurate, a dated session and relevant tests/benchmarks/recipes linked.
 Passing documentation validation establishes consistency of the plan, not correctness, security or performance of code.
