@@ -62,5 +62,10 @@ clean machines and real store branches. `crd-ship` owns publishing; its changeab
 Irreversible publication (submit, widen a rollout, change a price, delete) always needs a recorded human approval
 ([AGENT.3](../ROADMAP.md#slice-agent.3)).
 
+Amended 2026-10-27 ([adoption](../sessions/2026-10-27-research-adopt-store-family.md)): the Cerid store
+([STORE](../ROADMAP.md#slice-store)) is a Cerid product qualified like any other, not a second publishing path:
+`crd-store` consumes `crd-ship`'s entitlements, payments, updater and store interface, and each country it enters is
+a register block in [COMPLY.0](../ROADMAP.md#slice-comply.0) that passes the Turkish launch scenarios first.
+
 Before a slice closes, it must leave current docs accurate, a dated session and relevant tests/benchmarks/recipes linked.
 Passing documentation validation establishes consistency of the plan, not correctness, security or performance of code.
