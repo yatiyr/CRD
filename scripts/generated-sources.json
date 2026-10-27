@@ -943,7 +943,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs.",
-      "sha256": "1206059e640959218c3f0106cdd5d926b77fcb4e1f0596ed6cd4d2789ab46cab"
+      "sha256": "69a1ec40e5e8ba28face62e393d84502c39e356d503bcb4b0bd6058588934402"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp",

@@ -576,11 +576,17 @@ def _assemble(sig_lines, simd_inner, scalar_inner):
     return "\n".join(out)
 
 
+def _store_lines(dst, re_expr, im_expr, indent="        "):
+    """A lane-scalar store writes the two components: a Complex value would compile its constructor, an inline
+    function outside the level namespace, into every kernel unit."""
+    return [f"{indent}{dst}.re = {re_expr};", f"{indent}{dst}.im = {im_expr};"]
+
+
 def _scalar_batched(order, outs, tname, bvar="b"):
     S = [f"    using T = crd::{tname};", f"    for (crd::usize tl = 0; tl < {bvar}; ++tl)", "    {"]
     S += _emit_dag_body_scalar(order, tname, bvar, "        ")
     for k, o in enumerate(outs):
-        S.append(f"        out[{k} * {bvar} + tl] = crd::hesap::Complex<T>{{n{o.id}r, n{o.id}i}};")
+        S += _store_lines(f"out[{k} * {bvar} + tl]", f"n{o.id}r", f"n{o.id}i")
     S.append("    }")
     return S
 
@@ -590,10 +596,10 @@ def _scalar_fused_sh(order, outs, tname, N1):
     S += _emit_dag_body_scalar(order, tname, "n2", "        ")
     for k, o in enumerate(outs):
         S.append(f"        {{ const T wr = twr[{k} * n2 + tl], wi = twi[{k} * n2 + tl];")
-        S.append(
-            f"          out[tl * {N1} + {k}] = crd::hesap::Complex<T>{{{FMA}(-wi, n{o.id}i, n{o.id}r * wr), "
-            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
-        )
+        S += _store_lines(
+            f"out[tl * {N1} + {k}]", f"{FMA}(-wi, n{o.id}i, n{o.id}r * wr)",
+            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)", "          ")
+        S[-1] += " }"
     S.append("    }")
     return S
 
@@ -609,10 +615,10 @@ def _scalar_fused_notr(order, outs, tname):
     S += _emit_dag_body_scalar(order, tname, "b", "        ")
     for k, o in enumerate(outs):
         S.append(f"        {{ const T wr = twr[{k} * vc + v], wi = twi[{k} * vc + v];")
-        S.append(
-            f"          out[{k} * b + tl] = crd::hesap::Complex<T>{{{FMA}(-wi, n{o.id}i, n{o.id}r * wr), "
-            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)}}; }}"
-        )
+        S += _store_lines(
+            f"out[{k} * b + tl]", f"{FMA}(-wi, n{o.id}i, n{o.id}r * wr)",
+            f"{FMA}(wi, n{o.id}r, n{o.id}i * wr)", "          ")
+        S[-1] += " }"
     S.append("    }")
     return S
 
@@ -621,7 +627,7 @@ def _scalar_batched_strided(order, outs, tname):
     S = [f"    using T = crd::{tname};", "    for (crd::usize tl = 0; tl < bs; ++tl)", "    {"]
     S += _emit_dag_body_scalar(order, tname, "bs", "        ")
     for k, o in enumerate(outs):
-        S.append(f"        out[{k} * os + tl] = crd::hesap::Complex<T>{{n{o.id}r, n{o.id}i}};")
+        S += _store_lines(f"out[{k} * os + tl]", f"n{o.id}r", f"n{o.id}i")
     S.append("    }")
     return S
 
@@ -941,7 +947,7 @@ def emit_batched_sc(N, name, prec_key):
     S.insert(1, "    const crd::usize b2 = 2 * b;")
     S += _emit_dag_body_scalar(order, tname, "b", "        ", soa_in=lanes)
     for k, o in enumerate(outs):
-        S.append(f"        out[{k} * b + tl] = crd::hesap::Complex<T>{{n{o.id}r, n{o.id}i}};")
+        S += _store_lines(f"out[{k} * b + tl]", f"n{o.id}r", f"n{o.id}i")
     S.append("    }")
     return _assemble(sig, L, S)
 
@@ -1026,7 +1032,7 @@ def emit_batched_strided_sc(N, name, prec_key):
     S.insert(1, "    const crd::usize b2 = 2 * bs;")
     S += _emit_dag_body_scalar(order, tname, "bs", "        ", soa_in=lanes)
     for k, o in enumerate(outs):
-        S.append(f"        out[{k} * os + tl] = crd::hesap::Complex<T>{{n{o.id}r, n{o.id}i}};")
+        S += _store_lines(f"out[{k} * os + tl]", f"n{o.id}r", f"n{o.id}i")
     S.append("    }")
     return _assemble(sig, L, S)
 
