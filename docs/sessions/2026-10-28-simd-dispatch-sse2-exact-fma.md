@@ -1,4 +1,4 @@
-# 2026-10-28 — SIMD-DISPATCH: the single-rounded fma on the SSE2 and SSE4.2 backends
+# 2026-10-28 — SIMD-DISPATCH: the SSE2 and SSE4.2 exact fma and two-lane log and exp
 
 <!-- doc-role: session -->
 Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch). Decision: [ADR-0134](../decisions/0134-runtime-cpu-dispatch.md).
@@ -10,7 +10,7 @@ HEAD before: `60ebef5f`.
   initializers that `90a87169` fixed (`syrk_microkernel.hpp:80` sets it). The later push runs were cancelled before
   any job failed. No completed run has another failed job.
 - Needs CI audit: no complete-tier run finished since `ae7bdc23` (40578927592 stopped on billing), so DIAG.11c and
-  DIAG.12 stay Needs CI. A complete-tier run is dispatched after this batch's push.
+  DIAG.12 stay Needs CI. Complete-tier run 40592200636 (`d57b11cd`) was dispatched after the first push.
 
 ## What changed
 
@@ -28,6 +28,17 @@ HEAD before: `60ebef5f`.
   steps one unit down in magnitude, then every inexact sum sets bit 0. SSE2 has no 64-bit compare or arithmetic
   shift, so the sign test broadcasts each lane's high dword.
 
+## Two-lane log and exp, Student-t and the gamma batches
+
+- `crd_log_x2` and `crd_exp_x2` (`simd/transcendental.hpp`) are the SSE2 and SSE4.2 twins of `crd_log1` and
+  `crd_exp1`: the AVX2 twins' steps on `__m128d`, each FMA through `fma_pd`, and the scalar core on abnormal lanes.
+  SSE2 has no `floor`, so the exp twin floors by truncation and a compare (exact for the in-range lanes, |y| < 1100;
+  SSE4.2 uses `roundpd`), and builds 2^k from the low bits of `kf + 2^52 + 1023`.
+- hesap-stats: the sse2 Student-t score keeps lanes 0-1 and 2-3 in two registers, so element i still adds to lane
+  i % 4 and the (l0 + l1) + (l2 + l3) reduction is unchanged.
+- hesap-special builds an sse2 level. Its lgamma and tgamma bodies are one vector body over the level's width (four
+  lanes on AVX2, two on SSE2), with the same half-plane test and scalar lanes.
+
 ## Tests
 
 - `simd types: every level's fused multiply-add rounds once on hard cases` (`test_simd_levels.cpp`): 2^20 correlated
@@ -36,12 +47,15 @@ HEAD before: `60ebef5f`.
   (1 + 2^-j)(1 +- 2^-j) products at c's midpoints (the f32 double-rounding traps), addends within three binades and
   far apart, subnormal and overflowing products and results, both sides of every f64 region bound, infinities, NaNs
   and the signed-zero combinations.
-- Local, win-debug: `[simd-levels]` passes at portable, sse2, sse4.2 and avx2. Hosted CI runs the `-sse2` lanes and
-  every `-kernels-at-sse2` and `-kernels-at-sse4.2` arm, where fft, geometry, dense and every other fused user now run
-  the emulation.
+- The probe's `exp/log vector twins` runs each level's twins (the scalar cores on portable and NEON) over the raw
+  inputs, a [-750, 750] spread and the inputs' magnitudes; every level must give portable's bits. The Student-t and
+  gamma differentials already loop over every built level, so they now compare sse2 with the scalar bodies.
+- Local, win-debug: `[simd-levels]` passes at portable, sse2, sse4.2 and avx2; `[kernels]` of crd-hesap-stats-tests
+  and crd-hesap-special-tests passes. Hosted CI runs the `-sse2` lanes and every `-kernels-at-sse2` and
+  `-kernels-at-sse4.2` arm, where fft, geometry, dense and every other fused user now run the emulation.
 
 ## Board candidates (row-close pass)
 
-- The fused users at sse2 and sse4.2 against HEAD's per-lane libm calls. On GCC and Clang lanes glibc's `fma`
-  dispatches to the hardware instruction on an FMA host, so HEAD's column is faster there than on a real SSE2-only
-  CPU; the board records that.
+- The fused users at sse2 and sse4.2 against HEAD's per-lane libm calls; the sse2 Student-t and gamma bodies against
+  portable (each keeps its level only if it wins). On GCC and Clang lanes glibc's `fma` dispatches to the hardware
+  instruction on an FMA host, so HEAD's column is faster there than on a real SSE2-only CPU; the board records that.
