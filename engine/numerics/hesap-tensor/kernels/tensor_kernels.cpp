@@ -5,11 +5,12 @@
 // complex elements (8x8 f32, 4x4 64-bit and 2x2 128-bit squares; 4x4, 2x2 and single elements on SSE2; with next-tile
 // prefetches, and non-temporal stores for the multithreaded DRAM-sized permutes), twelve binned accumulators (six on
 // SSE2), the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four
-// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2, whose nn bodies are the portable loops);
-// the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits:
-// the permute is element copies and the IEEE operations of a real or complex product, the binned representation is
-// partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
-// f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
+// lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2). The SSE2 and SSE4.2 nn bodies run four
+// lanes: the quantizers on SSE2 operations, the dots on even/odd madd lanes (SSE2) or maddubs (SSE4.2), every f32
+// combine through the exact fma; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd.
+// Every body gives the same bits: the permute is element copies and the IEEE operations of a real or complex product,
+// the binned representation is partition-independent, the quantizers are per-element IEEE operations, the dots are
+// exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer operations.
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
@@ -772,8 +773,8 @@ void binned_sum_f64(BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept
 }
 
 // ---- nn: softmax (last dim, stable) -----------------------------------------
-// exp rides the deterministic crd_exp1 core; the AVX2 4-lane widen path uses crd_exp4, which is bit-identical to
-// crd_exp1 on every input, so the vector/tail split cannot perturb results.
+// exp rides the deterministic crd_exp1 core; the 4-lane widen paths use crd_exp4 (AVX2) and two crd_exp_x2 (SSE2,
+// SSE4.2), which are bit-identical to crd_exp1 on every input, so the vector/tail split cannot perturb results.
 void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
 {
     crd::f32 m = x[0];
@@ -788,6 +789,14 @@ void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
         const __m128 xf = _mm_sub_ps(_mm_loadu_ps(x + j), _mm_set1_ps(m));
         const __m128 ef = _mm256_cvtpd_ps(crd::math::crd_exp4(_mm256_cvtps_pd(xf)));
         _mm_storeu_ps(y + j, ef);
+    }
+#elif CRD_SIMD_HAS_SSE2
+    for (; j + 4U <= d; j += 4U)
+    {
+        const __m128 xf = _mm_sub_ps(_mm_loadu_ps(x + j), _mm_set1_ps(m));
+        const __m128 lo = _mm_cvtpd_ps(crd::math::crd_exp_x2(_mm_cvtps_pd(xf)));
+        const __m128 hi = _mm_cvtpd_ps(crd::math::crd_exp_x2(_mm_cvtps_pd(_mm_movehl_ps(xf, xf))));
+        _mm_storeu_ps(y + j, _mm_movelh_ps(lo, hi));
     }
 #endif
     for (; j < d; ++j)
@@ -813,13 +822,147 @@ void nn_softmax_rows(const NnSoftmaxF32& c, crd::u32 lo, crd::u32 hi) noexcept
     }
 }
 
+#if CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_AVX2
+// ---- nn: the 128-bit integer lanes of the SSE2 and SSE4.2 levels ----------------
+// Lane k of a 16-byte step is the exact i32 sum of products 4k..4k+3, the lane structure of the AVX2 bodies. SSE4.2
+// runs SSSE3's maddubs (u8 x i8 pair sums to i16, then madd by ones); SSE2 has no u8 x i8 multiply, so it widens the
+// even and odd bytes of each operand to i16 lanes, and madd of the evens gives products 4k and 4k+2 in lane k, of the
+// odds 4k+1 and 4k+3. Every f32 combine is fma_exact.hpp's single-rounded fma.
+using crd::math::simd::detail::fma_ps;
+
+#if CRD_SIMD_HAS_SSE42
+// The Q8_0 lanes of x and w (both i8, |x| <= 127): psignb puts w's sign on x, and pabsb's |w| is the u8 magnitude even
+// for w = -128 (0x80 reads as 128), so maddubs multiplies |w| by x*sign(w) exactly and no i16 pair sum saturates.
+inline __m128i q8_lanes(__m128i x, __m128i w) noexcept
+{
+    return _mm_madd_epi16(_mm_maddubs_epi16(_mm_abs_epi8(w), _mm_sign_epi8(x, w)), _mm_set1_epi16(1));
+}
+
+// u8 activations split as x = xl + 128*xh (xl <= 127, xh in {0, 1}), so the maddubs pair sums never saturate.
+struct U8Lhs
+{
+    __m128i low;
+    __m128i high;
+};
+
+inline U8Lhs u8_lhs(__m128i x) noexcept
+{
+    return {_mm_and_si128(x, _mm_set1_epi8(0x7F)), _mm_and_si128(_mm_srli_epi16(x, 7), _mm_set1_epi8(1))};
+}
+
+struct I8Rhs
+{
+    __m128i w;
+};
+
+inline I8Rhs i8_rhs(__m128i w) noexcept
+{
+    return {w};
+}
+
+inline __m128i u8i8_lanes(const U8Lhs& x, const I8Rhs& w) noexcept
+{
+    const __m128i ones = _mm_set1_epi16(1);
+    const __m128i pl = _mm_madd_epi16(_mm_maddubs_epi16(x.low, w.w), ones);
+    const __m128i ph = _mm_madd_epi16(_mm_maddubs_epi16(x.high, w.w), ones);
+    return _mm_add_epi32(pl, _mm_slli_epi32(ph, 7));
+}
+#else
+// The even and odd bytes of i8 values, sign-extended to i16 lanes.
+inline __m128i even_i8(__m128i v) noexcept
+{
+    return _mm_srai_epi16(_mm_slli_epi16(v, 8), 8);
+}
+
+inline __m128i odd_i8(__m128i v) noexcept
+{
+    return _mm_srai_epi16(v, 8);
+}
+
+inline __m128i q8_lanes(__m128i x, __m128i w) noexcept
+{
+    return _mm_add_epi32(_mm_madd_epi16(even_i8(x), even_i8(w)), _mm_madd_epi16(odd_i8(x), odd_i8(w)));
+}
+
+// The even and odd bytes of u8 values, zero-extended (255 * 128 * 2 fits every madd lane).
+struct U8Lhs
+{
+    __m128i even;
+    __m128i odd;
+};
+
+inline U8Lhs u8_lhs(__m128i x) noexcept
+{
+    return {_mm_and_si128(x, _mm_set1_epi16(0x00FF)), _mm_srli_epi16(x, 8)};
+}
+
+struct I8Rhs
+{
+    __m128i even;
+    __m128i odd;
+};
+
+inline I8Rhs i8_rhs(__m128i w) noexcept
+{
+    return {even_i8(w), odd_i8(w)};
+}
+
+inline __m128i u8i8_lanes(const U8Lhs& x, const I8Rhs& w) noexcept
+{
+    return _mm_add_epi32(_mm_madd_epi16(x.even, w.even), _mm_madd_epi16(x.odd, w.odd));
+}
+#endif
+
+// (l0 + l1) + (l2 + l3), the Q8_0 tree within one half of an output's eight lanes.
+inline crd::f32 q8_half_sum(__m128 v) noexcept
+{
+    crd::f32 l[4];
+    _mm_storeu_ps(l, v);
+    return (l[0] + l[1]) + (l[2] + l[3]);
+}
+
+// The exact i32 total of four lanes (order-free).
+inline crd::i32 lane_total(__m128i v) noexcept
+{
+    crd::i32 l[4];
+    _mm_storeu_si128(reinterpret_cast<__m128i*>(l), v);
+    return (l[0] + l[1]) + (l[2] + l[3]);
+}
+
+// y[0..count) = fma(scale, f32(dc), bias) lane for lane, ReLU'd as the ternary form (count <= 4).
+inline void i8_store4(crd::f32* y, crd::u32 count, crd::f32 scale, const crd::i32* dc, const crd::f32* bias,
+                      bool relu) noexcept
+{
+    crd::i32 d4[4] = {};
+    crd::f32 b4[4] = {};
+    for (crd::u32 r = 0; r < count; ++r)
+    {
+        d4[r] = dc[r];
+        b4[r] = bias[r];
+    }
+    __m128 v = fma_ps(_mm_set1_ps(scale), _mm_cvtepi32_ps(_mm_loadu_si128(reinterpret_cast<const __m128i*>(d4))),
+                      _mm_loadu_ps(b4));
+    if (relu)
+    {
+        v = _mm_max_ps(v, _mm_setzero_ps()); // lane semantics == the ternary form
+    }
+    crd::f32 o[4];
+    _mm_storeu_ps(o, v);
+    for (crd::u32 r = 0; r < count; ++r)
+    {
+        y[r] = o[r];
+    }
+}
+#endif
+
 // ---- nn: the Q8_0 linear ----------------------------------------------------
 // The lane-parallel Q8_0 kernel (pinned semantics, every body identical): each block's int8 x int8 products land in
-// eight exact i32 lane partials (lane k = products 4k..4k+3, the maddubs/madd pair structure; |lane| <= 64516, so the
-// f32 convert is exact too). The per-block f32 combine is one fma per lane (acc_k = fma(dx*dw, f32(lane_k), acc_k)),
-// and the per-output horizontal sum is the fixed hadd tree ((l0+l1)+(l2+l3)) + ((l4+l5)+(l6+l7)). Everything is a
-// fixed operation sequence, so the result is bit-exact across worker counts, runs and levels, and the integer stage
-// across all hardware (the certification tier). The portable body mirrors the lane structure and the tree exactly.
+// eight exact i32 lane partials (lane k = products 4k..4k+3, the maddubs/madd pair structure; |lane| <= 65024 for any
+// i8 weight, so the f32 convert is exact too). The per-block f32 combine is one fma per lane (acc_k = fma(dx*dw,
+// f32(lane_k), acc_k)), and the per-output horizontal sum is the fixed hadd tree ((l0+l1)+(l2+l3)) + ((l4+l5)+(l6+l7)).
+// Everything is a fixed operation sequence, so the result is bit-exact across worker counts, runs and levels, and the
+// integer stage across all hardware (the certification tier). The portable body mirrors the lane structure and the tree
+// exactly.
 constexpr crd::u32 kNnQ8OutTile = 8U; // outputs sharing one activation-block load (8 acc chains hide the fma latency)
 
 // y[o0..o0+T) over nb blocks. T is a compile-time tile size so the inner loop is fully unrolled straight-line code (a
@@ -840,20 +983,22 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
 #endif
     for (crd::u64 bi = 0; bi < nb; ++bi)
     {
+        // the activations are quantize_q8_0's (|x| <= 127), the weights any i8: |w| (pabsb, 128 for -128) times
+        // x * sign(w) (psignb, no wrap at |x| <= 127) is the product exactly
         const __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(xrow[bi].qs));
-        const __m256i ax = _mm256_sign_epi8(vx, vx); // |x| (u8 <= 127), shared by the tile
         const __m256 vdx = _mm256_set1_ps(xsc[bi]);
         for (crd::u32 r = 0; r < t; ++r)
         {
             const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wrow[bi].qs));
-            const __m256i sw = _mm256_sign_epi8(vw, vx); // w * sign(x)
+            const __m256i aw = _mm256_abs_epi8(vw);
+            const __m256i sx = _mm256_sign_epi8(vx, vw);
 #if CRD_KERNEL_HAS_AVXVNNI
             // dpbusd accumulates the same 4-product i32 lanes exactly (no intermediate saturation is reachable at
-            // |q| <= 127): the integer lanes are bit-identical to the maddubs/madd pair
-            const __m256i p32 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax, sw);
+            // |x| <= 127): the integer lanes are bit-identical to the maddubs/madd pair
+            const __m256i p32 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), aw, sx);
 #else
-            const __m256i p16 = _mm256_maddubs_epi16(ax, sw);   // pairs -> i16 (no saturation reachable)
+            const __m256i p16 = _mm256_maddubs_epi16(aw, sx);   // pairs -> i16 (|pair| <= 32512, no saturation)
             const __m256i p32 = _mm256_madd_epi16(p16, ones16); // 4-product i32 lanes
 #endif
             const __m256 scale = _mm256_mul_ps(vdx, _mm256_broadcast_ss(wscale + (o0 + r) * nb + bi));
@@ -886,6 +1031,35 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
             const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
             yrow[o0 + g + r] = relu ? rectified : v;
         }
+    }
+#elif CRD_SIMD_HAS_SSE2
+    __m128 acc_lo[kNnQ8OutTile]; // lanes 0-3 of each output
+    __m128 acc_hi[kNnQ8OutTile]; // lanes 4-7
+    for (crd::u32 r = 0; r < kNnQ8OutTile; ++r)
+    {
+        acc_lo[r] = _mm_setzero_ps();
+        acc_hi[r] = _mm_setzero_ps();
+    }
+    for (crd::u64 bi = 0; bi < nb; ++bi)
+    {
+        const __m128i x_lo = _mm_loadu_si128(reinterpret_cast<const __m128i*>(xrow[bi].qs));
+        const __m128i x_hi = _mm_loadu_si128(reinterpret_cast<const __m128i*>(xrow[bi].qs + 16));
+        const __m128 vdx = _mm_set1_ps(xsc[bi]);
+        for (crd::u32 r = 0; r < t; ++r)
+        {
+            const crd::i8* w = wq[(o0 + r) * nb + bi].qs;
+            const __m128i lanes_lo = q8_lanes(x_lo, _mm_loadu_si128(reinterpret_cast<const __m128i*>(w)));
+            const __m128i lanes_hi = q8_lanes(x_hi, _mm_loadu_si128(reinterpret_cast<const __m128i*>(w + 16)));
+            const __m128 scale = _mm_mul_ps(vdx, _mm_set1_ps(wscale[(o0 + r) * nb + bi]));
+            acc_lo[r] = fma_ps(scale, _mm_cvtepi32_ps(lanes_lo), acc_lo[r]);
+            acc_hi[r] = fma_ps(scale, _mm_cvtepi32_ps(lanes_hi), acc_hi[r]);
+        }
+    }
+    for (crd::u32 r = 0; r < t; ++r)
+    {
+        const crd::f32 v = (q8_half_sum(acc_lo[r]) + q8_half_sum(acc_hi[r])) + bias[o0 + r];
+        const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
+        yrow[o0 + r] = relu ? rectified : v;
     }
 #else
     for (crd::u32 r = 0; r < t; ++r)
@@ -995,6 +1169,48 @@ void quantize_q8_0(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexce
         const __m256i fixed = _mm256_permutevar8x32_epi32(q, _mm256_setr_epi32(0, 4, 1, 5, 2, 6, 3, 7));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[i].qs), fixed);
     }
+#elif CRD_SIMD_HAS_SSE2
+    const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+    const __m128 sign_mask = _mm_castsi128_ps(_mm_set1_epi32(static_cast<crd::i32>(0x80000000U)));
+    const __m128 half = _mm_set1_ps(0.5F);
+    const __m128i nan_q = _mm_set1_epi8(-128); // a non-finite lane converts to INT32_MIN, which packs to -128
+    const auto away = [&](__m128 t)
+    {
+        return _mm_cvttps_epi32(_mm_add_ps(t, _mm_or_ps(_mm_and_ps(t, sign_mask), half)));
+    };
+    for (crd::u64 i = 0; i < nblocks; ++i)
+    {
+        const crd::f32* blk = x + i * kQuantBlock;
+        __m128 v[8];
+        // maxps(a, b) is a > b ? a : b: with the NaN-free running maximum as b, a NaN never wins (two chains)
+        __m128 a0 = _mm_setzero_ps();
+        __m128 a1 = _mm_setzero_ps();
+        for (crd::u32 j = 0; j < 8U; j += 2U)
+        {
+            v[j] = _mm_loadu_ps(blk + 4U * j);
+            v[j + 1U] = _mm_loadu_ps(blk + 4U * (j + 1U));
+            a0 = _mm_max_ps(_mm_and_ps(v[j], abs_mask), a0);
+            a1 = _mm_max_ps(_mm_and_ps(v[j + 1U], abs_mask), a1);
+        }
+        __m128 m4 = _mm_max_ps(a0, a1);
+        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0x4E));
+        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0xB1));
+        const crd::f32 amax = _mm_cvtss_f32(m4);
+        const crd::f32 d = amax / 127.0F;
+        const crd::f32 id = d != 0.0F ? 1.0F / d : 0.0F;
+        out[i].d = crd::math::f32_to_f16_bits(d);
+        const __m128 vid = _mm_set1_ps(id);
+        for (crd::u32 h = 0; h < 2U; ++h)
+        {
+            const __m128* vh = v + 4U * h;
+            const __m128i q01 = _mm_packs_epi32(away(_mm_mul_ps(vh[0], vid)), away(_mm_mul_ps(vh[1], vid)));
+            const __m128i q23 = _mm_packs_epi32(away(_mm_mul_ps(vh[2], vid)), away(_mm_mul_ps(vh[3], vid)));
+            const __m128i packed = _mm_packs_epi16(q01, q23); // i8 in element order
+            // -128 is exactly the non-finite lanes (a finite t rounds into [-127, 127]): they quantize as 0
+            const __m128i q = _mm_andnot_si128(_mm_cmpeq_epi8(packed, nan_q), packed);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(out[i].qs + 16U * h), q);
+        }
+    }
 #else
     detail::quantize_q8_0_blocks(x, out, nblocks);
 #endif
@@ -1085,6 +1301,49 @@ void quantize_u8_row(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scal
     }
     scale = s;
     zero_point = zp;
+#elif CRD_SIMD_HAS_SSE2
+    __m128 vmin = _mm_setzero_ps(); // the range is 0-extended (the ort convention)
+    __m128 vmax = _mm_setzero_ps();
+    for (crd::u64 i = 0; i < k; i += 4U)
+    {
+        const __m128 v = _mm_loadu_ps(x + i);
+        vmin = _mm_min_ps(v, vmin); // v < vmin ? v : vmin
+        vmax = _mm_max_ps(v, vmax); // v > vmax ? v : vmax
+    }
+    vmin = _mm_min_ps(vmin, _mm_shuffle_ps(vmin, vmin, 0x4E));
+    vmin = _mm_min_ps(vmin, _mm_shuffle_ps(vmin, vmin, 0xB1));
+    vmax = _mm_max_ps(vmax, _mm_shuffle_ps(vmax, vmax, 0x4E));
+    vmax = _mm_max_ps(vmax, _mm_shuffle_ps(vmax, vmax, 0xB1));
+    const crd::f32 rmin = _mm_cvtss_f32(vmin);
+    const crd::f32 rmax = _mm_cvtss_f32(vmax);
+    const crd::f32 s = (rmax - rmin) / 255.0F;
+    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
+    const crd::i32 zp = detail::quantize_u8_zero_point(rmin, s);
+    const __m128 vinv = _mm_set1_ps(inv);
+    const __m128i vzp = _mm_set1_epi32(zp);
+    const __m128 sign_mask = _mm_castsi128_ps(_mm_set1_epi32(static_cast<crd::i32>(0x80000000U)));
+    const __m128 abs_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7FFFFFFF));
+    const __m128 inf = _mm_castsi128_ps(_mm_set1_epi32(0x7F800000));
+    const __m128 half = _mm_set1_ps(0.5F);
+    const auto away_zp = [&](__m128 t)
+    {
+        const __m128 finite = _mm_and_ps(t, _mm_cmplt_ps(_mm_and_ps(t, abs_mask), inf)); // else +0
+        const __m128i q = _mm_cvttps_epi32(_mm_add_ps(finite, _mm_or_ps(_mm_and_ps(finite, sign_mask), half)));
+        return _mm_add_epi32(q, vzp);
+    };
+    for (crd::u64 i = 0; i < k; i += 16U)
+    {
+        const __m128i q0 = away_zp(_mm_mul_ps(_mm_loadu_ps(x + i), vinv));
+        const __m128i q1 = away_zp(_mm_mul_ps(_mm_loadu_ps(x + i + 4), vinv));
+        const __m128i q2 = away_zp(_mm_mul_ps(_mm_loadu_ps(x + i + 8), vinv));
+        const __m128i q3 = away_zp(_mm_mul_ps(_mm_loadu_ps(x + i + 12), vinv));
+        // packs_epi32 then packus_epi16 is the [0, 255] clamp: both saturations are monotone, and an i32 outside
+        // [0, 255] saturates to an i16 outside it too
+        const __m128i q = _mm_packus_epi16(_mm_packs_epi32(q0, q1), _mm_packs_epi32(q2, q3));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i), q);
+    }
+    scale = s;
+    zero_point = zp;
 #else
     detail::quantize_u8_asym_row(x, k, out, scale, zero_point);
 #endif
@@ -1159,6 +1418,31 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
             const crd::f32 rectified = v > 0.0F ? v : 0.0F; // ReLU (a NaN becomes 0)
             yrow[o0 + g + r] = relu ? rectified : v;
         }
+    }
+#elif CRD_SIMD_HAS_SSE2
+    __m128i acc[8];
+    for (crd::u32 r = 0; r < 8U; ++r)
+    {
+        acc[r] = _mm_setzero_si128();
+    }
+    for (crd::u64 c = 0; c < k; c += 16U)
+    {
+        const U8Lhs vx = u8_lhs(_mm_loadu_si128(reinterpret_cast<const __m128i*>(xrow + c)));
+        for (crd::u32 r = 0; r < t; ++r)
+        {
+            const __m128i vw = _mm_loadu_si128(reinterpret_cast<const __m128i*>(wq + (o0 + r) * k + c));
+            acc[r] = _mm_add_epi32(acc[r], u8i8_lanes(vx, i8_rhs(vw)));
+        }
+    }
+    for (crd::u32 g = 0; g < t; g += 4U)
+    {
+        const crd::u32 tg = t - g < 4U ? t - g : 4U;
+        crd::i32 dc[4];
+        for (crd::u32 r = 0; r < tg; ++r)
+        {
+            dc[r] = lane_total(acc[g + r]) - zp * colsum[o0 + g + r]; // exact zero-point correction
+        }
+        i8_store4(yrow + o0 + g, tg, scale_m, dc, bias + o0 + g, relu);
     }
 #else
     for (crd::u32 r = 0; r < t; ++r)
@@ -1304,6 +1588,50 @@ void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* 
             {
                 const __m256i vmask = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(kNnTailMask + (8U - valid)));
                 _mm256_maskstore_ps(dst, vmask, v);
+            }
+        }
+    }
+#elif CRD_SIMD_HAS_SSE2
+    const crd::u64 n8 = (n + 7U) & ~crd::u64{7};
+    for (crd::u64 b = 0; b < n8; b += 8U)
+    {
+        __m128i acc_lo[R]; // outputs b..b+3
+        __m128i acc_hi[R]; // outputs b+4..b+7
+        for (crd::u32 r = 0; r < R; ++r)
+        {
+            acc_lo[r] = _mm_setzero_si128();
+            acc_hi[r] = _mm_setzero_si128();
+        }
+        const crd::i8* wp = wpack + b * k; // this block: k/4 slices of 8x4 bytes
+        for (crd::u64 c = 0; c < k; c += 4U)
+        {
+            const I8Rhs w_lo = i8_rhs(_mm_loadu_si128(reinterpret_cast<const __m128i*>(wp + c * 8U)));
+            const I8Rhs w_hi = i8_rhs(_mm_loadu_si128(reinterpret_cast<const __m128i*>(wp + c * 8U + 16U)));
+            for (crd::u32 r = 0; r < R; ++r)
+            {
+                crd::i32 xw = 0; // 4 u8 activation bytes, broadcast to every lane
+                std::memcpy(&xw, xrows + static_cast<crd::u64>(r) * k + c, 4U);
+                const U8Lhs va = u8_lhs(_mm_set1_epi32(xw));
+                acc_lo[r] = _mm_add_epi32(acc_lo[r], u8i8_lanes(va, w_lo));
+                acc_hi[r] = _mm_add_epi32(acc_hi[r], u8i8_lanes(va, w_hi));
+            }
+        }
+        const crd::u64 valid = n - b < 8U ? n - b : 8U;
+        for (crd::u32 r = 0; r < R; ++r)
+        {
+            crd::i32 dc[8];
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dc), acc_lo[r]);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dc + 4), acc_hi[r]);
+            for (crd::u32 o = 0; o < 8U; ++o)
+            {
+                dc[o] -= zp[r] * colsum[b + o]; // exact zero-point correction (colsum is n8-padded)
+            }
+            crd::f32* dst = yrows + static_cast<crd::u64>(r) * n + b;
+            const crd::u32 first = valid < 4U ? static_cast<crd::u32>(valid) : 4U;
+            i8_store4(dst, first, scale_m[r], dc, bias + b, relu);
+            if (valid > 4U)
+            {
+                i8_store4(dst + 4, static_cast<crd::u32>(valid - 4U), scale_m[r], dc + 4, bias + b + 4, relu);
             }
         }
     }

@@ -7,10 +7,10 @@
 // portable level's bits for the Tier R binned sum (around the vector threshold and the endurance window, the
 // speculative widening, the near-DBL_MAX compression regime, non-finite inputs, a non-empty accumulator), the scalar
 // quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned order of the Q8_0 and int8 linears (every
-// tile width, the saturating and zero-point extremes, row ranges), the scalar softmax (vector tails, crd_exp4's scalar
-// lanes, non-finite logits) and the scalar Philox blocks (counter and position wraps, partial vectors).
-// crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
-// level.
+// tile width, the saturating and zero-point extremes, -128 and every other i8 weight, subnormal scales, row ranges),
+// the scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits) and the scalar Philox blocks (counter
+// and position wraps, partial vectors). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts
+// and the sketch fill under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
@@ -494,6 +494,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     CHECK(levels[0].features == crd::CpuFeatureSet{});
     const crd::CpuFeatureSet vnni = crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni);
     usize sse2 = 0;
+    usize sse42 = 0;
     usize avx2 = 0;
     usize avx2_vnni = 0;
     for (usize i = 0; i < levels.size(); ++i)
@@ -510,11 +511,13 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
             CHECK((higher || variant));
         }
         sse2 += levels[i].level == CpuLevel::Sse2 ? 1U : 0U;
+        sse42 += levels[i].level == CpuLevel::Sse42 ? 1U : 0U;
         avx2 += levels[i].level == CpuLevel::Avx2 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
         avx2_vnni += levels[i].level == CpuLevel::Avx2 && levels[i].features == vnni ? 1U : 0U;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2) ? 1U : 0U));
+    CHECK(sse42 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse42) ? 1U : 0U));
     const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
     CHECK(avx2 == built);
     CHECK(avx2_vnni == built);
@@ -876,9 +879,11 @@ TEST_CASE("tensor kernels: every level the host runs gives the pinned Q8_0 linea
         wscale[i] = tn::f16_bits_to_f32(wq[i].d);
         for (u32 j = 0; j < 32U; ++j)
         {
-            wq[i].qs[j] = static_cast<crd::i8>(static_cast<crd::i32>(lcg(s) % 255U) - 127); // [-127, 127]
+            wq[i].qs[j] = static_cast<crd::i8>(static_cast<crd::i32>(lcg(s) % 256U) - 128); // every i8, -128 too
         }
     }
+    wscale[5] = 1e-41F; // subnormal weight scales: subnormal products and sums in the fma combine
+    wscale[9] = -3e-39F;
     fill_uniform(bias, max_n, 0xB1A5U, 0.5F);
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())

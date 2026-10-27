@@ -156,6 +156,7 @@ struct TensorKernels
 // build that compiles any other.
 extern const TensorKernels kTensorKernelsPortable;
 extern const TensorKernels kTensorKernelsSse2;
+extern const TensorKernels kTensorKernelsSse42;
 extern const TensorKernels kTensorKernelsAvx2;
 extern const TensorKernels kTensorKernelsAvx2AvxVnni;
 

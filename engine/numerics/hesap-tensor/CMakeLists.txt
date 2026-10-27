@@ -55,7 +55,7 @@ target_compile_features(crd-hesap-tensor PUBLIC cxx_std_20)
 # SIMD-DISPATCH (ADR-0134 §5): the f32 permute regions, the Tier R binned sum, the nn quantized linears, quantizers
 # and softmax and the Philox block loop, once per CPU level, and the avx2 level again with AVX-VNNI (the integer dots
 # on dpbusd).
-crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable sse2 avx2 VARIANTS avx2+avxvnni INCLUDES crd-math
+crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable sse2 sse42 avx2 VARIANTS avx2+avxvnni INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_kernels.cpp")
 
 crd_enable_default_pch(crd-hesap-tensor)
