@@ -3,10 +3,10 @@
 // and the binned operations included, so no function of this unit is shared with general code or with another level.
 // The portable bodies are the scalar loops; the AVX2 bodies run the 8x8 in-register f32 transpose (with non-temporal
 // stores for the multithreaded DRAM-sized permutes), twelve binned accumulators, the nn quantizers eight lanes at a
-// time, the quantized dots on maddubs/madd integer lanes and softmax's exp four lanes at a time. Every body gives the
-// same bits: the permute is element copies and IEEE multiplies, the binned representation is partition-independent,
-// the quantizers are per-element IEEE operations, the dots are exact integers combined in one f32 order, and crd_exp4
-// reproduces crd_exp1.
+// time, the quantized dots on maddubs/madd integer lanes and softmax's exp four lanes at a time; the avx2 level's
+// AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on dpbusd. Every body gives the same bits: the permute is
+// element copies and IEEE multiplies, the binned representation is partition-independent, the quantizers are
+// per-element IEEE operations, the dots are exact integers combined in one f32 order, and crd_exp4 reproduces crd_exp1.
 
 #include <crd/hesap/tensor/binned_core.hpp>
 #include <crd/hesap/tensor/permute_tiles.hpp>
@@ -443,7 +443,7 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
     {
         acc[r] = _mm256_setzero_ps();
     }
-#if !defined(__AVXVNNI__)
+#if !CRD_KERNEL_HAS_AVXVNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
 #endif
     for (crd::u64 bi = 0; bi < nb; ++bi)
@@ -456,7 +456,7 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
             const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wrow[bi].qs));
             const __m256i sw = _mm256_sign_epi8(vw, vx); // w * sign(x)
-#if defined(__AVXVNNI__)
+#if CRD_KERNEL_HAS_AVXVNNI
             // dpbusd accumulates the same 4-product i32 lanes exactly (no intermediate saturation is reachable at
             // |q| <= 127): the integer lanes are bit-identical to the maddubs/madd pair
             const __m256i p32 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), ax, sw);
@@ -711,7 +711,7 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
     {
         acc[r] = _mm256_setzero_si256();
     }
-#if !defined(__AVXVNNI__)
+#if !CRD_KERNEL_HAS_AVXVNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
     const __m256i low7 = _mm256_set1_epi8(0x7F);
     const __m256i one8 = _mm256_set1_epi8(1);
@@ -719,7 +719,7 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
     for (crd::u64 c = 0; c < k; c += 32U)
     {
         const __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(xrow + c)); // u8
-#if !defined(__AVXVNNI__)
+#if !CRD_KERNEL_HAS_AVXVNNI
         // u8 x i8 without VNNI: split x = xl + 128*xh (xl <= 127, xh in {0,1}) so the maddubs i16 pair sums can
         // never saturate; exact i32 either way
         const __m256i xl = _mm256_and_si256(vx, low7);
@@ -728,7 +728,7 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
         for (crd::u32 r = 0; r < t; ++r)
         {
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wq + (o0 + r) * k + c));
-#if defined(__AVXVNNI__)
+#if CRD_KERNEL_HAS_AVXVNNI
             acc[r] = _mm256_dpbusd_avx_epi32(acc[r], vx, vw); // u8 x i8, exact i32 accumulate
 #else
             const __m256i pl = _mm256_madd_epi16(_mm256_maddubs_epi16(xl, vw), ones16);
@@ -856,7 +856,7 @@ void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* 
 {
 #if CRD_SIMD_HAS_AVX2
     const crd::u64 n8 = (n + 7U) & ~crd::u64{7};
-#if !defined(__AVXVNNI__)
+#if !CRD_KERNEL_HAS_AVXVNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
     const __m256i low7 = _mm256_set1_epi8(0x7F);
     const __m256i one8 = _mm256_set1_epi8(1);
@@ -878,7 +878,7 @@ void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* 
                 crd::i32 xw = 0; // 4 u8 activation bytes, broadcast to every lane
                 std::memcpy(&xw, xrows + static_cast<crd::u64>(r) * k + c, 4U);
                 const __m256i va = _mm256_set1_epi32(xw);
-#if defined(__AVXVNNI__)
+#if CRD_KERNEL_HAS_AVXVNNI
                 acc[r] = _mm256_dpbusd_avx_epi32(acc[r], va, vb); // u8 x i8, exact i32
 #else
                 // u8 x i8 without VNNI: split x = xl + 128*xh so the maddubs i16 pair sums can never saturate;

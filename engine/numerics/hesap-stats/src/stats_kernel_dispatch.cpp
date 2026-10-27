@@ -16,9 +16,9 @@ static_assert((CRD_KERNELS_STATS & ~kLevelsWithBody) == 0, "a built level has no
 static_assert(CRD_KERNEL_BUILT(CRD_KERNELS_STATS, PORTABLE), "the portable level is always built");
 
 constexpr KernelLevel<StatsKernels> kLevels[] = {
-    {crd::CpuLevel::Portable, &kStatsKernelsPortable},
+    {crd::CpuLevel::Portable, &kStatsKernelsPortable, {}},
 #if CRD_KERNEL_BUILT(CRD_KERNELS_STATS, AVX2)
-    {crd::CpuLevel::Avx2, &kStatsKernelsAvx2},
+    {crd::CpuLevel::Avx2, &kStatsKernelsAvx2, {}},
 #endif
 };
 
@@ -31,8 +31,7 @@ std::span<const KernelLevel<StatsKernels>> stats_kernel_levels() noexcept
 
 const KernelLevel<StatsKernels>& stats_kernels() noexcept
 {
-    static const KernelLevel<StatsKernels>& selected = crd::math::select_kernel_level<StatsKernels>(
-        kLevels, crd::cpu_selection().selected, crd::math::kernel_level_cap());
+    static const KernelLevel<StatsKernels>& selected = crd::math::process_kernel_level<StatsKernels>(kLevels);
     return selected;
 }
 

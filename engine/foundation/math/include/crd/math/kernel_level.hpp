@@ -16,8 +16,17 @@
 #define CRD_KERNEL_LEVEL_AVX512 4
 #define CRD_KERNEL_LEVEL_NEON 5
 
-// CRD_KERNEL_LEVEL_SUFFIX names the level in the identifiers a kernel unit defines.
-#if !defined(CRD_KERNEL_LEVEL)
+// CRD_KERNEL_LEVEL_SUFFIX names the level in the identifiers a kernel unit defines. A feature variant
+// (crd_add_cpu_kernels VARIANTS: CRD_KERNEL_FEATURE_<FEATURE> on its level's unit) has a namespace and suffix of its
+// own, so its copies never merge with the level's plain unit; CRD_KERNEL_HAS_<FEATURE> tells its bodies apart.
+#if defined(CRD_KERNEL_FEATURE_AVXVNNI)
+#if !defined(CRD_KERNEL_LEVEL) || CRD_KERNEL_LEVEL != CRD_KERNEL_LEVEL_AVX2
+#error "AVX-VNNI is a feature variant of the avx2 level"
+#endif
+#define CRD_KERNEL_HAS_AVXVNNI 1
+#define CRD_MATH_LEVEL_NS avx2_avxvnni
+#define CRD_KERNEL_LEVEL_SUFFIX Avx2AvxVnni
+#elif !defined(CRD_KERNEL_LEVEL)
 #define CRD_MATH_LEVEL_NS general
 #elif CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
 #define CRD_MATH_LEVEL_NS portable
@@ -39,6 +48,9 @@
 #define CRD_KERNEL_LEVEL_SUFFIX Neon
 #else
 #error "CRD_KERNEL_LEVEL names no CPU level"
+#endif
+#if !defined(CRD_KERNEL_HAS_AVXVNNI)
+#define CRD_KERNEL_HAS_AVXVNNI 0
 #endif
 
 // The name of the kernel table a unit of this level defines: CRD_KERNEL_TABLE(kFoo) is kFooAvx2 in an AVX2 unit.

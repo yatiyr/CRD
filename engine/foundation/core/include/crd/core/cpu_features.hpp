@@ -10,8 +10,9 @@
 // hybrid part or a mixed virtual machine never selects code one of its cores faults on.
 //
 // `CRD_CPU_LEVEL` (sse2, sse4.2, avx2, avx512, neon, portable) lowers the level for tests and qualification (portable,
-// the kernels' scalar reference, on every architecture); a level above what every CPU executes, or of another
-// architecture, is refused and the detected level stays. It is read once, with the detection, at the first
+// the kernels' scalar reference, on every architecture) and drops the features above that level's definition from
+// the ones kernel variants select on; a level above what every CPU executes, or of another architecture, is refused
+// and the detected level stays. It is read once, with the detection, at the first
 // `cpu_selection()` call. No heap memory is allocated.
 
 #include <crd/core/types.hpp>
@@ -97,6 +98,13 @@ struct CpuFeatureSet
         return ((bits >> static_cast<crd::u32>(f)) & 1U) != 0U;
     }
     constexpr void set(CpuFeature f) noexcept { bits |= crd::u64{1} << static_cast<crd::u32>(f); }
+    [[nodiscard]] constexpr CpuFeatureSet with(CpuFeature f) const noexcept
+    {
+        CpuFeatureSet s = *this;
+        s.set(f);
+        return s;
+    }
+    [[nodiscard]] constexpr bool has_all(CpuFeatureSet other) const noexcept { return (other.bits & ~bits) == 0U; }
     [[nodiscard]] constexpr bool operator==(const CpuFeatureSet&) const noexcept = default;
 };
 
@@ -159,6 +167,9 @@ struct CpuSelection
     CpuLevel detected = CpuLevel::Portable;
     CpuLevel selected = CpuLevel::Portable;
     CpuOverride override_status = CpuOverride::None;
+    // The features a kernel variant may select on (ADR-0134 §1): features.usable, or under an applied CRD_CPU_LEVEL
+    // only the features the selected level defines, so a forced arm runs as the smallest CPU of its level.
+    CpuFeatureSet kernel_features;
 };
 
 // Feature decode: what the words report, and what the OS state lets code execute.
@@ -169,6 +180,9 @@ struct CpuSelection
 
 // The highest level `report` can execute on `arch`.
 [[nodiscard]] CpuLevel cpu_level_of(CpuArch arch, const CpuReport& report) noexcept;
+
+// The features `level` is defined by, its lower levels' included (empty for portable and neon).
+[[nodiscard]] CpuFeatureSet cpu_level_features(CpuLevel level) noexcept;
 
 // Adds one visited CPU's report to `into`: features, XCR0 and AVX10 shape are intersected, its core type is recorded,
 // and `uniform` falls when it differs from the CPUs before it.

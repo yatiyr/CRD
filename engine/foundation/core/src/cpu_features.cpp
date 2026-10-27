@@ -5,6 +5,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 
 #if CRD_OS_WINDOWS
 #ifndef NOMINMAX
@@ -186,17 +187,23 @@ CpuArch arch_of(CpuLevel level) noexcept
     return CpuArch::Other;
 }
 
-bool all_usable(const CpuReport& r, const CpuFeature* features, crd::usize count) noexcept
+constexpr CpuFeatureSet features_of(std::initializer_list<CpuFeature> list) noexcept
 {
-    for (crd::usize i = 0U; i < count; ++i)
+    CpuFeatureSet s;
+    for (const CpuFeature f : list)
     {
-        if (!r.usable.has(features[i]))
-        {
-            return false;
-        }
+        s.set(f);
     }
-    return true;
+    return s;
 }
+
+// The x86-64 psABI levels, each with its own additions to the one below.
+using F = CpuFeature;
+constexpr CpuFeatureSet kV1 = features_of({F::Sse2});
+constexpr CpuFeatureSet kV2 = features_of({F::Sse3, F::Ssse3, F::Sse41, F::Sse42, F::Popcnt, F::Cx16, F::LahfSahf});
+constexpr CpuFeatureSet kV3 =
+    features_of({F::Avx, F::Avx2, F::Fma, F::F16c, F::Bmi1, F::Bmi2, F::Lzcnt, F::Movbe, F::Osxsave});
+constexpr CpuFeatureSet kV4 = features_of({F::Avx512F, F::Avx512Cd, F::Avx512Bw, F::Avx512Dq, F::Avx512Vl});
 
 #if CRD_ARCH_X64
 void cpuid(crd::u32 leaf, crd::u32 subleaf, crd::u32 (&out)[4]) noexcept // NOLINT(modernize-avoid-c-arrays)
@@ -444,24 +451,39 @@ CpuLevel cpu_level_of(CpuArch arch, const CpuReport& report) noexcept
     {
         return CpuLevel::Portable;
     }
-    using F = CpuFeature;
-    constexpr F v2[] = {F::Sse3, F::Ssse3, F::Sse41, F::Sse42, F::Popcnt, F::Cx16, F::LahfSahf};             // NOLINT
-    constexpr F v3[] = {F::Avx, F::Avx2, F::Fma, F::F16c, F::Bmi1, F::Bmi2, F::Lzcnt, F::Movbe, F::Osxsave}; // NOLINT
-    constexpr F v4[] = {F::Avx512F, F::Avx512Cd, F::Avx512Bw, F::Avx512Dq, F::Avx512Vl};                     // NOLINT
-    if (!all_usable(report, v2, sizeof(v2) / sizeof(v2[0])))
+    if (!report.usable.has_all(kV2))
     {
         return CpuLevel::Sse2;
     }
-    if (!all_usable(report, v3, sizeof(v3) / sizeof(v3[0])))
+    if (!report.usable.has_all(kV3))
     {
         return CpuLevel::Sse42;
     }
     const bool avx10_512 = report.avx10_version >= 1U && report.avx10_vector_bits >= 512U;
-    if (!avx10_512 && !all_usable(report, v4, sizeof(v4) / sizeof(v4[0])))
+    if (!avx10_512 && !report.usable.has_all(kV4))
     {
         return CpuLevel::Avx2;
     }
     return CpuLevel::Avx512;
+}
+
+CpuFeatureSet cpu_level_features(CpuLevel level) noexcept
+{
+    switch (level)
+    {
+        case CpuLevel::Sse2:
+            return kV1;
+        case CpuLevel::Sse42:
+            return CpuFeatureSet{kV1.bits | kV2.bits};
+        case CpuLevel::Avx2:
+            return CpuFeatureSet{kV1.bits | kV2.bits | kV3.bits};
+        case CpuLevel::Avx512:
+            return CpuFeatureSet{kV1.bits | kV2.bits | kV3.bits | kV4.bits};
+        case CpuLevel::Portable:
+        case CpuLevel::Neon:
+            break;
+    }
+    return {};
 }
 
 void add_cpu_report(CpuSelection& s, const CpuReport& r) noexcept
@@ -517,6 +539,7 @@ CpuSelection detect_cpus() noexcept
     }
     s.detected = cpu_level_of(s.arch, s.features);
     s.selected = s.detected;
+    s.kernel_features = s.features.usable;
     return s;
 }
 
@@ -525,6 +548,7 @@ CpuSelection apply_cpu_override(const CpuSelection& detected, const char* overri
     CpuSelection s = detected;
     s.selected = detected.detected;
     s.override_status = CpuOverride::None;
+    s.kernel_features = detected.features.usable;
     if (override_text == nullptr || override_text[0] == '\0')
     {
         return s;
@@ -546,6 +570,7 @@ CpuSelection apply_cpu_override(const CpuSelection& detected, const char* overri
     {
         s.override_status = CpuOverride::Applied;
         s.selected = want;
+        s.kernel_features.bits &= cpu_level_features(want).bits;
     }
     return s;
 }

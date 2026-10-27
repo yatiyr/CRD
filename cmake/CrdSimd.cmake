@@ -229,22 +229,64 @@ elseif(_crd_arch_x64)
     set(_CRD_KERNEL_FLAGS_avx512 -march=x86-64-v4)
 endif()
 
-# crd_add_cpu_kernels(<archive> NAME <family> LEVELS portable [<level> ...] [INCLUDES <target> ...]
-#                     SOURCES <source> ...)
+# The features a level's variant may add (ADR-0134 §1): the level each extends and its flags (cl compiles every
+# intrinsic at any /arch and has no such flag).
+set(_CRD_KERNEL_FEATURE_LEVEL_avxvnni avx2)
+if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni "")
+else()
+    set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni -mavxvnni)
+endif()
+
+# One kernel unit: the sources as the object library <objects> at <level> (and <feature> unless it is empty), joined
+# to the archive.
+function(_crd_add_kernel_unit archive objects level feature)
+    cmake_parse_arguments(PARSE_ARGV 4 arg "" "" "INCLUDES;SOURCES")
+    add_library(${objects} OBJECT ${arg_SOURCES})
+    target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${archive},INTERFACE_INCLUDE_DIRECTORIES>)
+    foreach(target IN LISTS arg_INCLUDES)
+        target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${target},INTERFACE_INCLUDE_DIRECTORIES>)
+    endforeach()
+    target_link_libraries(${objects} PRIVATE crd-core)
+    target_compile_features(${objects} PRIVATE cxx_std_20)
+    target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}
+                               ${CRD_FP_CONTRACT_DEFINITION})
+    target_compile_options(${objects} PRIVATE ${CRD_FP_CONTRACT_OPTIONS} ${_CRD_KERNEL_FLAGS_${level}})
+    if(feature)
+        string(TOUPPER "${feature}" feature_name)
+        target_compile_definitions(${objects} PRIVATE CRD_KERNEL_FEATURE_${feature_name}=1)
+        target_compile_options(${objects} PRIVATE ${_CRD_KERNEL_FLAGS_FEATURE_${feature}})
+    endif()
+    if(NOT CMAKE_CONFIGURATION_TYPES)
+        # The debug types go to the archive's compile PDB, the one the relocatable package installs.
+        get_target_property(archive_binary_dir ${archive} BINARY_DIR)
+        set_target_properties(${objects} PROPERTIES
+            COMPILE_PDB_NAME ${archive}
+            COMPILE_PDB_OUTPUT_DIRECTORY "${archive_binary_dir}/CMakeFiles/${archive}.dir")
+    endif()
+    target_sources(${archive} PRIVATE $<TARGET_OBJECTS:${objects}>)
+endfunction()
+
+# crd_add_cpu_kernels(<archive> NAME <family> LEVELS portable [<level> ...] [VARIANTS <level>+<feature> ...]
+#                     [INCLUDES <target> ...] SOURCES <source> ...)
 #
 # Compiles a kernel family's sources once for each of its LEVELS that CRD_KERNEL_LEVELS holds, as one object library
 # per level (<archive>-<family>-<level>) with that level's ISA flags, CRD_KERNEL_LEVEL and the ADR-0063 contract, and
 # never crd-simd-flags' global ISA. The objects join the archive, which gets CRD_KERNELS_<FAMILY>: the mask of the
 # built levels (bit n is CpuLevel n). LEVELS names the levels the sources have a body for; a CPU between two of them
-# runs the lower one. The units see the archive's interface include directories and those of the INCLUDES targets.
+# runs the lower one. Each of VARIANTS builds one of those levels again with one more feature
+# (<archive>-<family>-<level>-<feature>, CRD_KERNEL_FEATURE_<FEATURE>=1 and its own level namespace), and the archive
+# gets CRD_KERNELS_<FAMILY>_<LEVEL>_<FEATURE>, 1 when its level was built. The units see the archive's interface
+# include directories and those of the INCLUDES targets.
 # The sources include only headers that put their inline code in CRD_MATH_LEVEL_NS (crd/math/kernel_level.hpp),
 # plain declarations and intrinsics: an inline function compiled at a higher level and shared with general code is the
 # defect class this rule removes. Kernel sources live outside the archive's src/.
 function(crd_add_cpu_kernels archive)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "LEVELS;INCLUDES;SOURCES")
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "NAME" "LEVELS;VARIANTS;INCLUDES;SOURCES")
     if(NOT arg_NAME OR NOT arg_SOURCES OR NOT "portable" IN_LIST arg_LEVELS)
         message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): NAME, SOURCES and LEVELS with portable are required")
     endif()
+    string(TOUPPER "${arg_NAME}" family)
     set(mask 0)
     foreach(level IN LISTS arg_LEVELS)
         if(NOT DEFINED _CRD_KERNEL_LEVEL_${level})
@@ -253,29 +295,33 @@ function(crd_add_cpu_kernels archive)
         if(NOT level IN_LIST CRD_KERNEL_LEVELS)
             continue()
         endif()
-        set(objects ${archive}-${arg_NAME}-${level})
-        add_library(${objects} OBJECT ${arg_SOURCES})
-        target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${archive},INTERFACE_INCLUDE_DIRECTORIES>)
-        foreach(target IN LISTS arg_INCLUDES)
-            target_include_directories(${objects} PRIVATE $<TARGET_PROPERTY:${target},INTERFACE_INCLUDE_DIRECTORIES>)
-        endforeach()
-        target_link_libraries(${objects} PRIVATE crd-core)
-        target_compile_features(${objects} PRIVATE cxx_std_20)
-        target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}
-                                   ${CRD_FP_CONTRACT_DEFINITION})
-        target_compile_options(${objects} PRIVATE ${CRD_FP_CONTRACT_OPTIONS} ${_CRD_KERNEL_FLAGS_${level}})
-        if(NOT CMAKE_CONFIGURATION_TYPES)
-            # The debug types go to the archive's compile PDB, the one the relocatable package installs.
-            get_target_property(archive_binary_dir ${archive} BINARY_DIR)
-            set_target_properties(${objects} PROPERTIES
-                COMPILE_PDB_NAME ${archive}
-                COMPILE_PDB_OUTPUT_DIRECTORY "${archive_binary_dir}/CMakeFiles/${archive}.dir")
-        endif()
-        target_sources(${archive} PRIVATE $<TARGET_OBJECTS:${objects}>)
+        _crd_add_kernel_unit(${archive} ${archive}-${arg_NAME}-${level} ${level} ""
+                             INCLUDES ${arg_INCLUDES} SOURCES ${arg_SOURCES})
         math(EXPR mask "${mask} | (1 << ${_CRD_KERNEL_LEVEL_${level}})")
     endforeach()
-    string(TOUPPER "${arg_NAME}" family)
     target_compile_definitions(${archive} PRIVATE CRD_KERNELS_${family}=${mask})
+    foreach(variant IN LISTS arg_VARIANTS)
+        string(REPLACE "+" ";" parts "${variant}")
+        list(LENGTH parts count)
+        set(level "")
+        set(feature "")
+        if(count EQUAL 2)
+            list(GET parts 0 level)
+            list(GET parts 1 feature)
+        endif()
+        if(NOT level IN_LIST arg_LEVELS OR NOT "${_CRD_KERNEL_FEATURE_LEVEL_${feature}}" STREQUAL "${level}")
+            message(FATAL_ERROR "crd_add_cpu_kernels(${archive}): variant '${variant}' is not a level of LEVELS "
+                                "plus a feature that extends it")
+        endif()
+        set(built 0)
+        if(level IN_LIST CRD_KERNEL_LEVELS)
+            _crd_add_kernel_unit(${archive} ${archive}-${arg_NAME}-${level}-${feature} ${level} ${feature}
+                                 INCLUDES ${arg_INCLUDES} SOURCES ${arg_SOURCES})
+            set(built 1)
+        endif()
+        string(TOUPPER "${level}_${feature}" variant_name)
+        target_compile_definitions(${archive} PRIVATE CRD_KERNELS_${family}_${variant_name}=${built})
+    endforeach()
 endfunction()
 
 # crd_add_kernel_level_tests(<test-executable> <filter> [ENVIRONMENT <var=value>...])

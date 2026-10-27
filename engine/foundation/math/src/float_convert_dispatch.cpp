@@ -14,9 +14,9 @@ static_assert((CRD_KERNELS_FLOAT_CONVERT & ~kLevelsWithBody) == 0, "a built leve
 static_assert(CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, PORTABLE), "the portable level is always built");
 
 constexpr KernelLevel<FloatConvertKernels> kLevels[] = {
-    {crd::CpuLevel::Portable, &kFloatConvertKernelsPortable},
+    {crd::CpuLevel::Portable, &kFloatConvertKernelsPortable, {}},
 #if CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, AVX2)
-    {crd::CpuLevel::Avx2, &kFloatConvertKernelsAvx2},
+    {crd::CpuLevel::Avx2, &kFloatConvertKernelsAvx2, {}},
 #endif
 };
 
@@ -29,8 +29,7 @@ std::span<const KernelLevel<FloatConvertKernels>> float_convert_levels() noexcep
 
 const KernelLevel<FloatConvertKernels>& float_convert_kernels() noexcept
 {
-    static const KernelLevel<FloatConvertKernels>& selected =
-        select_kernel_level<FloatConvertKernels>(kLevels, crd::cpu_selection().selected, kernel_level_cap());
+    static const KernelLevel<FloatConvertKernels>& selected = process_kernel_level<FloatConvertKernels>(kLevels);
     return selected;
 }
 

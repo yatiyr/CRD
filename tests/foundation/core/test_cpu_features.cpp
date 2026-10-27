@@ -530,6 +530,7 @@ TEST_CASE("cpu features: CRD_CPU_LEVEL lowers the level and refuses one the CPUs
     // An earlier override never carries into a later one.
     const crd::CpuSelection lowered = crd::apply_cpu_override(avx2, "sse2");
     CHECK(crd::apply_cpu_override(lowered, nullptr).selected == CpuLevel::Avx2);
+    CHECK(crd::apply_cpu_override(lowered, nullptr).kernel_features == avx2.features.usable);
 
     CHECK(crd::cpu_level_includes(CpuLevel::Avx512, CpuLevel::Sse2));
     CHECK(crd::cpu_level_includes(CpuLevel::Neon, CpuLevel::Portable));
@@ -537,6 +538,61 @@ TEST_CASE("cpu features: CRD_CPU_LEVEL lowers the level and refuses one the CPUs
     CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Avx512, CpuLevel::Neon));
     CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Neon, CpuLevel::Sse2));
     CHECK_FALSE(crd::cpu_level_includes(CpuLevel::Portable, CpuLevel::Sse2));
+}
+
+TEST_CASE("cpu features: kernel variants select on every usable feature, a forced level only on its definition",
+          "[core][cpu]")
+{
+    crd::CpuSelection hw = detected_at(CpuLevel::Avx512);
+    for (const CpuFeature f : {CpuFeature::Sse2, CpuFeature::Sse42, CpuFeature::Avx2, CpuFeature::Fma,
+                               CpuFeature::Avx512F, CpuFeature::Avx512Vl, CpuFeature::AvxVnni, CpuFeature::Avx512Vnni,
+                               CpuFeature::Gfni, CpuFeature::InvariantTsc})
+    {
+        hw.features.usable.set(f);
+    }
+    CHECK(crd::apply_cpu_override(hw, nullptr).kernel_features == hw.features.usable);
+    CHECK(crd::apply_cpu_override(hw, "avx3").kernel_features == hw.features.usable); // unknown: nothing changes
+    CHECK(crd::apply_cpu_override(hw, "neon").kernel_features == hw.features.usable); // other architecture
+    const crd::CpuFeatureSet at_avx512 = crd::apply_cpu_override(hw, "avx512").kernel_features;
+    CHECK(at_avx512.has_all(crd::CpuFeatureSet{}.with(CpuFeature::Avx512F).with(CpuFeature::Avx512Vl)));
+    CHECK_FALSE(at_avx512.has(CpuFeature::Avx512Vnni));
+    CHECK_FALSE(at_avx512.has(CpuFeature::Gfni));
+    const crd::CpuFeatureSet at_avx2 = crd::apply_cpu_override(hw, "avx2").kernel_features;
+    CHECK(at_avx2.has(CpuFeature::Avx2));
+    CHECK(at_avx2.has(CpuFeature::Fma));
+    CHECK_FALSE(at_avx2.has(CpuFeature::AvxVnni)); // the smallest avx2 CPU has no AVX-VNNI
+    CHECK_FALSE(at_avx2.has(CpuFeature::Avx512F));
+    CHECK_FALSE(at_avx2.has(CpuFeature::InvariantTsc));
+    const crd::CpuFeatureSet at_sse2 = crd::apply_cpu_override(hw, "sse2").kernel_features;
+    CHECK(at_sse2 == crd::CpuFeatureSet{}.with(CpuFeature::Sse2));
+    CHECK(crd::apply_cpu_override(hw, "portable").kernel_features == crd::CpuFeatureSet{});
+
+    // Each level's definition holds the one below it and adds its own (x86-64 psABI v1 to v4).
+    CHECK(crd::cpu_level_features(CpuLevel::Portable) == crd::CpuFeatureSet{});
+    CHECK(crd::cpu_level_features(CpuLevel::Neon) == crd::CpuFeatureSet{});
+    const CpuLevel order[] = {CpuLevel::Sse2, CpuLevel::Sse42, CpuLevel::Avx2, CpuLevel::Avx512};
+    const CpuFeature added[] = {CpuFeature::Sse2, CpuFeature::Popcnt, CpuFeature::Movbe, CpuFeature::Avx512Dq};
+    for (crd::usize i = 0; i < 4U; ++i)
+    {
+        INFO(crd::cpu_level_name(order[i]));
+        CHECK(crd::cpu_level_features(order[i]).has(added[i]));
+        if (i > 0U)
+        {
+            CHECK(crd::cpu_level_features(order[i]).has_all(crd::cpu_level_features(order[i - 1U])));
+            CHECK_FALSE(crd::cpu_level_features(order[i - 1U]).has(added[i]));
+        }
+    }
+
+    // The process: no override uses every usable feature, an applied one only the forced level's.
+    const crd::CpuSelection& s = crd::cpu_selection();
+    if (s.override_status == CpuOverride::Applied)
+    {
+        CHECK(s.kernel_features.bits == (s.features.usable.bits & crd::cpu_level_features(s.selected).bits));
+    }
+    else
+    {
+        CHECK(s.kernel_features == s.features.usable);
+    }
 }
 
 TEST_CASE("cpu features: the selection is what every CPU of the process executes, as the OS reports it", "[core][cpu]")

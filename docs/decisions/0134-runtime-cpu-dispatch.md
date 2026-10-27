@@ -12,7 +12,8 @@ table and the first family ([session](../sessions/2026-10-26-simd-dispatch-kerne
 SIMD types ([session](../sessions/2026-10-27-simd-dispatch-level-aware-types.md)), then the hesap-stats family
 ([session](../sessions/2026-10-27-simd-dispatch-hesap-stats-kernels.md)), then the hesap-tensor permute and Tier R
 family ([session](../sessions/2026-10-27-simd-dispatch-hesap-tensor-kernels.md)) and its nn routines
-([session](../sessions/2026-10-27-simd-dispatch-hesap-tensor-nn-kernels.md)); the other clauses are open in the row.
+([session](../sessions/2026-10-27-simd-dispatch-hesap-tensor-nn-kernels.md)), then the feature variants with AVX-VNNI on
+avx2 ([session](../sessions/2026-10-27-simd-dispatch-avx-vnni-variant.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
@@ -32,6 +33,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
 1. **Levels.** x64: `Sse2` (x86-64-v1), `Sse42` (v2), `Avx2` (v3: AVX2, FMA, F16C, BMI1/2, LZCNT, MOVBE) and `Avx512`
    (v4: AVX-512 F, CD, BW, DQ, VL, or AVX10 at 512 bits). AVX-512 extensions, AVX10.2, AVX-VNNI, APX and AMX are
    features a level's kernel selects on; a new level above `Avx512` is added only for a measured kernel that needs it.
+   A feature variant is the level's kernel unit built again with the feature (`crd_add_cpu_kernels` `VARIANTS`, its
+   own level namespace and table), listed after the level's plain table with the features it needs; the first is
+   AVX-VNNI on avx2 (hesap-tensor's integer dots).
    ARM64: `Neon` is architectural; SVE, SVE2 and SME detection and levels come with the ARM64 release rows
    (`getauxval` HWCAP/HWCAP2, `IsProcessorFeaturePresent`). WebAssembly SIMD128 tiers belong to WEB.1.
 2. **One detection owner.** `crd/core/cpu_features.hpp` (crd-core, below crd-time and crd-math) is the engine's only
@@ -43,7 +47,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    execute. Hybrid parts and virtual machines are not trusted to be uniform; the walk proves it and records the core
    types seen. It takes about 2 ms for 32 CPUs. `CRD_CPU_LEVEL` lowers the level for tests and qualification; a level
    above the hardware, of another architecture or unknown is refused, the detected level stays, and the status is
-   reported. The name is not `CRD_SIMD_LEVEL`, the build option. The walk moves whichever thread calls first
+   reported. A forced level also limits the features variants select on (`CpuSelection::kernel_features`) to the
+   ones that level is defined by, so a forced arm runs as the smallest CPU of its level and the unforced run takes the
+   variants. The name is not `CRD_SIMD_LEVEL`, the build option. The walk moves whichever thread calls first
    (TickClock's first map can be a pinned job worker) and gives it back exactly its own affinity.
 4. **Baseline build.** General engine code builds at the baseline ISA: crd-simd-flags keeps the determinism flags and
    loses the ISA flags. `CRD_SIMD_LEVEL` caps the levels a build compiles (`scalar` stays the portable reference build
@@ -56,7 +62,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    (`crd/math/libm.hpp`). Layout constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent,
    so one binary and its cooked data agree on every level. Dispatch is one indirect call per kernel invocation at the
    routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured loss). Each table is resolved
-   once from `cpu_selection().selected`, and every level's entry stays callable for the differential tests.
+   once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features
+   `kernel_features` holds), and every table stays callable for the differential tests.
 6. **Isolation guard.** A CTest on every lane disassembles the baseline code and fails on any instruction above the
    floor (VEX or EVEX encodings on x64) outside the per-level namespaces, and on any per-level symbol a baseline unit
    defines. LTCG objects hold IL, so MSVC trees are judged on the linked executables with their PDB symbols.

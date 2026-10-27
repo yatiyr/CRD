@@ -102,8 +102,10 @@ struct TensorKernels
     void (*nn_linear_i8_packed_rows)(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noexcept;
 };
 
-// The levels with a body; the dispatcher refuses a build that compiles any other.
+// The levels with a body and the avx2 level's AVX-VNNI variant (the integer dots on dpbusd); the dispatcher refuses a
+// build that compiles any other.
 extern const TensorKernels kTensorKernelsPortable;
 extern const TensorKernels kTensorKernelsAvx2;
+extern const TensorKernels kTensorKernelsAvx2AvxVnni;
 
 } // namespace crd::hesap::tensor

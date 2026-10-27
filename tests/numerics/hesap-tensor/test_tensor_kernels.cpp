@@ -1,16 +1,18 @@
-// The hesap-tensor kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs gives the scalar oracle's
-// bits for the f32 permute regions (unit and other source strides, edge strips, negative and broadcast strides, the
-// scaled and non-temporal variants, NaN payloads, nothing written outside the region), the portable level's bits for
-// the Tier R binned sum (around the vector threshold and the endurance window, the speculative widening, the
-// near-DBL_MAX compression regime, non-finite inputs, a non-empty accumulator), the scalar quantizers' bytes (ties,
-// signed zeros, NaN and infinite inputs), the pinned order of the Q8_0 and int8 linears (every tile width, the
-// saturating and zero-point extremes, row ranges) and the scalar softmax (vector tails, crd_exp4's scalar lanes,
-// non-finite logits). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases under each forced level.
+// The hesap-tensor kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs (the avx2 level's AVX-VNNI
+// variant included, where the host has the feature) gives the scalar oracle's bits for the f32 permute regions (unit
+// and other source strides, edge strips, negative and broadcast strides, the scaled and non-temporal variants, NaN
+// payloads, nothing written outside the region), the portable level's bits for the Tier R binned sum (around the vector
+// threshold and the endurance window, the speculative widening, the near-DBL_MAX compression regime, non-finite inputs,
+// a non-empty accumulator), the scalar quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned
+// order of the Q8_0 and int8 linears (every tile width, the saturating and zero-point extremes, row ranges) and the
+// scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits). crd-hesap-tensor-kernels-at-<level> runs
+// these [kernels] cases under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/tensor/dtypes.hpp>
 #include <crd/hesap/tensor/reduce.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
+#include <crd/math/kernel_level.hpp>
 #include <crd/math/transcendental.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -40,15 +42,23 @@ namespace
 
 constexpr u32 kSentinel = 0x7FA5A5A5U; // a quiet NaN no region writes
 
+// The host executes the table: its level and, for a feature variant, its features.
 bool runs_here(const KernelLevel<TensorKernels>& level)
 {
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
+    const crd::CpuSelection& s = crd::cpu_selection();
+    return crd::cpu_level_includes(s.detected, level.level) && s.features.usable.has_all(level.features);
 }
 
 u64 lcg(u64& s)
 {
     s = s * 6364136223846793005ULL + 1442695040888963407ULL;
     return s >> 11U;
+}
+
+// A variant's feature after its level's name in a failure message.
+const char* variant_suffix(const KernelLevel<TensorKernels>& level)
+{
+    return level.features.has(crd::CpuFeature::AvxVnni) ? "+avx-vnni" : "";
 }
 
 // f32 values with varied signs and magnitudes, every 13th a NaN with its own payload.
@@ -114,24 +124,36 @@ bool same_rungs(const BinnedRungs& a, const BinnedRungs& b)
 
 } // namespace
 
-TEST_CASE("tensor kernels: the archive holds portable and each body level the build compiles", "[tensor][kernels]")
+TEST_CASE("tensor kernels: the archive holds portable, each body level the build compiles and the AVX-VNNI variant",
+          "[tensor][kernels]")
 {
     const auto levels = tn::tensor_kernel_levels();
     REQUIRE(!levels.empty());
     CHECK(levels[0].level == CpuLevel::Portable);
-    bool avx2 = false;
+    CHECK(levels[0].features == crd::CpuFeatureSet{});
+    const crd::CpuFeatureSet vnni = crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni);
+    usize avx2 = 0;
+    usize avx2_vnni = 0;
     for (usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
-            CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
+            // ascending; a variant follows its level's plain table and adds features to it
+            const bool higher = static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level);
+            const bool variant = levels[i - 1U].level == levels[i].level &&
+                                 levels[i].features.has_all(levels[i - 1U].features) &&
+                                 levels[i].features != levels[i - 1U].features;
+            CHECK((higher || variant));
         }
-        avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
+        avx2 += levels[i].level == CpuLevel::Avx2 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
+        avx2_vnni += levels[i].level == CpuLevel::Avx2 && levels[i].features == vnni ? 1U : 0U;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
-    CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
+    const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
+    CHECK(avx2 == built);
+    CHECK(avx2_vnni == built);
 }
 
 TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permute region bits", "[tensor][kernels]")
@@ -198,8 +220,9 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar f32 permut
                         mismatches += std::bit_cast<u32>(want.data()[i]) != std::bit_cast<u32>(got.data()[i]) ? 1U : 0U;
                     }
                     INFO(crd::cpu_level_name(level.level)
-                         << " na " << c.na << " nb " << c.nb << " sa " << c.sa << " sb " << c.sb << " tiles "
-                         << c.tile_a << "x" << c.tile_b << " alpha " << alpha << " stream " << stream);
+                         << variant_suffix(level) << " na " << c.na << " nb " << c.nb << " sa " << c.sa << " sb "
+                         << c.sb << " tiles " << c.tile_a << "x" << c.tile_b << " alpha " << alpha << " stream "
+                         << stream);
                     CHECK(mismatches == 0U);
                 }
             }
@@ -274,7 +297,8 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
                     const BinnedRungs got_rungs = binned_at(*level.table, p, n, seed);
                     const u64 want = std::bit_cast<u64>(tn::detail::binned_convert(want_rungs));
                     const u64 got = std::bit_cast<u64>(tn::detail::binned_convert(got_rungs));
-                    INFO(crd::cpu_level_name(level.level) << " input " << which << " n " << n << " seed " << seed);
+                    INFO(crd::cpu_level_name(level.level)
+                         << variant_suffix(level) << " input " << which << " n " << n << " seed " << seed);
                     CHECK(got == want);
                     if (which < 4U) // finite inputs
                     {
@@ -300,7 +324,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
                 tn::detail::binned_add(merged, part);
                 begin = end;
             }
-            INFO(crd::cpu_level_name(level.level) << " chunks " << chunks);
+            INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " chunks " << chunks);
             CHECK(same_rungs(merged, binned_at(*portable.table, x.data(), n_max, 0.0)));
         }
     }
@@ -478,7 +502,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
         level.table->quantize_q8_0(x, got, blocks);
         for (u64 b = 0; b < blocks; ++b)
         {
-            INFO(crd::cpu_level_name(level.level) << " Q8_0 block " << b);
+            INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " Q8_0 block " << b);
             CHECK(same_bytes(&want[b], &got[b], sizeof(BlockQ8Zero)));
         }
         for (const Row& r : rows)
@@ -491,7 +515,8 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
             crd::i32 zg = -2;
             tn::nn_quantize_u8_asym({x + r.offset, r.k}, {qw, r.k}, sw, zw);
             level.table->quantize_u8_row(x + r.offset, r.k, qg, sg, zg);
-            INFO(crd::cpu_level_name(level.level) << " u8 row at " << r.offset << " k " << r.k);
+            INFO(crd::cpu_level_name(level.level)
+                 << variant_suffix(level) << " u8 row at " << r.offset << " k " << r.k);
             CHECK(same_bytes(qw, qg, r.k));
             CHECK(std::bit_cast<u32>(sw) == std::bit_cast<u32>(sg));
             CHECK(zw == zg);
@@ -580,7 +605,8 @@ TEST_CASE("tensor kernels: every level the host runs gives the pinned Q8_0 linea
                     }
                     const tn::NnLinearQ8 c{x, wq, wscale, bias, got, xq, xscale, k, n, relu};
                     level.table->nn_linear_q8_rows(c, 1U, static_cast<u32>(batch - 1U));
-                    INFO(crd::cpu_level_name(level.level) << " k " << k << " n " << n << " relu " << relu);
+                    INFO(crd::cpu_level_name(level.level)
+                         << variant_suffix(level) << " k " << k << " n " << n << " relu " << relu);
                     CHECK(f32_mismatches(want, got, batch * n + kSlack) == 0U);
                     CHECK(same_bytes(xq_want + nb, xq + nb, (batch - 2U) * nb * sizeof(BlockQ8Zero)));
                 }
@@ -682,8 +708,8 @@ TEST_CASE("tensor kernels: every level the host runs gives the int8 linear bits,
                         {
                             level.table->nn_linear_i8_rows(c, 1U, static_cast<u32>(batch));
                         }
-                        INFO(crd::cpu_level_name(level.level)
-                             << " k " << k << " n " << n << " relu " << relu << " packed " << use_packed);
+                        INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " k " << k << " n " << n
+                                                              << " relu " << relu << " packed " << use_packed);
                         CHECK(f32_mismatches(want, got, batch * n + kSlack) == 0U);
                         CHECK(same_bytes(xq_want + k, xq + k, (batch - 1U) * k));
                         CHECK(same_bytes(xs_want + 1, xs + 1, (batch - 1U) * sizeof(f32)));
@@ -750,7 +776,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar softmax bi
                 got[i] = std::bit_cast<f32>(kSentinel);
             }
             level.table->nn_softmax_rows({x, got, d}, 1U, static_cast<u32>(rows));
-            INFO(crd::cpu_level_name(level.level) << " d " << d);
+            INFO(crd::cpu_level_name(level.level) << variant_suffix(level) << " d " << d);
             CHECK(f32_mismatches(want, got, rows * d) == 0U);
             if (d == 4U)
             {
@@ -766,8 +792,19 @@ TEST_CASE("tensor kernels: the process runs the level its CPU selection resolves
     const crd::CpuSelection& s = crd::cpu_selection();
     const auto levels = tn::tensor_kernel_levels();
     const KernelLevel<TensorKernels>& chosen = tn::tensor_kernels();
-    INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen == &crd::math::select_kernel_level<TensorKernels>(levels, s.selected, crd::math::kernel_level_cap()));
+    INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level)
+                     << variant_suffix(chosen));
+    CHECK(&chosen == &crd::math::select_kernel_level<TensorKernels>(levels, s.selected, s.kernel_features,
+                                                                    crd::math::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+    CHECK(s.kernel_features.has_all(chosen.features));
+#if CRD_TEST_KERNEL_LEVELS_TOP == CRD_KERNEL_LEVEL_AVX2 || CRD_TEST_KERNEL_LEVELS_TOP == CRD_KERNEL_LEVEL_AVX512
+    // The avx2 tables (built only here): with usable AVX-VNNI the dpbusd dots, under a forced level the plain ones.
+    if (chosen.level == CpuLevel::Avx2)
+    {
+        const bool vnni = s.kernel_features.has(crd::CpuFeature::AvxVnni);
+        CHECK(chosen.table == (vnni ? &tn::kTensorKernelsAvx2AvxVnni : &tn::kTensorKernelsAvx2));
+    }
+#endif
 }

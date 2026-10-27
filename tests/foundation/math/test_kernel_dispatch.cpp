@@ -90,13 +90,13 @@ TEST_CASE("kernel dispatch: the selected level is the highest one both the selec
           "[math][kernels]")
 {
     const int tables[4] = {};
-    const KernelLevel<int> levels[] = {{CpuLevel::Portable, &tables[0]},
-                                       {CpuLevel::Sse2, &tables[1]},
-                                       {CpuLevel::Avx2, &tables[2]},
-                                       {CpuLevel::Avx512, &tables[3]}};
+    const KernelLevel<int> levels[] = {{CpuLevel::Portable, &tables[0], {}},
+                                       {CpuLevel::Sse2, &tables[1], {}},
+                                       {CpuLevel::Avx2, &tables[2], {}},
+                                       {CpuLevel::Avx512, &tables[3], {}}};
     const auto pick = [&](CpuLevel selected, CpuLevel cap)
     {
-        return crd::math::select_kernel_level<int>(levels, selected, cap).level;
+        return crd::math::select_kernel_level<int>(levels, selected, crd::CpuFeatureSet{}, cap).level;
     };
     CHECK(pick(CpuLevel::Avx512, CpuLevel::Avx512) == CpuLevel::Avx512);
     CHECK(pick(CpuLevel::Avx2, CpuLevel::Avx512) == CpuLevel::Avx2);
@@ -107,6 +107,35 @@ TEST_CASE("kernel dispatch: the selected level is the highest one both the selec
     CHECK(pick(CpuLevel::Avx512, CpuLevel::Sse2) == CpuLevel::Sse2);
     CHECK(pick(CpuLevel::Avx512, CpuLevel::Portable) == CpuLevel::Portable);
     CHECK(pick(CpuLevel::Neon, CpuLevel::Avx512) == CpuLevel::Portable); // another architecture runs none of them
+}
+
+TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and the selection holds its features",
+          "[math][kernels]")
+{
+    using crd::CpuFeature;
+    using crd::CpuFeatureSet;
+    const int tables[5] = {};
+    const CpuFeatureSet vnni = CpuFeatureSet{}.with(CpuFeature::AvxVnni);
+    const KernelLevel<int> levels[] = {{CpuLevel::Portable, &tables[0], {}},
+                                       {CpuLevel::Avx2, &tables[1], {}},
+                                       {CpuLevel::Avx2, &tables[2], vnni},
+                                       {CpuLevel::Avx2, &tables[3], vnni.with(CpuFeature::Gfni)},
+                                       {CpuLevel::Avx512, &tables[4], {}}};
+    const auto pick = [&](CpuLevel selected, CpuFeatureSet features, CpuLevel cap)
+    {
+        return crd::math::select_kernel_level<int>(levels, selected, features, cap).table - tables;
+    };
+    const CpuFeatureSet none;
+    const CpuFeatureSet both = vnni.with(CpuFeature::Gfni);
+    CHECK(pick(CpuLevel::Avx2, none, CpuLevel::Avx512) == 1);
+    CHECK(pick(CpuLevel::Avx2, vnni, CpuLevel::Avx512) == 2);
+    CHECK(pick(CpuLevel::Avx2, vnni.with(CpuFeature::Sha), CpuLevel::Avx512) == 2); // other features change nothing
+    CHECK(pick(CpuLevel::Avx2, CpuFeatureSet{}.with(CpuFeature::Gfni), CpuLevel::Avx512) == 1); // needs both
+    CHECK(pick(CpuLevel::Avx2, both, CpuLevel::Avx512) == 3);
+    CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx512) == 4); // a higher level outranks a lower one's variant
+    CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx2) == 3);   // the build's cap
+    CHECK(pick(CpuLevel::Sse42, both, CpuLevel::Avx512) == 0);  // the features never lift the level
+    CHECK(pick(CpuLevel::Neon, both, CpuLevel::Avx512) == 0);
 }
 
 TEST_CASE("float conversion kernels: the archive holds portable and each body level the build compiles",
@@ -220,8 +249,8 @@ TEST_CASE("float conversion kernels: the process runs the level its CPU selectio
     const auto levels = crd::math::float_convert_levels();
     const KernelLevel<FloatConvertKernels>& chosen = crd::math::float_convert_kernels();
     INFO("selected " << crd::cpu_level_name(s.selected) << ", running " << crd::cpu_level_name(chosen.level));
-    CHECK(&chosen ==
-          &crd::math::select_kernel_level<FloatConvertKernels>(levels, s.selected, crd::math::kernel_level_cap()));
+    CHECK(&chosen == &crd::math::select_kernel_level<FloatConvertKernels>(levels, s.selected, s.kernel_features,
+                                                                          crd::math::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
 }
