@@ -3,7 +3,9 @@
 // docs/PRINCIPLES_reference_class_benchmarking.md to the L2 surface.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/blas2.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/matrix.hpp>
 #include <crd/hesap/dense/matrix_types.hpp>
 #include <crd/hesap/dense/vector.hpp>
@@ -84,9 +86,47 @@ template <typename Op> crd::f64 time_loop_best_of_3(Op&& op, int& iters_out)
     return best_elapsed;
 }
 
-void bench_gemv(crd::memory::IAllocator* alloc)
+
+// The f64 and f32 peers: Eigen's dynamic types and OpenBLAS's d/s routines (row-major, unit strides).
+template <typename T> struct Peer;
+template <> struct Peer<crd::f64>
 {
-    std::fprintf(stdout, "\n==== gemv.f64: y = alpha*A*x + beta*y ====\n");
+    static constexpr const char* kName = "f64";
+    static void gemv(int n, crd::f64 alpha, const crd::f64* a, const crd::f64* x, crd::f64 beta, crd::f64* y)
+    {
+        cblas_dgemv(CblasRowMajor, CblasNoTrans, n, n, alpha, a, n, x, 1, beta, y, 1);
+    }
+    static void symv(int n, crd::f64 alpha, const crd::f64* a, const crd::f64* x, crd::f64 beta, crd::f64* y)
+    {
+        cblas_dsymv(CblasRowMajor, CblasLower, n, alpha, a, n, x, 1, beta, y, 1);
+    }
+    static void trsv(int n, const crd::f64* a, crd::f64* x)
+    {
+        cblas_dtrsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit, n, a, n, x, 1);
+    }
+};
+template <> struct Peer<crd::f32>
+{
+    static constexpr const char* kName = "f32";
+    static void gemv(int n, crd::f32 alpha, const crd::f32* a, const crd::f32* x, crd::f32 beta, crd::f32* y)
+    {
+        cblas_sgemv(CblasRowMajor, CblasNoTrans, n, n, alpha, a, n, x, 1, beta, y, 1);
+    }
+    static void symv(int n, crd::f32 alpha, const crd::f32* a, const crd::f32* x, crd::f32 beta, crd::f32* y)
+    {
+        cblas_ssymv(CblasRowMajor, CblasLower, n, alpha, a, n, x, 1, beta, y, 1);
+    }
+    static void trsv(int n, const crd::f32* a, crd::f32* x)
+    {
+        cblas_strsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit, n, a, n, x, 1);
+    }
+};
+template <typename T> using EMat = Eigen::Matrix<T, Eigen::Dynamic, Eigen::Dynamic>;
+template <typename T> using EVec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+template <typename T> void bench_gemv(crd::memory::IAllocator* alloc)
+{
+    std::fprintf(stdout, "\n==== gemv.%s: y = alpha*A*x + beta*y ====\n", Peer<T>::kName);
     std::fprintf(stdout, "%-6s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
                  "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
@@ -98,45 +138,44 @@ void bench_gemv(crd::memory::IAllocator* alloc)
         using crd::hesap::dense::Layout;
         using crd::hesap::dense::Matrix;
         using crd::hesap::dense::Vector;
-        Matrix<crd::f64> ca(alloc, n, n);
-        Vector<crd::f64> cx(alloc, n);
-        Vector<crd::f64> cy(alloc, n);
+        Matrix<T> ca(alloc, n, n);
+        Vector<T> cx(alloc, n);
+        Vector<T> cy(alloc, n);
         fill(ca.data(), n * n, 11U);
         fill(cx.data(), n, 22U);
         fill(cy.data(), n, 33U);
-        const crd::f64 alpha = 1.25;
-        const crd::f64 beta = 0.5;
+        const T alpha = T(1.25);
+        const T beta = T(0.5);
 
         int citers = 0;
         const crd::f64 ce = time_loop_best_of_3(
             [&]()
-            { crd::hesap::dense::gemv<crd::f64, Layout::RowMajor>(alpha, ca.cview(), cx.span(), beta, cy.span()); },
+            { crd::hesap::dense::gemv<T, Layout::RowMajor>(alpha, ca.cview(), cx.span(), beta, cy.span()); },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
-        Eigen::VectorXd ex(n);
-        Eigen::VectorXd ey(n);
-        std::memcpy(ea.data(), ca.data(), n * n * sizeof(crd::f64));
-        std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
+        EMat<T> ea(n, n);
+        EVec<T> ex(n);
+        EVec<T> ey(n);
+        std::memcpy(ea.data(), ca.data(), n * n * sizeof(T));
+        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
+        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { ey.noalias() = alpha * ea * ex + beta * ey; }, eiters);
 
-        crd::containers::Array<crd::f64> oa(alloc);
-        crd::containers::Array<crd::f64> ox(alloc);
-        crd::containers::Array<crd::f64> oy(alloc);
+        crd::containers::Array<T> oa(alloc);
+        crd::containers::Array<T> ox(alloc);
+        crd::containers::Array<T> oy(alloc);
         oa.resize(n * n);
         ox.resize(n);
         oy.resize(n);
-        std::memcpy(oa.data(), ca.data(), n * n * sizeof(crd::f64));
-        std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
+        std::memcpy(oa.data(), ca.data(), n * n * sizeof(T));
+        std::memcpy(ox.data(), cx.data(), n * sizeof(T));
+        std::memcpy(oy.data(), cy.data(), n * sizeof(T));
         int oiters = 0;
         const crd::f64 oe = time_loop_best_of_3(
             [&]()
             {
-                cblas_dgemv(CblasRowMajor, CblasNoTrans, static_cast<int>(n), static_cast<int>(n), alpha, oa.data(),
-                            static_cast<int>(n), ox.data(), 1, beta, oy.data(), 1);
+                Peer<T>::gemv(static_cast<int>(n), alpha, oa.data(), ox.data(), beta, oy.data());
             },
             oiters);
 
@@ -150,9 +189,9 @@ void bench_gemv(crd::memory::IAllocator* alloc)
     }
 }
 
-void bench_symv(crd::memory::IAllocator* alloc)
+template <typename T> void bench_symv(crd::memory::IAllocator* alloc)
 {
-    std::fprintf(stdout, "\n==== symv.f64: y = alpha*A_sym*x + beta*y ====\n");
+    std::fprintf(stdout, "\n==== symv.%s: y = alpha*A_sym*x + beta*y ====\n", Peer<T>::kName);
     std::fprintf(stdout, "%-6s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
                  "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
@@ -163,27 +202,27 @@ void bench_symv(crd::memory::IAllocator* alloc)
     {
         using crd::hesap::dense::Symmetric;
         using crd::hesap::dense::Vector;
-        Symmetric<crd::f64> ca(alloc, n);
-        Vector<crd::f64> cx(alloc, n);
-        Vector<crd::f64> cy(alloc, n);
+        Symmetric<T> ca(alloc, n);
+        Vector<T> cx(alloc, n);
+        Vector<T> cy(alloc, n);
         for (crd::usize i = 0; i < n; ++i)
         {
             for (crd::usize j = 0; j <= i; ++j)
             {
-                ca.at(i, j) = 0.001 * static_cast<crd::f64>((i + 1) * (j + 1));
+                ca.at(i, j) = T(0.001) * static_cast<T>((i + 1) * (j + 1));
             }
         }
         fill(cx.data(), n, 22U);
         fill(cy.data(), n, 33U);
-        const crd::f64 alpha = 1.25;
-        const crd::f64 beta = 0.5;
+        const T alpha = T(1.25);
+        const T beta = T(0.5);
 
         int citers = 0;
         const crd::f64 ce = time_loop_best_of_3(
-            [&]() { crd::hesap::dense::symv<crd::f64>(alpha, ca, cx.span(), beta, cy.span()); }, citers);
+            [&]() { crd::hesap::dense::symv<T>(alpha, ca, cx.span(), beta, cy.span()); }, citers);
 
         // Eigen: build dense symmetric matrix, use selfadjointView.
-        Eigen::MatrixXd ea(n, n);
+        EMat<T> ea(n, n);
         for (crd::usize i = 0; i < n; ++i)
         {
             for (crd::usize j = 0; j < n; ++j)
@@ -191,17 +230,17 @@ void bench_symv(crd::memory::IAllocator* alloc)
                 ea(i, j) = ca.at(i, j);
             }
         }
-        Eigen::VectorXd ex(n);
-        Eigen::VectorXd ey(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
+        EVec<T> ex(n);
+        EVec<T> ey(n);
+        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
+        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3(
-            [&]() { ey.noalias() = alpha * ea.selfadjointView<Eigen::Lower>() * ex + beta * ey; }, eiters);
+            [&]() { ey.noalias() = alpha * ea.template selfadjointView<Eigen::Lower>() * ex + beta * ey; }, eiters);
 
-        crd::containers::Array<crd::f64> oa(alloc);
-        crd::containers::Array<crd::f64> ox(alloc);
-        crd::containers::Array<crd::f64> oy(alloc);
+        crd::containers::Array<T> oa(alloc);
+        crd::containers::Array<T> ox(alloc);
+        crd::containers::Array<T> oy(alloc);
         oa.resize(n * n);
         ox.resize(n);
         oy.resize(n);
@@ -212,14 +251,13 @@ void bench_symv(crd::memory::IAllocator* alloc)
                 oa[i * n + j] = ca.at(i, j);
             }
         }
-        std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
+        std::memcpy(ox.data(), cx.data(), n * sizeof(T));
+        std::memcpy(oy.data(), cy.data(), n * sizeof(T));
         int oiters = 0;
         const crd::f64 oe = time_loop_best_of_3(
             [&]()
             {
-                cblas_dsymv(CblasRowMajor, CblasLower, static_cast<int>(n), alpha, oa.data(), static_cast<int>(n),
-                            ox.data(), 1, beta, oy.data(), 1);
+                Peer<T>::symv(static_cast<int>(n), alpha, oa.data(), ox.data(), beta, oy.data());
             },
             oiters);
 
@@ -233,9 +271,9 @@ void bench_symv(crd::memory::IAllocator* alloc)
     }
 }
 
-void bench_trsv(crd::memory::IAllocator* alloc)
+template <typename T> void bench_trsv(crd::memory::IAllocator* alloc)
 {
-    std::fprintf(stdout, "\n==== trsv.f64.lower: solve L * x = b in-place ====\n");
+    std::fprintf(stdout, "\n==== trsv.%s.lower: solve L * x = b in-place ====\n", Peer<T>::kName);
     std::fprintf(stdout, "%-6s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
                  "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
@@ -244,7 +282,7 @@ void bench_trsv(crd::memory::IAllocator* alloc)
     for (crd::usize n : {crd::usize{64}, crd::usize{128}, crd::usize{256}, crd::usize{512}, crd::usize{1024},
                          crd::usize{2048}, crd::usize{4096}})
     {
-        using Tri = crd::hesap::dense::Triangular<crd::f64, crd::hesap::dense::TriangularSide::Lower,
+        using Tri = crd::hesap::dense::Triangular<T, crd::hesap::dense::TriangularSide::Lower,
                                                   crd::hesap::dense::TriangularDiag::Explicit>;
         using crd::hesap::dense::Vector;
         Tri ca(alloc, n);
@@ -253,25 +291,25 @@ void bench_trsv(crd::memory::IAllocator* alloc)
         {
             for (crd::usize j = 0; j < i; ++j)
             {
-                ca.at(i, j) = 0.001 * static_cast<crd::f64>(j + 1);
+                ca.at(i, j) = T(0.001) * static_cast<T>(j + 1);
             }
-            ca.at(i, i) = 10.0 + static_cast<crd::f64>(i);
+            ca.at(i, i) = T(10) + static_cast<T>(i);
         }
-        Vector<crd::f64> cb0(alloc, n);
+        Vector<T> cb0(alloc, n);
         fill(cb0.data(), n, 41U);
-        Vector<crd::f64> cb(alloc, n);
+        Vector<T> cb(alloc, n);
 
         int citers = 0;
         const crd::f64 ce = time_loop_best_of_3(
             [&]()
             {
-                std::memcpy(cb.data(), cb0.data(), n * sizeof(crd::f64));
-                crd::hesap::dense::trsv<crd::f64, crd::hesap::dense::TriangularSide::Lower,
+                std::memcpy(cb.data(), cb0.data(), n * sizeof(T));
+                crd::hesap::dense::trsv<T, crd::hesap::dense::TriangularSide::Lower,
                                         crd::hesap::dense::TriangularDiag::Explicit>(ca, cb.span());
             },
             citers);
 
-        Eigen::MatrixXd ea(n, n);
+        EMat<T> ea(n, n);
         ea.setZero();
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -280,20 +318,20 @@ void bench_trsv(crd::memory::IAllocator* alloc)
                 ea(i, j) = ca.at(i, j);
             }
         }
-        Eigen::VectorXd eb0(n);
-        Eigen::VectorXd eb(n);
-        std::memcpy(eb0.data(), cb0.data(), n * sizeof(crd::f64));
+        EVec<T> eb0(n);
+        EVec<T> eb(n);
+        std::memcpy(eb0.data(), cb0.data(), n * sizeof(T));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3(
             [&]()
             {
                 eb = eb0;
-                ea.triangularView<Eigen::Lower>().solveInPlace(eb);
+                ea.template triangularView<Eigen::Lower>().solveInPlace(eb);
             },
             eiters);
 
-        crd::containers::Array<crd::f64> oa(alloc);
-        oa.resize(n * n, 0.0);
+        crd::containers::Array<T> oa(alloc);
+        oa.resize(n * n, T(0));
         for (crd::usize i = 0; i < n; ++i)
         {
             for (crd::usize j = 0; j <= i; ++j)
@@ -301,18 +339,17 @@ void bench_trsv(crd::memory::IAllocator* alloc)
                 oa[i * n + j] = ca.at(i, j);
             }
         }
-        crd::containers::Array<crd::f64> ob0(alloc);
-        crd::containers::Array<crd::f64> ob(alloc);
+        crd::containers::Array<T> ob0(alloc);
+        crd::containers::Array<T> ob(alloc);
         ob0.resize(n);
         ob.resize(n);
-        std::memcpy(ob0.data(), cb0.data(), n * sizeof(crd::f64));
+        std::memcpy(ob0.data(), cb0.data(), n * sizeof(T));
         int oiters = 0;
         const crd::f64 oe = time_loop_best_of_3(
             [&]()
             {
-                std::memcpy(ob.data(), ob0.data(), n * sizeof(crd::f64));
-                cblas_dtrsv(CblasRowMajor, CblasLower, CblasNoTrans, CblasNonUnit, static_cast<int>(n), oa.data(),
-                            static_cast<int>(n), ob.data(), 1);
+                std::memcpy(ob.data(), ob0.data(), n * sizeof(T));
+                Peer<T>::trsv(static_cast<int>(n), oa.data(), ob.data());
             },
             oiters);
 
@@ -351,15 +388,21 @@ int main(int argc, char** argv)
     std::fprintf(stdout,
                  "==== bench_hesap_blas2_vs_reference ====\n"
                  "  SIMD backend : %s\n"
+                 "  Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n"
                  "  Clock        : %.2f GHz (P-cores)\n"
                  "  Threads      : 1 each (BLAS L2 is memory-bandwidth-bound)\n"
                  "  Goal         : Cerid >= Eigen AND Cerid >= OpenBLAS\n",
-                 crd::math::simd::backend_name(), ghz);
+                 crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level),
+                 ghz);
 
-    crd::memory::TlsfAllocator alloc(256ULL * 1024ULL * 1024ULL);
-    bench_gemv(&alloc);
-    bench_symv(&alloc);
-    bench_trsv(&alloc);
+    // N = 4096 holds two 128 MiB f64 copies of A at once (Cerid's and OpenBLAS's).
+    crd::memory::TlsfAllocator alloc(320ULL * 1024ULL * 1024ULL);
+    bench_gemv<crd::f64>(&alloc);
+    bench_symv<crd::f64>(&alloc);
+    bench_trsv<crd::f64>(&alloc);
+    bench_gemv<crd::f32>(&alloc);
+    bench_symv<crd::f32>(&alloc);
+    bench_trsv<crd::f32>(&alloc);
 
     std::fprintf(stdout, "\nDone.\n");
     return 0;

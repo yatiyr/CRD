@@ -8,7 +8,9 @@
 // Build-gated by `CRD_BUILD_HESAP_VS_REFERENCE=ON`. Eigen is fetched via
 // CPM into build/_deps/ — never vendored.
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/cholesky.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/ldlt.hpp>
 #include <crd/hesap/dense/lu.hpp>
 #include <crd/hesap/dense/matrix.hpp>
@@ -518,8 +520,9 @@ int main()
                  "Per docs/PRINCIPLES_reference_class_benchmarking.md.\n"
                  "P-core affinity pinned (0xFFFF mask on 14900K).\n"
                  "Eigen::nbThreads() = %d (after setNbThreads(16))\n"
-                 "Best-of-3 measurement with 3 warmup iters.\n",
-                 Eigen::nbThreads());
+                 "Best-of-3 measurement with 3 warmup iters.\n"
+                 "Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n",
+                 Eigen::nbThreads(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level));
 
     bench_lu(&alloc);
     bench_cholesky(&alloc);

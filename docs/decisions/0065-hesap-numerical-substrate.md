@@ -762,12 +762,17 @@ validated empirically and the scope deltas taken along the way.
   **Sparse catalog deferred to v1** (the storage formats are v1's whole job).
 - **L51 (BLAS L1 reduction).** Kahan-Babuška-Neumaier pairwise reduction is the
   default reduction tree (satisfies §4 determinism). SIMD path: 8-accumulator
-  `simd_dot`/`simd_sumsq` via single-rounded `simd::fma()`.
+  `simd_dot`/`simd_sumsq` via single-rounded `simd::fma()`. *(2026-10-27: dot and the nrm2 sum of squares run on the
+  hesap-dense per-level kernels, each level bit-exact with its declared reduction shape
+  ([ADR-0134](0134-runtime-cpu-dispatch.md) §7); nrm2 rescales by the largest magnitude when the squares overflow or
+  leave the normal range.)*
 - **L52 (BLAS L2 SIMD shape).** Single-pass BLAS symv (each lower-half element
   touched once, updates both `y[i]` and `y[k]`) + 8-row tiled gemv +
   16-wide-unroll symv with 4 dot accumulators + gated `_mm_prefetch(_T1)` for
   `n > 512`. Residual 5–25% gaps vs Eigen filed `vs-ref-blas2-followups`
-  (need asm or AVX-512).
+  (need asm or AVX-512). *(2026-10-27: gemv, symv and trsv run on the hesap-dense per-level kernels: one accumulator
+  per gemv row in eight-row tiles from avx2 and four-row tiles below, the symv and trsv rows on the dot product's
+  shape, any gemv row stride.)*
 - **L53 (BLAS L3 = Goto/BLIS layered gemm, intrinsics microkernel).** 5-loop
   layered gemm + scalar/AVX2 microkernel hot-swap behind
   `CRD_HESAP_MICROKERNEL_BACKEND`; **per-µarch asm deferred indefinitely**

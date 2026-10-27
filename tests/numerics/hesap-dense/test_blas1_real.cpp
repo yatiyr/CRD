@@ -6,6 +6,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <cmath>
+#include <limits>
 
 using crd::hesap::dense::asum;
 using crd::hesap::dense::axpy;
@@ -116,6 +117,28 @@ TEST_CASE("nrm2 real: 3-4-5 right triangle", "[hesap][blas1][real][nrm2]")
     crd::memory::TlsfAllocator alloc(64 * 1024);
     auto x = make_vec<crd::f64>(&alloc, {3.0, 4.0});
     REQUIRE(nrm2<crd::f64>(x) == 5.0);
+}
+
+// The 3-4-5 vector scaled so far up that its squares overflow, or so far down that they leave the normal range, keeps
+// its norm (LAPACK xNRM2); a NaN gives NaN and an infinity infinity.
+TEST_CASE("nrm2 real: squares that overflow or underflow keep the norm", "[hesap][blas1][real][nrm2]")
+{
+    crd::memory::TlsfAllocator alloc(64 * 1024);
+    for (const crd::f64 scale : {1e200, 1e-200, 1e-305})
+    {
+        auto x = make_vec<crd::f64>(&alloc, {3.0 * scale, 0.0, 4.0 * scale, 0.0, 0.0});
+        CHECK_THAT(nrm2<crd::f64>(x), WithinRel(5.0 * scale, 1e-15));
+    }
+    for (const crd::f32 scale : {1e30F, 1e-25F, 1e-37F})
+    {
+        auto x = make_vec<crd::f32>(&alloc, {3.0F * scale, 4.0F * scale});
+        CHECK_THAT(nrm2<crd::f32>(x), WithinRel(5.0F * scale, 1e-6F));
+    }
+    const crd::f64 inf = std::numeric_limits<crd::f64>::infinity();
+    auto with_inf = make_vec<crd::f64>(&alloc, {1e300, inf, 2.0});
+    CHECK(nrm2<crd::f64>(with_inf) == inf);
+    auto with_nan = make_vec<crd::f64>(&alloc, {1e300, inf, std::numeric_limits<crd::f64>::quiet_NaN()});
+    CHECK(std::isnan(nrm2<crd::f64>(with_nan)));
 }
 
 // ---- scal --------------------------------------------------------------

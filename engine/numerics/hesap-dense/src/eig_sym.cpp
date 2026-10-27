@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/detail/dot_simd.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/hesap/dense/detail/mrrr_vectors.hpp>
@@ -284,68 +285,8 @@ inline void rot_cols(Z* z, crd::usize ldz, crd::usize n, crd::usize p, crd::usiz
     }
 }
 
-// Contiguous SIMD dot over [0, n):  sum x[t]*y[t].
-template <typename T>
-inline T simd_dot(const T* x, const T* y, crd::usize n) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize t = 0;
-    T acc{};
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        simd::Vec4d a0 = simd::Vec4d::zero();
-        simd::Vec4d a1 = simd::Vec4d::zero();
-        for (; t + 8 <= n; t += 8)
-        {
-            a0 = simd::fma(simd::Vec4d::load(x + t), simd::Vec4d::load(y + t), a0);
-            a1 = simd::fma(simd::Vec4d::load(x + t + 4), simd::Vec4d::load(y + t + 4), a1);
-        }
-        acc = simd::horizontal_sum(a0 + a1);
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        simd::Vec8f a0 = simd::Vec8f::zero();
-        for (; t + 8 <= n; t += 8)
-        {
-            a0 = simd::fma(simd::Vec8f::load(x + t), simd::Vec8f::load(y + t), a0);
-        }
-        acc = simd::horizontal_sum(a0);
-    }
-    for (; t < n; ++t)
-    {
-        acc += x[t] * y[t];
-    }
-    return acc;
-}
-
-// Contiguous SIMD axpy over [0, n):  y[t] += a * x[t].
-template <typename T>
-inline void simd_axpy(T* y, const T* x, T a, crd::usize n) noexcept
-{
-    namespace simd = crd::math::simd;
-    crd::usize t = 0;
-    if constexpr (std::is_same_v<T, crd::f64>)
-    {
-        const simd::Vec4d av(a);
-        for (; t + 8 <= n; t += 8)
-        {
-            simd::fma(av, simd::Vec4d::load(x + t), simd::Vec4d::load(y + t)).store(y + t);
-            simd::fma(av, simd::Vec4d::load(x + t + 4), simd::Vec4d::load(y + t + 4)).store(y + t + 4);
-        }
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        const simd::Vec8f av(a);
-        for (; t + 8 <= n; t += 8)
-        {
-            simd::fma(av, simd::Vec8f::load(x + t), simd::Vec8f::load(y + t)).store(y + t);
-        }
-    }
-    for (; t < n; ++t)
-    {
-        y[t] += a * x[t];
-    }
-}
+using detail::simd_axpy;
+using detail::simd_dot;
 
 } // namespace
 

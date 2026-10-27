@@ -1,10 +1,12 @@
 #include <crd/hesap/dense/blas1.hpp>
 
 #include <crd/core/assert.hpp>
-#include <crd/hesap/dense/detail/dot_simd.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/pairwise_sum.hpp>
 
 #include <crd/math/cmath.hpp>
+#include <cmath>
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -32,16 +34,15 @@ T dot(crd::containers::ConstSpan<T> x, crd::containers::ConstSpan<T> y)
 {
     static_assert(!is_complex_v<T>, "dot<T> is real-only; use dotu / dotc for complex");
     CRD_ASSERT_MSG(x.size() == y.size(), "dot: x.size() != y.size()");
-    // v0b-simd-followon: dispatch to SIMD path for f32/f64. Other real types
-    // (none in the v0b instantiation set today) would fall back to scalar
+    // f32 and f64 run the level's dot kernel (dense_kernels.hpp declares its reduction); other real types sum
     // pairwise.
     if constexpr (std::is_same_v<T, crd::f32>)
     {
-        return detail::simd_dot_f32(x.data(), y.data(), x.size());
+        return dense_kernels().table->dot_f32(x.data(), y.data(), x.size());
     }
     else if constexpr (std::is_same_v<T, crd::f64>)
     {
-        return detail::simd_dot_f64(x.data(), y.data(), x.size());
+        return dense_kernels().table->dot_f64(x.data(), y.data(), x.size());
     }
     else
     {
@@ -81,35 +82,74 @@ Complex<T> dotc(
 // =======================================================================
 // 5. nrm2 — Euclidean norm; returns real type
 // =======================================================================
+namespace
+{
+
+// The norm of `count` real values, value(i), as amax * sqrt(sum (value / amax)^2) for the largest magnitude amax: no
+// square overflows and none that matters underflows. A NaN gives NaN, an infinity (and no NaN) infinity.
+template <typename R, typename Value> R scaled_norm(crd::usize count, Value value) noexcept
+{
+    R amax = R(0);
+    for (crd::usize i = 0; i < count; ++i)
+    {
+        const R v = value(i);
+        const R magnitude = v < R(0) ? -v : v;
+        if (std::isnan(magnitude))
+        {
+            return magnitude;
+        }
+        amax = magnitude > amax ? magnitude : amax;
+    }
+    if (amax == R(0) || amax == std::numeric_limits<R>::infinity())
+    {
+        return amax;
+    }
+    const R sum_sq = detail::pairwise_sum_produced<R>(count,
+                                                      [&](crd::usize i) -> R
+                                                      {
+                                                          const R s = value(i) / amax;
+                                                          return s * s;
+                                                      });
+    return amax * crd::math::sqrt(sum_sq);
+}
+
+} // namespace
+
 template <typename T>
 RealType<T> nrm2(crd::containers::ConstSpan<T> x)
 {
     using R = RealType<T>;
-    // sqrt(sum |x_i|^2). For real T: |x_i|^2 = x_i * x_i. For complex T:
-    // |x_i|^2 = re*re + im*im = norm_sq(z). Pairwise-sum the squared
-    // magnitudes (real-valued), then sqrt.
-    if constexpr (is_complex_v<T>)
+    // sqrt(sum |x_i|^2): f32 and f64 square on the level's dot kernel, other types sum norm_sq(x_i) (re^2 + im^2)
+    // pairwise. A sum that overflowed (infinity, or NaN where the pairwise compensation subtracts infinities), or that
+    // is so small that the squares lost bits below the normal range (each loses at most the least subnormal, so a sum
+    // under count * the least normal loses more than an ulp), is redone scaled by the largest magnitude, as LAPACK's
+    // xNRM2 scales every input.
+    R sum_sq;
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        const R sum_sq = detail::pairwise_sum_produced<R>(
-            x.size(),
-            [&](crd::usize i) -> R { return norm_sq(x[i]); });
-        return crd::math::sqrt(sum_sq);
-    }
-    else if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        return crd::math::sqrt(detail::simd_sumsq_f32(x.data(), x.size()));
+        sum_sq = dense_kernels().table->dot_f32(x.data(), x.data(), x.size());
     }
     else if constexpr (std::is_same_v<T, crd::f64>)
     {
-        return crd::math::sqrt(detail::simd_sumsq_f64(x.data(), x.size()));
+        sum_sq = dense_kernels().table->dot_f64(x.data(), x.data(), x.size());
     }
     else
     {
-        const R sum_sq = detail::pairwise_sum_produced<R>(
-            x.size(),
-            [&](crd::usize i) -> R { return x[i] * x[i]; });
-        return crd::math::sqrt(sum_sq);
+        sum_sq = detail::pairwise_sum_produced<R>(x.size(), [&](crd::usize i) -> R { return norm_sq(x[i]); });
     }
+    const crd::usize values = is_complex_v<T> ? 2U * x.size() : x.size();
+    if (!(sum_sq <= std::numeric_limits<R>::max()) || sum_sq < static_cast<R>(values) * std::numeric_limits<R>::min())
+    {
+        if constexpr (is_complex_v<T>)
+        {
+            return scaled_norm<R>(values, [&](crd::usize i) { return i % 2U == 0U ? x[i / 2U].re : x[i / 2U].im; });
+        }
+        else
+        {
+            return scaled_norm<R>(values, [&](crd::usize i) { return x[i]; });
+        }
+    }
+    return crd::math::sqrt(sum_sq);
 }
 
 // =======================================================================

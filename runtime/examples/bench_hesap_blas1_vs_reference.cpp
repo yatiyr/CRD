@@ -5,7 +5,9 @@
 // Build only when -DCRD_BUILD_HESAP_VS_REFERENCE=ON.
 
 #include <crd/containers/array.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/blas1.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/vector.hpp>
 #include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -141,9 +143,24 @@ void bench_axpy(crd::memory::IAllocator* alloc)
 
 // ---- dot -------------------------------------------------------------
 
-void bench_dot(crd::memory::IAllocator* alloc)
+template <typename T> struct Peer;
+template <> struct Peer<crd::f64>
 {
-    std::fprintf(stdout, "\n==== dot.f64: sum_i x[i]*y[i] ====\n");
+    static constexpr const char* kName = "f64";
+    static crd::f64 dot(int n, const crd::f64* x, const crd::f64* y) { return cblas_ddot(n, x, 1, y, 1); }
+    static crd::f64 nrm2(int n, const crd::f64* x) { return cblas_dnrm2(n, x, 1); }
+};
+template <> struct Peer<crd::f32>
+{
+    static constexpr const char* kName = "f32";
+    static crd::f32 dot(int n, const crd::f32* x, const crd::f32* y) { return cblas_sdot(n, x, 1, y, 1); }
+    static crd::f32 nrm2(int n, const crd::f32* x) { return cblas_snrm2(n, x, 1); }
+};
+template <typename T> using EVec = Eigen::Matrix<T, Eigen::Dynamic, 1>;
+
+template <typename T> void bench_dot(crd::memory::IAllocator* alloc)
+{
+    std::fprintf(stdout, "\n==== dot.%s: sum_i x[i]*y[i] ====\n", Peer<T>::kName);
     std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
                  "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
@@ -152,32 +169,32 @@ void bench_dot(crd::memory::IAllocator* alloc)
     for (crd::usize n : {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536}, crd::usize{262144}})
     {
         using crd::hesap::dense::Vector;
-        Vector<crd::f64> cx(alloc, n);
-        Vector<crd::f64> cy(alloc, n);
+        Vector<T> cx(alloc, n);
+        Vector<T> cy(alloc, n);
         fill(cx.data(), n, 11U);
         fill(cy.data(), n, 22U);
-        volatile crd::f64 sink = 0;
+        volatile T sink = 0;
 
         int citers = 0;
         const crd::f64 ce =
-            time_loop_best_of_3([&]() { sink = crd::hesap::dense::dot<crd::f64>(cx.span(), cy.span()); }, citers);
+            time_loop_best_of_3([&]() { sink = crd::hesap::dense::dot<T>(cx.span(), cy.span()); }, citers);
 
-        Eigen::VectorXd ex(n);
-        Eigen::VectorXd ey(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(ey.data(), cy.data(), n * sizeof(crd::f64));
+        EVec<T> ex(n);
+        EVec<T> ey(n);
+        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
+        std::memcpy(ey.data(), cy.data(), n * sizeof(T));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.dot(ey); }, eiters);
 
-        crd::containers::Array<crd::f64> ox(alloc);
-        crd::containers::Array<crd::f64> oy(alloc);
+        crd::containers::Array<T> ox(alloc);
+        crd::containers::Array<T> oy(alloc);
         ox.resize(n);
         oy.resize(n);
-        std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
-        std::memcpy(oy.data(), cy.data(), n * sizeof(crd::f64));
+        std::memcpy(ox.data(), cx.data(), n * sizeof(T));
+        std::memcpy(oy.data(), cy.data(), n * sizeof(T));
         int oiters = 0;
         const crd::f64 oe =
-            time_loop_best_of_3([&]() { sink = cblas_ddot(static_cast<int>(n), ox.data(), 1, oy.data(), 1); }, oiters);
+            time_loop_best_of_3([&]() { sink = Peer<T>::dot(static_cast<int>(n), ox.data(), oy.data()); }, oiters);
         (void)sink;
 
         const crd::f64 flop_per_iter = 2.0 * static_cast<crd::f64>(n);
@@ -192,9 +209,9 @@ void bench_dot(crd::memory::IAllocator* alloc)
 
 // ---- nrm2 ------------------------------------------------------------
 
-void bench_nrm2(crd::memory::IAllocator* alloc)
+template <typename T> void bench_nrm2(crd::memory::IAllocator* alloc)
 {
-    std::fprintf(stdout, "\n==== nrm2.f64: sqrt(sum_i x[i]^2) ====\n");
+    std::fprintf(stdout, "\n==== nrm2.%s: sqrt(sum_i x[i]^2) ====\n", Peer<T>::kName);
     std::fprintf(stdout, "%-8s | %-22s | %-22s | %-22s | %-10s | %-10s\n", "N", "Cerid (GFLOPS,iters)",
                  "Eigen (GFLOPS,iters)", "OBLAS (GFLOPS,iters)", "C/Eigen", "C/OBLAS");
     std::fprintf(stdout, "%s\n",
@@ -203,24 +220,24 @@ void bench_nrm2(crd::memory::IAllocator* alloc)
     for (crd::usize n : {crd::usize{1024}, crd::usize{4096}, crd::usize{16384}, crd::usize{65536}, crd::usize{262144}})
     {
         using crd::hesap::dense::Vector;
-        Vector<crd::f64> cx(alloc, n);
+        Vector<T> cx(alloc, n);
         fill(cx.data(), n, 11U);
-        volatile crd::f64 sink = 0;
+        volatile T sink = 0;
 
         int citers = 0;
-        const crd::f64 ce = time_loop_best_of_3([&]() { sink = crd::hesap::dense::nrm2<crd::f64>(cx.span()); }, citers);
+        const crd::f64 ce = time_loop_best_of_3([&]() { sink = crd::hesap::dense::nrm2<T>(cx.span()); }, citers);
 
-        Eigen::VectorXd ex(n);
-        std::memcpy(ex.data(), cx.data(), n * sizeof(crd::f64));
+        EVec<T> ex(n);
+        std::memcpy(ex.data(), cx.data(), n * sizeof(T));
         int eiters = 0;
         const crd::f64 ee = time_loop_best_of_3([&]() { sink = ex.norm(); }, eiters);
 
-        crd::containers::Array<crd::f64> ox(alloc);
+        crd::containers::Array<T> ox(alloc);
         ox.resize(n);
-        std::memcpy(ox.data(), cx.data(), n * sizeof(crd::f64));
+        std::memcpy(ox.data(), cx.data(), n * sizeof(T));
         int oiters = 0;
         const crd::f64 oe =
-            time_loop_best_of_3([&]() { sink = cblas_dnrm2(static_cast<int>(n), ox.data(), 1); }, oiters);
+            time_loop_best_of_3([&]() { sink = Peer<T>::nrm2(static_cast<int>(n), ox.data()); }, oiters);
         (void)sink;
 
         // nrm2 does ~2 flops per element (mul + add); sqrt is a single op.
@@ -261,15 +278,19 @@ int main(int argc, char** argv)
     std::fprintf(stdout,
                  "==== bench_hesap_blas1_vs_reference ====\n"
                  "  SIMD backend : %s\n"
+                 "  Dense kernels: %s level (CRD_CPU_LEVEL forces it)\n"
                  "  Clock        : %.2f GHz (P-cores)\n"
                  "  Threads      : 1 each (BLAS L1 is memory-bandwidth-bound)\n"
                  "  Goal         : Cerid >= Eigen-MT AND Cerid >= OpenBLAS\n",
-                 crd::math::simd::backend_name(), ghz);
+                 crd::math::simd::backend_name(), crd::cpu_level_name(crd::hesap::dense::dense_kernels().level),
+                 ghz);
 
     crd::memory::TlsfAllocator alloc(64ULL * 1024ULL * 1024ULL);
     bench_axpy(&alloc);
-    bench_dot(&alloc);
-    bench_nrm2(&alloc);
+    bench_dot<crd::f64>(&alloc);
+    bench_nrm2<crd::f64>(&alloc);
+    bench_dot<crd::f32>(&alloc);
+    bench_nrm2<crd::f32>(&alloc);
 
     std::fprintf(stdout, "\nDone.\n");
     return 0;

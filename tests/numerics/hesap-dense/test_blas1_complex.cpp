@@ -107,6 +107,18 @@ TEST_CASE("nrm2 complex returns real magnitude", "[hesap][blas1][complex][nrm2]"
     REQUIRE(nrm2<Complex64>(x) == 13.0);
 }
 
+TEST_CASE("nrm2 complex: squares that overflow or underflow keep the norm", "[hesap][blas1][complex][nrm2]")
+{
+    crd::memory::TlsfAllocator alloc(64 * 1024);
+    for (const crd::f64 scale : {1e200, 1e-200})
+    {
+        Vector<Complex64> x(&alloc, 2);
+        x(0) = Complex64{3.0 * scale, 4.0 * scale};
+        x(1) = Complex64{0.0, 12.0 * scale};
+        CHECK(std::fabs(nrm2<Complex64>(x) - 13.0 * scale) <= 1e-15 * 13.0 * scale);
+    }
+}
+
 TEST_CASE("scal complex: multiply by i rotates 90 degrees", "[hesap][blas1][complex][scal]")
 {
     crd::memory::TlsfAllocator alloc(64 * 1024);
