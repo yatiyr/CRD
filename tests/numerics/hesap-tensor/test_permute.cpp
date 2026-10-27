@@ -14,6 +14,7 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <algorithm>
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <cstdio>
@@ -425,6 +426,42 @@ TEST_CASE("v14-d permute_copy informal 4096 f32 transpose timing", "[.][hesap][t
                 "| speedup %.2fx\n",
                 naive_ms, gib / (naive_ms / 1000.0), blocked_ms, gib / (blocked_ms / 1000.0), naive_ms / blocked_ms);
     CHECK(blocked_ms > 0.0);
+}
+
+TEST_CASE("v14-d MT: a streamed reversal whose dst-fastest extent is not a multiple of 8 matches serial",
+          "[hesap][tensor][v14][permute][moat]")
+{
+    // dst 24576 x 8 x 36 f32 (28 MB, past the MT and stream gates): the a-stride 288 is a multiple of 8, but the
+    // middle dim steps each task's region origin by 36 floats, so non-temporal stores there would be misaligned.
+    crd::memory::TlsfAllocator alloc(1ULL << 28U);
+    const crd::u64 shape[] = {36U, 8U, 24576U};
+    const crd::u32 order[] = {2U, 1U, 0U};
+    Tensor<crd::f32> src(&alloc, shape);
+    for (crd::u64 i = 0; i < src.size(); ++i)
+    {
+        src.data()[i] = static_cast<crd::f32>((i * 2654435761ULL) % 65536ULL) * 0.25F - 8192.0F;
+    }
+    Tensor<crd::f32> ref(&alloc);
+    REQUIRE(permute_copy(TensorView<const crd::f32>(src.view()), order, ref) == TensorStatus::Ok); // serial
+    crd::jobs::Config cfg;
+    cfg.num_threads = 8U;
+    crd::jobs::init(cfg);
+    Tensor<crd::f32> out(&alloc);
+    const TensorStatus st = permute_copy(TensorView<const crd::f32>(src.view()), order, out, 1.0F);
+    Tensor<crd::f32> scaled(&alloc);
+    const TensorStatus st_scaled = permute_copy(TensorView<const crd::f32>(src.view()), order, scaled, -2.0F);
+    crd::jobs::shutdown();
+    REQUIRE(st == TensorStatus::Ok);
+    REQUIRE(st_scaled == TensorStatus::Ok);
+    bool same = true;
+    bool same_scaled = true;
+    for (crd::u64 i = 0; i < ref.size(); ++i)
+    {
+        same = same && std::bit_cast<crd::u32>(out.data()[i]) == std::bit_cast<crd::u32>(ref.data()[i]);
+        same_scaled = same_scaled && scaled.data()[i] == -2.0F * ref.data()[i];
+    }
+    CHECK(same);
+    CHECK(same_scaled);
 }
 
 TEST_CASE("v14-d MT: {1,2,4,8,16} workers produce bit-identical permutes", "[hesap][tensor][v14][permute][moat]")

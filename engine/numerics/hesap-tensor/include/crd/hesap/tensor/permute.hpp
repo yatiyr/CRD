@@ -451,11 +451,14 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
         permute_tiled<Scale>(dst, src, shp, s_in, s_out, m, a, alpha);
         return;
     }
-    // Streaming gate: DRAM-sized f32 dst + the alignment the NT stores require
-    // (64B-aligned base from Tensor::resize; every microkernel row start is
-    // 32B-aligned iff the dst a-stride is a multiple of 8 f32).
+    // Streaming gate: DRAM-sized f32 dst + the alignment the NT stores require.
+    // The base is 64B-aligned (Tensor::resize); every region origin and
+    // microkernel row start is 32B-aligned iff the dst-fastest extent is a
+    // multiple of 8 f32, since every other dst stride is a multiple of it
+    // (the a-stride alone is not enough: an outer dim between a and b steps
+    // the origin by its own stride).
     const bool stream = std::is_same_v<T, crd::f32> && total * sizeof(T) >= kPermuteMtStreamBytes &&
-                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && (s_out[a] & 7) == 0;
+                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && (shp[m - 1U] & 7U) == 0U;
     permute_tiled_mt<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, stream);
 }
 

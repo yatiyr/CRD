@@ -18,8 +18,8 @@ struct BinnedRungs; // crd/hesap/tensor/binned_core.hpp
 
 // One (a, b) region of an f32 permute: dst(ia, ib) = src(ia, ib) (scale: alpha * src(ia, ib)) over [0, na) x [0, nb),
 // with dst(ia, ib) at dst + ia*ra + ib and src(ia, ib) at src + ia*sa + ib*sb, in tile_a x tile_b tiles, a-tiles outer.
-// stream asks for non-temporal stores (dst 32-byte aligned, ra and tile_b multiples of 8), published before the call
-// returns; a level without them stores normally.
+// stream asks for non-temporal stores (the region origin dst 32-byte aligned, ra and tile_b multiples of 8),
+// published before the call returns; a level without them stores normally.
 struct PermuteRegionF32
 {
     crd::f32* dst;

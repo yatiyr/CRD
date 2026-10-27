@@ -40,6 +40,7 @@
 | A NaN's payload and sign in the binned read-out depended on the level and the partition (the AVX2 ladder sets the sticky bit in it, merges keep the first operand's) | `binned_convert` returns the one quiet NaN; infinities stay exact |
 | `permute_tile_staged_f32` had no caller since the repository import (its 64 KB stack stage is the whole small fiber stack) | deleted; the 3D 8T row is re-measured below |
 | The serial non-temporal path was unreachable (`kPermuteStreamBytes = ~0`; NT stores measured slower single-threaded on 2026-07-02) | removed with its gate |
+| The multithreaded stream gate tested the a-stride, but an outer dim between a and b steps each task's origin by its own stride: dst 24576 x 8 x 36 f32 made misaligned non-temporal stores (an access violation on AVX2; HEAD had the same gate) | the gate tests the dst-fastest extent, of which every other stride is a multiple; a 28 MB streamed reversal case checks it |
 | The outer odometer order was written twice | `permute_outer_order`, shared by both paths |
 | Touched-file tidy findings: nested conditionals, the local constant `kW` | fixed |
 
@@ -62,6 +63,7 @@ two NaN payloads) and a non-empty accumulator, chunked merges; the resolved leve
 | NaN read-out keeps the payload | NaN differential and the quiet-NaN check |
 | scalar tile reads the a stride for b | region differential |
 | table resolved from `detected` | resolved-level case at `CRD_CPU_LEVEL=sse2` |
+| the old a-stride stream gate | the streamed reversal case crashes at avx2 (exit 139), passes at portable |
 
 linux-gcc-debug: the shuffle, sticky-bit and widening teeth failed the same cases; each restore was rebuilt and
 passed. Both lanes pass the tensor, permute, einsum, nn, decomp and cli suites, `smoke_hesap_tensor` (the ADR-0096
