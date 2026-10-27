@@ -137,12 +137,15 @@ class MasterPlanSequence(unittest.TestCase):
                 for i, state in enumerate(states, 1)]
 
     def test_blocked_review_and_partial_are_not_bypassed(self):
-        for state in ('Blocked', 'Review', 'Partial', 'Open', 'Later', 'In progress'):
+        for state in ('Blocked', 'Review', 'Partial', 'Open', 'In progress'):
             with self.subTest(state=state):
                 rows = self.rows('Done', 'Recorded', state, 'Open')
                 self.assertEqual(master.first_unfinished(rows)[0], 'S3')
                 self.assertEqual(master.sequence_errors(rows, ['S3']), [])
                 self.assertTrue(master.sequence_errors(rows, ['S4']))
+
+    def test_later_state_is_retired(self):
+        self.assertNotIn('Later', master.STATES)
 
     def test_later_completion_or_activity_cannot_jump_a_gap(self):
         for state in ('Done', 'In progress'):
