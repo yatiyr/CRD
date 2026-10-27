@@ -1,14 +1,12 @@
 #pragma once
 
+#include <crd/hesap/tensor/permute_tiles.hpp>
 #include <crd/hesap/tensor/tensor.hpp>
+#include <crd/hesap/tensor/tensor_dispatch.hpp>
 #include <crd/jobs/jobs.hpp>
 
 #include <cstring>
 #include <type_traits>
-
-#if defined(__AVX2__)
-#include <immintrin.h>
-#endif
 
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor — HPTT-class tensor transpose/permute (Phase 3.1.6 v14-d,
@@ -37,16 +35,17 @@
 //        src-fastest dim, b = the dst-fastest dim — in kPermuteTile edges so
 //        both the read and the write stream stay inside L1 for the duration
 //        of a tile; all remaining dims are an outer odometer around the tiled
-//        2-D kernel. Inside a tile, f32 with a unit source stride runs the
-//        AVX2 8x8 in-register transpose microkernel (unpack/shuffle/
-//        permute2f128); everything else runs the scalar tile loop with the
-//        write stream contiguous.
+//        2-D kernel. f32 regions run the per-level tensor kernels
+//        (tensor_kernels.hpp, SIMD-DISPATCH): on AVX2, tiles with a unit
+//        source stride run the 8x8 in-register transpose microkernel
+//        (unpack/shuffle/permute2f128); everything else runs the scalar tile
+//        loop with the write stream contiguous.
 //      - tiny inner extents fall back to the simple strided row loop (tile
 //        machinery is pure overhead below kPermuteTinyDim).
 //
 // Determinism: serial, fixed traversal order, pure element copies (plus one
 // IEEE multiply per element when alpha != 1) -> bit-identical by
-// construction; alpha == 1 is a pure bit copy (no arithmetic touches the
+// construction, on every kernel level and worker count; alpha == 1 is a pure bit copy (no arithmetic touches the
 // payload, NaNs included).
 //
 // Contract (the v13 pillars, ADR-0095 §2): status-not-exception, noexcept
@@ -70,14 +69,6 @@ inline constexpr crd::u64 kPermuteTile = 64U;
 // Below this extent on either transpose dim the tile machinery is pure
 // overhead; use the simple strided row loop instead.
 inline constexpr crd::u64 kPermuteTinyDim = 8U;
-
-// Streaming-store gate. MEASURED 2026-07-02 (WSL2/Raptor Lake, 1T): NT stores
-// REGRESS the single-thread big-transpose cases (4096^2 0.598->0.718 ns/elem;
-// 512^3 0.795->0.897) — one core cannot fill the NT write-combining path
-// faster than the regular-store + LLC write-back pipeline here. The machinery
-// stays (Stream template) for the MULTITHREADED increment, where aggregate NT
-// traffic is the classic win — re-measure there. Disabled by default:
-inline constexpr crd::u64 kPermuteStreamBytes = ~crd::u64{0};
 
 // One contiguous dst row of `count` elements from a strided source (stride
 // may be negative = flipped, or 0 = broadcast). alpha == 1 (Scale=false) is
@@ -107,174 +98,31 @@ inline void permute_row(T* dst, const T* src, crd::u64 count, crd::i64 s_in, T a
     }
 }
 
-#if defined(__AVX2__)
-// In-register 8x8 f32 transpose (the classic unpack/shuffle/permute2f128
-// microkernel). Preconditions: source column j is 8 contiguous floats at
-// src + j*src_stride (the a dim is stride-1 in the source); destination row
-// i is 8 contiguous floats at dst + i*dst_stride (the b dim is stride-1 in
-// the destination). Loads 8 source columns, transposes in registers, stores
-// 8 destination rows — both memory streams stay unit-stride.
-template <bool Scale, bool Stream = false>
-inline void transpose_8x8_f32(const crd::f32* src, crd::i64 src_stride, crd::f32* dst, crd::i64 dst_stride,
-                              crd::f32 alpha) noexcept
+// One (a, b) region [0, na) x [0, nb) in tile_a x tile_b tiles: dst(ia, ib)
+// at ia*ra + ib, src(ia, ib) at ia*sa + ib*sb. f32 runs the per-level tensor
+// kernel (the 8x8 in-register transpose on AVX2, non-temporal stores when
+// stream is set; one call per region); every other type runs the scalar tiles.
+template <bool Scale, typename T>
+inline void permute_region(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
+                           crd::u64 tile_a, crd::u64 tile_b, T alpha, bool stream) noexcept
 {
-    if constexpr (Stream)
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        // Prefetch the next micro-block's 8 source columns (the ib+8 call).
-        // ONLY when columns are near (<= 64 KB apart): hides strided-read
-        // latency the streamer cannot track in the MT regime (measured: 2D
-        // 46.8 -> 51.2 GB/s); on page-scattered columns the 8 extra TLB walks
-        // cost more than they hide (4D/3D regressed — gated off there).
-        if (src_stride * static_cast<crd::i64>(sizeof(crd::f32)) <= 65536)
-        {
-            for (int k = 8; k < 16; ++k)
-            {
-                _mm_prefetch(reinterpret_cast<const char*>(src + k * src_stride), _MM_HINT_T0);
-            }
-        }
-    }
-    __m256 r0 = _mm256_loadu_ps(src + 0 * src_stride);
-    __m256 r1 = _mm256_loadu_ps(src + 1 * src_stride);
-    __m256 r2 = _mm256_loadu_ps(src + 2 * src_stride);
-    __m256 r3 = _mm256_loadu_ps(src + 3 * src_stride);
-    __m256 r4 = _mm256_loadu_ps(src + 4 * src_stride);
-    __m256 r5 = _mm256_loadu_ps(src + 5 * src_stride);
-    __m256 r6 = _mm256_loadu_ps(src + 6 * src_stride);
-    __m256 r7 = _mm256_loadu_ps(src + 7 * src_stride);
-
-    const __m256 t0 = _mm256_unpacklo_ps(r0, r1);
-    const __m256 t1 = _mm256_unpackhi_ps(r0, r1);
-    const __m256 t2 = _mm256_unpacklo_ps(r2, r3);
-    const __m256 t3 = _mm256_unpackhi_ps(r2, r3);
-    const __m256 t4 = _mm256_unpacklo_ps(r4, r5);
-    const __m256 t5 = _mm256_unpackhi_ps(r4, r5);
-    const __m256 t6 = _mm256_unpacklo_ps(r6, r7);
-    const __m256 t7 = _mm256_unpackhi_ps(r6, r7);
-
-    const __m256 s0 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s1 = _mm256_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s2 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s3 = _mm256_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s4 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s5 = _mm256_shuffle_ps(t4, t6, _MM_SHUFFLE(3, 2, 3, 2));
-    const __m256 s6 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(1, 0, 1, 0));
-    const __m256 s7 = _mm256_shuffle_ps(t5, t7, _MM_SHUFFLE(3, 2, 3, 2));
-
-    r0 = _mm256_permute2f128_ps(s0, s4, 0x20);
-    r1 = _mm256_permute2f128_ps(s1, s5, 0x20);
-    r2 = _mm256_permute2f128_ps(s2, s6, 0x20);
-    r3 = _mm256_permute2f128_ps(s3, s7, 0x20);
-    r4 = _mm256_permute2f128_ps(s0, s4, 0x31);
-    r5 = _mm256_permute2f128_ps(s1, s5, 0x31);
-    r6 = _mm256_permute2f128_ps(s2, s6, 0x31);
-    r7 = _mm256_permute2f128_ps(s3, s7, 0x31);
-
-    if constexpr (Scale)
-    {
-        const __m256 va = _mm256_set1_ps(alpha);
-        r0 = _mm256_mul_ps(r0, va);
-        r1 = _mm256_mul_ps(r1, va);
-        r2 = _mm256_mul_ps(r2, va);
-        r3 = _mm256_mul_ps(r3, va);
-        r4 = _mm256_mul_ps(r4, va);
-        r5 = _mm256_mul_ps(r5, va);
-        r6 = _mm256_mul_ps(r6, va);
-        r7 = _mm256_mul_ps(r7, va);
-    }
-
-    if constexpr (Stream)
-    {
-        // Non-temporal stores: no read-for-ownership, no cache pollution — the
-        // DRAM-bound big-permute path (32B-aligned by the dispatch gate; the
-        // write-combining buffers pair consecutive ib tiles into full lines).
-        _mm256_stream_ps(dst + 0 * dst_stride, r0);
-        _mm256_stream_ps(dst + 1 * dst_stride, r1);
-        _mm256_stream_ps(dst + 2 * dst_stride, r2);
-        _mm256_stream_ps(dst + 3 * dst_stride, r3);
-        _mm256_stream_ps(dst + 4 * dst_stride, r4);
-        _mm256_stream_ps(dst + 5 * dst_stride, r5);
-        _mm256_stream_ps(dst + 6 * dst_stride, r6);
-        _mm256_stream_ps(dst + 7 * dst_stride, r7);
+        tensor_kernels().table->permute_region_f32(
+            {dst, ra, src, sa, sb, na, nb, tile_a, tile_b, alpha, Scale, stream});
     }
     else
     {
-        _mm256_storeu_ps(dst + 0 * dst_stride, r0);
-        _mm256_storeu_ps(dst + 1 * dst_stride, r1);
-        _mm256_storeu_ps(dst + 2 * dst_stride, r2);
-        _mm256_storeu_ps(dst + 3 * dst_stride, r3);
-        _mm256_storeu_ps(dst + 4 * dst_stride, r4);
-        _mm256_storeu_ps(dst + 5 * dst_stride, r5);
-        _mm256_storeu_ps(dst + 6 * dst_stride, r6);
-        _mm256_storeu_ps(dst + 7 * dst_stride, r7);
+        (void)stream;
+        permute_region_tiles(na, nb, tile_a, tile_b,
+                             [&](crd::u64 ta, crd::u64 tb, crd::u64 ha, crd::u64 hb)
+                             {
+                                 permute_tile_scalar<Scale>(
+                                     dst + static_cast<crd::i64>(ta) * ra + static_cast<crd::i64>(tb), ra,
+                                     src + static_cast<crd::i64>(ta) * sa + static_cast<crd::i64>(tb) * sb, sa, sb, ha,
+                                     hb, alpha);
+                             });
     }
-}
-#endif // __AVX2__
-
-// Scalar (a, b)-plane tile: dst(ia, ib) at ia*ra + ib (b is dst-contiguous),
-// src(ia, ib) at ia*sa + ib*sb. Inner loop over ib keeps the WRITE stream
-// contiguous; the read stream jumps sb per step but stays inside the tile's
-// L1 footprint.
-template <bool Scale, typename T>
-inline void permute_tile_scalar(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
-                                T alpha) noexcept
-{
-    for (crd::u64 ia = 0; ia < na; ++ia)
-    {
-        T* drow = dst + static_cast<crd::i64>(ia) * ra;
-        const T* scol = src + static_cast<crd::i64>(ia) * sa;
-        crd::i64 off = 0;
-        for (crd::u64 ib = 0; ib < nb; ++ib, off += sb)
-        {
-            if constexpr (Scale)
-            {
-                drow[ib] = alpha * scol[off];
-            }
-            else
-            {
-                drow[ib] = scol[off];
-            }
-        }
-    }
-}
-
-// One (a, b) tile, extents (na, nb) <= kPermuteTile. f32 with a unit source
-// stride runs the 8x8 AVX2 microkernel over the full 8x8 grid, then finishes
-// the right/bottom edge strips scalar; every other case is the scalar tile.
-template <bool Scale, bool Stream, typename T>
-inline void permute_tile(T* dst, crd::i64 ra, const T* src, crd::i64 sa, crd::i64 sb, crd::u64 na, crd::u64 nb,
-                         T alpha) noexcept
-{
-#if defined(__AVX2__)
-    if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        if (sa == 1)
-        {
-            const crd::u64 na8 = na & ~crd::u64{7};
-            const crd::u64 nb8 = nb & ~crd::u64{7};
-            for (crd::u64 ia = 0; ia < na8; ia += 8U)
-            {
-                for (crd::u64 ib = 0; ib < nb8; ib += 8U)
-                {
-                    transpose_8x8_f32<Scale, Stream>(
-                        src + static_cast<crd::i64>(ia) + static_cast<crd::i64>(ib) * sb, sb,
-                        dst + static_cast<crd::i64>(ia) * ra + static_cast<crd::i64>(ib), ra, alpha);
-                }
-            }
-            if (nb8 < nb) // right strip: rows [0, na8), cols [nb8, nb)
-            {
-                permute_tile_scalar<Scale>(dst + static_cast<crd::i64>(nb8), ra, src + static_cast<crd::i64>(nb8) * sb,
-                                           sa, sb, na8, nb - nb8, alpha);
-            }
-            if (na8 < na) // bottom strip: rows [na8, na), all cols
-            {
-                permute_tile_scalar<Scale>(dst + static_cast<crd::i64>(na8) * ra, ra,
-                                           src + static_cast<crd::i64>(na8) * sa, sa, sb, na - na8, nb, alpha);
-            }
-            return;
-        }
-    }
-#endif
-    permute_tile_scalar<Scale>(dst, ra, src, sa, sb, na, nb, alpha);
 }
 
 // Row-loop kernel: odometer over dims [0, m-1); every step emits one
@@ -308,40 +156,20 @@ inline void permute_rows(T* dst, const T* src, const crd::u64* shp, const crd::i
     }
 }
 
-// Tiled-transpose kernel: outer odometer over every dim except a (the
-// src-fastest dim) and b = m-1 (the dst-fastest dim); each step runs the
-// square-tiled 2-D transpose over the (a, b) plane.
-template <bool Scale, bool Stream, typename T>
-inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
-                          crd::u32 m, crd::u32 a, T alpha) noexcept
+// The outer odometer of the tiled transpose: every dim except a (the
+// src-fastest dim) and b = m-1 (the dst-fastest dim), INNERMOST-first by
+// ascending |src stride|, so consecutive plane visits move the scattered
+// source stream by its smallest step (page/TLB locality on the stream that
+// has none inside the tile; the dst side is contiguous per row regardless).
+// Writes the dims to ord and returns their count and (through outer) the
+// number of planes.
+inline crd::u32 permute_outer_order(const crd::u64* shp, const crd::i64* s_in, crd::u32 m, crd::u32 a, crd::u32* ord,
+                                    crd::u64& outer) noexcept
 {
-    const crd::u32 b = m - 1U;
-    const crd::u64 na = shp[a];
-    const crd::u64 nb = shp[b];
-    const crd::i64 sa_in = s_in[a];
-    const crd::i64 sb_in = s_in[b];
-    const crd::i64 ra = s_out[a]; // dst stride of a (dst stride of b is 1)
-    // Stride-aware tile edge (measured on the HPTT board): 64 keeps both
-    // streams hot when the scattered-stream step is small (fewer boundary
-    // crossings); when each tile column lands on a fresh page region
-    // (|sb|*sizeof(T) > 64 KB), 64 columns thrash the dTLB — drop to 32.
-    const crd::i64 sb_mag = sb_in < 0 ? -sb_in : sb_in;
-    // …unless the whole plane is a single 64-tile (nb <= 64): then there is no
-    // boundary overhead to pay, and the src-locality-ordered odometer reuses
-    // the same column pages across consecutive planes (measured: 64^4 reversal
-    // 0.44 ns/elem at 64 vs 0.51 at 32).
-    const crd::u64 tile =
-        (static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U || nb <= kPermuteTile) ? kPermuteTile : 32U;
-
-    // Outer odometer over every dim except (a, b), iterated INNERMOST-first by
-    // ascending |src stride|: consecutive plane visits then move the scattered
-    // source stream by its smallest step (page/TLB locality on the stream that
-    // has none inside the tile). The dst side is contiguous per row regardless.
-    crd::u32 ord[kMaxRank];
     crd::u32 nout = 0;
     for (crd::u32 d = 0; d < m; ++d)
     {
-        if (d != a && d != b)
+        if (d != a && d != m - 1U)
         {
             ord[nout++] = d;
         }
@@ -363,28 +191,47 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
         }
         ord[j] = v;
     }
-    crd::u64 outer = 1;
+    outer = 1;
     for (crd::u32 i = 0; i < nout; ++i)
     {
         outer *= shp[ord[i]];
     }
+    return nout;
+}
+
+// Tiled-transpose kernel: the outer odometer around one square-tiled 2-D
+// transpose of the (a, b) plane per step.
+template <bool Scale, typename T>
+inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
+                          crd::u32 m, crd::u32 a, T alpha) noexcept
+{
+    const crd::u32 b = m - 1U;
+    const crd::u64 na = shp[a];
+    const crd::u64 nb = shp[b];
+    const crd::i64 sa_in = s_in[a];
+    const crd::i64 sb_in = s_in[b];
+    const crd::i64 ra = s_out[a]; // dst stride of a (dst stride of b is 1)
+    // Stride-aware tile edge (measured on the HPTT board): 64 keeps both
+    // streams hot when the scattered-stream step is small (fewer boundary
+    // crossings); when each tile column lands on a fresh page region
+    // (|sb|*sizeof(T) > 64 KB), 64 columns thrash the dTLB — drop to 32.
+    const crd::i64 sb_mag = sb_in < 0 ? -sb_in : sb_in;
+    // …unless the whole plane is a single 64-tile (nb <= 64): then there is no
+    // boundary overhead to pay, and the src-locality-ordered odometer reuses
+    // the same column pages across consecutive planes (measured: 64^4 reversal
+    // 0.44 ns/elem at 64 vs 0.51 at 32).
+    const crd::u64 tile =
+        (static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U || nb <= kPermuteTile) ? kPermuteTile : 32U;
+
+    crd::u32 ord[kMaxRank];
+    crd::u64 outer = 1;
+    const crd::u32 nout = permute_outer_order(shp, s_in, m, a, ord, outer);
     crd::u64 idx[kMaxRank] = {};
     crd::i64 soff = 0;
     crd::i64 doff = 0;
     for (crd::u64 it = 0; it < outer; ++it)
     {
-        for (crd::u64 ta = 0; ta < na; ta += tile)
-        {
-            const crd::u64 ha = na - ta < tile ? na - ta : tile;
-            for (crd::u64 tb = 0; tb < nb; tb += tile)
-            {
-                const crd::u64 hb = nb - tb < tile ? nb - tb : tile;
-                permute_tile<Scale, Stream>(dst + doff + static_cast<crd::i64>(ta) * ra + static_cast<crd::i64>(tb), ra,
-                                            src + soff + static_cast<crd::i64>(ta) * sa_in +
-                                                static_cast<crd::i64>(tb) * sb_in,
-                                            sa_in, sb_in, ha, hb, alpha);
-            }
-        }
+        permute_region<Scale>(dst + doff, ra, src + soff, sa_in, sb_in, na, nb, tile, tile, alpha, false);
         for (crd::u32 i = 0; i < nout; ++i) // ord[0] = the innermost (smallest src step)
         {
             const crd::u32 d = ord[i];
@@ -402,97 +249,36 @@ inline void permute_tiled(T* dst, const T* src, const crd::u64* shp, const crd::
 }
 
 // MULTITHREADED tiled transpose (v14-d increment 2). The macro-task space is
-// (outer odometer position × ta tile row) — every task writes a DISJOINT dst
-// region (the permutation is a bijection), so the result bytes are identical
-// for ANY worker count / any scheduling BY CONSTRUCTION (gated anyway).
-// Tasks decompose their outer index into odometer digits along the same
-// src-locality order the serial path walks. Streaming (NT) stores are the
-// aggregate-bandwidth lever in this regime — each task fences before it
-// completes (the jobs counter's release ordering does not cover NT stores).
-#if defined(__AVX2__)
-// Staged scattered-column tile (f32, MT+Stream): reads run ib-OUTER — 8
-// sequential column streams instead of 64 interleaved ones (DRAM page
-// locality) — transposing through an L1-resident stage, which is then
-// streamed to dst linearly (full-line NT). Resolves the loop-order tension
-// measured on the 512^3 8T row. Tile dims must be multiples of 8.
-template <bool Scale>
-inline void permute_tile_staged_f32(crd::f32* dst, crd::i64 ra, const crd::f32* src, crd::i64 sb, crd::u64 na,
-                                    crd::u64 nb, crd::f32 alpha) noexcept
-{
-    alignas(64) crd::f32 stage[512U * 32U];  // 64 KB exactly; worker threads carry MB stacks
-    for (crd::u64 ib = 0; ib < nb; ib += 8U) // column-group OUTER: 8 read streams
-    {
-        for (crd::u64 ia = 0; ia < na; ia += 8U)
-        {
-            transpose_8x8_f32<Scale, false>(src + static_cast<crd::i64>(ia) + static_cast<crd::i64>(ib) * sb, sb,
-                                            stage + ia * nb + ib, static_cast<crd::i64>(nb), alpha);
-        }
-    }
-    for (crd::u64 ia = 0; ia < na; ++ia)
-    {
-        const crd::f32* srow = stage + ia * nb;
-        crd::f32* drow = dst + static_cast<crd::i64>(ia) * ra;
-        for (crd::u64 j = 0; j < nb; j += 8U)
-        {
-            _mm256_stream_ps(drow + j, _mm256_load_ps(srow + j));
-        }
-    }
-}
-#endif // __AVX2__
-
+// (outer odometer position × (a, b) super-block) — every task writes a
+// DISJOINT dst region (the permutation is a bijection), so the result bytes
+// are identical for ANY worker count / any scheduling BY CONSTRUCTION (gated
+// anyway). Tasks decompose their outer index into odometer digits along the
+// same src-locality order the serial path walks. Streaming (NT) stores are
+// the aggregate-bandwidth lever in this regime; the kernel publishes them
+// before each region returns (the jobs counter's release ordering does not
+// cover NT stores).
 inline constexpr crd::u64 kPermuteMtBytes = 4U * 1024U * 1024U;
 inline constexpr crd::u64 kPermuteMtStreamBytes = 8U * 1024U * 1024U;
 
-template <bool Scale, bool Stream, typename T>
+template <bool Scale, typename T>
 inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const crd::i64* s_in, const crd::i64* s_out,
-                             crd::u32 m, crd::u32 a, T alpha) noexcept
+                             crd::u32 m, crd::u32 a, T alpha, bool stream) noexcept
 {
     const crd::u32 b = m - 1U;
-    // MT tile rule (measured; INVERTED from the 1T rule): near columns -> 32
-    // (the per-tile read-stream count stays under the L2 streamer's tracker
-    // with 8 cores in flight); page-scattered columns -> 64 (the prefetcher
-    // cannot follow anyway; fewer tile boundaries wins).
-    // RECTANGULAR MT tiles: a (the src stride-1 dim) is where sequential DRAM
-    // bursts live — on page-scattered columns a TALL tile (256×64) reads 1 KB
-    // per column visit instead of 256 B and quarters the cold-miss rounds
-    // (the 3D 512³ lever). Near columns keep the square 32 rule.
+    // MT tiles (measured): near columns -> 32x32 (the per-tile read-stream
+    // count stays under the L2 streamer's tracker with 8 cores in flight);
+    // page-scattered columns -> TALL tiles along a, the src stride-1 dim
+    // where sequential DRAM bursts live (up to 512x32: each column visit
+    // reads 2 KB instead of 128 B, the 3D 512³ lever).
     const crd::i64 sb_mag = s_in[b] < 0 ? -s_in[b] : s_in[b];
     const bool near_cols = static_cast<crd::u64>(sb_mag) * sizeof(T) <= 65536U;
-    const crd::u64 tile_a = near_cols ? 32U : (shp[a] < 512U ? shp[a] : 512U);
-    const crd::u64 tile_b = near_cols ? 32U : 32U;
+    const crd::u64 tall = shp[a] < 512U ? shp[a] : 512U;
+    const crd::u64 tile_a = near_cols ? 32U : tall;
+    const crd::u64 tile_b = 32U;
 
-    // src-locality outer order (identical to the serial path's).
     crd::u32 ord[kMaxRank];
-    crd::u32 nout = 0;
-    for (crd::u32 d = 0; d < m; ++d)
-    {
-        if (d != a && d != b)
-        {
-            ord[nout++] = d;
-        }
-    }
-    for (crd::u32 i = 1; i < nout; ++i)
-    {
-        const crd::u32 v = ord[i];
-        const crd::i64 mv = s_in[v] < 0 ? -s_in[v] : s_in[v];
-        crd::u32 j = i;
-        while (j > 0U)
-        {
-            const crd::i64 mj = s_in[ord[j - 1U]] < 0 ? -s_in[ord[j - 1U]] : s_in[ord[j - 1U]];
-            if (mj <= mv)
-            {
-                break;
-            }
-            ord[j] = ord[j - 1U];
-            --j;
-        }
-        ord[j] = v;
-    }
     crd::u64 outer = 1;
-    for (crd::u32 i = 0; i < nout; ++i)
-    {
-        outer *= shp[ord[i]];
-    }
+    const crd::u32 nout = permute_outer_order(shp, s_in, m, a, ord, outer);
 
     struct Params
     {
@@ -511,6 +297,7 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
         crd::u64 sup_b;
         crd::u64 n_sup; // supers per (a,b) plane
         T alpha;
+        bool stream;
     };
     // Super-block task shape: 8x8 tiles (512^2 at tile 64). Partitioning BOTH
     // transpose dims keeps each task's scattered-stream reads inside a small
@@ -525,7 +312,8 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
     const crd::u64 sup_b = tile_b * 8U;
     const crd::u64 n_ta = (shp[a] + sup_a - 1U) / sup_a;
     const crd::u64 n_tb = (shp[b] + sup_b - 1U) / sup_b;
-    const Params prm{dst, src, shp, s_in, s_out, ord, nout, a, b, tile_a, tile_b, sup_a, sup_b, n_ta * n_tb, alpha};
+    const Params prm{dst, src,    shp,    s_in,  s_out, ord,         nout,  a,
+                     b,   tile_a, tile_b, sup_a, sup_b, n_ta * n_tb, alpha, stream};
     const crd::u64 tasks = outer * n_ta * n_tb;
 
     crd::jobs::Counter* c = crd::jobs::parallel_for(
@@ -556,25 +344,11 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
                 }
                 const crd::u64 ta1 = ta0 + prm.sup_a < na ? ta0 + prm.sup_a : na;
                 const crd::u64 tb1 = tb0 + prm.sup_b < nb ? tb0 + prm.sup_b : nb;
-                for (crd::u64 ta = ta0; ta < ta1; ta += prm.tile_a)
-                {
-                    const crd::u64 ha = ta1 - ta < prm.tile_a ? ta1 - ta : prm.tile_a;
-                    for (crd::u64 tb = tb0; tb < tb1; tb += prm.tile_b)
-                    {
-                        const crd::u64 hb = tb1 - tb < prm.tile_b ? tb1 - tb : prm.tile_b;
-                        permute_tile<Scale, Stream>(
-                            prm.dst + doff + static_cast<crd::i64>(ta) * ra + static_cast<crd::i64>(tb), ra,
-                            prm.src + soff + static_cast<crd::i64>(ta) * sa_in + static_cast<crd::i64>(tb) * sb_in,
-                            sa_in, sb_in, ha, hb, prm.alpha);
-                    }
-                }
+                permute_region<Scale>(
+                    prm.dst + doff + static_cast<crd::i64>(ta0) * ra + static_cast<crd::i64>(tb0), ra,
+                    prm.src + soff + static_cast<crd::i64>(ta0) * sa_in + static_cast<crd::i64>(tb0) * sb_in, sa_in,
+                    sb_in, ta1 - ta0, tb1 - tb0, prm.tile_a, prm.tile_b, prm.alpha, prm.stream);
             }
-#if defined(__AVX2__)
-            if constexpr (Stream)
-            {
-                _mm_sfence(); // publish NT stores before this task completes
-            }
-#endif
         });
     crd::jobs::wait(c);
     crd::jobs::frame_reset();
@@ -660,60 +434,29 @@ inline void permute_impl(T* dst, const T* src, const crd::u64* oshape, const crd
         permute_rows<Scale>(dst, src, shp, s_in, m, alpha);
         return;
     }
-    // Streaming gate: DRAM-sized dst + the alignment the NT stores require
-    // (64B-aligned base from Tensor::resize; every microkernel row start is
-    // 32B-aligned iff the dst a-stride is a multiple of 8 f32).
     crd::u64 total = 1;
     for (crd::u32 d = 0; d < m; ++d)
     {
         total *= shp[d];
     }
-    bool stream = false;
-#if defined(__AVX2__)
-    if constexpr (std::is_same_v<T, crd::f32>)
-    {
-        stream = total * sizeof(T) >= kPermuteStreamBytes && (reinterpret_cast<crd::usize>(dst) & 31U) == 0U &&
-                 (s_out[a] & 7) == 0;
-    }
-#endif
     // MT dispatch: a live jobs pool + enough bytes + >= 2 macro tasks. The MT
-    // regime is where aggregate NT stores win (re-measured; serial 1T NT was
-    // refuted and stays off via kPermuteStreamBytes).
+    // regime is where aggregate NT stores win; the single-thread path keeps
+    // regular stores (NT stores measured slower there).
     const crd::u64 outer_est = total / (shp[a] * shp[m - 1U]);
     const crd::u64 tasks_min = outer_est * ((shp[a] + kPermuteTile - 1U) / kPermuteTile);
     const bool mt = crd::jobs::num_workers() > 1U && total * sizeof(T) >= kPermuteMtBytes && tasks_min >= 2U &&
                     tasks_min <= 0xFFFFFFFFULL;
-    if (mt)
+    if (!mt)
     {
-        bool mt_stream = false;
-#if defined(__AVX2__)
-        if constexpr (std::is_same_v<T, crd::f32>)
-        {
-            mt_stream = total * sizeof(T) >= kPermuteMtStreamBytes && (reinterpret_cast<crd::usize>(dst) & 31U) == 0U &&
-                        (s_out[a] & 7) == 0;
-        }
-#endif
-        if (mt_stream)
-        {
-            permute_tiled_mt<Scale, true>(dst, src, shp, s_in, s_out, m, a, alpha);
-        }
-        else
-        {
-            permute_tiled_mt<Scale, false>(dst, src, shp, s_in, s_out, m, a, alpha);
-        }
+        permute_tiled<Scale>(dst, src, shp, s_in, s_out, m, a, alpha);
         return;
     }
-    if (stream)
-    {
-        permute_tiled<Scale, true>(dst, src, shp, s_in, s_out, m, a, alpha);
-#if defined(__AVX2__)
-        _mm_sfence(); // NT stores are weakly ordered — publish before returning
-#endif
-    }
-    else
-    {
-        permute_tiled<Scale, false>(dst, src, shp, s_in, s_out, m, a, alpha);
-    }
+    // Streaming gate: DRAM-sized f32 dst + the alignment the NT stores require
+    // (64B-aligned base from Tensor::resize; every microkernel row start is
+    // 32B-aligned iff the dst a-stride is a multiple of 8 f32).
+    const bool stream = std::is_same_v<T, crd::f32> && total * sizeof(T) >= kPermuteMtStreamBytes &&
+                        (reinterpret_cast<crd::usize>(dst) & 31U) == 0U && (s_out[a] & 7) == 0;
+    permute_tiled_mt<Scale>(dst, src, shp, s_in, s_out, m, a, alpha, stream);
 }
 
 } // namespace detail

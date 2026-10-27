@@ -1,16 +1,16 @@
 #pragma once
 
+#include "binned_core.hpp"
 #include "dtypes.hpp"
 #include "elementwise.hpp" // EwSimd vector traits
 #include "tensor.hpp"
+#include "tensor_dispatch.hpp"
 
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/simd/simd.hpp>
-
-#include <bit>
 
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor reduce — reductions + the reproducible tier
@@ -100,27 +100,27 @@ template <typename T> struct RMax
 template <typename T, typename Op> [[nodiscard]] inline T block_partial(const T* p, crd::u64 n, T init) noexcept
 {
     using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 kW = EwSimd<T>::kWidth;
+    constexpr crd::u64 width = EwSimd<T>::kWidth;
     T acc = init;
     crd::u64 i = 0;
-    if (n >= 4U * kW)
+    if (n >= 4U * width)
     {
         V a0 = V::load(p);
-        V a1 = V::load(p + kW);
-        V a2 = V::load(p + 2U * kW);
-        V a3 = V::load(p + 3U * kW);
-        for (i = 4U * kW; i + 4U * kW <= n; i += 4U * kW)
+        V a1 = V::load(p + width);
+        V a2 = V::load(p + 2U * width);
+        V a3 = V::load(p + 3U * width);
+        for (i = 4U * width; i + 4U * width <= n; i += 4U * width)
         {
             a0 = Op::v(a0, V::load(p + i));
-            a1 = Op::v(a1, V::load(p + i + kW));
-            a2 = Op::v(a2, V::load(p + i + 2U * kW));
-            a3 = Op::v(a3, V::load(p + i + 3U * kW));
+            a1 = Op::v(a1, V::load(p + i + width));
+            a2 = Op::v(a2, V::load(p + i + 2U * width));
+            a3 = Op::v(a3, V::load(p + i + 3U * width));
         }
         const V c = Op::v(Op::v(a0, a1), Op::v(a2, a3));
-        alignas(64) T lanes[kW];
+        alignas(64) T lanes[width];
         c.store(lanes);
         T va = lanes[0];
-        for (crd::u64 l = 1; l < kW; ++l)
+        for (crd::u64 l = 1; l < width; ++l)
         {
             va = Op::s(va, lanes[l]);
         }
@@ -182,515 +182,23 @@ template <typename T, typename Op>
     return acc;
 }
 
-// ============================================================================
-// TIER R — BinnedF64: faithful fold-3 transcription of ReproBLAS v2.1.0
-// (binned.h + src/binned/{dindex,dmbins,dmdupdate,dmddeposit,dmrenorm,
-// dmdmadd,ddmconv}.c — external/reproblas, SHA dfb8150). Deposits are
-// order-free (the sticky-bit two-sum ladder), the representation is
-// partition-independent, and the read-out rounds once at the end.
-// ============================================================================
-
-inline constexpr crd::i32 kBinWidth = 40;                 // DBWIDTH
-inline constexpr crd::i32 kBinFold = 3;                   // the default fold
-inline constexpr crd::i32 kBinMaxIndex = 51;              // ((1024+1021+52)/40)-1
-inline constexpr crd::i32 kBinMaxFold = kBinMaxIndex + 1; // binned_DBMAXFOLD
-inline constexpr crd::u64 kBinEndurance = 1ULL << 11U;    // 1<<(53-40-2)
-inline constexpr crd::f64 kBinCompression = 1.0 / (1 << 14);
-inline constexpr crd::f64 kBinExpansion = 1.0 * (1 << 14);
-
-// 0.75 × 2^k as bits (1.5 × 2^(k-1): exponent field k-1+1023, mantissa 0.5).
-[[nodiscard]] constexpr crd::f64 pow2_075(crd::i32 k) noexcept
-{
-    const crd::u64 bits = (static_cast<crd::u64>(k - 1 + 1023) << 52U) | 0x8000000000000ULL;
-    return std::bit_cast<crd::f64>(bits);
-}
-
-// The bin ladder (binned_dmbins): bins[0] = 1.5×2^1023; bins[i>=1] =
-// 0.75×2^(1038 - 40i); the tail repeats the last finite rung.
-[[nodiscard]] inline crd::f64 bin_value(crd::i32 index) noexcept
-{
-    if (index <= 0)
-    {
-        return pow2_075(1024); // 2·0.75·2^1023
-    }
-    const crd::i32 i = index > kBinMaxIndex ? kBinMaxIndex : index;
-    return pow2_075(1024 + 53 - kBinWidth + 1 - i * kBinWidth);
-}
-
-[[nodiscard]] inline crd::u32 f64_biased_exp(crd::f64 x) noexcept
-{
-    return static_cast<crd::u32>((std::bit_cast<crd::u64>(x) >> 52U) & 0x7FFU);
-}
-[[nodiscard]] inline bool f64_nan_or_inf(crd::f64 x) noexcept
-{
-    return f64_biased_exp(x) == 0x7FFU;
-}
-
-// binned_dindex: the ladder bucket of |X|.
-[[nodiscard]] inline crd::i32 bin_index_of(crd::f64 x) noexcept
-{
-    const crd::u32 e = f64_biased_exp(x);
-    if (e == 0U)
-    {
-        return kBinMaxIndex; // zero/denormal: the bottom bucket (their MIN() clamp)
-    }
-    return (2047 - static_cast<crd::i32>(e)) / kBinWidth; // (DBL_MAX_EXP + EXP_BIAS - exp)/W
-}
-
-// binned_dmindex: the index OF an accumulator, from its top primary.
-[[nodiscard]] inline crd::i32 bin_index_of_acc(crd::f64 pri0) noexcept
-{
-    return (1024 + 53 - kBinWidth + 1 + 1023 - static_cast<crd::i32>(f64_biased_exp(pri0))) / kBinWidth;
-}
-
-// Fold-3 binned accumulator (primary + carry per rung).
+// TIER R: the binned accumulator (binned_core.hpp, the ReproBLAS v2.1.0 fold-3 transcription). Its contiguous sum
+// runs the per-level tensor kernels (the twelve-accumulator AVX2 body or the scalar deposits), identical bits on every
+// level and in any partition.
 struct BinnedF64
 {
-    crd::f64 pri[kBinFold] = {0.0, 0.0, 0.0};
-    crd::f64 car[kBinFold] = {0.0, 0.0, 0.0};
+    BinnedRungs rungs{};
 
-    // binned_dmdupdate: make the index suitable for |x| <= max_abs.
-    void update(crd::f64 max_abs) noexcept
-    {
-        if (f64_nan_or_inf(pri[0]))
-        {
-            return;
-        }
-        const crd::i32 x_index = bin_index_of(max_abs);
-        if (pri[0] == 0.0)
-        {
-            for (crd::i32 i = 0; i < kBinFold; ++i)
-            {
-                pri[i] = bin_value(x_index + i);
-                car[i] = 0.0;
-            }
-            return;
-        }
-        const crd::i32 shift = bin_index_of_acc(pri[0]) - x_index;
-        if (shift > 0)
-        {
-            crd::i32 i = kBinFold - 1;
-            for (; i >= shift; --i)
-            {
-                pri[i] = pri[i - shift];
-                car[i] = car[i - shift];
-            }
-            for (crd::i32 j = 0; j < i + 1; ++j)
-            {
-                pri[j] = bin_value(x_index + j);
-                car[j] = 0.0;
-            }
-        }
-    }
+    // binned_dmdmadd: this += other.
+    void add(const BinnedF64& other) noexcept { binned_add(rungs, other.rungs); }
 
-    // binned_dmddeposit: the sticky-bit two-sum ladder (order-free).
-    void deposit(crd::f64 x) noexcept
-    {
-        if (f64_nan_or_inf(x) || f64_nan_or_inf(pri[0]))
-        {
-            pri[0] += x;
-            return;
-        }
-        crd::f64 m;
-        crd::u64 ql;
-        crd::f64 qd;
-        if (bin_index_of_acc(pri[0]) == 0) // the index-0 compression branch
-        {
-            m = pri[0];
-            qd = x * kBinCompression;
-            ql = std::bit_cast<crd::u64>(qd) | 1ULL;
-            qd = std::bit_cast<crd::f64>(ql) + m;
-            pri[0] = qd;
-            m -= qd;
-            m *= kBinExpansion * 0.5;
-            x += m;
-            x += m;
-            for (crd::i32 i = 1; i < kBinFold - 1; ++i)
-            {
-                m = pri[i];
-                ql = std::bit_cast<crd::u64>(x) | 1ULL;
-                qd = std::bit_cast<crd::f64>(ql) + m;
-                pri[i] = qd;
-                m -= qd;
-                x += m;
-            }
-            ql = std::bit_cast<crd::u64>(x) | 1ULL;
-            pri[kBinFold - 1] += std::bit_cast<crd::f64>(ql);
-            return;
-        }
-        for (crd::i32 i = 0; i < kBinFold - 1; ++i)
-        {
-            m = pri[i];
-            ql = std::bit_cast<crd::u64>(x) | 1ULL;
-            qd = std::bit_cast<crd::f64>(ql) + m;
-            pri[i] = qd;
-            m -= qd;
-            x += m;
-        }
-        ql = std::bit_cast<crd::u64>(x) | 1ULL;
-        pri[kBinFold - 1] += std::bit_cast<crd::f64>(ql);
-    }
-
-    // binned_dmrenorm (the bit-twiddled form): pull the top 2 mantissa bits
-    // into the carry and re-center the primary. Call at least every
-    // kBinEndurance deposits and before add/convert.
-    void renorm() noexcept
-    {
-        if (pri[0] == 0.0 || f64_nan_or_inf(pri[0]))
-        {
-            return;
-        }
-        for (crd::i32 i = 0; i < kBinFold; ++i)
-        {
-            crd::u64 bits = std::bit_cast<crd::u64>(pri[i]);
-            car[i] += static_cast<crd::f64>(static_cast<crd::i32>((bits >> 50U) & 3ULL) - 2);
-            bits &= ~(1ULL << 50U);
-            bits |= 1ULL << 51U;
-            pri[i] = std::bit_cast<crd::f64>(bits);
-        }
-    }
-
-    // binned_dmdmadd: this += other (index-aligned merge, then renorm).
-    void add(const BinnedF64& other) noexcept
-    {
-        if (other.pri[0] == 0.0)
-        {
-            return;
-        }
-        if (pri[0] == 0.0)
-        {
-            *this = other;
-            return;
-        }
-        if (f64_nan_or_inf(other.pri[0]) || f64_nan_or_inf(pri[0]))
-        {
-            pri[0] += other.pri[0];
-            return;
-        }
-        const crd::i32 x_index = bin_index_of_acc(other.pri[0]);
-        const crd::i32 y_index = bin_index_of_acc(pri[0]);
-        const crd::i32 shift = y_index - x_index;
-        if (shift > 0)
-        {
-            // shift THIS upwards and add other
-            for (crd::i32 i = kBinFold - 1; i >= shift; --i)
-            {
-                pri[i] = other.pri[i] + (pri[i - shift] - bin_value(y_index + (i - shift)));
-                car[i] = other.car[i] + car[i - shift];
-            }
-            for (crd::i32 i = 0; i < shift && i < kBinFold; ++i)
-            {
-                pri[i] = other.pri[i];
-                car[i] = other.car[i];
-            }
-        }
-        else
-        {
-            // shift OTHER upwards and add onto this
-            for (crd::i32 i = -shift; i < kBinFold; ++i)
-            {
-                pri[i] += other.pri[i + shift] - bin_value(x_index + (i + shift));
-                car[i] += other.car[i + shift];
-            }
-        }
-        renorm();
-    }
-
-    // binned_ddmconv: read out the represented value (rounds ONCE, here).
-    [[nodiscard]] crd::f64 convert() const noexcept
-    {
-        if (f64_nan_or_inf(pri[0]))
-        {
-            return pri[0];
-        }
-        if (pri[0] == 0.0)
-        {
-            return 0.0;
-        }
-        crd::f64 y = 0.0;
-        const crd::i32 x_index = bin_index_of_acc(pri[0]);
-        if (x_index <= (3 * 53) / kBinWidth)
-        {
-            // near the overflow end: scaled accumulation (their scale branch)
-            const crd::f64 scale_down = std::bit_cast<crd::f64>((static_cast<crd::u64>(-65 + 1023) << 52U)); // 2^-65
-            const crd::f64 scale_up = std::bit_cast<crd::f64>((static_cast<crd::u64>(65 + 1023) << 52U));    // 2^65
-            const crd::i32 want = (3 * 53) / kBinWidth - x_index;
-            const crd::i32 scaled = want < 0 ? 0 : (want > kBinFold ? kBinFold : want);
-            crd::i32 i;
-            if (x_index == 0)
-            {
-                y += car[0] * ((bin_value(x_index + 0) / 6.0) * scale_down * kBinExpansion);
-                y += car[1] * ((bin_value(x_index + 1) / 6.0) * scale_down);
-                y += (pri[0] - bin_value(x_index + 0)) * scale_down * kBinExpansion;
-                i = 2;
-            }
-            else
-            {
-                y += car[0] * ((bin_value(x_index + 0) / 6.0) * scale_down);
-                i = 1;
-            }
-            for (; i < scaled; ++i)
-            {
-                y += car[i] * ((bin_value(x_index + i) / 6.0) * scale_down);
-                y += (pri[i - 1] - bin_value(x_index + i - 1)) * scale_down;
-            }
-            if (i == kBinFold)
-            {
-                y += (pri[kBinFold - 1] - bin_value(x_index + kBinFold - 1)) * scale_down;
-                return y * scale_up;
-            }
-            if (f64_nan_or_inf(y * scale_up))
-            {
-                return y * scale_up;
-            }
-            y *= scale_up;
-            for (; i < kBinFold; ++i)
-            {
-                y += car[i] * (bin_value(x_index + i) / 6.0);
-                y += pri[i - 1] - bin_value(x_index + i - 1);
-            }
-            y += pri[kBinFold - 1] - bin_value(x_index + kBinFold - 1);
-            return y;
-        }
-        y += car[0] * (bin_value(x_index + 0) / 6.0);
-        for (crd::i32 i = 1; i < kBinFold; ++i)
-        {
-            y += car[i] * (bin_value(x_index + i) / 6.0);
-            y += pri[i - 1] - bin_value(x_index + i - 1);
-        }
-        y += pri[kBinFold - 1] - bin_value(x_index + kBinFold - 1);
-        return y;
-    }
+    // binned_ddmconv: the represented value, rounded once.
+    [[nodiscard]] crd::f64 convert() const noexcept { return binned_convert(rungs); }
 };
 
-#if defined(__AVX2__)
-// SIMD reproducible sum: TWELVE independent binned accumulators — 3 streams
-// (breaking the rung-ladder latency chain) × 4 Vec4d lanes — merged at the
-// end. Legal precisely because the binned representation is
-// partition-INDEPENDENT (the repartition/shuffle gates prove the property);
-// the merged bits equal the scalar whole-array sum. The per-element ladder is
-// the exact scalar deposit (sticky-or, two-sum) per lane. The rare index-0
-// compression regime (|x| within 2^40 of DBL_MAX) falls back to scalar.
-namespace binned_avx2
-{
-inline constexpr crd::u64 kStreams = 3U;
-inline constexpr crd::u64 kLanes = 4U;
-inline constexpr crd::u64 kStep = kStreams * kLanes;
-
-// One super-block of deposits over the 12 SoA accumulators. TrackMax fuses
-// the |max| scan into the same pass (the speculative single-DRAM-pass mode);
-// returns the block's abs-max (0 when not tracking).
-template <bool TrackMax>
-[[nodiscard]] inline crd::f64 deposit_superblock(BinnedF64 (&lanes)[kStep], const crd::f64* p, crd::u64 len) noexcept
-{
-    const __m256d sticky = _mm256_castsi256_pd(_mm256_set1_epi64x(1LL));
-    const __m256d absmask = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
-    __m256d pri[kStreams][kBinFold];
-    for (crd::u64 s = 0; s < kStreams; ++s)
-    {
-        for (crd::i32 k = 0; k < kBinFold; ++k)
-        {
-            pri[s][k] = _mm256_set_pd(lanes[s * kLanes + 3U].pri[k], lanes[s * kLanes + 2U].pri[k],
-                                      lanes[s * kLanes + 1U].pri[k], lanes[s * kLanes + 0U].pri[k]);
-        }
-    }
-    __m256d vmax = _mm256_setzero_pd();
-    for (crd::u64 k = 0; k < len; k += kStep)
-    {
-        for (crd::u64 s = 0; s < kStreams; ++s)
-        {
-            __m256d x = _mm256_loadu_pd(p + k + s * kLanes);
-            if constexpr (TrackMax)
-            {
-                vmax = _mm256_max_pd(vmax, _mm256_and_pd(x, absmask));
-            }
-            for (crd::i32 r = 0; r < kBinFold - 1; ++r)
-            {
-                const __m256d m = pri[s][r];
-                const __m256d q = _mm256_or_pd(x, sticky);
-                const __m256d snew = _mm256_add_pd(q, m);
-                pri[s][r] = snew;
-                x = _mm256_add_pd(x, _mm256_sub_pd(m, snew));
-            }
-            pri[s][kBinFold - 1] = _mm256_add_pd(pri[s][kBinFold - 1], _mm256_or_pd(x, sticky));
-        }
-    }
-    for (crd::u64 s = 0; s < kStreams; ++s)
-    {
-        for (crd::i32 k = 0; k < kBinFold; ++k)
-        {
-            alignas(32) crd::f64 lv[kLanes];
-            _mm256_store_pd(lv, pri[s][k]);
-            for (crd::u64 l = 0; l < kLanes; ++l)
-            {
-                lanes[s * kLanes + l].pri[k] = lv[l];
-            }
-        }
-    }
-    if constexpr (TrackMax)
-    {
-        alignas(32) crd::f64 mx[kLanes];
-        _mm256_store_pd(mx, vmax);
-        crd::f64 amax = mx[0];
-        for (crd::u64 l = 1; l < kLanes; ++l)
-        {
-            amax = mx[l] > amax ? mx[l] : amax;
-        }
-        return amax;
-    }
-    else
-    {
-        return 0.0;
-    }
-}
-} // namespace binned_avx2
-
-inline void binned_sum_run_avx2(BinnedF64& out, const crd::f64* p, crd::u64 n) noexcept
-{
-    using namespace binned_avx2;
-    BinnedF64 lanes[kStep]; // 12 lane accumulators (SoA inside the kernel)
-
-    crd::i32 cur_index = -1; // no window yet: the first block seeds it two-pass
-    crd::u64 i = 0;
-    while (i + kStep <= n)
-    {
-        const crd::u64 len0 = ((n - i) / kStep) * kStep;
-        const crd::u64 len = len0 < kBinEndurance * kStep ? len0 : kBinEndurance * kStep;
-
-        if (cur_index < 0)
-        {
-            // Seed pass: scan |max| first (reads once from DRAM, deposit hits L2).
-            __m256d vmax = _mm256_setzero_pd();
-            const __m256d absmask = _mm256_castsi256_pd(_mm256_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
-            for (crd::u64 k = 0; k < len; k += kLanes)
-            {
-                vmax = _mm256_max_pd(vmax, _mm256_and_pd(_mm256_loadu_pd(p + i + k), absmask));
-            }
-            alignas(32) crd::f64 mx[kLanes];
-            _mm256_store_pd(mx, vmax);
-            crd::f64 amax = mx[0];
-            for (crd::u64 l = 1; l < kLanes; ++l)
-            {
-                amax = mx[l] > amax ? mx[l] : amax;
-            }
-            if (bin_index_of(amax) == 0) // near-DBL_MAX regime: scalar handles compression
-            {
-                break;
-            }
-            for (auto& lane : lanes)
-            {
-                lane.update(amax);
-            }
-            cur_index = bin_index_of_acc(lanes[0].pri[0]);
-            (void)deposit_superblock<false>(lanes, p + i, len);
-        }
-        else
-        {
-            // SPECULATIVE single-DRAM-pass: deposit under the previous block's
-            // window while tracking |max| in the same registers. On the rare
-            // violation (a bigger magnitude arrived: its index < the window's)
-            // restore the 576-byte snapshot, widen, and redo from L2. The
-            // result is bit-identical either way (partition-independence).
-            BinnedF64 snap[kStep];
-            for (crd::u64 l = 0; l < kStep; ++l)
-            {
-                snap[l] = lanes[l];
-            }
-            const crd::f64 amax = deposit_superblock<true>(lanes, p + i, len);
-            const crd::i32 amax_index = bin_index_of(amax);
-            if (amax_index == 0)
-            {
-                for (crd::u64 l = 0; l < kStep; ++l)
-                {
-                    lanes[l] = snap[l];
-                }
-                break; // scalar tail handles the compression regime
-            }
-            if (amax_index < cur_index)
-            {
-                for (crd::u64 l = 0; l < kStep; ++l)
-                {
-                    lanes[l] = snap[l];
-                }
-                for (auto& lane : lanes)
-                {
-                    lane.update(amax);
-                }
-                cur_index = bin_index_of_acc(lanes[0].pri[0]);
-                (void)deposit_superblock<false>(lanes, p + i, len);
-            }
-        }
-        for (auto& lane : lanes)
-        {
-            lane.renorm();
-        }
-        i += len;
-    }
-    // Merge the lane accumulators + the scalar tail into `out`.
-    for (const auto& lane : lanes)
-    {
-        out.add(lane);
-    }
-    if (i < n)
-    {
-        crd::u64 j = i;
-        while (j < n)
-        {
-            const crd::u64 len = n - j < kBinEndurance ? n - j : kBinEndurance;
-            crd::f64 amax = 0.0;
-            for (crd::u64 k = 0; k < len; ++k)
-            {
-                const crd::f64 a = p[j + k] < 0.0 ? -p[j + k] : p[j + k];
-                amax = a > amax ? a : amax;
-            }
-            out.update(amax);
-            for (crd::u64 k = 0; k < len; ++k)
-            {
-                out.deposit(p[j + k]);
-            }
-            out.renorm();
-            j += len;
-        }
-    }
-}
-#endif // __AVX2__
-
-// Reproducible sum of a contiguous run: per-endurance-block max-update +
-// deposits + renorm (the binnedBLAS dbdsum protocol).
-inline void binned_sum_run_scalar(BinnedF64& acc, const crd::f64* p, crd::u64 n) noexcept
-{
-    crd::u64 i = 0;
-    while (i < n)
-    {
-        const crd::u64 len = n - i < kBinEndurance ? n - i : kBinEndurance;
-        crd::f64 amax = 0.0;
-        for (crd::u64 k = 0; k < len; ++k) // |max| scan (branch-light; vectorizes)
-        {
-            const crd::f64 a = p[i + k] < 0.0 ? -p[i + k] : p[i + k];
-            amax = a > amax ? a : amax;
-        }
-        acc.update(amax);
-        for (crd::u64 k = 0; k < len; ++k)
-        {
-            acc.deposit(p[i + k]);
-        }
-        acc.renorm();
-        i += len;
-    }
-}
-
-// Dispatch: the 12-accumulator SIMD path when available, scalar otherwise —
-// identical bits either way (the partition-independence property, gated).
 inline void binned_sum_run(BinnedF64& acc, const crd::f64* p, crd::u64 n) noexcept
 {
-#if defined(__AVX2__)
-    if (n >= 96U)
-    {
-        binned_sum_run_avx2(acc, p, n);
-        return;
-    }
-#endif
-    binned_sum_run_scalar(acc, p, n);
+    tensor_kernels().table->binned_sum_f64(acc.rungs, p, n);
 }
 
 } // namespace detail

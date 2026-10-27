@@ -6,6 +6,7 @@ add_executable(crd-hesap-tensor-tests
     test_dtype_set.cpp
     test_reduce_axes.cpp
     test_einsum_path.cpp
+    test_tensor_kernels.cpp
 )
 
 target_link_libraries(crd-hesap-tensor-tests PRIVATE
@@ -19,6 +20,9 @@ target_link_libraries(crd-hesap-tensor-tests PRIVATE
 crd_enable_default_pch(crd-hesap-tensor-tests)
 
 crd_discover_tests(crd-hesap-tensor-tests)
+
+# ADR-0134 §8: the kernel and Tier R cases once per compiled level (crd-hesap-tensor-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-tests "[kernels],[repro]")
 
 # --- v14-d permute gates (separate executable: keeps parallel work on the ---
 # --- main test target conflict-free)                                      ---
@@ -37,6 +41,9 @@ target_link_libraries(crd-hesap-tensor-permute-tests PRIVATE
 crd_enable_default_pch(crd-hesap-tensor-permute-tests)
 
 crd_discover_tests(crd-hesap-tensor-permute-tests)
+
+# ADR-0134 §8: every permute gate once per compiled level (crd-hesap-tensor-permute-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-permute-tests "[permute]")
 
 # --- v14-g hyper-optimizer gates (separate executable: keeps the large ---
 # --- planner suites out of the main target's compile time)             ---

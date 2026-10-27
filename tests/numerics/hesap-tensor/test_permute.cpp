@@ -431,7 +431,7 @@ TEST_CASE("v14-d MT: {1,2,4,8,16} workers produce bit-identical permutes", "[hes
 {
     crd::memory::TlsfAllocator alloc(1ULL << 28U);
     // Big enough to cross kPermuteMtBytes on both cases; adversarial shapes.
-    const crd::u64 s2[] = {2048U, 1536U}; // 12 MB: crosses the MT stream gate (the staged kernel is covered)
+    const crd::u64 s2[] = {2048U, 1536U}; // 12 MB: crosses the MT stream gate (the non-temporal stores are covered)
     const crd::u32 p2[] = {1U, 0U};
     const crd::u64 s4[] = {24U, 40U, 32U, 48U};
     const crd::u32 p4[] = {3U, 1U, 2U, 0U};
