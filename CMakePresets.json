@@ -402,6 +402,138 @@
                     "intelliSenseMode": "linux-clang-x64"
                 }
             }
+        },
+        {
+            "name": "arm64-base",
+            "hidden": true,
+            "description": "ARM64 lanes: crd-jobs has no ARM64 fiber context before JOBS-PORT.2, so they configure every module whose closure and tests avoid it (cmake/CrdModules.cmake)",
+            "cacheVariables": {
+                "CRD_MODULES_WITHOUT": "jobs"
+            }
+        },
+        {
+            "name": "linux-arm64-base",
+            "hidden": true,
+            "inherits": [
+                "linux-base",
+                "arm64-base"
+            ],
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-gcc-arm64"
+                }
+            }
+        },
+        {
+            "name": "linux-gcc-arm64-debug",
+            "displayName": "Linux ARM64 GCC Debug",
+            "inherits": "linux-arm64-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON"
+            }
+        },
+        {
+            "name": "linux-gcc-arm64-asan",
+            "displayName": "Linux ARM64 GCC Debug + ASan + UBSan",
+            "inherits": "linux-arm64-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_ENABLE_ASAN": "ON",
+                "CRD_ENABLE_UBSAN": "ON"
+            }
+        },
+        {
+            "name": "linux-clang-arm64-debug",
+            "displayName": "Linux ARM64 clang Debug",
+            "inherits": "linux-arm64-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-clang-arm64"
+                }
+            }
+        },
+        {
+            "name": "linux-clang-arm64-asan",
+            "displayName": "Linux ARM64 clang Debug + ASan + UBSan",
+            "inherits": "linux-arm64-base",
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON",
+                "CRD_ENABLE_ASAN": "ON",
+                "CRD_ENABLE_UBSAN": "ON"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Linux"
+                    ],
+                    "intelliSenseMode": "linux-clang-arm64"
+                }
+            }
+        },
+        {
+            "name": "win-arm64-base",
+            "hidden": true,
+            "inherits": [
+                "base",
+                "arm64-base"
+            ],
+            "generator": "Ninja",
+            "architecture": {
+                "value": "ARM64",
+                "strategy": "external"
+            },
+            "toolset": {
+                "value": "host=ARM64",
+                "strategy": "external"
+            },
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Windows"
+            },
+            "cacheVariables": {
+                "CMAKE_C_COMPILER": "cl",
+                "CMAKE_CXX_COMPILER": "cl"
+            },
+            "vendor": {
+                "microsoft.com/VisualStudioSettings/CMake/1.0": {
+                    "hostOS": [
+                        "Windows"
+                    ],
+                    "intelliSenseMode": "windows-msvc-arm64"
+                }
+            }
+        },
+        {
+            "name": "win-arm64-debug",
+            "displayName": "Windows ARM64 Debug",
+            "inherits": "win-arm64-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CRD_ENABLE_ASSERTS": "ON",
+                "CRD_ENABLE_PROFILING": "ON"
+            }
         }
     ],
     "buildPresets": [
@@ -572,6 +704,26 @@
         {
             "name": "linux-clang-tsan",
             "configurePreset": "linux-clang-tsan"
+        },
+        {
+            "name": "linux-gcc-arm64-debug",
+            "configurePreset": "linux-gcc-arm64-debug"
+        },
+        {
+            "name": "linux-gcc-arm64-asan",
+            "configurePreset": "linux-gcc-arm64-asan"
+        },
+        {
+            "name": "linux-clang-arm64-debug",
+            "configurePreset": "linux-clang-arm64-debug"
+        },
+        {
+            "name": "linux-clang-arm64-asan",
+            "configurePreset": "linux-clang-arm64-asan"
+        },
+        {
+            "name": "win-arm64-debug",
+            "configurePreset": "win-arm64-debug"
         }
     ],
     "testPresets": [
@@ -816,6 +968,53 @@
         {
             "name": "linux-gcc-shipping",
             "configurePreset": "linux-gcc-shipping",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-gcc-arm64-debug",
+            "configurePreset": "linux-gcc-arm64-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-gcc-arm64-asan",
+            "configurePreset": "linux-gcc-arm64-asan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "timeout": 3600
+            },
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
+        },
+        {
+            "name": "linux-clang-arm64-debug",
+            "configurePreset": "linux-clang-arm64-debug",
+            "output": {
+                "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-clang-arm64-asan",
+            "configurePreset": "linux-clang-arm64-asan",
+            "output": {
+                "outputOnFailure": true
+            },
+            "execution": {
+                "timeout": 3600
+            },
+            "environment": {
+                "UBSAN_OPTIONS": "print_stacktrace=1"
+            }
+        },
+        {
+            "name": "win-arm64-debug",
+            "configurePreset": "win-arm64-debug",
             "output": {
                 "outputOnFailure": true
             }

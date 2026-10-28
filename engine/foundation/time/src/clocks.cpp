@@ -56,6 +56,8 @@ crd::u64 CycleCounter::now() noexcept
     crd::u64 val;
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(val));
     return val;
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    return static_cast<crd::u64>(_ReadStatusReg(ARM64_CNTVCT)); // the generic timer, as cntvct_el0 above
 #else
     // Fallback: derive a "cycle"-ish counter from the monotonic clock's
     // nanoseconds. Not great but at least monotonic.

@@ -1044,7 +1044,7 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(re.findall(r'runs-on:\s*\S*-latest', self.workflow), [])
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
-        self.assertEqual(self.workflow.count("python-version: '3.12'"), 11)
+        self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
         for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'tracy'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 

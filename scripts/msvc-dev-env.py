@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Export the Visual Studio x64 developer environment (vcvars64.bat) to later workflow steps.
+"""Export the Visual Studio developer environment (vcvars64.bat, or vcvarsarm64.bat) to later workflow steps.
 
-Finds the newest Visual Studio with the x64 C++ tools through vswhere (as scripts/msvc-env.bat does), runs its
-vcvars64.bat in a child cmd.exe that then prints its whole environment as JSON through this interpreter, and appends
+Finds the newest Visual Studio with the target's C++ tools through vswhere (as scripts/msvc-env.bat does), runs its
+vcvars script in a child cmd.exe that then prints its whole environment as JSON through this interpreter, and appends
 every variable vcvars added or changed to --github-env (the workflow's $GITHUB_ENV), the same variables the
 developer command prompt sets. The environment must then name the compiler (`cl.exe` on the new PATH) and its
 INCLUDE and LIB, or the step fails. It replaced ilammy/msvc-dev-cmd, which has no Node 24 release (2026-10-26).
@@ -17,7 +17,12 @@ import shutil
 import subprocess
 import sys
 
-COMPONENT = 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64'
+# Per target: the vswhere component that holds its C++ tools and the native-host vcvars script (x64 on an x64 host,
+# ARM64 on an ARM64 host such as windows-11-arm).
+ARCHES = {
+    'x64': ('Microsoft.VisualStudio.Component.VC.Tools.x86.x64', 'vcvars64.bat'),
+    'arm64': ('Microsoft.VisualStudio.Component.VC.Tools.ARM64', 'vcvarsarm64.bat'),
+}
 # nt.environ keeps each name's own case (os.environ upper-cases them on Windows), as the developer prompt spells it.
 DUMP = 'import json, nt, sys; sys.stdout.write(json.dumps(dict(nt.environ)))'
 REQUIRED = ('INCLUDE', 'LIB', 'VCToolsInstallDir')
@@ -35,17 +40,17 @@ def vswhere():
     return path
 
 
-def installation(locator):
-    result = subprocess.run([str(locator), '-latest', '-products', '*', '-requires', COMPONENT,
+def installation(locator, arch):
+    result = subprocess.run([str(locator), '-latest', '-products', '*', '-requires', ARCHES[arch][0],
                              '-property', 'installationPath'], capture_output=True, text=True, check=True)
     lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
     if not lines:
-        raise MsvcEnvironmentError('no Visual Studio installation has the x64 C++ build tools')
+        raise MsvcEnvironmentError(f'no Visual Studio installation has the {arch} C++ build tools')
     return Path(lines[-1])
 
 
 def developer_environment(vcvars, locator, base):
-    """The environment vcvars64.bat leaves, as a dict, run from `base` with the vswhere directory on PATH (VsDevCmd
+    """The environment the vcvars script leaves, as a dict, run from `base` with the vswhere directory on PATH (VsDevCmd
     runs vswhere by bare name, and a shell that skips the current directory would not find it)."""
     child = dict(base)
     child['PATH'] = f'{locator.parent};{base.get("PATH", "")}'
@@ -84,13 +89,14 @@ def github_env_lines(variables):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--github-env', type=Path, required=True, help='the file receiving NAME=value lines')
+    parser.add_argument('--arch', choices=sorted(ARCHES), default='x64', help='the target and host architecture')
     args = parser.parse_args(argv)
     if platform.system() != 'Windows':
         parser.error('the Visual Studio developer environment exists on Windows only')
     try:
         locator = vswhere()
-        root = installation(locator)
-        vcvars = root / 'VC' / 'Auxiliary' / 'Build' / 'vcvars64.bat'
+        root = installation(locator, args.arch)
+        vcvars = root / 'VC' / 'Auxiliary' / 'Build' / ARCHES[args.arch][1]
         if not vcvars.is_file():
             raise MsvcEnvironmentError(f'{vcvars} is missing')
         base = dict(os.environ)
@@ -98,7 +104,7 @@ def main(argv=None):
         missing = [name for name in REQUIRED if not after.get(name) and not after.get(name.upper())]
         compiler = shutil.which('cl.exe', path=after.get('PATH') or after.get('Path'))
         if missing or compiler is None:
-            raise MsvcEnvironmentError(f'vcvars64.bat left no {", ".join(missing) or "cl.exe on PATH"}')
+            raise MsvcEnvironmentError(f'{vcvars.name} left no {", ".join(missing) or "cl.exe on PATH"}')
     except (MsvcEnvironmentError, subprocess.CalledProcessError, ValueError) as error:
         print(f'error: {error}', file=sys.stderr)
         return 1

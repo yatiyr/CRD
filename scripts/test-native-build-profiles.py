@@ -46,7 +46,7 @@ class PresetContract(unittest.TestCase):
         native = resolve(DOCUMENT, 'win-vs')
         self.assertEqual(native['cacheVariables']['CMAKE_CONFIGURATION_TYPES'].split(';'), list(EXPECTED))
         self.assertEqual(native['cacheVariables'], resolve(DOCUMENT, 'win-vs-debug')['cacheVariables'])
-        self.assertEqual(len([p for p in DOCUMENT['configurePresets'] if not p.get('hidden')]), 25)
+        self.assertEqual(len([p for p in DOCUMENT['configurePresets'] if not p.get('hidden')]), 30)
 
     def test_inherited_shipping_semantics(self):
         values = profiles(DOCUMENT)

@@ -9,7 +9,9 @@
     "windows-shipping": {"runner": "windows-2025"},
     "windows-clang-cl-shipping": {"runner": "windows-2025"},
     "linux-gcc-shipping": {"runner": "ubuntu-24.04"},
-    "windows-native": {"runner": "windows-2025-vs2026"}
+    "windows-native": {"runner": "windows-2025-vs2026"},
+    "linux-arm64": {"runner": "ubuntu-24.04-arm"},
+    "windows-arm64": {"runner": "windows-11-arm"}
   },
   "presets": {
     "win-debug": {"tier": "change", "job": "windows"},
@@ -36,7 +38,12 @@
     "linux-gcc-debug-sse2": {"tier": "change", "job": "linux-gcc"},
     "linux-gcc-debug-scalar": {"tier": "complete", "job": "linux-gcc"},
     "linux-gcc-public-checks": {"tier": "complete", "job": "linux-gcc"},
-    "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"}
+    "linux-gcc-shipping": {"tier": "change", "job": "linux-gcc-shipping"},
+    "linux-gcc-arm64-debug": {"tier": "change", "job": "linux-arm64"},
+    "linux-gcc-arm64-asan": {"tier": "change", "job": "linux-arm64"},
+    "linux-clang-arm64-debug": {"tier": "change", "job": "linux-arm64"},
+    "linux-clang-arm64-asan": {"tier": "change", "job": "linux-arm64"},
+    "win-arm64-debug": {"tier": "change", "job": "windows-arm64"}
   },
   "preset_steps": {
     "GenMC weak-memory model": {"preset": "linux-clang-tsan", "tier": "complete"},

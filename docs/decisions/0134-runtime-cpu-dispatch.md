@@ -106,7 +106,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
-   where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE until such hardware exists (10.13.1,
+   where the runner has it, `portable` and `neon` on the hosted ARM64 lanes, which give general code the NEON backend
+   of the SIMD types); AVX-512 and AVX10 kernels run under Intel SDE until such hardware exists (10.13.1,
    approved 2026-10-27 and pinned, `scripts/install-sde.py`): with `CRD_SDE`, win-release and linux-gcc-release run
    `<suite>-kernels-at-avx512-sde-<cpu>` per SDE CPU model whose features a body selects on, and those arms fail
    when the level is refused (the hidden `[cpu-level-applied]` case). The doctor, the specimen harness's host tuple

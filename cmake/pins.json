@@ -367,7 +367,9 @@
   "runners": {
     "windows": "windows-2025",
     "linux": "ubuntu-24.04",
-    "windows-native": "windows-2025-vs2026"
+    "windows-native": "windows-2025-vs2026",
+    "linux-arm64": "ubuntu-24.04-arm",
+    "windows-arm64": "windows-11-arm"
   },
   "unpinned": {
     "apt": [
@@ -388,8 +390,11 @@
       "llvm-20-dev",
       "clang-20",
       "g++-14",
-      "libedit-dev"
+      "libedit-dev",
+      "ninja-build",
+      "clang",
+      "libclang-rt-18-dev"
     ],
-    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
+    "note": "OS-provided by the pinned runner image; the Linux lanes record the installed versions with dpkg-query into the lane census (llvm-20-dev, clang-20, g++-14 and libedit-dev only on the linux-clang-tsan entry, for the GenMC build; ninja-build, clang and libclang-rt-18-dev only on the linux-arm64 lanes, whose image runs no x86-64 pinned Ninja). The MSVC toolset comes from the pinned Windows image and is recorded by the evidence bundle."
   }
 }

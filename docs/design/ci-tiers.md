@@ -16,7 +16,7 @@ evidence for the exact revision every lane built.
 | Tier | Runs | Presets |
 |---|---|---|
 | preflight | every run | none; the `preflight` and `repository` jobs (workflow syntax, mapping, hygiene, documentation, tooling fixtures, generated artifacts) |
-| change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping` |
+| change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping`, the [ARM64 lanes](#arm64-lanes) `linux-gcc-arm64-debug`, `linux-gcc-arm64-asan`, `linux-clang-arm64-debug`, `linux-clang-arm64-asan`, `win-arm64-debug` |
 | complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution, the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) and the clang ThreadSanitizer preset `linux-clang-tsan` ([test instruments](test-instruments.md)) |
 | diagnostic | never in a tier | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)), `linux-clang-coverage` ([DIAG.10b](runtime-diagnostics.md#diag-10b)) |
 
@@ -41,6 +41,16 @@ win-asan, linux-gcc-debug and linux-gcc-asan in the change tier and on linux-cla
 the lane's build and tests pass ([test instruments](test-instruments.md#seeded-detector-failures-diag10b)). Each seed
 rebuilds only the targets holding its detecting tests, so a lane adds a few incremental builds: 16 s on the local
 win-debug tree and 92 s on win-asan.
+
+### ARM64 lanes
+
+The `linux-arm64` job (ubuntu-24.04-arm: GCC and Clang, debug and ASan with UBSan) and the `windows-arm64` job
+(windows-11-arm, MSVC ARM64) run the suite on NEON hardware: every kernel family builds portable there and the level
+probe's arms run portable and neon (SIMD-DISPATCH, [session](../sessions/2026-10-28-simd-dispatch-neon-parity.md)).
+They use the images' toolchains (Ubuntu's ninja-build and gdb; the pinned x64 Ninja under emulation and
+`msvc-dev-env.py --arch arm64` on Windows) and no compiler cache. crd-jobs has no ARM64 fiber context before
+[JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2), so the presets set `CRD_MODULES_WITHOUT=jobs`
+([module registry](module-registry.md#selection)); they widen by themselves once it builds there.
 
 [check-ci-tiers.py](../../scripts/check-ci-tiers.py) is the `crd-ci-tiers` CTest, a preflight step, a repository
 step and a tooling test. It fails when a visible preset has no owner or an entry names no preset, when an owning job
