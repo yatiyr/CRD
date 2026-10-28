@@ -6,8 +6,10 @@
 // two roundings (D(sparse)-3: never a fused multiply-add). The portable bodies keep the lane sums in arrays; the SSE2
 // bodies in 128-bit registers, gathering x by scalar loads; the AVX2 bodies in 256-bit registers, gathering complex x
 // by scalar loads, f32 x with vgatherdps and f64 x by scalar loads in L2 and vgatherdpd beyond it (each pick the
-// faster form on the 2026-10-27 board; a gather's signed index needs cols <= 2^31, scalar loads serve wider x). A
-// complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
+// faster form on the 2026-10-27 board; a gather's signed index needs cols <= 2^31, scalar loads serve wider x). The
+// AVX-512 bodies run a pair's shared full columns in one ZMM (slice s low, s + 1 high, gathering both slices' x in one
+// instruction), then finish each slice in the 256-bit body, which masks its gathers with an opmask; a complex f64
+// slice fills one ZMM alone. A complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
 // vi xi as it has no addsub. The columns every row of a slice stores run unmasked; past the shortest row a padded
 // lane multiplies its padding 0 by a zero instead of x[0], so an infinite or NaN x[0] reaches only the rows that
 // store column 0, and adding that +0 leaves the sum's bits (a sum from +0 is never -0). A Delta16 slice walks each
@@ -254,10 +256,25 @@ void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kO
     const crd::u32 both = full0 < full1 ? full0 : full1;
     typename Body::Sums sum0 = Body::zero();
     typename Body::Sums sum1 = Body::zero();
-    for (crd::u32 w = 0; w < both; ++w)
+    if constexpr (requires { typename Body::Pair; })
     {
-        sum0 = Body::template step<false>(sum0, a, x, b0 + w * height, walk0.next(), w, lens0);
-        sum1 = Body::template step<false>(sum1, a, x, b1 + w * height, walk1.next(), w, lens1);
+        // Both slices' lanes in one register over the columns both store, then each slice's own sums.
+        using Pair = typename Body::Pair;
+        typename Pair::Sums sums = Pair::zero();
+        for (crd::u32 w = 0; w < both; ++w)
+        {
+            const crd::u32* c0 = walk0.next();
+            sums = Pair::step(sums, a, x, b0 + w * height, c0, b1 + w * height, walk1.next());
+        }
+        Pair::split(sums, sum0, sum1);
+    }
+    else
+    {
+        for (crd::u32 w = 0; w < both; ++w)
+        {
+            sum0 = Body::template step<false>(sum0, a, x, b0 + w * height, walk0.next(), w, lens0);
+            sum1 = Body::template step<false>(sum1, a, x, b1 + w * height, walk1.next(), w, lens1);
+        }
     }
     Body::store(finish<Body>(sum0, a, x, s, both, full0, walk0), out0);
     Body::store(finish<Body>(sum1, a, x, s + 1U, both, full1, walk1), out1);
@@ -412,25 +429,44 @@ template <typename T> struct ScalarComplexBody
 };
 
 #if CRD_SIMD_HAS_SSE2
+// Two (re, im) pairs of f32 x in one 128-bit register: the pair at lo, then the pair at hi.
+__m128 c32_two(const crd::f32* lo, const crd::f32* hi) noexcept
+{
+    return _mm_loadh_pi(_mm_loadl_pi(_mm_setzero_ps(), reinterpret_cast<const __m64*>(lo)),
+                        reinterpret_cast<const __m64*>(hi));
+}
+
 // The (re, im) pairs of x for complex lanes `lane` and lane + 1 of an f32 slice column, in one 128-bit register.
 template <bool Masked>
 __m128 c32_x_pair(const crd::f32* x, const crd::u32* c, crd::u32 w, const crd::u32* lens, crd::u32 lane) noexcept
 {
-    const auto* lo =
-        reinterpret_cast<const __m64*>(x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane]), w, lens[lane]));
-    const auto* hi =
-        reinterpret_cast<const __m64*>(x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane + 1U]), w, lens[lane + 1U]));
-    return _mm_loadh_pi(_mm_loadl_pi(_mm_setzero_ps(), lo), hi);
+    return c32_two(x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane]), w, lens[lane]),
+                   x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane + 1U]), w, lens[lane + 1U]));
 }
 #endif
 
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+// The lanes of a masked column that store a value, len > w (unsigned), as an opmask over four or eight lanes.
+__mmask8 live_mask4(const crd::u32* lens, crd::u32 w) noexcept
+{
+    return _mm_cmpgt_epu32_mask(_mm_loadu_si128(reinterpret_cast<const __m128i*>(lens)),
+                                _mm_set1_epi32(static_cast<int>(w)));
+}
+__mmask8 live_mask8(const crd::u32* lens, crd::u32 w) noexcept
+{
+    return _mm256_cmpgt_epu32_mask(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(lens)),
+                                   _mm256_set1_epi32(static_cast<int>(w)));
+}
+#elif CRD_SIMD_HAS_AVX2
 // The lanes of a masked column that store a value: len >= w + 1 (unsigned), all ones; a padded lane, zero.
 __m128i live_lanes(const crd::u32* lens, crd::u32 w) noexcept
 {
     const __m128i len = _mm_loadu_si128(reinterpret_cast<const __m128i*>(lens));
     return _mm_cmpeq_epi32(_mm_max_epu32(len, _mm_set1_epi32(static_cast<int>(w + 1U))), len);
 }
+#endif
+
+#if CRD_SIMD_HAS_AVX2
 
 // Gather: vgatherdpd (a padded lane gathers nothing and keeps the zero); else scalar loads.
 template <bool Gather> struct Avx2F64Body
@@ -453,9 +489,13 @@ template <bool Gather> struct Avx2F64Body
         }
         else if constexpr (Masked)
         {
+            const __m128i index = _mm_loadu_si128(reinterpret_cast<const __m128i*>(c));
+#if CRD_SIMD_HAS_AVX512
+            xv = _mm256_mmask_i32gather_pd(_mm256_setzero_pd(), live_mask4(lens, w), index, x, 8);
+#else
             const __m256d live = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(live_lanes(lens, w)));
-            xv = _mm256_mask_i32gather_pd(_mm256_setzero_pd(), x, _mm_loadu_si128(reinterpret_cast<const __m128i*>(c)),
-                                          live, 8);
+            xv = _mm256_mask_i32gather_pd(_mm256_setzero_pd(), x, index, live, 8);
+#endif
         }
         else
         {
@@ -491,12 +531,15 @@ template <bool Gather> struct Avx2F32Body
         }
         else if constexpr (Masked)
         {
+            const __m256i index = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(c));
+#if CRD_SIMD_HAS_AVX512
+            xv = _mm256_mmask_i32gather_ps(_mm256_setzero_ps(), live_mask8(lens, w), index, x, 4);
+#else
             const __m256i len = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(lens));
             const __m256i live =
                 _mm256_cmpeq_epi32(_mm256_max_epu32(len, _mm256_set1_epi32(static_cast<int>(w + 1U))), len);
-            xv = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), x,
-                                          _mm256_loadu_si256(reinterpret_cast<const __m256i*>(c)),
-                                          _mm256_castsi256_ps(live), 4);
+            xv = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), x, index, _mm256_castsi256_ps(live), 4);
+#endif
         }
         else
         {
@@ -569,12 +612,162 @@ struct Avx2C32Body
     static void store(Sums sums, crd::f32 (&out)[kOut]) noexcept { _mm256_storeu_ps(out, sums); }
 };
 
+#if CRD_SIMD_HAS_AVX512
+// addsub on 512 bits: a - b in the even lanes (each complex value's real part), a + b in the odd ones.
+__m512d addsub(__m512d a, __m512d b) noexcept
+{
+    return _mm512_mask_sub_pd(_mm512_add_pd(a, b), 0x55, a, b);
+}
+__m512 addsub(__m512 a, __m512 b) noexcept
+{
+    return _mm512_mask_sub_ps(_mm512_add_ps(a, b), 0x5555, a, b);
+}
+
+// A pair's step in one ZMM: slice s's lanes low, slice s + 1's high, each lane the 256-bit body's chain. The pair runs
+// only the columns both slices store in full, so no lane is masked; the 256-bit body finishes each slice.
+template <bool Gather> struct Avx512F64Body : Avx2F64Body<Gather>
+{
+    using Loads = Avx512F64Body<false>;
+    struct Pair
+    {
+        using Sums = __m512d;
+        static Sums zero() noexcept { return _mm512_setzero_pd(); }
+        static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off0, const crd::u32* c0,
+                         crd::u32 off1, const crd::u32* c1) noexcept
+        {
+            __m512d xv;
+            if constexpr (Gather)
+            {
+                const __m256i index = _mm256_inserti128_si256(
+                    _mm256_castsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(c0))),
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(c1)), 1);
+                xv = _mm512_i32gather_pd(index, x, 8);
+            }
+            else
+            {
+                xv = _mm512_setr_pd(x[c0[0]], x[c0[1]], x[c0[2]], x[c0[3]], x[c1[0]], x[c1[1]], x[c1[2]], x[c1[3]]);
+            }
+            const __m512d v = _mm512_insertf64x4(_mm512_castpd256_pd512(_mm256_loadu_pd(a.vals + off0)),
+                                                 _mm256_loadu_pd(a.vals + off1), 1);
+            return _mm512_add_pd(sums, _mm512_mul_pd(v, xv));
+        }
+        static void split(Sums sums, __m256d& lo, __m256d& hi) noexcept
+        {
+            lo = _mm512_castpd512_pd256(sums);
+            hi = _mm512_extractf64x4_pd(sums, 1);
+        }
+    };
+};
+
+// The same for f32: sixteen lanes, one vgatherdps of both slices' columns.
+template <bool Gather> struct Avx512F32Body : Avx2F32Body<Gather>
+{
+    using Loads = Avx512F32Body<false>;
+    struct Pair
+    {
+        using Sums = __m512;
+        static Sums zero() noexcept { return _mm512_setzero_ps(); }
+        static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off0, const crd::u32* c0,
+                         crd::u32 off1, const crd::u32* c1) noexcept
+        {
+            __m512 xv;
+            if constexpr (Gather)
+            {
+                const __m512i index =
+                    _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(c0))),
+                                       _mm256_loadu_si256(reinterpret_cast<const __m256i*>(c1)), 1);
+                xv = _mm512_i32gather_ps(index, x, 4);
+            }
+            else
+            {
+                alignas(64) crd::f32 xg[2U * kSellSliceF32];
+                for (crd::u32 lane = 0; lane < kSellSliceF32; ++lane)
+                {
+                    xg[lane] = x[c0[lane]];
+                    xg[kSellSliceF32 + lane] = x[c1[lane]];
+                }
+                xv = _mm512_load_ps(xg);
+            }
+            const __m512 v = _mm512_insertf32x8(_mm512_castps256_ps512(_mm256_loadu_ps(a.vals + off0)),
+                                                _mm256_loadu_ps(a.vals + off1), 1);
+            return _mm512_add_ps(sums, _mm512_mul_ps(v, xv));
+        }
+        static void split(Sums sums, __m256& lo, __m256& hi) noexcept
+        {
+            lo = _mm512_castps512_ps256(sums);
+            hi = _mm512_extractf32x8_ps(sums, 1);
+        }
+    };
+};
+
+// The four complex f64 lanes of a slice in one register, as Avx2C64Body.
+struct Avx512C64Body
+{
+    static constexpr crd::u32 kC = kSellSliceComplex;
+    static constexpr crd::u32 kOut = 2U * kC;
+    using Sums = __m512d;
+    static Sums zero() noexcept { return _mm512_setzero_pd(); }
+    template <bool Masked>
+    static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
+                     crd::u32 w, const crd::u32* lens) noexcept
+    {
+        const __m512d v = _mm512_loadu_pd(a.vals + 2U * static_cast<crd::usize>(off));
+        const __m512d xv = _mm512_insertf64x4(_mm512_castpd256_pd512(Avx2C64Body::x_pair<Masked>(x, c, w, lens, 0)),
+                                              Avx2C64Body::x_pair<Masked>(x, c, w, lens, 2), 1);
+        const __m512d p = addsub(_mm512_mul_pd(_mm512_movedup_pd(v), xv),
+                                 _mm512_mul_pd(_mm512_permute_pd(v, 0xFF), _mm512_permute_pd(xv, 0x55)));
+        return _mm512_add_pd(sums, p);
+    }
+    static void store(Sums sums, crd::f64 (&out)[kOut]) noexcept { _mm512_storeu_pd(out, sums); }
+};
+
+// A pair of complex f32 slices in one register, as Avx512F64Body.
+struct Avx512C32Body : Avx2C32Body
+{
+    struct Pair
+    {
+        using Sums = __m512;
+        static Sums zero() noexcept { return _mm512_setzero_ps(); }
+        // The x pairs of a slice column's four complex lanes.
+        static __m256 x_lanes(const crd::f32* x, const crd::u32* c) noexcept
+        {
+            const auto at = [x, c](crd::u32 lane)
+            {
+                return x + 2U * static_cast<crd::usize>(c[lane]);
+            };
+            return _mm256_insertf128_ps(_mm256_castps128_ps256(c32_two(at(0), at(1))), c32_two(at(2), at(3)), 1);
+        }
+        static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off0, const crd::u32* c0,
+                         crd::u32 off1, const crd::u32* c1) noexcept
+        {
+            const __m512 v =
+                _mm512_insertf32x8(_mm512_castps256_ps512(_mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off0))),
+                                   _mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off1)), 1);
+            const __m512 xv = _mm512_insertf32x8(_mm512_castps256_ps512(x_lanes(x, c0)), x_lanes(x, c1), 1);
+            const __m512 p = addsub(_mm512_mul_ps(_mm512_moveldup_ps(v), xv),
+                                    _mm512_mul_ps(_mm512_movehdup_ps(v), _mm512_permute_ps(xv, 0xB1)));
+            return _mm512_add_ps(sums, p);
+        }
+        static void split(Sums sums, __m256& lo, __m256& hi) noexcept
+        {
+            lo = _mm512_castps512_ps256(sums);
+            hi = _mm512_extractf32x8_ps(sums, 1);
+        }
+    };
+};
+
+using F64Policy = SellPolicy<Avx512F64Body<false>, kPairWidth, Avx512F64Body<true>, kPairWidth>;
+using F32Policy = SellPolicy<Avx512F32Body<true>, kPairWidth, Avx512F32Body<true>, kPairWidth>;
+using C64Policy = SellPolicy<Avx512C64Body, kPairWidth, Avx512C64Body, kPairWidth>;
+using C32Policy = SellPolicy<Avx512C32Body, kPairWidth, Avx512C32Body, kPairWidth>;
+#else
 // f64: scalar loads 6% to 20% ahead of vgatherdpd in L2, vgatherdpd ahead from DRAM (power-law 1M 12.49 against 13.52
 // to 13.67 ms).
 using F64Policy = SellPolicy<Avx2F64Body<false>, kPairWidth, Avx2F64Body<true>, kPairWidth>;
 using F32Policy = SellPolicy<Avx2F32Body<true>, kPairWidth, Avx2F32Body<true>, kPairWidth>;
 using C64Policy = SellPolicy<Avx2C64Body, kPairWidth, Avx2C64Body, kPairWidth>;
 using C32Policy = SellPolicy<Avx2C32Body, kPairWidth, Avx2C32Body, kPairWidth>;
+#endif
 #elif CRD_SIMD_HAS_SSE2
 struct Sse2F64Body
 {
