@@ -91,6 +91,33 @@ struct Vec16f
 #endif
     }
 
+    // [p0 p0 p1 p1 ... p7 p7]: eight table entries, each duplicated over a complex lane.
+    [[nodiscard]] CRD_FORCEINLINE static Vec16f load_dup_pairs(const f32* p) noexcept
+    {
+#if CRD_SIMD_HAS_AVX512
+        Vec16f r;
+        r.v = _mm512_permutexvar_ps(_mm512_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7),
+                                    _mm512_castps256_ps512(_mm256_loadu_ps(p)));
+        return r;
+#else
+        return Vec16f(Vec8f::load_dup_pairs(p), Vec8f::load_dup_pairs(p + 4));
+#endif
+    }
+
+    // [lo.c0 hi.c0 lo.c1 hi.c1 lo.c2 hi.c2 lo.c3 hi.c3] from four complex at lo and four at hi.
+    [[nodiscard]] CRD_FORCEINLINE static Vec16f load_c_quad(const f32* lo, const f32* hi) noexcept
+    {
+#if CRD_SIMD_HAS_AVX512
+        Vec16f r;
+        const __m512d both =
+            _mm512_castps_pd(_mm512_insertf32x8(_mm512_castps256_ps512(_mm256_loadu_ps(lo)), _mm256_loadu_ps(hi), 1));
+        r.v = _mm512_castpd_ps(_mm512_permutexvar_pd(_mm512_setr_epi64(0, 4, 1, 5, 2, 6, 3, 7), both));
+        return r;
+#else
+        return Vec16f(Vec8f::load_c_quad(lo, hi), Vec8f::load_c_quad(lo + 4, hi + 4));
+#endif
+    }
+
     // The first `count` lanes (1..15; 16 is `load`/`store`): the other lanes load as +0 and are never read or written.
     [[nodiscard]] CRD_FORCEINLINE static Vec16f load_partial(const f32* p, usize count) noexcept
     {
@@ -531,6 +558,77 @@ CRD_FORCEINLINE void store_complex_interleaved(f32* p, Vec16f re, Vec16f im) noe
 #else
     store_complex_interleaved(p, re.lo, im.lo);
     store_complex_interleaved(p + 16, re.hi, im.hi);
+#endif
+}
+
+// Vec8f's interleaved-complex helpers on eight complex (c0..c7, 64 bits each), each the two halves' helper.
+// [a1, a0, a3, a2, ...]: the real and imaginary parts of every complex lane swapped.
+CRD_FORCEINLINE Vec16f swap_pairs(Vec16f a) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_permute_ps(a.v, 0xB1);
+    return r;
+#else
+    return Vec16f(swap_pairs(a.lo), swap_pairs(a.hi));
+#endif
+}
+
+// [a0-b0, a1+b1, ...]: AVX-512 has no addsub, so the sum's even lanes are replaced by the difference.
+CRD_FORCEINLINE Vec16f addsub(Vec16f a, Vec16f b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_mask_sub_ps(_mm512_add_ps(a.v, b.v), 0x5555, a.v, b.v);
+    return r;
+#else
+    return Vec16f(addsub(a.lo, b.lo), addsub(a.hi, b.hi));
+#endif
+}
+
+// [a0*b0-c0, a1*b1+c1, ...] — fused single-rounded multiply-addsub.
+CRD_FORCEINLINE Vec16f fmaddsub(Vec16f a, Vec16f b, Vec16f c) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_fmaddsub_ps(a.v, b.v, c.v);
+    return r;
+#else
+    return Vec16f(fmaddsub(a.lo, b.lo, c.lo), fmaddsub(a.hi, b.hi, c.hi));
+#endif
+}
+
+// Per 128-bit lane: [a.c0 b.c0 | a.c2 b.c2 | ...] and [a.c1 b.c1 | a.c3 b.c3 | ...].
+CRD_FORCEINLINE Vec16f unpack_c_lo(Vec16f a, Vec16f b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_castpd_ps(_mm512_unpacklo_pd(_mm512_castps_pd(a.v), _mm512_castps_pd(b.v)));
+    return r;
+#else
+    return Vec16f(unpack_c_lo(a.lo, b.lo), unpack_c_lo(a.hi, b.hi));
+#endif
+}
+CRD_FORCEINLINE Vec16f unpack_c_hi(Vec16f a, Vec16f b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_castpd_ps(_mm512_unpackhi_pd(_mm512_castps_pd(a.v), _mm512_castps_pd(b.v)));
+    return r;
+#else
+    return Vec16f(unpack_c_hi(a.lo, b.lo), unpack_c_hi(a.hi, b.hi));
+#endif
+}
+
+// [a.c0 b.c1 a.c2 b.c3 ...]: the odd complex lanes from b.
+CRD_FORCEINLINE Vec16f blend_c_odd(Vec16f a, Vec16f b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec16f r;
+    r.v = _mm512_mask_blend_ps(0xCCCC, a.v, b.v);
+    return r;
+#else
+    return Vec16f(blend_c_odd(a.lo, b.lo), blend_c_odd(a.hi, b.hi));
 #endif
 }
 

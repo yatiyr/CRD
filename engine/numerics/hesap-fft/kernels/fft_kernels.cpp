@@ -1135,6 +1135,35 @@ template <typename T> struct Engine
         return d;
     }
 
+    // execute_ip4aos' fold output: the u-th complex pair of y to ob[u] + off.
+    template <typename W> CRD_FORCEINLINE static void store_units(Complex<T>* const* ob, crd::usize off, W y) noexcept
+    {
+        constexpr crd::usize units = kCols<T, W> / 4;
+        if constexpr (units == 1)
+        {
+            y.store(reinterpret_cast<T*>(ob[0] + off));
+        }
+        else if constexpr (units == 2)
+        {
+            simd::store_c_lo(reinterpret_cast<T*>(ob[0] + off), y);
+            simd::store_c_hi(reinterpret_cast<T*>(ob[1] + off), y);
+        }
+        else
+        {
+            store_units(ob, off, low_half(y));
+            store_units(ob + units / 2, off, high_half(y));
+        }
+    }
+
+    // execute_ip4aos' staging copy of count T, one W a step.
+    template <typename W> CRD_FORCEINLINE static void stage(const T* src, T* dst, crd::usize count) noexcept
+    {
+        for (crd::usize o = 0; o < count; o += kCols<T, W>)
+        {
+            W::load(src + o).store(dst + o);
+        }
+    }
+
     // Recursive DIT core: writes the n-point DFT of the strided SoA input (inr/ini, stride si) into the
     // contiguous output (outr/outi). RADIX-4 split (stride ×4), recurse into the 4 cosets, then a SIMD
     // in-place radix-4 combine. Same work-per-element as the direct radix-4 Stockham, but depth-first so the
@@ -1479,15 +1508,15 @@ template <typename T> struct Engine
                                     {
                                         twiddle_by(ur[i], ui[i], wr[i], wi[i]);
                                     }
-                                    else if (i < tile) // row tile 0: its own recurrence on both tiles
+                                    else
                                     {
-                                        twiddle_by(ur[i], ui[i], wr[i], wi[i]);
-                                    }
-                                    else // row tile 1: the transposed element's on tile 0, its own on tile 1
-                                    {
-                                        // the halves exist only on the two-tile types: found at instantiation
-                                        twiddle_by(ur[i], ui[i], V(low_half(twtr[i]), high_half(wr[i])),
-                                                   V(low_half(twti[i]), high_half(wi[i])));
+                                        // Row tile 0 takes its own recurrence on both tiles; row tile 1 the
+                                        // transposed element's on tile 0 and its own on tile 1. The halves exist
+                                        // only on the two-tile types: found at instantiation.
+                                        const bool own = i < tile;
+                                        const V tr = own ? wr[i] : V(low_half(twtr[i]), high_half(wr[i]));
+                                        const V ti = own ? wi[i] : V(low_half(twti[i]), high_half(wi[i]));
+                                        twiddle_by(ur[i], ui[i], tr, ti);
                                     }
                                 }
                                 simd::store_complex_interleaved(reinterpret_cast<T*>(a + (r + i) * m + c), ur[i],
@@ -1560,11 +1589,11 @@ template <typename T> struct Engine
         fs6_transpose_inplace(x, m, false); // T3 -> natural order
     }
 
-    // IP4-AoS (PROMOTED): the INTERLEAVED in-place radix-4 DIT engine, f64 1K..64K both parities
-    // and both DIRECTIONS. INV = inverse: conjugated twiddles throughout — folded into the fold's
-    // sgn vector (zero extra ops: only t.hi feeds mix_lo_hi), compile-time-negated fold constants,
-    // an X1/X3 swap in bf4, and negate-at-load for table twiddles (measured free, round 15).
-    // Design record: docs/research/fft-stockham-v2.md rounds 1-17.
+    // IP4-AoS (PROMOTED): the INTERLEAVED in-place radix-4 DIT engine, f64 1K..64K and f32 2K and
+    // 16K..64K, both parities and both DIRECTIONS. INV = inverse: conjugated twiddles throughout — folded into the
+    // fold's sgn vector (zero extra ops: only t.hi feeds mix_lo_hi), compile-time-negated fold constants, an X1/X3 swap
+    // in bf4, and negate-at-load for table twiddles (measured free, round 15). Design record:
+    // docs/research/fft-stockham-v2.md rounds 1-17.
     template <bool INV>
 #if defined(_MSC_VER) && !defined(__clang__)
     // MSVC LTCG inlines both instantiations into execute(), stacking this ~600-line SIMD driver
@@ -1576,20 +1605,34 @@ template <typename T> struct Engine
     execute_ip4aos(Complex<T>* data) const
     {
         constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
-        using V = TileVec<T>;
-        constexpr crd::usize per_vec = is_f32 ? 4 : 2; // complex per vector
-        // 4-tuple constant builder: one value per T-lane over a complex PAIR; the f32 vector holds
-        // two such pairs (twin units) ⇒ the tuple duplicates across 128-bit halves.
+        // Every column, fold unit and twiddle is its own lane chain, so a wider vector only packs more of them: at
+        // avx512 each step and fold call takes two tiles' worth on WideVec, with every lane's operations unchanged.
+        using V = WideVec<T>;
+        using H = TileVec<T>;
+        constexpr crd::usize per_vec = kCols<T, V> / 2; // complex per vector
+        // A fold unit is a complex PAIR (128 bits of f32, 256 of f64): one per Vec4d, two per Vec8f or Vec8d (twin
+        // units), four per Vec16f.
+        constexpr crd::usize units = kCols<T, V> / 4;
+        // 4-tuple constant builder: one value per T-lane over a complex PAIR, duplicated across every unit.
         const auto mkv = [](double a, double b, double c, double d) noexcept -> V
         {
+            H h;
             if constexpr (is_f32)
             {
-                return V(static_cast<T>(a), static_cast<T>(b), static_cast<T>(c), static_cast<T>(d), static_cast<T>(a),
-                         static_cast<T>(b), static_cast<T>(c), static_cast<T>(d));
+                h = H(static_cast<T>(a), static_cast<T>(b), static_cast<T>(c), static_cast<T>(d), static_cast<T>(a),
+                      static_cast<T>(b), static_cast<T>(c), static_cast<T>(d));
             }
             else
             {
-                return V(a, b, c, d);
+                h = H(a, b, c, d);
+            }
+            if constexpr (std::is_same_v<V, H>)
+            {
+                return h;
+            }
+            else
+            {
+                return V(h, h);
             }
         };
         constexpr double ns = INV ? -1.0 : 1.0; // conjugation sign (applied inside mkv, T-cast there)
@@ -1666,13 +1709,10 @@ template <typename T> struct Engine
             // + 0..3], t = 0..15). Stage the 64 complex through a 1 KB L1 buffer: every io line is
             // fetched from L2 exactly ONCE (the scattered-unit form re-fetched each line 4×).
             const crd::usize n16 = n >> 4; // io stream stride — SAME expression for both parities
-            // fold-unit: 16 complex from staged lbuf (group step gs, role-m step ms, lane base l)
-            // through len-4 (P-trick) + len-16 (constant twiddles) into 16 sequential tb slots.
-            // fold-unit: 16 complex per unit through len-4 (P-trick) + len-16 (constant twiddles)
-            // into 16 sequential tb slots. f64: one unit per call (obB unused). f32: TWIN units per
-            // call — low 128-half of every vector = unit A → obA, high = unit B → obB.
-            const auto fold16 =
-                [&](const T* lbase, crd::usize gs, crd::usize ms, Complex<T>* obA, Complex<T>* obB) noexcept
+            // fold-unit: 16 complex per unit from staged lbuf (group step gs, role-m step ms, unit u at
+            // lbase + 2u) through len-4 (P-trick) + len-16 (constant twiddles) into 16 sequential slots
+            // at ob[u]. A call takes `units` units, unit u in the vector's u-th complex pair.
+            const auto fold16 = [&](const T* lbase, crd::usize gs, crd::usize ms, Complex<T>* const* ob) noexcept
             {
                 V y00; // y{group}{pair-half}
                 V y01;
@@ -1689,10 +1729,10 @@ template <typename T> struct Engine
                     V cd;
                     V u;
                     V w;
-                    if constexpr (is_f32)
+                    if constexpr (units > 1)
                     {
-                        ab = simd::load_c_quad(l0, l0 + ms);
-                        cd = simd::load_c_quad(l0 + 2 * ms, l0 + 3 * ms);
+                        ab = V::load_c_quad(l0, l0 + ms);
+                        cd = V::load_c_quad(l0 + 2 * ms, l0 + 3 * ms);
                     }
                     else
                     {
@@ -1701,7 +1741,7 @@ template <typename T> struct Engine
                     }
                     const V u0 = ab + cd; // [t0, t2] per unit
                     const V u1 = ab - cd; // [t1, t3]
-                    if constexpr (is_f32)
+                    if constexpr (units > 1)
                     {
                         u = simd::unpack_c_lo(u0, u1); // [t0, t1] per unit
                         w = simd::unpack_c_hi(u0, u1); // [t2, t3]
@@ -1713,7 +1753,7 @@ template <typename T> struct Engine
                     }
                     const V t = simd::swap_pairs(w) * sgn; // [t2i, t2r, t3i, ∓t3r]
                     V p;
-                    if constexpr (is_f32)
+                    if constexpr (units > 1)
                     {
                         p = simd::blend_c_odd(w, t); // [t2, (t3i, ∓t3r)]
                     }
@@ -1728,37 +1768,14 @@ template <typename T> struct Engine
                 }
                 bf4(y00, y10, y20, y30, w1r_a, w1i_a, w2r_a, w2i_a, w3r_a, w3i_a); // positions 0,1
                 bf4(y01, y11, y21, y31, w1r_b, w1i_b, w2r_b, w2i_b, w3r_b, w3i_b); // positions 2,3
-                if constexpr (is_f32)
-                {
-                    simd::store_c_lo(reinterpret_cast<T*>(obA), y00);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB), y00);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 2), y01);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 2), y01);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 4), y10);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 4), y10);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 6), y11);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 6), y11);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 8), y20);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 8), y20);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 10), y21);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 10), y21);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 12), y30);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 12), y30);
-                    simd::store_c_lo(reinterpret_cast<T*>(obA + 14), y31);
-                    simd::store_c_hi(reinterpret_cast<T*>(obB + 14), y31);
-                }
-                else
-                {
-                    (void)obB;
-                    y00.store(reinterpret_cast<T*>(obA));
-                    y01.store(reinterpret_cast<T*>(obA + 2));
-                    y10.store(reinterpret_cast<T*>(obA + 4));
-                    y11.store(reinterpret_cast<T*>(obA + 6));
-                    y20.store(reinterpret_cast<T*>(obA + 8));
-                    y21.store(reinterpret_cast<T*>(obA + 10));
-                    y30.store(reinterpret_cast<T*>(obA + 12));
-                    y31.store(reinterpret_cast<T*>(obA + 14));
-                }
+                store_units(ob, 0, y00);
+                store_units(ob, 2, y01);
+                store_units(ob, 4, y10);
+                store_units(ob, 6, y11);
+                store_units(ob, 8, y20);
+                store_units(ob, 10, y21);
+                store_units(ob, 12, y30);
+                store_units(ob, 14, y31);
             };
             alignas(64) T lbuf[256];
             if (!ipodd)
@@ -1768,73 +1785,41 @@ template <typename T> struct Engine
                     const crd::usize j0 = plan.ip_rev[s];
                     for (crd::usize t = 0; t < 16; ++t) // line-complete loads → L1 staging (8 T)
                     {
-                        const T* const src = reinterpret_cast<const T*>(io + j0 + t * n16);
-                        if constexpr (is_f32)
-                        {
-                            V::load(src).store(lbuf + 8 * t);
-                        }
-                        else
-                        {
-                            V::load(src).store(lbuf + 8 * t);
-                            V::load(src + 4).store(lbuf + 8 * t + 4);
-                        }
+                        stage<std::conditional_t<(kCols<T, V> <= 8), V, H>>(
+                            reinterpret_cast<const T*>(io + j0 + t * n16), lbuf + 8 * t, 8);
                     }
-                    if constexpr (is_f32) // twin over v: units (v, v+1) share each vector
+                    for (crd::usize v = 0; v < 4; v += units) // unit v at lbuf + 2v
                     {
-                        for (crd::usize v = 0; v < 4; v += 2)
+                        Complex<T>* ob[units];
+                        for (crd::usize u = 0; u < units; ++u)
                         {
-                            fold16(lbuf + 2 * v, 8, 32, tb + ps(s + v * nq), tb + ps(s + (v + 1) * nq));
+                            ob[u] = tb + ps(s + (v + u) * nq);
                         }
-                    }
-                    else
-                    {
-                        for (crd::usize v = 0; v < 4; ++v)
-                        {
-                            fold16(lbuf + 2 * v, 8, 32, tb + ps(s + v * nq), nullptr);
-                        }
+                        fold16(lbuf + 2 * v, 8, 32, ob);
                     }
                 }
             }
             else
             {
                 // odd log2: each io line holds 2 even + 2 odd complex — co-process BOTH halves'
-                // units per stream (8 complex staged per stream; lane (v,h) at offset 2·(2v+h)).
+                // units per stream (8 complex staged per stream; unit i = 2v + h at offset 2i).
                 const crd::usize nqh = nh >> 2;
                 for (crd::usize s = 0; s < nqh; s += 16)
                 {
                     const crd::usize j0 = plan.ip_rev[s]; // = 2·rev(s)
                     for (crd::usize t = 0; t < 16; ++t)   // 16 T per stream
                     {
-                        const T* const src = reinterpret_cast<const T*>(io + j0 + t * n16);
-                        if constexpr (is_f32)
-                        {
-                            V::load(src).store(lbuf + 16 * t);
-                            V::load(src + 8).store(lbuf + 16 * t + 8);
-                        }
-                        else
-                        {
-                            V::load(src).store(lbuf + 16 * t);
-                            V::load(src + 4).store(lbuf + 16 * t + 4);
-                            V::load(src + 8).store(lbuf + 16 * t + 8);
-                            V::load(src + 12).store(lbuf + 16 * t + 12);
-                        }
+                        stage<V>(reinterpret_cast<const T*>(io + j0 + t * n16), lbuf + 16 * t, 16);
                     }
-                    if constexpr (is_f32) // twin over h: lanes (v,h=0)|(v,h=1) are adjacent (4v, 4v+2)
+                    for (crd::usize i = 0; i < 8; i += units) // twin units pair (v, 0) with (v, 1)
                     {
-                        for (crd::usize v = 0; v < 4; ++v)
+                        Complex<T>* ob[units];
+                        for (crd::usize u = 0; u < units; ++u)
                         {
-                            fold16(lbuf + 4 * v, 16, 64, tb + ps(s + v * nqh), tb + ps(s + v * nqh + nh));
+                            const crd::usize j = i + u;
+                            ob[u] = tb + ps(s + (j >> 1U) * nqh + (j & 1U) * nh);
                         }
-                    }
-                    else
-                    {
-                        for (crd::usize h = 0; h < 2; ++h)
-                        {
-                            for (crd::usize v = 0; v < 4; ++v)
-                            {
-                                fold16(lbuf + 2 * (2 * v + h), 16, 64, tb + ps(s + v * nqh + h * nh), nullptr);
-                            }
-                        }
+                        fold16(lbuf + 2 * i, 16, 64, ob);
                     }
                 }
             }
@@ -1954,20 +1939,20 @@ template <typename T> struct Engine
                     }
                     for (crd::usize k = 0; k < q; k += per_vec)
                     {
-                        const V w1r = simd::load_dup_pairs(twr + k);
-                        const V w2r = simd::load_dup_pairs(twr + q + k);
-                        const V w3r = simd::load_dup_pairs(twr + 2 * q + k);
-                        const V w4r = simd::load_dup_pairs(twr + 3 * q + k);
-                        const V w5r = simd::load_dup_pairs(twr + 4 * q + k);
-                        const V w6r = simd::load_dup_pairs(twr + 5 * q + k);
-                        const V w7r = simd::load_dup_pairs(twr + 6 * q + k);
-                        V w1i = simd::load_dup_pairs(twi + k);
-                        V w2i = simd::load_dup_pairs(twi + q + k);
-                        V w3i = simd::load_dup_pairs(twi + 2 * q + k);
-                        V w4i = simd::load_dup_pairs(twi + 3 * q + k);
-                        V w5i = simd::load_dup_pairs(twi + 4 * q + k);
-                        V w6i = simd::load_dup_pairs(twi + 5 * q + k);
-                        V w7i = simd::load_dup_pairs(twi + 6 * q + k);
+                        const V w1r = V::load_dup_pairs(twr + k);
+                        const V w2r = V::load_dup_pairs(twr + q + k);
+                        const V w3r = V::load_dup_pairs(twr + 2 * q + k);
+                        const V w4r = V::load_dup_pairs(twr + 3 * q + k);
+                        const V w5r = V::load_dup_pairs(twr + 4 * q + k);
+                        const V w6r = V::load_dup_pairs(twr + 5 * q + k);
+                        const V w7r = V::load_dup_pairs(twr + 6 * q + k);
+                        V w1i = V::load_dup_pairs(twi + k);
+                        V w2i = V::load_dup_pairs(twi + q + k);
+                        V w3i = V::load_dup_pairs(twi + 2 * q + k);
+                        V w4i = V::load_dup_pairs(twi + 3 * q + k);
+                        V w5i = V::load_dup_pairs(twi + 4 * q + k);
+                        V w6i = V::load_dup_pairs(twi + 5 * q + k);
+                        V w7i = V::load_dup_pairs(twi + 6 * q + k);
                         if constexpr (INV)
                         {
                             w1i = V::zero() - w1i;
@@ -2015,10 +2000,10 @@ template <typename T> struct Engine
                         const T* const t3i = t1i + 2 * q;
                         for (crd::usize k = 0; k < ke; k += 2 * per_vec) // k-unroll×2 × block-pair: 4 chains
                         {
-                            V w1r = simd::load_dup_pairs(t1r + k);
-                            V w1i = simd::load_dup_pairs(t1i + k);
-                            V u1r = simd::load_dup_pairs(t1r + k + per_vec);
-                            V u1i = simd::load_dup_pairs(t1i + k + per_vec);
+                            V w1r = V::load_dup_pairs(t1r + k);
+                            V w1i = V::load_dup_pairs(t1i + k);
+                            V u1r = V::load_dup_pairs(t1r + k + per_vec);
+                            V u1i = V::load_dup_pairs(t1i + k + per_vec);
                             if constexpr (INV) // conjugate at load (measured free — port headroom)
                             {
                                 w1i = V::zero() - w1i;
@@ -2034,14 +2019,14 @@ template <typename T> struct Engine
                             V u3i;
                             if (tab3) // small pass: full table (branch is pass-invariant, predicted)
                             {
-                                w2r = simd::load_dup_pairs(t2r + k);
-                                w2i = simd::load_dup_pairs(t2i + k);
-                                w3r = simd::load_dup_pairs(t3r + k);
-                                w3i = simd::load_dup_pairs(t3i + k);
-                                u2r = simd::load_dup_pairs(t2r + k + per_vec);
-                                u2i = simd::load_dup_pairs(t2i + k + per_vec);
-                                u3r = simd::load_dup_pairs(t3r + k + per_vec);
-                                u3i = simd::load_dup_pairs(t3i + k + per_vec);
+                                w2r = V::load_dup_pairs(t2r + k);
+                                w2i = V::load_dup_pairs(t2i + k);
+                                w3r = V::load_dup_pairs(t3r + k);
+                                w3i = V::load_dup_pairs(t3i + k);
+                                u2r = V::load_dup_pairs(t2r + k + per_vec);
+                                u2i = V::load_dup_pairs(t2i + k + per_vec);
+                                u3r = V::load_dup_pairs(t3r + k + per_vec);
+                                u3i = V::load_dup_pairs(t3i + k + per_vec);
                                 if constexpr (INV)
                                 {
                                     w2i = V::zero() - w2i;
@@ -2124,10 +2109,10 @@ template <typename T> struct Engine
                             V b1 = V::load(reinterpret_cast<const T*>(p1 + k + per_vec));
                             V c1 = V::load(reinterpret_cast<const T*>(p2 + k + per_vec));
                             V d1 = V::load(reinterpret_cast<const T*>(p3 + k + per_vec));
-                            V w1r = simd::load_dup_pairs(t1r + k);
-                            V w1i = simd::load_dup_pairs(t1i + k);
-                            V u1r = simd::load_dup_pairs(t1r + k + per_vec);
-                            V u1i = simd::load_dup_pairs(t1i + k + per_vec);
+                            V w1r = V::load_dup_pairs(t1r + k);
+                            V w1i = V::load_dup_pairs(t1i + k);
+                            V u1r = V::load_dup_pairs(t1r + k + per_vec);
+                            V u1i = V::load_dup_pairs(t1i + k + per_vec);
                             if constexpr (INV)
                             {
                                 w1i = V::zero() - w1i;
@@ -2143,14 +2128,14 @@ template <typename T> struct Engine
                             V u3i;
                             if (tab3)
                             {
-                                w2r = simd::load_dup_pairs(t1r + q + k);
-                                w2i = simd::load_dup_pairs(t1i + q + k);
-                                w3r = simd::load_dup_pairs(t1r + 2 * q + k);
-                                w3i = simd::load_dup_pairs(t1i + 2 * q + k);
-                                u2r = simd::load_dup_pairs(t1r + q + k + per_vec);
-                                u2i = simd::load_dup_pairs(t1i + q + k + per_vec);
-                                u3r = simd::load_dup_pairs(t1r + 2 * q + k + per_vec);
-                                u3i = simd::load_dup_pairs(t1i + 2 * q + k + per_vec);
+                                w2r = V::load_dup_pairs(t1r + q + k);
+                                w2i = V::load_dup_pairs(t1i + q + k);
+                                w3r = V::load_dup_pairs(t1r + 2 * q + k);
+                                w3i = V::load_dup_pairs(t1i + 2 * q + k);
+                                u2r = V::load_dup_pairs(t1r + q + k + per_vec);
+                                u2i = V::load_dup_pairs(t1i + q + k + per_vec);
+                                u3r = V::load_dup_pairs(t1r + 2 * q + k + per_vec);
+                                u3i = V::load_dup_pairs(t1i + 2 * q + k + per_vec);
                                 if constexpr (INV)
                                 {
                                     w2i = V::zero() - w2i;
@@ -2189,10 +2174,10 @@ template <typename T> struct Engine
                 const V o0 = V::load(reinterpret_cast<const T*>(tb + ps(nh + j)));
                 const V e1 = V::load(reinterpret_cast<const T*>(tb + ps(j + per_vec)));
                 const V o1 = V::load(reinterpret_cast<const T*>(tb + ps(nh + j + per_vec)));
-                const V w0r = simd::load_dup_pairs(twr + j);
-                const V w1r = simd::load_dup_pairs(twr + j + per_vec);
-                V w0i = simd::load_dup_pairs(twi + j);
-                V w1i = simd::load_dup_pairs(twi + j + per_vec);
+                const V w0r = V::load_dup_pairs(twr + j);
+                const V w1r = V::load_dup_pairs(twr + j + per_vec);
+                V w0i = V::load_dup_pairs(twi + j);
+                V w1i = V::load_dup_pairs(twi + j + per_vec);
                 if constexpr (INV)
                 {
                     w0i = V::zero() - w0i;

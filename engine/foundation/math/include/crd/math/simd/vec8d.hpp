@@ -89,6 +89,32 @@ struct Vec8d
 #endif
     }
 
+    // [p0 p0 p1 p1 p2 p2 p3 p3]: four table entries, each duplicated over a complex lane.
+    [[nodiscard]] CRD_FORCEINLINE static Vec8d load_dup_pairs(const f64* p) noexcept
+    {
+#if CRD_SIMD_HAS_AVX512
+        Vec8d r;
+        r.v = _mm512_permutexvar_pd(_mm512_setr_epi64(0, 0, 1, 1, 2, 2, 3, 3),
+                                    _mm512_castpd256_pd512(_mm256_loadu_pd(p)));
+        return r;
+#else
+        return Vec8d(Vec4d::load_dup_pairs(p), Vec4d::load_dup_pairs(p + 2));
+#endif
+    }
+
+    // [lo.c0 hi.c0 lo.c1 hi.c1] from two complex pairs (each half's load_pair128).
+    [[nodiscard]] CRD_FORCEINLINE static Vec8d load_c_quad(const f64* lo, const f64* hi) noexcept
+    {
+#if CRD_SIMD_HAS_AVX512
+        Vec8d r;
+        const __m512d both = _mm512_insertf64x4(_mm512_castpd256_pd512(_mm256_loadu_pd(lo)), _mm256_loadu_pd(hi), 1);
+        r.v = _mm512_shuffle_f64x2(both, both, 0xD8); // 128-bit lanes 0, 2, 1, 3
+        return r;
+#else
+        return Vec8d(load_pair128(lo, hi), load_pair128(lo + 2, hi + 2));
+#endif
+    }
+
     // The first `count` lanes (1..7; 8 is `load`/`store`): the other lanes load as +0 and are never read or written.
     [[nodiscard]] CRD_FORCEINLINE static Vec8d load_partial(const f64* p, usize count) noexcept
     {
@@ -438,6 +464,63 @@ CRD_FORCEINLINE Vec8d fmaddsub(Vec8d a, Vec8d b, Vec8d c) noexcept
 #else
     return Vec8d(fmaddsub(a.lo, b.lo, c.lo), fmaddsub(a.hi, b.hi, c.hi));
 #endif
+}
+
+// [a0-b0, a1+b1, ...]: AVX-512 has no addsub, so the sum's even lanes are replaced by the difference.
+CRD_FORCEINLINE Vec8d addsub(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_mask_sub_pd(_mm512_add_pd(a.v, b.v), 0x55, a.v, b.v);
+    return r;
+#else
+    return Vec8d(addsub(a.lo, b.lo), addsub(a.hi, b.hi));
+#endif
+}
+
+// Vec8f's complex-unit helpers on four f64 complex (c0..c3, 128 bits each), each the halves' Vec4d helper:
+// [a.c0 b.c0 a.c2 b.c2] and [a.c1 b.c1 a.c3 b.c3] (each half's concat_lo / concat_hi).
+CRD_FORCEINLINE Vec8d unpack_c_lo(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_permutex2var_pd(a.v, _mm512_setr_epi64(0, 1, 8, 9, 4, 5, 12, 13), b.v);
+    return r;
+#else
+    return Vec8d(concat_lo(a.lo, b.lo), concat_lo(a.hi, b.hi));
+#endif
+}
+CRD_FORCEINLINE Vec8d unpack_c_hi(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_permutex2var_pd(a.v, _mm512_setr_epi64(2, 3, 10, 11, 6, 7, 14, 15), b.v);
+    return r;
+#else
+    return Vec8d(concat_hi(a.lo, b.lo), concat_hi(a.hi, b.hi));
+#endif
+}
+
+// [a.c0 b.c1 a.c2 b.c3] (each half's mix_lo_hi).
+CRD_FORCEINLINE Vec8d blend_c_odd(Vec8d a, Vec8d b) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_mask_blend_pd(0xCC, a.v, b.v);
+    return r;
+#else
+    return Vec8d(mix_lo_hi(a.lo, b.lo), mix_lo_hi(a.hi, b.hi));
+#endif
+}
+
+// c0 c1 (lanes 0-3) and c2 c3 (lanes 4-7) to p.
+CRD_FORCEINLINE void store_c_lo(f64* p, Vec8d a) noexcept
+{
+    low_half(a).store(p);
+}
+CRD_FORCEINLINE void store_c_hi(f64* p, Vec8d a) noexcept
+{
+    high_half(a).store(p);
 }
 
 // In-register 8x8 transpose (lane j of row i becomes lane i of row j): unpacks and two 128-bit lane shuffle stages at

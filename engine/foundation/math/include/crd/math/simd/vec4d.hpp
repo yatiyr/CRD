@@ -107,6 +107,21 @@ struct Vec4d
 #endif
     }
 
+    // [p[0] p[0] p[1] p[1]] — load two doubles, duplicating each within its 128-bit lane (the
+    // interleaved-complex twiddle expander: halves twiddle-table bytes vs pre-duplicated storage).
+    [[nodiscard]] CRD_FORCEINLINE static Vec4d load_dup_pairs(const f64* p) noexcept
+    {
+#if CRD_SIMD_HAS_AVX2
+        Vec4d r;
+        r.v = _mm256_permute4x64_pd(_mm256_castpd128_pd256(_mm_loadu_pd(p)), 0x50);
+        return r;
+#elif CRD_SIMD_HAS_SSE2
+        return Vec4d(_mm_set1_pd(p[0]), _mm_set1_pd(p[1]));
+#else
+        return Vec4d(p[0], p[0], p[1], p[1]);
+#endif
+    }
+
     // Masked partial load/store of the FIRST `count` lanes (1..3; count==4 is
     // `load`/`store`). Unloaded lanes are ZERO; unstored lanes untouched. The
     // vector-tail primitive for kernels whose column count is not a multiple
@@ -608,21 +623,6 @@ CRD_FORCEINLINE Vec4d load_pair128(const f64* lo, const f64* hi) noexcept
     return Vec4d(_mm_loadu_pd(lo), _mm_loadu_pd(hi));
 #else
     return Vec4d(lo[0], lo[1], hi[0], hi[1]);
-#endif
-}
-
-// [p[0] p[0] p[1] p[1]] — load two doubles, duplicating each within its 128-bit lane (the
-// interleaved-complex twiddle expander: halves twiddle-table bytes vs pre-duplicated storage).
-CRD_FORCEINLINE Vec4d load_dup_pairs(const f64* p) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    Vec4d r;
-    r.v = _mm256_permute4x64_pd(_mm256_castpd128_pd256(_mm_loadu_pd(p)), 0x50);
-    return r;
-#elif CRD_SIMD_HAS_SSE2
-    return Vec4d(_mm_set1_pd(p[0]), _mm_set1_pd(p[1]));
-#else
-    return Vec4d(p[0], p[0], p[1], p[1]);
 #endif
 }
 

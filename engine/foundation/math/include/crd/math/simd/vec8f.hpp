@@ -88,6 +88,34 @@ struct Vec8f
 #endif
     }
 
+    // [p0 p0 p1 p1 p2 p2 p3 p3] — four table entries duplicated per complex lane (twiddle expander).
+    [[nodiscard]] CRD_FORCEINLINE static Vec8f load_dup_pairs(const f32* p) noexcept
+    {
+#if CRD_SIMD_HAS_AVX2
+        Vec8f r;
+        const __m256i idx = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
+        r.v = _mm256_permutevar8x32_ps(_mm256_castps128_ps256(_mm_loadu_ps(p)), idx);
+        return r;
+#else
+        return Vec8f(p[0], p[0], p[1], p[1], p[2], p[2], p[3], p[3]);
+#endif
+    }
+
+    // [lo.c0 hi.c0 lo.c1 hi.c1] — complex-interleave of two 2-complex (128-bit) loads: the twin-unit
+    // gather builder (units v, v+1 share a vector; roles a/b at l0 / l0+ms).
+    [[nodiscard]] CRD_FORCEINLINE static Vec8f load_c_quad(const f32* lo, const f32* hi) noexcept
+    {
+#if CRD_SIMD_HAS_AVX2
+        Vec8f r;
+        const __m256d both =
+            _mm256_castps_pd(_mm256_set_m128(_mm_loadu_ps(hi), _mm_loadu_ps(lo))); // [lo.c0 lo.c1 | hi.c0 hi.c1]
+        r.v = _mm256_castpd_ps(_mm256_permute4x64_pd(both, 0xD8));                 // (0,2,1,3)
+        return r;
+#else
+        return Vec8f(lo[0], lo[1], hi[0], hi[1], lo[2], lo[3], hi[2], hi[3]);
+#endif
+    }
+
     // Masked partial load/store of the FIRST `count` lanes (1..7; count==8 is
     // `load`/`store`). Unloaded lanes are ZERO; unstored lanes untouched (the
     // vector-tail primitive — see Vec4d::load_partial).
@@ -489,19 +517,6 @@ CRD_FORCEINLINE Vec8f fmaddsub(Vec8f a, Vec8f b, Vec8f c) noexcept
 #endif
 }
 
-// [p0 p0 p1 p1 p2 p2 p3 p3] — four table entries duplicated per complex lane (twiddle expander).
-CRD_FORCEINLINE Vec8f load_dup_pairs(const f32* p) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    Vec8f r;
-    const __m256i idx = _mm256_setr_epi32(0, 0, 1, 1, 2, 2, 3, 3);
-    r.v = _mm256_permutevar8x32_ps(_mm256_castps128_ps256(_mm_loadu_ps(p)), idx);
-    return r;
-#else
-    return Vec8f(p[0], p[0], p[1], p[1], p[2], p[2], p[3], p[3]);
-#endif
-}
-
 // complex-granularity interleaves: [a.c0 b.c0 a.c2 b.c2] / [a.c1 b.c1 a.c3 b.c3] (per-128 unpack).
 CRD_FORCEINLINE Vec8f unpack_c_lo(Vec8f a, Vec8f b) noexcept
 {
@@ -545,21 +560,6 @@ CRD_FORCEINLINE Vec8f blend_c_odd(Vec8f a, Vec8f b) noexcept
     a.store(x);
     b.store(y);
     return Vec8f(x[0], x[1], y[2], y[3], x[4], x[5], y[6], y[7]);
-#endif
-}
-
-// [lo.c0 hi.c0 lo.c1 hi.c1] — complex-interleave of two 2-complex (128-bit) loads: the twin-unit
-// gather builder (units v, v+1 share a vector; roles a/b at l0 / l0+ms).
-CRD_FORCEINLINE Vec8f load_c_quad(const f32* lo, const f32* hi) noexcept
-{
-#if CRD_SIMD_HAS_AVX2
-    Vec8f r;
-    const __m256d both = _mm256_castps_pd(
-        _mm256_set_m128(_mm_loadu_ps(hi), _mm_loadu_ps(lo))); // [lo.c0 lo.c1 | hi.c0 hi.c1]
-    r.v = _mm256_castpd_ps(_mm256_permute4x64_pd(both, 0xD8)); // (0,2,1,3)
-    return r;
-#else
-    return Vec8f(lo[0], lo[1], hi[0], hi[1], lo[2], lo[3], hi[2], hi[3]);
 #endif
 }
 

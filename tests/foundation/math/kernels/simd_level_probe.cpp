@@ -355,8 +355,8 @@ usize v8_loads(const Input& in, u64* out) noexcept
     usize n = 0;
     for (usize i = 0; i + 8 <= kLanes; i += 8)
     {
-        n += put(s::load_dup_pairs(in.a + i), out + n);
-        n += put(s::load_c_quad(in.a + i, in.b + i), out + n);
+        n += put(Vec8f::load_dup_pairs(in.a + i), out + n);
+        n += put(Vec8f::load_c_quad(in.a + i, in.b + i), out + n);
     }
     return n;
 }
@@ -442,6 +442,29 @@ usize v16_fnmadd(const Input& in, u64* out) noexcept
 {
     return each_f32<Vec16f>(in, out, [](Vec16f a, Vec16f b, Vec16f c) { return s::fnmadd(a, b, c); });
 }
+usize v16_fmaddsub(const Input& in, u64* out) noexcept
+{
+    return each_f32<Vec16f>(in, out, [](Vec16f a, Vec16f b, Vec16f c) { return s::fmaddsub(a, b, c); });
+}
+usize v16_addsub(const Input& in, u64* out) noexcept
+{
+    return each_f32<Vec16f>(in, out, [](Vec16f a, Vec16f b, Vec16f) { return s::addsub(a, b); });
+}
+usize v16_shuffles(const Input& in, u64* out) noexcept
+{
+    return each_f32<Vec16f>(in, out, [](Vec16f a, Vec16f b, Vec16f c)
+                            { return s::blend_c_odd(s::unpack_c_lo(s::swap_pairs(a), b), s::unpack_c_hi(b, c)); });
+}
+usize v16_loads(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i + 16 <= kLanes; i += 8)
+    {
+        n += put(Vec16f::load_dup_pairs(in.a + i), out + n);
+        n += put(Vec16f::load_c_quad(in.a + i, in.b + i), out + n);
+    }
+    return n;
+}
 // Every partial count: the loaded lanes, then a store's buffer whose lanes past the count must keep their guard values.
 usize v16_partial(const Input& in, u64* out) noexcept
 {
@@ -483,7 +506,8 @@ usize v16_transpose(const Input& in, u64* out) noexcept
         for (usize j = 0; j < 16; ++j)
         {
             const usize k = (16 * i + j) % (3 * kLanes);
-            t[j] = k < kLanes ? in.a[k] : (k < 2 * kLanes ? in.b[k - kLanes] : in.c[k - 2 * kLanes]);
+            const f32* const source[3] = {in.a, in.b, in.c};
+            t[j] = source[k / kLanes][k % kLanes];
         }
         r[i] = Vec16f::load_aligned(t);
     }
@@ -597,6 +621,40 @@ usize d8_swap_pairs(const Input& in, u64* out) noexcept
 {
     return each_f64<Vec8d>(in, out, [](Vec8d a, Vec8d, Vec8d) { return s::swap_pairs(a); });
 }
+usize d8_addsub(const Input& in, u64* out) noexcept
+{
+    return each_f64<Vec8d>(in, out, [](Vec8d a, Vec8d b, Vec8d) { return s::addsub(a, b); });
+}
+usize d8_shuffles(const Input& in, u64* out) noexcept
+{
+    return each_f64<Vec8d>(in, out, [](Vec8d a, Vec8d b, Vec8d c)
+                           { return s::blend_c_odd(s::unpack_c_lo(s::swap_pairs(a), b), s::unpack_c_hi(b, c)); });
+}
+usize d8_loads(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i + 8 <= kLanes; i += 4)
+    {
+        n += put(Vec8d::load_dup_pairs(in.dc + i), out + n);
+        n += put(Vec8d::load_c_quad(in.da + i, in.db + i), out + n);
+    }
+    return n;
+}
+usize d8_half_stores(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i < kLanes; i += 8)
+    {
+        f64 t[8] = {};
+        s::store_c_lo(t, Vec8d::load(in.da + i));
+        s::store_c_hi(t + 4, Vec8d::load(in.db + i));
+        for (const f64 x : t)
+        {
+            n += put(x, out + n);
+        }
+    }
+    return n;
+}
 usize d_addsub(const Input& in, u64* out) noexcept
 {
     return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d) { return s::addsub(a, b); });
@@ -612,7 +670,7 @@ usize d_loads(const Input& in, u64* out) noexcept
     for (usize i = 0; i + 4 <= kLanes; i += 4)
     {
         n += put(s::load_pair128(in.da + i, in.db + i), out + n);
-        n += put(s::load_dup_pairs(in.dc + i), out + n);
+        n += put(Vec4d::load_dup_pairs(in.dc + i), out + n);
     }
     return n;
 }
@@ -878,6 +936,10 @@ constexpr Op kOps[] = {
     {"vec16f partial load/store", Compare::F32Value, &v16_partial},
     {"vec16f halves", Compare::Bits, &v16_halves},
     {"vec16f transpose16x16", Compare::Bits, &v16_transpose},
+    {"vec16f fmaddsub", Compare::F32Value, &v16_fmaddsub},
+    {"vec16f addsub", Compare::F32Value, &v16_addsub},
+    {"vec16f complex shuffles", Compare::Bits, &v16_shuffles},
+    {"vec16f pair loads", Compare::Bits, &v16_loads},
     {"vec8f fmaddsub", Compare::F32Value, &v8_fmaddsub},
     {"vec8f addsub", Compare::F32Value, &v8_addsub},
     {"vec8f complex shuffles", Compare::Bits, &v8_shuffles},
@@ -915,6 +977,10 @@ constexpr Op kOps[] = {
     {"vec4d addsub", Compare::F64Value, &d_addsub},
     {"vec4d shuffles", Compare::Bits, &d_shuffles},
     {"vec8d swap_pairs", Compare::Bits, &d8_swap_pairs},
+    {"vec8d addsub", Compare::F64Value, &d8_addsub},
+    {"vec8d complex shuffles", Compare::Bits, &d8_shuffles},
+    {"vec8d pair loads", Compare::Bits, &d8_loads},
+    {"vec8d half stores", Compare::Bits, &d8_half_stores},
     {"vec4d pair loads", Compare::Bits, &d_loads},
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
     {"vec8d transpose8x8", Compare::Bits, &d8_transpose},
