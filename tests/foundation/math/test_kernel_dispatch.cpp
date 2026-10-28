@@ -61,24 +61,36 @@ const Inputs& inputs()
     return kInputs;
 }
 
-// Mismatches of one routine against its scalar reference, over the whole input and over every length 0..19 from an
-// odd offset (each vector tail and an unaligned start).
+// The guard words after a short call's output: a routine writes nothing past its n elements.
+constexpr crd::usize kGuard = 17U;
+
+// Mismatches of one routine against its scalar reference, over the whole input and over every length 0..33 from an
+// odd offset (each vector tail of up to two 16-lane steps and an unaligned start), with guard words past the output.
 template <typename Bits, typename Run, typename Reference>
 crd::usize mismatches(const crd::f32* src, Run run, Reference reference)
 {
     static Bits out[kCount];
+    constexpr Bits guard = static_cast<Bits>(0xA5A5U);
     crd::usize bad = 0;
     run(src, out, kCount);
     for (crd::usize i = 0; i < kCount; ++i)
     {
         bad += out[i] == reference(i) ? 0U : 1U;
     }
-    for (crd::usize n = 0; n < 20U; ++n)
+    for (crd::usize n = 0; n < 34U; ++n)
     {
+        for (crd::usize i = 0; i < n + kGuard; ++i)
+        {
+            out[i] = guard;
+        }
         run(src + 3, out, n);
         for (crd::usize i = 0; i < n; ++i)
         {
             bad += out[i] == reference(i + 3U) ? 0U : 1U;
+        }
+        for (crd::usize i = n; i < n + kGuard; ++i)
+        {
+            bad += out[i] == guard ? 0U : 1U;
         }
     }
     return bad;
@@ -252,6 +264,27 @@ TEST_CASE("float conversion kernels: every level the host runs is bit-identical 
             bad += std::bit_cast<crd::u32>(wide[i]) == want ? 0U : 1U;
         }
         CHECK(bad == 0U);
+        // Short calls from an odd offset: every tail, nothing written past n.
+        crd::usize short_bad = 0;
+        for (crd::usize n = 0; n < 34U; ++n)
+        {
+            const crd::u32 guard = 0x7FA5A5A5U;
+            for (crd::usize i = 0; i < n + kGuard; ++i)
+            {
+                wide[i] = std::bit_cast<crd::f32>(guard);
+            }
+            k.f16_to_f32(halves + 0x7BF5U, wide, n); // the top normals, the infinity and the first NaNs
+            for (crd::usize i = 0; i < n; ++i)
+            {
+                const crd::u32 want = std::bit_cast<crd::u32>(crd::math::f16_bits_to_f32(halves[0x7BF5U + i]));
+                short_bad += std::bit_cast<crd::u32>(wide[i]) == want ? 0U : 1U;
+            }
+            for (crd::usize i = n; i < n + kGuard; ++i)
+            {
+                short_bad += std::bit_cast<crd::u32>(wide[i]) == guard ? 0U : 1U;
+            }
+        }
+        CHECK(short_bad == 0U);
     }
     CHECK(ran >= 1U); // portable runs everywhere
 }
