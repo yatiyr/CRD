@@ -1,14 +1,18 @@
 // The geometry-mesh kernels of crd/geometry/mesh/mesh_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS). The raycast
 // walks the BVH with the scalar robust slab test (detail/slab_core.hpp) and runs Moller-Trumbore on eight leaf
-// triangles a step on the level's Vec8f (detail/batch8_core.hpp), every product and sum rounded on its own; the lane
-// decisions are scalar. Every level gives the portable bits.
+// triangles a step on the level's Vec8f (detail/batch8_core.hpp), sixteen on Vec16f at avx512 while more than eight
+// are left, every product and sum rounded on its own; the lane decisions are scalar, in triangle order. Every level
+// gives the portable bits.
 
 #include <crd/core/assert.hpp>
 #include <crd/geometry/mesh/mesh_kernels.hpp>
 #include <crd/geometry/primitives/detail/batch8_core.hpp>
 #include <crd/geometry/primitives/detail/slab_core.hpp>
 #include <crd/math/simd/vec8f.hpp>
+#if CRD_SIMD_HAS_AVX512
+#include <crd/math/simd/vec16f.hpp>
+#endif
 
 #include <cstring>
 
@@ -48,15 +52,15 @@ Node load_node(const unsigned char* nodes, u32 index) noexcept
     return n;
 }
 
-// The eight triangles from prim[0, valid) as columns; the lanes past valid repeat lane 0.
-struct Columns
+// The Lanes triangles from prim[0, valid) as columns; the lanes past valid repeat lane 0.
+template <u32 Lanes> struct Columns
 {
-    alignas(32) f32 c[9][kBatchLanes]; // v0 x y z, v1 x y z, v2 x y z
+    alignas(64) f32 c[9][Lanes]; // v0 x y z, v1 x y z, v2 x y z
 };
 
-void gather(const MeshBvhView& mesh, const u32* prim, u32 valid, Columns& out) noexcept
+template <u32 Lanes> void gather(const MeshBvhView& mesh, const u32* prim, u32 valid, Columns<Lanes>& out) noexcept
 {
-    for (u32 lane = 0; lane < kBatchLanes; ++lane)
+    for (u32 lane = 0; lane < Lanes; ++lane)
     {
         const u32 tri = prim[lane < valid ? lane : 0U];
         for (u32 corner = 0; corner < 3U; ++corner)
@@ -88,31 +92,45 @@ struct Walk
                                                                 best_t, enter);
     }
 
-    // The leaf's triangles, eight a step, against the best hit so far.
+    // The leaf's triangles against the best hit so far: sixteen a step at avx512 while more than eight are left, then
+    // eight.
     void leaf(const Node& n) noexcept
     {
         const u32 end = n.left_first + n.prim_count;
-        for (u32 first = n.left_first; first < end; first += kBatchLanes)
+        u32 first = n.left_first;
+#if CRD_SIMD_HAS_AVX512
+        for (; first + kBatchLanes < end; first += 2U * kBatchLanes)
         {
-            const u32 valid = end - first < kBatchLanes ? end - first : static_cast<u32>(kBatchLanes);
-            Columns cols;
-            gather(mesh, mesh.prim_indices + first, valid, cols);
-            const crd::geometry::primitives::detail::Mt8 r = crd::geometry::primitives::detail::moller_trumbore8(
-                ray.origin, ray.direction, Vec8f::load(cols.c[0]), Vec8f::load(cols.c[1]), Vec8f::load(cols.c[2]),
-                Vec8f::load(cols.c[3]), Vec8f::load(cols.c[4]), Vec8f::load(cols.c[5]), Vec8f::load(cols.c[6]),
-                Vec8f::load(cols.c[7]), Vec8f::load(cols.c[8]));
-            alignas(32) f32 det[kBatchLanes];
-            alignas(32) f32 u[kBatchLanes];
-            alignas(32) f32 v[kBatchLanes];
-            alignas(32) f32 t[kBatchLanes];
-            r.det.store(det);
-            r.u.store(u);
-            r.v.store(v);
-            r.t.store(t);
-            for (u32 lane = 0; lane < valid; ++lane)
-            {
-                take(det[lane], u[lane], v[lane], t[lane], mesh.prim_indices[first + lane]);
-            }
+            triangles<crd::math::simd::Vec16f>(first, end);
+        }
+#endif
+        for (; first < end; first += kBatchLanes)
+        {
+            triangles<Vec8f>(first, end);
+        }
+    }
+
+    // One register of the triangles from first (fewer before end).
+    template <typename V> void triangles(u32 first, u32 end) noexcept
+    {
+        constexpr u32 lanes = static_cast<u32>(sizeof(V) / sizeof(f32));
+        const u32 valid = end - first < lanes ? end - first : lanes;
+        Columns<lanes> cols;
+        gather(mesh, mesh.prim_indices + first, valid, cols);
+        const crd::geometry::primitives::detail::Mt<V> r = crd::geometry::primitives::detail::moller_trumbore<V>(
+            ray.origin, ray.direction, V::load(cols.c[0]), V::load(cols.c[1]), V::load(cols.c[2]), V::load(cols.c[3]),
+            V::load(cols.c[4]), V::load(cols.c[5]), V::load(cols.c[6]), V::load(cols.c[7]), V::load(cols.c[8]));
+        alignas(64) f32 det[lanes];
+        alignas(64) f32 u[lanes];
+        alignas(64) f32 v[lanes];
+        alignas(64) f32 t[lanes];
+        r.det.store(det);
+        r.u.store(u);
+        r.v.store(v);
+        r.t.store(t);
+        for (u32 lane = 0; lane < valid; ++lane)
+        {
+            take(det[lane], u[lane], v[lane], t[lane], mesh.prim_indices[first + lane]);
         }
     }
 
