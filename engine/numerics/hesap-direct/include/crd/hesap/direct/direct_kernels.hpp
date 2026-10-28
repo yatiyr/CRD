@@ -8,7 +8,8 @@
 // multiply and an add rounded below avx2, one fused multiply-add from avx2), and every element, the last partial vector
 // included, takes it. Each element's chain depends on the column count only, never on the row count or offset, so the
 // serial right-looking and the level-parallel left-looking solves give the same bits. A subtraction x - l y takes the
-// step with -l (or -y), which gives the same bits. Across the avx2 boundary the family is tolerance-declared.
+// step with -l (or -y), which gives the same bits. No chain depends on the vector width either, so avx512's ZMM bodies
+// give avx2's bits. Across the avx2 boundary the family is tolerance-declared.
 
 #pragma once
 

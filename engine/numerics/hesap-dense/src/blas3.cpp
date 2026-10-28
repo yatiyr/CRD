@@ -14,8 +14,8 @@ namespace crd::hesap::dense
 
 namespace
 {
-// Goto/BLIS cache-block defaults (alias detail::kGemmMc / Kc / Nc).
-constexpr crd::usize kMc = detail::kGemmMc;
+// Goto/BLIS cache-block defaults (alias detail::kGemmKc / Nc; a shape's Mc and Nc blocks are detail::gemm_mc and
+// gemm_nc).
 constexpr crd::usize kKc = detail::kGemmKc;
 constexpr crd::usize kNc = detail::kGemmNc;
 
@@ -276,16 +276,18 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
 
     crd::memory::IAllocator& alloc = pack_allocator(scratch);
     const GemmShape shape = detail::gemm_shape_of<T>();
+    const crd::usize mc_block = detail::gemm_mc(shape);
+    const crd::usize nc_block = detail::gemm_nc(shape);
     const crd::usize a_pack_capacity =
-        whole_lines<T>(detail::packed_a_size(shape, std::min<crd::usize>(m, kMc), std::min<crd::usize>(k, kKc)));
+        whole_lines<T>(detail::packed_a_size(shape, std::min<crd::usize>(m, mc_block), std::min<crd::usize>(k, kKc)));
     const crd::usize b_pack_capacity =
-        detail::packed_b_size(shape, std::min<crd::usize>(k, kKc), std::min<crd::usize>(n, kNc));
+        detail::packed_b_size(shape, std::min<crd::usize>(k, kKc), std::min<crd::usize>(n, nc_block));
     T* a_pack = allocate_packs<T>(alloc, a_pack_capacity + b_pack_capacity);
     T* b_pack = a_pack + a_pack_capacity;
 
-    for (crd::usize jc = 0; jc < n; jc += kNc)
+    for (crd::usize jc = 0; jc < n; jc += nc_block)
     {
-        const crd::usize nc = (jc + kNc < n) ? kNc : (n - jc);
+        const crd::usize nc = (jc + nc_block < n) ? nc_block : (n - jc);
         for (crd::usize pc = 0; pc < k; pc += kKc)
         {
             const crd::usize kc = (pc + kKc < k) ? kKc : (k - pc);
@@ -297,9 +299,9 @@ void gemm(T alpha, MatrixView<const T, L> a, MatrixView<const T, L> b, T beta,
             // a templated function body (sibling D27 v0c quirk).
             detail::pack_b(b, pc, jc, kc, nc, trans_b, b_pack);
 
-            for (crd::usize ic = 0; ic < m; ic += kMc)
+            for (crd::usize ic = 0; ic < m; ic += mc_block)
             {
-                const crd::usize mc = (ic + kMc < m) ? kMc : (m - ic);
+                const crd::usize mc = (ic + mc_block < m) ? mc_block : (m - ic);
 
                 detail::pack_a(a, ic, pc, mc, kc, trans_a, a_pack);
                 detail::gemm_packed_inner(alpha, beta, update, ic, jc, mc, nc, kc, a_pack, kc, b_pack, c);
@@ -345,15 +347,16 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
         return;
     }
 
-    // Auto-tune Mc (v0d-small-gemm-fastpath): kMc gives `num_ic = ceil(m / kMc)` chunks per (jc, pc), which leaves
-    // workers idle when m is small. Pick a smaller Mc such that num_ic >= num_workers (capped above by kMc to keep
-    // the cache reuse at large m), a multiple of the level's mr so the packed-A layout stays clean.
+    // Auto-tune Mc (v0d-small-gemm-fastpath): the shape's Mc block gives `num_ic = ceil(m / mc)` chunks per (jc, pc),
+    // which leaves workers idle when m is small. Pick a smaller Mc such that num_ic >= num_workers (capped above by
+    // the block to keep the cache reuse at large m), a multiple of the level's mr so the packed-A layout stays clean.
     const GemmShape shape = detail::gemm_shape_of<T>();
+    const crd::usize nc_block = detail::gemm_nc(shape);
     const crd::usize eff_mc = [&]() {
         const crd::usize ideal = (m + num_workers - 1U) / num_workers;
         const crd::usize rounded = (ideal + shape.mr - 1U) / shape.mr * shape.mr;
         const crd::usize floored = std::max<crd::usize>(shape.mr, rounded);
-        return std::min<crd::usize>(floored, kMc);
+        return std::min<crd::usize>(floored, detail::gemm_mc(shape));
     }();
 
     // Per-worker Ac scratch + single shared Bc scratch, in one buffer.
@@ -369,8 +372,8 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // Size to MIN(actual_dim, macro_block) — same reasoning as gemm().
     const crd::usize ap_kc = std::min<crd::usize>(k, kKc);
     const crd::usize a_pack_per_worker = whole_lines<T>(detail::packed_a_size(shape, eff_mc, ap_kc));
-    const crd::usize b_pack_capacity = detail::packed_b_size(shape, ap_kc, std::min<crd::usize>(n, kNc));
-    // One block-bounded panel per worker: a_pack_per_worker <= (kMc + mr) * kKc + a line, so the product cannot
+    const crd::usize b_pack_capacity = detail::packed_b_size(shape, ap_kc, std::min<crd::usize>(n, nc_block));
+    // One block-bounded panel per worker: a_pack_per_worker <= (gemm_mc + mr) * kKc + a line, so the product cannot
     // overflow.
     T* a_pack_pool = allocate_packs<T>(alloc, a_pack_per_worker * total_workers + b_pack_capacity);
     T* b_pack = a_pack_pool + a_pack_per_worker * total_workers;
@@ -415,9 +418,9 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // each wait() — reclaims only THIS call's JobDecls, leaving any caller frame_alloc state below the mark
     // intact (nest-safe, unlike frame_reset()). Fixes the cross-call arena exhaustion in heavy-gemm loops.
     const crd::usize frame_mark = crd::jobs::frame_get_mark();
-    for (crd::usize jc = 0; jc < n; jc += kNc)
+    for (crd::usize jc = 0; jc < n; jc += nc_block)
     {
-        const crd::usize nc = (jc + kNc < n) ? kNc : (n - jc);
+        const crd::usize nc = (jc + nc_block < n) ? nc_block : (n - jc);
         for (crd::usize pc = 0; pc < k; pc += kKc)
         {
             const crd::usize kc = (pc + kKc < k) ? kKc : (k - pc);

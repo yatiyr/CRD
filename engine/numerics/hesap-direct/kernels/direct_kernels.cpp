@@ -27,9 +27,12 @@ constexpr crd::usize kStreams = 4;
 // The rows of a multi-RHS block that stay in cache while the panel columns stream.
 constexpr crd::usize kRowBlock = 256;
 
-// The panel columns a multi-RHS reduction sums together, one accumulator vector each: eight YMM from avx2; below it a
-// vector is two XMM (or an array), so four.
-#if CRD_SIMD_HAS_AVX2
+// The panel columns a multi-RHS reduction sums together, one accumulator vector each: sixteen of the 32 ZMM at
+// avx512, eight YMM at avx2; below it a vector is two XMM (or an array), so four. Each column keeps its own
+// accumulator over the rows in order, so the group changes no element's chain.
+#if CRD_SIMD_HAS_AVX512
+constexpr crd::usize kReduceColumns = 16;
+#elif CRD_SIMD_HAS_AVX2
 constexpr crd::usize kReduceColumns = 8;
 #else
 constexpr crd::usize kReduceColumns = 4;

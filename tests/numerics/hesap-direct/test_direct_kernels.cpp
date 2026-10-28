@@ -137,7 +137,8 @@ template <typename T> void fill_panel(Array<T>& p, usize rows, usize nc, Values&
 
 template <typename T> void check_forward_below(crd::memory::IAllocator* alloc, Counts& c, bool specials)
 {
-    constexpr usize w = sizeof(T) == 8 ? 4U : 8U;
+    constexpr usize w = sizeof(T) == 8 ? 4U : 8U; // the 256-bit width, and the 512-bit one at avx512
+    constexpr usize wide = 2U * w;
     const T nan = std::numeric_limits<T>::quiet_NaN();
     Array<T> a(alloc);
     Array<T> x(alloc);
@@ -157,7 +158,8 @@ template <typename T> void check_forward_below(crd::memory::IAllocator* alloc, C
         const bool fma = fuses(level.level);
         for (usize rows = 0; rows <= 9U; ++rows)
         {
-            for (const usize n : {usize{0}, usize{1}, w - 1U, w, 2U * w + 1U, 4U * w + 3U, usize{257}, usize{600}})
+            for (const usize n : {usize{0}, usize{1}, w - 1U, w, 2U * w + 1U, 4U * w + 3U, wide - 1U, 2U * wide + 1U,
+                                  4U * wide + 3U, usize{257}, usize{600}})
             {
                 const usize lda = n + 3U;
                 a.resize(rows * lda + 1U);

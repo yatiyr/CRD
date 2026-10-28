@@ -57,7 +57,14 @@ struct Lcg
     template <typename T> T value() { return static_cast<T>(static_cast<int>(next() % 19U) - 9) / T(7); }
 };
 
-template <typename T> constexpr usize kWidth = sizeof(T) == 8 ? 4 : 8;
+// The vector widths: 256 bits below avx512 (kNarrow), 512 at avx512 (kWide).
+template <typename T> constexpr usize kNarrow = sizeof(T) == 8 ? 4 : 8;
+template <typename T> constexpr usize kWide = 2U * kNarrow<T>;
+
+template <typename T> usize width(CpuLevel level)
+{
+    return crd::cpu_level_includes(level, CpuLevel::Avx512) ? kWide<T> : kNarrow<T>;
+}
 
 // ---- the declared arithmetic ----
 
@@ -66,24 +73,18 @@ template <typename T> T step(T a, T b, T c, bool fma)
     return fma ? std::fma(a, b, c) : a * b + c;
 }
 
-template <typename T> T lane_sum(const T* l)
+// horizontal_sum's pairwise tree over w lanes: the first half, then the second, each the same way down to a pair.
+template <typename T> T lane_sum(const T* l, usize w)
 {
-    if constexpr (kWidth<T> == 4)
-    {
-        return (l[0] + l[1]) + (l[2] + l[3]);
-    }
-    else
-    {
-        return ((l[0] + l[1]) + (l[2] + l[3])) + ((l[4] + l[5]) + (l[6] + l[7]));
-    }
+    return w == 2U ? l[0] + l[1] : lane_sum(l, w / 2U) + lane_sum(l + w / 2U, w / 2U);
 }
 
 template <typename T> T model_dot(const T* a, const T* x, usize n, CpuLevel level)
 {
-    constexpr usize w = kWidth<T>;
+    const usize w = width<T>(level);
     const bool fma = fuses(level);
     const usize count = fma ? 8U : 4U;
-    T acc[8][8] = {};
+    T acc[8][16] = {};
     usize k = 0;
     for (usize v = 0; k + w <= n; k += w, ++v)
     {
@@ -92,14 +93,14 @@ template <typename T> T model_dot(const T* a, const T* x, usize n, CpuLevel leve
             acc[v % count][l] = step(a[k + l], x[k + l], acc[v % count][l], fma);
         }
     }
-    T total[8];
+    T total[16];
     for (usize l = 0; l < w; ++l)
     {
         total[l] = count == 8U ? ((acc[0][l] + acc[1][l]) + (acc[2][l] + acc[3][l])) +
                                      ((acc[4][l] + acc[5][l]) + (acc[6][l] + acc[7][l]))
                                : (acc[0][l] + acc[1][l]) + (acc[2][l] + acc[3][l]);
     }
-    T s = lane_sum(total);
+    T s = lane_sum(total, w);
     for (; k < n; ++k)
     {
         s += a[k] * x[k];
@@ -109,8 +110,8 @@ template <typename T> T model_dot(const T* a, const T* x, usize n, CpuLevel leve
 
 template <typename T> T model_gemv_row(const T* row, const T* x, usize cols, T alpha, T beta, T y, CpuLevel level)
 {
-    constexpr usize w = kWidth<T>;
-    T acc[8] = {};
+    const usize w = width<T>(level);
+    T acc[16] = {};
     usize k = 0;
     for (; k + w <= cols; k += w)
     {
@@ -119,7 +120,7 @@ template <typename T> T model_gemv_row(const T* row, const T* x, usize cols, T a
             acc[l] = step(row[k + l], x[k + l], acc[l], fuses(level));
         }
     }
-    T s = lane_sum(acc);
+    T s = lane_sum(acc, w);
     for (; k < cols; ++k)
     {
         s += row[k] * x[k];
@@ -127,11 +128,11 @@ template <typename T> T model_gemv_row(const T* row, const T* x, usize cols, T a
     return alpha * s + beta * y;
 }
 
-// Every remainder of an eight-accumulator rotation twice over, plus long and prefetching lengths.
+// Every remainder of an eight-accumulator rotation twice over at the widest vector, plus long and prefetching lengths.
 template <typename T> crd::containers::Array<usize> lengths(crd::memory::IAllocator* alloc)
 {
     crd::containers::Array<usize> out(alloc);
-    for (usize n = 0; n <= 2U * 8U * kWidth<T> + kWidth<T> + 2U; ++n)
+    for (usize n = 0; n <= 2U * 8U * kWide<T> + kWide<T> + 2U; ++n)
     {
         out.push_back(n);
     }
@@ -191,7 +192,6 @@ template <typename T> void check_dot(crd::memory::IAllocator* alloc, Counts& c)
 
 template <typename T> void check_gemv(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     const T nan = std::numeric_limits<T>::quiet_NaN();
     crd::containers::Array<T> a(alloc);
     crd::containers::Array<T> x(alloc);
@@ -205,6 +205,7 @@ template <typename T> void check_gemv(crd::memory::IAllocator* alloc, Counts& c)
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         for (const usize rows : {usize{0}, usize{1}, usize{3}, usize{4}, usize{5}, usize{8}, usize{9}, usize{17}})
         {
             for (const usize cols : {usize{0}, usize{1}, w - 1U, w, w + 1U, 2U * w + 3U, usize{600}})
@@ -252,7 +253,6 @@ template <typename T> void check_gemv(crd::memory::IAllocator* alloc, Counts& c)
 
 template <typename T> void check_symv(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     const T nan = std::numeric_limits<T>::quiet_NaN();
     crd::containers::Array<T> a(alloc);
     crd::containers::Array<T> x(alloc);
@@ -266,6 +266,7 @@ template <typename T> void check_symv(crd::memory::IAllocator* alloc, Counts& c)
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         const bool fma = fuses(level.level);
         for (const usize n :
              {usize{0}, usize{1}, usize{2}, w - 1U, w, w + 1U, 4U * w + 3U, 8U * w + 1U, 17U * w + 2U, usize{600}})
@@ -323,7 +324,6 @@ template <typename T> void check_symv(crd::memory::IAllocator* alloc, Counts& c)
 
 template <typename T> void check_trsv(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     const T nan = std::numeric_limits<T>::quiet_NaN();
     crd::containers::Array<T> a(alloc);
     crd::containers::Array<T> x(alloc);
@@ -336,6 +336,7 @@ template <typename T> void check_trsv(crd::memory::IAllocator* alloc, Counts& c)
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         for (const usize n : {usize{1}, usize{2}, w + 1U, 4U * w + 3U, 17U * w + 2U, usize{300}})
         {
             for (const bool lower : {true, false})
@@ -582,11 +583,22 @@ template <typename T> void check_axpy(crd::memory::IAllocator* alloc, Counts& c)
     }
 }
 
-// The column counts of the matrix kernels: every remainder of a vector, the register block of gemvt (8 vectors from
-// avx2, 4 below) and past it, and a long row.
+// The column counts of the matrix kernels: every remainder of a vector of either width, the register block of gemvt
+// (8 vectors from avx2, 4 below, at either width) and past it, and a long row.
 template <typename T>
-constexpr usize kColumnCounts[9] = {
-    0, 1, kWidth<T> - 1U, kWidth<T>, kWidth<T> + 1U, 4U * kWidth<T>, 8U * kWidth<T>, 9U * kWidth<T> + 3U, 300};
+constexpr usize kColumnCounts[13] = {0,
+                                     1,
+                                     kNarrow<T> - 1U,
+                                     kNarrow<T>,
+                                     kNarrow<T> + 1U,
+                                     kWide<T> - 1U,
+                                     kWide<T>,
+                                     kWide<T> + 1U,
+                                     4U * kNarrow<T>,
+                                     8U * kNarrow<T>,
+                                     8U * kWide<T>,
+                                     9U * kWide<T> + 3U,
+                                     300};
 
 template <typename T> void check_gemvt(crd::memory::IAllocator* alloc, Counts& c)
 {
@@ -753,7 +765,6 @@ template <typename T> void check_rot(crd::memory::IAllocator* alloc, Counts& c)
 
 template <typename T> void check_reflect(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     crd::containers::Array<T> v(alloc);
     crd::containers::Array<T> cm(alloc);
     crd::containers::Array<T> want(alloc);
@@ -765,6 +776,7 @@ template <typename T> void check_reflect(crd::memory::IAllocator* alloc, Counts&
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         const bool fma = fuses(level.level);
         for (const usize count : {usize{0}, usize{1}, usize{4}})
         {
@@ -812,7 +824,6 @@ template <typename T> void check_reflect(crd::memory::IAllocator* alloc, Counts&
 // that the kernel ran.
 template <typename T> void check_ldlt_update(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     const T inf = std::numeric_limits<T>::infinity();
     crd::containers::Array<T> a(alloc);
     crd::containers::Array<T> want(alloc);
@@ -826,6 +837,7 @@ template <typename T> void check_ldlt_update(crd::memory::IAllocator* alloc, Cou
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         const bool fma = fuses(level.level);
         for (const usize n : {usize{1}, usize{2}, w + 1U, 3U * w + 2U, usize{40}})
         {
@@ -903,10 +915,10 @@ template <typename T> struct Cx
 // The complex dot product's shape: four real products in one pass, A accumulators each (2 from avx2, 1 below).
 template <typename T> Cx<T> model_cdot(const T* ar, const T* ai, const T* vr, const T* vi, usize n, CpuLevel level)
 {
-    constexpr usize w = kWidth<T>;
+    const usize w = width<T>(level);
     const bool fma = fuses(level);
     const usize count = fma ? 2U : 1U;
-    T acc[4][2][8] = {};
+    T acc[4][2][16] = {};
     usize k = 0;
     for (usize v = 0; k + w <= n; k += w, ++v)
     {
@@ -922,12 +934,12 @@ template <typename T> Cx<T> model_cdot(const T* ar, const T* ai, const T* vr, co
     T s[4];
     for (usize p = 0; p < 4U; ++p)
     {
-        T total[8];
+        T total[16];
         for (usize l = 0; l < w; ++l)
         {
             total[l] = count == 2U ? acc[p][0][l] + acc[p][1][l] : acc[p][0][l];
         }
-        s[p] = lane_sum(total);
+        s[p] = lane_sum(total, w);
     }
     for (; k < n; ++k)
     {
@@ -953,18 +965,22 @@ template <typename T> Cx<T> model_cmul(T are, T aim, T bre, T bim)
     return {are * bre - aim * bim, are * bim + aim * bre};
 }
 
-// Lengths across every remainder of a vector and of the two-accumulator rotation, and long rows.
+// Lengths across every remainder of a vector of either width and of the two-accumulator rotation, and long rows.
 template <typename T>
-constexpr usize kSplitLengths[12] = {0,
+constexpr usize kSplitLengths[16] = {0,
                                      1,
                                      2,
-                                     kWidth<T> - 1U,
-                                     kWidth<T>,
-                                     kWidth<T> + 1U,
-                                     2U * kWidth<T>,
-                                     2U * kWidth<T> + 1U,
-                                     3U * kWidth<T> + 2U,
-                                     4U * kWidth<T> + 5U,
+                                     kNarrow<T> - 1U,
+                                     kNarrow<T>,
+                                     kNarrow<T> + 1U,
+                                     3U * kNarrow<T> + 2U,
+                                     kWide<T> - 1U,
+                                     kWide<T>,
+                                     kWide<T> + 1U,
+                                     2U * kWide<T>,
+                                     2U * kWide<T> + 1U,
+                                     3U * kWide<T> + 2U,
+                                     4U * kWide<T> + 5U,
                                      40,
                                      100};
 
@@ -1173,7 +1189,6 @@ template <typename T> void check_cger(crd::memory::IAllocator* alloc, Counts& c)
 // The upper triangle, the padding and the diagonal's imaginary part hold NaN: chemv must read none of them.
 template <typename T> void check_chemv(crd::memory::IAllocator* alloc, Counts& c)
 {
-    constexpr usize w = kWidth<T>;
     const T nan = std::numeric_limits<T>::quiet_NaN();
     crd::containers::Array<T> re(alloc);
     crd::containers::Array<T> im(alloc);
@@ -1191,6 +1206,7 @@ template <typename T> void check_chemv(crd::memory::IAllocator* alloc, Counts& c
             continue;
         }
         ++c.ran;
+        const usize w = width<T>(level.level);
         const bool fma = fuses(level.level);
         for (const usize n : kSplitLengths<T>)
         {

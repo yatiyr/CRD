@@ -94,6 +94,19 @@ template <typename T> [[nodiscard]] inline GemmShape gemm_shape_of() noexcept
     return (cols + s.nr - 1U) / s.nr * s.nr * depth;
 }
 
+// The Mc and Nc blocks of a shape: kGemmMc and kGemmNc rounded down to whole tiles, so only a matrix's last row or
+// column block holds a partial panel (480 rows would leave a 4-row panel of 14-row tiles in every block). The blocks
+// change no element's bits: only the depth groups (kGemmKc) shape a sum.
+[[nodiscard]] inline crd::usize gemm_mc(GemmShape s) noexcept
+{
+    return kGemmMc - kGemmMc % s.mr;
+}
+
+[[nodiscard]] inline crd::usize gemm_nc(GemmShape s) noexcept
+{
+    return kGemmNc - kGemmNc % s.nr;
+}
+
 // op(x) from element (r0, c0) on as a strided source (real types: ConjTranspose is Transpose).
 template <typename T, Layout L>
 [[nodiscard]] inline GemmSource<T> gemm_source(MatrixView<const T, L> x, crd::usize r0, crd::usize c0,

@@ -6,8 +6,9 @@
 //
 // Determinism (ADR-0134 §7): each level is bit-exact with its declared arithmetic. Every element of a product is
 // summed in depth order from +0; the portable and sse2 levels round each multiply and each add (they agree bit for
-// bit), the avx2 level uses a single-rounded fused multiply-add per step, as hesap's GEMM has since ADR-0082's
-// 2026-05-20 update. Across that boundary the family is tolerance-declared: an element differs by at most the
+// bit), the avx2 and avx512 levels use a single-rounded fused multiply-add per step (they agree bit for bit), as
+// hesap's GEMM has since ADR-0082's 2026-05-20 update. Across that boundary the family is tolerance-declared: an
+// element differs by at most the
 // classical inner-product bound, depth * eps * sum |a| |b|. The merge into C rounds alike on every level. A GEMM sums
 // its depth in groups of kGemmKc (256, detail/gemm_pack.hpp) values, one group after another on every path (gemm, its
 // parallel and small-GEMM paths, syrk): the first merges as beta c + alpha p (beta 0: +0 + alpha p, C unread), each
@@ -67,12 +68,14 @@ template <typename T> struct GemmBlock
 };
 
 // The vector and matrix-vector kernels sum like the GEMM blocks: below avx2 each vector step rounds its multiply and
-// its add, from avx2 it is one fused multiply-add. The vectors are Vec4d (w = 4) and Vec8f (w = 8), and the
-// reductions have a fixed shape:
+// its add, from avx2 it is one fused multiply-add. The vectors are Vec4d (w = 4) and Vec8f (w = 8) below avx512 and
+// Vec8d (w = 8) and Vec16f (w = 16) at avx512, so a reduction's shape is the level's, and avx2 and avx512 agree only
+// within the inner-product bound there. The reductions have a fixed shape:
 // - a dot product (dot, the Cholesky, triangular-solve and reflector rows): A accumulators (8 from avx2, 4 below);
 //   whole vector v (elements v w to v w + w - 1) goes to accumulator v % A, the accumulators sum as the tree
-//   ((0 + 1) + (2 + 3)) + ((4 + 5) + (6 + 7)), its lanes as horizontal_sum's tree, then the remaining elements in
-//   order, each rounding twice;
+//   ((0 + 1) + (2 + 3)) + ((4 + 5) + (6 + 7)), its lanes as horizontal_sum's pairwise tree (lanes 0 to w/2 - 1, then
+//   the rest, each half the same way down to (0 + 1) + (2 + 3)), then the remaining elements in order, each rounding
+//   twice;
 // - a gemv row: one accumulator over the whole vectors, horizontal_sum, the remaining columns in order (rounding
 //   twice), then alpha * s + beta * y;
 // - symv: beta * y first; then row i (columns k < i of the lower triangle) takes the dot product of the row with x

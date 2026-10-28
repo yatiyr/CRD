@@ -296,7 +296,7 @@ template <typename T> void check_packers()
     crd::containers::Array<T> src(&alloc);
     crd::containers::Array<T> out(&alloc);
     Lcg g{0xFACEULL};
-    constexpr usize ld = 41;
+    constexpr usize ld = 73; // holds 2 nr + 1 columns at the widest shape (avx512 f32: 32) beside the source's offset
     src.resize(ld * ld);
     for (usize e = 0; e < ld * ld; ++e)
     {
@@ -419,7 +419,7 @@ template <typename T> void check_paths()
     usize runs = 0;
     for (const usize k : {usize{9}, usize{300}})
     {
-        for (const usize m : {usize{13}, 6U * shape.mr * shape.nr + 1U})
+        for (const usize m : {usize{13}, dn::detail::gemm_mc(shape) + 2U * shape.mr + 1U}) // across an Mc block
         {
             const usize n = shape.nr + 3U;
             crd::containers::Array<T> a(&alloc);  // op(A), row-major m by k

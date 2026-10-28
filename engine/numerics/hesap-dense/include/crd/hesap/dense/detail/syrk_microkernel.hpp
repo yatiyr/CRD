@@ -23,8 +23,8 @@ namespace crd::hesap::dense::detail
 // leading dim that transpose-pack is one cache/TLB miss per element and
 // MEASURED 3.4 GF/s standalone (20× under OpenBLAS dsyrk) while the gemm
 // driver's pack_a/pack_b run stride-friendly. This version reuses the gemm
-// driver's EXACT machinery — pack_a / pack_b, the kGemmMc/Kc/Nc cache
-// blocking, the GEMM block — and only changes which C tiles are visited
+// driver's EXACT machinery — pack_a / pack_b, the gemm_mc/kGemmKc/gemm_nc
+// cache blocking, the GEMM block — and only changes which C tiles are visited
 // (strict-upper tiles skipped, diagonal-crossing tiles masked to i ≥ j).
 //
 // DETERMINISM / VALUE CONTRACT: the per-element reduction is the SAME
@@ -102,11 +102,13 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
     auto* alloc = (scratch != nullptr) ? scratch : crd::memory::default_allocator();
 
     // Pack buffers sized like dense::gemm (block-bounded, not full-operand).
-    const crd::usize a_dim_m = std::min<crd::usize>(m, kGemmMc);
-    const crd::usize a_dim_k = std::min<crd::usize>(k, kGemmKc);
-    const crd::usize b_dim_n = std::min<crd::usize>(m, kGemmNc);
     const GemmShape shape = gemm_shape_of<T>();
     const crd::usize nr = shape.nr;
+    const crd::usize mc_block = gemm_mc(shape);
+    const crd::usize nc_block = gemm_nc(shape);
+    const crd::usize a_dim_m = std::min<crd::usize>(m, mc_block);
+    const crd::usize a_dim_k = std::min<crd::usize>(k, kGemmKc);
+    const crd::usize b_dim_n = std::min<crd::usize>(m, nc_block);
     const crd::usize a_pack_capacity = packed_a_size(shape, a_dim_m, a_dim_k);
     const crd::usize b_pack_capacity = packed_b_size(shape, a_dim_k, b_dim_n);
     const crd::usize align = alignof(T) > 32 ? alignof(T) : 32;
@@ -118,9 +120,9 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
     const crd::u32 nw = crd::jobs::num_workers();
     const bool parallel = allow_parallel && (nw > 1) && (m * m * k > crd::usize{256} * 1024);
 
-    for (crd::usize jc = 0; jc < m; jc += kGemmNc)
+    for (crd::usize jc = 0; jc < m; jc += nc_block)
     {
-        const crd::usize nc = (jc + kGemmNc < m) ? kGemmNc : (m - jc);
+        const crd::usize nc = (jc + nc_block < m) ? nc_block : (m - jc);
         for (crd::usize pc = 0; pc < k; pc += kGemmKc)
         {
             const crd::usize kc = (pc + kGemmKc < k) ? kGemmKc : (k - pc);
@@ -129,9 +131,9 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
             pack_b(a, pc, jc, kc, nc, Trans::Transpose, b_pack);
             const crd::usize num_panels_n = (nc + nr - 1) / nr;
 
-            for (crd::usize ic = 0; ic < m; ic += kGemmMc)
+            for (crd::usize ic = 0; ic < m; ic += mc_block)
             {
-                const crd::usize mc = (ic + kGemmMc < m) ? kGemmMc : (m - ic);
+                const crd::usize mc = (ic + mc_block < m) ? mc_block : (m - ic);
                 if (ic + mc <= jc)
                 {
                     continue; // the whole macro block is strict-upper

@@ -2,19 +2,20 @@
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS).
 //
 // Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by
-// 4 PortableTile (two roundings, its accumulators in registers). The sse2 and avx2 levels run one 6-row tile of two
-// registers a row: twelve accumulators, two B registers and one A broadcast a step (15 of 16 vector registers). sse2
-// rounds twice in 128-bit registers (f64 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by
-// single-rounded FMA (f64 6 by 8, about 98% of peak in L1; f32 6 by 16). The tile hands each finished row to a sink
-// while its accumulators are still in registers: the product stores the tile, the fused path merges a full row-major
-// tile straight into C with merge_element's expression. It prefetches the next B panel one line a step, which hides
-// its re-stream from L3 at each panel boundary.
+// 4 PortableTile (two roundings, its accumulators in registers). The vector levels run one tile of two registers a
+// row: two accumulators a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector
+// registers), avx512 14 (31 of 32 ZMM, the shape of BLIS's skx kernels). sse2 rounds twice in 128-bit registers (f64
+// 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of
+// peak in L1; f32 6 by 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile
+// hands each finished row to a sink while its accumulators are still in registers: the product stores the tile, the
+// fused path merges a full row-major tile straight into C with merge_element's expression. Each step prefetches the
+// next B panel's row (one line, two at avx512), which hides its re-stream from L3 at each panel boundary.
 
 //
-// The vector and matrix-vector kernels are written once over Vec4d and Vec8f, which every level backs with its own
-// registers (one YMM from avx2, two XMM on sse2, arrays on portable); dense_kernels.hpp declares their reduction
-// shapes. A level fixes only the accumulator and row counts (enough independent chains for its adder or FMA latency in
-// its sixteen registers) and whether a step fuses.
+// The vector and matrix-vector kernels are written once over the level's vectors (vector_steps.hpp: Vec4d and Vec8f,
+// one YMM from avx2, two XMM on sse2, arrays on portable; Vec8d and Vec16f, one ZMM, at avx512); dense_kernels.hpp
+// declares their reduction shapes. A level fixes only the accumulator and row counts (enough independent chains for
+// its adder or FMA latency) and whether a step fuses.
 
 #include <crd/hesap/dense/detail/gemm_block.hpp>
 #include <crd/hesap/dense/detail/vector_steps.hpp>
@@ -111,77 +112,76 @@ CRD_FORCEINLINE void merge_into(T* c, V p, V alpha, V beta) noexcept
     }
 }
 
-// The 6 by 2w tile of T on the level's w-lane registers: twelve accumulators, two B registers and one A broadcast
-// reused row after row (15 of 16 vector registers), the next tile's B panel (b_next) prefetched one line a step.
-// sink(i, lo, hi) receives row i.
+// The tile's rows: two accumulators a row beside two B registers and one A broadcast fill 15 of the 16 vector registers
+// below avx512 and 31 of the 32 at avx512.
+#if CRD_SIMD_HAS_AVX512
+constexpr crd::usize kTileRows = 14;
+#else
+constexpr crd::usize kTileRows = 6;
+#endif
+
+// The values of T in a cache line, the stride of the tile's prefetches.
+template <typename T> constexpr crd::usize kLineValues = 64U / sizeof(T);
+
+// The kTileRows by 2w tile of T on the level's w-lane registers: two accumulators a row, two B registers and one A
+// broadcast reused row after row, the next tile's B panel (b_next) prefetched a line of each step's row at a time.
+// sink(i, lo, hi) receives row i. Every register array index is a constant (unroll), so the arrays stay in registers.
 template <typename T, typename Sink>
-CRD_FORCEINLINE void six_row_tile(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next,
-                                  Sink sink) noexcept
+CRD_FORCEINLINE void row_tile(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next,
+                              Sink sink) noexcept
 {
     using R = Reg<T>;
     using V = typename R::V;
     constexpr crd::usize w = R::kWidth;
     constexpr crd::usize nr = 2U * w;
-    V c00 = R::zero();
-    V c01 = R::zero();
-    V c10 = R::zero();
-    V c11 = R::zero();
-    V c20 = R::zero();
-    V c21 = R::zero();
-    V c30 = R::zero();
-    V c31 = R::zero();
-    V c40 = R::zero();
-    V c41 = R::zero();
-    V c50 = R::zero();
-    V c51 = R::zero();
+    V lo[kTileRows];
+    V hi[kTileRows];
+    auto zero = [&](auto q)
+    {
+        lo[decltype(q)::kValue] = R::zero();
+        hi[decltype(q)::kValue] = R::zero();
+    };
+    unroll<kTileRows>(zero);
     for (crd::usize p = 0; p < depth; ++p)
     {
         const V b0 = R::load(b + p * nr);
         const V b1 = R::load(b + p * nr + w);
-        prefetch(b_next + p * nr);
-        V ai = R::splat(a[p]);
-        c00 = R::step(c00, ai, b0);
-        c01 = R::step(c01, ai, b1);
-        ai = R::splat(a[lda + p]);
-        c10 = R::step(c10, ai, b0);
-        c11 = R::step(c11, ai, b1);
-        ai = R::splat(a[2U * lda + p]);
-        c20 = R::step(c20, ai, b0);
-        c21 = R::step(c21, ai, b1);
-        ai = R::splat(a[3U * lda + p]);
-        c30 = R::step(c30, ai, b0);
-        c31 = R::step(c31, ai, b1);
-        ai = R::splat(a[4U * lda + p]);
-        c40 = R::step(c40, ai, b0);
-        c41 = R::step(c41, ai, b1);
-        ai = R::splat(a[5U * lda + p]);
-        c50 = R::step(c50, ai, b0);
-        c51 = R::step(c51, ai, b1);
+        for (crd::usize at = 0; at < nr; at += kLineValues<T>)
+        {
+            prefetch(b_next + p * nr + at);
+        }
+        auto row = [&](auto q)
+        {
+            constexpr crd::usize i = decltype(q)::kValue;
+            const V ai = R::splat(a[i * lda + p]);
+            lo[i] = R::step(lo[i], ai, b0);
+            hi[i] = R::step(hi[i], ai, b1);
+        };
+        unroll<kTileRows>(row);
     }
-    sink(0, c00, c01);
-    sink(1, c10, c11);
-    sink(2, c20, c21);
-    sink(3, c30, c31);
-    sink(4, c40, c41);
-    sink(5, c50, c51);
+    auto hand = [&](auto q)
+    {
+        sink(decltype(q)::kValue, lo[decltype(q)::kValue], hi[decltype(q)::kValue]);
+    };
+    unroll<kTileRows>(hand);
 }
 
-template <typename T> struct SixRowTile
+template <typename T> struct RowTile
 {
     using R = Reg<T>;
     using V = typename R::V;
     static constexpr bool kFused = true;
-    static constexpr crd::usize kMr = 6;
+    static constexpr crd::usize kMr = kTileRows;
     static constexpr crd::usize kNr = 2U * R::kWidth;
 
     static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next, T* out) noexcept
     {
-        six_row_tile(depth, lda, a, b, b_next,
-                     [out](crd::usize i, V lo, V hi)
-                     {
-                         R::store(out + i * kNr, lo);
-                         R::store(out + i * kNr + R::kWidth, hi);
-                     });
+        row_tile(depth, lda, a, b, b_next,
+                 [out](crd::usize i, V lo, V hi)
+                 {
+                     R::store(out + i * kNr, lo);
+                     R::store(out + i * kNr + R::kWidth, hi);
+                 });
     }
 
     template <GemmMerge M>
@@ -190,22 +190,25 @@ template <typename T> struct SixRowTile
     {
         for (crd::usize i = 0; i < kMr; ++i) // C is read after the depth loop: request its lines now
         {
-            prefetch(c + i * ldc);
+            for (crd::usize at = 0; at < kNr; at += kLineValues<T>)
+            {
+                prefetch(c + i * ldc + at);
+            }
             prefetch(c + i * ldc + kNr - 1U);
         }
         const V av = R::splat(alpha);
         const V bv = R::splat(beta);
-        six_row_tile(depth, lda, a, b, b_next,
-                     [c, ldc, av, bv](crd::usize i, V lo, V hi)
-                     {
-                         merge_into<M, R>(c + i * ldc, lo, av, bv);
-                         merge_into<M, R>(c + i * ldc + R::kWidth, hi, av, bv);
-                     });
+        row_tile(depth, lda, a, b, b_next,
+                 [c, ldc, av, bv](crd::usize i, V lo, V hi)
+                 {
+                     merge_into<M, R>(c + i * ldc, lo, av, bv);
+                     merge_into<M, R>(c + i * ldc + R::kWidth, hi, av, bv);
+                 });
     }
 };
 
-using F64Tile = SixRowTile<crd::f64>;
-using F32Tile = SixRowTile<crd::f32>;
+using F64Tile = RowTile<crd::f64>;
+using F32Tile = RowTile<crd::f32>;
 #else
 // 2 by 4: eight accumulators, two A and four B values a step (14 of 16 scalar registers on x64).
 using F64Tile = PortableTile<crd::f64, 2, 4, true>;
@@ -245,7 +248,7 @@ void pack_b_kernel(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T*
 // ---- the vector and matrix-vector kernels ----
 
 // Independent chains for the adder (below avx2) or the FMA (from avx2), each four cycles deep on two ports: eight
-// registers. Below avx2 a vector is two XMM registers, so half as many vectors.
+// registers, YMM or ZMM. Below avx2 a vector is two XMM registers, so half as many vectors.
 #if CRD_SIMD_HAS_AVX2
 constexpr crd::usize kDotAccumulators = 8;
 constexpr crd::usize kGemvRows = 8;
@@ -625,8 +628,8 @@ template <typename T> void ldlt_update_kernel(const LdltUpdate<T>& view) noexcep
 
 // ---- the split-complex kernels ----
 
-// The accumulators of each real product of a complex dot: the four products share the sixteen registers with their
-// loads, so two each from avx2 (eight FMA chains) and one below (a vector is two XMM there: eight adder chains).
+// The accumulators of each real product of a complex dot: the four products share the registers with their loads, so
+// two each from avx2 (eight FMA chains, YMM or ZMM) and one below (a vector is two XMM there: eight adder chains).
 #if CRD_SIMD_HAS_AVX2
 constexpr crd::usize kSplitAccumulators = 2;
 #else

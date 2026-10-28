@@ -1,7 +1,8 @@
-// The vector steps of the hesap kernel families (SIMD-DISPATCH, ADR-0134 §7): the level's vector of each type, its
-// multiply-add (two roundings below avx2, one fused rounding from avx2) and the walks over whole and partial vectors
-// that give every element the same step. The kernel units of hesap-dense and hesap-direct include it; its inline code
-// lives in the level namespace and calls no standard-library inline function.
+// The vector steps of the hesap kernel families (SIMD-DISPATCH, ADR-0134 §7): the level's vector of each type (256
+// bits below avx512, one ZMM register at avx512), its multiply-add (two roundings below avx2, one fused rounding from
+// avx2) and the walks over whole and partial vectors that give every element the same step. The kernel units of
+// hesap-dense and hesap-direct include it; its inline code lives in the level namespace and calls no standard-library
+// inline function.
 
 #pragma once
 
@@ -10,12 +11,28 @@
 #include <crd/math/simd/backend.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
+#if CRD_SIMD_HAS_AVX512
+#include <crd/math/simd/vec16f.hpp>
+#include <crd/math/simd/vec8d.hpp>
+#endif
 
 namespace crd::hesap::dense::detail::inline CRD_MATH_LEVEL_NS
 {
 
 namespace simd = crd::math::simd;
 
+#if CRD_SIMD_HAS_AVX512
+template <typename T> struct VectorOf
+{
+    using Type = simd::Vec8d;
+    static constexpr crd::usize kWidth = 8;
+};
+template <> struct VectorOf<crd::f32>
+{
+    using Type = simd::Vec16f;
+    static constexpr crd::usize kWidth = 16;
+};
+#else
 template <typename T> struct VectorOf
 {
     using Type = simd::Vec4d;
@@ -26,6 +43,7 @@ template <> struct VectorOf<crd::f32>
     using Type = simd::Vec8f;
     static constexpr crd::usize kWidth = 8;
 };
+#endif
 
 template <typename V> CRD_FORCEINLINE V madd(V a, V b, V c) noexcept
 {
