@@ -2,7 +2,6 @@
 
 #include "binned_core.hpp"
 #include "dtypes.hpp"
-#include "elementwise.hpp" // EwSimd vector traits
 #include "tensor.hpp"
 #include "tensor_dispatch.hpp"
 
@@ -10,7 +9,8 @@
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/simd/simd.hpp>
+
+#include <type_traits>
 
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor reduce — reductions + the reproducible tier
@@ -21,8 +21,9 @@
 //   TIER D (default): fixed-order reduction trees, serial ≡ parallel.
 //   The tensor is cut into kReduceBlock-element blocks — a function of the
 //   SHAPE ONLY, never of num_workers — each block produces one partial with a
-//   fixed internal order (the 4×Vec4d/4×Vec8f vertical-accumulator layout,
-//   lanes folded in a pinned order, tail appended last), and the partials are
+//   fixed internal order (four vertical accumulators of kEwLanes lanes, the
+//   tensor kernels at the CPU's level; lanes folded in a pinned order, tail
+//   appended last), and the partials are
 //   folded LEFT-TO-RIGHT in block order. Workers compute whole blocks; the
 //   fold is identical regardless of who computed what ⇒ bit-identical across
 //   {1..16} workers BY CONSTRUCTION. (The order is a function of shape and
@@ -58,79 +59,50 @@ namespace crd::hesap::tensor
 namespace detail
 {
 
-// Tier-D block: a function of the SHAPE ONLY (never num_workers).
-inline constexpr crd::u64 kReduceBlock = 4096U;
-
-// ---- Tier-D op functors ----------------------------------------------------
+// ---- Tier-D op functors: the scalar fold and the kernels of the op (kReduceBlock, the block: tensor_kernels.hpp) ----
+// Min and Max are minps and maxps (the second operand on a NaN or a signed-zero tie), as in the kernels' vector lanes.
 template <typename T> struct RAdd
 {
+    static constexpr ReduceOp kOp = ReduceOp::Sum;
     static constexpr T kInit = T{0};
     static T s(T a, T b) noexcept { return a + b; }
-    template <typename V> static V v(V a, V b) noexcept { return a + b; }
 };
 template <typename T> struct RMul
 {
+    static constexpr ReduceOp kOp = ReduceOp::Prod;
     static constexpr T kInit = T{1};
     static T s(T a, T b) noexcept { return a * b; }
-    template <typename V> static V v(V a, V b) noexcept { return a * b; }
 };
 template <typename T> struct RMin
 {
-    static T s(T a, T b) noexcept { return b < a ? b : a; }
-    template <typename V> static V v(V a, V b) noexcept
-    {
-        using crd::math::simd::min;
-        return min(a, b);
-    }
+    static constexpr ReduceOp kOp = ReduceOp::Min;
+    static T s(T a, T b) noexcept { return a < b ? a : b; }
 };
 template <typename T> struct RMax
 {
-    static T s(T a, T b) noexcept { return a < b ? b : a; }
-    template <typename V> static V v(V a, V b) noexcept
-    {
-        using crd::math::simd::max;
-        return max(a, b);
-    }
+    static constexpr ReduceOp kOp = ReduceOp::Max;
+    static T s(T a, T b) noexcept { return a > b ? a : b; }
 };
 
-// One contiguous block's partial with the PINNED internal order:
-// 4 vector accumulators striped over the block (acc[j] gathers lanes
-// j*W..j*W+W-1 of every 4W-wide stripe), combined ((a0+a1)+(a2+a3)), lanes
-// stored and folded left-to-right, the scalar tail appended last.
+// The Tier D kernels of Op at the CPU's level.
+template <typename T, typename Op> [[nodiscard]] inline const ReduceKernels<T>& reduce_kernels() noexcept
+{
+    static_assert(std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>, "Tier D computes f32 and f64");
+    const TensorKernels& k = *tensor_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        return k.reduce_f32[static_cast<crd::u32>(Op::kOp)];
+    }
+    else
+    {
+        return k.reduce_f64[static_cast<crd::u32>(Op::kOp)];
+    }
+}
+
+// One contiguous block's partial with the PINNED internal order (ReduceKernels::block).
 template <typename T, typename Op> [[nodiscard]] inline T block_partial(const T* p, crd::u64 n, T init) noexcept
 {
-    using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 width = EwSimd<T>::kWidth;
-    T acc = init;
-    crd::u64 i = 0;
-    if (n >= 4U * width)
-    {
-        V a0 = V::load(p);
-        V a1 = V::load(p + width);
-        V a2 = V::load(p + 2U * width);
-        V a3 = V::load(p + 3U * width);
-        for (i = 4U * width; i + 4U * width <= n; i += 4U * width)
-        {
-            a0 = Op::v(a0, V::load(p + i));
-            a1 = Op::v(a1, V::load(p + i + width));
-            a2 = Op::v(a2, V::load(p + i + 2U * width));
-            a3 = Op::v(a3, V::load(p + i + 3U * width));
-        }
-        const V c = Op::v(Op::v(a0, a1), Op::v(a2, a3));
-        alignas(64) T lanes[width];
-        c.store(lanes);
-        T va = lanes[0];
-        for (crd::u64 l = 1; l < width; ++l)
-        {
-            va = Op::s(va, lanes[l]);
-        }
-        acc = Op::s(acc, va);
-    }
-    for (; i < n; ++i)
-    {
-        acc = Op::s(acc, p[i]);
-    }
-    return acc;
+    return reduce_kernels<T, Op>().block(p, n, init);
 }
 
 // Fold a contiguous buffer through the Tier-D fixed tree, optionally in

@@ -1,13 +1,14 @@
 #pragma once
 
 #include "tensor.hpp"
+#include "tensor_dispatch.hpp"
 
 #include <crd/containers/span.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
-#include <crd/math/simd/simd.hpp>
 
 #include <bit>
+#include <type_traits>
 
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor elementwise — the broadcasting elementwise engine
@@ -19,8 +20,9 @@
 // gate corpus (scripts/v14b_elementwise_corpus.py) proves the ITERATION
 // (broadcast/stride mapping) bit-exact.
 //
-// Engine shape (the crush levers):
-//   P0: every operand contiguous-canonical → one flat SIMD loop (Vec8f/Vec4d).
+// Engine shape (the crush levers), the binary walk of the tensor kernels at the CPU's level (tensor_kernels.hpp,
+// ADR-0134 §5), one call per op:
+//   P0: every operand contiguous-canonical → one flat SIMD loop.
 //   P1: unit-or-broadcast inner stride     → SIMD per inner run (stride-0
 //       operands splat once per run — this is where NumPy's generic iterator
 //       pays overhead and Cerid does not).
@@ -34,7 +36,8 @@
 //     including ±0 and NaN payloads (a `0 - x` negation would give +0 for
 //     x == +0). The scalar loops auto-vectorize to xorps/andps.
 //   - Min/Max use the IEEE hardware semantics (x86 minps/maxps: the SECOND
-//     operand wins on a NaN) — matched to std::min/max-style usage; the
+//     operand wins on a NaN or a signed-zero tie, in the vector body and the
+//     scalar tail alike) — matched to std::min/max-style usage; the
 //     NumPy NaN-propagating minimum/maximum and fmin/fmax variants land when
 //     a consumer needs the distinction (documented, not silently different:
 //     the corpus gates finite values only for Min/Max).
@@ -50,15 +53,7 @@
 namespace crd::hesap::tensor
 {
 
-enum class BinaryOp : crd::u8
-{
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Min,
-    Max,
-};
+// BinaryOp: crd/hesap/tensor/tensor_kernels.hpp.
 
 enum class UnaryOp : crd::u8
 {
@@ -106,65 +101,6 @@ enum class CompareOp : crd::u8
 
 namespace detail
 {
-
-// ---- SIMD trait: the vector type + width per compute dtype ----------------
-template <typename T> struct EwSimd;
-template <> struct EwSimd<crd::f32>
-{
-    using Vec = crd::math::simd::Vec8f;
-    static constexpr crd::u64 kWidth = 8U;
-};
-template <> struct EwSimd<crd::f64>
-{
-    using Vec = crd::math::simd::Vec4d;
-    static constexpr crd::u64 kWidth = 4U;
-};
-
-// ---- op functors: scalar + vector lanes ------------------------------------
-template <typename T> struct OpAdd
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return a + b; }
-    static V v(V a, V b) noexcept { return a + b; }
-};
-template <typename T> struct OpSub
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return a - b; }
-    static V v(V a, V b) noexcept { return a - b; }
-};
-template <typename T> struct OpMul
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return a * b; }
-    static V v(V a, V b) noexcept { return a * b; }
-};
-template <typename T> struct OpDiv
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return a / b; }
-    static V v(V a, V b) noexcept { return a / b; }
-};
-template <typename T> struct OpMin
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return b < a ? b : a; } // IEEE minps: second wins on NaN
-    static V v(V a, V b) noexcept
-    {
-        using crd::math::simd::min;
-        return min(a, b);
-    }
-};
-template <typename T> struct OpMax
-{
-    using V = typename EwSimd<T>::Vec;
-    static T s(T a, T b) noexcept { return a < b ? b : a; }
-    static V v(V a, V b) noexcept
-    {
-        using crd::math::simd::max;
-        return max(a, b);
-    }
-};
 
 // Sign-bit unaries (bit-exact vs np.negative/np.abs incl. ±0 / NaN payloads);
 // plain scalar loops — the compiler lowers them to xorps/andps.
@@ -331,111 +267,9 @@ template <typename T>
     return TensorStatus::Ok;
 }
 
-// ---- the binary engine ------------------------------------------------------
-template <typename T, typename Op, typename D, typename Store>
-inline void run_binary(const Collapsed& c, const Prepared<T>& a, const Prepared<T>& b, D* dst, Store store) noexcept
-{
-    using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 kW = EwSimd<T>::kWidth;
-    constexpr bool kVecStore = std::is_same_v<D, T>; // compare stores u8 → scalar inner
-
-    if (c.rank == 0U) // rank-0 scalar
-    {
-        store(dst, 0, Op::s(a.data[0], b.data[0]));
-        return;
-    }
-    const crd::u32 last = c.rank - 1U;
-    const crd::u64 inner = c.shape[last];
-    const crd::i64 sa = a.stride[last];
-    const crd::i64 sb = b.stride[last];
-
-    crd::u64 idx[kMaxRank] = {};
-    crd::u64 outer = 1;
-    for (crd::u32 d = 0; d < last; ++d)
-    {
-        outer *= c.shape[d];
-    }
-    const T* pa = a.data;
-    const T* pb = b.data;
-    crd::u64 w = 0;
-    for (crd::u64 o = 0; o < outer; ++o)
-    {
-        // inner run
-        if constexpr (kVecStore)
-        {
-            if (sa == 1 && sb == 1)
-            {
-                crd::u64 i = 0;
-                for (; i + kW <= inner; i += kW, w += kW)
-                {
-                    Op::v(V::load(pa + i), V::load(pb + i)).store(dst + w);
-                }
-                for (; i < inner; ++i, ++w)
-                {
-                    dst[w] = Op::s(pa[i], pb[i]);
-                }
-            }
-            else if (sa == 1 && sb == 0)
-            {
-                const V vb(pb[0]);
-                crd::u64 i = 0;
-                for (; i + kW <= inner; i += kW, w += kW)
-                {
-                    Op::v(V::load(pa + i), vb).store(dst + w);
-                }
-                for (; i < inner; ++i, ++w)
-                {
-                    dst[w] = Op::s(pa[i], pb[0]);
-                }
-            }
-            else if (sa == 0 && sb == 1)
-            {
-                const V va(pa[0]);
-                crd::u64 i = 0;
-                for (; i + kW <= inner; i += kW, w += kW)
-                {
-                    Op::v(va, V::load(pb + i)).store(dst + w);
-                }
-                for (; i < inner; ++i, ++w)
-                {
-                    dst[w] = Op::s(pa[0], pb[i]);
-                }
-            }
-            else
-            {
-                for (crd::u64 i = 0; i < inner; ++i, ++w)
-                {
-                    dst[w] = Op::s(pa[static_cast<crd::i64>(i) * sa], pb[static_cast<crd::i64>(i) * sb]);
-                }
-            }
-        }
-        else
-        {
-            for (crd::u64 i = 0; i < inner; ++i, ++w)
-            {
-                store(dst, w, Op::s(pa[static_cast<crd::i64>(i) * sa], pb[static_cast<crd::i64>(i) * sb]));
-            }
-        }
-        // outer counter advance (row-major)
-        for (crd::u32 d = last; d-- > 0U;)
-        {
-            pa += a.stride[d];
-            pb += b.stride[d];
-            if (++idx[d] < c.shape[d])
-            {
-                break;
-            }
-            // rewind this dim
-            pa -= a.stride[d] * static_cast<crd::i64>(c.shape[d]);
-            pb -= b.stride[d] * static_cast<crd::i64>(c.shape[d]);
-            idx[d] = 0;
-        }
-    }
-}
-
-template <typename T, typename Op>
-[[nodiscard]] inline TensorStatus ew_binary_impl(const TensorView<const T>& a, const TensorView<const T>& b,
-                                                 const TensorView<T>& dst) noexcept
+template <typename T>
+[[nodiscard]] inline TensorStatus ew_binary_impl(BinaryOp op, const TensorView<const T>& a,
+                                                 const TensorView<const T>& b, const TensorView<T>& dst) noexcept
 {
     crd::u64 bshape[kMaxRank];
     crd::u32 brank = 0;
@@ -462,7 +296,17 @@ template <typename T, typename Op>
     }
     Collapsed c;
     collapse<2>({bshape, brank}, ops, c);
-    run_binary<T, Op>(c, ops[0], ops[1], dst.data(), [](T* d, crd::u64 i, T v) noexcept { d[i] = v; });
+    static_assert(kMaxRank == kPermuteMaxRank, "the kernel walk counts kPermuteMaxRank dims");
+    const EwBinaryWalk<T> walk{dst.data(), ops[0].data, ops[1].data, c.shape, ops[0].stride, ops[1].stride, c.rank};
+    const TensorKernels& k = *tensor_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f32>)
+    {
+        k.ew_binary_f32[static_cast<crd::u32>(op)](walk);
+    }
+    else
+    {
+        k.ew_binary_f64[static_cast<crd::u32>(op)](walk);
+    }
     return TensorStatus::Ok;
 }
 
@@ -476,22 +320,12 @@ template <typename T>
 [[nodiscard]] inline TensorStatus ew_binary(BinaryOp op, const TensorView<const T>& a, const TensorView<const T>& b,
                                             const TensorView<T>& dst) noexcept
 {
-    switch (op)
+    static_assert(std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>, "ew_binary computes f32 and f64");
+    if (static_cast<crd::u32>(op) >= kBinaryOps)
     {
-        case BinaryOp::Add:
-            return detail::ew_binary_impl<T, detail::OpAdd<T>>(a, b, dst);
-        case BinaryOp::Sub:
-            return detail::ew_binary_impl<T, detail::OpSub<T>>(a, b, dst);
-        case BinaryOp::Mul:
-            return detail::ew_binary_impl<T, detail::OpMul<T>>(a, b, dst);
-        case BinaryOp::Div:
-            return detail::ew_binary_impl<T, detail::OpDiv<T>>(a, b, dst);
-        case BinaryOp::Min:
-            return detail::ew_binary_impl<T, detail::OpMin<T>>(a, b, dst);
-        case BinaryOp::Max:
-            return detail::ew_binary_impl<T, detail::OpMax<T>>(a, b, dst);
+        return TensorStatus::BadInput;
     }
-    return TensorStatus::BadInput;
+    return detail::ew_binary_impl(op, a, b, dst);
 }
 
 // Unary (sign-bit exact): dst shape must equal a's shape (contiguous canonical).

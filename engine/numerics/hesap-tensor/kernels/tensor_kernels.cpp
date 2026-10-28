@@ -16,6 +16,8 @@
 // partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
 // f32 order, crd_exp8 and crd_exp4 reproduce crd_exp1, and the Philox rounds are integer operations.
 
+#include "tensor_ew_kernels.hpp"
+
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
 #include <crd/hesap/tensor/permute_tiles.hpp>
@@ -2110,13 +2112,51 @@ void nn_linear_i8_packed_rows(const NnLinearI8& c, crd::u32 lo, crd::u32 hi) noe
 namespace crd::hesap::tensor
 {
 
+// The table's entry groups, in the level's namespace like every function of the unit.
+inline namespace CRD_MATH_LEVEL_NS
+{
+namespace
+{
+
+template <typename T, ReduceOp Op> constexpr ReduceKernels<T> tier_d() noexcept
+{
+    using K = CRD_MATH_LEVEL_NS::TierDKernel<T, Op>;
+    return {&K::block, &K::rows, &K::columns};
+}
+
+template <typename T, BinaryOp Op> constexpr auto ew_binary() noexcept
+{
+    return &CRD_MATH_LEVEL_NS::EwBinaryKernel<T, Op>::walk;
+}
+
+} // namespace
+} // namespace CRD_MATH_LEVEL_NS
+
 const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
-    &CRD_MATH_LEVEL_NS::permute_region_f32,       &CRD_MATH_LEVEL_NS::permute_region_f64,
-    &CRD_MATH_LEVEL_NS::permute_walk_f32,         &CRD_MATH_LEVEL_NS::permute_walk_f64,
-    &CRD_MATH_LEVEL_NS::binned_sum_f64,           &CRD_MATH_LEVEL_NS::quantize_q8_0,
-    &CRD_MATH_LEVEL_NS::quantize_u8_row,          &CRD_MATH_LEVEL_NS::nn_softmax_rows,
-    &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,        &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,
-    &CRD_MATH_LEVEL_NS::nn_linear_i8_packed_rows, &crd::hesap::stats::CRD_MATH_LEVEL_NS::philox4x32_fill_blocks,
+    &CRD_MATH_LEVEL_NS::permute_region_f32,
+    &CRD_MATH_LEVEL_NS::permute_region_f64,
+    &CRD_MATH_LEVEL_NS::permute_walk_f32,
+    &CRD_MATH_LEVEL_NS::permute_walk_f64,
+    &CRD_MATH_LEVEL_NS::binned_sum_f64,
+    &CRD_MATH_LEVEL_NS::quantize_q8_0,
+    &CRD_MATH_LEVEL_NS::quantize_u8_row,
+    &CRD_MATH_LEVEL_NS::nn_softmax_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_q8_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_i8_rows,
+    &CRD_MATH_LEVEL_NS::nn_linear_i8_packed_rows,
+    &crd::hesap::stats::CRD_MATH_LEVEL_NS::philox4x32_fill_blocks,
+    {ew_binary<crd::f32, BinaryOp::Add>(), ew_binary<crd::f32, BinaryOp::Sub>(), ew_binary<crd::f32, BinaryOp::Mul>(),
+     ew_binary<crd::f32, BinaryOp::Div>(), ew_binary<crd::f32, BinaryOp::Min>(), ew_binary<crd::f32, BinaryOp::Max>()},
+    {ew_binary<crd::f64, BinaryOp::Add>(), ew_binary<crd::f64, BinaryOp::Sub>(), ew_binary<crd::f64, BinaryOp::Mul>(),
+     ew_binary<crd::f64, BinaryOp::Div>(), ew_binary<crd::f64, BinaryOp::Min>(), ew_binary<crd::f64, BinaryOp::Max>()},
+    {tier_d<crd::f32, ReduceOp::Sum>(), tier_d<crd::f32, ReduceOp::Prod>(), tier_d<crd::f32, ReduceOp::Min>(),
+     tier_d<crd::f32, ReduceOp::Max>()},
+    {tier_d<crd::f64, ReduceOp::Sum>(), tier_d<crd::f64, ReduceOp::Prod>(), tier_d<crd::f64, ReduceOp::Min>(),
+     tier_d<crd::f64, ReduceOp::Max>()},
+    &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f32>::thin,
+    &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f64>::thin,
+    &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f32>::smallm,
+    &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f64>::smallm,
 };
 
 } // namespace crd::hesap::tensor

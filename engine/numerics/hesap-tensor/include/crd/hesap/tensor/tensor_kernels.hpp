@@ -4,7 +4,9 @@
 // it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and the IEEE operations
 // of a real or Complex<T> product, the binned sum is partition-independent by construction, the quantizers are
 // per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order (single-rounded
-// FMAs), softmax's exp core has a bit-identical vector twin, and the Philox blocks are integer rounds.
+// FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the elementwise ops
+// and the einsum products are per-element IEEE operations in one order, and Tier D's reduction order is fixed by
+// kEwLanes and kReduceBlock alone.
 
 #pragma once
 
@@ -16,9 +18,68 @@ namespace crd::hesap::tensor
 namespace detail
 {
 struct BinnedRungs; // crd/hesap/tensor/binned_core.hpp
+
+// Tier D's block (reduce.hpp): a function of the shape only, never of the workers.
+inline constexpr crd::u64 kReduceBlock = 4096U;
 } // namespace detail
 
 struct BlockQ8Zero; // crd/hesap/tensor/quant_core.hpp
+
+// The lane group of the elementwise, reduction and einsum kernels: eight f32 or four f64 values on every level. It
+// fixes Tier D's block partial (four groups, ADR-0134 §7) and the einsum direct-kernel gates; a level with wider
+// registers steps two groups at once.
+template <typename T> inline constexpr crd::u64 kEwLanes = sizeof(T) == 4U ? 8U : 4U;
+
+// The broadcast binary ops (elementwise.hpp ew_binary), each one IEEE operation per element; Min and Max are x86's
+// minps and maxps (a < b ? a : b, a > b ? a : b: the second operand on a NaN or a signed-zero tie).
+enum class BinaryOp : crd::u8
+{
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Min,
+    Max,
+};
+inline constexpr crd::u32 kBinaryOps = 6U;
+
+// The reductions (reduce.hpp, reduce_axes.hpp); the kernels run the first four (Mean is the sum's quotient).
+enum class ReduceOp : crd::u8
+{
+    Sum,
+    Prod,
+    Min,
+    Max,
+    Mean,
+};
+inline constexpr crd::u32 kReduceKernelOps = 4U;
+
+// One broadcast binary op over its collapsed dims (elementwise.hpp collapse): dst[w] = a op b for the row-major
+// positions w of shape[0 .. rank), dst contiguous, a and b at their element strides sa and sb per dim (0 where they
+// broadcast). Rank 0 is one element.
+template <typename T> struct EwBinaryWalk
+{
+    T* dst;
+    const T* a;
+    const T* b;
+    const crd::u64* shape;
+    const crd::i64* sa;
+    const crd::i64* sb;
+    crd::u32 rank;
+};
+
+// The Tier D kernels of one ReduceOp.
+template <typename T> struct ReduceKernels
+{
+    // A contiguous run's partial in the pinned order, folded onto init: four accumulators of kEwLanes lanes striped
+    // over the run, combined ((a0 op a1) op (a2 op a3)), their lanes folded left to right, then the scalar tail.
+    T (*block)(const T* p, crd::u64 n, T init) noexcept;
+    // out[o] for o in [o0, o1): the Tier D tree of the run src[o*len, o*len + len), its blocks' partials folded left
+    // to right, seeded by 0 (Sum), 1 (Prod) or the run's first value (Min, Max; len > 0).
+    void (*rows)(T* out, const T* src, crd::u64 len, crd::u64 o0, crd::u64 o1) noexcept;
+    // out[j] for j in [j0, j1): src[j] folded with src[i*w + j] for i = 1 .. rows - 1 in order (rows > 0).
+    void (*columns)(T* out, const T* src, crd::u64 rows, crd::u64 w, crd::u64 j0, crd::u64 j1) noexcept;
+};
 
 // The largest rank a permute walks (kMaxRank of crd/hesap/tensor/tensor.hpp, which permute.hpp asserts).
 inline constexpr crd::u32 kPermuteMaxRank = 8U;
@@ -150,6 +211,23 @@ struct TensorKernels
     // the SR draws (dtypes.hpp) and the decomp sketches keep Philox include-only (ADR-0096 §1).
     void (*philox4x32_blocks)(crd::u64 seed, crd::u64 stream, crd::u64 first_block, void* out,
                               crd::usize blocks) noexcept;
+    // The broadcast binary ops, indexed by BinaryOp.
+    void (*ew_binary_f32[kBinaryOps])(const EwBinaryWalk<crd::f32>& walk) noexcept;
+    void (*ew_binary_f64[kBinaryOps])(const EwBinaryWalk<crd::f64>& walk) noexcept;
+    // Tier D, indexed by ReduceOp.
+    ReduceKernels<crd::f32> reduce_f32[kReduceKernelOps];
+    ReduceKernels<crd::f64> reduce_f64[kReduceKernelOps];
+    // einsum's pack-free row-major products c[m x n] = a[m x k] b[k x n] (einsum_exec.hpp), each output a sum of
+    // a*b products in k order, rounded after every multiply and add. thin: n <= 8 * kEwLanes. smallm: a is k x m when
+    // a_trans; n in pairs of lane groups in registers over 8 rows, the rest as scalar dots.
+    void (*einsum_thin_f32)(crd::u64 m, crd::u64 k, crd::u64 n, const crd::f32* a, const crd::f32* b,
+                            crd::f32* c) noexcept;
+    void (*einsum_thin_f64)(crd::u64 m, crd::u64 k, crd::u64 n, const crd::f64* a, const crd::f64* b,
+                            crd::f64* c) noexcept;
+    void (*einsum_smallm_f32)(crd::u64 m, crd::u64 k, crd::u64 n, const crd::f32* a, const crd::f32* b, crd::f32* c,
+                              bool a_trans) noexcept;
+    void (*einsum_smallm_f64)(crd::u64 m, crd::u64 k, crd::u64 n, const crd::f64* a, const crd::f64* b, crd::f64* c,
+                              bool a_trans) noexcept;
 };
 
 // The levels with a body and the VNNI variants of avx2 (AVX-VNNI) and avx512 (AVX512-VNNI), the integer dots on

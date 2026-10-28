@@ -248,119 +248,38 @@ template <typename T>
 // L1-resident, A streams once, C rows accumulate in registers). The v0d
 // packed GEMM pays pack traffic comparable to the FLOPs at these shapes —
 // measured 0.54× torch on 24^4 tensor networks before this kernel.
-// Deterministic: fixed k-order per output row; dispatch is shape-only.
+// The sibling shape (M and K small, N large — the tensor-network step) is
+// REGISTER-blocked over M (8 accumulators live across the full k loop per
+// n-column pair): ~2 loads per 16 vector mul+adds — flop-bound, not L1-bound.
+// Both run in the tensor kernels at the CPU's level; deterministic: fixed
+// k-order per output, dispatch shape-only.
 template <typename T>
 inline void direct_gemm_thin(crd::u64 m_count, crd::u64 k_count, crd::u64 n_count, const T* a, const T* b,
                              T* c) noexcept
 {
-    using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 kW = EwSimd<T>::kWidth;
-    const crd::u64 nv = n_count / kW;
-    for (crd::u64 m = 0; m < m_count; ++m)
+    const TensorKernels& k = *tensor_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        const T* arow = a + m * k_count;
-        T* crow = c + m * n_count;
-        V acc[16]; // n_count <= 16*kW enforced by the dispatch gate
-        for (crd::u64 j = 0; j < nv; ++j)
-        {
-            acc[j] = V(T{0});
-        }
-        for (crd::u64 j = nv * kW; j < n_count; ++j)
-        {
-            crow[j] = T{0};
-        }
-        for (crd::u64 k = 0; k < k_count; ++k)
-        {
-            const V av(arow[k]);
-            const T* brow = b + k * n_count;
-            for (crd::u64 j = 0; j < nv; ++j)
-            {
-                acc[j] = acc[j] + av * V::load(brow + j * kW);
-            }
-            for (crd::u64 j = nv * kW; j < n_count; ++j)
-            {
-                crow[j] += arow[k] * brow[j];
-            }
-        }
-        for (crd::u64 j = 0; j < nv; ++j)
-        {
-            acc[j].store(crow + j * kW);
-        }
+        k.einsum_thin_f32(m_count, k_count, n_count, a, b, c);
+    }
+    else
+    {
+        k.einsum_thin_f64(m_count, k_count, n_count, a, b, c);
     }
 }
 
-// The sibling shape (M and K small, N large — the tensor-network step):
-// REGISTER-blocked over M (8 accumulators live across the full k loop per
-// n-column pair): ~2 loads per 16 vector mul+adds — flop-bound, not L1-bound.
-// Deterministic fixed (n-block, k, m) order.
-template <typename T, bool ATrans>
-inline void direct_gemm_smallm(crd::u64 m_count, crd::u64 k_count, crd::u64 n_count, const T* a, const T* b,
-                               T* c) noexcept
+template <typename T>
+inline void direct_gemm_smallm(crd::u64 m_count, crd::u64 k_count, crd::u64 n_count, const T* a, const T* b, T* c,
+                               bool a_trans) noexcept
 {
-    const auto aat = [=](crd::u64 m, crd::u64 k) noexcept
+    const TensorKernels& k = *tensor_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        return ATrans ? a[k * m_count + m] : a[m * k_count + k];
-    };
-    using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 kW = EwSimd<T>::kWidth;
-    const crd::u64 nv = n_count / kW;
-    for (crd::u64 j = 0; j + 2U <= nv; j += 2U) // 8x2 register tile (measured best: 5x3 regressed)
-    {
-        const T* bj = b + j * kW;
-        crd::u64 m0 = 0;
-        for (; m0 + 8U <= m_count; m0 += 8U)
-        {
-            V acc0[8];
-            V acc1[8];
-            for (crd::u32 i = 0; i < 8U; ++i)
-            {
-                acc0[i] = V(T{0});
-                acc1[i] = V(T{0});
-            }
-            for (crd::u64 k = 0; k < k_count; ++k)
-            {
-                const V b0 = V::load(bj + k * n_count);
-                const V b1 = V::load(bj + k * n_count + kW);
-                for (crd::u32 i = 0; i < 8U; ++i)
-                {
-                    const V av(aat(m0 + i, k));
-                    acc0[i] = acc0[i] + av * b0;
-                    acc1[i] = acc1[i] + av * b1;
-                }
-            }
-            for (crd::u32 i = 0; i < 8U; ++i)
-            {
-                acc0[i].store(c + (m0 + i) * n_count + j * kW);
-                acc1[i].store(c + (m0 + i) * n_count + j * kW + kW);
-            }
-        }
-        for (; m0 < m_count; ++m0) // m tail
-        {
-            V a0(T{0});
-            V a1(T{0});
-            for (crd::u64 k = 0; k < k_count; ++k)
-            {
-                const V av(aat(m0, k));
-                a0 = a0 + av * V::load(bj + k * n_count);
-                a1 = a1 + av * V::load(bj + k * n_count + kW);
-            }
-            a0.store(c + m0 * n_count + j * kW);
-            a1.store(c + m0 * n_count + j * kW + kW);
-        }
+        k.einsum_smallm_f32(m_count, k_count, n_count, a, b, c, a_trans);
     }
-    // n tail (odd n-vec + scalar remainder): simple per-row dots
-    const crd::u64 ndone = (nv & ~crd::u64{1}) * kW;
-    for (crd::u64 m = 0; m < m_count; ++m)
+    else
     {
-        for (crd::u64 n = ndone; n < n_count; ++n)
-        {
-            T acc{};
-            for (crd::u64 k = 0; k < k_count; ++k)
-            {
-                acc += aat(m, k) * b[k * n_count + n];
-            }
-            c[m * n_count + n] = acc;
-        }
+        k.einsum_smallm_f64(m_count, k_count, n_count, a, b, c, a_trans);
     }
 }
 
@@ -434,34 +353,34 @@ template <typename T>
     for (crd::u32 s = 0; s < plan.n_steps; ++s)
     {
         const EinsumStep& stp = plan.step[s];
-        detail::EinsumSlot<T>& A = slot[stp.a];
-        detail::EinsumSlot<T>& B = slot[stp.b];
+        detail::EinsumSlot<T>& lhs = slot[stp.a];
+        detail::EinsumSlot<T>& rhs = slot[stp.b];
         const crd::u64 result = stp.result_mask;
 
         // pre-sum indices private to one side and not in the result
-        const crd::u64 a_private = A.mask & ~B.mask & ~result;
+        const crd::u64 a_private = lhs.mask & ~rhs.mask & ~result;
         if (a_private != 0U)
         {
-            const TensorStatus st = detail::slot_sum_out(A, a_private, other_store(stp.a), alloc);
+            const TensorStatus st = detail::slot_sum_out(lhs, a_private, other_store(stp.a), alloc);
             if (st != TensorStatus::Ok)
             {
                 return st;
             }
         }
-        const crd::u64 b_private = B.mask & ~A.mask & ~result;
+        const crd::u64 b_private = rhs.mask & ~lhs.mask & ~result;
         if (b_private != 0U)
         {
-            const TensorStatus st = detail::slot_sum_out(B, b_private, other_store(stp.b), alloc);
+            const TensorStatus st = detail::slot_sum_out(rhs, b_private, other_store(stp.b), alloc);
             if (st != TensorStatus::Ok)
             {
                 return st;
             }
         }
 
-        const crd::u64 batch = A.mask & B.mask & result;
-        const crd::u64 contract = A.mask & B.mask & ~result;
-        const crd::u64 m_mask = A.mask & ~B.mask & result;
-        const crd::u64 n_mask = B.mask & ~A.mask & result;
+        const crd::u64 batch = lhs.mask & rhs.mask & result;
+        const crd::u64 contract = lhs.mask & rhs.mask & ~result;
+        const crd::u64 m_mask = lhs.mask & ~rhs.mask & result;
+        const crd::u64 n_mask = rhs.mask & ~lhs.mask & result;
 
         // TTGT copy avoidance, generalized: the LARGER operand keeps its
         // natural layout when it is any (batch|M|K)-run partition (any
@@ -473,11 +392,11 @@ template <typename T>
         using DTrans = dense::Trans;
         DTrans ta = DTrans::None;
         DTrans tb = DTrans::None;
-        const crd::u32 cntB = static_cast<crd::u32>(std::popcount(batch));
-        const crd::u32 cntM = static_cast<crd::u32>(std::popcount(m_mask));
-        const crd::u32 cntK = static_cast<crd::u32>(std::popcount(contract));
-        crd::u8 seqA[kMaxRank];
-        crd::u8 seqB[kMaxRank];
+        const crd::u32 cnt_b = static_cast<crd::u32>(std::popcount(batch));
+        const crd::u32 cnt_m = static_cast<crd::u32>(std::popcount(m_mask));
+        const crd::u32 cnt_k = static_cast<crd::u32>(std::popcount(contract));
+        crd::u8 seq_a[kMaxRank];
+        crd::u8 seq_b[kMaxRank];
         crd::u8 pre[kMaxRank];
         crd::u8 m_ord[kMaxRank];
         crd::u8 n_ord[kMaxRank];
@@ -496,11 +415,11 @@ template <typename T>
 
         bool a_nat = false;
         bool b_nat = false;
-        if (detail::grouped_runs(A, batch, m_mask, contract, seqA))
+        if (detail::grouped_runs(lhs, batch, m_mask, contract, seq_a))
         {
             a_nat = true; // [B,M,K]
         }
-        else if (detail::grouped_runs(A, batch, contract, m_mask, seqA))
+        else if (detail::grouped_runs(lhs, batch, contract, m_mask, seq_a))
         {
             a_nat = true;
             ta = DTrans::Transpose; // [B,K,M]
@@ -508,33 +427,33 @@ template <typename T>
         if (a_nat)
         {
             pn = 0;
-            for (crd::u32 i = 0; i < cntB; ++i)
+            for (crd::u32 i = 0; i < cnt_b; ++i)
             {
-                pre[pn++] = seqA[i];
+                pre[pn++] = seq_a[i];
             }
-            const crd::u32 koff = ta == DTrans::None ? cntB + cntM : cntB;
-            for (crd::u32 i = 0; i < cntK; ++i)
+            const crd::u32 koff = ta == DTrans::None ? cnt_b + cnt_m : cnt_b;
+            for (crd::u32 i = 0; i < cnt_k; ++i)
             {
-                pre[pn++] = seqA[koff + i];
+                pre[pn++] = seq_a[koff + i];
             }
-            const crd::u32 moff = ta == DTrans::None ? cntB : cntB + cntK;
-            for (crd::u32 i = 0; i < cntM; ++i)
+            const crd::u32 moff = ta == DTrans::None ? cnt_b : cnt_b + cnt_k;
+            for (crd::u32 i = 0; i < cnt_m; ++i)
             {
-                m_ord[i] = seqA[moff + i];
+                m_ord[i] = seq_a[moff + i];
             }
             // fit B: natural [sB,sK,N-run] or materialize to it
-            if (detail::matches_prefix_run(B, pre, pn, n_mask))
+            if (detail::matches_prefix_run(rhs, pre, pn, n_mask))
             {
-                for (crd::u32 i = 0; i < B.rank - pn; ++i)
+                for (crd::u32 i = 0; i < rhs.rank - pn; ++i)
                 {
-                    n_ord[i] = B.order[pn + i];
+                    n_ord[i] = rhs.order[pn + i];
                 }
             }
             else
             {
                 crd::u32 nlen = pn;
                 detail::append_split(pre, nlen, n_mask, consumer_kept);
-                const TensorStatus st = detail::materialize_seq(B, pre, nlen, other_store(stp.b));
+                const TensorStatus st = detail::materialize_seq(rhs, pre, nlen, other_store(stp.b));
                 if (st != TensorStatus::Ok)
                 {
                     return st;
@@ -547,11 +466,11 @@ template <typename T>
         }
         else
         {
-            if (detail::grouped_runs(B, batch, contract, n_mask, seqB))
+            if (detail::grouped_runs(rhs, batch, contract, n_mask, seq_b))
             {
                 b_nat = true; // [B,K,N]
             }
-            else if (detail::grouped_runs(B, batch, n_mask, contract, seqB))
+            else if (detail::grouped_runs(rhs, batch, n_mask, contract, seq_b))
             {
                 b_nat = true;
                 tb = DTrans::Transpose; // [B,N,K]
@@ -559,19 +478,19 @@ template <typename T>
             if (b_nat)
             {
                 pn = 0;
-                for (crd::u32 i = 0; i < cntB; ++i)
+                for (crd::u32 i = 0; i < cnt_b; ++i)
                 {
-                    pre[pn++] = seqB[i];
+                    pre[pn++] = seq_b[i];
                 }
-                const crd::u32 koff2 = tb == DTrans::None ? cntB : cntB + (B.rank - cntB - cntK);
-                for (crd::u32 i = 0; i < cntK; ++i)
+                const crd::u32 koff2 = tb == DTrans::None ? cnt_b : cnt_b + (rhs.rank - cnt_b - cnt_k);
+                for (crd::u32 i = 0; i < cnt_k; ++i)
                 {
-                    pre[pn++] = seqB[koff2 + i];
+                    pre[pn++] = seq_b[koff2 + i];
                 }
-                const crd::u32 noff = tb == DTrans::None ? cntB + cntK : cntB;
-                for (crd::u32 i = 0; i < B.rank - cntB - cntK; ++i)
+                const crd::u32 noff = tb == DTrans::None ? cnt_b + cnt_k : cnt_b;
+                for (crd::u32 i = 0; i < rhs.rank - cnt_b - cnt_k; ++i)
                 {
-                    n_ord[i] = seqB[noff + i];
+                    n_ord[i] = seq_b[noff + i];
                 }
             }
             else
@@ -582,7 +501,7 @@ template <typename T>
                 detail::append_split(pre, pn, contract, ~crd::u64{0});
                 crd::u32 blen = pn;
                 detail::append_split(pre, blen, n_mask, consumer_kept);
-                const TensorStatus st = detail::materialize_seq(B, pre, blen, other_store(stp.b));
+                const TensorStatus st = detail::materialize_seq(rhs, pre, blen, other_store(stp.b));
                 if (st != TensorStatus::Ok)
                 {
                     return st;
@@ -594,19 +513,19 @@ template <typename T>
                 tb = DTrans::None;
             }
             // fit A as [sB,sK,M-run] (trans) or materialize to it
-            if (detail::matches_prefix_run(A, pre, pn, m_mask))
+            if (detail::matches_prefix_run(lhs, pre, pn, m_mask))
             {
                 ta = DTrans::Transpose;
-                for (crd::u32 i = 0; i < A.rank - pn; ++i)
+                for (crd::u32 i = 0; i < lhs.rank - pn; ++i)
                 {
-                    m_ord[i] = A.order[pn + i];
+                    m_ord[i] = lhs.order[pn + i];
                 }
             }
             else
             {
                 crd::u32 alen = pn;
                 detail::append_split(pre, alen, m_mask, consumer_kept);
-                const TensorStatus st = detail::materialize_seq(A, pre, alen, other_store(stp.a));
+                const TensorStatus st = detail::materialize_seq(lhs, pre, alen, other_store(stp.a));
                 if (st != TensorStatus::Ok)
                 {
                     return st;
@@ -626,25 +545,25 @@ template <typename T>
 
         // result slot: [batch, M, N] in the ACTUAL sub-orders the GEMM emits
         // (batch = the shared prefix, M = A's m-run, N = B's n-run)
-        detail::EinsumSlot<T>& R = slot[n_ssa];
+        detail::EinsumSlot<T>& out_slot = slot[n_ssa];
         crd::u64 rshape[kMaxRank];
         crd::u32 rr = 0;
-        const crd::u32 cntN = static_cast<crd::u32>(std::popcount(n_mask));
-        for (crd::u32 i = 0; i < cntB; ++i)
+        const crd::u32 cnt_n = static_cast<crd::u32>(std::popcount(n_mask));
+        for (crd::u32 i = 0; i < cnt_b; ++i)
         {
-            R.order[rr] = pre[i];
+            out_slot.order[rr] = pre[i];
             rshape[rr] = idx_size[pre[i]];
             ++rr;
         }
-        for (crd::u32 i = 0; i < cntM; ++i)
+        for (crd::u32 i = 0; i < cnt_m; ++i)
         {
-            R.order[rr] = m_ord[i];
+            out_slot.order[rr] = m_ord[i];
             rshape[rr] = idx_size[m_ord[i]];
             ++rr;
         }
-        for (crd::u32 i = 0; i < cntN; ++i)
+        for (crd::u32 i = 0; i < cnt_n; ++i)
         {
-            R.order[rr] = n_ord[i];
+            out_slot.order[rr] = n_ord[i];
             rshape[rr] = idx_size[n_ord[i]];
             ++rr;
         }
@@ -654,8 +573,8 @@ template <typename T>
             return TensorStatus::AllocFailed;
         }
         // one deterministic GEMM per batch entry (row-major, packed layouts)
-        const T* pa = A.view.data();
-        const T* pb = B.view.data();
+        const T* pa = lhs.view.data();
+        const T* pb = rhs.view.data();
         T* pc = res.data();
         const crd::u32 nw = crd::jobs::num_workers();
         for (crd::u64 bi = 0; bi < nb; ++bi)
@@ -671,25 +590,17 @@ template <typename T>
             const MatrixView<const T, Layout::RowMajor> mb(pb + bi * nk * nn, br, bc, bc);
             MatrixView<T, Layout::RowMajor> mc(pc + bi * nm * nn, nm, nn, nn);
             // thin-contraction direct kernel: pack-free when B is L1-resident
-            const bool thin = ta == DTrans::None && tb == DTrans::None && nk <= 48U &&
-                              nn <= 8U * detail::EwSimd<T>::kWidth && nk * nn * sizeof(T) <= 32768U;
-            const bool thin_m = tb == DTrans::None && nm <= 64U && nk <= 64U && nn >= 8U * detail::EwSimd<T>::kWidth;
+            const bool thin = ta == DTrans::None && tb == DTrans::None && nk <= 48U && nn <= 8U * kEwLanes<T> &&
+                              nk * nn * sizeof(T) <= 32768U;
+            const bool thin_m = tb == DTrans::None && nm <= 64U && nk <= 64U && nn >= 8U * kEwLanes<T>;
             if (thin)
             {
                 detail::direct_gemm_thin<T>(nm, nk, nn, pa + bi * nm * nk, pb + bi * nk * nn, pc + bi * nm * nn);
             }
             else if (thin_m)
             {
-                if (ta == DTrans::Transpose)
-                {
-                    detail::direct_gemm_smallm<T, true>(nm, nk, nn, pa + bi * nm * nk, pb + bi * nk * nn,
-                                                        pc + bi * nm * nn);
-                }
-                else
-                {
-                    detail::direct_gemm_smallm<T, false>(nm, nk, nn, pa + bi * nm * nk, pb + bi * nk * nn,
-                                                         pc + bi * nm * nn);
-                }
+                detail::direct_gemm_smallm<T>(nm, nk, nn, pa + bi * nm * nk, pb + bi * nk * nn, pc + bi * nm * nn,
+                                              ta == DTrans::Transpose);
             }
             else if (nw > 1U)
             {
@@ -702,20 +613,20 @@ template <typename T>
         }
         store_a[n_ssa] = static_cast<Tensor<T>&&>(res);
         held[n_ssa] = 1U;
-        R.view = TensorView<const T>(store_a[n_ssa].view());
-        R.rank = rr;
-        R.mask = result;
+        out_slot.view = TensorView<const T>(store_a[n_ssa].view());
+        out_slot.rank = rr;
+        out_slot.mask = result;
         ++n_ssa;
     }
 
     // final slot: the single survivor (n_steps==0 → the lone input)
-    detail::EinsumSlot<T>& F = slot[plan.n_steps == 0U ? 0U : n_ssa - 1U];
+    detail::EinsumSlot<T>& last_slot = slot[plan.n_steps == 0U ? 0U : n_ssa - 1U];
     // 1-operand plans may still need a sum-out (e.g. "ii" trace, "ab->a")
-    const crd::u64 extra = F.mask & ~e.out_mask;
+    const crd::u64 extra = last_slot.mask & ~e.out_mask;
     if (extra != 0U)
     {
         const crd::u32 fid = plan.n_steps == 0U ? 0U : n_ssa - 1U;
-        const TensorStatus st = detail::slot_sum_out(F, extra, other_store(fid), alloc);
+        const TensorStatus st = detail::slot_sum_out(last_slot, extra, other_store(fid), alloc);
         if (st != TensorStatus::Ok)
         {
             return st;
@@ -726,9 +637,9 @@ template <typename T>
     for (crd::u32 o = 0; o < e.out_count; ++o)
     {
         bool found = false;
-        for (crd::u32 d = 0; d < F.rank; ++d)
+        for (crd::u32 d = 0; d < last_slot.rank; ++d)
         {
-            if (F.order[d] == e.out_idx[o])
+            if (last_slot.order[d] == e.out_idx[o])
             {
                 perm[o] = d;
                 found = true;
@@ -740,7 +651,7 @@ template <typename T>
             return TensorStatus::BadInput;
         }
     }
-    return permute_copy(F.view, {perm, e.out_count}, out);
+    return permute_copy(last_slot.view, {perm, e.out_count}, out);
 }
 
 } // namespace crd::hesap::tensor

@@ -111,6 +111,27 @@
       "why": "the storage dtypes and SR converts; the SR draws run the per-level tensor kernels' Philox block loop and the narrowers the crd-math kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/tensor/elementwise.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_elementwise.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the broadcast binary ops run the per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header, the baseline's SSE2 ones included, to its consumers"
+    },
+    {
+      "include": "crd/hesap/tensor/reduce_axes.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_reduce_axes.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "Tier D (reduce.hpp and the axis folds) runs the per-level tensor kernels (SIMD-DISPATCH), so neither header brings an intrinsics header to its consumers"
+    },
+    {
+      "include": "crd/hesap/tensor/einsum_exec.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_einsum_exec.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "einsum's direct products run the per-level tensor kernels and its GEMMs the dense ones (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

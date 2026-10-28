@@ -33,72 +33,25 @@
 namespace crd::hesap::tensor
 {
 
-enum class ReduceOp : crd::u8
-{
-    Sum,
-    Prod,
-    Min,
-    Max,
-    Mean,
-};
+// ReduceOp: crd/hesap/tensor/tensor_kernels.hpp.
 
 namespace detail
 {
 
 // Vertical fold: out[0..w) over `rows` slices of width w (contiguous), i-order
-// per output element. SIMD across outputs; tail scalar. Op applies per lane.
+// per output element (ReduceKernels::columns).
 template <typename T, typename Op> inline void vertical_fold(T* out, const T* src, crd::u64 rows, crd::u64 w) noexcept
 {
-    using V = typename EwSimd<T>::Vec;
-    constexpr crd::u64 kW = EwSimd<T>::kWidth;
-    // init with slice 0 (correct for min/max; sum/prod fold from the first
-    // value identically to the scalar chain)
-    for (crd::u64 j = 0; j < w; ++j)
-    {
-        out[j] = src[j];
-    }
-    for (crd::u64 i = 1; i < rows; ++i)
-    {
-        const T* row = src + i * w;
-        crd::u64 j = 0;
-        for (; j + kW <= w; j += kW)
-        {
-            Op::v(V::load(out + j), V::load(row + j)).store(out + j);
-        }
-        for (; j < w; ++j)
-        {
-            out[j] = Op::s(out[j], row[j]);
-        }
-    }
-}
-
-// Op-init: Sum/Prod fold from their identity; Min/Max (no identity) seed
-// from the first element of the run (the full-reduction convention).
-template <typename Op, typename T> [[nodiscard]] inline T ax_init(const T& first) noexcept
-{
-    if constexpr (std::is_same_v<Op, RAdd<T>>)
-    {
-        return T{0};
-    }
-    else if constexpr (std::is_same_v<Op, RMul<T>>)
-    {
-        return T{1};
-    }
-    else
-    {
-        return first;
-    }
+    reduce_kernels<T, Op>().columns(out, src, rows, w, 0U, w);
 }
 
 // Row fold: each output folds one contiguous run of `len` through the fixed
-// block tree (identical order to the full reduction of that run).
+// block tree (identical order to the full reduction of that run; Sum and Prod
+// seeded by their identity, Min and Max by the run's first element).
 template <typename T, typename Op>
 inline void row_fold_range(T* out, const T* src, crd::u64 len, crd::u64 o0, crd::u64 o1) noexcept
 {
-    for (crd::u64 o = o0; o < o1; ++o)
-    {
-        out[o] = reduce_fixed_tree<T, Op>(src + o * len, len, ax_init<Op>(src[o * len]), {});
-    }
+    reduce_kernels<T, Op>().rows(out, src, len, o0, o1);
 }
 
 } // namespace detail
@@ -170,37 +123,14 @@ template <typename T>
             const crd::u64 nblocks = (w + detail::kReduceBlock - 1U) / detail::kReduceBlock;
             if (crd::jobs::num_workers() > 1U && nblocks >= 2U && w <= 0xFFFFFFFFULL)
             {
-                crd::jobs::Counter* c =
-                    crd::jobs::parallel_for(static_cast<crd::u32>(nblocks), crd::jobs::num_workers(),
-                                            [out, src, red_count, w](crd::u32 b0, crd::u32 b1)
-                                            {
-                                                for (crd::u32 b = b0; b < b1; ++b)
-                                                {
-                                                    const crd::u64 j0 = static_cast<crd::u64>(b) * detail::kReduceBlock;
-                                                    const crd::u64 j1 =
-                                                        j0 + detail::kReduceBlock < w ? j0 + detail::kReduceBlock : w;
-                                                    // vertical fold restricted to columns [j0, j1)
-                                                    for (crd::u64 j = j0; j < j1; ++j)
-                                                    {
-                                                        out[j] = src[j];
-                                                    }
-                                                    for (crd::u64 i = 1; i < red_count; ++i)
-                                                    {
-                                                        const T* row = src + i * w;
-                                                        using V = typename detail::EwSimd<T>::Vec;
-                                                        constexpr crd::u64 kW = detail::EwSimd<T>::kWidth;
-                                                        crd::u64 j = j0;
-                                                        for (; j + kW <= j1; j += kW)
-                                                        {
-                                                            Op::v(V::load(out + j), V::load(row + j)).store(out + j);
-                                                        }
-                                                        for (; j < j1; ++j)
-                                                        {
-                                                            out[j] = Op::s(out[j], row[j]);
-                                                        }
-                                                    }
-                                                }
-                                            });
+                crd::jobs::Counter* c = crd::jobs::parallel_for(
+                    static_cast<crd::u32>(nblocks), crd::jobs::num_workers(),
+                    [out, src, red_count, w](crd::u32 b0, crd::u32 b1)
+                    {
+                        const crd::u64 j0 = static_cast<crd::u64>(b0) * detail::kReduceBlock;
+                        const crd::u64 j1 = static_cast<crd::u64>(b1) * detail::kReduceBlock;
+                        detail::reduce_kernels<T, Op>().columns(out, src, red_count, w, j0, j1 < w ? j1 : w);
+                    });
                 crd::jobs::wait(c);
                 crd::jobs::frame_reset();
             }

@@ -1186,6 +1186,458 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Philox blo
     CHECK(ran >= 1U);
 }
 
+// ---- elementwise, Tier D and einsum kernels ------------------------------------
+
+namespace
+{
+
+using tn::BinaryOp;
+using tn::ReduceOp;
+
+template <typename T> using Bits = std::conditional_t<sizeof(T) == 4U, u32, u64>;
+
+// Values of varied signs and magnitudes; every `special`-th (0: none) is a quiet NaN (when nan), an infinity, a signed
+// zero, a subnormal or an extreme. An input NaN has one payload, so one operation's NaN is the same whichever operand
+// it comes from; a chain of operations that makes NaNs of its own (inf - inf) gets no input NaN, since the payload of
+// two different NaNs depends on their operand order, which a compiler may swap in the scalar oracle.
+template <typename T> void fill_values(T* p, u64 n, u64 seed, u64 special, bool nan = true)
+{
+    using L = std::numeric_limits<T>;
+    const T specials[] = {L::quiet_NaN(),  L::infinity(),           -L::infinity(), T{0},       -T{0},
+                          L::denorm_min(), -L::denorm_min() * T{3}, L::max(),       L::lowest()};
+    u64 s = seed;
+    for (u64 i = 0; i < n; ++i)
+    {
+        const u64 r = lcg(s);
+        if (special != 0U && r % special == 0U)
+        {
+            p[i] = nan ? specials[(r >> 8U) % 9U] : specials[1U + (r >> 8U) % 8U];
+        }
+        else
+        {
+            p[i] = static_cast<T>(static_cast<i64>(r % 2000001U) - 1000000) / T{1024};
+        }
+    }
+}
+
+template <typename T> u64 mismatches(const T* want, const T* got, u64 n)
+{
+    u64 bad = 0;
+    for (u64 i = 0; i < n; ++i)
+    {
+        bad += std::bit_cast<Bits<T>>(want[i]) != std::bit_cast<Bits<T>>(got[i]) ? 1U : 0U;
+    }
+    return bad;
+}
+
+// The scalar oracle: one IEEE operation; Min and Max as minps and maxps (the second operand on a NaN or a tie).
+template <typename T> T apply_op(BinaryOp op, T a, T b)
+{
+    switch (op)
+    {
+        case BinaryOp::Add:
+            return a + b;
+        case BinaryOp::Sub:
+            return a - b;
+        case BinaryOp::Mul:
+            return a * b;
+        case BinaryOp::Div:
+            return a / b;
+        case BinaryOp::Min:
+            return a < b ? a : b;
+        case BinaryOp::Max:
+            return a > b ? a : b;
+    }
+    return a;
+}
+
+BinaryOp fold_op(ReduceOp op)
+{
+    switch (op)
+    {
+        case ReduceOp::Sum:
+            return BinaryOp::Add;
+        case ReduceOp::Prod:
+            return BinaryOp::Mul;
+        case ReduceOp::Min:
+            return BinaryOp::Min;
+        default:
+            return BinaryOp::Max;
+    }
+}
+
+template <typename T> void (*ew_entry(const TensorKernels& k, BinaryOp op))(const tn::EwBinaryWalk<T>&) noexcept
+{
+    if constexpr (sizeof(T) == 4U)
+    {
+        return k.ew_binary_f32[static_cast<u32>(op)];
+    }
+    else
+    {
+        return k.ew_binary_f64[static_cast<u32>(op)];
+    }
+}
+
+template <typename T> const tn::ReduceKernels<T>& reduce_entry(const TensorKernels& k, ReduceOp op)
+{
+    if constexpr (sizeof(T) == 4U)
+    {
+        return k.reduce_f32[static_cast<u32>(op)];
+    }
+    else
+    {
+        return k.reduce_f64[static_cast<u32>(op)];
+    }
+}
+
+// One walk of the binary kernel against the row-major oracle, with guard words around dst.
+struct EwCase
+{
+    u32 rank;
+    u64 shape[3];
+    i64 sa[3];
+    i64 sb[3];
+    i64 a_base; // the operands' first element in their buffers (negative strides start inside)
+    i64 b_base;
+};
+
+template <typename T> u64 check_walk(const TensorKernels& k, BinaryOp op, const EwCase& c, const T* a, const T* b)
+{
+    constexpr u64 guard = 16U;
+    static T want[8192 + 2U * guard];
+    static T got[8192 + 2U * guard];
+    u64 total = 1;
+    for (u32 d = 0; d < c.rank; ++d)
+    {
+        total *= c.shape[d];
+    }
+    for (u64 i = 0; i < total + 2U * guard; ++i)
+    {
+        want[i] = sentinel<T>();
+        got[i] = sentinel<T>();
+    }
+    for (u64 w = 0; w < total; ++w)
+    {
+        i64 oa = c.a_base;
+        i64 ob = c.b_base;
+        u64 rest = w;
+        for (u32 d = c.rank; d-- > 0U;)
+        {
+            const i64 id = static_cast<i64>(rest % c.shape[d]);
+            rest /= c.shape[d];
+            oa += id * c.sa[d];
+            ob += id * c.sb[d];
+        }
+        want[guard + w] = apply_op(op, a[oa], b[ob]);
+    }
+    const tn::EwBinaryWalk<T> walk{got + guard, a + c.a_base, b + c.b_base, c.shape, c.sa, c.sb, c.rank};
+    ew_entry<T>(k, op)(walk);
+    return mismatches(want, got, total + 2U * guard);
+}
+
+template <typename T> u64 check_binary_level(const TensorKernels& k)
+{
+    static T a[8192];
+    static T b[8192];
+    fill_values(a, 8192U, 0xE1U + sizeof(T), 5U);
+    fill_values(b, 8192U, 0xE2U + sizeof(T), 7U);
+    using L = std::numeric_limits<T>;
+    const T ties[7][2] = {{T{0}, -T{0}},
+                          {-T{0}, T{0}},
+                          {L::quiet_NaN(), T{1}},
+                          {T{1}, L::quiet_NaN()},
+                          {L::quiet_NaN(), L::quiet_NaN()},
+                          {L::infinity(), L::infinity()},
+                          {T{2}, T{2}}};
+    for (u64 i = 0; i < 64U; ++i) // the signed-zero, NaN and equal ties of min and max
+    {
+        a[5U * i + 2U] = ties[i % 7U][0];
+        b[5U * i + 2U] = ties[i % 7U][1];
+    }
+    u64 bad = 0;
+    for (const BinaryOp op : {BinaryOp::Add, BinaryOp::Sub, BinaryOp::Mul, BinaryOp::Div, BinaryOp::Min, BinaryOp::Max})
+    {
+        bad += check_walk<T>(k, op, {0U, {}, {}, {}, 0, 5}, a, b);
+        for (const u64 n : {1U, 3U, 4U, 5U, 7U, 8U, 9U, 15U, 16U, 17U, 31U, 32U, 33U, 63U, 64U, 65U, 1000U})
+        {
+            const i64 sn = static_cast<i64>(n);
+            bad += check_walk<T>(k, op, {1U, {n}, {1}, {1}, 0, 1}, a, b);   // both step
+            bad += check_walk<T>(k, op, {1U, {n}, {1}, {0}, 2, 7}, a, b);   // b broadcast
+            bad += check_walk<T>(k, op, {1U, {n}, {0}, {1}, 9, 3}, a, b);   // a broadcast
+            bad += check_walk<T>(k, op, {1U, {n}, {0}, {0}, 4, 11}, a, b);  // both broadcast
+            bad += check_walk<T>(k, op, {1U, {n}, {3}, {2}, 1, 0}, a, b);   // strided
+            bad += check_walk<T>(k, op, {1U, {n}, {-1}, {1}, sn, 6}, a, b); // reversed
+            bad += check_walk<T>(k, op, {3U, {2U, 3U, n}, {3 * sn, sn, 1}, {0, sn, 1}, 0, 0}, a, b);
+            bad += check_walk<T>(k, op, {3U, {2U, 3U, n}, {3 * sn, sn, 1}, {1, 0, 0}, 0, 0}, a, b);
+            bad += check_walk<T>(k, op, {3U, {3U, 2U, n}, {0, 0, 1}, {2 * sn, sn, 1}, 13, 0}, a, b);
+            bad += check_walk<T>(k, op, {3U, {2U, 2U, n}, {4 * sn, 2 * sn, 2}, {sn, 0, 1}, 0, 0}, a, b);
+        }
+        bad += check_walk<T>(k, op, {3U, {2U, 0U, 9U}, {9, 9, 1}, {9, 9, 1}, 0, 0}, a, b); // an empty dim
+    }
+    return bad;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar elementwise bits", "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_binary_level<f32>(*level.table) == 0U);
+        CHECK(check_binary_level<f64>(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// Tier D's pinned order: four kEwLanes-wide accumulators striped over the run, ((a0 op a1) op (a2 op a3)), the lanes
+// left to right, the scalar tail last, all folded onto init.
+template <typename T> T block_reference(ReduceOp rop, const T* p, u64 n, T init)
+{
+    const BinaryOp op = fold_op(rop);
+    constexpr u64 group_lanes = tn::kEwLanes<T>;
+    T acc = init;
+    u64 i = 0;
+    if (n >= 4U * group_lanes)
+    {
+        T lanes[4][group_lanes];
+        for (u64 g = 0; g < 4U; ++g)
+        {
+            for (u64 l = 0; l < group_lanes; ++l)
+            {
+                lanes[g][l] = p[g * group_lanes + l];
+            }
+        }
+        for (i = 4U * group_lanes; i + 4U * group_lanes <= n; i += 4U * group_lanes)
+        {
+            for (u64 g = 0; g < 4U; ++g)
+            {
+                for (u64 l = 0; l < group_lanes; ++l)
+                {
+                    lanes[g][l] = apply_op(op, lanes[g][l], p[i + g * group_lanes + l]);
+                }
+            }
+        }
+        T fold = T{};
+        for (u64 l = 0; l < group_lanes; ++l)
+        {
+            const T c = apply_op(op, apply_op(op, lanes[0][l], lanes[1][l]), apply_op(op, lanes[2][l], lanes[3][l]));
+            fold = l == 0U ? c : apply_op(op, fold, c);
+        }
+        acc = apply_op(op, acc, fold);
+    }
+    for (; i < n; ++i)
+    {
+        acc = apply_op(op, acc, p[i]);
+    }
+    return acc;
+}
+
+template <typename T> T tree_reference(ReduceOp rop, const T* p, u64 len)
+{
+    T init = p[0];
+    if (rop == ReduceOp::Sum || rop == ReduceOp::Prod)
+    {
+        init = rop == ReduceOp::Sum ? T{0} : T{1};
+    }
+    T acc = init;
+    for (u64 off = 0; off < len; off += tn::detail::kReduceBlock)
+    {
+        const u64 n = len - off < tn::detail::kReduceBlock ? len - off : tn::detail::kReduceBlock;
+        const T partial = block_reference(rop, p + off, n, init);
+        acc = off == 0U ? partial : apply_op(fold_op(rop), acc, partial);
+    }
+    return acc;
+}
+
+template <typename T> u64 check_reduce_level(const TensorKernels& k)
+{
+    constexpr u64 count = 24000U;
+    constexpr u64 guard = 8U;
+    static T p[count];
+    static T want[count + 2U * guard];
+    static T got[count + 2U * guard];
+    u64 bad = 0;
+    for (const u64 special : {0U, 97U, 11U})
+    {
+        for (const ReduceOp rop : {ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Min, ReduceOp::Max})
+        {
+            // min and max select, so their NaNs keep the input's payload.
+            fill_values(p, count, 0x7D0U + special, special, rop == ReduceOp::Min || rop == ReduceOp::Max);
+            const tn::ReduceKernels<T>& r = reduce_entry<T>(k, rop);
+            for (const u64 n :
+                 {0U, 1U, 7U, 8U, 15U, 16U, 31U, 32U, 33U, 63U, 64U, 65U, 100U, 4095U, 4096U, 4097U, 9000U, 20000U})
+            {
+                const T init = rop == ReduceOp::Prod ? T{1} : p[n % 5U];
+                const T expect = block_reference(rop, p, n, init);
+                const T actual = r.block(p, n, init);
+                bad += std::bit_cast<Bits<T>>(expect) != std::bit_cast<Bits<T>>(actual) ? 1U : 0U;
+            }
+            // rows: runs of len through the tree, a sub-range [o0, o1) of the outputs.
+            for (const u64 len : {1U, 5U, 31U, 32U, 33U, 4095U, 4096U, 4097U, 8193U})
+            {
+                const u64 outs = count / len < 6U ? count / len : 6U;
+                for (u64 i = 0; i < outs + 2U * guard; ++i)
+                {
+                    want[i] = sentinel<T>();
+                    got[i] = sentinel<T>();
+                }
+                const u64 o0 = outs > 2U ? 1U : 0U;
+                for (u64 o = o0; o < outs; ++o)
+                {
+                    want[guard + o] = tree_reference(rop, p + o * len, len);
+                }
+                r.rows(got + guard, p, len, o0, outs);
+                bad += mismatches(want, got, outs + 2U * guard);
+            }
+            // columns: rows x w slices folded in row order, a sub-range [j0, j1).
+            for (const u64 rows : {1U, 2U, 5U})
+            {
+                for (const u64 w : {1U, 7U, 8U, 9U, 16U, 33U, 4103U})
+                {
+                    for (u64 j = 0; j < w + 2U * guard; ++j)
+                    {
+                        want[j] = sentinel<T>();
+                        got[j] = sentinel<T>();
+                    }
+                    const u64 j0 = w > 8U ? 3U : 0U;
+                    const u64 j1 = w > 8U ? w - 1U : w;
+                    for (u64 j = j0; j < j1; ++j)
+                    {
+                        T acc = p[j];
+                        for (u64 i = 1; i < rows; ++i)
+                        {
+                            acc = apply_op(fold_op(rop), acc, p[i * w + j]);
+                        }
+                        want[guard + j] = acc;
+                    }
+                    r.columns(got + guard, p, rows, w, j0, j1);
+                    bad += mismatches(want, got, w + 2U * guard);
+                }
+            }
+        }
+    }
+    return bad;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the pinned Tier D bits", "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_reduce_level<f32>(*level.table) == 0U);
+        CHECK(check_reduce_level<f64>(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// einsum's direct products: every output a + a*b chain in k order from +0, rounded after each operation.
+template <typename T> u64 check_einsum_level(const TensorKernels& k)
+{
+    constexpr u64 guard = 8U;
+    static T a[64U * 64U];
+    static T b[64U * 128U];
+    static T want[64U * 128U + 2U * guard];
+    static T got[64U * 128U + 2U * guard];
+    fill_values(a, 64U * 64U, 0xA0U + sizeof(T), 61U, false);
+    fill_values(b, 64U * 128U, 0xB0U + sizeof(T), 0U);
+    const auto run = [&](u64 m, u64 kk, u64 n, bool thin, bool a_trans)
+    {
+        for (u64 i = 0; i < m * n + 2U * guard; ++i)
+        {
+            want[i] = sentinel<T>();
+            got[i] = sentinel<T>();
+        }
+        for (u64 r = 0; r < m; ++r)
+        {
+            for (u64 c = 0; c < n; ++c)
+            {
+                T acc = T{0};
+                for (u64 q = 0; q < kk; ++q)
+                {
+                    const T av = a_trans ? a[q * m + r] : a[r * kk + q];
+                    const T prod = av * b[q * n + c];
+                    acc = acc + prod;
+                }
+                want[guard + r * n + c] = acc;
+            }
+        }
+        if constexpr (sizeof(T) == 4U)
+        {
+            if (thin)
+            {
+                k.einsum_thin_f32(m, kk, n, a, b, got + guard);
+            }
+            else
+            {
+                k.einsum_smallm_f32(m, kk, n, a, b, got + guard, a_trans);
+            }
+        }
+        else
+        {
+            if (thin)
+            {
+                k.einsum_thin_f64(m, kk, n, a, b, got + guard);
+            }
+            else
+            {
+                k.einsum_smallm_f64(m, kk, n, a, b, got + guard, a_trans);
+            }
+        }
+        return mismatches(want, got, m * n + 2U * guard);
+    };
+    u64 bad = 0;
+    constexpr u64 thin_max = 8U * tn::kEwLanes<T>;
+    for (const u64 m : {1U, 2U, 3U, 7U, 8U, 9U, 17U})
+    {
+        for (const u64 kk : {0U, 1U, 3U, 7U, 48U})
+        {
+            for (const u64 n : {1U, 3U, 4U, 5U, 7U, 8U, 9U, 15U, 16U, 17U, 31U, 32U, 33U, 63U, 64U})
+            {
+                if (n <= thin_max)
+                {
+                    bad += run(m, kk, n, true, false);
+                }
+            }
+            for (const u64 n : {16U, 17U, 24U, 31U, 32U, 33U, 47U, 48U, 49U, 64U, 65U, 100U, 128U})
+            {
+                bad += run(m, kk, n, false, false);
+                bad += run(m, kk, n, false, true);
+            }
+        }
+    }
+    return bad;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar einsum product bits", "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_einsum_level<f32>(*level.table) == 0U);
+        CHECK(check_einsum_level<f64>(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+} // namespace
+
 TEST_CASE("tensor kernels: the process runs the level its CPU selection resolves", "[tensor][kernels]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
