@@ -14,6 +14,7 @@
 #include <crd/hesap/fft/detail/codelets.hpp>
 #include <crd/hesap/fft/detail/hier_codelets.hpp>
 #include <crd/hesap/fft/detail/small_n_codelets.hpp>
+#include <crd/hesap/fft/detail/twiddle_codelets.hpp>
 #include <crd/hesap/fft/fft_kernels.hpp>
 #include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/vec4d.hpp>
@@ -2746,11 +2747,11 @@ template <typename T> struct Engine
             const crd::usize obase = j * r;
             if (dir == FftDirection::Forward)
             {
-                detail::twiddle8_fwd<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle8_fwd(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
             else
             {
-                detail::twiddle8_inv<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle8_inv(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
         }
     }
@@ -2780,11 +2781,11 @@ template <typename T> struct Engine
             const crd::usize obase = j * r;
             if (dir == FftDirection::Forward)
             {
-                detail::twiddle16_fwd<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle16_fwd(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
             else
             {
-                detail::twiddle16_inv<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle16_inv(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
         }
     }
@@ -2814,11 +2815,11 @@ template <typename T> struct Engine
             const crd::usize obase = j * r;
             if (dir == FftDirection::Forward)
             {
-                detail::twiddle32_fwd<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle32_fwd(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
             else
             {
-                detail::twiddle32_inv<T>(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
+                detail::twiddle32_inv(xr, xi, yr, yi, ibase, r, obase, q, w_re, w_im);
             }
         }
     }

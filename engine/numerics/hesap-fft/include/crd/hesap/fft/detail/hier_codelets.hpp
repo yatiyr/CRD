@@ -4,10 +4,11 @@
 // surviving artifact, style-normalized by scripts/fft_codegen_style.py on 2026-09-12 and recorded with its hash
 // in scripts/generated-sources.json (status generator-absent: the bytes are the artifact). A change is an FFT
 // decision recorded against its row, then `check-generated.py --refresh` records the new bytes.
-// Declarations only: `python scripts/fft_codegen_split.py <this file> 150 2
-// engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run from the repository root, moved the definitions
-// into two codelet units balanced by line count, tile bodies in parts of at most 150 lines (2026-10-28):
-// MSVC's optimizer is superlinear in a function's and a unit's size.
+// Declarations only: `python scripts/fft_codegen_split.py --lanes <this file> 150 2
+// engine/numerics/hesap-fft/kernels/fft_hier_codelets`, run from the repository root on the bytes before the split
+// (20c9f2a1^), moved the definitions into two codelet units balanced by line count, tile bodies in parts of at most
+// 150 lines, on codelet_lanes.hpp's lanes (2026-10-28): MSVC's optimizer is superlinear in a function's and a unit's
+// size, and the portable level runs the bodies a column at a time.
 #include <crd/core/types.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/math/kernel_level.hpp>

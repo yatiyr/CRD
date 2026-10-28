@@ -70,6 +70,7 @@ rebuild passes 56 FFT/consumer runtime cases plus six relevant guards; this does
 stack sizes or replace the exact published CI gate.
 
 Implementation: [codelet split](../../scripts/fft_codegen_split.py),
+[lanes](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_lanes.hpp),
 [hierarchical leaves](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp),
 [batched generator](../../scripts/gen_fft_batched.py), [emitted batched leaves](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/batched_codelets_gen.hpp),
 [consumer tests](../../tests/numerics/hesap-fft/test_fft.cpp).

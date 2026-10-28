@@ -72,7 +72,28 @@ working set of cl.exe:
 The codelets are solved at sse2, avx2 and avx512. The engine unit at sse2 and portable and the portable hierarchical
 units are not: a hosted runner has 16 GB.
 
+## Combine codelets and lanes (HEAD before: `3952d310`)
+
+CI first: push run 40623100798's failures were the groups above; its win-shipping and win-relwithdebinfo
+`test_type.cpp`/`test_builder.cpp` heap errors (C1060, C1076, C3859) came from the fft units filling the host, and
+the Linux release lanes' exit 143 sat in the same phase. No completed run since; no Needs CI row changed.
+
+- `gen_fft_codelets.py [--check]` writes the leaf codelets (`codelets.hpp`, unchanged), and the radix-8/16/32 combine
+  codelets as per-type functions declared in `twiddle_codelets.hpp` and split into
+  `kernels/fft_twiddle_codelets_0..1.cpp`.
+  The 7,744 operation and store lines of the old templates reappear in the same order (renamed values, `t` for `k`).
+  The scalar tail of the last `r % W` columns keeps its two-rounding products.
+- `codelet_lanes.hpp` owns `CRD_FFT_GEN_SIMD_BODY` and `lanes::Lane<T>`: Vec4d/Vec8f, or the scalar itself with
+  `libm::fma` on portable and in unoptimised builds. A lanes codelet's tile loop runs its body once per Lane step, so
+  every column of a tile computes the same operations. `fft_codegen_split.py --lanes` re-split the hierarchical header
+  from 20c9f2a1^ onto the lanes; without `--lanes` the splitter still reproduces the committed units byte for byte.
+  A part that writes no slot reads them through a const pointer (25 tidy findings on the scalar lanes).
+- win-release, each unit alone, wall and peak working set: engine unit sse2 1.8 s / 0.26 GB, portable 6.8 s / 1.37 GB
+  (`execute_ip4aos<f32>` 3.6 s the longest function), avx2 1.6 s; combine units sse2 5.2-5.8 s / 0.67 GB, portable
+  0.3 s; hierarchical unit sse2 13.9 s / 0.60 GB, portable 0.8 s / 0.11 GB.
+- crd-hesap-fft-tests pass on win-debug and on win-release forced to portable, sse2 and avx2 (the kernels cases compare
+  every level with portable's bits).
+
 ## Left
 
-The fft engine unit's code generation at sse2 and portable (radix32_pass and twiddle32) and the portable hierarchical
-codelets (10.9 GB a unit), then the 512-bit types and the zmm bodies.
+The 512-bit types and the zmm bodies.

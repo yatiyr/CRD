@@ -17,10 +17,14 @@ noexcept` at column 0 inside the header's one namespace, its SIMD body holds one
 `for (crd::usize t = 0; t + L <= X; t += L)`, values are `n<id>r`/`n<id>i` and the loop body is lines at one depth
 plus `{ ... }` blocks.
 
-  python scripts/fft_codegen_split.py <header> <budget> <units> <unit-stem>
+A codelet without its own lane-scalar edition (no `#ifdef CRD_FFT_GEN_SIMD_BODY`) computes on
+`crd::hesap::fft::lanes::Lane<T>` (codelet_lanes.hpp): its tile loop runs the body once per lane step, once a tile
+above the portable level and once a column on scalars, so every column sees the same operations.
 
-rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; gen_fft_batched.py calls
-split_kernels() itself.
+  python scripts/fft_codegen_split.py [--lanes] <header> <budget> <units> <unit-stem>
+
+rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; --lanes first retypes the header's
+Vec4d/Vec8f bodies onto the lanes. gen_fft_batched.py and gen_fft_codelets.py call split_kernels() themselves.
 """
 from pathlib import Path
 import re
@@ -33,6 +37,11 @@ _VALUE_DEF = re.compile(r'(?:^\s*|[;{]\s*)(?:const )?V (n\d+[ri])\b', re.M)
 _LOCAL_DEF = re.compile(r'^\s*const (?!V )[^=;]*?\b(\w+) = ')
 _WORD = re.compile(r'\b[A-Za-z_]\w*\b')
 _SUFFIX = '_part'
+_LANES = 'crd::hesap::fft::lanes'
+_RETYPE = {'    using V = crd::math::simd::Vec4d;': f'    using V = {_LANES}::Lane<crd::f64>;',
+           '    using V = crd::math::simd::Vec8f;': f'    using V = {_LANES}::Lane<crd::f32>;',
+           '    namespace simd = crd::math::simd;': f'    namespace simd = {_LANES};'}
+_TILE_LOOP = re.compile(r'^    for \(crd::usize t = 0; t \+ (\d+) <= (\w+); t \+= \1\)$')
 
 
 def _items(lines):
@@ -73,6 +82,16 @@ def _wrap(opening, params, closing, width=120):
     return lines
 
 
+def _tile_loop(loop, body, lanes):
+    """The tile loop around `body`; on the lanes it steps through each tile's columns one Lane at a time."""
+    if not lanes:
+        return [loop, '    {'] + body + ['    }']
+    width, bound = _TILE_LOOP.match(loop).groups()
+    return ([f'    for (crd::usize tile = 0; tile + {width} <= {bound}; tile += {width})', '    {',
+             f'        for (crd::usize t = tile; t < tile + {width}; t += {_LANES}::kWidth<V>)', '        {']
+            + [f'    {line}' for line in body] + ['        }', '    }'])
+
+
 def _closure(text, locals_):
     """The local definitions `text` needs, transitively, in their original order."""
     needed = set(_WORD.findall(text))
@@ -84,7 +103,7 @@ def _closure(text, locals_):
     return [line for name, line in locals_ if name in chosen]
 
 
-def _split_kernel(name, signature, prologue, loop, body, budget):
+def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
     items = _items(body)
     head = []
     while items and not _VALUE.search(''.join(items[0])):
@@ -179,7 +198,8 @@ def _split_kernel(name, signature, prologue, loop, body, budget):
         locals_text = _closure(text, invariant + tile_locals)
         out.append('// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.')
         out += _wrap(f'CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
-                     part_params + ['[[maybe_unused]] crd::usize t', f'{vtype}* sp'], ') noexcept')
+                     part_params + ['[[maybe_unused]] crd::usize t', f'{"" if stores else "const "}{vtype}* sp'],
+                     ') noexcept')
         out.append('{')
         out.append(prologue[0])
         if 'simd::' in text:
@@ -190,10 +210,8 @@ def _split_kernel(name, signature, prologue, loop, body, budget):
         out += [f'    sp[{slot_of[v]}] = {v};' for v in stores]
         out.append('}')
     args = ', '.join(names)
-    driver = [prologue[0], f'    alignas(64) V sp[{slots}];', loop, '    {']
-    driver += [f'        {name}{_SUFFIX}{part}({args}, t, sp);' for part in range(len(bounds) - 1)]
-    driver.append('    }')
-    return out, driver
+    calls = [f'        {name}{_SUFFIX}{part}({args}, t, sp);' for part in range(len(bounds) - 1)]
+    return out, [prologue[0], f'    alignas(64) V sp[{slots}];'] + _tile_loop(loop, calls, lanes)
 
 
 def split_kernels(source, budget, units):
@@ -249,12 +267,14 @@ def split_kernels(source, budget, units):
             index += 1
         rest.append(lines[index])
         index += 1
+        lanes = bool(prologue) and prologue[0].startswith(f'    using V = {_LANES}::Lane<')
+        alias = _LANES if lanes else 'crd::math::simd'
         if len(prologue) < 2 or not prologue[0].startswith('    using V = ') or (
-                prologue[1] != '    namespace simd = crd::math::simd;'):
+                prologue[1] != f'    namespace simd = {alias};') or (lanes and (guard or not _TILE_LOOP.match(loop))):
             raise ValueError(f'{name}: unexpected kernel prologue')
-        result = _split_kernel(name, signature, prologue, loop, body, budget)
+        result = _split_kernel(name, signature, prologue, loop, body, budget, lanes)
         if result is None:
-            definition = comment + signature + ['{'] + guard + prologue + [loop, '    {'] + body + ['    }'] + rest
+            definition = comment + signature + ['{'] + guard + prologue + _tile_loop(loop, body, lanes) + rest
         else:
             parts, driver = result
             if guard:
@@ -289,10 +309,14 @@ def split_kernels(source, budget, units):
 
 
 def main(argv):
+    lanes = argv[:1] == ['--lanes']
+    argv = argv[1:] if lanes else argv
     if len(argv) != 4:
         raise SystemExit(__doc__)
     header, budget, units, stem = Path(argv[0]), int(argv[1]), int(argv[2]), argv[3]
     source = header.read_text(encoding='utf-8')
+    if lanes:
+        source = '\n'.join(_RETYPE.get(line, line) for line in source.split('\n'))
     origin = re.search(r'GENERATED by (\S+)', source).group(1)
     declarations, bodies = split_kernels(source, budget, units)
     header.write_text(declarations, encoding='utf-8', newline='\n')
@@ -300,8 +324,9 @@ def main(argv):
     for unit, body in enumerate(bodies):
         text = (f'// GENERATED by {origin} — codelet unit {unit} of {units}: definitions of {header.name}, moved here\n'
                 '// by scripts/fft_codegen_split.py.\n'
-                f'#include <{include}>\n#include <crd/core/platform.hpp>\n#include <crd/math/simd/simd.hpp>\n'
-                + body)
+                f'#include <{include}>\n#include <crd/core/platform.hpp>\n'
+                + ('#include <crd/hesap/fft/detail/codelet_lanes.hpp>\n' if lanes
+                   else '#include <crd/math/simd/simd.hpp>\n') + body)
         Path(f'{stem}_{unit}.cpp').write_text(text, encoding='utf-8', newline='\n')
 
 

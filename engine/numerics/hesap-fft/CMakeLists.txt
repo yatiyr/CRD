@@ -42,7 +42,8 @@ crd_enable_default_pch(crd-hesap-fft)
 
 # The transform engine, one body per CPU level (ADR-0134); src/fft_kernel_dispatch.cpp lists them. The generated
 # codelets it calls sit in their own units, balanced by line count so no unit outgrows a compiler (gen_fft_batched.py
-# writes fft_batched_codelets_<k>.cpp; fft_codegen_split.py moved the hierarchical ones).
+# writes fft_batched_codelets_<k>.cpp, gen_fft_codelets.py fft_twiddle_codelets_<k>.cpp; fft_codegen_split.py moved the
+# hierarchical ones).
 crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 avx512 INCLUDES crd-math crd-hesap
                     SOURCES
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_kernels.cpp"
@@ -54,4 +55,6 @@ crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 avx512 INCL
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_batched_codelets_5.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_batched_codelets_6.cpp"
                         "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_hier_codelets_0.cpp"
-                        "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_hier_codelets_1.cpp")
+                        "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_hier_codelets_1.cpp"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_twiddle_codelets_0.cpp"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_twiddle_codelets_1.cpp")
