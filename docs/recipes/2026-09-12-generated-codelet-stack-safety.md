@@ -8,8 +8,7 @@
 | Input | Meaning / units | Contract |
 |---|---|---|
 | `NDEBUG`, `__OPTIMIZE__` | Build/preprocessor flags, dimensionless | Existing optimized Cerid configurations define at least one; ordinary Debug defines neither. Do not infer optimization from the build directory name. |
-| `CRD_FFT_CODELET_INLINE` | Hierarchical leaf call policy | Ordinary `inline` in unoptimized builds; existing force-inline policy in optimized builds. |
-| `CRD_FFT_GEN_INLINE` | Large generated batched leaf policy | Ordinary `inline` in unoptimized builds and native MSVC; existing force-inline policy in optimized Clang/GCC. |
+| Codelet units | Where the generated leaves are defined | Since 2026-10-28 every hierarchical and batched leaf is an out-of-line function of a codelet unit (`kernels/fft_*_codelets_<k>.cpp`, [fft_codegen_split.py](../../scripts/fft_codegen_split.py)), so no build inlines it into the engine; the former `CRD_FFT_CODELET_INLINE`/`CRD_FFT_GEN_INLINE` policies are retired. |
 | Executable stack reserve | Virtual-address reserve, bytes | Inspect the actual PE header. The reproduced clang-cl test executable has 1,048,576 bytes; the repair does not enlarge it. |
 | `FftPlan` size, direction, batch | Transform elements, forward/inverse, independent columns | Unchanged algorithm selection, scratch ownership, schedule and numerical oracles. |
 
@@ -70,7 +69,7 @@ After the repair and declaration cleanup, those caller frames are 736 and 880 by
 rebuild passes 56 FFT/consumer runtime cases plus six relevant guards; this does not qualify arbitrary fiber
 stack sizes or replace the exact published CI gate.
 
-Implementation: [call policy](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelet_policy.hpp),
+Implementation: [codelet split](../../scripts/fft_codegen_split.py),
 [hierarchical leaves](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp),
 [batched generator](../../scripts/gen_fft_batched.py), [emitted batched leaves](../../engine/numerics/hesap-fft/include/crd/hesap/fft/detail/batched_codelets_gen.hpp),
 [consumer tests](../../tests/numerics/hesap-fft/test_fft.cpp).

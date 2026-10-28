@@ -1,0 +1,309 @@
+"""Move the FFT generators' straight-line codelets out of their header into bounded codelet units.
+
+MSVC's optimizer is superlinear in a function's size and in a unit's: one N=256 codelet took 207 to 588 s at /O2
+/arch:AVX2 and an N=128 one 14.7 GB at the SSE2 level, where every vector value is two registers; the whole engine
+unit took 799 s and 4.9 GB at SSE2 even with split bodies (2026-10-28 SIMD-DISPATCH). This pass does two things:
+
+- It cuts each codelet's tile loop body, in its scheduled order, into parts of at most `budget` lines. Each part is
+  a non-inlined internal function of the codelet's parameters, the tile index and a slot array; the values that
+  cross a cut go through the slots, which reuse their storage once read for the last time. No operation changes or
+  moves past another, so every level keeps its bits. Cuts sit where the fewest values cross.
+- It leaves the header with the codelets' declarations and spreads their definitions over `units` codelet units by
+  line count (largest first, each to the unit with the fewest lines so far), so no unit outgrows a compiler and the
+  engine unit that calls them parses declarations only. One call per codelet covers a whole batch.
+
+The grammar is the canonical one fft_codegen_style.py leaves: a codelet is `[CRD_FFT_*_INLINE ]void name(...)
+noexcept` at column 0 inside the header's one namespace, its SIMD body holds one tile loop
+`for (crd::usize t = 0; t + L <= X; t += L)`, values are `n<id>r`/`n<id>i` and the loop body is lines at one depth
+plus `{ ... }` blocks.
+
+  python scripts/fft_codegen_split.py <header> <budget> <units> <unit-stem>
+
+rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; gen_fft_batched.py calls
+split_kernels() itself.
+"""
+from pathlib import Path
+import re
+import sys
+
+_KERNEL = re.compile(r'^(?:CRD_FFT_(?:GEN|CODELET)_INLINE )?void (\w+)\(')
+_LOOP = re.compile(r'^    for \(crd::usize t = 0; t \+ \d+ <= \w+; t \+= \d+\)$')
+_VALUE = re.compile(r'\bn\d+[ri]\b')
+_VALUE_DEF = re.compile(r'(?:^\s*|[;{]\s*)(?:const )?V (n\d+[ri])\b', re.M)
+_LOCAL_DEF = re.compile(r'^\s*const (?!V )[^=;]*?\b(\w+) = ')
+_WORD = re.compile(r'\b[A-Za-z_]\w*\b')
+_SUFFIX = '_part'
+
+
+def _items(lines):
+    """Group loop-body lines into statements: one line, a `V x;` line with the next, or a `{ ... }` block."""
+    items = []
+    pending = []
+    depth = 0
+    for line in lines:
+        pending.append(line)
+        depth += line.count('{') - line.count('}')
+        if depth < 0:
+            raise ValueError('Unbalanced codelet body')
+        if depth == 0 and not re.match(r'^\s*V n\d+[ri];$', line):
+            items.append(pending)
+            pending = []
+    if pending or depth:
+        raise ValueError('Codelet body ends inside a statement')
+    return items
+
+
+def _params(signature):
+    text = ' '.join(part.strip() for part in signature)
+    inner = text[text.index('(') + 1:text.rindex(') noexcept')]
+    params = [' '.join(param.split()) for param in inner.split(',')]
+    return params, [re.findall(r'\w+', param)[-1] for param in params]
+
+
+def _wrap(opening, params, closing, width=120):
+    """`opening` + the comma-separated `params` + `closing`, continued on lines indented four spaces."""
+    lines = [opening]
+    for index, param in enumerate(params):
+        piece = param + (closing if index == len(params) - 1 else ',')
+        joint = '' if lines[-1].endswith('(') else ' '
+        if len(lines[-1]) + len(joint) + len(piece) > width and lines[-1].strip() != opening.strip():
+            lines.append('    ' + piece)
+        else:
+            lines[-1] += joint + piece
+    return lines
+
+
+def _closure(text, locals_):
+    """The local definitions `text` needs, transitively, in their original order."""
+    needed = set(_WORD.findall(text))
+    chosen = set()
+    for name, line in reversed(locals_):
+        if name in needed:
+            chosen.add(name)
+            needed |= set(_WORD.findall(line))
+    return [line for name, line in locals_ if name in chosen]
+
+
+def _split_kernel(name, signature, prologue, loop, body, budget):
+    items = _items(body)
+    head = []
+    while items and not _VALUE.search(''.join(items[0])):
+        if len(items[0]) != 1 or not _LOCAL_DEF.match(items[0][0]):
+            raise ValueError(f'{name}: unexpected tile prologue {items[0]!r}')
+        head.append(items.pop(0)[0])
+    weights = [len(item) for item in items]
+    if sum(weights) <= budget:
+        return None
+    defs = []
+    uses = []
+    for item in items:
+        text = '\n'.join(item)
+        d = set(_VALUE_DEF.findall(text))
+        defs.append(d)
+        uses.append(set(_VALUE.findall(text)) - d)
+    def_at = {}
+    last_use = {}
+    for index, (d, u) in enumerate(zip(defs, uses)):
+        for value in d:
+            def_at[value] = index
+        for value in u:
+            if value not in def_at:
+                raise ValueError(f'{name}: {value} is used before its definition')
+            last_use[value] = index
+    # crossing[p] = values defined before item p and used at or after it.
+    delta = [0] * (len(items) + 1)
+    for value, start in def_at.items():
+        end = last_use.get(value, start)
+        if end > start:
+            delta[start + 1] += 1
+            delta[end + 1] -= 1
+    crossing = []
+    running = 0
+    for step in delta:
+        running += step
+        crossing.append(running)
+    cuts = []
+    start = 0
+    while True:
+        total = 0
+        stop = start
+        while stop < len(items) and total + weights[stop] <= budget:
+            total += weights[stop]
+            stop += 1
+        if stop == len(items):
+            break
+        stop = max(stop, start + 1)
+        low = start + max(1, (stop - start) * 3 // 4)
+        cut = min(range(low, stop + 1), key=lambda p: (crossing[p], -p))
+        cuts.append(cut)
+        start = cut
+    bounds = [0] + cuts + [len(items)]
+    part_of = []
+    for part, (lo, hi) in enumerate(zip(bounds, bounds[1:])):
+        part_of += [part] * (hi - lo)
+    # A crossing value holds one slot from the end of its defining part to its last reading part.
+    spans = []
+    for value, start_item in def_at.items():
+        first = part_of[start_item]
+        last = part_of[last_use.get(value, start_item)]
+        if last > first:
+            spans.append((first, last, value))
+    spans.sort()
+    slot_of = {}
+    free = []
+    busy = []
+    slots = 0
+    for first, last, value in spans:
+        for entry in [entry for entry in busy if entry[0] <= first]:
+            busy.remove(entry)
+            free.append(entry[1])
+        free.sort()
+        slot = free.pop(0) if free else slots
+        slots = max(slots, slot + 1)
+        slot_of[value] = slot
+        busy.append((last, slot))
+    vtype = re.match(r'^    using V = (.+);$', prologue[0]).group(1)
+    params, names = _params(signature)
+    part_params = [f'[[maybe_unused]] {param}' for param in params]
+    invariant = [(m.group(1), line) for line in prologue[2:] if (m := _LOCAL_DEF.match(line))]
+    if len(invariant) != len(prologue) - 2:
+        raise ValueError(f'{name}: unexpected kernel prologue')
+    tile_locals = [(_LOCAL_DEF.match(line).group(1), line) for line in head]
+    out = []
+    for part, (lo, hi) in enumerate(zip(bounds, bounds[1:])):
+        body_text = [line for item in items[lo:hi] for line in item]
+        loads = sorted({v for i in range(lo, hi) for v in uses[i] if part_of[def_at[v]] < part},
+                       key=lambda v: slot_of[v])
+        stores = sorted({v for i in range(lo, hi) for v in defs[i] if v in slot_of}, key=lambda v: slot_of[v])
+        text = '\n'.join(body_text)
+        locals_text = _closure(text, invariant + tile_locals)
+        out.append('// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.')
+        out += _wrap(f'CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
+                     part_params + ['[[maybe_unused]] crd::usize t', f'{vtype}* sp'], ') noexcept')
+        out.append('{')
+        out.append(prologue[0])
+        if 'simd::' in text:
+            out.append(prologue[1])
+        out += [line[4:] if line.startswith('        ') else line for line in locals_text]
+        out += [f'    const V {v} = sp[{slot_of[v]}];' for v in loads]
+        out += [line[4:] for line in body_text]
+        out += [f'    sp[{slot_of[v]}] = {v};' for v in stores]
+        out.append('}')
+    args = ', '.join(names)
+    driver = [prologue[0], f'    alignas(64) V sp[{slots}];', loop, '    {']
+    driver += [f'        {name}{_SUFFIX}{part}({args}, t, sp);' for part in range(len(bounds) - 1)]
+    driver.append('    }')
+    return out, driver
+
+
+def split_kernels(source, budget, units):
+    """Return (header, unit bodies): `source` with each codelet replaced by its declaration, and `units` texts, each
+    the header's namespace holding the definitions of that unit's codelets (tile bodies longer than `budget` lines
+    run in parts)."""
+    lines = source.split('\n')
+    head = []
+    kernels = []
+    tail = []
+    index = 0
+    while index < len(lines):
+        match = _KERNEL.match(lines[index])
+        if not match:
+            (tail if kernels else head).append(lines[index])
+            index += 1
+            continue
+        if tail:
+            raise ValueError('Text between codelets other than their comments')
+        name = match.group(1)
+        comment = []
+        while head and head[-1].startswith('//') and not kernels:
+            comment.insert(0, head.pop())
+        while kernels and kernels[-1]['trailing']:
+            comment.insert(0, kernels[-1]['trailing'].pop())
+        start = index
+        while not lines[index].endswith(') noexcept'):
+            index += 1
+        signature = [re.sub(r'^CRD_FFT_(?:GEN|CODELET)_INLINE ', '', lines[start])] + lines[start + 1:index + 1]
+        if lines[index + 1] != '{':
+            raise ValueError(f'{name}: expected the body')
+        index += 2
+        guard = []
+        if lines[index] == '#ifdef CRD_FFT_GEN_SIMD_BODY':
+            guard = [lines[index]]
+            index += 1
+        prologue = []
+        while not _LOOP.match(lines[index]):
+            prologue.append(lines[index])
+            index += 1
+        loop = lines[index]
+        if lines[index + 1] != '    {':
+            raise ValueError(f'{name}: expected the tile loop body')
+        index += 2
+        body = []
+        while lines[index] != '    }':
+            body.append(lines[index])
+            index += 1
+        index += 1
+        rest = []
+        while lines[index] != '}':
+            rest.append(lines[index])
+            index += 1
+        rest.append(lines[index])
+        index += 1
+        if len(prologue) < 2 or not prologue[0].startswith('    using V = ') or (
+                prologue[1] != '    namespace simd = crd::math::simd;'):
+            raise ValueError(f'{name}: unexpected kernel prologue')
+        result = _split_kernel(name, signature, prologue, loop, body, budget)
+        if result is None:
+            definition = comment + signature + ['{'] + guard + prologue + [loop, '    {'] + body + ['    }'] + rest
+        else:
+            parts, driver = result
+            if guard:
+                parts = guard + parts + ['#endif']
+            definition = parts + comment + signature + ['{'] + guard + driver + rest
+        declaration = [line for line in comment if 'NOLINT' not in line] + signature[:-1] + [signature[-1] + ';']
+        # Comments and blank lines after a codelet belong to the next one; the last codelet's go to the tail.
+        kernels.append({'declaration': declaration, 'definition': definition, 'trailing': []})
+        while index < len(lines) and not _KERNEL.match(lines[index]) and (
+                lines[index].startswith('//') or not lines[index].strip()):
+            kernels[-1]['trailing'].append(lines[index])
+            index += 1
+    if not kernels or len(kernels) < units:
+        raise ValueError(f'{len(kernels)} codelets cannot fill {units} units')
+    tail = kernels[-1]['trailing'] + tail
+    opening = head[-1] if head else ''
+    closing = next((line for line in tail if line.strip()), '')
+    if not opening.startswith('namespace ') or not opening.endswith(' {') or not closing.startswith('} // namespace'):
+        raise ValueError('The codelets must sit in one namespace that closes the header')
+    load = [0] * units
+    unit_of = {}
+    for k in sorted(range(len(kernels)), key=lambda k: (-len(kernels[k]['definition']), k)):
+        unit = min(range(units), key=lambda u: (load[u], u))
+        unit_of[k] = unit
+        load[unit] += len(kernels[k]['definition'])
+    header = head + [line for kernel in kernels for line in kernel['declaration']] + tail
+    bodies = []
+    for unit in range(units):
+        definitions = [line for k, kernel in enumerate(kernels) if unit_of[k] == unit for line in kernel['definition']]
+        bodies.append('\n'.join([opening] + definitions + [closing, '']))
+    return '\n'.join(header), bodies
+
+
+def main(argv):
+    if len(argv) != 4:
+        raise SystemExit(__doc__)
+    header, budget, units, stem = Path(argv[0]), int(argv[1]), int(argv[2]), argv[3]
+    source = header.read_text(encoding='utf-8')
+    origin = re.search(r'GENERATED by (\S+)', source).group(1)
+    declarations, bodies = split_kernels(source, budget, units)
+    header.write_text(declarations, encoding='utf-8', newline='\n')
+    include = header.as_posix().split('/include/', 1)[1]
+    for unit, body in enumerate(bodies):
+        text = (f'// GENERATED by {origin} — codelet unit {unit} of {units}: definitions of {header.name}, moved here\n'
+                '// by scripts/fft_codegen_split.py.\n'
+                f'#include <{include}>\n#include <crd/core/platform.hpp>\n#include <crd/math/simd/simd.hpp>\n'
+                + body)
+        Path(f'{stem}_{unit}.cpp').write_text(text, encoding='utf-8', newline='\n')
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

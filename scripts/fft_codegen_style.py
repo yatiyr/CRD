@@ -51,4 +51,4 @@ def canonicalize(source):
     # One generated DAG must remain one scheduled scope. Keep all other checks active.
     annotation = '// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.\n'
     source = source.replace(annotation, '')
-    return re.sub(r'^(CRD_FFT_(?:GEN|CODELET)_INLINE void )', annotation + r'\1', source, flags=re.MULTILINE)
+    return re.sub(r'^(?=void codelet\w*\()', lambda match: annotation, source, flags=re.MULTILINE)

@@ -218,10 +218,66 @@ class RepositoryTools(unittest.TestCase):
         original = '    const crd::f64* const tr = twr + n * 64, * const ti = twi + n * 64;\n'
         expected = '    const crd::f64* const tr = twr + n * 64;\n    const crd::f64* const ti = twi + n * 64;\n'
         self.assertEqual(canonicalize(original), expected)
-        original = 'CRD_FFT_GEN_INLINE void codelet() {}\n'
+        original = 'void codelet2(T a) noexcept\n{}\n'
+        self.assertEqual(canonicalize(original), '// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled '
+                                                 'DAG; retain fused scope.\n' + original)
         self.assertEqual(canonicalize(canonicalize(original)), canonicalize(original))
         with self.assertRaisesRegex(ValueError, 'Unbalanced'):
             canonicalize('const T a = f(x, b = 1;')
+
+    def test_fft_codegen_split_moves_codelets_into_units_in_the_scheduled_order(self):
+        from fft_codegen_split import split_kernels
+
+        def codelet(name, prefix='CRD_FFT_CODELET_INLINE '):
+            return [f'// {name} codelet. GENERATED.',
+                    '// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG.',
+                    f'{prefix}void {name}(const C* in,',
+                    '    C* out, crd::usize b) noexcept',
+                    '{',
+                    '    using V = crd::math::simd::Vec4d;',
+                    '    namespace simd = crd::math::simd;',
+                    '    for (crd::usize t = 0; t + 4 <= b; t += 4)',
+                    '    {',
+                    '        const crd::usize q = t >> 2;',
+                    '        V n0r;',
+                    '        V n0i; simd::load(in + t, n0r, n0i);',
+                    '        const V n1r = n0r + n0i;',
+                    '        const V n2r = n1r * n0r;',
+                    '        { const V w = V(q);',
+                    '          simd::store(out + t, n2r * w, n1r); }',
+                    '    }',
+                    '}']
+
+        opening, closing = 'namespace gen::inline L {', '} // namespace gen::inline L'
+        source = '\n'.join(['#pragma once', opening] + codelet('codelet2') + codelet('codelet4') + [closing, ''])
+        header, units = split_kernels(source, 10, 2)
+        # The header keeps the codelets' comments and declarations; each unit defines its codelets unchanged.
+        self.assertEqual(header, '\n'.join(['#pragma once', opening,
+                                            '// codelet2 codelet. GENERATED.', 'void codelet2(const C* in,',
+                                            '    C* out, crd::usize b) noexcept;',
+                                            '// codelet4 codelet. GENERATED.', 'void codelet4(const C* in,',
+                                            '    C* out, crd::usize b) noexcept;', closing, '']))
+        self.assertEqual(units, ['\n'.join([opening] + codelet(name, '') + [closing, ''])
+                                 for name in ('codelet2', 'codelet4')])
+        with self.assertRaisesRegex(ValueError, '2 codelets cannot fill 3 units'):
+            split_kernels(source, 10, 3)
+
+        single = '\n'.join([opening] + codelet('codelet2') + [closing, ''])
+        _, (split,) = split_kernels(single, 3, 1)
+        self.assertIn('CRD_NOINLINE static void codelet2_part0([[maybe_unused]] const C* in, [[maybe_unused]] C* out,\n'
+                      '    [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t, crd::math::simd::Vec4d* sp) '
+                      'noexcept', split)
+        self.assertIn('    alignas(64) V sp[2];\n    for (crd::usize t = 0; t + 4 <= b; t += 4)\n    {\n'
+                      '        codelet2_part0(in, out, b, t, sp);\n        codelet2_part1(in, out, b, t, sp);\n'
+                      '    }\n}', split)
+        # Every value crossing a cut is stored once by its part and read by each later part that uses it; the tile
+        # local follows the part that reads it, and the comment stays on the codelet.
+        self.assertEqual((split.count('    sp['), split.count('= sp[')), (2, 2))
+        self.assertEqual(split.count('    const crd::usize q = t >> 2;'), 1)
+        self.assertIn('// codelet2 codelet. GENERATED.\n// NOLINTNEXTLINE(readability-function-size) -- Generated '
+                      'scheduled DAG.\nvoid codelet2(', split)
+        with self.assertRaisesRegex(ValueError, 'used before its definition'):
+            split_kernels(single.replace('const V n1r = n0r + n0i;', 'const V n1r = n9r + n0i;'), 3, 1)
 
     def test_validation_request_identifies_client_and_still_checks_bytes(self):
         installer_spec = importlib.util.spec_from_file_location('validation', ROOT / 'scripts/install-vulkan-validation.py')
