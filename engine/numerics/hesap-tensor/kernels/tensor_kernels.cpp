@@ -16,6 +16,7 @@
 // partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
 // f32 order, crd_exp8 and crd_exp4 reproduce crd_exp1, and the Philox rounds are integer operations.
 
+#include "tensor_batched_kernels.hpp"
 #include "tensor_ew_kernels.hpp"
 
 #include <crd/hesap/stats/philox_blocks.hpp>
@@ -2129,6 +2130,12 @@ template <typename T, BinaryOp Op> constexpr auto ew_binary() noexcept
     return &CRD_MATH_LEVEL_NS::EwBinaryKernel<T, Op>::walk;
 }
 
+template <typename T> constexpr BatchedKernels<T> batched() noexcept
+{
+    using K = CRD_MATH_LEVEL_NS::BatchedKernel<T>;
+    return {&K::gemm_tiny, &K::cholesky, &K::lu, &K::svd, &K::cholesky_solve, &K::lu_solve};
+}
+
 } // namespace
 } // namespace CRD_MATH_LEVEL_NS
 
@@ -2157,6 +2164,8 @@ const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
     &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f64>::thin,
     &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f32>::smallm,
     &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f64>::smallm,
+    batched<crd::f32>(),
+    batched<crd::f64>(),
 };
 
 } // namespace crd::hesap::tensor

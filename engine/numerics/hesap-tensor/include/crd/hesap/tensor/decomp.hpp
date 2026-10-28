@@ -63,7 +63,7 @@
 //              green on the switched kernel (incl. the 1e-12 exact-recovery
 //              rows).
 // ---------------------------------------------------------------------------
-#include "batched.hpp"  // chol_scalar_one / svd_scalar_sweeps / svd_finalize_one (R x R solves)
+#include "batched_core.hpp" // chol_scalar_one / svd_scalar_sweeps / svd_finalize_one (R x R solves)
 #include "permute.hpp"  // HPTT-class unfoldings
 #include "tensor.hpp"
 #include "tensor_dispatch.hpp" // the sketch draws: the per-level tensor kernels' Philox block loop

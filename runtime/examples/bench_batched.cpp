@@ -3,6 +3,7 @@
 // defined — the WSL harness build/crd_batched_bench.sh links mkl_rt). torch /
 // numpy / MATLAB rows come from scripts/v14h_peers.py + the MATLAB -batch
 // call; boards -> docs/bench/2026-07-05-v14h-batched-la.md.
+#include <crd/containers/array.hpp>
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/batched.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>

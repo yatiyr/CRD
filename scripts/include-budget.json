@@ -132,6 +132,13 @@
       "why": "einsum's direct products run the per-level tensor kernels and its GEMMs the dense ones (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/tensor/batched.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_batched.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the batched GEMM, factorizations and solves run the per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

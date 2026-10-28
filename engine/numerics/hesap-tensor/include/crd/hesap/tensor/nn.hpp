@@ -62,14 +62,16 @@
 // op count, rank, conv scratch slots, dense-tier arena.
 // ---------------------------------------------------------------------------
 
-#include "batched.hpp" // batcheddetail::direct_gemm_tiny — the v14-h allocation-free tiny GEMM (+ jobs + simd)
-#include "dtypes.hpp"  // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
-#include "io.hpp"      // SafetensorsFile — the v14-l reader consumed by the builders
+#include "dtypes.hpp" // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
+#include "io.hpp"     // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
-#include "tensor_dispatch.hpp" // the quantized dots, quantizers and softmax: the per-level tensor kernels
+#include "tensor_dispatch.hpp" // the quantized dots, quantizers, softmax and tiny GEMM: the per-level tensor kernels
 
-#include <crd/math/cmath.hpp>               // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
-#include <crd/math/deterministic.hpp>       // crd::math::deterministic::erf — the exact (erf-form) gelu
+#include <crd/hesap/dense/blas3.hpp>
+#include <crd/jobs/jobs.hpp>
+#include <crd/math/cmath.hpp>         // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
+#include <crd/math/deterministic.hpp> // crd::math::deterministic::erf — the exact (erf-form) gelu
+#include <crd/math/simd/simd.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
@@ -694,7 +696,8 @@ inline void conv_run(const ConvCtx& c, crd::u32 lo, crd::u32 hi)
                 bv.store_partial(row + p, static_cast<crd::usize>(ohw - p));
             }
         }
-        batcheddetail::direct_gemm_tiny(1.0F, c.w, scratch, 1.0F, yi, c.oc, ckk, ohw);
+        const BatchedGemm<crd::f32> g{1.0F, 1.0F, c.w, scratch, yi, 0, 0, 0, c.oc, ckk, ohw};
+        tensor_kernels().table->batched_f32.gemm_tiny(g, 0U, 1U);
         if (c.relu)
         {
             relu_span(yi, yi, c.oc * ohw);
@@ -723,8 +726,9 @@ inline void linear_f32_run(const LinF32Ctx& c, crd::u32 lo, crd::u32 hi)
         std::memcpy(c.y + static_cast<crd::u64>(m) * c.n, c.bias, c.n * sizeof(crd::f32));
     }
     crd::f32* yblk = c.y + static_cast<crd::u64>(lo) * c.n;
-    batcheddetail::direct_gemm_tiny(1.0F, c.x + static_cast<crd::u64>(lo) * c.k, c.wt, 1.0F, yblk,
-                                    static_cast<crd::u64>(hi) - lo, c.k, c.n);
+    const crd::f32* xblk = c.x + static_cast<crd::u64>(lo) * c.k;
+    const BatchedGemm<crd::f32> g{1.0F, 1.0F, xblk, c.wt, yblk, 0, 0, 0, static_cast<crd::u64>(hi) - lo, c.k, c.n};
+    tensor_kernels().table->batched_f32.gemm_tiny(g, 0U, 1U);
     if (c.relu)
     {
         const crd::u64 nblk = (static_cast<crd::u64>(hi) - lo) * c.n;

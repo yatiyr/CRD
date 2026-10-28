@@ -223,6 +223,9 @@ crd_enable_default_pch(crd-hesap-tensor-batched-tests)
 
 crd_discover_tests(crd-hesap-tensor-batched-tests)
 
+# ADR-0134 §8: the batched drivers once per compiled level (crd-hesap-tensor-batched-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-batched-tests "[batched]")
+
 # --- v14-f einsum-execution gates (separate executable: einsum_exec.hpp is ---
 # --- header-only so only EXECUTING targets pay the hesap-dense link edge)  ---
 add_executable(crd-hesap-tensor-einsum-tests

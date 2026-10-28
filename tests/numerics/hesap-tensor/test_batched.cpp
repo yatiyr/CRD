@@ -1,9 +1,11 @@
 // v14-h batched-LA gates - increment A: batched_gemm.
 // The BIT gate: batched == loop-of-single hesap-dense gemm, exactly; the moat
 // gate: {1,2,4,8,16} workers bit-identical. Peers board separate (bench doc).
+#include <crd/containers/array.hpp>
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/batched.hpp>
+#include <crd/hesap/tensor/batched_core.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>

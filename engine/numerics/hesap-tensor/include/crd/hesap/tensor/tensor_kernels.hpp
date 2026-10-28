@@ -5,8 +5,8 @@
 // of a real or Complex<T> product, the binned sum is partition-independent by construction, the quantizers are
 // per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order (single-rounded
 // FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the elementwise ops
-// and the einsum products are per-element IEEE operations in one order, and Tier D's reduction order is fixed by
-// kEwLanes and kReduceBlock alone.
+// and the einsum products are per-element IEEE operations in one order, Tier D's reduction order is fixed by kEwLanes
+// and kReduceBlock alone, and each batched matrix runs its own lane in the scalar tier's operations.
 
 #pragma once
 
@@ -79,6 +79,81 @@ template <typename T> struct ReduceKernels
     void (*rows)(T* out, const T* src, crd::u64 len, crd::u64 o0, crd::u64 o1) noexcept;
     // out[j] for j in [j0, j1): src[j] folded with src[i*w + j] for i = 1 .. rows - 1 in order (rows > 0).
     void (*columns)(T* out, const T* src, crd::u64 rows, crd::u64 w, crd::u64 j0, crd::u64 j1) noexcept;
+};
+
+// The batched dense linear algebra (batched.hpp) over matrices b of a batch, each row-major tight at element b * s of
+// its operand. The lane tier factors kEwLanes matrices per group (one lane each) up to these n, the scalar tier
+// (batched_core.hpp) above them, in the same operations, so a matrix's bits depend on nothing but its own values.
+inline constexpr crd::u64 kBatchedCholMaxN = 32U; // Cholesky and LU
+inline constexpr crd::u64 kBatchedSvdMaxN = 16U;
+
+// c[b] = alpha * a[b] @ b[b] + beta * c[b], a m x k, b k x n: every element the k-ordered single-rounded fma chain,
+// then alpha * acc and (beta != 0) fma(beta, c, alpha * acc).
+template <typename T> struct BatchedGemm
+{
+    T alpha;
+    T beta;
+    const T* a;
+    const T* b;
+    T* c;
+    crd::i64 sa;
+    crd::i64 sb;
+    crd::i64 sc;
+    crd::u64 m;
+    crd::u64 k;
+    crd::u64 n;
+};
+
+// A batch of n x n matrices factored in place, with info[b] and (LU) the pivot rows piv[b * n + j].
+template <typename T> struct BatchedFactor
+{
+    T* a;
+    crd::i64 sa;
+    crd::i32* info;
+    crd::i32* piv;
+    crd::u64 n;
+};
+
+// A batch of n x n one-sided Jacobi SVDs: u[b] diag(sigma[b * n ..]) v[b]^T = a[b], info[b] = 0 or 1 (still rotating
+// after max_sweeps).
+template <typename T> struct BatchedSvd
+{
+    const T* a;
+    T* u;
+    T* v;
+    T* sigma;
+    crd::i32* info;
+    crd::i64 sa;
+    crd::i64 su;
+    crd::i64 sv;
+    crd::u64 n;
+    crd::u32 max_sweeps;
+};
+
+// The solves with a batched factor f (n x n) of the n x r right-hand sides x, in place; piv as BatchedFactor's (LU).
+template <typename T> struct BatchedSolve
+{
+    const T* f;
+    T* x;
+    const crd::i32* piv;
+    crd::i64 sf;
+    crd::i64 sx;
+    crd::u64 n;
+    crd::u64 r;
+};
+
+// The batched kernels of one element type, each over the matrices [b0, b1).
+template <typename T> struct BatchedKernels
+{
+    void (*gemm_tiny)(const BatchedGemm<T>& g, crd::u64 b0, crd::u64 b1) noexcept;
+    // Cholesky (lower factor, strict upper zeroed; info the first non-positive pivot's 1-based column) and LU with
+    // partial pivoting, both in batched_core.hpp's operations.
+    void (*cholesky)(const BatchedFactor<T>& f, crd::u64 b0, crd::u64 b1) noexcept;
+    void (*lu)(const BatchedFactor<T>& f, crd::u64 b0, crd::u64 b1) noexcept;
+    void (*svd)(const BatchedSvd<T>& s, crd::u64 b0, crd::u64 b1) noexcept;
+    // x = L^-T L^-1 x, and x = U^-1 L^-1 P x.
+    void (*cholesky_solve)(const BatchedSolve<T>& s, crd::u64 b0, crd::u64 b1) noexcept;
+    void (*lu_solve)(const BatchedSolve<T>& s, crd::u64 b0, crd::u64 b1) noexcept;
 };
 
 // The largest rank a permute walks (kMaxRank of crd/hesap/tensor/tensor.hpp, which permute.hpp asserts).
@@ -228,6 +303,9 @@ struct TensorKernels
                               bool a_trans) noexcept;
     void (*einsum_smallm_f64)(crd::u64 m, crd::u64 k, crd::u64 n, const crd::f64* a, const crd::f64* b, crd::f64* c,
                               bool a_trans) noexcept;
+    // The batched dense linear algebra.
+    BatchedKernels<crd::f32> batched_f32;
+    BatchedKernels<crd::f64> batched_f64;
 };
 
 // The levels with a body and the VNNI variants of avx2 (AVX-VNNI) and avx512 (AVX512-VNNI), the integer dots on

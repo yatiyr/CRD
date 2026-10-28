@@ -10,12 +10,14 @@
 // tile width, the saturating and zero-point extremes, -128 and every other i8 weight, subnormal scales, row ranges),
 // the scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits), the scalar Philox blocks (counter
 // and position wraps, partial vectors), the scalar elementwise walk (every inner form, broadcast and reversed operands,
-// IEEE specials, min/max ties), Tier D's pinned order (block, row and column edges) and einsum's direct products (row,
-// depth and column tails). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the
-// sketch fill under each forced level.
+// IEEE specials, min/max ties), Tier D's pinned order (block, row and column edges), einsum's direct products (row,
+// depth and column tails) and the scalar tier's batched GEMM, Cholesky, LU, SVD and solves (every lane-tier edge of n,
+// poisoned lanes, split ranges, guard words). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR
+// converts and the sketch fill under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
+#include <crd/hesap/tensor/batched_core.hpp>
 #include <crd/hesap/tensor/dtypes.hpp>
 #include <crd/hesap/tensor/reduce.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
@@ -519,9 +521,16 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     usize avx2_vnni = 0;
     usize avx512 = 0;
     usize avx512_vnni = 0;
+    const auto batched_complete = [](const auto& kb)
+    {
+        return kb.gemm_tiny != nullptr && kb.cholesky != nullptr && kb.lu != nullptr && kb.svd != nullptr &&
+               kb.cholesky_solve != nullptr && kb.lu_solve != nullptr;
+    };
     for (usize i = 0; i < levels.size(); ++i)
     {
-        CHECK(levels[i].table != nullptr);
+        REQUIRE(levels[i].table != nullptr);
+        CHECK(batched_complete(levels[i].table->batched_f32));
+        CHECK(batched_complete(levels[i].table->batched_f64));
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
@@ -1634,6 +1643,405 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar einsum pro
         INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
         CHECK(check_einsum_level<f32>(*level.table) == 0U);
         CHECK(check_einsum_level<f64>(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// ---- batched linear algebra -----------------------------------------------------
+
+template <typename T> const tn::BatchedKernels<T>& batched_of(const TensorKernels& k)
+{
+    if constexpr (std::is_same_v<T, f32>)
+    {
+        return k.batched_f32;
+    }
+    else
+    {
+        return k.batched_f64;
+    }
+}
+
+// A guard word: finite and unlike any result, so an overwrite by a value or a NaN shows.
+template <typename T> constexpr T kGuard = T(-7777.25);
+
+// Equal bits, or a NaN on both sides (ADR-0134 §7: NaN payloads aside; a negated NaN operand keeps or flips its sign
+// depending on the instruction form).
+template <typename T> u64 nan_aside_mismatches(const T* want, const T* got, u64 n)
+{
+    u64 bad = 0;
+    for (u64 i = 0; i < n; ++i)
+    {
+        const bool both_nan = std::isnan(want[i]) && std::isnan(got[i]);
+        bad += !both_nan && std::bit_cast<Bits<T>>(want[i]) != std::bit_cast<Bits<T>>(got[i]) ? 1U : 0U;
+    }
+    return bad;
+}
+
+u64 i32_mismatches(const crd::i32* want, const crd::i32* got, u64 n)
+{
+    u64 bad = 0;
+    for (u64 i = 0; i < n; ++i)
+    {
+        bad += want[i] != got[i] ? 1U : 0U;
+    }
+    return bad;
+}
+
+// count matrices of `elems` values at stride elems + 3, the gaps and the tail guard words.
+template <typename T> void guard_fill(T* p, u64 count, u64 elems)
+{
+    for (u64 i = 0; i < count * (elems + 3U) + 3U; ++i)
+    {
+        p[i] = kGuard<T>;
+    }
+}
+
+// The tiny GEMM's contract: each element the k-ordered single-rounded fma chain, alpha * acc, then (beta != 0)
+// fma(beta, c, alpha * acc); beta 0 never reads c (which holds NaNs here). Rows 1 to 9, depths 0 to 7 and column tails
+// across one and two vectors of every width, three matrices at padded strides, the range [1, 3) leaving matrix 0.
+template <typename T> u64 check_batched_gemm(const tn::BatchedKernels<T>& kb)
+{
+    constexpr u64 batch = 3U;
+    static T a[batch * (9U * 7U + 3U) + 3U];
+    static T b[batch * (7U * 33U + 3U) + 3U];
+    static T c0[batch * (9U * 33U + 3U) + 3U];
+    static T want[batch * (9U * 33U + 3U) + 3U];
+    static T got[batch * (9U * 33U + 3U) + 3U];
+    u64 bad = 0;
+    for (const u64 m : {1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U})
+    {
+        for (const u64 k : {0U, 1U, 3U, 7U})
+        {
+            for (const u64 n : {1U, 3U, 4U, 7U, 8U, 9U, 15U, 16U, 17U, 24U, 31U, 32U, 33U})
+            {
+                for (const T beta : {T(0), T(0.75)})
+                {
+                    const u64 sa = m * k + 3U;
+                    const u64 sb = k * n + 3U;
+                    const u64 sc = m * n + 3U;
+                    fill_values(a, batch * sa, 0xB1U + m, 11U);
+                    fill_values(b, batch * sb, 0xB2U + n, 13U);
+                    fill_values(c0, batch * sc, 0xB3U + k, 7U);
+                    guard_fill(want, batch, m * n);
+                    for (u64 q = 0; q < batch; ++q)
+                    {
+                        for (u64 e = 0; e < m * n; ++e)
+                        {
+                            want[q * sc + e] = c0[q * sc + e];
+                        }
+                    }
+                    for (u64 i = 0; i < batch * sc + 3U; ++i)
+                    {
+                        got[i] = want[i];
+                    }
+                    const T alpha = T(-1.25);
+                    for (u64 q = 1; q < batch; ++q)
+                    {
+                        for (u64 r = 0; r < m; ++r)
+                        {
+                            for (u64 j = 0; j < n; ++j)
+                            {
+                                T acc = T(0);
+                                for (u64 p = 0; p < k; ++p)
+                                {
+                                    acc = std::fma(a[q * sa + r * k + p], b[q * sb + p * n + j], acc);
+                                }
+                                T out = acc * alpha;
+                                if (beta != T(0))
+                                {
+                                    out = std::fma(beta, c0[q * sc + r * n + j], out);
+                                }
+                                want[q * sc + r * n + j] = out;
+                            }
+                        }
+                    }
+                    const tn::BatchedGemm<T> g{
+                        alpha, beta, a, b, got, static_cast<i64>(sa), static_cast<i64>(sb), static_cast<i64>(sc),
+                        m,     k,    n};
+                    kb.gemm_tiny(g, 1U, batch);
+                    bad += nan_aside_mismatches(want, got, batch * sc + 3U);
+                }
+            }
+        }
+    }
+    return bad;
+}
+
+// n x n inputs at stride n*n + 3 for a batch of 19 (a group remainder at 4, 8 and 16 lanes): SPD M M^T + n I, or (spd
+// false) the random values, with the poisons the lane tier must keep in their own lane.
+template <typename T> void batched_inputs(T* p, u64 batch, u64 n, bool spd, u64 seed)
+{
+    static T m[33U * 33U];
+    guard_fill(p, batch, n * n);
+    u64 s = seed;
+    for (u64 q = 0; q < batch; ++q)
+    {
+        T* x = p + q * (n * n + 3U);
+        for (u64 e = 0; e < n * n; ++e)
+        {
+            m[e] = static_cast<T>(static_cast<i64>(lcg(s) % 2001U) - 1000) / T(1000);
+        }
+        for (u64 i = 0; i < n; ++i)
+        {
+            for (u64 j = 0; j < n; ++j)
+            {
+                T acc = i == j && spd ? static_cast<T>(n) : T(0);
+                for (u64 l = 0; l < n && spd; ++l)
+                {
+                    acc += m[i * n + l] * m[j * n + l];
+                }
+                x[i * n + j] = spd ? acc : m[i * n + j];
+            }
+        }
+        const u64 last = n * n - 1U;
+        switch (q)
+        {
+            case 2U: // not SPD at column 1
+                x[0] = T(-1);
+                break;
+            case 5U: // not SPD at the last column; a zero pivot for LU's elimination
+                x[last] = spd ? T(-1e6) : T(0);
+                break;
+            case 7U:
+                x[last / 2U] = std::numeric_limits<T>::quiet_NaN();
+                break;
+            case 9U:
+                x[last] = std::numeric_limits<T>::infinity();
+                break;
+            case 11U: // subnormal and signed-zero entries
+                x[n * n / 3U] = std::numeric_limits<T>::denorm_min();
+                x[n * n / 2U] = -T(0);
+                break;
+            case 13U: // LU pivot ties: column 0 is +-2 down every row
+                for (u64 i = 0; i < n; ++i)
+                {
+                    x[i * n] = (i % 2U) == 0U ? T(2) : T(-2);
+                }
+                break;
+            case 15U: // LU: a zero column, singular at column 2 (n > 1)
+                for (u64 i = 0; i < n && n > 1U; ++i)
+                {
+                    x[i * n + 1U] = T(0);
+                }
+                break;
+            case 17U: // SVD: a zero matrix
+                for (u64 e = 0; e < n * n; ++e)
+                {
+                    x[e] = T(0);
+                }
+                break;
+            case 18U: // SVD: two equal columns (rank-deficient)
+                for (u64 i = 0; i < n && n > 1U; ++i)
+                {
+                    x[i * n + 1U] = x[i * n];
+                }
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+// Cholesky and LU against batched_core.hpp's scalar tier: every n of the lane tier's edges (one and two groups a
+// step), past it (the scalar tier), the batch in two ranges that split a group.
+template <typename T> u64 check_batched_factor(const tn::BatchedKernels<T>& kb, bool lu)
+{
+    constexpr u64 batch = 19U;
+    constexpr u64 cap = batch * (33U * 33U + 3U) + 3U;
+    static T want[cap];
+    static T got[cap];
+    crd::i32 want_info[batch];
+    crd::i32 got_info[batch];
+    static crd::i32 want_piv[batch * 33U];
+    static crd::i32 got_piv[batch * 33U];
+    u64 bad = 0;
+    for (const u64 n : {1U, 2U, 3U, 4U, 5U, 8U, 11U, 16U, 22U, 23U, 32U, 33U})
+    {
+        const u64 s = n * n + 3U;
+        batched_inputs(want, batch, n, !lu, 0xC0U + n);
+        for (u64 i = 0; i < batch * s + 3U; ++i)
+        {
+            got[i] = want[i];
+        }
+        for (u64 q = 0; q < batch; ++q)
+        {
+            if (lu)
+            {
+                tn::batcheddetail::lu_scalar_one(want + q * s, n, want_piv + q * n, want_info + q);
+            }
+            else
+            {
+                tn::batcheddetail::chol_scalar_one(want + q * s, n, want_info + q);
+            }
+            got_info[q] = -1;
+        }
+        const tn::BatchedFactor<T> f{got, static_cast<i64>(s), got_info, got_piv, n};
+        (lu ? kb.lu : kb.cholesky)(f, 0U, 5U);
+        (lu ? kb.lu : kb.cholesky)(f, 5U, batch);
+        bad += nan_aside_mismatches(want, got, batch * s + 3U);
+        bad += i32_mismatches(want_info, got_info, batch);
+        bad += lu ? i32_mismatches(want_piv, got_piv, batch * n) : 0U;
+    }
+    return bad;
+}
+
+// The SVD against batched_core.hpp's sweeps and post-pass, at max_sweeps 30 and 2 (some matrices still rotating).
+template <typename T> u64 check_batched_svd(const tn::BatchedKernels<T>& kb)
+{
+    constexpr u64 batch = 19U;
+    constexpr u64 cap = batch * (17U * 17U + 3U) + 3U;
+    static T a[cap];
+    static T want_u[cap];
+    static T want_v[cap];
+    static T got_u[cap];
+    static T got_v[cap];
+    T want_sigma[batch * 17U];
+    T got_sigma[batch * 17U];
+    crd::i32 want_info[batch];
+    crd::i32 got_info[batch];
+    u64 bad = 0;
+    for (const u64 n : {1U, 2U, 3U, 4U, 5U, 8U, 11U, 12U, 16U, 17U})
+    {
+        for (const u32 sweeps : {30U, 2U})
+        {
+            const u64 s = n * n + 3U;
+            batched_inputs(a, batch, n, false, 0xD0U + n);
+            guard_fill(want_u, batch, n * n);
+            guard_fill(want_v, batch, n * n);
+            guard_fill(got_u, batch, n * n);
+            guard_fill(got_v, batch, n * n);
+            for (u64 q = 0; q < batch; ++q)
+            {
+                for (u64 e = 0; e < n * n; ++e)
+                {
+                    want_u[q * s + e] = a[q * s + e];
+                }
+                tn::batcheddetail::svd_scalar_sweeps(want_u + q * s, want_v + q * s, n, sweeps, want_info + q);
+                tn::batcheddetail::svd_finalize_one(want_u + q * s, want_v + q * s, want_sigma + q * n, n);
+                got_info[q] = -1;
+            }
+            const i64 si = static_cast<i64>(s);
+            const tn::BatchedSvd<T> sv{a, got_u, got_v, got_sigma, got_info, si, si, si, n, sweeps};
+            kb.svd(sv, 0U, 7U);
+            kb.svd(sv, 7U, batch);
+            bad += nan_aside_mismatches(want_u, got_u, batch * s + 3U);
+            bad += nan_aside_mismatches(want_v, got_v, batch * s + 3U);
+            bad += nan_aside_mismatches(want_sigma, got_sigma, batch * n);
+            bad += i32_mismatches(want_info, got_info, batch);
+        }
+    }
+    return bad;
+}
+
+// The solves against plain substitution loops with a factor of the scalar tier: r 1, 3 and 8 right-hand sides.
+template <typename T> u64 check_batched_solves(const tn::BatchedKernels<T>& kb)
+{
+    constexpr u64 batch = 19U;
+    static T f[batch * (32U * 32U + 3U) + 3U];
+    static T x0[batch * (32U * 8U + 3U) + 3U];
+    static T want[batch * (32U * 8U + 3U) + 3U];
+    static T got[batch * (32U * 8U + 3U) + 3U];
+    static crd::i32 piv[batch * 32U];
+    crd::i32 info[batch];
+    u64 bad = 0;
+    for (const bool lu : {false, true})
+    {
+        for (const u64 n : {1U, 4U, 9U, 32U})
+        {
+            const u64 sf = n * n + 3U;
+            batched_inputs(f, batch, n, !lu, 0xE0U + n);
+            for (u64 q = 0; q < batch; ++q)
+            {
+                if (lu)
+                {
+                    tn::batcheddetail::lu_scalar_one(f + q * sf, n, piv + q * n, info + q);
+                }
+                else
+                {
+                    tn::batcheddetail::chol_scalar_one(f + q * sf, n, info + q);
+                }
+            }
+            for (const u64 r : {1U, 3U, 8U})
+            {
+                const u64 sx = n * r + 3U;
+                guard_fill(x0, batch, n * r);
+                for (u64 q = 0; q < batch; ++q)
+                {
+                    fill_values(x0 + q * sx, n * r, 0xE5U + q, 0U);
+                }
+                for (u64 i = 0; i < batch * sx + 3U; ++i)
+                {
+                    want[i] = x0[i];
+                    got[i] = x0[i];
+                }
+                for (u64 q = 0; q < batch; ++q)
+                {
+                    const T* m = f + q * sf;
+                    T* x = want + q * sx;
+                    for (u64 j = 0; j < n && lu; ++j)
+                    {
+                        const u64 pj = static_cast<u64>(piv[q * n + j]);
+                        for (u64 c = 0; c < r; ++c)
+                        {
+                            const T t = x[j * r + c];
+                            x[j * r + c] = x[pj * r + c];
+                            x[pj * r + c] = t;
+                        }
+                    }
+                    for (u64 i = 0; i < n; ++i) // lower, forward (unit diagonal for LU)
+                    {
+                        for (u64 c = 0; c < r; ++c)
+                        {
+                            T acc = x[i * r + c];
+                            for (u64 p = 0; p < i; ++p)
+                            {
+                                acc = std::fma(-m[i * n + p], x[p * r + c], acc);
+                            }
+                            x[i * r + c] = lu ? acc : acc * (T(1) / m[i * n + i]);
+                        }
+                    }
+                    for (u64 i = n; i-- > 0U;) // upper (L^T for Cholesky), backward
+                    {
+                        for (u64 c = 0; c < r; ++c)
+                        {
+                            T acc = x[i * r + c];
+                            for (u64 p = i + 1U; p < n; ++p)
+                            {
+                                acc = std::fma(-(lu ? m[i * n + p] : m[p * n + i]), x[p * r + c], acc);
+                            }
+                            x[i * r + c] = acc * (T(1) / m[i * n + i]);
+                        }
+                    }
+                }
+                const tn::BatchedSolve<T> sol{f, got, piv, static_cast<i64>(sf), static_cast<i64>(sx), n, r};
+                (lu ? kb.lu_solve : kb.cholesky_solve)(sol, 0U, batch);
+                bad += nan_aside_mismatches(want, got, batch * sx + 3U);
+            }
+        }
+    }
+    return bad;
+}
+
+template <typename T> u64 check_batched_level(const TensorKernels& k)
+{
+    const tn::BatchedKernels<T>& kb = batched_of<T>(k);
+    return check_batched_gemm<T>(kb) + check_batched_factor<T>(kb, false) + check_batched_factor<T>(kb, true) +
+           check_batched_svd<T>(kb) + check_batched_solves<T>(kb);
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar tier's batched bits", "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_batched_level<f32>(*level.table) == 0U);
+        CHECK(check_batched_level<f64>(*level.table) == 0U);
     }
     CHECK(ran >= 1U);
 }
