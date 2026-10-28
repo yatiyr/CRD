@@ -57,7 +57,7 @@ void fill_inputs(f64 (&xs)[kInputs])
     for (const f64 e : edges)
     {
         xs[at] = e;
-        at += 7; // co-prime with 4, so the edges land in every lane
+        at += 7; // co-prime with 2, 4 and 8, so the edges land in every lane of each width
     }
 }
 
