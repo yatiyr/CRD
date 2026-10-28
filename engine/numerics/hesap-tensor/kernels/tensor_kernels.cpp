@@ -7,11 +7,14 @@
 // SSE2), the nn quantizers eight lanes at a time, the quantized dots on maddubs/madd integer lanes, softmax's exp four
 // lanes at a time and the Philox block loop 24 blocks at a time (16 on SSE2 and SSE4.2). The SSE2 and SSE4.2 nn bodies
 // run four lanes: the quantizers on SSE2 operations, the dots on even/odd madd lanes (SSE2) or maddubs (SSE4.2), every
-// f32 combine through the exact fma; the avx2 level's AVX-VNNI variant (CRD_KERNEL_HAS_AVXVNNI) runs the dots on
-// dpbusd. Every body gives the same bits: the permute is element copies and the IEEE operations of a real or complex
-// product, the binned representation is partition-independent, the quantizers are per-element IEEE operations, the dots
-// are exact integers combined in one f32 order, crd_exp4 reproduces crd_exp1, and the Philox rounds are integer
-// operations.
+// f32 combine through the exact fma. The AVX-512 bodies run the permute squares on zmm (16x16 f32, 8x8 64-bit, 4x4
+// 128-bit), three binned streams of eight lanes, the quantizers sixteen lanes at a time, softmax's exp eight, the Q8_0
+// dots two blocks a zmm in the integer stage (each block's f32 combine stays on its own eight lanes in block order),
+// the int8 row dots 64 values a step and the packed dots two 8-output blocks a step. The avx2 and avx512 levels' VNNI
+// variants (CRD_KERNEL_HAS_AVXVNNI, CRD_KERNEL_HAS_AVX512VNNI) run the dots on dpbusd. Every body gives the same bits:
+// the permute is element copies and the IEEE operations of a real or complex product, the binned representation is
+// partition-independent, the quantizers are per-element IEEE operations, the dots are exact integers combined in one
+// f32 order, crd_exp8 and crd_exp4 reproduce crd_exp1, and the Philox rounds are integer operations.
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
@@ -85,8 +88,73 @@ void scalar_tile(S* dst, crd::i64 ra, const S* src, crd::i64 sa, crd::i64 sb, cr
 // kRegBytes / E::kBytes elements on a side. Source column j is that many contiguous elements at src + j*src_stride
 // (the a dim is stride-1 in the source); destination row i is that many contiguous elements at dst + i*dst_stride
 // (the b dim is stride-1 in the destination), so both memory streams stay unit-stride. The shuffles move bits only;
-// a scale is applied to each destination row register. Stream stores non-temporally (dst register-aligned).
-#if CRD_SIMD_HAS_AVX2
+// a scale is applied to each destination row register. Stream stores non-temporally (dst rows 32-byte aligned, the
+// region contract of every level: a zmm row on a line boundary is one 64-byte store, otherwise two 32-byte ones).
+#if CRD_SIMD_HAS_AVX512
+using Reg = __m512d;
+constexpr crd::u64 kRegBytes = 64U;
+
+inline Reg load_reg(const crd::f32* p) noexcept
+{
+    return _mm512_castps_pd(_mm512_loadu_ps(p));
+}
+
+inline Reg load_reg(const crd::f64* p) noexcept
+{
+    return _mm512_loadu_pd(p);
+}
+
+template <bool Stream> inline void store_reg(crd::f64* p, Reg v) noexcept
+{
+    if constexpr (Stream)
+    {
+        if ((reinterpret_cast<crd::usize>(p) & 63U) == 0U)
+        {
+            _mm512_stream_pd(p, v);
+        }
+        else
+        {
+            _mm256_stream_pd(p, _mm512_castpd512_pd256(v));
+            _mm256_stream_pd(p + 4, _mm512_extractf64x4_pd(v, 1));
+        }
+    }
+    else
+    {
+        _mm512_storeu_pd(p, v);
+    }
+}
+
+template <bool Stream> inline void store_reg(crd::f32* p, Reg v) noexcept
+{
+    const __m512 x = _mm512_castpd_ps(v);
+    if constexpr (Stream)
+    {
+        if ((reinterpret_cast<crd::usize>(p) & 63U) == 0U)
+        {
+            _mm512_stream_ps(p, x);
+        }
+        else
+        {
+            _mm256_stream_ps(p, _mm512_castps512_ps256(x));
+            _mm256_stream_ps(p + 8, _mm256_castpd_ps(_mm512_extractf64x4_pd(v, 1)));
+        }
+    }
+    else
+    {
+        _mm512_storeu_ps(p, x);
+    }
+}
+
+inline Reg broadcast(crd::f32 v) noexcept
+{
+    return _mm512_castps_pd(_mm512_set1_ps(v));
+}
+
+inline Reg broadcast(crd::f64 v) noexcept
+{
+    return _mm512_set1_pd(v);
+}
+#elif CRD_SIMD_HAS_AVX2
 using Reg = __m256d;
 constexpr crd::u64 kRegBytes = 32U;
 
@@ -190,14 +258,16 @@ struct RegScale
 };
 
 // alpha * v per element, the operations of put_element lane by lane: the products in its operand order, then a true
-// subtract on the re lanes and an add on the im lanes (addsub on AVX2, both and a select on SSE2), so a propagated
-// NaN keeps its sign.
+// subtract on the re lanes and an add on the im lanes (addsub on AVX2, the add with a masked subtract on AVX-512, both
+// and a select on SSE2), so a propagated NaN keeps its sign.
 template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
 {
     using S = typename E::Scalar;
     if constexpr (E::kParts == 1U && sizeof(S) == 4U)
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        return _mm512_castps_pd(_mm512_mul_ps(_mm512_castpd_ps(k.re), _mm512_castpd_ps(v)));
+#elif CRD_SIMD_HAS_AVX2
         return _mm256_castps_pd(_mm256_mul_ps(_mm256_castpd_ps(k.re), _mm256_castpd_ps(v)));
 #else
         return _mm_castps_pd(_mm_mul_ps(_mm_castpd_ps(k.re), _mm_castpd_ps(v)));
@@ -205,7 +275,9 @@ template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
     }
     else if constexpr (E::kParts == 1U)
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        return _mm512_mul_pd(k.re, v);
+#elif CRD_SIMD_HAS_AVX2
         return _mm256_mul_pd(k.re, v);
 #else
         return _mm_mul_pd(k.re, v);
@@ -213,7 +285,12 @@ template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
     }
     else if constexpr (sizeof(S) == 4U)
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        const __m512 x = _mm512_castpd_ps(v);
+        const __m512 t1 = _mm512_mul_ps(_mm512_castpd_ps(k.re), x);
+        const __m512 t2 = _mm512_mul_ps(_mm512_castpd_ps(k.im), _mm512_permute_ps(x, _MM_SHUFFLE(2, 3, 0, 1)));
+        return _mm512_castps_pd(_mm512_mask_sub_ps(_mm512_add_ps(t1, t2), 0x5555, t1, t2));
+#elif CRD_SIMD_HAS_AVX2
         const __m256 x = _mm256_castpd_ps(v);
         const __m256 t1 = _mm256_mul_ps(_mm256_castpd_ps(k.re), x);
         const __m256 t2 = _mm256_mul_ps(_mm256_castpd_ps(k.im), _mm256_permute_ps(x, _MM_SHUFFLE(2, 3, 0, 1)));
@@ -229,7 +306,11 @@ template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
     }
     else
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        const __m512d t1 = _mm512_mul_pd(k.re, v);
+        const __m512d t2 = _mm512_mul_pd(k.im, _mm512_permute_pd(v, 0x55));
+        return _mm512_mask_sub_pd(_mm512_add_pd(t1, t2), 0x55, t1, t2);
+#elif CRD_SIMD_HAS_AVX2
         const __m256d t1 = _mm256_mul_pd(k.re, v);
         const __m256d t2 = _mm256_mul_pd(k.im, _mm256_permute_pd(v, 0x5));
         return _mm256_addsub_pd(t1, t2);
@@ -241,9 +322,10 @@ template <typename E> inline Reg scale_reg(Reg v, const RegScale& k) noexcept
     }
 }
 
-// One square of the in-register transpose: 32-bit elements the unpack/shuffle/permute2f128 8x8 (the unpack/movelh/
-// movehl 4x4 on SSE2), 64-bit ones the unpack/permute2f128 4x4 (the unpack 2x2), 128-bit ones the permute2f128 2x2
-// (one element on SSE2). Strides are in scalars.
+// One square of the in-register transpose: 32-bit elements the unpack/shuffle/permute2f128 8x8 (the unpack/shuffle/
+// shuffle_f32x4 16x16 on AVX-512, the unpack/movelh/movehl 4x4 on SSE2), 64-bit ones the unpack/permute2f128 4x4 (the
+// unpack/shuffle_f64x2 8x8, the unpack 2x2), 128-bit ones the permute2f128 2x2 (the shuffle_f64x2 4x4, one element on
+// SSE2). Strides are in scalars.
 template <typename E, bool Scale, bool Stream>
 void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typename E::Scalar* dst, crd::i64 dst_stride,
                      const RegScale& k) noexcept
@@ -259,7 +341,38 @@ void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typenam
     };
     if constexpr (E::kBytes == 4U)
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        // The 4x4 transposes inside each 128-bit lane of four rows (AVX2's unpack and shuffle stages): s[4g + c] holds,
+        // in lane L, column 4L + c of rows 4g..4g+3. Output row 4L + c is lane L of s[c], s[4 + c], s[8 + c] and
+        // s[12 + c]: a 4x4 transpose of 128-bit lanes in two shuffle_f32x4 stages.
+        __m512 s[16];
+        for (crd::i64 g = 0; g < 4; ++g)
+        {
+            const __m512 r0 = _mm512_loadu_ps(src + (4 * g + 0) * src_stride);
+            const __m512 r1 = _mm512_loadu_ps(src + (4 * g + 1) * src_stride);
+            const __m512 r2 = _mm512_loadu_ps(src + (4 * g + 2) * src_stride);
+            const __m512 r3 = _mm512_loadu_ps(src + (4 * g + 3) * src_stride);
+            const __m512 t0 = _mm512_unpacklo_ps(r0, r1);
+            const __m512 t1 = _mm512_unpackhi_ps(r0, r1);
+            const __m512 t2 = _mm512_unpacklo_ps(r2, r3);
+            const __m512 t3 = _mm512_unpackhi_ps(r2, r3);
+            s[4 * g + 0] = _mm512_shuffle_ps(t0, t2, _MM_SHUFFLE(1, 0, 1, 0));
+            s[4 * g + 1] = _mm512_shuffle_ps(t0, t2, _MM_SHUFFLE(3, 2, 3, 2));
+            s[4 * g + 2] = _mm512_shuffle_ps(t1, t3, _MM_SHUFFLE(1, 0, 1, 0));
+            s[4 * g + 3] = _mm512_shuffle_ps(t1, t3, _MM_SHUFFLE(3, 2, 3, 2));
+        }
+        for (crd::i64 c = 0; c < 4; ++c)
+        {
+            const __m512 u0 = _mm512_shuffle_f32x4(s[c], s[4 + c], _MM_SHUFFLE(1, 0, 1, 0));
+            const __m512 u1 = _mm512_shuffle_f32x4(s[c], s[4 + c], _MM_SHUFFLE(3, 2, 3, 2));
+            const __m512 u2 = _mm512_shuffle_f32x4(s[8 + c], s[12 + c], _MM_SHUFFLE(1, 0, 1, 0));
+            const __m512 u3 = _mm512_shuffle_f32x4(s[8 + c], s[12 + c], _MM_SHUFFLE(3, 2, 3, 2));
+            put(0 + c, _mm512_castps_pd(_mm512_shuffle_f32x4(u0, u2, _MM_SHUFFLE(2, 0, 2, 0))));
+            put(4 + c, _mm512_castps_pd(_mm512_shuffle_f32x4(u0, u2, _MM_SHUFFLE(3, 1, 3, 1))));
+            put(8 + c, _mm512_castps_pd(_mm512_shuffle_f32x4(u1, u3, _MM_SHUFFLE(2, 0, 2, 0))));
+            put(12 + c, _mm512_castps_pd(_mm512_shuffle_f32x4(u1, u3, _MM_SHUFFLE(3, 1, 3, 1))));
+        }
+#elif CRD_SIMD_HAS_AVX2
         const __m256 r0 = _mm256_loadu_ps(src + 0 * src_stride);
         const __m256 r1 = _mm256_loadu_ps(src + 1 * src_stride);
         const __m256 r2 = _mm256_loadu_ps(src + 2 * src_stride);
@@ -314,7 +427,29 @@ void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typenam
     }
     else if constexpr (E::kBytes == 8U)
     {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        // t[2p + c] holds, in 128-bit lane L, column 2L + c of rows 2p and 2p + 1; output row 2L + c is lane L of t[c],
+        // t[2 + c], t[4 + c] and t[6 + c] (the 128-bit lane transpose).
+        __m512d t[8];
+        for (crd::i64 p = 0; p < 4; ++p)
+        {
+            const Reg r0 = load_reg(src + (2 * p + 0) * src_stride);
+            const Reg r1 = load_reg(src + (2 * p + 1) * src_stride);
+            t[2 * p + 0] = _mm512_unpacklo_pd(r0, r1);
+            t[2 * p + 1] = _mm512_unpackhi_pd(r0, r1);
+        }
+        for (crd::i64 c = 0; c < 2; ++c)
+        {
+            const __m512d u0 = _mm512_shuffle_f64x2(t[c], t[2 + c], _MM_SHUFFLE(1, 0, 1, 0));
+            const __m512d u1 = _mm512_shuffle_f64x2(t[c], t[2 + c], _MM_SHUFFLE(3, 2, 3, 2));
+            const __m512d u2 = _mm512_shuffle_f64x2(t[4 + c], t[6 + c], _MM_SHUFFLE(1, 0, 1, 0));
+            const __m512d u3 = _mm512_shuffle_f64x2(t[4 + c], t[6 + c], _MM_SHUFFLE(3, 2, 3, 2));
+            put(0 + c, _mm512_shuffle_f64x2(u0, u2, _MM_SHUFFLE(2, 0, 2, 0)));
+            put(2 + c, _mm512_shuffle_f64x2(u0, u2, _MM_SHUFFLE(3, 1, 3, 1)));
+            put(4 + c, _mm512_shuffle_f64x2(u1, u3, _MM_SHUFFLE(2, 0, 2, 0)));
+            put(6 + c, _mm512_shuffle_f64x2(u1, u3, _MM_SHUFFLE(3, 1, 3, 1)));
+        }
+#elif CRD_SIMD_HAS_AVX2
         const Reg r0 = load_reg(src + 0 * src_stride);
         const Reg r1 = load_reg(src + 1 * src_stride);
         const Reg r2 = load_reg(src + 2 * src_stride);
@@ -340,7 +475,20 @@ void transpose_micro(const typename E::Scalar* src, crd::i64 src_stride, typenam
     else
     {
         static_assert(E::kBytes == 16U, "the permute elements are 4, 8 or 16 bytes");
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+        const Reg r0 = load_reg(src + 0 * src_stride);
+        const Reg r1 = load_reg(src + 1 * src_stride);
+        const Reg r2 = load_reg(src + 2 * src_stride);
+        const Reg r3 = load_reg(src + 3 * src_stride);
+        const __m512d u0 = _mm512_shuffle_f64x2(r0, r1, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m512d u1 = _mm512_shuffle_f64x2(r0, r1, _MM_SHUFFLE(3, 2, 3, 2));
+        const __m512d u2 = _mm512_shuffle_f64x2(r2, r3, _MM_SHUFFLE(1, 0, 1, 0));
+        const __m512d u3 = _mm512_shuffle_f64x2(r2, r3, _MM_SHUFFLE(3, 2, 3, 2));
+        put(0, _mm512_shuffle_f64x2(u0, u2, _MM_SHUFFLE(2, 0, 2, 0)));
+        put(1, _mm512_shuffle_f64x2(u0, u2, _MM_SHUFFLE(3, 1, 3, 1)));
+        put(2, _mm512_shuffle_f64x2(u1, u3, _MM_SHUFFLE(2, 0, 2, 0)));
+        put(3, _mm512_shuffle_f64x2(u1, u3, _MM_SHUFFLE(3, 1, 3, 1)));
+#elif CRD_SIMD_HAS_AVX2
         const Reg r0 = load_reg(src + 0 * src_stride);
         const Reg r1 = load_reg(src + 1 * src_stride);
 
@@ -563,12 +711,29 @@ void permute_walk_f64(const PermuteWalk<crd::f64>& w) noexcept
 // Independent binned accumulators: kStreams streams (breaking the rung-ladder latency chain) x kLanes lanes, merged at
 // the end. Legal because the binned representation is partition-independent: the merged bits equal the scalar
 // whole-array sum at any lane or stream count. The per-element ladder is the scalar deposit (sticky-or, two-sum) per
-// lane. The level's register set: three streams of four lanes on AVX2, three of two on SSE2 (nine ladder registers
-// plus the constants and the deposit's temporaries fit both register files).
+// lane. The level's register set: three streams of eight lanes on AVX-512, of four on AVX2, of two on SSE2 (nine ladder
+// registers plus the constants and the deposit's temporaries fit every register file; each stream carries one add per
+// rung from element to element, so three streams already keep the adders busy).
 using detail::kBinEndurance;
 using detail::kBinFold;
 
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+struct BinnedIsa
+{
+    using V = __m512d;
+    static constexpr crd::u64 kLanes = 8U;
+    static constexpr crd::u64 kStreams = 3U;
+    static V load(const crd::f64* p) noexcept { return _mm512_loadu_pd(p); }
+    static void store(crd::f64* p, V v) noexcept { _mm512_storeu_pd(p, v); }
+    static V bits(crd::i64 b) noexcept { return _mm512_castsi512_pd(_mm512_set1_epi64(b)); }
+    static V zero() noexcept { return _mm512_setzero_pd(); }
+    static V add(V a, V b) noexcept { return _mm512_add_pd(a, b); }
+    static V sub(V a, V b) noexcept { return _mm512_sub_pd(a, b); }
+    static V bit_or(V a, V b) noexcept { return _mm512_or_pd(a, b); }
+    static V bit_and(V a, V b) noexcept { return _mm512_and_pd(a, b); }
+    static V max(V a, V b) noexcept { return _mm512_max_pd(a, b); }
+};
+#elif CRD_SIMD_HAS_AVX2
 struct BinnedIsa
 {
     using V = __m256d;
@@ -774,8 +939,9 @@ void binned_sum_f64(BinnedRungs& acc, const crd::f64* p, crd::u64 n) noexcept
 }
 
 // ---- nn: softmax (last dim, stable) -----------------------------------------
-// exp rides the deterministic crd_exp1 core; the 4-lane widen paths use crd_exp4 (AVX2) and two crd_exp_x2 (SSE2,
-// SSE4.2), which are bit-identical to crd_exp1 on every input, so the vector/tail split cannot perturb results.
+// exp rides the deterministic crd_exp1 core; the widen paths use crd_exp8 (eight lanes, AVX-512, then AVX2's step),
+// crd_exp4 (AVX2) and two crd_exp_x2 (SSE2, SSE4.2), which are bit-identical to crd_exp1 on every input, so the
+// vector/tail split cannot perturb results.
 void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
 {
     crd::f32 m = x[0];
@@ -784,6 +950,13 @@ void softmax_row(const crd::f32* x, crd::f32* y, crd::u64 d) noexcept
         m = x[j] > m ? x[j] : m;
     }
     crd::u64 j = 0;
+#if CRD_SIMD_HAS_AVX512
+    for (; j + 8U <= d; j += 8U)
+    {
+        const __m256 xf = _mm256_sub_ps(_mm256_loadu_ps(x + j), _mm256_set1_ps(m));
+        _mm256_storeu_ps(y + j, _mm512_cvtpd_ps(crd::math::crd_exp8(_mm512_cvtps_pd(xf))));
+    }
+#endif
 #if CRD_SIMD_HAS_AVX2
     for (; j + 4U <= d; j += 4U)
     {
@@ -966,6 +1139,41 @@ inline void i8_store4(crd::f32* y, crd::u32 count, crd::f32 scale, const crd::i3
 // exactly.
 constexpr crd::u32 kNnQ8OutTile = 8U; // outputs sharing one activation-block load (8 acc chains hide the fma latency)
 
+// The VNNI variants (AVX-VNNI on avx2, AVX512-VNNI on avx512) accumulate the 4-product i32 lanes with dpbusd: no
+// intermediate saturation is reachable at |x| <= 127 or with the u8 x i8 split, so the lanes are bit-identical to the
+// maddubs/madd pair.
+#define CRD_TENSOR_VNNI (CRD_KERNEL_HAS_AVXVNNI || CRD_KERNEL_HAS_AVX512VNNI) // NOLINT(cppcoreguidelines-macro-usage)
+
+#if CRD_TENSOR_VNNI
+inline __m256i dpbusd256(__m256i acc, __m256i u, __m256i s) noexcept
+{
+#if CRD_KERNEL_HAS_AVX512VNNI
+    return _mm256_dpbusd_epi32(acc, u, s);
+#else
+    return _mm256_dpbusd_avx_epi32(acc, u, s);
+#endif
+}
+#endif
+
+#if CRD_SIMD_HAS_AVX512
+// Two 32-byte rows in one zmm: a in the low half, b in the high one.
+inline __m512i load_pair(const void* a, const void* b) noexcept
+{
+    return _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_loadu_si256(static_cast<const __m256i*>(a))),
+                              _mm256_loadu_si256(static_cast<const __m256i*>(b)), 1);
+}
+
+// The 4-product i32 lanes of u8 u times i8 s (|s| <= 127 when u reaches 128): dpbusd, or maddubs then madd.
+inline __m512i dot_lanes512(__m512i u, __m512i s) noexcept
+{
+#if CRD_KERNEL_HAS_AVX512VNNI
+    return _mm512_dpbusd_epi32(_mm512_setzero_si512(), u, s);
+#else
+    return _mm512_madd_epi16(_mm512_maddubs_epi16(u, s), _mm512_set1_epi16(1));
+#endif
+}
+#endif
+
 // y[o0..o0+T) over nb blocks. T is a compile-time tile size so the inner loop is fully unrolled straight-line code (a
 // runtime bound costs 2-3 loop micro-ops per 3-instruction iteration, measured as the issue-width wall).
 template <crd::u32 T>
@@ -979,10 +1187,34 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
     {
         acc[r] = _mm256_setzero_ps();
     }
-#if !CRD_KERNEL_HAS_AVXVNNI
+#if !CRD_TENSOR_VNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
 #endif
-    for (crd::u64 bi = 0; bi < nb; ++bi)
+    crd::u64 bi = 0;
+#if CRD_SIMD_HAS_AVX512
+    // Two blocks a step in the integer stage (block bi in the low half, bi + 1 in the high one), then each block's f32
+    // combine on its own eight lanes in block order: the fma chain of one block a step. AVX-512 has no psignb: x
+    // negated where w is negative is x * sign(w) wherever |w| is not 0.
+    for (; bi + 2U <= nb; bi += 2U)
+    {
+        const __m512i vx = load_pair(xrow[bi].qs, xrow[bi + 1U].qs);
+        const __m256 vdx0 = _mm256_set1_ps(xsc[bi]);
+        const __m256 vdx1 = _mm256_set1_ps(xsc[bi + 1U]);
+        for (crd::u32 r = 0; r < t; ++r)
+        {
+            const BlockQ8Zero* wrow = wq + (o0 + r) * nb;
+            const __m512i vw = load_pair(wrow[bi].qs, wrow[bi + 1U].qs);
+            const __m512i sx = _mm512_mask_sub_epi8(vx, _mm512_movepi8_mask(vw), _mm512_setzero_si512(), vx);
+            const __m512 lanes = _mm512_cvtepi32_ps(dot_lanes512(_mm512_abs_epi8(vw), sx));
+            const crd::f32* ws = wscale + (o0 + r) * nb + bi;
+            const __m256 scale0 = _mm256_mul_ps(vdx0, _mm256_broadcast_ss(ws));
+            const __m256 scale1 = _mm256_mul_ps(vdx1, _mm256_broadcast_ss(ws + 1));
+            acc[r] = _mm256_fmadd_ps(scale0, _mm512_castps512_ps256(lanes), acc[r]);
+            acc[r] = _mm256_fmadd_ps(scale1, _mm512_extractf32x8_ps(lanes, 1), acc[r]);
+        }
+    }
+#endif
+    for (; bi < nb; ++bi)
     {
         // the activations are quantize_q8_0's (|x| <= 127), the weights any i8: |w| (pabsb, 128 for -128) times
         // x * sign(w) (psignb, no wrap at |x| <= 127) is the product exactly
@@ -994,10 +1226,8 @@ void q8_dot_tile(const BlockQ8Zero* xrow, const crd::f32* xsc, const BlockQ8Zero
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wrow[bi].qs));
             const __m256i aw = _mm256_abs_epi8(vw);
             const __m256i sx = _mm256_sign_epi8(vx, vw);
-#if CRD_KERNEL_HAS_AVXVNNI
-            // dpbusd accumulates the same 4-product i32 lanes exactly (no intermediate saturation is reachable at
-            // |x| <= 127): the integer lanes are bit-identical to the maddubs/madd pair
-            const __m256i p32 = _mm256_dpbusd_avx_epi32(_mm256_setzero_si256(), aw, sx);
+#if CRD_TENSOR_VNNI
+            const __m256i p32 = dpbusd256(_mm256_setzero_si256(), aw, sx);
 #else
             const __m256i p16 = _mm256_maddubs_epi16(aw, sx);   // pairs -> i16 (|pair| <= 32512, no saturation)
             const __m256i p32 = _mm256_madd_epi16(p16, ones16); // 4-product i32 lanes
@@ -1131,7 +1361,42 @@ void q8_dot_tile_any(crd::u32 t, const BlockQ8Zero* xrow, const crd::f32* xsc, c
 // trunc(t + copysign(0.5, t)) (-0 included), and a lane whose scaled value is not finite quantizes as 0.
 void quantize_q8_0(const crd::f32* x, BlockQ8Zero* out, crd::u64 nblocks) noexcept
 {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+    const __m512 abs_mask = _mm512_castsi512_ps(_mm512_set1_epi32(0x7FFFFFFF));
+    const __m512 sign_mask = _mm512_castsi512_ps(_mm512_set1_epi32(static_cast<crd::i32>(0x80000000U)));
+    const __m512 half = _mm512_set1_ps(0.5F);
+    const __m256i nan_q = _mm256_set1_epi8(-128); // a non-finite lane converts to INT32_MIN, which narrows to -128
+    // vpmovsdb: each i32 saturated to i8 in element order, the packs_epi32 then packs_epi16 chain of AVX2
+    const auto away = [&](__m512 t)
+    {
+        return _mm512_cvtsepi32_epi8(
+            _mm512_cvttps_epi32(_mm512_add_ps(t, _mm512_or_ps(_mm512_and_ps(t, sign_mask), half))));
+    };
+    for (crd::u64 i = 0; i < nblocks; ++i)
+    {
+        const crd::f32* blk = x + i * kQuantBlock;
+        const __m512 v0 = _mm512_loadu_ps(blk);
+        const __m512 v1 = _mm512_loadu_ps(blk + 16);
+        // maxps(a, b) is a > b ? a : b: with a NaN-free b on every step a NaN never wins
+        const __m512 am =
+            _mm512_max_ps(_mm512_and_ps(v1, abs_mask), _mm512_max_ps(_mm512_and_ps(v0, abs_mask), _mm512_setzero_ps()));
+        const __m256 m8 = _mm256_max_ps(_mm512_castps512_ps256(am), _mm512_extractf32x8_ps(am, 1));
+        __m128 m4 = _mm_max_ps(_mm256_castps256_ps128(m8), _mm256_extractf128_ps(m8, 1));
+        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0x4E));
+        m4 = _mm_max_ps(m4, _mm_shuffle_ps(m4, m4, 0xB1));
+        const crd::f32 amax = _mm_cvtss_f32(m4);
+        const crd::f32 d = amax / 127.0F;
+        const crd::f32 id = d != 0.0F ? 1.0F / d : 0.0F;
+        out[i].d = crd::math::f32_to_f16_bits(d);
+        const __m512 vid = _mm512_set1_ps(id);
+        const __m128i q0 = away(_mm512_mul_ps(v0, vid));
+        const __m128i q1 = away(_mm512_mul_ps(v1, vid));
+        const __m256i packed = _mm256_inserti128_si256(_mm256_castsi128_si256(q0), q1, 1);
+        // -128 is exactly the non-finite lanes (a finite t rounds into [-127, 127]): they quantize as 0
+        const __m256i q = _mm256_andnot_si256(_mm256_cmpeq_epi8(packed, nan_q), packed);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[i].qs), q);
+    }
+#elif CRD_SIMD_HAS_AVX2
     const __m256 abs_mask = _mm256_castsi256_ps(_mm256_set1_epi32(0x7FFFFFFF));
     const __m256 sign_mask = _mm256_castsi256_ps(_mm256_set1_epi32(static_cast<crd::i32>(0x80000000U)));
     const __m256 half = _mm256_set1_ps(0.5F);
@@ -1255,7 +1520,49 @@ void nn_linear_q8_rows(const NnLinearQ8& c, crd::u32 lo, crd::u32 hi) noexcept
 // scalar [0, 255] clamp. k must be a multiple of 32.
 void quantize_u8_row(const crd::f32* x, crd::u64 k, crd::u8* out, crd::f32& scale, crd::i32& zero_point) noexcept
 {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+    __m512 vmin = _mm512_setzero_ps(); // the range is 0-extended (the ort convention)
+    __m512 vmax = _mm512_setzero_ps();
+    for (crd::u64 i = 0; i < k; i += 16U)
+    {
+        const __m512 v = _mm512_loadu_ps(x + i);
+        vmin = _mm512_min_ps(v, vmin); // v < vmin ? v : vmin
+        vmax = _mm512_max_ps(v, vmax); // v > vmax ? v : vmax
+    }
+    // the lanes hold +0 or values of one sign, so the reduction order does not matter
+    const __m256 lo8 = _mm256_min_ps(_mm512_castps512_ps256(vmin), _mm512_extractf32x8_ps(vmin, 1));
+    const __m256 hi8 = _mm256_max_ps(_mm512_castps512_ps256(vmax), _mm512_extractf32x8_ps(vmax, 1));
+    __m128 lo4 = _mm_min_ps(_mm256_castps256_ps128(lo8), _mm256_extractf128_ps(lo8, 1));
+    lo4 = _mm_min_ps(lo4, _mm_shuffle_ps(lo4, lo4, 0x4E));
+    lo4 = _mm_min_ps(lo4, _mm_shuffle_ps(lo4, lo4, 0xB1));
+    __m128 hi4 = _mm_max_ps(_mm256_castps256_ps128(hi8), _mm256_extractf128_ps(hi8, 1));
+    hi4 = _mm_max_ps(hi4, _mm_shuffle_ps(hi4, hi4, 0x4E));
+    hi4 = _mm_max_ps(hi4, _mm_shuffle_ps(hi4, hi4, 0xB1));
+    const crd::f32 rmin = _mm_cvtss_f32(lo4);
+    const crd::f32 rmax = _mm_cvtss_f32(hi4);
+    const crd::f32 s = (rmax - rmin) / 255.0F;
+    const crd::f32 inv = s != 0.0F ? 1.0F / s : 0.0F;
+    const crd::i32 zp = detail::quantize_u8_zero_point(rmin, s);
+    const __m512 vinv = _mm512_set1_ps(inv);
+    const __m512i vzp = _mm512_set1_epi32(zp);
+    const __m512 sign_mask = _mm512_castsi512_ps(_mm512_set1_epi32(static_cast<crd::i32>(0x80000000U)));
+    const __m512 abs_mask = _mm512_castsi512_ps(_mm512_set1_epi32(0x7FFFFFFF));
+    const __m512 inf = _mm512_castsi512_ps(_mm512_set1_epi32(0x7F800000));
+    const __m512 half = _mm512_set1_ps(0.5F);
+    for (crd::u64 i = 0; i < k; i += 16U)
+    {
+        const __m512 t = _mm512_mul_ps(_mm512_loadu_ps(x + i), vinv);
+        const __m512 finite = _mm512_maskz_mov_ps(_mm512_cmp_ps_mask(_mm512_and_ps(t, abs_mask), inf, _CMP_LT_OQ), t);
+        const __m512i q = _mm512_add_epi32(
+            _mm512_cvttps_epi32(_mm512_add_ps(finite, _mm512_or_ps(_mm512_and_ps(finite, sign_mask), half))), vzp);
+        // packus's [0, 255] clamp: the lanes raised to 0, then vpmovusdb's unsigned saturation (it reads a negative
+        // lane as a large unsigned one, so the raise comes first)
+        const __m128i bytes = _mm512_cvtusepi32_epi8(_mm512_max_epi32(q, _mm512_setzero_si512()));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out + i), bytes);
+    }
+    scale = s;
+    zero_point = zp;
+#elif CRD_SIMD_HAS_AVX2
     __m256 vmin = _mm256_setzero_ps(); // the range is 0-extended (the ort convention)
     __m256 vmax = _mm256_setzero_ps();
     for (crd::u64 i = 0; i < k; i += 8U)
@@ -1363,15 +1670,54 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
     {
         acc[r] = _mm256_setzero_si256();
     }
-#if !CRD_KERNEL_HAS_AVXVNNI
+#if !CRD_TENSOR_VNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
     const __m256i low7 = _mm256_set1_epi8(0x7F);
     const __m256i one8 = _mm256_set1_epi8(1);
 #endif
-    for (crd::u64 c = 0; c < k; c += 32U)
+    crd::u64 c = 0;
+#if CRD_SIMD_HAS_AVX512
+    {
+        // 64 values a step on zmm lanes, folded exactly into the ymm accumulators for a last 32 and the reduction
+        __m512i wide[8];
+        for (crd::u32 r = 0; r < 8U; ++r)
+        {
+            wide[r] = _mm512_setzero_si512();
+        }
+#if !CRD_TENSOR_VNNI
+        const __m512i ones16z = _mm512_set1_epi16(1);
+        const __m512i low7z = _mm512_set1_epi8(0x7F);
+        const __m512i one8z = _mm512_set1_epi8(1);
+#endif
+        for (; c + 64U <= k; c += 64U)
+        {
+            const __m512i vx = _mm512_loadu_si512(xrow + c); // u8
+#if !CRD_TENSOR_VNNI
+            const __m512i xl = _mm512_and_si512(vx, low7z);
+            const __m512i xh = _mm512_and_si512(_mm512_srli_epi16(vx, 7), one8z);
+#endif
+            for (crd::u32 r = 0; r < t; ++r)
+            {
+                const __m512i vw = _mm512_loadu_si512(wq + (o0 + r) * k + c);
+#if CRD_TENSOR_VNNI
+                wide[r] = _mm512_dpbusd_epi32(wide[r], vx, vw);
+#else
+                const __m512i pl = _mm512_madd_epi16(_mm512_maddubs_epi16(xl, vw), ones16z);
+                const __m512i ph = _mm512_madd_epi16(_mm512_maddubs_epi16(xh, vw), ones16z);
+                wide[r] = _mm512_add_epi32(wide[r], _mm512_add_epi32(pl, _mm512_slli_epi32(ph, 7)));
+#endif
+            }
+        }
+        for (crd::u32 r = 0; r < 8U; ++r)
+        {
+            acc[r] = _mm256_add_epi32(_mm512_castsi512_si256(wide[r]), _mm512_extracti64x4_epi64(wide[r], 1));
+        }
+    }
+#endif
+    for (; c < k; c += 32U)
     {
         const __m256i vx = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(xrow + c)); // u8
-#if !CRD_KERNEL_HAS_AVXVNNI
+#if !CRD_TENSOR_VNNI
         // u8 x i8 without VNNI: split x = xl + 128*xh (xl <= 127, xh in {0,1}) so the maddubs i16 pair sums can
         // never saturate; exact i32 either way
         const __m256i xl = _mm256_and_si256(vx, low7);
@@ -1380,8 +1726,8 @@ void i8_dot_tile(const crd::u8* xrow, const crd::i8* wq, const crd::i32* colsum,
         for (crd::u32 r = 0; r < t; ++r)
         {
             const __m256i vw = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(wq + (o0 + r) * k + c));
-#if CRD_KERNEL_HAS_AVXVNNI
-            acc[r] = _mm256_dpbusd_avx_epi32(acc[r], vx, vw); // u8 x i8, exact i32 accumulate
+#if CRD_TENSOR_VNNI
+            acc[r] = dpbusd256(acc[r], vx, vw); // u8 x i8, exact i32 accumulate
 #else
             const __m256i pl = _mm256_madd_epi16(_mm256_maddubs_epi16(xl, vw), ones16);
             const __m256i ph = _mm256_madd_epi16(_mm256_maddubs_epi16(xh, vw), ones16);
@@ -1533,13 +1879,69 @@ void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* 
 {
 #if CRD_SIMD_HAS_AVX2
     const crd::u64 n8 = (n + 7U) & ~crd::u64{7};
-#if !CRD_KERNEL_HAS_AVXVNNI
+#if !CRD_TENSOR_VNNI
     const __m256i ones16 = _mm256_set1_epi16(1);
     const __m256i low7 = _mm256_set1_epi8(0x7F);
     const __m256i one8 = _mm256_set1_epi8(1);
 #endif
     const __m256 zero = _mm256_setzero_ps();
-    for (crd::u64 b = 0; b < n8; b += 8U)
+    crd::u64 b = 0;
+#if CRD_SIMD_HAS_AVX512
+    // Two blocks a step, 16 outputs: block b's slice in the low half, block b + 8's in the high one, one activation
+    // broadcast for both; an odd last block takes the 8-output step below.
+    {
+#if !CRD_TENSOR_VNNI
+        const __m512i ones16z = _mm512_set1_epi16(1);
+        const __m512i low7z = _mm512_set1_epi8(0x7F);
+        const __m512i one8z = _mm512_set1_epi8(1);
+#endif
+        for (; b + 16U <= n8; b += 16U)
+        {
+            __m512i acc[R];
+            for (crd::u32 r = 0; r < R; ++r)
+            {
+                acc[r] = _mm512_setzero_si512();
+            }
+            const crd::i8* wp0 = wpack + b * k;
+            const crd::i8* wp1 = wp0 + 8U * k;
+            for (crd::u64 c = 0; c < k; c += 4U)
+            {
+                const __m512i vb = load_pair(wp0 + c * 8U, wp1 + c * 8U);
+                for (crd::u32 r = 0; r < R; ++r)
+                {
+                    crd::i32 xw = 0;
+                    std::memcpy(&xw, xrows + static_cast<crd::u64>(r) * k + c, 4U);
+                    const __m512i va = _mm512_set1_epi32(xw);
+#if CRD_TENSOR_VNNI
+                    acc[r] = _mm512_dpbusd_epi32(acc[r], va, vb);
+#else
+                    const __m512i xl = _mm512_and_si512(va, low7z);
+                    const __m512i xh = _mm512_and_si512(_mm512_srli_epi16(va, 7), one8z);
+                    const __m512i pl = _mm512_madd_epi16(_mm512_maddubs_epi16(xl, vb), ones16z);
+                    const __m512i ph = _mm512_madd_epi16(_mm512_maddubs_epi16(xh, vb), ones16z);
+                    acc[r] = _mm512_add_epi32(acc[r], _mm512_add_epi32(pl, _mm512_slli_epi32(ph, 7)));
+#endif
+                }
+            }
+            const crd::u64 valid = n - b < 16U ? n - b : 16U; // more than 8: block b + 8 holds an output
+            const __mmask16 keep = static_cast<__mmask16>((1U << valid) - 1U);
+            const __m512i cs16 = _mm512_loadu_si512(colsum + b);
+            const __m512 b16 = _mm512_loadu_ps(bias + b);
+            for (crd::u32 r = 0; r < R; ++r)
+            {
+                const __m512i corr = _mm512_mullo_epi32(_mm512_set1_epi32(zp[r]), cs16);
+                const __m512 dots = _mm512_cvtepi32_ps(_mm512_sub_epi32(acc[r], corr));
+                __m512 v = _mm512_fmadd_ps(_mm512_set1_ps(scale_m[r]), dots, b16);
+                if (relu)
+                {
+                    v = _mm512_max_ps(v, _mm512_setzero_ps()); // lane semantics == the ternary form
+                }
+                _mm512_mask_storeu_ps(yrows + static_cast<crd::u64>(r) * n + b, keep, v);
+            }
+        }
+    }
+#endif
+    for (; b < n8; b += 8U)
     {
         __m256i acc[R];
         for (crd::u32 r = 0; r < R; ++r)
@@ -1555,8 +1957,8 @@ void i8_packed_rows(const crd::u8* xrows, const crd::i8* wpack, const crd::i32* 
                 crd::i32 xw = 0; // 4 u8 activation bytes, broadcast to every lane
                 std::memcpy(&xw, xrows + static_cast<crd::u64>(r) * k + c, 4U);
                 const __m256i va = _mm256_set1_epi32(xw);
-#if CRD_KERNEL_HAS_AVXVNNI
-                acc[r] = _mm256_dpbusd_avx_epi32(acc[r], va, vb); // u8 x i8, exact i32
+#if CRD_TENSOR_VNNI
+                acc[r] = dpbusd256(acc[r], va, vb); // u8 x i8, exact i32
 #else
                 // u8 x i8 without VNNI: split x = xl + 128*xh so the maddubs i16 pair sums can never saturate;
                 // exact i32 either way

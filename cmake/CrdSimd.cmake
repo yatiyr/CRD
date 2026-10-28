@@ -232,10 +232,13 @@ endif()
 # The features a level's variant may add (ADR-0134 §1): the level each extends and its flags (cl compiles every
 # intrinsic at any /arch and has no such flag).
 set(_CRD_KERNEL_FEATURE_LEVEL_avxvnni avx2)
+set(_CRD_KERNEL_FEATURE_LEVEL_avx512vnni avx512)
 if(MSVC AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni "")
+    set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni "")
 else()
     set(_CRD_KERNEL_FLAGS_FEATURE_avxvnni -mavxvnni)
+    set(_CRD_KERNEL_FLAGS_FEATURE_avx512vnni -mavx512vnni)
 endif()
 
 # One kernel unit: the sources as the object library <objects> at <level> (and <feature> unless it is empty), joined
@@ -332,20 +335,21 @@ endfunction()
 # CRD_SDE: Intel SDE (scripts/install-sde.py), under which the avx512 arms run whatever the host's CPU. The hosted
 # lanes that run them export it before the configure; elsewhere it stays empty and no emulated arm exists.
 set(CRD_SDE "$ENV{CRD_SDE}" CACHE FILEPATH "Intel SDE executable for the emulated avx512 kernel arms (empty: none)")
-# The SDE CPU models the avx512 arms run on: skx, the level's smallest CPU (AVX-512 F, CD, BW, DQ and VL only).
+# The SDE CPU model every avx512 arm runs on: skx, the level's smallest CPU (AVX-512 F, CD, BW, DQ and VL only).
 set(_CRD_SDE_CPUS skx)
 set(_CRD_LEVEL_APPLIED_TEST "${CMAKE_CURRENT_LIST_DIR}/../tests/support/kernel-levels/test_cpu_level_applied.cpp")
 
-# crd_add_kernel_level_tests(<test-executable> <filter> [ENVIRONMENT <var=value>...])
+# crd_add_kernel_level_tests(<test-executable> <filter> [SDE_CPUS <cpu>...] [ENVIRONMENT <var=value>...])
 #
 # ADR-0134 §8: <prefix>-kernels-at-<level> runs the executable's <filter> once per level CRD_KERNEL_LEVELS holds, with
 # CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is refused, and that arm runs at the
 # detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's name without "-tests". With
-# CRD_SDE, <prefix>-kernels-at-avx512-sde-<cpu> runs the filter under SDE's model of each _CRD_SDE_CPUS CPU at avx512,
-# and those arms also run the hidden [cpu-level-applied] case, which fails when the level was refused. The executable
+# CRD_SDE, <prefix>-kernels-at-avx512-sde-<cpu> runs the filter under SDE's model of each _CRD_SDE_CPUS CPU and each
+# SDE_CPUS CPU (a model with the features a suite's variant selects on, ADR-0134 §8) at avx512, and those arms also run
+# the hidden [cpu-level-applied] case, which fails when the level was refused. The executable
 # gets CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
 function(crd_add_kernel_level_tests executable filter)
-    cmake_parse_arguments(PARSE_ARGV 2 arg "" "" "ENVIRONMENT")
+    cmake_parse_arguments(PARSE_ARGV 2 arg "" "" "SDE_CPUS;ENVIRONMENT")
     list(GET CRD_KERNEL_LEVELS -1 top)
     target_compile_definitions(${executable} PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${top}})
     target_sources(${executable} PRIVATE "${_CRD_LEVEL_APPLIED_TEST}")
@@ -358,7 +362,7 @@ function(crd_add_kernel_level_tests executable filter)
             ENVIRONMENT "${environment}" LABELS "cerid.test.target=${executable}")
     endforeach()
     if(CRD_SDE AND "avx512" IN_LIST CRD_KERNEL_LEVELS)
-        foreach(cpu IN LISTS _CRD_SDE_CPUS)
+        foreach(cpu IN LISTS _CRD_SDE_CPUS arg_SDE_CPUS)
             set(name ${prefix}-kernels-at-avx512-sde-${cpu})
             add_test(NAME ${name}
                      COMMAND "${CRD_SDE}" -${cpu} -- $<TARGET_FILE:${executable}> "${filter},[cpu-level-applied]")

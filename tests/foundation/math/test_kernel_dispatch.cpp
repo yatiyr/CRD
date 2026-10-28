@@ -114,13 +114,13 @@ TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and
 {
     using crd::CpuFeature;
     using crd::CpuFeatureSet;
-    const int tables[5] = {};
+    const int tables[6] = {};
     const CpuFeatureSet vnni = CpuFeatureSet{}.with(CpuFeature::AvxVnni);
-    const KernelLevel<int> levels[] = {{CpuLevel::Portable, &tables[0], {}},
-                                       {CpuLevel::Avx2, &tables[1], {}},
-                                       {CpuLevel::Avx2, &tables[2], vnni},
-                                       {CpuLevel::Avx2, &tables[3], vnni.with(CpuFeature::Gfni)},
-                                       {CpuLevel::Avx512, &tables[4], {}}};
+    const CpuFeatureSet vnni512 = CpuFeatureSet{}.with(CpuFeature::Avx512Vnni);
+    const KernelLevel<int> levels[] = {
+        {CpuLevel::Portable, &tables[0], {}}, {CpuLevel::Avx2, &tables[1], {}},
+        {CpuLevel::Avx2, &tables[2], vnni},   {CpuLevel::Avx2, &tables[3], vnni.with(CpuFeature::Gfni)},
+        {CpuLevel::Avx512, &tables[4], {}},   {CpuLevel::Avx512, &tables[5], vnni512}};
     const auto pick = [&](CpuLevel selected, CpuFeatureSet features, CpuLevel cap)
     {
         return crd::math::select_kernel_level<int>(levels, selected, features, cap).table - tables;
@@ -133,8 +133,12 @@ TEST_CASE("kernel dispatch: a feature variant runs only where its level runs and
     CHECK(pick(CpuLevel::Avx2, CpuFeatureSet{}.with(CpuFeature::Gfni), CpuLevel::Avx512) == 1); // needs both
     CHECK(pick(CpuLevel::Avx2, both, CpuLevel::Avx512) == 3);
     CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx512) == 4); // a higher level outranks a lower one's variant
-    CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx2) == 3);   // the build's cap
-    CHECK(pick(CpuLevel::Sse42, both, CpuLevel::Avx512) == 0);  // the features never lift the level
+    CHECK(pick(CpuLevel::Avx512, both.with(CpuFeature::Avx512Vnni), CpuLevel::Avx512) == 5);
+    CHECK(pick(CpuLevel::Avx512, vnni512, CpuLevel::Avx512) == 5);
+    CHECK(pick(CpuLevel::Avx2, vnni512, CpuLevel::Avx512) == 1); // the avx512 variant needs its level
+    CHECK(pick(CpuLevel::Avx512, vnni512, CpuLevel::Avx2) == 1); // and the build's cap
+    CHECK(pick(CpuLevel::Avx512, both, CpuLevel::Avx2) == 3);    // the build's cap
+    CHECK(pick(CpuLevel::Sse42, both, CpuLevel::Avx512) == 0);   // the features never lift the level
     CHECK(pick(CpuLevel::Neon, both, CpuLevel::Avx512) == 0);
 }
 

@@ -11,7 +11,7 @@ namespace
 using crd::math::KernelLevel;
 
 // CRD_KERNELS_TENSOR: the levels crd_add_cpu_kernels built (../CMakeLists.txt), and CRD_KERNELS_TENSOR_AVX2_AVXVNNI
-// its variant. Each needs its entry below.
+// and CRD_KERNELS_TENSOR_AVX512_AVX512VNNI its variants. Each needs its entry below.
 constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) |
                                 (1 << CRD_KERNEL_LEVEL_SSE42) | (1 << CRD_KERNEL_LEVEL_AVX2) |
                                 (1 << CRD_KERNEL_LEVEL_AVX512);
@@ -34,6 +34,9 @@ constexpr KernelLevel<TensorKernels> kLevels[] = {
 #endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_TENSOR, AVX512)
     {crd::CpuLevel::Avx512, &kTensorKernelsAvx512, {}},
+#endif
+#if CRD_KERNELS_TENSOR_AVX512_AVX512VNNI
+    {crd::CpuLevel::Avx512, &kTensorKernelsAvx512Avx512Vnni, crd::CpuFeatureSet{}.with(crd::CpuFeature::Avx512Vnni)},
 #endif
 };
 

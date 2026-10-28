@@ -1,10 +1,10 @@
-// The hesap-tensor kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs (the avx2 level's AVX-VNNI
-// variant included, where the host has the feature) gives the scalar oracle's bits for the permute regions of f32,
-// f64, Complex<f32> and Complex<f64> elements (unit and other source strides, edge strips, negative and broadcast
-// strides, real and complex scales, the non-temporal variants, NaN payloads, nothing written outside the region, with
-// and without a next region to prefetch) and serial walks (ranks 2 to 5, a-extents that cut the 16-row block, tiles
-// below the micro transpose, signed-zero and infinite scales), the
-// portable level's bits for the Tier R binned sum (around the vector threshold and the endurance window, the
+// The hesap-tensor kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs (the avx2 and avx512
+// levels' VNNI variants included, where the host has the feature) gives the scalar oracle's bits for the permute
+// regions of f32, f64, Complex<f32> and Complex<f64> elements (unit and other source strides, edge strips, negative and
+// broadcast strides, real and complex scales, the non-temporal variants on and off a 64-byte line, NaN payloads,
+// nothing written outside the region, with and without a next region to prefetch) and serial walks (ranks 2 to 5,
+// a-extents that cut the 16-row block, tiles below the micro transpose, signed-zero and infinite scales), the
+// portable level's bits for the Tier R binned sum (around each body's vector threshold and endurance window, the
 // speculative widening, the near-DBL_MAX compression regime, non-finite inputs, a non-empty accumulator), the scalar
 // quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned order of the Q8_0 and int8 linears (every
 // tile width, the saturating and zero-point extremes, -128 and every other i8 weight, subnormal scales, row ranges),
@@ -65,6 +65,10 @@ u64 lcg(u64& s)
 // A variant's feature after its level's name in a failure message.
 const char* variant_suffix(const KernelLevel<TensorKernels>& level)
 {
+    if (level.features.has(crd::CpuFeature::Avx512Vnni))
+    {
+        return "+avx512-vnni";
+    }
     return level.features.has(crd::CpuFeature::AvxVnni) ? "+avx-vnni" : "";
 }
 
@@ -260,63 +264,76 @@ template <typename E> void check_permute_regions()
     const u64 shape_dst[] = {dst_n * E::kParts};
     Tensor<S> want(&alloc, shape_dst);
     Tensor<S> got(&alloc, shape_dst);
-    for (const RegionCase& c : cases)
+    // The destination on a 64-byte line and 32 bytes past one (the non-temporal variant's contract is 32-byte rows;
+    // a zmm row store must then split).
+    for (const u64 lead : {u64{0}, 32U / sizeof(S)})
     {
-        // dst rows padded past nb (to a multiple of 8 for the non-temporal variant), so writes outside the region
-        // land on sentinel words.
-        const i64 ra = static_cast<i64>(((c.nb + 9U) + 7U) & ~u64{7});
-        // A base inside src such that every negative stride stays in the buffer.
-        const i64 lo = (c.sa < 0 ? (static_cast<i64>(c.na) - 1) * -c.sa : 0) +
-                       (c.sb < 0 ? (static_cast<i64>(c.nb) - 1) * -c.sb : 0);
-        const S* base = src.data() + (lo + 3) * step; // 3: off the 32-byte grid
-        REQUIRE(static_cast<u64>(lo + 3 + (static_cast<i64>(c.na) * (c.sa < 0 ? 0 : c.sa)) +
-                                 static_cast<i64>(c.nb) * (c.sb < 0 ? 0 : c.sb) + 8) < src_n);
-        REQUIRE(static_cast<u64>(ra) * c.na + 64U <= dst_n);              // sentinels after the last row too
-        const u64 used = (static_cast<u64>(ra) * c.na + 64U) * E::kParts; // the region and its sentinels
-        for (const Alpha<S> alpha : alphas)
+        for (const RegionCase& c : cases)
         {
-            const bool scale = scaled(alpha);
-            for (u64 i = 0; i < used; ++i)
+            // dst rows padded past nb (to a multiple of 8 for the non-temporal variant: 32 bytes, so f32 rows alternate
+            // between a line start and its middle), so writes outside the region land on sentinel words.
+            const i64 ra = static_cast<i64>(((c.nb + 9U) + 7U) & ~u64{7});
+            // A base inside src such that every negative stride stays in the buffer.
+            const i64 lo = (c.sa < 0 ? (static_cast<i64>(c.na) - 1) * -c.sa : 0) +
+                           (c.sb < 0 ? (static_cast<i64>(c.nb) - 1) * -c.sb : 0);
+            const S* base = src.data() + (lo + 3) * step; // 3: off the 32-byte grid
+            REQUIRE(static_cast<u64>(lo + 3 + (static_cast<i64>(c.na) * (c.sa < 0 ? 0 : c.sa)) +
+                                     static_cast<i64>(c.nb) * (c.sb < 0 ? 0 : c.sb) + 8) < src_n);
+            // the region and its sentinels, after the last row too
+            const u64 used = (static_cast<u64>(ra) * c.na + 64U) * E::kParts + lead;
+            REQUIRE(used <= dst_n * E::kParts);
+            for (const Alpha<S> alpha : alphas)
             {
-                want.data()[i] = sentinel<S>();
-            }
-            for (u64 ia = 0; ia < c.na; ++ia)
-            {
-                for (u64 ib = 0; ib < c.nb; ++ib)
+                const bool scale = scaled(alpha);
+                for (u64 i = 0; i < used; ++i)
                 {
-                    put_reference<E>(want.data() + (static_cast<i64>(ia) * ra + static_cast<i64>(ib)) * step,
-                                     base + (static_cast<i64>(ia) * c.sa + static_cast<i64>(ib) * c.sb) * step, alpha,
-                                     scale);
+                    want.data()[i] = sentinel<S>();
                 }
-            }
-            for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
-            {
-                if (!runs_here(level))
+                for (u64 ia = 0; ia < c.na; ++ia)
                 {
-                    continue;
-                }
-                for (const bool stream : {false, true})
-                {
-                    if (stream && (c.tile_b * sizeof(S) * E::kParts) % 32U != 0U)
+                    for (u64 ib = 0; ib < c.nb; ++ib)
                     {
-                        continue; // the non-temporal variant needs 32-byte aligned tile rows
+                        const i64 at = (static_cast<i64>(ia) * ra + static_cast<i64>(ib)) * step;
+                        put_reference<E>(want.data() + lead + at,
+                                         base + (static_cast<i64>(ia) * c.sa + static_cast<i64>(ib) * c.sb) * step,
+                                         alpha, scale);
                     }
-                    // Without a next region, and with the region itself as the next one (its prefetches run and
-                    // stay inside it).
-                    for (const bool next : {false, true})
+                }
+                for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+                {
+                    if (!runs_here(level))
                     {
-                        const tn::PermuteNext hint{0, 0, next ? c.na : 0U, next ? c.nb : 0U};
-                        for (u64 i = 0; i < used; ++i)
+                        continue;
+                    }
+                    for (const bool stream : {false, true})
+                    {
+                        if (stream && (c.tile_b * sizeof(S) * E::kParts) % 32U != 0U)
                         {
-                            got.data()[i] = sentinel<S>();
+                            continue; // the non-temporal variant needs 32-byte aligned tile rows
                         }
-                        run_region(*level.table, {got.data(), ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a, c.tile_b,
-                                                  alpha.re, alpha.im, E::kParts == 2U, scale, stream, hint});
-                        INFO(crd::cpu_level_name(level.level)
-                             << variant_suffix(level) << " " << elem_name<E>() << " na " << c.na << " nb " << c.nb
-                             << " sa " << c.sa << " sb " << c.sb << " tiles " << c.tile_a << "x" << c.tile_b
-                             << " alpha " << alpha.re << "+" << alpha.im << "i stream " << stream << " next " << next);
-                        CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
+                        if (!stream && lead != 0U)
+                        {
+                            continue;
+                        }
+                        // Without a next region, and with the region itself as the next one (its prefetches run and
+                        // stay inside it).
+                        for (const bool next : {false, true})
+                        {
+                            const tn::PermuteNext hint{0, 0, next ? c.na : 0U, next ? c.nb : 0U};
+                            for (u64 i = 0; i < used; ++i)
+                            {
+                                got.data()[i] = sentinel<S>();
+                            }
+                            run_region(*level.table,
+                                       {got.data() + lead, ra, base, c.sa, c.sb, c.na, c.nb, c.tile_a, c.tile_b,
+                                        alpha.re, alpha.im, E::kParts == 2U, scale, stream, hint});
+                            INFO(crd::cpu_level_name(level.level)
+                                 << variant_suffix(level) << " " << elem_name<E>() << " na " << c.na << " nb " << c.nb
+                                 << " sa " << c.sa << " sb " << c.sb << " tiles " << c.tile_a << "x" << c.tile_b
+                                 << " alpha " << alpha.re << "+" << alpha.im << "i stream " << stream << " next "
+                                 << next << " lead " << lead);
+                            CHECK(count_mismatches<E>(want.data(), got.data(), used, scale) == 0U);
+                        }
                     }
                 }
             }
@@ -485,7 +502,7 @@ bool same_rungs(const BinnedRungs& a, const BinnedRungs& b)
 
 } // namespace
 
-TEST_CASE("tensor kernels: the archive holds portable, each body level the build compiles and the AVX-VNNI variant",
+TEST_CASE("tensor kernels: the archive holds portable, each body level the build compiles and the VNNI variants",
           "[tensor][kernels]")
 {
     const auto levels = tn::tensor_kernel_levels();
@@ -493,11 +510,13 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     CHECK(levels[0].level == CpuLevel::Portable);
     CHECK(levels[0].features == crd::CpuFeatureSet{});
     const crd::CpuFeatureSet vnni = crd::CpuFeatureSet{}.with(crd::CpuFeature::AvxVnni);
+    const crd::CpuFeatureSet vnni512 = crd::CpuFeatureSet{}.with(crd::CpuFeature::Avx512Vnni);
     usize sse2 = 0;
     usize sse42 = 0;
     usize avx2 = 0;
     usize avx2_vnni = 0;
     usize avx512 = 0;
+    usize avx512_vnni = 0;
     for (usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
@@ -516,6 +535,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         avx2 += levels[i].level == CpuLevel::Avx2 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
         avx2_vnni += levels[i].level == CpuLevel::Avx2 && levels[i].features == vnni ? 1U : 0U;
         avx512 += levels[i].level == CpuLevel::Avx512 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
+        avx512_vnni += levels[i].level == CpuLevel::Avx512 && levels[i].features == vnni512 ? 1U : 0U;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2) ? 1U : 0U));
@@ -523,7 +543,9 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
     CHECK(avx2 == built);
     CHECK(avx2_vnni == built);
-    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512) ? 1U : 0U));
+    const usize built512 = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512) ? 1U : 0U;
+    CHECK(avx512 == built512);
+    CHECK(avx512_vnni == built512);
 }
 
 TEST_CASE("tensor kernels: every level the host runs gives the scalar permute region bits of each element type",
@@ -549,9 +571,10 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar permute wa
 TEST_CASE("tensor kernels: every level the host runs gives the portable binned sum bits", "[tensor][kernels]")
 {
     crd::memory::TlsfAllocator alloc(1U << 24U);
-    constexpr u64 window = 12U * tn::detail::kBinEndurance; // the AVX2 body's super-block
+    constexpr u64 wide = 24U * tn::detail::kBinEndurance;   // the AVX-512 body's super-block
+    constexpr u64 window = 12U * tn::detail::kBinEndurance; // the AVX2 body's
     constexpr u64 half = 6U * tn::detail::kBinEndurance;    // the SSE2 body's
-    const u64 n_max = 3U * window + 77U;
+    const u64 n_max = 3U * wide + 77U;
     const u64 shape[] = {n_max};
     Tensor<f64> x(&alloc, shape);
     u64 s = 0xC0FFEEU;
@@ -561,9 +584,10 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
         const f64 mag = 1.0 + 1e6 * static_cast<f64>(lcg(s) % 1000U) / 1000.0;
         x.data()[i] = ((i & 1U) != 0U ? -1.0 : 1.0) * mag * (static_cast<f64>(lcg(s) % 4096U) - 2048.0);
     }
-    // Around each body's gate (8 steps of 12 or 6 elements), its step tails and super-blocks.
-    const u64 lengths[] = {0U,  1U,   5U,        11U,  47U,       48U,         49U,    53U,          95U,  96U,
-                           97U, 107U, half - 1U, half, half + 7U, window - 1U, window, window + 13U, n_max};
+    // Around each body's gate (8 steps of 24, 12 or 6 elements), its step tails and super-blocks.
+    const u64 lengths[] = {0U,   1U,        5U,          11U,    23U,          47U,       48U,  49U,        53U,
+                           95U,  96U,       97U,         107U,   191U,         192U,      193U, 215U,       half - 1U,
+                           half, half + 7U, window - 1U, window, window + 13U, wide - 1U, wide, wide + 13U, n_max};
     const KernelLevel<TensorKernels>& portable = tn::tensor_kernel_levels()[0];
     REQUIRE(portable.level == CpuLevel::Portable);
 
@@ -575,12 +599,14 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
     Tensor<f64> ties(&alloc, shape);
     Tensor<f64> late(&alloc, shape);
     Tensor<f64> huge(&alloc, shape);
+    Tensor<f64> huge_wide(&alloc, shape);
     Tensor<f64> inf(&alloc, shape);
     Tensor<f64> nan(&alloc, shape);
     for (u64 i = 0; i < n_max; ++i)
     {
         late.data()[i] = x.data()[i];
         huge.data()[i] = x.data()[i];
+        huge_wide.data()[i] = x.data()[i];
         inf.data()[i] = x.data()[i];
         nan.data()[i] = x.data()[i];
         const f64 power = std::bit_cast<f64>(static_cast<u64>(1023 + 30 - static_cast<i64>(i % 89U)) << 52U);
@@ -590,12 +616,14 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
     late.data()[half + 5U] = 2.5e150;
     late.data()[window + 5U] = 3.5e200;
     late.data()[2U * window + 1U] = -3.5e200;
+    late.data()[wide + 5U] = 4.5e250;
     huge.data()[window + 7U] = 1.6e308;
     huge.data()[2U * window + 9U] = -1.5e308;
+    huge_wide.data()[wide + 7U] = 1.6e308; // in the AVX-512 body's second super-block (huge's are in its first)
     inf.data()[window + 3U] = std::bit_cast<f64>(0x7FF0000000000000ULL);
     nan.data()[50U] = std::bit_cast<f64>(0x7FF8000000000000ULL);
     nan.data()[window + 3U] = std::bit_cast<f64>(0xFFF4000000000123ULL);
-    const Tensor<f64>* inputs[] = {&x, &ties, &late, &huge, &inf, &nan};
+    const Tensor<f64>* inputs[] = {&x, &ties, &late, &huge, &inf, &nan, &huge_wide};
     const f64 seeds[] = {0.0, -7.25e5};
 
     usize ran = 0;
@@ -606,7 +634,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
             continue;
         }
         ++ran;
-        for (usize which = 0; which < 6U; ++which)
+        for (usize which = 0; which < 7U; ++which)
         {
             for (const u64 n : lengths)
             {
@@ -620,7 +648,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
                     INFO(crd::cpu_level_name(level.level)
                          << variant_suffix(level) << " input " << which << " n " << n << " seed " << seed);
                     CHECK(got == want);
-                    if (which < 4U) // finite inputs
+                    if (which < 4U || which == 6U) // finite inputs
                     {
                         CHECK(same_rungs(got_rungs, want_rungs));
                     }

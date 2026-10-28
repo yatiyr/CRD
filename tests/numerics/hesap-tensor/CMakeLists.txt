@@ -22,8 +22,9 @@ crd_enable_default_pch(crd-hesap-tensor-tests)
 
 crd_discover_tests(crd-hesap-tensor-tests)
 
-# ADR-0134 §8: the kernel and Tier R cases once per compiled level (crd-hesap-tensor-kernels-at-<level>).
-crd_add_kernel_level_tests(crd-hesap-tensor-tests "[kernels],[repro]")
+# ADR-0134 §8: the kernel and Tier R cases once per compiled level (crd-hesap-tensor-kernels-at-<level>), and under
+# SDE's Sapphire Rapids, which has the AVX-VNNI and AVX512-VNNI the variants select on.
+crd_add_kernel_level_tests(crd-hesap-tensor-tests "[kernels],[repro]" SDE_CPUS spr)
 
 # --- v14-d permute gates (separate executable: keeps parallel work on the ---
 # --- main test target conflict-free)                                      ---
@@ -177,8 +178,9 @@ crd_discover_tests(crd-hesap-tensor-nn-tests
     PROPERTIES ENVIRONMENT "CRD_NN_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/nn_corpus"
 )
 
-# ADR-0134 §8: the quantized tiers and softmax once per compiled level (crd-hesap-tensor-nn-kernels-at-<level>).
-crd_add_kernel_level_tests(crd-hesap-tensor-nn-tests "[q8],[i8],[softmax]"
+# ADR-0134 §8: the quantized tiers and softmax once per compiled level (crd-hesap-tensor-nn-kernels-at-<level>), and
+# under SDE's Sapphire Rapids for the VNNI variants.
+crd_add_kernel_level_tests(crd-hesap-tensor-nn-tests "[q8],[i8],[softmax]" SDE_CPUS spr
     ENVIRONMENT "CRD_NN_CORPUS=${CMAKE_CURRENT_SOURCE_DIR}/nn_corpus")
 
 # --- v14-z CLI gates (pulls the anchor => needs the full anchor-gated edge set) ---

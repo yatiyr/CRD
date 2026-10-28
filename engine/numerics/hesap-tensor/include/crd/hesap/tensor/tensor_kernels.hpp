@@ -152,13 +152,14 @@ struct TensorKernels
                               crd::usize blocks) noexcept;
 };
 
-// The levels with a body and the avx2 level's AVX-VNNI variant (the integer dots on dpbusd); the dispatcher refuses a
-// build that compiles any other.
+// The levels with a body and the VNNI variants of avx2 (AVX-VNNI) and avx512 (AVX512-VNNI), the integer dots on
+// dpbusd; the dispatcher refuses a build that compiles any other.
 extern const TensorKernels kTensorKernelsPortable;
 extern const TensorKernels kTensorKernelsSse2;
 extern const TensorKernels kTensorKernelsSse42;
 extern const TensorKernels kTensorKernelsAvx2;
 extern const TensorKernels kTensorKernelsAvx2AvxVnni;
 extern const TensorKernels kTensorKernelsAvx512;
+extern const TensorKernels kTensorKernelsAvx512Avx512Vnni;
 
 } // namespace crd::hesap::tensor
