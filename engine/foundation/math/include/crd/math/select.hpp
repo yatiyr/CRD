@@ -2,15 +2,13 @@
 
 // crd-math select/round tier — EXACT primitives (hardware / bit-ops), deterministic by construction. The unified
 // surface so engine code calls crd::math::{min,max,clamp,abs,floor,ceil,round,trunc,sqrt,copysign,fma,sign,lerp,
-// saturate} instead of std:: (the guard target). No approximation ⇒ no ulp gate; correctness is exactness.
+// saturate} instead of std:: (the guard target). No approximation ⇒ no ulp gate; correctness is exactness. Kernel
+// units include it too, so it lives in the unit's level namespace and calls only crd/math/libm.hpp (ADR-0134 §5).
 
 #include <crd/core/types.hpp>
+#include <crd/math/libm.hpp>
 
-#include <bit>
-#include <cmath>
-#include <limits>
-
-namespace crd::math
+namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
 template <class T>
 [[nodiscard]] constexpr T min(T a, T b) noexcept
@@ -38,37 +36,37 @@ template <class T>
     return clamp(x, T(0), T(1));
 }
 
-[[nodiscard]] inline double abs(double x) noexcept { return std::fabs(x); }
-[[nodiscard]] inline float abs(float x) noexcept { return std::fabs(x); }
-[[nodiscard]] inline double fabs(double x) noexcept { return std::fabs(x); }
-[[nodiscard]] inline float fabs(float x) noexcept { return std::fabs(x); }
-[[nodiscard]] inline double floor(double x) noexcept { return std::floor(x); }
-[[nodiscard]] inline float floor(float x) noexcept { return std::floor(x); }
-[[nodiscard]] inline double ceil(double x) noexcept { return std::ceil(x); }
-[[nodiscard]] inline float ceil(float x) noexcept { return std::ceil(x); }
-[[nodiscard]] inline double round(double x) noexcept { return std::round(x); }
-[[nodiscard]] inline float round(float x) noexcept { return std::round(x); }
-[[nodiscard]] inline double trunc(double x) noexcept { return std::trunc(x); }
-[[nodiscard]] inline float trunc(float x) noexcept { return std::trunc(x); }
-[[nodiscard]] inline double sqrt(double x) noexcept { return std::sqrt(x); } // IEEE-exact, deterministic
-[[nodiscard]] inline float sqrt(float x) noexcept { return std::sqrt(x); }
-[[nodiscard]] inline double copysign(double m, double s) noexcept { return std::copysign(m, s); }
-[[nodiscard]] inline float copysign(float m, float s) noexcept { return std::copysign(m, s); }
-[[nodiscard]] inline double fma(double a, double b, double c) noexcept { return std::fma(a, b, c); } // single-rounded
-[[nodiscard]] inline float fma(float a, float b, float c) noexcept { return std::fma(a, b, c); }
-[[nodiscard]] inline double lerp(double a, double b, double t) noexcept { return std::fma(t, b - a, a); }
-[[nodiscard]] inline float lerp(float a, float b, float t) noexcept { return std::fma(t, b - a, a); }
-[[nodiscard]] inline long lround(double x) noexcept { return std::lround(x); }
-[[nodiscard]] inline long lround(float x) noexcept { return std::lround(x); }
-[[nodiscard]] inline double fmod(double x, double y) noexcept { return std::fmod(x, y); }
-[[nodiscard]] inline float fmod(float x, float y) noexcept { return std::fmod(x, y); }
+[[nodiscard]] inline double abs(double x) noexcept { return libm::fabs(x); }
+[[nodiscard]] inline float abs(float x) noexcept { return libm::fabs(x); }
+[[nodiscard]] inline double fabs(double x) noexcept { return libm::fabs(x); }
+[[nodiscard]] inline float fabs(float x) noexcept { return libm::fabs(x); }
+[[nodiscard]] inline double floor(double x) noexcept { return libm::floor(x); }
+[[nodiscard]] inline float floor(float x) noexcept { return libm::floor(x); }
+[[nodiscard]] inline double ceil(double x) noexcept { return libm::ceil(x); }
+[[nodiscard]] inline float ceil(float x) noexcept { return libm::ceil(x); }
+[[nodiscard]] inline double round(double x) noexcept { return libm::round(x); }
+[[nodiscard]] inline float round(float x) noexcept { return libm::round(x); }
+[[nodiscard]] inline double trunc(double x) noexcept { return libm::trunc(x); }
+[[nodiscard]] inline float trunc(float x) noexcept { return libm::trunc(x); }
+[[nodiscard]] inline double sqrt(double x) noexcept { return libm::sqrt(x); } // IEEE-exact, deterministic
+[[nodiscard]] inline float sqrt(float x) noexcept { return libm::sqrt(x); }
+[[nodiscard]] inline double copysign(double m, double s) noexcept { return libm::copysign(m, s); }
+[[nodiscard]] inline float copysign(float m, float s) noexcept { return libm::copysign(m, s); }
+[[nodiscard]] inline double fma(double a, double b, double c) noexcept { return libm::fma(a, b, c); } // single-rounded
+[[nodiscard]] inline float fma(float a, float b, float c) noexcept { return libm::fma(a, b, c); }
+[[nodiscard]] inline double lerp(double a, double b, double t) noexcept { return libm::fma(t, b - a, a); }
+[[nodiscard]] inline float lerp(float a, float b, float t) noexcept { return libm::fma(t, b - a, a); }
+[[nodiscard]] inline long lround(double x) noexcept { return libm::lround(x); }
+[[nodiscard]] inline long lround(float x) noexcept { return libm::lround(x); }
+[[nodiscard]] inline double fmod(double x, double y) noexcept { return libm::fmod(x, y); }
+[[nodiscard]] inline float fmod(float x, float y) noexcept { return libm::fmod(x, y); }
 
 // ── native gap-fills (our OWN logic — bit-ops + composition of the exact primitives above, no std::<fn> passthrough) ──
 // These cmath functions were absent from crd::math; each is IEEE-exact and deterministic by construction.
 
 // IEEE sign bit — correct for −0 and NaN (unlike `x < 0`). Pure bit test.
-[[nodiscard]] inline bool signbit(double x) noexcept { return (std::bit_cast<crd::u64>(x) >> 63U) != 0U; }
-[[nodiscard]] inline bool signbit(float x) noexcept { return (std::bit_cast<crd::u32>(x) >> 31U) != 0U; }
+[[nodiscard]] inline bool signbit(double x) noexcept { return (__builtin_bit_cast(crd::u64, x) >> 63U) != 0U; }
+[[nodiscard]] inline bool signbit(float x) noexcept { return (__builtin_bit_cast(crd::u32, x) >> 31U) != 0U; }
 
 // NaN-IGNORING max/min (IEEE-754 maxNum/minNum): a NaN operand is dropped in favour of the number — distinct from min/max,
 // which propagate whatever the comparison yields. `a != a` is the branchless isnan.
@@ -178,7 +176,7 @@ template <class T>
 // decompose x = m·2^e with m ∈ [0.5,1) (m = x for 0/inf/nan). Pure IEEE bit surgery (subnormals normalised by a 2^54 scale).
 [[nodiscard]] inline double frexp(double x, int* e) noexcept
 {
-    crd::u64  b      = std::bit_cast<crd::u64>(x);
+    crd::u64  b      = __builtin_bit_cast(crd::u64, x);
     const int rawexp = static_cast<int>((b >> 52U) & 0x7FFU);
     if (rawexp == 0x7FF || x == 0.0) // inf/nan/±0
     {
@@ -188,16 +186,16 @@ template <class T>
     int shift = 0;
     if (rawexp == 0) // subnormal: scale up by 2^54, re-read the exponent, account for the scale
     {
-        b     = std::bit_cast<crd::u64>(x * 18014398509481984.0); // 2^54
+        b     = __builtin_bit_cast(crd::u64, x * 18014398509481984.0); // 2^54
         shift = -54;
     }
     *e = (static_cast<int>((b >> 52U) & 0x7FFU) - 1022) + shift; // bias 1023, m∈[0.5,1) ⇒ stored exponent 1022
     b  = (b & ~(0x7FFULL << 52U)) | (static_cast<crd::u64>(1022) << 52U);
-    return std::bit_cast<double>(b);
+    return __builtin_bit_cast(double, b);
 }
 [[nodiscard]] inline float frexp(float x, int* e) noexcept
 {
-    crd::u32  b      = std::bit_cast<crd::u32>(x);
+    crd::u32  b      = __builtin_bit_cast(crd::u32, x);
     const int rawexp = static_cast<int>((b >> 23U) & 0xFFU);
     if (rawexp == 0xFF || x == 0.0F)
     {
@@ -207,12 +205,12 @@ template <class T>
     int shift = 0;
     if (rawexp == 0)
     {
-        b     = std::bit_cast<crd::u32>(x * 16777216.0F); // 2^24
+        b     = __builtin_bit_cast(crd::u32, x * 16777216.0F); // 2^24
         shift = -24;
     }
     *e = (static_cast<int>((b >> 23U) & 0xFFU) - 126) + shift; // bias 127, m∈[0.5,1) ⇒ stored exponent 126
     b  = (b & ~(0xFFU << 23U)) | (static_cast<crd::u32>(126) << 23U);
-    return std::bit_cast<float>(b);
+    return __builtin_bit_cast(float, b);
 }
 
 // IEEE remainder: x − n·y with n = round-to-nearest-EVEN(x/y); the result lies in [−|y|/2, |y|/2] and is EXACT (fdlibm
@@ -226,7 +224,7 @@ template <class T>
     // fmod resolves the special cases for free: fmod(·,0)/fmod(±inf,·)=NaN (⇒ NaN out), fmod(·,±inf)=|x| (⇒ x out); 2|y| that
     // overflows to +inf leaves r=|x| (correct, since |x|<2|y|). Otherwise r ∈ [0, 2|y|).
     double r = fmod(ax, ay + ay);
-    if (ay < std::numeric_limits<double>::min()) // tiny/zero |y|: 0.5*|y| would underflow ⇒ compare via r+r
+    if (ay < 0x1p-1022) // tiny/zero |y|: 0.5*|y| would underflow ⇒ compare via r+r
     {
         if (r + r > ay)
         {
@@ -256,7 +254,7 @@ template <class T>
     const float ay = abs(y);
     const float ax = abs(x);
     float       r  = fmod(ax, ay + ay);
-    if (ay < std::numeric_limits<float>::min())
+    if (ay < 0x1p-126F)
     {
         if (r + r > ay)
         {
@@ -282,4 +280,4 @@ template <class T>
     return signbit(x) ? -r : r; // remainder is ODD in x; r carries its own sign
 }
 
-} // namespace crd::math
+} // namespace crd::math::inline CRD_MATH_LEVEL_NS

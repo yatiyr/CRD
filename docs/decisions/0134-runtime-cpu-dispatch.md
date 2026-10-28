@@ -74,7 +74,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    Highway pattern), so no inline function or template instantiated there shares a mangled name, and so a COMDAT
    body, with baseline code or another level. The crd-math SIMD types follow the unit's level, not a global macro;
    raw `__AVX2__` tests go. Headers shared with kernel units call no inline function of the standard library
-   (`crd/math/libm.hpp`). Layout constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent,
+   (`crd/math/libm.hpp`); the scalar `crd::math` surface (select, the exp/log, trig, power and hyperbolic families) is
+   one and lives in the level namespace (amended 2026-10-28). Layout constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent,
    so one binary and its cooked data agree on every level. Dispatch is one indirect call per kernel invocation at the
    routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured loss). Each table is resolved
    once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features

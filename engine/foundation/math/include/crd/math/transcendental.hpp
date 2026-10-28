@@ -5,18 +5,18 @@
 // forbidden in engine code (guard crd-no-std-transcendental). These wrap the bit-identical scalar+SIMD cores in
 // simd/transcendental.hpp (crd_exp1/crd_log1) and complete the exp/log family. Contract (docs/phases/
 // crd-math-transcendental.md §1): <=1 ulp vs mpmath, -ffp-contract=off ⇒ identical bits on every platform/width
-// (the certification moat). Edge cases (NaN/±Inf/subnormal/huge) fall back to the correctly-rounded std:: result —
-// std:: is permitted HERE (the kernel + its fallbacks) and ONLY here. f32 overloads route through the f64 core
-// (correctly-rounded into f32, deterministic). The family slices (trig/inverse-trig/power/hyperbolic) add sibling
-// files following this exact pattern: fast common path + std:: edge fallback + a gen→mpmath-gate→golden-determinism
-// test entry.
+// (the certification moat). Edge cases (NaN/±Inf/subnormal/huge) fall back to the correctly-rounded C library result
+// through crd/math/libm.hpp, permitted HERE (the kernel + its fallbacks) and ONLY here. f32 overloads route through
+// the f64 core (correctly-rounded into f32, deterministic). The family slices (trig/inverse-trig/power/hyperbolic)
+// add sibling files following this exact pattern: fast common path + library edge fallback + a
+// gen→mpmath-gate→golden-determinism test entry. Kernel units include the family too, so it lives in the unit's level
+// namespace (ADR-0134 §5).
 
 #include <crd/math/exp_log_core.hpp> // crd_exp1 / crd_log1, the scalar cores
-#include <crd/math/trig.hpp>                 // crd::math::sin/cos/sincos/tan (the trig family)
+#include <crd/math/libm.hpp>         // edge fallbacks ONLY (NaN/Inf/subnormal/huge)
+#include <crd/math/trig.hpp>         // crd::math::sin/cos/sincos/tan (the trig family)
 
-#include <cmath> // edge fallbacks ONLY (NaN/Inf/subnormal/huge); the guard exempts crd-math's own kernel
-
-namespace crd::math
+namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
 // High-precision constants (ln2 carried by the cores; these are the family base changes).
 inline constexpr double kLn2Const = 0.69314718055994530941723212145818;   // ln 2
@@ -43,25 +43,26 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
 // 2^x — base-2 range reduction (integer part exact via ldexp; fractional via the exp core on f·ln2, |f|<=0.5).
 [[nodiscard]] inline double exp2(double x) noexcept
 {
-    if (!std::isfinite(x) || x > 1024.0 || x < -1075.0)
+    if (!libm::is_finite(x) || x > 1024.0 || x < -1075.0)
     {
-        return std::exp2(x); // overflow/underflow/NaN → correctly-rounded library edge
+        return libm::exp2(x); // overflow/underflow/NaN → correctly-rounded library edge
     }
-    const double k = std::floor(x + 0.5);          // nearest integer
+    const double k = libm::floor(x + 0.5);          // nearest integer
     const double f = x - k;                         // |f| <= 0.5, exact
-    return std::ldexp(crd_exp1(f * kLn2Const), static_cast<int>(k)); // 2^k · e^{f·ln2}, ldexp exact
+    return libm::ldexp(crd_exp1(f * kLn2Const), static_cast<int>(k)); // 2^k · e^{f·ln2}, ldexp exact
 }
 
 // 10^x — analogous base-10 reduction through base-2 (k = round(x·log2 10); exact 2^k · 10^{frac}).
 [[nodiscard]] inline double exp10(double x) noexcept
 {
-    if (!std::isfinite(x) || x > 308.5 || x < -324.0)
+    if (!libm::is_finite(x) || x > 308.5 || x < -324.0)
     {
-        return std::pow(10.0, x);
+        return libm::pow(10.0, x);
     }
-    const double k = std::floor(x * 3.32192809488736234787 + 0.5);      // round(x·log2 10)
-    const double f = std::fma(k, -kLog10Of2Lo, std::fma(k, -kLog10Of2Hi, x)); // x − k·log10(2), two-part (no precision loss)
-    return std::ldexp(crd_exp1(f * kLn10Const), static_cast<int>(k));
+    const double k = libm::floor(x * 3.32192809488736234787 + 0.5);      // round(x·log2 10)
+    // x − k·log10(2), two-part (no precision loss)
+    const double f = libm::fma(k, -kLog10Of2Lo, libm::fma(k, -kLog10Of2Hi, x));
+    return libm::ldexp(crd_exp1(f * kLn10Const), static_cast<int>(k));
 }
 
 // exp(x) − 1 — anti-cancellation. |x|<0.5: x·Q(x), Q=(e^x−1)/x minimax. |x|>=0.5: fdlibm reduction
@@ -69,47 +70,47 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
 // exp(x)−1 cancellation that left the [0.5,3] mid-band at ~2 ulp. ≤1 ulp across the whole finite range.
 [[nodiscard]] inline double expm1(double x) noexcept
 {
-    if (!std::isfinite(x))
+    if (!libm::is_finite(x))
     {
-        return std::expm1(x);
+        return libm::expm1(x);
     }
     if (x > -0.34657359027997264 && x < 0.34657359027997264) // |x| < ½·ln2: direct (Q peaks past this — reduce beyond)
     {
         // Q(x) = (e^x−1)/x ≈ 1 + Σ kQ_n·x^n (minimax); expm1 = x·Q(x). No 1+… cancellation.
         double q = kQ11;
-        q = std::fma(q, x, kQ10);
-        q = std::fma(q, x, kQ9);
-        q = std::fma(q, x, kQ8);
-        q = std::fma(q, x, kQ7);
-        q = std::fma(q, x, kQ6);
-        q = std::fma(q, x, kQ5);
-        q = std::fma(q, x, kQ4);
-        q = std::fma(q, x, kQ3);
-        q = std::fma(q, x, kQ2);
-        q = std::fma(q, x, kQ1);
-        q = std::fma(q, x, 1.0);
+        q = libm::fma(q, x, kQ10);
+        q = libm::fma(q, x, kQ9);
+        q = libm::fma(q, x, kQ8);
+        q = libm::fma(q, x, kQ7);
+        q = libm::fma(q, x, kQ6);
+        q = libm::fma(q, x, kQ5);
+        q = libm::fma(q, x, kQ4);
+        q = libm::fma(q, x, kQ3);
+        q = libm::fma(q, x, kQ2);
+        q = libm::fma(q, x, kQ1);
+        q = libm::fma(q, x, 1.0);
         return x * q;
     }
     // |x| >= 0.5: reduce x = k·ln2 + r (same Cody-Waite split as crd_exp1), expm1(r) = r·Q(r) on |r| ≤ ln2/2,
     // then 2^k·expm1(r) + (2^k − 1). k>52 ⇒ (2^k−1)==2^k and the term vanishes (exp huge, no cancellation);
     // k very negative ⇒ 2^k→0 and the result → −1 exactly; k≥1024 ⇒ 2^k=Inf ⇒ expm1=Inf (overflow). All exact.
-    const double kf = std::floor(std::fma(x, kLog2e, 0.5));
-    const double r = std::fma(kf, -kLn2LoE, std::fma(kf, -kLn2HiE, x));
+    const double kf = libm::floor(libm::fma(x, kLog2e, 0.5));
+    const double r = libm::fma(kf, -kLn2LoE, libm::fma(kf, -kLn2HiE, x));
     double qr = kQ11;
-    qr = std::fma(qr, r, kQ10);
-    qr = std::fma(qr, r, kQ9);
-    qr = std::fma(qr, r, kQ8);
-    qr = std::fma(qr, r, kQ7);
-    qr = std::fma(qr, r, kQ6);
-    qr = std::fma(qr, r, kQ5);
-    qr = std::fma(qr, r, kQ4);
-    qr = std::fma(qr, r, kQ3);
-    qr = std::fma(qr, r, kQ2);
-    qr = std::fma(qr, r, kQ1);
-    qr = std::fma(qr, r, 1.0);
+    qr = libm::fma(qr, r, kQ10);
+    qr = libm::fma(qr, r, kQ9);
+    qr = libm::fma(qr, r, kQ8);
+    qr = libm::fma(qr, r, kQ7);
+    qr = libm::fma(qr, r, kQ6);
+    qr = libm::fma(qr, r, kQ5);
+    qr = libm::fma(qr, r, kQ4);
+    qr = libm::fma(qr, r, kQ3);
+    qr = libm::fma(qr, r, kQ2);
+    qr = libm::fma(qr, r, kQ1);
+    qr = libm::fma(qr, r, 1.0);
     const double er = r * qr;                                  // expm1(r)
-    const double twok = std::ldexp(1.0, static_cast<int>(kf)); // 2^k
-    return std::fma(twok, er, twok - 1.0);                     // 2^k·expm1(r) + (2^k − 1)
+    const double twok = libm::ldexp(1.0, static_cast<int>(kf)); // 2^k
+    return libm::fma(twok, er, twok - 1.0);                     // 2^k·expm1(r) + (2^k − 1)
 }
 
 // ───────────────────────── log family ─────────────────────────
@@ -117,33 +118,33 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
 
 [[nodiscard]] inline double log2(double x) noexcept
 {
-    if (!(x > 0.0) || !std::isfinite(x) || x < kMinNormal)
+    if (!(x > 0.0) || !libm::is_finite(x) || x < kMinNormal)
     {
-        return std::log2(x);
+        return libm::log2(x);
     }
     double ed = 0.0;
     const double logm = crd_log_reduce(x, ed);           // ed exact, logm small
-    return ed + std::fma(logm, kLog2eHi, logm * kLog2eLo); // ed + logm·log2e (extra precision) ⇒ ≤1 ulp
+    return ed + libm::fma(logm, kLog2eHi, logm * kLog2eLo); // ed + logm·log2e (extra precision) ⇒ ≤1 ulp
 }
 
 [[nodiscard]] inline double log10(double x) noexcept
 {
-    if (!(x > 0.0) || !std::isfinite(x) || x < kMinNormal)
+    if (!(x > 0.0) || !libm::is_finite(x) || x < kMinNormal)
     {
-        return std::log10(x);
+        return libm::log10(x);
     }
     double ed = 0.0;
     const double logm = crd_log_reduce(x, ed); // log10(x) = ed·log10(2) + logm·log10(e), ed exact (hi/lo split)
-    const double lm = std::fma(logm, kLog10eHi, logm * kLog10eLo);
-    return std::fma(ed, kLog10Of2Hi, std::fma(ed, kLog10Of2Lo, lm));
+    const double lm = libm::fma(logm, kLog10eHi, logm * kLog10eLo);
+    return libm::fma(ed, kLog10Of2Hi, libm::fma(ed, kLog10Of2Lo, lm));
 }
 
 // log(1+x) — Goldberg correction so the low bits of x survive the 1+x rounding (<=1 ulp near 0).
 [[nodiscard]] inline double log1p(double x) noexcept
 {
-    if (!(x > -1.0) || !std::isfinite(x))
+    if (!(x > -1.0) || !libm::is_finite(x))
     {
-        return std::log1p(x);
+        return libm::log1p(x);
     }
     const double u = 1.0 + x;
     if (u == 1.0)
@@ -163,4 +164,4 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
 [[nodiscard]] inline float log10(float x) noexcept { return static_cast<float>(log10(static_cast<double>(x))); }
 [[nodiscard]] inline float log1p(float x) noexcept { return static_cast<float>(log1p(static_cast<double>(x))); }
 
-} // namespace crd::math
+} // namespace crd::math::inline CRD_MATH_LEVEL_NS

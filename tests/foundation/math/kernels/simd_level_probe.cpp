@@ -1,11 +1,15 @@
 // The SIMD-type probe, compiled once per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134 §5): every
 // operation of the crd::math::simd types of this level's backend over the probe inputs. The table is this level's
-// (CRD_KERNEL_TABLE); everything else has internal linkage or lives in the level namespace.
+// (CRD_KERNEL_TABLE); everything else has internal linkage or lives in the level namespace. It also runs the scalar
+// crd::math surface, which kernel units share with general code.
 
 #include "../simd_level_probe.hpp"
 
 #include <crd/math/exp_log_core.hpp>
+#include <crd/math/hyperbolic.hpp>
 #include <crd/math/kernel_level.hpp>
+#include <crd/math/power.hpp>
+#include <crd/math/select.hpp>
 #include <crd/math/simd/convert.hpp>
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/quatf.hpp>
@@ -798,6 +802,192 @@ usize d_exp_log_twins8(const Input& in, u64* out) noexcept
 #endif
 }
 
+// ---- the scalar crd::math surface (select, transcendental, trig, power, hyperbolic) at this level ----
+
+// Each input as itself, as a value in [-1, 1) built from its mantissa and scaled down, so the cores, their range
+// reductions and their library edges all run; y and z are the second and third inputs.
+void scalar_args(f64 x, f64* args) noexcept
+{
+    const u64 m = (__builtin_bit_cast(u64, x) & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL;
+    args[0] = x;
+    args[1] = (__builtin_bit_cast(f64, m) - 1.5) * 2.0;
+    args[2] = x * 0x1p-40;
+}
+void scalar_args(f32 x, f32* args) noexcept
+{
+    const u32 m = (__builtin_bit_cast(u32, x) & 0x007FFFFFU) | 0x3F800000U;
+    args[0] = x;
+    args[1] = (__builtin_bit_cast(f32, m) - 1.5F) * 2.0F;
+    args[2] = x * 0x1p-20F;
+}
+
+template <typename T, typename Fn> usize scalar_each(const Input& in, u64* out, Fn fn) noexcept
+{
+    constexpr bool is_f64 = sizeof(T) == sizeof(f64);
+    usize n = 0;
+    for (usize i = 0; i < kLanes; ++i)
+    {
+        T args[3];
+        if constexpr (is_f64)
+        {
+            scalar_args(in.da[i], args);
+        }
+        else
+        {
+            scalar_args(in.a[i], args);
+        }
+        for (const T x : args)
+        {
+            if constexpr (is_f64)
+            {
+                n += put(fn(x, in.db[i], in.dc[i]), out + n);
+            }
+            else
+            {
+                n += put(fn(x, in.b[i], in.c[i]), out + n);
+            }
+        }
+    }
+    return n;
+}
+
+template <typename T> T sincos_sin(T x) noexcept
+{
+    T s = 0;
+    T c = 0;
+    crd::math::sincos(x, s, c);
+    return s;
+}
+template <typename T> T sincos_cos(T x) noexcept
+{
+    T s = 0;
+    T c = 0;
+    crd::math::sincos(x, s, c);
+    return c;
+}
+template <typename T> T frexp_exponent(T x) noexcept
+{
+    int e = 0;
+    static_cast<void>(crd::math::frexp(x, &e));
+    return static_cast<T>(e);
+}
+template <typename T> T frexp_mantissa(T x) noexcept
+{
+    int e = 0;
+    return crd::math::frexp(x, &e);
+}
+template <typename T> T modf_integral(T x) noexcept
+{
+    T ip = 0;
+    static_cast<void>(crd::math::modf(x, &ip));
+    return ip;
+}
+template <typename T> T modf_fraction(T x) noexcept
+{
+    T ip = 0;
+    return crd::math::modf(x, &ip);
+}
+// lround outside the long range is the library's own unspecified value.
+template <typename T> T lround_in_range(T x) noexcept
+{
+    return crd::math::abs(x) < T(1048576) ? static_cast<T>(crd::math::lround(x)) : T(0);
+}
+
+template <typename T> T clamp_half(T x) noexcept
+{
+    return crd::math::clamp(x, T(-0.5), T(0.5));
+}
+template <typename T> T signbit_value(T x) noexcept
+{
+    return crd::math::signbit(x) ? T(1) : T(0);
+}
+
+// One scalar function in both precisions over x, the input under test, and y and z, the second and third inputs.
+struct ScalarFn
+{
+    const char* f64_name;
+    const char* f32_name;
+    f64 (*f64_fn)(f64, f64, f64) noexcept;
+    f32 (*f32_fn)(f32, f32, f32) noexcept;
+};
+template <typename Fn> constexpr ScalarFn scalar_fn(const char* f64_name, const char* f32_name, Fn fn) noexcept
+{
+    return {f64_name, f32_name, fn, fn};
+}
+
+constexpr ScalarFn kScalarFns[] = {
+    scalar_fn("f64 exp", "f32 exp", [](auto x, auto, auto) noexcept { return crd::math::exp(x); }),
+    scalar_fn("f64 exp2", "f32 exp2", [](auto x, auto, auto) noexcept { return crd::math::exp2(x); }),
+    scalar_fn("f64 exp10", "f32 exp10", [](auto x, auto, auto) noexcept { return crd::math::exp10(x); }),
+    scalar_fn("f64 expm1", "f32 expm1", [](auto x, auto, auto) noexcept { return crd::math::expm1(x); }),
+    scalar_fn("f64 log", "f32 log", [](auto x, auto, auto) noexcept { return crd::math::log(x); }),
+    scalar_fn("f64 log2", "f32 log2", [](auto x, auto, auto) noexcept { return crd::math::log2(x); }),
+    scalar_fn("f64 log10", "f32 log10", [](auto x, auto, auto) noexcept { return crd::math::log10(x); }),
+    scalar_fn("f64 log1p", "f32 log1p", [](auto x, auto, auto) noexcept { return crd::math::log1p(x); }),
+    scalar_fn("f64 sin", "f32 sin", [](auto x, auto, auto) noexcept { return crd::math::sin(x); }),
+    scalar_fn("f64 cos", "f32 cos", [](auto x, auto, auto) noexcept { return crd::math::cos(x); }),
+    scalar_fn("f64 tan", "f32 tan", [](auto x, auto, auto) noexcept { return crd::math::tan(x); }),
+    scalar_fn("f64 sincos sin", "f32 sincos sin", [](auto x, auto, auto) noexcept { return sincos_sin(x); }),
+    scalar_fn("f64 sincos cos", "f32 sincos cos", [](auto x, auto, auto) noexcept { return sincos_cos(x); }),
+    scalar_fn("f64 atan", "f32 atan", [](auto x, auto, auto) noexcept { return crd::math::atan(x); }),
+    scalar_fn("f64 asin", "f32 asin", [](auto x, auto, auto) noexcept { return crd::math::asin(x); }),
+    scalar_fn("f64 acos", "f32 acos", [](auto x, auto, auto) noexcept { return crd::math::acos(x); }),
+    scalar_fn("f64 atan2", "f32 atan2", [](auto x, auto y, auto) noexcept { return crd::math::atan2(x, y); }),
+    scalar_fn("f64 sinh", "f32 sinh", [](auto x, auto, auto) noexcept { return crd::math::sinh(x); }),
+    scalar_fn("f64 cosh", "f32 cosh", [](auto x, auto, auto) noexcept { return crd::math::cosh(x); }),
+    scalar_fn("f64 tanh", "f32 tanh", [](auto x, auto, auto) noexcept { return crd::math::tanh(x); }),
+    scalar_fn("f64 asinh", "f32 asinh", [](auto x, auto, auto) noexcept { return crd::math::asinh(x); }),
+    scalar_fn("f64 acosh", "f32 acosh", [](auto x, auto, auto) noexcept { return crd::math::acosh(x); }),
+    scalar_fn("f64 atanh", "f32 atanh", [](auto x, auto, auto) noexcept { return crd::math::atanh(x); }),
+    scalar_fn("f64 pow", "f32 pow", [](auto x, auto y, auto) noexcept { return crd::math::pow(x, y); }),
+    scalar_fn("f64 cbrt", "f32 cbrt", [](auto x, auto, auto) noexcept { return crd::math::cbrt(x); }),
+    scalar_fn("f64 hypot", "f32 hypot", [](auto x, auto y, auto) noexcept { return crd::math::hypot(x, y); }),
+    scalar_fn("f64 rsqrt", "f32 rsqrt", [](auto x, auto, auto) noexcept { return crd::math::rsqrt(x); }),
+    scalar_fn("f64 sqrt", "f32 sqrt", [](auto x, auto, auto) noexcept { return crd::math::sqrt(x); }),
+    scalar_fn("f64 abs", "f32 abs", [](auto x, auto, auto) noexcept { return crd::math::abs(x); }),
+    scalar_fn("f64 floor", "f32 floor", [](auto x, auto, auto) noexcept { return crd::math::floor(x); }),
+    scalar_fn("f64 ceil", "f32 ceil", [](auto x, auto, auto) noexcept { return crd::math::ceil(x); }),
+    scalar_fn("f64 round", "f32 round", [](auto x, auto, auto) noexcept { return crd::math::round(x); }),
+    scalar_fn("f64 trunc", "f32 trunc", [](auto x, auto, auto) noexcept { return crd::math::trunc(x); }),
+    scalar_fn("f64 rint", "f32 rint", [](auto x, auto, auto) noexcept { return crd::math::rint(x); }),
+    scalar_fn("f64 nearbyint", "f32 nearbyint", [](auto x, auto, auto) noexcept { return crd::math::nearbyint(x); }),
+    scalar_fn("f64 lround", "f32 lround", [](auto x, auto, auto) noexcept { return lround_in_range(x); }),
+    scalar_fn("f64 fmod", "f32 fmod", [](auto x, auto y, auto) noexcept { return crd::math::fmod(x, y); }),
+    scalar_fn("f64 remainder", "f32 remainder",
+              [](auto x, auto y, auto) noexcept { return crd::math::remainder(x, y); }),
+    scalar_fn("f64 copysign", "f32 copysign", [](auto x, auto y, auto) noexcept { return crd::math::copysign(x, y); }),
+    scalar_fn("f64 fmin", "f32 fmin", [](auto x, auto y, auto) noexcept { return crd::math::fmin(x, y); }),
+    scalar_fn("f64 fmax", "f32 fmax", [](auto x, auto y, auto) noexcept { return crd::math::fmax(x, y); }),
+    scalar_fn("f64 fdim", "f32 fdim", [](auto x, auto y, auto) noexcept { return crd::math::fdim(x, y); }),
+    scalar_fn("f64 min", "f32 min", [](auto x, auto y, auto) noexcept { return crd::math::min(x, y); }),
+    scalar_fn("f64 max", "f32 max", [](auto x, auto y, auto) noexcept { return crd::math::max(x, y); }),
+    scalar_fn("f64 clamp", "f32 clamp", [](auto x, auto, auto) noexcept { return clamp_half(x); }),
+    scalar_fn("f64 saturate", "f32 saturate", [](auto x, auto, auto) noexcept { return crd::math::saturate(x); }),
+    scalar_fn("f64 sign", "f32 sign", [](auto x, auto, auto) noexcept { return crd::math::sign(x); }),
+    scalar_fn("f64 signbit", "f32 signbit", [](auto x, auto, auto) noexcept { return signbit_value(x); }),
+    scalar_fn("f64 fma", "f32 fma", [](auto x, auto y, auto z) noexcept { return crd::math::fma(x, y, z); }),
+    scalar_fn("f64 lerp", "f32 lerp", [](auto x, auto y, auto z) noexcept { return crd::math::lerp(x, y, z); }),
+    scalar_fn("f64 frexp mantissa", "f32 frexp mantissa",
+              [](auto x, auto, auto) noexcept { return frexp_mantissa(x); }),
+    scalar_fn("f64 frexp exponent", "f32 frexp exponent",
+              [](auto x, auto, auto) noexcept { return frexp_exponent(x); }),
+    scalar_fn("f64 modf fraction", "f32 modf fraction", [](auto x, auto, auto) noexcept { return modf_fraction(x); }),
+    scalar_fn("f64 modf integral", "f32 modf integral", [](auto x, auto, auto) noexcept { return modf_integral(x); }),
+};
+constexpr usize kScalarFnCount = sizeof(kScalarFns) / sizeof(kScalarFns[0]);
+
+template <typename T, usize I> usize scalar_op(const Input& in, u64* out) noexcept
+{
+    if constexpr (sizeof(T) == sizeof(f64))
+    {
+        return scalar_each<T>(in, out, kScalarFns[I].f64_fn);
+    }
+    else
+    {
+        return scalar_each<T>(in, out, kScalarFns[I].f32_fn);
+    }
+}
+
 // ---- Mat4f and Quatf ----
 
 usize mat4(const Input& in, u64* out) noexcept
@@ -831,7 +1021,7 @@ usize quat(const Input& in, u64* out) noexcept
     return n;
 }
 
-constexpr Op kOps[] = {
+constexpr Op kVectorOps[] = {
     {"vec4f +", Compare::F32Value, &F32<Vec4f>::add},
     {"vec8f +", Compare::F32Value, &F32<Vec8f>::add},
     {"vec16f +", Compare::F32Value, &F32<Vec16f>::add},
@@ -993,13 +1183,44 @@ constexpr Op kOps[] = {
     {"quatf", Compare::F32Value, &quat},
 };
 
+constexpr usize kVectorOpCount = sizeof(kVectorOps) / sizeof(kVectorOps[0]);
+constexpr usize kOpCount = kVectorOpCount + (2 * kScalarFnCount);
+
+struct Ops
+{
+    Op op[kOpCount];
+};
+
+template <usize I> constexpr void add_scalar_ops(Ops& all) noexcept
+{
+    if constexpr (I < kScalarFnCount)
+    {
+        all.op[kVectorOpCount + (2 * I)] = {kScalarFns[I].f64_name, Compare::F64Value, &scalar_op<f64, I>};
+        all.op[kVectorOpCount + (2 * I) + 1] = {kScalarFns[I].f32_name, Compare::F32Value, &scalar_op<f32, I>};
+        add_scalar_ops<I + 1>(all);
+    }
+}
+
+constexpr Ops all_ops() noexcept
+{
+    Ops all{};
+    for (usize i = 0; i < kVectorOpCount; ++i)
+    {
+        all.op[i] = kVectorOps[i];
+    }
+    add_scalar_ops<0>(all);
+    return all;
+}
+
+constexpr Ops kOps = all_ops();
+
 } // namespace
 
 constinit const Table CRD_KERNEL_TABLE(kSimdProbe) = {
     crd::math::simd::backend_name(),
     crd::math::simd::kNativeLaneWidth,
-    kOps,
-    sizeof(kOps) / sizeof(kOps[0]),
+    kOps.op,
+    kOpCount,
 };
 
 } // namespace crd::test::simd_probe
