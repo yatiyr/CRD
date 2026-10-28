@@ -111,8 +111,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    codelets compute tiles of four f64 or eight f32 columns on every level, two tiles a register at avx512. The geometry
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots. The forward jets are bit-exact too:
-   per-lane chains of single-rounded fma, two-rounded quotient and scale steps and scalar value lanes, whatever the
-   register width.
+   per-lane chains in which only the product rule fuses (one fma), the quotient and scale steps round each operation
+   and the value lane is scalar, whatever the register width.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it, `portable` and `neon` on the hosted ARM64 lanes, which give general code the NEON backend
    of the SIMD types); AVX-512 and AVX10 kernels run under Intel SDE until such hardware exists (10.13.1,

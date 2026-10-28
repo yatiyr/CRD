@@ -55,8 +55,10 @@ stay Needs CI.
   - Each level's layout is checked: registers, lanes, alignment and size.
   - On well-conditioned inputs, results must lie within 1e-12 of the scalar Jet oracle.
 - The `[kernels]` cases cover the canned table (levels against the build mask and the selection, every level against
-  general code's driver, and a guard word). The CLI gradient case also has the tag. They run as
+  general code's driver, and a guard word). The probe and the CLI gradient case also have the tag. They run as
   `crd-hesap-autodiff-kernels-at-<level>` and under SDE.
+- The SIMD-type probe's cases (`test_simd_levels.cpp`) were tagged `[math][simd-levels]` only, so the hosted SDE arm
+  never ran them. They now also carry `[kernels]`, as every other family's cross-level cases do.
 - Local, win-debug:
   - The tree builds keep-going with no error.
   - The autodiff and opt suites pass.

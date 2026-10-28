@@ -2,8 +2,8 @@
 // CPU level of the unit that compiles them and give the same bits on every level. kernels/jet_level_probe.cpp is
 // compiled once per level; each level the host executes runs every operation, slope and driver over the same inputs as
 // the portable level, in this one process, and general code's jets give those bits too. The scalar Jet<f64, N> is the
-// oracle on well-conditioned inputs. The canned gradients' table (crd/hesap/autodiff/autodiff_dispatch.hpp) is the
-// [kernels] part, which the forced-level arms run once per level.
+// oracle on well-conditioned inputs. With the canned gradients' table (crd/hesap/autodiff/autodiff_dispatch.hpp) they
+// are [kernels] cases, which the forced-level arms run once per level and the emulated avx512 arm under SDE.
 
 #include "jet_level_probe.hpp"
 #include "jet_probe_ops.hpp"
@@ -218,7 +218,7 @@ probe::Layout expected_layout(crd::u32 widest, int n)
 
 } // namespace
 
-TEST_CASE("jets: each level's unit lays out its own registers", "[autodiff][jet-levels]")
+TEST_CASE("jets: each level's unit lays out its own registers", "[autodiff][jet-levels][kernels]")
 {
     REQUIRE(kLevels[0].level == CpuLevel::Portable);
     for (const Level& level : kLevels)
@@ -245,7 +245,7 @@ TEST_CASE("jets: each level's unit lays out its own registers", "[autodiff][jet-
     CHECK(got.size == want.size);
 }
 
-TEST_CASE("jets: every level the host runs gives the portable bits", "[autodiff][jet-levels]")
+TEST_CASE("jets: every level the host runs gives the portable bits", "[autodiff][jet-levels][kernels]")
 {
     static f64 ref[probe::kOpWords];
     static f64 got[probe::kOpWords];
@@ -307,7 +307,7 @@ TEST_CASE("jets: every level the host runs gives the portable bits", "[autodiff]
     CHECK(compared >= kInputSets); // portable runs everywhere
 }
 
-TEST_CASE("jets: the drivers give the portable bits on every level and tile", "[autodiff][jet-levels]")
+TEST_CASE("jets: the drivers give the portable bits on every level and tile", "[autodiff][jet-levels][kernels]")
 {
     f64 x[probe::kMaxN];
     for (int i = 0; i < probe::kMaxN; ++i)

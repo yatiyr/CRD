@@ -49,7 +49,7 @@ crd_enable_default_pch(crd-hesap-autodiff-tests)
 
 crd_discover_tests(crd-hesap-autodiff-tests)
 
-# ADR-0134 §8: the canned gradients' table and the CLI gradient once per compiled level
+# ADR-0134 §8: the jet probe, the canned gradients' table and the CLI gradient once per compiled level
 # (crd-hesap-autodiff-kernels-at-<level>).
 crd_add_kernel_level_tests(crd-hesap-autodiff-tests "[kernels]")
 

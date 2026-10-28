@@ -159,7 +159,8 @@ bool same(probe::Compare compare, crd::u64 x, crd::u64 y)
 
 } // namespace
 
-TEST_CASE("simd types: each level's unit compiles its own backend and the one data layout", "[math][simd-levels]")
+TEST_CASE("simd types: each level's unit compiles its own backend and the one data layout",
+          "[math][simd-levels][kernels]")
 {
     REQUIRE(kLevels[0].level == CpuLevel::Portable);
     const probe::Table& portable = *kLevels[0].table;
@@ -178,7 +179,7 @@ TEST_CASE("simd types: each level's unit compiles its own backend and the one da
     CHECK(static_cast<int>(kLevels[kLevelCount - 1U].level) == CRD_TEST_KERNEL_LEVELS_TOP);
 }
 
-TEST_CASE("simd types: every level the host executes gives the portable level's bits", "[math][simd-levels]")
+TEST_CASE("simd types: every level the host executes gives the portable level's bits", "[math][simd-levels][kernels]")
 {
     const probe::Table& portable = *kLevels[0].table;
     static probe::Input inputs[kInputSets];
@@ -457,7 +458,7 @@ struct Tally
 
 } // namespace
 
-TEST_CASE("simd types: every level's fused multiply-add rounds once on hard cases", "[math][simd-levels]")
+TEST_CASE("simd types: every level's fused multiply-add rounds once on hard cases", "[math][simd-levels][kernels]")
 {
     constexpr crd::usize set_count = 16384; // 2^20 triples of each type
     static probe::Input in;
