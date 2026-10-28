@@ -15,13 +15,15 @@ both fixed in `fcb3bb42`, and win-tidy's four test findings, fixed in `b80f733a`
 - MSVC's vectorizer emits `__isa_available`-tested AVX-512 and SSE4.1 paths under every `/arch` (the guard's
   `msvc-isa-dispatch`), so a forced arm on a wider host ran them. Each image keeps its own CRT dispatch state in
   `MSVCRT:cpu_disp.obj`: `__isa_available` (5 here), `__isa_enabled` (bit set, `0x2e`), `__isa_inverted`
-  (`__IA_SUPPORT_*`, a set bit is unsupported) and `__avx10_version`. Of 2,439 win-debug and 1,415 win-release
-  objects only `__isa_available` is read; `msvcprt:vector_algorithms.obj` also reads `__isa_enabled`.
+  (`__IA_SUPPORT_*`, a set bit is unsupported) and `__avx10_version`. Of the machine-code objects of win-debug
+  (2,439) and win-release (its kernel and third-party objects; general ones are `/GL` IL) only `__isa_available`
+  is read; `msvcprt:vector_algorithms.obj` also reads `__isa_enabled`.
 - `cpu_features.cpp`: an applied level lowers all four to its level, never raising them, and below avx2 calls
   `_set_FMA3_enable(0)`, which reaches ucrtbase's libm. A pointer in `.CRT$XCL` (after the C initializers that set
-  the CRT state, before every user initializer and thread) selects at startup when `CRD_CPU_LEVEL` is set; crd-core's
-  interface links `/INCLUDE:kCrdCpuSelectAtStart` on MSVC x64 so every image keeps it (the crash TLS callback's
-  pattern). `cpu_runtime_dispatch()` reports the CRT level and the FMA3 state.
+  the CRT state, with the library initializers, before every user one) selects at startup when `CRD_CPU_LEVEL` is
+  set; crd-core's interface links `/INCLUDE:kCrdCpuSelectAtStart` on MSVC x64 so every image keeps it (the crash
+  TLS callback's pattern). `cpu_runtime_dispatch()` reports the CRT level and the FMA3 state. The hosted Windows
+  lanes use the same 14.51.36231 toolset. Tracy's `.CRT$XCB` statics start no thread (delayed manual lifetime).
 - Boundary (ADR §8): vcruntime140's and ucrtbase's string routines, glibc's ifuncs and zstd's dynamic BMI2 decoders
   keep dispatching on the hardware, with the same results.
 

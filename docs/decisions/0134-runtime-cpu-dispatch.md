@@ -139,7 +139,7 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    an applied level also lowers the CRT's own dispatch in each image (`__isa_available`, which the vectorizer's
    paths and the STL test, with `__isa_enabled`, `__isa_inverted` and `__avx10_version`) and below avx2 turns the
    UCRT libm's FMA3 bodies off, from a `.CRT$XCL` initializer that crd-core's interface keeps in every image, before
-   any user initializer or thread; it never raises them, and `cpu_runtime_dispatch()` reports them. The DLL
+   any user initializer; it never raises them, and `cpu_runtime_dispatch()` reports them. The DLL
    runtimes' string routines (vcruntime140, ucrtbase), glibc's ifuncs and zstd's dynamic BMI2 decoders keep
    dispatching on the hardware with the same results. The doctor, the specimen harness's host tuple
    and every board record the detected and selected level and the override status. The diag-overhead, hesap, geometry and jobs boards are re-measured at each level

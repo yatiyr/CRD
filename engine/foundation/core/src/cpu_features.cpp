@@ -775,8 +775,8 @@ CpuRuntimeDispatch cpu_runtime_dispatch() noexcept
 namespace
 {
 
-// Selects at startup when CRD_CPU_LEVEL is set, so an applied level reaches the CRT's dispatch before any user
-// initializer runs and before any thread exists; without it the selection stays lazy.
+// Selects at startup when CRD_CPU_LEVEL is set, so an applied level reaches the CRT's dispatch with the library
+// initializers, before any user initializer runs; without it the selection stays lazy.
 void __cdecl select_at_start() noexcept
 {
     char buffer[32] = {}; // NOLINT(modernize-avoid-c-arrays)

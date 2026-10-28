@@ -996,16 +996,19 @@ TEST_CASE("cpu features: an applied CRD_CPU_LEVEL lowers the C runtime's own dis
     {
         const cd::Outcome sse42 = run_level_child("sse4.2");
         INFO(sse42.output.c_str());
-        CHECK(contains(sse42, runtime_line(own, 2L, false).c_str()));
+        const cont::String want = runtime_line(own, 2L, false);
+        CHECK(contains(sse42, want.c_str()));
     }
     if (crd::cpu_level_includes(s.detected, CpuLevel::Avx2))
     {
         const cd::Outcome avx2 = run_level_child("avx2");
         INFO(avx2.output.c_str());
-        CHECK(contains(avx2, runtime_line(own, 5L, own_fma3).c_str()));
+        const cont::String want = runtime_line(own, 5L, own_fma3);
+        CHECK(contains(avx2, want.c_str()));
     }
     // A refused level lowers nothing.
     const cd::Outcome other = run_level_child("neon");
     INFO(other.output.c_str());
-    CHECK(contains(other, runtime_line(own, 6L, own_fma3).c_str()));
+    const cont::String unchanged = runtime_line(own, 6L, own_fma3);
+    CHECK(contains(other, unchanged.c_str()));
 }
