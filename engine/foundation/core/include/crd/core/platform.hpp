@@ -97,6 +97,15 @@
 #define CRD_FORCEINLINE __attribute__((always_inline)) inline
 #endif
 
+/// Inline at every call site in every build, unoptimised ones included: for a small body that is correct only inside
+/// its caller's frame, never for speed (the sanitizer fiber-switch hooks of crd-jobs, whose TSan frame must not
+/// straddle the switch). GCC and Clang honour it at -O0; cl's /Od inlines nothing, and no cl sanitizer depends on it.
+#if CRD_COMPILER_MSVC
+#define CRD_ALWAYS_INLINE __forceinline
+#else
+#define CRD_ALWAYS_INLINE __attribute__((always_inline)) inline
+#endif
+
 #if CRD_COMPILER_MSVC
 /// Prevent the compiler from inlining the function, even under LTO.
 #define CRD_NOINLINE __declspec(noinline)

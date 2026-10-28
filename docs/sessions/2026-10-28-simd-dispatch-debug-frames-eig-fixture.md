@@ -41,6 +41,13 @@ After the change:
   `DW.ref.__gxx_personality_v0`.
 - One `-Wpsabi` note appears per sse2 test unit.
 
+Regression (hosted linux-clang-tsan, push run 40623100798 at `bedfc2bb`): the TSan lane builds at -O0, so the
+sanitizer fiber-switch hooks went out of line, the defect DIAG.1b fixed on 2026-10-06 (the hook's TSan exit frame popped
+on the target fiber). TSan then reported races on fiber dispatch in four tests (the JD and LOBPCG determinism moats and
+`fiber keep: with fewer processors than threads`). The hooks now use `CRD_ALWAYS_INLINE`, which forces inlining at
+every level and is meant only for bodies that must run in their caller's frame; the tooling suite fails if a hook
+loses it or the macro tests `__OPTIMIZE__`.
+
 `platform.hpp`'s compiler notes said clang-cl resolves as `CRD_COMPILER_CLANG`; it resolves as `CRD_COMPILER_MSVC`, and
 the notes now say so.
 

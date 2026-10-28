@@ -3464,6 +3464,12 @@ class TestInstruments(unittest.TestCase):
         for symbol in ('__sanitizer_start_switch_fiber', '__sanitizer_finish_switch_fiber', '__tsan_create_fiber',
                        '__tsan_switch_to_fiber', '__tsan_destroy_fiber', '__tsan_func_exit'):
             self.assertIn(symbol, header)
+        # The switch hooks run in their caller's frame at every optimisation level (TSan's lane is -O0).
+        for hook in ('sanitizer_switch_begin(', 'sanitizer_switch_end(', 'sanitizer_fiber_finished('):
+            self.assertIn('CRD_ALWAYS_INLINE void ' + hook, header)
+        platform = (ROOT / 'engine/foundation/core/include/crd/core/platform.hpp').read_text(encoding='utf-8')
+        start = platform.rindex('#if', 0, platform.index('#define CRD_ALWAYS_INLINE'))
+        self.assertNotIn('__OPTIMIZE__', platform[start:platform.index('#endif', start)])
         # Switches, then finishes: the trampoline's entry also restores the fiber's fake stack, and the completing
         # trampoline pops its TSan frame once.
         sites = {'engine/foundation/jobs/src/counter.cpp': (1, 1, 0),

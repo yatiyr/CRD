@@ -21,7 +21,9 @@
 //
 // Nothing here changes an uninstrumented build: every helper is empty unless the compiler defines the sanitizer.
 //
-// The switch helpers are forced inline. TSan pushes a shadow-stack frame on every instrumented function entry and
+// The switch helpers are forced inline in every build (CRD_ALWAYS_INLINE: the -O0 TSan lane needs it most; with the
+// optimised-only CRD_FORCEINLINE they went out of line there and TSan reported races on fiber dispatch, hosted run
+// 40623100798). TSan pushes a shadow-stack frame on every instrumented function entry and
 // pops one on exit, on whichever TSan context is current at that moment. An out-of-line sanitizer_switch_begin()
 // enters on the switching context, calls __tsan_switch_to_fiber, and then pops its exit frame from the TARGET
 // fiber's shadow stack. On a fiber that has never run, that stack is empty: the pop underflows it by one slot, and
@@ -83,8 +85,8 @@ struct SanitizerSwitch
 
 // Immediately before fiber_switch(), in the same frame (forced inline; see above): the target stack's bounds and
 // TSan context.
-CRD_FORCEINLINE void sanitizer_switch_begin(SanitizerSwitch& state, const void* target_bottom, crd::usize target_size,
-                                   void* target_tsan_fiber) noexcept
+CRD_ALWAYS_INLINE void sanitizer_switch_begin(SanitizerSwitch& state, const void* target_bottom, crd::usize target_size,
+                                              void* target_tsan_fiber) noexcept
 {
 #if CRD_JOBS_ASAN
     __sanitizer_start_switch_fiber(&state.fake_stack, target_bottom, target_size);
@@ -103,7 +105,7 @@ CRD_FORCEINLINE void sanitizer_switch_begin(SanitizerSwitch& state, const void* 
 // Immediately after fiber_switch() returned, back on the stack that called sanitizer_switch_begin(), and as the
 // trampoline's first instruction: restores the fake stack (none on a fiber that never ran) and records the bounds of
 // the stack that switched here (the one this stack will return to next).
-CRD_FORCEINLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
+CRD_ALWAYS_INLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 {
 #if CRD_JOBS_ASAN
     __sanitizer_finish_switch_fiber(state.fake_stack, &state.return_bottom, &state.return_size);
@@ -116,7 +118,7 @@ CRD_FORCEINLINE void sanitizer_switch_end(SanitizerSwitch& state) noexcept
 // the fiber's context is rebuilt for its next job, so the trampoline never returns and its TSan frame is popped here.
 // Left on the fiber's shadow stack, one frame a job made every later stack trace on that fiber unique, so TSan's
 // stack depot grew with every allocation (DIAG.11b, 2026-10-24).
-CRD_FORCEINLINE void sanitizer_fiber_finished() noexcept
+CRD_ALWAYS_INLINE void sanitizer_fiber_finished() noexcept
 {
 #if CRD_JOBS_TSAN
     __tsan_func_exit();
