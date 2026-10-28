@@ -628,11 +628,9 @@ usize d_exp_log_core(const Input& in, u64* out) noexcept
     return n;
 }
 
-// The level's vector twins of those cores (four lanes on the 256-bit backends, two on SSE2 and SSE4.2; the cores
-// themselves elsewhere): exp over the raw inputs and over [-750, 750], log over the raw inputs and their magnitudes.
-usize d_exp_log_twins(const Input& in, u64* out) noexcept
+// The twins' inputs: exp over the raw inputs and over [-750, 750], log over the raw inputs and their magnitudes.
+void twin_inputs(const Input& in, f64* x) noexcept
 {
-    alignas(32) f64 x[4 * kLanes];
     for (usize i = 0; i < kLanes; ++i)
     {
         x[i] = in.da[i];
@@ -640,7 +638,25 @@ usize d_exp_log_twins(const Input& in, u64* out) noexcept
         x[(2 * kLanes) + i] = in.db[i];
         x[(3 * kLanes) + i] = __builtin_bit_cast(f64, __builtin_bit_cast(u64, in.db[i]) & ~(1ULL << 63U));
     }
-    alignas(32) f64 r[4 * kLanes];
+}
+
+usize put_twins(const f64* r, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i < 4 * kLanes; ++i)
+    {
+        n += put(r[i], out + n);
+    }
+    return n;
+}
+
+// The level's vector twins of those cores (four lanes on the 256-bit backends, two on SSE2 and SSE4.2; the cores
+// themselves elsewhere).
+usize d_exp_log_twins(const Input& in, u64* out) noexcept
+{
+    alignas(64) f64 x[4 * kLanes];
+    twin_inputs(in, x);
+    alignas(64) f64 r[4 * kLanes];
 #if CRD_SIMD_HAS_AVX2
     for (usize i = 0; i < 4 * kLanes; i += 4)
     {
@@ -659,12 +675,25 @@ usize d_exp_log_twins(const Input& in, u64* out) noexcept
         r[i] = i < 2 * kLanes ? crd::math::crd_exp1(x[i]) : crd::math::crd_log1(x[i]);
     }
 #endif
-    usize n = 0;
-    for (const f64 value : r)
+    return put_twins(r, out);
+}
+
+// The eight-lane twins on avx512 over the same inputs; the other levels run their own twins again.
+usize d_exp_log_twins8(const Input& in, u64* out) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    alignas(64) f64 x[4 * kLanes];
+    twin_inputs(in, x);
+    alignas(64) f64 r[4 * kLanes];
+    for (usize i = 0; i < 4 * kLanes; i += 8)
     {
-        n += put(value, out + n);
+        const __m512d v = _mm512_load_pd(x + i);
+        _mm512_store_pd(r + i, i < 2 * kLanes ? crd::math::crd_exp8(v) : crd::math::crd_log8(v));
     }
-    return n;
+    return put_twins(r, out);
+#else
+    return d_exp_log_twins(in, out);
+#endif
 }
 
 // ---- Mat4f and Quatf ----
@@ -843,6 +872,7 @@ constexpr Op kOps[] = {
     {"vec4d complex (de)interleave", Compare::Bits, &d_complex},
     {"crd_exp1/crd_log1", Compare::F64Value, &d_exp_log_core},
     {"exp/log vector twins", Compare::F64Value, &d_exp_log_twins},
+    {"exp/log eight-lane twins", Compare::F64Value, &d_exp_log_twins8},
     {"mat4f", Compare::F32Value, &mat4},
     {"quatf", Compare::F32Value, &quat},
 };

@@ -54,6 +54,15 @@ Results:
   assertions).
 - Under SDE `-skx`, the avx512 level runs too and matches: 92,881 assertions, against 74,305 without it.
 
+## The eight-lane log and exp twins
+
+`crd_log8` and `crd_exp8` (transcendental.hpp, avx512 only) run crd_log4's and crd_exp4's operations in the same
+order on one zmm register. The blends are masked multiply and add, the floor is `roundscale`, and the exponent
+injection is the single one. Abnormal and edge lanes take the scalar core. The scaling is not done with `scalef`, which
+rounds once where the core injects the exponent in two steps. The probe adds an eight-lane twin operation over the
+twins' inputs: at avx512 it runs the new twins, and elsewhere it runs the level's own twins. Under SDE `-skx` it gives
+crd_exp1's and crd_log1's bits (`[simd-levels]`: 667,778 assertions with avx512, against 534,378 natively).
+
 ## Left
 
-The transcendental twins at eight f64 lanes (`crd_log8`/`crd_exp8`), then each family's zmm body.
+Each family's zmm body.

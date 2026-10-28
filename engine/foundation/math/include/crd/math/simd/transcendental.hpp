@@ -1,8 +1,8 @@
 #pragma once
 
-// crd-math — f64 SIMD transcendentals (natural log + exp): AVX2 four-lane and SSE2/SSE4.2 two-lane twins of the scalar
-// cores (crd/math/exp_log_core.hpp), BIT-IDENTICAL to them; the two-lane twins round each FMA once through
-// crd/math/simd/fma_exact.hpp.
+// crd-math — f64 SIMD transcendentals (natural log + exp): AVX-512 eight-lane, AVX2 four-lane and SSE2/SSE4.2
+// two-lane twins of the scalar cores (crd/math/exp_log_core.hpp), BIT-IDENTICAL to them; the two-lane twins round each
+// FMA once through crd/math/simd/fma_exact.hpp.
 // The reusable home for these primitives (the f32 log/exp live in crd/math/deterministic.hpp; Vec4d in simd/vec4d.hpp;
 // these fill the f64 gap). Consumers: FFT, AD, and the hesap-special distribution/special-function hot paths.
 //
@@ -118,6 +118,97 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
     }
     return res;
 }
+
+#if CRD_SIMD_HAS_AVX512
+// The eight-lane twins: crd_log4 and crd_exp4's operations in the same order on a zmm register, the blends as masked
+// operations, so each lane gives crd_log1's and crd_exp1's bits; abnormal lanes take the scalar core.
+template <typename Core>
+[[nodiscard]] inline __m512d crd_scalar_lanes8(__m512d x, __m512d r, __mmask8 lanes, Core core) noexcept
+{
+    alignas(64) double xa[8];
+    alignas(64) double ra[8];
+    _mm512_store_pd(xa, x);
+    _mm512_store_pd(ra, r);
+    for (int i = 0; i < 8; ++i)
+    {
+        if ((lanes >> i) & 1)
+        {
+            ra[i] = core(xa[i]);
+        }
+    }
+    return _mm512_load_pd(ra);
+}
+
+[[nodiscard]] inline __m512d crd_log8(__m512d x) noexcept
+{
+    const __m512i bits = _mm512_castpd_si512(x);
+    __m512i ei = _mm512_sub_epi64(_mm512_and_si512(_mm512_srli_epi64(bits, 52), _mm512_set1_epi64(0x7FF)),
+                                  _mm512_set1_epi64(1023));
+    const __m512i mbits = _mm512_or_si512(_mm512_and_si512(bits, _mm512_set1_epi64(0x000FFFFFFFFFFFFF)),
+                                          _mm512_set1_epi64(0x3FF0000000000000));
+    __m512d m = _mm512_castsi512_pd(mbits);
+    const __mmask8 gt = _mm512_cmp_pd_mask(m, _mm512_set1_pd(kSqrt2), _CMP_GT_OQ);
+    m = _mm512_mask_mul_pd(m, gt, m, _mm512_set1_pd(0.5));
+    ei = _mm512_mask_add_epi64(ei, gt, ei, _mm512_set1_epi64(1));
+    const __m512d magic = _mm512_set1_pd(6755399441055744.0); // 0x4338000000000000
+    const __m512d ed = _mm512_sub_pd(_mm512_castsi512_pd(_mm512_add_epi64(ei, _mm512_castpd_si512(magic))), magic);
+    const __m512d one = _mm512_set1_pd(1.0);
+    const __m512d t = _mm512_div_pd(_mm512_sub_pd(m, one), _mm512_add_pd(m, one));
+    const __m512d s = _mm512_mul_pd(t, t);
+    __m512d q = _mm512_set1_pd(kC17);
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC15));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC13));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC11));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC9));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC7));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC5));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC3));
+    const __m512d tt = _mm512_add_pd(t, t);
+    const __m512d logm = _mm512_fmadd_pd(_mm512_mul_pd(tt, s), q, tt);
+    __m512d r = _mm512_fmadd_pd(ed, _mm512_set1_pd(kLn2Hi), logm);
+    r = _mm512_fmadd_pd(ed, _mm512_set1_pd(kLn2Lo), r);
+    const __mmask8 abn = _mm512_cmp_pd_mask(x, _mm512_setzero_pd(), _CMP_LE_OQ) |
+                         _mm512_cmp_pd_mask(x, x, _CMP_UNORD_Q) |
+                         _mm512_cmp_pd_mask(x, _mm512_set1_pd(1.7976931348623157e308), _CMP_GT_OQ) |
+                         _mm512_cmp_pd_mask(x, _mm512_set1_pd(kMinNormal), _CMP_LT_OQ);
+    if (abn != 0)
+    {
+        r = crd_scalar_lanes8(x, r, abn, [](double v) noexcept { return crd_log1(v); });
+    }
+    return r;
+}
+
+[[nodiscard]] inline __m512d crd_exp8(__m512d x) noexcept
+{
+    const __m512d kf = _mm512_roundscale_pd(_mm512_fmadd_pd(x, _mm512_set1_pd(kLog2e), _mm512_set1_pd(0.5)),
+                                            _MM_FROUND_TO_NEG_INF | _MM_FROUND_NO_EXC);
+    __m512d r = _mm512_fmadd_pd(kf, _mm512_set1_pd(-kLn2HiE), x);
+    r = _mm512_fmadd_pd(kf, _mm512_set1_pd(-kLn2LoE), r);
+    __m512d p = _mm512_set1_pd(kE11);
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE10));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE9));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE8));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE7));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE6));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE5));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE4));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE3));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(kE2));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+    p = _mm512_fmadd_pd(p, r, _mm512_set1_pd(1.0));
+    // The single exponent injection of crd_exp4, valid for |x| up to about 708; the edge band takes crd_exp1.
+    const __m512i ki = _mm512_add_epi64(_mm512_cvtepi32_epi64(_mm512_cvtpd_epi32(kf)), _mm512_set1_epi64(1023));
+    __m512d res = _mm512_mul_pd(p, _mm512_castsi512_pd(_mm512_slli_epi64(ki, 52)));
+    const __mmask8 edge = _mm512_cmp_pd_mask(x, _mm512_set1_pd(709.0), _CMP_GT_OQ) |
+                          _mm512_cmp_pd_mask(x, _mm512_set1_pd(-708.0), _CMP_LT_OQ) |
+                          _mm512_cmp_pd_mask(x, x, _CMP_UNORD_Q);
+    if (edge != 0)
+    {
+        res = crd_scalar_lanes8(x, res, edge, [](double v) noexcept { return crd_exp1(v); });
+    }
+    return res;
+}
+#endif
 #elif CRD_SIMD_HAS_SSE2
 // SSE2/SSE4.2 log twin — bit-identical to crd_log1 on normal-positive lanes; abnormal lanes fall back to crd_log1.
 [[nodiscard]] inline __m128d crd_log_x2(__m128d x) noexcept
