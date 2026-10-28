@@ -16,7 +16,6 @@
 #include <crd/hesap/autodiff/dual.hpp>
 #include <crd/hesap/autodiff/hyperdual.hpp>
 #include <crd/hesap/autodiff/jet.hpp>
-#include <crd/hesap/autodiff/jet_simd.hpp>
 #include <crd/hesap/autodiff/matrix_jvp.hpp>
 #include <crd/hesap/autodiff/sparse_hessian.hpp>
 #include <crd/hesap/autodiff/sparse_jacobian.hpp>

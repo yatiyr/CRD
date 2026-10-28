@@ -27,7 +27,7 @@ TEST_CASE("Jet seed constructor sets exactly one tangent", "[autodiff][jet]")
     CHECK(x.v[0] == 1.0);
     CHECK(x.v[1] == 0.0);
     CHECK(x.v[2] == 0.0);
-    CHECK(J3::DIMENSION == 3);
+    CHECK(J3::kDimension == 3);
 }
 
 TEST_CASE("Jet arithmetic propagates every partial", "[autodiff][jet]")

@@ -4,6 +4,7 @@
 // bit-identical across {1..16} workers; ragged tiles (n not a multiple of W) are exact.
 
 #include <crd/hesap/autodiff/forward.hpp>
+#include <crd/hesap/autodiff/jet_simd.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -59,7 +60,7 @@ TEST_CASE("gradient driver matches the scalar Jet reference (<=1 ulp)", "[autodi
     // driver gradient (tiled SIMD)
     ad::JetPackD<8> sc[n];
     crd::f64        g[n];
-    ad::gradient<8>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g, n), cc::Span<ad::JetPackD<8>>(sc, n));
+    ad::gradient(ScalarF{}, x, n, g, sc);
 
     // scalar Jet reference (one pass)
     ad::Jet<crd::f64, n> jx[n];
@@ -89,10 +90,9 @@ TEST_CASE("gradient is BIT-IDENTICAL across tile widths (determinism moat)", "[a
     crd::f64         g4[n];
     crd::f64         g8[n];
     crd::f64         g16[n];
-    ad::gradient<4>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g4, n), cc::Span<ad::JetPackD<4>>(s4, n));
-    ad::gradient<8>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g8, n), cc::Span<ad::JetPackD<8>>(s8, n));
-    ad::gradient<16>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g16, n),
-                     cc::Span<ad::JetPackD<16>>(s16, n));
+    ad::gradient(ScalarF{}, x, n, g4, s4);
+    ad::gradient(ScalarF{}, x, n, g8, s8);
+    ad::gradient(ScalarF{}, x, n, g16, s16);
     for (int k = 0; k < n; ++k)
     {
         CHECK_THAT(g4[k], WithinAbs(g8[k], 0.0));  // exact — per-lane independence
@@ -106,7 +106,7 @@ TEST_CASE("gradient ragged tail is correct (n not a multiple of W)", "[autodiff]
     crd::f64      x[n]    = {0.3, -0.4, 0.55, 0.1, -0.25};
     ad::JetPackD<4> s4[n];
     crd::f64        g4[n];
-    ad::gradient<4>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g4, n), cc::Span<ad::JetPackD<4>>(s4, n));
+    ad::gradient(ScalarF{}, x, n, g4, s4);
 
     ad::Jet<crd::f64, n> jx[n];
     for (int i = 0; i < n; ++i)
@@ -128,8 +128,7 @@ TEST_CASE("jacobian driver matches analytic", "[autodiff][drivers]")
     ad::JetPackD<8> sc[n];
     ad::JetPackD<8> ys[m];
     crd::f64        jac[m * n];
-    ad::jacobian<8>(VecF{}, cc::ConstSpan<crd::f64>(x, n), m, cc::Span<crd::f64>(jac, m * n),
-                    cc::Span<ad::JetPackD<8>>(sc, n), cc::Span<ad::JetPackD<8>>(ys, m));
+    ad::jacobian(VecF{}, x, n, m, jac, sc, ys);
     // y_j = sin(x_j)·x_{j+1} + x_j² ; ∂y_j/∂x_j = cos(x_j)·x_{j+1} + 2x_j ; ∂y_j/∂x_{j+1} = sin(x_j)
     for (int j = 0; j < m; ++j)
     {
@@ -162,7 +161,7 @@ TEST_CASE("jvp (J*v) and directional derivative match analytic", "[autodiff][dri
     // scalar directional derivative ∇f·v == Σ_k g_k v_k
     ad::JetPackD<8> gsc[n];
     crd::f64        g[n];
-    ad::gradient<8>(ScalarF{}, cc::ConstSpan<crd::f64>(x, n), cc::Span<crd::f64>(g, n), cc::Span<ad::JetPackD<8>>(gsc, n));
+    ad::gradient(ScalarF{}, x, n, g, gsc);
     double gv = 0.0;
     for (int k = 0; k < n; ++k)
     {

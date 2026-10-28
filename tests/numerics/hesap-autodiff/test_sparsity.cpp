@@ -4,6 +4,7 @@
 // structural-vs-numerical zero distinction (global keeps x*0).
 
 #include <crd/hesap/autodiff/forward.hpp>
+#include <crd/hesap/autodiff/jet_simd.hpp>
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
@@ -144,8 +145,7 @@ TEST_CASE("compressed recovery == dense Jacobian (tridiagonal + arrowhead)", "[a
         ad::JetPackD<8> jsc[n];
         ad::JetPackD<8> jys[n];
         crd::f64        dense[n * n];
-        ad::jacobian<8>(functor, cc::ConstSpan<crd::f64>(x, n), n, cc::Span<crd::f64>(dense, n * n),
-                        cc::Span<ad::JetPackD<8>>(jsc, n), cc::Span<ad::JetPackD<8>>(jys, n));
+        ad::jacobian(functor, x, n, n, dense, jsc, jys);
 
         // sparse pipeline
         ad::JacPattern<1> rows[n];

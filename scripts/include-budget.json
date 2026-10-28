@@ -160,6 +160,20 @@
       "why": "the sparse TTM and MTTKRP walks run the per-level tensor kernels (SIMD-DISPATCH), so neither sparse.hpp nor sparse_mttkrp.hpp brings an intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/autodiff/forward.hpp",
+      "flags_of": "tests/numerics/hesap-autodiff/test_dual_forward.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the forward-mode umbrella reaches every hesap-opt unit; the SIMD jets (jet_simd.hpp, per CPU level since SIMD-DISPATCH) are included only where a unit names them"
+    },
+    {
+      "include": "crd/hesap/opt/forward_ad.hpp",
+      "flags_of": "tests/numerics/hesap-opt/test_derivatives.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the optimizers' forward-mode gradient runs on Dual only, so it brings no intrinsics header to opt.hpp's and model.hpp's consumers"
+    },
+    {
       "include": "catch2/catch_test_macros.hpp",
       "flags_of": "tests/foundation/containers/test_containers.cpp",
       "forbid": ["chrono", "format"],

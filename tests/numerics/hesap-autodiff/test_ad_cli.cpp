@@ -55,7 +55,7 @@ TEST_CASE("CLI ad: commands are registered", "[autodiff][cli]")
     }
 }
 
-TEST_CASE("CLI ad: gradient of sphere and Rosenbrock", "[autodiff][cli]")
+TEST_CASE("CLI ad: gradient of sphere and Rosenbrock", "[autodiff][cli][kernels]")
 {
     REQUIRE(kPullAd);
     crd::memory::TlsfAllocator alloc(8 << 20);

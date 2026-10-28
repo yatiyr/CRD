@@ -24,12 +24,12 @@ namespace crd::hesap::autodiff::forward
 {
 
 // Forward-mode jet: value `a` + N-vector of partials `v`. Aggregate / trivially copyable POD (no Eigen, no align
-// requirement). `DIMENSION` mirrors the Ceres spelling for consumers that template over the width.
+// requirement). `kDimension` is the width for consumers that template over it (Ceres spells it DIMENSION).
 template <typename T, int N>
 struct Jet
 {
-    static constexpr int DIMENSION = N;
-    using Scalar                   = T;
+    static constexpr int kDimension = N;
+    using Scalar                    = T;
 
     T a;    // value      f(x)
     T v[N]; // partials   ∂f/∂(seeded direction k), k = 0..N-1

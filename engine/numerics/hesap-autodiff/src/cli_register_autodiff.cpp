@@ -2,13 +2,16 @@
 // callable split) agents reach the drivers through CANNED, named scalar/1-D functions + a point, exactly like
 // hesap.ode.*:
 //
-//   hesap.ad.gradient.f64 : ∇f(x) of a canned f:Rⁿ→R via the SIMD vector-forward driver. func 0 Rosenbrock,
-//                           1 sphere Σxᵢ², 2 Σxᵢ³. x = the point (n ≤ 32). Out [f(x), ∇f(n)...].
+//   hesap.ad.gradient.f64 : ∇f(x) of a canned f:Rⁿ→R via the SIMD vector-forward driver on the process's CPU level
+//                           (autodiff_kernels()). func 0 Rosenbrock, 1 sphere Σxᵢ², 2 Σxᵢ³. x = the point (n ≤ 32).
+//                           Out [f(x), ∇f(n)...].
 //   hesap.ad.hessian.f64  : ∇²f(x) (exact, hyper-dual) of the same canned f (n ≤ 6). Out [f(x), H row-major(n²)...].
 //   hesap.ad.taylor.f64   : the order-K normalized Taylor coefficients a[k]=f⁽ᵏ⁾/k! of a canned 1-D f at x0.
 //                           func 0 exp, 1 sin, 2 1/(1−x), 3 √(1+x). order ∈ {4,8,12,16}. Out [a_0..a_K].
 // Anchor: register_autodiff_cli_anchor(). ADR-0097.
 
+#include <crd/hesap/autodiff/autodiff_dispatch.hpp>
+#include <crd/hesap/autodiff/canned_functions.hpp>
 #include <crd/hesap/autodiff/forward.hpp>
 #include <crd/hesap/autodiff/hvp.hpp>            // v16-z: forward-over-reverse H·v
 #include <crd/hesap/autodiff/implicit_diff.hpp>  // v16-z: IFT root VJP
@@ -63,62 +66,11 @@ void add_param(CommandSchema& s, crd::memory::IAllocator* alloc, const char* nam
     s.params.push_back(std::move(p));
 }
 
-// ---- canned scalar functions (polynomial ⇒ valid on every carrier: double / JetPackD / HyperDual) ----
-struct Rosenbrock
-{
-    template <class T>
-    T operator()(const T* x, int n) const
-    {
-        T s = T(0.0);
-        for (int i = 0; i < n - 1; ++i)
-        {
-            const T a = x[i + 1] - x[i] * x[i];
-            const T b = T(1.0) - x[i];
-            s         = s + T(100.0) * a * a + b * b;
-        }
-        return s;
-    }
-};
-struct Sphere
-{
-    template <class T>
-    T operator()(const T* x, int n) const
-    {
-        T s = T(0.0);
-        for (int i = 0; i < n; ++i)
-        {
-            s = s + x[i] * x[i];
-        }
-        return s;
-    }
-};
-struct Cubes
-{
-    template <class T>
-    T operator()(const T* x, int n) const
-    {
-        T s = T(0.0);
-        for (int i = 0; i < n; ++i)
-        {
-            s = s + x[i] * x[i] * x[i];
-        }
-        return s;
-    }
-};
-
 crd::f64 eval_value(crd::u64 func, const crd::f64* x, int n)
 {
-    if (func == 1)
-    {
-        return Sphere{}
-        (x, n);
-    }
-    if (func == 2)
-    {
-        return Cubes{}
-        (x, n);
-    }
-    return Rosenbrock{}(x, n);
+    crd::f64 value = 0.0;
+    autodiff::canned::visit(static_cast<autodiff::CannedFunction>(func), [&](const auto& f) { value = f(x, n); });
+    return value;
 }
 
 CommandResult impl_gradient(const CommandArgs& args)
@@ -134,27 +86,13 @@ CommandResult impl_gradient(const CommandArgs& args)
         return error_result(args.alloc, "ad.gradient: func must be 0..2");
     }
     const int n = static_cast<int>(x.size());
-    if (n > 32)
+    if (n > autodiff::kCannedMaxN)
     {
         return error_result(args.alloc, "ad.gradient: n must be <= 32");
     }
 
-    ad::JetPackD<8> scratch[32];
-    crd::f64        g[32];
-    const crd::containers::Span<crd::f64>        gs{g, static_cast<crd::usize>(n)};
-    const crd::containers::Span<ad::JetPackD<8>> ss{scratch, static_cast<crd::usize>(n)};
-    if (func == 1)
-    {
-        ad::gradient<8>(Sphere{}, x, gs, ss);
-    }
-    else if (func == 2)
-    {
-        ad::gradient<8>(Cubes{}, x, gs, ss);
-    }
-    else
-    {
-        ad::gradient<8>(Rosenbrock{}, x, gs, ss);
-    }
+    crd::f64 g[autodiff::kCannedMaxN];
+    autodiff::autodiff_kernels().table->gradient_f64(static_cast<autodiff::CannedFunction>(func), x.data(), n, g);
 
     crd::containers::Array<crd::f64> out(args.alloc);
     out.reserve(static_cast<crd::usize>(n) + 1);
@@ -169,18 +107,8 @@ CommandResult impl_gradient(const CommandArgs& args)
 template <int N>
 void hessian_run(crd::u64 func, const crd::f64* x, crd::f64* h)
 {
-    if (func == 1)
-    {
-        ad::hessian<N>(Sphere{}, x, h);
-    }
-    else if (func == 2)
-    {
-        ad::hessian<N>(Cubes{}, x, h);
-    }
-    else
-    {
-        ad::hessian<N>(Rosenbrock{}, x, h);
-    }
+    autodiff::canned::visit(static_cast<autodiff::CannedFunction>(func),
+                            [&](const auto& f) { ad::hessian<N>(f, x, h); });
 }
 
 CommandResult impl_hessian(const CommandArgs& args)

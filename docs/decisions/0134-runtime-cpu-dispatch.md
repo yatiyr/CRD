@@ -75,9 +75,14 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    body, with baseline code or another level. The crd-math SIMD types follow the unit's level, not a global macro;
    raw `__AVX2__` tests go. Headers shared with kernel units call no inline function of the standard library
    (`crd/math/libm.hpp`); the scalar `crd::math` surface (select, the exp/log, trig, power and hyperbolic families) is
-   one and lives in the level namespace (amended 2026-10-28). Layout constants that reach data (`kNativeLaneWidth` for AoSoA) become level-independent,
-   so one binary and its cooked data agree on every level. Dispatch is one indirect call per kernel invocation at the
-   routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured loss). Each table is resolved
+   one and lives in the level namespace (amended 2026-10-28). A carrier whose register layout follows the level (the
+   forward jets, `JetPackD`) lives in the level namespace, and a functor over it runs at the level of the unit that
+   instantiates it: general code at the baseline, a module's kernel family at each level (hesap-autodiff's canned
+   gradients); a caller's jets and the code evaluating them are one unit, no cooked data holds a jet, and no generic jet
+   workspace ABI exists until a second consumer needs one (amended 2026-10-28). Layout constants that reach data
+   (`kNativeLaneWidth` for AoSoA) become level-independent, so one binary and its cooked data agree on every level.
+   Dispatch is one indirect call per kernel invocation at the routine level (a whole GEMM panel loop), never per
+   microkernel (ADR-0088's measured loss). Each table is resolved
    once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features
    `kernel_features` holds), and every table stays callable for the differential tests. A unit compiles to machine
    code on every lane, never to link-time IL (amended 2026-10-28): entered only through its table, it has no call for
@@ -105,7 +110,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside); its generated
    codelets compute tiles of four f64 or eight f32 columns on every level, two tiles a register at avx512. The geometry
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
-   is the eylem-rigid3d body step, with true divisions and square roots.
+   is the eylem-rigid3d body step, with true divisions and square roots. The forward jets are bit-exact too:
+   per-lane chains of single-rounded fma, two-rounded quotient and scale steps and scalar value lanes, whatever the
+   register width.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
    where the runner has it, `portable` and `neon` on the hosted ARM64 lanes, which give general code the NEON backend
    of the SIMD types); AVX-512 and AVX10 kernels run under Intel SDE until such hardware exists (10.13.1,

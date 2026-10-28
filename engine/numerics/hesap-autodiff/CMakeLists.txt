@@ -36,3 +36,8 @@ target_link_libraries(crd-hesap-autodiff
 
 target_compile_features(crd-hesap-autodiff PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-autodiff)
+
+# The canned functions' forward gradient on each CPU level's jets (ADR-0134 §5); src/autodiff_kernel_dispatch.cpp lists
+# them.
+crd_add_cpu_kernels(crd-hesap-autodiff NAME autodiff LEVELS portable sse2 avx2 avx512 INCLUDES crd-math
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/autodiff_kernels.cpp")

@@ -5,6 +5,7 @@ add_executable(crd-hesap-autodiff-tests
     test_dual_forward.cpp
     test_jet.cpp
     test_jet_simd.cpp
+    test_jet_levels.cpp
     test_jvp_rules.cpp
     test_hyperdual.cpp
     test_drivers.cpp
@@ -39,9 +40,18 @@ target_link_libraries(crd-hesap-autodiff-tests PRIVATE
     Catch2::Catch2WithMain
 )
 
+# The jet probe, one unit per CPU level the build compiles (ADR-0134 §5, §7); test_jet_levels.cpp lists them.
+crd_add_cpu_kernels(crd-hesap-autodiff-tests NAME jet_probe LEVELS portable sse2 avx2 avx512
+                    INCLUDES crd-math crd-hesap-autodiff
+                    SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/jet_level_probe.cpp")
+
 crd_enable_default_pch(crd-hesap-autodiff-tests)
 
 crd_discover_tests(crd-hesap-autodiff-tests)
+
+# ADR-0134 §8: the canned gradients' table and the CLI gradient once per compiled level
+# (crd-hesap-autodiff-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-autodiff-tests "[kernels]")
 
 # The vectorized HVP tape's fatals, one child process per mode (a fatal cannot run in-process): a refused node or
 # scratch array, a scratch pool size that overflows and a node past the capacity are fatal in every build, never a

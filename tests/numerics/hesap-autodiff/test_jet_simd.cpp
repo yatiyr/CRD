@@ -1,9 +1,10 @@
-// test_jet_simd.cpp — Phase 3.1.6 v15-a: the SIMD vector-forward carrier (JetPackD<N>, Vec4d named-register pack).
+// test_jet_simd.cpp — Phase 3.1.6 v15-a: the SIMD vector-forward carrier (JetPackD<N>, named-register pack).
 // Gates: gradient == the scalar Jet<T,N> path (<=1 ulp; fma vs mul+add) == analytic; register-tiling correctness at
 // N=4/8/16; run-to-run bit-identity (determinism). This TU also forces the recursive-template carrier to compile on
-// every toolchain (MSVC/clang-cl/gcc) — the [[no_unique_address]] pack + explicit function-template specializations.
+// every toolchain (MSVC/clang-cl/gcc) — the [[no_unique_address]] pack and its if-constexpr recursion.
 
 #include <crd/hesap/autodiff/forward.hpp>
+#include <crd/hesap/autodiff/jet_simd.hpp>
 
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -55,12 +56,15 @@ struct Prod
 
 TEST_CASE("JetPackD partial pack has no padding bloat", "[autodiff][simd]")
 {
-    // [[no_unique_address]] => RegPackD<kRegs> is exactly kRegs*32 bytes; JetPackD<4> == a + one Vec4d.
-    STATIC_REQUIRE(sizeof(ad::detail::RegPackD<1>) == 32);
-    STATIC_REQUIRE(sizeof(ad::detail::RegPackD<2>) == 64);
+    // [[no_unique_address]] => a pack is exactly its registers (a Vec8d for every eight lanes at avx512, else Vec4d);
+    // JetPackD<4> == a + one Vec4d. The kernel levels' layouts are the jet probe's (test_jet_levels.cpp).
+    STATIC_REQUIRE(sizeof(ad::pack_detail::RegPackD<4>) == 32);
+    STATIC_REQUIRE(sizeof(ad::pack_detail::RegPackD<1>) == 32);
+    STATIC_REQUIRE(sizeof(ad::pack_detail::RegPackD<8>) == 64);
     STATIC_REQUIRE(ad::JetPackD<4>::kRegs == 1);
-    STATIC_REQUIRE(ad::JetPackD<8>::kRegs == 2);
-    STATIC_REQUIRE(ad::JetPackD<16>::kRegs == 4);
+    STATIC_REQUIRE(ad::JetPackD<8>::kRegs == (CRD_SIMD_HAS_AVX512 ? 1 : 2));
+    STATIC_REQUIRE(ad::JetPackD<16>::kRegs == (CRD_SIMD_HAS_AVX512 ? 2 : 4));
+    STATIC_REQUIRE(ad::JetPackD<5>::kLanes == 8);
 }
 
 TEMPLATE_TEST_CASE_SIG("JetPackD gradient equals the scalar Jet path", "[autodiff][simd]", ((int N), N), 4, 8, 16)
