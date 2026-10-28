@@ -3,9 +3,10 @@
 // the generated codelets and the SIMD types it runs on. The plan (FftPlanState) comes from general code; a sub-plan
 // runs on the same level, never through the table.
 //
-// Every level runs one algorithm per size on the level's SIMD types (Vec4d, Vec8f) and the generated codelets, whose
-// operations each give the same bits on every backend, so the family is bit-exact across levels. Only memory hints
-// (prefetch, non-temporal stores, the store fence) depend on the level; they change no value.
+// Every level runs one algorithm per size on the level's SIMD types and the generated codelets, whose operations each
+// give the same bits on every backend, so the family is bit-exact across levels. A vector step covers tiles of four f64
+// or eight f32 columns (Vec4d, Vec8f), two tiles a step at avx512 (Vec8d, Vec16f). Only memory hints (prefetch,
+// non-temporal stores, the store fence) depend on the level; they change no value.
 
 #include <crd/core/platform.hpp>
 #include <crd/core/types.hpp>
@@ -19,6 +20,10 @@
 #include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec8f.hpp>
+#if CRD_SIMD_HAS_AVX512
+#include <crd/math/simd/vec16f.hpp>
+#include <crd/math/simd/vec8d.hpp>
+#endif
 
 #include <type_traits>
 
@@ -61,6 +66,83 @@ CRD_FORCEINLINE void store_fence() noexcept
 #if CRD_SIMD_HAS_SSE2
     _mm_sfence();
 #endif
+}
+
+namespace simd = crd::math::simd;
+
+// The vector steps' lanes. A tile of four f64 or eight f32 columns (TileVec) is the unit of every step's column range
+// on every level; at avx512 a step takes two tiles in one Vec8d or Vec16f (WideVec), an odd last tile one TileVec.
+// Which columns the steps and a scalar tail compute, and so their bits, never depend on the level.
+template <typename T> using TileVec = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
+#if CRD_SIMD_HAS_AVX512
+template <typename T> using WideVec = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec8d, simd::Vec16f>;
+#else
+template <typename T> using WideVec = TileVec<T>;
+#endif
+// The columns a step on V computes.
+template <typename T, typename V> inline constexpr crd::usize kCols = sizeof(V) / sizeof(T);
+static_assert(kCols<crd::f64, TileVec<crd::f64>> == 4 && kCols<crd::f32, TileVec<crd::f32>> == 8);
+
+// run<V>(first, last) over the whole tiles of [0, n), kCols<T, V> columns a step: two tiles a step on WideVec at
+// avx512, then an odd last tile on TileVec. A run hoists its constants. Returns where the caller's scalar tail starts:
+// n rounded down to a tile on every level.
+template <typename T, typename Run> CRD_FORCEINLINE crd::usize for_tiles(crd::usize n, Run run) noexcept
+{
+    using W = WideVec<T>;
+    using H = TileVec<T>;
+    const crd::usize tiles = n - n % kCols<T, H>;
+    const crd::usize wide = tiles - tiles % kCols<T, W>;
+    run.template operator()<W>(crd::usize{0}, wide);
+    if constexpr (!std::is_same_v<W, H>)
+    {
+        run.template operator()<H>(wide, tiles);
+    }
+    return tiles;
+}
+
+// A step's f64 lanes at(0) .. at(kCols - 1), one Vec4d a tile.
+template <typename V, typename At> CRD_FORCEINLINE V gather_f64(At at) noexcept
+{
+    const auto tile = [&](crd::usize c) noexcept
+    {
+        return simd::Vec4d(at(c), at(c + 1), at(c + 2), at(c + 3));
+    };
+    if constexpr (std::is_same_v<V, simd::Vec4d>)
+    {
+        return tile(0);
+    }
+    else
+    {
+        return V(tile(0), tile(4));
+    }
+}
+
+// A step's groups of four contiguous f64 at p, one vector per point of the groups: a 4x4 transpose a tile.
+template <typename V> CRD_FORCEINLINE void load_points4(const crd::f64* p, V& x0, V& x1, V& x2, V& x3) noexcept
+{
+    const auto tile = [](const crd::f64* q, simd::Vec4d& a, simd::Vec4d& b, simd::Vec4d& c, simd::Vec4d& d) noexcept
+    {
+        a = simd::Vec4d::load(q);
+        b = simd::Vec4d::load(q + 4);
+        c = simd::Vec4d::load(q + 8);
+        d = simd::Vec4d::load(q + 12);
+        simd::transpose4x4(a, b, c, d);
+    };
+    if constexpr (std::is_same_v<V, simd::Vec4d>)
+    {
+        tile(p, x0, x1, x2, x3);
+    }
+    else
+    {
+        simd::Vec4d lo[4];
+        simd::Vec4d hi[4];
+        tile(p, lo[0], lo[1], lo[2], lo[3]);
+        tile(p + 16, hi[0], hi[1], hi[2], hi[3]);
+        x0 = V(lo[0], hi[0]);
+        x1 = V(lo[1], hi[1]);
+        x2 = V(lo[2], hi[2]);
+        x3 = V(lo[3], hi[3]);
+    }
 }
 
 // The transform engine of one plan.
@@ -673,21 +755,18 @@ template <typename T> struct Engine
         }
     }
 
-    // One radix-2 batched butterfly over the contiguous batch axis (Vec4d over t for f64; scalar tail).
+    // One radix-2 batched butterfly over the contiguous batch axis (whole tiles of transforms a step; scalar tail).
     static void batched_butterfly2(Complex<T>* d, crd::usize b, crd::usize o0, crd::usize o1, T wr, T wi) noexcept
     {
         Complex<T>* arow = d + o0;
         Complex<T>* brow = d + o1;
-        crd::usize t = 0;
+        // SoA SIMD over the batch, a transform a lane; the complex deinterleave/interleave helpers are pure shuffles
+        // (bit-identical to the scalar tail).
+        const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
         {
-            // SoA SIMD over the batch: f64 → Vec4d (4 transforms/vec), f32 → Vec8f (8/vec). Same body; the
-            // complex deinterleave/interleave helpers are pure shuffles (bit-identical to the scalar tail).
-            namespace simd = crd::math::simd;
-            using V = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
-            constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
             const V wrv(wr);
             const V wiv(wi);
-            for (; t + lanes <= b; t += lanes)
+            for (crd::usize t = first; t < last; t += kCols<T, V>)
             {
                 V ar;
                 V ai;
@@ -700,8 +779,8 @@ template <typename T> struct Engine
                 simd::store_complex_interleaved(reinterpret_cast<T*>(arow + t), ar + vr, ai + vi);
                 simd::store_complex_interleaved(reinterpret_cast<T*>(brow + t), ar - vr, ai - vi);
             }
-        }
-        for (; t < b; ++t)
+        };
+        for (crd::usize t = for_tiles<T>(b, step); t < b; ++t)
         {
             const T ar = arow[t].re;
             const T ai = arow[t].im;
@@ -731,18 +810,15 @@ template <typename T> struct Engine
         Complex<T>* r1 = d + o1;
         Complex<T>* r2 = d + o2;
         Complex<T>* r3 = d + o3;
-        crd::usize t = 0;
+        const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
         {
-            namespace simd = crd::math::simd;
-            using V = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
-            constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
             const V wsrv(wsr);
             const V wsiv(wsi);
             const V w0rv(w0r);
             const V w0iv(w0i);
             const V w1rv(w1r);
             const V w1iv(w1i);
-            for (; t + lanes <= b; t += lanes)
+            for (crd::usize t = first; t < last; t += kCols<T, V>)
             {
                 V x0r;
                 V x0i;
@@ -777,8 +853,8 @@ template <typename T> struct Engine
                 simd::store_complex_interleaved(reinterpret_cast<T*>(r2 + t), e0r - g0r, e0i - g0i);
                 simd::store_complex_interleaved(reinterpret_cast<T*>(r3 + t), e1r - g1r, e1i - g1i);
             }
-        }
-        for (; t < b; ++t)
+        };
+        for (crd::usize t = for_tiles<T>(b, step); t < b; ++t)
         {
             const T x0r = r0[t].re;
             const T x0i = r0[t].im;
@@ -813,8 +889,8 @@ template <typename T> struct Engine
 
     // One radix-8 batched DIT butterfly, BIT-REVERSED input — three fused radix-2 stages: A) ws=W_{2q}^k on
     // pairs (0,1)(2,3)(4,5)(6,7); B) w0=W_{4q}^k on (0,2)(4,6), w1=W_{4q}^{k+q} on (1,3)(5,7); C) v0..v3=
-    // W_{8q}^{k,k+q,k+2q,k+3q} on (0,4)(1,5)(2,6)(3,7). In place; twiddles carry isign. Vec4d over the batch +
-    // scalar tail (the 8-pt waist = 16 ymm at peak ⇒ some spill to L1, cheap on the L2-resident block).
+    // W_{8q}^{k,k+q,k+2q,k+3q} on (0,4)(1,5)(2,6)(3,7). In place; twiddles carry isign. Whole tiles over the batch
+    // + scalar tail (the 8-pt waist = 16 ymm at peak ⇒ some spill to L1, cheap on the L2-resident block).
 #if defined(_MSC_VER) && !defined(__clang__)
     // Same MSVC LTCG heap-exhaustion guard as batched_butterfly4: keep this radix-8 SIMD codelet out-of-line so
     // the optimizer does not stack it onto the radix driver (C1001). Batch-amortized call -> perf-neutral.
@@ -833,11 +909,8 @@ template <typename T> struct Engine
         Complex<T>* r5 = d + o5;
         Complex<T>* r6 = d + o6;
         Complex<T>* r7 = d + o7;
-        crd::usize t = 0;
+        const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
         {
-            namespace simd = crd::math::simd;
-            using V = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
-            constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
             const V wsrv(wsr);
             const V wsiv(wsi);
             const V w0rv(w0r);
@@ -852,7 +925,7 @@ template <typename T> struct Engine
             const V v2iv(v2i);
             const V v3rv(v3r);
             const V v3iv(v3i);
-            for (; t + lanes <= b; t += lanes)
+            for (crd::usize t = first; t < last; t += kCols<T, V>)
             {
                 V x0r;
                 V x0i;
@@ -943,8 +1016,8 @@ template <typename T> struct Engine
                 simd::store_complex_interleaved(reinterpret_cast<T*>(r6 + t), c2r - n6r, c2i - n6i);
                 simd::store_complex_interleaved(reinterpret_cast<T*>(r7 + t), c3r - n7r, c3i - n7i);
             }
-        }
-        for (; t < b; ++t)
+        };
+        for (crd::usize t = for_tiles<T>(b, step); t < b; ++t)
         {
             // stage A: a_even = x_even + ws·x_odd, a_odd = x_even - ws·x_odd
             const T s1r = wsr * r1[t].re - wsi * r1[t].im;
@@ -1064,66 +1137,72 @@ template <typename T> struct Engine
     }
 
     // In-place radix-4 DIT combine of 4 size-m sub-results stored contiguously at out[p·m..]. For each k2:
-    // t_p = W_n^{p·k2}·X_p (p=1,2,3), then the radix-4 butterfly → Y[k1]=out[k1·m+k2]. SIMD over k2 (Vec4d);
-    // the per-k2 combine-twiddles W_n^{p·k2}=plan.tw[p·k2·(plan.n/n)] are strided gathers. Same butterfly + sign
-    // convention as radix4_row (verified). Element-independent over k2 ⇒ moat holds.
+    // t_p = W_n^{p·k2}·X_p (p=1,2,3), then the radix-4 butterfly → Y[k1]=out[k1·m+k2]. SIMD over k2 (f64, whole
+    // tiles); the per-k2 combine-twiddles W_n^{p·k2}=plan.tw[p·k2·(plan.n/n)] are strided gathers. Same butterfly +
+    // sign convention as radix4_row (verified). Element-independent over k2 ⇒ moat holds.
     void radix4_combine_inplace(T* outr, T* outi, crd::usize m, crd::usize n, FftDirection dir) const
     {
         const crd::usize ts = plan.n / n; // W_n^idx = plan.tw[idx·ts]
         const T isign = (dir == FftDirection::Inverse) ? static_cast<T>(-1) : static_cast<T>(1);
-        crd::usize k2 = 0;
+        crd::usize tail = 0;
         if constexpr (std::is_same_v<T, crd::f64>)
         {
-            namespace simd = crd::math::simd;
-            using V = simd::Vec4d;
-            const V sg(isign);
-            for (; k2 + 4 <= m; k2 += 4)
+            const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
             {
-                const V x0r = V::load(outr + k2);
-                const V x0i = V::load(outi + k2);
-                const V x1r = V::load(outr + m + k2);
-                const V x1i = V::load(outi + m + k2);
-                const V x2r = V::load(outr + 2 * m + k2);
-                const V x2i = V::load(outi + 2 * m + k2);
-                const V x3r = V::load(outr + 3 * m + k2);
-                const V x3i = V::load(outi + 3 * m + k2);
-                const crd::usize a = k2 * ts;
-                const crd::usize b = (k2 + 1) * ts;
-                const crd::usize c = (k2 + 2) * ts;
-                const crd::usize d = (k2 + 3) * ts;
-                const V w1r(plan.tw_re[a], plan.tw_re[b], plan.tw_re[c], plan.tw_re[d]);
-                const V w1i = V(plan.tw_im[a], plan.tw_im[b], plan.tw_im[c], plan.tw_im[d]) * sg;
-                const V w2r(plan.tw_re[2 * a], plan.tw_re[2 * b], plan.tw_re[2 * c], plan.tw_re[2 * d]);
-                const V w2i = V(plan.tw_im[2 * a], plan.tw_im[2 * b], plan.tw_im[2 * c], plan.tw_im[2 * d]) * sg;
-                const V w3r(plan.tw_re[3 * a], plan.tw_re[3 * b], plan.tw_re[3 * c], plan.tw_re[3 * d]);
-                const V w3i = V(plan.tw_im[3 * a], plan.tw_im[3 * b], plan.tw_im[3 * c], plan.tw_im[3 * d]) * sg;
-                const V t1r = w1r * x1r - w1i * x1i;
-                const V t1i = w1r * x1i + w1i * x1r;
-                const V t2r = w2r * x2r - w2i * x2i;
-                const V t2i = w2r * x2i + w2i * x2r;
-                const V t3r = w3r * x3r - w3i * x3i;
-                const V t3i = w3r * x3i + w3i * x3r;
-                const V a0r = x0r + t2r;
-                const V a0i = x0i + t2i;
-                const V a1r = x0r - t2r;
-                const V a1i = x0i - t2i;
-                const V a2r = t1r + t3r;
-                const V a2i = t1i + t3i;
-                const V a3r = t1r - t3r;
-                const V a3i = t1i - t3i;
-                const V rsr = V(0.0) - sg * a3i;
-                const V rsi = sg * a3r;
-                (a0r + a2r).store(outr + k2);
-                (a0i + a2i).store(outi + k2);
-                (a1r - rsr).store(outr + m + k2);
-                (a1i - rsi).store(outi + m + k2);
-                (a0r - a2r).store(outr + 2 * m + k2);
-                (a0i - a2i).store(outi + 2 * m + k2);
-                (a1r + rsr).store(outr + 3 * m + k2);
-                (a1i + rsi).store(outi + 3 * m + k2);
-            }
+                const V sg(isign);
+                for (crd::usize k2 = first; k2 < last; k2 += kCols<T, V>)
+                {
+                    const V x0r = V::load(outr + k2);
+                    const V x0i = V::load(outi + k2);
+                    const V x1r = V::load(outr + m + k2);
+                    const V x1i = V::load(outi + m + k2);
+                    const V x2r = V::load(outr + 2 * m + k2);
+                    const V x2i = V::load(outi + 2 * m + k2);
+                    const V x3r = V::load(outr + 3 * m + k2);
+                    const V x3i = V::load(outi + 3 * m + k2);
+                    const auto tw = [&](const T* table, crd::usize p) noexcept
+                    {
+                        const auto at = [&](crd::usize c) noexcept
+                        {
+                            return table[p * (k2 + c) * ts];
+                        };
+                        return gather_f64<V>(at);
+                    };
+                    const V w1r = tw(plan.tw_re, 1);
+                    const V w1i = tw(plan.tw_im, 1) * sg;
+                    const V w2r = tw(plan.tw_re, 2);
+                    const V w2i = tw(plan.tw_im, 2) * sg;
+                    const V w3r = tw(plan.tw_re, 3);
+                    const V w3i = tw(plan.tw_im, 3) * sg;
+                    const V t1r = w1r * x1r - w1i * x1i;
+                    const V t1i = w1r * x1i + w1i * x1r;
+                    const V t2r = w2r * x2r - w2i * x2i;
+                    const V t2i = w2r * x2i + w2i * x2r;
+                    const V t3r = w3r * x3r - w3i * x3i;
+                    const V t3i = w3r * x3i + w3i * x3r;
+                    const V a0r = x0r + t2r;
+                    const V a0i = x0i + t2i;
+                    const V a1r = x0r - t2r;
+                    const V a1i = x0i - t2i;
+                    const V a2r = t1r + t3r;
+                    const V a2i = t1i + t3i;
+                    const V a3r = t1r - t3r;
+                    const V a3i = t1i - t3i;
+                    const V rsr = V(0.0) - sg * a3i;
+                    const V rsi = sg * a3r;
+                    (a0r + a2r).store(outr + k2);
+                    (a0i + a2i).store(outi + k2);
+                    (a1r - rsr).store(outr + m + k2);
+                    (a1i - rsi).store(outi + m + k2);
+                    (a0r - a2r).store(outr + 2 * m + k2);
+                    (a0i - a2i).store(outi + 2 * m + k2);
+                    (a1r + rsr).store(outr + 3 * m + k2);
+                    (a1i + rsi).store(outi + 3 * m + k2);
+                }
+            };
+            tail = for_tiles<T>(m, step);
         }
-        for (; k2 < m; ++k2)
+        for (crd::usize k2 = tail; k2 < m; ++k2)
         {
             const crd::usize a = k2 * ts;
             const T w1r = plan.tw_re[a];
@@ -1241,8 +1320,7 @@ template <typename T> struct Engine
     // reseed class). Symmetry w(r,c)=w(c,r) twiddles the U-half via the transposed twiddle tile.
     void fs6_transpose_inplace(Complex<T>* a, crd::usize m, bool twiddle) const
     {
-        namespace simd = crd::math::simd;
-        using V = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
+        using V = TileVec<T>;
         constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
         // block so the tile-PAIR footprint (2 · ktb rows · m·sizeof(Complex<T>) row stride) stays
         // L2-resident: 64 at m=1024 (1 MB pair), 32 at m>=2048 (4M measured −13% with 64: 2 MB pair).
@@ -1415,8 +1493,7 @@ template <typename T> struct Engine
     // in-place pair-swap lacks at ≥4M. Optional fused W_n^{r·c} twiddle (same recurrence as in-place).
     void fs6_transpose_oop(const Complex<T>* src, Complex<T>* dst, crd::usize m, bool twiddle) const
     {
-        namespace simd = crd::math::simd;
-        using V = std::conditional_t<std::is_same_v<T, crd::f64>, simd::Vec4d, simd::Vec8f>;
+        using V = TileVec<T>;
         constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
         const crd::usize ktb = (m >= 2048) ? 32U : 64U;
         const crd::usize mmask = (crd::usize{1} << plan.ftw_h) - 1;
@@ -1552,9 +1629,8 @@ template <typename T> struct Engine
     void
     execute_ip4aos(Complex<T>* data) const
     {
-        namespace simd = crd::math::simd;
         constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
-        using V = std::conditional_t<is_f32, simd::Vec8f, simd::Vec4d>;
+        using V = TileVec<T>;
         constexpr crd::usize per_vec = is_f32 ? 4 : 2; // complex per vector
         // 4-tuple constant builder: one value per T-lane over a complex PAIR; the f32 vector holds
         // two such pairs (twin units) ⇒ the tuple duplicates across 128-bit halves.
@@ -2273,21 +2349,18 @@ template <typename T> struct Engine
 #ifdef CRD_FFT_PROFILE
             const unsigned long long pt0 = prof::rdtsc();
 #endif
-            // SIMD twiddle over the bb axis (Vec8f for f32, Vec4d for f64: a contiguous scratch read; the
-            // transposed tbuf write hits L2-resident bands of `lanes` rows). Twiddle by recurrence (w*=W_n^col),
-            // reseeded from the factored table every `period` steps to bound the drift (f32 ~1.5e-7, f64 ~1e-15,
-            // in class). Measured 2.15x on the f32 twiddle phase and +5.6% on f64 8M (the twiddle ~1.5x).
+            // SIMD twiddle over the bb axis (whole tiles: a contiguous scratch read; the transposed tbuf write hits
+            // L2-resident bands of a step's rows). Twiddle by recurrence (w*=W_n^col), reseeded from the factored
+            // table every `period` steps to bound the drift (f32 ~1.5e-7, f64 ~1e-15, in class). Measured 2.15x on
+            // the f32 twiddle phase and +5.6% on f64 8M (the twiddle ~1.5x).
+            const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
             {
-                namespace simd = crd::math::simd;
-                constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
-                using V = std::conditional_t<is_f32, simd::Vec8f, simd::Vec4d>;
-                constexpr crd::usize lanes = is_f32 ? 8 : 4;
-                constexpr crd::usize period = is_f32 ? 8 : 32;
-                crd::usize g = 0;
-                for (; g + lanes <= bw; g += lanes)
+                constexpr crd::usize lanes = kCols<T, V>;
+                constexpr crd::usize period = std::is_same_v<T, crd::f32> ? 8 : 32;
+                for (crd::usize g = first; g < last; g += lanes)
                 {
-                    alignas(32) T wsr[lanes];
-                    alignas(32) T wsi[lanes];
+                    alignas(64) T wsr[lanes];
+                    alignas(64) T wsi[lanes];
                     for (crd::usize l = 0; l < lanes; ++l)
                     {
                         const crd::usize c = i2 + g + l;
@@ -2304,8 +2377,8 @@ template <typename T> struct Engine
                     {
                         if ((k1 & (period - 1)) == 0) // reseed from the exact factored table (bounds recurrence drift)
                         {
-                            alignas(32) T sr[lanes];
-                            alignas(32) T si[lanes];
+                            alignas(64) T sr[lanes];
+                            alignas(64) T si[lanes];
                             for (crd::usize l = 0; l < lanes; ++l)
                             {
                                 const crd::usize a = (i2 + g + l) * k1;
@@ -2320,8 +2393,8 @@ template <typename T> struct Engine
                         V zr;
                         V zi;
                         simd::load_complex_deinterleaved(reinterpret_cast<const T*>(scratch + k1 * bw + g), zr, zi);
-                        alignas(32) T orr[lanes];
-                        alignas(32) T oii[lanes];
+                        alignas(64) T orr[lanes];
+                        alignas(64) T oii[lanes];
                         (zr * wr - zi * wi).store_aligned(orr);
                         (zr * wi + zi * wr).store_aligned(oii);
                         for (crd::usize l = 0; l < lanes; ++l)
@@ -2337,20 +2410,21 @@ template <typename T> struct Engine
                         }
                     }
                 }
-                for (; g < bw; ++g) // bw-tail (bw is a multiple of `lanes` at the four-step sizes, but keep correct)
+            };
+            // bw-tail (bw is a multiple of a tile at the four-step sizes, but keep correct)
+            for (crd::usize g = for_tiles<T>(bw, step); g < bw; ++g)
+            {
+                const crd::usize col = i2 + g;
+                Complex<T>* const trow = tbuf + col * n1;
+                for (crd::usize k1 = 0; k1 < n1; ++k1)
                 {
-                    const crd::usize col = i2 + g;
-                    Complex<T>* const trow = tbuf + col * n1;
-                    for (crd::usize k1 = 0; k1 < n1; ++k1)
-                    {
-                        const crd::usize a = col * k1;
-                        const crd::usize hh = a >> plan.ftw_h;
-                        const crd::usize ll = a & mmask;
-                        const T wr = hir[hh] * lor[ll] - hii[hh] * loi[ll];
-                        const T wi = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
-                        const Complex<T> z = scratch[k1 * bw + g];
-                        store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true);
-                    }
+                    const crd::usize a = col * k1;
+                    const crd::usize hh = a >> plan.ftw_h;
+                    const crd::usize ll = a & mmask;
+                    const T wr = hir[hh] * lor[ll] - hii[hh] * loi[ll];
+                    const T wi = isign * (hir[hh] * loi[ll] + hii[hh] * lor[ll]);
+                    const Complex<T> z = scratch[k1 * bw + g];
+                    store_complex(trow + k1, z.re * wr - z.im * wi, z.re * wi + z.im * wr, true);
                 }
             }
 #ifdef CRD_FFT_PROFILE
@@ -2545,50 +2619,52 @@ template <typename T> struct Engine
     {
         const crd::usize r = plan.n >> 2; // n/4 = the input-stream stride
         const crd::usize q = r;           // output quarter stride = n/4
-        crd::usize k = 0;
+        crd::usize tail = 0;
         if constexpr (std::is_same_v<T, crd::f64>)
         {
             // SIMD over k with an AoS→SoA deinterleave-load (recovers SIMD on this full pass; the fold made
             // it scalar). r = n/4 is large ⇒ this loop dominates. f32 keeps the scalar path below.
-            namespace simd = crd::math::simd;
-            using V = simd::Vec4d;
-            const V sg(isign);
             const auto* dp = reinterpret_cast<const crd::f64*>(d); // interleaved {re,im} pairs
-            for (; k + 4 <= r; k += 4)
+            const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
             {
-                V ar;
-                V ai;
-                V br;
-                V bi;
-                V cr;
-                V ci;
-                V dr;
-                V di;
-                simd::load_complex_deinterleaved(dp + 2 * k, ar, ai);
-                simd::load_complex_deinterleaved(dp + 2 * (r + k), br, bi);
-                simd::load_complex_deinterleaved(dp + 2 * (2 * r + k), cr, ci);
-                simd::load_complex_deinterleaved(dp + 2 * (3 * r + k), dr, di);
-                const V t0r = ar + cr;
-                const V t0i = ai + ci;
-                const V t1r = ar - cr;
-                const V t1i = ai - ci;
-                const V t2r = br + dr;
-                const V t2i = bi + di;
-                const V t3r = br - dr;
-                const V t3i = bi - di;
-                const V rsr = V(0.0) - sg * t3i;
-                const V rsi = sg * t3r;
-                (t0r + t2r).store(yr + k);
-                (t0i + t2i).store(yi + k);
-                (t1r - rsr).store(yr + q + k);
-                (t1i - rsi).store(yi + q + k);
-                (t0r - t2r).store(yr + 2 * q + k);
-                (t0i - t2i).store(yi + 2 * q + k);
-                (t1r + rsr).store(yr + 3 * q + k);
-                (t1i + rsi).store(yi + 3 * q + k);
-            }
+                const V sg(isign);
+                for (crd::usize k = first; k < last; k += kCols<T, V>)
+                {
+                    V ar;
+                    V ai;
+                    V br;
+                    V bi;
+                    V cr;
+                    V ci;
+                    V dr;
+                    V di;
+                    simd::load_complex_deinterleaved(dp + 2 * k, ar, ai);
+                    simd::load_complex_deinterleaved(dp + 2 * (r + k), br, bi);
+                    simd::load_complex_deinterleaved(dp + 2 * (2 * r + k), cr, ci);
+                    simd::load_complex_deinterleaved(dp + 2 * (3 * r + k), dr, di);
+                    const V t0r = ar + cr;
+                    const V t0i = ai + ci;
+                    const V t1r = ar - cr;
+                    const V t1i = ai - ci;
+                    const V t2r = br + dr;
+                    const V t2i = bi + di;
+                    const V t3r = br - dr;
+                    const V t3i = bi - di;
+                    const V rsr = V(0.0) - sg * t3i;
+                    const V rsi = sg * t3r;
+                    (t0r + t2r).store(yr + k);
+                    (t0i + t2i).store(yi + k);
+                    (t1r - rsr).store(yr + q + k);
+                    (t1i - rsi).store(yi + q + k);
+                    (t0r - t2r).store(yr + 2 * q + k);
+                    (t0i - t2i).store(yi + 2 * q + k);
+                    (t1r + rsr).store(yr + 3 * q + k);
+                    (t1i + rsi).store(yi + 3 * q + k);
+                }
+            };
+            tail = for_tiles<T>(r, step);
         }
-        for (; k < r; ++k)
+        for (crd::usize k = tail; k < r; ++k)
         {
             const T ar = d[k].re;
             const T ai = d[k].im;
@@ -2624,60 +2700,69 @@ template <typename T> struct Engine
     void radix4_last_interleaved(const T* xr, const T* xi, Complex<T>* d, crd::usize lq, T isign) const
     {
         const crd::usize q = plan.n >> 2; // output quarter stride
-        crd::usize j = 0;
+        crd::usize tail = 0;
         if constexpr (std::is_same_v<T, crd::f64>)
         {
-            // SIMD over j (4 groups/iter): r=1 ⇒ over-k degenerates to scalar, so vectorize the GROUP axis
-            // instead. Load 4 groups' 16 contiguous values, transpose4x4 into per-point vectors (no cross-lane
-            // butterfly shuffles), per-lane combine-twiddles, then contiguous interleaved stores. Recovers SIMD
-            // on this otherwise-scalar full pass. w1 loads contiguous (idx=j); w2/w3 are stride-2/3 gathers.
-            namespace simd = crd::math::simd;
-            using V = simd::Vec4d;
-            const V sg(isign);
+            // SIMD over j (a step's groups): r=1 ⇒ over-k degenerates to scalar, so vectorize the GROUP axis
+            // instead. Load the step's groups (four contiguous values each), transpose4x4 a tile into per-point
+            // vectors (no cross-lane butterfly shuffles), per-lane combine-twiddles, then contiguous interleaved
+            // stores. Recovers SIMD on this otherwise-scalar full pass. w1 loads contiguous (idx=j); w2/w3 are
+            // stride-2/3 gathers.
             auto* dp = reinterpret_cast<crd::f64*>(d);
-            for (; j + 4 <= lq; j += 4)
+            const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
             {
-                V p0r = V::load(xr + 4 * j);
-                V p1r = V::load(xr + 4 * j + 4);
-                V p2r = V::load(xr + 4 * j + 8);
-                V p3r = V::load(xr + 4 * j + 12);
-                simd::transpose4x4(p0r, p1r, p2r, p3r); // → p_m_r = re of point m for groups j..j+3
-                V p0i = V::load(xi + 4 * j);
-                V p1i = V::load(xi + 4 * j + 4);
-                V p2i = V::load(xi + 4 * j + 8);
-                V p3i = V::load(xi + 4 * j + 12);
-                simd::transpose4x4(p0i, p1i, p2i, p3i);
-                const V w1r = V::load(&plan.tw_re[j]);
-                const V w1i = V::load(&plan.tw_im[j]) * sg;
-                const V w2r(plan.tw_re[2 * j], plan.tw_re[2 * j + 2], plan.tw_re[2 * j + 4], plan.tw_re[2 * j + 6]);
-                const V w2i =
-                    V(plan.tw_im[2 * j], plan.tw_im[2 * j + 2], plan.tw_im[2 * j + 4], plan.tw_im[2 * j + 6]) * sg;
-                const V w3r(plan.tw_re[3 * j], plan.tw_re[3 * j + 3], plan.tw_re[3 * j + 6], plan.tw_re[3 * j + 9]);
-                const V w3i =
-                    V(plan.tw_im[3 * j], plan.tw_im[3 * j + 3], plan.tw_im[3 * j + 6], plan.tw_im[3 * j + 9]) * sg;
-                const V br = simd::fnmadd(w1i, p1i, w1r * p1r);
-                const V bi = simd::fma(w1i, p1r, w1r * p1i);
-                const V cr = simd::fnmadd(w2i, p2i, w2r * p2r);
-                const V ci = simd::fma(w2i, p2r, w2r * p2i);
-                const V dr = simd::fnmadd(w3i, p3i, w3r * p3r);
-                const V di = simd::fma(w3i, p3r, w3r * p3i);
-                const V t0r = p0r + cr;
-                const V t0i = p0i + ci;
-                const V t1r = p0r - cr;
-                const V t1i = p0i - ci;
-                const V t2r = br + dr;
-                const V t2i = bi + di;
-                const V t3r = br - dr;
-                const V t3i = bi - di;
-                const V rsr = V(0.0) - sg * t3i;
-                const V rsi = sg * t3r;
-                simd::store_complex_interleaved(dp + 2 * j, t0r + t2r, t0i + t2i);
-                simd::store_complex_interleaved(dp + 2 * (q + j), t1r - rsr, t1i - rsi);
-                simd::store_complex_interleaved(dp + 2 * (2 * q + j), t0r - t2r, t0i - t2i);
-                simd::store_complex_interleaved(dp + 2 * (3 * q + j), t1r + rsr, t1i + rsi);
-            }
+                const V sg(isign);
+                for (crd::usize j = first; j < last; j += kCols<T, V>)
+                {
+                    V p0r;
+                    V p1r;
+                    V p2r;
+                    V p3r;
+                    load_points4(xr + 4 * j, p0r, p1r, p2r, p3r); // → p_m_r = re of point m for the step's groups
+                    V p0i;
+                    V p1i;
+                    V p2i;
+                    V p3i;
+                    load_points4(xi + 4 * j, p0i, p1i, p2i, p3i);
+                    const auto tw = [&](const T* table, crd::usize p) noexcept
+                    {
+                        const auto at = [&](crd::usize c) noexcept
+                        {
+                            return table[p * (j + c)];
+                        };
+                        return gather_f64<V>(at);
+                    };
+                    const V w1r = V::load(&plan.tw_re[j]);
+                    const V w1i = V::load(&plan.tw_im[j]) * sg;
+                    const V w2r = tw(plan.tw_re, 2);
+                    const V w2i = tw(plan.tw_im, 2) * sg;
+                    const V w3r = tw(plan.tw_re, 3);
+                    const V w3i = tw(plan.tw_im, 3) * sg;
+                    const V br = simd::fnmadd(w1i, p1i, w1r * p1r);
+                    const V bi = simd::fma(w1i, p1r, w1r * p1i);
+                    const V cr = simd::fnmadd(w2i, p2i, w2r * p2r);
+                    const V ci = simd::fma(w2i, p2r, w2r * p2i);
+                    const V dr = simd::fnmadd(w3i, p3i, w3r * p3r);
+                    const V di = simd::fma(w3i, p3r, w3r * p3i);
+                    const V t0r = p0r + cr;
+                    const V t0i = p0i + ci;
+                    const V t1r = p0r - cr;
+                    const V t1i = p0i - ci;
+                    const V t2r = br + dr;
+                    const V t2i = bi + di;
+                    const V t3r = br - dr;
+                    const V t3i = bi - di;
+                    const V rsr = V(0.0) - sg * t3i;
+                    const V rsi = sg * t3r;
+                    simd::store_complex_interleaved(dp + 2 * j, t0r + t2r, t0i + t2i);
+                    simd::store_complex_interleaved(dp + 2 * (q + j), t1r - rsr, t1i - rsi);
+                    simd::store_complex_interleaved(dp + 2 * (2 * q + j), t0r - t2r, t0i - t2i);
+                    simd::store_complex_interleaved(dp + 2 * (3 * q + j), t1r + rsr, t1i + rsi);
+                }
+            };
+            tail = for_tiles<T>(lq, step);
         }
-        for (; j < lq; ++j)
+        for (crd::usize j = tail; j < lq; ++j)
         {
             const T w1r = plan.tw_re[j];
             const T w1i = isign * plan.tw_im[j];
@@ -2825,17 +2910,15 @@ template <typename T> struct Engine
         }
     }
 
-    // r unit-stride radix-4 butterflies sharing (w1,w2,w3). AVX2 over k (element-independent ⇒ bit-identical
-    // to the scalar remainder, so the {1..16}/SIMD-width determinism holds, ADR-0063).
+    // r unit-stride radix-4 butterflies sharing (w1,w2,w3), whole tiles over k. The tiles' twiddle products round once
+    // (fma), the scalar tail's twice; the tile decides which columns each computes on every level, so the
+    // {1..16}/SIMD-width determinism holds (ADR-0063).
     static void radix4_row(const T* xr, const T* xi, T* yr, T* yi, crd::usize i0, crd::usize i1, crd::usize i2,
                            crd::usize i3, crd::usize o0, crd::usize o1, crd::usize o2, crd::usize o3, crd::usize r,
                            T w1r, T w1i, T w2r, T w2i, T w3r, T w3i, T isign) noexcept
     {
-        crd::usize k = 0;
-        if constexpr (std::is_same_v<T, crd::f64>)
+        const auto step = [&]<typename V>(crd::usize first, crd::usize last) noexcept
         {
-            namespace simd = crd::math::simd;
-            using V = simd::Vec4d;
             // FMA butterflies (2026-07-04 strided-v3): the MKL-archaeology build — cmul = 2 mul +
             // fnmadd + fma on split registers (fewer ops than MKL's own mul+mul+add+sub idiom).
             const V w1rv(w1r);
@@ -2845,7 +2928,7 @@ template <typename T> struct Engine
             const V w3rv(w3r);
             const V w3iv(w3i);
             const V sg(isign);
-            for (; k + 4 <= r; k += 4)
+            for (crd::usize k = first; k < last; k += kCols<T, V>)
             {
                 const V ar = V::load(xr + i0 + k);
                 const V ai = V::load(xi + i0 + k);
@@ -2869,7 +2952,7 @@ template <typename T> struct Engine
                 const V t2i = bi + di;
                 const V t3r = br - dr;
                 const V t3i = bi - di;
-                const V rsr = V(0.0) - sg * t3i;
+                const V rsr = V(T{0}) - sg * t3i;
                 const V rsi = sg * t3r;
                 (t0r + t2r).store(yr + o0 + k);
                 (t0i + t2i).store(yi + o0 + k);
@@ -2880,55 +2963,8 @@ template <typename T> struct Engine
                 (t1r + rsr).store(yr + o3 + k);
                 (t1i + rsi).store(yi + o3 + k);
             }
-        }
-        else if constexpr (std::is_same_v<T, crd::f32>)
-        {
-            namespace simd = crd::math::simd;
-            using V = simd::Vec8f;
-            const V w1rv(w1r);
-            const V w1iv(w1i);
-            const V w2rv(w2r);
-            const V w2iv(w2i);
-            const V w3rv(w3r);
-            const V w3iv(w3i);
-            const V sg(isign);
-            for (; k + 8 <= r; k += 8)
-            {
-                const V ar = V::load(xr + i0 + k);
-                const V ai = V::load(xi + i0 + k);
-                const V b0r = V::load(xr + i1 + k);
-                const V b0i = V::load(xi + i1 + k);
-                const V c0r = V::load(xr + i2 + k);
-                const V c0i = V::load(xi + i2 + k);
-                const V d0r = V::load(xr + i3 + k);
-                const V d0i = V::load(xi + i3 + k);
-                const V br = simd::fnmadd(w1iv, b0i, w1rv * b0r);
-                const V bi = simd::fma(w1iv, b0r, w1rv * b0i);
-                const V cr = simd::fnmadd(w2iv, c0i, w2rv * c0r);
-                const V ci = simd::fma(w2iv, c0r, w2rv * c0i);
-                const V dr = simd::fnmadd(w3iv, d0i, w3rv * d0r);
-                const V di = simd::fma(w3iv, d0r, w3rv * d0i);
-                const V t0r = ar + cr;
-                const V t0i = ai + ci;
-                const V t1r = ar - cr;
-                const V t1i = ai - ci;
-                const V t2r = br + dr;
-                const V t2i = bi + di;
-                const V t3r = br - dr;
-                const V t3i = bi - di;
-                const V rsr = V(0.0F) - sg * t3i;
-                const V rsi = sg * t3r;
-                (t0r + t2r).store(yr + o0 + k);
-                (t0i + t2i).store(yi + o0 + k);
-                (t1r - rsr).store(yr + o1 + k);
-                (t1i - rsi).store(yi + o1 + k);
-                (t0r - t2r).store(yr + o2 + k);
-                (t0i - t2i).store(yi + o2 + k);
-                (t1r + rsr).store(yr + o3 + k);
-                (t1i + rsi).store(yi + o3 + k);
-            }
-        }
-        for (; k < r; ++k)
+        };
+        for (crd::usize k = for_tiles<T>(r, step); k < r; ++k)
         {
             const T ar = xr[i0 + k];
             const T ai = xi[i0 + k];

@@ -67,6 +67,20 @@ template <typename T> void fill_lcg(T* v, usize count, u64 seed)
     }
 }
 
+// fill_lcg's values, or negative zeros only.
+template <typename T> void fill_input(T* v, usize count, u64 seed, bool negative_zeros)
+{
+    if (!negative_zeros)
+    {
+        fill_lcg(v, count, seed);
+        return;
+    }
+    for (usize i = 0; i < count; ++i)
+    {
+        v[i] = -T(0);
+    }
+}
+
 // The interleaved data of n complex values `shift` T words past the front guard, guards filled.
 template <typename T> struct Buffer
 {
@@ -137,11 +151,18 @@ template <typename T> void check_every_level()
         const fft::FftPlan<T> plan(&alloc, n);
         for (const FftDirection dir : {FftDirection::Forward, FftDirection::Inverse})
         {
-            // The four-step's NT stores take aligned data; one word in, f64 takes its plain-store branch.
-            for (const usize shift : {usize{0}, usize{1}})
+            // The four-step's NT stores take aligned data; one word in, f64 takes its plain-store branch. Negative
+            // zeros, whose signs every level must keep as portable does, take the aligned data.
+            struct Pass
             {
+                usize shift;
+                bool negative_zeros;
+            };
+            for (const Pass pass : {Pass{0, false}, Pass{1, false}, Pass{0, true}})
+            {
+                const usize shift = pass.shift;
                 Buffer<T> want(&alloc, n, 0);
-                fill_lcg(want.values(), 2 * n, 0x5EEDULL + n);
+                fill_input(want.values(), 2 * n, 0x5EEDULL + n, pass.negative_zeros);
                 plan.execute_reference(Span<Complex<T>>(want.data(), n), dir);
                 Buffer<T> portable(&alloc, n, shift);
                 usize ran = 0;
@@ -154,7 +175,7 @@ template <typename T> void check_every_level()
                     const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
                     Buffer<T> got(&alloc, n, shift);
                     Buffer<T> again(&alloc, n, shift);
-                    fill_lcg(got.values(), 2 * n, 0x5EEDULL + n);
+                    fill_input(got.values(), 2 * n, 0x5EEDULL + n, pass.negative_zeros);
                     std::memcpy(again.values(), got.values(), 2 * n * sizeof(T));
                     k.execute(plan.state(), got.data(), dir);
                     k.execute(plan.state(), again.data(), dir);
@@ -164,8 +185,8 @@ template <typename T> void check_every_level()
                     }
                     ++ran;
                     const double rel = rel_error(got.data(), want.data(), n);
-                    INFO(crd::cpu_level_name(level.level)
-                         << " n=" << n << " dir=" << static_cast<int>(dir) << " shift=" << shift << " rel=" << rel);
+                    INFO(crd::cpu_level_name(level.level) << " n=" << n << " dir=" << static_cast<int>(dir) << " shift="
+                                                          << shift << " -0=" << pass.negative_zeros << " rel=" << rel);
                     CHECK(rel < tolerance<T>(n));
                     CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(T)) == 0);
                     CHECK(std::memcmp(got.values(), portable.values(), 2 * n * sizeof(T)) == 0);
@@ -179,8 +200,9 @@ template <typename T> void check_every_level()
 
 // The batched paths: N=8 (even and odd batch), N=16 inside and past the over-2 cache budget, the batched leaves
 // (16..256 at a multiple of the vector width; at one and three tiles of codelet_lanes.hpp, so avx512 runs a two-tile
-// step and an odd last tile) and the hierarchical sub-FFTs at their block width. Each shape takes random inputs and
-// negative zeros, whose signs every level must keep as portable does.
+// step and an odd last tile), the radix-2/4/8 butterflies at three tiles and a column (a two-tile step, an odd tile
+// and the scalar tail in one call) and the hierarchical sub-FFTs at their block width. Each shape takes random inputs
+// and negative zeros, whose signs every level must keep as portable does.
 template <typename T> void check_batched_every_level()
 {
     constexpr usize tile = 32 / sizeof(T);
@@ -207,6 +229,8 @@ template <typename T> void check_batched_every_level()
         {16, tile},
         {32, 3 * tile},
         {64, 3 * tile},
+        {16, 3 * tile + 1},
+        {32, 3 * tile + 1},
     };
     for (const Shape& shape : shapes)
     {
