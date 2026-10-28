@@ -78,10 +78,14 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    so one binary and its cooked data agree on every level. Dispatch is one indirect call per kernel invocation at the
    routine level (a whole GEMM panel loop), never per microkernel (ADR-0088's measured loss). Each table is resolved
    once from `cpu_selection()` (the last whose level the selection and the build's cap include and whose features
-   `kernel_features` holds), and every table stays callable for the differential tests.
+   `kernel_features` holds), and every table stays callable for the differential tests. A unit compiles to machine
+   code on every lane, never to link-time IL (amended 2026-10-28): entered only through its table, it has no call for
+   link-time code generation to inline across, and IL made every image that links the archive generate the unit's
+   code again.
 6. **Isolation guard.** A CTest on every lane disassembles the baseline code and fails on any instruction above the
    floor (VEX or EVEX encodings on x64) outside the per-level namespaces, and on any per-level symbol a baseline unit
-   defines. LTCG objects hold IL, so MSVC trees are judged on the linked executables with their PDB symbols.
+   defines. LTCG objects of general code hold IL, so MSVC trees judge those on the linked executables with their PDB
+   symbols; kernel objects hold their instructions (§5).
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
    order, and single-rounded FMA only where every level computes it single-rounded. The others declare tolerances
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.
@@ -98,9 +102,11 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`
-   where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE (a download the user approves) until such
-   hardware exists. The doctor, the specimen harness's host tuple and every board record the detected and selected
-   level and the override status. The diag-overhead, hesap, geometry and jobs boards are re-measured at each level
+   where the runner has it); AVX-512 and AVX10 kernels run under Intel SDE until such hardware exists (10.13.1,
+   approved 2026-10-27 and pinned, `scripts/install-sde.py`): with `CRD_SDE`, win-release and linux-gcc-release run
+   `<suite>-kernels-at-avx512-sde-<cpu>` per SDE CPU model whose features a body selects on, and those arms fail
+   when the level is refused (the hidden `[cpu-level-applied]` case). The doctor, the specimen harness's host tuple
+   and every board record the detected and selected level and the override status. The diag-overhead, hesap, geometry and jobs boards are re-measured at each level
    against their peers, Highway 1.3 included for the dispatch cost.
 9. **Ownership.** CPU ISA detection and kernel dispatch is one OWN.1 capability: detection in crd-core, the dispatch
    tables and level-parameterised SIMD types in crd-math, kernels in their owning modules.
