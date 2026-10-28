@@ -460,6 +460,33 @@ struct MoveOnly
     MoveOnly& operator=(MoveOnly&&) noexcept = default;
 };
 
+// Counts live objects and points at itself, so a relocation by byte copy leaves a stale self.
+struct SelfAnchored
+{
+    static int& live()
+    {
+        static int n = 0;
+        return n;
+    }
+    int value = 0;
+    const SelfAnchored* self = this;
+
+    explicit SelfAnchored(int v = 0) : value(v) { ++live(); }
+    SelfAnchored(const SelfAnchored& o) : value(o.value) { ++live(); }
+    SelfAnchored(SelfAnchored&& o) noexcept : value(o.value) { ++live(); }
+    ~SelfAnchored() { --live(); }
+    SelfAnchored& operator=(const SelfAnchored& o)
+    {
+        value = o.value;
+        return *this;
+    }
+    SelfAnchored& operator=(SelfAnchored&& o) noexcept
+    {
+        value = o.value;
+        return *this;
+    }
+};
+
 // Aligned above every unit's widest register below avx512: the by-value argument GCC realigns (-Wpsabi).
 struct alignas(64) WideComponent
 {
@@ -600,6 +627,44 @@ TEST_CASE("Commands add_component and set_component copy an lvalue once and move
     CHECK(holds_wide(w, a, 3U));
     CHECK(holds_wide(w, b, 3U));
     CHECK(holds_wide(w, c, 5U));
+}
+
+TEST_CASE("Commands keep queued payloads aligned and anchored across buffer growth and destroy each once",
+          "[scene][commands][payload]")
+{
+    constexpr crd::u32 kEntities = 24U; // several payload-buffer growths before one flush
+    {
+        World w;
+        w.register_component<SelfAnchored>();
+        w.register_component<WideComponent>();
+        SelfAnchored::live() = 0;
+        EntityId e[kEntities];
+        for (crd::u32 i = 0; i < kEntities; ++i)
+        {
+            e[i] = w.spawn();
+            w.commands().add_component(e[i], SelfAnchored{static_cast<int>(i)});
+            w.commands().set_component<WideComponent>(e[i], wide_of(static_cast<crd::u8>(i)));
+        }
+        CHECK(SelfAnchored::live() == static_cast<int>(kEntities)); // the queued payloads only
+        w.commands().flush();
+        CHECK(SelfAnchored::live() == static_cast<int>(kEntities)); // the stored components only
+        bool all_held = true;
+        for (crd::u32 i = 0; i < kEntities; ++i)
+        {
+            const SelfAnchored* s = w.get_component<SelfAnchored>(e[i]);
+            all_held = all_held && s != nullptr && s->self == s && s->value == static_cast<int>(i) &&
+                       holds_wide(w, e[i], static_cast<crd::u8>(i));
+        }
+        CHECK(all_held);
+
+        // A queue the world drops unflushed destroys its payloads.
+        for (crd::u32 i = 0; i < kEntities; ++i)
+        {
+            w.commands().set_component(e[i], SelfAnchored{-1});
+        }
+        CHECK(SelfAnchored::live() == static_cast<int>(2U * kEntities));
+    }
+    CHECK(SelfAnchored::live() == 0);
 }
 
 // ---------------------------------------------------------------------------

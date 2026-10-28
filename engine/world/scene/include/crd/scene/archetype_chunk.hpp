@@ -15,6 +15,7 @@ namespace crd::scene
 // stay hot during a chunk-grain visitor pass.
 inline constexpr crd::usize kChunkSize = 16 * 1024;
 inline constexpr crd::usize kChunkAlignment = 64;
+static_assert(kChunkAlignment >= kMaxComponentAlignment, "every component's SoA array starts aligned in a chunk");
 
 // Cap on archetype width. Per-archetype, not per-World — a small ceiling keeps
 // the per-chunk version-counter array bounded (256 B at 32 entries × u64).

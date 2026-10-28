@@ -45,14 +45,14 @@ class World;
 //   implementation gets a per-fiber stripe.
 //
 // Ownership / lifetime:
-//   Commands holds an `Array<Command>` of records and a parallel
-//   `Array<u8>` of per-command payload bytes (move-constructed from
-//   the user's value at queue time). At flush, each command's payload is
-//   move-consumed by the storage backend's insert() — the source is
-//   destructed in the process. If Commands is destroyed without flush
-//   (rare; shouldn't happen in normal frames), the destructor walks
-//   remaining records and calls their type's destructor on the payload
-//   bytes so non-trivially-destructible Ts don't leak.
+//   Commands holds an `Array<Command>` of records and a parallel payload
+//   buffer of kMaxComponentAlignment-aligned blocks, each payload
+//   move-constructed from the user's value at queue time at an offset
+//   aligned to its type. A buffer growth relocates every live payload
+//   through its type's move constructor and destructor, never by a byte
+//   copy. At flush, each payload is the source of the storage backend's
+//   insert() and is destroyed afterwards. If Commands is destroyed without
+//   flush, the destructor runs every remaining payload's destructor.
 class Commands
 {
 public:
@@ -121,14 +121,32 @@ private:
     // time and re-resolved at flush; the ID is the bridge.
     void enqueue_with_payload(Command cmd, void* src_value, const ComponentInfo& info);
 
+    // Reallocate the payload buffer to hold at least `min_blocks`, relocating every live payload.
+    void grow_payloads(crd::usize min_blocks);
+
+    // Run the payload's destructor and mark the command as holding none.
+    void destroy_payload(Command& cmd) noexcept;
+
+    [[nodiscard]] crd::u8* payload_at(crd::u32 offset) noexcept
+    {
+        return reinterpret_cast<crd::u8*>(m_payloads.data()) + offset;
+    }
+
     // Run any registered destructors on remaining command payloads. Called
     // from ~Commands and at the end of flush() so the buffer can be
     // re-used safely.
     void destruct_unflushed_payloads() noexcept;
 
-    World*                                  m_world;
-    crd::containers::Array<Command>         m_commands;
-    crd::containers::Array<crd::u8>         m_payloads;
+    // A payload at an offset aligned to its type is aligned in memory: the buffer starts on a block.
+    struct alignas(kMaxComponentAlignment) PayloadBlock
+    {
+        crd::u8 bytes[kMaxComponentAlignment];
+    };
+
+    World* m_world;
+    crd::containers::Array<Command> m_commands;
+    crd::containers::Array<PayloadBlock> m_payloads;
+    crd::usize m_payload_bytes = 0; // bytes in use, a prefix of m_payloads
 };
 
 // ---- Inline templated mutations -----------------------------------------

@@ -151,6 +151,8 @@ public:
     template <typename T, typename... Traits> ComponentId register_type(Traits&&... traits)
     {
         static_assert(!std::is_reference_v<T>, "ComponentRegistry::register_type<T>: T must not be a reference");
+        static_assert(alignof(T) <= kMaxComponentAlignment,
+                      "ComponentRegistry::register_type<T>: T is aligned above kMaxComponentAlignment");
         const void* key = component_type_key<T>();
         if (auto* existing = m_id_by_key.find(key); existing != nullptr)
         {

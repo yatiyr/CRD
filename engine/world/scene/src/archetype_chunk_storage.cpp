@@ -30,6 +30,34 @@ ArchetypeChunkStorage::ArchetypeChunkStorage(crd::memory::IAllocator* alloc, con
 {
 }
 
+ArchetypeChunkStorage::~ArchetypeChunkStorage()
+{
+    for (crd::u32 a = 0; a < m_graph.archetype_count(); ++a)
+    {
+        Archetype* arch = m_graph.by_id(ArchetypeId{a});
+        if (arch == nullptr)
+        {
+            continue;
+        }
+        for (crd::u32 li = 0; li < arch->layout.component_count(); ++li)
+        {
+            const ComponentInfo& info = m_registry->require_info(arch->layout.components_sorted[li]);
+            if (info.destruct == nullptr)
+            {
+                continue;
+            }
+            for (Chunk& chunk : arch->chunks)
+            {
+                const crd::u16 count = chunk.header()->entity_count;
+                for (crd::u16 slot = 0; slot < count; ++slot)
+                {
+                    info.destruct(component_slot(chunk, arch->layout, li, slot));
+                }
+            }
+        }
+    }
+}
+
 void ArchetypeChunkStorage::set_event_sink(IStorageEventSink* sink) noexcept
 {
     m_sink = (sink != nullptr) ? sink : NullStorageEventSink::instance();

@@ -195,6 +195,9 @@ using DefaultCtorFn = void (*)(void* dst);
 using DtorFn = void (*)(void* p);
 using MoveCtorFn = void (*)(void* dst, void* src);
 
+// The widest alignment a component may declare: chunk SoA arrays and queued command payloads are aligned to it.
+inline constexpr crd::usize kMaxComponentAlignment = 64;
+
 // ---- ComponentInfo: per-registration metadata --------------------------
 
 struct ComponentInfo

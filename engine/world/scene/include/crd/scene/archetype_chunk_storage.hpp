@@ -49,7 +49,8 @@ class ArchetypeChunkStorage : public IStorageBackend
 {
 public:
     ArchetypeChunkStorage(crd::memory::IAllocator* alloc, const ComponentRegistry& registry);
-    ~ArchetypeChunkStorage() override = default;
+    // Destroys every stored component: the chunk allocator frees chunk memory without knowing what it holds.
+    ~ArchetypeChunkStorage() override;
 
     ArchetypeChunkStorage(const ArchetypeChunkStorage&) = delete;
     ArchetypeChunkStorage& operator=(const ArchetypeChunkStorage&) = delete;
