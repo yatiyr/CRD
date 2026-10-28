@@ -111,6 +111,25 @@ private:
     crd::f64 m_c;
 };
 
+// φ(t) = 3 + 1e-20·(t − 0.5)²: every value rounds to 3, while φ'(t) = 2e-20·(t − 0.5) still locates t = 0.5 exactly.
+class RoundedFlatQuad1D final : public opt::Objective<crd::f64>
+{
+public:
+    RoundedFlatQuad1D() : opt::Objective<crd::f64>(/*has_gradient=*/true, /*has_hessian_vector=*/false) {}
+    [[nodiscard]] crd::f64 value(crd::containers::ConstSpan<crd::f64> x) const override
+    {
+        const crd::f64 d = x[0] - 0.5;
+        return 3.0 + 1e-20 * (d * d);
+    }
+    [[nodiscard]] crd::usize n() const noexcept override { return 1; }
+    [[nodiscard]] bool gradient(crd::containers::ConstSpan<crd::f64> x,
+                                crd::containers::Span<crd::f64> g) const override
+    {
+        g[0] = 2e-20 * (x[0] - 0.5);
+        return true;
+    }
+};
+
 // Recompute the Wolfe conditions at x + alpha·p from a fresh objective eval.
 struct WolfeAt
 {
@@ -196,6 +215,44 @@ TEST_CASE("v7-c WolfeLineSearch returns a step where the Wolfe conditions hold",
         const auto w = eval_at(obj, {x.data(), n}, {p.data(), n}, r.alpha, &alloc);
         CHECK(w.phi_a <= fx + c1 * r.alpha * dphi0); // Armijo
         CHECK(w.dphi_a >= c2 * dphi0);               // weak curvature (one-sided)
+    }
+}
+
+TEST_CASE("v7-c WolfeLineSearch judges by the derivative where f rounds flat (approximate Wolfe)", "[hesap][opt][v7]")
+{
+    const RoundedFlatQuad1D obj;
+    const crd::f64 x[1] = {0.0};
+    const crd::f64 p[1] = {1.0};
+    crd::f64 g[1] = {};
+    REQUIRE(obj.gradient({x, 1}, {g, 1}));
+    const crd::f64 fx = obj.value({x, 1});
+    const crd::f64 dphi0 = g[0] * p[0];
+    REQUIRE(dphi0 < 0.0);
+    const crd::f64 c1 = 1e-4;
+    const crd::f64 c2 = 0.1;
+    for (const bool strong : {true, false})
+    {
+        for (const crd::f64 alpha0 : {1.0, 0.25, 1e3})
+        {
+            crd::f64 x_out[1] = {};
+            crd::f64 g_out[1] = {};
+            const opt::WolfeLineSearch<crd::f64> ls(c1, c2, strong, 60);
+            const auto r = ls.search(obj, {x, 1}, fx, {g, 1}, {p, 1}, alpha0, {x_out, 1}, {g_out, 1});
+            REQUIRE(r.ok);
+            REQUIRE(r.grad_at_new_valid);
+            CHECK(x_out[0] == r.alpha);
+            CHECK(r.fx_new == fx); // f cannot tell the accepted step from the start
+            const crd::f64 dphi_a = g_out[0] * p[0];
+            CHECK(dphi_a <= (2.0 * c1 - 1.0) * dphi0); // the derivative form of Armijo
+            if (strong)
+            {
+                CHECK(std::fabs(dphi_a) <= c2 * std::fabs(dphi0));
+            }
+            else
+            {
+                CHECK(dphi_a >= c2 * dphi0);
+            }
+        }
     }
 }
 

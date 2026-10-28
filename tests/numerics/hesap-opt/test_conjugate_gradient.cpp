@@ -107,6 +107,31 @@ public:
         return r;
     }
 };
+
+// f(x) + c: the same minimizer and gradient, but f sits so far above its decrease that near x* every trial's f rounds
+// to the same value (the regime a hosted AVX-512 runner reached in the moat below at c = 0).
+class OffsetObjective final : public opt::Objective<crd::f64>
+{
+public:
+    OffsetObjective(const opt::Objective<crd::f64>& base, crd::f64 offset)
+        : opt::Objective<crd::f64>(/*has_gradient=*/true, /*has_hessian_vector=*/false), m_base(&base), m_offset(offset)
+    {
+    }
+    [[nodiscard]] crd::f64 value(crd::containers::ConstSpan<crd::f64> x) const override
+    {
+        return m_base->value(x) + m_offset;
+    }
+    [[nodiscard]] crd::usize n() const noexcept override { return m_base->n(); }
+    [[nodiscard]] bool gradient(crd::containers::ConstSpan<crd::f64> x,
+                                crd::containers::Span<crd::f64> g) const override
+    {
+        return m_base->gradient(x, g);
+    }
+
+private:
+    const opt::Objective<crd::f64>* m_base;
+    crd::f64 m_offset;
+};
 } // namespace
 
 TEST_CASE("v7-f nonlinear CG: finite termination on an SPD quadratic (exact line search)", "[hesap][opt][v7]")
@@ -246,5 +271,44 @@ TEST_CASE("v7-f nonlinear CG determinism moat {1,2,4,8,16}", "[hesap][opt][v7][m
             }
         }
         crd::jobs::shutdown();
+    }
+}
+
+TEST_CASE("v7-f nonlinear CG reaches grad_tol where f no longer resolves the decrease", "[hesap][opt][v7]")
+{
+    const crd::u32 n = 64;
+    crd::memory::TlsfAllocator alloc(1U << 24);
+    Csr a = laplacian_1d(&alloc, n);
+    sp::SparseLinearOp<crd::f64> op(a);
+    crd::containers::Array<crd::f64> xtrue(&alloc);
+    crd::containers::Array<crd::f64> b(&alloc);
+    crd::containers::Array<crd::f64> x0(&alloc);
+    xtrue.resize(n);
+    b.resize(n);
+    x0.resize(n);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        xtrue[i] = 1.0 + 0.02 * static_cast<crd::f64>(i);
+        x0[i] = 0.0;
+    }
+    (void)op.apply({xtrue.data(), n}, {b.data(), n});
+    opt::QuadraticObjective<crd::f64> quadratic(op, {b.data(), n}, &alloc);
+    const OffsetObjective obj(quadratic, 1e4); // ulp(f) ~ 2e-12, far above the last steps' decrease
+
+    opt::OptOptions<crd::f64> opts;
+    opts.grad_tol = 1e-7;
+    opts.max_iters = 4000;
+    for (auto variant : {opt::CgVariant::FletcherReeves, opt::CgVariant::PolakRibierePlus,
+                         opt::CgVariant::HestenesStiefel, opt::CgVariant::DaiYuan})
+    {
+        auto r = opt::minimize_nonlinear_cg<crd::f64>(obj, {x0.data(), n}, opts, &alloc, nullptr, variant);
+        REQUIRE(r.status == opt::OptStatus::Success);
+        CHECK(r.grad_norm <= opts.grad_tol);
+        crd::f64 err = 0.0;
+        for (crd::u32 i = 0; i < n; ++i)
+        {
+            err = std::max(err, std::fabs(r.x[i] - xtrue[i]));
+        }
+        CHECK(err < 1e-4); // ‖x − x*‖∞ ≤ ‖∇f‖ / λ_min ≈ 1e-7 / 2.3e-3
     }
 }

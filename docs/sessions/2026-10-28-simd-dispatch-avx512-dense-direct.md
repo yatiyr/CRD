@@ -56,6 +56,34 @@ run until a hosted runner detects AVX-512; only the `[kernels]` cases run under 
   direct 124,683 assertions in 14 cases (414 s).
 - Hosted: the win-release and linux-gcc-release SDE arms (`crd-hesap-dense-kernels-at-avx512-sde-skx`, `...direct...`).
 
+## A hosted AVX-512 runner: the Wolfe search at the rounding floor of f
+
+Push run 40662109393 (`7e230e22`), job win-clang-cl-shipping: `v7-f nonlinear CG determinism moat` failed with
+`LineSearchFailed` at its first worker count. Hosted Windows runners are drawn from AVX-512 and non-AVX-512 hosts, so
+this job was the first to run the dense avx512 dot shape outside SDE, and a lane passes or fails by its runner. It
+reproduces on win-debug under SDE skx at avx512 and nowhere else.
+
+- Not a kernel defect. The SELL apply is bit-exact with the scalar CSR at avx512, and the dot stays within its bound.
+  The declared avx512 dot rounds differently, so the trajectory differs from iteration 3 in the last bits. portable,
+  avx2 and avx512 end at 385, 380 and 360 iterations, and portable stops at a gradient of 9.99e-8 against the 1e-7
+  tolerance. All three sit at the edge of what f can resolve.
+- The cause is in `WolfeLineSearch`. At iteration 360, with f near -3.07 and φ'(0) near -1.6e-13, every trial's f
+  differs from the others by a few ulps. The zoom ranked the trials by f alone: a trial tied with the low end moved
+  the high end, and 28 bisections shrank onto α = 0.603, where |φ'| was 1.68e-14 against a bound of 1.56e-14. The
+  minimizer was near α = 0.54. A second defect: `φ(α) ≤ φ(0) + c1·α·φ'(0)` rounds back to φ(0) once the decrease is
+  below an ulp, so it passed any step that tied φ(0), and a weak search could accept a step past the minimizer.
+- Fix: Armijo is evaluated as the difference φ(α) − φ(0). A trial that is at most ε·|φ(0)| above both φ(0) and the
+  point it is ranked against, with ε = 1e-6, is judged by φ'. It is accepted under the approximate Wolfe conditions
+  of Hager and Zhang (2005, §4, as in CG_DESCENT). Otherwise the sign of φ' picks the side of the interval to keep.
+  Trials f can rank take the textbook path unchanged. The search is shared by CG, gradient descent and the Newton
+  paths.
+- Tests: a 1-D search on a φ that rounds to 3 at every trial (strong and weak, three starting steps), and all four CG
+  variants on the moat's quadratic plus 1e4, which reach the gradient tolerance at every level. The old search fails
+  both. The whole hesap-opt suite (154 cases) passes on win-debug at portable, sse2 and avx2, and at avx512 under SDE
+  skx.
+- The jobs assertion that followed under SDE (`WorkerPool::init called twice`, momentum moat) was a consequence: the
+  failed REQUIRE left the pool initialised.
+
 ## Board candidates (row close; the AVX-512 rows need AVX-512 hardware, SDE times are not data)
 
 - The sse2 and avx2 tile now indexes register arrays through `unroll` (it held twelve named registers): one-thread

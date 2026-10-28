@@ -10,6 +10,13 @@
 //              weak     φ'(α) ≥ c2·φ'(0)         (one-sided; cheaper, fine for CG)
 // with φ(α) = f(x + α·p), φ'(α) = ∇f(x + α·p)·p, 0 < c1 < c2 < 1.
 //
+// APPROXIMATE WOLFE (Hager & Zhang 2005, SIAM J. Optim. 16(1) §4; CG_DESCENT): near a minimizer the decrease Armijo
+// must see falls below the rounding of f itself, so φ ties φ(0) at every trial and a search that ranks points by φ
+// alone shrinks onto α = 0 and fails. A trial that fails Armijo by no more than ε·|φ(0)| above both φ(0) and the
+// point it is ranked against is judged by φ' instead: it is accepted when (2c1 − 1)·φ'(0) ≥ φ'(α) and the curvature
+// condition holds (the derivative form of Armijo, exact for a quadratic φ), and otherwise φ'(α)'s sign says which side
+// of α the minimizer lies on. ε = 1e-6, Hager and Zhang's value.
+//
 // COST CONTRACT (v7-a): this search evaluates ∇f at trial points (the curvature test needs φ'(α)), so on success
 // it returns the accepted point in x_out AND its gradient in g_out with grad_at_new_valid=true — the optimizer
 // then skips its own gradient eval. Zoom uses bisection (deterministic, robust); the cubic-interpolation
@@ -22,6 +29,7 @@
 #include <crd/hesap/opt/objective.hpp>
 
 #include <crd/math/cmath.hpp>
+#include <limits>
 
 namespace crd::hesap::opt
 {
@@ -75,6 +83,23 @@ public:
         const T curv_rhs = m_c2 * (m_strong ? -dphi0 : dphi0); // strong: c2·|φ'(0)|; weak: c2·φ'(0)
         auto curvature_ok = [&](T dphi_a) -> bool
         { return m_strong ? (crd::math::fabs(dphi_a) <= -m_c2 * dphi0) : (dphi_a >= curv_rhs); };
+        // Armijo at α (as a difference: φ(0) + c1·α·φ'(0) rounds back to φ(0) once the decrease is below ulp(φ(0)),
+        // which would pass any step) against the point it is ranked against (φ_ref), the band where φ cannot rank
+        // it, and the approximate Wolfe test that judges a trial in the band.
+        auto armijo_ok = [&](T a, T phi_a, T phi_ref) -> bool
+        {
+            return std::isfinite(phi_a) && phi_a - phi0 <= m_c1 * a * dphi0 && phi_a < phi_ref;
+        };
+        const T band = static_cast<T>(1e-6) * crd::math::fabs(phi0); // Hager-Zhang ε·|φ(0)|
+        auto in_band = [&](T phi_a, T phi_ref) -> bool
+        {
+            return std::isfinite(phi_a) && phi_a <= (phi_ref < phi0 ? phi_ref : phi0) + band;
+        };
+        const T approx_rhs = (static_cast<T>(2) * m_c1 - static_cast<T>(1)) * dphi0;
+        auto approx_ok = [&](T dphi_a) -> bool
+        {
+            return dphi_a <= approx_rhs && curvature_ok(dphi_a);
+        };
 
         // ---- zoom(α_lo, α_hi): the interval brackets a Wolfe point (φ(α_lo) is the lowest acceptable-Armijo end).
         auto zoom = [&](T a_lo, T phi_lo, T a_hi) -> LineSearchResult<T>
@@ -83,26 +108,37 @@ public:
             {
                 const T a_j = static_cast<T>(0.5) * (a_lo + a_hi); // bisection (deterministic, safeguarded)
                 const T phi_j = phi(a_j);
-                if (!std::isfinite(phi_j) || phi_j > phi0 + m_c1 * a_j * dphi0 || phi_j >= phi_lo)
+                const bool armijo = armijo_ok(a_j, phi_j, phi_lo);
+                if (!armijo && !in_band(phi_j, phi_lo))
                 {
                     a_hi = a_j;
+                    continue;
                 }
-                else
+                const T dphi_j = dphi(); // x_out holds α_j's point
+                if (armijo ? curvature_ok(dphi_j) : approx_ok(dphi_j))
                 {
-                    const T dphi_j = dphi(); // x_out holds α_j's point
-                    if (curvature_ok(dphi_j))
-                    {
-                        LineSearchResult<T> rr = r;
-                        rr.alpha = a_j;
-                        rr.fx_new = phi_j;
-                        rr.ok = true;
-                        rr.grad_at_new_valid = true;
-                        return rr;
-                    }
+                    LineSearchResult<T> rr = r;
+                    rr.alpha = a_j;
+                    rr.fx_new = phi_j;
+                    rr.ok = true;
+                    rr.grad_at_new_valid = true;
+                    return rr;
+                }
+                if (armijo)
+                {
                     if (dphi_j * (a_hi - a_lo) >= static_cast<T>(0))
                     {
                         a_hi = a_lo;
                     }
+                    a_lo = a_j;
+                    phi_lo = phi_j;
+                }
+                else if (dphi_j * (a_j - a_lo) >= static_cast<T>(0))
+                {
+                    a_hi = a_j; // φ cannot rank α_j: φ' rising away from α_lo puts the minimizer between them
+                }
+                else
+                {
                     a_lo = a_j;
                     phi_lo = phi_j;
                 }
@@ -121,12 +157,14 @@ public:
         for (crd::usize it = 0; it < m_max_iters; ++it)
         {
             const T phi_cur = phi(a_cur);
-            if (!std::isfinite(phi_cur) || phi_cur > phi0 + m_c1 * a_cur * dphi0 || (it > 0 && phi_cur >= phi_prev))
+            const T phi_ref = it > 0 ? phi_prev : std::numeric_limits<T>::infinity();
+            const bool armijo = armijo_ok(a_cur, phi_cur, phi_ref);
+            if (!armijo && !in_band(phi_cur, phi_ref))
             {
                 return zoom(a_prev, phi_prev, a_cur);
             }
             const T dphi_cur = dphi(); // x_out holds α_cur's point
-            if (curvature_ok(dphi_cur))
+            if (armijo ? curvature_ok(dphi_cur) : approx_ok(dphi_cur))
             {
                 r.alpha = a_cur;
                 r.fx_new = phi_cur;
@@ -136,7 +174,7 @@ public:
             }
             if (dphi_cur >= static_cast<T>(0))
             {
-                return zoom(a_cur, phi_cur, a_prev);
+                return armijo ? zoom(a_cur, phi_cur, a_prev) : zoom(a_prev, phi_prev, a_cur);
             }
             a_prev = a_cur;
             phi_prev = phi_cur;
