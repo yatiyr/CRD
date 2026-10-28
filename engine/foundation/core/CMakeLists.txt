@@ -36,6 +36,12 @@ if(WIN32)
     target_link_libraries(crd-core PRIVATE dbghelp ntdll)
 endif()
 
+# An applied CRD_CPU_LEVEL lowers the CRT's own ISA dispatch from a startup object in cpu_features.cpp (ADR-0134 §8);
+# the include keeps it in every image that links crd-core, also one that never asks for the selection.
+if(MSVC AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(amd64|x86_64|AMD64|x64)$")
+    target_link_options(crd-core INTERFACE "LINKER:/INCLUDE:kCrdCpuSelectAtStart")
+endif()
+
 crd_enable_default_pch(crd-core)
 
 # Cerid::core of the relocatable package: the public headers, the generated profile header and the archive.

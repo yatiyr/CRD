@@ -43,7 +43,8 @@ rebuilds only the targets holding its detecting tests, so a lane adds a few incr
 win-debug tree and 92 s on win-asan. `Test at the sse2 level` is another (2026-10-28): general code builds at the SSE2
 baseline on every lane (ADR-0134 §4), so the former `win-debug-sse2` and `linux-gcc-debug-sse2` builds became a
 second CTest pass of the win-debug and linux-gcc-debug binaries under the `<preset>-at-sse2` test presets
-(`CRD_CPU_LEVEL=sse2`; a test that forces its own level keeps it), checked against the register as lane
+(`CRD_CPU_LEVEL=sse2`, which on MSVC also lowers the CRT's own `__isa_available` dispatch and turns the UCRT's
+FMA3 libm off; a test that forces its own level keeps it), checked against the register as lane
 `<preset>-at-sse2`, after the hidden `[cpu-level-applied]` case proves the level was applied.
 
 ### ARM64 lanes

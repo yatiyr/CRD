@@ -65,4 +65,5 @@ run 40761837951 was cancelled before any job started. No run completed, so no Ne
 
 The guard's first hosted run on every lane, with its runtime per lane (Clang's `__clang_call_terminate` and the
 coverage records are reviewed in advance; libgcc's `__cpu_indicator_init` or Tracy's timer may surface on the GCC IPO
-images and are reviewed there if so); the forced levels and MSVC's dispatch.
+images and are reviewed there if so). The forced levels and MSVC's dispatch landed next
+([session](2026-10-29-simd-dispatch-forced-levels-crt-dispatch.md)).

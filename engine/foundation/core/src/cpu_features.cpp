@@ -18,6 +18,20 @@
 #if CRD_ARCH_X64
 #include <intrin.h>
 #endif
+#if defined(_MSC_VER) && CRD_ARCH_X64
+#include <cmath>
+#include <isa_availability.h>
+// The CRT's view of the CPU, one copy per image (vcruntime's cpu_disp.obj, set before any C++ initializer):
+// __isa_available is the level the compiler's vectorized paths and the STL test, __isa_enabled its bit set,
+// __isa_inverted the __IA_SUPPORT_* bits __check_isa_support() reads (a set bit: not supported).
+extern "C"
+{
+    extern int __isa_available;               // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+    extern int __isa_enabled;                 // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+    extern unsigned long long __isa_inverted; // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+    extern unsigned __avx10_version;          // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+}
+#endif
 #elif CRD_OS_LINUX
 #include <sched.h>
 #include <unistd.h>
@@ -346,6 +360,61 @@ const char* read_override(char (&buffer)[32]) noexcept // NOLINT(modernize-avoid
     return buffer;
 #endif
 }
+
+#if defined(_MSC_VER) && CRD_ARCH_X64
+// The CRT level of `level`: no CRT level sits between SSE2 and SSE4.2, and portable runs on the SSE2 floor.
+int crt_level_of(CpuLevel level) noexcept
+{
+    switch (level)
+    {
+        case CpuLevel::Sse42:
+            return __ISA_AVAILABLE_SSE42;
+        case CpuLevel::Avx2:
+            return __ISA_AVAILABLE_AVX2;
+        case CpuLevel::Avx512:
+            return __ISA_AVAILABLE_AVX512;
+        case CpuLevel::Portable:
+        case CpuLevel::Sse2:
+        case CpuLevel::Neon:
+            break;
+    }
+    return __ISA_AVAILABLE_SSE2;
+}
+
+// Lowers the CRT's own dispatch to `level`, never raising it, so the compiler's and the STL's runtime paths and the
+// UCRT's libm run what a CPU of that level runs. No level includes AVX10, APX or FP16.
+void lower_crt_dispatch(CpuLevel level) noexcept
+{
+    const int cap = crt_level_of(level);
+    unsigned long long supported = __IA_SUPPORT_VECTOR128;
+    if (cap >= __ISA_AVAILABLE_SSE42)
+    {
+        supported |= __IA_SUPPORT_SSE42;
+    }
+    if (cap >= __ISA_AVAILABLE_AVX2)
+    {
+        supported |= __IA_SUPPORT_VECTOR256;
+    }
+    if (cap >= __ISA_AVAILABLE_AVX512)
+    {
+        supported |= __IA_SUPPORT_VECTOR512 | __IA_SUPPORT_SV128X;
+    }
+    constexpr unsigned long long known = __IA_SUPPORT_VECTOR128 | __IA_SUPPORT_VECTOR256 | __IA_SUPPORT_VECTOR512 |
+                                         __IA_SUPPORT_AVX10 | __IA_SUPPORT_SSE42 | __IA_SUPPORT_SV128X |
+                                         __IA_SUPPORT_AVX10_2 | __IA_SUPPORT_APX | __IA_SUPPORT_FP16;
+    if (__isa_available > cap)
+    {
+        __isa_available = cap;
+    }
+    __isa_enabled &= (1 << (cap + 1)) - 1;
+    __isa_inverted |= known & ~supported;
+    __avx10_version = 0U;
+    if (cap < __ISA_AVAILABLE_AVX2)
+    {
+        (void)_set_FMA3_enable(0);
+    }
+}
+#endif
 
 // The data caches the words describe: the deterministic leaf's data and unified caches, else the legacy leaves.
 CpuCaches decode_caches(const CpuidWords& words) noexcept
@@ -680,10 +749,51 @@ const CpuSelection& cpu_selection() noexcept
     static const CpuSelection kSelection = []() noexcept
     {
         char buffer[32] = {}; // NOLINT(modernize-avoid-c-arrays)
-        return apply_cpu_override(detect_cpus(), read_override(buffer));
+        const CpuSelection s = apply_cpu_override(detect_cpus(), read_override(buffer));
+#if defined(_MSC_VER) && CRD_ARCH_X64
+        if (s.override_status == CpuOverride::Applied)
+        {
+            lower_crt_dispatch(s.selected);
+        }
+#endif
+        return s;
     }();
     return kSelection;
 }
+
+CpuRuntimeDispatch cpu_runtime_dispatch() noexcept
+{
+    CpuRuntimeDispatch d;
+#if defined(_MSC_VER) && CRD_ARCH_X64
+    d.crt_level = __isa_available;
+    d.ucrt_fma3 = _get_FMA3_enable() != 0;
+#endif
+    return d;
+}
+
+#if defined(_MSC_VER) && CRD_ARCH_X64
+namespace
+{
+
+// Selects at startup when CRD_CPU_LEVEL is set, so an applied level reaches the CRT's dispatch before any user
+// initializer runs and before any thread exists; without it the selection stays lazy.
+void __cdecl select_at_start() noexcept
+{
+    char buffer[32] = {}; // NOLINT(modernize-avoid-c-arrays)
+    if (read_override(buffer) != nullptr)
+    {
+        (void)cpu_selection();
+    }
+}
+
+} // namespace
+
+// A pointer in the CRT's library initializer section: .CRT$XCL sorts after the C initializers (__isa_available is
+// set) and before the user ones (.CRT$XCU). crd-core's interface links /INCLUDE:kCrdCpuSelectAtStart, so every image
+// keeps it, also one that never asks for the selection; extern "C" keeps the x64 name literal.
+#pragma section(".CRT$XCL", read)
+extern "C" __declspec(allocate(".CRT$XCL")) void(__cdecl* const kCrdCpuSelectAtStart)() = &select_at_start;
+#endif
 
 bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept
 {

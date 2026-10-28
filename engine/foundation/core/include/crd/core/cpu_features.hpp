@@ -13,7 +13,8 @@
 // the kernels' scalar reference, on every architecture) and drops the features above that level's definition from
 // the ones kernel variants select on; a level above what every CPU executes, or of another architecture, is refused
 // and the detected level stays. It is read once, with the detection, at the first
-// `cpu_selection()` call. No heap memory is allocated.
+// `cpu_selection()` call; an applied level also lowers the C runtime's own dispatch (`cpu_runtime_dispatch()`). No
+// heap memory is allocated.
 
 #include <crd/core/types.hpp>
 
@@ -233,8 +234,21 @@ void add_cpu_report(CpuSelection& into, const CpuReport& cpu) noexcept;
 // `detected` with `override_text` (CRD_CPU_LEVEL's value, nullptr when unset) applied to its selected level.
 [[nodiscard]] CpuSelection apply_cpu_override(const CpuSelection& detected, const char* override_text) noexcept;
 
-// The process's selection: detect_cpus() and CRD_CPU_LEVEL, read once at the first call.
+// The process's selection: detect_cpus() and CRD_CPU_LEVEL, read once at the first call (MSVC x64: at startup when
+// CRD_CPU_LEVEL is set, see CpuRuntimeDispatch).
 [[nodiscard]] const CpuSelection& cpu_selection() noexcept;
+
+// The C runtime's own ISA dispatch in this image (MSVC and clang-cl on x64, ADR-0134 §8). crt_level is the CRT's
+// __isa_available (1 SSE2, 2 SSE4.2, 3 AVX, 5 AVX2, 6 AVX-512), which the compiler's vectorized paths and the STL
+// test; ucrt_fma3 says whether the UCRT's libm runs its FMA3 bodies. An applied CRD_CPU_LEVEL lowers both, and the
+// CRT's other ISA variables, to its level before the first user initializer; nothing raises them. Elsewhere
+// crt_level is -1 and ucrt_fma3 false.
+struct CpuRuntimeDispatch
+{
+    crd::i32 crt_level = -1;
+    bool ucrt_fma3 = false;
+};
+[[nodiscard]] CpuRuntimeDispatch cpu_runtime_dispatch() noexcept;
 
 // `have` runs code built for `want`: the same architecture's level, at or above it.
 [[nodiscard]] bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept;

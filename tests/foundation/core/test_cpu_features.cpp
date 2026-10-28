@@ -912,6 +912,8 @@ TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
     const crd::CpuSelection& s = crd::cpu_selection();
     std::printf("cpu level: detected %s selected %s override %s\n", crd::cpu_level_name(s.detected),
                 crd::cpu_level_name(s.selected), crd::cpu_override_name(s.override_status));
+    const crd::CpuRuntimeDispatch crt = crd::cpu_runtime_dispatch();
+    std::printf("cpu runtime: crt %d fma3 %d\n", static_cast<int>(crt.crt_level), crt.ucrt_fma3 ? 1 : 0);
     std::printf("cpu walk: %u visited %u refused, core types 0x%x, uniform %d, xcr0 0x%llx, avx10 %u/%u\n",
                 s.cpus_visited, s.cpus_refused, static_cast<unsigned>(s.core_types_seen), s.uniform ? 1 : 0,
                 static_cast<unsigned long long>(s.features.xcr0), static_cast<unsigned>(s.features.avx10_version),
@@ -956,4 +958,54 @@ TEST_CASE("cpu features: a process started with CRD_CPU_LEVEL selects that level
         INFO(above.output.c_str());
         CHECK(contains(above, "override above-hardware"));
     }
+}
+
+// The child's "cpu runtime: crt <level> fma3 <0|1>" line as that line again, with the level capped at `cap`.
+cont::String runtime_line(const cd::Outcome& o, long cap, bool fma3)
+{
+    const std::string_view out{o.output.data(), o.output.size()};
+    const std::string_view key = "cpu runtime: crt ";
+    const std::size_t at = out.find(key);
+    REQUIRE(at != std::string_view::npos);
+    const long crt = std::strtol(out.data() + at + key.size(), nullptr, 10);
+    char line[64] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(line, sizeof(line), "cpu runtime: crt %ld fma3 %d", crt < cap ? crt : cap, fma3 ? 1 : 0);
+    return cont::String{line};
+}
+
+TEST_CASE("cpu features: an applied CRD_CPU_LEVEL lowers the C runtime's own dispatch", "[core][cpu]")
+{
+    const crd::CpuSelection& s = crd::cpu_selection();
+    if (s.arch != crd::CpuArch::X64 || crd::cpu_runtime_dispatch().crt_level < 0)
+    {
+        return; // only MSVC's CRT keeps a dispatch level of its own
+    }
+    // The CRT's levels (isa_availability.h): 1 SSE2, 2 SSE4.2, 5 AVX2; the UCRT's FMA3 libm needs avx2.
+    const cd::Outcome own = run_level_child("");
+    INFO(own.output.c_str());
+    CHECK(contains(own, "override none"));
+    const bool own_fma3 = contains(own, " fma3 1");
+
+    const cd::Outcome sse2 = run_level_child("sse2");
+    INFO(sse2.output.c_str());
+    CHECK(contains(sse2, "cpu runtime: crt 1 fma3 0"));
+    const cd::Outcome portable = run_level_child("portable");
+    INFO(portable.output.c_str());
+    CHECK(contains(portable, "cpu runtime: crt 1 fma3 0"));
+    if (crd::cpu_level_includes(s.detected, CpuLevel::Sse42))
+    {
+        const cd::Outcome sse42 = run_level_child("sse4.2");
+        INFO(sse42.output.c_str());
+        CHECK(contains(sse42, runtime_line(own, 2L, false).c_str()));
+    }
+    if (crd::cpu_level_includes(s.detected, CpuLevel::Avx2))
+    {
+        const cd::Outcome avx2 = run_level_child("avx2");
+        INFO(avx2.output.c_str());
+        CHECK(contains(avx2, runtime_line(own, 5L, own_fma3).c_str()));
+    }
+    // A refused level lowers nothing.
+    const cd::Outcome other = run_level_child("neon");
+    INFO(other.output.c_str());
+    CHECK(contains(other, runtime_line(own, 6L, own_fma3).c_str()));
 }

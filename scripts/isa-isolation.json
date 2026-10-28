@@ -19,7 +19,7 @@
       "allows": ["VEX", "EVEX", "legacy"],
       "guard_symbol": "__isa_available",
       "guard": "the function tests __isa_available (set from CPUID by the CRT) before each path above SSE2: MSVC's vectorizer emits such paths at /O2 under every /arch (EVEX vpmullq for 64-bit index products, SSE4.1 pmaxud, pmovzxdq), and the STL's _Checked_popcount, _Checked_x86_x64_countl_zero and _Float_multi_prec::_Sqr_x2 inline them; no Cerid source reads __isa_available",
-      "reason": "compiler and STL runtime dispatch; CRD_CPU_LEVEL does not reach it, and its integer paths give the baseline path's results"
+      "reason": "compiler and STL runtime dispatch; an applied CRD_CPU_LEVEL lowers __isa_available to its level before the first user initializer (cpu_features.cpp), and the integer paths give the baseline path's results"
     },
     {
       "id": "msvc-stl-vector-algorithms",
