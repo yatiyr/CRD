@@ -1297,6 +1297,59 @@ template <typename T> void check_cher2(crd::memory::IAllocator* alloc, Counts& c
     }
 }
 
+// Sums whose every product is -0 (negative a times +0 x): the accumulators start at +0, so the declared shape gives +0.
+// MSVC folds a vector add of a constant +0 to its other operand, which would give -0 wherever a seed reached an add
+// in straight-line code (the GEMM merge on win-release, 2026-10-28); the dot and gemv seeds must stay +0.
+template <typename T> void check_negative_zero_sums(crd::memory::IAllocator* alloc, Counts& c)
+{
+    const auto ns = lengths<T>(alloc);
+    crd::containers::Array<T> a(alloc);
+    crd::containers::Array<T> x(alloc);
+    crd::containers::Array<T> m(alloc);
+    crd::containers::Array<T> y(alloc);
+    for (const auto& level : dn::dense_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++c.ran;
+        for (const usize n : ns)
+        {
+            a.resize(n + 1U);
+            x.resize(n + 1U);
+            for (usize i = 0; i < n; ++i)
+            {
+                a[i] = -static_cast<T>(1U + i % 5U) / T(7);
+                x[i] = T(0);
+            }
+            a[n] = std::numeric_limits<T>::quiet_NaN();
+            x[n] = std::numeric_limits<T>::quiet_NaN();
+            const T d = dn::kernels_of<T>(*level.table).dot(a.data(), x.data(), n);
+            ++c.cases;
+            c.wrong += same_bits(d, T(0)) && same_bits(model_dot(a.data(), x.data(), n, level.level), T(0)) ? 0U : 1U;
+            constexpr usize rows = 9U; // a group of eight rows (avx2), of four (below), and one alone
+            m.resize(rows * n + 1U);
+            for (usize i = 0; i < rows * n; ++i)
+            {
+                m[i] = -static_cast<T>(1U + i % 3U) / T(7);
+            }
+            m[rows * n] = std::numeric_limits<T>::quiet_NaN();
+            y.resize(rows);
+            for (usize i = 0; i < rows; ++i)
+            {
+                y[i] = T(5);
+            }
+            dn::kernels_of<T>(*level.table).gemv(dn::GemvRows<T>{m.data(), x.data(), y.data(), n, rows, n, T(1), T(0)});
+            for (usize i = 0; i < rows; ++i)
+            {
+                ++c.cases;
+                c.wrong += same_bits(y[i], T(0)) ? 0U : 1U;
+            }
+        }
+    }
+}
+
 template <typename Check> Counts run(Check check)
 {
     crd::memory::TlsfAllocator alloc(16U << 20);
@@ -1315,6 +1368,17 @@ TEST_CASE("dense kernels: every level the host runs gives its declared dot produ
         CHECK(c.cases > 0U);
         CHECK(c.wrong == 0U);
         CHECK(c.apart == 0U);
+    }
+}
+
+TEST_CASE("dense kernels: a dot or gemv row of only -0 products is +0 on every level the host runs",
+          "[dense][kernels]")
+{
+    for (const Counts& c : {run(check_negative_zero_sums<crd::f64>), run(check_negative_zero_sums<crd::f32>)})
+    {
+        CHECK(c.ran >= 1U);
+        CHECK(c.cases > 0U);
+        CHECK(c.wrong == 0U);
     }
 }
 

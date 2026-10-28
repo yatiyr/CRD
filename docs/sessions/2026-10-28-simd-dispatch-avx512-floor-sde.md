@@ -55,6 +55,15 @@ HEAD before: `f57ced95`.
 - `test_dense_kernels.cpp` nested a conditional (tidy). The 36 changed files are tidy-clean (one clang-tidy crash on
   the first pass, clean on the rerun).
 
+## The constant +0 audit
+
+Every `setzero`/`zero()` in the eleven families' kernel units and in `vector_steps.hpp` (113 sites) was classified.
+None is an operand of an add or fma in straight-line code any more: the accumulator seeds of dense, direct, sparse,
+stats and tensor are loop-carried, and the rest are select, mask, compare, max and pack operands or `0 - x`
+negations, which MSVC keeps. Stats' Student-t terms are never -0. Sparse already checks rows of signed zeros against
+CSR (`-0` in A and x). Dense gains a case whose dot and gemv rows hold only -0 products and must give +0 on every
+level; hosted win-release runs it at every forced level.
+
 ## Tidy needs no per-unit ISA flag
 
 The scout brief held that win-tidy analyses avx512 units under `/arch:AVX2`, so the first `_mm512` call would fail.
@@ -74,5 +83,4 @@ sse2 each `Vec4d`/`Vec8f` is two registers and on portable four-element arrays. 
 ## Left
 
 The fft code generation above; the 512-bit `Vec16f`, `Vec8d` and `Vec16i` types with masked partial loads and their
-probe; each family's zmm body; whether other kernels start a vector sum from a constant +0 (the MSVC fold); the
-`-Wpsabi` notes.
+probe; each family's zmm body; the `-Wpsabi` notes.
