@@ -415,6 +415,31 @@ CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec8d re, Vec8d im) noexc
 #endif
 }
 
+// The complex helpers of Vec4d on eight lanes (four interleaved complex), each the two halves' helper.
+// [a1, a0, a3, a2, ...]: the real and imaginary parts of every complex lane swapped.
+CRD_FORCEINLINE Vec8d swap_pairs(Vec8d a) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_permute_pd(a.v, 0x55);
+    return r;
+#else
+    return Vec8d(swap_pairs(a.lo), swap_pairs(a.hi));
+#endif
+}
+
+// [a0*b0-c0, a1*b1+c1, ...] — fused single-rounded multiply-addsub.
+CRD_FORCEINLINE Vec8d fmaddsub(Vec8d a, Vec8d b, Vec8d c) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    Vec8d r;
+    r.v = _mm512_fmaddsub_pd(a.v, b.v, c.v);
+    return r;
+#else
+    return Vec8d(fmaddsub(a.lo, b.lo, c.lo), fmaddsub(a.hi, b.hi, c.hi));
+#endif
+}
+
 // In-register 8x8 transpose (lane j of row i becomes lane i of row j): unpacks and two 128-bit lane shuffle stages at
 // avx512 (24 ops), Vec4d's transpose4x4 on the four quadrants and a swap of the off-diagonal ones below it. Pure data
 // movement, so every level gives the same bits.

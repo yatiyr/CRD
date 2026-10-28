@@ -6,6 +6,8 @@
 // SoA deinterleave → SoA-codelet → reinterleave round-trip the small-N leaf path used before, and are faster
 // than that prior SoA path at these sizes. The single-transform path is latency-bound (the 128-bit-half
 // lane-merge combine is a dependency chain); the batched N=8 path is throughput-bound and register-resident.
+// The batched paths run per complex lane, four transforms a Vec8d at avx512. The single transform stays on Vec4d at
+// every level: its two halves are its even and odd subsequences, so a wider register is another decomposition.
 // (The full performance scoreboard, including external-library comparisons, lives in the FFT research dossier
 // under docs/research/ — not in engine source.)
 //
@@ -27,81 +29,110 @@
 #include <crd/hesap/fft/fft_kernels.hpp>
 #include <crd/math/kernel_level.hpp>
 #include <crd/math/simd/vec4d.hpp>
+#if CRD_SIMD_HAS_AVX512
+#include <crd/math/simd/vec8d.hpp>
+#endif
 
 namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS
 {
 
 using SmallNVec = crd::math::simd::Vec4d;
+// The batched codelets' step: two transforms of the batch, four in one Vec8d at avx512. The leaf codelets below
+// run per complex lane, so a step's width never changes a transform's bits.
+#if CRD_SIMD_HAS_AVX512
+using SmallNWide = crd::math::simd::Vec8d;
+#else
+using SmallNWide = SmallNVec;
+#endif
 
-// Complex multiply of two interleaved [re,im|re,im] lanes by a broadcast/paired twiddle (wr,wi).
-[[nodiscard]] inline SmallNVec vcmul(SmallNVec x, SmallNVec wr, SmallNVec wi) noexcept
+// A Vec4d's four lanes on every Vec4d of V.
+template <typename V> [[nodiscard]] inline V small_n_lanes(SmallNVec x) noexcept
+{
+    if constexpr (sizeof(V) == sizeof(SmallNVec))
+    {
+        return x;
+    }
+    else
+    {
+        return V(x, x);
+    }
+}
+
+// A leaf twiddle of SmallNTwiddles: the same complex value on every complex lane.
+template <typename V> [[nodiscard]] inline V leaf_twiddle(const crd::f64* p) noexcept
+{
+    return small_n_lanes<V>(SmallNVec::load_aligned(p));
+}
+
+// Complex multiply of interleaved [re,im|re,im] lanes by a broadcast/paired twiddle (wr,wi).
+template <typename V> [[nodiscard]] inline V vcmul(V x, V wr, V wi) noexcept
 {
     return crd::math::simd::fmaddsub(wr, x, wi * crd::math::simd::swap_pairs(x));
 }
 
 // Multiply each complex lane by -i: (re,im) → (im,-re).
-[[nodiscard]] inline SmallNVec vmul_neg_i(SmallNVec x) noexcept
+template <typename V> [[nodiscard]] inline V vmul_neg_i(V x) noexcept
 {
-    return crd::math::simd::swap_pairs(x) * SmallNVec(1.0, -1.0, 1.0, -1.0);
+    return crd::math::simd::swap_pairs(x) * small_n_lanes<V>(SmallNVec(1.0, -1.0, 1.0, -1.0));
 }
 
 // Conjugate each complex lane: (re,im) → (re,-im).
-[[nodiscard]] inline SmallNVec vconj(SmallNVec x) noexcept
+template <typename V> [[nodiscard]] inline V vconj(V x) noexcept
 {
-    return x * SmallNVec(1.0, -1.0, 1.0, -1.0);
+    return x * small_n_lanes<V>(SmallNVec(1.0, -1.0, 1.0, -1.0));
 }
 
 // Radix-2 butterfly (a,b) → (a+b, a-b).
-inline void bfly(SmallNVec& a, SmallNVec& b) noexcept
+template <typename V> inline void bfly(V& a, V& b) noexcept
 {
-    const SmallNVec t = b;
+    const V t = b;
     b = a - t;
     a = a + t;
 }
 
 // Radix-2 butterfly with a -i twist on b: (a,b) → (a + (-i)b, a - (-i)b).
-inline void bfly_i(SmallNVec& a, SmallNVec& b) noexcept
+template <typename V> inline void bfly_i(V& a, V& b) noexcept
 {
-    const SmallNVec t = vmul_neg_i(b);
+    const V t = vmul_neg_i(b);
     b = a - t;
     a = a + t;
 }
 
-// Over-2 split-radix DFT-8 (the two halves carry two independent transforms). Bit-reversed input → natural.
-inline void dft8_over2(SmallNVec* d, const SmallNTwiddles& tw) noexcept
+// Over-2 split-radix DFT-8 (each complex lane carries its own transform, two a Vec4d). Bit-reversed input → natural.
+template <typename V> inline void dft8_over2(V* d, const SmallNTwiddles& tw) noexcept
 {
-    SmallNVec e0 = d[0];
-    SmallNVec e1 = d[1];
-    SmallNVec e2 = d[2];
-    SmallNVec e3 = d[3];
+    V e0 = d[0];
+    V e1 = d[1];
+    V e2 = d[2];
+    V e3 = d[3];
     bfly(e0, e1);
     bfly(e2, e3);
     bfly(e0, e2);
     bfly_i(e1, e3);
-    SmallNVec z10 = d[4];
-    SmallNVec z11 = d[5];
+    V z10 = d[4];
+    V z11 = d[5];
     bfly(z10, z11);
-    SmallNVec z30 = d[6];
-    SmallNVec z31 = d[7];
+    V z30 = d[6];
+    V z31 = d[7];
     bfly(z30, z31);
-    const SmallNVec s0 = z10 + z30;
-    const SmallNVec p0 = z10 - z30;
+    const V s0 = z10 + z30;
+    const V p0 = z10 - z30;
     d[0] = e0 + s0;
     d[4] = e0 - s0;
     d[2] = e2 + vmul_neg_i(p0);
     d[6] = e2 - vmul_neg_i(p0);
-    const SmallNVec t1 = vcmul(z11, SmallNVec::load_aligned(tw.w81r), SmallNVec::load_aligned(tw.w81i));
-    const SmallNVec t3 = vcmul(z31, SmallNVec::load_aligned(tw.w83r), SmallNVec::load_aligned(tw.w83i));
-    const SmallNVec s1 = t1 + t3;
-    const SmallNVec p1 = t1 - t3;
+    const V t1 = vcmul(z11, leaf_twiddle<V>(tw.w81r), leaf_twiddle<V>(tw.w81i));
+    const V t3 = vcmul(z31, leaf_twiddle<V>(tw.w83r), leaf_twiddle<V>(tw.w83i));
+    const V s1 = t1 + t3;
+    const V p1 = t1 - t3;
     d[1] = e1 + s1;
     d[5] = e1 - s1;
     d[3] = e3 + vmul_neg_i(p1);
     d[7] = e3 - vmul_neg_i(p1);
 }
 
-// Over-2 radix-4 DFT-4 (in place, the two halves independent). Bit-reversed input → natural.
-inline void dft4_over2(SmallNVec* g) noexcept
+// Over-2 radix-4 DFT-4 (in place, every complex lane independent). Bit-reversed input → natural.
+template <typename V> inline void dft4_over2(V* g) noexcept
 {
     bfly(g[0], g[1]);
     bfly(g[2], g[3]);
@@ -109,22 +140,22 @@ inline void dft4_over2(SmallNVec* g) noexcept
     bfly_i(g[1], g[3]);
 }
 
-// Over-2 split-radix DFT-16 (the two halves independent). Bit-reversed input → natural.
-inline void dft16_over2(const SmallNVec* in, SmallNVec* out, const SmallNTwiddles& tw) noexcept
+// Over-2 split-radix DFT-16 (every complex lane independent). Bit-reversed input → natural.
+template <typename V> inline void dft16_over2(const V* in, V* out, const SmallNTwiddles& tw) noexcept
 {
-    SmallNVec u[8];
+    V u[8];
     for (int j = 0; j < 8; ++j)
     {
         u[j] = in[j];
     }
     dft8_over2(u, tw);
-    SmallNVec z1[4];
+    V z1[4];
     for (int j = 0; j < 4; ++j)
     {
         z1[j] = in[8 + j];
     }
     dft4_over2(z1);
-    SmallNVec z3[4];
+    V z3[4];
     for (int j = 0; j < 4; ++j)
     {
         z3[j] = in[12 + j];
@@ -132,10 +163,10 @@ inline void dft16_over2(const SmallNVec* in, SmallNVec* out, const SmallNTwiddle
     dft4_over2(z3);
     for (int k = 0; k < 4; ++k)
     {
-        const SmallNVec t1 = vcmul(z1[k], SmallNVec::load_aligned(tw.w16r[k]), SmallNVec::load_aligned(tw.w16i[k]));
-        const SmallNVec t3 = vcmul(z3[k], SmallNVec::load_aligned(tw.w163r[k]), SmallNVec::load_aligned(tw.w163i[k]));
-        const SmallNVec s = t1 + t3;
-        const SmallNVec p = t1 - t3;
+        const V t1 = vcmul(z1[k], leaf_twiddle<V>(tw.w16r[k]), leaf_twiddle<V>(tw.w16i[k]));
+        const V t3 = vcmul(z3[k], leaf_twiddle<V>(tw.w163r[k]), leaf_twiddle<V>(tw.w163i[k]));
+        const V s = t1 + t3;
+        const V p = t1 - t3;
         out[k] = u[k] + s;
         out[k + 8] = u[k] - s;
         out[k + 4] = u[k + 4] + vmul_neg_i(p);
@@ -270,32 +301,52 @@ inline void small_n_fft_f64(double* data, crd::usize n, bool forward) noexcept
     }
 }
 
+// run<V>(t) over the transforms of an even batch b: four a step on SmallNWide at avx512, then a last pair on
+// SmallNVec, so every transform takes the same operations at every level.
+template <typename Run> inline void for_transform_steps(crd::usize b, Run run) noexcept
+{
+    constexpr crd::usize wide = sizeof(SmallNWide) / (2 * sizeof(crd::f64));
+    crd::usize t = 0;
+    for (; t + wide <= b; t += wide)
+    {
+        run.template operator()<SmallNWide>(t);
+    }
+    if constexpr (wide != 2U)
+    {
+        if (t + 1 < b)
+        {
+            run.template operator()<SmallNVec>(t);
+        }
+    }
+}
+
 // BATCHED N=8 (the v10-e fast path): `b` transforms in element-major layout (element i of transform t at
-// i·b+t). Two adjacent transforms (t, t+1) at a fixed element are CONTIGUOUS ⇒ one 4-lane load = the over-2
-// vector [transform t | transform t+1]. The whole size-8 transform stays in 8 vectors ⇒ no spill, no intermediate
+// i·b+t). Adjacent transforms (t, t+1, ...) at a fixed element are CONTIGUOUS ⇒ one load = the over-2 vector
+// [transform t | transform t+1 | ...]. The whole size-8 transform stays in 8 vectors ⇒ no spill, no intermediate
 // memory pass (the SoA-vectorized-over-batch path pays log₂(8) full passes). Requires b even (caller guards).
 // Inverse = the conj trick.
 inline void small_n_batched8_f64(double* data, crd::usize b, bool forward) noexcept
 {
     const SmallNTwiddles& tw = small_n_twiddles();
-    constexpr crd::usize idx8[8] = {0, 4, 2, 6, 1, 5, 3, 7}; // bit-reversed size-8 input order
-    for (crd::usize t = 0; t + 1 < b; t += 2)
-    {
-        SmallNVec ig[8];
-        for (int j = 0; j < 8; ++j)
-        {
-            const SmallNVec v = SmallNVec::load(data + (idx8[j] * b + t) * 2);
-            ig[j] = forward ? v : vconj(v);
-        }
-        dft8_over2(ig, tw);
-        for (crd::usize k = 0; k < 8; ++k)
-        {
-            (forward ? ig[k] : vconj(ig[k])).store(data + (k * b + t) * 2);
-        }
-    }
+    for_transform_steps(b,
+                        [&]<typename V>(crd::usize t) noexcept
+                        {
+                            constexpr crd::usize idx8[8] = {0, 4, 2, 6, 1, 5, 3, 7}; // bit-reversed size-8 order
+                            V ig[8];
+                            for (int j = 0; j < 8; ++j)
+                            {
+                                const V v = V::load(data + (idx8[j] * b + t) * 2);
+                                ig[j] = forward ? v : vconj(v);
+                            }
+                            dft8_over2(ig, tw);
+                            for (crd::usize k = 0; k < 8; ++k)
+                            {
+                                (forward ? ig[k] : vconj(ig[k])).store(data + (k * b + t) * 2);
+                            }
+                        });
 }
 
-// BATCHED N=16: same over-2 construction as N=8 (two adjacent transforms share one vector), driven by the
+// BATCHED N=16: same over-2 construction as N=8 (adjacent transforms share one vector), driven by the
 // split-radix `dft16_over2` register-resident leaf — the whole size-16 transform stays in registers, no
 // log₂(n) memory passes. `sig16` is the split-radix input order (even half bit-reversed-8 = 2·{0,4,2,6,1,5,3,7};
 // odd quarters {1,9,5,13} and {3,11,7,15}). Requires b even; the caller ALSO guards the working set to stay
@@ -304,22 +355,23 @@ inline void small_n_batched8_f64(double* data, crd::usize b, bool forward) noexc
 inline void small_n_batched16_f64(double* data, crd::usize b, bool forward) noexcept
 {
     const SmallNTwiddles& tw = small_n_twiddles();
-    constexpr crd::usize sig16[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
-    for (crd::usize t = 0; t + 1 < b; t += 2)
-    {
-        SmallNVec ig[16];
-        SmallNVec og[16];
-        for (int j = 0; j < 16; ++j)
-        {
-            const SmallNVec v = SmallNVec::load(data + (sig16[j] * b + t) * 2);
-            ig[j] = forward ? v : vconj(v);
-        }
-        dft16_over2(ig, og, tw);
-        for (crd::usize k = 0; k < 16; ++k)
-        {
-            (forward ? og[k] : vconj(og[k])).store(data + (k * b + t) * 2);
-        }
-    }
+    for_transform_steps(b,
+                        [&]<typename V>(crd::usize t) noexcept
+                        {
+                            constexpr crd::usize sig16[16] = {0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15};
+                            V ig[16];
+                            V og[16];
+                            for (int j = 0; j < 16; ++j)
+                            {
+                                const V v = V::load(data + (sig16[j] * b + t) * 2);
+                                ig[j] = forward ? v : vconj(v);
+                            }
+                            dft16_over2(ig, og, tw);
+                            for (crd::usize k = 0; k < 16; ++k)
+                            {
+                                (forward ? og[k] : vconj(og[k])).store(data + (k * b + t) * 2);
+                            }
+                        });
 }
 
 } // namespace crd::hesap::fft::detail::inline CRD_MATH_LEVEL_NS

@@ -198,11 +198,12 @@ template <typename T> void check_every_level()
     }
 }
 
-// The batched paths: N=8 (even and odd batch), N=16 inside and past the over-2 cache budget, the batched leaves
+// The batched paths: N=8 (an odd batch, one pair, four-transform steps and a last pair) and N=16 (steps and a last
+// pair, two steps) inside and past the over-2 cache budget, the batched leaves
 // (16..256 at a multiple of the vector width; at one and three tiles of codelet_lanes.hpp, so avx512 runs a two-tile
-// step and an odd last tile), the radix-2/4/8 butterflies at three tiles and a column (a two-tile step, an odd tile
-// and the scalar tail in one call) and the hierarchical sub-FFTs at their block width. Each shape takes random inputs
-// and negative zeros, whose signs every level must keep as portable does.
+// step and an odd last tile), the radix-2/4/8 butterflies at three tiles and a column (a two-tile step, an odd tile and
+// the scalar tail in one call) and the hierarchical sub-FFTs at their block width. Each shape takes random inputs and
+// negative zeros, whose signs every level must keep as portable does.
 template <typename T> void check_batched_every_level()
 {
     constexpr usize tile = 32 / sizeof(T);
@@ -213,8 +214,10 @@ template <typename T> void check_batched_every_level()
         usize batch;
     };
     const Shape shapes[] = {
+        {8, 2},
         {8, 6},
         {8, 7},
+        {16, 6},
         {16, 8},
         {16, 256},
         {32, 16},

@@ -589,6 +589,14 @@ usize d_fmaddsub(const Input& in, u64* out) noexcept
 {
     return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::fmaddsub(a, b, c); });
 }
+usize d8_fmaddsub(const Input& in, u64* out) noexcept
+{
+    return each_f64<Vec8d>(in, out, [](Vec8d a, Vec8d b, Vec8d c) { return s::fmaddsub(a, b, c); });
+}
+usize d8_swap_pairs(const Input& in, u64* out) noexcept
+{
+    return each_f64<Vec8d>(in, out, [](Vec8d a, Vec8d, Vec8d) { return s::swap_pairs(a); });
+}
 usize d_addsub(const Input& in, u64* out) noexcept
 {
     return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d) { return s::addsub(a, b); });
@@ -903,8 +911,10 @@ constexpr Op kOps[] = {
     {"vec8d partial load/store", Compare::F64Value, &F64<Vec8d>::partial},
     {"vec8d halves", Compare::Bits, &d8_halves},
     {"vec4d fmaddsub", Compare::F64Value, &d_fmaddsub},
+    {"vec8d fmaddsub", Compare::F64Value, &d8_fmaddsub},
     {"vec4d addsub", Compare::F64Value, &d_addsub},
     {"vec4d shuffles", Compare::Bits, &d_shuffles},
+    {"vec8d swap_pairs", Compare::Bits, &d8_swap_pairs},
     {"vec4d pair loads", Compare::Bits, &d_loads},
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
     {"vec8d transpose8x8", Compare::Bits, &d8_transpose},
