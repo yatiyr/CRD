@@ -181,7 +181,8 @@ function(_crd_add_kernel_unit archive objects level feature)
     # generation has no call to inline across it, yet it ran the unit's code generation again in every image that
     # links the archive (an LTCG link of one hesap-fft specimen, five fft units, passed 40 GB on win-release). The
     # objects then hold the instructions the ISA isolation guard reads (ADR-0134 §6).
-    set_target_properties(${objects} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
+    set_target_properties(${objects} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF CRD_KERNEL_LEVEL_NAME ${level}
+                          CRD_KERNEL_FEATURE_NAME "${feature}" CRD_KERNEL_ARCHIVE ${archive})
     if(feature)
         string(TOUPPER "${feature}" feature_name)
         target_compile_definitions(${objects} PRIVATE CRD_KERNEL_FEATURE_${feature_name}=1)
@@ -293,6 +294,63 @@ function(crd_add_kernel_level_tests executable filter)
                                  LABELS "cerid.test.target=${executable}")
         endforeach()
     endif()
+endfunction()
+
+# crd_add_isa_isolation_check(): once, after every target exists (ADR-0134 §6). Writes
+# <build>/isa-isolation/<config>.manifest, one line per kernel object (its level, feature and archive), general object
+# (its target and the archive or program it builds) and image, and registers crd-check-isa-isolation: no general code
+# above the floor, no kernel object above its level, no symbol shared between the levels and general code
+# (scripts/check-isa-isolation.py). A built archive or program must have every object it lists. Where objects hold
+# link-time IL, the guard judges the linked images, which MSVC links therefore map (/MAP, root CMakeLists.txt).
+function(crd_add_isa_isolation_check)
+    if(NOT CRD_BUILD_TESTS OR NOT (_crd_arch_x64 OR _crd_arch_arm64))
+        return()
+    endif()
+    find_package(Python3 3.12 REQUIRED COMPONENTS Interpreter)
+    _crd_collect_build_targets("${CMAKE_SOURCE_DIR}" targets)
+    set(content "")
+    foreach(target IN LISTS targets)
+        get_target_property(type ${target} TYPE)
+        if(NOT type MATCHES "^(STATIC_LIBRARY|SHARED_LIBRARY|MODULE_LIBRARY|OBJECT_LIBRARY|EXECUTABLE)$")
+            continue()
+        endif()
+        get_target_property(level ${target} CRD_KERNEL_LEVEL_NAME)
+        if(level)
+            get_target_property(feature ${target} CRD_KERNEL_FEATURE_NAME)
+            get_target_property(archive ${target} CRD_KERNEL_ARCHIVE)
+            set(prefix "kernel\t${level}\t${feature}\t$<TARGET_FILE:${archive}>\t")
+        elseif(type STREQUAL "OBJECT_LIBRARY")
+            set(prefix "general\t${target}\t\t")
+        else()
+            set(prefix "general\t${target}\t$<TARGET_FILE:${target}>\t")
+        endif()
+        set(objects "$<TARGET_OBJECTS:${target}>")
+        string(APPEND content "$<$<BOOL:${objects}>:${prefix}$<JOIN:${objects},\n${prefix}>\n>")
+        if(type MATCHES "^(SHARED_LIBRARY|MODULE_LIBRARY|EXECUTABLE)$")
+            string(APPEND content "image\t${target}\t$<TARGET_FILE:${target}>\n")
+        endif()
+    endforeach()
+    file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/isa-isolation/$<CONFIG>.manifest" CONTENT "${content}")
+    if(_crd_arch_x64)
+        set(arch x64)
+    else()
+        set(arch arm64)
+    endif()
+    set(tools "")
+    if(WIN32)
+        set(os windows)
+    else()
+        set(os linux)
+        # GCC's slim LTO objects list their symbols through the compiler's plugin (gcc-nm beside gcc-ar).
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_AR MATCHES "gcc-ar(-[0-9.]+)?$")
+            string(REGEX REPLACE "gcc-ar(-[0-9.]+)?$" "gcc-nm\\1" gcc_nm "${CMAKE_CXX_COMPILER_AR}")
+            list(APPEND tools --gcc-nm "${gcc_nm}")
+        endif()
+    endif()
+    add_test(NAME crd-check-isa-isolation
+        COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-isa-isolation.py"
+                --manifest "${CMAKE_BINARY_DIR}/isa-isolation/$<CONFIG>.manifest" --arch ${arch} --os ${os} ${tools})
+    set_tests_properties(crd-check-isa-isolation PROPERTIES TIMEOUT 1800 ENVIRONMENT "PYTHONUTF8=1")
 endfunction()
 
 # ---- Determinism: ADR-0063 FP contract -------------------------------------

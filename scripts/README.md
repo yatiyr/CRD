@@ -49,8 +49,11 @@ Run commands from the repository root. Build/test rules and exact quality requir
   pinned ClangBuildAnalyzer that `install-clang-build-analyzer.py` builds into `~/.cerid/tools`; `--vcperf <session>`
   adds C++ Build Insights in an elevated shell) and `render`/`compare` print its tables;
   `check-include-budget.py --build <tree>` (the `crd-check-include-budget` CTest) fails a hot header of
-  `include-budget.json` that reaches a forbidden standard header, with the include chain. `elevated-captures.bat` is
-  the user's one elevated step (overhead sampling and Build Insights; `sampling` or `build-insights` runs one alone).
+  `include-budget.json` that reaches a forbidden standard header, with the include chain.
+  `check-isa-isolation.py --manifest <tree>/isa-isolation/<config>.manifest` (the `crd-check-isa-isolation` CTest,
+  ADR-0134 §6) fails general code above the CPU floor, a kernel unit above its level and a symbol shared between a
+  level and general code, judging IL lanes on the linked images; `isa-isolation.json` holds its reviewed exceptions.
+  `elevated-captures.bat` is the user's one elevated step (overhead sampling and Build Insights; `sampling` or `build-insights` runs one alone).
   `wsl-lane.sh build` takes `CRD_LANE_KEEP_GOING=1` to report every broken unit of a widely included header change in
   one round.
 - Public consumption ([design](../docs/design/public-consumption.md)): `check-headers.py --build <dir> --changed`

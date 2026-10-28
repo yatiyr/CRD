@@ -1574,9 +1574,8 @@ f32 beta  (f32 a, f32 b) noexcept { return static_cast<f32>(beta  (static_cast<f
 // equals the scalar result on lane k bit-for-bit (the math suite verifies
 // this; the [simd] tag in test_deterministic.cpp pins the contract).
 //
-// Performance: on AVX2 with Vec8f, the inner polynomial evaluation is one
-// vmulps+vaddps per Horner step over 8 lanes — the disasm check
-// (crd-simd-emission-check) confirms 256-bit FP ops are emitted.
+// Performance: on the SSE2 baseline Vec8f is two 128-bit halves, so each
+// Horner step is two mulps+addps pairs over 8 lanes.
 // ===========================================================================
 
 namespace

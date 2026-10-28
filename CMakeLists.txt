@@ -276,6 +276,13 @@ if(CRD_SHIPPING OR CRD_NATIVE_PROFILES)
     message(STATUS "[crd] Shipping condition: ${_crd_shipping}; max optimizations + symbols, deterministic FP preserved")
 endif()
 
+# Link-time code generation leaves general objects as IL, so the ISA isolation guard judges that code on the linked
+# images (ADR-0134 §6). The map beside each MSVC or lld-link image names every function's address and object.
+crd_profile_condition(_crd_ipo CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+if(MSVC)
+    add_link_options($<${_crd_ipo}:/MAP>)
+endif()
+
 # ----- Compiler Warnings (Cerid targets only — propagates via crd-core) -----
 # Third-party CPM packages never see these flags; they inherit them only
 # if they transitively link crd-core, which they don't.
@@ -1117,6 +1124,7 @@ if(CRD_PROJECT_SYNC AND CMAKE_GENERATOR MATCHES "^Visual Studio")
     )
 endif()
 crd_apply_native_profiles("${PROJECT_SOURCE_DIR}")
+crd_add_isa_isolation_check()
 crd_organize_targets("${CMAKE_CURRENT_SOURCE_DIR}")
 if(TARGET crd-sandbox)
     set_property(DIRECTORY PROPERTY VS_STARTUP_PROJECT crd-sandbox)

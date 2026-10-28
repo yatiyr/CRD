@@ -871,49 +871,6 @@ run_command([sys.executable, '-c',
         self.assertTrue(result['environment_ready'])
         self.assertIn('snapshot_revalidated', result['synchronization'])
 
-    def test_simd_guard_preserves_decoder_failures_and_explicit_skips(self):
-        # Deliberately controlled decoder output exercises guard reporting, not actual compiler emission.
-        tool_dir = Path(self.temp.name) / 'decoder tools'
-        tool_dir.mkdir()
-        obj = tool_dir / 'fixture object.obj'
-        obj.write_bytes(b'disassembly fixture')
-        environment = dict(os.environ)
-        path_key = next(key for key in environment if key.upper() == 'PATH')
-        environment[path_key] = str(tool_dir) + os.pathsep + environment[path_key]
-        decoder = tool_dir / ('dumpbin.bat' if os.name == 'nt' else 'objdump')
-        command = ([shutil.which('powershell'), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
-                    str(ROOT / 'scripts/check_simd_emission.ps1'), '-Obj', str(obj)] if os.name == 'nt'
-                   else [shutil.which('bash'), str(ROOT / 'scripts/check_simd_emission.sh'), '--obj', str(obj)])
-        cases = [(9, 0, False, 'avx2', '0', 2), (9, 0, False, 'avx2', '1', 2),
-                 (0, 0, False, 'avx2', '0', 1), (0, 0, False, 'avx2', '1', 77),
-                 (0, 0, False, 'neon', '0', 77), (0, 110, False, 'scalar', '0', 0),
-                 (0, 110, False, 'avx2', '0', 1), (0, 110, True, 'avx2', '0', 0),
-                 (0, 110, True, 'sse2', '0', 1)]
-        for index, (exit_code, count, ymm, expect, ipo, expected_exit) in enumerate(cases):
-            with self.subTest(exit_code=exit_code, count=count, ymm=ymm, expect=expect, ipo=ipo):
-                instruction = ('  0000000000000000: 90 nop' if os.name == 'nt' else '  0: 90 nop')
-                lines = [instruction] * count + (['vaddps ymm0, ymm1, ymm2'] if ymm else [])
-                if os.name == 'nt':
-                    script = '@echo off\n' + ''.join('echo ' + line + '\n' for line in lines)
-                    if exit_code:
-                        script += 'echo fixture decoder diagnostic 1>&2\n'
-                    script += f'exit /b {exit_code}\n'
-                else:
-                    script = '#!/usr/bin/env bash\n' + ''.join("printf '%s\\n' '" + line + "'\n" for line in lines)
-                    script += f'exit {exit_code}\n'
-                decoder.write_text(script, encoding='utf-8', newline='\n')
-                decoder.chmod(0o755)
-                args = ['-Expect', expect, '-Ipo', ipo] if os.name == 'nt' else ['--expect', expect, '--ipo', ipo]
-                # The budget only bounds a hang; it is not the check. 15 s was too tight for the hosted
-                # windows-2025-vs2026 runner (run 37814393863: both decoder-failure cases ran out of time, while earlier
-                # runs of the same test took 13.7 s to 33.7 s in total).
-                result = run_command(command + args, self.root, environment,
-                                     Path(self.temp.name) / f'decoder-result-{index}', 60)
-                output = Path(result['log']).read_text(errors='replace')
-                self.assertEqual(result['exit_code'], expected_exit, output)
-                if exit_code:
-                    self.assertIn('exited 9', output)
-
     def test_native_check_uses_owner_baseline_even_with_a_readable_file_api_model(self):
         from project_sync.service import state_dir
         from project_sync.storage import Conflict

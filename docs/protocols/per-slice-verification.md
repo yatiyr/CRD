@@ -22,7 +22,7 @@ entries in any test binary's `--list-tests` output:
 | Guard | What it catches |
 |---|---|
 | `crd-no-non-ascii-test-names` | Windows ctest mojibakes non-ASCII chars in TEST_CASE names via CP1254 (Turkish Windows). `→` / `—` / `²` / `°` in TEST_CASE names fail to match argv. v3-close exposed 19 instances in v3b/v3c that had shipped past the test-binary-only verification. |
-| `crd-simd-emission-check` | The compiler must emit AVX2 `ymm` instructions when the preset asks for them. Catches LTCG fold-back, preprocessor-skipped SIMD intrinsic includes, etc. |
+| `crd-check-isa-isolation` | ADR-0134 §6: general code holds no instruction above the CPU floor, each kernel unit none above its level (and its level's VEX or EVEX code), and no symbol is shared between a level and general code; IL lanes are judged on the linked images. |
 | `crd-no-std-math-check` | Bans `std::sin/cos/exp/log/pow/sqrt/tan/asin/acos/atan/sinh/cosh/tanh` outside `crd::math::deterministic`. Catches accidental drift from ADR-0063 determinism contract. |
 | `crd-no-std-sort-check` | Bans `std::sort` (use `crd::containers::stable_sort` instead). Catches cross-platform-sort-order divergence. |
 | `crd-no-untagged-physical-numeric` (lands at v0a-3) | Bans bare-`f32` / `f64` for fields named `length`/`mass`/`force`/etc. — the units-system enforcement. |

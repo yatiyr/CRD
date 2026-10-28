@@ -94,9 +94,9 @@ on the stale August object path ("obj not found", never a pass) and then **passe
 `test_simd.cpp.o` for the current tree: 23,212 instructions, 445 YMM references. Accepted; Done once REPO.DEV.3b.3 closes.
 
 **REPO.DEV.3b.5 — decoder errors, IPO/unsupported skips, generator-owned arguments, no skip-as-pass.**
-[check_simd_emission.ps1](../../scripts/check_simd_emission.ps1) captures native stderr only around the decoder call,
-saves `dumpbin`'s exit before restoring the preference, and exits 2 on a decoder failure or a missing tool;
-[check_simd_emission.sh](../../scripts/check_simd_emission.sh) mirrors it with `objdump`. NEON is an explicit exit 77
+`check_simd_emission.ps1` (retired 2026-10-29 for `crd-check-isa-isolation`) captures native stderr only around
+the decoder call, saves `dumpbin`'s exit before restoring the preference, and exits 2 on a decoder failure or a
+missing tool; `check_simd_emission.sh` mirrors it with `objdump`. NEON is an explicit exit 77
 skip ("not implemented"); insufficient native code is exit 77 only when the configured target has IPO and exit 1
 otherwise. CTest maps 77 through `SKIP_RETURN_CODE 77`, and `check` turns any skipped or disabled test into
 `incomplete` (exit 3), so a skip never reads as a pass. The generator-owned arguments are the CMake expressions above;

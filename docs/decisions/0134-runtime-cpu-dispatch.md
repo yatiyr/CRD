@@ -97,7 +97,20 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
 6. **Isolation guard.** A CTest on every lane disassembles the baseline code and fails on any instruction above the
    floor (VEX or EVEX encodings on x64) outside the per-level namespaces, and on any per-level symbol a baseline unit
    defines. LTCG objects of general code hold IL, so MSVC trees judge those on the linked executables with their PDB
-   symbols; kernel objects hold their instructions (§5).
+   symbols; kernel objects hold their instructions (§5). Landed 2026-10-29 as `crd-check-isa-isolation`
+   (`scripts/check-isa-isolation.py`, over a per-configuration manifest of kernel objects with their level, general
+   objects and images), amended: the floor also bars REX2 and XOP and every legacy-encoded instruction of a later
+   level (SSE3 to SSE4.2, POPCNT, LZCNT, MOVBE, AES, PCLMUL, SHA, GFNI, RDRAND, ADX, XSAVE and XGETBV, RDTSCP,
+   CLFLUSHOPT, CLWB, PREFETCHW; not TZCNT, which every x86-64 CPU runs as BSF; on Windows CMPXCHG16B, PREFETCHW and
+   LAHF/SAHF are inside the OS's own floor), and on ARM64 SVE, SME, LSE and the later-revision instructions; each
+   kernel unit is held to its level, with VEX code at avx2 and EVEX at avx512 (this retires `crd-simd-emission-check`);
+   a symbol is per-level when its mangled name names a level namespace, and a kernel object defines no other
+   non-local symbol than its table and reviewed compiler constants. The linked-image route covers every IL lane, MSVC
+   and clang-cl through the `/MAP` map of each IPO link (each function's address and object, so win-release needs no
+   PDB; MSVC's jump tables in `.text` are data from their `$LN` label to the next function), GCC slim LTO through the
+   images' symbol tables and its objects' symbols through `gcc-nm`. `scripts/isa-isolation.json` holds the reviewed
+   exceptions, each naming its runtime check (the MSVC STL's `__isa_available` tests, zstd's dynamic BMI2, XGETBV
+   behind OSXSAVE).
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
    order, and single-rounded FMA only where every level computes it single-rounded. The others declare tolerances
    against the portable reference. Each kernel's differential test runs every level the host executes, in one process.

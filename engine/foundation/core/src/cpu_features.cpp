@@ -220,8 +220,10 @@ void cpuid(crd::u32 leaf, crd::u32 subleaf, crd::u32 (&out)[4]) noexcept // NOLI
 #endif
 }
 
-// XGETBV(0). GCC and Clang gate the _xgetbv intrinsic behind -mxsave, which this baseline unit does not take.
-crd::u64 read_xcr0() noexcept
+// XGETBV(0). GCC and Clang gate the _xgetbv intrinsic behind -mxsave, which this baseline unit does not take. The
+// caller runs it only when CPUID reports OSXSAVE; kept out of line, it is the one function of general code the ISA
+// isolation guard's reviewed XGETBV exception names (scripts/isa-isolation.json).
+CRD_NOINLINE crd::u64 read_xcr0() noexcept
 {
 #if CRD_COMPILER_MSVC
     return _xgetbv(0U);

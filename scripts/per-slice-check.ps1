@@ -5,7 +5,7 @@
 # A slice is NOT closed until this script returns exit 0. Per the Strategic Execution
 # Plan locked 2026-05-15 + CLAUDE.md DoD #8 + memory feedback_per_slice_run_ctest.md:
 #
-# Guard tests (crd-no-non-ascii-test-names / crd-simd-emission-check /
+# Guard tests (crd-no-non-ascii-test-names / crd-check-isa-isolation /
 # crd-no-std-math-check / crd-no-std-sort-check / future crd-no-untagged-physical-numeric)
 # are registered as separate ctest tests via add_test(NAME ...) in tests/foundation/math/CMakeLists.txt
 # and do NOT appear in any test binary's --list-tests output. The test binary saying

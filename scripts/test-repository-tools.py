@@ -11,6 +11,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tarfile
@@ -130,6 +131,9 @@ source_routes_spec = importlib.util.spec_from_file_location('check_source_routes
                                                             ROOT / 'scripts/check-source-routes.py')
 source_routes = importlib.util.module_from_spec(source_routes_spec)
 source_routes_spec.loader.exec_module(source_routes)
+isa_spec = importlib.util.spec_from_file_location('check_isa_isolation', ROOT / 'scripts/check-isa-isolation.py')
+isa_isolation = importlib.util.module_from_spec(isa_spec)
+isa_spec.loader.exec_module(isa_isolation)
 sys.path.insert(0, str(ROOT / 'scripts'))
 import pins as pins_registry
 from cerid_dev import tidy as tidy_gate  # noqa: E402  # noqa: E402  (scripts/pins.py; the installers import the same module)
@@ -4362,6 +4366,269 @@ class CiPresetSteps(unittest.TestCase):
             respecified['preset_steps'][step] = spec
             problems = ci_tiers.validate(respecified, presets, workflow)
             self.assertTrue(any(text in p for p in problems), (spec, problems))
+
+
+def _elf_object(sections):
+    """A minimal little-endian ELF64 object with the named sections: (name, flags, size)."""
+    names = b'\0' + b''.join(name + b'\0' for name, _, _ in sections) + b'.shstrtab\0'
+    headers = [struct.pack('<IIQQQQIIQQ', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)]
+    offset = 1
+    for name, flags, size in sections:
+        headers.append(struct.pack('<IIQQQQIIQQ', offset, 1, flags, 0, 0, size, 0, 0, 1, 0))
+        offset += len(name) + 1
+    names_at = 64
+    headers.append(struct.pack('<IIQQQQIIQQ', offset, 3, 0, 0, names_at, len(names), 0, 0, 1, 0))
+    shoff = names_at + len(names)
+    header = bytearray(64)
+    header[:6] = b'\x7fELF\x02\x01'
+    struct.pack_into('<Q', header, 0x28, shoff)
+    struct.pack_into('<HHH', header, 0x3A, 64, len(headers), len(headers) - 1)
+    return bytes(header) + names + b''.join(headers)
+
+
+class IsaIsolation(unittest.TestCase):
+    """The ISA isolation guard (ADR-0134 §6) on decoder-output fixtures."""
+
+    def setUp(self):
+        self.exceptions = isa_isolation.Exceptions()
+
+    def test_encodings_in_64_bit_mode(self):
+        cases = {'C5 F8 77': 'VEX', 'C4 E2 79 18': 'VEX', '64 C5 F9 7E': 'VEX', '67 62 F1 7C 48': 'EVEX',
+                 'D5 10 89 C0': 'REX2', '8F E8 78 C2': 'XOP', '8F 00': None, '66 0F 38 00 C1': None,
+                 '48 89 C8': None, 'F3 48 0F B8 C7': None}
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(expected, isa_isolation.encoding([int(byte, 16) for byte in text.split()]))
+
+    def test_floor_scan_names_each_function_and_category(self):
+        dump = ('Dump of file a.obj\n\nFile Type: COFF OBJECT\n\n?f@@YAXXZ (void __cdecl f(void)):\n'
+                '  0000000000000000: C5 FC 58 C1        vaddps      ymm0,ymm0,ymm1\n'
+                '$LN4:\n'
+                '  0000000000000004: 64 C5 F9 7E 00     vmovd       dword ptr fs:[rax],xmm0\n'
+                '?g@@YAXXZ (void __cdecl g(void)):\n'
+                '  0000000000000010: F3 48 0F B8 C7     popcnt      rax,rdi\n'
+                '  0000000000000015: 66 0F 38 00 C1     pshufb      xmm0,xmm1\n'
+                '  000000000000001A: F0 48 0F C7 0E     lock cmpxchg16b oword ptr [rsi]\n'
+                '  000000000000001F: 48 89 C8           mov         rax,rcx\n')
+        hits = [(function, kind) for function, _address, kind, _line in isa_isolation.scan_x64(dump, True)]
+        self.assertEqual([('?f@@YAXXZ', 'VEX'), ('?f@@YAXXZ', 'VEX'), ('?g@@YAXXZ', 'popcnt'),
+                          ('?g@@YAXXZ', 'pshufb')], hits)
+        elf = ('0000000000000000 <crd::f()>:\n   0:\tc5 fc 58 c1          \tvaddps ymm0,ymm0,ymm1\n'
+               '0000000000000010 <crd::g()>:\n  10:\tf0 48 0f c7 0e       \tlock cmpxchg16b OWORD PTR [rsi]\n')
+        hits = [(function, kind) for function, _address, kind, _line in isa_isolation.scan_x64(elf, False)]
+        self.assertEqual([('crd::f()', 'VEX'), ('crd::g()', 'cmpxchg16b')], hits)
+
+    def test_general_symbols_hold_no_level(self):
+        judge = isa_isolation.judge_general_symbols
+        self.assertEqual([], judge([('crd::math::general::Vec4f::load(float const*)', True), ('?f@@YAXXZ', True)]))
+        self.assertEqual(1, len(judge([('?add@avx2@math@crd@@YA?AUVec8f@123@U4123@0@Z', True)])))
+        self.assertEqual(1, len(judge([('crd::math::sse2::exp(double)', False)])))
+        self.assertEqual(1, len(judge([('crd::hesap::tensor::kTensorKernelsAvx2', True)])))
+
+    def test_kernel_symbols_stay_in_their_level(self):
+        allowed = self.exceptions.kernel_symbols
+        judge = isa_isolation.judge_kernel_symbols
+        good = [('?kTensorKernelsAvx2@tensor@hesap@crd@@3UTensorKernels@123@B', True),
+                ('__real@3ff0000000000000', True),
+                ('??$bit_cast@VVec8f@avx2@math@crd@@@std@@YA?AVVec8f@avx2@math@crd@@AEBM@Z', True),
+                ('crd::hesap::tensor::avx2::walk(int)', True), ('local_helper', False)]
+        self.assertEqual(([], 1), judge('avx2', good, allowed))
+        failures, _ = judge('avx2', [('??$min@H@std@@YAAEBHAEBH0@Z', True)], allowed)
+        self.assertEqual(1, len(failures))
+        failures, tables = judge('avx2', [('crd::hesap::tensor::kTensorKernelsAvx2AvxVnni', True)], allowed)
+        self.assertEqual((1, 0), (len(failures), tables))
+        self.assertEqual(([], 1), judge('avx2_avxvnni', [('crd::hesap::tensor::kTensorKernelsAvx2AvxVnni', True)],
+                                        allowed))
+        failures, _ = judge('sse2', [('crd::math::avx2::exp(double)', True)], allowed)
+        self.assertEqual(1, len(failures))
+
+    def test_kernel_code_stays_within_its_level(self):
+        judge = isa_isolation.judge_kernel_code
+        vex = ('f', 0, 'VEX', 'vaddps')
+        self.assertEqual([], judge('avx2', [vex, ('f', 4, 'lzcnt', 'lzcnt'), ('f', 8, 'popcnt', 'popcnt')], True))
+        self.assertEqual(1, len(judge('avx2_avxvnni', [vex, ('f', 4, 'EVEX', 'vpdpbusd')], True)))
+        self.assertEqual([], judge('avx512', [('f', 0, 'EVEX', 'vaddps zmm0'), vex], True))
+        self.assertEqual(1, len(judge('avx2', [('f', 0, 'REX2', 'push2')], True)))
+        self.assertEqual([], judge('sse42', [('f', 0, 'pshufb', 'pshufb'), ('f', 4, 'popcnt', 'popcnt')], True))
+        self.assertEqual(1, len(judge('sse42', [('f', 0, 'EVEX', 'vaddps zmm0')], True)))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'pshufb', 'pshufb')], True)))
+        self.assertEqual([], judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], True))
+        self.assertEqual(1, len(judge('sse2', [('f', 0, 'cmpxchg16b', 'lock cmpxchg16b')], False)))
+        self.assertEqual([], judge('portable', [], True))
+
+    def test_each_family_level_holds_its_table_and_encoding(self):
+        judge = isa_isolation.judge_families
+        self.assertEqual([], judge({('t-avx2.dir', 'avx2'): [1, {'VEX'}], ('t-avx512.dir', 'avx512'): [1, {'EVEX'}],
+                                    ('t-sse2.dir', 'sse2'): [1, set()]}, 'x64'))
+        self.assertEqual(1, len(judge({('t-avx2.dir', 'avx2'): [1, {'popcnt'}]}, 'x64')))
+        self.assertEqual(1, len(judge({('t-avx512.dir', 'avx512'): [1, {'VEX'}]}, 'x64')))
+        self.assertEqual(1, len(judge({('t-sse2.dir', 'sse2'): [0, set()]}, 'x64')))
+        self.assertEqual([], judge({('t-neon.dir', 'neon'): [1, set()]}, 'arm64'))
+        self.assertEqual('crd-fft-fft-avx512.dir',
+                         isa_isolation.object_library('/b/engine/CMakeFiles/crd-fft-fft-avx512.dir/kernels/c_0.cpp.o'))
+
+    def test_msvc_jump_tables_in_objects_are_data(self):
+        dump = ('?f@@YAXXZ (void __cdecl f(void)):\n'
+                '  0000000000000000: FF E0              jmp         rax\n'
+                '$LN5:\n'
+                '  0000000000000002: B8 01 00 00 00     mov         eax,1\n'
+                '  0000000000000007: C5 F8 77           vzeroupper\n'
+                '$LN9:\n'
+                '  0000000000000010: 62\n'
+                '  0000000000000011: C5\n'
+                '?g@@YAXXZ (void __cdecl g(void)):\n'
+                '  0000000000000000: C5 F8 77           vzeroupper\n')
+        layout = ({('3', 0x10)}, {'?f@@YAXXZ': '3', '?g@@YAXXZ': '4'})
+        hits = [(f, a) for f, a, _k, _l in isa_isolation.scan_x64(dump, True, layout)]
+        self.assertEqual([('?f@@YAXXZ', 7), ('?g@@YAXXZ', 0)], hits)
+        self.assertEqual(4, len(isa_isolation.scan_x64(dump, True)))
+        symbols = ('008 00000000 SECT3  notype ()    External     | ?f@@YAXXZ (void __cdecl f(void))\n'
+                   '009 00000002 SECT3  notype       Label        | $LN5\n'
+                   '00A 00000010 SECT3  notype       Static       | $LN9\n'
+                   '00B 00000000 SECT4  notype ()    Static       | ?g@@YAXXZ (void __cdecl g(void))\n'
+                   '00C 00000000 SECT5  notype       External     | ??_C@_04GEEJMEMG@avx2@\n')
+        defined, found = isa_isolation.coff_symbols(symbols)
+        self.assertEqual(({('3', 0x10)}, {'?f@@YAXXZ': '3', '?g@@YAXXZ': '4'}), found)
+        self.assertEqual(['?f@@YAXXZ', '$LN9', '?g@@YAXXZ', '??_C@_04GEEJMEMG@avx2@'], [name for name, _ in defined])
+        self.assertEqual([], isa_isolation.judge_general_symbols(defined))
+        self.assertEqual(1, len(isa_isolation.judge_general_symbols([('??Havx2@simd@math@crd@@YAXXZ', True)])))
+
+    def test_reviewed_exceptions_name_their_scope(self):
+        allows = self.exceptions.allows
+        self.assertTrue(allows('VEX', 'HUF_decompress4X1_usingDTable_internal_bmi2', 'libzstd_static/x.c.o', set()))
+        self.assertTrue(allows('VEX', 'ZSTD_decompressSequences_bmi2.constprop.0', '', set()))
+        self.assertTrue(allows('VEX', 'HUF_decompress4X2_usingDTable_internal_fast_asm_loop', '', set()))
+        self.assertFalse(allows('EVEX', 'HUF_decompress4X1_usingDTable_internal_bmi2', '', set()))
+        self.assertFalse(allows('VEX', 'crd::hesap::tensor::einsum(int)', 'crd-hesap-tensor/einsum.cpp.obj', set()))
+        self.assertTrue(allows('popcnt', '?count@@YAHI@Z', 'crd-hesap-tensor/einsum.cpp.obj', {'?count@@YAHI@Z'}))
+        self.assertFalse(allows('popcnt', '?count@@YAHI@Z', 'crd-hesap-tensor/einsum.cpp.obj', set()))
+        self.assertTrue(allows('lzcnt', '??$_Countl_zero_lzcnt@I@std@@YAHI@Z', 'crd-x/lbvh.cpp.obj', set()))
+        self.assertTrue(allows('popcnt', '??$_Unchecked_popcount@_K@std@@YAH_K@Z', 'crd-x/a.cpp.obj', set()))
+        self.assertFalse(allows('lzcnt', '?count@crd@@YAHI@Z', 'crd-x/lbvh.cpp.obj', set()))
+        self.assertTrue(allows('xgetbv', 'crd::(anonymous namespace)::read_xcr0()', '', set()))
+        self.assertFalse(allows('xgetbv', 'crd::(anonymous namespace)::detect()', '', set()))
+
+    def test_decoded_instructions_are_counted_and_decoders_checked(self):
+        shapes = {('x64', True): '  0000000000000000: C5 F8 77           vzeroupper\n                    00\n',
+                  ('x64', False): '   0:\tc5 f8 77             \tvzeroupper\n',
+                  ('arm64', True): '  0000000000000000: D10043FF  sub         sp,sp,#0x10\n',
+                  ('arm64', False): '   0:\td10043ff \tsub\tsp, sp, #0x10\n'}
+        for shape, text in shapes.items():
+            with self.subTest(shape=shape):
+                self.assertEqual(1, len(isa_isolation.INSTRUCTION[shape].findall(text + 'Summary\n')))
+                self.assertEqual(0, len(isa_isolation.INSTRUCTION[shape].findall('   0: c5 f8 77  vzeroupper\n')))
+        with patch.object(isa_isolation.shutil, 'which', return_value='/usr/bin/llvm-objdump'):
+            with patch.object(isa_isolation, '_run', return_value='LLVM (http://llvm.org/):\n'):
+                with self.assertRaisesRegex(isa_isolation.GuardError, 'not GNU binutils'):
+                    isa_isolation.resolve_tools(SimpleNamespace(gcc_nm=None), False)
+        self.assertTrue(any(p.search('__clang_call_terminate') for p in self.exceptions.kernel_symbols))
+        self.assertTrue(any(p.search('__llvm_profile_raw_version') for p in self.exceptions.kernel_symbols))
+        self.assertTrue(self.exceptions.allows('VEX', 'ZSTD_decompressSequences_bmi2.cold', '', set()))
+
+    def test_arm64_floor(self):
+        above = isa_isolation.arm64_above
+        self.assertEqual('SVE/SME', above('ld1w', '{z0.s}, p0/z, [x0]'))
+        self.assertEqual('ldaddal', above('ldaddal', 'w0, w1, [x2]'))
+        self.assertEqual('casal', above('casal', 'x0, x1, [x2]'))
+        self.assertEqual('FP16', above('fadd', 'h0, h1, h2'))
+        self.assertIsNone(above('fadd', 's0, s1, s2'))
+        self.assertIsNone(above('fcvt', 'h0, s0'))
+        self.assertIsNone(above('zip1', 'v0.4s, v1.4s, v2.4s'))
+        self.assertIsNone(above('add', 'x0, x1, #0x10'))
+        self.assertIsNone(above('.word', '0x05a0e000'))
+        dump = ('0000000000000000 <crd::f()>:\n   0:\ta5404000 \tld1w\t{z0.s}, p0/z, [x0]\n'
+                '   4:\t8b020020 \tadd\tx0, x1, x2\n')
+        self.assertEqual([('crd::f()', 'SVE/SME')],
+                         [(f, k) for f, _a, k, _l in isa_isolation.scan_arm64(dump, False)])
+
+    def test_object_formats(self):
+        with tempfile.TemporaryDirectory() as temp:
+            def kind(name, data):
+                path = Path(temp) / name
+                path.write_bytes(data)
+                return isa_isolation.object_format(str(path))
+            self.assertEqual('coff', kind('a.obj', b'\x64\x86' + bytes(62)))
+            self.assertEqual('coff', kind('big.obj', b'\x00\x00\xff\xff\x02\x00\x64\x86' + bytes(4)
+                                          + isa_isolation.BIGOBJ_CLASS + bytes(36)))
+            self.assertEqual('ltcg', kind('gl.obj', b'\x00\x00\xff\xff\x01\x00\x64\x86' + bytes(56)))
+            self.assertEqual('bitcode', kind('thin.obj', b'BC\xc0\xde' + bytes(60)))
+            self.assertEqual('gnu-lto', kind('slim.o', _elf_object([(b'.gnu.lto_.decls', 0, 8), (b'.text', 6, 0)])))
+            self.assertEqual('elf', kind('fat.o', _elf_object([(b'.gnu.lto_.decls', 0, 8), (b'.text', 6, 4)])))
+            self.assertEqual('elf', kind('plain.o', _elf_object([(b'.text', 6, 4)])))
+            with self.assertRaises(isa_isolation.GuardError):
+                kind('junk.o', b'junk' + bytes(60))
+
+    def test_decoder_failures_and_silence_fail(self):
+        with self.assertRaisesRegex(isa_isolation.GuardError, 'exited 3'):
+            isa_isolation._run([sys.executable, '-c', 'import sys; sys.exit(3)'])
+        with self.assertRaisesRegex(isa_isolation.GuardError, 'printed nothing'):
+            isa_isolation._run([sys.executable, '-c', 'pass'])
+        stream = isa_isolation._stream
+        with self.assertRaisesRegex(isa_isolation.GuardError, 'exited 4'):
+            list(stream([sys.executable, '-c', 'import sys; print("x"); sys.exit(4)'], isa_isolation._LABEL_ELF))
+        with self.assertRaisesRegex(isa_isolation.GuardError, 'printed nothing'):
+            list(stream([sys.executable, '-c', 'pass'], isa_isolation._LABEL_ELF))
+
+    def test_image_dumps_stream_in_chunks_that_keep_their_function(self):
+        lines = ''.join(f'{i:016x} <f{i}()>:\n  {i:x}:\tc5 f8 77             \tvzeroupper\n' for i in range(400))
+        script = f'import sys; sys.stdout.write({lines!r})'
+        with patch.object(isa_isolation, 'CHUNK', 512):
+            chunks = list(isa_isolation._stream([sys.executable, '-c', script], isa_isolation._LABEL_ELF))
+            hits = [hit for chunk in chunks for hit in isa_isolation.scan_x64(chunk, False)]
+        self.assertGreater(len(chunks), 10)
+        self.assertEqual([(f'f{i}()', i) for i in range(400)], [(function, address) for function, address, _, _ in hits])
+
+    def test_map_owners_and_jump_tables(self):
+        kernel = os.path.normpath('/b/x-avx2.dir/kernels/tensor_kernels.cpp.obj')
+        kernels = {kernel: ('avx2', '/b/crd-hesap-tensor.lib')}
+        generals = {os.path.normpath('/b/x.dir/src/einsum.cpp.obj'): ('crd-hesap-tensor', '/b/crd-hesap-tensor.lib'),
+                    os.path.normpath('/b/t.dir/main.cpp.obj'): ('crd-t', '/b/t.exe')}
+        owners = isa_isolation.Owners(kernels, generals)
+        image = '/b/t.exe'
+        self.assertEqual('kernel', owners.classify('crd-hesap-tensor:tensor_kernels.cpp.obj', image)[0])
+        self.assertEqual('general', owners.classify('crd-hesap-tensor:einsum.cpp.obj', image)[0])
+        self.assertEqual('general', owners.classify('main.cpp.obj', image)[0])
+        self.assertEqual('general', owners.classify('t.exe.lto.crd-hesap-tensor.libeinsum.cpp.obj', image)[0])
+        self.assertEqual('kernel', owners.classify('t.exe.lto.crd-hesap-tensor.libtensor_kernels.cpp.obj', image)[0])
+        self.assertEqual('library', owners.classify('libvcruntime:ehhelpers.obj', image)[0])
+        self.assertEqual('library', owners.classify('<linker defined>', image)[0])
+        clash = dict(generals, **{os.path.normpath('/b/y.dir/tensor_kernels.cpp.obj'): ('crd-y', '')})
+        with self.assertRaisesRegex(isa_isolation.GuardError, 'shares its name'):
+            isa_isolation.Owners(kernels, clash)
+        base = 0x140000000
+        code = [(0x140001070, 'main', 'a.obj'), (0x1400010FC, '$LN15', 'a.obj'), (0x140001120, 'helper', 'b.obj'),
+                (0x140001130, '$LN3', 'b.obj')]
+        starts = [0x140001070, 0x140001120, 0x140001200]
+        memory = {0x1400010FC: struct.pack('<I', 0x1091), 0x140001130: struct.pack('<I', 0x9999)}
+        tables = isa_isolation.jump_tables(base, starts, code, lambda address, size: memory.get(address, b''))
+        self.assertEqual([(0x1400010FC, 0x140001120)], tables)
+
+    def test_manifest_and_il_without_images(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            kernel = root / 'k.obj'
+            kernel.write_bytes(b'\x00\x00\xff\xff\x01\x00\x64\x86' + bytes(56))
+            general = root / 'g.obj'
+            general.write_bytes(b'\x00\x00\xff\xff\x01\x00\x64\x86' + bytes(56))
+            manifest = root / 'm.manifest'
+            lines = [f'kernel\tavx2\t\t{root / "x.lib"}\t{kernel}', f'general\tcrd-x\t{root / "x.lib"}\t{general}',
+                     f'general\tcrd-x\t{manifest}\t{root / "gone.obj"}', f'image\tcrd-t\t{root / "t.exe"}']
+            manifest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+            args = SimpleNamespace(manifest=str(manifest), exceptions=str(isa_isolation.EXCEPTIONS), os='windows',
+                                   arch='x64', jobs=1, limit=60)
+            output = io.StringIO()
+            with patch.object(isa_isolation, 'resolve_tools', return_value={}), contextlib.redirect_stdout(output):
+                self.assertEqual(1, isa_isolation.run(args))
+            text = output.getvalue()
+            self.assertIn('kernel unit holds link-time IL', text)
+            self.assertIn('no image was built', text)
+            self.assertIn('gone.obj: missing, yet', text)
+            manifest.write_text('kernel\tavx3\t\tcrd-x.lib\tk.obj\n', encoding='utf-8')
+            with self.assertRaisesRegex(isa_isolation.GuardError, 'unknown level'):
+                isa_isolation.read_manifest(str(manifest))
+            manifest.write_text('object\tk.obj\n', encoding='utf-8')
+            with self.assertRaisesRegex(isa_isolation.GuardError, 'malformed'):
+                isa_isolation.read_manifest(str(manifest))
 
 
 if __name__ == '__main__':
