@@ -13,18 +13,18 @@ namespace crd::test::simd_probe
 // Lanes per input array: a multiple of every vector width.
 inline constexpr crd::usize kLanes = 64;
 // The most result words one operation writes for one input.
-inline constexpr crd::usize kMaxWords = 4 * kLanes;
+inline constexpr crd::usize kMaxWords = 8 * kLanes;
 
 struct Input
 {
-    alignas(32) crd::f32 a[kLanes];
-    alignas(32) crd::f32 b[kLanes];
-    alignas(32) crd::f32 c[kLanes];
-    alignas(32) crd::f64 da[kLanes];
-    alignas(32) crd::f64 db[kLanes];
-    alignas(32) crd::f64 dc[kLanes];
-    alignas(32) crd::i32 ia[kLanes];
-    alignas(32) crd::i32 ib[kLanes];
+    alignas(64) crd::f32 a[kLanes];
+    alignas(64) crd::f32 b[kLanes];
+    alignas(64) crd::f32 c[kLanes];
+    alignas(64) crd::f64 da[kLanes];
+    alignas(64) crd::f64 db[kLanes];
+    alignas(64) crd::f64 dc[kLanes];
+    alignas(64) crd::i32 ia[kLanes];
+    alignas(64) crd::i32 ib[kLanes];
 };
 
 // How two levels' results of one operation compare.

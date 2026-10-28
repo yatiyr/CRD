@@ -1,8 +1,9 @@
 // SIMD backend selection (ADR-0063, ADR-0065, ADR-0134 §5).
 //
 // A kernel unit (CRD_KERNEL_LEVEL, compiled once per CPU level by crd_add_cpu_kernels in cmake/CrdSimd.cmake) gets
-// the backend of its own level: portable is the scalar reference, sse2 and sse4.2 the 128-bit backends, avx2 and
-// avx512 the 256-bit one (no type uses 512-bit registers yet). General code gets CRD_SIMD_TARGET, which
+// the backend of its own level: portable is the scalar reference, sse2 and sse4.2 the 128-bit backends, avx2 the
+// 256-bit one, and avx512 the 256-bit one plus 512-bit registers for Vec16f, Vec8d and Vec16i (vec16f.hpp, vec8d.hpp,
+// vec16i.hpp; composed of two 256-bit halves below it). General code gets CRD_SIMD_TARGET, which
 // crd-simd-flags defines with the matching ISA flags; it is never read from compiler ISA macros (`__AVX2__`), which
 // MSVC defines only under /arch.
 //
@@ -39,9 +40,10 @@
     #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_PORTABLE
 #endif
 
-// The backend rungs; each holds on the rungs above it (HAS_SSE2 on the SSE4.2 and AVX2 backends, HAS_SSE42 on AVX2).
-// The avx512 level uses the AVX2 backend: no type uses 512-bit registers yet.
-#define CRD_SIMD_HAS_AVX2  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX2 || CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX512)
+// The backend rungs; each holds on the rungs above it (HAS_SSE2 on the SSE4.2, AVX2 and AVX-512 backends, HAS_SSE42 on
+// AVX2 and AVX-512, HAS_AVX2 on AVX-512, whose 256-bit types are the AVX2 ones).
+#define CRD_SIMD_HAS_AVX512 (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX512)
+#define CRD_SIMD_HAS_AVX2  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_AVX2 || CRD_SIMD_HAS_AVX512)
 #define CRD_SIMD_HAS_SSE42 (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_SSE42 || CRD_SIMD_HAS_AVX2)
 #define CRD_SIMD_HAS_SSE2  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_SSE2 || CRD_SIMD_HAS_SSE42)
 #define CRD_SIMD_HAS_NEON  (CRD_SIMD_UNIT_LEVEL == CRD_KERNEL_LEVEL_NEON)
@@ -79,7 +81,9 @@ inline constexpr usize kNativeLaneWidth = 8;
 // the cross-level tests against each kernel unit's level.
 [[nodiscard]] constexpr const char* backend_name() noexcept
 {
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+    return "AVX-512";
+#elif CRD_SIMD_HAS_AVX2
     return "AVX2";
 #elif CRD_SIMD_HAS_SSE42
     return "SSE4.2";

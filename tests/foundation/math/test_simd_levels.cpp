@@ -42,7 +42,7 @@ constexpr Level kLevels[] = {
     {CpuLevel::Avx2, &probe::kSimdProbeAvx2, "AVX2"},
 #endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_SIMD_PROBE, AVX512)
-    {CpuLevel::Avx512, &probe::kSimdProbeAvx512, "AVX2"}, // no type uses 512-bit registers yet
+    {CpuLevel::Avx512, &probe::kSimdProbeAvx512, "AVX-512"},
 #endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_SIMD_PROBE, NEON)
     {CpuLevel::Neon, &probe::kSimdProbeNeon, "NEON"},

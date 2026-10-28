@@ -10,9 +10,12 @@
 #include <crd/math/simd/mat4f.hpp>
 #include <crd/math/simd/quatf.hpp>
 #include <crd/math/simd/transcendental.hpp>
+#include <crd/math/simd/vec16f.hpp>
+#include <crd/math/simd/vec16i.hpp>
 #include <crd/math/simd/vec4d.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec4i.hpp>
+#include <crd/math/simd/vec8d.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/math/simd/vec8i.hpp>
 
@@ -29,9 +32,12 @@ using crd::u64;
 using crd::usize;
 using crd::math::simd::Mat4f;
 using crd::math::simd::Quatf;
+using crd::math::simd::Vec16f;
+using crd::math::simd::Vec16i;
 using crd::math::simd::Vec4d;
 using crd::math::simd::Vec4f;
 using crd::math::simd::Vec4i;
+using crd::math::simd::Vec8d;
 using crd::math::simd::Vec8f;
 using crd::math::simd::Vec8i;
 namespace s = crd::math::simd;
@@ -68,6 +74,16 @@ usize put(Vec8f v, u64* out) noexcept
     }
     return 8;
 }
+usize put(Vec16f v, u64* out) noexcept
+{
+    f32 t[16];
+    v.store(t);
+    for (usize i = 0; i < 16; ++i)
+    {
+        put(t[i], out + i);
+    }
+    return 16;
+}
 usize put(Vec4d v, u64* out) noexcept
 {
     f64 t[4];
@@ -77,6 +93,16 @@ usize put(Vec4d v, u64* out) noexcept
         put(t[i], out + i);
     }
     return 4;
+}
+usize put(Vec8d v, u64* out) noexcept
+{
+    f64 t[8];
+    v.store(t);
+    for (usize i = 0; i < 8; ++i)
+    {
+        put(t[i], out + i);
+    }
+    return 8;
 }
 template <typename VI> usize put_int(VI v, u64* out) noexcept
 {
@@ -95,6 +121,10 @@ usize put(Vec8i v, u64* out) noexcept
 {
     return put_int(v, out);
 }
+usize put(Vec16i v, u64* out) noexcept
+{
+    return put_int(v, out);
+}
 
 // ---- operand loads ----
 
@@ -110,6 +140,12 @@ template <> struct Width<Vec8f>
     using Int = Vec8i;
     static constexpr usize kWidth = 8;
     static Int ints(const i32* p) noexcept { return Vec8i(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]); }
+};
+template <> struct Width<Vec16f>
+{
+    using Int = Vec16i;
+    static constexpr usize kWidth = 16;
+    static Int ints(const i32* p) noexcept { return Vec16i::from(p); }
 };
 
 // fn(a, b, c) over each vector of the f32 inputs.
@@ -135,12 +171,12 @@ template <typename V, typename Fn> usize each_i32(const Input& in, u64* out, Fn 
 }
 
 // fn(a, b, c) over each vector of the f64 inputs.
-template <typename Fn> usize each_f64(const Input& in, u64* out, Fn fn) noexcept
+template <typename V, typename Fn> usize each_f64(const Input& in, u64* out, Fn fn) noexcept
 {
     usize n = 0;
-    for (usize i = 0; i < kLanes; i += 4)
+    for (usize i = 0; i < kLanes; i += sizeof(V) / sizeof(f64))
     {
-        n += put(fn(Vec4d::load(in.da + i), Vec4d::load(in.db + i), Vec4d::load(in.dc + i)), out + n);
+        n += put(fn(V::load(in.da + i), V::load(in.db + i), V::load(in.dc + i)), out + n);
     }
     return n;
 }
@@ -390,78 +426,145 @@ usize v8_complex(const Input& in, u64* out) noexcept
     return n;
 }
 
-// ---- Vec4d ----
+// ---- the Vec16f-only operations ----
 
-usize d_arith(const Input& in, u64* out) noexcept
+usize v16_fnmadd(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return ((a + b) * c - a) / b; });
+    return each_f32<Vec16f>(in, out, [](Vec16f a, Vec16f b, Vec16f c) { return s::fnmadd(a, b, c); });
 }
-usize d_neg_abs(const Input& in, u64* out) noexcept
+// Every partial count: the loaded lanes, then a store's buffer whose lanes past the count must keep their guard values.
+usize v16_partial(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d, Vec4d) { return s::select(s::cmp_lt(a, Vec4d(0.5)), -a, s::abs(a)); });
+    usize n = 0;
+    for (usize count = 1; count < 16; ++count)
+    {
+        f32 t[16];
+        for (usize i = 0; i < 16; ++i)
+        {
+            t[i] = static_cast<f32>(i + 1U);
+        }
+        const Vec16f v = Vec16f::load_partial(in.a + count, count);
+        n += put(v, out + n);
+        (v + Vec16f::load(in.b)).store_partial(t, count);
+        for (const f32 x : t)
+        {
+            n += put(x, out + n);
+        }
+    }
+    return n;
 }
-usize d_fused(const Input& in, u64* out) noexcept
+usize v16_halves(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::fma(a, b, c); });
+    usize n = 0;
+    for (usize i = 0; i < kLanes; i += 16)
+    {
+        const Vec16f v = Vec16f::load_aligned(in.a + i);
+        n += put(Vec16f(s::high_half(v), s::low_half(Vec16f::load(in.b + i))), out + n);
+    }
+    return n;
 }
-usize d_fnmadd(const Input& in, u64* out) noexcept
+
+// ---- the operations both f64 widths have ----
+
+template <typename V> struct F64
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::fnmadd(a, b, c); });
-}
+    static constexpr usize kWidth = sizeof(V) / sizeof(f64);
+
+    static usize arith(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V b, V c) { return ((a + b) * c - a) / b; });
+    }
+    static usize neg_abs(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V, V) { return s::select(s::cmp_lt(a, V(0.5)), -a, s::abs(a)); });
+    }
+    static usize fused(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V b, V c) { return s::fma(a, b, c); });
+    }
+    static usize fnmadd(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V b, V c) { return s::fnmadd(a, b, c); });
+    }
+    static usize mul_add(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V b, V c) { return s::mul_sub(s::mul_add(a, b, c), c, a); });
+    }
+    static usize min_max(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V b, V c) { return s::clamp(a, s::min(b, c), s::max(b, c)); });
+    }
+    static usize sqrt(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(in, out, [](V a, V, V) { return s::sqrt(a); });
+    }
+    static usize reduce(const Input& in, u64* out) noexcept
+    {
+        usize n = 0;
+        for (usize i = 0; i < kLanes; i += kWidth)
+        {
+            n += put(s::horizontal_sum(V::load(in.da + i)), out + n);
+            n += put(s::dot(V::load(in.da + i), V::load(in.db + i)), out + n);
+        }
+        return n;
+    }
+    static usize compare(const Input& in, u64* out) noexcept
+    {
+        return each_f64<V>(
+            in, out, [](V a, V b, V c)
+            { return s::select(s::cmp_le(a, b), s::select(s::cmp_eq(b, c), a, b), s::select(s::cmp_gt(a, c), c, a)); });
+    }
+    static usize compare_masks(const Input& in, u64* out) noexcept
+    {
+        usize n = 0;
+        for (usize i = 0; i < kLanes; i += kWidth)
+        {
+            const V a = V::load_aligned(in.da + i);
+            const V b = V::load(in.db + i);
+            n += put(s::cmp_lt(a, b), out + n);
+            n += put(s::cmp_le(a, b), out + n);
+            n += put(s::cmp_eq(a, b), out + n);
+            n += put(s::cmp_ge(a, b), out + n);
+        }
+        return n;
+    }
+    // Every partial count, as v16_partial.
+    static usize partial(const Input& in, u64* out) noexcept
+    {
+        usize n = 0;
+        for (usize count = 1; count < kWidth; ++count)
+        {
+            f64 t[kWidth];
+            for (usize i = 0; i < kWidth; ++i)
+            {
+                t[i] = static_cast<f64>(i + 1U);
+            }
+            const V v = V::load_partial(in.da + count, count);
+            n += put(v, out + n);
+            (v * V::load(in.db)).store_partial(t, count);
+            for (const f64 x : t)
+            {
+                n += put(x, out + n);
+            }
+        }
+        return n;
+    }
+};
+
+// ---- the Vec4d-only operations ----
+
 usize d_fmaddsub(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::fmaddsub(a, b, c); });
-}
-usize d_mul_add(const Input& in, u64* out) noexcept
-{
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::mul_sub(s::mul_add(a, b, c), c, a); });
+    return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::fmaddsub(a, b, c); });
 }
 usize d_addsub(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d) { return s::addsub(a, b); });
-}
-usize d_min_max(const Input& in, u64* out) noexcept
-{
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c) { return s::clamp(a, s::min(b, c), s::max(b, c)); });
-}
-usize d_sqrt(const Input& in, u64* out) noexcept
-{
-    return each_f64(in, out, [](Vec4d a, Vec4d, Vec4d) { return s::sqrt(a); });
-}
-usize d_reduce(const Input& in, u64* out) noexcept
-{
-    usize n = 0;
-    for (usize i = 0; i < kLanes; i += 4)
-    {
-        n += put(s::horizontal_sum(Vec4d::load(in.da + i)), out + n);
-        n += put(s::dot(Vec4d::load(in.da + i), Vec4d::load(in.db + i)), out + n);
-    }
-    return n;
-}
-usize d_compare(const Input& in, u64* out) noexcept
-{
-    return each_f64(
-        in, out, [](Vec4d a, Vec4d b, Vec4d c)
-        { return s::select(s::cmp_le(a, b), s::select(s::cmp_eq(b, c), a, b), s::select(s::cmp_gt(a, c), c, a)); });
-}
-usize d_compare_masks(const Input& in, u64* out) noexcept
-{
-    usize n = 0;
-    for (usize i = 0; i < kLanes; i += 4)
-    {
-        const Vec4d a = Vec4d::load(in.da + i);
-        const Vec4d b = Vec4d::load(in.db + i);
-        n += put(s::cmp_lt(a, b), out + n);
-        n += put(s::cmp_le(a, b), out + n);
-        n += put(s::cmp_eq(a, b), out + n);
-        n += put(s::cmp_ge(a, b), out + n);
-    }
-    return n;
+    return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d) { return s::addsub(a, b); });
 }
 usize d_shuffles(const Input& in, u64* out) noexcept
 {
-    return each_f64(in, out, [](Vec4d a, Vec4d b, Vec4d c)
-                    { return s::mix_lo_hi(s::concat_lo(s::swap_pairs(a), b), s::concat_hi(b, c)); });
+    return each_f64<Vec4d>(in, out, [](Vec4d a, Vec4d b, Vec4d c)
+                           { return s::mix_lo_hi(s::concat_lo(s::swap_pairs(a), b), s::concat_hi(b, c)); });
 }
 usize d_loads(const Input& in, u64* out) noexcept
 {
@@ -471,16 +574,15 @@ usize d_loads(const Input& in, u64* out) noexcept
         n += put(s::load_pair128(in.da + i, in.db + i), out + n);
         n += put(s::load_dup_pairs(in.dc + i), out + n);
     }
-    for (usize count = 1; count < 4; ++count)
+    return n;
+}
+usize d8_halves(const Input& in, u64* out) noexcept
+{
+    usize n = 0;
+    for (usize i = 0; i < kLanes; i += 8)
     {
-        f64 t[4] = {1.0, 2.0, 3.0, 4.0};
-        const Vec4d v = Vec4d::load_partial(in.da + count, count);
-        n += put(v, out + n);
-        (v * Vec4d::load(in.db)).store_partial(t, count);
-        for (const f64 x : t)
-        {
-            n += put(x, out + n);
-        }
+        const Vec8d v = Vec8d::load(in.da + i);
+        n += put(Vec8d(s::high_half(v), s::low_half(Vec8d::load_aligned(in.db + i))), out + n);
     }
     return n;
 }
@@ -601,71 +703,107 @@ usize quat(const Input& in, u64* out) noexcept
 constexpr Op kOps[] = {
     {"vec4f +", Compare::F32Value, &F32<Vec4f>::add},
     {"vec8f +", Compare::F32Value, &F32<Vec8f>::add},
+    {"vec16f +", Compare::F32Value, &F32<Vec16f>::add},
     {"vec4f -", Compare::F32Value, &F32<Vec4f>::sub},
     {"vec8f -", Compare::F32Value, &F32<Vec8f>::sub},
+    {"vec16f -", Compare::F32Value, &F32<Vec16f>::sub},
     {"vec4f *", Compare::F32Value, &F32<Vec4f>::mul},
     {"vec8f *", Compare::F32Value, &F32<Vec8f>::mul},
+    {"vec16f *", Compare::F32Value, &F32<Vec16f>::mul},
     {"vec4f /", Compare::F32Value, &F32<Vec4f>::div},
     {"vec8f /", Compare::F32Value, &F32<Vec8f>::div},
+    {"vec16f /", Compare::F32Value, &F32<Vec16f>::div},
     {"vec4f negate", Compare::Bits, &F32<Vec4f>::neg},
     {"vec8f negate", Compare::Bits, &F32<Vec8f>::neg},
+    {"vec16f negate", Compare::Bits, &F32<Vec16f>::neg},
     {"vec4f scalar * /", Compare::F32Value, &F32<Vec4f>::scale},
     {"vec8f scalar * /", Compare::F32Value, &F32<Vec8f>::scale},
+    {"vec16f scalar * /", Compare::F32Value, &F32<Vec16f>::scale},
     {"vec4f mul_add", Compare::F32Value, &F32<Vec4f>::mul_add},
     {"vec8f mul_add", Compare::F32Value, &F32<Vec8f>::mul_add},
+    {"vec16f mul_add", Compare::F32Value, &F32<Vec16f>::mul_add},
     {"vec4f mul_sub", Compare::F32Value, &F32<Vec4f>::mul_sub},
     {"vec8f mul_sub", Compare::F32Value, &F32<Vec8f>::mul_sub},
+    {"vec16f mul_sub", Compare::F32Value, &F32<Vec16f>::mul_sub},
     {"vec4f fma", Compare::F32Value, &F32<Vec4f>::fma},
     {"vec8f fma", Compare::F32Value, &F32<Vec8f>::fma},
+    {"vec16f fma", Compare::F32Value, &F32<Vec16f>::fma},
     {"vec4f min", Compare::Bits, &F32<Vec4f>::min},
     {"vec8f min", Compare::Bits, &F32<Vec8f>::min},
+    {"vec16f min", Compare::Bits, &F32<Vec16f>::min},
     {"vec4f max", Compare::Bits, &F32<Vec4f>::max},
     {"vec8f max", Compare::Bits, &F32<Vec8f>::max},
+    {"vec16f max", Compare::Bits, &F32<Vec16f>::max},
     {"vec4f abs", Compare::Bits, &F32<Vec4f>::abs},
     {"vec8f abs", Compare::Bits, &F32<Vec8f>::abs},
+    {"vec16f abs", Compare::Bits, &F32<Vec16f>::abs},
     {"vec4f clamp", Compare::Bits, &F32<Vec4f>::clamp},
     {"vec8f clamp", Compare::Bits, &F32<Vec8f>::clamp},
+    {"vec16f clamp", Compare::Bits, &F32<Vec16f>::clamp},
     {"vec4f sqrt", Compare::F32Value, &F32<Vec4f>::sqrt},
     {"vec8f sqrt", Compare::F32Value, &F32<Vec8f>::sqrt},
+    {"vec16f sqrt", Compare::F32Value, &F32<Vec16f>::sqrt},
     {"vec4f horizontal_sum", Compare::F32Value, &F32<Vec4f>::horizontal_sum},
     {"vec8f horizontal_sum", Compare::F32Value, &F32<Vec8f>::horizontal_sum},
+    {"vec16f horizontal_sum", Compare::F32Value, &F32<Vec16f>::horizontal_sum},
     {"vec4f dot", Compare::F32Value, &F32<Vec4f>::dot},
     {"vec8f dot", Compare::F32Value, &F32<Vec8f>::dot},
+    {"vec16f dot", Compare::F32Value, &F32<Vec16f>::dot},
     {"vec4f cmp_lt", Compare::Bits, &F32<Vec4f>::cmp_lt},
     {"vec8f cmp_lt", Compare::Bits, &F32<Vec8f>::cmp_lt},
+    {"vec16f cmp_lt", Compare::Bits, &F32<Vec16f>::cmp_lt},
     {"vec4f cmp_le", Compare::Bits, &F32<Vec4f>::cmp_le},
     {"vec8f cmp_le", Compare::Bits, &F32<Vec8f>::cmp_le},
+    {"vec16f cmp_le", Compare::Bits, &F32<Vec16f>::cmp_le},
     {"vec4f cmp_eq", Compare::Bits, &F32<Vec4f>::cmp_eq},
     {"vec8f cmp_eq", Compare::Bits, &F32<Vec8f>::cmp_eq},
+    {"vec16f cmp_eq", Compare::Bits, &F32<Vec16f>::cmp_eq},
     {"vec4f cmp_gt", Compare::Bits, &F32<Vec4f>::cmp_gt},
     {"vec8f cmp_gt", Compare::Bits, &F32<Vec8f>::cmp_gt},
+    {"vec16f cmp_gt", Compare::Bits, &F32<Vec16f>::cmp_gt},
     {"vec4f cmp_ge", Compare::Bits, &F32<Vec4f>::cmp_ge},
     {"vec8f cmp_ge", Compare::Bits, &F32<Vec8f>::cmp_ge},
+    {"vec16f cmp_ge", Compare::Bits, &F32<Vec16f>::cmp_ge},
     {"vec4f select", Compare::Bits, &F32<Vec4f>::select},
     {"vec8f select", Compare::Bits, &F32<Vec8f>::select},
+    {"vec16f select", Compare::Bits, &F32<Vec16f>::select},
     {"vec4f truncate", Compare::F32Value, &F32<Vec4f>::truncate},
     {"vec8f truncate", Compare::F32Value, &F32<Vec8f>::truncate},
+    {"vec16f truncate", Compare::F32Value, &F32<Vec16f>::truncate},
     {"vec4f round_nearest", Compare::F32Value, &F32<Vec4f>::round_nearest},
     {"vec8f round_nearest", Compare::F32Value, &F32<Vec8f>::round_nearest},
+    {"vec16f round_nearest", Compare::F32Value, &F32<Vec16f>::round_nearest},
     {"vec4f convert_truncate", Compare::Bits, &F32<Vec4f>::convert_truncate},
     {"vec8f convert_truncate", Compare::Bits, &F32<Vec8f>::convert_truncate},
+    {"vec16f convert_truncate", Compare::Bits, &F32<Vec16f>::convert_truncate},
     {"vec4i convert_to_float", Compare::Bits, &F32<Vec4f>::convert_to_float},
     {"vec8i convert_to_float", Compare::Bits, &F32<Vec8f>::convert_to_float},
+    {"vec16i convert_to_float", Compare::Bits, &F32<Vec16f>::convert_to_float},
     {"vec4f bitcast", Compare::Bits, &F32<Vec4f>::bitcast},
     {"vec8f bitcast", Compare::Bits, &F32<Vec8f>::bitcast},
+    {"vec16f bitcast", Compare::Bits, &F32<Vec16f>::bitcast},
     {"vec4f bit ops", Compare::Bits, &F32<Vec4f>::bit_ops},
     {"vec8f bit ops", Compare::Bits, &F32<Vec8f>::bit_ops},
+    {"vec16f bit ops", Compare::Bits, &F32<Vec16f>::bit_ops},
     {"vec4i + (wrapping)", Compare::Bits, &I32<Vec4f>::add},
     {"vec8i + (wrapping)", Compare::Bits, &I32<Vec8f>::add},
+    {"vec16i + (wrapping)", Compare::Bits, &I32<Vec16f>::add},
     {"vec4i - (wrapping)", Compare::Bits, &I32<Vec4f>::sub},
     {"vec8i - (wrapping)", Compare::Bits, &I32<Vec8f>::sub},
+    {"vec16i - (wrapping)", Compare::Bits, &I32<Vec16f>::sub},
     {"vec4i bit ops", Compare::Bits, &I32<Vec4f>::bit_ops},
     {"vec8i bit ops", Compare::Bits, &I32<Vec8f>::bit_ops},
+    {"vec16i bit ops", Compare::Bits, &I32<Vec16f>::bit_ops},
     {"vec4i shifts", Compare::Bits, &I32<Vec4f>::shifts},
     {"vec8i shifts", Compare::Bits, &I32<Vec8f>::shifts},
+    {"vec16i shifts", Compare::Bits, &I32<Vec16f>::shifts},
     {"vec4i compares", Compare::Bits, &I32<Vec4f>::compare},
     {"vec8i compares", Compare::Bits, &I32<Vec8f>::compare},
+    {"vec16i compares", Compare::Bits, &I32<Vec16f>::compare},
     {"vec8f fnmadd", Compare::F32Value, &v8_fnmadd},
+    {"vec16f fnmadd", Compare::F32Value, &v16_fnmadd},
+    {"vec16f partial load/store", Compare::F32Value, &v16_partial},
+    {"vec16f halves", Compare::Bits, &v16_halves},
     {"vec8f fmaddsub", Compare::F32Value, &v8_fmaddsub},
     {"vec8f addsub", Compare::F32Value, &v8_addsub},
     {"vec8f complex shuffles", Compare::Bits, &v8_shuffles},
@@ -674,20 +812,33 @@ constexpr Op kOps[] = {
     {"vec8f partial load/store", Compare::F32Value, &v8_partial},
     {"vec8f transpose8x8", Compare::Bits, &v8_transpose},
     {"vec8f complex (de)interleave", Compare::Bits, &v8_complex},
-    {"vec4d arithmetic", Compare::F64Value, &d_arith},
-    {"vec4d negate/abs/select", Compare::Bits, &d_neg_abs},
-    {"vec4d fma", Compare::F64Value, &d_fused},
-    {"vec4d fnmadd", Compare::F64Value, &d_fnmadd},
+    {"vec4d arithmetic", Compare::F64Value, &F64<Vec4d>::arith},
+    {"vec8d arithmetic", Compare::F64Value, &F64<Vec8d>::arith},
+    {"vec4d negate/abs/select", Compare::Bits, &F64<Vec4d>::neg_abs},
+    {"vec8d negate/abs/select", Compare::Bits, &F64<Vec8d>::neg_abs},
+    {"vec4d fma", Compare::F64Value, &F64<Vec4d>::fused},
+    {"vec8d fma", Compare::F64Value, &F64<Vec8d>::fused},
+    {"vec4d fnmadd", Compare::F64Value, &F64<Vec4d>::fnmadd},
+    {"vec8d fnmadd", Compare::F64Value, &F64<Vec8d>::fnmadd},
+    {"vec4d mul_add/mul_sub", Compare::F64Value, &F64<Vec4d>::mul_add},
+    {"vec8d mul_add/mul_sub", Compare::F64Value, &F64<Vec8d>::mul_add},
+    {"vec4d min/max/clamp", Compare::Bits, &F64<Vec4d>::min_max},
+    {"vec8d min/max/clamp", Compare::Bits, &F64<Vec8d>::min_max},
+    {"vec4d sqrt", Compare::F64Value, &F64<Vec4d>::sqrt},
+    {"vec8d sqrt", Compare::F64Value, &F64<Vec8d>::sqrt},
+    {"vec4d horizontal_sum/dot", Compare::F64Value, &F64<Vec4d>::reduce},
+    {"vec8d horizontal_sum/dot", Compare::F64Value, &F64<Vec8d>::reduce},
+    {"vec4d compare/select", Compare::Bits, &F64<Vec4d>::compare},
+    {"vec8d compare/select", Compare::Bits, &F64<Vec8d>::compare},
+    {"vec4d compare masks", Compare::Bits, &F64<Vec4d>::compare_masks},
+    {"vec8d compare masks", Compare::Bits, &F64<Vec8d>::compare_masks},
+    {"vec4d partial load/store", Compare::F64Value, &F64<Vec4d>::partial},
+    {"vec8d partial load/store", Compare::F64Value, &F64<Vec8d>::partial},
+    {"vec8d halves", Compare::Bits, &d8_halves},
     {"vec4d fmaddsub", Compare::F64Value, &d_fmaddsub},
-    {"vec4d mul_add/mul_sub", Compare::F64Value, &d_mul_add},
     {"vec4d addsub", Compare::F64Value, &d_addsub},
-    {"vec4d min/max/clamp", Compare::Bits, &d_min_max},
-    {"vec4d sqrt", Compare::F64Value, &d_sqrt},
-    {"vec4d horizontal_sum/dot", Compare::F64Value, &d_reduce},
-    {"vec4d compare/select", Compare::Bits, &d_compare},
-    {"vec4d compare masks", Compare::Bits, &d_compare_masks},
     {"vec4d shuffles", Compare::Bits, &d_shuffles},
-    {"vec4d pair and partial loads", Compare::F64Value, &d_loads},
+    {"vec4d pair loads", Compare::Bits, &d_loads},
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
     {"vec4d complex (de)interleave", Compare::Bits, &d_complex},
     {"crd_exp1/crd_log1", Compare::F64Value, &d_exp_log_core},
