@@ -1633,8 +1633,10 @@ jobs:
 
       - name: Record system package versions
         run: |
-          dpkg-query -W -f='${Package} ${Version}\n' ninja-build gdb clang libclang-rt-18-dev g++ cmake \
+          dpkg-query -W -f='${Package} ${Version}\n' ninja-build gdb clang libclang-rt-18-dev g++ \
             | tee "$RUNNER_TEMP/packages.txt"
+          # The image's CMake is Kitware's binary, not an apt package.
+          cmake --version | head -n 1 | tee -a "$RUNNER_TEMP/packages.txt"
           uname -m | tee -a "$RUNNER_TEMP/packages.txt"
           grep -m1 -o 'asimd' /proc/cpuinfo | tee -a "$RUNNER_TEMP/packages.txt"
 
