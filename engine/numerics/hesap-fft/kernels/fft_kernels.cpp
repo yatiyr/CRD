@@ -1485,40 +1485,48 @@ template <typename T> struct Engine
                             simd::load_complex_deinterleaved(reinterpret_cast<const T*>(a + (r + i) * m + c), ur[i],
                                                              ui[i]);
                         }
-                        // the TRANSPOSED twiddle micro-tile: twt[j] lane i = w(r+i, c+j) of row r+i's recurrence
-                        V twtr[lanes];
-                        V twti[lanes];
-                        if (twiddle && (r != c || steps > 1U))
+                        // the TRANSPOSED twiddle micro-tile: twt[j] lane i = w(r+i, c+j) of row r+i's recurrence.
+                        // Each use declares and fills its own, so no path reads a micro-tile it did not build.
+                        const auto transposed_state = [&](V(&tr)[lanes], V(&ti)[lanes]) noexcept
                         {
                             for (crd::usize i = 0; i < lanes; ++i)
                             {
-                                twtr[i] = wr[i];
-                                twti[i] = wi[i];
+                                tr[i] = wr[i];
+                                ti[i] = wi[i];
                             }
-                            tp(twtr, twti);
-                        }
+                            tp(tr, ti);
+                        };
                         if (r == c) // diagonal micro-tile: transpose + twiddle in place
                         {
                             tp(ur, ui);
-                            for (crd::usize i = 0; i < lanes; ++i)
+                            if (twiddle)
                             {
-                                if (twiddle)
+                                if constexpr (steps == 1U)
                                 {
-                                    if constexpr (steps == 1U)
+                                    for (crd::usize i = 0; i < lanes; ++i)
                                     {
                                         twiddle_by(ur[i], ui[i], wr[i], wi[i]);
                                     }
-                                    else
+                                }
+                                else
+                                {
+                                    // Row tile 0 takes its own recurrence on both tiles; row tile 1 the transposed
+                                    // element's on tile 0 and its own on tile 1. The halves exist only on the
+                                    // two-tile types: found at instantiation.
+                                    V twtr[lanes];
+                                    V twti[lanes];
+                                    transposed_state(twtr, twti);
+                                    for (crd::usize i = 0; i < lanes; ++i)
                                     {
-                                        // Row tile 0 takes its own recurrence on both tiles; row tile 1 the
-                                        // transposed element's on tile 0 and its own on tile 1. The halves exist
-                                        // only on the two-tile types: found at instantiation.
                                         const bool own = i < tile;
                                         const V tr = own ? wr[i] : V(low_half(twtr[i]), high_half(wr[i]));
                                         const V ti = own ? wi[i] : V(low_half(twti[i]), high_half(wi[i]));
                                         twiddle_by(ur[i], ui[i], tr, ti);
                                     }
                                 }
+                            }
+                            for (crd::usize i = 0; i < lanes; ++i)
+                            {
                                 simd::store_complex_interleaved(reinterpret_cast<T*>(a + (r + i) * m + c), ur[i],
                                                                 ui[i]);
                             }
@@ -1536,6 +1544,9 @@ template <typename T> struct Engine
                             tp(vr, vi); // Vt row i = destination row (r+i) content across c..c+lanes
                             if (twiddle)
                             {
+                                V twtr[lanes];
+                                V twti[lanes];
+                                transposed_state(twtr, twti);
                                 for (crd::usize i = 0; i < lanes; ++i)
                                 {
                                     twiddle_by(vr[i], vi[i], wr[i], wi[i]);     // V-half: the recurrence rows directly
