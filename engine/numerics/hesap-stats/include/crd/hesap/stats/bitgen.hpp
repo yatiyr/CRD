@@ -26,10 +26,13 @@ __extension__ using crd_u128_t = unsigned __int128; // __extension__ keeps it un
     const crd_u128_t p = static_cast<crd_u128_t>(a) * static_cast<crd_u128_t>(b);
     hi = static_cast<crd::u64>(p >> 64);
     return static_cast<crd::u64>(p);
-#elif defined(_MSC_VER)
+#elif defined(_MSC_VER) && defined(_M_X64)
     crd::u64 lo;
     lo = _umul128(a, b, &hi);
     return lo;
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    hi = __umulh(a, b);
+    return a * b;
 #else
     const crd::u64 al = a & 0xFFFFFFFFULL, ah = a >> 32, bl = b & 0xFFFFFFFFULL, bh = b >> 32;
     const crd::u64 ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;

@@ -57,7 +57,9 @@ crd::u64 CycleCounter::now() noexcept
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(val));
     return val;
 #elif defined(_MSC_VER) && defined(_M_ARM64)
-    return static_cast<crd::u64>(_ReadStatusReg(ARM64_CNTVCT)); // the generic timer, as cntvct_el0 above
+    // CNTVCT_EL0, the generic timer read above as cntvct_el0. The register's name (ARM64_CNTVCT) comes from the
+    // SDK's winnt.h, which this unit does not include; the compiler's arm64intr.h gives the encoder.
+    return static_cast<crd::u64>(_ReadStatusReg(ARM64_SYSREG(3, 3, 14, 0, 2)));
 #else
     // Fallback: derive a "cycle"-ish counter from the monotonic clock's
     // nanoseconds. Not great but at least monotonic.
@@ -117,6 +119,10 @@ crd::i64 scale(crd::u64 ticks, crd::u64 rate_q32) noexcept
 #elif defined(_MSC_VER) && defined(_M_X64)
     crd::u64 high = 0U;
     const crd::u64 low = _umul128(ticks, rate_q32, &high);
+    return static_cast<crd::i64>((high << 32U) | (low >> 32U));
+#elif defined(_MSC_VER) && defined(_M_ARM64)
+    const crd::u64 high = __umulh(ticks, rate_q32);
+    const crd::u64 low = ticks * rate_q32;
     return static_cast<crd::i64>((high << 32U) | (low >> 32U));
 #else
     const crd::u64 t_lo = ticks & 0xFFFFFFFFULL;

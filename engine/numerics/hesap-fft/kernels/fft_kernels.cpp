@@ -25,6 +25,8 @@
 #include <crd/math/simd/vec8d.hpp>
 #endif
 
+#include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 #ifdef CRD_FFT_PROFILE
