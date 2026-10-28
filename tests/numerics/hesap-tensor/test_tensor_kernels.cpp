@@ -8,9 +8,11 @@
 // speculative widening, the near-DBL_MAX compression regime, non-finite inputs, a non-empty accumulator), the scalar
 // quantizers' bytes (ties, signed zeros, NaN and infinite inputs), the pinned order of the Q8_0 and int8 linears (every
 // tile width, the saturating and zero-point extremes, -128 and every other i8 weight, subnormal scales, row ranges),
-// the scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits) and the scalar Philox blocks (counter
-// and position wraps, partial vectors). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts
-// and the sketch fill under each forced level.
+// the scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits), the scalar Philox blocks (counter
+// and position wraps, partial vectors), the scalar elementwise walk (every inner form, broadcast and reversed operands,
+// IEEE specials, min/max ties), Tier D's pinned order (block, row and column edges) and einsum's direct products (row,
+// depth and column tails). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the
+// sketch fill under each forced level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
