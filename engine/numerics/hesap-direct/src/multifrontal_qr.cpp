@@ -535,9 +535,8 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
                 if (len <= 1)
                 {
                     // No rows below the diagonal ⇒ a trivial reflector (H = I): R[k][k] = colk[0] as-is,
-                    // nothing to apply. CRITICAL for complex — make_householder_complex's n≤1 branch returns
-                    // only Re(α) (β is real-typed), which would drop the imaginary part of the last diagonal
-                    // on an exactly-determined front (fm == npiv). Real is unaffected (β == colk[0] there).
+                    // nothing to apply. For complex this keeps a complex last diagonal on an exactly-determined
+                    // front (fm == npiv) where zlarfg would reflect it to a real one; the solve needs neither.
                     tau[k] = T{};
                     continue;
                 }

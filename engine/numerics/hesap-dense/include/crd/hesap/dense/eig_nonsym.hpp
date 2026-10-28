@@ -50,8 +50,9 @@ void balance(Matrix<T>& a, crd::containers::Array<RealType<T>>& scale, crd::usiz
 //   - the upper Hessenberg H occupies the upper triangle + first subdiagonal,
 //   - reflector i (annihilating A[i+2..ihi, i]) is stored in A[i+2..ihi][i],
 //     with implicit v[i+1] = 1; A[i+1][i] holds the subdiagonal of H,
-//   - tau[i] (i in [ilo, ihi-1)) holds the reflector scalars; tau has length n
-//     (entries outside [ilo, ihi-1) are 0).
+//   - tau[i] (i in [ilo, ihi)) holds the reflector scalars; tau has length n
+//     (entries outside [ilo, ihi) are 0). The last, length-1 reflector is the
+//     identity for real T and makes the final subdiagonal real for complex T.
 // Rows/cols outside [ilo, ihi] are left untouched (they carry isolated
 // eigenvalues after balancing). For an un-balanced matrix pass ilo=0, ihi=n-1.
 //
@@ -66,7 +67,7 @@ void hessenberg(Matrix<T>& a, crd::usize ilo, crd::usize ihi, crd::containers::A
 // =======================================================================
 // form_hessenberg_q — materialize the orthogonal Q (n×n) of the Hessenberg
 // reduction (LAPACK dorghr), from the reflectors stored in `a_packed` (the
-// post-`hessenberg` matrix) + `tau`. Q = H_ilo · H_{ilo+1} · … · H_{ihi-2},
+// post-`hessenberg` matrix) + `tau`. Q = H_ilo · H_{ilo+1} · … · H_{ihi-1},
 // identity outside the [ilo, ihi] block. So A = Q · H · Qᵀ. Complex c32/c64
 // (v3d-2c-1, zunghr): Q is UNITARY and A = Q · H · Qᴴ.
 // =======================================================================

@@ -259,6 +259,8 @@ namespace
 // over contiguous ar/ai rows. Reflector i (complex, v[0]=1
 // implicit) annihilates A(i+2:ihi, i); its tail is stored in ar/ai below the
 // subdiagonal, the real beta on the subdiagonal, the complex `tau[i]` returned.
+// As in zgehd2, i runs to ihi-1: the last reflector has length 1 and only makes
+// the final subdiagonal real.
 //
 // Two-sided update per reflector, faithful to LAPACK zgehd2 order (RIGHT then
 // LEFT): A := H^H · A · H with H = I − tau·v·v^H.
@@ -274,7 +276,7 @@ void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::u
     {
         tau[k] = C{R{0}, R{0}};
     }
-    if (ihi < ilo + 2)
+    if (ihi <= ilo)
     {
         return;
     }
@@ -289,7 +291,7 @@ void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::u
     wr.resize(n);
     wi.resize(n);
 
-    for (crd::usize i = ilo; i + 1 < ihi; ++i)
+    for (crd::usize i = ilo; i < ihi; ++i)
     {
         const crd::usize len = ihi - i;  // reflector support rows [i+1, ihi]
         for (crd::usize k = 0; k < len; ++k)
@@ -339,8 +341,8 @@ void hessenberg_complex_split(R* ar, R* ai, crd::usize n, crd::usize lda, crd::u
 }
 
 // v3d-2c-1 — form the unitary Q (zunghr) of the complex Hessenberg reduction
-// into split arrays (qr, qi). Q = H(ilo)·…·H(ihi-2), built by left-applying
-// H_i to I from i = ihi-2 down to ilo: Q := (I − tau·v·v^H)·Q (cgemvt, cger).
+// into split arrays (qr, qi). Q = H(ilo)·…·H(ihi-1), built by left-applying
+// H_i to I from i = ihi-1 down to ilo: Q := (I − tau·v·v^H)·Q (cgemvt, cger).
 template <typename R>
 void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda, crd::usize ilo,
                           crd::usize ihi, const crd::hesap::Complex<R>* tau, R* qr, R* qi,
@@ -354,7 +356,7 @@ void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda
             qi[i * ldq + j] = R{0};
         }
     }
-    if (ihi < ilo + 2)
+    if (ihi <= ilo)
     {
         return;
     }
@@ -367,7 +369,7 @@ void form_q_complex_split(const R* ar, const R* ai, crd::usize n, crd::usize lda
     wr.resize(n);
     wi.resize(n);
 
-    for (crd::usize ii = ihi - 1; ii-- > ilo;)  // i = ihi-2 .. ilo
+    for (crd::usize ii = ihi; ii-- > ilo;)  // i = ihi-1 .. ilo
     {
         const crd::usize i = ii;
         const crd::usize len = ihi - i;

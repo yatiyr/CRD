@@ -32,23 +32,10 @@ using Catch::Matchers::WithinAbs;
 
 namespace
 {
-template <typename T>
-void fill_general(Matrix<T, Layout::RowMajor>& a, T diag_boost)
-{
-    for (crd::usize i = 0; i < a.rows(); ++i)
-    {
-        for (crd::usize j = 0; j < a.cols(); ++j)
-        {
-            a.at(i, j) = static_cast<T>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17)) +
-                         (i == j ? diag_boost : T{0});
-        }
-    }
-}
-
-// fill_general is a rank-2 matrix plus diag_boost * I: its spectrum is real, so complex pairs came only from rounding
-// splitting the (n-2)-fold eigenvalue. The quadratic phase gives a full-rank matrix whose spectrum at diag_boost 0.5
-// holds kComplexPairs[n] conjugate pairs, each |Im| at least 3e-3 (numpy.linalg.eigvals).
-template <typename T> void fill_complex_spectrum(Matrix<T, Layout::RowMajor>& a, T diag_boost)
+// A full-rank general matrix plus diag_boost * I (the quadratic phase keeps sin's rank-2 sum from repeating an
+// eigenvalue n-2 times). The shift moves every eigenvalue by diag_boost alone, so the spectrum holds
+// complex_pairs_of_fixture(n) conjugate pairs at every boost, each |Im| at least 3e-3 (numpy.linalg.eigvals).
+template <typename T> void fill_general(Matrix<T, Layout::RowMajor>& a, T diag_boost)
 {
     for (crd::usize i = 0; i < a.rows(); ++i)
     {
@@ -60,7 +47,22 @@ template <typename T> void fill_complex_spectrum(Matrix<T, Layout::RowMajor>& a,
     }
 }
 
-// Conjugate pairs of fill_complex_spectrum(a, 0.5) at n = 8, 16, 20 and 50.
+// A full-rank complex general matrix with distinct eigenvalues (without the quadratic phases its two rank-2 parts
+// made 0 an (n-4)-fold eigenvalue).
+template <typename R> void fill_general_complex(Matrix<Complex<R>, Layout::RowMajor>& a)
+{
+    for (crd::usize i = 0; i < a.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < a.cols(); ++j)
+        {
+            const double re = static_cast<double>(i * 7 + j * 3) * 0.17 + 0.013 * static_cast<double>(i * j * j);
+            const double im = static_cast<double>(i * 5 + j * 11) * 0.13 + 0.011 * static_cast<double>(i * i * j);
+            a.at(i, j) = Complex<R>{static_cast<R>(std::sin(re)), static_cast<R>(std::cos(im))};
+        }
+    }
+}
+
+// Conjugate pairs of fill_general at n = 8, 16, 20 and 50.
 crd::usize complex_pairs_of_fixture(crd::usize n)
 {
     switch (n)
@@ -1274,7 +1276,7 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
     for (crd::usize n : {crd::usize{8}, crd::usize{20}, crd::usize{50}})
     {
         Matrix<double, Layout::RowMajor> a(&alloc, n, n);
-        fill_complex_spectrum<double>(a, 0.5);
+        fill_general<double>(a, 0.5);
         crd::containers::Array<double> tau(&alloc);
         hessenberg<double>(a, 0, n - 1, tau);
         Matrix<double, Layout::RowMajor> h(&alloc, n, n);
@@ -1522,7 +1524,7 @@ TEST_CASE("eig: A*v = lambda*v forevery eigenpair of a general matrix (f64)",
     for (crd::usize n : {crd::usize{8}, crd::usize{20}, crd::usize{50}})
     {
         Matrix<double, Layout::RowMajor> a(&alloc, n, n);
-        fill_complex_spectrum<double>(a, 0.5);
+        fill_general<double>(a, 0.5);
         Matrix<double, Layout::RowMajor> a_orig(&alloc, n, n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -1631,7 +1633,7 @@ TEST_CASE("eig: A*v = lambda*v fora general matrix (f32)", "[hesap][eig][nonsym]
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
     const crd::usize n = 16;
     Matrix<float, Layout::RowMajor> a(&alloc, n, n);
-    fill_complex_spectrum<float>(a, 0.5F);
+    fill_general<float>(a, 0.5F);
     Matrix<float, Layout::RowMajor> a_orig(&alloc, n, n);
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -1661,15 +1663,7 @@ void check_hessenberg_complex(crd::memory::IAllocator* alloc, crd::usize n, doub
 {
     using C = crd::hesap::Complex<R>;
     Matrix<C, Layout::RowMajor> a(alloc, n, n);
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            const auto re = static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17));
-            const auto im = static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13));
-            a.at(i, j) = C{re, im};
-        }
-    }
+    fill_general_complex<R>(a);
     Matrix<C, Layout::RowMajor> a_orig(alloc, n, n);
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -1808,16 +1802,9 @@ template <typename R>
 void check_complex_schur(crd::memory::IAllocator* alloc, crd::usize n, double tol)
 {
     using C = crd::hesap::Complex<R>;
-    // Random complex matrix → complex Hessenberg H (the zlahqr input).
+    // A general complex matrix → complex Hessenberg H (the zlahqr input).
     Matrix<C, Layout::RowMajor> a(alloc, n, n);
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            a.at(i, j) = C{static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17)),
-                           static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13))};
-        }
-    }
+    fill_general_complex<R>(a);
     crd::containers::Array<C> tau(alloc);
     hessenberg<C>(a, 0, n - 1, tau);
     Matrix<C, Layout::RowMajor> hmat(alloc, n, n);
@@ -1952,14 +1939,7 @@ void make_complex_schur(crd::memory::IAllocator* alloc, crd::usize n,
 {
     using C = crd::hesap::Complex<R>;
     Matrix<C, Layout::RowMajor> a(alloc, n, n);
-    for (crd::usize i = 0; i < n; ++i)
-    {
-        for (crd::usize j = 0; j < n; ++j)
-        {
-            a.at(i, j) = C{static_cast<R>(std::sin(static_cast<double>(i * 7 + j * 3) * 0.17)),
-                           static_cast<R>(std::cos(static_cast<double>(i * 5 + j * 11) * 0.13))};
-        }
-    }
+    fill_general_complex<R>(a);
     crd::containers::Array<C> tau(alloc);
     hessenberg<C>(a, 0, n - 1, tau);
     for (crd::usize i = 0; i < n; ++i)

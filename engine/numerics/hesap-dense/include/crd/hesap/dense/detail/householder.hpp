@@ -144,7 +144,8 @@ template <typename T>
 // complex. `x` is contiguous length `n` with x[0] = alpha, x[1..n-1] the tail
 // to annihilate; on exit x[1..n-1] holds the v-tail (v[0]=1 NOT written), x[0]
 // unchanged. Includes the `safmin` rescaling guard (matters for the two-sided
-// similarity updates, same reasoning as the real `make_householder`).
+// similarity updates, same reasoning as the real `make_householder`). As in
+// zlarfg, n == 1 still reflects a complex alpha to the real beta (tau != 0).
 //
 // Shared by the complex Hermitian reduction (`zhetd2`, v3a-2.5) and the complex
 // Hessenberg reduction (`zgehd2`, v3d-2c-1).
@@ -161,9 +162,9 @@ template <typename R>
                                                                     crd::usize n) noexcept
 {
     using C = crd::hesap::Complex<R>;
-    if (n <= 1)
+    if (n == 0)
     {
-        return HouseholderComplex<R>{C{R{0}, R{0}}, n == 1 ? x[0].re : R{0}};
+        return HouseholderComplex<R>{C{R{0}, R{0}}, R{0}};
     }
     R alphr = x[0].re;
     R alphi = x[0].im;
