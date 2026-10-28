@@ -99,9 +99,9 @@ template <typename T>
 void bsr_block_row_dyn(const crd::u32* col_idx, const T* vals, const T* x, T* y_blk, crd::u32 k0, crd::u32 k1,
                        crd::u32 b, T alpha, T beta, bool bzero)
 {
-    constexpr crd::u32 kMaxDynB = 64;
-    CRD_ASSERT_MSG(b <= kMaxDynB, "BSR runtime block size exceeds kMaxDynB");
-    T acc[kMaxDynB];
+    constexpr crd::u32 max_dyn_b = 64;
+    CRD_ASSERT_MSG(b <= max_dyn_b, "BSR runtime block size exceeds max_dyn_b");
+    T acc[max_dyn_b];
     for (crd::u32 r = 0; r < b; ++r)
     {
         acc[r] = T{};
@@ -184,12 +184,12 @@ void spmv_bsr_parallel(T alpha, const BsrMatrix<T>& a, crd::containers::ConstSpa
         jobs = 1;
     }
     jobs = jobs < nbr ? jobs : nbr;
-    constexpr crd::u32 kMaxJobs = 1024;
-    if (jobs > kMaxJobs)
+    constexpr crd::u32 max_jobs = 1024;
+    if (jobs > max_jobs)
     {
-        jobs = kMaxJobs;
+        jobs = max_jobs;
     }
-    crd::u32 bnd[kMaxJobs + 1];
+    crd::u32 bnd[max_jobs + 1];
     bnd[0]    = 0;
     bnd[jobs] = nbr;
     {

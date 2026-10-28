@@ -1,24 +1,31 @@
-// The hesap-sparse kernels of crd/hesap/sparse/sparse_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
-// (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS).
+// The hesap-sparse kernels of crd/hesap/sparse/sparse_kernels.hpp, the SELL-C-σ spmv and the SDDMM rows, compiled once
+// per CPU level by crd_add_cpu_kernels (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's
+// namespace (CRD_MATH_LEVEL_NS).
 //
-// Each level and type picks per sweep (SellSweep) whether wide slices run two at a time, so two independent sets of
-// lane sums are in flight, and how x is gathered; each lane adds vals * x[col] to its row's sum column by column with
-// two roundings (D(sparse)-3: never a fused multiply-add). The portable bodies keep the lane sums in arrays; the SSE2
-// bodies in 128-bit registers, gathering x by scalar loads; the AVX2 bodies in 256-bit registers, gathering complex x
-// by scalar loads, f32 x with vgatherdps and f64 x by scalar loads in L2 and vgatherdpd beyond it (each pick the
-// faster form on the 2026-10-27 board; a gather's signed index needs cols <= 2^31, scalar loads serve wider x). The
-// AVX-512 bodies run a pair's shared full columns in one ZMM (slice s low, s + 1 high, gathering both slices' x in one
-// instruction), then finish each slice in the 256-bit body, which masks its gathers with an opmask; a complex f64
-// slice fills one ZMM alone. A complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
+// In the spmv, each level and type picks per sweep (SellSweep) whether wide slices run two at a time, so two
+// independent sets of lane sums are in flight, and how x is gathered; each lane adds vals * x[col] to its row's sum
+// column by column with two roundings (D(sparse)-3: never a fused multiply-add). The portable bodies keep the lane sums
+// in arrays; the SSE2 bodies in 128-bit registers, gathering x by scalar loads; the AVX2 bodies in 256-bit registers,
+// gathering complex x by scalar loads, f32 x with vgatherdps and f64 x by scalar loads in L2 and vgatherdpd beyond it
+// (each pick the faster form on the 2026-10-27 board; a gather's signed index needs cols <= 2^31, scalar loads serve
+// wider x). The AVX-512 bodies run a pair's shared full columns in one ZMM (slice s low, s + 1 high, gathering both
+// slices' x in one instruction), then finish each slice in the 256-bit body, which masks its gathers with an opmask; a
+// complex f64 slice fills one ZMM alone. A complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
 // vi xi as it has no addsub. The columns every row of a slice stores run unmasked; past the shortest row a padded
 // lane multiplies its padding 0 by a zero instead of x[0], so an infinite or NaN x[0] reaches only the rows that
 // store column 0, and adding that +0 leaves the sum's bits (a sum from +0 is never -0). A Delta16 slice walks each
 // lane's column by its 16-bit gaps (scalar adds; the gathering AVX2 bodies widen eight or four gaps in one add) and a
 // pair runs two slices of one column form, so the column form changes only how the columns are read. The sums are
 // written out by one scalar expression on every level, so every level gives the CSR spmv's bits.
+//
+// The SDDMM dots gather random Y rows, so independent lane sums keep several gathers in flight. Each level runs the
+// one accumulator shape SddmmRows declares in Vec4d and Vec8f (scalar arrays on portable, 128-bit halves on SSE2),
+// and horizontal_sum folds a register pairwise through memory on every level, so every level gives the same bits.
 
 #include <crd/hesap/sparse/sparse_kernels.hpp>
 #include <crd/math/simd/backend.hpp>
+#include <crd/math/simd/vec4d.hpp>
+#include <crd/math/simd/vec8f.hpp>
 
 namespace crd::hesap::sparse::inline CRD_MATH_LEVEL_NS
 {
@@ -928,12 +935,67 @@ void sell_spmv_complex(const SellSlices<T>& a, const SellComplexScales<T>& scale
     Policy::run(sweep, a, ComplexWrite<T>{scales, beta_zero}, x, y, s_begin, s_end);
 }
 
+// dot(xi, yj) over r columns in SddmmRows' order.
+crd::f64 sddmm_dot(const crd::f64* xi, const crd::f64* yj, crd::u32 r) noexcept
+{
+    using V = crd::math::simd::Vec4d;
+    V a0 = V::zero();
+    V a1 = V::zero();
+    crd::u32 col = 0;
+    for (; col + 8U <= r; col += 8U)
+    {
+        a0 = a0 + V::load(xi + col) * V::load(yj + col);
+        a1 = a1 + V::load(xi + col + 4U) * V::load(yj + col + 4U);
+    }
+    crd::f64 acc = crd::math::simd::horizontal_sum(a0 + a1);
+    for (; col + 4U <= r; col += 4U)
+    {
+        acc = acc + crd::math::simd::horizontal_sum(V::load(xi + col) * V::load(yj + col));
+    }
+    for (; col < r; ++col)
+    {
+        acc = acc + xi[col] * yj[col];
+    }
+    return acc;
+}
+
+crd::f32 sddmm_dot(const crd::f32* xi, const crd::f32* yj, crd::u32 r) noexcept
+{
+    using V = crd::math::simd::Vec8f;
+    V a0 = V::zero();
+    crd::u32 col = 0;
+    for (; col + 8U <= r; col += 8U)
+    {
+        a0 = a0 + V::load(xi + col) * V::load(yj + col);
+    }
+    crd::f32 acc = crd::math::simd::horizontal_sum(a0);
+    for (; col < r; ++col)
+    {
+        acc = acc + xi[col] * yj[col];
+    }
+    return acc;
+}
+
+template <typename T> void sddmm_rows(const SddmmRows<T>& s, crd::u32 i_begin, crd::u32 i_end) noexcept
+{
+    for (crd::u32 i = i_begin; i < i_end; ++i)
+    {
+        const T* xi = s.x + static_cast<crd::usize>(i) * s.ldx;
+        for (crd::u32 k = s.outer[i]; k < s.outer[i + 1U]; ++k)
+        {
+            s.out[k] = s.alpha * sddmm_dot(xi, s.y + static_cast<crd::usize>(s.inner[k]) * s.ldy, s.r);
+        }
+    }
+}
+
 } // namespace
 
 constexpr auto kSellSpmvF64 = &sell_spmv_real<F64Policy, crd::f64>;
 constexpr auto kSellSpmvF32 = &sell_spmv_real<F32Policy, crd::f32>;
 constexpr auto kSellSpmvC64 = &sell_spmv_complex<C64Policy, crd::f64>;
 constexpr auto kSellSpmvC32 = &sell_spmv_complex<C32Policy, crd::f32>;
+constexpr auto kSddmmRowsF64 = &sddmm_rows<crd::f64>;
+constexpr auto kSddmmRowsF32 = &sddmm_rows<crd::f32>;
 
 } // namespace crd::hesap::sparse::inline CRD_MATH_LEVEL_NS
 
@@ -941,10 +1003,8 @@ namespace crd::hesap::sparse
 {
 
 const SparseKernels CRD_KERNEL_TABLE(kSparseKernels) = {
-    CRD_MATH_LEVEL_NS::kSellSpmvF64,
-    CRD_MATH_LEVEL_NS::kSellSpmvF32,
-    CRD_MATH_LEVEL_NS::kSellSpmvC64,
-    CRD_MATH_LEVEL_NS::kSellSpmvC32,
+    CRD_MATH_LEVEL_NS::kSellSpmvF64, CRD_MATH_LEVEL_NS::kSellSpmvF32,  CRD_MATH_LEVEL_NS::kSellSpmvC64,
+    CRD_MATH_LEVEL_NS::kSellSpmvC32, CRD_MATH_LEVEL_NS::kSddmmRowsF64, CRD_MATH_LEVEL_NS::kSddmmRowsF32,
 };
 
 } // namespace crd::hesap::sparse

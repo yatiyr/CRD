@@ -3,8 +3,12 @@
 // and long rows, rows past the last full slice, a σ order and the identity, any slice range, both beta paths (beta == 0
 // never reads y), IEEE special values in A, an infinite or NaN x[0] (padding never multiplies x), both sweeps, one
 // with x declared wider than a gather's index reaches, and both column forms: u32 and Delta16, mixed in one matrix
-// where a gap needs more than 16 bits. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases under each
-// forced level.
+// where a gap needs more than 16 bits. The SDDMM rows of f64 and f32 give the bits of their declared order on every
+// level at r 0 to 17 and past it, over empty rows, sub-ranges (guards around them) and IEEE special values in X and
+// Y, and sddmm and sddmm_parallel give them too. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases and
+// the [sddmm] suite under each forced level.
+
+#include "sparse_jobs_fixture.hpp"
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
@@ -401,6 +405,221 @@ template <typename T> void check_every_level()
     CHECK(ran >= 1U); // portable runs everywhere
 }
 
+// An SDDMM dot in SddmmRows' order, one scalar operation at a time: f64 as two four-lane sums over stripes of 8, then
+// stripes of 4 folded alone; f32 as one eight-lane sum over stripes of 8; then column by column.
+template <typename U> U sddmm_oracle(const U* x, const U* y, u32 r)
+{
+    U lanes[8] = {};
+    u32 col = 0;
+    for (; col + 8U <= r; col += 8U)
+    {
+        for (u32 l = 0; l < 8U; ++l)
+        {
+            lanes[l] = lanes[l] + x[col + l] * y[col + l];
+        }
+    }
+    U acc;
+    if constexpr (std::is_same_v<U, crd::f64>)
+    {
+        U s[4];
+        for (u32 l = 0; l < 4U; ++l)
+        {
+            s[l] = lanes[l] + lanes[l + 4U];
+        }
+        acc = (s[0] + s[1]) + (s[2] + s[3]);
+        for (; col + 4U <= r; col += 4U)
+        {
+            U p[4];
+            for (u32 l = 0; l < 4U; ++l)
+            {
+                p[l] = x[col + l] * y[col + l];
+            }
+            acc = acc + ((p[0] + p[1]) + (p[2] + p[3]));
+        }
+    }
+    else
+    {
+        acc = ((lanes[0] + lanes[1]) + (lanes[2] + lanes[3])) + ((lanes[4] + lanes[5]) + (lanes[6] + lanes[7]));
+    }
+    for (; col < r; ++col)
+    {
+        acc = acc + x[col] * y[col];
+    }
+    return acc;
+}
+
+inline constexpr u32 kSddmmRows = 13U;
+inline constexpr u32 kSddmmCols = 11U;
+inline constexpr u32 kSddmmMaxR = 70U;
+inline constexpr u32 kSddmmPad = 3U; // columns past r in each row of x and y, NaN: a dot never reads them
+inline constexpr u32 kSddmmNnz = kSddmmRows * 7U;
+
+// X and Y rows of fractions of both signs at two magnitudes, so the order of the sum shows in its bits; rows 1, 5 and
+// 9 of X and row 2 of Y also hold a signed zero, a subnormal, an infinity, a NaN or the largest finite value at
+// columns of the stripes and of the tail.
+template <typename U> void sddmm_operands(Lcg& g, u32 r, U* x, U* y)
+{
+    const U specials[] = {U(-0.0),
+                          std::numeric_limits<U>::denorm_min(),
+                          std::numeric_limits<U>::infinity(),
+                          -std::numeric_limits<U>::infinity(),
+                          std::numeric_limits<U>::quiet_NaN(),
+                          std::numeric_limits<U>::max()};
+    const u32 ld = r + kSddmmPad;
+    const auto fill = [&](U* m, u32 rows)
+    {
+        for (u32 i = 0; i < rows; ++i)
+        {
+            for (u32 c = 0; c < ld; ++c)
+            {
+                const U scale = g.next() % 3U == 0U ? U(1048576) : U(1);
+                m[i * ld + c] = c < r ? g.fraction<U>(19U, U(7)) * scale : std::numeric_limits<U>::quiet_NaN();
+            }
+        }
+    };
+    fill(x, kSddmmRows);
+    fill(y, kSddmmCols);
+    if (r == 0U)
+    {
+        return;
+    }
+    for (const u32 i : {1U, 5U, 9U})
+    {
+        x[i * ld + (i * 7U) % r] = specials[(i + r) % 6U];
+        x[i * ld + r - 1U] = specials[(i + r + 3U) % 6U];
+    }
+    y[2U * ld + r / 2U] = specials[r % 6U];
+}
+
+// Every level's SDDMM rows against sddmm_oracle at r 0 to 17 and past it, three row ranges (the whole mask, a middle
+// one, an empty one) and two alphas, with a mask of empty rows and rows of up to 6 entries; every value slot outside
+// the range, and a guard past the last, keeps its guard.
+template <typename U> void check_sddmm_levels()
+{
+    using Rows = sp::SddmmRows<U>;
+    u32 outer[kSddmmRows + 1U];
+    u32 inner[kSddmmNnz];
+    Lcg g{0x5DD3ULL};
+    outer[0] = 0U;
+    for (u32 i = 0; i < kSddmmRows; ++i)
+    {
+        const u32 len = i % 6U == 3U ? 0U : (i * 5U) % 7U;
+        for (u32 k = 0; k < len; ++k)
+        {
+            inner[outer[i] + k] = g.next() % kSddmmCols;
+        }
+        outer[i + 1U] = outer[i] + len;
+    }
+    const u32 nnz = outer[kSddmmRows];
+    const U guard = U(12345.5);
+    const U alphas[] = {U(1), U(-1.5)};
+    const u32 ranges[][2] = {{0U, kSddmmRows}, {2U, 9U}, {5U, 5U}};
+    U x[kSddmmRows * (kSddmmMaxR + kSddmmPad)];
+    U y[kSddmmCols * (kSddmmMaxR + kSddmmPad)];
+    U out[kSddmmNnz + 1U];
+    usize ran = 0;
+    for (const KernelLevel<SparseKernels>& level : sp::sparse_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO("level " << crd::cpu_level_name(level.level) << ", " << sizeof(U) * 8U << "-bit");
+        usize cases = 0;
+        usize wrong = 0;
+        usize touched = 0;
+        for (const u32 r :
+             {0U, 1U, 2U, 3U, 4U, 5U, 6U, 7U, 8U, 9U, 10U, 11U, 12U, 13U, 14U, 15U, 16U, 17U, 31U, 32U, 33U, 64U, 70U})
+        {
+            sddmm_operands<U>(g, r, x, y);
+            const u32 ld = r + kSddmmPad;
+            for (const U alpha : alphas)
+            {
+                for (const auto& range : ranges)
+                {
+                    ++cases;
+                    for (u32 k = 0; k <= nnz; ++k)
+                    {
+                        out[k] = guard;
+                    }
+                    const Rows rows{outer, inner, x, y, out, ld, ld, r, alpha};
+                    if constexpr (std::is_same_v<U, crd::f64>)
+                    {
+                        level.table->sddmm_rows_f64(rows, range[0], range[1]);
+                    }
+                    else
+                    {
+                        level.table->sddmm_rows_f32(rows, range[0], range[1]);
+                    }
+                    for (u32 i = 0; i < kSddmmRows; ++i)
+                    {
+                        const bool in = i >= range[0] && i < range[1];
+                        for (u32 k = outer[i]; k < outer[i + 1U]; ++k)
+                        {
+                            const U want = in ? alpha * sddmm_oracle(x + i * ld, y + inner[k] * ld, r) : guard;
+                            (in ? wrong : touched) += same_scalar(out[k], want) ? 0U : 1U;
+                        }
+                    }
+                    touched += same_scalar(out[nnz], guard) ? 0U : 1U;
+                }
+            }
+        }
+        CHECK(cases == 23U * 2U * 3U);
+        CHECK(wrong == 0U);
+        CHECK(touched == 0U);
+    }
+    CHECK(ran >= 1U); // portable runs everywhere
+}
+
+// sddmm and sddmm_parallel run the selected level: the oracle's bits on a TripletBuilder mask.
+template <typename U> void check_sddmm_public()
+{
+    crd::memory::TlsfAllocator alloc(8U << 20);
+    constexpr u32 m = 37U;
+    constexpr u32 n = 29U;
+    constexpr u32 r = 45U;
+    Lcg g{0x5DD5ULL};
+    sp::TripletBuilder<U> b(&alloc, m, n);
+    for (u32 i = 0; i < m; ++i)
+    {
+        for (u32 k = 0; k < i % 9U; ++k)
+        {
+            b.add(i, g.next() % n, U(1));
+        }
+    }
+    const auto mask = b.compress();
+    U x[m * r];
+    U y[n * r];
+    for (U& v : x)
+    {
+        v = g.fraction<U>(23U, U(9));
+    }
+    for (U& v : y)
+    {
+        v = g.fraction<U>(23U, U(9)) * U(4096);
+    }
+    const auto serial = sp::sddmm<U>(mask, x, r, y, r, r, U(0.75), &alloc);
+    crd_hesap_sparse_tests::sparse_jobs_listener();
+    const auto parallel = sp::sddmm_parallel<U>(mask, x, r, y, r, r, U(0.75), &alloc, 3U);
+    crd::jobs::frame_reset();
+    const u32* outer = mask.pattern().outer_ptr.data();
+    const u32* inner = mask.pattern().inner_idx.data();
+    REQUIRE(serial.nnz() == mask.nnz());
+    REQUIRE(parallel.nnz() == mask.nnz());
+    usize wrong = 0;
+    for (u32 i = 0; i < m; ++i)
+    {
+        for (u32 k = outer[i]; k < outer[i + 1U]; ++k)
+        {
+            const U want = U(0.75) * sddmm_oracle(x + i * r, y + inner[k] * r, r);
+            wrong += same_scalar(serial.values().values[k], want) ? 0U : 1U;
+            wrong += same_scalar(parallel.values().values[k], want) ? 0U : 1U;
+        }
+    }
+    CHECK(wrong == 0U);
+}
+
 } // namespace
 
 TEST_CASE("sparse kernels: the archive holds portable and each body level the build compiles", "[sparse][kernels]")
@@ -413,7 +632,9 @@ TEST_CASE("sparse kernels: the archive holds portable and each body level the bu
     bool avx512 = false;
     for (usize i = 0; i < levels.size(); ++i)
     {
-        CHECK(levels[i].table != nullptr);
+        REQUIRE(levels[i].table != nullptr);
+        CHECK(levels[i].table->sddmm_rows_f64 != nullptr);
+        CHECK(levels[i].table->sddmm_rows_f32 != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
@@ -551,4 +772,20 @@ TEST_CASE("sparse kernels: the process runs the level its CPU selection resolves
                                                                     crd::math::kernel_level_cap()));
     CHECK(crd::cpu_level_includes(s.selected, chosen.level));
     CHECK(crd::cpu_level_includes(crd::math::kernel_level_cap(), chosen.level));
+}
+
+TEST_CASE("sparse kernels: every level the host runs gives the SDDMM order's bits (f64)", "[sparse][kernels]")
+{
+    check_sddmm_levels<crd::f64>();
+}
+
+TEST_CASE("sparse kernels: every level the host runs gives the SDDMM order's bits (f32)", "[sparse][kernels]")
+{
+    check_sddmm_levels<crd::f32>();
+}
+
+TEST_CASE("sparse kernels: sddmm and sddmm_parallel run the selected level", "[sparse][kernels]")
+{
+    check_sddmm_public<crd::f64>();
+    check_sddmm_public<crd::f32>();
 }

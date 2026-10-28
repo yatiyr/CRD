@@ -90,6 +90,13 @@
       "why": "the SELL-C-sigma spmv of the sparse LinearOps and Krylov solvers; its f64 and f32 bodies are per-level sparse kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/sparse/sparse.hpp",
+      "flags_of": "tests/numerics/hesap-sparse/test_sddmm.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the hesap-sparse umbrella; the SELL spmv and the SDDMM dots run the per-level sparse kernels (SIMD-DISPATCH), so no header of the module brings an intrinsics header to its consumers"
+    },
+    {
       "include": "crd/hesap/fft/fft.hpp",
       "flags_of": "tests/numerics/hesap-fft/test_fft.cpp",
       "forbid": ["chrono", "format"],

@@ -1,8 +1,8 @@
 // The table of the hesap-sparse kernels (SIMD-DISPATCH, ADR-0134 §5): one per CPU level the kernel unit is built for
 // (engine/numerics/hesap-sparse/kernels/sparse_kernels.cpp), resolved by sparse_kernels() in
 // crd/hesap/sparse/sparse_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing
-// from it. Every routine is bit-exact across levels, column forms and with the CSR spmv (ADR-0063, D(sparse)-3), NaN
-// payloads aside.
+// from it. Every routine is bit-exact across levels (ADR-0063, D(sparse)-3), NaN payloads aside: the SELL-C-σ spmv
+// across column forms and with the CSR spmv too.
 
 #pragma once
 
@@ -57,6 +57,24 @@ template <typename T> struct SellComplexScales
     T beta_im;
 };
 
+// One SDDMM (crd/hesap/sparse/sddmm.hpp): a CSR mask's row pointers and columns, X and Y row-major with leading
+// dimensions ldx and ldy >= r, and the mask's value slots. Each dot runs two roundings a term in one fixed order on
+// every level: f64 in two four-lane sums over stripes of 8 columns, added lane by lane and folded pairwise, then each
+// remaining stripe of 4 folded pairwise and added, then column by column; f32 in one eight-lane sum over stripes of 8,
+// folded pairwise, then column by column. An empty dot is +0.
+template <typename T> struct SddmmRows
+{
+    const crd::u32* outer;
+    const crd::u32* inner;
+    const T* x;
+    const T* y;
+    T* out;
+    crd::u32 ldx;
+    crd::u32 ldy;
+    crd::u32 r;
+    T alpha;
+};
+
 struct SparseKernels
 {
     // y[r] = alpha * sum_w vals * x[col] + beta * y[r] for the rows of slices [s_begin, s_end); each row sums its
@@ -71,6 +89,9 @@ struct SparseKernels
                           crd::f64* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
     void (*sell_spmv_c32)(const SellSlices<crd::f32>& a, const SellComplexScales<crd::f32>& scales, const crd::f32* x,
                           crd::f32* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
+    // out[k] = alpha * dot(x row i, y row inner[k]) for the nonzeros k of mask rows [i_begin, i_end) (SddmmRows).
+    void (*sddmm_rows_f64)(const SddmmRows<crd::f64>& s, crd::u32 i_begin, crd::u32 i_end) noexcept;
+    void (*sddmm_rows_f32)(const SddmmRows<crd::f32>& s, crd::u32 i_begin, crd::u32 i_end) noexcept;
 };
 
 // The levels with a body; the dispatcher refuses a build that compiles any other.

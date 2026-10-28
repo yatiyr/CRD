@@ -37,6 +37,7 @@ target_link_libraries(crd-hesap-sparse
 target_compile_features(crd-hesap-sparse PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-sparse)
 
-# The f64 and f32 SELL-C-sigma spmv, one body per CPU level (ADR-0134); src/sparse_kernel_dispatch.cpp lists them.
+# The SELL-C-sigma spmv and the f64 and f32 SDDMM rows, one body per CPU level (ADR-0134);
+# src/sparse_kernel_dispatch.cpp lists them.
 crd_add_cpu_kernels(crd-hesap-sparse NAME sparse LEVELS portable sse2 avx2 avx512 INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/sparse_kernels.cpp")

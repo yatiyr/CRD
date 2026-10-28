@@ -3,11 +3,9 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/types.hpp>
+#include <crd/hesap/sparse/sparse_dispatch.hpp>
 #include <crd/hesap/sparse/sparse_matrix.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/simd/backend.hpp>
-#include <crd/math/simd/vec4d.hpp>
-#include <crd/math/simd/vec8f.hpp>
 
 #include <type_traits>
 #include <utility>
@@ -33,87 +31,68 @@ namespace crd::hesap::sparse
 
 namespace detail
 {
-template <typename T>
-void sddmm_rows(const SparseMatrix<T, SparseFormat::Csr>& mask, const T* x, crd::u32 ldx, const T* y, crd::u32 ldy,
-                crd::u32 r, T alpha, T* out_vals, crd::u32 i_begin, crd::u32 i_end)
+// The f64 and f32 dots run the level kernels (SddmmRows, crd/hesap/sparse/sparse_kernels.hpp): the Y-row access is a
+// random gather, so a single scalar accumulator (a 4-cycle add chain) starves the gathers of in-flight parallelism, and
+// the kernels' lane sums break the chain. Two-rounded mul+add per term (NOT a single-rounded FMA; D(sparse)-3 /
+// ADR-0063), in one fixed order on every level. A complex dot has no lane type: four scalar partial sums.
+template <typename T> struct SddmmRun
 {
-    const crd::u32* outer = mask.pattern().outer_ptr.data();
-    const crd::u32* inner = mask.pattern().inner_idx.data();
-    for (crd::u32 i = i_begin; i < i_end; ++i)
+    const crd::u32* outer;
+    const crd::u32* inner;
+    const T* x;
+    crd::u32 ldx;
+    const T* y;
+    crd::u32 ldy;
+    crd::u32 r;
+    T alpha;
+    T* out_vals;
+
+    void operator()(crd::u32 i_begin, crd::u32 i_end) const
     {
-        const T* xi = x + static_cast<crd::usize>(i) * ldx;
-        for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
+        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
         {
-            const T* yj = y + static_cast<crd::usize>(inner[k]) * ldy;
-            // The dot is the hot loop and the Y-row access is a random gather, so a
-            // single scalar accumulator (4-cycle FP-add latency chain) starves the
-            // gathers of in-flight parallelism. Explicit SIMD with multiple lane
-            // accumulators breaks the chain (mirrors the SELL kernel that beat
-            // Eigen). Two-rounded mul+add per term (NOT a single-rounded FMA;
-            // D(sparse)-3 / ADR-0063). Vec4d/Vec8f reduce via a store-then-scalar
-            // `horizontal_sum` -> the SAME fixed order on AVX2 and the scalar
-            // fallback build, so the result is bit-exact across SIMD widths.
-            T acc;
+            const SddmmRows<T> rows{outer, inner, x, y, out_vals, ldx, ldy, r, alpha};
+            const SparseKernels& k = *sparse_kernels().table;
             if constexpr (std::is_same_v<T, crd::f64>)
             {
-                using V    = crd::math::simd::Vec4d;
-                V        a0 = V::zero();
-                V        a1 = V::zero();
-                crd::u32 col = 0;
-                for (; col + 8 <= r; col += 8)
-                {
-                    a0 = a0 + V::load(xi + col) * V::load(yj + col);
-                    a1 = a1 + V::load(xi + col + 4) * V::load(yj + col + 4);
-                }
-                acc = crd::math::simd::horizontal_sum(a0 + a1);
-                for (; col + 4 <= r; col += 4)
-                {
-                    acc = acc + crd::math::simd::horizontal_sum(V::load(xi + col) * V::load(yj + col));
-                }
-                for (; col < r; ++col)
-                {
-                    acc = acc + xi[col] * yj[col];
-                }
+                k.sddmm_rows_f64(rows, i_begin, i_end);
             }
-            else if constexpr (std::is_same_v<T, crd::f32>)
+            else
             {
-                using V    = crd::math::simd::Vec8f;
-                V        a0 = V::zero();
-                crd::u32 col = 0;
-                for (; col + 8 <= r; col += 8)
-                {
-                    a0 = a0 + V::load(xi + col) * V::load(yj + col);
-                }
-                acc = crd::math::simd::horizontal_sum(a0);
-                for (; col < r; ++col)
-                {
-                    acc = acc + xi[col] * yj[col];
-                }
+                k.sddmm_rows_f32(rows, i_begin, i_end);
             }
-            else  // complex / other: four scalar partial sums (no SIMD lane type)
+        }
+        else
+        {
+            for (crd::u32 i = i_begin; i < i_end; ++i)
             {
-                T        a0  = T{};
-                T        a1  = T{};
-                T        a2  = T{};
-                T        a3  = T{};
-                crd::u32 col = 0;
-                for (; col + 4 <= r; col += 4)
+                const T* xi = x + static_cast<crd::usize>(i) * ldx;
+                for (crd::u32 k = outer[i]; k < outer[i + 1]; ++k)
                 {
-                    a0 = a0 + xi[col] * yj[col];
-                    a1 = a1 + xi[col + 1] * yj[col + 1];
-                    a2 = a2 + xi[col + 2] * yj[col + 2];
-                    a3 = a3 + xi[col + 3] * yj[col + 3];
-                }
-                acc = (a0 + a1) + (a2 + a3);
-                for (; col < r; ++col)
-                {
-                    acc = acc + xi[col] * yj[col];
+                    const T* yj = y + static_cast<crd::usize>(inner[k]) * ldy;
+                    T a0 = T{};
+                    T a1 = T{};
+                    T a2 = T{};
+                    T a3 = T{};
+                    crd::u32 col = 0;
+                    for (; col + 4 <= r; col += 4)
+                    {
+                        a0 = a0 + xi[col] * yj[col];
+                        a1 = a1 + xi[col + 1] * yj[col + 1];
+                        a2 = a2 + xi[col + 2] * yj[col + 2];
+                        a3 = a3 + xi[col + 3] * yj[col + 3];
+                    }
+                    T acc = (a0 + a1) + (a2 + a3);
+                    for (; col < r; ++col)
+                    {
+                        acc = acc + xi[col] * yj[col];
+                    }
+                    out_vals[k] = alpha * acc;
                 }
             }
-            out_vals[k] = alpha * acc;
         }
     }
-}
+};
 } // namespace detail
 
 // Serial SDDMM: C = alpha * sample(X * Yᵀ, mask). C carries mask's pattern.
@@ -145,7 +124,9 @@ template <typename T>
     }
     vals.values.resize_uninitialized(nnz);
 
-    detail::sddmm_rows<T>(mask, x, ldx, y, ldy, r, alpha, vals.values.data(), 0, mp.rows);
+    const detail::SddmmRun<T> run{mp.outer_ptr.data(), mp.inner_idx.data(), x, ldx, y, ldy, r, alpha,
+                                  vals.values.data()};
+    run(0, mp.rows);
     pat.recompute_topology_hash();
     return SparseMatrix<T, SparseFormat::Csr>(std::move(pat), std::move(vals));
 }
@@ -195,12 +176,12 @@ template <typename T>
         jobs = 1;
     }
     jobs = jobs < m ? jobs : m;
-    constexpr crd::u32 kMaxJobs = 1024;
-    if (jobs > kMaxJobs)
+    constexpr crd::u32 max_jobs = 1024;
+    if (jobs > max_jobs)
     {
-        jobs = kMaxJobs;
+        jobs = max_jobs;
     }
-    crd::u32 bnd[kMaxJobs + 1];
+    crd::u32 bnd[max_jobs + 1];
     bnd[0]    = 0;
     bnd[jobs] = m;
     {
@@ -218,23 +199,19 @@ template <typename T>
 
     struct Ctx
     {
-        const SparseMatrix<T, SparseFormat::Csr>* mask;
-        const T*                                  x;
-        const T*                                  y;
-        crd::u32                                  ldx, ldy, r;
-        T                                         alpha;
-        T*                                        out;
-        const crd::u32*                           bnd;
+        detail::SddmmRun<T> run;
+        const crd::u32* bnd;
     };
-    Ctx ctx{&mask, x, y, ldx, ldy, r, alpha, vals.values.data(), bnd};
+    const Ctx ctx{{outer, mp.inner_idx.data(), x, ldx, y, ldy, r, alpha, vals.values.data()}, bnd};
 
-    auto* counter = crd::jobs::parallel_for(jobs, jobs, [&ctx](crd::u32 jb0, crd::u32 jb1) {
-        for (crd::u32 jb = jb0; jb < jb1; ++jb)
-        {
-            detail::sddmm_rows<T>(*ctx.mask, ctx.x, ctx.ldx, ctx.y, ctx.ldy, ctx.r, ctx.alpha, ctx.out, ctx.bnd[jb],
-                                  ctx.bnd[jb + 1]);
-        }
-    });
+    auto* counter = crd::jobs::parallel_for(jobs, jobs,
+                                            [&ctx](crd::u32 jb0, crd::u32 jb1)
+                                            {
+                                                for (crd::u32 jb = jb0; jb < jb1; ++jb)
+                                                {
+                                                    ctx.run(ctx.bnd[jb], ctx.bnd[jb + 1]);
+                                                }
+                                            });
     crd::jobs::wait(counter);
 
     pat.recompute_topology_hash();

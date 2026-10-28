@@ -94,10 +94,10 @@ void spmv_ell_parallel(T alpha, const EllMatrix<T>& a, crd::containers::ConstSpa
         jobs = 1;
     }
     jobs = jobs < rows ? jobs : rows;
-    constexpr crd::u32 kMaxJobs = 1024;
-    if (jobs > kMaxJobs)
+    constexpr crd::u32 max_jobs = 1024;
+    if (jobs > max_jobs)
     {
-        jobs = kMaxJobs;
+        jobs = max_jobs;
     }
     struct Ctx
     {

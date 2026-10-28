@@ -35,5 +35,5 @@ crd_enable_default_pch(crd-hesap-sparse-tests)
 
 crd_discover_tests(crd-hesap-sparse-tests)
 
-# ADR-0134 §8: the [kernels] cases once per compiled level (crd-hesap-sparse-kernels-at-<level>).
-crd_add_kernel_level_tests(crd-hesap-sparse-tests "[kernels]")
+# ADR-0134 §8: the [kernels] cases and the SDDMM suite once per compiled level (crd-hesap-sparse-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-sparse-tests "[kernels],[sddmm]")
