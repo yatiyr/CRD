@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **10** · tools: **19** · workflow actions: **5** · runner images: **3** · unpinned apt packages: **18**
+- packages: **10** · tools: **21** · workflow actions: **5** · runner images: **3** · unpinned apt packages: **18**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -40,6 +40,8 @@
 | actionlint | 1.7.12 | MIT | github.com | `actionlint_1.7.12_linux_amd64.tar.gz` |
 | sccache-windows | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-pc-windows-msvc.zip` |
 | sccache-linux | 0.17.0 | Apache-2.0 | github.com | `sccache-v0.17.0-x86_64-unknown-linux-musl.tar.gz` |
+| sde-windows | 10.13.1 | Intel Simplified Software License (Licenses/; third-party programs in Licenses/third-party-programs.txt) | downloadmirror.intel.com | `sde-external-10.13.1-2026-07-28-win.tar.xz` |
+| sde-linux | 10.13.1 | Intel Simplified Software License (Licenses/; third-party programs in Licenses/third-party-programs.txt) | downloadmirror.intel.com | `sde-external-10.13.1-2026-07-28-lin.tar.xz` |
 | mold-linux | 3.0.0 | MIT | github.com | `mold-3.0.0-x86_64-linux.tar.gz` |
 | clang-build-analyzer | 1.6.0 | Unlicense | aras-p/ClangBuildAnalyzer (bae0cb488cce) | `ClangBuildAnalyzer-bae0cb48.tar.gz` |
 | clang-tidy-linux | 20.1.0 | Apache-2.0 WITH LLVM-exception AND Apache-2.0 | files.pythonhosted.org | `clang_tidy-20.1.0-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` |

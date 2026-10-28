@@ -328,6 +328,15 @@ jobs:
               core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
             }
 
+      # Intel SDE 10.13.1 (cmake/pins.json tools/sde-windows, scripts/install-sde.py): the configure reads CRD_SDE from
+      # the environment and registers the <suite>-kernels-at-avx512-sde-<cpu> arms (cmake/CrdSimd.cmake), which run
+      # the avx512 tables under SDE's CPU models whatever the runner's CPU (ADR-0134 §8). On the optimised lane: its
+      # codegen is where the v4 units differ, and debug code under the emulator outlasts any test timeout.
+      - name: Install pinned Intel SDE
+        if: matrix.preset == 'win-release'
+        shell: pwsh
+        run: python scripts/install-sde.py --destination "$env:RUNNER_TEMP/sde" --download-dir "$env:RUNNER_TEMP" --github-env "$env:GITHUB_ENV"
+
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"
         run: cmake --preset ${{ matrix.preset }}
@@ -837,6 +846,14 @@ jobs:
             } else {
               core.warning('no cache service for sccache in this job; the lane builds through an empty local cache');
             }
+
+      # Intel SDE as in the windows job (tools/sde-linux). Pin attaches to the program it starts, which Ubuntu's Yama
+      # allows only at ptrace scope 0 (Intel's README).
+      - name: Install pinned Intel SDE
+        if: matrix.preset == 'linux-gcc-release'
+        run: |
+          python3 scripts/install-sde.py --destination "$RUNNER_TEMP/sde" --download-dir "$RUNNER_TEMP" --github-env "$GITHUB_ENV"
+          sudo sysctl -w kernel.yama.ptrace_scope=0
 
       - name: Configure
         if: "!contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))"

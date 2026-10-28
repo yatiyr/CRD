@@ -225,6 +225,26 @@
       "member_sha256": "066c5a84c85044c8f48b3ab571ac114293ea717c3d36985db022af8206e21e63",
       "license": "Apache-2.0"
     },
+    "sde-windows": {
+      "version": "10.13.1",
+      "url": "https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-win.tar.xz",
+      "file": "sde-external-10.13.1-2026-07-28-win.tar.xz",
+      "sha256": "74e626ede09b0baa5011fc9e51b58627ea92c3fc0bae5fd7db34b490f335f651",
+      "root": "sde-external-10.13.1-2026-07-28-win/",
+      "binary": "sde.exe",
+      "license": "Intel Simplified Software License (Licenses/; third-party programs in Licenses/third-party-programs.txt)",
+      "note": "Intel's published SHA-256 (matched by the archive the user approved on 2026-10-27); the emulator of the avx512 kernel arms (ADR-0134 §8), installed whole by scripts/install-sde.py."
+    },
+    "sde-linux": {
+      "version": "10.13.1",
+      "url": "https://downloadmirror.intel.com/924984/sde-external-10.13.1-2026-07-28-lin.tar.xz",
+      "file": "sde-external-10.13.1-2026-07-28-lin.tar.xz",
+      "sha256": "94e97d623fec54385686e1e7ba65ebc9941748c05ee451423948334892bf2b50",
+      "root": "sde-external-10.13.1-2026-07-28-lin/",
+      "binary": "sde64",
+      "license": "Intel Simplified Software License (Licenses/; third-party programs in Licenses/third-party-programs.txt)",
+      "note": "Intel's published SHA-256 (matched by the archive the user approved on 2026-10-27); the emulator of the avx512 kernel arms (ADR-0134 §8), installed whole by scripts/install-sde.py."
+    },
     "mold-linux": {
       "version": "3.0.0",
       "url": "https://github.com/rui314/mold/releases/download/v3.0.0/mold-3.0.0-x86_64-linux.tar.gz",

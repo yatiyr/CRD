@@ -324,16 +324,26 @@ function(crd_add_cpu_kernels archive)
     endforeach()
 endfunction()
 
+# CRD_SDE: Intel SDE (scripts/install-sde.py), under which the avx512 arms run whatever the host's CPU. The hosted
+# lanes that run them export it before the configure; elsewhere it stays empty and no emulated arm exists.
+set(CRD_SDE "$ENV{CRD_SDE}" CACHE FILEPATH "Intel SDE executable for the emulated avx512 kernel arms (empty: none)")
+# The SDE CPU models the avx512 arms run on: skx, the level's smallest CPU (AVX-512 F, CD, BW, DQ and VL only).
+set(_CRD_SDE_CPUS skx)
+set(_CRD_LEVEL_APPLIED_TEST "${CMAKE_CURRENT_LIST_DIR}/../tests/support/kernel-levels/test_cpu_level_applied.cpp")
+
 # crd_add_kernel_level_tests(<test-executable> <filter> [ENVIRONMENT <var=value>...])
 #
 # ADR-0134 §8: <prefix>-kernels-at-<level> runs the executable's <filter> once per level CRD_KERNEL_LEVELS holds, with
 # CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is refused, and that arm runs at the
-# detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's name without "-tests". The
-# executable gets CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
+# detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's name without "-tests". With
+# CRD_SDE, <prefix>-kernels-at-avx512-sde-<cpu> runs the filter under SDE's model of each _CRD_SDE_CPUS CPU at avx512,
+# and those arms also run the hidden [cpu-level-applied] case, which fails when the level was refused. The executable
+# gets CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
 function(crd_add_kernel_level_tests executable filter)
     cmake_parse_arguments(PARSE_ARGV 2 arg "" "" "ENVIRONMENT")
     list(GET CRD_KERNEL_LEVELS -1 top)
     target_compile_definitions(${executable} PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${top}})
+    target_sources(${executable} PRIVATE "${_CRD_LEVEL_APPLIED_TEST}")
     string(REGEX REPLACE "-tests$" "" prefix "${executable}")
     foreach(level IN LISTS CRD_KERNEL_LEVELS)
         string(REPLACE "sse42" "sse4.2" spelling "${level}")
@@ -342,6 +352,16 @@ function(crd_add_kernel_level_tests executable filter)
         set_tests_properties(${prefix}-kernels-at-${level} PROPERTIES
             ENVIRONMENT "${environment}" LABELS "cerid.test.target=${executable}")
     endforeach()
+    if(CRD_SDE AND "avx512" IN_LIST CRD_KERNEL_LEVELS)
+        foreach(cpu IN LISTS _CRD_SDE_CPUS)
+            set(name ${prefix}-kernels-at-avx512-sde-${cpu})
+            add_test(NAME ${name}
+                     COMMAND "${CRD_SDE}" -${cpu} -- $<TARGET_FILE:${executable}> "${filter},[cpu-level-applied]")
+            set(environment "CRD_CPU_LEVEL=avx512" ${arg_ENVIRONMENT})
+            set_tests_properties(${name} PROPERTIES ENVIRONMENT "${environment}" TIMEOUT 1800
+                                 LABELS "cerid.test.target=${executable}")
+        endforeach()
+    endif()
 endfunction()
 
 # ---- Determinism: ADR-0063 FP contract -------------------------------------

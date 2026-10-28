@@ -17,7 +17,7 @@ read-only. A mismatch anywhere is a failure before compilation, never a silent s
 | Section | Entries | Fields |
 |---|---|---|
 | `packages` | the ten CPM sources (Catch2, glfw, zstd, stb, cgltf, MikkTSpace, imgui, the gated Eigen and OpenBLAS, and the gated Tracy client) | version, repository, ref, commit, commit-addressed archive `url`, local `file` name, `sha256`, license, optional `patches` |
-| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM 20.1.8 (the Windows release archive: the hosted clang-tidy lane's `clang-tidy.exe` member and builtin-header directory), Ninja 1.11.1 (Windows and Linux archives with the binary member), the GenMC source archive (commit-addressed, built against the pinned LLVM major), the Tracy 0.14.1 Windows release archive with its `tracy-capture` and `tracy-csvexport` members (the peer board's capture client and trace reader) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
+| `tools` | CPM bootstrap, Vulkan SDK (Windows installer, Linux archive with the validation members), Vulkan-Headers archive, the SPIRV-Reflect and SPIRV-Headers files, WARP package and member, actionlint, sccache (Windows and Linux archives with the binary member), mold (the Linux archive with the binary member), the ClangBuildAnalyzer source archive, the clang-tidy 20.1.0 wheel (the Linux developer hosts' strict-analysis tool: binary member and builtin-header directory), LLVM 20.1.8 (the Windows release archive: the hosted clang-tidy lane's `clang-tidy.exe` member and builtin-header directory), Ninja 1.11.1 (Windows and Linux archives with the binary member), the GenMC source archive (commit-addressed, built against the pinned LLVM major), the Tracy 0.14.1 Windows release archive with its `tracy-capture` and `tracy-csvexport` members (the peer board's capture client and trace reader), Intel SDE 10.13.1 (the Windows and Linux kits, extracted whole: the avx512 arms' emulator) | version, `url`, `file`, `sha256` (per file where a tool is several files), license, provenance |
 | `actions` | the five workflow actions, every one on Node 24 (2026-10-26) | tag `ref` and the 40-hex commit `sha` the workflow must use |
 | `runners` | the hosted images | explicit labels (`windows-2025`, `ubuntu-24.04`, `windows-2025-vs2026`), never `-latest` |
 | `unpinned` | the apt packages of the Linux image | recorded by `dpkg-query` into every Linux lane's census; the MSVC toolset of the Windows image is recorded by the evidence bundle |
@@ -62,8 +62,11 @@ three SPIRV-Reflect files; [install-vulkan-validation.py](../../scripts/install-
 [install-ninja.py](../../scripts/install-ninja.py) puts the pinned Ninja on every lane's `PATH` (its binary member
 verified and its `--version` checked), and [install-clang-tidy.py](../../scripts/install-clang-tidy.py) installs the
 clang-tidy lane's LLVM 20.1.8 `clang-tidy.exe` and builtin headers from LLVM's release archive in one pass over the
-tar (the binary's digest, the header count and the reported version checked). Every hosted lane installs Python 3.12
-before calling them.
+tar (the binary's digest, the header count and the reported version checked).
+[install-sde.py](../../scripts/install-sde.py) extracts Intel SDE 10.13.1's whole kit below the pin's root through
+tarfile's `data` filter (the Linux kit's inner links kept, anything escaping refused), checks `-version` and
+exports `CRD_SDE` for the emulated avx512 arms of win-release and linux-gcc-release. Every hosted lane installs
+Python 3.12 before calling them.
 
 ### Cold acquisition on every complete run
 

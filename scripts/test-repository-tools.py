@@ -50,6 +50,9 @@ sccache_spec.loader.exec_module(install_sccache)
 mold_spec = importlib.util.spec_from_file_location('install_mold', ROOT / 'scripts/install-mold.py')
 install_mold = importlib.util.module_from_spec(mold_spec)
 mold_spec.loader.exec_module(install_mold)
+sde_spec = importlib.util.spec_from_file_location('install_sde', ROOT / 'scripts/install-sde.py')
+install_sde = importlib.util.module_from_spec(sde_spec)
+sde_spec.loader.exec_module(install_sde)
 cba_spec = importlib.util.spec_from_file_location('install_cba', ROOT / 'scripts/install-clang-build-analyzer.py')
 install_cba = importlib.util.module_from_spec(cba_spec)
 cba_spec.loader.exec_module(install_cba)
@@ -1542,6 +1545,66 @@ class BuildPerformance(unittest.TestCase):
         self.assertIn('/v%s/' % pin['version'], pin['url'])
         self.assertRegex(pin['member_sha256'], r'^[0-9a-f]{64}$')
         self.assertIn('scripts/install-mold.py', check_pins.HELPERS)
+
+    def test_sde_installer_extracts_the_whole_kit_keeps_inner_links_and_refuses_what_escapes_it(self):
+        def kit(path, extra=()):
+            with tarfile.open(path, 'w:xz') as package:
+                for name, data in (('kit/sde64', b'#!/bin/sh\n'), ('kit/intel64/pin_lib/libpincrt.so', b'crt'),
+                                   ('kit/misc/cpuid/skx/cpuid.def', b'skx')):
+                    info = tarfile.TarInfo(name)
+                    info.size, info.mode = len(data), 0o755
+                    package.addfile(info, io.BytesIO(data))
+                for name, target in (('kit/intel64/pinrt/pin.ld.so', '../pin_lib/libpincrt.so'), *extra):
+                    link = tarfile.TarInfo(name)
+                    link.type, link.linkname = tarfile.SYMTYPE, target
+                    package.addfile(link)
+            return {'version': '10.13.1', 'url': 'https://example.invalid/sde', 'file': path.name,
+                    'sha256': pins_registry.sha256(path), 'root': 'kit/', 'binary': 'sde64'}
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            pin = kit(root / 'sde.tar.xz')
+            tool = install_sde.install(root / 'tools', archive=root / 'sde.tar.xz', pin=pin, check=False)
+            self.assertEqual(tool, (root / 'tools' / 'sde64').resolve())
+            self.assertEqual(sorted(p.name for p in (root / 'tools').iterdir()),
+                             ['cerid-sde.json', 'intel64', 'misc', 'sde64'], 'the kit without its root directory')
+            self.assertEqual((root / 'tools/intel64/pinrt/pin.ld.so').read_bytes(), b'crt', 'the inner link resolves')
+            self.assertEqual((root / 'tools/misc/cpuid/skx/cpuid.def').read_bytes(), b'skx')
+            # A matching stamp is reused; a directory this script did not install is never replaced.
+            (root / 'tools/misc/cpuid/skx/cpuid.def').write_bytes(b'kept')
+            install_sde.install(root / 'tools', archive=root / 'sde.tar.xz', pin=pin, check=False)
+            self.assertEqual((root / 'tools/misc/cpuid/skx/cpuid.def').read_bytes(), b'kept')
+            (root / 'foreign').mkdir()
+            with self.assertRaisesRegex(pins_registry.PinError, 'no kit this script installed'):
+                install_sde.install(root / 'foreign', archive=root / 'sde.tar.xz', pin=pin, check=False)
+            with self.assertRaisesRegex(pins_registry.PinError, 'checksum mismatch'):
+                install_sde.install(root / 'wrong', archive=root / 'sde.tar.xz', pin=dict(pin, sha256='0' * 64),
+                                    check=False)
+            for name, extra, error in (('outside', [('other/file', 'kit/sde64')], 'outside kit/'),
+                                       ('escaping', [('kit/up', '../../etc/passwd')], 'outside the destination'),
+                                       ('absolute', [('kit/abs', '/etc/passwd')], 'absolute|outside the destination')):
+                evil = kit(root / f'{name}.tar.xz', extra)
+                with self.assertRaisesRegex(Exception, error):
+                    install_sde.install(root / name, archive=root / f'{name}.tar.xz', pin=evil, check=False)
+                self.assertFalse((root / name).exists(), f'{name}: nothing installed')
+                self.assertFalse((root / f'{name}.partial').exists(), f'{name}: the staging tree is removed')
+            for reported, accepted in (('Intel(R) Software Development Emulator.  Version:  10.13.1 external\n', True),
+                                       ('Intel(R) Software Development Emulator.  Version:  10.12.0 external\n', False)):
+                target = root / ('version-%s' % accepted)
+                with patch.object(install_sde.subprocess, 'run',
+                                  return_value=SimpleNamespace(stdout=reported, stderr='', returncode=0)):
+                    if accepted:
+                        install_sde.install(target, archive=root / 'sde.tar.xz', pin=pin)
+                    else:
+                        with self.assertRaisesRegex(pins_registry.PinError, 'reports'):
+                            install_sde.install(target, archive=root / 'sde.tar.xz', pin=pin)
+                self.assertEqual(target.exists(), accepted, 'a wrong version leaves nothing installed')
+        for name, binary in (('sde-windows', 'sde.exe'), ('sde-linux', 'sde64')):
+            pin = pins_registry.entry('tools', name)
+            self.assertEqual(pin['binary'], binary)
+            self.assertEqual(pin['root'], pin['file'].removesuffix('.tar.xz') + '/')
+            self.assertIn(pin['version'], pin['url'])
+        self.assertIn('scripts/install-sde.py', check_pins.HELPERS)
 
     def test_clang_tidy_installer_keeps_the_resource_layout_and_checks_digests_count_and_version(self):
         with tempfile.TemporaryDirectory() as temp:
