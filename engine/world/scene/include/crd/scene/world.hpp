@@ -143,9 +143,9 @@ public:
         return id;
     }
 
-    // An lvalue is copied once into a local the storage moves from; an rvalue (a temporary, a braced list, std::move)
-    // is that move's source itself. Neither takes the component by value, so an over-aligned one never takes GCC's
-    // realigned by-value argument path (-Wpsabi, crd/math/simd/backend.hpp).
+    // An lvalue (or a const rvalue) is copied once into a local the storage moves from; an rvalue (a temporary, a
+    // braced list, std::move) is that move's source itself. Neither takes the component by value, so an over-aligned
+    // one never takes GCC's realigned by-value argument path (-Wpsabi, crd/math/simd/backend.hpp).
     template <typename T> void add_component(EntityId e, const T& value)
     {
         T copy = value;
@@ -153,7 +153,7 @@ public:
     }
 
     template <typename T>
-        requires(!std::is_reference_v<T>)
+        requires(std::is_same_v<T, std::remove_cvref_t<T>>)
     void add_component(EntityId e, T&& value)
     {
         CRD_ASSERT(is_alive(e));
@@ -1303,7 +1303,7 @@ template <typename T> void Commands::add_component(EntityId e, const T& value)
 }
 
 template <typename T>
-    requires(!std::is_reference_v<T>)
+    requires(std::is_same_v<T, std::remove_cvref_t<T>>)
 void Commands::add_component(EntityId e, T&& value)
 {
     const ComponentId id = m_world->components().template id_of<T>();
@@ -1340,7 +1340,7 @@ template <typename T> void Commands::set_component(EntityId e, const T& value)
 }
 
 template <typename T>
-    requires(!std::is_reference_v<T>)
+    requires(std::is_same_v<T, std::remove_cvref_t<T>>)
 void Commands::set_component(EntityId e, T&& value)
 {
     add_component<T>(e, std::forward<T>(value));

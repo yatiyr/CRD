@@ -526,6 +526,13 @@ TEST_CASE("World::add_component copies an lvalue once and moves an rvalue withou
     CHECK(value_of(w, d) == 0);
     CHECK(value_of(w, f) == 11);
 
+    // A const rvalue cannot be moved from: it binds the lvalue sink and is copied once.
+    const EntityId g = w.spawn();
+    w.add_component(g, static_cast<const CopyCounted&&>(explicit_source));
+    CHECK(CopyCounted::copies() == 3);
+    CHECK(explicit_source.value == 7);
+    CHECK(value_of(w, g) == 7);
+
     MoveOnly held{5};
     w.add_component(a, MoveOnly{4});
     w.add_component<MoveOnly>(b, std::move(held));
@@ -567,8 +574,12 @@ TEST_CASE("Commands add_component and set_component copy an lvalue once and move
     CHECK(deduced_source.value == 8);
     w.commands().add_component(c, CopyCounted{9});
     w.commands().set_component<CopyCounted>(d, std::move(moved_source));
+    const EntityId g = w.spawn();
+    w.commands().add_component(g, static_cast<const CopyCounted&&>(explicit_source));
     w.commands().flush();
-    CHECK(CopyCounted::copies() == 2);
+    CHECK(CopyCounted::copies() == 3);
+    CHECK(explicit_source.value == 7);
+    CHECK(value_of(w, g) == 7);
     CHECK(value_of(w, a) == 7);
     CHECK(value_of(w, b) == 8);
     CHECK(value_of(w, c) == 9);
