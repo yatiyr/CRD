@@ -5,13 +5,14 @@
 # keeps a link line of its own.
 #   bash scripts/run-lane-bench.sh <target> [-D<option>=<value> ...] [-- <program arguments>]
 # The options are configured into the tree when its cache lacks them. Environment: CRD_BENCH_LEVELS (default
-# "detected sse2 portable"; detected runs without an override, a level above the host runs at the detected one, and an
-# empty list only builds), CRD_BENCH_CPUS (the taskset list, default 4), CRD_LANE_ROOT (a tree root of its own for an
-# option that changes the measured code, such as CRD_HESAP_FFT_PROFILE).
+# "detected sse2 portable"; detected runs without an override, and an empty list only builds), CRD_BENCH_CPUS (the
+# taskset list, default 4), CRD_LANE_ROOT (a tree root of its own for an option that changes the measured code, such as
+# CRD_HESAP_FFT_PROFILE). Before each level's run, cpu_level_record prints the level line under the same CRD_CPU_LEVEL
+# and CPU list (ADR-0134 §8) and stops the board when the level did not apply (above the host or the build's cap).
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 if [[ $# -lt 1 || $1 == -* ]]; then
-    sed -n '2,10p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '2,11p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     exit 2
 fi
 target=$1
@@ -41,7 +42,7 @@ done
 if [[ $configure == 1 ]]; then
     bash scripts/wsl-lane.sh configure "$PRESET" "${options[@]}"
 fi
-bash scripts/wsl-lane.sh build "$PRESET" "$target"
+bash scripts/wsl-lane.sh build "$PRESET" "$target" cpu_level_record
 read -r -a levels <<< "${CRD_BENCH_LEVELS-detected sse2 portable}"
 for level in "${levels[@]}"; do
     select=()
@@ -49,6 +50,8 @@ for level in "${levels[@]}"; do
         select=("CRD_CPU_LEVEL=$level")
     fi
     echo "--- $target, CPU level: $level ---"
+    bash scripts/wsl-lane.sh run "$PRESET" -- env "${select[@]}" taskset -c "${CRD_BENCH_CPUS:-4}" \
+        "$tree/runtime/cpu_level_record" --expect "$level"
     bash scripts/wsl-lane.sh run "$PRESET" -- env "${select[@]}" MKL_NUM_THREADS=1 OMP_NUM_THREADS=1 \
         taskset -c "${CRD_BENCH_CPUS:-4}" "$tree/runtime/$target" "$@"
 done

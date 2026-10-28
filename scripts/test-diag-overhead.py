@@ -15,7 +15,9 @@ record whose client was not there as the arm asks or whose zones did not close, 
 pinned ones each fail; the instruction board counts the same arms and their per-event instructions. The clock
 (DIAG.11b (q2)): full over full-system-clock is judged at 0% on a frame of work (within, over and unresolved) and
 reported per event on a site workload, the system arm runs with --clock system, and a record that did not run the
-system clock fails its process.
+system clock fails its process. The CPU level (ADR-0134 §8): `--cpu-level` reaches every process, a record that did not
+run it applied, ran under CRD_CPU_LEVEL without it or names no level fails its process (a before arm's older build
+may name none), arms that ran different selections fail the workload, and the rendered head names the level.
 Run: python scripts/test-diag-overhead.py
 """
 import importlib.util
@@ -30,10 +32,18 @@ mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(mod)
 
 
+def selection(env=None, detected='avx2'):
+    """The cpu_level object of a process started with `env` on an avx2 host whose kernels go to avx512."""
+    level = (env or {}).get('CRD_CPU_LEVEL')
+    return {'detected': detected, 'selected': level or detected, 'override': 'applied' if level else 'none',
+            'kernel_cap': 'avx512'}
+
+
 def record(workload, mode, samples, wrong=0, captures=3, delivered=None, resident=(1000, 1000), ring=0, cpu=None,
-           warmup=1, validation='none', errors=0, tracy=None, clock='tick'):
+           warmup=1, validation='none', errors=0, tracy=None, clock='tick', cpu_level=None):
     """A process's record; `cpu` is its CPU per frame (cycles), by default its frame time (one busy thread), and
-    False when it was not read. `tracy` is its tracy object (the tracy mode's)."""
+    False when it was not read. `tracy` is its tracy object (the tracy mode's); `cpu_level` its CPU selection (by
+    default the detected level's, False for a build that records none)."""
     per_frame = mod.median(samples) if cpu is None else (0 if cpu is False else cpu)
     return {'tracy': tracy or {'started': False},
             'schema': mod.RECORD_SCHEMA, 'workload': workload, 'mode': mode, 'warmup': warmup,
@@ -46,7 +56,8 @@ def record(workload, mode, samples, wrong=0, captures=3, delivered=None, residen
                        'resident_peak': resident[1], 'recorder_ring_bytes': ring},
             'validation': {'requested': validation} if validation == 'none' else {
                 'requested': validation, 'errors': errors, 'warnings': 0, 'lost': 0, 'instrumentation_failures': 0},
-            'lifetime': {}, 'host': {}, 'build': {'clock': clock, 'tick_clock_mapped': clock == 'tick'}}
+            'lifetime': {}, 'host': {}, 'build': {'clock': clock, 'tick_clock_mapped': clock == 'tick'},
+            **({} if cpu_level is False else {'cpu_level': cpu_level or selection()})}
 
 
 class Args:
@@ -61,6 +72,7 @@ class Args:
         self.captures = 3
         self.threads = 4
         self.affinity = None
+        self.cpu_level = None
         self.timeout = 5.0
         self.scratch = scratch
         self.label = 'test'
@@ -80,6 +92,7 @@ class FakeRunner:
         self.cpu_jitter = cpu_jitter
         self.calls = []
         self.ports = []
+        self.envs = []
 
     def __call__(self, command, timeout, env=None):
         exe = command[0]
@@ -106,8 +119,9 @@ class FakeRunner:
         ring = 155648 if arm in ('basic', 'full') else 0
         tracy = None if mode != 'tracy' else {'started': True, 'connected': connected, 'connected_at_end': connected,
                                               'zones': 7, 'messages': 5, 'frame_marks': 6, 'unmatched': 0}
+        self.envs.append(env)
         text = json.dumps(record('alloc', mode, samples, ring=ring, cpu=cpu, validation=validation, tracy=tracy,
-                                 clock=clock))
+                                 clock=clock, cpu_level=selection(env)))
         return 0, 'noise line\n' + text + '\n', ''
 
 
@@ -331,6 +345,41 @@ class Boards(unittest.TestCase):
         self.assertIsNone(clock['budget'])
         self.assertAlmostEqual(clock['per_event_ns']['cost'], -28672 / 2048.0, places=6)
 
+    def test_a_board_runs_the_cpu_level_it_asks_and_names_it(self):
+        runner = FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000})
+        board = self.measure(runner, cpu_level='sse2')
+        entry = board['workloads']['alloc']
+        self.assertEqual(entry['failures'], [])
+        self.assertTrue(all(env == {'CRD_CPU_LEVEL': 'sse2'} for env in runner.envs))
+        self.assertEqual(board['parameters']['cpu_level'], 'sse2')
+        self.assertEqual(entry['arms']['off']['cpu_level']['selected'], 'sse2')
+        self.assertIn('CPU level sse2 (detected avx2, override applied, kernel cap avx512)', mod.render([board]))
+        detected = self.measure(FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000}))
+        self.assertIn('CPU level avx2 (detected avx2, override none, kernel cap avx512)', mod.render([detected]))
+
+    def test_a_record_that_did_not_run_the_asked_level_fails_its_process(self):
+        medians = {'compiled-out': 100000, 'off': 100000, 'basic': 101000, 'full': 101000}
+        refused = dict(selection(), override='above-hardware')
+        for asked, cpu_level, problem in (('avx512', refused, 'CPU level avx512 was not applied'),
+                                          (None, selection({'CRD_CPU_LEVEL': 'sse2'}), 'override applied'),
+                                          (None, False, 'names no CPU level')):
+            special = {('off', 1): (0, json.dumps(record('alloc', 'off', [1, 2, 3, 4, 5], cpu_level=cpu_level)), '')}
+            entry = self.measure(FakeRunner(medians, special), cpu_level=asked)['workloads']['alloc']
+            failures = [f for f in entry['failures'] if f['arm'] == 'off']
+            self.assertEqual(len(failures), 1)
+            self.assertTrue(any(problem in f['problem'] for f in failures), failures)
+            self.assertEqual(entry['verdicts'], {})
+        self.assertIsNone(mod.cpu_problem(record('alloc', 'off', [1], cpu_level=False), None, required=False))
+
+    def test_arms_that_ran_different_selections_fail_the_workload(self):
+        medians = {'compiled-out': 100000, 'off': 100000, 'basic': 101000, 'full': 101000}
+        other = dict(selection(), detected='avx512', selected='avx512')
+        special = {('basic', 3): (0, json.dumps(record('alloc', 'basic', [1, 2, 3, 4, 5], cpu_level=other)), '')}
+        entry = self.measure(FakeRunner(medians, special))['workloads']['alloc']
+        self.assertEqual([f['arm'] for f in entry['failures']], ['all'])
+        self.assertIn('different CPU selections', entry['failures'][0]['problem'])
+        self.assertEqual(entry['verdicts'], {})
+
     def test_render_is_stable_and_names_every_arm(self):
         board = self.measure(FakeRunner({'compiled-out': 100000, 'off': 100400, 'basic': 101000, 'full': 150000}))
         text = mod.render([board])
@@ -474,7 +523,8 @@ class FakeCachegrind:
                           'summary: %d %s\n' % (instructions, misses), encoding='utf-8')
         tracy = None if mode != 'tracy' else {'started': True, 'connected': arm == 'tracy-connected',
                                               'connected_at_end': arm == 'tracy-connected', 'unmatched': 0}
-        return 0, json.dumps(record('offline', mode, [100] * frames, captures=0, warmup=20, tracy=tracy)) + '\n', ''
+        return 0, json.dumps(record('offline', mode, [100] * frames, captures=0, warmup=20, tracy=tracy,
+                                    cpu_level=selection(env))) + '\n', ''
 
 
 class CountArgs:

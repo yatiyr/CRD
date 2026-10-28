@@ -10,11 +10,12 @@ if [[ ${#LEVELS[@]} -eq 1 && -z ${LEVELS[0]} ]]; then
     LEVELS=(detected portable)
 fi
 bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-tensor-permute-tests crd-hesap-tensor crd-math crd-jobs \
-    crd-containers crd-memory crd-vm crd-log crd-core
+    crd-containers crd-memory crd-vm crd-log crd-core cpu_level_record
 bash scripts/wsl-lane.sh test linux-gcc-release -R 'permute'
 HPTT="$PWD/external/hptt"
 bash scripts/wsl-lane.sh run linux-gcc-release -- bash -c '
 set -euo pipefail
+source "$S/scripts/bench-level.sh"
 inc=()
 for d in numerics/hesap-tensor numerics/hesap-stats foundation/core foundation/math foundation/containers \
          foundation/memory foundation/log foundation/units foundation/jobs; do
@@ -27,18 +28,11 @@ g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/co
     "$B/engine/hesap-tensor/libcrd-hesap-tensor.a" "$B/engine/jobs/libcrd-jobs.a" \
     "$B/engine/containers/libcrd-containers.a" "$B/engine/memory/libcrd-memory.a" "$B/engine/vm/libcrd-vm.a" \
     "$B/engine/log/libcrd-log.a" "$B/engine/math/libcrd-math.a" "$B/engine/core/libcrd-core.a" -o bench_permute_bin
-at_level() {
-    if [[ $level == detected ]]; then
-        "$@"
-    else
-        CRD_CPU_LEVEL=$level "$@"
-    fi
-}
 for level in '"${LEVELS[*]}"'; do
     echo "--- Cerid, CPU level: $level ---"
-    at_level taskset -c 4 ./bench_permute_bin
-    at_level taskset -c 0,2,4,6,8,10,12,14 ./bench_permute_bin mt
-    at_level taskset -c 0-15 ./bench_permute_bin mt16
+    at_level "$level" 4 ./bench_permute_bin
+    at_level "$level" 0,2,4,6,8,10,12,14 ./bench_permute_bin mt
+    at_level "$level" 0-15 ./bench_permute_bin mt16
 done
 if [[ -x '"$HPTT"'/crd_hptt_bench ]]; then
     echo "--- HPTT (same machine) ---"

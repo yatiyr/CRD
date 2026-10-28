@@ -53,6 +53,11 @@ target_link_libraries(smoke_math PRIVATE
 )
 crd_enable_default_pch(smoke_math)
 
+# The CPU level line every bench board records (ADR-0134 §8): the harnesses run it beside each measured program.
+add_executable(cpu_level_record examples/cpu_level_record.cpp)
+target_link_libraries(cpu_level_record PRIVATE crd-core crd-math)
+crd_enable_default_pch(cpu_level_record)
+
 add_executable(smoke_window
     examples/smoke_window.cpp
 )

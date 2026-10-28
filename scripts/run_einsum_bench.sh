@@ -10,10 +10,11 @@ if [[ ${#LEVELS[@]} -eq 1 && -z ${LEVELS[0]} ]]; then
     LEVELS=(detected portable)
 fi
 bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-tensor-einsum-tests crd-hesap-tensor crd-hesap-dense \
-    crd-hesap crd-math crd-jobs crd-containers crd-memory crd-vm crd-log crd-core
+    crd-hesap crd-math crd-jobs crd-containers crd-memory crd-vm crd-log crd-core cpu_level_record
 bash scripts/wsl-lane.sh test linux-gcc-release -R '^v14-f'
 bash scripts/wsl-lane.sh run linux-gcc-release -- bash -c '
 set -euo pipefail
+source "$S/scripts/bench-level.sh"
 inc=()
 for d in numerics/hesap-tensor numerics/hesap-dense numerics/hesap numerics/hesap-stats foundation/core \
          foundation/math foundation/containers foundation/memory foundation/log foundation/units foundation/jobs; do
@@ -29,11 +30,7 @@ g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/co
     "$B/engine/vm/libcrd-vm.a" "$B/engine/log/libcrd-log.a" "$B/engine/core/libcrd-core.a" -o bench_einsum_bin
 for level in '"${LEVELS[*]}"'; do
     echo "--- Cerid, CPU level: $level (1T pinned) ---"
-    if [[ $level == detected ]]; then
-        taskset -c 4 ./bench_einsum_bin
-    else
-        CRD_CPU_LEVEL=$level taskset -c 4 ./bench_einsum_bin
-    fi
+    at_level "$level" 4 ./bench_einsum_bin
 done
 echo "--- peers (1T pinned) ---"
 OMP_NUM_THREADS=1 taskset -c 4 python3 "$S/scripts/bench_einsum_peers.py"

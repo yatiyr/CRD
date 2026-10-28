@@ -10,10 +10,11 @@ if [[ ${#LEVELS[@]} -eq 1 && -z ${LEVELS[0]} ]]; then
     LEVELS=(detected portable)
 fi
 bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-tensor-tests crd-hesap-tensor crd-math crd-jobs \
-    crd-containers crd-memory crd-vm crd-log crd-core
+    crd-containers crd-memory crd-vm crd-log crd-core cpu_level_record
 bash scripts/wsl-lane.sh test linux-gcc-release -R '^v14-b|^tensor kernels'
 bash scripts/wsl-lane.sh run linux-gcc-release -- bash -c '
 set -euo pipefail
+source "$S/scripts/bench-level.sh"
 inc=()
 for d in numerics/hesap-tensor numerics/hesap-stats foundation/core foundation/math foundation/containers \
          foundation/memory foundation/log foundation/units foundation/jobs; do
@@ -29,11 +30,7 @@ g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/co
     -o bench_elementwise_bin
 for level in '"${LEVELS[*]}"'; do
     echo "--- Cerid, CPU level: $level ---"
-    if [[ $level == detected ]]; then
-        taskset -c 4 ./bench_elementwise_bin
-    else
-        CRD_CPU_LEVEL=$level taskset -c 4 ./bench_elementwise_bin
-    fi
+    at_level "$level" 4 ./bench_elementwise_bin
 done
 echo "--- python peers (single thread) ---"
 OMP_NUM_THREADS=1 taskset -c 4 python3 "$S/scripts/bench_elementwise_peers.py"

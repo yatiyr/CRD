@@ -11,6 +11,7 @@
 set(_crd_overhead_libraries
     crd-core
     crd-containers
+    crd-math
     crd-memory
     crd-jobs
     crd-perf

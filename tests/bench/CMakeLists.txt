@@ -5,6 +5,7 @@ add_executable(crd-bench
     test_bench_gjk.cpp
     test_bench_quickhull.cpp
     test_bench_diag.cpp        # DIAG.11b (9): generation checks, recording and probes per call
+    test_bench_cpu_level.cpp   # ADR-0134 §8: the run's CPU level line
 )
 
 target_link_libraries(crd-bench PRIVATE

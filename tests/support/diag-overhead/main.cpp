@@ -7,11 +7,12 @@
 //   crd-diag-overhead-tracy  the same, and --mode tracy [--tracy-connect <ms>] (CRD_DIAG_PEER_TRACY)
 //
 // One process measures one workload in one mode and prints one JSON record (schema cerid-diag-overhead/1) on stdout:
-// the build, the host's modes, every timed iteration in nanoseconds, the CPU every thread used over the timed
-// iterations, the sites and their payload evaluations, what the recorder kept and left out, the captures requested
-// and delivered with the bytes written, the resident set, the lifetime ledger's windows and, with --check, the
-// structural verdicts. Nothing here judges a timing: that is the driver's (scripts/diag-overhead.py), over
-// interleaved processes.
+// the build, the CPU level it ran (cpu_level: the detected and selected levels, the CRD_CPU_LEVEL override's standing,
+// the kernels' build cap and the CRT's own level where it dispatches; ADR-0134 §8), the host's modes, every timed
+// iteration in nanoseconds, the CPU every thread used over the timed iterations, the sites and their payload
+// evaluations, what the recorder kept and left out, the captures requested and delivered with the bytes written, the
+// resident set, the lifetime ledger's windows and, with --check, the structural verdicts. Nothing here judges a
+// timing: that is the driver's (scripts/diag-overhead.py), over interleaved processes.
 //
 // The capture phase follows the timed frames: K manual triggers, each waited for (bounded) until the host delivered
 // its capture and, with --scratch, wrote its bundle; the bytes written are counted and the bundles removed unless
@@ -50,8 +51,10 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/assert.hpp>
 #include <crd/core/build_config.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/core/host_pressure.hpp>
 #include <crd/core/lifetime_ledger.hpp>
+#include <crd/math/kernel_dispatch.hpp>
 #include <crd/memory/allocator.hpp>
 #include <crd/perf/config.hpp>
 #include <crd/perf/diagnostics.hpp>
@@ -917,6 +920,19 @@ int main(int argc, char** argv)
     j.str("compiler", "gcc");
     j.u("compiler_version", static_cast<u64>((__GNUC__ * 10000) + (__GNUC_MINOR__ * 100) + __GNUC_PATCHLEVEL__));
 #endif
+    j.close('}');
+    const crd::CpuSelection& cpu = crd::cpu_selection();
+    const crd::CpuRuntimeDispatch crt = crd::cpu_runtime_dispatch();
+    j.open("cpu_level", '{');
+    j.str("detected", crd::cpu_level_name(cpu.detected));
+    j.str("selected", crd::cpu_level_name(cpu.selected));
+    j.str("override", crd::cpu_override_name(cpu.override_status));
+    j.str("kernel_cap", crd::cpu_level_name(crd::math::kernel_level_cap()));
+    if (crt.crt_level >= 0)
+    {
+        j.u("crt", static_cast<u64>(crt.crt_level));
+        j.b("ucrt_fma3", crt.ucrt_fma3);
+    }
     j.close('}');
     j.open("host", '{');
     j.b("started", host_started);

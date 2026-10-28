@@ -10,7 +10,9 @@ instead of restating tables.
 **Naming:** `YYYY-MM-DD-<slice-or-module>-<subject>.md` (e.g. `2026-07-02-v14a-dtype-converts.md`).
 
 **Each file carries:**
-1. The exact machine/config (CPU, pinning, thread count, compiler + flags, peer versions).
+1. The exact machine/config (CPU, pinning, thread count, compiler + flags, peer versions), and for each Cerid arm
+   its CPU level line (`cpu detected=... selected=... override=... kernel_cap=...`, ADR-0134 §8), which the
+   harnesses print through `runtime/cpu_level_record` (and crd-bench and diag-overhead in their own output).
 2. The harness used (script path — tracked under `scripts/`), so any board is re-runnable.
 3. The full peer board — every peer measured, losses and ties included (SANITY #6/#9: a loss is an open
    bug, not a disclosure; N/A stated *with the check*).

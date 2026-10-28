@@ -9,10 +9,12 @@ LEVELS=("${@:-}")
 if [[ ${#LEVELS[@]} -eq 1 && -z ${LEVELS[0]} ]]; then
     LEVELS=(detected portable)
 fi
-bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-tensor-tests crd-math crd-memory crd-vm crd-log crd-core
+bash scripts/wsl-lane.sh build linux-gcc-release crd-hesap-tensor-tests crd-math crd-memory crd-vm crd-log crd-core \
+    cpu_level_record
 bash scripts/wsl-lane.sh test linux-gcc-release -R '^v14-a'
 bash scripts/wsl-lane.sh run linux-gcc-release -- bash -c '
 set -euo pipefail
+source "$S/scripts/bench-level.sh"
 inc=()
 for d in numerics/hesap-tensor numerics/hesap-stats foundation/core foundation/math foundation/containers \
          foundation/memory foundation/log foundation/units; do
@@ -25,11 +27,7 @@ g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "${inc[@]}" -I "$B/engine/core/include
     "$B/engine/log/libcrd-log.a" "$B/engine/math/libcrd-math.a" "$B/engine/core/libcrd-core.a" -o bench_dtypes_bin
 for level in '"${LEVELS[*]}"'; do
     echo "--- Cerid, CPU level: $level ---"
-    if [[ $level == detected ]]; then
-        taskset -c 4 ./bench_dtypes_bin
-    else
-        CRD_CPU_LEVEL=$level taskset -c 4 ./bench_dtypes_bin
-    fi
+    at_level "$level" 4 ./bench_dtypes_bin
 done
 echo "--- python peers (same machine, single thread) ---"
 OMP_NUM_THREADS=1 taskset -c 4 python3 "$S/scripts/bench_dtypes_peers.py"

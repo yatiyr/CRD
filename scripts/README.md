@@ -111,7 +111,8 @@ Run commands from the repository root. Build/test rules and exact quality requir
   runs the harness (`tests/support/diag-overhead`) once per process for every workload and arm, interleaved, and
   judges ADR-0133 ID-5's budgets on the frame time and on the CPU per frame, the worse deciding (within, over, or
   unresolved when the host's noise is wider than the claim); `render` writes the markdown of a board for docs/bench.
-  `test-diag-overhead.py` covers every statistic and verdict with fake processes and is a CTest and repository CI
+  `--cpu-level` runs every process at that CRD_CPU_LEVEL; a record that did not run the asked level (ADR-0134 §8)
+  fails its process and arms that ran different selections fail the workload. `test-diag-overhead.py` covers every statistic and verdict with fake processes and is a CTest and repository CI
   step. `sample-overhead-wpr.py record` (an elevated shell)
   samples the same workloads with WPR in the boards' shape, every arm a process of one trace, and refuses a harness
   tree not current with the checkout; `analyze <run dir>` (no elevation) counts each process's CPU samples, the
@@ -132,7 +133,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope. `run-lane-bench.sh <target>
   [-D<option>=ON ...]` builds a `runtime/examples` program in the WSL linux-gcc-release lane tree and runs it pinned
-  at each CPU level; the boards whose programs CMake links call it instead of keeping link lines.
+  at each CPU level; the boards whose programs CMake links call it instead of keeping link lines. Each level's run
+  follows the line of `runtime/cpu_level_record` under the same `CRD_CPU_LEVEL` and CPU list (ADR-0134 §8), which
+  stops the board when the level did not apply; the boards that link by hand source `bench-level.sh` (`at_level`).
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.
 
 Put one-shot scripts, logs and probes in ignored `build/<task>/`. Shared scripts must not encode a particular

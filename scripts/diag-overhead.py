@@ -60,6 +60,11 @@ full-system-clock) is judged with a budget of 0%: TickClock replaced steady_cloc
 of work it may cost no more than steady_clock did (within, over or unresolved as above); on the site workloads it is
 reported, per event.
 
+The CPU level (ADR-0134 §8): `--cpu-level` sets CRD_CPU_LEVEL for every process. A record names the level it ran
+(cpu_level: detected, selected, the override's standing, the kernel cap); one that did not run the asked level
+(selected and override applied), or that ran under CRD_CPU_LEVEL on a board without `--cpu-level`, is an instrument
+failure, and so is a workload whose arms ran different selections. A before arm's build may predate the record.
+
 `render` turns boards into the markdown of docs/bench. Contract: docs/design/runtime-diagnostics.md (DIAG.11b).
 """
 from pathlib import Path
@@ -209,6 +214,34 @@ def clock_problem(record, system):
     return None
 
 
+def cpu_selection(record):
+    """The CPU selection a record ran (ADR-0134 §8): detected and selected level, override standing, kernel cap."""
+    cpu = record.get('cpu_level') or {}
+    return tuple(cpu.get(key) for key in ('detected', 'selected', 'override', 'kernel_cap'))
+
+
+def cpu_problem(record, level, required=True):
+    """Why a record did not run the CPU level its board asks (`level`: --cpu-level, None for the detected level), or
+    None. A record of a build made before the levels were recorded (`required` false: a before arm) names none."""
+    detected, selected, override, _ = cpu_selection(record)
+    if selected is None:
+        return 'the record names no CPU level' if required else None
+    if level is None and override != 'none':
+        return 'CRD_CPU_LEVEL was set (override %s) on a board of the detected level' % override
+    if level is not None and (override != 'applied' or selected != level):
+        return 'CPU level %s was not applied: selected %s (detected %s), override %s' % (level, selected, detected,
+                                                                                        override)
+    return None
+
+
+def mixed_selection(records):
+    """Why the records cannot share a board (they ran different CPU selections), or None."""
+    seen = sorted({cpu_selection(r) for r in records if r is not None and cpu_selection(r)[1] is not None}, key=str)
+    if len(seen) <= 1:
+        return None
+    return 'the arms ran different CPU selections: ' + '; '.join('/'.join(map(str, s)) for s in seen)
+
+
 def run_process(command, timeout, env=None):
     """Run one measurement process; (exit code, stdout, stderr). `env` adds variables to the inherited ones."""
     try:
@@ -327,11 +360,13 @@ class Processes:
         self.capture = capture
         self.port = TRACY_PORT_BASE
         self.tools = None
+        level = getattr(args, 'cpu_level', None)
+        self.env = {'CRD_CPU_LEVEL': level} if level else {}
 
     def run(self, command, connected, directory, timeout):
         """(exit code, stdout, stderr, problem): a connected process's capture problem, else None."""
         if not connected:
-            code, stdout, stderr = self.runner(command, timeout)
+            code, stdout, stderr = self.runner(command, timeout, dict(self.env) or None)
             return code, stdout, stderr, None
         if self.tools is None:
             if not getattr(self.args, 'tracy_tools', None):
@@ -340,7 +375,7 @@ class Processes:
         self.port += 1
         client = self.capture(self.tools, directory, self.port, timeout)
         client.start()
-        code, stdout, stderr = self.runner(command, timeout, {'TRACY_PORT': str(self.port)})
+        code, stdout, stderr = self.runner(command, timeout, dict(self.env, TRACY_PORT=str(self.port)))
         record = parse_record(stdout) if code == 0 else None
         if record is None:
             client.stop()
@@ -378,6 +413,7 @@ def summarize_arm(runs):
             'recorder_ring_bytes': max((r['memory']['recorder_ring_bytes'] for r in usable), default=0),
             'lifetime': usable[0]['lifetime'] if usable else None, 'host': usable[0]['host'] if usable else None,
             'build': usable[0]['build'] if usable else None,
+            'cpu_level': usable[0].get('cpu_level') if usable else None,
             'validation': usable[0].get('validation') if usable else None}
 
 
@@ -508,12 +544,13 @@ def count(args, runner=run_process, capture=TracyCapture):
     memory = getattr(args, 'memory', False)
     board = board_head(COUNT_SCHEMA, args, {name: exe for name, exe, _, _, _ in arms},
                        {'frames': [short, long], 'warmup': args.warmup, 'threads': args.threads,
-                        'repeats': args.repeats, 'memory': memory,
+                        'repeats': args.repeats, 'memory': memory, 'cpu_level': getattr(args, 'cpu_level', None),
                         'tool': [args.valgrind, '--tool=cachegrind', '--cache-sim=yes']})
     processes = Processes(args, runner, capture)
     for workload in args.workloads:
         totals = {name: {short: [], long: []} for name, _, _, _, _ in arms}
         failures = []
+        records = []
         for repeat in range(args.repeats):
             for name, exe, mode, extra, connected in arm_order(arms, repeat):
                 for frames in (short, long):
@@ -527,7 +564,9 @@ def count(args, runner=run_process, capture=TracyCapture):
                     if memory and workload == 'alloc':
                         command.append('--memory')
                     outcome = processes.run(command, connected, directory, args.timeout)
-                    _, problem = usable_record(name, mode, connected, frames + args.warmup, *outcome)
+                    record, problem = usable_record(name, mode, connected, frames + args.warmup, *outcome,
+                                                    cpu_level=getattr(args, 'cpu_level', None))
+                    records.append(record)
                     if not problem:
                         try:
                             totals[name][frames].append(parse_cachegrind(output.read_text(encoding='utf-8')))
@@ -538,6 +577,9 @@ def count(args, runner=run_process, capture=TracyCapture):
                     if args.progress:
                         print('%s %s %d frames #%d: %s' % (workload, name, frames, repeat, problem or 'ok'),
                               file=sys.stderr, flush=True)
+        mixed = mixed_selection(records)
+        if mixed:
+            failures.append({'arm': 'all', 'repetition': None, 'problem': mixed})
         rates = {name: {event: per_frame([t[event] for t in totals[name][short]],
                                          [t[event] for t in totals[name][long]], long - short)
                         for event in COUNTED} for name, _, _, _, _ in arms}
@@ -563,6 +605,8 @@ def count(args, runner=run_process, capture=TracyCapture):
                         peers[name]['per_event'] = {'low': (least - ref_most) / events,
                                                     'high': (most - ref_least) / events}
         board['workloads'][workload] = {'per_frame': rates, 'disabled': costs, 'change': change, 'peers': peers,
+                                        'cpu_level': next((r['cpu_level'] for r in records
+                                                           if r is not None and r.get('cpu_level')), None),
                                         'failures': failures}
     return board
 
@@ -577,10 +621,12 @@ def relative_rates(candidate, reference):
     return costs
 
 
-def usable_record(name, mode, connected, frames, code, stdout, stderr, capture_problem):
+def usable_record(name, mode, connected, frames, code, stdout, stderr, capture_problem, cpu_level=None):
     """(record, problem) of one process: its record when nothing is wrong with it."""
     record = parse_record(stdout) if code == 0 else None
     problem = ('exit %s: %s' % (code, (stderr or '').strip()[-300:])) if code != 0 else record_problem(record, frames)
+    if not problem:
+        problem = cpu_problem(record, cpu_level, not name.startswith('before-'))
     if not problem and mode == 'tracy':
         problem = tracy_problem(record, connected) or capture_problem
     if not problem and name == 'full-system-clock':
@@ -600,7 +646,8 @@ def measure(args, runner=run_process, capture=TracyCapture):
     board = board_head(SCHEMA, args, {name: exe for name, exe, _, _, _ in arms},
                        {'processes': args.processes, 'iterations': args.iterations, 'warmup': args.warmup,
                         'captures': args.captures, 'threads': args.threads, 'affinity': args.affinity,
-                        'memory': memory, 'bootstrap': BOOTSTRAP, 'seed': SEED})
+                        'memory': memory, 'bootstrap': BOOTSTRAP, 'seed': SEED,
+                        'cpu_level': getattr(args, 'cpu_level', None)})
     processes = Processes(args, runner, capture)
     for workload in args.workloads:
         runs = {name: [] for name, _, _, _, _ in arms}
@@ -617,12 +664,16 @@ def measure(args, runner=run_process, capture=TracyCapture):
                 if args.affinity:
                     command += ['--affinity', args.affinity]
                 outcome = processes.run(command, connected, directory, args.timeout)
-                record, problem = usable_record(name, mode, connected, frames, *outcome)
+                record, problem = usable_record(name, mode, connected, frames, *outcome,
+                                                cpu_level=getattr(args, 'cpu_level', None))
                 if problem:
                     failures.append({'arm': name, 'repetition': repetition, 'problem': problem})
                 runs[name].append(record)
                 if args.progress:
                     print('%s %s #%d: %s' % (workload, name, repetition, problem or 'ok'), file=sys.stderr, flush=True)
+        mixed = mixed_selection([r for name in runs for r in runs[name]])
+        if mixed:
+            failures.append({'arm': 'all', 'repetition': None, 'problem': mixed})
         entry = {name: {'runs': runs[name], 'summary': summarize_arm(runs[name])} for name in runs}
         site = workload in SITE_WORKLOADS
         board['workloads'][workload] = {'arms': {name: entry[name]['summary'] for name in entry},
@@ -647,15 +698,27 @@ def cpu_text(summary):
     return '%.1f µs' % (value / 1000.0) if unit == 'ns' else '%.2f M%s' % (value / 1e6, unit)
 
 
+def level_text(board):
+    """The CPU selection a board's arms ran (one, or the board failed), as its head states it."""
+    for entry in board['workloads'].values():
+        found = [entry.get('cpu_level')] + [s.get('cpu_level') for s in entry.get('arms', {}).values()]
+        cpu = next((c for c in found if c), None)
+        if cpu:
+            return 'CPU level %s (detected %s, override %s, kernel cap %s)' % (cpu['selected'], cpu['detected'],
+                                                                               cpu['override'], cpu['kernel_cap'])
+    return 'CPU level %s, not recorded' % (board['parameters'].get('cpu_level') or 'detected')
+
+
 def render(boards):
     lines = []
     for board in boards:
         host = board['host']
         lines += ['### %s' % board['label'], '',
                   '%s %s (%s), %s logical processors; %s processes per arm, %s timed frames after %s warmup each; '
-                  'affinity %s.' % (host['system'], host['release'], host['machine'], host['cpus'],
-                                    board['parameters']['processes'], board['parameters']['iterations'],
-                                    board['parameters']['warmup'], board['parameters']['affinity'] or 'not pinned'),
+                  'affinity %s; %s.' % (host['system'], host['release'], host['machine'], host['cpus'],
+                                        board['parameters']['processes'], board['parameters']['iterations'],
+                                        board['parameters']['warmup'], board['parameters']['affinity'] or 'not pinned',
+                                        level_text(board)),
                   '']
         lines += ['| Workload | Arm | p50 µs | p95 µs | p99 µs | p50 ns/site | Cost vs reference (95% interval) | '
                   'CPU per frame | CPU cost (95% interval) | Verdict | Payloads / recorded / filtered | '
@@ -750,9 +813,9 @@ def render_counts(board):
     parameters = board['parameters']
     lines = ['### %s' % board['label'], '',
              'cachegrind with a simulated cache; per frame = the difference of runs of %d and %d timed frames after %d '
-             'warmup, %d repeats each; %d jobs thread(s).' % (parameters['frames'][0], parameters['frames'][1],
-                                                            parameters['warmup'], parameters['repeats'],
-                                                            parameters['threads']), '',
+             'warmup, %d repeats each; %d jobs thread(s); %s.' % (parameters['frames'][0], parameters['frames'][1],
+                                                                parameters['warmup'], parameters['repeats'],
+                                                                parameters['threads'], level_text(board)), '',
              '| Workload | Arm | %s | Verdict |' % ' | '.join('%s per frame' % event for event in COUNTED),
              '|---|---|%s---|' % ('---:|' * len(COUNTED))]
     for workload, entry in board['workloads'].items():
@@ -822,6 +885,9 @@ def main(argv=None):
     counted.add_argument('--arms', help='the counted arms (default compiled-out,off,before-off: the ones given)')
     counted.add_argument('--memory', action='store_true', help="the harness's --memory for the alloc workload")
     counted.add_argument('--tracy-tools', help='as for run: the client of the tracy-connected arm')
+    for sub_parser in (run, counted):
+        sub_parser.add_argument('--cpu-level', help='CRD_CPU_LEVEL of every process (sse2, sse4.2, avx2, avx512, '
+                                'neon, portable); each record must have run it, applied (default: the detected level)')
     show = commands.add_parser('render', help='markdown of one or more boards')
     show.add_argument('boards', nargs='+')
     args = parser.parse_args(argv)
