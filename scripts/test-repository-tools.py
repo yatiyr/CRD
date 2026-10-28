@@ -4,6 +4,7 @@ from pathlib import Path
 import contextlib
 import importlib.util
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -15,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1100,6 +1102,35 @@ class PinnedInputs(unittest.TestCase):
             with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=AssertionError('no download expected')):
                 with self.assertRaisesRegex(pins_registry.PinError, 'checksum mismatch'):
                     pins_registry.fetch(None, destination, url='https://example.invalid/a.bin', sha=digest, file='a.bin')
+
+    def test_download_retries_only_network_failures_a_bounded_number_of_times(self):
+        good = b'pinned bytes'
+        digest = hashlib.sha256(good).hexdigest()
+        url = 'https://example.invalid/a.bin'
+        missing = urllib.error.HTTPError(url, 404, 'Not Found', {}, None)
+        busy = urllib.error.HTTPError(url, 503, 'Service Unavailable', {}, None)
+        with tempfile.TemporaryDirectory() as temp:
+            target = Path(temp) / 'a.bin'
+            waits = []
+            stalls = [TimeoutError('read timed out'), http.client.IncompleteRead(b'pin'), busy, io.BytesIO(good)]
+            with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(pins_registry.download(url, target, digest, 'a', sleep=waits.append), target)
+            self.assertEqual(target.read_bytes(), good)
+            self.assertEqual(waits, list(pins_registry.RETRY_WAITS))
+            target.unlink()
+            waits.clear()
+            with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=[missing]):
+                with self.assertRaises(urllib.error.HTTPError):
+                    pins_registry.download(url, target, digest, 'a', sleep=waits.append)
+            self.assertEqual(waits, [])
+            stalls = [TimeoutError('read timed out')] * (len(pins_registry.RETRY_WAITS) + 1)
+            with patch.object(pins_registry.urllib.request, 'urlopen', side_effect=stalls), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(TimeoutError):
+                    pins_registry.download(url, target, digest, 'a', sleep=waits.append)
+            self.assertEqual(len(waits), len(pins_registry.RETRY_WAITS))
+            self.assertEqual(list(Path(temp).iterdir()), [])
 
     def test_vulkan_sdk_installer_verifies_runs_and_checks_the_layout(self):
         spec = importlib.util.spec_from_file_location('sdk', ROOT / 'scripts/install-vulkan-sdk.py')

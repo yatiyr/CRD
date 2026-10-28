@@ -15,6 +15,11 @@ Push run 40623100798 (`bedfc2bb`) is still in progress. Its finished jobs show f
 - linux-clang-tsan: races on fiber dispatch in four tests. This group is new, and `38b982f2` fixes it
   ([note](2026-10-28-simd-dispatch-debug-frames-eig-fixture.md)).
 
+Complete run 40649898318 (`3e849d96`, in progress) lost linux-gcc-debug-scalar, one of the cold lanes, because a
+read of the Vulkan validation layer archive stalled past `pins.download`'s 120 s timeout. The download now retries a
+failure in the network up to three times, after 5, 15 and 45 s. It does not retry a 4xx status or a checksum mismatch.
+The tooling suite covers this case.
+
 The linux-gcc release, relwithdebinfo and shipping builds ended with exit 143 ("the runner has received a shutdown
 signal") while the fft units compiled. No row is Needs CI. DIAG.11c and DIAG.12 still wait on a finished complete-tier
 run.

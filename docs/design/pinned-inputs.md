@@ -53,7 +53,9 @@ gate (the first complete-tier run, 34821419392, failed clang-cl inside a Catch2 
 entry's `file` for its URL (the same hash applies), which is the offline setup path.
 
 The Python helpers share [scripts/pins.py](../../scripts/pins.py): `fetch()` downloads through a `.partial` file,
-verifies, renames, and verifies an existing file before reuse; `--archive` (or `--archive-dir`) verifies a handed-in
+verifies, renames, and verifies an existing file before reuse; a transfer that fails in the network (a stalled
+read, a reset, a truncated body, a 5xx, 408 or 429 status) is tried again after 5, 15 and 45 s, never a 4xx or a
+checksum mismatch (hosted run 40649898318: a stalled read of the validation layer archive); `--archive` (or `--archive-dir`) verifies a handed-in
 copy instead. [install-vulkan-sdk.py](../../scripts/install-vulkan-sdk.py) runs the verified Windows installer and
 checks the installed layout; [install-vulkan-headers.py](../../scripts/install-vulkan-headers.py) assembles the
 Linux header tree from the Vulkan-Headers archive (only its `include/` subtree, every member path validated) and the

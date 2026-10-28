@@ -9,10 +9,13 @@ Contract: docs/design/pinned-inputs.md.
 from pathlib import Path
 import argparse
 import hashlib
+import http.client
 import json
 import shutil
 import sys
 import tarfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -55,14 +58,35 @@ def verify(path, expected, label):
     return Path(path)
 
 
-def download(url, destination, expected, label):
+# A transfer that fails in the network (a stalled read, a reset or refused connection, a truncated body, a server-side
+# HTTP status) is tried again after these waits in seconds; a client-side HTTP status and a checksum mismatch never are.
+RETRY_WAITS = (5, 15, 45)
+
+
+def transient(error):
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code in (408, 429)
+    return isinstance(error, (TimeoutError, ConnectionError, http.client.HTTPException, urllib.error.URLError))
+
+
+def download(url, destination, expected, label, sleep=time.sleep):
     """Download url to destination through a .partial file; verify before the final name exists."""
     destination = Path(destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_name(destination.name + '.partial')
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
-    with urllib.request.urlopen(request, timeout=120) as response, partial.open('wb') as output:
-        shutil.copyfileobj(response, output)
+    for attempt in range(len(RETRY_WAITS) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response, partial.open('wb') as output:
+                shutil.copyfileobj(response, output)
+            break
+        except (OSError, http.client.HTTPException) as error:
+            partial.unlink(missing_ok=True)
+            if attempt == len(RETRY_WAITS) or not transient(error):
+                raise
+            print(f'{label}: download attempt {attempt + 1} failed ({error!r}); retrying in {RETRY_WAITS[attempt]} s',
+                  file=sys.stderr)
+            sleep(RETRY_WAITS[attempt])
     try:
         verify(partial, expected, label)
     except PinError:
