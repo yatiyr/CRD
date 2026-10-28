@@ -166,7 +166,7 @@ UNIT_PRELUDE = """\
 // builds); MSVC optimized configs all carry NDEBUG in this project. The portable level takes the
 // lane-scalar edition too: its vectors are arrays, four or eight times the code for the same bits.
 #if (defined(NDEBUG) || defined(__OPTIMIZE__)) && !CRD_SIMD_IS_SCALAR
-#define CRD_FFT_GEN_SIMD_BODY 1
+#define CRD_FFT_GEN_SIMD_BODY
 #endif
 """
 
