@@ -18,6 +18,7 @@
 
 #include "tensor_batched_kernels.hpp"
 #include "tensor_ew_kernels.hpp"
+#include "tensor_sparse_kernels.hpp"
 
 #include <crd/hesap/stats/philox_blocks.hpp>
 #include <crd/hesap/tensor/binned_core.hpp>
@@ -2136,6 +2137,12 @@ template <typename T> constexpr BatchedKernels<T> batched() noexcept
     return {&K::gemm_tiny, &K::cholesky, &K::lu, &K::svd, &K::cholesky_solve, &K::lu_solve};
 }
 
+template <typename T> constexpr SparseTensorKernels<T> sparse() noexcept
+{
+    using K = CRD_MATH_LEVEL_NS::SparseKernel<T>;
+    return {&K::ttm_scatter, &K::ttm_staged, &K::fold, &K::mttkrp_csf, &K::mttkrp_coo};
+}
+
 } // namespace
 } // namespace CRD_MATH_LEVEL_NS
 
@@ -2166,6 +2173,8 @@ const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
     &CRD_MATH_LEVEL_NS::EinsumKernel<crd::f64>::smallm,
     batched<crd::f32>(),
     batched<crd::f64>(),
+    sparse<crd::f32>(),
+    sparse<crd::f64>(),
 };
 
 } // namespace crd::hesap::tensor

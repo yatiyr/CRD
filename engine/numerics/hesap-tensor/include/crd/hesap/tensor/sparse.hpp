@@ -28,13 +28,13 @@
 // ---------------------------------------------------------------------------
 #include "reduce.hpp" // detail::block_partial — the module's pinned-order reduction core
 #include "tensor.hpp"
+#include "tensor_dispatch.hpp"
+#include "tensor_kernels.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/jobs/jobs.hpp>
-#include <crd/math/simd/simd.hpp>
 #include <crd/memory/construct.hpp> // allocate_array: a checked byte size for ScratchBlock
 
-#include <cmath>   // std::fma — the single-rounded scalar chain (codelet rule)
 #include <cstring> // memset/memcpy on trivially-copyable planes
 
 namespace crd::hesap::tensor
@@ -231,61 +231,20 @@ inline void lsd_sort(crd::u32* perm_a, crd::u32* perm_b, crd::u32* counts, crd::
     return static_cast<crd::u32>(tasks);
 }
 
-// dst[q] += a * row[q] over q in [0, r) — vector fma lanes + masked partial
-// tail (each element q is ONE fixed-order fma chain; lanes are lane-wise
-// IEEE ⇒ identical bits on every path that uses this kernel).
-template <typename T> inline void axpy_row(T* dst, const T* row, T a, crd::u64 r) noexcept
-{
-    namespace simd = crd::math::simd;
-    using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
-    const V av(a);
-    crd::u64 q = 0;
-    for (; q + lanes <= r; q += lanes)
-    {
-        simd::fma(av, V::load(row + q), V::load(dst + q)).store(dst + q);
-    }
-    if (q < r)
-    {
-        const crd::usize c = static_cast<crd::usize>(r - q);
-        simd::fma(av, V::load_partial(row + q, c), V::load_partial(dst + q, c)).store_partial(dst + q, c);
-    }
-}
+static_assert(kMaxRank == kSparseMaxRank, "the sparse walks hold kMaxRank index planes");
 
-// dst[q] += a[q] * b[q] over q in [0, r) — same bit contract as axpy_row.
-template <typename T> inline void hadamard_acc(T* dst, const T* a, const T* b, crd::u64 r) noexcept
+// The sparse tensor walks of T at the level the process runs (tensor_kernels.hpp SparseTensorKernels).
+template <typename T> [[nodiscard]] inline const SparseTensorKernels<T>& sparse_kernels() noexcept
 {
-    namespace simd = crd::math::simd;
-    using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
-    crd::u64 q = 0;
-    for (; q + lanes <= r; q += lanes)
+    static_assert(std::is_same_v<T, crd::f32> || std::is_same_v<T, crd::f64>, "the sparse walks run f32 and f64");
+    const TensorKernels& k = *tensor_kernels().table;
+    if constexpr (std::is_same_v<T, crd::f32>)
     {
-        simd::fma(V::load(a + q), V::load(b + q), V::load(dst + q)).store(dst + q);
+        return k.sparse_f32;
     }
-    if (q < r)
+    else
     {
-        const crd::usize c = static_cast<crd::usize>(r - q);
-        simd::fma(V::load_partial(a + q, c), V::load_partial(b + q, c), V::load_partial(dst + q, c))
-            .store_partial(dst + q, c);
-    }
-}
-
-// dst[q] += src[q] (the partial-buffer fold)
-template <typename T> inline void add_acc(T* dst, const T* src, crd::u64 r) noexcept
-{
-    namespace simd = crd::math::simd;
-    using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 lanes = std::is_same_v<T, crd::f32> ? 8U : 4U;
-    crd::u64 q = 0;
-    for (; q + lanes <= r; q += lanes)
-    {
-        (V::load(dst + q) + V::load(src + q)).store(dst + q);
-    }
-    if (q < r)
-    {
-        const crd::usize c = static_cast<crd::usize>(r - q);
-        (V::load_partial(dst + q, c) + V::load_partial(src + q, c)).store_partial(dst + q, c);
+        return k.sparse_f64;
     }
 }
 
@@ -1096,109 +1055,25 @@ template <typename T>
     {
         return TensorStatus::Ok;
     }
-    crd::u64 ostride[kMaxRank];
-    contiguous_strides(out.shape(), ostride);
-    const crd::u32* planes[kMaxRank];
+    SparseTtmWalk<T> walk{};
+    contiguous_strides(out.shape(), walk.ostride);
     for (crd::u32 m = 0; m < rank; ++m)
     {
-        planes[m] = x.idx(m);
+        walk.planes[m] = x.idx(m);
     }
-    const T* pval = x.val();
-    const T* pu = u.data();
-    const crd::u64 osm = ostride[mode];
-    // per-entry kernel: out[base + q*osm] += v * urow[q]
-    const auto scatter_range = [&](crd::u64 eb, crd::u64 ee, T* dst) noexcept
-    {
-        for (crd::u64 e = eb; e < ee; ++e)
-        {
-            crd::u64 base = 0;
-            for (crd::u32 m = 0; m < rank; ++m)
-            {
-                if (m != mode)
-                {
-                    base += static_cast<crd::u64>(planes[m][e]) * ostride[m];
-                }
-            }
-            const T v = pval[e];
-            const T* urow = pu + static_cast<crd::u64>(planes[mode][e]) * f;
-            if (mode == rank - 1U)
-            {
-                axpy_row(dst + base, urow, v, f); // contiguous fastest path
-            }
-            else
-            {
-                T* o = dst + base;
-                for (crd::u64 q = 0; q < f; ++q)
-                {
-                    o[q * osm] = std::fma(v, urow[q], o[q * osm]);
-                }
-            }
-        }
-    };
-    // staged tile path for an INNER contracted mode (0 < mode < rank-1) with
-    // an affordable [suffix, F] tile: per PREFIX run (modes 0..mode-1
-    // constant), per-entry CONTIGUOUS axpy into the tile, then one blocked
-    // transpose into the contiguous out slice — replaces the F-line strided
-    // scatter per nonzero. Per-out-element fma chains stay in the exact same
-    // e-order as the scatter kernel (bit-identical paths).
-    const crd::u64 suffix = ostride[mode]; // product of the trailing out dims
+    walk.val = x.val();
+    walk.u = u.data();
+    walk.f = f;
+    walk.rank = rank;
+    walk.mode = mode;
+    const SparseTensorKernels<T>& kernels = sparse_kernels<T>();
+    // The staged tile path for an INNER contracted mode (0 < mode < rank-1) with an affordable [suffix, F] tile: per
+    // PREFIX run (modes 0..mode-1 constant), each nonzero's contiguous axpy into the tile, then one blocked transpose
+    // into the contiguous out slice, in place of the F-line strided scatter per nonzero. Every out element's fma chain
+    // keeps the scatter's nonzero order (the same bits on both paths).
+    const crd::u64 suffix = walk.ostride[mode]; // product of the trailing out dims
     const bool staged =
         mode != 0U && mode + 1U < rank && suffix * f * sizeof(T) <= 8ULL * 1024ULL * 1024ULL;
-    const auto staged_range = [&](crd::u64 eb, crd::u64 ee, T* tile) noexcept
-    {
-        crd::u64 e = eb;
-        while (e < ee)
-        {
-            crd::u64 re = e + 1U; // prefix-run end (modes 0..mode-1 constant)
-            while (re < ee)
-            {
-                bool same = true;
-                for (crd::u32 m = 0; m < mode; ++m)
-                {
-                    if (planes[m][re] != planes[m][e])
-                    {
-                        same = false;
-                        break;
-                    }
-                }
-                if (!same)
-                {
-                    break;
-                }
-                ++re;
-            }
-            crd::u64 pbase = 0;
-            for (crd::u32 m = 0; m < mode; ++m)
-            {
-                pbase += static_cast<crd::u64>(planes[m][e]) * ostride[m];
-            }
-            std::memset(tile, 0, static_cast<crd::usize>(suffix * f) * sizeof(T));
-            for (crd::u64 e2 = e; e2 < re; ++e2)
-            {
-                crd::u64 soff = 0;
-                for (crd::u32 m = mode + 1U; m < rank; ++m)
-                {
-                    soff += static_cast<crd::u64>(planes[m][e2]) * ostride[m];
-                }
-                axpy_row(tile + soff * f, pu + static_cast<crd::u64>(planes[mode][e2]) * f, pval[e2], f);
-            }
-            T* oslice = pout + pbase; // blocked transpose tile[s][q] -> out[q][s]
-            constexpr crd::u64 bs = 128;
-            for (crd::u64 s0 = 0; s0 < suffix; s0 += bs)
-            {
-                const crd::u64 s1 = suffix - s0 < bs ? suffix : s0 + bs;
-                for (crd::u64 q = 0; q < f; ++q)
-                {
-                    T* orow = oslice + q * suffix;
-                    for (crd::u64 s = s0; s < s1; ++s)
-                    {
-                        orow[s] = tile[s * f + q];
-                    }
-                }
-            }
-            e = re;
-        }
-    };
     crd::u32 nw = num_workers;
     if (nw == 0U)
     {
@@ -1216,8 +1091,8 @@ template <typename T>
         }
         struct Ctx
         {
-            const decltype(scatter_range)* scatter;
-            const decltype(staged_range)* stage;
+            const SparseTensorKernels<T>* kernels;
+            const SparseTtmWalk<T>* walk;
             T* tiles;
             crd::u64 tile_elems;
             const crd::u32* root;
@@ -1226,7 +1101,7 @@ template <typename T>
             crd::u32 tasks;
             bool staged;
         };
-        Ctx ctx{&scatter_range, &staged_range, tiles.m_ptr, suffix * f, planes[0], pout, n, tasks, staged};
+        Ctx ctx{&kernels, &walk, tiles.m_ptr, suffix * f, walk.planes[0], pout, n, tasks, staged};
         Ctx* const cp = &ctx;
         const auto run_tasks = [cp](crd::u32 tb, crd::u32 te) noexcept
         {
@@ -1248,11 +1123,12 @@ template <typename T>
                 }
                 if (cp->staged)
                 {
-                    (*cp->stage)(eb, ee, cp->tiles + static_cast<crd::u64>(t) * cp->tile_elems);
+                    cp->kernels->ttm_staged(*cp->walk, eb, ee, cp->tiles + static_cast<crd::u64>(t) * cp->tile_elems,
+                                            cp->out);
                 }
                 else
                 {
-                    (*cp->scatter)(eb, ee, cp->out);
+                    cp->kernels->ttm_scatter(*cp->walk, eb, ee, cp->out);
                 }
             }
         };
@@ -1288,7 +1164,7 @@ template <typename T>
     const crd::u32 nparts = static_cast<crd::u32>(nparts64);
     if (nparts < 2U)
     {
-        scatter_range(0U, n, pout);
+        kernels.ttm_scatter(walk, 0U, n, pout);
         return TensorStatus::Ok;
     }
     // nparts >= 2: ALWAYS take the partial-buffer path (even serially) — the
@@ -1301,13 +1177,14 @@ template <typename T>
     }
     struct Ctx0
     {
-        const decltype(scatter_range)* scatter;
+        const SparseTensorKernels<T>* kernels;
+        const SparseTtmWalk<T>* walk;
         T* parts;
         crd::u64 osize;
         crd::u64 n;
         crd::u32 nparts;
     };
-    Ctx0 ctx{&scatter_range, partials.m_ptr, osize, n, nparts};
+    Ctx0 ctx{&kernels, &walk, partials.m_ptr, osize, n, nparts};
     Ctx0* const cp = &ctx;
     const auto run_part = [cp](crd::u32 tb, crd::u32 te) noexcept
     {
@@ -1317,7 +1194,7 @@ template <typename T>
             std::memset(buf, 0, static_cast<crd::usize>(cp->osize) * sizeof(T));
             const crd::u64 eb = cp->n * t / cp->nparts;
             const crd::u64 ee = cp->n * (t + 1U) / cp->nparts;
-            (*cp->scatter)(eb, ee, buf);
+            cp->kernels->ttm_scatter(*cp->walk, eb, ee, buf);
         }
     };
     if (nw <= 1U)
@@ -1336,10 +1213,7 @@ template <typename T>
             crd::jobs::parallel_for(nparts, nw, [rp](crd::u32 tb, crd::u32 te) { (*rp->run)(tb, te); });
         crd::jobs::wait(counter);
     }
-    for (crd::u32 t = 0; t < nparts; ++t) // fixed-order fold
-    {
-        sparsedetail::add_acc(pout, partials.m_ptr + static_cast<crd::u64>(t) * osize, osize);
-    }
+    kernels.fold(pout, partials.m_ptr, osize, nparts); // fixed part order
     return TensorStatus::Ok;
 }
 

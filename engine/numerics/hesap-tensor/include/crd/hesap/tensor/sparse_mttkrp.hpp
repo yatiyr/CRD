@@ -17,6 +17,9 @@
 // with fiber-boundary detection — the EXACT op sequence of the CSF walk by
 // construction ⇒ CSF == COO bit-identity (gated). Target = mode 0 of the
 // COO; use coo_reorder for other targets.
+//
+// Both walks run in the per-level tensor kernels (tensor_kernels.hpp
+// SparseTensorKernels); this header validates, partitions and allocates.
 // ---------------------------------------------------------------------------
 #include "sparse.hpp"
 
@@ -26,109 +29,22 @@ namespace crd::hesap::tensor
 namespace sparsedetail
 {
 
-template <typename T> struct MttkrpCtx
+// No two neighbouring nonzeros of a canonical COO share their tuple (the debug check of mttkrp_coo's input).
+template <typename T> [[nodiscard]] bool distinct_neighbours(const SparseCoo<T>& x) noexcept
 {
-    const crd::u32* fids[kMaxRank];
-    const crd::u32* fptr[kMaxRank]; // levels 0..rank-2
-    const T* fac[kMaxRank];         // per LEVEL: the level's mode's factor matrix
-    const T* val;
-    T* tmp[kMaxRank]; // task-local accumulators, levels 1..rank-2
-    crd::u64 r;
-    crd::u32 rank;
-};
-
-// The hot path: a fiber whose children are LEAVES. Register-chunked
-// accumulation over the fiber's leaves (the accumulator never round-trips
-// through memory) + the parent factor multiply FUSED into the store:
-//   dst[q] += (sum_t val[t] * leaf_row_t[q]) * prow[q]
-// Every element's chain is the exact op sequence of axpy_row-per-leaf +
-// hadamard_acc (fma-for-fma) ⇒ bit-identical to the COO reference walk.
-template <typename T>
-inline void leaf_fiber_fused(const MttkrpCtx<T>& c, crd::u32 cb, crd::u32 ce, const T* prow, T* dst) noexcept
-{
-    namespace simd = crd::math::simd;
-    using V = std::conditional_t<std::is_same_v<T, crd::f32>, simd::Vec8f, simd::Vec4d>;
-    constexpr crd::u64 W = std::is_same_v<T, crd::f32> ? 8U : 4U;
-    const crd::u32* lf = c.fids[c.rank - 1U];
-    const T* fac = c.fac[c.rank - 1U];
-    const T* val = c.val;
-    const crd::u64 r = c.r;
-    crd::u64 q0 = 0;
-    while (q0 < r)
+    for (crd::u64 e = 1; e < x.nnz(); ++e)
     {
-        const crd::u64 rem = r - q0;
-        if (rem >= 4U * W)
+        bool same = true;
+        for (crd::u32 m = 0; m < x.rank() && same; ++m)
         {
-            V a0(T(0));
-            V a1(T(0));
-            V a2(T(0));
-            V a3(T(0));
-            for (crd::u32 t = cb; t < ce; ++t)
-            {
-                const T* row = fac + static_cast<crd::u64>(lf[t]) * r + q0;
-                const V vv(val[t]);
-                a0 = simd::fma(vv, V::load(row), a0);
-                a1 = simd::fma(vv, V::load(row + W), a1);
-                a2 = simd::fma(vv, V::load(row + 2U * W), a2);
-                a3 = simd::fma(vv, V::load(row + 3U * W), a3);
-            }
-            simd::fma(a0, V::load(prow + q0), V::load(dst + q0)).store(dst + q0);
-            simd::fma(a1, V::load(prow + q0 + W), V::load(dst + q0 + W)).store(dst + q0 + W);
-            simd::fma(a2, V::load(prow + q0 + 2U * W), V::load(dst + q0 + 2U * W)).store(dst + q0 + 2U * W);
-            simd::fma(a3, V::load(prow + q0 + 3U * W), V::load(dst + q0 + 3U * W)).store(dst + q0 + 3U * W);
-            q0 += 4U * W;
+            same = x.idx(m)[e] == x.idx(m)[e - 1U];
         }
-        else if (rem >= W)
+        if (same)
         {
-            V a0(T(0));
-            for (crd::u32 t = cb; t < ce; ++t)
-            {
-                a0 = simd::fma(V(val[t]), V::load(fac + static_cast<crd::u64>(lf[t]) * r + q0), a0);
-            }
-            simd::fma(a0, V::load(prow + q0), V::load(dst + q0)).store(dst + q0);
-            q0 += W;
-        }
-        else
-        {
-            const crd::usize cw = static_cast<crd::usize>(rem);
-            V a0(T(0));
-            for (crd::u32 t = cb; t < ce; ++t)
-            {
-                a0 = simd::fma(V(val[t]),
-                               V::load_partial(fac + static_cast<crd::u64>(lf[t]) * r + q0, cw), a0);
-            }
-            simd::fma(a0, V::load_partial(prow + q0, cw), V::load_partial(dst + q0, cw))
-                .store_partial(dst + q0, cw);
-            q0 = r;
+            return false;
         }
     }
-}
-
-// adds the subtree contribution of node z at level l (1 <= l <= rank-1)
-// into dst[r]: leaf = val * leaf-factor row; inner = (sum of children) *
-// this level's factor row. Bounded recursion (depth < kMaxRank).
-template <typename T> inline void mttkrp_node(const MttkrpCtx<T>& c, crd::u32 l, crd::u64 z, T* dst) noexcept
-{
-    const T* row = c.fac[l] + static_cast<crd::u64>(c.fids[l][z]) * c.r;
-    if (l == c.rank - 1U)
-    {
-        axpy_row(dst, row, c.val[z], c.r);
-        return;
-    }
-    const crd::u32 cb = c.fptr[l][z];
-    const crd::u32 ce = c.fptr[l][z + 1U];
-    if (l + 1U == c.rank - 1U)
-    {
-        leaf_fiber_fused(c, cb, ce, row, dst); // the hot path — no staging buffer
-        return;
-    }
-    T* acc = c.tmp[l];
-    std::memset(acc, 0, static_cast<crd::usize>(c.r) * sizeof(T));
-    for (crd::u32 t = cb; t < ce; ++t)
-    {
-        mttkrp_node(c, l + 1U, t, acc);
-    }
-    hadamard_acc(dst, acc, row, c.r);
+    return true;
 }
 
 } // namespace sparsedetail
@@ -168,19 +84,20 @@ template <typename T>
     {
         return TensorStatus::Ok;
     }
-    MttkrpCtx<T> base{};
+    MttkrpCsfWalk<T> walk{};
     for (crd::u32 l = 0; l < rank; ++l)
     {
-        base.fids[l] = x.fids(l);
+        walk.fids[l] = x.fids(l);
         if (l + 1U < rank)
         {
-            base.fptr[l] = x.fptr(l);
+            walk.fptr[l] = x.fptr(l);
         }
-        base.fac[l] = l == 0U ? nullptr : factors[x.order(l)].data();
+        walk.fac[l] = l == 0U ? nullptr : factors[x.order(l)].data();
     }
-    base.val = x.val();
-    base.r = r;
-    base.rank = rank;
+    walk.val = x.val();
+    walk.out = pout;
+    walk.r = r;
+    walk.rank = rank;
     const crd::u32 tmp_levels = rank >= 3U ? rank - 2U : 0U;
     // deterministic tasking: grain a function of shape/nnz ONLY
     const crd::u64 per_root = 2ULL * r * (x.nnz() / n0 + 1ULL);
@@ -199,51 +116,37 @@ template <typename T>
     {
         return TensorStatus::AllocFailed;
     }
-    const auto run_roots = [&base, tmp_levels, pout, n0](crd::u64 rb, crd::u64 re, T* tmpbase) noexcept
-    {
-        (void)n0;
-        MttkrpCtx<T> c = base;
-        for (crd::u32 l = 1; l <= tmp_levels; ++l)
-        {
-            c.tmp[l] = tmpbase + static_cast<crd::u64>(l - 1U) * c.r;
-        }
-        for (crd::u64 z0 = rb; z0 < re; ++z0)
-        {
-            T* dst = pout + static_cast<crd::u64>(c.fids[0][z0]) * c.r;
-            const crd::u32 cb = c.fptr[0][z0];
-            const crd::u32 ce = c.fptr[0][z0 + 1U];
-            for (crd::u32 t = cb; t < ce; ++t)
-            {
-                mttkrp_node(c, 1U, t, dst);
-            }
-        }
-    };
+    const SparseTensorKernels<T>& kernels = sparse_kernels<T>();
     if (tasks == 1U)
     {
-        run_roots(0U, n0, tmps.m_ptr);
+        kernels.mttkrp_csf(walk, 0U, n0, tmps.m_ptr);
         return TensorStatus::Ok;
     }
     struct Ctx
     {
-        const decltype(run_roots)* run;
+        const SparseTensorKernels<T>* kernels;
+        const MttkrpCsfWalk<T>* walk;
         T* tmps;
         crd::u64 n0;
         crd::u64 stride; // tmp_levels * r
         crd::u32 tasks;
     };
-    Ctx ctx{&run_roots, tmps.m_ptr, n0, static_cast<crd::u64>(tmp_levels) * r, tasks};
+    Ctx ctx{&kernels, &walk, tmps.m_ptr, n0, static_cast<crd::u64>(tmp_levels) * r, tasks};
     Ctx* const cp = &ctx;
-    auto* const counter = crd::jobs::parallel_for(tasks, nw, [cp](crd::u32 tb, crd::u32 te) {
-        for (crd::u32 t = tb; t < te; ++t)
+    auto* const counter = crd::jobs::parallel_for(
+        tasks, nw,
+        [cp](crd::u32 tb, crd::u32 te)
         {
-            const crd::u64 rb = cp->n0 * t / cp->tasks;
-            const crd::u64 re = cp->n0 * (t + 1U) / cp->tasks;
-            if (rb < re)
+            for (crd::u32 t = tb; t < te; ++t)
             {
-                (*cp->run)(rb, re, cp->tmps + static_cast<crd::u64>(t) * cp->stride);
+                const crd::u64 rb = cp->n0 * t / cp->tasks;
+                const crd::u64 re = cp->n0 * (t + 1U) / cp->tasks;
+                if (rb < re)
+                {
+                    cp->kernels->mttkrp_csf(*cp->walk, rb, re, cp->tmps + static_cast<crd::u64>(t) * cp->stride);
+                }
             }
-        }
-    });
+        });
     crd::jobs::wait(counter);
     return TensorStatus::Ok;
 }
@@ -282,74 +185,25 @@ template <typename T>
     {
         return TensorStatus::Ok;
     }
+    CRD_ASSERT_MSG(distinct_neighbours(x), "mttkrp_coo: duplicate tuple in canonical COO");
     const crd::u32 tmp_levels = rank >= 3U ? rank - 2U : 0U;
     ScratchBlock<T> tmps(scratch, static_cast<crd::u64>(tmp_levels) * r);
     if (tmp_levels > 0U && tmps.m_ptr == nullptr)
     {
         return TensorStatus::AllocFailed;
     }
-    const crd::u32* planes[kMaxRank];
-    const T* fac[kMaxRank];
-    T* tmp[kMaxRank] = {};
+    MttkrpCooWalk<T> walk{};
     for (crd::u32 m = 0; m < rank; ++m)
     {
-        planes[m] = x.idx(m);
-        fac[m] = m == 0U ? nullptr : factors[m].data();
+        walk.planes[m] = x.idx(m);
+        walk.fac[m] = m == 0U ? nullptr : factors[m].data();
     }
-    for (crd::u32 l = 1; l <= tmp_levels; ++l)
-    {
-        tmp[l] = tmps.m_ptr + static_cast<crd::u64>(l - 1U) * r;
-    }
-    const T* pval = x.val();
-    T* dst = nullptr;
-    for (crd::u64 e = 0; e < n; ++e)
-    {
-        crd::u32 d = 0; // first level whose key changed vs the previous entry
-        if (e > 0U)
-        {
-            d = rank; // canonical COO is deduped ⇒ some level always differs
-            for (crd::u32 m = 0; m < rank; ++m)
-            {
-                if (planes[m][e] != planes[m][e - 1U])
-                {
-                    d = m;
-                    break;
-                }
-            }
-            CRD_ASSERT_MSG(d < rank, "mttkrp_coo: duplicate tuple in canonical COO");
-            if (rank >= 3U) // close finished fibers, deepest first
-            {
-                const crd::u32 lo = d > 1U ? d : 1U;
-                for (crd::u32 l = rank - 2U; l + 1U > lo; --l)
-                {
-                    T* parent = l == 1U ? dst : tmp[l - 1U];
-                    hadamard_acc(parent, tmp[l],
-                                 fac[l] + static_cast<crd::u64>(planes[l][e - 1U]) * r, r);
-                }
-            }
-        }
-        for (crd::u32 l = d; l + 1U < rank; ++l) // open levels d..rank-2
-        {
-            if (l == 0U)
-            {
-                dst = pout + static_cast<crd::u64>(planes[0][e]) * r;
-            }
-            else
-            {
-                std::memset(tmp[l], 0, static_cast<crd::usize>(r) * sizeof(T));
-            }
-        }
-        T* leafdst = rank >= 3U ? tmp[rank - 2U] : dst;
-        axpy_row(leafdst, fac[rank - 1U] + static_cast<crd::u64>(planes[rank - 1U][e]) * r, pval[e], r);
-    }
-    if (rank >= 3U) // close the trailing fibers
-    {
-        for (crd::u32 l = rank - 2U; l >= 1U; --l)
-        {
-            T* parent = l == 1U ? dst : tmp[l - 1U];
-            hadamard_acc(parent, tmp[l], fac[l] + static_cast<crd::u64>(planes[l][n - 1U]) * r, r);
-        }
-    }
+    walk.val = x.val();
+    walk.out = pout;
+    walk.n = n;
+    walk.r = r;
+    walk.rank = rank;
+    sparse_kernels<T>().mttkrp_coo(walk, tmps.m_ptr);
     return TensorStatus::Ok;
 }
 

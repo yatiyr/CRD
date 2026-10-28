@@ -6,7 +6,8 @@
 // per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order (single-rounded
 // FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the elementwise ops
 // and the einsum products are per-element IEEE operations in one order, Tier D's reduction order is fixed by kEwLanes
-// and kReduceBlock alone, and each batched matrix runs its own lane in the scalar tier's operations.
+// and kReduceBlock alone, each batched matrix runs its own lane in the scalar tier's operations, and each sparse
+// walk's output element is one fma chain in the canonical nonzero order.
 
 #pragma once
 
@@ -154,6 +155,67 @@ template <typename T> struct BatchedKernels
     // x = L^-T L^-1 x, and x = U^-1 L^-1 P x.
     void (*cholesky_solve)(const BatchedSolve<T>& s, crd::u64 b0, crd::u64 b1) noexcept;
     void (*lu_solve)(const BatchedSolve<T>& s, crd::u64 b0, crd::u64 b1) noexcept;
+};
+
+// The largest rank a sparse walk takes (kMaxRank of crd/hesap/tensor/tensor.hpp, which sparse.hpp asserts).
+inline constexpr crd::u32 kSparseMaxRank = 8U;
+
+// A sparse x dense mode-n product (sparse.hpp contract_mode) over a canonical COO's nonzeros e: the output element at
+// sum over m != mode of planes[m][e] * ostride[m], plus q * ostride[mode], gains val[e] * u[planes[mode][e] * f + q]
+// for q in [0, f).
+template <typename T> struct SparseTtmWalk
+{
+    const crd::u32* planes[kSparseMaxRank]{};
+    crd::u64 ostride[kSparseMaxRank]{};
+    const T* val;
+    const T* u;
+    crd::u64 f;
+    crd::u32 rank;
+    crd::u32 mode;
+};
+
+// A CSF MTTKRP (sparse_mttkrp.hpp mttkrp): the fiber ids of every level, the child pointers of levels 0 .. rank - 2,
+// the factor of each level's mode (level 0's unused), the leaf values and the [shape(order(0)), r] output.
+template <typename T> struct MttkrpCsfWalk
+{
+    const crd::u32* fids[kSparseMaxRank]{};
+    const crd::u32* fptr[kSparseMaxRank]{};
+    const T* fac[kSparseMaxRank]{};
+    const T* val;
+    T* out;
+    crd::u64 r;
+    crd::u32 rank;
+};
+
+// A COO MTTKRP over mode 0 (sparse_mttkrp.hpp mttkrp_coo): the index planes and factors of every mode (mode 0's
+// unused), the n values and the [shape(0), r] output.
+template <typename T> struct MttkrpCooWalk
+{
+    const crd::u32* planes[kSparseMaxRank]{};
+    const T* fac[kSparseMaxRank]{};
+    const T* val;
+    T* out;
+    crd::u64 n;
+    crd::u64 r;
+    crd::u32 rank;
+};
+
+// The sparse tensor walks of one element type. Every output element is one chain of single-rounded fmas in the
+// canonical nonzero order (an MTTKRP fiber's leaves seeded by 0 into a sum that multiplies its parent's factor row as
+// fma(sum, row, dst)), or the parts' sums in ascending part order, so a CSF and a COO MTTKRP give the same bits.
+template <typename T> struct SparseTensorKernels
+{
+    // The nonzeros [eb, ee) into dst (zeroed by the caller).
+    void (*ttm_scatter)(const SparseTtmWalk<T>& w, crd::u64 eb, crd::u64 ee, T* dst) noexcept;
+    // An inner mode (0 < mode < rank - 1): per run of equal modes 0 .. mode - 1 in [eb, ee), the nonzeros into the
+    // zeroed [ostride[mode], f] tile, which is then transposed into its out slice.
+    void (*ttm_staged)(const SparseTtmWalk<T>& w, crd::u64 eb, crd::u64 ee, T* tile, T* out) noexcept;
+    // out[i] += parts[t * osize + i] for t = 0 .. nparts - 1 in order.
+    void (*fold)(T* out, const T* parts, crd::u64 osize, crd::u32 nparts) noexcept;
+    // The root fibers [rb, re) into their (zeroed) output rows; tmp holds (rank - 2) * r scratch values.
+    void (*mttkrp_csf)(const MttkrpCsfWalk<T>& w, crd::u64 rb, crd::u64 re, T* tmp) noexcept;
+    // The whole walk (out zeroed, n > 0); tmp as mttkrp_csf's.
+    void (*mttkrp_coo)(const MttkrpCooWalk<T>& w, T* tmp) noexcept;
 };
 
 // The largest rank a permute walks (kMaxRank of crd/hesap/tensor/tensor.hpp, which permute.hpp asserts).
@@ -306,6 +368,9 @@ struct TensorKernels
     // The batched dense linear algebra.
     BatchedKernels<crd::f32> batched_f32;
     BatchedKernels<crd::f64> batched_f64;
+    // The sparse tensor TTM and MTTKRP walks.
+    SparseTensorKernels<crd::f32> sparse_f32;
+    SparseTensorKernels<crd::f64> sparse_f64;
 };
 
 // The levels with a body and the VNNI variants of avx2 (AVX-VNNI) and avx512 (AVX512-VNNI), the integer dots on

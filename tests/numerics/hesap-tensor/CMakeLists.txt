@@ -131,6 +131,9 @@ crd_enable_default_pch(crd-hesap-tensor-sparse-tests)
 
 crd_discover_tests(crd-hesap-tensor-sparse-tests)
 
+# ADR-0134 §8: the sparse TTM, MTTKRP and CP gates once per compiled level (crd-hesap-tensor-sparse-kernels-at-<level>).
+crd_add_kernel_level_tests(crd-hesap-tensor-sparse-tests "[sparse]")
+
 # --- v14-j decomposition gates (separate executable: links hesap-dense) ---
 add_executable(crd-hesap-tensor-decomp-tests
     test_decomp.cpp

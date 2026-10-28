@@ -11,9 +11,11 @@
 // the scalar softmax (vector tails, crd_exp4's scalar lanes, non-finite logits), the scalar Philox blocks (counter
 // and position wraps, partial vectors), the scalar elementwise walk (every inner form, broadcast and reversed operands,
 // IEEE specials, min/max ties), Tier D's pinned order (block, row and column edges), einsum's direct products (row,
-// depth and column tails) and the scalar tier's batched GEMM, Cholesky, LU, SVD and solves (every lane-tier edge of n,
-// poisoned lanes, split ranges, guard words). crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR
-// converts and the sketch fill under each forced level.
+// depth and column tails), the scalar tier's batched GEMM, Cholesky, LU, SVD and solves (every lane-tier edge of n,
+// poisoned lanes, split ranges, guard words) and the scalar sparse TTM scatter, staged tile, part fold and CSF and COO
+// MTTKRP walks (ranks 1 to 5, every mode, column tails at every width, sub-ranges, guard words).
+// crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
+// level.
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
@@ -526,11 +528,18 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         return kb.gemm_tiny != nullptr && kb.cholesky != nullptr && kb.lu != nullptr && kb.svd != nullptr &&
                kb.cholesky_solve != nullptr && kb.lu_solve != nullptr;
     };
+    const auto sparse_complete = [](const auto& ks)
+    {
+        return ks.ttm_scatter != nullptr && ks.ttm_staged != nullptr && ks.fold != nullptr &&
+               ks.mttkrp_csf != nullptr && ks.mttkrp_coo != nullptr;
+    };
     for (usize i = 0; i < levels.size(); ++i)
     {
         REQUIRE(levels[i].table != nullptr);
         CHECK(batched_complete(levels[i].table->batched_f32));
         CHECK(batched_complete(levels[i].table->batched_f64));
+        CHECK(sparse_complete(levels[i].table->sparse_f32));
+        CHECK(sparse_complete(levels[i].table->sparse_f64));
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
@@ -2042,6 +2051,418 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar tier's bat
         INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
         CHECK(check_batched_level<f32>(*level.table) == 0U);
         CHECK(check_batched_level<f64>(*level.table) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// --- the sparse tensor walks ---
+
+template <typename T> const tn::SparseTensorKernels<T>& sparse_of(const TensorKernels& k)
+{
+    if constexpr (std::is_same_v<T, f32>)
+    {
+        return k.sparse_f32;
+    }
+    else
+    {
+        return k.sparse_f64;
+    }
+}
+
+// The guard words written past a scratch area's first len values.
+template <typename T> u64 scratch_overruns(const T* p, u64 len)
+{
+    u64 bad = 0;
+    for (u64 i = len; i < len + 3U; ++i)
+    {
+        bad += p[i] == kGuard<T> ? 0U : 1U;
+    }
+    return bad;
+}
+
+// A canonical COO: every tuple of dims in lexicographic order (mode 0 major), about two in three kept.
+struct SparseCase
+{
+    u32 rank;
+    u64 dims[5];
+    u64 n;
+    u32 idx[5][256];
+};
+
+void make_sparse_case(SparseCase& c, u32 rank, const u64* dims, u64 seed)
+{
+    c.rank = rank;
+    c.n = 0;
+    u64 total = 1;
+    for (u32 m = 0; m < rank; ++m)
+    {
+        c.dims[m] = dims[m];
+        total *= dims[m];
+    }
+    u64 s = seed;
+    for (u64 lin = 0; lin < total; ++lin)
+    {
+        if (lcg(s) % 3U == 0U)
+        {
+            continue;
+        }
+        u64 rem = lin;
+        for (u32 m = rank; m-- > 0U;)
+        {
+            c.idx[m][c.n] = static_cast<u32>(rem % dims[m]);
+            rem /= dims[m];
+        }
+        ++c.n;
+    }
+}
+
+// The identity-order CSF tree of a SparseCase: level l's nodes are its distinct (l + 1)-prefixes, the leaves its
+// nonzeros; fptr[l][z] is node z's first child.
+struct CsfTree
+{
+    u64 nodes[5];
+    u32 fids[5][256];
+    u32 fptr[5][257];
+};
+
+void make_csf_tree(const SparseCase& c, CsfTree& t)
+{
+    for (u32 l = 0; l < c.rank; ++l)
+    {
+        t.nodes[l] = 0;
+    }
+    for (u64 e = 0; e < c.n; ++e)
+    {
+        u32 d = 0;
+        if (e > 0U)
+        {
+            d = c.rank;
+            for (u32 m = 0; m < c.rank; ++m)
+            {
+                if (c.idx[m][e] != c.idx[m][e - 1U])
+                {
+                    d = m;
+                    break;
+                }
+            }
+        }
+        for (u32 l = d; l < c.rank; ++l)
+        {
+            if (l + 1U < c.rank)
+            {
+                t.fptr[l][t.nodes[l]] = static_cast<u32>(t.nodes[l + 1U]);
+            }
+            t.fids[l][t.nodes[l]] = c.idx[l][e];
+            ++t.nodes[l];
+        }
+    }
+    for (u32 l = 0; l + 1U < c.rank; ++l)
+    {
+        t.fptr[l][t.nodes[l]] = static_cast<u32>(t.nodes[l + 1U]);
+    }
+}
+
+// The TTM oracle: out[base + q * stride(mode)] = fma(val[e], u[i_mode * f + q], ...) per nonzero e in [eb, ee).
+template <typename T>
+void ttm_oracle(const SparseCase& c, const T* val, const T* u, const u64* ostride, u32 mode, u64 f, u64 eb, u64 ee,
+                T* out)
+{
+    for (u64 e = eb; e < ee; ++e)
+    {
+        u64 base = 0;
+        for (u32 m = 0; m < c.rank; ++m)
+        {
+            base += m == mode ? 0U : static_cast<u64>(c.idx[m][e]) * ostride[m];
+        }
+        for (u64 q = 0; q < f; ++q)
+        {
+            T& o = out[base + q * ostride[mode]];
+            o = std::fma(val[e], u[static_cast<u64>(c.idx[mode][e]) * f + q], o);
+        }
+    }
+}
+
+// Ranks 1 to 4, every mode (the strided scatter, the contiguous last mode and the staged inner modes), f across one,
+// two and many vectors with tails, the whole range and a sub-range that leaves outputs untouched, guard words after
+// the output and the tile.
+template <typename T> u64 check_sparse_ttm(const tn::SparseTensorKernels<T>& ks)
+{
+    constexpr u64 lanes = tn::kEwLanes<T>;
+    constexpr u64 out_cap = 6U * 4U * 3U * (8U * lanes + 3U);
+    static SparseCase c{};
+    static T val[256];
+    static T u[6U * (8U * lanes + 3U)];
+    static T want[out_cap + 3U];
+    static T got[out_cap + 3U];
+    static T ref[out_cap + 3U];
+    static T tile[out_cap + 3U];
+    const u64 dims_of[4][4] = {{5U}, {4U, 6U}, {3U, 4U, 5U}, {3U, 2U, 4U, 3U}};
+    u64 bad = 0;
+    for (u32 rank = 1; rank <= 4U; ++rank)
+    {
+        make_sparse_case(c, rank, dims_of[rank - 1U], 0x5100U + rank);
+        fill_values(val, c.n, 0x5200U + rank, 7U);
+        for (u32 mode = 0; mode < rank; ++mode)
+        {
+            for (const u64 f : {u64{1}, lanes - 1U, lanes, 2U * lanes - 1U, 4U * lanes + 1U, 8U * lanes + 3U})
+            {
+                fill_values(u, c.dims[mode] * f, 0x5300U + mode * 131U + f, 5U);
+                tn::SparseTtmWalk<T> w{};
+                u64 osize = 1;
+                for (u32 m = rank; m-- > 0U;)
+                {
+                    w.ostride[m] = osize;
+                    osize *= m == mode ? f : c.dims[m];
+                }
+                for (u32 m = 0; m < rank; ++m)
+                {
+                    w.planes[m] = c.idx[m];
+                }
+                w.val = val;
+                w.u = u;
+                w.f = f;
+                w.rank = rank;
+                w.mode = mode;
+                const u64 suffix = w.ostride[mode];
+                const u64 ranges[2][2] = {{0U, c.n}, {c.n / 3U, c.n - c.n / 4U}};
+                for (const auto& range : ranges)
+                {
+                    for (u64 i = 0; i < osize + 3U; ++i)
+                    {
+                        want[i] = i < osize ? T(0) : kGuard<T>;
+                        got[i] = want[i];
+                    }
+                    ttm_oracle(c, val, u, w.ostride, mode, f, range[0], range[1], want);
+                    ks.ttm_scatter(w, range[0], range[1], got);
+                    bad += nan_aside_mismatches(want, got, osize + 3U);
+                    if (mode == 0U || mode + 1U == rank)
+                    {
+                        continue;
+                    }
+                    // staged: every prefix run in the range rewrites its whole [f, suffix] out slice
+                    for (u64 i = 0; i < osize + 3U; ++i)
+                    {
+                        ref[i] = T(0);
+                        want[i] = kGuard<T>;
+                        got[i] = kGuard<T>;
+                    }
+                    ttm_oracle(c, val, u, w.ostride, mode, f, range[0], range[1], ref);
+                    for (u64 e = range[0]; e < range[1]; ++e)
+                    {
+                        u64 pbase = 0;
+                        for (u32 m = 0; m < mode; ++m)
+                        {
+                            pbase += static_cast<u64>(c.idx[m][e]) * w.ostride[m];
+                        }
+                        for (u64 i = 0; i < f * suffix; ++i)
+                        {
+                            want[pbase + i] = ref[pbase + i];
+                        }
+                    }
+                    for (u64 i = 0; i < suffix * f + 3U; ++i)
+                    {
+                        tile[i] = kGuard<T>;
+                    }
+                    ks.ttm_staged(w, range[0], range[1], tile, got);
+                    bad += nan_aside_mismatches(want, got, osize + 3U);
+                    bad += scratch_overruns(tile, suffix * f);
+                }
+            }
+        }
+    }
+    return bad;
+}
+
+// out[i] += parts[t * osize + i] in part order: around a vector, a register pair and the 2048-value fold block,
+// 1, 2 and 7 parts, signed zeros and infinities in out and the parts.
+template <typename T> u64 check_sparse_fold(const tn::SparseTensorKernels<T>& ks)
+{
+    constexpr u64 lanes = tn::kEwLanes<T>;
+    static T parts[7U * 4101U];
+    static T want[4101U + 3U];
+    static T got[4101U + 3U];
+    u64 bad = 0;
+    for (const u64 osize : {u64{1}, lanes - 1U, 2U * lanes + 1U, u64{2048}, u64{2049}, u64{4101}})
+    {
+        for (const u32 nparts : {1U, 2U, 7U})
+        {
+            fill_values(parts, nparts * osize, 0x5400U + osize + nparts, 5U);
+            fill_values(want, osize, 0x5500U + osize, 3U);
+            for (u64 i = osize; i < osize + 3U; ++i)
+            {
+                want[i] = kGuard<T>;
+            }
+            for (u64 i = 0; i < osize + 3U; ++i)
+            {
+                got[i] = want[i];
+            }
+            for (u32 t = 0; t < nparts; ++t)
+            {
+                for (u64 i = 0; i < osize; ++i)
+                {
+                    want[i] = want[i] + parts[static_cast<u64>(t) * osize + i];
+                }
+            }
+            ks.fold(got, parts, osize, nparts);
+            bad += nan_aside_mismatches(want, got, osize + 3U);
+        }
+    }
+    return bad;
+}
+
+// The MTTKRP oracle: a leaf adds fma(val, row, dst); an inner node's children sum into a zeroed acc, which then adds
+// fma(acc, row, dst), its level's factor row.
+template <typename T>
+void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val, u64 r, u32 l, u64 z, T* dst)
+{
+    const T* row = fac[l] + static_cast<u64>(t.fids[l][z]) * r;
+    if (l + 1U == rank)
+    {
+        for (u64 q = 0; q < r; ++q)
+        {
+            dst[q] = std::fma(val[z], row[q], dst[q]);
+        }
+        return;
+    }
+    T acc[16U * 8U + 1U];
+    for (u64 q = 0; q < r; ++q)
+    {
+        acc[q] = T(0);
+    }
+    for (u64 ch = t.fptr[l][z]; ch < t.fptr[l][z + 1U]; ++ch)
+    {
+        mttkrp_oracle(t, rank, fac, val, r, l + 1U, ch, acc);
+    }
+    for (u64 q = 0; q < r; ++q)
+    {
+        dst[q] = std::fma(acc[q], row[q], dst[q]);
+    }
+}
+
+// Ranks 2 (leaves under the roots), 3 (one fused leaf level) and 5 (accumulator levels above it), r across the four-
+// register chunk, one register and the tail at every width, the CSF walk over all roots and a sub-range, the COO walk
+// against both, guard words after the output and the scratch rows.
+template <typename T> u64 check_sparse_mttkrp(const tn::SparseTensorKernels<T>& ks)
+{
+    constexpr u64 lanes = tn::kEwLanes<T>;
+    constexpr u64 max_r = 16U * lanes + 1U;
+    static SparseCase c{};
+    static CsfTree tree{};
+    static T fac[5][7U * max_r];
+    static T val[256];
+    static T want[5U * max_r + 3U];
+    static T got[5U * max_r + 3U];
+    static T coo[5U * max_r + 3U];
+    static T tmp[3U * max_r + 3U];
+    const u32 ranks[3] = {2U, 3U, 5U};
+    const u64 dims_of[3][5] = {{5U, 7U}, {4U, 5U, 6U}, {3U, 3U, 2U, 3U, 4U}};
+    u64 bad = 0;
+    for (u32 ci = 0; ci < 3U; ++ci)
+    {
+        const u32 rank = ranks[ci];
+        make_sparse_case(c, rank, dims_of[ci], 0x5600U + rank);
+        make_csf_tree(c, tree);
+        fill_values(val, c.n, 0x5700U + rank, 7U);
+        const u64 n0 = tree.nodes[0];
+        const u64 rows = c.dims[0];
+        const u64 tmp_len = (rank - 2U) * max_r;
+        const u64 widths[] = {
+            1U,   lanes - 1U, lanes, 2U * lanes - 1U, 4U * lanes - 1U, 4U * lanes, 4U * lanes + 1U, 8U * lanes + 3U,
+            max_r};
+        for (const u64 r : widths)
+        {
+            const T* facp[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+            for (u32 m = 1; m < rank; ++m)
+            {
+                fill_values(fac[m], c.dims[m] * r, 0x5800U + m * 37U + r, 9U);
+                facp[m] = fac[m];
+            }
+            tn::MttkrpCsfWalk<T> w{};
+            for (u32 l = 0; l < rank; ++l)
+            {
+                w.fids[l] = tree.fids[l];
+                w.fptr[l] = l + 1U < rank ? tree.fptr[l] : nullptr;
+                w.fac[l] = facp[l];
+            }
+            w.val = val;
+            w.out = got;
+            w.r = r;
+            w.rank = rank;
+            const u64 ranges[2][2] = {{0U, n0}, {1U, n0 - 1U}};
+            for (const auto& range : ranges)
+            {
+                for (u64 i = 0; i < rows * r + 3U; ++i)
+                {
+                    want[i] = i < rows * r ? T(0) : kGuard<T>;
+                    got[i] = want[i];
+                }
+                for (u64 i = 0; i < tmp_len + 3U; ++i)
+                {
+                    tmp[i] = kGuard<T>;
+                }
+                for (u64 z0 = range[0]; z0 < range[1]; ++z0)
+                {
+                    T* dst = want + static_cast<u64>(tree.fids[0][z0]) * r;
+                    for (u64 ch = tree.fptr[0][z0]; ch < tree.fptr[0][z0 + 1U]; ++ch)
+                    {
+                        mttkrp_oracle(tree, rank, facp, val, r, 1U, ch, dst);
+                    }
+                }
+                ks.mttkrp_csf(w, range[0], range[1], tmp);
+                bad += nan_aside_mismatches(want, got, rows * r + 3U);
+                bad += scratch_overruns(tmp, (rank - 2U) * r);
+            }
+            // the COO walk is the whole-range CSF walk's operations
+            tn::MttkrpCooWalk<T> cw{};
+            for (u32 m = 0; m < rank; ++m)
+            {
+                cw.planes[m] = c.idx[m];
+                cw.fac[m] = facp[m];
+            }
+            cw.val = val;
+            cw.out = coo;
+            cw.n = c.n;
+            cw.r = r;
+            cw.rank = rank;
+            for (u64 i = 0; i < rows * r + 3U; ++i)
+            {
+                coo[i] = i < rows * r ? T(0) : kGuard<T>;
+                want[i] = coo[i];
+            }
+            for (u64 z0 = 0; z0 < n0; ++z0)
+            {
+                T* dst = want + static_cast<u64>(tree.fids[0][z0]) * r;
+                for (u64 ch = tree.fptr[0][z0]; ch < tree.fptr[0][z0 + 1U]; ++ch)
+                {
+                    mttkrp_oracle(tree, rank, facp, val, r, 1U, ch, dst);
+                }
+            }
+            ks.mttkrp_coo(cw, tmp);
+            bad += nan_aside_mismatches(want, coo, rows * r + 3U);
+            bad += scratch_overruns(tmp, (rank - 2U) * r);
+        }
+    }
+    return bad;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar sparse TTM, fold and MTTKRP bits",
+          "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_sparse_ttm<f32>(sparse_of<f32>(*level.table)) == 0U);
+        CHECK(check_sparse_ttm<f64>(sparse_of<f64>(*level.table)) == 0U);
+        CHECK(check_sparse_fold<f32>(sparse_of<f32>(*level.table)) == 0U);
+        CHECK(check_sparse_fold<f64>(sparse_of<f64>(*level.table)) == 0U);
+        CHECK(check_sparse_mttkrp<f32>(sparse_of<f32>(*level.table)) == 0U);
+        CHECK(check_sparse_mttkrp<f64>(sparse_of<f64>(*level.table)) == 0U);
     }
     CHECK(ran >= 1U);
 }

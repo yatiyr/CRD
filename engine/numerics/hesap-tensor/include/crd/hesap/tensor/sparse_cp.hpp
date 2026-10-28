@@ -15,6 +15,8 @@
 #include "sparse.hpp"
 #include "sparse_mttkrp.hpp"
 
+#include <cmath> // std::fma: the norm's single-rounded chain
+
 namespace crd::hesap::tensor
 {
 
