@@ -45,6 +45,42 @@ void fill_general(Matrix<T, Layout::RowMajor>& a, T diag_boost)
     }
 }
 
+// fill_general is a rank-2 matrix plus diag_boost * I: its spectrum is real, so complex pairs came only from rounding
+// splitting the (n-2)-fold eigenvalue. The quadratic phase gives a full-rank matrix whose spectrum at diag_boost 0.5
+// holds kComplexPairs[n] conjugate pairs, each |Im| at least 3e-3 (numpy.linalg.eigvals).
+template <typename T> void fill_complex_spectrum(Matrix<T, Layout::RowMajor>& a, T diag_boost)
+{
+    for (crd::usize i = 0; i < a.rows(); ++i)
+    {
+        for (crd::usize j = 0; j < a.cols(); ++j)
+        {
+            const double phase = static_cast<double>(i * 7 + j * 3) * 0.17 + 0.013 * static_cast<double>(i * j * j);
+            a.at(i, j) = static_cast<T>(std::sin(phase)) + (i == j ? diag_boost : T{0});
+        }
+    }
+}
+
+// Conjugate pairs of fill_complex_spectrum(a, 0.5) at n = 8, 16, 20 and 50.
+crd::usize complex_pairs_of_fixture(crd::usize n)
+{
+    switch (n)
+    {
+        case 8:
+            return 2;
+        case 16:
+            return 6;
+        case 20:
+            return 8;
+        case 50:
+            return 19;
+        default:
+            return 0;
+    }
+}
+
+// An imaginary part this large is a genuine pair of the fixtures, never a rounding split of a real eigenvalue.
+constexpr double kGenuineImaginary = 1e-6;
+
 // Verify A_orig == Q · H · Qᵀ + Q orthogonal + H upper-Hessenberg, for a fresh
 // reduction of an n×n general matrix.
 template <typename T>
@@ -1238,7 +1274,7 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
     for (crd::usize n : {crd::usize{8}, crd::usize{20}, crd::usize{50}})
     {
         Matrix<double, Layout::RowMajor> a(&alloc, n, n);
-        fill_general<double>(a, 0.5);  // modest diag → generates complex pairs too
+        fill_complex_spectrum<double>(a, 0.5);
         crd::containers::Array<double> tau(&alloc);
         hessenberg<double>(a, 0, n - 1, tau);
         Matrix<double, Layout::RowMajor> h(&alloc, n, n);
@@ -1255,7 +1291,7 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
         const Matrix<double>& t = sch.t;
         Matrix<double> vr = schur_right_eigvecs<double>(&alloc, t);
 
-        bool saw_complex = false;
+        crd::usize complex_pairs = 0;
         double worst = 0.0;
         for (crd::usize k = 0; k < n; ++k)
         {
@@ -1276,7 +1312,10 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
             }
             else if (li > 0.0)  // first of pair (columns k, k+1 = re, im)
             {
-                saw_complex = true;
+                if (li > kGenuineImaginary)
+                {
+                    ++complex_pairs;
+                }
                 for (crd::usize i = 0; i < n; ++i)
                 {
                     vre[i] = vr.at(i, k);
@@ -1313,7 +1352,7 @@ TEST_CASE("dtrevc: T*v = lambda*v for every eigenpair of a real Schur form [v3d-
         }
         INFO("n=" << n << " worst rel residual=" << worst);
         CHECK(worst < 1e-9);
-        CHECK(saw_complex);  // the fixtures must exercise the complex path
+        CHECK(complex_pairs == complex_pairs_of_fixture(n)); // the fixtures exercise the complex path
     }
 }
 
@@ -1413,22 +1452,21 @@ TEST_CASE("hessenberg: trivial blocks (n<=2) are no-ops", "[hesap][eig][nonsym][
 // =======================================================================
 namespace
 {
-// Returns the worst per-eigenpair relative residual; sets `saw_complex` if any
-// eigenvalue had a nonzero imaginary part. `a` is the ORIGINAL matrix.
+// Returns the worst per-eigenpair relative residual; counts in `complex_pairs` the eigenvalues whose imaginary part
+// exceeds kGenuineImaginary (one per conjugate pair). `a` is the ORIGINAL matrix.
 template <typename T>
-double eig_worst_residual(const Matrix<T, Layout::RowMajor>& a, const EigNonsym<T>& e,
-                          bool& saw_complex)
+double eig_worst_residual(const Matrix<T, Layout::RowMajor>& a, const EigNonsym<T>& e, crd::usize& complex_pairs)
 {
     const crd::usize n = a.rows();
     double worst = 0.0;
-    saw_complex = false;
+    complex_pairs = 0;
     for (crd::usize k = 0; k < n; ++k)
     {
         const double lr = static_cast<double>(e.values.data()[k].re);
         const double li = static_cast<double>(e.values.data()[k].im);
-        if (li != 0.0)
+        if (li > kGenuineImaginary)
         {
-            saw_complex = true;
+            ++complex_pairs;
         }
         double vnorm = 0.0;
         for (crd::usize i = 0; i < n; ++i)
@@ -1484,7 +1522,7 @@ TEST_CASE("eig: A*v = lambda*v forevery eigenpair of a general matrix (f64)",
     for (crd::usize n : {crd::usize{8}, crd::usize{20}, crd::usize{50}})
     {
         Matrix<double, Layout::RowMajor> a(&alloc, n, n);
-        fill_general<double>(a, 0.5);  // modest diag → real + complex eigenpairs
+        fill_complex_spectrum<double>(a, 0.5);
         Matrix<double, Layout::RowMajor> a_orig(&alloc, n, n);
         for (crd::usize i = 0; i < n; ++i)
         {
@@ -1495,11 +1533,11 @@ TEST_CASE("eig: A*v = lambda*v forevery eigenpair of a general matrix (f64)",
         }
 
         EigNonsym<double> e = eig<double>(&alloc, a);
-        bool saw_complex = false;
-        const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+        crd::usize complex_pairs = 0;
+        const double worst = eig_worst_residual<double>(a_orig, e, complex_pairs);
         INFO("n=" << n << " worst rel residual=" << worst);
         CHECK(worst < 1e-9);
-        CHECK(saw_complex);  // these fixtures generate complex pairs
+        CHECK(complex_pairs == complex_pairs_of_fixture(n));
         CHECK(eig_worst_norm_dev<double>(e, n) < 1e-12);
 
         // trace invariant: Σ Re(λ) == trace(A), Σ Im(λ) == 0.
@@ -1541,8 +1579,8 @@ TEST_CASE("eig: exercises dgebak permutation (corner-isolated eigenvalues)",
     }
 
     EigNonsym<double> e = eig<double>(&alloc, a);
-    bool saw_complex = false;
-    const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+    crd::usize complex_pairs = 0;
+    const double worst = eig_worst_residual<double>(a_orig, e, complex_pairs);
     INFO("corner-isolated worst rel residual=" << worst);
     CHECK(worst < 1e-9);
     CHECK(eig_worst_norm_dev<double>(e, n) < 1e-12);
@@ -1582,8 +1620,8 @@ TEST_CASE("eig: exercises dgebak scaling (badly-scaled A = D*B*D^-1)",
     }
 
     EigNonsym<double> e = eig<double>(&alloc, a);
-    bool saw_complex = false;
-    const double worst = eig_worst_residual<double>(a_orig, e, saw_complex);
+    crd::usize complex_pairs = 0;
+    const double worst = eig_worst_residual<double>(a_orig, e, complex_pairs);
     INFO("badly-scaled worst rel residual=" << worst);
     CHECK(worst < 1e-9);
 }
@@ -1593,7 +1631,7 @@ TEST_CASE("eig: A*v = lambda*v fora general matrix (f32)", "[hesap][eig][nonsym]
     crd::memory::TlsfAllocator alloc(static_cast<crd::usize>(32U * 1024U * 1024U));
     const crd::usize n = 16;
     Matrix<float, Layout::RowMajor> a(&alloc, n, n);
-    fill_general<float>(a, 0.5F);
+    fill_complex_spectrum<float>(a, 0.5F);
     Matrix<float, Layout::RowMajor> a_orig(&alloc, n, n);
     for (crd::usize i = 0; i < n; ++i)
     {
@@ -1604,10 +1642,11 @@ TEST_CASE("eig: A*v = lambda*v fora general matrix (f32)", "[hesap][eig][nonsym]
     }
 
     EigNonsym<float> e = eig<float>(&alloc, a);
-    bool saw_complex = false;
-    const double worst = eig_worst_residual<float>(a_orig, e, saw_complex);
+    crd::usize complex_pairs = 0;
+    const double worst = eig_worst_residual<float>(a_orig, e, complex_pairs);
     INFO("f32 worst rel residual=" << worst);
     CHECK(worst < 1e-3);
+    CHECK(complex_pairs == complex_pairs_of_fixture(n));
     CHECK(eig_worst_norm_dev<float>(e, n) < 1e-5);
 }
 
