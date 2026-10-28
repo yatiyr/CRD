@@ -64,6 +64,9 @@ Results:
 - win-release natively: 4,891 assertions.
 - win-release under SDE 10.13.1 `-skx`, `CRD_CPU_LEVEL=avx512`: `[kernels],[cpu-level-applied]` 6,428 assertions in
   8 cases, 138 s, bit-exact with portable.
+- Budget: the third sweep pass adds about half to the plain sweep. The slowest hosted arms were linux-gcc-asan's
+  `crd-hesap-fft-kernels-at-<level>` at 315 s and win-debug's at 213 s (runs 40662109393 and 40663338177), so about
+  470 s against CTest's 1500 s default. win-release's SDE arm took 24 s there.
 
 ## Left
 
