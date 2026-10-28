@@ -1549,15 +1549,16 @@ class BuildPerformance(unittest.TestCase):
     def test_sde_installer_extracts_the_whole_kit_keeps_inner_links_and_refuses_what_escapes_it(self):
         def kit(path, extra=()):
             with tarfile.open(path, 'w:xz') as package:
+                # The link precedes its target, so a Windows install must extract it after every file.
+                for name, target in (('kit/intel64/pinrt/pin.ld.so', '../pin_lib/libpincrt.so'), *extra):
+                    link = tarfile.TarInfo(name)
+                    link.type, link.linkname = tarfile.SYMTYPE, target
+                    package.addfile(link)
                 for name, data in (('kit/sde64', b'#!/bin/sh\n'), ('kit/intel64/pin_lib/libpincrt.so', b'crt'),
                                    ('kit/misc/cpuid/skx/cpuid.def', b'skx')):
                     info = tarfile.TarInfo(name)
                     info.size, info.mode = len(data), 0o755
                     package.addfile(info, io.BytesIO(data))
-                for name, target in (('kit/intel64/pinrt/pin.ld.so', '../pin_lib/libpincrt.so'), *extra):
-                    link = tarfile.TarInfo(name)
-                    link.type, link.linkname = tarfile.SYMTYPE, target
-                    package.addfile(link)
             return {'version': '10.13.1', 'url': 'https://example.invalid/sde', 'file': path.name,
                     'sha256': pins_registry.sha256(path), 'root': 'kit/', 'binary': 'sde64'}
 
@@ -1569,6 +1570,8 @@ class BuildPerformance(unittest.TestCase):
             self.assertEqual(sorted(p.name for p in (root / 'tools').iterdir()),
                              ['cerid-sde.json', 'intel64', 'misc', 'sde64'], 'the kit without its root directory')
             self.assertEqual((root / 'tools/intel64/pinrt/pin.ld.so').read_bytes(), b'crt', 'the inner link resolves')
+            self.assertEqual((root / 'tools/intel64/pinrt/pin.ld.so').is_symlink(), not install_sde.WINDOWS,
+                             'a symlink on POSIX, a hard link to the same file on Windows')
             self.assertEqual((root / 'tools/misc/cpuid/skx/cpuid.def').read_bytes(), b'skx')
             # A matching stamp is reused; a directory this script did not install is never replaced.
             (root / 'tools/misc/cpuid/skx/cpuid.def').write_bytes(b'kept')

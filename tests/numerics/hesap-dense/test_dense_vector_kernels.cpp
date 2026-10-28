@@ -585,7 +585,7 @@ template <typename T> void check_axpy(crd::memory::IAllocator* alloc, Counts& c)
 // The column counts of the matrix kernels: every remainder of a vector, the register block of gemvt (8 vectors from
 // avx2, 4 below) and past it, and a long row.
 template <typename T>
-constexpr usize kColumnCounts[] = {
+constexpr usize kColumnCounts[9] = {
     0, 1, kWidth<T> - 1U, kWidth<T>, kWidth<T> + 1U, 4U * kWidth<T>, 8U * kWidth<T>, 9U * kWidth<T> + 3U, 300};
 
 template <typename T> void check_gemvt(crd::memory::IAllocator* alloc, Counts& c)
@@ -955,18 +955,18 @@ template <typename T> Cx<T> model_cmul(T are, T aim, T bre, T bim)
 
 // Lengths across every remainder of a vector and of the two-accumulator rotation, and long rows.
 template <typename T>
-constexpr usize kSplitLengths[] = {0,
-                                   1,
-                                   2,
-                                   kWidth<T> - 1U,
-                                   kWidth<T>,
-                                   kWidth<T> + 1U,
-                                   2U * kWidth<T>,
-                                   2U * kWidth<T> + 1U,
-                                   3U * kWidth<T> + 2U,
-                                   4U * kWidth<T> + 5U,
-                                   40,
-                                   100};
+constexpr usize kSplitLengths[12] = {0,
+                                     1,
+                                     2,
+                                     kWidth<T> - 1U,
+                                     kWidth<T>,
+                                     kWidth<T> + 1U,
+                                     2U * kWidth<T>,
+                                     2U * kWidth<T> + 1U,
+                                     3U * kWidth<T> + 2U,
+                                     4U * kWidth<T> + 5U,
+                                     40,
+                                     100};
 
 // A split vector of n random values and one NaN past its end (a kernel must not read it).
 template <typename T> void fill_split(crd::containers::Array<T>& re, crd::containers::Array<T>& im, usize n, Lcg& g)

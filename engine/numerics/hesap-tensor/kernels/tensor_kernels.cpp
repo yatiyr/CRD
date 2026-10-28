@@ -633,9 +633,9 @@ crd::f64 deposit_superblock(BinnedRungs (&lanes)[kBinStep], const crd::f64* p, c
         for (crd::i32 k = 0; k < kBinFold; ++k)
         {
             crd::f64 lv[kBinLanes];
-            for (crd::u64 l = 0; l < kBinLanes; ++l)
+            for (crd::u64 lane = 0; lane < kBinLanes; ++lane)
             {
-                lv[l] = lanes[s * kBinLanes + l].pri[k];
+                lv[lane] = lanes[s * kBinLanes + lane].pri[k];
             }
             pri[s][k] = I::load(lv);
         }
@@ -666,9 +666,9 @@ crd::f64 deposit_superblock(BinnedRungs (&lanes)[kBinStep], const crd::f64* p, c
         {
             crd::f64 lv[kBinLanes];
             I::store(lv, pri[s][k]);
-            for (crd::u64 l = 0; l < kBinLanes; ++l)
+            for (crd::u64 lane = 0; lane < kBinLanes; ++lane)
             {
-                lanes[s * kBinLanes + l].pri[k] = lv[l];
+                lanes[s * kBinLanes + lane].pri[k] = lv[lane];
             }
         }
     }
@@ -720,17 +720,17 @@ void binned_sum_run_vector(BinnedRungs& out, const crd::f64* p, crd::u64 n) noex
             // same registers. On the rare violation (a bigger magnitude arrived: its index < the window's) restore
             // the snapshot, widen, and redo from L2. The result is bit-identical either way.
             BinnedRungs snap[kBinStep];
-            for (crd::u64 l = 0; l < kBinStep; ++l)
+            for (crd::u64 lane = 0; lane < kBinStep; ++lane)
             {
-                snap[l] = lanes[l];
+                snap[lane] = lanes[lane];
             }
             const crd::f64 amax = deposit_superblock<true>(lanes, p + i, len);
             const crd::i32 amax_index = detail::bin_index_of(amax);
             if (amax_index == 0 || amax_index < cur_index)
             {
-                for (crd::u64 l = 0; l < kBinStep; ++l)
+                for (crd::u64 lane = 0; lane < kBinStep; ++lane)
                 {
-                    lanes[l] = snap[l];
+                    lanes[lane] = snap[lane];
                 }
             }
             if (amax_index == 0)

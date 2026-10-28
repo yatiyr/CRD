@@ -6,7 +6,9 @@ pins.fetch(), so it is verified before the final name exists (an already downloa
 `~/.cerid/tools/sde/<version>/dl-<os>`, is verified instead of downloaded). SDE runs from its whole kit (Pin, its
 runtime and the CPU models under misc/cpuid), so every member below the pin's `root` is extracted, through tarfile's
 `data` filter: a member outside the root, an absolute or escaping path or link, or a device file is refused, and the
-Linux kit's relative links inside the tree are kept (Pin's loader is one). The tree is assembled beside the
+Linux kit's relative links inside the tree are kept (Pin's loader is one). On Windows such a link becomes a hard link
+to its target inside the tree: a Windows symlink needs a privilege and cannot resolve a POSIX separator, and links
+are extracted after every file so a target always exists first. The tree is assembled beside the
 destination (by default `~/.cerid/tools/sde/<version>/<os>-kit`) and renamed into place only when it is complete,
 and the pinned `binary` must report the pinned version. A stamp (`cerid-sde.json`) records the pin, so a matching
 install is reused and a directory without one is never replaced. Prints CRD_SDE=<binary>, which
@@ -17,8 +19,10 @@ Contract: docs/design/pinned-inputs.md; ADR-0134 §8.
 """
 from pathlib import Path, PurePosixPath
 import argparse
+import copy
 import json
 import platform
+import posixpath
 import re
 import shutil
 import subprocess
@@ -86,7 +90,17 @@ def kit_members(package, root):
             raise pins.PinError(f'archive member outside {root}: {info.name}')
         info.name = name[len(root):]
         members.append(info)
-    return members
+    return sorted(members, key=lambda info: info.issym() or info.islnk())
+
+
+def kit_filter(member, path):
+    """tarfile's `data` filter; on Windows a symlink it accepted becomes a hard link to the same member."""
+    member = tarfile.data_filter(member, path)
+    if WINDOWS and member.issym():
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(member.name), member.linkname))
+        member = copy.copy(member)
+        member.type, member.linkname = tarfile.LNKTYPE, target
+    return member
 
 
 def install(destination=None, archive=None, download_dir=None, pin=None, check=True):
@@ -107,8 +121,8 @@ def install(destination=None, archive=None, download_dir=None, pin=None, check=T
             shutil.rmtree(staging)
         staging.mkdir(parents=True)
         try:
-            with tarfile.open(verified, 'r:*') as package:
-                package.extractall(staging, members=kit_members(package, pin['root']), filter='data')
+            with tarfile.open(verified, 'r:*', errorlevel=2) as package:
+                package.extractall(staging, members=kit_members(package, pin['root']), filter=kit_filter)
             tool = binary(staging, pin)
             if not tool.is_file():
                 raise pins.PinError(f'{verified.name}: the kit has no {pin["binary"]}')
