@@ -32,7 +32,7 @@ target_link_libraries(crd-eylem-rigid3d
 target_compile_features(crd-eylem-rigid3d PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-eylem-rigid3d)
 
-# The fixed-substep body step on eight lanes a step, one body per CPU level (ADR-0134); src/rigid3d_kernel_dispatch.cpp
-# lists them.
+# The fixed-substep body step on eight lanes a step (two chunks, sixteen, at avx512), one body per CPU level (ADR-0134);
+# src/rigid3d_kernel_dispatch.cpp lists them.
 crd_add_cpu_kernels(crd-eylem-rigid3d NAME rigid3d LEVELS portable sse2 avx2 avx512 INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/rigid3d_kernels.cpp")
