@@ -140,7 +140,7 @@ private:
 // Introspection — valid after init().
 [[nodiscard]] bool is_worker_fiber() noexcept;  // true when called from inside a job fiber
 [[nodiscard]] crd::u32 worker_index() noexcept; // thread index of the calling thread
-[[nodiscard]] crd::u32 num_workers() noexcept;  // total thread count (incl. thread 0)
+[[nodiscard]] crd::u32 num_workers() noexcept;  // total thread count (incl. thread 0); 0 while the pool is down
 // The unique task-instance id of the job currently executing on the calling fiber, or 0 when
 // no job is running on this thread (off-fiber caller, or main thread outside a job). Derived from the
 // running fiber's Counter, so it travels with the fiber across suspend/resume/thread-migration and a
