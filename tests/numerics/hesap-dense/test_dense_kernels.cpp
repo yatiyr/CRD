@@ -216,7 +216,8 @@ void check_shape(const DenseKernels& k, CpuLevel level, const Shape& s, Buffers<
                     const T* b_col = buf.logical_b.data() + j;
                     const T p = inner(a_row, b_col, s.cols, s.depth, fma);
                     const T want = updated(u.update, u.alpha, u.beta, start[at], p);
-                    counts.wrong += (unread ? exact_bits(buf.c[at], want) : same_bits(buf.c[at], want)) ? 0U : 1U;
+                    const bool declared = unread ? exact_bits(buf.c[at], want) : same_bits(buf.c[at], want);
+                    counts.wrong += declared ? 0U : 1U;
                     T bound = T(0);
                     for (usize q = 0; q < s.depth; ++q)
                     {

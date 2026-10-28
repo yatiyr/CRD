@@ -27,12 +27,10 @@ namespace
 {
 
 #if CRD_SIMD_HAS_SSE2
-// A hint to fetch the line of base[offset]. The address is formed as an integer: the next B panel's line lies past the
-// buffer after the last panel, where a pointer may not be formed.
-template <typename T> CRD_FORCEINLINE void prefetch(const T* base, crd::usize offset) noexcept
+// A hint to fetch the line of `at`, a pointer into the block's buffers.
+CRD_FORCEINLINE void prefetch(const void* at) noexcept
 {
-    const std::uintptr_t at = reinterpret_cast<std::uintptr_t>(base) + offset * sizeof(T);
-    _mm_prefetch(reinterpret_cast<const char*>(at), _MM_HINT_T0);
+    _mm_prefetch(static_cast<const char*>(at), _MM_HINT_T0);
 }
 
 // The registers of a tile: kWidth lanes of T, a step of acc + a b (fused from avx2, rounded twice on sse2) and the
@@ -91,7 +89,9 @@ CRD_FORCEINLINE void merge_into(T* c, V p, V alpha, V beta) noexcept
     }
     else if constexpr (M == GemmMerge::Zero)
     {
-        R::store(c, R::add(R::zero(), R::mul(alpha, p)));
+        // +0 + x as x - (-0), the same IEEE value: MSVC 14.51 folds a vector add of a constant +0 to its other
+        // operand, which keeps a -0 the expression turns into +0.
+        R::store(c, R::sub(R::mul(alpha, p), R::splat(T(-0.0))));
     }
     else if constexpr (M == GemmMerge::Scale)
     {
@@ -112,10 +112,11 @@ CRD_FORCEINLINE void merge_into(T* c, V p, V alpha, V beta) noexcept
 }
 
 // The 6 by 2w tile of T on the level's w-lane registers: twelve accumulators, two B registers and one A broadcast
-// reused row after row (15 of 16 vector registers), the next B panel prefetched one line a step. sink(i, lo, hi)
-// receives row i.
+// reused row after row (15 of 16 vector registers), the next tile's B panel (b_next) prefetched one line a step.
+// sink(i, lo, hi) receives row i.
 template <typename T, typename Sink>
-CRD_FORCEINLINE void six_row_tile(crd::usize depth, crd::usize lda, const T* a, const T* b, Sink sink) noexcept
+CRD_FORCEINLINE void six_row_tile(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next,
+                                  Sink sink) noexcept
 {
     using R = Reg<T>;
     using V = typename R::V;
@@ -137,7 +138,7 @@ CRD_FORCEINLINE void six_row_tile(crd::usize depth, crd::usize lda, const T* a, 
     {
         const V b0 = R::load(b + p * nr);
         const V b1 = R::load(b + p * nr + w);
-        prefetch(b, (depth + p) * nr); // line p of the next B panel
+        prefetch(b_next + p * nr);
         V ai = R::splat(a[p]);
         c00 = R::step(c00, ai, b0);
         c01 = R::step(c01, ai, b1);
@@ -173,9 +174,9 @@ template <typename T> struct SixRowTile
     static constexpr crd::usize kMr = 6;
     static constexpr crd::usize kNr = 2U * R::kWidth;
 
-    static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, T* out) noexcept
+    static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next, T* out) noexcept
     {
-        six_row_tile(depth, lda, a, b,
+        six_row_tile(depth, lda, a, b, b_next,
                      [out](crd::usize i, V lo, V hi)
                      {
                          R::store(out + i * kNr, lo);
@@ -184,17 +185,17 @@ template <typename T> struct SixRowTile
     }
 
     template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha,
-                      T beta) noexcept
+    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* b_next, T* c, crd::usize ldc,
+                      T alpha, T beta) noexcept
     {
         for (crd::usize i = 0; i < kMr; ++i) // C is read after the depth loop: request its lines now
         {
-            prefetch(c, i * ldc);
-            prefetch(c, i * ldc + kNr - 1U);
+            prefetch(c + i * ldc);
+            prefetch(c + i * ldc + kNr - 1U);
         }
         const V av = R::splat(alpha);
         const V bv = R::splat(beta);
-        six_row_tile(depth, lda, a, b,
+        six_row_tile(depth, lda, a, b, b_next,
                      [c, ldc, av, bv](crd::usize i, V lo, V hi)
                      {
                          merge_into<M, R>(c + i * ldc, lo, av, bv);

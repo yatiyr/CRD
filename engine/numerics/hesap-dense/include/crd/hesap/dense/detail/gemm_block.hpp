@@ -170,7 +170,7 @@ template <typename T, crd::usize MR, crd::usize NR, bool Fused> struct PortableT
         }
     }
 
-    static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, T* out) noexcept
+    static void product(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* /*b_next*/, T* out) noexcept
     {
         T acc[MR][NR]{};
         sum(depth, lda, a, b, acc);
@@ -184,8 +184,8 @@ template <typename T, crd::usize MR, crd::usize NR, bool Fused> struct PortableT
     }
 
     template <GemmMerge M>
-    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, T* c, crd::usize ldc, T alpha,
-                      T beta) noexcept
+    static void fused(crd::usize depth, crd::usize lda, const T* a, const T* b, const T* /*b_next*/, T* c,
+                      crd::usize ldc, T alpha, T beta) noexcept
     {
         T acc[MR][NR]{};
         sum(depth, lda, a, b, acc);
@@ -256,26 +256,29 @@ template <typename Tile, GemmMerge M, typename T> void gemm_block_merged(const G
                 break; // this tile and the rest of the row lie above the diagonal
             }
             const T* b = g.b + j0 * g.depth;
+            const T* b_next = j0 + nr < g.cols ? b + nr * g.depth : g.b; // the next tile's panel, for a prefetch
             const crd::usize cols_in = g.cols - j0 < nr ? g.cols - j0 : nr;
             const bool masked = g.lower && g.row0 + i0 < g.col0 + j0 + cols_in - 1;
             if constexpr (Tile::kFused)
             {
                 if (!g.col_major && !masked && rows_in == mr && cols_in == nr)
                 {
-                    Tile::template fused<M>(g.depth, g.lda, a, b, g.c + i0 * g.ldc + j0, g.ldc, g.alpha, g.beta);
+                    Tile::template fused<M>(g.depth, g.lda, a, b, b_next, g.c + i0 * g.ldc + j0, g.ldc, g.alpha,
+                                            g.beta);
                     continue;
                 }
             }
             T out[mr * nr];
-            Tile::product(g.depth, g.lda, a, b, out);
+            Tile::product(g.depth, g.lda, a, b, b_next, out);
             merge_tile<M, nr>(g, out, i0, j0, rows_in, cols_in, masked);
         }
     }
 }
 
-// The block on Tile (shape kMr by kNr): product(depth, lda, a, b, out) as PortableTile's, and, when Tile::kFused,
-// fused<M>(depth, lda, a, b, c, ldc, alpha, beta), which merges a full row-major tile from its registers with
-// merge_element's expression (the same bits, no stored tile).
+// The block on Tile (shape kMr by kNr): product(depth, lda, a, b, b_next, out) as PortableTile's (b_next: the next
+// tile's B panel, which a tile may prefetch), and, when Tile::kFused, fused<M>(depth, lda, a, b, b_next, c, ldc,
+// alpha, beta), which merges a full row-major tile from its registers with merge_element's expression (the same bits,
+// no stored tile).
 template <typename Tile, typename T> void gemm_block(const GemmBlock<T>& g) noexcept
 {
     if (g.update == GemmUpdate::Assign)
