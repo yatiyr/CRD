@@ -3,9 +3,11 @@
 // functions and the log core included, so no function of this unit is shared with general code or with another level.
 // The portable bodies are the scalar loops (Threefry three blocks at a time); the SSE2 bodies run 16 Philox blocks or
 // seven Threefry blocks (four in vector registers beside three scalar ones) or four Student-t lanes in two registers
-// at a time, and the AVX2 bodies 24 Philox blocks, 12 Threefry blocks or four Student-t lanes. Every body gives the
-// same bits: the generators are integer arithmetic, and every Student-t body keeps four lane sums in the same order,
-// with single-rounded FMAs and the log core that crd_log4 and crd_log_x2 reproduce lane for lane.
+// at a time, the AVX2 bodies 24 Philox blocks, 12 Threefry blocks or four Student-t lanes, and the AVX-512 bodies 48
+// Philox blocks, 24 Threefry blocks (vprolq rotations) or eight Student-t terms, whose low then high half add to the
+// four lanes. Every body gives the same bits: the generators are integer arithmetic, and every Student-t body keeps
+// four lane sums in the same order, with single-rounded FMAs and the log core that crd_log8, crd_log4 and crd_log_x2
+// reproduce lane for lane.
 
 #include <crd/core/platform.hpp>
 #include <crd/hesap/stats/counter_rng_core.hpp>
@@ -85,6 +87,40 @@ struct ThreefryAvx2
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(out + 12), _mm256_permute2x128_si256(t1, t3, 0x31));
     }
 };
+
+#if CRD_SIMD_HAS_AVX512
+// Eight Threefry blocks per group, as ThreefryAvx2.
+struct ThreefryAvx512
+{
+    using V = __m512i;
+    static constexpr int kLanes = 8;
+
+    static V add(V a, V b) noexcept { return _mm512_add_epi64(a, b); }
+    static V bxor(V a, V b) noexcept { return _mm512_xor_si512(a, b); }
+    static V set1(crd::u64 w) noexcept { return _mm512_set1_epi64(static_cast<long long>(w)); }
+    static V iota() noexcept { return _mm512_set_epi64(7, 6, 5, 4, 3, 2, 1, 0); }
+    static V load(const crd::u64* w) noexcept { return _mm512_loadu_si512(w); }
+    template <int R> static V rotl(V x) noexcept { return _mm512_rol_epi64(x, R); }
+
+    // Transpose 4x8 u64 (lanes to blocks) and store the 32 words in block order: 128-bit lane L of t0 and t2 holds
+    // words 0, 1 and 2, 3 of block 2L, of t1 and t3 those of block 2L + 1.
+    static void store(const V (&x)[4], crd::u64* out) noexcept
+    {
+        const __m512i t0 = _mm512_unpacklo_epi64(x[0], x[1]);
+        const __m512i t1 = _mm512_unpackhi_epi64(x[0], x[1]);
+        const __m512i t2 = _mm512_unpacklo_epi64(x[2], x[3]);
+        const __m512i t3 = _mm512_unpackhi_epi64(x[2], x[3]);
+        const __m512i u0 = _mm512_shuffle_i64x2(t0, t2, 0x44);
+        const __m512i u1 = _mm512_shuffle_i64x2(t1, t3, 0x44);
+        const __m512i u2 = _mm512_shuffle_i64x2(t0, t2, 0xEE);
+        const __m512i u3 = _mm512_shuffle_i64x2(t1, t3, 0xEE);
+        _mm512_storeu_si512(out + 0, _mm512_shuffle_i64x2(u0, u1, 0x88));
+        _mm512_storeu_si512(out + 8, _mm512_shuffle_i64x2(u0, u1, 0xDD));
+        _mm512_storeu_si512(out + 16, _mm512_shuffle_i64x2(u2, u3, 0x88));
+        _mm512_storeu_si512(out + 24, _mm512_shuffle_i64x2(u2, u3, 0xDD));
+    }
+};
+#endif
 #elif CRD_SIMD_HAS_SSE2
 // Two Threefry blocks per group: lane j of word register w holds word w of block j.
 struct ThreefrySse2
@@ -281,8 +317,9 @@ CRD_FORCEINLINE void threefry_scalar_step(const crd::u64 (&ks)[5], crd::u64 (&ct
     std::memcpy(out, x, sizeof x);
 }
 
-// The vector bodies take whole steps (AVX2: three groups of four blocks, then one group; SSE2: two groups of two
-// beside three scalar blocks), then the scalar body three blocks at a time and one at a time.
+// The vector bodies take whole steps (AVX-512: three groups of eight blocks, then one group, then AVX2's group of four;
+// AVX2: three groups of four blocks, then one group; SSE2: two groups of two beside three scalar blocks), then the
+// scalar body three blocks at a time and one at a time.
 void threefry4x64_blocks(const crd::u64 (&key)[4], const crd::u64 (&counter)[4], crd::u64* out,
                          crd::usize blocks) noexcept
 {
@@ -290,11 +327,22 @@ void threefry4x64_blocks(const crd::u64 (&key)[4], const crd::u64 (&counter)[4],
     threefry_key_schedule(key, ks);
     crd::u64 ctr[4] = {counter[0], counter[1], counter[2], counter[3]};
     crd::usize b = 0;
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+    for (; b + 24U <= blocks; b += 24U)
+    {
+        threefry_step<ThreefryAvx512, 3, 0>(ks, ctr, out + 4U * b);
+    }
+    for (; b + 8U <= blocks; b += 8U)
+    {
+        threefry_step<ThreefryAvx512, 1, 0>(ks, ctr, out + 4U * b);
+    }
+#elif CRD_SIMD_HAS_AVX2
     for (; b + 12U <= blocks; b += 12U)
     {
         threefry_step<ThreefryAvx2, 3, 0>(ks, ctr, out + 4U * b);
     }
+#endif
+#if CRD_SIMD_HAS_AVX2
     for (; b + 4U <= blocks; b += 4U)
     {
         threefry_step<ThreefryAvx2, 1, 0>(ks, ctr, out + 4U * b);
@@ -336,6 +384,24 @@ crd::f64 student_t_nu_score_sum(const crd::f64* xs, crd::usize n, crd::f64 nu) n
     const __m256d vneg_half = _mm256_set1_pd(-0.5);
     const __m256d vk = _mm256_set1_pd(k);
     __m256d acc = _mm256_setzero_pd();
+#if CRD_SIMD_HAS_AVX512
+    // Eight terms a step: elements i .. i + 3, then i + 4 .. i + 7, add to the four lanes in element order.
+    const __m512d wnu = _mm512_set1_pd(nu);
+    const __m512d wone = _mm512_set1_pd(1.0);
+    const __m512d winv_nu = _mm512_set1_pd(inv_nu);
+    const __m512d wneg_half = _mm512_set1_pd(-0.5);
+    const __m512d wk = _mm512_set1_pd(k);
+    for (; i + 8U <= n; i += 8U)
+    {
+        const __m512d wx = _mm512_loadu_pd(xs + i);
+        const __m512d wx2 = _mm512_mul_pd(wx, wx);
+        const __m512d wlog = crd::math::crd_log8(_mm512_fmadd_pd(wx2, winv_nu, wone));
+        const __m512d wrat = _mm512_div_pd(_mm512_mul_pd(wk, wx2), _mm512_add_pd(wnu, wx2));
+        const __m512d term = _mm512_fmadd_pd(wneg_half, wlog, wrat);
+        acc = _mm256_add_pd(acc, _mm512_castpd512_pd256(term));
+        acc = _mm256_add_pd(acc, _mm512_extractf64x4_pd(term, 1));
+    }
+#endif
     for (; i + 4U <= n; i += 4U)
     {
         const __m256d vx = _mm256_loadu_pd(xs + i);

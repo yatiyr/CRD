@@ -1,8 +1,9 @@
 #pragma once
 
 // The Philox4x32-10 block loop: blocks first .. first + n - 1 of (seed, stream), bit-identical to philox4x32
-// (counter_rng_core.hpp): 24 at a time on the AVX2 backend (three independent groups of eight), 16 at a time on the
-// 128-bit backends (four groups of four), so the ten dependent rounds of one group overlap with the others'. The
+// (counter_rng_core.hpp): 48 at a time on the AVX-512 backend (three independent groups of sixteen), 24 on AVX2 (three
+// groups of eight), 16 on the 128-bit backends (four groups of four), so the ten dependent rounds of one group overlap
+// with the others'. The
 // stats kernels run it per level (../../../../kernels/stats_kernels.cpp), and so do the hesap-tensor kernels for the
 // stochastic rounding and sketches, which keep Philox include-only (ADR-0096 §1). It lives in the unit's level
 // namespace and takes the unit's backend (crd/math/simd/backend.hpp); only kernel units include it.
@@ -101,6 +102,90 @@ template <int G> inline void philox4x32_x8(crd::u64 seed, crd::u64 stream, crd::
 }
 #endif
 
+#if CRD_SIMD_HAS_AVX512
+// philox_mulhilo8 on sixteen lanes.
+inline void philox_mulhilo16(__m512i a, __m512i m, __m512i& hi, __m512i& lo) noexcept
+{
+    const __m512i evn = _mm512_mul_epu32(a, m);
+    const __m512i odd = _mm512_mul_epu32(_mm512_srli_epi64(a, 32), m);
+    hi = _mm512_mask_blend_epi32(0xAAAA, _mm512_srli_epi64(evn, 32), odd);
+    lo = _mm512_mask_blend_epi32(0xAAAA, evn, _mm512_slli_epi64(odd, 32));
+}
+
+// Philox blocks first .. first + 16G - 1 (mod 2^64) of (seed, stream) in G groups of sixteen lanes, as philox4x32_x8
+// stores its groups: 256G bytes at out.
+template <int G> inline void philox4x32_x16(crd::u64 seed, crd::u64 stream, crd::u64 first, void* out) noexcept
+{
+    __m512i c0[G];
+    __m512i c1[G];
+    __m512i c2[G];
+    __m512i c3[G];
+    const __m512i lane = _mm512_set_epi64(7, 6, 5, 4, 3, 2, 1, 0);
+    // The sixteen 64-bit positions' low and high words, lanes in position order.
+    const __m512i low_words = _mm512_setr_epi32(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30);
+    const __m512i high_words = _mm512_setr_epi32(1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31);
+    for (int g = 0; g < G; ++g)
+    {
+        const __m512i base = _mm512_set1_epi64(static_cast<long long>(first + 16U * static_cast<crd::u64>(g)));
+        const __m512i p_lo = _mm512_add_epi64(base, lane);                                         // positions 0..7
+        const __m512i p_hi = _mm512_add_epi64(base, _mm512_add_epi64(lane, _mm512_set1_epi64(8))); // 8..15
+        c0[g] = _mm512_permutex2var_epi32(p_lo, low_words, p_hi);
+        c1[g] = _mm512_permutex2var_epi32(p_lo, high_words, p_hi);
+        c2[g] = _mm512_set1_epi32(static_cast<int>(static_cast<crd::u32>(stream)));
+        c3[g] = _mm512_set1_epi32(static_cast<int>(static_cast<crd::u32>(stream >> 32)));
+    }
+    const __m512i m0 = _mm512_set1_epi32(static_cast<int>(0xD2511F53U));
+    const __m512i m1 = _mm512_set1_epi32(static_cast<int>(0xCD9E8D57U));
+    const __m512i w0 = _mm512_set1_epi32(static_cast<int>(0x9E3779B9U));
+    const __m512i w1 = _mm512_set1_epi32(static_cast<int>(0xBB67AE85U));
+    __m512i k0 = _mm512_set1_epi32(static_cast<int>(static_cast<crd::u32>(seed)));
+    __m512i k1 = _mm512_set1_epi32(static_cast<int>(static_cast<crd::u32>(seed >> 32)));
+    for (int round = 0; round < 10; ++round)
+    {
+        if (round > 0) // the key schedule bumps between rounds
+        {
+            k0 = _mm512_add_epi32(k0, w0);
+            k1 = _mm512_add_epi32(k1, w1);
+        }
+        for (int g = 0; g < G; ++g)
+        {
+            __m512i hi0;
+            __m512i lo0;
+            __m512i hi1;
+            __m512i lo1;
+            philox_mulhilo16(c0[g], m0, hi0, lo0);
+            philox_mulhilo16(c2[g], m1, hi1, lo1);
+            c0[g] = _mm512_xor_si512(_mm512_xor_si512(hi1, c1[g]), k0);
+            c2[g] = _mm512_xor_si512(_mm512_xor_si512(hi0, c3[g]), k1);
+            c1[g] = lo1;
+            c3[g] = lo0;
+        }
+    }
+    auto* words = static_cast<__m512i*>(out);
+    for (int g = 0; g < G; ++g)
+    {
+        // Transpose 16x4 u32: 128-bit lane L of e, f, h0 and h1 holds blocks 4L, 4L + 1, 4L + 2 and 4L + 3.
+        const __m512i t0 = _mm512_unpacklo_epi32(c0[g], c1[g]);
+        const __m512i t1 = _mm512_unpackhi_epi32(c0[g], c1[g]);
+        const __m512i t2 = _mm512_unpacklo_epi32(c2[g], c3[g]);
+        const __m512i t3 = _mm512_unpackhi_epi32(c2[g], c3[g]);
+        const __m512i e = _mm512_unpacklo_epi64(t0, t2);
+        const __m512i f = _mm512_unpackhi_epi64(t0, t2);
+        const __m512i h0 = _mm512_unpacklo_epi64(t1, t3);
+        const __m512i h1 = _mm512_unpackhi_epi64(t1, t3);
+        // Then the 4x4 transpose of 128-bit lanes: blocks 0, 4, 1, 5 | 2, 6, 3, 7 | 8, 12, 9, 13 | 10, 14, 11, 15.
+        const __m512i u0 = _mm512_shuffle_i32x4(e, f, 0x44);
+        const __m512i u1 = _mm512_shuffle_i32x4(h0, h1, 0x44);
+        const __m512i u2 = _mm512_shuffle_i32x4(e, f, 0xEE);
+        const __m512i u3 = _mm512_shuffle_i32x4(h0, h1, 0xEE);
+        _mm512_storeu_si512(words + 4 * g + 0, _mm512_shuffle_i32x4(u0, u1, 0x88));
+        _mm512_storeu_si512(words + 4 * g + 1, _mm512_shuffle_i32x4(u0, u1, 0xDD));
+        _mm512_storeu_si512(words + 4 * g + 2, _mm512_shuffle_i32x4(u2, u3, 0x88));
+        _mm512_storeu_si512(words + 4 * g + 3, _mm512_shuffle_i32x4(u2, u3, 0xDD));
+    }
+}
+#endif
+
 #if CRD_SIMD_HAS_SSE2
 // Lane i of hi and lo: the high and low words of a[i] * m, from two 32x32->64 multiplies (pmuludq reads the low word of
 // each 64-bit lane).
@@ -182,11 +267,22 @@ inline void philox4x32_fill_blocks(crd::u64 seed, crd::u64 stream, crd::u64 firs
 {
     auto* bytes = static_cast<unsigned char*>(out);
     crd::usize b = 0;
-#if CRD_SIMD_HAS_AVX2
+#if CRD_SIMD_HAS_AVX512
+    for (; b + 48U <= blocks; b += 48U)
+    {
+        philox4x32_x16<3>(seed, stream, first + b, bytes + 16U * b);
+    }
+    for (; b + 16U <= blocks; b += 16U)
+    {
+        philox4x32_x16<1>(seed, stream, first + b, bytes + 16U * b);
+    }
+#elif CRD_SIMD_HAS_AVX2
     for (; b + 24U <= blocks; b += 24U)
     {
         philox4x32_x8<3>(seed, stream, first + b, bytes + 16U * b);
     }
+#endif
+#if CRD_SIMD_HAS_AVX2
     for (; b + 8U <= blocks; b += 8U)
     {
         philox4x32_x8<1>(seed, stream, first + b, bytes + 16U * b);
