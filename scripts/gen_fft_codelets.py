@@ -264,8 +264,8 @@ def _emit_node(idx, nodes, scalar, simd):
 
     if k == "load":
         m = nd[1]
-        re = f"simd::load(xr + ibase + {m} * r + t)" if simd else f"xr[ibase + {m} * r + t]"
-        im = f"simd::load(xi + ibase + {m} * r + t)" if simd else f"xi[ibase + {m} * r + t]"
+        re = f"simd::load<V>(xr + ibase + {m} * r + t)" if simd else f"xr[ibase + {m} * r + t]"
+        im = f"simd::load<V>(xi + ibase + {m} * r + t)" if simd else f"xi[ibase + {m} * r + t]"
     elif k == "tw_rt":
         s, m = f"n{nd[1]}", nd[2]
         wr, wi = bw(f"w_re[{m}]"), bw(f"w_im[{m}]")

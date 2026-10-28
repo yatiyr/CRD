@@ -389,4 +389,30 @@ CRD_FORCEINLINE Vec8d select(Vec8d mask, Vec8d true_v, Vec8d false_v) noexcept
 #endif
 }
 
+// Eight interleaved complex {r0,i0,...,r7,i7} (16 contiguous f64) into split re and im, and the inverse store, as
+// Vec4d's helpers on each half: pure data movement, so every level gives the same bits.
+CRD_FORCEINLINE void load_complex_deinterleaved(const f64* p, Vec8d& re, Vec8d& im) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    const __m512d a = _mm512_loadu_pd(p);     // r0 i0 r1 i1 r2 i2 r3 i3
+    const __m512d b = _mm512_loadu_pd(p + 8); // r4 i4 r5 i5 r6 i6 r7 i7
+    re.v = _mm512_permutex2var_pd(a, _mm512_setr_epi64(0, 2, 4, 6, 8, 10, 12, 14), b);
+    im.v = _mm512_permutex2var_pd(a, _mm512_setr_epi64(1, 3, 5, 7, 9, 11, 13, 15), b);
+#else
+    load_complex_deinterleaved(p, re.lo, im.lo);
+    load_complex_deinterleaved(p + 8, re.hi, im.hi);
+#endif
+}
+
+CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec8d re, Vec8d im) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    _mm512_storeu_pd(p, _mm512_permutex2var_pd(re.v, _mm512_setr_epi64(0, 8, 1, 9, 2, 10, 3, 11), im.v));
+    _mm512_storeu_pd(p + 8, _mm512_permutex2var_pd(re.v, _mm512_setr_epi64(4, 12, 5, 13, 6, 14, 7, 15), im.v));
+#else
+    store_complex_interleaved(p, re.lo, im.lo);
+    store_complex_interleaved(p + 8, re.hi, im.hi);
+#endif
+}
+
 } // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

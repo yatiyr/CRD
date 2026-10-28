@@ -281,18 +281,35 @@ class RepositoryTools(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'used before its definition'):
             split_kernels(single.replace('const V n1r = n0r + n0i;', 'const V n1r = n9r + n0i;'), 3, 1)
 
-        # On the lanes a tile of four columns runs its body, or its parts, once per Lane step.
+        # On the lanes every body runs in parts templated on the lane: the widest Lane over the whole tiles it holds,
+        # then a TileLane over an odd last tile (at avx512, where a Lane holds two).
         lanes = single.replace('crd::math::simd::Vec4d', 'crd::hesap::fft::lanes::Lane<crd::f64>').replace(
             'namespace simd = crd::math::simd;', 'namespace simd = crd::hesap::fft::lanes;')
-        column = ('    for (crd::usize tile = 0; tile + 4 <= b; tile += 4)\n    {\n        for (crd::usize t = tile; '
-                  't < tile + 4; t += crd::hesap::fft::lanes::kWidth<V>)\n        {\n')
+        with self.assertRaisesRegex(ValueError, 'codelet2: a 8-column step straddles a column block of 4'):
+            split_kernels(lanes, 10, 1)
+        lanes = lanes.replace('t >> 2', 't >> 3')
+        with self.assertRaisesRegex(ValueError, 'A tile of crd::f64 is 4 columns, not 8'):
+            split_kernels(lanes.replace('t + 4 <= b; t += 4', 't + 8 <= b; t += 8'), 10, 1)
+        drive = ('    const crd::usize tiles = b - b % lanes::kTile<crd::f64>;\n'
+                 '    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;\n'
+                 '    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)\n    {\n')
         _, (whole,) = split_kernels(lanes, 10, 1)
-        self.assertIn(column + '            const crd::usize q = t >> 2;\n', whole)
-        self.assertIn('              simd::store(out + t, n2r * w, n1r); }\n        }\n    }\n}', whole)
+        self.assertIn('template <typename V> CRD_NOINLINE static void codelet2_part0([[maybe_unused]] const C* in, '
+                      '[[maybe_unused]] C* out,\n    [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t) '
+                      'noexcept\n{\n    namespace simd = crd::hesap::fft::lanes;\n    const crd::usize q = t >> 3;\n',
+                      whole)
+        self.assertIn('    using V = lanes::Lane<crd::f64>;\n' + drive + '        codelet2_part0<V>(in, out, b, t);\n'
+                      '    }\n    if constexpr (lanes::kPairedTiles<crd::f64>)\n    {\n'
+                      '        using H = lanes::TileLane<crd::f64>;\n        if (wide < tiles)\n        {\n'
+                      '            codelet2_part0<H>(in, out, b, wide);\n        }\n    }\n}', whole)
         _, (split,) = split_kernels(lanes, 3, 1)
-        self.assertIn('crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept', split)
-        self.assertIn('    alignas(64) V sp[2];\n' + column + '            codelet2_part0(in, out, b, t, sp);\n'
-                      '            codelet2_part1(in, out, b, t, sp);\n        }\n    }\n}', split)
+        self.assertIn('crd::usize t, V* sp) noexcept', split)
+        self.assertIn('crd::usize t, const V* sp) noexcept', split)
+        self.assertIn('    alignas(64) V sp[2];\n' + drive + '        codelet2_part0<V>(in, out, b, t, sp);\n'
+                      '        codelet2_part1<V>(in, out, b, t, sp);\n    }\n', split)
+        self.assertIn('        alignas(64) H sh[2];\n        if (wide < tiles)\n        {\n'
+                      '            codelet2_part0<H>(in, out, b, wide, sh);\n'
+                      '            codelet2_part1<H>(in, out, b, wide, sh);\n        }\n', split)
         # The lanes replace a codelet's own lane-scalar edition, never sit beside it.
         guarded = lanes.replace('noexcept\n{\n', 'noexcept\n{\n#ifdef CRD_FFT_GEN_SIMD_BODY\n', 1)
         with self.assertRaisesRegex(ValueError, 'unexpected kernel prologue'):

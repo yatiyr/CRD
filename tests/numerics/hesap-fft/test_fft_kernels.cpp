@@ -178,9 +178,12 @@ template <typename T> void check_every_level()
 }
 
 // The batched paths: N=8 (even and odd batch), N=16 inside and past the over-2 cache budget, the batched leaves
-// (16..256 at a multiple of the vector width) and the hierarchical sub-FFTs at their block width.
+// (16..256 at a multiple of the vector width; at one and three tiles of codelet_lanes.hpp, so avx512 runs a two-tile
+// step and an odd last tile) and the hierarchical sub-FFTs at their block width. Each shape takes random inputs and
+// negative zeros, whose signs every level must keep as portable does.
 template <typename T> void check_batched_every_level()
 {
+    constexpr usize tile = 32 / sizeof(T);
     crd::memory::TlsfAllocator alloc(usize{1} << 28);
     struct Shape
     {
@@ -201,6 +204,9 @@ template <typename T> void check_batched_every_level()
         {4096, fft::detail::block_width<T>(4096)},
         {256, fft::detail::block_width<T>(256)},
         {512, 3},
+        {16, tile},
+        {32, 3 * tile},
+        {64, 3 * tile},
     };
     for (const Shape& shape : shapes)
     {
@@ -208,50 +214,64 @@ template <typename T> void check_batched_every_level()
         const usize total = shape.m * shape.batch;
         for (const FftDirection dir : {FftDirection::Forward, FftDirection::Inverse})
         {
-            Array<Complex<T>> input(&alloc);
-            input.resize(total);
-            fill_lcg(reinterpret_cast<T*>(input.data()), 2 * total, 0xBA7CULL + total);
-            Array<Complex<T>> portable(&alloc);
-            portable.resize(total);
-            usize ran = 0;
-            for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+            for (const bool negative_zeros : {false, true})
             {
-                if (!runs_here(level))
+                Array<Complex<T>> input(&alloc);
+                input.resize(total);
+                if (negative_zeros)
                 {
-                    continue;
-                }
-                const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
-                Buffer<T> got(&alloc, total, 0);
-                std::memcpy(got.data(), input.data(), total * sizeof(Complex<T>));
-                k.execute_batched(plan.state(), got.data(), shape.batch, dir);
-                if (ran == 0U) // portable, levels[0]: the bits every other level gives
-                {
-                    std::memcpy(portable.data(), got.data(), total * sizeof(Complex<T>));
-                }
-                ++ran;
-                Array<Complex<T>> single(&alloc);
-                single.resize(shape.m);
-                double worst = 0.0;
-                for (usize t = 0; t < shape.batch; ++t)
-                {
-                    for (usize i = 0; i < shape.m; ++i)
+                    for (usize i = 0; i < total; ++i)
                     {
-                        single[i] = input[i * shape.batch + t];
+                        input[i] = Complex<T>{-T(0), -T(0)};
                     }
-                    plan.execute_reference(Span<Complex<T>>(single.data(), shape.m), dir);
-                    Array<Complex<T>> column(&alloc);
-                    column.resize(shape.m);
-                    for (usize i = 0; i < shape.m; ++i)
-                    {
-                        column[i] = got.data()[i * shape.batch + t];
-                    }
-                    worst = std::max(worst, rel_error(column.data(), single.data(), shape.m));
                 }
-                INFO(crd::cpu_level_name(level.level) << " m=" << shape.m << " batch=" << shape.batch
-                                                      << " dir=" << static_cast<int>(dir) << " rel=" << worst);
-                CHECK(worst < tolerance<T>(shape.m));
-                CHECK(std::memcmp(got.data(), portable.data(), total * sizeof(Complex<T>)) == 0);
-                CHECK(got.guards_kept());
+                else
+                {
+                    fill_lcg(reinterpret_cast<T*>(input.data()), 2 * total, 0xBA7CULL + total);
+                }
+                Array<Complex<T>> portable(&alloc);
+                portable.resize(total);
+                usize ran = 0;
+                for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+                {
+                    if (!runs_here(level))
+                    {
+                        continue;
+                    }
+                    const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
+                    Buffer<T> got(&alloc, total, 0);
+                    std::memcpy(got.data(), input.data(), total * sizeof(Complex<T>));
+                    k.execute_batched(plan.state(), got.data(), shape.batch, dir);
+                    if (ran == 0U) // portable, levels[0]: the bits every other level gives
+                    {
+                        std::memcpy(portable.data(), got.data(), total * sizeof(Complex<T>));
+                    }
+                    ++ran;
+                    Array<Complex<T>> single(&alloc);
+                    single.resize(shape.m);
+                    double worst = 0.0;
+                    for (usize t = 0; t < shape.batch; ++t)
+                    {
+                        for (usize i = 0; i < shape.m; ++i)
+                        {
+                            single[i] = input[i * shape.batch + t];
+                        }
+                        plan.execute_reference(Span<Complex<T>>(single.data(), shape.m), dir);
+                        Array<Complex<T>> column(&alloc);
+                        column.resize(shape.m);
+                        for (usize i = 0; i < shape.m; ++i)
+                        {
+                            column[i] = got.data()[i * shape.batch + t];
+                        }
+                        worst = std::max(worst, rel_error(column.data(), single.data(), shape.m));
+                    }
+                    INFO(crd::cpu_level_name(level.level)
+                         << " m=" << shape.m << " batch=" << shape.batch << " dir=" << static_cast<int>(dir)
+                         << " -0=" << negative_zeros << " rel=" << worst);
+                    CHECK(worst < tolerance<T>(shape.m));
+                    CHECK(std::memcmp(got.data(), portable.data(), total * sizeof(Complex<T>)) == 0);
+                    CHECK(got.guards_kept());
+                }
             }
         }
     }

@@ -68,5 +68,5 @@ check-generated and the tooling suite's provenance case failed on that, and both
 
 ## Left
 
-As the row says. Follow-up: `fill_general` (rank 2 plus a shift) is also the fixture of the balance, AED, dlaqr5 and
-reorder cases, so those tests run on a spectrum that is mostly a multiple eigenvalue.
+As the row says. The follow-up this note named (`fill_general`, rank 2 plus a shift, also the fixture of the balance,
+AED, dlaqr5 and reorder cases) was done in `bedfc2bb`: every nonsymmetric case runs on full-rank matrices.

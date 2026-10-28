@@ -560,11 +560,12 @@ template <typename T> struct Engine
         // FFT-CRUSH 2026-07-03 (batched-LEAF gate): n in {16,32,64} batched forward goes straight to the
         // generated split-radix leaf codelets (the hier stage-2 kernels, both types) instead of
         // bit-reversal + batched radix-8. IN-PLACE-safe (verified: every generated tile loads all inputs
-        // before its first store) and tail-free (b stays a power of two >= the vector width here). This is
-        // what makes the all-hier four-step splits (128K = 2048x64, 256K = 4096x64) fast on the P2 side.
+        // before its first store) and tail-free (b stays a power of two and whole tiles of codelet_lanes.hpp here,
+        // so every level picks this path at the same sizes). This is what makes the all-hier four-step splits
+        // (128K = 2048x64, 256K = 4096x64) fast on the P2 side.
         if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
         {
-            constexpr crd::usize kw = std::is_same_v<T, crd::f32> ? 8U : 4U;
+            constexpr crd::usize kw = std::is_same_v<T, crd::f32> ? 8U : 4U; // the tile, 32 bytes
             if (dir == FftDirection::Forward && (b % kw) == 0U && b >= kw)
             {
                 if (plan.n == 256)

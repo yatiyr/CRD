@@ -406,24 +406,34 @@ usize v8_transpose(const Input& in, u64* out) noexcept
     }
     return n;
 }
-usize v8_complex(const Input& in, u64* out) noexcept
+// Interleaved complex through V: the split re and im, then (im, re) stored back interleaved.
+template <typename V, typename T> usize complex_round_trip(const T* in, u64* out) noexcept
 {
+    constexpr usize complex_count = sizeof(V) / sizeof(T);
     usize n = 0;
-    for (usize i = 0; i + 16 <= kLanes; i += 16)
+    for (usize i = 0; i + 2 * complex_count <= kLanes; i += 2 * complex_count)
     {
-        Vec8f re;
-        Vec8f im;
-        s::load_complex_deinterleaved(in.a + i, re, im);
+        V re;
+        V im;
+        s::load_complex_deinterleaved(in + i, re, im);
         n += put(re, out + n);
         n += put(im, out + n);
-        f32 t[16];
+        T t[2 * complex_count];
         s::store_complex_interleaved(t, im, re);
-        for (const f32 x : t)
+        for (const T x : t)
         {
             n += put(x, out + n);
         }
     }
     return n;
+}
+usize v8_complex(const Input& in, u64* out) noexcept
+{
+    return complex_round_trip<Vec8f>(in.a, out);
+}
+usize v16_complex(const Input& in, u64* out) noexcept
+{
+    return complex_round_trip<Vec16f>(in.a, out);
 }
 
 // ---- the Vec16f-only operations ----
@@ -600,22 +610,11 @@ usize d_transpose(const Input& in, u64* out) noexcept
 }
 usize d_complex(const Input& in, u64* out) noexcept
 {
-    usize n = 0;
-    for (usize i = 0; i + 8 <= kLanes; i += 8)
-    {
-        Vec4d re;
-        Vec4d im;
-        s::load_complex_deinterleaved(in.da + i, re, im);
-        n += put(re, out + n);
-        n += put(im, out + n);
-        f64 t[8];
-        s::store_complex_interleaved(t, im, re);
-        for (const f64 x : t)
-        {
-            n += put(x, out + n);
-        }
-    }
-    return n;
+    return complex_round_trip<Vec4d>(in.da, out);
+}
+usize d8_complex(const Input& in, u64* out) noexcept
+{
+    return complex_round_trip<Vec8d>(in.da, out);
 }
 usize d_exp_log_core(const Input& in, u64* out) noexcept
 {
@@ -841,6 +840,7 @@ constexpr Op kOps[] = {
     {"vec8f partial load/store", Compare::F32Value, &v8_partial},
     {"vec8f transpose8x8", Compare::Bits, &v8_transpose},
     {"vec8f complex (de)interleave", Compare::Bits, &v8_complex},
+    {"vec16f complex (de)interleave", Compare::Bits, &v16_complex},
     {"vec4d arithmetic", Compare::F64Value, &F64<Vec4d>::arith},
     {"vec8d arithmetic", Compare::F64Value, &F64<Vec8d>::arith},
     {"vec4d negate/abs/select", Compare::Bits, &F64<Vec4d>::neg_abs},
@@ -870,6 +870,7 @@ constexpr Op kOps[] = {
     {"vec4d pair loads", Compare::Bits, &d_loads},
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
     {"vec4d complex (de)interleave", Compare::Bits, &d_complex},
+    {"vec8d complex (de)interleave", Compare::Bits, &d8_complex},
     {"crd_exp1/crd_log1", Compare::F64Value, &d_exp_log_core},
     {"exp/log vector twins", Compare::F64Value, &d_exp_log_twins},
     {"exp/log eight-lane twins", Compare::F64Value, &d_exp_log_twins8},

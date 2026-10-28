@@ -5,12 +5,321 @@
 #include <crd/hesap/fft/detail/codelet_lanes.hpp>
 namespace crd::hesap::fft::gen::inline CRD_MATH_LEVEL_NS {
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet16_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
+    V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    V n15r;
+    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 15 * b + t), n15r, n15i);
+    V n14r;
+    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 14 * b + t), n14r, n14i);
+    V n13r;
+    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 13 * b + t), n13r, n13i);
+    V n12r;
+    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 12 * b + t), n12r, n12i);
+    V n11r;
+    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 11 * b + t), n11r, n11i);
+    V n10r;
+    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 10 * b + t), n10r, n10i);
+    V n9r;
+    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 9 * b + t), n9r, n9i);
+    V n8r;
+    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 8 * b + t), n8r, n8i);
+    V n7r;
+    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 7 * b + t), n7r, n7i);
+    const V n57r = n7r - n15r;
+    const V n57i = n7i - n15i;
+    const V n56r = n7r + n15r;
+    const V n56i = n7i + n15i;
+    const V n58r = n57i;
+    const V n58i = -n57r;
+    V n6r;
+    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 6 * b + t), n6r, n6i);
+    const V n28r = n6r - n14r;
+    const V n28i = n6i - n14i;
+    const V n27r = n6r + n14r;
+    const V n27i = n6i + n14i;
+    const V n37r = simd::fnmadd(V(-0.7071067811865476), n28i, V(-0.7071067811865475) * n28r);
+    const V n37i = simd::fma(V(-0.7071067811865476), n28r, V(-0.7071067811865475) * n28i);
+    V n5r;
+    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 5 * b + t), n5r, n5i);
+    const V n48r = n5r - n13r;
+    const V n48i = n5i - n13i;
+    const V n47r = n5r + n13r;
+    const V n47i = n5i + n13i;
+    const V n49r = n48i;
+    const V n49i = -n48r;
+    V n4r;
+    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 4 * b + t), n4r, n4i);
+    const V n19r = n4r - n12r;
+    const V n19i = n4i - n12i;
+    const V n18r = n4r + n12r;
+    const V n18i = n4i + n12i;
+    const V n20r = n19i;
+    const V n20i = -n19r;
+    V n3r;
+    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 3 * b + t), n3r, n3i);
+    const V n55r = n3r - n11r;
+    const V n55i = n3i - n11i;
+    const V n54r = n3r + n11r;
+    const V n54i = n3i + n11i;
+    const V n62r = n55r - n58r;
+    const V n62i = n55i - n58i;
+    const V n61r = n55r + n58r;
+    const V n61i = n55i + n58i;
+    const V n89r = simd::fnmadd(V(0.38268343236508967), n62i, V(-0.9238795325112868) * n62r);
+    const V n89i = simd::fma(V(0.38268343236508967), n62r, V(-0.9238795325112868) * n62i);
+    const V n71r = simd::fnmadd(V(-0.9238795325112867), n61i, V(0.38268343236508984) * n61r);
+    const V n71i = simd::fma(V(-0.9238795325112867), n61r, V(0.38268343236508984) * n61i);
+    const V n60r = n54r - n56r;
+    const V n60i = n54i - n56i;
+    const V n59r = n54r + n56r;
+    const V n59i = n54i + n56i;
+    const V n80r = simd::fnmadd(V(-0.7071067811865476), n60i, V(-0.7071067811865475) * n60r);
+    const V n80i = simd::fma(V(-0.7071067811865476), n60r, V(-0.7071067811865475) * n60i);
+    V n2r;
+    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 2 * b + t), n2r, n2i);
+    const V n26r = n2r - n10r;
+    const V n26i = n2i - n10i;
+    const V n25r = n2r + n10r;
+    const V n25i = n2i + n10i;
+    const V n36r = simd::fnmadd(V(-0.7071067811865475), n26i, V(0.7071067811865476) * n26r);
+    const V n36i = simd::fma(V(-0.7071067811865475), n26r, V(0.7071067811865476) * n26i);
+    const V n39r = n36r - n37r;
+    const V n39i = n36i - n37i;
+    const V n38r = n36r + n37r;
+    const V n38i = n36i + n37i;
+    const V n40r = n39i;
+    const V n40i = -n39r;
+    const V n30r = n25r - n27r;
+    const V n30i = n25i - n27i;
+    const V n29r = n25r + n27r;
+    const V n29i = n25i + n27i;
+    const V n31r = n30i;
+    const V n31i = -n30r;
+    V n1r;
+    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 1 * b + t), n1r, n1i);
+    const V n46r = n1r - n9r;
+    const V n46i = n1i - n9i;
+    const V n45r = n1r + n9r;
+    const V n45i = n1i + n9i;
+    const V n53r = n46r - n49r;
+    const V n53i = n46i - n49i;
+    const V n52r = n46r + n49r;
+    const V n52i = n46i + n49i;
+    const V n88r = simd::fnmadd(V(-0.9238795325112867), n53i, V(0.38268343236508984) * n53r);
+    const V n88i = simd::fma(V(-0.9238795325112867), n53r, V(0.38268343236508984) * n53i);
+    const V n70r = simd::fnmadd(V(-0.3826834323650898), n52i, V(0.9238795325112867) * n52r);
+    const V n70i = simd::fma(V(-0.3826834323650898), n52r, V(0.9238795325112867) * n52i);
+    const V n91r = n88r - n89r;
+    const V n91i = n88i - n89i;
+    const V n90r = n88r + n89r;
+    const V n90i = n88i + n89i;
+    const V n92r = n91i;
+    const V n92i = -n91r;
+    const V n73r = n70r - n71r;
+    const V n73i = n70i - n71i;
+    const V n72r = n70r + n71r;
+    const V n72i = n70i + n71i;
+    const V n74r = n73i;
+    const V n74i = -n73r;
+    const V n51r = n45r - n47r;
+    const V n51i = n45i - n47i;
+    const V n50r = n45r + n47r;
+    const V n50i = n45i + n47i;
+    const V n79r = simd::fnmadd(V(-0.7071067811865475), n51i, V(0.7071067811865476) * n51r);
+    const V n79i = simd::fma(V(-0.7071067811865475), n51r, V(0.7071067811865476) * n51i);
+    const V n82r = n79r - n80r;
+    const V n82i = n79i - n80i;
+    const V n81r = n79r + n80r;
+    const V n81i = n79i + n80i;
+    const V n83r = n82i;
+    const V n83i = -n82r;
+    const V n64r = n50r - n59r;
+    const V n64i = n50i - n59i;
+    const V n63r = n50r + n59r;
+    const V n63i = n50i + n59i;
+    const V n65r = n64i;
+    const V n65i = -n64r;
+    sp[0] = n18i;
+    sp[1] = n18r;
+    sp[2] = n20i;
+    sp[3] = n20r;
+    sp[4] = n29i;
+    sp[5] = n29r;
+    sp[6] = n31i;
+    sp[7] = n31r;
+    sp[8] = n38i;
+    sp[9] = n38r;
+    sp[10] = n40i;
+    sp[11] = n40r;
+    sp[12] = n63i;
+    sp[13] = n63r;
+    sp[14] = n65i;
+    sp[15] = n65r;
+    sp[16] = n72i;
+    sp[17] = n72r;
+    sp[18] = n74i;
+    sp[19] = n74r;
+    sp[20] = n81i;
+    sp[21] = n81r;
+    sp[22] = n83i;
+    sp[23] = n83r;
+    sp[24] = n8i;
+    sp[25] = n8r;
+    sp[26] = n90i;
+    sp[27] = n90r;
+    sp[28] = n92i;
+    sp[29] = n92r;
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet16_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+    [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
+    const V* sp) noexcept
+{
+    namespace simd = crd::hesap::fft::lanes;
+    const V n18i = sp[0];
+    const V n18r = sp[1];
+    const V n20i = sp[2];
+    const V n20r = sp[3];
+    const V n29i = sp[4];
+    const V n29r = sp[5];
+    const V n31i = sp[6];
+    const V n31r = sp[7];
+    const V n38i = sp[8];
+    const V n38r = sp[9];
+    const V n40i = sp[10];
+    const V n40r = sp[11];
+    const V n63i = sp[12];
+    const V n63r = sp[13];
+    const V n65i = sp[14];
+    const V n65r = sp[15];
+    const V n72i = sp[16];
+    const V n72r = sp[17];
+    const V n74i = sp[18];
+    const V n74r = sp[19];
+    const V n81i = sp[20];
+    const V n81r = sp[21];
+    const V n83i = sp[22];
+    const V n83r = sp[23];
+    const V n8i = sp[24];
+    const V n8r = sp[25];
+    const V n90i = sp[26];
+    const V n90r = sp[27];
+    const V n92i = sp[28];
+    const V n92r = sp[29];
+    V n0r;
+    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 0 * b + t), n0r, n0i);
+    const V n17r = n0r - n8r;
+    const V n17i = n0i - n8i;
+    const V n16r = n0r + n8r;
+    const V n16i = n0i + n8i;
+    const V n24r = n17r - n20r;
+    const V n24i = n17i - n20i;
+    const V n23r = n17r + n20r;
+    const V n23i = n17i + n20i;
+    const V n44r = n24r - n40r;
+    const V n44i = n24i - n40i;
+    const V n43r = n24r + n40r;
+    const V n43i = n24i + n40i;
+    const V n96r = n44r - n92r;
+    const V n96i = n44i - n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 15 * b + t), n96r, n96i);
+    const V n95r = n44r + n92r;
+    const V n95i = n44i + n92i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 7 * b + t), n95r, n95i);
+    const V n94r = n43r - n90r;
+    const V n94i = n43i - n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 11 * b + t), n94r, n94i);
+    const V n93r = n43r + n90r;
+    const V n93i = n43i + n90i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 3 * b + t), n93r, n93i);
+    const V n42r = n23r - n38r;
+    const V n42i = n23i - n38i;
+    const V n41r = n23r + n38r;
+    const V n41i = n23i + n38i;
+    const V n78r = n42r - n74r;
+    const V n78i = n42i - n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 13 * b + t), n78r, n78i);
+    const V n77r = n42r + n74r;
+    const V n77i = n42i + n74i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 5 * b + t), n77r, n77i);
+    const V n76r = n41r - n72r;
+    const V n76i = n41i - n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 9 * b + t), n76r, n76i);
+    const V n75r = n41r + n72r;
+    const V n75i = n41i + n72i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 1 * b + t), n75r, n75i);
+    const V n22r = n16r - n18r;
+    const V n22i = n16i - n18i;
+    const V n21r = n16r + n18r;
+    const V n21i = n16i + n18i;
+    const V n35r = n22r - n31r;
+    const V n35i = n22i - n31i;
+    const V n34r = n22r + n31r;
+    const V n34i = n22i + n31i;
+    const V n87r = n35r - n83r;
+    const V n87i = n35i - n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 14 * b + t), n87r, n87i);
+    const V n86r = n35r + n83r;
+    const V n86i = n35i + n83i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 6 * b + t), n86r, n86i);
+    const V n85r = n34r - n81r;
+    const V n85i = n34i - n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 10 * b + t), n85r, n85i);
+    const V n84r = n34r + n81r;
+    const V n84i = n34i + n81i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 2 * b + t), n84r, n84i);
+    const V n33r = n21r - n29r;
+    const V n33i = n21i - n29i;
+    const V n32r = n21r + n29r;
+    const V n32i = n21i + n29i;
+    const V n69r = n33r - n65r;
+    const V n69i = n33i - n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 12 * b + t), n69r, n69i);
+    const V n68r = n33r + n65r;
+    const V n68i = n33i + n65i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 4 * b + t), n68r, n68i);
+    const V n67r = n32r - n63r;
+    const V n67i = n32i - n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 8 * b + t), n67r, n67i);
+    const V n66r = n32r + n63r;
+    const V n66i = n32i + n63i;
+    simd::store_complex_interleaved(reinterpret_cast<crd::f64*>(out + 0 * b + t), n66r, n66i);
+}
+// N=16 batched split-radix codelet (Vec4d over batch). GENERATED.
+// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
+void codelet16_batched(const crd::hesap::Complex<crd::f64>* in,
+    crd::hesap::Complex<crd::f64>* out, crd::usize b) noexcept
+{
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f64>;
+    alignas(64) V sp[30];
+    const crd::usize tiles = b - b % lanes::kTile<crd::f64>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
+    {
+        codelet16_batched_part0<V>(in, out, b, t, sp);
+        codelet16_batched_part1<V>(in, out, b, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f64>)
+    {
+        using H = lanes::TileLane<crd::f64>;
+        alignas(64) H sh[30];
+        if (wide < tiles)
+        {
+            codelet16_batched_part0<H>(in, out, b, wide, sh);
+            codelet16_batched_part1<H>(in, out, b, wide, sh);
+        }
+    }
+}
+// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part0([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     V n63r;
     V n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f64*>(in + 63 * b + t), n63r, n63i);
@@ -212,12 +521,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part0([[maybe_unused]] con
     sp[77] = n32r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part1([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part1([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const V n185i = sp[0];
     const V n185r = sp[1];
@@ -449,12 +757,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part1([[maybe_unused]] con
     sp[101] = n66r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part2([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part2([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const V n385i = sp[0];
     const V n385r = sp[1];
@@ -702,12 +1009,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part2([[maybe_unused]] con
     sp[113] = n77r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part3([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part3([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const V n107i = sp[0];
     const V n107r = sp[1];
@@ -933,12 +1239,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part3([[maybe_unused]] con
     sp[119] = n113r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part4([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part4([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const V n211i = sp[0];
     const V n211r = sp[1];
@@ -1196,12 +1501,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part4([[maybe_unused]] con
     sp[123] = n214r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part5([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part5([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const V n150i = sp[0];
     const V n150r = sp[1];
@@ -1463,12 +1767,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part5([[maybe_unused]] con
     sp[125] = n203r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part6([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part6([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -1718,12 +2021,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part6([[maybe_unused]] con
     sp[70] = n507r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part7([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part7([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -1924,12 +2226,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part7([[maybe_unused]] con
     sp[3] = n124r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part8([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part8([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -2133,12 +2434,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part8([[maybe_unused]] con
     sp[7] = n69r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part9([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part9([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -2341,12 +2641,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part9([[maybe_unused]] con
     sp[5] = n512r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x32_part10([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x32_part10([[maybe_unused]] const crd::hesap::Complex<crd::f64>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f64>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f64* twr, [[maybe_unused]] const crd::f64* twi, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f64>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -2423,32 +2722,50 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x32_part10([[maybe_unused]] co
 void codelet64_stage1_fused_64x32(const crd::hesap::Complex<crd::f64>* in,
     crd::hesap::Complex<crd::f64>* out, crd::usize b, const crd::f64* twr, const crd::f64* twi) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f64>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f64>;
     alignas(64) V sp[126];
-    for (crd::usize tile = 0; tile + 4 <= b; tile += 4)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f64>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 4; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet64_stage1_fused_64x32_part0<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part1<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part2<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part3<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part4<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part5<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part6<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part7<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part8<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part9<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x32_part10<V>(in, out, b, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f64>)
+    {
+        using H = lanes::TileLane<crd::f64>;
+        alignas(64) H sh[126];
+        if (wide < tiles)
         {
-            codelet64_stage1_fused_64x32_part0(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part1(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part2(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part3(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part4(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part5(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part6(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part7(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part8(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part9(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x32_part10(in, out, b, twr, twi, t, sp);
+            codelet64_stage1_fused_64x32_part0<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part1<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part2<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part3<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part4<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part5<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part6<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part7<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part8<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part9<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x32_part10<H>(in, out, b, twr, twi, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n31r;
     V n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
@@ -2640,11 +2957,10 @@ CRD_NOINLINE static void codelet32_batched_part0([[maybe_unused]] const crd::hes
     sp[51] = n34r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n105i = sp[0];
     const V n105r = sp[1];
@@ -2864,11 +3180,10 @@ CRD_NOINLINE static void codelet32_batched_part1([[maybe_unused]] const crd::hes
     sp[59] = n99r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_batched_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_batched_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n106i = sp[0];
     const V n106r = sp[1];
@@ -3097,11 +3412,10 @@ CRD_NOINLINE static void codelet32_batched_part2([[maybe_unused]] const crd::hes
     sp[30] = n94i;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_batched_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_batched_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n171i = sp[0];
     const V n171r = sp[1];
@@ -3256,25 +3570,36 @@ CRD_NOINLINE static void codelet32_batched_part3([[maybe_unused]] const crd::hes
 void codelet32_batched(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[60];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet32_batched_part0<V>(in, out, b, t, sp);
+        codelet32_batched_part1<V>(in, out, b, t, sp);
+        codelet32_batched_part2<V>(in, out, b, t, sp);
+        codelet32_batched_part3<V>(in, out, b, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[60];
+        if (wide < tiles)
         {
-            codelet32_batched_part0(in, out, b, t, sp);
-            codelet32_batched_part1(in, out, b, t, sp);
-            codelet32_batched_part2(in, out, b, t, sp);
-            codelet32_batched_part3(in, out, b, t, sp);
+            codelet32_batched_part0<H>(in, out, b, wide, sh);
+            codelet32_batched_part1<H>(in, out, b, wide, sh);
+            codelet32_batched_part2<H>(in, out, b, wide, sh);
+            codelet32_batched_part3<H>(in, out, b, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n63r;
     V n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 63 * b + t), n63r, n63i);
@@ -3476,11 +3801,10 @@ CRD_NOINLINE static void codelet64_batched_part0([[maybe_unused]] const crd::hes
     sp[77] = n32r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n185i = sp[0];
     const V n185r = sp[1];
@@ -3712,11 +4036,10 @@ CRD_NOINLINE static void codelet64_batched_part1([[maybe_unused]] const crd::hes
     sp[101] = n66r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n385i = sp[0];
     const V n385r = sp[1];
@@ -3964,11 +4287,10 @@ CRD_NOINLINE static void codelet64_batched_part2([[maybe_unused]] const crd::hes
     sp[113] = n77r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n107i = sp[0];
     const V n107r = sp[1];
@@ -4194,11 +4516,10 @@ CRD_NOINLINE static void codelet64_batched_part3([[maybe_unused]] const crd::hes
     sp[119] = n113r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n211i = sp[0];
     const V n211r = sp[1];
@@ -4456,11 +4777,10 @@ CRD_NOINLINE static void codelet64_batched_part4([[maybe_unused]] const crd::hes
     sp[123] = n250r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part5([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part5([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n150i = sp[0];
     const V n150r = sp[1];
@@ -4722,11 +5042,10 @@ CRD_NOINLINE static void codelet64_batched_part5([[maybe_unused]] const crd::hes
     sp[125] = n241r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part6([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part6([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n278i = sp[0];
     const V n278r = sp[1];
@@ -4980,11 +5299,10 @@ CRD_NOINLINE static void codelet64_batched_part6([[maybe_unused]] const crd::hes
     sp[65] = n545r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part7([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part7([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n233i = sp[0];
     const V n233r = sp[1];
@@ -5212,11 +5530,10 @@ CRD_NOINLINE static void codelet64_batched_part7([[maybe_unused]] const crd::hes
     sp[5] = n69r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_batched_part8([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_batched_part8([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n132i = sp[0];
     const V n132r = sp[1];
@@ -5361,31 +5678,47 @@ CRD_NOINLINE static void codelet64_batched_part8([[maybe_unused]] const crd::hes
 void codelet64_batched(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[126];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet64_batched_part0<V>(in, out, b, t, sp);
+        codelet64_batched_part1<V>(in, out, b, t, sp);
+        codelet64_batched_part2<V>(in, out, b, t, sp);
+        codelet64_batched_part3<V>(in, out, b, t, sp);
+        codelet64_batched_part4<V>(in, out, b, t, sp);
+        codelet64_batched_part5<V>(in, out, b, t, sp);
+        codelet64_batched_part6<V>(in, out, b, t, sp);
+        codelet64_batched_part7<V>(in, out, b, t, sp);
+        codelet64_batched_part8<V>(in, out, b, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[126];
+        if (wide < tiles)
         {
-            codelet64_batched_part0(in, out, b, t, sp);
-            codelet64_batched_part1(in, out, b, t, sp);
-            codelet64_batched_part2(in, out, b, t, sp);
-            codelet64_batched_part3(in, out, b, t, sp);
-            codelet64_batched_part4(in, out, b, t, sp);
-            codelet64_batched_part5(in, out, b, t, sp);
-            codelet64_batched_part6(in, out, b, t, sp);
-            codelet64_batched_part7(in, out, b, t, sp);
-            codelet64_batched_part8(in, out, b, t, sp);
+            codelet64_batched_part0<H>(in, out, b, wide, sh);
+            codelet64_batched_part1<H>(in, out, b, wide, sh);
+            codelet64_batched_part2<H>(in, out, b, wide, sh);
+            codelet64_batched_part3<H>(in, out, b, wide, sh);
+            codelet64_batched_part4<H>(in, out, b, wide, sh);
+            codelet64_batched_part5<H>(in, out, b, wide, sh);
+            codelet64_batched_part6<H>(in, out, b, wide, sh);
+            codelet64_batched_part7<H>(in, out, b, wide, sh);
+            codelet64_batched_part8<H>(in, out, b, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n31r;
     V n31i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 31 * b + t), n31r, n31i);
@@ -5577,12 +5910,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_part0([[maybe_unused]] con
     sp[51] = n34r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n105i = sp[0];
     const V n105r = sp[1];
@@ -5802,12 +6134,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_part1([[maybe_unused]] con
     sp[59] = n81r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -6040,12 +6371,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_part2([[maybe_unused]] con
     sp[44] = n209r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -6242,12 +6572,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_part3([[maybe_unused]] con
     sp[3] = n37r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -6361,27 +6690,39 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_part4([[maybe_unused]] con
 void codelet32_stage1_fused_32x32(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[60];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet32_stage1_fused_32x32_part0<V>(in, out, b, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_part1<V>(in, out, b, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_part2<V>(in, out, b, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_part3<V>(in, out, b, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_part4<V>(in, out, b, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[60];
+        if (wide < tiles)
         {
-            codelet32_stage1_fused_32x32_part0(in, out, b, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_part1(in, out, b, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_part2(in, out, b, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_part3(in, out, b, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_part4(in, out, b, twr, twi, t, sp);
+            codelet32_stage1_fused_32x32_part0<H>(in, out, b, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_part1<H>(in, out, b, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_part2<H>(in, out, b, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_part3<H>(in, out, b, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_part4<H>(in, out, b, twr, twi, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n63r;
     V n63i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 63 * b + t), n63r, n63i);
@@ -6583,12 +6924,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part0([[maybe_unused]] con
     sp[77] = n32r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n185i = sp[0];
     const V n185r = sp[1];
@@ -6820,12 +7160,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part1([[maybe_unused]] con
     sp[101] = n66r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n385i = sp[0];
     const V n385r = sp[1];
@@ -7073,12 +7412,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part2([[maybe_unused]] con
     sp[113] = n77r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n107i = sp[0];
     const V n107r = sp[1];
@@ -7304,12 +7642,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part3([[maybe_unused]] con
     sp[119] = n113r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n211i = sp[0];
     const V n211r = sp[1];
@@ -7567,12 +7904,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part4([[maybe_unused]] con
     sp[123] = n214r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part5([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part5([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n150i = sp[0];
     const V n150r = sp[1];
@@ -7834,12 +8170,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part5([[maybe_unused]] con
     sp[125] = n203r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part6([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part6([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -8089,12 +8424,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part6([[maybe_unused]] con
     sp[70] = n507r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part7([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part7([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -8295,12 +8629,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part7([[maybe_unused]] con
     sp[3] = n124r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part8([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part8([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -8504,12 +8837,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part8([[maybe_unused]] con
     sp[7] = n69r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part9([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part9([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -8712,12 +9044,11 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part9([[maybe_unused]] con
     sp[5] = n512r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet64_stage1_fused_64x64_part10([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet64_stage1_fused_64x64_part10([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 5;
     const crd::usize bb0 = t & 31;
@@ -8794,32 +9125,51 @@ CRD_NOINLINE static void codelet64_stage1_fused_64x64_part10([[maybe_unused]] co
 void codelet64_stage1_fused_64x64(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[126];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet64_stage1_fused_64x64_part0<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part1<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part2<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part3<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part4<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part5<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part6<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part7<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part8<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part9<V>(in, out, b, twr, twi, t, sp);
+        codelet64_stage1_fused_64x64_part10<V>(in, out, b, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[126];
+        if (wide < tiles)
         {
-            codelet64_stage1_fused_64x64_part0(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part1(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part2(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part3(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part4(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part5(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part6(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part7(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part8(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part9(in, out, b, twr, twi, t, sp);
-            codelet64_stage1_fused_64x64_part10(in, out, b, twr, twi, t, sp);
+            codelet64_stage1_fused_64x64_part0<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part1<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part2<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part3<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part4<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part5<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part6<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part7<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part8<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part9<H>(in, out, b, twr, twi, wide, sh);
+            codelet64_stage1_fused_64x64_part10<H>(in, out, b, twr, twi, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_batched_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_16x16_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
+    [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n15r;
     V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
@@ -8985,315 +9335,11 @@ CRD_NOINLINE static void codelet16_batched_part0([[maybe_unused]] const crd::hes
     sp[29] = n92r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_batched_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
-{
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
-    namespace simd = crd::hesap::fft::lanes;
-    const V n18i = sp[0];
-    const V n18r = sp[1];
-    const V n20i = sp[2];
-    const V n20r = sp[3];
-    const V n29i = sp[4];
-    const V n29r = sp[5];
-    const V n31i = sp[6];
-    const V n31r = sp[7];
-    const V n38i = sp[8];
-    const V n38r = sp[9];
-    const V n40i = sp[10];
-    const V n40r = sp[11];
-    const V n63i = sp[12];
-    const V n63r = sp[13];
-    const V n65i = sp[14];
-    const V n65r = sp[15];
-    const V n72i = sp[16];
-    const V n72r = sp[17];
-    const V n74i = sp[18];
-    const V n74r = sp[19];
-    const V n81i = sp[20];
-    const V n81r = sp[21];
-    const V n83i = sp[22];
-    const V n83r = sp[23];
-    const V n8i = sp[24];
-    const V n8r = sp[25];
-    const V n90i = sp[26];
-    const V n90r = sp[27];
-    const V n92i = sp[28];
-    const V n92r = sp[29];
-    V n0r;
-    V n0i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 0 * b + t), n0r, n0i);
-    const V n17r = n0r - n8r;
-    const V n17i = n0i - n8i;
-    const V n16r = n0r + n8r;
-    const V n16i = n0i + n8i;
-    const V n24r = n17r - n20r;
-    const V n24i = n17i - n20i;
-    const V n23r = n17r + n20r;
-    const V n23i = n17i + n20i;
-    const V n44r = n24r - n40r;
-    const V n44i = n24i - n40i;
-    const V n43r = n24r + n40r;
-    const V n43i = n24i + n40i;
-    const V n96r = n44r - n92r;
-    const V n96i = n44i - n92i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 15 * b + t), n96r, n96i);
-    const V n95r = n44r + n92r;
-    const V n95i = n44i + n92i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 7 * b + t), n95r, n95i);
-    const V n94r = n43r - n90r;
-    const V n94i = n43i - n90i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 11 * b + t), n94r, n94i);
-    const V n93r = n43r + n90r;
-    const V n93i = n43i + n90i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 3 * b + t), n93r, n93i);
-    const V n42r = n23r - n38r;
-    const V n42i = n23i - n38i;
-    const V n41r = n23r + n38r;
-    const V n41i = n23i + n38i;
-    const V n78r = n42r - n74r;
-    const V n78i = n42i - n74i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 13 * b + t), n78r, n78i);
-    const V n77r = n42r + n74r;
-    const V n77i = n42i + n74i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 5 * b + t), n77r, n77i);
-    const V n76r = n41r - n72r;
-    const V n76i = n41i - n72i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 9 * b + t), n76r, n76i);
-    const V n75r = n41r + n72r;
-    const V n75i = n41i + n72i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 1 * b + t), n75r, n75i);
-    const V n22r = n16r - n18r;
-    const V n22i = n16i - n18i;
-    const V n21r = n16r + n18r;
-    const V n21i = n16i + n18i;
-    const V n35r = n22r - n31r;
-    const V n35i = n22i - n31i;
-    const V n34r = n22r + n31r;
-    const V n34i = n22i + n31i;
-    const V n87r = n35r - n83r;
-    const V n87i = n35i - n83i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 14 * b + t), n87r, n87i);
-    const V n86r = n35r + n83r;
-    const V n86i = n35i + n83i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 6 * b + t), n86r, n86i);
-    const V n85r = n34r - n81r;
-    const V n85i = n34i - n81i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 10 * b + t), n85r, n85i);
-    const V n84r = n34r + n81r;
-    const V n84i = n34i + n81i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 2 * b + t), n84r, n84i);
-    const V n33r = n21r - n29r;
-    const V n33i = n21i - n29i;
-    const V n32r = n21r + n29r;
-    const V n32i = n21i + n29i;
-    const V n69r = n33r - n65r;
-    const V n69i = n33i - n65i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 12 * b + t), n69r, n69i);
-    const V n68r = n33r + n65r;
-    const V n68i = n33i + n65i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 4 * b + t), n68r, n68i);
-    const V n67r = n32r - n63r;
-    const V n67i = n32i - n63i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 8 * b + t), n67r, n67i);
-    const V n66r = n32r + n63r;
-    const V n66i = n32i + n63i;
-    simd::store_complex_interleaved(reinterpret_cast<crd::f32*>(out + 0 * b + t), n66r, n66i);
-}
-// N=16 batched split-radix codelet (Vec8f over batch). GENERATED.
-// NOLINTNEXTLINE(readability-function-size) -- Generated scheduled DAG; retain fused scope.
-void codelet16_batched(const crd::hesap::Complex<crd::f32>* in,
-    crd::hesap::Complex<crd::f32>* out, crd::usize b) noexcept
-{
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
-    alignas(64) V sp[30];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
-    {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
-        {
-            codelet16_batched_part0(in, out, b, t, sp);
-            codelet16_batched_part1(in, out, b, t, sp);
-        }
-    }
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_stage1_fused_16x16_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet16_stage1_fused_16x16_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
-    namespace simd = crd::hesap::fft::lanes;
-    V n15r;
-    V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
-    V n14r;
-    V n14i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 14 * b + t), n14r, n14i);
-    V n13r;
-    V n13i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 13 * b + t), n13r, n13i);
-    V n12r;
-    V n12i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 12 * b + t), n12r, n12i);
-    V n11r;
-    V n11i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 11 * b + t), n11r, n11i);
-    V n10r;
-    V n10i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 10 * b + t), n10r, n10i);
-    V n9r;
-    V n9i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 9 * b + t), n9r, n9i);
-    V n8r;
-    V n8i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 8 * b + t), n8r, n8i);
-    V n7r;
-    V n7i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 7 * b + t), n7r, n7i);
-    const V n57r = n7r - n15r;
-    const V n57i = n7i - n15i;
-    const V n56r = n7r + n15r;
-    const V n56i = n7i + n15i;
-    const V n58r = n57i;
-    const V n58i = -n57r;
-    V n6r;
-    V n6i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 6 * b + t), n6r, n6i);
-    const V n28r = n6r - n14r;
-    const V n28i = n6i - n14i;
-    const V n27r = n6r + n14r;
-    const V n27i = n6i + n14i;
-    const V n37r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n28i, V(static_cast<crd::f32>(-0.7071067811865475)) * n28r);
-    const V n37i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n28r, V(static_cast<crd::f32>(-0.7071067811865475)) * n28i);
-    V n5r;
-    V n5i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 5 * b + t), n5r, n5i);
-    const V n48r = n5r - n13r;
-    const V n48i = n5i - n13i;
-    const V n47r = n5r + n13r;
-    const V n47i = n5i + n13i;
-    const V n49r = n48i;
-    const V n49i = -n48r;
-    V n4r;
-    V n4i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 4 * b + t), n4r, n4i);
-    const V n19r = n4r - n12r;
-    const V n19i = n4i - n12i;
-    const V n18r = n4r + n12r;
-    const V n18i = n4i + n12i;
-    const V n20r = n19i;
-    const V n20i = -n19r;
-    V n3r;
-    V n3i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 3 * b + t), n3r, n3i);
-    const V n55r = n3r - n11r;
-    const V n55i = n3i - n11i;
-    const V n54r = n3r + n11r;
-    const V n54i = n3i + n11i;
-    const V n62r = n55r - n58r;
-    const V n62i = n55i - n58i;
-    const V n61r = n55r + n58r;
-    const V n61i = n55i + n58i;
-    const V n89r = simd::fnmadd(V(static_cast<crd::f32>(0.38268343236508967)), n62i, V(static_cast<crd::f32>(-0.9238795325112868)) * n62r);
-    const V n89i = simd::fma(V(static_cast<crd::f32>(0.38268343236508967)), n62r, V(static_cast<crd::f32>(-0.9238795325112868)) * n62i);
-    const V n71r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n61i, V(static_cast<crd::f32>(0.38268343236508984)) * n61r);
-    const V n71i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n61r, V(static_cast<crd::f32>(0.38268343236508984)) * n61i);
-    const V n60r = n54r - n56r;
-    const V n60i = n54i - n56i;
-    const V n59r = n54r + n56r;
-    const V n59i = n54i + n56i;
-    const V n80r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865476)), n60i, V(static_cast<crd::f32>(-0.7071067811865475)) * n60r);
-    const V n80i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865476)), n60r, V(static_cast<crd::f32>(-0.7071067811865475)) * n60i);
-    V n2r;
-    V n2i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 2 * b + t), n2r, n2i);
-    const V n26r = n2r - n10r;
-    const V n26i = n2i - n10i;
-    const V n25r = n2r + n10r;
-    const V n25i = n2i + n10i;
-    const V n36r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n26i, V(static_cast<crd::f32>(0.7071067811865476)) * n26r);
-    const V n36i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n26r, V(static_cast<crd::f32>(0.7071067811865476)) * n26i);
-    const V n39r = n36r - n37r;
-    const V n39i = n36i - n37i;
-    const V n38r = n36r + n37r;
-    const V n38i = n36i + n37i;
-    const V n40r = n39i;
-    const V n40i = -n39r;
-    const V n30r = n25r - n27r;
-    const V n30i = n25i - n27i;
-    const V n29r = n25r + n27r;
-    const V n29i = n25i + n27i;
-    const V n31r = n30i;
-    const V n31i = -n30r;
-    V n1r;
-    V n1i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 1 * b + t), n1r, n1i);
-    const V n46r = n1r - n9r;
-    const V n46i = n1i - n9i;
-    const V n45r = n1r + n9r;
-    const V n45i = n1i + n9i;
-    const V n53r = n46r - n49r;
-    const V n53i = n46i - n49i;
-    const V n52r = n46r + n49r;
-    const V n52i = n46i + n49i;
-    const V n88r = simd::fnmadd(V(static_cast<crd::f32>(-0.9238795325112867)), n53i, V(static_cast<crd::f32>(0.38268343236508984)) * n53r);
-    const V n88i = simd::fma(V(static_cast<crd::f32>(-0.9238795325112867)), n53r, V(static_cast<crd::f32>(0.38268343236508984)) * n53i);
-    const V n70r = simd::fnmadd(V(static_cast<crd::f32>(-0.3826834323650898)), n52i, V(static_cast<crd::f32>(0.9238795325112867)) * n52r);
-    const V n70i = simd::fma(V(static_cast<crd::f32>(-0.3826834323650898)), n52r, V(static_cast<crd::f32>(0.9238795325112867)) * n52i);
-    const V n91r = n88r - n89r;
-    const V n91i = n88i - n89i;
-    const V n90r = n88r + n89r;
-    const V n90i = n88i + n89i;
-    const V n92r = n91i;
-    const V n92i = -n91r;
-    const V n73r = n70r - n71r;
-    const V n73i = n70i - n71i;
-    const V n72r = n70r + n71r;
-    const V n72i = n70i + n71i;
-    const V n74r = n73i;
-    const V n74i = -n73r;
-    const V n51r = n45r - n47r;
-    const V n51i = n45i - n47i;
-    const V n50r = n45r + n47r;
-    const V n50i = n45i + n47i;
-    const V n79r = simd::fnmadd(V(static_cast<crd::f32>(-0.7071067811865475)), n51i, V(static_cast<crd::f32>(0.7071067811865476)) * n51r);
-    const V n79i = simd::fma(V(static_cast<crd::f32>(-0.7071067811865475)), n51r, V(static_cast<crd::f32>(0.7071067811865476)) * n51i);
-    const V n82r = n79r - n80r;
-    const V n82i = n79i - n80i;
-    const V n81r = n79r + n80r;
-    const V n81i = n79i + n80i;
-    const V n83r = n82i;
-    const V n83i = -n82r;
-    const V n64r = n50r - n59r;
-    const V n64i = n50i - n59i;
-    const V n63r = n50r + n59r;
-    const V n63i = n50i + n59i;
-    const V n65r = n64i;
-    const V n65i = -n64r;
-    sp[0] = n18i;
-    sp[1] = n18r;
-    sp[2] = n20i;
-    sp[3] = n20r;
-    sp[4] = n29i;
-    sp[5] = n29r;
-    sp[6] = n31i;
-    sp[7] = n31r;
-    sp[8] = n38i;
-    sp[9] = n38r;
-    sp[10] = n40i;
-    sp[11] = n40r;
-    sp[12] = n63i;
-    sp[13] = n63r;
-    sp[14] = n65i;
-    sp[15] = n65r;
-    sp[16] = n72i;
-    sp[17] = n72r;
-    sp[18] = n74i;
-    sp[19] = n74r;
-    sp[20] = n81i;
-    sp[21] = n81r;
-    sp[22] = n83i;
-    sp[23] = n83r;
-    sp[24] = n8i;
-    sp[25] = n8r;
-    sp[26] = n90i;
-    sp[27] = n90r;
-    sp[28] = n92i;
-    sp[29] = n92r;
-}
-// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_stage1_fused_16x16_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
-    [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize b,
-    [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
-{
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2 = t >> 9;
     const crd::usize bb0 = t & 511;
@@ -9477,24 +9523,32 @@ CRD_NOINLINE static void codelet16_stage1_fused_16x16_part1([[maybe_unused]] con
 void codelet16_stage1_fused_16x16(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* out, crd::usize b, const crd::f32* twr, const crd::f32* twi) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[30];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet16_stage1_fused_16x16_part0<V>(in, out, b, twr, twi, t, sp);
+        codelet16_stage1_fused_16x16_part1<V>(in, out, b, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[30];
+        if (wide < tiles)
         {
-            codelet16_stage1_fused_16x16_part0(in, out, b, twr, twi, t, sp);
-            codelet16_stage1_fused_16x16_part1(in, out, b, twr, twi, t, sp);
+            codelet16_stage1_fused_16x16_part0<H>(in, out, b, twr, twi, wide, sh);
+            codelet16_stage1_fused_16x16_part1<H>(in, out, b, twr, twi, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_batched_scatter_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet16_batched_scatter_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* data_base, [[maybe_unused]] crd::usize k1,
-    [[maybe_unused]] crd::usize n1, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    [[maybe_unused]] crd::usize n1, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t, V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     V n15r;
     V n15i; simd::load_complex_deinterleaved(reinterpret_cast<const crd::f32*>(in + 15 * b + t), n15r, n15i);
@@ -9660,12 +9714,10 @@ CRD_NOINLINE static void codelet16_batched_scatter_part0([[maybe_unused]] const 
     sp[29] = n92r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet16_batched_scatter_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
+template <typename V> CRD_NOINLINE static void codelet16_batched_scatter_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* in,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* data_base, [[maybe_unused]] crd::usize k1,
-    [[maybe_unused]] crd::usize n1, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    [[maybe_unused]] crd::usize n1, [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t, const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const V n18i = sp[0];
     const V n18r = sp[1];
@@ -9781,24 +9833,33 @@ CRD_NOINLINE static void codelet16_batched_scatter_part1([[maybe_unused]] const 
 void codelet16_batched_scatter(const crd::hesap::Complex<crd::f32>* in,
     crd::hesap::Complex<crd::f32>* data_base, crd::usize k1, crd::usize n1, crd::usize b) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[30];
-    for (crd::usize tile = 0; tile + 8 <= b; tile += 8)
+    const crd::usize tiles = b - b % lanes::kTile<crd::f32>;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet16_batched_scatter_part0<V>(in, data_base, k1, n1, b, t, sp);
+        codelet16_batched_scatter_part1<V>(in, data_base, k1, n1, b, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[30];
+        if (wide < tiles)
         {
-            codelet16_batched_scatter_part0(in, data_base, k1, n1, b, t, sp);
-            codelet16_batched_scatter_part1(in, data_base, k1, n1, b, t, sp);
+            codelet16_batched_scatter_part0<H>(in, data_base, k1, n1, b, wide, sh);
+            codelet16_batched_scatter_part1<H>(in, data_base, k1, n1, b, wide, sh);
         }
     }
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part0([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize rs,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2v = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -9993,12 +10054,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part0([[maybe_unuse
     sp[51] = n34r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part1([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize rs,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2v = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -10221,12 +10281,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part1([[maybe_unuse
     sp[59] = n81r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part2([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize rs,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2v = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -10460,12 +10519,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part2([[maybe_unuse
     sp[44] = n209r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part3([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize rs,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2v = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -10662,12 +10720,11 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part3([[maybe_unuse
     sp[3] = n37r;
 }
 // NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.
-CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
+template <typename V> CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part4([[maybe_unused]] const crd::hesap::Complex<crd::f32>* din_block,
     [[maybe_unused]] crd::hesap::Complex<crd::f32>* out, [[maybe_unused]] crd::usize rs,
     [[maybe_unused]] const crd::f32* twr, [[maybe_unused]] const crd::f32* twi, [[maybe_unused]] crd::usize t,
-    const crd::hesap::fft::lanes::Lane<crd::f32>* sp) noexcept
+    const V* sp) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
     namespace simd = crd::hesap::fft::lanes;
     const crd::usize n2v = t >> 7;
     const crd::usize bb0 = t & 127;
@@ -10781,17 +10838,30 @@ CRD_NOINLINE static void codelet32_stage1_fused_32x32_gather_part4([[maybe_unuse
 void codelet32_stage1_fused_32x32_gather(const crd::hesap::Complex<crd::f32>* din_block,
     crd::hesap::Complex<crd::f32>* out, crd::usize rs, const crd::f32* twr, const crd::f32* twi) noexcept
 {
-    using V = crd::hesap::fft::lanes::Lane<crd::f32>;
+    namespace lanes = crd::hesap::fft::lanes;
+    using V = lanes::Lane<crd::f32>;
     alignas(64) V sp[60];
-    for (crd::usize tile = 0; tile + 8 <= 4096; tile += 8)
+    const crd::usize tiles = 4096;
+    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;
+    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)
     {
-        for (crd::usize t = tile; t < tile + 8; t += crd::hesap::fft::lanes::kWidth<V>)
+        codelet32_stage1_fused_32x32_gather_part0<V>(din_block, out, rs, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_gather_part1<V>(din_block, out, rs, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_gather_part2<V>(din_block, out, rs, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_gather_part3<V>(din_block, out, rs, twr, twi, t, sp);
+        codelet32_stage1_fused_32x32_gather_part4<V>(din_block, out, rs, twr, twi, t, sp);
+    }
+    if constexpr (lanes::kPairedTiles<crd::f32>)
+    {
+        using H = lanes::TileLane<crd::f32>;
+        alignas(64) H sh[60];
+        if (wide < tiles)
         {
-            codelet32_stage1_fused_32x32_gather_part0(din_block, out, rs, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_gather_part1(din_block, out, rs, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_gather_part2(din_block, out, rs, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_gather_part3(din_block, out, rs, twr, twi, t, sp);
-            codelet32_stage1_fused_32x32_gather_part4(din_block, out, rs, twr, twi, t, sp);
+            codelet32_stage1_fused_32x32_gather_part0<H>(din_block, out, rs, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_gather_part1<H>(din_block, out, rs, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_gather_part2<H>(din_block, out, rs, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_gather_part3<H>(din_block, out, rs, twr, twi, wide, sh);
+            codelet32_stage1_fused_32x32_gather_part4<H>(din_block, out, rs, twr, twi, wide, sh);
         }
     }
 }

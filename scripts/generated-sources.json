@@ -1101,7 +1101,7 @@
         "numpy"
       ],
       "note": "A codelet unit of twiddle_codelets.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "44e178947e7d6ac4af605d24fdb1d3b03831ea3d369cdbf8e42d6aa499c0b68a"
+      "sha256": "cb63cbbe713474a32d53a42712de39f50c93663acadb3a19ad9896a70001ec7a"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_twiddle_codelets_1.cpp",
@@ -1116,7 +1116,7 @@
         "numpy"
       ],
       "note": "A codelet unit of twiddle_codelets.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "6bd2701580b87877224431937f635611b4679eeb14268a64d5649f64671ee3a2"
+      "sha256": "af862883ebac38b3eaf251b9af23584ebbe2257ca1cc1d40c4bf8c13f23d7ba0"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/hier_codelets.hpp",
@@ -1129,15 +1129,15 @@
       "path": "engine/numerics/hesap-fft/kernels/fft_hier_codelets_0.cpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28; the bytes are the artifact, as for the header.",
-      "sha256": "2b2d325e9af92215b395df82436822ce36c69d9fa62f203da7997d573bdfb591"
+      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes; the bytes are the artifact, as for the header.",
+      "sha256": "2470edfbc1711f764632519ec40953cd4f1d76bf52c60e8275e68ced6983a9b1"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_hier_codelets_1.cpp",
       "generator": "build/gen_subfft_m3.py",
       "status": "generator-absent",
-      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28; the bytes are the artifact, as for the header.",
-      "sha256": "52b4539bfa8d226f6700b825b1e9d0eee85faa59464440e8bb5f0aec42ab4e5c"
+      "note": "A codelet unit of hier_codelets.hpp, moved out of it by scripts/fft_codegen_split.py on 2026-10-28 and re-split the same day with parts templated on the lane (SIMD-DISPATCH fft zmm codelets): the same --lanes command on the 20c9f2a1^ header bytes; the bytes are the artifact, as for the header.",
+      "sha256": "5f9dad14081bc6de65d30598ff51d03e343c1174b8e40804497478bbd6247994"
     },
     {
       "path": "engine/numerics/hesap-ode/include/crd/hesap/ode/detail/ark_tableaus.hpp",

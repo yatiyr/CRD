@@ -101,7 +101,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    the differential tests model; its
    elementwise kernels give every element the level's step, and its rotation rounds twice on every level. The
    hesap-fft transform is bit-exact: every level runs one algorithm per size on the level-aware SIMD types, whose
-   single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside). The geometry
+   single-rounded fma and two-rounded products give every level the same bits (NaN payloads aside); its generated
+   codelets compute tiles of four f64 or eight f32 columns on every level, two tiles a register at avx512. The geometry
    families are bit-exact the same way: two roundings a step, the IEEE min/max ordering and scalar lane decisions; so
    is the eylem-rigid3d body step, with true divisions and square roots.
 8. **Qualification.** One binary per lane runs forced-level arms (`CRD_CPU_LEVEL=sse2`, `sse4.2`, `avx2`, and `avx512`

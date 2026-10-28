@@ -17,9 +17,10 @@ noexcept` at column 0 inside the header's one namespace, its SIMD body holds one
 `for (crd::usize t = 0; t + L <= X; t += L)`, values are `n<id>r`/`n<id>i` and the loop body is lines at one depth
 plus `{ ... }` blocks.
 
-A codelet without its own lane-scalar edition (no `#ifdef CRD_FFT_GEN_SIMD_BODY`) computes on
-`crd::hesap::fft::lanes::Lane<T>` (codelet_lanes.hpp): its tile loop runs the body once per lane step, once a tile
-above the portable level and once a column on scalars, so every column sees the same operations.
+A codelet without its own lane-scalar edition (no `#ifdef CRD_FFT_GEN_SIMD_BODY`) computes on codelet_lanes.hpp's
+lanes: its parts, at least one, are templates of the lane, run on `Lane<T>` over the whole tiles it holds (one tile
+above the portable level, two at avx512, a column on scalars) and on `TileLane<T>` over an odd last tile, so every
+column sees the same operations on every level.
 
   python scripts/fft_codegen_split.py [--lanes] <header> <budget> <units> <unit-stem>
 
@@ -42,6 +43,10 @@ _RETYPE = {'    using V = crd::math::simd::Vec4d;': f'    using V = {_LANES}::La
            '    using V = crd::math::simd::Vec8f;': f'    using V = {_LANES}::Lane<crd::f32>;',
            '    namespace simd = crd::math::simd;': f'    namespace simd = {_LANES};'}
 _TILE_LOOP = re.compile(r'^    for \(crd::usize t = 0; t \+ (\d+) <= (\w+); t \+= \1\)$')
+_LANE_OF = re.compile(rf'^    using V = {_LANES}::Lane<(crd::f(?:32|64))>;$')
+_TILE = {'crd::f64': 4, 'crd::f32': 8}  # codelet_lanes.hpp's kTile: 32 bytes of columns
+_MASK = re.compile(r'\bt & (\d+)\b')
+_SHIFT = re.compile(r'\bt >> (\d+)\b')
 
 
 def _items(lines):
@@ -82,14 +87,30 @@ def _wrap(opening, params, closing, width=120):
     return lines
 
 
-def _tile_loop(loop, body, lanes):
-    """The tile loop around `body`; on the lanes it steps through each tile's columns one Lane at a time."""
-    if not lanes:
-        return [loop, '    {'] + body + ['    }']
+def _lane_driver(scalar, loop, calls, slots):
+    """The tiles of `loop` on the lanes: the widest Lane while it holds whole tiles, then an odd last tile on a
+    TileLane; `calls` are the part calls of one step at column `{col}` with the lane `{lane}` and slots `{slots}`."""
     width, bound = _TILE_LOOP.match(loop).groups()
-    return ([f'    for (crd::usize tile = 0; tile + {width} <= {bound}; tile += {width})', '    {',
-             f'        for (crd::usize t = tile; t < tile + {width}; t += {_LANES}::kWidth<V>)', '        {']
-            + [f'    {line}' for line in body] + ['        }', '    }'])
+    if int(width) != _TILE[scalar]:
+        raise ValueError(f'A tile of {scalar} is {_TILE[scalar]} columns, not {width}')
+    if bound.isdigit():
+        tiles = str(int(bound) - int(bound) % int(width))
+    else:
+        tiles = f'{bound} - {bound} % lanes::kTile<{scalar}>'
+
+    def step(indent, lane, col, array):
+        return [indent + call.format(lane=lane, col=col, slots=array) for call in calls]
+
+    out = [f'    namespace lanes = {_LANES};', f'    using V = lanes::Lane<{scalar}>;']
+    out += [f'    alignas(64) V sp[{slots}];'] if slots else []
+    out += [f'    const crd::usize tiles = {tiles};', '    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;',
+            '    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)', '    {']
+    out += step('        ', 'V', 't', 'sp')
+    out += ['    }', f'    if constexpr (lanes::kPairedTiles<{scalar}>)', '    {',
+            f'        using H = lanes::TileLane<{scalar}>;']
+    out += [f'        alignas(64) H sh[{slots}];'] if slots else []
+    out += ['        if (wide < tiles)', '        {'] + step('            ', 'H', 'wide', 'sh')
+    return out + ['        }', '    }']
 
 
 def _closure(text, locals_):
@@ -111,8 +132,14 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
             raise ValueError(f'{name}: unexpected tile prologue {items[0]!r}')
         head.append(items.pop(0)[0])
     weights = [len(item) for item in items]
-    if sum(weights) <= budget:
+    if sum(weights) <= budget and not lanes:
         return None
+    if lanes:  # a step of the widest Lane must not straddle a column block the body indexes by t
+        width = 2 * _TILE[_LANE_OF.match(prologue[0]).group(1)]
+        whole = '\n'.join(body)
+        blocks = [int(m) + 1 for m in _MASK.findall(whole)] + [1 << int(s) for s in _SHIFT.findall(whole)]
+        if any(block % width for block in blocks):
+            raise ValueError(f'{name}: a {width}-column step straddles a column block of {min(blocks)}')
     defs = []
     uses = []
     for item in items:
@@ -181,7 +208,9 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         slots = max(slots, slot + 1)
         slot_of[value] = slot
         busy.append((last, slot))
-    vtype = re.match(r'^    using V = (.+);$', prologue[0]).group(1)
+    # On the lanes every body runs in parts, templates of the lane, so one text serves a Lane and a TileLane.
+    vtype = 'V' if lanes else re.match(r'^    using V = (.+);$', prologue[0]).group(1)
+    template = 'template <typename V> ' if lanes else ''
     params, names = _params(signature)
     part_params = [f'[[maybe_unused]] {param}' for param in params]
     invariant = [(m.group(1), line) for line in prologue[2:] if (m := _LOCAL_DEF.match(line))]
@@ -197,11 +226,11 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         text = '\n'.join(body_text)
         locals_text = _closure(text, invariant + tile_locals)
         out.append('// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.')
-        out += _wrap(f'CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
-                     part_params + ['[[maybe_unused]] crd::usize t', f'{"" if stores else "const "}{vtype}* sp'],
-                     ') noexcept')
+        slot_param = [f'{"" if stores else "const "}{vtype}* sp'] if slots else []
+        out += _wrap(f'{template}CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
+                     part_params + ['[[maybe_unused]] crd::usize t'] + slot_param, ') noexcept')
         out.append('{')
-        out.append(prologue[0])
+        out += [] if lanes else [prologue[0]]
         if 'simd::' in text:
             out.append(prologue[1])
         out += [line[4:] if line.startswith('        ') else line for line in locals_text]
@@ -210,8 +239,12 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         out += [f'    sp[{slot_of[v]}] = {v};' for v in stores]
         out.append('}')
     args = ', '.join(names)
+    if lanes:
+        slot_arg = ', {slots}' if slots else ''
+        calls = [f'{name}{_SUFFIX}{part}<{{lane}}>({args}, {{col}}{slot_arg});' for part in range(len(bounds) - 1)]
+        return out, _lane_driver(_LANE_OF.match(prologue[0]).group(1), loop, calls, slots)
     calls = [f'        {name}{_SUFFIX}{part}({args}, t, sp);' for part in range(len(bounds) - 1)]
-    return out, [prologue[0], f'    alignas(64) V sp[{slots}];'] + _tile_loop(loop, calls, lanes)
+    return out, [prologue[0], f'    alignas(64) V sp[{slots}];', loop, '    {'] + calls + ['    }']
 
 
 def split_kernels(source, budget, units):
@@ -274,9 +307,12 @@ def split_kernels(source, budget, units):
             raise ValueError(f'{name}: unexpected kernel prologue')
         result = _split_kernel(name, signature, prologue, loop, body, budget, lanes)
         if result is None:
-            definition = comment + signature + ['{'] + guard + prologue + _tile_loop(loop, body, lanes) + rest
+            definition = comment + signature + ['{'] + guard + prologue + [loop, '    {'] + body + ['    }'] + rest
         else:
             parts, driver = result
+            if lanes:  # the invariant locals a scalar tail reads
+                invariant = [(_LOCAL_DEF.match(line).group(1), line) for line in prologue[2:]]
+                driver += _closure('\n'.join(rest), invariant)
             if guard:
                 parts = guard + parts + ['#endif']
             definition = parts + comment + signature + ['{'] + guard + driver + rest
