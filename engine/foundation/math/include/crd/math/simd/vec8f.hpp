@@ -262,7 +262,7 @@ CRD_FORCEINLINE Vec8f mul_sub(Vec8f a, Vec8f b, Vec8f c) noexcept
 // wants ~2x throughput on AVX2-FMA hardware AND accepts the single-rounded
 // arithmetic. Bit-exact across SIMD widths only when ALL lanes/widths use
 // fma() (NOT mixed with mul_add). Below AVX2 it runs on the Vec4f halves (an exact
-// emulation on SSE2 and SSE4.2, the C library's fma on NEON and scalar).
+// emulation on SSE2 and SSE4.2, FMLA on NEON, the C library's fma on scalar).
 CRD_FORCEINLINE Vec8f fma(Vec8f a, Vec8f b, Vec8f c) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
@@ -414,6 +414,44 @@ CRD_FORCEINLINE Vec8f select(Vec8f mask, Vec8f true_v, Vec8f false_v) noexcept
 #endif
 }
 
+#if CRD_SIMD_HAS_NEON
+namespace detail
+{
+// A Vec8f from two NEON registers (lanes 0 to 3, lanes 4 to 7).
+CRD_FORCEINLINE Vec8f vec8f_of(float32x4_t lo, float32x4_t hi) noexcept
+{
+    Vec8f r;
+    r.lo.v = lo;
+    r.hi.v = hi;
+    return r;
+}
+
+inline constexpr crd::u32 kEvenSignF32[4] = {0x80000000U, 0U, 0x80000000U, 0U};
+inline constexpr crd::u32 kOddLanesF32[4] = {0U, 0xFFFFFFFFU, 0U, 0xFFFFFFFFU};
+
+// [a.c0 b.c0] and [a.c1 b.c1]: the 64-bit complex units of two registers, low or high.
+CRD_FORCEINLINE float32x4_t units_lo(float32x4_t a, float32x4_t b) noexcept
+{
+    return vcombine_f32(vget_low_f32(a), vget_low_f32(b));
+}
+CRD_FORCEINLINE float32x4_t units_hi(float32x4_t a, float32x4_t b) noexcept
+{
+    return vcombine_f32(vget_high_f32(a), vget_high_f32(b));
+}
+
+// In-register 4x4 transpose: TRN pairs the rows, the 64-bit unit moves finish the columns.
+CRD_FORCEINLINE void transpose4x4(float32x4_t& a, float32x4_t& b, float32x4_t& c, float32x4_t& d) noexcept
+{
+    const float32x4x2_t ab = vtrnq_f32(a, b); // [a0 b0 a2 b2] [a1 b1 a3 b3]
+    const float32x4x2_t cd = vtrnq_f32(c, d); // [c0 d0 c2 d2] [c1 d1 c3 d3]
+    a = units_lo(ab.val[0], cd.val[0]);
+    b = units_lo(ab.val[1], cd.val[1]);
+    c = units_hi(ab.val[0], cd.val[0]);
+    d = units_hi(ab.val[1], cd.val[1]);
+}
+} // namespace detail
+#endif
+
 // Complex deinterleave/interleave for f32 (mirror of the Vec4d helpers): load 8 interleaved complex
 // {r0,i0,...,r7,i7} into split re={r0..r7}, im={i0..i7}; and the inverse store. Pure data shuffles (no
 // arithmetic) ⇒ bit-identical to the scalar fallback on every backend. Lets the batched FFT butterflies run a
@@ -428,6 +466,11 @@ CRD_FORCEINLINE void load_complex_deinterleaved(const f32* p, Vec8f& re, Vec8f& 
     const __m256i idx = _mm256_setr_epi32(0, 1, 4, 5, 2, 3, 6, 7);
     re.v = _mm256_permutevar8x32_ps(ev, idx); // r0 r1 r2 r3 r4 r5 r6 r7
     im.v = _mm256_permutevar8x32_ps(od, idx); // i0 i1 i2 i3 i4 i5 i6 i7
+#elif CRD_SIMD_HAS_NEON
+    const float32x4x2_t z03 = vld2q_f32(p);     // {r0 r1 r2 r3} {i0 i1 i2 i3}
+    const float32x4x2_t z47 = vld2q_f32(p + 8); // {r4 r5 r6 r7} {i4 i5 i6 i7}
+    re = detail::vec8f_of(z03.val[0], z47.val[0]);
+    im = detail::vec8f_of(z03.val[1], z47.val[1]);
 #else
     re = Vec8f(p[0], p[2], p[4], p[6], p[8], p[10], p[12], p[14]);
     im = Vec8f(p[1], p[3], p[5], p[7], p[9], p[11], p[13], p[15]);
@@ -441,6 +484,14 @@ CRD_FORCEINLINE void store_complex_interleaved(f32* p, Vec8f re, Vec8f im) noexc
     const __m256 uh = _mm256_unpackhi_ps(re.v, im.v);              // r2 i2 r3 i3 | r6 i6 r7 i7
     _mm256_storeu_ps(p, _mm256_permute2f128_ps(ul, uh, 0x20));     // r0 i0 r1 i1 r2 i2 r3 i3
     _mm256_storeu_ps(p + 8, _mm256_permute2f128_ps(ul, uh, 0x31)); // r4 i4 r5 i5 r6 i6 r7 i7
+#elif CRD_SIMD_HAS_NEON
+    float32x4x2_t z;
+    z.val[0] = re.lo.v;
+    z.val[1] = im.lo.v;
+    vst2q_f32(p, z); // r0 i0 ... r3 i3
+    z.val[0] = re.hi.v;
+    z.val[1] = im.hi.v;
+    vst2q_f32(p + 8, z); // r4 i4 ... r7 i7
 #else
     for (usize k = 0; k < 8; ++k)
     {
@@ -462,6 +513,8 @@ CRD_FORCEINLINE Vec8f swap_pairs(Vec8f a) noexcept
     Vec8f r;
     r.v = _mm256_permute_ps(a.v, 0xB1); // [1,0,3,2] per 128
     return r;
+#elif CRD_SIMD_HAS_NEON
+    return detail::vec8f_of(vrev64q_f32(a.lo.v), vrev64q_f32(a.hi.v));
 #else
     alignas(32) f32 t[8];
     a.store(t);
@@ -476,6 +529,11 @@ CRD_FORCEINLINE Vec8f addsub(Vec8f a, Vec8f b) noexcept
     Vec8f r;
     r.v = _mm256_addsub_ps(a.v, b.v);
     return r;
+#elif CRD_SIMD_HAS_NEON
+    // Even lanes from the difference, odd lanes from the sum.
+    const uint32x4_t odd = vld1q_u32(detail::kOddLanesF32);
+    return detail::vec8f_of(vbslq_f32(odd, vaddq_f32(a.lo.v, b.lo.v), vsubq_f32(a.lo.v, b.lo.v)),
+                            vbslq_f32(odd, vaddq_f32(a.hi.v, b.hi.v), vsubq_f32(a.hi.v, b.hi.v)));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
@@ -501,6 +559,12 @@ CRD_FORCEINLINE Vec8f fmaddsub(Vec8f a, Vec8f b, Vec8f c) noexcept
     lo.v = _mm_xor_ps(c.lo.v, even);
     hi.v = _mm_xor_ps(c.hi.v, even);
     return Vec8f(fma(a.lo, b.lo, lo), fma(a.hi, b.hi, hi));
+#elif CRD_SIMD_HAS_NEON
+    // c negated (exactly) on the even lanes; FMLA computes c + a*b with one rounding.
+    const uint32x4_t even = vld1q_u32(detail::kEvenSignF32);
+    return detail::vec8f_of(
+        vfmaq_f32(vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(c.lo.v), even)), a.lo.v, b.lo.v),
+        vfmaq_f32(vreinterpretq_f32_u32(veorq_u32(vreinterpretq_u32_f32(c.hi.v), even)), a.hi.v, b.hi.v));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
@@ -524,6 +588,8 @@ CRD_FORCEINLINE Vec8f unpack_c_lo(Vec8f a, Vec8f b) noexcept
     Vec8f r;
     r.v = _mm256_castpd_ps(_mm256_unpacklo_pd(_mm256_castps_pd(a.v), _mm256_castps_pd(b.v)));
     return r;
+#elif CRD_SIMD_HAS_NEON
+    return detail::vec8f_of(detail::units_lo(a.lo.v, b.lo.v), detail::units_lo(a.hi.v, b.hi.v));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
@@ -538,6 +604,8 @@ CRD_FORCEINLINE Vec8f unpack_c_hi(Vec8f a, Vec8f b) noexcept
     Vec8f r;
     r.v = _mm256_castpd_ps(_mm256_unpackhi_pd(_mm256_castps_pd(a.v), _mm256_castps_pd(b.v)));
     return r;
+#elif CRD_SIMD_HAS_NEON
+    return detail::vec8f_of(detail::units_hi(a.lo.v, b.lo.v), detail::units_hi(a.hi.v, b.hi.v));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
@@ -554,6 +622,9 @@ CRD_FORCEINLINE Vec8f blend_c_odd(Vec8f a, Vec8f b) noexcept
     Vec8f r;
     r.v = _mm256_blend_ps(a.v, b.v, 0xCC); // floats 2,3,6,7 from b
     return r;
+#elif CRD_SIMD_HAS_NEON
+    return detail::vec8f_of(vcombine_f32(vget_low_f32(a.lo.v), vget_high_f32(b.lo.v)),
+                            vcombine_f32(vget_low_f32(a.hi.v), vget_high_f32(b.hi.v)));
 #else
     alignas(32) f32 x[8];
     alignas(32) f32 y[8];
@@ -568,6 +639,8 @@ CRD_FORCEINLINE void store_c_lo(f32* p, Vec8f a) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     _mm_storeu_ps(p, _mm256_castps256_ps128(a.v));
+#elif CRD_SIMD_HAS_NEON
+    vst1q_f32(p, a.lo.v);
 #else
     alignas(32) f32 x[8];
     a.store(x);
@@ -581,6 +654,8 @@ CRD_FORCEINLINE void store_c_hi(f32* p, Vec8f a) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
     _mm_storeu_ps(p, _mm256_extractf128_ps(a.v, 1));
+#elif CRD_SIMD_HAS_NEON
+    vst1q_f32(p, a.hi.v);
 #else
     alignas(32) f32 x[8];
     a.store(x);
@@ -621,6 +696,24 @@ CRD_FORCEINLINE void transpose8x8(Vec8f& r0, Vec8f& r1, Vec8f& r2, Vec8f& r3, Ve
     r5.v = _mm256_permute2f128_ps(u1, u5, 0x31);
     r6.v = _mm256_permute2f128_ps(u2, u6, 0x31);
     r7.v = _mm256_permute2f128_ps(u3, u7, 0x31);
+#elif CRD_SIMD_HAS_NEON
+    // Four 4x4 quadrant transposes: the top-right quadrant of the result is the bottom-left one of the input.
+    float32x4_t q[4][4] = {{r0.lo.v, r1.lo.v, r2.lo.v, r3.lo.v},
+                           {r4.lo.v, r5.lo.v, r6.lo.v, r7.lo.v},
+                           {r0.hi.v, r1.hi.v, r2.hi.v, r3.hi.v},
+                           {r4.hi.v, r5.hi.v, r6.hi.v, r7.hi.v}};
+    for (float32x4_t(&t)[4] : q)
+    {
+        detail::transpose4x4(t[0], t[1], t[2], t[3]);
+    }
+    r0 = detail::vec8f_of(q[0][0], q[1][0]);
+    r1 = detail::vec8f_of(q[0][1], q[1][1]);
+    r2 = detail::vec8f_of(q[0][2], q[1][2]);
+    r3 = detail::vec8f_of(q[0][3], q[1][3]);
+    r4 = detail::vec8f_of(q[2][0], q[3][0]);
+    r5 = detail::vec8f_of(q[2][1], q[3][1]);
+    r6 = detail::vec8f_of(q[2][2], q[3][2]);
+    r7 = detail::vec8f_of(q[2][3], q[3][3]);
 #else
     Vec8f* rows[8] = {&r0, &r1, &r2, &r3, &r4, &r5, &r6, &r7};
     f32 m[8][8];

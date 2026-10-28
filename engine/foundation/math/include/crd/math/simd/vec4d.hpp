@@ -1,10 +1,10 @@
 // Vec4d — 4-lane f64 SIMD wrapper. Phase 3.1.6 v0d-perf-f64-avx2.
 //
-// AVX2: one 256-bit register (`__m256d`). SSE2 and SSE4.2: two 128-bit registers (`lo` holds lanes 0 and 1, `hi`
-// lanes 2 and 3). NEON and scalar: a 4-element f64 array. Every backend gives the scalar array's bits: IEEE lane
-// arithmetic, hardware `sqrt`, the fixed pairwise horizontal sum, and a single-rounded `fma` (exact emulation on SSE2
-// and SSE4.2, fma_exact.hpp; the C library's fma per lane on NEON and scalar). `mul_add` rounds twice on every backend
-// (ADR-0063).
+// AVX2: one 256-bit register (`__m256d`). SSE2, SSE4.2 and NEON: two 128-bit registers (`lo` holds lanes 0 and 1,
+// `hi` lanes 2 and 3). Scalar: a 4-element f64 array. Every backend gives the scalar array's bits: IEEE lane
+// arithmetic, hardware `sqrt`, the fixed pairwise horizontal sum, and a single-rounded `fma` (the instruction on AVX2
+// and NEON, exact emulation on SSE2 and SSE4.2, fma_exact.hpp; the C library's fma per lane on scalar). `mul_add`
+// rounds twice on every backend (ADR-0063).
 
 #pragma once
 
@@ -21,16 +21,21 @@ struct Vec4d
     using Native = __m256d;
     Native v;
 #elif CRD_SIMD_HAS_SSE2
-    __m128d lo;
-    __m128d hi;
+    using Half = __m128d;
+    Half lo;
+    Half hi;
+#elif CRD_SIMD_HAS_NEON
+    using Half = float64x2_t;
+    Half lo;
+    Half hi;
 #else
     alignas(16) f64 lanes[4];
 #endif
 
     Vec4d() noexcept = default;
 
-#if CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_AVX2
-    CRD_FORCEINLINE Vec4d(__m128d lo_in, __m128d hi_in) noexcept : lo(lo_in), hi(hi_in) {}
+#if (CRD_SIMD_HAS_SSE2 && !CRD_SIMD_HAS_AVX2) || CRD_SIMD_HAS_NEON
+    CRD_FORCEINLINE Vec4d(Half lo_in, Half hi_in) noexcept : lo(lo_in), hi(hi_in) {}
 #endif
 
     CRD_FORCEINLINE explicit Vec4d(f64 broadcast) noexcept
@@ -39,6 +44,9 @@ struct Vec4d
         v = _mm256_set1_pd(broadcast);
 #elif CRD_SIMD_HAS_SSE2
         lo = _mm_set1_pd(broadcast);
+        hi = lo;
+#elif CRD_SIMD_HAS_NEON
+        lo = vdupq_n_f64(broadcast);
         hi = lo;
 #else
         lanes[0] = broadcast;
@@ -55,6 +63,10 @@ struct Vec4d
 #elif CRD_SIMD_HAS_SSE2
         lo = _mm_set_pd(e1, e0);
         hi = _mm_set_pd(e3, e2);
+#elif CRD_SIMD_HAS_NEON
+        const f64 e[4] = {e0, e1, e2, e3};
+        lo = vld1q_f64(e);
+        hi = vld1q_f64(e + 2);
 #else
         lanes[0] = e0;
         lanes[1] = e1;
@@ -74,6 +86,8 @@ struct Vec4d
         return r;
 #elif CRD_SIMD_HAS_SSE2
         return Vec4d(_mm_loadu_pd(p), _mm_loadu_pd(p + 2));
+#elif CRD_SIMD_HAS_NEON
+        return Vec4d(vld1q_f64(p), vld1q_f64(p + 2));
 #else
         return Vec4d(p[0], p[1], p[2], p[3]);
 #endif
@@ -87,6 +101,8 @@ struct Vec4d
         return r;
 #elif CRD_SIMD_HAS_SSE2
         return Vec4d(_mm_load_pd(p), _mm_load_pd(p + 2));
+#elif CRD_SIMD_HAS_NEON
+        return Vec4d(vld1q_f64(p), vld1q_f64(p + 2));
 #else
         return Vec4d(p[0], p[1], p[2], p[3]);
 #endif
@@ -99,6 +115,9 @@ struct Vec4d
 #elif CRD_SIMD_HAS_SSE2
         _mm_storeu_pd(p, lo);
         _mm_storeu_pd(p + 2, hi);
+#elif CRD_SIMD_HAS_NEON
+        vst1q_f64(p, lo);
+        vst1q_f64(p + 2, hi);
 #else
         p[0] = lanes[0];
         p[1] = lanes[1];
@@ -117,6 +136,8 @@ struct Vec4d
         return r;
 #elif CRD_SIMD_HAS_SSE2
         return Vec4d(_mm_set1_pd(p[0]), _mm_set1_pd(p[1]));
+#elif CRD_SIMD_HAS_NEON
+        return Vec4d(vld1q_dup_f64(p), vld1q_dup_f64(p + 1));
 #else
         return Vec4d(p[0], p[0], p[1], p[1]);
 #endif
@@ -146,6 +167,18 @@ struct Vec4d
             return Vec4d(_mm_loadu_pd(p), _mm_setzero_pd());
         }
         return Vec4d(_mm_loadu_pd(p), _mm_load_sd(p + 2));
+#elif CRD_SIMD_HAS_NEON
+        // Reads only the first count lanes, as the mask load does.
+        const float64x2_t zero = vdupq_n_f64(0.0);
+        if (count == 1U)
+        {
+            return Vec4d(vsetq_lane_f64(p[0], zero, 0), zero);
+        }
+        if (count == 2U)
+        {
+            return Vec4d(vld1q_f64(p), zero);
+        }
+        return Vec4d(vld1q_f64(p), vsetq_lane_f64(p[2], zero, 0));
 #else
         Vec4d r(0.0, 0.0, 0.0, 0.0);
         for (usize i = 0; i < count; ++i)
@@ -175,6 +208,19 @@ struct Vec4d
                 _mm_store_sd(p + 2, hi);
             }
         }
+#elif CRD_SIMD_HAS_NEON
+        if (count == 1U)
+        {
+            vst1q_lane_f64(p, lo, 0);
+        }
+        else
+        {
+            vst1q_f64(p, lo);
+            if (count == 3U)
+            {
+                vst1q_lane_f64(p + 2, hi, 0);
+            }
+        }
 #else
         for (usize i = 0; i < count; ++i)
         {
@@ -190,6 +236,9 @@ struct Vec4d
 #elif CRD_SIMD_HAS_SSE2
         _mm_store_pd(p, lo);
         _mm_store_pd(p + 2, hi);
+#elif CRD_SIMD_HAS_NEON
+        vst1q_f64(p, lo);
+        vst1q_f64(p + 2, hi);
 #else
         p[0] = lanes[0];
         p[1] = lanes[1];
@@ -218,6 +267,8 @@ CRD_FORCEINLINE Vec4d operator+(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_add_pd(a.lo, b.lo), _mm_add_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vaddq_f64(a.lo, b.lo), vaddq_f64(a.hi, b.hi));
 #else
     return Vec4d(a.lanes[0] + b.lanes[0], a.lanes[1] + b.lanes[1],
                  a.lanes[2] + b.lanes[2], a.lanes[3] + b.lanes[3]);
@@ -232,6 +283,8 @@ CRD_FORCEINLINE Vec4d operator-(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_sub_pd(a.lo, b.lo), _mm_sub_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vsubq_f64(a.lo, b.lo), vsubq_f64(a.hi, b.hi));
 #else
     return Vec4d(a.lanes[0] - b.lanes[0], a.lanes[1] - b.lanes[1],
                  a.lanes[2] - b.lanes[2], a.lanes[3] - b.lanes[3]);
@@ -246,6 +299,8 @@ CRD_FORCEINLINE Vec4d operator*(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_mul_pd(a.lo, b.lo), _mm_mul_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vmulq_f64(a.lo, b.lo), vmulq_f64(a.hi, b.hi));
 #else
     return Vec4d(a.lanes[0] * b.lanes[0], a.lanes[1] * b.lanes[1],
                  a.lanes[2] * b.lanes[2], a.lanes[3] * b.lanes[3]);
@@ -260,6 +315,8 @@ CRD_FORCEINLINE Vec4d operator/(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_div_pd(a.lo, b.lo), _mm_div_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vdivq_f64(a.lo, b.lo), vdivq_f64(a.hi, b.hi));
 #else
     return Vec4d(a.lanes[0] / b.lanes[0], a.lanes[1] / b.lanes[1],
                  a.lanes[2] / b.lanes[2], a.lanes[3] / b.lanes[3]);
@@ -276,6 +333,8 @@ CRD_FORCEINLINE Vec4d operator-(Vec4d a) noexcept
 #elif CRD_SIMD_HAS_SSE2
     const __m128d sign = _mm_set1_pd(-0.0);
     return Vec4d(_mm_xor_pd(a.lo, sign), _mm_xor_pd(a.hi, sign));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vnegq_f64(a.lo), vnegq_f64(a.hi));
 #else
     return Vec4d(-a.lanes[0], -a.lanes[1], -a.lanes[2], -a.lanes[3]);
 #endif
@@ -299,6 +358,8 @@ CRD_FORCEINLINE Vec4d fma(Vec4d a, Vec4d b, Vec4d c) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(detail::fma_pd(a.lo, b.lo, c.lo), detail::fma_pd(a.hi, b.hi, c.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vfmaq_f64(c.lo, a.lo, b.lo), vfmaq_f64(c.hi, a.hi, b.hi)); // FMLA: c + a*b, one rounding
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -319,6 +380,8 @@ CRD_FORCEINLINE Vec4d fnmadd(Vec4d a, Vec4d b, Vec4d c) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return fma(-a, b, c); // the negation is exact, so this rounds once like the instruction
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vfmsq_f64(c.lo, a.lo, b.lo), vfmsq_f64(c.hi, a.hi, b.hi)); // FMLS: c - a*b, one rounding
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -339,6 +402,8 @@ CRD_FORCEINLINE Vec4d min(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_min_pd(a.lo, b.lo), _mm_min_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vbslq_f64(vcltq_f64(a.lo, b.lo), a.lo, b.lo), vbslq_f64(vcltq_f64(a.hi, b.hi), a.hi, b.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -357,6 +422,8 @@ CRD_FORCEINLINE Vec4d max(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_max_pd(a.lo, b.lo), _mm_max_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vbslq_f64(vcgtq_f64(a.lo, b.lo), a.lo, b.lo), vbslq_f64(vcgtq_f64(a.hi, b.hi), a.hi, b.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -378,6 +445,8 @@ CRD_FORCEINLINE Vec4d abs(Vec4d a) noexcept
 #elif CRD_SIMD_HAS_SSE2
     const __m128d sign_mask = _mm_castsi128_pd(_mm_set1_epi64x(0x7FFFFFFFFFFFFFFFLL));
     return Vec4d(_mm_and_pd(a.lo, sign_mask), _mm_and_pd(a.hi, sign_mask));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vabsq_f64(a.lo), vabsq_f64(a.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -399,6 +468,8 @@ CRD_FORCEINLINE Vec4d sqrt(Vec4d a) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_sqrt_pd(a.lo), _mm_sqrt_pd(a.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vsqrtq_f64(a.lo), vsqrtq_f64(a.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -432,6 +503,8 @@ CRD_FORCEINLINE Vec4d cmp_lt(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_cmplt_pd(a.lo, b.lo), _mm_cmplt_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vreinterpretq_f64_u64(vcltq_f64(a.lo, b.lo)), vreinterpretq_f64_u64(vcltq_f64(a.hi, b.hi)));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -451,6 +524,8 @@ CRD_FORCEINLINE Vec4d cmp_le(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_cmple_pd(a.lo, b.lo), _mm_cmple_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vreinterpretq_f64_u64(vcleq_f64(a.lo, b.lo)), vreinterpretq_f64_u64(vcleq_f64(a.hi, b.hi)));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -469,6 +544,8 @@ CRD_FORCEINLINE Vec4d cmp_eq(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_cmpeq_pd(a.lo, b.lo), _mm_cmpeq_pd(a.hi, b.hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vreinterpretq_f64_u64(vceqq_f64(a.lo, b.lo)), vreinterpretq_f64_u64(vceqq_f64(a.hi, b.hi)));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -492,6 +569,9 @@ CRD_FORCEINLINE Vec4d select(Vec4d mask, Vec4d true_v, Vec4d false_v) noexcept
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_or_pd(_mm_and_pd(mask.lo, true_v.lo), _mm_andnot_pd(mask.lo, false_v.lo)),
                  _mm_or_pd(_mm_and_pd(mask.hi, true_v.hi), _mm_andnot_pd(mask.hi, false_v.hi)));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vbslq_f64(vreinterpretq_u64_f64(mask.lo), true_v.lo, false_v.lo),
+                 vbslq_f64(vreinterpretq_u64_f64(mask.hi), true_v.hi, false_v.hi));
 #else
     Vec4d r;
     // Mask lane is either all-1s or all-0s as f64-encoded bits; test by
@@ -524,6 +604,11 @@ CRD_FORCEINLINE void load_complex_deinterleaved(const f64* p, Vec4d& re, Vec4d& 
     const __m128d z3 = _mm_loadu_pd(p + 6); // r3 i3
     re = Vec4d(_mm_unpacklo_pd(z0, z1), _mm_unpacklo_pd(z2, z3));
     im = Vec4d(_mm_unpackhi_pd(z0, z1), _mm_unpackhi_pd(z2, z3));
+#elif CRD_SIMD_HAS_NEON
+    const float64x2x2_t z01 = vld2q_f64(p);     // {r0 r1} {i0 i1}
+    const float64x2x2_t z23 = vld2q_f64(p + 4); // {r2 r3} {i2 i3}
+    re = Vec4d(z01.val[0], z23.val[0]);
+    im = Vec4d(z01.val[1], z23.val[1]);
 #else
     re = Vec4d(p[0], p[2], p[4], p[6]);
     im = Vec4d(p[1], p[3], p[5], p[7]);
@@ -542,6 +627,14 @@ CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec4d re, Vec4d im) noexc
     _mm_storeu_pd(p + 2, _mm_unpackhi_pd(re.lo, im.lo)); // r1 i1
     _mm_storeu_pd(p + 4, _mm_unpacklo_pd(re.hi, im.hi)); // r2 i2
     _mm_storeu_pd(p + 6, _mm_unpackhi_pd(re.hi, im.hi)); // r3 i3
+#elif CRD_SIMD_HAS_NEON
+    float64x2x2_t z;
+    z.val[0] = re.lo;
+    z.val[1] = im.lo;
+    vst2q_f64(p, z); // r0 i0 r1 i1
+    z.val[0] = re.hi;
+    z.val[1] = im.hi;
+    vst2q_f64(p + 4, z); // r2 i2 r3 i3
 #else
     p[0] = re.lanes[0];
     p[1] = im.lanes[0];
@@ -567,6 +660,8 @@ CRD_FORCEINLINE Vec4d swap_pairs(Vec4d a) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_shuffle_pd(a.lo, a.lo, 1), _mm_shuffle_pd(a.hi, a.hi, 1));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vextq_f64(a.lo, a.lo, 1), vextq_f64(a.hi, a.hi, 1));
 #else
     return Vec4d(a.lanes[1], a.lanes[0], a.lanes[3], a.lanes[2]);
 #endif
@@ -583,6 +678,10 @@ CRD_FORCEINLINE Vec4d addsub(Vec4d a, Vec4d b) noexcept
     // SSE2 has no addsub (SSE3): lane 0 of each half from the difference, lane 1 from the sum.
     return Vec4d(_mm_move_sd(_mm_add_pd(a.lo, b.lo), _mm_sub_pd(a.lo, b.lo)),
                  _mm_move_sd(_mm_add_pd(a.hi, b.hi), _mm_sub_pd(a.hi, b.hi)));
+#elif CRD_SIMD_HAS_NEON
+    // Lane 0 of each half from the difference, lane 1 from the sum, as on SSE2.
+    return Vec4d(vcombine_f64(vget_low_f64(vsubq_f64(a.lo, b.lo)), vget_high_f64(vaddq_f64(a.lo, b.lo))),
+                 vcombine_f64(vget_low_f64(vsubq_f64(a.hi, b.hi)), vget_high_f64(vaddq_f64(a.hi, b.hi))));
 #else
     return Vec4d(a.lanes[0] - b.lanes[0], a.lanes[1] + b.lanes[1], a.lanes[2] - b.lanes[2],
                  a.lanes[3] + b.lanes[3]);
@@ -601,6 +700,11 @@ CRD_FORCEINLINE Vec4d fmaddsub(Vec4d a, Vec4d b, Vec4d c) noexcept
     const __m128d even = _mm_set_pd(0.0, -0.0);
     return Vec4d(detail::fma_pd(a.lo, b.lo, _mm_xor_pd(c.lo, even)),
                  detail::fma_pd(a.hi, b.hi, _mm_xor_pd(c.hi, even)));
+#elif CRD_SIMD_HAS_NEON
+    // c negated (exactly) on the even lanes.
+    const uint64x2_t even = vcombine_u64(vcreate_u64(0x8000000000000000ULL), vcreate_u64(0U));
+    return Vec4d(vfmaq_f64(vreinterpretq_f64_u64(veorq_u64(vreinterpretq_u64_f64(c.lo), even)), a.lo, b.lo),
+                 vfmaq_f64(vreinterpretq_f64_u64(veorq_u64(vreinterpretq_u64_f64(c.hi), even)), a.hi, b.hi));
 #else
     Vec4d r;
     for (usize i = 0; i < 4; ++i)
@@ -621,6 +725,8 @@ CRD_FORCEINLINE Vec4d load_pair128(const f64* lo, const f64* hi) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(_mm_loadu_pd(lo), _mm_loadu_pd(hi));
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(vld1q_f64(lo), vld1q_f64(hi));
 #else
     return Vec4d(lo[0], lo[1], hi[0], hi[1]);
 #endif
@@ -635,6 +741,8 @@ CRD_FORCEINLINE Vec4d concat_lo(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(a.lo, b.lo);
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(a.lo, b.lo);
 #else
     return Vec4d(a.lanes[0], a.lanes[1], b.lanes[0], b.lanes[1]);
 #endif
@@ -647,6 +755,8 @@ CRD_FORCEINLINE Vec4d concat_hi(Vec4d a, Vec4d b) noexcept
     return r;
 #elif CRD_SIMD_HAS_SSE2
     return Vec4d(a.hi, b.hi);
+#elif CRD_SIMD_HAS_NEON
+    return Vec4d(a.hi, b.hi);
 #else
     return Vec4d(a.lanes[2], a.lanes[3], b.lanes[2], b.lanes[3]);
 #endif
@@ -658,6 +768,8 @@ CRD_FORCEINLINE Vec4d mix_lo_hi(Vec4d a, Vec4d b) noexcept
     r.v = _mm256_permute2f128_pd(a.v, b.v, 0x30);
     return r;
 #elif CRD_SIMD_HAS_SSE2
+    return Vec4d(a.lo, b.hi);
+#elif CRD_SIMD_HAS_NEON
     return Vec4d(a.lo, b.hi);
 #else
     return Vec4d(a.lanes[0], a.lanes[1], b.lanes[2], b.lanes[3]);
@@ -682,6 +794,16 @@ CRD_FORCEINLINE void transpose4x4(Vec4d& r0, Vec4d& r1, Vec4d& r2, Vec4d& r3) no
     const Vec4d o1(_mm_unpackhi_pd(r0.lo, r1.lo), _mm_unpackhi_pd(r2.lo, r3.lo));
     const Vec4d o2(_mm_unpacklo_pd(r0.hi, r1.hi), _mm_unpacklo_pd(r2.hi, r3.hi));
     const Vec4d o3(_mm_unpackhi_pd(r0.hi, r1.hi), _mm_unpackhi_pd(r2.hi, r3.hi));
+    r0 = o0;
+    r1 = o1;
+    r2 = o2;
+    r3 = o3;
+#elif CRD_SIMD_HAS_NEON
+    // vzip1q/vzip2q: [a0 b0] and [a1 b1], the SSE2 unpacks.
+    const Vec4d o0(vzip1q_f64(r0.lo, r1.lo), vzip1q_f64(r2.lo, r3.lo));
+    const Vec4d o1(vzip2q_f64(r0.lo, r1.lo), vzip2q_f64(r2.lo, r3.lo));
+    const Vec4d o2(vzip1q_f64(r0.hi, r1.hi), vzip1q_f64(r2.hi, r3.hi));
+    const Vec4d o3(vzip2q_f64(r0.hi, r1.hi), vzip2q_f64(r2.hi, r3.hi));
     r0 = o0;
     r1 = o1;
     r2 = o2;

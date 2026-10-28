@@ -178,10 +178,10 @@ CRD_FORCEINLINE Vec4f mul_add(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * 
 CRD_FORCEINLINE Vec4f mul_sub(Vec4f a, Vec4f b, Vec4f c) noexcept { return (a * b) - c; }
 
 // Single-rounded IEEE 754 FMA (a*b + c with one rounding). Distinct from mul_add
-// (two roundings, ADR-0063 default). The AVX2 backend has the instruction, SSE2 and
-// SSE4.2 emulate it exactly (fma_exact.hpp), NEON and scalar fuse per lane through the
-// C library's fma; IEEE 754-2008 fixes the bits, so Vec8f (two Vec4f halves below AVX2)
-// stays width- and level-exact. Do NOT rewrite as (a*b)+c: that is two-rounded.
+// (two roundings, ADR-0063 default). AVX2 and NEON have the instruction (FMLA computes c + a*b), SSE2 and SSE4.2
+// emulate it exactly (fma_exact.hpp), scalar fuses per lane through the C library's fma; IEEE 754-2008 fixes the bits,
+// so Vec8f (two Vec4f halves below AVX2) stays width- and level-exact. Do NOT rewrite as (a*b)+c: that is
+// two-rounded.
 CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
 {
 #if CRD_SIMD_HAS_AVX2
@@ -191,6 +191,10 @@ CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
 #elif CRD_SIMD_HAS_SSE2
     Vec4f r;
     r.v = detail::fma_ps(a.v, b.v, c.v);
+    return r;
+#elif CRD_SIMD_HAS_NEON
+    Vec4f r;
+    r.v = vfmaq_f32(c.v, a.v, b.v);
     return r;
 #else
     f32 af[4];
@@ -205,13 +209,19 @@ CRD_FORCEINLINE Vec4f fma(Vec4f a, Vec4f b, Vec4f c) noexcept
 }
 
 // ---- min / max / abs / sqrt -----------------------------------------------
+//
+// min is a < b ? a : b and max is a > b ? a : b on every backend, as SSE's minps/maxps compute them: a NaN in either
+// operand or two equal operands (+0 and -0) give the second operand. NEON's FMIN/FMAX return NaN and order -0 below
+// +0, so the NEON backend selects on the comparison instead.
 
 CRD_FORCEINLINE Vec4f min(Vec4f a, Vec4f b) noexcept
 {
 #if CRD_SIMD_HAS_SSE2
     Vec4f r; r.v = _mm_min_ps(a.v, b.v); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4f r; r.v = vminq_f32(a.v, b.v); return r;
+    Vec4f r;
+    r.v = vbslq_f32(vcltq_f32(a.v, b.v), a.v, b.v);
+    return r;
 #else
     return Vec4f(a.v[0] < b.v[0] ? a.v[0] : b.v[0],
                  a.v[1] < b.v[1] ? a.v[1] : b.v[1],
@@ -225,7 +235,9 @@ CRD_FORCEINLINE Vec4f max(Vec4f a, Vec4f b) noexcept
 #if CRD_SIMD_HAS_SSE2
     Vec4f r; r.v = _mm_max_ps(a.v, b.v); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4f r; r.v = vmaxq_f32(a.v, b.v); return r;
+    Vec4f r;
+    r.v = vbslq_f32(vcgtq_f32(a.v, b.v), a.v, b.v);
+    return r;
 #else
     return Vec4f(a.v[0] > b.v[0] ? a.v[0] : b.v[0],
                  a.v[1] > b.v[1] ? a.v[1] : b.v[1],

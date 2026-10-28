@@ -97,10 +97,12 @@ CRD_FORCEINLINE Vec4i convert_truncate(Vec4f a) noexcept
     r.v = _mm_cvttps_epi32(detail::fold_barrier(a.v));
     return r;
 #elif CRD_SIMD_HAS_NEON
-    // FCVTZS saturates and gives 0 for a NaN; a lane that is not below 2^31 takes INT32_MIN instead.
+    // FCVTZS saturates and gives 0 for a NaN. The scalar's own range test picks the lanes it converts, so no lane
+    // depends on the conversion's out-of-range result (nor on a compiler folding it).
+    const uint32x4_t in_range =
+        vandq_u32(vcgeq_f32(a.v, vdupq_n_f32(-2147483648.0F)), vcltq_f32(a.v, vdupq_n_f32(2147483648.0F)));
     Vec4i r;
-    r.v = vbslq_s32(vcltq_f32(a.v, vdupq_n_f32(2147483648.0F)), vcvtq_s32_f32(a.v),
-                    vdupq_n_s32(static_cast<crd::i32>(0x80000000U)));
+    r.v = vbslq_s32(in_range, vcvtq_s32_f32(a.v), vdupq_n_s32(static_cast<crd::i32>(0x80000000U)));
     return r;
 #else
     Vec4i r;

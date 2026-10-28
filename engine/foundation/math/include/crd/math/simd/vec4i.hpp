@@ -149,10 +149,14 @@ CRD_FORCEINLINE Vec4i and_not(Vec4i a, Vec4i b) noexcept
 #endif
 }
 
+// Shifts by a compile-time count in [0, 32): every backend's result is defined there (NEON's right-shift immediates
+// take 1 to 32, so a zero right shift returns its operand).
+
 // Logical shift left by compile-time imm.
 template <int N>
 CRD_FORCEINLINE Vec4i shift_left(Vec4i a) noexcept
 {
+    static_assert(N >= 0 && N < 32, "shift count out of range");
 #if CRD_SIMD_HAS_SSE2
     Vec4i r; r.v = _mm_slli_epi32(a.v, N); return r;
 #elif CRD_SIMD_HAS_NEON
@@ -166,10 +170,20 @@ CRD_FORCEINLINE Vec4i shift_left(Vec4i a) noexcept
 template <int N>
 CRD_FORCEINLINE Vec4i shift_right_arith(Vec4i a) noexcept
 {
+    static_assert(N >= 0 && N < 32, "shift count out of range");
 #if CRD_SIMD_HAS_SSE2
     Vec4i r; r.v = _mm_srai_epi32(a.v, N); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4i r; r.v = vshrq_n_s32(a.v, N); return r;
+    if constexpr (N == 0)
+    {
+        return a;
+    }
+    else
+    {
+        Vec4i r;
+        r.v = vshrq_n_s32(a.v, N);
+        return r;
+    }
 #else
     return Vec4i(a.v[0] >> N, a.v[1] >> N, a.v[2] >> N, a.v[3] >> N);
 #endif
@@ -179,10 +193,20 @@ CRD_FORCEINLINE Vec4i shift_right_arith(Vec4i a) noexcept
 template <int N>
 CRD_FORCEINLINE Vec4i shift_right_logical(Vec4i a) noexcept
 {
+    static_assert(N >= 0 && N < 32, "shift count out of range");
 #if CRD_SIMD_HAS_SSE2
     Vec4i r; r.v = _mm_srli_epi32(a.v, N); return r;
 #elif CRD_SIMD_HAS_NEON
-    Vec4i r; r.v = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(a.v), N)); return r;
+    if constexpr (N == 0)
+    {
+        return a;
+    }
+    else
+    {
+        Vec4i r;
+        r.v = vreinterpretq_s32_u32(vshrq_n_u32(vreinterpretq_u32_s32(a.v), N));
+        return r;
+    }
 #else
     return Vec4i(static_cast<crd::i32>(static_cast<crd::u32>(a.v[0]) >> N),
                  static_cast<crd::i32>(static_cast<crd::u32>(a.v[1]) >> N),

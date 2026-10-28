@@ -703,3 +703,61 @@ TEST_CASE("simd negation flips the sign bit and fnmadd is single-rounded", "[sim
     const f64 d = 1.0 + 0x1.0p-27;
     CHECK(bit_eq_f64(crd::math::simd::fnmadd(Vec4d(d), Vec4d(d), Vec4d(1.0)).lane(0), -(0x1.0p-26 + 0x1.0p-54)));
 }
+
+// min is a < b ? a : b and max a > b ? a : b on every backend (x86's minps/maxps): a NaN or a tie gives the second
+// operand, bit for bit. NEON's FMIN/FMAX would give NaN and -0 instead.
+TEST_CASE("simd min and max return the second operand on a NaN or a tie", "[simd][determinism]")
+{
+    using crd::u32;
+    using crd::u64;
+    using crd::math::simd::Vec16f;
+    using crd::math::simd::Vec8d;
+    struct RowF
+    {
+        u32 a;
+        u32 b;
+        u32 min;
+        u32 max;
+    };
+    const RowF rows_f[] = {
+        {0x7FC00001U, 0x40000000U, 0x40000000U, 0x40000000U}, // min(NaN, 2) = 2
+        {0x40000000U, 0x7FC00001U, 0x7FC00001U, 0x7FC00001U}, // min(2, NaN) = NaN
+        {0x80000000U, 0x00000000U, 0x00000000U, 0x00000000U}, // min(-0, +0) = +0
+        {0x00000000U, 0x80000000U, 0x80000000U, 0x80000000U}, // min(+0, -0) = -0
+        {0xBF800000U, 0x40400000U, 0xBF800000U, 0x40400000U}, // min(-1, 3) = -1
+    };
+    for (const RowF& row : rows_f)
+    {
+        const f32 a = std::bit_cast<f32>(row.a);
+        const f32 b = std::bit_cast<f32>(row.b);
+        CHECK(std::bit_cast<u32>(crd::math::simd::min(Vec4f(a), Vec4f(b)).lane(2)) == row.min);
+        CHECK(std::bit_cast<u32>(crd::math::simd::max(Vec4f(a), Vec4f(b)).lane(1)) == row.max);
+        CHECK(std::bit_cast<u32>(crd::math::simd::min(Vec8f(a), Vec8f(b)).lane(5)) == row.min);
+        CHECK(std::bit_cast<u32>(crd::math::simd::max(Vec8f(a), Vec8f(b)).lane(7)) == row.max);
+        CHECK(std::bit_cast<u32>(crd::math::simd::min(Vec16f(a), Vec16f(b)).lane(13)) == row.min);
+        CHECK(std::bit_cast<u32>(crd::math::simd::max(Vec16f(a), Vec16f(b)).lane(9)) == row.max);
+    }
+    struct RowD
+    {
+        u64 a;
+        u64 b;
+        u64 min;
+        u64 max;
+    };
+    const RowD rows_d[] = {
+        {0x7FF8000000000001ULL, 0x4000000000000000ULL, 0x4000000000000000ULL, 0x4000000000000000ULL},
+        {0x4000000000000000ULL, 0x7FF8000000000001ULL, 0x7FF8000000000001ULL, 0x7FF8000000000001ULL},
+        {0x8000000000000000ULL, 0x0000000000000000ULL, 0x0000000000000000ULL, 0x0000000000000000ULL},
+        {0x0000000000000000ULL, 0x8000000000000000ULL, 0x8000000000000000ULL, 0x8000000000000000ULL},
+        {0xBFF0000000000000ULL, 0x4008000000000000ULL, 0xBFF0000000000000ULL, 0x4008000000000000ULL},
+    };
+    for (const RowD& row : rows_d)
+    {
+        const f64 a = std::bit_cast<f64>(row.a);
+        const f64 b = std::bit_cast<f64>(row.b);
+        CHECK(std::bit_cast<u64>(crd::math::simd::min(Vec4d(a), Vec4d(b)).lane(3)) == row.min);
+        CHECK(std::bit_cast<u64>(crd::math::simd::max(Vec4d(a), Vec4d(b)).lane(0)) == row.max);
+        CHECK(std::bit_cast<u64>(crd::math::simd::min(Vec8d(a), Vec8d(b)).lane(6)) == row.min);
+        CHECK(std::bit_cast<u64>(crd::math::simd::max(Vec8d(a), Vec8d(b)).lane(4)) == row.max);
+    }
+}
