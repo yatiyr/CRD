@@ -77,5 +77,6 @@ struct SparseKernels
 extern const SparseKernels kSparseKernelsPortable;
 extern const SparseKernels kSparseKernelsSse2;
 extern const SparseKernels kSparseKernelsAvx2;
+extern const SparseKernels kSparseKernelsAvx512;
 
 } // namespace crd::hesap::sparse

@@ -120,6 +120,7 @@ struct FftKernels
 extern const FftKernels kFftKernelsPortable;
 extern const FftKernels kFftKernelsSse2;
 extern const FftKernels kFftKernelsAvx2;
+extern const FftKernels kFftKernelsAvx512;
 
 #ifdef CRD_FFT_PROFILE
 // Per-phase cycle counters of the kernels (the CRD_HESAP_FFT_PROFILE tree, scripts/prof_fft_kernel.sh); src/fft.cpp

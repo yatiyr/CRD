@@ -127,6 +127,7 @@ TEST_CASE("mesh kernels: the archive holds portable and each body level the buil
     REQUIRE(!levels.empty());
     CHECK(levels[0].level == crd::CpuLevel::Portable);
     bool avx2 = false;
+    bool avx512 = false;
     for (usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
@@ -136,9 +137,11 @@ TEST_CASE("mesh kernels: the archive holds portable and each body level the buil
             CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
         }
         avx2 = avx2 || levels[i].level == crd::CpuLevel::Avx2;
+        avx512 = avx512 || levels[i].level == crd::CpuLevel::Avx512;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(crd::CpuLevel::Avx2)));
+    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(crd::CpuLevel::Avx512)));
 }
 
 TEST_CASE("mesh kernels: every level the host runs gives the portable raycast bits", "[geometry][kernels]")

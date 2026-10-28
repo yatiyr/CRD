@@ -150,5 +150,6 @@ struct PrimitiveKernels
 extern const PrimitiveKernels kPrimitiveKernelsPortable;
 extern const PrimitiveKernels kPrimitiveKernelsSse2;
 extern const PrimitiveKernels kPrimitiveKernelsAvx2;
+extern const PrimitiveKernels kPrimitiveKernelsAvx512;
 
 } // namespace crd::geometry::primitives

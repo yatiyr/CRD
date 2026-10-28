@@ -10,7 +10,8 @@ namespace
 
 // CRD_KERNELS_FLOAT_CONVERT: the levels crd_add_cpu_kernels built (../CMakeLists.txt). Each needs its entry below.
 constexpr int kLevelsWithBody = (1 << CRD_KERNEL_LEVEL_PORTABLE) | (1 << CRD_KERNEL_LEVEL_SSE2) |
-                                (1 << CRD_KERNEL_LEVEL_SSE42) | (1 << CRD_KERNEL_LEVEL_AVX2);
+                                (1 << CRD_KERNEL_LEVEL_SSE42) | (1 << CRD_KERNEL_LEVEL_AVX2) |
+                                (1 << CRD_KERNEL_LEVEL_AVX512);
 static_assert((CRD_KERNELS_FLOAT_CONVERT & ~kLevelsWithBody) == 0, "a built level has no table entry here");
 static_assert(CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, PORTABLE), "the portable level is always built");
 
@@ -24,6 +25,9 @@ constexpr KernelLevel<FloatConvertKernels> kLevels[] = {
 #endif
 #if CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, AVX2)
     {crd::CpuLevel::Avx2, &kFloatConvertKernelsAvx2, {}},
+#endif
+#if CRD_KERNEL_BUILT(CRD_KERNELS_FLOAT_CONVERT, AVX512)
+    {crd::CpuLevel::Avx512, &kFloatConvertKernelsAvx512, {}},
 #endif
 };
 

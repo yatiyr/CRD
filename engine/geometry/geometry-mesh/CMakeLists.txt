@@ -34,5 +34,6 @@ crd_enable_default_pch(crd-geometry-mesh)
 
 # The BVH raycast with Moller-Trumbore on eight leaf triangles a step, one body per CPU level (ADR-0134);
 # src/mesh_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-geometry-mesh NAME mesh LEVELS portable sse2 avx2 INCLUDES crd-math crd-geometry-primitives
+crd_add_cpu_kernels(crd-geometry-mesh NAME mesh LEVELS portable sse2 avx2 avx512
+                    INCLUDES crd-math crd-geometry-primitives
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/mesh_kernels.cpp")

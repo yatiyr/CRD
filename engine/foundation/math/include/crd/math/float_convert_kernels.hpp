@@ -29,5 +29,6 @@ extern const FloatConvertKernels kFloatConvertKernelsPortable;
 extern const FloatConvertKernels kFloatConvertKernelsSse2;
 extern const FloatConvertKernels kFloatConvertKernelsSse42;
 extern const FloatConvertKernels kFloatConvertKernelsAvx2;
+extern const FloatConvertKernels kFloatConvertKernelsAvx512;
 
 } // namespace crd::math

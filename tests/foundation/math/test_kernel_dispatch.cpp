@@ -147,6 +147,7 @@ TEST_CASE("float conversion kernels: the archive holds portable and each body le
     bool sse2 = false;
     bool sse42 = false;
     bool avx2 = false;
+    bool avx512 = false;
     for (crd::usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
@@ -158,11 +159,13 @@ TEST_CASE("float conversion kernels: the archive holds portable and each body le
         sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
         sse42 = sse42 || levels[i].level == CpuLevel::Sse42;
         avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
+        avx512 = avx512 || levels[i].level == CpuLevel::Avx512;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
     CHECK(sse42 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse42)));
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
+    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512)));
 }
 
 TEST_CASE("float conversion kernels: every level the host runs is bit-identical to the scalar converts",

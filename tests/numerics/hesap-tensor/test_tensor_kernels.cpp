@@ -497,6 +497,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     usize sse42 = 0;
     usize avx2 = 0;
     usize avx2_vnni = 0;
+    usize avx512 = 0;
     for (usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
@@ -514,6 +515,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         sse42 += levels[i].level == CpuLevel::Sse42 ? 1U : 0U;
         avx2 += levels[i].level == CpuLevel::Avx2 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
         avx2_vnni += levels[i].level == CpuLevel::Avx2 && levels[i].features == vnni ? 1U : 0U;
+        avx512 += levels[i].level == CpuLevel::Avx512 && levels[i].features == crd::CpuFeatureSet{} ? 1U : 0U;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2) ? 1U : 0U));
@@ -521,6 +523,7 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
     const usize built = x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2) ? 1U : 0U;
     CHECK(avx2 == built);
     CHECK(avx2_vnni == built);
+    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512) ? 1U : 0U));
 }
 
 TEST_CASE("tensor kernels: every level the host runs gives the scalar permute region bits of each element type",

@@ -34,5 +34,5 @@ crd_enable_default_pch(crd-geometry-primitives)
 
 # The batch intersection kernels and the hull support scan, one body per CPU level (ADR-0134);
 # src/primitive_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-geometry-primitives NAME primitives LEVELS portable sse2 avx2 INCLUDES crd-math
+crd_add_cpu_kernels(crd-geometry-primitives NAME primitives LEVELS portable sse2 avx2 avx512 INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/primitive_kernels.cpp")

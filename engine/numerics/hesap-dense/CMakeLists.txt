@@ -40,5 +40,5 @@ target_compile_features(crd-hesap-dense PUBLIC cxx_std_20)
 crd_enable_default_pch(crd-hesap-dense)
 
 # The f64 and f32 GEMM blocks, one body per CPU level (ADR-0134); src/dense_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-hesap-dense NAME dense LEVELS portable sse2 avx2 INCLUDES crd-math
+crd_add_cpu_kernels(crd-hesap-dense NAME dense LEVELS portable sse2 avx2 avx512 INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dense_kernels.cpp")

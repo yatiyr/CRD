@@ -22,5 +22,6 @@ struct SpecialKernels
 extern const SpecialKernels kSpecialKernelsPortable;
 extern const SpecialKernels kSpecialKernelsSse2;
 extern const SpecialKernels kSpecialKernelsAvx2;
+extern const SpecialKernels kSpecialKernelsAvx512;
 
 } // namespace crd::hesap::special

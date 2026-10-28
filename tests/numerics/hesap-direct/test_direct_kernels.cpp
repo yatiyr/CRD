@@ -590,6 +590,32 @@ void expect(const Counts& c)
 
 } // namespace
 
+TEST_CASE("direct kernels: the archive holds portable and each body level the build compiles", "[direct][kernels]")
+{
+    const auto levels = dr::direct_kernel_levels();
+    REQUIRE(!levels.empty());
+    CHECK(levels[0].level == CpuLevel::Portable);
+    bool sse2 = false;
+    bool avx2 = false;
+    bool avx512 = false;
+    for (usize i = 0; i < levels.size(); ++i)
+    {
+        CHECK(levels[i].table != nullptr);
+        CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
+        if (i > 0U)
+        {
+            CHECK(static_cast<int>(levels[i - 1U].level) < static_cast<int>(levels[i].level));
+        }
+        sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
+        avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
+        avx512 = avx512 || levels[i].level == CpuLevel::Avx512;
+    }
+    const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
+    CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
+    CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
+    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512)));
+}
+
 TEST_CASE("direct kernels: forward_below gives gemvt's bits on every level the host runs", "[direct][kernels]")
 {
     expect(run(check_forward_below<crd::f64>));

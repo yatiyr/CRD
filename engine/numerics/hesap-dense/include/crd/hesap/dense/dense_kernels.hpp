@@ -317,5 +317,6 @@ struct DenseKernels
 extern const DenseKernels kDenseKernelsPortable;
 extern const DenseKernels kDenseKernelsSse2;
 extern const DenseKernels kDenseKernelsAvx2;
+extern const DenseKernels kDenseKernelsAvx512;
 
 } // namespace crd::hesap::dense

@@ -63,5 +63,6 @@ struct Rigid3dKernels
 extern const Rigid3dKernels kRigid3dKernelsPortable;
 extern const Rigid3dKernels kRigid3dKernelsSse2;
 extern const Rigid3dKernels kRigid3dKernelsAvx2;
+extern const Rigid3dKernels kRigid3dKernelsAvx512;
 
 } // namespace crd::eylem_rigid3d

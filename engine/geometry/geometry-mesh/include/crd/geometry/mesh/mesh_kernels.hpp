@@ -49,5 +49,6 @@ struct MeshKernels
 extern const MeshKernels kMeshKernelsPortable;
 extern const MeshKernels kMeshKernelsSse2;
 extern const MeshKernels kMeshKernelsAvx2;
+extern const MeshKernels kMeshKernelsAvx512;
 
 } // namespace crd::geometry::mesh

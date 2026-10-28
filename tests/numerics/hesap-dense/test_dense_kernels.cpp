@@ -531,6 +531,7 @@ TEST_CASE("dense kernels: the archive holds portable and each body level the bui
     CHECK(levels[0].level == CpuLevel::Portable);
     bool sse2 = false;
     bool avx2 = false;
+    bool avx512 = false;
     for (usize i = 0; i < levels.size(); ++i)
     {
         CHECK(levels[i].table != nullptr);
@@ -542,10 +543,12 @@ TEST_CASE("dense kernels: the archive holds portable and each body level the bui
         }
         sse2 = sse2 || levels[i].level == CpuLevel::Sse2;
         avx2 = avx2 || levels[i].level == CpuLevel::Avx2;
+        avx512 = avx512 || levels[i].level == CpuLevel::Avx512;
     }
     const bool x64 = crd::cpu_selection().arch == crd::CpuArch::X64;
     CHECK(sse2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Sse2)));
     CHECK(avx2 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx2)));
+    CHECK(avx512 == (x64 && CRD_TEST_KERNEL_LEVELS_TOP >= static_cast<int>(CpuLevel::Avx512)));
 }
 
 TEST_CASE("dense kernels: every level the host runs gives its declared GEMM block bits (f64)", "[dense][kernels]")

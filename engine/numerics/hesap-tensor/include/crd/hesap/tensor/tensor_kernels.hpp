@@ -159,5 +159,6 @@ extern const TensorKernels kTensorKernelsSse2;
 extern const TensorKernels kTensorKernelsSse42;
 extern const TensorKernels kTensorKernelsAvx2;
 extern const TensorKernels kTensorKernelsAvx2AvxVnni;
+extern const TensorKernels kTensorKernelsAvx512;
 
 } // namespace crd::hesap::tensor

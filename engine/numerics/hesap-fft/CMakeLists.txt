@@ -41,5 +41,5 @@ endif()
 crd_enable_default_pch(crd-hesap-fft)
 
 # The transform engine, one body per CPU level (ADR-0134); src/fft_kernel_dispatch.cpp lists them.
-crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 INCLUDES crd-math crd-hesap
+crd_add_cpu_kernels(crd-hesap-fft NAME fft LEVELS portable sse2 avx2 avx512 INCLUDES crd-math crd-hesap
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/fft_kernels.cpp")

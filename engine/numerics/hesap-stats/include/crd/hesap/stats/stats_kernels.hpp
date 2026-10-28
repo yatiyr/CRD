@@ -30,5 +30,6 @@ struct StatsKernels
 extern const StatsKernels kStatsKernelsPortable;
 extern const StatsKernels kStatsKernelsSse2;
 extern const StatsKernels kStatsKernelsAvx2;
+extern const StatsKernels kStatsKernelsAvx512;
 
 } // namespace crd::hesap::stats

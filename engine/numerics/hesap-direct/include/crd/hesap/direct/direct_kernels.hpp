@@ -76,5 +76,6 @@ struct DirectKernels
 extern const DirectKernels kDirectKernelsPortable;
 extern const DirectKernels kDirectKernelsSse2;
 extern const DirectKernels kDirectKernelsAvx2;
+extern const DirectKernels kDirectKernelsAvx512;
 
 } // namespace crd::hesap::direct
