@@ -11,11 +11,12 @@
 TEST_CASE("forced arm: the CPU level CRD_CPU_LEVEL asks for is the selected one", "[.][cpu-level-applied]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
-    INFO("override " << crd::cpu_override_name(s.override_status) << ", detected " << crd::cpu_level_name(s.detected)
-                     << ", selected " << crd::cpu_level_name(s.selected));
+    const crd::CpuRuntimeDispatch crt = crd::cpu_runtime_dispatch();
+    char line[512] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)crd::format_cpu_selection(s, crt, line, sizeof(line));
+    INFO(line);
     CHECK(s.override_status == crd::CpuOverride::Applied);
 
-    const crd::CpuRuntimeDispatch crt = crd::cpu_runtime_dispatch();
     if (crt.crt_level >= 0)
     {
         // The CRT's levels (isa_availability.h): 1 SSE2, 2 SSE4.2, 5 AVX2, 6 AVX-512.
@@ -33,7 +34,6 @@ TEST_CASE("forced arm: the CPU level CRD_CPU_LEVEL asks for is the selected one"
         {
             cap = 5;
         }
-        INFO("crt level " << crt.crt_level << ", ucrt fma3 " << crt.ucrt_fma3);
         CHECK(crt.crt_level <= cap);
         CHECK_FALSE((below_avx2 && crt.ucrt_fma3));
     }

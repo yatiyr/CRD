@@ -8,6 +8,7 @@
 #include <crd/diag/specimen_runner.hpp>
 
 #include <catch2/catch_test_macros.hpp>
+#include <string_view>
 
 namespace
 {
@@ -80,7 +81,9 @@ TEST_CASE("diag harness: the clean specimen is an expected-clean positive", "[di
     const cd::Outcome o = cd::run_specimen(clean_specimen(), cont::Array<cont::String>{}, e);
     INFO("verdict=" << cd::verdict_name(o.verdict) << " reason=" << o.reason.c_str());
     CHECK(o.verdict == cd::Verdict::Clean);
-    CHECK_FALSE(cont::StringView{o.host_tuple}.empty());
+    const std::string_view tuple{o.host_tuple.data(), o.host_tuple.size()};
+    CHECK(tuple.find(" cpu detected=") != std::string_view::npos);
+    CHECK(tuple.find(" override=") != std::string_view::npos);
 }
 
 TEST_CASE("diag harness: the crash specimen is an expected-crash positive", "[diag][harness]")

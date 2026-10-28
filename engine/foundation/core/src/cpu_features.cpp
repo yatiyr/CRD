@@ -795,6 +795,88 @@ void __cdecl select_at_start() noexcept
 extern "C" __declspec(allocate(".CRT$XCL")) void(__cdecl* const kCrdCpuSelectAtStart)() = &select_at_start;
 #endif
 
+namespace
+{
+
+// A bounded line that counts its full length (format_cpu_selection).
+struct LineWriter
+{
+    char* out;
+    crd::usize capacity;
+    crd::usize length = 0U;
+
+    void put(char c) noexcept
+    {
+        if (length + 1U < capacity)
+        {
+            out[length] = c;
+        }
+        ++length;
+    }
+
+    void put(const char* text) noexcept
+    {
+        for (; *text != '\0'; ++text)
+        {
+            put(*text);
+        }
+    }
+
+    void put(crd::u32 value) noexcept
+    {
+        char digits[10] = {}; // NOLINT(modernize-avoid-c-arrays)
+        crd::usize n = 0U;
+        do
+        {
+            digits[n] = static_cast<char>('0' + (value % 10U));
+            ++n;
+            value /= 10U;
+        } while (value != 0U);
+        while (n > 0U)
+        {
+            --n;
+            put(digits[n]);
+        }
+    }
+};
+
+} // namespace
+
+crd::usize format_cpu_selection(const CpuSelection& s, const CpuRuntimeDispatch& crt, char* out,
+                                crd::usize capacity) noexcept
+{
+    LineWriter w{out, out == nullptr ? 0U : capacity};
+    w.put("cpu detected=");
+    w.put(cpu_level_name(s.detected));
+    w.put(" selected=");
+    w.put(cpu_level_name(s.selected));
+    w.put(" override=");
+    w.put(cpu_override_name(s.override_status));
+    if (crt.crt_level >= 0)
+    {
+        w.put(" crt=");
+        w.put(static_cast<crd::u32>(crt.crt_level));
+        w.put(crt.ucrt_fma3 ? " fma3=1" : " fma3=0");
+    }
+    const CpuFeatureSet extra{s.kernel_features.bits & ~cpu_level_features(s.selected).bits};
+    const char* separator = " extra=";
+    for (crd::u32 i = 0U; i < static_cast<crd::u32>(CpuFeature::Count); ++i)
+    {
+        const auto f = static_cast<CpuFeature>(i);
+        if (extra.has(f))
+        {
+            w.put(separator);
+            w.put(cpu_feature_name(f));
+            separator = ",";
+        }
+    }
+    if (w.capacity > 0U)
+    {
+        out[w.length < w.capacity ? w.length : w.capacity - 1U] = '\0';
+    }
+    return w.length;
+}
+
 bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept
 {
     if (want == CpuLevel::Portable)

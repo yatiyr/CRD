@@ -5,6 +5,7 @@
 // arguments bounded and checked in the arguments step, the bundle importer route, the capture window and the job wait
 // graph.
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
@@ -723,6 +724,13 @@ TEST_CASE("diag commands: capabilities report the doctor, the grant and the auth
     CHECK(contains(caps.json, "\"schema\":\"cerid-diagnostics/1\""));
     CHECK(contains(caps.json, "\"command_schema\":1"));
     CHECK(contains(caps.json, "\"grant\":\"read\""));
+    const crd::CpuSelection& cpu = crd::cpu_selection();
+    char fields[160] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)std::snprintf(fields, sizeof(fields), R"("cpu_detected":"%s","cpu_selected":"%s","cpu_override":"%s")",
+                        crd::cpu_level_name(cpu.detected), crd::cpu_level_name(cpu.selected),
+                        crd::cpu_override_name(cpu.override_status));
+    CHECK(contains(caps.json, fields));
+    CHECK(contains(caps.json, "\"crt_level\":") == (crd::cpu_runtime_dispatch().crt_level >= 0));
     CHECK(contains(caps.json, CRD_PERF_ENABLED ? "\"profiling_compiled\":true" : "\"profiling_compiled\":false"));
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"read\",\"granted\":true}"));
     CHECK(contains(caps.json, "{\"kind\":\"authority\",\"name\":\"record\",\"granted\":false}"));

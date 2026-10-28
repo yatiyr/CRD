@@ -142,8 +142,15 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    any user initializer; it never raises them, and `cpu_runtime_dispatch()` reports them. The DLL
    runtimes' string routines (vcruntime140, ucrtbase), glibc's ifuncs and zstd's dynamic BMI2 decoders keep
    dispatching on the hardware with the same results. The doctor, the specimen harness's host tuple
-   and every board record the detected and selected level and the override status. The diag-overhead, hesap, geometry and jobs boards are re-measured at each level
-   against their peers, Highway 1.3 included for the dispatch cost.
+   and every board record the detected and selected level and the override status. Landed 2026-10-29 for the
+   doctor and the harness: `format_cpu_selection` (crd-core) writes the one line
+   `cpu detected=<level> selected=<level> override=<status>`, with ` crt=<level> fma3=<0|1>` where the image's CRT
+   dispatches and ` extra=<features>` for the kernel features above the selected level; the doctor carries the
+   selection (`diag.capabilities`: `cpu_detected`, `cpu_selected`, `cpu_override`, and `crt_level`, `ucrt_fma3`
+   where the CRT dispatches; additive, so `cerid-diagnostics/1` and command schema 1 stay), and the harness's host
+   tuple ends with the line of the child it spawns, under `CRD_CPU_LEVEL` as set at the spawn. The diag-overhead,
+   hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.3 included for the
+   dispatch cost.
 9. **Ownership.** CPU ISA detection and kernel dispatch is one OWN.1 capability: detection in crd-core, the dispatch
    tables and level-parameterised SIMD types in crd-math, kernels in their owning modules.
 

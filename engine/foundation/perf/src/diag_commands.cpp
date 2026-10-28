@@ -1104,12 +1104,20 @@ DiagStatus DiagCommandService::run_capabilities(void* self, const DiagCall& call
     append_authority_list(grant, call.granted);
     out.summary.str("schema", report.schema)
         .str("host", cont::StringView{report.host_tuple.data(), report.host_tuple.size()})
+        .str("cpu_detected", crd::cpu_level_name(report.cpu.detected))
+        .str("cpu_selected", crd::cpu_level_name(report.cpu.selected))
+        .str("cpu_override", crd::cpu_override_name(report.cpu.override_status))
         .u64("command_schema", kDiagCommandSchemaVersion)
         .str("grant", cont::StringView{grant.data(), grant.size()})
         .boolean("profiling_compiled", CRD_PERF_ENABLED != 0)
         .boolean("profiler_active", is_active())
         .boolean("job_pool", crd::jobs::num_workers() > 0U)
         .boolean("file_root", !svc->m_root.empty());
+    if (report.cpu_crt.crt_level >= 0)
+    {
+        out.summary.u64("crt_level", static_cast<u64>(report.cpu_crt.crt_level))
+            .boolean("ucrt_fma3", report.cpu_crt.ucrt_fma3);
+    }
 
     DiagFields item(out.allocator());
     for (const DiagAuthority a : kAuthorityOrder)

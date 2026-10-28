@@ -150,9 +150,11 @@ DoctorReport run_doctor(cont::StringView output_dir, const DoctorLive& live)
     DoctorReport report;
     report.schema = cont::StringView{"cerid-diagnostics/1"};
     const BuildIdentity build = current_build_identity();
-    const bool          asan  = (build.flags & kBuildFlagAsan) != 0U;
-    const bool          tsan  = (build.flags & kBuildFlagTsan) != 0U;
-    report.host_tuple         = host_tuple_string(build);
+    const bool asan = (build.flags & kBuildFlagAsan) != 0U;
+    const bool tsan = (build.flags & kBuildFlagTsan) != 0U;
+    report.host_tuple = host_tuple_string(build);
+    report.cpu = crd::cpu_selection();
+    report.cpu_crt = crd::cpu_runtime_dispatch();
 
     // ---- live-probed dependencies -------------------------------------------
     {

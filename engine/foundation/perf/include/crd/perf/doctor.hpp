@@ -5,7 +5,8 @@
 // Reports each diagnostic mode as compiled / enabled / usable with its
 // dependencies, so a host (or a test) can ask "what diagnostics does this build
 // actually have?" Each row is read from this build or this host, never assumed: the build identity (platform,
-// arch, compiler version, configuration and its sanitizer) names the tuple and the instrument modes, a mode that needs
+// arch, compiler version, configuration and its sanitizer) names the tuple and the instrument modes, the CPU selection
+// names the detected and selected dispatch levels and the CRD_CPU_LEVEL override's standing, a mode that needs
 // another build says which switch builds it, and a platform with no backend reports the mode absent and names its
 // later-platform owner (MAC.DIAG, WEB.DIAG). Live modes read the host's instances (DoctorLive): the DIAG.9b flight
 // recorder and fault injection, and the upper-module command names registered with its service (controlled replay and
@@ -17,6 +18,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/containers/string.hpp>
+#include <crd/core/cpu_features.hpp>
 #include <crd/core/types.hpp>
 
 namespace crd::perf
@@ -47,13 +49,15 @@ struct DiagnosticDependency
 // The doctor's report. `schema` is the versioned diagnostics schema name.
 struct DoctorReport
 {
-    cont::StringView                     schema;
-    cont::String                         host_tuple; // platform/arch/compiler version/configuration
-    cont::Array<DiagnosticMode>          modes;
-    cont::Array<DiagnosticDependency>    dependencies;
+    cont::StringView schema;
+    cont::String host_tuple;         // platform/arch/compiler version/configuration
+    crd::CpuSelection cpu;           // the process's CPU level selection (ADR-0134 §8)
+    crd::CpuRuntimeDispatch cpu_crt; // the C runtime's own dispatch in this image (crt_level -1: none)
+    cont::Array<DiagnosticMode> modes;
+    cont::Array<DiagnosticDependency> dependencies;
 
     // Convenience lookups (nullptr when absent).
-    const DiagnosticMode*       find_mode(cont::StringView name) const noexcept;
+    const DiagnosticMode* find_mode(cont::StringView name) const noexcept;
     const DiagnosticDependency* find_dependency(cont::StringView name) const noexcept;
 };
 

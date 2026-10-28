@@ -907,13 +907,50 @@ TEST_CASE("cpu features: the caches are the smallest of each level the OS report
     CHECK((os.line == 0U || os.line == c.line_bytes));
 }
 
+TEST_CASE("cpu features: the selection line names the levels, the override, the CRT's level and extra features",
+          "[core][cpu]")
+{
+    crd::CpuSelection s;
+    s.arch = crd::CpuArch::X64;
+    s.detected = CpuLevel::Avx2;
+    s.selected = CpuLevel::Sse2;
+    s.override_status = CpuOverride::Applied;
+    s.kernel_features = crd::cpu_level_features(CpuLevel::Sse2);
+    char line[160] = {}; // NOLINT(modernize-avoid-c-arrays)
+    const std::string_view applied = "cpu detected=avx2 selected=sse2 override=applied";
+    CHECK(crd::format_cpu_selection(s, crd::CpuRuntimeDispatch{}, line, sizeof(line)) == applied.size());
+    CHECK(std::string_view{line} == applied);
+
+    // The CRT's own level where it has one, then the kernel features above the selected level's definition.
+    s.selected = CpuLevel::Avx2;
+    s.override_status = CpuOverride::None;
+    s.kernel_features = crd::cpu_level_features(CpuLevel::Avx2).with(CpuFeature::AvxVnni).with(CpuFeature::Sha);
+    const std::string_view full = "cpu detected=avx2 selected=avx2 override=none crt=5 fma3=1 extra=sha,avx-vnni";
+    crd::CpuRuntimeDispatch crt;
+    crt.crt_level = 5;
+    crt.ucrt_fma3 = true;
+    CHECK(crd::format_cpu_selection(s, crt, line, sizeof(line)) == full.size());
+    CHECK(std::string_view{line} == full);
+
+    // A short buffer keeps a terminated prefix and the result still counts the whole line; none writes nothing.
+    char cut[12] = {}; // NOLINT(modernize-avoid-c-arrays)
+    CHECK(crd::format_cpu_selection(s, crt, cut, sizeof(cut)) == full.size());
+    CHECK(std::string_view{cut} == full.substr(0U, sizeof(cut) - 1U));
+    CHECK(crd::format_cpu_selection(s, crt, nullptr, 0U) == full.size());
+
+    // Refused levels keep the detected one and say why.
+    s.override_status = CpuOverride::AboveHardware;
+    s.kernel_features = crd::cpu_level_features(CpuLevel::Avx2);
+    CHECK(crd::format_cpu_selection(s, crd::CpuRuntimeDispatch{}, line, sizeof(line)) > 0U);
+    CHECK(std::string_view{line} == "cpu detected=avx2 selected=avx2 override=above-hardware");
+}
+
 TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
-    std::printf("cpu level: detected %s selected %s override %s\n", crd::cpu_level_name(s.detected),
-                crd::cpu_level_name(s.selected), crd::cpu_override_name(s.override_status));
-    const crd::CpuRuntimeDispatch crt = crd::cpu_runtime_dispatch();
-    std::printf("cpu runtime: crt %d fma3 %d\n", static_cast<int>(crt.crt_level), crt.ucrt_fma3 ? 1 : 0);
+    char line[512] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)crd::format_cpu_selection(s, crd::cpu_runtime_dispatch(), line, sizeof(line));
+    std::printf("%s\n", line);
     std::printf("cpu walk: %u visited %u refused, core types 0x%x, uniform %d, xcr0 0x%llx, avx10 %u/%u\n",
                 s.cpus_visited, s.cpus_refused, static_cast<unsigned>(s.core_types_seen), s.uniform ? 1 : 0,
                 static_cast<unsigned long long>(s.features.xcr0), static_cast<unsigned>(s.features.avx10_version),
@@ -943,11 +980,14 @@ TEST_CASE("cpu features: a process started with CRD_CPU_LEVEL selects that level
     const cd::Outcome lowered = run_level_child("sse2");
     INFO(lowered.output.c_str());
     CHECK(lowered.verdict == cd::Verdict::Clean);
-    CHECK(contains(lowered, "selected sse2 override applied"));
+    CHECK(contains(lowered, "selected=sse2 override=applied"));
+    // The harness names the selection the child made, not the parent's own.
+    const std::string_view tuple{lowered.host_tuple.c_str()};
+    CHECK(tuple.find("selected=sse2 override=applied") != std::string_view::npos);
 
-    cont::String refused{"selected "};
+    cont::String refused{"selected="};
     refused.append(crd::cpu_level_name(s.detected));
-    refused.append(" override other-arch");
+    refused.append(" override=other-arch");
     const cd::Outcome other = run_level_child("neon");
     INFO(other.output.c_str());
     CHECK(contains(other, refused.c_str()));
@@ -956,20 +996,20 @@ TEST_CASE("cpu features: a process started with CRD_CPU_LEVEL selects that level
     {
         const cd::Outcome above = run_level_child("avx512");
         INFO(above.output.c_str());
-        CHECK(contains(above, "override above-hardware"));
+        CHECK(contains(above, "override=above-hardware"));
     }
 }
 
-// The child's "cpu runtime: crt <level> fma3 <0|1>" line as that line again, with the level capped at `cap`.
+// The child's " crt=<level> fma3=<0|1>" fields as those fields again, with the level capped at `cap`.
 cont::String runtime_line(const cd::Outcome& o, long cap, bool fma3)
 {
     const std::string_view out{o.output.data(), o.output.size()};
-    const std::string_view key = "cpu runtime: crt ";
+    const std::string_view key = " crt=";
     const std::size_t at = out.find(key);
     REQUIRE(at != std::string_view::npos);
     const long crt = std::strtol(out.data() + at + key.size(), nullptr, 10);
     char line[64] = {}; // NOLINT(modernize-avoid-c-arrays)
-    (void)std::snprintf(line, sizeof(line), "cpu runtime: crt %ld fma3 %d", crt < cap ? crt : cap, fma3 ? 1 : 0);
+    (void)std::snprintf(line, sizeof(line), " crt=%ld fma3=%d", crt < cap ? crt : cap, fma3 ? 1 : 0);
     return cont::String{line};
 }
 
@@ -983,15 +1023,16 @@ TEST_CASE("cpu features: an applied CRD_CPU_LEVEL lowers the C runtime's own dis
     // The CRT's levels (isa_availability.h): 1 SSE2, 2 SSE4.2, 5 AVX2; the UCRT's FMA3 libm needs avx2.
     const cd::Outcome own = run_level_child("");
     INFO(own.output.c_str());
-    CHECK(contains(own, "override none"));
-    const bool own_fma3 = contains(own, " fma3 1");
+    CHECK(contains(own, "override=none"));
+    CHECK(std::string_view{own.host_tuple.c_str()}.find("override=none") != std::string_view::npos);
+    const bool own_fma3 = contains(own, " fma3=1");
 
     const cd::Outcome sse2 = run_level_child("sse2");
     INFO(sse2.output.c_str());
-    CHECK(contains(sse2, "cpu runtime: crt 1 fma3 0"));
+    CHECK(contains(sse2, " crt=1 fma3=0"));
     const cd::Outcome portable = run_level_child("portable");
     INFO(portable.output.c_str());
-    CHECK(contains(portable, "cpu runtime: crt 1 fma3 0"));
+    CHECK(contains(portable, " crt=1 fma3=0"));
     if (crd::cpu_level_includes(s.detected, CpuLevel::Sse42))
     {
         const cd::Outcome sse42 = run_level_child("sse4.2");

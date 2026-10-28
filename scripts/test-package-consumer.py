@@ -928,6 +928,11 @@ class Session:
         if caps_line is None:
             raise ConsumerError(f'the application printed no capabilities:\n{output_tail(result)}')
         caps = json.loads(caps_line.split(' ', 1)[1])
+        summary = caps.get('summary', {})
+        levels = ('portable', 'sse2', 'sse4.2', 'avx2', 'avx512', 'neon')
+        if (summary.get('cpu_detected') not in levels or summary.get('cpu_selected') not in levels or
+                summary.get('cpu_override') not in ('none', 'applied', 'unknown', 'other-arch', 'above-hardware')):
+            raise ConsumerError(f'diag.capabilities names no CPU selection (ADR-0134 §8): {summary}')
         for name, compiled in (('basic-recording', bool(expected['profiling'])), ('fault-injection', fault_seams),
                                ('flight-recorder', True)):
             item = capability(caps, name)

@@ -11,11 +11,13 @@
 // only std facilities used are the permitted non-owning std::string_view (for
 // scanning the child's stdout) and C stdio/OS syscalls at the process boundary.
 
+#include <crd/core/cpu_features.hpp>
 #include <crd/diag/specimen_runner.hpp>
 
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string_view>
 #include <sys/stat.h>
 #include <thread>
@@ -530,6 +532,24 @@ crd::containers::String host_tuple()
 #else
     t.append("unknown-cc");
 #endif
+    // The CPU selection the child makes (ADR-0134 §8): it inherits CRD_CPU_LEVEL as set now, which a caller may have
+    // changed after this process made its own selection. The child's C runtime dispatch is its own and not named.
+#if defined(_WIN32)
+    char level[32] = {}; // NOLINT(modernize-avoid-c-arrays)
+    const DWORD n = ::GetEnvironmentVariableA("CRD_CPU_LEVEL", level, sizeof(level));
+    const char* asked = n > 0U ? level : nullptr;
+    if (n >= sizeof(level))
+    {
+        asked = "?"; // longer than every level name, so as unknown as the child finds it
+    }
+#else
+    const char* asked = std::getenv("CRD_CPU_LEVEL"); // NOLINT(concurrency-mt-unsafe): read at a spawn, not written
+#endif
+    char line[512] = {}; // NOLINT(modernize-avoid-c-arrays)
+    (void)crd::format_cpu_selection(crd::apply_cpu_override(crd::cpu_selection(), asked), crd::CpuRuntimeDispatch{},
+                                    line, sizeof(line));
+    t.append(" ");
+    t.append(line);
     return t;
 }
 

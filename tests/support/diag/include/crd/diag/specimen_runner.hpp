@@ -72,8 +72,8 @@ struct Expectation
 inline constexpr crd::usize kMaxOutputBytes = 1024U * 1024U;
 
 // The classified result of one run. Never carries an exception; a spawn failure is
-// MissingExecutable, not a throw. host_tuple records OS/ISA/compiler per the shared
-// acceptance rules.
+// MissingExecutable, not a throw. host_tuple records OS/ISA/compiler and the child's CPU
+// selection per the shared acceptance rules.
 struct Outcome
 {
     Verdict                 verdict = Verdict::Unexpected;
@@ -84,7 +84,7 @@ struct Outcome
     crd::containers::String identity;   // as echoed by the specimen on stdout
     crd::containers::String sanitizer;  // "asan" | "tsan" | "ubsan" | "none", as echoed by the specimen
     crd::containers::String reason;     // human-readable detail
-    crd::containers::String host_tuple; // os/isa/compiler recorded on every run
+    crd::containers::String host_tuple; // os/isa/compiler and CPU selection recorded on every run
     crd::containers::String output;     // the child's stdout and stderr together, first kMaxOutputBytes kept
     bool                    output_truncated = false; // the child wrote more than kMaxOutputBytes
 };
@@ -118,7 +118,8 @@ Outcome select_and_run(const crd::containers::Array<crd::containers::String>& ca
                        const crd::containers::String& filter,
                        const Expectation& expect);
 
-// OS/ISA/compiler tuple recorded on every run.
+// OS/ISA/compiler tuple recorded on every run, then the CPU selection line (crd::format_cpu_selection) of a child
+// spawned now: the detected level, and the selected one under CRD_CPU_LEVEL as currently set.
 crd::containers::String host_tuple();
 
 // The running executable's path, for a test that re-enters itself on a hidden child case; empty when unreadable.

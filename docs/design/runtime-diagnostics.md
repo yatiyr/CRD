@@ -3006,7 +3006,10 @@ Settled (2026-10-24, [session](../sessions/2026-10-24-diag-11c-doctor-modes.md))
   instruments from `current_build_identity()`; `memory-check` (ASan) and `race-check` (TSan) each need their own build
   and, absent, name its CMake switch; `crash-capture` follows the platform's crash backend and, absent, names
   MAC.DIAG and WEB.DIAG; `controlled-replay` and `authored-provenance` follow the commands registered with the
-  service (`DoctorLive::commands`). GPU validation and device faults are the GPU device's to report.
+  service (`DoctorLive::commands`). GPU validation and device faults are the GPU device's to report. The CPU
+  selection (`DoctorReport::cpu`, `cpu_crt`; ADR-0134 §8) gives `diag.capabilities` its `cpu_detected`,
+  `cpu_selected` and `cpu_override` fields, and `crt_level` and `ucrt_fma3` where the image's C runtime dispatches;
+  the specimen harness's host tuple ends with the child's `cpu detected=... selected=... override=...` line.
 - `doctor:` cases hold the instrument modes to `lane_promise()` on every lane and the upper-module modes to the
   registered commands; `diag commands:` holds `diag.capabilities` to the same.
 - The native workflow (2026-10-24, [session](../sessions/2026-10-24-diag-11c-native-workflow.md)): the

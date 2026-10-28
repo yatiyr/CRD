@@ -46,6 +46,14 @@ TEST_CASE("doctor: reports the schema, host tuple and the diagnostic modes", "[d
     CHECK(tuple.find(std::string_view{crd::arch_name()}) != std::string_view::npos);
     CHECK(tuple.ends_with("/debug") != tuple.ends_with("/release"));
 
+    // The CPU selection is the process's own (ADR-0134 §8), with the C runtime's dispatch where it has one.
+    const crd::CpuSelection& cpu = crd::cpu_selection();
+    CHECK(r.cpu.detected == cpu.detected);
+    CHECK(r.cpu.selected == cpu.selected);
+    CHECK(r.cpu.override_status == cpu.override_status);
+    CHECK(r.cpu.kernel_features == cpu.kernel_features);
+    CHECK(r.cpu_crt.crt_level == crd::cpu_runtime_dispatch().crt_level);
+
     // crash-capture follows the platform's backend; a route this report does not own is never claimed.
     const auto* crash = r.find_mode(cont::StringView{"crash-capture"});
     REQUIRE(crash != nullptr);

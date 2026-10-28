@@ -250,6 +250,14 @@ struct CpuRuntimeDispatch
 };
 [[nodiscard]] CpuRuntimeDispatch cpu_runtime_dispatch() noexcept;
 
+// The selection as the one line the doctor, the specimen harness's host tuple and every board record carry
+// (ADR-0134 §8): "cpu detected=<level> selected=<level> override=<status>", then " crt=<level> fma3=<0|1>" when `crt`
+// reports a C runtime dispatch of its own (crt_level >= 0), then " extra=<feature>,..." naming the kernel features
+// above the selected level's definition (none under an applied CRD_CPU_LEVEL). Writes at most capacity - 1
+// characters and a terminating NUL (capacity > 0) and returns the line's full length: a result >= capacity was cut.
+[[nodiscard]] crd::usize format_cpu_selection(const CpuSelection& selection, const CpuRuntimeDispatch& crt, char* out,
+                                              crd::usize capacity) noexcept;
+
 // `have` runs code built for `want`: the same architecture's level, at or above it.
 [[nodiscard]] bool cpu_level_includes(CpuLevel have, CpuLevel want) noexcept;
 
