@@ -18,6 +18,7 @@
 
 #include "tensor_batched_kernels.hpp"
 #include "tensor_ew_kernels.hpp"
+#include "tensor_nn_kernels.hpp"
 #include "tensor_sparse_kernels.hpp"
 
 #include <crd/hesap/stats/philox_blocks.hpp>
@@ -2175,6 +2176,8 @@ const TensorKernels CRD_KERNEL_TABLE(kTensorKernels) = {
     batched<crd::f64>(),
     sparse<crd::f32>(),
     sparse<crd::f64>(),
+    &CRD_MATH_LEVEL_NS::NnKernel::pool2d_planes,
+    &CRD_MATH_LEVEL_NS::NnKernel::conv2d_images,
 };
 
 } // namespace crd::hesap::tensor

@@ -95,6 +95,20 @@ private:
     crd::u64 m_allocs = 0;
 };
 
+// IEEE 754 maximum, the max pool's rule: a NaN wins, +0 over -0.
+crd::f32 ieee_max(crd::f32 a, crd::f32 b)
+{
+    if (std::isnan(a) || std::isnan(b))
+    {
+        return std::isnan(a) ? a : b;
+    }
+    if (a == b)
+    {
+        return std::signbit(a) ? b : a;
+    }
+    return a > b ? a : b;
+}
+
 void fill_rand(crd::f32* p, crd::u64 n, crd::u64 seed, crd::u64 stream)
 {
     crd::hesap::stats::PhiloxRng rng(seed, stream);
@@ -446,10 +460,7 @@ TEST_CASE("nn: max and avg pooling match the window references", "[v14m][nn]")
                 const crd::f32 b = xp[(2U * oi) * 16U + 2U * oj + 1U];
                 const crd::f32 c = xp[(2U * oi + 1U) * 16U + 2U * oj];
                 const crd::f32 dd = xp[(2U * oi + 1U) * 16U + 2U * oj + 1U];
-                crd::f32 mx = a;
-                mx = b > mx ? b : mx;
-                mx = c > mx ? c : mx;
-                mx = dd > mx ? dd : mx;
+                const crd::f32 mx = ieee_max(ieee_max(ieee_max(a, b), c), dd);
                 // avg reference mirrors the kernel's row-major accumulation order
                 const crd::f32 av = (((a + b) + c) + dd) * 0.25F;
                 if (std::bit_cast<crd::u32>(mx) !=

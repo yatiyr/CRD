@@ -13,7 +13,9 @@
 // IEEE specials, min/max ties), Tier D's pinned order (block, row and column edges), einsum's direct products (row,
 // depth and column tails), the scalar tier's batched GEMM, Cholesky, LU, SVD and solves (every lane-tier edge of n,
 // poisoned lanes, split ranges, guard words) and the scalar sparse TTM scatter, staged tile, part fold and CSF and COO
-// MTTKRP walks (ranks 1 to 5, every mode, column tails at every width, sub-ranges, guard words).
+// MTTKRP walks (ranks 1 to 5, every mode, column tails at every width, sub-ranges, guard words) and nn's scalar
+// pooling (IEEE maximum ties, the 256-wide row stage, every window) and convolution (every output-channel block, column
+// tails, the fused relu and pool, im2col shapes, guard words).
 // crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
 // level.
 
@@ -540,6 +542,8 @@ TEST_CASE("tensor kernels: the archive holds portable, each body level the build
         CHECK(batched_complete(levels[i].table->batched_f64));
         CHECK(sparse_complete(levels[i].table->sparse_f32));
         CHECK(sparse_complete(levels[i].table->sparse_f64));
+        CHECK(levels[i].table->nn_pool2d_planes != nullptr);
+        CHECK(levels[i].table->nn_conv2d_images != nullptr);
         CHECK(static_cast<int>(levels[i].level) <= CRD_TEST_KERNEL_LEVELS_TOP);
         if (i > 0U)
         {
@@ -2463,6 +2467,262 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar sparse TTM
         CHECK(check_sparse_fold<f64>(sparse_of<f64>(*level.table)) == 0U);
         CHECK(check_sparse_mttkrp<f32>(sparse_of<f32>(*level.table)) == 0U);
         CHECK(check_sparse_mttkrp<f64>(sparse_of<f64>(*level.table)) == 0U);
+    }
+    CHECK(ran >= 1U);
+}
+
+// --- nn's f32 pooling and convolution ---
+
+// IEEE 754 maximum, the max pool's rule: a NaN wins, +0 over -0.
+f32 ieee_max(f32 a, f32 b)
+{
+    if (std::isnan(a) || std::isnan(b))
+    {
+        return std::isnan(a) ? a : b;
+    }
+    if (a == b)
+    {
+        return std::signbit(a) ? b : a;
+    }
+    return a > b ? a : b;
+}
+
+// Values from {-2, -1, -0, +0, 1, 2}, so windows tie and mix signed zeros, about every 11th a fill_values special.
+void fill_ties(f32* p, u64 n, u64 seed)
+{
+    const f32 small[] = {-2.0F, -1.0F, -0.0F, 0.0F, 1.0F, 2.0F};
+    fill_values(p, n, seed, 11U);
+    u64 s = seed ^ 0x9E37U;
+    for (u64 i = 0; i < n; ++i)
+    {
+        const u64 r = lcg(s);
+        if (r % 11U != 0U)
+        {
+            p[i] = small[(r >> 8U) % 6U];
+        }
+    }
+}
+
+// Three planes at heights 2 to 5 and widths around a vector, the 2x2/s2 shape's 256-wide row stage and past it, every
+// window and stride (max and average), split into the ranges [1, 3) then [0, 1); guard words after y.
+u64 check_nn_pool(const TensorKernels& k)
+{
+    constexpr u64 kPlanes = 3U;
+    static f32 x[kPlanes * 5U * 257U];
+    static f32 y[kPlanes * 5U * 257U + 3U];
+    static f32 want[kPlanes * 5U * 257U];
+    const u64 heights[] = {2U, 3U, 5U};
+    const u64 widths[] = {2U, 3U, 9U, 16U, 17U, 255U, 256U, 257U};
+    const u64 windows[][2] = {{2U, 2U}, {1U, 1U}, {2U, 1U}, {3U, 1U}, {3U, 2U}, {3U, 3U}};
+    const bool modes[] = {true, false};
+    u64 bad = 0;
+    u64 seed = 41U;
+    for (const u64 h : heights)
+    {
+        for (const u64 w : widths)
+        {
+            for (const auto& win : windows)
+            {
+                const u64 kk = win[0];
+                const u64 st = win[1];
+                if (h < kk || w < kk)
+                {
+                    continue;
+                }
+                const u64 oh = (h - kk) / st + 1U;
+                const u64 ow = (w - kk) / st + 1U;
+                const u64 total = kPlanes * oh * ow;
+                for (const bool is_max : modes)
+                {
+                    fill_ties(x, kPlanes * h * w, ++seed);
+                    for (u64 i = 0; i < total + 3U; ++i)
+                    {
+                        y[i] = kGuard<f32>;
+                    }
+                    const tn::NnPool2d c{x, y, h, w, oh, ow, kk, st, is_max};
+                    k.nn_pool2d_planes(c, 1U, 3U);
+                    for (u64 i = 0; i < oh * ow; ++i)
+                    {
+                        bad += y[i] == kGuard<f32> ? 0U : 1U;
+                    }
+                    k.nn_pool2d_planes(c, 0U, 1U);
+                    const f32 inv = 1.0F / static_cast<f32>(kk * kk);
+                    for (u64 p = 0; p < kPlanes; ++p)
+                    {
+                        for (u64 oi = 0; oi < oh; ++oi)
+                        {
+                            for (u64 oj = 0; oj < ow; ++oj)
+                            {
+                                const f32* wp = x + p * h * w + oi * st * w + oj * st;
+                                f32 acc = is_max ? wp[0] : 0.0F;
+                                for (u64 ki = 0; ki < kk; ++ki)
+                                {
+                                    for (u64 kj = 0; kj < kk; ++kj)
+                                    {
+                                        acc = is_max ? ieee_max(acc, wp[ki * w + kj]) : acc + wp[ki * w + kj];
+                                    }
+                                }
+                                want[(p * oh + oi) * ow + oj] = is_max ? acc : acc * inv;
+                            }
+                        }
+                    }
+                    bad += nan_aside_mismatches(want, y, total);
+                    bad += scratch_overruns(y, total);
+                }
+            }
+        }
+    }
+    return bad;
+}
+
+// The scalar convolution: per output bias + the (c, ki, kj)-ordered fma chain from 0, relu as `v > 0 ? v : 0`, the
+// fused pool as the IEEE maximum of each 2x2/s2 window.
+void conv_oracle(const tn::NnConv2d& c, u64 images, f32* conv, f32* out)
+{
+    for (u64 img = 0; img < images; ++img)
+    {
+        for (u64 o = 0; o < c.oc; ++o)
+        {
+            for (u64 oi = 0; oi < c.oh; ++oi)
+            {
+                for (u64 oj = 0; oj < c.ow; ++oj)
+                {
+                    f32 acc = 0.0F;
+                    for (u64 ci = 0; ci < c.chans; ++ci)
+                    {
+                        for (u64 ki = 0; ki < c.kh; ++ki)
+                        {
+                            for (u64 kj = 0; kj < c.kw; ++kj)
+                            {
+                                const i64 ih = static_cast<i64>(oi * c.stride + ki) - static_cast<i64>(c.pad);
+                                const i64 iw = static_cast<i64>(oj * c.stride + kj) - static_cast<i64>(c.pad);
+                                const bool in =
+                                    ih >= 0 && ih < static_cast<i64>(c.h) && iw >= 0 && iw < static_cast<i64>(c.w_in);
+                                const u64 at = in ? ((img * c.chans + ci) * c.h + static_cast<u64>(ih)) * c.w_in +
+                                                        static_cast<u64>(iw)
+                                                  : 0U;
+                                const f32 xv = in ? c.x[at] : 0.0F;
+                                acc = std::fma(c.w[((o * c.chans + ci) * c.kh + ki) * c.kw + kj], xv, acc);
+                            }
+                        }
+                    }
+                    f32 v = c.bias[o] + acc;
+                    if (c.relu)
+                    {
+                        v = v > 0.0F ? v : 0.0F;
+                    }
+                    conv[((img * c.oc + o) * c.oh + oi) * c.ow + oj] = v;
+                }
+            }
+        }
+    }
+    const u64 oh2 = c.pool ? (c.oh - 2U) / 2U + 1U : c.oh;
+    const u64 ow2 = c.pool ? (c.ow - 2U) / 2U + 1U : c.ow;
+    for (u64 pl = 0; pl < images * c.oc; ++pl)
+    {
+        const f32* src = conv + pl * c.oh * c.ow;
+        for (u64 oi = 0; oi < oh2; ++oi)
+        {
+            for (u64 oj = 0; oj < ow2; ++oj)
+            {
+                f32 v = src[oi * c.ow + oj];
+                if (c.pool)
+                {
+                    const f32* q = src + 2U * oi * c.ow + 2U * oj;
+                    v = ieee_max(ieee_max(q[0], q[1]), ieee_max(q[c.ow], q[c.ow + 1U]));
+                }
+                out[(pl * oh2 + oi) * ow2 + oj] = v;
+            }
+        }
+    }
+}
+
+// The direct 3x3/s1/p1 kernel at every output-channel block R 1 to 8 (and 17 = 8 + 8 + 1), heights 1 to 5 and widths
+// around one and two vectors, with and without relu and the fused pool; im2col at kernels 1 to 5 (and 1 x 3), pads 0
+// to 2 and strides 1 to 3, its bias prefill below, inside and past a vector. Two images, split into [1, 2) then
+// [0, 1); NaNs, infinities, signed zeros and subnormals in x, the weights and the bias; guard words after y and after
+// the scratch slot.
+u64 check_nn_conv(const TensorKernels& k)
+{
+    struct Shape
+    {
+        u64 chans, h, w, oc, kh, kw, pad, stride;
+    };
+    const Shape shapes[] = {
+        {1U, 1U, 1U, 1U, 3U, 3U, 1U, 1U},  {2U, 3U, 7U, 3U, 3U, 3U, 1U, 1U},  {1U, 2U, 8U, 8U, 3U, 3U, 1U, 1U},
+        {3U, 5U, 9U, 17U, 3U, 3U, 1U, 1U}, {2U, 4U, 15U, 5U, 3U, 3U, 1U, 1U}, {1U, 3U, 16U, 7U, 3U, 3U, 1U, 1U},
+        {2U, 5U, 17U, 9U, 3U, 3U, 1U, 1U}, {1U, 4U, 31U, 2U, 3U, 3U, 1U, 1U}, {2U, 2U, 33U, 4U, 3U, 3U, 1U, 1U},
+        {1U, 5U, 33U, 6U, 3U, 3U, 1U, 1U}, {2U, 5U, 6U, 3U, 1U, 1U, 0U, 1U},  {1U, 6U, 7U, 4U, 2U, 2U, 0U, 1U},
+        {2U, 7U, 9U, 5U, 3U, 3U, 0U, 2U},  {1U, 8U, 8U, 3U, 5U, 5U, 2U, 1U},  {3U, 6U, 11U, 2U, 3U, 3U, 1U, 3U},
+        {1U, 4U, 4U, 9U, 3U, 3U, 0U, 1U},  {2U, 5U, 7U, 3U, 1U, 3U, 1U, 1U},  {1U, 4U, 6U, 2U, 3U, 3U, 2U, 2U},
+    };
+    constexpr u64 kImages = 2U;
+    static f32 x[kImages * 3U * 8U * 33U];
+    static f32 wt[17U * 3U * 25U];
+    static f32 bias[17U];
+    static f32 y[kImages * 17U * 5U * 33U + 3U];
+    static f32 conv[kImages * 17U * 5U * 33U];
+    static f32 want[kImages * 17U * 5U * 33U];
+    static f32 scratch[4096U];
+    u64 bad = 0;
+    u64 seed = 77U;
+    for (const Shape& sh : shapes)
+    {
+        const u64 oh = (sh.h + 2U * sh.pad - sh.kh) / sh.stride + 1U;
+        const u64 ow = (sh.w + 2U * sh.pad - sh.kw) / sh.stride + 1U;
+        const bool direct = sh.kh == 3U && sh.kw == 3U && sh.pad == 1U && sh.stride == 1U;
+        const u64 slot = tn::nn_conv2d_scratch_floats(sh.chans, sh.kh, sh.kw, oh, ow);
+        for (u32 flags = 0; flags < 4U; ++flags)
+        {
+            const bool relu = (flags & 1U) != 0U;
+            const bool pool = (flags & 2U) != 0U;
+            if (pool && (!direct || sh.h < 2U || sh.w < 2U))
+            {
+                continue;
+            }
+            fill_values(x, kImages * sh.chans * sh.h * sh.w, ++seed, 23U);
+            fill_values(wt, sh.oc * sh.chans * sh.kh * sh.kw, ++seed, 29U);
+            fill_values(bias, sh.oc, ++seed, 7U);
+            const tn::NnConv2d c{x,     wt,     bias,      y,     sh.chans, sh.h, sh.w, sh.kh,
+                                 sh.kw, sh.pad, sh.stride, sh.oc, oh,       ow,   relu, pool};
+            const u64 per = sh.oc * (pool ? ((oh - 2U) / 2U + 1U) * ((ow - 2U) / 2U + 1U) : oh * ow);
+            for (u64 i = 0; i < kImages * per + 3U; ++i)
+            {
+                y[i] = kGuard<f32>;
+            }
+            for (u64 i = 0; i < slot + 3U; ++i)
+            {
+                scratch[i] = kGuard<f32>;
+            }
+            k.nn_conv2d_images(c, scratch, 1U, 2U);
+            for (u64 i = 0; i < per; ++i)
+            {
+                bad += y[i] == kGuard<f32> ? 0U : 1U;
+            }
+            k.nn_conv2d_images(c, scratch, 0U, 1U);
+            conv_oracle(c, kImages, conv, want);
+            bad += nan_aside_mismatches(want, y, kImages * per);
+            bad += scratch_overruns(y, kImages * per);
+            bad += scratch_overruns(scratch, slot);
+        }
+    }
+    return bad;
+}
+
+TEST_CASE("tensor kernels: every level the host runs gives the scalar nn pooling and convolution bits",
+          "[tensor][kernels]")
+{
+    usize ran = 0;
+    for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
+    {
+        if (!runs_here(level))
+        {
+            continue;
+        }
+        ++ran;
+        INFO(crd::cpu_level_name(level.level) << variant_suffix(level));
+        CHECK(check_nn_pool(*level.table) == 0U);
+        CHECK(check_nn_conv(*level.table) == 0U);
     }
     CHECK(ran >= 1U);
 }

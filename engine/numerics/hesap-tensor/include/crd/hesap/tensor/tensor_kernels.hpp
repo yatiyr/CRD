@@ -1,13 +1,14 @@
 // The table of the hesap-tensor kernels (SIMD-DISPATCH, ADR-0134 §5): one per CPU level the kernel unit is built for
 // (engine/numerics/hesap-tensor/kernels/tensor_kernels.cpp), resolved by tensor_kernels() in
-// crd/hesap/tensor/tensor_dispatch.hpp. The header holds only data declarations, so a kernel unit compiles nothing from
-// it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and the IEEE operations
-// of a real or Complex<T> product, the binned sum is partition-independent by construction, the quantizers are
-// per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order (single-rounded
-// FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the elementwise ops
-// and the einsum products are per-element IEEE operations in one order, Tier D's reduction order is fixed by kEwLanes
-// and kReduceBlock alone, each batched matrix runs its own lane in the scalar tier's operations, and each sparse
-// walk's output element is one fma chain in the canonical nonzero order.
+// crd/hesap/tensor/tensor_dispatch.hpp. The header holds only data declarations and constants, so a kernel unit
+// compiles nothing from it. Every routine is bit-exact across levels (ADR-0063, ADR-0134 §7): the permute is copies and
+// the IEEE operations of a real or Complex<T> product, the binned sum is partition-independent by construction, the
+// quantizers are per-element IEEE operations, the quantized dots are exact integers combined in one fixed f32 order
+// (single-rounded FMAs), softmax's exp core has a bit-identical vector twin, the Philox blocks are integer rounds, the
+// elementwise ops and the einsum products are per-element IEEE operations in one order, Tier D's reduction order is
+// fixed by kEwLanes and kReduceBlock alone, each batched matrix runs its own lane in the scalar tier's operations, each
+// sparse walk's output element is one fma chain in the canonical nonzero order, and the nn convolution's outputs are
+// fma chains in one order and its max pool the order-free IEEE maximum.
 
 #pragma once
 
@@ -57,7 +58,7 @@ inline constexpr crd::u32 kReduceKernelOps = 4U;
 
 // One broadcast binary op over its collapsed dims (elementwise.hpp collapse): dst[w] = a op b for the row-major
 // positions w of shape[0 .. rank), dst contiguous, a and b at their element strides sa and sb per dim (0 where they
-// broadcast). Rank 0 is one element.
+// broadcast). Rank 0 is one element. dst may be a when a steps by 1 (each element is read before it is written).
 template <typename T> struct EwBinaryWalk
 {
     T* dst;
@@ -321,6 +322,56 @@ struct NnLinearI8
     bool relu;
 };
 
+// The planes [lo, hi) of a k x k pool at stride s over [planes, h, w] into [planes, oh, ow] (nn.hpp nn_maxpool2d,
+// nn_avgpool2d). The max is IEEE 754 maximum (a NaN wins, +0 over -0), which no window order changes, NaN payloads
+// aside; the average sums its window row-major from 0 and multiplies by 1 / (k * k).
+struct NnPool2d
+{
+    const crd::f32* x;
+    crd::f32* y;
+    crd::u64 h;
+    crd::u64 w;
+    crd::u64 oh;
+    crd::u64 ow;
+    crd::u64 k;
+    crd::u64 s;
+    bool is_max;
+};
+
+// The images [lo, hi) of a conv2d (nn.hpp nn_conv2d_f32), each output bias + its (c, ki, kj)-ordered chain of
+// single-rounded fmas from 0, then relu (maxps against +0) when asked. The 3x3/s1/p1 shape runs the direct kernel,
+// which alone takes pool: the 2x2/s2 max pool of NnPool2d fused, y then holding the pooled planes. Other shapes run
+// im2col and the tiny GEMM. scratch holds nn_conv2d_scratch_floats(chans, kh, kw, oh, ow) values.
+struct NnConv2d
+{
+    const crd::f32* x;    // [N, C, H, W]
+    const crd::f32* w;    // [OC, C * KH * KW]
+    const crd::f32* bias; // [OC]
+    crd::f32* y;          // [N, OC, OH, OW], or the pooled [N, OC, (OH - 2) / 2 + 1, (OW - 2) / 2 + 1]
+    crd::u64 chans;
+    crd::u64 h;
+    crd::u64 w_in;
+    crd::u64 kh;
+    crd::u64 kw;
+    crd::u64 pad;
+    crd::u64 stride;
+    crd::u64 oc;
+    crd::u64 oh; // the convolution's output dims, before any pool
+    crd::u64 ow;
+    bool relu;
+    bool pool;
+};
+
+// One conv2d scratch slot in floats: the im2col column matrix, or the direct kernel's staging (a zero row, the C * H
+// padded rows and 16 fused-pool row buffers, each OW + 10 wide), whichever is larger.
+[[nodiscard]] constexpr crd::u64 nn_conv2d_scratch_floats(crd::u64 chans, crd::u64 kh, crd::u64 kw, crd::u64 oh,
+                                                          crd::u64 ow) noexcept
+{
+    const crd::u64 col = chans * kh * kw * oh * ow;
+    const crd::u64 stage = (chans * oh + 1U + 16U) * (ow + 10U);
+    return col > stage ? col : stage;
+}
+
 struct TensorKernels
 {
     // The region of a permute of f32 or Complex<f32> (f64, Complex<f64>) elements: one multithreaded permute task.
@@ -371,6 +422,9 @@ struct TensorKernels
     // The sparse tensor TTM and MTTKRP walks.
     SparseTensorKernels<crd::f32> sparse_f32;
     SparseTensorKernels<crd::f64> sparse_f64;
+    // nn's f32 pooling and convolution.
+    void (*nn_pool2d_planes)(const NnPool2d& c, crd::u32 lo, crd::u32 hi) noexcept;
+    void (*nn_conv2d_images)(const NnConv2d& c, crd::f32* scratch, crd::u32 lo, crd::u32 hi) noexcept;
 };
 
 // The levels with a body and the VNNI variants of avx2 (AVX-VNNI) and avx512 (AVX512-VNNI), the integer dots on

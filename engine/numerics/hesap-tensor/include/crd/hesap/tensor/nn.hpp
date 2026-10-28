@@ -2,9 +2,11 @@
 // ---------------------------------------------------------------------------
 // crd-hesap-tensor — v14-m: the NN inference pack (the certified tiny-ML demo).
 //
-// Ops: conv2d (im2col over the engine's OWN dense GEMM — the allocation-free
-// v14-h direct tiny-tier kernel per im2col matrix, SANITY #8 reuse), max/avg
-// pooling, activations (relu / exact erf-gelu / tanh / sigmoid — ALL
+// Ops: conv2d (the direct 3x3/s1/p1 kernel with the fused 2x2/s2 maxpool, or
+// im2col over the allocation-free v14-h tiny-tier GEMM, SANITY #8 reuse),
+// max pooling (IEEE 754 maximum: a NaN wins, +0 over -0) and avg pooling, the
+// convolution and pooling being per-level tensor kernels (tensor_kernels.hpp),
+// activations (relu / exact erf-gelu / tanh / sigmoid — ALL
 // transcendentals via crd::math, never std::), layernorm (torch semantics:
 // biased variance, eps inside the sqrt), numerically-stable softmax
 // (max-subtract; exp = the crd_exp1/crd_exp4 deterministic core), linear f32
@@ -65,13 +67,12 @@
 #include "dtypes.hpp" // BlockQ8Zero + f16 converts + quantize_q8_0 (activations)
 #include "io.hpp"     // SafetensorsFile — the v14-l reader consumed by the builders
 #include "tensor.hpp"
-#include "tensor_dispatch.hpp" // the quantized dots, quantizers, softmax and tiny GEMM: the per-level tensor kernels
+#include "tensor_dispatch.hpp" // the dots, quantizers, softmax, GEMM, conv, pool and relu: the per-level tensor kernels
 
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/math/cmath.hpp>         // crd::math::exp / tanh / sqrt / nearbyint — the deterministic surface
 #include <crd/math/deterministic.hpp> // crd::math::deterministic::erf — the exact (erf-form) gelu
-#include <crd/math/simd/simd.hpp>
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
@@ -187,21 +188,15 @@ inline void nn_parallel(crd::u32 count, crd::u32 nw, const C* ctx,
 
 // ---- activations ----------------------------------------------------------
 
-// relu: vector max(x, +0) with a scalar tail — lane-for-lane bit-identical
-// (maxps returns the SECOND operand on equal/NaN, matching `x > 0 ? x : 0`).
+// relu: maxps(x, +0) per element (+0 for a NaN or -0, `x > 0 ? x : 0`), the tensor kernels' elementwise Max walk
+// with a broadcast zero; y may be x.
 inline void relu_span(const crd::f32* x, crd::f32* y, crd::u64 n) noexcept
 {
-    namespace simd = crd::math::simd;
-    const simd::Vec8f zero(0.0F);
-    crd::u64 i = 0;
-    for (; i + 8U <= n; i += 8U)
-    {
-        simd::max(simd::Vec8f::load(x + i), zero).store(y + i);
-    }
-    for (; i < n; ++i)
-    {
-        y[i] = x[i] > 0.0F ? x[i] : 0.0F;
-    }
+    const crd::f32 zero = 0.0F;
+    const crd::u64 shape[1] = {n};
+    const crd::i64 sa[1] = {1};
+    const crd::i64 sb[1] = {0};
+    tensor_kernels().table->ew_binary_f32[static_cast<crd::u32>(BinaryOp::Max)]({y, x, &zero, shape, sa, sb, 1U});
 }
 
 // exact gelu (torch approximate='none'): 0.5 x (1 + erf(x / sqrt(2))) in f64.
@@ -316,342 +311,16 @@ inline void layernorm_run(const LayerNormCtx& c, crd::u32 lo, crd::u32 hi)
     }
 }
 
-// ---- pooling ---------------------------------------------------------------
-// scalar ternary max / sum chains per window (the dtypes.hpp amax idiom —
-// no conditional two-array updates near vector code, SANITY 2026-07-05).
-struct PoolCtx
-{
-    const crd::f32* x;
-    crd::f32* y;
-    crd::u64 h;
-    crd::u64 w;
-    crd::u64 oh;
-    crd::u64 ow;
-    crd::u64 k;
-    crd::u64 s;
-    bool is_max;
-};
-
-inline void pool_run(const PoolCtx& c, crd::u32 lo, crd::u32 hi)
-{
-    namespace simd = crd::math::simd;
-    const crd::f32 inv = 1.0F / static_cast<crd::f32>(c.k * c.k);
-    if (c.is_max && c.k == 2U && c.s == 2U && c.w <= 256U) // the CNN hot shape, vectorized
-    {
-        for (crd::u32 p = lo; p < hi; ++p)
-        {
-            const crd::f32* xp = c.x + static_cast<crd::u64>(p) * c.h * c.w;
-            crd::f32* yp = c.y + static_cast<crd::u64>(p) * c.oh * c.ow;
-            crd::f32 vm[256];
-            for (crd::u64 oi = 0; oi < c.oh; ++oi)
-            {
-                const crd::f32* r0 = xp + (2U * oi) * c.w;
-                const crd::f32* r1 = r0 + c.w;
-                crd::u64 j = 0;
-                for (; j + 8U <= c.w; j += 8U) // vertical max, 8 lanes at a time
-                {
-                    simd::max(simd::Vec8f::load(r0 + j), simd::Vec8f::load(r1 + j)).store(vm + j);
-                }
-                for (; j < c.w; ++j)
-                {
-                    vm[j] = r0[j] > r1[j] ? r0[j] : r1[j];
-                }
-                crd::f32* yrow = yp + oi * c.ow;
-                for (crd::u64 oj = 0; oj < c.ow; ++oj) // horizontal pair max
-                {
-                    const crd::f32 a = vm[2U * oj];
-                    const crd::f32 b = vm[2U * oj + 1U];
-                    yrow[oj] = a > b ? a : b;
-                }
-            }
-        }
-        return;
-    }
-    for (crd::u32 p = lo; p < hi; ++p) // p = plane index (sample*channels + channel)
-    {
-        const crd::f32* xp = c.x + static_cast<crd::u64>(p) * c.h * c.w;
-        crd::f32* yp = c.y + static_cast<crd::u64>(p) * c.oh * c.ow;
-        for (crd::u64 oi = 0; oi < c.oh; ++oi)
-        {
-            for (crd::u64 oj = 0; oj < c.ow; ++oj)
-            {
-                const crd::f32* win = xp + oi * c.s * c.w + oj * c.s;
-                if (c.is_max)
-                {
-                    crd::f32 m = win[0];
-                    for (crd::u64 ki = 0; ki < c.k; ++ki)
-                    {
-                        for (crd::u64 kj = 0; kj < c.k; ++kj)
-                        {
-                            const crd::f32 v = win[ki * c.w + kj];
-                            m = v > m ? v : m;
-                        }
-                    }
-                    yp[oi * c.ow + oj] = m;
-                }
-                else
-                {
-                    crd::f32 acc = 0.0F;
-                    for (crd::u64 ki = 0; ki < c.k; ++ki)
-                    {
-                        for (crd::u64 kj = 0; kj < c.k; ++kj)
-                        {
-                            acc += win[ki * c.w + kj];
-                        }
-                    }
-                    yp[oi * c.ow + oj] = acc * inv;
-                }
-            }
-        }
-    }
-}
-
-// ---- conv2d: im2col + the engine's own dense GEMM ---------------------------
-// One column matrix per image: col[(c*KH+ki)*KW+kj][oh*OW+ow]; stride-1 rows
-// fill via memset edges + memcpy middle (the hot corpus path), generic
-// strides via a branchless bounds ternary.
-inline void im2col_one(const crd::f32* x, crd::u64 chans, crd::u64 h, crd::u64 w, crd::u64 kh, crd::u64 kw,
-                       crd::u64 pad, crd::u64 stride, crd::u64 oh, crd::u64 ow, crd::f32* col) noexcept
-{
-    const crd::u64 ohw = oh * ow;
-    crd::u64 r = 0;
-    for (crd::u64 ci = 0; ci < chans; ++ci)
-    {
-        const crd::f32* plane = x + ci * h * w;
-        for (crd::u64 ki = 0; ki < kh; ++ki)
-        {
-            for (crd::u64 kj = 0; kj < kw; ++kj)
-            {
-                crd::f32* dst = col + r * ohw;
-                ++r;
-                for (crd::u64 oi = 0; oi < oh; ++oi)
-                {
-                    const crd::i64 ih =
-                        static_cast<crd::i64>(oi * stride + ki) - static_cast<crd::i64>(pad);
-                    crd::f32* drow = dst + oi * ow;
-                    if (ih < 0 || ih >= static_cast<crd::i64>(h))
-                    {
-                        std::memset(drow, 0, ow * sizeof(crd::f32));
-                        continue;
-                    }
-                    const crd::f32* srow = plane + static_cast<crd::u64>(ih) * w;
-                    if (stride == 1U)
-                    {
-                        const crd::i64 shift = static_cast<crd::i64>(kj) - static_cast<crd::i64>(pad);
-                        const crd::u64 valid_lo = shift < 0 ? static_cast<crd::u64>(-shift) : 0U;
-                        const crd::i64 hi_signed = static_cast<crd::i64>(w) - shift;
-                        crd::u64 valid_hi = hi_signed < 0 ? 0U : static_cast<crd::u64>(hi_signed);
-                        valid_hi = valid_hi > ow ? ow : valid_hi;
-                        if (valid_lo > 0U)
-                        {
-                            std::memset(drow, 0, valid_lo * sizeof(crd::f32));
-                        }
-                        if (valid_hi > valid_lo)
-                        {
-                            std::memcpy(drow + valid_lo, srow + static_cast<crd::i64>(valid_lo) + shift,
-                                        (valid_hi - valid_lo) * sizeof(crd::f32));
-                        }
-                        if (valid_hi < ow)
-                        {
-                            std::memset(drow + valid_hi, 0, (ow - valid_hi) * sizeof(crd::f32));
-                        }
-                    }
-                    else
-                    {
-                        for (crd::u64 oj = 0; oj < ow; ++oj)
-                        {
-                            const crd::i64 iw =
-                                static_cast<crd::i64>(oj * stride + kj) - static_cast<crd::i64>(pad);
-                            drow[oj] =
-                                (iw >= 0 && iw < static_cast<crd::i64>(w)) ? srow[iw] : 0.0F;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
+// ---- pooling and conv2d: the tensor kernels (NnPool2d, NnConv2d) ------------
+// conv2d runs per image: the direct 3x3/s1/p1 kernel (the CNN hot shape, with the fused 2x2/s2 maxpool), or im2col
+// and the tiny GEMM in a per-worker scratch slot.
 struct ConvCtx
 {
-    const crd::f32* x;   // [N, C, H, W]
-    const crd::f32* w;   // [OC, C*KH*KW] row-major flat
-    const crd::f32* bias; // [OC]
-    crd::f32* y;         // [N, OC, OH, OW]
+    NnConv2d conv;
     crd::f32* col_slots; // slot_floats per worker slot
     crd::u64 slot_floats;
-    crd::u64 chans, h, w_in, kh, kw, pad, stride, oc, oh, ow; // oh/ow = CONV output dims
     bool parallel; // slot = jobs::worker_index() when true, slot 0 otherwise
-    bool relu;     // fused epilogue
-    bool pool;     // fused 2x2/s2 maxpool (direct 3x3 path only) — y carries POOLED planes
 };
-
-// ---- the direct 3x3 / stride-1 / pad-1 kernel (the CNN hot shape) ----------
-// Same per-element fma CHAIN as im2col+GEMM — the accumulation order over
-// (c, ki, kj) and the single-rounded bias add are identical, vector lanes are
-// output columns — so the conv bit gate holds across both paths. Input rows
-// are staged once per image into a zero-padded buffer (left pad + right slack)
-// so every kj shift is a plain 8-lane load; OOB rows read a shared zero row
-// (the fma with 0 executes — never skipped — preserving the chain).
-// One conv output row for R output channels into dst + r*dst_stride (+ j0).
-template <crd::u32 R>
-inline void conv3x3_rowblock(const crd::f32* rows, const crd::f32* zrow, crd::u64 chans, crd::u64 h,
-                             crd::u64 w, crd::u64 rs, const crd::f32* wblk, const crd::f32* bias,
-                             crd::f32* dst, crd::u64 dst_stride, crd::u64 oi, bool relu) noexcept
-{
-    namespace simd = crd::math::simd;
-    using V = simd::Vec8f;
-    const V zero(0.0F);
-    for (crd::u64 j0 = 0; j0 < w; j0 += 8U)
-    {
-        const crd::u64 cw = w - j0 < 8U ? w - j0 : 8U;
-        V acc[R];
-        for (crd::u32 r = 0; r < R; ++r)
-        {
-            acc[r] = V(0.0F);
-        }
-        for (crd::u64 ci = 0; ci < chans; ++ci)
-        {
-            for (crd::u64 ki = 0; ki < 3U; ++ki)
-            {
-                const crd::i64 ih = static_cast<crd::i64>(oi + ki) - 1;
-                const bool oob = ih < 0 || ih >= static_cast<crd::i64>(h);
-                const crd::f32* srow = oob ? zrow : rows + (ci * h + static_cast<crd::u64>(ih)) * rs;
-                for (crd::u64 kj = 0; kj < 3U; ++kj)
-                {
-                    const V xv = V::load(srow + j0 + kj); // staged: full loads are always in-bounds
-                    const crd::u64 wo = (ci * 3U + ki) * 3U + kj;
-                    for (crd::u32 r = 0; r < R; ++r)
-                    {
-                        acc[r] = simd::fma(V(wblk[r * chans * 9U + wo]), xv, acc[r]);
-                    }
-                }
-            }
-        }
-        for (crd::u32 r = 0; r < R; ++r)
-        {
-            V out = V(bias[r]) + acc[r]; // fl(bias + chain) — the GEMM's beta=1 form
-            if (relu)
-            {
-                out = simd::max(out, zero);
-            }
-            crd::f32* d = dst + static_cast<crd::u64>(r) * dst_stride + j0;
-            if (cw == 8U)
-            {
-                out.store(d);
-            }
-            else
-            {
-                out.store_partial(d, static_cast<crd::usize>(cw));
-            }
-        }
-    }
-}
-
-// Dispatch over the residual oc-block size (the batched.hpp switch pattern).
-inline void conv3x3_rowblock_any(crd::u32 r, const crd::f32* rows, const crd::f32* zrow, crd::u64 chans,
-                                 crd::u64 h, crd::u64 w, crd::u64 rs, const crd::f32* wblk,
-                                 const crd::f32* bias, crd::f32* dst, crd::u64 dst_stride, crd::u64 oi,
-                                 bool relu) noexcept
-{
-    switch (r)
-    {
-    case 8U:
-        conv3x3_rowblock<8U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 7U:
-        conv3x3_rowblock<7U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 6U:
-        conv3x3_rowblock<6U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 5U:
-        conv3x3_rowblock<5U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 4U:
-        conv3x3_rowblock<4U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 3U:
-        conv3x3_rowblock<3U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 2U:
-        conv3x3_rowblock<2U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    case 1U:
-        conv3x3_rowblock<1U>(rows, zrow, chans, h, w, rs, wblk, bias, dst, dst_stride, oi, relu);
-        return;
-    default:
-        return;
-    }
-}
-
-// fuse_pool: the conv(+relu) rows are pooled 2x2/s2 in-register-file and only
-// the POOLED rows hit memory — the CNN pipeline's DRAM-traffic killer (the
-// unfused conv output never exists as a buffer). Pooling of identical values
-// is exact (max), so the fused pipeline is bit-identical to conv->relu->pool.
-inline void conv3x3_image(const crd::f32* xi, crd::u64 chans, crd::u64 h, crd::u64 w, const crd::f32* wflat,
-                          const crd::f32* bias, crd::f32* yi, crd::u64 oc, crd::f32* stage, bool relu,
-                          bool fuse_pool) noexcept
-{
-    const crd::u64 rs = w + 10U; // 1 left pad + w + right zero slack for full 8-lane loads
-    crd::f32* zrow = stage;
-    crd::f32* rows = stage + rs;
-    std::memset(zrow, 0, rs * sizeof(crd::f32));
-    for (crd::u64 ci = 0; ci < chans; ++ci)
-    {
-        for (crd::u64 ih = 0; ih < h; ++ih)
-        {
-            crd::f32* dst = rows + (ci * h + ih) * rs;
-            dst[0] = 0.0F;
-            std::memcpy(dst + 1, xi + (ci * h + ih) * w, w * sizeof(crd::f32));
-            std::memset(dst + 1 + w, 0, 9U * sizeof(crd::f32));
-        }
-    }
-    if (!fuse_pool)
-    {
-        for (crd::u64 oi = 0; oi < h; ++oi)
-        {
-            for (crd::u64 o0 = 0; o0 < oc; o0 += 8U)
-            {
-                const crd::u32 r = oc - o0 < 8U ? static_cast<crd::u32>(oc - o0) : 8U;
-                conv3x3_rowblock_any(r, rows, zrow, chans, h, w, rs, wflat + o0 * chans * 9U, bias + o0,
-                                     yi + o0 * h * w + oi * w, h * w, oi, relu);
-            }
-        }
-        return;
-    }
-    // fused 2x2/s2 maxpool: two conv rows land in the scratch row buffer, the
-    // pooled row goes to memory. rowbuf = 16 rows of rs floats after staging.
-    const crd::u64 oh2 = (h - 2U) / 2U + 1U;
-    const crd::u64 ow2 = (w - 2U) / 2U + 1U;
-    crd::f32* rowbuf = rows + chans * h * rs;
-    for (crd::u64 oi2 = 0; oi2 < oh2; ++oi2)
-    {
-        for (crd::u64 o0 = 0; o0 < oc; o0 += 8U)
-        {
-            const crd::u32 r = oc - o0 < 8U ? static_cast<crd::u32>(oc - o0) : 8U;
-            crd::f32* rb0 = rowbuf;            // conv row 2*oi2, R rows of rs
-            crd::f32* rb1 = rowbuf + 8U * rs;  // conv row 2*oi2+1
-            conv3x3_rowblock_any(r, rows, zrow, chans, h, w, rs, wflat + o0 * chans * 9U, bias + o0, rb0,
-                                 rs, 2U * oi2, relu);
-            conv3x3_rowblock_any(r, rows, zrow, chans, h, w, rs, wflat + o0 * chans * 9U, bias + o0, rb1,
-                                 rs, 2U * oi2 + 1U, relu);
-            for (crd::u32 rr = 0; rr < r; ++rr)
-            {
-                const crd::f32* a = rb0 + static_cast<crd::u64>(rr) * rs;
-                const crd::f32* b = rb1 + static_cast<crd::u64>(rr) * rs;
-                crd::f32* yrow = yi + (o0 + rr) * oh2 * ow2 + oi2 * ow2;
-                for (crd::u64 oj = 0; oj < ow2; ++oj)
-                {
-                    const crd::f32 v0 = a[2U * oj] > b[2U * oj] ? a[2U * oj] : b[2U * oj];
-                    const crd::f32 v1 =
-                        a[2U * oj + 1U] > b[2U * oj + 1U] ? a[2U * oj + 1U] : b[2U * oj + 1U];
-                    yrow[oj] = v0 > v1 ? v0 : v1;
-                }
-            }
-        }
-    }
-}
 
 [[nodiscard]] inline bool conv_is_3x3s1p1(crd::u64 kh, crd::u64 kw, crd::u64 pad, crd::u64 stride) noexcept
 {
@@ -660,9 +329,6 @@ inline void conv3x3_image(const crd::f32* xi, crd::u64 chans, crd::u64 h, crd::u
 
 inline void conv_run(const ConvCtx& c, crd::u32 lo, crd::u32 hi)
 {
-    namespace simd = crd::math::simd;
-    const crd::u64 ckk = c.chans * c.kh * c.kw;
-    const crd::u64 ohw = c.oh * c.ow;
     crd::f32* scratch = c.col_slots;
     if (c.parallel)
     {
@@ -670,39 +336,7 @@ inline void conv_run(const ConvCtx& c, crd::u32 lo, crd::u32 hi)
         CRD_ASSERT_MSG(slot < kNnConvScratchSlots, "conv_run: worker slot exceeds the scratch bound");
         scratch = c.col_slots + static_cast<crd::u64>(slot) * c.slot_floats;
     }
-    const bool direct3x3 = conv_is_3x3s1p1(c.kh, c.kw, c.pad, c.stride);
-    const crd::u64 yohw = c.pool ? ((c.oh - 2U) / 2U + 1U) * ((c.ow - 2U) / 2U + 1U) : ohw;
-    for (crd::u32 img = lo; img < hi; ++img)
-    {
-        const crd::f32* xi = c.x + static_cast<crd::u64>(img) * c.chans * c.h * c.w_in;
-        crd::f32* yi = c.y + static_cast<crd::u64>(img) * c.oc * yohw;
-        if (direct3x3)
-        {
-            conv3x3_image(xi, c.chans, c.h, c.w_in, c.w, c.bias, yi, c.oc, scratch, c.relu, c.pool);
-            continue;
-        }
-        im2col_one(xi, c.chans, c.h, c.w_in, c.kh, c.kw, c.pad, c.stride, c.oh, c.ow, scratch);
-        for (crd::u64 o = 0; o < c.oc; ++o) // bias prefill (beta = 1 in the GEMM)
-        {
-            const simd::Vec8f bv(c.bias[o]);
-            crd::f32* row = yi + o * ohw;
-            crd::u64 p = 0;
-            for (; p + 8U <= ohw; p += 8U)
-            {
-                bv.store(row + p);
-            }
-            if (p < ohw)
-            {
-                bv.store_partial(row + p, static_cast<crd::usize>(ohw - p));
-            }
-        }
-        const BatchedGemm<crd::f32> g{1.0F, 1.0F, c.w, scratch, yi, 0, 0, 0, c.oc, ckk, ohw};
-        tensor_kernels().table->batched_f32.gemm_tiny(g, 0U, 1U);
-        if (c.relu)
-        {
-            relu_span(yi, yi, c.oc * ohw);
-        }
-    }
+    tensor_kernels().table->nn_conv2d_images(c.conv, scratch, lo, hi);
 }
 
 // ---- linear f32 (direct tier) ----------------------------------------------
@@ -910,8 +544,8 @@ namespace nndetail
     {
         return TensorStatus::NotContiguous;
     }
-    const PoolCtx ctx{x.data(), y.data(), h, w, oh, ow, k, s, is_max};
-    nn_parallel(static_cast<crd::u32>(x.shape(0) * x.shape(1)), 1U, &ctx, pool_run);
+    const NnPool2d ctx{x.data(), y.data(), h, w, oh, ow, k, s, is_max};
+    nn_parallel(static_cast<crd::u32>(x.shape(0) * x.shape(1)), 1U, &ctx, tensor_kernels().table->nn_pool2d_planes);
     return TensorStatus::Ok;
 }
 } // namespace nndetail
@@ -926,18 +560,6 @@ namespace nndetail
                                                TensorView<crd::f32> y) noexcept
 {
     return nndetail::pool_common(x, k, s, y, false);
-}
-
-// Per-call conv2d scratch size (ONE slot, floats): the im2col column matrix,
-// or the padded row staging of the direct 3x3/s1/p1 kernel — whichever is
-// larger. The NnSequential workspace reserves kNnConvScratchSlots of these.
-[[nodiscard]] constexpr crd::u64 nn_conv2d_scratch_floats(crd::u64 chans, crd::u64 kh, crd::u64 kw,
-                                                          crd::u64 oh, crd::u64 ow) noexcept
-{
-    const crd::u64 col = chans * kh * kw * oh * ow;
-    // zero row + C*H padded rows + 16 pooled-fusion row buffers
-    const crd::u64 stage = (chans * oh + 1U + 16U) * (ow + 10U);
-    return col > stage ? col : stage;
 }
 
 // conv2d, stride/pad, x [N,C,H,W], w [OC,C,KH,KW], y [N,OC,OH,OW].
@@ -981,10 +603,9 @@ namespace nndetail
     {
         return TensorStatus::BadInput;
     }
-    const nndetail::ConvCtx ctx{x.data(), w.data(),  bias.data(), y.data(), col_scratch.data(), slot,
-                                chans,    h,         ww,          kh,       kw,                 pad,
-                                stride,   oc,        oh,          ow,       false,              false,
-                                false};
+    const NnConv2d conv{x.data(), w.data(), bias.data(), y.data(), chans, h,  ww,    kh,
+                        kw,       pad,      stride,      oc,       oh,    ow, false, false};
+    const nndetail::ConvCtx ctx{conv, col_scratch.data(), slot, false};
     nndetail::nn_parallel(static_cast<crd::u32>(n), 1U, &ctx, nndetail::conv_run);
     return TensorStatus::Ok;
 }
@@ -2053,25 +1674,23 @@ private:
             // the execution mode can never disagree.
             const bool parallel =
                 nw > 1U && batch >= 2U && crd::jobs::num_workers() <= kNnConvScratchSlots;
-            const nndetail::ConvCtx ctx{in,
-                                        weight_ptr(op),
-                                        bias_ptr(op),
-                                        out,
-                                        reinterpret_cast<crd::f32*>(scratch),
-                                        slot_floats,
-                                        op.in_c,
-                                        op.in_shape[2],
-                                        op.in_shape[3],
-                                        op.kh,
-                                        op.kw,
-                                        op.pad,
-                                        op.stride,
-                                        op.out_c,
-                                        oh,
-                                        ow,
-                                        parallel,
-                                        op.fuse_relu,
-                                        op.fuse_pool};
+            const NnConv2d conv{in,
+                                weight_ptr(op),
+                                bias_ptr(op),
+                                out,
+                                op.in_c,
+                                op.in_shape[2],
+                                op.in_shape[3],
+                                op.kh,
+                                op.kw,
+                                op.pad,
+                                op.stride,
+                                op.out_c,
+                                oh,
+                                ow,
+                                op.fuse_relu,
+                                op.fuse_pool};
+            const nndetail::ConvCtx ctx{conv, reinterpret_cast<crd::f32*>(scratch), slot_floats, parallel};
             nndetail::nn_parallel(static_cast<crd::u32>(batch), parallel ? nw : 1U, &ctx,
                                   nndetail::conv_run);
             return;
@@ -2079,17 +1698,17 @@ private:
         case NnOpKind::MaxPool2d:
         case NnOpKind::AvgPool2d:
         {
-            const nndetail::PoolCtx ctx{in,
-                                        out,
-                                        op.in_shape[2],
-                                        op.in_shape[3],
-                                        op.out_shape[2],
-                                        op.out_shape[3],
-                                        op.pool_k,
-                                        op.pool_s,
-                                        op.kind == NnOpKind::MaxPool2d};
+            const NnPool2d ctx{in,
+                               out,
+                               op.in_shape[2],
+                               op.in_shape[3],
+                               op.out_shape[2],
+                               op.out_shape[3],
+                               op.pool_k,
+                               op.pool_s,
+                               op.kind == NnOpKind::MaxPool2d};
             nndetail::nn_parallel(static_cast<crd::u32>(batch * op.in_shape[1]), nw, &ctx,
-                                  nndetail::pool_run);
+                                  tensor_kernels().table->nn_pool2d_planes);
             return;
         }
         case NnOpKind::Relu:

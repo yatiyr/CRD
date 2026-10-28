@@ -139,6 +139,13 @@
       "why": "the batched GEMM, factorizations and solves run the per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/tensor/nn.hpp",
+      "flags_of": "tests/numerics/hesap-tensor/test_nn.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "nn's convolution, pooling and relu run the per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
+    },
+    {
       "include": "crd/hesap/tensor/sparse_mttkrp.hpp",
       "flags_of": "tests/numerics/hesap-tensor/test_sparse.cpp",
       "forbid": ["chrono", "format"],

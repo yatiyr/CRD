@@ -54,14 +54,15 @@ target_compile_features(crd-hesap-tensor PUBLIC cxx_std_20)
 
 # SIMD-DISPATCH (ADR-0134 §5): the f32 permute regions, the Tier R binned sum, the nn quantized linears, quantizers
 # and softmax and the Philox block loop (tensor_kernels.cpp), the elementwise ops, Tier D and einsum's direct products
-# (tensor_ew_kernels.cpp), the batched GEMM, factorizations and solves (tensor_batched_kernels.cpp) and the sparse
-# TTM and MTTKRP walks (tensor_sparse_kernels.cpp), once per CPU level, and the avx2 and avx512 levels again with
-# AVX-VNNI and AVX512-VNNI (the integer dots on dpbusd).
+# (tensor_ew_kernels.cpp), the batched GEMM, factorizations and solves (tensor_batched_kernels.cpp), the sparse
+# TTM and MTTKRP walks (tensor_sparse_kernels.cpp) and nn's f32 pooling and convolution (tensor_nn_kernels.cpp), once
+# per CPU level, and the avx2 and avx512 levels again with AVX-VNNI and AVX512-VNNI (the integer dots on dpbusd).
 crd_add_cpu_kernels(crd-hesap-tensor NAME tensor LEVELS portable sse2 sse42 avx2 avx512
                     VARIANTS avx2+avxvnni avx512+avx512vnni INCLUDES crd-math
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_kernels.cpp"
                             "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_ew_kernels.cpp"
                             "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_batched_kernels.cpp"
-                            "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_sparse_kernels.cpp")
+                            "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_sparse_kernels.cpp"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/kernels/tensor_nn_kernels.cpp")
 
 crd_enable_default_pch(crd-hesap-tensor)
