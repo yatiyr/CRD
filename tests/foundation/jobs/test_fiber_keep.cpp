@@ -546,15 +546,24 @@ void stream_and_read(bool targeted)
         j.fn   = &tiny;
         j.data = &ran;
     }
-    for (crd::u32 frame = 0U; frame < 200U; ++frame)
+    // At least 200 frames, and on until the reader has finished 16 samples begun after the stream started: a busy host
+    // may not schedule the reader before 200 frames end, and then it read nothing (hosted win-clang-cl-shipping). The
+    // sample in flight when `before` is read is the only one that may have begun earlier.
+    constexpr crd::u32 stream_samples = 16U;
+    const crd::u32 before = samples.load(std::memory_order_relaxed);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    crd::u32 frames = 0U;
+    while (frames < 200U || (samples.load(std::memory_order_relaxed) < before + 1U + stream_samples &&
+                             std::chrono::steady_clock::now() < deadline))
     {
         crd::jobs::run_and_wait(std::span<const crd::jobs::JobDecl>(jobs));
+        ++frames;
     }
     reading.store(false, std::memory_order_release);
     reader.join();
 
-    CHECK(ran.load(std::memory_order_relaxed) == 512U * 200U);
-    CHECK(samples.load(std::memory_order_relaxed) > 0U);
+    CHECK(ran.load(std::memory_order_relaxed) == 512U * frames);
+    CHECK(samples.load(std::memory_order_relaxed) >= before + 1U + stream_samples);
     CHECK(broken.load(std::memory_order_relaxed) == 0U);
     const crd::BudgetReading idle_soon = small_reading();
     CHECK(idle_soon.high_water >= most_seen.load(std::memory_order_relaxed));

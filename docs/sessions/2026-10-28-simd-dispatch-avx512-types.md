@@ -70,6 +70,22 @@ rounds once where the core injects the exponent in two steps. The probe adds an 
 twins' inputs: at avx512 it runs the new twins, and elsewhere it runs the level's own twins. Under SDE `-skx` it gives
 crd_exp1's and crd_log1's bits (`[simd-levels]`: 667,778 assertions with avx512, against 534,378 natively).
 
+## CI read 2
+
+Complete run 40649898318 (`3e849d96`, in progress) has two finished failures; the push runs after it were cancelled
+before any job failed.
+
+- linux-gcc-debug-scalar: the Vulkan validation download stall above, fixed in `137b89f1`.
+- win-clang-cl-shipping, one test of 7,863: `fiber keep: while tiny jobs stream the readings stay exact and bounded,
+  and an idle pool holds nothing` (targeted wake) failed `samples > 0`. The 200 frames took a few milliseconds and
+  ended before the reader thread was first scheduled, so it took no reading. The pool was not at fault. The stream now
+  runs at least 200 frames and until the reader has finished 16 samples that it began after the stream started,
+  within 10 s. `ran` is checked against the frames actually run (win-debug, `[fiber_keep]` 126 assertions).
+
+Needs CI audit: DIAG.11c keeps its evidence. DIAG.12's last open clause, the race case on linux-clang-tsan at or after
+`7eec1bf7`, passes in push run 40623100798 at `bedfc2bb`. That job failed only on the fiber-switch hooks fixed in
+`38b982f2`. Both rows follow SIMD-DISPATCH and stay Needs CI.
+
 ## Left
 
 Each family's zmm body.
