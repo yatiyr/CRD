@@ -9,6 +9,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <crd/math/simd/simd.hpp>
+#include <crd/math/simd/vec16f.hpp>
+#include <crd/math/simd/vec16i.hpp>
+#include <crd/math/simd/vec8d.hpp>
 
 #include <bit>
 #include <cmath>
@@ -264,9 +267,29 @@ TEST_CASE("simd Vec8f sqrt", "[simd][vec8f]")
     REQUIRE(vec8_bit_eq(sqrt(a), ref));
 }
 
-TEST_CASE("simd Vec8f alignment is 32 bytes", "[simd][vec8f]")
+// A wide type split into halves below its native level carries the halves' alignment, so no by-value argument is
+// aligned above the unit's widest register (GCC's -Wpsabi stack realignment, backend.hpp).
+TEST_CASE("simd wide types align to the level's widest register and never above it", "[simd][vec8f]")
 {
-    STATIC_REQUIRE(alignof(Vec8f) == 32);
+#if CRD_SIMD_HAS_AVX512
+    constexpr crd::usize register_bytes = 64;
+#elif CRD_SIMD_HAS_AVX2
+    constexpr crd::usize register_bytes = 32;
+#else
+    constexpr crd::usize register_bytes = 16;
+#endif
+    constexpr crd::usize bytes_256 = register_bytes < 32 ? register_bytes : 32;
+    STATIC_REQUIRE(crd::math::simd::kNativeRegisterBytes == register_bytes);
+    STATIC_REQUIRE(alignof(Vec4f) == 16);
+    STATIC_REQUIRE(alignof(Vec8f) == bytes_256);
+    STATIC_REQUIRE(alignof(crd::math::simd::Vec8i) == bytes_256);
+    STATIC_REQUIRE(alignof(crd::math::simd::Vec4d) == bytes_256);
+    STATIC_REQUIRE(alignof(crd::math::simd::Vec16f) == register_bytes);
+    STATIC_REQUIRE(alignof(crd::math::simd::Vec8d) == register_bytes);
+    STATIC_REQUIRE(alignof(crd::math::simd::Vec16i) == register_bytes);
+    STATIC_REQUIRE(sizeof(crd::math::simd::Vec16f) == 64);
+    STATIC_REQUIRE(sizeof(crd::math::simd::Vec8d) == 64);
+    STATIC_REQUIRE(sizeof(crd::math::simd::Vec16i) == 64);
 }
 
 // ===========================================================================
@@ -624,7 +647,7 @@ TEST_CASE("Vec4d cmp + select round-trip", "[simd][vec4d]")
 TEST_CASE("Vec4d sizeof + alignment", "[simd][vec4d]")
 {
     STATIC_REQUIRE(sizeof(Vec4d) == 32);
-    STATIC_REQUIRE(alignof(Vec4d) == 32);
+    STATIC_REQUIRE(alignof(Vec4d) >= 16); // the Soa floor (soa.hpp); the exact value is pinned above
 }
 
 // ===========================================================================

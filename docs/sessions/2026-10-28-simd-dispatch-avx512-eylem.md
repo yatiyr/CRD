@@ -48,6 +48,6 @@ The two-chunk step against avx2's one.
 
 After this body, hesap-fft is the only family whose avx512 unit still runs the avx2 code (compiled at x86-64-v4).
 The [types note](2026-10-28-simd-dispatch-avx512-types.md) said that no zmm body is planned for fft. That was a
-judgment in a session note, not a user decision. A zmm fft needs the complex helpers on Vec16f and Vec8d and generator
-work in `gen_fft_batched.py` and `gen_fft_codelets.py`. The Left list already boards fft's f32 1M forward at every
-level. Whether fft gets zmm codelets is an open question for the user.
+judgment in a session note, not a user decision, and the user's order names AVX-512 bodies for every family. So the
+fft zmm codelets stay in the row's Left list: the complex helpers on Vec16f and Vec8d, and the generators
+(`gen_fft_batched.py`, `gen_fft_codelets.py`) emitting a zmm edition.

@@ -12,7 +12,7 @@
 
 namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
-struct alignas(32) Vec8f
+struct Vec8f
 {
 #if CRD_SIMD_HAS_AVX2
     using Native = __m256;
@@ -146,6 +146,8 @@ struct alignas(32) Vec8f
         return tmp[i];
     }
 };
+static_assert(sizeof(Vec8f) == 32 && alignof(Vec8f) == simd_alignment(32),
+              "Vec8f is 256 bits, aligned no higher than the level's widest register");
 
 // ---- arithmetic ------------------------------------------------------------
 

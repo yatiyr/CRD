@@ -8,6 +8,7 @@
 #include <crd/scene/relation.hpp>
 
 #include <cstring>
+#include <type_traits>
 #include <utility>
 
 namespace crd::scene
@@ -71,9 +72,16 @@ public:
 
     void destroy(EntityId e);
 
-    template <typename T> void add_component(EntityId e, T value);
+    // An lvalue is copied once; an rvalue is the payload's move source (World::add_component).
+    template <typename T> void add_component(EntityId e, const T& value);
+    template <typename T>
+        requires(!std::is_reference_v<T>)
+    void add_component(EntityId e, T&& value);
     template <typename T> void remove_component(EntityId e);
-    template <typename T> void set_component(EntityId e, T value);
+    template <typename T> void set_component(EntityId e, const T& value);
+    template <typename T>
+        requires(!std::is_reference_v<T>)
+    void set_component(EntityId e, T&& value);
 
     template <typename Tag> void add_relation(EntityId src, EntityId target);
     template <typename Tag> void remove_relation(EntityId src);

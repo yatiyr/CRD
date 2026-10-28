@@ -77,6 +77,24 @@ inline constexpr usize kVec8fLanes = 8;
 // widest level's f32 register; the 128-bit backends process a chunk column as two halves.
 inline constexpr usize kNativeLaneWidth = 8;
 
+// The bytes of this level's widest vector register: 64 at avx512, 32 at avx2, else 16 (portable and NEON included).
+// Every wide type is aligned to min(its size, this), never above it: GCC's x86-64 ABI passes a by-value argument
+// aligned above the unit's widest register on a realigned stack and notes it (-Wpsabi) once per unit, so a type split
+// into halves below its native level carries the halves' alignment instead.
+#if CRD_SIMD_HAS_AVX512
+inline constexpr usize kNativeRegisterBytes = 64;
+#elif CRD_SIMD_HAS_AVX2
+inline constexpr usize kNativeRegisterBytes = 32;
+#else
+inline constexpr usize kNativeRegisterBytes = 16;
+#endif
+
+// The alignment every SIMD type of size `bytes` has on this level.
+[[nodiscard]] constexpr usize simd_alignment(usize bytes) noexcept
+{
+    return bytes < kNativeRegisterBytes ? bytes : kNativeRegisterBytes;
+}
+
 // The backend this unit's types compiled for. Smokes and startup logs check it against the configure summary, and
 // the cross-level tests against each kernel unit's level.
 [[nodiscard]] constexpr const char* backend_name() noexcept

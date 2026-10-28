@@ -26,6 +26,8 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 
 using crd::scene::EntityId;
 using crd::scene::ISystem;
@@ -408,6 +410,185 @@ TEST_CASE("Commands destructor runs payload destructors", "[scene][commands][lif
     // Destroy the entity — storage destructs the slot.
     w.destroy_immediate(e);
     CHECK(DtorCounter::counter().load() == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Component sinks: an lvalue is copied once, an rvalue is the storage's move source
+// ---------------------------------------------------------------------------
+
+namespace
+{
+// Counts the copies a sink makes; a move leaves -1 behind.
+struct CopyCounted
+{
+    static int& copies()
+    {
+        static int c = 0;
+        return c;
+    }
+    int value = 0;
+
+    CopyCounted() = default;
+    explicit CopyCounted(int v) : value(v) {}
+    ~CopyCounted() = default;
+    CopyCounted(const CopyCounted& o) : value(o.value) { ++copies(); }
+    CopyCounted(CopyCounted&& o) noexcept : value(o.value) { o.value = -1; }
+    CopyCounted& operator=(const CopyCounted& o)
+    {
+        value = o.value;
+        ++copies();
+        return *this;
+    }
+    CopyCounted& operator=(CopyCounted&& o) noexcept
+    {
+        value = o.value;
+        o.value = -1;
+        return *this;
+    }
+};
+
+struct MoveOnly
+{
+    int value = 0;
+
+    MoveOnly() = default;
+    explicit MoveOnly(int v) : value(v) {}
+    ~MoveOnly() = default;
+    MoveOnly(const MoveOnly&) = delete;
+    MoveOnly& operator=(const MoveOnly&) = delete;
+    MoveOnly(MoveOnly&&) noexcept = default;
+    MoveOnly& operator=(MoveOnly&&) noexcept = default;
+};
+
+// Aligned above every unit's widest register below avx512: the by-value argument GCC realigns (-Wpsabi).
+struct alignas(64) WideComponent
+{
+    crd::u8 bytes[256]{};
+};
+
+[[nodiscard]] WideComponent wide_of(crd::u8 seed)
+{
+    WideComponent c;
+    for (crd::usize i = 0; i < sizeof(c.bytes); ++i)
+    {
+        c.bytes[i] = static_cast<crd::u8>(seed + i);
+    }
+    return c;
+}
+
+[[nodiscard]] bool holds_wide(const World& w, EntityId e, crd::u8 seed)
+{
+    const WideComponent* c = w.get_component<WideComponent>(e);
+    if (c == nullptr || reinterpret_cast<std::uintptr_t>(c) % alignof(WideComponent) != 0U)
+    {
+        return false;
+    }
+    const WideComponent want = wide_of(seed);
+    return std::memcmp(c->bytes, want.bytes, sizeof(want.bytes)) == 0;
+}
+
+[[nodiscard]] int value_of(const World& w, EntityId e)
+{
+    const CopyCounted* c = w.get_component<CopyCounted>(e);
+    return c == nullptr ? -2 : c->value;
+}
+} // namespace
+
+TEST_CASE("World::add_component copies an lvalue once and moves an rvalue without a copy", "[scene][world][sink]")
+{
+    World w;
+    w.register_component<CopyCounted>();
+    w.register_component<MoveOnly>();
+    w.register_component<WideComponent>();
+    CopyCounted::copies() = 0;
+
+    const CopyCounted explicit_source{7};
+    CopyCounted deduced_source{8};
+    const EntityId a = w.spawn();
+    const EntityId b = w.spawn();
+    w.add_component<CopyCounted>(a, explicit_source);
+    w.add_component(b, deduced_source);
+    CHECK(CopyCounted::copies() == 2);
+    CHECK(explicit_source.value == 7); // the lvalue sources are left as they were
+    CHECK(deduced_source.value == 8);
+
+    CopyCounted moved_source{11};
+    const EntityId c = w.spawn();
+    const EntityId d = w.spawn();
+    const EntityId f = w.spawn();
+    w.add_component(c, CopyCounted{9});
+    w.add_component<CopyCounted>(d, {});
+    w.add_component(f, std::move(moved_source));
+    CHECK(CopyCounted::copies() == 2);
+    CHECK(value_of(w, a) == 7);
+    CHECK(value_of(w, b) == 8);
+    CHECK(value_of(w, c) == 9);
+    CHECK(value_of(w, d) == 0);
+    CHECK(value_of(w, f) == 11);
+
+    MoveOnly held{5};
+    w.add_component(a, MoveOnly{4});
+    w.add_component<MoveOnly>(b, std::move(held));
+    REQUIRE(w.get_component<MoveOnly>(a) != nullptr);
+    REQUIRE(w.get_component<MoveOnly>(b) != nullptr);
+    CHECK(w.get_component<MoveOnly>(a)->value == 4);
+    CHECK(w.get_component<MoveOnly>(b)->value == 5);
+
+    const WideComponent wide = wide_of(3U);
+    w.add_component<WideComponent>(a, wide);
+    w.add_component(b, wide);
+    w.add_component<WideComponent>(c, wide_of(5U));
+    CHECK(holds_wide(w, a, 3U));
+    CHECK(holds_wide(w, b, 3U));
+    CHECK(holds_wide(w, c, 5U));
+    CHECK(std::memcmp(wide.bytes, wide_of(3U).bytes, sizeof(wide.bytes)) == 0);
+}
+
+TEST_CASE("Commands add_component and set_component copy an lvalue once and move an rvalue without a copy",
+          "[scene][commands][sink]")
+{
+    World w;
+    w.register_component<CopyCounted>();
+    w.register_component<MoveOnly>();
+    w.register_component<WideComponent>();
+    CopyCounted::copies() = 0;
+
+    const CopyCounted explicit_source{7};
+    CopyCounted deduced_source{8};
+    CopyCounted moved_source{11};
+    const EntityId a = w.spawn();
+    const EntityId b = w.spawn();
+    const EntityId c = w.spawn();
+    const EntityId d = w.spawn();
+    w.commands().add_component<CopyCounted>(a, explicit_source);
+    w.commands().set_component(b, deduced_source);
+    CHECK(CopyCounted::copies() == 2);
+    CHECK(explicit_source.value == 7);
+    CHECK(deduced_source.value == 8);
+    w.commands().add_component(c, CopyCounted{9});
+    w.commands().set_component<CopyCounted>(d, std::move(moved_source));
+    w.commands().flush();
+    CHECK(CopyCounted::copies() == 2);
+    CHECK(value_of(w, a) == 7);
+    CHECK(value_of(w, b) == 8);
+    CHECK(value_of(w, c) == 9);
+    CHECK(value_of(w, d) == 11);
+
+    MoveOnly held{5};
+    w.commands().add_component(a, MoveOnly{4});
+    w.commands().set_component<MoveOnly>(b, std::move(held));
+    const WideComponent wide = wide_of(3U);
+    w.commands().add_component<WideComponent>(a, wide);
+    w.commands().set_component(b, wide);
+    w.commands().set_component<WideComponent>(c, wide_of(5U));
+    w.commands().flush();
+    REQUIRE(w.get_component<MoveOnly>(a) != nullptr);
+    REQUIRE(w.get_component<MoveOnly>(b) != nullptr);
+    CHECK(w.get_component<MoveOnly>(a)->value == 4);
+    CHECK(w.get_component<MoveOnly>(b)->value == 5);
+    CHECK(holds_wide(w, a, 3U));
+    CHECK(holds_wide(w, b, 3U));
+    CHECK(holds_wide(w, c, 5U));
 }
 
 // ---------------------------------------------------------------------------

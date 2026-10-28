@@ -26,6 +26,7 @@
 #include <crd/scene/transform.hpp>
 
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 // Forward-declare crd::jobs::Counter for the (currently unused) job-system
@@ -142,13 +143,25 @@ public:
         return id;
     }
 
-    template <typename T> void add_component(EntityId e, T value)
+    // An lvalue is copied once into a local the storage moves from; an rvalue (a temporary, a braced list, std::move)
+    // is that move's source itself. Neither takes the component by value, so an over-aligned one never takes GCC's
+    // realigned by-value argument path (-Wpsabi, crd/math/simd/backend.hpp).
+    template <typename T> void add_component(EntityId e, const T& value)
+    {
+        T copy = value;
+        add_component<T>(e, std::move(copy));
+    }
+
+    template <typename T>
+        requires(!std::is_reference_v<T>)
+    void add_component(EntityId e, T&& value)
     {
         CRD_ASSERT(is_alive(e));
         const ComponentId id = require_component_id<T>();
-        // `value` is a local; storage may move-from it. Backend selection
-        // routes by ComponentInfo::storage_hint (ADR-0050).
-        backend_for(id).insert(e, id, static_cast<void*>(&value));
+        // IStorageBackend::insert may move from the value (storage_backend.hpp), so the caller's rvalue goes onward
+        // as the source of that move. Backend selection routes by ComponentInfo::storage_hint (ADR-0050).
+        T&& source = std::forward<T>(value);
+        backend_for(id).insert(e, id, static_cast<void*>(&source));
     }
 
     template <typename T> [[nodiscard]] bool has_component(EntityId e) const noexcept
@@ -1283,7 +1296,15 @@ template <typename Set> ComponentMask World::component_set_mask() const noexcept
     return detail::ComponentSetMaskHelper<Set>::compute(m_components);
 }
 
-template <typename T> void Commands::add_component(EntityId e, T value)
+template <typename T> void Commands::add_component(EntityId e, const T& value)
+{
+    T copy = value;
+    add_component<T>(e, std::move(copy));
+}
+
+template <typename T>
+    requires(!std::is_reference_v<T>)
+void Commands::add_component(EntityId e, T&& value)
 {
     const ComponentId id = m_world->components().template id_of<T>();
     // T must be registered: an unregistered T is fatal in require_info, in every build.
@@ -1292,7 +1313,9 @@ template <typename T> void Commands::add_component(EntityId e, T value)
     cmd.kind = CommandKind::AddComponent;
     cmd.component = id;
     cmd.entity = e;
-    enqueue_with_payload(cmd, &value, info);
+    // The payload is move-constructed from the value, so the caller's rvalue goes onward as that move's source.
+    T&& source = std::forward<T>(value);
+    enqueue_with_payload(cmd, &source, info);
 }
 
 template <typename T> void Commands::remove_component(EntityId e)
@@ -1309,11 +1332,18 @@ template <typename T> void Commands::remove_component(EntityId e)
     enqueue(cmd);
 }
 
-template <typename T> void Commands::set_component(EntityId e, T value)
+// UPSERT semantics — same as add_component for v1h (storage already upserts internally). Kept as a separate API name
+// for caller intent.
+template <typename T> void Commands::set_component(EntityId e, const T& value)
 {
-    // UPSERT semantics — same as add_component for v1h (storage already
-    // upserts internally). Kept as a separate API name for caller intent.
-    add_component<T>(e, std::move(value));
+    add_component<T>(e, value);
+}
+
+template <typename T>
+    requires(!std::is_reference_v<T>)
+void Commands::set_component(EntityId e, T&& value)
+{
+    add_component<T>(e, std::forward<T>(value));
 }
 
 template <typename Tag> void Commands::add_relation(EntityId src, EntityId target)

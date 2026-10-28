@@ -81,7 +81,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    `kernel_features` holds), and every table stays callable for the differential tests. A unit compiles to machine
    code on every lane, never to link-time IL (amended 2026-10-28): entered only through its table, it has no call for
    link-time code generation to inline across, and IL made every image that links the archive generate the unit's
-   code again.
+   code again. A wide type is aligned to min(its size, the level's widest register) (amended 2026-10-28): split into
+   halves below its native level, it carries the halves' alignment, so no by-value argument is aligned above the
+   unit's registers (GCC's realigned argument path, `-Wpsabi`).
 6. **Isolation guard.** A CTest on every lane disassembles the baseline code and fails on any instruction above the
    floor (VEX or EVEX encodings on x64) outside the per-level namespaces, and on any per-level symbol a baseline unit
    defines. LTCG objects of general code hold IL, so MSVC trees judge those on the linked executables with their PDB

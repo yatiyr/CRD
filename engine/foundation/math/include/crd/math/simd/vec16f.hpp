@@ -15,7 +15,7 @@
 
 namespace crd::math::simd::inline CRD_MATH_LEVEL_NS
 {
-struct alignas(64) Vec16f
+struct Vec16f
 {
 #if CRD_SIMD_HAS_AVX512
     using Native = __m512;
@@ -132,7 +132,8 @@ struct alignas(64) Vec16f
         return tmp[i];
     }
 };
-static_assert(sizeof(Vec16f) == 64 && alignof(Vec16f) == 64, "Vec16f is one 512-bit vector on every level");
+static_assert(sizeof(Vec16f) == 64 && alignof(Vec16f) == simd_alignment(64),
+              "Vec16f is 512 bits, aligned no higher than the level's widest register");
 
 // Lanes 0-7 and 8-15.
 CRD_FORCEINLINE Vec8f low_half(Vec16f a) noexcept
