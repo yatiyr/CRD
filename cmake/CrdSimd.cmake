@@ -252,6 +252,11 @@ function(_crd_add_kernel_unit archive objects level feature)
     target_compile_definitions(${objects} PRIVATE CRD_KERNEL_LEVEL=${_CRD_KERNEL_LEVEL_${level}}
                                ${CRD_FP_CONTRACT_DEFINITION})
     target_compile_options(${objects} PRIVATE ${CRD_FP_CONTRACT_OPTIONS} ${_CRD_KERNEL_FLAGS_${level}})
+    # Machine code at compile time, never link-time IL: a unit is entered only through its table, so link-time code
+    # generation has no call to inline across it, yet it ran the unit's code generation again in every image that
+    # links the archive (an LTCG link of one hesap-fft specimen, five fft units, passed 40 GB on win-release). The
+    # objects then hold the instructions the ISA isolation guard reads (ADR-0134 §6).
+    set_target_properties(${objects} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
     if(feature)
         string(TOUPPER "${feature}" feature_name)
         target_compile_definitions(${objects} PRIVATE CRD_KERNEL_FEATURE_${feature_name}=1)
