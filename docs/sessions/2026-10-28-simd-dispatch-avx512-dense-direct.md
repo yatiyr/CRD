@@ -20,7 +20,7 @@ against portable on every level.
 
 `six_row_tile` becomes `row_tile`, which unrolls `kTileRows` rows over constant register indices. Below avx512 it
 keeps 6 rows. At avx512 it takes 14 rows: 28 accumulators, two B registers and one A broadcast, 31 of 32 ZMM, the
-shape of BLIS's skx kernels (f64 14 by 16, f32 14 by 32). Each step prefetches every line of the next panel's B row,
+transpose of BLIS's skx shape (f64 14 by 16, f32 14 by 32). Each step prefetches every line of the next panel's B row,
 which is two lines at avx512 and one below it, as before. The fused path prefetches every line of each C row. The
 element sums are unchanged (one fused step per depth value in depth order), so avx512 gives avx2's GEMM bits on every
 path.
@@ -35,6 +35,11 @@ alias is deleted.
 At avx512 `kReduceColumns` is 16 (16 accumulator ZMM). Each panel column keeps its own accumulator over the rows in
 order, so the group size changes no chain. `direct_kernels.hpp` now says avx512 gives avx2's bits. The forward walk's
 test lengths add the 512-bit tails.
+
+The supernodal Cholesky's row-block walk places an mr by 64 snapshot after a `row_blk` by 256 block in a buffer of
+`max_nr * max_nc` values (`supernodal_cholesky.cpp`). At mr = 14, `row_blk` is 84, so the snapshot ends at 22,400
+values, below the 24,960 of mr = 6, and the bound holds. The non-`[kernels]` dense and direct cases have no avx512
+run until a hosted runner detects AVX-512; only the `[kernels]` cases run under SDE.
 
 ## Tests
 
@@ -51,8 +56,11 @@ test lengths add the 512-bit tails.
   direct 124,683 assertions in 14 cases (414 s).
 - Hosted: the win-release and linux-gcc-release SDE arms (`crd-hesap-dense-kernels-at-avx512-sde-skx`, `...direct...`).
 
-## Board candidates (row close, AVX-512 hardware only; SDE times are not data)
+## Board candidates (row close; the AVX-512 rows need AVX-512 hardware, SDE times are not data)
 
+- The sse2 and avx2 tile now indexes register arrays through `unroll` (it held twelve named registers): one-thread
+  GEMM, f64 and f32, `6210ab6f` against `d1a0cb1d` from one source, interleaved, MSVC first. MSVC once kept such
+  arrays in memory (`gemv_rows`). A loss there is this change, not the 14-row shape or the Mc rounding.
 - 14 against 12 rows a tile (12 leaves room for a second A broadcast), and the two-line B prefetch distance.
 - Eight gemv rows against 16, and two split accumulators against four, on 32 registers.
 - direct's 16-column reduction group against 8.

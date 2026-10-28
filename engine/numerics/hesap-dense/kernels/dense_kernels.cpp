@@ -4,7 +4,7 @@
 // Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by
 // 4 PortableTile (two roundings, its accumulators in registers). The vector levels run one tile of two registers a
 // row: two accumulators a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector
-// registers), avx512 14 (31 of 32 ZMM, the shape of BLIS's skx kernels). sse2 rounds twice in 128-bit registers (f64
+// registers), avx512 14 (31 of 32 ZMM, the transpose of BLIS's skx shape). sse2 rounds twice in 128-bit registers (f64
 // 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of
 // peak in L1; f32 6 by 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile
 // hands each finished row to a sink while its accumulators are still in registers: the product stores the tile, the
