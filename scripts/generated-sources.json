@@ -944,7 +944,7 @@
         "numpy"
       ],
       "note": "Twiddles come from the host cmath.exp: Windows renders 11,802 lines one ulp apart (e.g. -0.7071067811865476 for -0.7071067811865475). A correctly rounded rendering and its regeneration are the FFT owner's qualification when that programme resumes; the reference host reproduced the header byte-for-byte in seven runs. Since 2026-10-28 the script also writes the codelet units (fft_codegen_split.py) and --check compares the header and every unit.",
-      "sha256": "4c68d4ec8178b7f235444e510760d9b80cfee024d66b24e4f0328658e30e6623"
+      "sha256": "83e99c825412b785f622097f3ded614422fa860b1b4159a41e6ee7c8522ecb6f"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_0.cpp",
@@ -960,7 +960,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "778745b38519a0e41a5709c4da954e6cb900fe6072997776c21f188dc463976a"
+      "sha256": "b5958b3a98d38cca1f1a9a7431471656dd19a14d1faf761707dcc34640a8e470"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_1.cpp",
@@ -976,7 +976,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "7cd3d34a9f23e31153d790b4929c028307fe9a106e22a8cb97d873942fbdac60"
+      "sha256": "c3d42c69af2f5747499e0935266b194493e19c845e3f2d39f114df01c8509712"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_2.cpp",
@@ -992,7 +992,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "9110204278b83fc960a214b1498ef4a265000fe2da7ef8a90d54efa69fc6e765"
+      "sha256": "c5ba27faf2d57ea5ce79e4c70437744ff6ae49af6059e614b9d001c9a1b95b64"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_3.cpp",
@@ -1008,7 +1008,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "9a949b3a5ac09ff05773b606bdaa8595b4e61a265012dac66f73732df868aade"
+      "sha256": "bec04e2c2ca176a7198e50139ed569d6bfd1ae0dd4fd0ebc6c9f1feabc7cea97"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_4.cpp",
@@ -1024,7 +1024,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "e96db6c55bee1fadcc8904cdbda9bfd69ac46e6a2792d5004aaa81000fed2511"
+      "sha256": "f26eea6d68aabc33917f4fee95d4dda74b95d6826642c7a8f4b556b2d9a277ea"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_5.cpp",
@@ -1040,7 +1040,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "f7d372fa0e06e8ed9f74ad16cb2a861c623b9adefb126b9736f56b5308da906c"
+      "sha256": "5890259256be98ff2bb1c3ed4e08dc41371cc36cb685a56179271428341d88be"
     },
     {
       "path": "engine/numerics/hesap-fft/kernels/fft_batched_codelets_6.cpp",
@@ -1056,7 +1056,7 @@
         "numpy"
       ],
       "note": "A codelet unit of batched_codelets_gen.hpp; twiddles render on the host as for the header, and the one --check run covers it.",
-      "sha256": "aaaf15d23e8ada0d25219b7bc8fee6b1a38847ae9554d6c2343bf8205be35650"
+      "sha256": "2863b10d1a377f1a70ad2ab3a6f7cc5054ed5a5de4b2241a1efb23741b878815"
     },
     {
       "path": "engine/numerics/hesap-fft/include/crd/hesap/fft/detail/codelets.hpp",

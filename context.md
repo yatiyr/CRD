@@ -4,7 +4,7 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: SIMD-DISPATCH -->
-**Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the fft zmm codelets (tranche 2) next.
+**Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the fft zmm codelets (tranche 3) next.
 [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).

@@ -121,4 +121,106 @@ template <typename T> using TileLane = typename LaneOf<T>::Tile;
 // Lane<T> holds two tiles: a body's last odd tile runs on a TileLane.
 template <typename T> inline constexpr bool kPairedTiles = kWidth<Lane<T>> != kWidth<TileLane<T>>;
 
+// The batched pipelines' AoSoA rows hold blocks of kTile real parts, then kTile imaginary parts: column c of a row sits
+// at c / kTile * 2 * kTile + c % kTile and its imaginary part kTile further on. A step starts on a tile, so a TileLane
+// is one block and a Lane of two tiles two adjacent blocks. The layout is the same on every level.
+template <typename V, typename T> CRD_FORCEINLINE void load_block(const T* row, crd::usize t, V& re, V& im) noexcept
+{
+    constexpr crd::usize w = kTile<T>;
+    if constexpr (kWidth<V> == 1)
+    {
+        const T* const at = row + t / w * 2 * w + t % w;
+        re = at[0];
+        im = at[w];
+    }
+    else if constexpr (kWidth<V> == w)
+    {
+        re = V::load(row + 2 * t);
+        im = V::load(row + 2 * t + w);
+    }
+    else
+    {
+        using H = TileLane<T>;
+        re = V(H::load(row + 2 * t), H::load(row + 2 * t + 2 * w));
+        im = V(H::load(row + 2 * t + w), H::load(row + 2 * t + 3 * w));
+    }
+}
+template <typename V, typename T> CRD_FORCEINLINE void store_block(T* row, crd::usize t, V re, V im) noexcept
+{
+    constexpr crd::usize w = kTile<T>;
+    if constexpr (kWidth<V> == 1)
+    {
+        T* const at = row + t / w * 2 * w + t % w;
+        at[0] = re;
+        at[w] = im;
+    }
+    else if constexpr (kWidth<V> == w)
+    {
+        re.store(row + 2 * t);
+        im.store(row + 2 * t + w);
+    }
+    else
+    {
+        low_half(re).store(row + 2 * t);
+        high_half(re).store(row + 2 * t + 2 * w);
+        low_half(im).store(row + 2 * t + w);
+        high_half(im).store(row + 2 * t + 3 * w);
+    }
+}
+
+template <typename H, crd::usize N> CRD_FORCEINLINE void transpose_tile(H (&x)[N]) noexcept
+{
+    if constexpr (N == 4)
+    {
+        transpose4x4(x[0], x[1], x[2], x[3]);
+    }
+    else
+    {
+        transpose8x8(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
+    }
+}
+
+// Stores a step's group of kTile outputs transposed: column t + c of the step takes the group's values at
+// p + c * stride, as an AoSoA block row of the pipelines' first stage. On scalars a step is one column and p[l] takes
+// output l.
+template <typename T, typename V, typename... R>
+CRD_FORCEINLINE void store_transposed(T* p, crd::usize stride, V x0, R... rest) noexcept
+{
+    constexpr crd::usize w = kTile<T>;
+    static_assert(sizeof...(R) + 1 == w, "A group holds one tile of outputs");
+    V x[w] = {x0, rest...};
+    if constexpr (kWidth<V> == 1)
+    {
+        for (crd::usize l = 0; l < w; ++l)
+        {
+            p[l] = x[l];
+        }
+    }
+    else if constexpr (kWidth<V> == w)
+    {
+        transpose_tile(x);
+        for (crd::usize c = 0; c < w; ++c)
+        {
+            x[c].store(p + c * stride);
+        }
+    }
+    else
+    {
+        TileLane<T> lo[w];
+        TileLane<T> hi[w];
+        for (crd::usize l = 0; l < w; ++l)
+        {
+            lo[l] = low_half(x[l]);
+            hi[l] = high_half(x[l]);
+        }
+        transpose_tile(lo);
+        transpose_tile(hi);
+        for (crd::usize c = 0; c < w; ++c)
+        {
+            lo[c].store(p + c * stride);
+            hi[c].store(p + (w + c) * stride);
+        }
+    }
+}
+
 } // namespace crd::hesap::fft::lanes::inline CRD_MATH_LEVEL_NS

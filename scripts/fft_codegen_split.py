@@ -13,18 +13,18 @@ unit took 799 s and 4.9 GB at SSE2 even with split bodies (2026-10-28 SIMD-DISPA
   engine unit that calls them parses declarations only. One call per codelet covers a whole batch.
 
 The grammar is the canonical one fft_codegen_style.py leaves: a codelet is `[CRD_FFT_*_INLINE ]void name(...)
-noexcept` at column 0 inside the header's one namespace, its SIMD body holds one tile loop
-`for (crd::usize t = 0; t + L <= X; t += L)`, values are `n<id>r`/`n<id>i` and the loop body is lines at one depth
-plus `{ ... }` blocks.
+noexcept` at column 0 inside the header's one namespace; its body is `using V = crd::hesap::fft::lanes::Lane<T>;`,
+`namespace simd = crd::hesap::fft::lanes;`, invariant locals, one tile loop
+`for (crd::usize t = 0; t + kTile <= X; t += kTile)` and an optional scalar tail; values are `n<id>r`/`n<id>i` and
+the loop body is lines at one depth plus `{ ... }` blocks.
 
-A codelet without its own lane-scalar edition (no `#ifdef CRD_FFT_GEN_SIMD_BODY`) computes on codelet_lanes.hpp's
-lanes: its parts, at least one, are templates of the lane, run on `Lane<T>` over the whole tiles it holds (one tile
-above the portable level, two at avx512, a column on scalars) and on `TileLane<T>` over an odd last tile, so every
-column sees the same operations on every level.
+A codelet computes on codelet_lanes.hpp's lanes: its parts, at least one, are templates of the lane, run on `Lane<T>`
+over the whole tiles it holds (one tile above the portable level, two at avx512, a column on scalars) and on
+`TileLane<T>` over an odd last tile, so every column sees the same operations on every level.
 
   python scripts/fft_codegen_split.py [--lanes] <header> <budget> <units> <unit-stem>
 
-rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; --lanes first retypes the header's
+rewrites a generator-absent header in place and writes `<unit-stem>_<k>.cpp`; --lanes first retypes a header's
 Vec4d/Vec8f bodies onto the lanes. gen_fft_batched.py and gen_fft_codelets.py call split_kernels() themselves.
 """
 from pathlib import Path
@@ -124,7 +124,7 @@ def _closure(text, locals_):
     return [line for name, line in locals_ if name in chosen]
 
 
-def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
+def _split_kernel(name, signature, prologue, loop, body, budget):
     items = _items(body)
     head = []
     while items and not _VALUE.search(''.join(items[0])):
@@ -132,14 +132,12 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
             raise ValueError(f'{name}: unexpected tile prologue {items[0]!r}')
         head.append(items.pop(0)[0])
     weights = [len(item) for item in items]
-    if sum(weights) <= budget and not lanes:
-        return None
-    if lanes:  # a step of the widest Lane must not straddle a column block the body indexes by t
-        width = 2 * _TILE[_LANE_OF.match(prologue[0]).group(1)]
-        whole = '\n'.join(body)
-        blocks = [int(m) + 1 for m in _MASK.findall(whole)] + [1 << int(s) for s in _SHIFT.findall(whole)]
-        if any(block % width for block in blocks):
-            raise ValueError(f'{name}: a {width}-column step straddles a column block of {min(blocks)}')
+    # A step of the widest Lane must not straddle a column block the body indexes by t.
+    width = 2 * _TILE[_LANE_OF.match(prologue[0]).group(1)]
+    whole = '\n'.join(body)
+    blocks = [int(m) + 1 for m in _MASK.findall(whole)] + [1 << int(s) for s in _SHIFT.findall(whole)]
+    if any(block % width for block in blocks):
+        raise ValueError(f'{name}: a {width}-column step straddles a column block of {min(blocks)}')
     defs = []
     uses = []
     for item in items:
@@ -208,9 +206,7 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         slots = max(slots, slot + 1)
         slot_of[value] = slot
         busy.append((last, slot))
-    # On the lanes every body runs in parts, templates of the lane, so one text serves a Lane and a TileLane.
-    vtype = 'V' if lanes else re.match(r'^    using V = (.+);$', prologue[0]).group(1)
-    template = 'template <typename V> ' if lanes else ''
+    # Every body runs in parts, templates of the lane, so one text serves a Lane and a TileLane.
     params, names = _params(signature)
     part_params = [f'[[maybe_unused]] {param}' for param in params]
     invariant = [(m.group(1), line) for line in prologue[2:] if (m := _LOCAL_DEF.match(line))]
@@ -226,11 +222,10 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         text = '\n'.join(body_text)
         locals_text = _closure(text, invariant + tile_locals)
         out.append('// NOLINTNEXTLINE(readability-function-size) -- One part of a generated scheduled DAG.')
-        slot_param = [f'{"" if stores else "const "}{vtype}* sp'] if slots else []
-        out += _wrap(f'{template}CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
+        slot_param = [f'{"" if stores else "const "}V* sp'] if slots else []
+        out += _wrap(f'template <typename V> CRD_NOINLINE static void {name}{_SUFFIX}{part}(',
                      part_params + ['[[maybe_unused]] crd::usize t'] + slot_param, ') noexcept')
         out.append('{')
-        out += [] if lanes else [prologue[0]]
         if 'simd::' in text:
             out.append(prologue[1])
         out += [line[4:] if line.startswith('        ') else line for line in locals_text]
@@ -239,12 +234,9 @@ def _split_kernel(name, signature, prologue, loop, body, budget, lanes):
         out += [f'    sp[{slot_of[v]}] = {v};' for v in stores]
         out.append('}')
     args = ', '.join(names)
-    if lanes:
-        slot_arg = ', {slots}' if slots else ''
-        calls = [f'{name}{_SUFFIX}{part}<{{lane}}>({args}, {{col}}{slot_arg});' for part in range(len(bounds) - 1)]
-        return out, _lane_driver(_LANE_OF.match(prologue[0]).group(1), loop, calls, slots)
-    calls = [f'        {name}{_SUFFIX}{part}({args}, t, sp);' for part in range(len(bounds) - 1)]
-    return out, [prologue[0], f'    alignas(64) V sp[{slots}];', loop, '    {'] + calls + ['    }']
+    slot_arg = ', {slots}' if slots else ''
+    calls = [f'{name}{_SUFFIX}{part}<{{lane}}>({args}, {{col}}{slot_arg});' for part in range(len(bounds) - 1)]
+    return out, _lane_driver(_LANE_OF.match(prologue[0]).group(1), loop, calls, slots)
 
 
 def split_kernels(source, budget, units):
@@ -277,10 +269,6 @@ def split_kernels(source, budget, units):
         if lines[index + 1] != '{':
             raise ValueError(f'{name}: expected the body')
         index += 2
-        guard = []
-        if lines[index] == '#ifdef CRD_FFT_GEN_SIMD_BODY':
-            guard = [lines[index]]
-            index += 1
         prologue = []
         while not _LOOP.match(lines[index]):
             prologue.append(lines[index])
@@ -300,22 +288,13 @@ def split_kernels(source, budget, units):
             index += 1
         rest.append(lines[index])
         index += 1
-        lanes = bool(prologue) and prologue[0].startswith(f'    using V = {_LANES}::Lane<')
-        alias = _LANES if lanes else 'crd::math::simd'
-        if len(prologue) < 2 or not prologue[0].startswith('    using V = ') or (
-                prologue[1] != f'    namespace simd = {alias};') or (lanes and (guard or not _TILE_LOOP.match(loop))):
+        if len(prologue) < 2 or not _LANE_OF.match(prologue[0]) or prologue[1] != f'    namespace simd = {_LANES};' or (
+                not _TILE_LOOP.match(loop)):
             raise ValueError(f'{name}: unexpected kernel prologue')
-        result = _split_kernel(name, signature, prologue, loop, body, budget, lanes)
-        if result is None:
-            definition = comment + signature + ['{'] + guard + prologue + [loop, '    {'] + body + ['    }'] + rest
-        else:
-            parts, driver = result
-            if lanes:  # the invariant locals a scalar tail reads
-                invariant = [(_LOCAL_DEF.match(line).group(1), line) for line in prologue[2:]]
-                driver += _closure('\n'.join(rest), invariant)
-            if guard:
-                parts = guard + parts + ['#endif']
-            definition = parts + comment + signature + ['{'] + guard + driver + rest
+        parts, driver = _split_kernel(name, signature, prologue, loop, body, budget)
+        # The invariant locals a scalar tail reads.
+        invariant = [(_LOCAL_DEF.match(line).group(1), line) for line in prologue[2:]]
+        definition = parts + comment + signature + ['{'] + driver + _closure('\n'.join(rest), invariant) + rest
         declaration = [line for line in comment if 'NOLINT' not in line] + signature[:-1] + [signature[-1] + ';']
         # Comments and blank lines after a codelet belong to the next one; the last codelet's go to the tail.
         kernels.append({'declaration': declaration, 'definition': definition, 'trailing': []})
@@ -361,8 +340,7 @@ def main(argv):
         text = (f'// GENERATED by {origin} — codelet unit {unit} of {units}: definitions of {header.name}, moved here\n'
                 '// by scripts/fft_codegen_split.py.\n'
                 f'#include <{include}>\n#include <crd/core/platform.hpp>\n'
-                + ('#include <crd/hesap/fft/detail/codelet_lanes.hpp>\n' if lanes
-                   else '#include <crd/math/simd/simd.hpp>\n') + body)
+                '#include <crd/hesap/fft/detail/codelet_lanes.hpp>\n' + body)
         Path(f'{stem}_{unit}.cpp').write_text(text, encoding='utf-8', newline='\n')
 
 

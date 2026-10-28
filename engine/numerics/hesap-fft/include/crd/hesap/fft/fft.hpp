@@ -341,6 +341,8 @@ public:
                         m_s.ds_b2 = 64U;
                         m_s.ds_c = 64U;
                     }
+                    // 2^ash = A >= 16 columns, so S2's broadcast twiddle is one value over a codelet step of two
+                    // tiles (sixteen f32 columns at avx512).
                     while ((crd::usize{1} << m_s.ds_ash) < m_s.sh_n1)
                     {
                         ++m_s.ds_ash;
@@ -528,7 +530,9 @@ public:
                     {
                         ++n2log;
                     }
-                    const crd::u32 lmin = std::is_same_v<T, crd::f32> ? 3U : 2U; // M >= lane width
+                    // M >= a codelet step of two tiles (16 f32 or 8 f64 columns at avx512): its lo loads stay
+                    // in one row of the table and its hi value is one broadcast.
+                    const crd::u32 lmin = std::is_same_v<T, crd::f32> ? 4U : 3U;
                     m_s.sh_msh = (n2log + 1U) / 2U;
                     if (m_s.sh_msh < lmin)
                     {

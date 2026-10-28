@@ -236,11 +236,11 @@ class RepositoryTools(unittest.TestCase):
                     f'{prefix}void {name}(const C* in,',
                     '    C* out, crd::usize b) noexcept',
                     '{',
-                    '    using V = crd::math::simd::Vec4d;',
-                    '    namespace simd = crd::math::simd;',
+                    '    using V = crd::hesap::fft::lanes::Lane<crd::f64>;',
+                    '    namespace simd = crd::hesap::fft::lanes;',
                     '    for (crd::usize t = 0; t + 4 <= b; t += 4)',
                     '    {',
-                    '        const crd::usize q = t >> 2;',
+                    '        const crd::usize q = t >> 3;',
                     '        V n0r;',
                     '        V n0i; simd::load(in + t, n0r, n0i);',
                     '        const V n1r = n0r + n0i;',
@@ -253,47 +253,26 @@ class RepositoryTools(unittest.TestCase):
         opening, closing = 'namespace gen::inline L {', '} // namespace gen::inline L'
         source = '\n'.join(['#pragma once', opening] + codelet('codelet2') + codelet('codelet4') + [closing, ''])
         header, units = split_kernels(source, 10, 2)
-        # The header keeps the codelets' comments and declarations; each unit defines its codelets unchanged.
+        # The header keeps the codelets' comments and declarations; each unit defines one codelet, its comment kept.
         self.assertEqual(header, '\n'.join(['#pragma once', opening,
                                             '// codelet2 codelet. GENERATED.', 'void codelet2(const C* in,',
                                             '    C* out, crd::usize b) noexcept;',
                                             '// codelet4 codelet. GENERATED.', 'void codelet4(const C* in,',
                                             '    C* out, crd::usize b) noexcept;', closing, '']))
-        self.assertEqual(units, ['\n'.join([opening] + codelet(name, '') + [closing, ''])
-                                 for name in ('codelet2', 'codelet4')])
+        for unit, name in zip(units, ('codelet2', 'codelet4')):
+            self.assertTrue(unit.startswith(opening + '\n') and unit.endswith(closing + '\n'))
+            self.assertIn(f'// {name} codelet. GENERATED.\n// NOLINTNEXTLINE(readability-function-size) -- Generated '
+                          f'scheduled DAG.\nvoid {name}(', unit)
         with self.assertRaisesRegex(ValueError, '2 codelets cannot fill 3 units'):
             split_kernels(source, 10, 3)
 
+        # Every body runs in parts templated on the lane: the widest Lane over the whole tiles it holds, then a
+        # TileLane over an odd last tile (at avx512, where a Lane holds two).
         single = '\n'.join([opening] + codelet('codelet2') + [closing, ''])
-        _, (split,) = split_kernels(single, 3, 1)
-        self.assertIn('CRD_NOINLINE static void codelet2_part0([[maybe_unused]] const C* in, [[maybe_unused]] C* out,\n'
-                      '    [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t, crd::math::simd::Vec4d* sp) '
-                      'noexcept', split)
-        self.assertIn('    alignas(64) V sp[2];\n    for (crd::usize t = 0; t + 4 <= b; t += 4)\n    {\n'
-                      '        codelet2_part0(in, out, b, t, sp);\n        codelet2_part1(in, out, b, t, sp);\n'
-                      '    }\n}', split)
-        # Every value crossing a cut is stored once by its part and read by each later part that uses it; the tile
-        # local follows the part that reads it, and the comment stays on the codelet.
-        self.assertEqual((split.count('    sp['), split.count('= sp[')), (2, 2))
-        self.assertEqual(split.count('    const crd::usize q = t >> 2;'), 1)
-        self.assertIn('// codelet2 codelet. GENERATED.\n// NOLINTNEXTLINE(readability-function-size) -- Generated '
-                      'scheduled DAG.\nvoid codelet2(', split)
-        with self.assertRaisesRegex(ValueError, 'used before its definition'):
-            split_kernels(single.replace('const V n1r = n0r + n0i;', 'const V n1r = n9r + n0i;'), 3, 1)
-
-        # On the lanes every body runs in parts templated on the lane: the widest Lane over the whole tiles it holds,
-        # then a TileLane over an odd last tile (at avx512, where a Lane holds two).
-        lanes = single.replace('crd::math::simd::Vec4d', 'crd::hesap::fft::lanes::Lane<crd::f64>').replace(
-            'namespace simd = crd::math::simd;', 'namespace simd = crd::hesap::fft::lanes;')
-        with self.assertRaisesRegex(ValueError, 'codelet2: a 8-column step straddles a column block of 4'):
-            split_kernels(lanes, 10, 1)
-        lanes = lanes.replace('t >> 2', 't >> 3')
-        with self.assertRaisesRegex(ValueError, 'A tile of crd::f64 is 4 columns, not 8'):
-            split_kernels(lanes.replace('t + 4 <= b; t += 4', 't + 8 <= b; t += 8'), 10, 1)
         drive = ('    const crd::usize tiles = b - b % lanes::kTile<crd::f64>;\n'
                  '    const crd::usize wide = tiles - tiles % lanes::kWidth<V>;\n'
                  '    for (crd::usize t = 0; t < wide; t += lanes::kWidth<V>)\n    {\n')
-        _, (whole,) = split_kernels(lanes, 10, 1)
+        _, (whole,) = split_kernels(single, 10, 1)
         self.assertIn('template <typename V> CRD_NOINLINE static void codelet2_part0([[maybe_unused]] const C* in, '
                       '[[maybe_unused]] C* out,\n    [[maybe_unused]] crd::usize b, [[maybe_unused]] crd::usize t) '
                       'noexcept\n{\n    namespace simd = crd::hesap::fft::lanes;\n    const crd::usize q = t >> 3;\n',
@@ -302,7 +281,7 @@ class RepositoryTools(unittest.TestCase):
                       '    }\n    if constexpr (lanes::kPairedTiles<crd::f64>)\n    {\n'
                       '        using H = lanes::TileLane<crd::f64>;\n        if (wide < tiles)\n        {\n'
                       '            codelet2_part0<H>(in, out, b, wide);\n        }\n    }\n}', whole)
-        _, (split,) = split_kernels(lanes, 3, 1)
+        _, (split,) = split_kernels(single, 3, 1)
         self.assertIn('crd::usize t, V* sp) noexcept', split)
         self.assertIn('crd::usize t, const V* sp) noexcept', split)
         self.assertIn('    alignas(64) V sp[2];\n' + drive + '        codelet2_part0<V>(in, out, b, t, sp);\n'
@@ -310,10 +289,22 @@ class RepositoryTools(unittest.TestCase):
         self.assertIn('        alignas(64) H sh[2];\n        if (wide < tiles)\n        {\n'
                       '            codelet2_part0<H>(in, out, b, wide, sh);\n'
                       '            codelet2_part1<H>(in, out, b, wide, sh);\n        }\n', split)
-        # The lanes replace a codelet's own lane-scalar edition, never sit beside it.
-        guarded = lanes.replace('noexcept\n{\n', 'noexcept\n{\n#ifdef CRD_FFT_GEN_SIMD_BODY\n', 1)
-        with self.assertRaisesRegex(ValueError, 'unexpected kernel prologue'):
-            split_kernels(guarded, 3, 1)
+        # Every value crossing a cut is stored once by its part and read by each later part that uses it; the tile
+        # local follows the part that reads it.
+        self.assertEqual((split.count('    sp['), split.count('= sp[')), (2, 2))
+        self.assertEqual(split.count('    const crd::usize q = t >> 3;'), 1)
+        with self.assertRaisesRegex(ValueError, 'used before its definition'):
+            split_kernels(single.replace('const V n1r = n0r + n0i;', 'const V n1r = n9r + n0i;'), 3, 1)
+        with self.assertRaisesRegex(ValueError, 'codelet2: a 8-column step straddles a column block of 4'):
+            split_kernels(single.replace('t >> 3', 't >> 2'), 10, 1)
+        with self.assertRaisesRegex(ValueError, 'A tile of crd::f64 is 4 columns, not 8'):
+            split_kernels(single.replace('t + 4 <= b; t += 4', 't + 8 <= b; t += 8'), 10, 1)
+        # A codelet computes on the lanes only: neither its own lane-scalar edition nor fixed vector types.
+        guarded = single.replace('noexcept\n{\n', 'noexcept\n{\n#ifdef CRD_FFT_GEN_SIMD_BODY\n', 1)
+        fixed = single.replace('crd::hesap::fft::lanes::Lane<crd::f64>', 'crd::math::simd::Vec4d')
+        for text in (guarded, fixed):
+            with self.assertRaisesRegex(ValueError, 'unexpected kernel prologue'):
+                split_kernels(text, 3, 1)
 
     def test_validation_request_identifies_client_and_still_checks_bytes(self):
         installer_spec = importlib.util.spec_from_file_location('validation', ROOT / 'scripts/install-vulkan-validation.py')
