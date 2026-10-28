@@ -8,7 +8,7 @@
 // the same information for logs and smoke tests.
 
 /// 1 when the active compiler is MSVC; 0 otherwise.
-/// @note clang-cl defines both _MSC_VER and __clang__, so clang-cl resolves as CLANG, not MSVC.
+/// @note clang-cl defines both _MSC_VER and __clang__ and resolves as MSVC; test __clang__ to tell it from cl.
 #if defined(_MSC_VER)
 #define CRD_COMPILER_MSVC 1
 #define CRD_COMPILER_GCC 0
@@ -16,7 +16,7 @@
 #elif defined(__clang__)
 #define CRD_COMPILER_MSVC 0
 #define CRD_COMPILER_GCC 0
-/// 1 when the active compiler is Clang or clang-cl; 0 otherwise.
+/// 1 when the active compiler is Clang with the GNU driver; 0 otherwise.
 #define CRD_COMPILER_CLANG 1
 #elif defined(__GNUC__)
 #define CRD_COMPILER_MSVC 0
@@ -83,13 +83,24 @@
 #define CRD_DEBUGBREAK() __builtin_trap()
 #endif
 
-/// Hint the compiler to inline the function at every call site, overriding its normal heuristic.
-#if CRD_COMPILER_MSVC
+/// Hint the compiler to inline the function at every call site, overriding its normal heuristic. Optimised builds
+/// only, as MSVC's /Od inlines nothing: GCC and Clang (clang-cl too) force inlining at -O0 as well, where every inlined
+/// body keeps its own stack slots, so chains of forced bodies grew frames past the 64 KB fiber stacks and the 1 MB
+/// Windows main stack (the SSE2 exact fma users and the fft kernels, 2026-10-28).
+#if CRD_COMPILER_MSVC && !defined(__clang__)
 #define CRD_FORCEINLINE __forceinline
+#elif !defined(__OPTIMIZE__)
+#define CRD_FORCEINLINE inline
+#elif CRD_COMPILER_MSVC
+#define CRD_FORCEINLINE __forceinline
+#else
+#define CRD_FORCEINLINE __attribute__((always_inline)) inline
+#endif
+
+#if CRD_COMPILER_MSVC
 /// Prevent the compiler from inlining the function, even under LTO.
 #define CRD_NOINLINE __declspec(noinline)
 #else
-#define CRD_FORCEINLINE __attribute__((always_inline)) inline
 /// Prevent the compiler from inlining the function, even under LTO.
 #define CRD_NOINLINE __attribute__((noinline))
 #endif

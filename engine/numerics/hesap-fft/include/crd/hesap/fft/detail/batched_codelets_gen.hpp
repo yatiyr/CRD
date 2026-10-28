@@ -25,9 +25,8 @@
 // MSVC therefore gets plain `inline` — its /O2 cost model declines bodies this size on its own,
 // and one call into a straight-line kernel of thousands of instructions is noise. gcc/clang keep
 // always_inline in optimized builds, preserving the recorded benchmark code generation.
-// Unoptimized clang-cl also needs ordinary calls: forced inlining merged the scalar leaves
-// into 2 MB execute_batched frames, exceeding the default 1 MB Windows stack (REPO.3c.8).
-#if (!defined(NDEBUG) && !defined(__OPTIMIZE__)) || (defined(_MSC_VER) && !defined(__clang__))
+// Unoptimized builds force nothing (CRD_FORCEINLINE, REPO.3c.8).
+#if defined(_MSC_VER) && !defined(__clang__)
 #define CRD_FFT_GEN_INLINE inline
 #else
 #define CRD_FFT_GEN_INLINE CRD_FORCEINLINE
