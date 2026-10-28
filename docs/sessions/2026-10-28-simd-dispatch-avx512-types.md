@@ -32,7 +32,9 @@ They are not part of the `simd.hpp` umbrella, so no general-code header reaches 
 
 - **API:** Vec16f has Vec8f's arithmetic, compare and select operations, plus the convert.hpp conversions, rounding
   and bit operations at 16 lanes. Vec8d has Vec4d's arithmetic, compare and select operations. Vec16i has Vec8i's
-  operations.
+  operations. The complex helpers (`addsub`, `fmaddsub`, `swap_pairs`, the (de)interleaves, the transposes, the
+  `*_c_*` loads and stores) are not included: no zmm body is planned for fft or the complex sweeps, so they come with
+  the first body that needs them.
 - **Masks:** a comparison gives all-ones lanes (`movm`), and `select` reads each lane's sign bit (`movepi*_mask`), as
   the 256-bit blend does.
 - **min and max:** on a NaN or two zeros they return the second operand, as `minps` does.
