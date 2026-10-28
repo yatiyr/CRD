@@ -473,6 +473,28 @@ usize v16_halves(const Input& in, u64* out) noexcept
     }
     return n;
 }
+// Sixteen rows of sixteen lanes from a, b and c in turn.
+usize v16_transpose(const Input& in, u64* out) noexcept
+{
+    Vec16f r[16];
+    for (usize i = 0; i < 16; ++i)
+    {
+        alignas(64) f32 t[16];
+        for (usize j = 0; j < 16; ++j)
+        {
+            const usize k = (16 * i + j) % (3 * kLanes);
+            t[j] = k < kLanes ? in.a[k] : (k < 2 * kLanes ? in.b[k - kLanes] : in.c[k - 2 * kLanes]);
+        }
+        r[i] = Vec16f::load_aligned(t);
+    }
+    s::transpose16x16(r);
+    usize n = 0;
+    for (const Vec16f& v : r)
+    {
+        n += put(v, out + n);
+    }
+    return n;
+}
 
 // ---- the operations both f64 widths have ----
 
@@ -593,6 +615,21 @@ usize d8_halves(const Input& in, u64* out) noexcept
     {
         const Vec8d v = Vec8d::load(in.da + i);
         n += put(Vec8d(s::high_half(v), s::low_half(Vec8d::load_aligned(in.db + i))), out + n);
+    }
+    return n;
+}
+usize d8_transpose(const Input& in, u64* out) noexcept
+{
+    Vec8d r[8];
+    for (usize i = 0; i < 8; ++i)
+    {
+        r[i] = Vec8d::load(in.da + (8 * i));
+    }
+    s::transpose8x8(r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7]);
+    usize n = 0;
+    for (const Vec8d& v : r)
+    {
+        n += put(v, out + n);
     }
     return n;
 }
@@ -832,6 +869,7 @@ constexpr Op kOps[] = {
     {"vec16f fnmadd", Compare::F32Value, &v16_fnmadd},
     {"vec16f partial load/store", Compare::F32Value, &v16_partial},
     {"vec16f halves", Compare::Bits, &v16_halves},
+    {"vec16f transpose16x16", Compare::Bits, &v16_transpose},
     {"vec8f fmaddsub", Compare::F32Value, &v8_fmaddsub},
     {"vec8f addsub", Compare::F32Value, &v8_addsub},
     {"vec8f complex shuffles", Compare::Bits, &v8_shuffles},
@@ -869,6 +907,7 @@ constexpr Op kOps[] = {
     {"vec4d shuffles", Compare::Bits, &d_shuffles},
     {"vec4d pair loads", Compare::Bits, &d_loads},
     {"vec4d transpose4x4", Compare::Bits, &d_transpose},
+    {"vec8d transpose8x8", Compare::Bits, &d8_transpose},
     {"vec4d complex (de)interleave", Compare::Bits, &d_complex},
     {"vec8d complex (de)interleave", Compare::Bits, &d8_complex},
     {"crd_exp1/crd_log1", Compare::F64Value, &d_exp_log_core},

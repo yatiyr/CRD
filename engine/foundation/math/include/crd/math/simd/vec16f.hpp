@@ -534,4 +534,55 @@ CRD_FORCEINLINE void store_complex_interleaved(f32* p, Vec16f re, Vec16f im) noe
 #endif
 }
 
+// In-register 16x16 transpose (lane j of row i becomes lane i of row j): two unpack stages and two 128-bit lane shuffle
+// stages at avx512 (64 ops), Vec8f's transpose8x8 on the four quadrants and a swap of the off-diagonal ones below it.
+// Pure data movement, so every level gives the same bits.
+CRD_FORCEINLINE void transpose16x16(Vec16f (&r)[16]) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    __m512 t[16];
+    for (usize i = 0; i < 16; i += 2)
+    {
+        t[i] = _mm512_unpacklo_ps(r[i].v, r[i + 1].v);
+        t[i + 1] = _mm512_unpackhi_ps(r[i].v, r[i + 1].v);
+    }
+    // 128-bit lane k of u[4g + m] holds column 4k + m of rows 4g..4g+3.
+    __m512 u[16];
+    for (usize g = 0; g < 16; g += 4)
+    {
+        const __m512d a = _mm512_castps_pd(t[g]);
+        const __m512d b = _mm512_castps_pd(t[g + 1]);
+        const __m512d c = _mm512_castps_pd(t[g + 2]);
+        const __m512d d = _mm512_castps_pd(t[g + 3]);
+        u[g] = _mm512_castpd_ps(_mm512_unpacklo_pd(a, c));
+        u[g + 1] = _mm512_castpd_ps(_mm512_unpackhi_pd(a, c));
+        u[g + 2] = _mm512_castpd_ps(_mm512_unpacklo_pd(b, d));
+        u[g + 3] = _mm512_castpd_ps(_mm512_unpackhi_pd(b, d));
+    }
+    // Row 4k + m is 128-bit lane k of u[m], u[4 + m], u[8 + m], u[12 + m]: a 4x4 transpose of 128-bit lanes.
+    for (usize m = 0; m < 4; ++m)
+    {
+        const __m512 s0 = _mm512_shuffle_f32x4(u[m], u[4 + m], 0x44);      // a0 a1 b0 b1
+        const __m512 s1 = _mm512_shuffle_f32x4(u[m], u[4 + m], 0xEE);      // a2 a3 b2 b3
+        const __m512 s2 = _mm512_shuffle_f32x4(u[8 + m], u[12 + m], 0x44); // c0 c1 d0 d1
+        const __m512 s3 = _mm512_shuffle_f32x4(u[8 + m], u[12 + m], 0xEE); // c2 c3 d2 d3
+        r[m].v = _mm512_shuffle_f32x4(s0, s2, 0x88);                       // a0 b0 c0 d0
+        r[4 + m].v = _mm512_shuffle_f32x4(s0, s2, 0xDD);                   // a1 b1 c1 d1
+        r[8 + m].v = _mm512_shuffle_f32x4(s1, s3, 0x88);                   // a2 b2 c2 d2
+        r[12 + m].v = _mm512_shuffle_f32x4(s1, s3, 0xDD);                  // a3 b3 c3 d3
+    }
+#else
+    transpose8x8(r[0].lo, r[1].lo, r[2].lo, r[3].lo, r[4].lo, r[5].lo, r[6].lo, r[7].lo);
+    transpose8x8(r[0].hi, r[1].hi, r[2].hi, r[3].hi, r[4].hi, r[5].hi, r[6].hi, r[7].hi);
+    transpose8x8(r[8].lo, r[9].lo, r[10].lo, r[11].lo, r[12].lo, r[13].lo, r[14].lo, r[15].lo);
+    transpose8x8(r[8].hi, r[9].hi, r[10].hi, r[11].hi, r[12].hi, r[13].hi, r[14].hi, r[15].hi);
+    for (usize i = 0; i < 8; ++i)
+    {
+        const Vec8f upper_right = r[i].hi;
+        r[i].hi = r[8 + i].lo;
+        r[8 + i].lo = upper_right;
+    }
+#endif
+}
+
 } // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

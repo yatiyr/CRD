@@ -415,4 +415,51 @@ CRD_FORCEINLINE void store_complex_interleaved(f64* p, Vec8d re, Vec8d im) noexc
 #endif
 }
 
+// In-register 8x8 transpose (lane j of row i becomes lane i of row j): unpacks and two 128-bit lane shuffle stages at
+// avx512 (24 ops), Vec4d's transpose4x4 on the four quadrants and a swap of the off-diagonal ones below it. Pure data
+// movement, so every level gives the same bits.
+CRD_FORCEINLINE void transpose8x8(Vec8d& r0, Vec8d& r1, Vec8d& r2, Vec8d& r3, Vec8d& r4, Vec8d& r5, Vec8d& r6,
+                                  Vec8d& r7) noexcept
+{
+#if CRD_SIMD_HAS_AVX512
+    // 128-bit lane k of t0 holds column 2k of rows 0-1, of t1 column 2k + 1; t2..t7 the same for rows 2-7.
+    const __m512d t0 = _mm512_unpacklo_pd(r0.v, r1.v);
+    const __m512d t1 = _mm512_unpackhi_pd(r0.v, r1.v);
+    const __m512d t2 = _mm512_unpacklo_pd(r2.v, r3.v);
+    const __m512d t3 = _mm512_unpackhi_pd(r2.v, r3.v);
+    const __m512d t4 = _mm512_unpacklo_pd(r4.v, r5.v);
+    const __m512d t5 = _mm512_unpackhi_pd(r4.v, r5.v);
+    const __m512d t6 = _mm512_unpacklo_pd(r6.v, r7.v);
+    const __m512d t7 = _mm512_unpackhi_pd(r6.v, r7.v);
+    // Row 2k + h is 128-bit lane k of t(h), t(2 + h), t(4 + h), t(6 + h): a 4x4 transpose of 128-bit lanes.
+    const auto lanes4x4 =
+        [](__m512d a, __m512d b, __m512d c, __m512d d, Vec8d& o0, Vec8d& o1, Vec8d& o2, Vec8d& o3) noexcept
+    {
+        const __m512d s0 = _mm512_shuffle_f64x2(a, b, 0x44); // a0 a1 b0 b1
+        const __m512d s1 = _mm512_shuffle_f64x2(a, b, 0xEE); // a2 a3 b2 b3
+        const __m512d s2 = _mm512_shuffle_f64x2(c, d, 0x44); // c0 c1 d0 d1
+        const __m512d s3 = _mm512_shuffle_f64x2(c, d, 0xEE); // c2 c3 d2 d3
+        o0.v = _mm512_shuffle_f64x2(s0, s2, 0x88);           // a0 b0 c0 d0
+        o1.v = _mm512_shuffle_f64x2(s0, s2, 0xDD);           // a1 b1 c1 d1
+        o2.v = _mm512_shuffle_f64x2(s1, s3, 0x88);           // a2 b2 c2 d2
+        o3.v = _mm512_shuffle_f64x2(s1, s3, 0xDD);           // a3 b3 c3 d3
+    };
+    lanes4x4(t0, t2, t4, t6, r0, r2, r4, r6);
+    lanes4x4(t1, t3, t5, t7, r1, r3, r5, r7);
+#else
+    transpose4x4(r0.lo, r1.lo, r2.lo, r3.lo);
+    transpose4x4(r0.hi, r1.hi, r2.hi, r3.hi);
+    transpose4x4(r4.lo, r5.lo, r6.lo, r7.lo);
+    transpose4x4(r4.hi, r5.hi, r6.hi, r7.hi);
+    Vec8d* const top[4] = {&r0, &r1, &r2, &r3};
+    Vec8d* const bottom[4] = {&r4, &r5, &r6, &r7};
+    for (usize i = 0; i < 4; ++i)
+    {
+        const Vec4d upper_right = top[i]->hi;
+        top[i]->hi = bottom[i]->lo;
+        bottom[i]->lo = upper_right;
+    }
+#endif
+}
+
 } // namespace crd::math::simd::inline CRD_MATH_LEVEL_NS

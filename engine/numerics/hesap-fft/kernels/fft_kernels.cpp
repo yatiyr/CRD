@@ -145,6 +145,26 @@ template <typename V> CRD_FORCEINLINE void load_points4(const crd::f64* p, V& x0
     }
 }
 
+// The in-register transpose of a micro-tile's rows: lane j of row i becomes lane i of row j.
+template <typename V, crd::usize N> CRD_FORCEINLINE void transpose_rows(V (&x)[N]) noexcept
+{
+    if constexpr (N == 4)
+    {
+        simd::transpose4x4(x[0], x[1], x[2], x[3]);
+    }
+    else if constexpr (N == 8)
+    {
+        simd::transpose8x8(x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7]);
+    }
+    else
+    {
+        static_assert(N == 16, "a micro-tile is four, eight or sixteen rows");
+#if CRD_SIMD_HAS_AVX512
+        simd::transpose16x16(x);
+#endif
+    }
+}
+
 // The transform engine of one plan.
 template <typename T> struct Engine
 {
@@ -1312,19 +1332,27 @@ template <typename T> struct Engine
     // fuses into the middle transpose via the four-step's FACTORED hi/lo tables (no n-sized stream).
     // This replaces the four-step's stride-bound gather/scatter phases; the five-step's strided
     // multirow failure (stream-count wall) is what this variant structurally avoids.
-    // v2 (2026-07-04): SIMD micro-tile pair-swap transpose — lanes×lanes complex tiles moved via
+    // v2 (2026-07-04): SIMD micro-tile pair-swap transpose — square complex micro-tiles moved via
     // deinterleaved loads + per-plane register transpose + interleaved CONTIGUOUS stores on BOTH
     // halves (the v14-d tensor-permute discipline; v1's element-scalar swaps were the measured
-    // wall). The fused T2 twiddle W_n^{r·c} evolves by per-row recurrence along c (step W_n^{r·lanes}),
+    // wall). The fused T2 twiddle W_n^{r·c} evolves by per-row recurrence along c (step W_n^{r·tile}),
     // reseeded from the FACTORED hi/lo tables at every kTb block (≤16 steps — the proven four-step
     // reseed class). Symmetry w(r,c)=w(c,r) twiddles the U-half via the transposed twiddle tile.
+    // A micro-tile is kCols complex square: one tile, or at avx512 a 2 by 2 block of tiles moved as one. Every element
+    // keeps the one-tile pair-swap's twiddle: row p's recurrence along the columns, one step a tile, and on a diagonal
+    // micro-tile below its tile diagonal the transposed element's (row q at column p), so every level gives the same
+    // bits.
     void fs6_transpose_inplace(Complex<T>* a, crd::usize m, bool twiddle) const
     {
-        using V = TileVec<T>;
-        constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
+        using V = WideVec<T>;
+        using H = TileVec<T>;
+        constexpr crd::usize lanes = kCols<T, V>;
+        constexpr crd::usize tile = kCols<T, H>;
+        constexpr crd::usize steps = lanes / tile; // recurrence steps a micro-tile
         // block so the tile-PAIR footprint (2 · ktb rows · m·sizeof(Complex<T>) row stride) stays
         // L2-resident: 64 at m=1024 (1 MB pair), 32 at m>=2048 (4M measured −13% with 64: 2 MB pair).
         const crd::usize ktb = (m >= 2048) ? 32U : 64U;
+        static_assert(32U % lanes == 0U, "a block holds whole micro-tiles");
         const crd::usize mmask = (crd::usize{1} << plan.ftw_h) - 1;
         const T* const hir = plan.ftw_hi_re;
         const T* const hii = plan.ftw_hi_im;
@@ -1340,18 +1368,25 @@ template <typename T> struct Engine
             wre = hr * lr - hi * li; // W_n^{r·c} (cos, −sin)
             wim = hr * li + hi * lr;
         };
-        const auto tp = [](V* xr, V* xi) noexcept
+        // One recurrence step of every tile of a row's twiddle state: w <- w · W_n^{row·tile}.
+        const auto advance = [](auto& wr, auto& wi, auto sr, auto si) noexcept
         {
-            if constexpr (lanes == 4U)
-            {
-                simd::transpose4x4(xr[0], xr[1], xr[2], xr[3]);
-                simd::transpose4x4(xi[0], xi[1], xi[2], xi[3]);
-            }
-            else
-            {
-                simd::transpose8x8(xr[0], xr[1], xr[2], xr[3], xr[4], xr[5], xr[6], xr[7]);
-                simd::transpose8x8(xi[0], xi[1], xi[2], xi[3], xi[4], xi[5], xi[6], xi[7]);
-            }
+            const auto nr = simd::fnmadd(wi, si, wr * sr);
+            const auto ni = simd::fma(wi, sr, wr * si);
+            wr = nr;
+            wi = ni;
+        };
+        const auto tp = [](V(&xr)[lanes], V(&xi)[lanes]) noexcept
+        {
+            transpose_rows(xr);
+            transpose_rows(xi);
+        };
+        const auto twiddle_by = [](V& xr, V& xi, V wr, V wi) noexcept
+        {
+            const V yr = simd::fnmadd(xi, wi, xr * wr);
+            const V yi = simd::fma(xr, wi, xi * wr);
+            xr = yr;
+            xi = yi;
         };
         for (crd::usize i0 = 0; i0 < m; i0 += ktb)
         {
@@ -1359,7 +1394,8 @@ template <typename T> struct Engine
             {
                 for (crd::usize r = i0; r < i0 + ktb; r += lanes)
                 {
-                    // per-row twiddle state for rows r..r+lanes over columns j0.. (recurrence along c)
+                    // per-row twiddle state for rows r..r+lanes, the micro-tile's tiles at columns j0.. (recurrence
+                    // along c): a tile's state is its predecessor's advanced one step
                     V wr[lanes];
                     V wi[lanes];
                     V sr[lanes];
@@ -1368,19 +1404,32 @@ template <typename T> struct Engine
                     {
                         for (crd::usize i = 0; i < lanes; ++i)
                         {
-                            alignas(64) T row_r[lanes];
-                            alignas(64) T row_i[lanes];
-                            for (crd::usize j = 0; j < lanes; ++j)
+                            alignas(64) T row_r[tile];
+                            alignas(64) T row_i[tile];
+                            for (crd::usize j = 0; j < tile; ++j)
                             {
                                 tw_of(r + i, j0 + j, row_r[j], row_i[j]);
                             }
-                            wr[i] = V::load(row_r);
-                            wi[i] = V::load(row_i);
                             T step_r;
                             T step_i;
-                            tw_of(r + i, lanes, step_r, step_i); // step W_n^{(r+i)·lanes} — exact table product
+                            tw_of(r + i, tile, step_r, step_i); // step W_n^{(r+i)·tile} — exact table product
                             sr[i] = V(step_r);
                             si[i] = V(step_i);
+                            H lo_r = H::load(row_r);
+                            H lo_i = H::load(row_i);
+                            if constexpr (steps == 1U)
+                            {
+                                wr[i] = lo_r;
+                                wi[i] = lo_i;
+                            }
+                            else
+                            {
+                                H hi_r = lo_r;
+                                H hi_i = lo_i;
+                                advance(hi_r, hi_i, H(step_r), H(step_i));
+                                wr[i] = V(lo_r, hi_r);
+                                wi[i] = V(lo_i, hi_i);
+                            }
                         }
                     }
                     const crd::usize cbeg = (j0 == i0) ? r : j0; // diagonal block: upper micro-tiles only
@@ -1391,10 +1440,10 @@ template <typename T> struct Engine
                         {
                             for (crd::usize i = 0; i < lanes; ++i)
                             {
-                                const V nr = simd::fnmadd(wi[i], si[i], wr[i] * sr[i]);
-                                const V ni = simd::fma(wi[i], sr[i], wr[i] * si[i]);
-                                wr[i] = nr;
-                                wi[i] = ni;
+                                for (crd::usize k = 0; k < steps; ++k)
+                                {
+                                    advance(wr[i], wi[i], sr[i], si[i]);
+                                }
                             }
                         }
                     }
@@ -1407,6 +1456,18 @@ template <typename T> struct Engine
                             simd::load_complex_deinterleaved(reinterpret_cast<const T*>(a + (r + i) * m + c), ur[i],
                                                              ui[i]);
                         }
+                        // the TRANSPOSED twiddle micro-tile: twt[j] lane i = w(r+i, c+j) of row r+i's recurrence
+                        V twtr[lanes];
+                        V twti[lanes];
+                        if (twiddle && (r != c || steps > 1U))
+                        {
+                            for (crd::usize i = 0; i < lanes; ++i)
+                            {
+                                twtr[i] = wr[i];
+                                twti[i] = wi[i];
+                            }
+                            tp(twtr, twti);
+                        }
                         if (r == c) // diagonal micro-tile: transpose + twiddle in place
                         {
                             tp(ur, ui);
@@ -1414,10 +1475,20 @@ template <typename T> struct Engine
                             {
                                 if (twiddle)
                                 {
-                                    const V xr = simd::fnmadd(ui[i], wi[i], ur[i] * wr[i]);
-                                    const V xi = simd::fma(ur[i], wi[i], ui[i] * wr[i]);
-                                    ur[i] = xr;
-                                    ui[i] = xi;
+                                    if constexpr (steps == 1U)
+                                    {
+                                        twiddle_by(ur[i], ui[i], wr[i], wi[i]);
+                                    }
+                                    else if (i < tile) // row tile 0: its own recurrence on both tiles
+                                    {
+                                        twiddle_by(ur[i], ui[i], wr[i], wi[i]);
+                                    }
+                                    else // row tile 1: the transposed element's on tile 0, its own on tile 1
+                                    {
+                                        // the halves exist only on the two-tile types: found at instantiation
+                                        twiddle_by(ur[i], ui[i], V(low_half(twtr[i]), high_half(wr[i])),
+                                                   V(low_half(twti[i]), high_half(wi[i])));
+                                    }
                                 }
                                 simd::store_complex_interleaved(reinterpret_cast<T*>(a + (r + i) * m + c), ur[i],
                                                                 ui[i]);
@@ -1436,29 +1507,10 @@ template <typename T> struct Engine
                             tp(vr, vi); // Vt row i = destination row (r+i) content across c..c+lanes
                             if (twiddle)
                             {
-                                // V-half: destination rows r+i twiddle with the recurrence rows directly
                                 for (crd::usize i = 0; i < lanes; ++i)
                                 {
-                                    const V xr = simd::fnmadd(vi[i], wi[i], vr[i] * wr[i]);
-                                    const V xi = simd::fma(vr[i], wi[i], vi[i] * wr[i]);
-                                    vr[i] = xr;
-                                    vi[i] = xi;
-                                }
-                                // U-half needs the TRANSPOSED twiddle tile (w(c+j, r+i) = Tw[i][j])
-                                V twtr[lanes];
-                                V twti[lanes];
-                                for (crd::usize i = 0; i < lanes; ++i)
-                                {
-                                    twtr[i] = wr[i];
-                                    twti[i] = wi[i];
-                                }
-                                tp(twtr, twti);
-                                for (crd::usize j = 0; j < lanes; ++j)
-                                {
-                                    const V xr = simd::fnmadd(ui[j], twti[j], ur[j] * twtr[j]);
-                                    const V xi = simd::fma(ur[j], twti[j], ui[j] * twtr[j]);
-                                    ur[j] = xr;
-                                    ui[j] = xi;
+                                    twiddle_by(vr[i], vi[i], wr[i], wi[i]);     // V-half: the recurrence rows directly
+                                    twiddle_by(ur[i], ui[i], twtr[i], twti[i]); // U-half: w(c+j, r+i) = twt[j][i]
                                 }
                             }
                             for (crd::usize i = 0; i < lanes; ++i) // contiguous stores, BOTH halves
@@ -1476,115 +1528,10 @@ template <typename T> struct Engine
                         {
                             for (crd::usize i = 0; i < lanes; ++i)
                             {
-                                const V nr = simd::fnmadd(wi[i], si[i], wr[i] * sr[i]);
-                                const V ni = simd::fma(wi[i], sr[i], wr[i] * si[i]);
-                                wr[i] = nr;
-                                wi[i] = ni;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // OUT-OF-PLACE micro-tile transpose (T3-fusion rechain, 2026-07-04): src rows -> dst rows, both
-    // sides CONTIGUOUS per lanes×lanes tile, one-directional streams — the DRAM-page-friendly form the
-    // in-place pair-swap lacks at ≥4M. Optional fused W_n^{r·c} twiddle (same recurrence as in-place).
-    void fs6_transpose_oop(const Complex<T>* src, Complex<T>* dst, crd::usize m, bool twiddle) const
-    {
-        using V = TileVec<T>;
-        constexpr crd::usize lanes = std::is_same_v<T, crd::f64> ? 4U : 8U;
-        const crd::usize ktb = (m >= 2048) ? 32U : 64U;
-        const crd::usize mmask = (crd::usize{1} << plan.ftw_h) - 1;
-        const T* const hir = plan.ftw_hi_re;
-        const T* const hii = plan.ftw_hi_im;
-        const T* const lor = plan.ftw_lo_re;
-        const T* const loi = plan.ftw_lo_im;
-        const auto tw_of = [&](crd::usize r, crd::usize c, T& wre, T& wim) noexcept
-        {
-            const crd::usize aa = r * c;
-            const T hr = hir[aa >> plan.ftw_h];
-            const T hi = hii[aa >> plan.ftw_h];
-            const T lr = lor[aa & mmask];
-            const T li = loi[aa & mmask];
-            wre = hr * lr - hi * li;
-            wim = hr * li + hi * lr;
-        };
-        const auto tp = [](V* xr, V* xi) noexcept
-        {
-            if constexpr (lanes == 4U)
-            {
-                simd::transpose4x4(xr[0], xr[1], xr[2], xr[3]);
-                simd::transpose4x4(xi[0], xi[1], xi[2], xi[3]);
-            }
-            else
-            {
-                simd::transpose8x8(xr[0], xr[1], xr[2], xr[3], xr[4], xr[5], xr[6], xr[7]);
-                simd::transpose8x8(xi[0], xi[1], xi[2], xi[3], xi[4], xi[5], xi[6], xi[7]);
-            }
-        };
-        for (crd::usize i0 = 0; i0 < m; i0 += ktb)
-        {
-            for (crd::usize j0 = 0; j0 < m; j0 += ktb)
-            {
-                for (crd::usize r = i0; r < i0 + ktb; r += lanes)
-                {
-                    V wr[lanes];
-                    V wi[lanes];
-                    V sr[lanes];
-                    V si[lanes];
-                    if (twiddle) // per-row recurrence over c, reseeded per block (proven class)
-                    {
-                        for (crd::usize i = 0; i < lanes; ++i)
-                        {
-                            alignas(64) T row_r[lanes];
-                            alignas(64) T row_i[lanes];
-                            for (crd::usize j = 0; j < lanes; ++j)
-                            {
-                                tw_of(r + i, j0 + j, row_r[j], row_i[j]);
-                            }
-                            wr[i] = V::load(row_r);
-                            wi[i] = V::load(row_i);
-                            T step_r;
-                            T step_i;
-                            tw_of(r + i, lanes, step_r, step_i);
-                            sr[i] = V(step_r);
-                            si[i] = V(step_i);
-                        }
-                    }
-                    for (crd::usize c = j0; c < j0 + ktb; c += lanes)
-                    {
-                        V ur[lanes];
-                        V ui[lanes];
-                        for (crd::usize i = 0; i < lanes; ++i)
-                        {
-                            simd::load_complex_deinterleaved(reinterpret_cast<const T*>(src + (r + i) * m + c), ur[i],
-                                                             ui[i]);
-                        }
-                        if (twiddle) // dst[c+j][r+i] = src[r+i][c+j]·w(r+i,c+j): apply BEFORE transposing
-                        {
-                            for (crd::usize i = 0; i < lanes; ++i)
-                            {
-                                const V xr2 = simd::fnmadd(ui[i], wi[i], ur[i] * wr[i]);
-                                const V xi2 = simd::fma(ur[i], wi[i], ui[i] * wr[i]);
-                                ur[i] = xr2;
-                                ui[i] = xi2;
-                            }
-                        }
-                        tp(ur, ui);
-                        for (crd::usize j = 0; j < lanes; ++j)
-                        {
-                            simd::store_complex_interleaved(reinterpret_cast<T*>(dst + (c + j) * m + r), ur[j], ui[j]);
-                        }
-                        if (twiddle)
-                        {
-                            for (crd::usize i = 0; i < lanes; ++i)
-                            {
-                                const V nr = simd::fnmadd(wi[i], si[i], wr[i] * sr[i]);
-                                const V ni = simd::fma(wi[i], sr[i], wr[i] * si[i]);
-                                wr[i] = nr;
-                                wi[i] = ni;
+                                for (crd::usize k = 0; k < steps; ++k)
+                                {
+                                    advance(wr[i], wi[i], sr[i], si[i]);
+                                }
                             }
                         }
                     }
@@ -1598,9 +1545,8 @@ template <typename T> struct Engine
         const crd::usize m = plan.n1; // square: n = m·m; row FFTs via the hoisted sub-plan
         Complex<T>* const x = data;
         // ALL-IN-PLACE chain (re-verified 2026-07-04): at 1M the whole array is L3-RESIDENT — the
-        // in-place transposes keep every pass L3-hot. The out-of-place rechain (fs6_transpose_oop,
-        // kept for A/B) MEASURED WORSE everywhere (1M 5.38→6.69 ms, 4M 33.5→40.4): the x↔t ping-pong
-        // doubles the live footprint and thrashes L3.
+        // in-place transposes keep every pass L3-hot. An out-of-place rechain MEASURED WORSE everywhere
+        // (1M 5.38→6.69 ms, 4M 33.5→40.4): the x↔t ping-pong doubles the live footprint and thrashes L3.
         fs6_transpose_inplace(x, m, false); // T1
         for (crd::usize r = 0; r < m; ++r)  // sweep A: m contiguous m-point FFTs
         {
