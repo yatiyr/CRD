@@ -1098,19 +1098,16 @@ class TidyTests(unittest.TestCase):
         self.assertEqual(compiler_family({'arguments': ['clang-cl.exe', '/c']}), 'msvc')
         self.assertEqual(compiler_family({'command': '"C:\\Program Files\\LLVM\\bin\\clang++.exe" -c a.cpp'}), 'gnu')
 
-    def test_extra_arguments_come_from_the_database_compiler_and_the_cmake_cache(self):
-        self.assertEqual(extra_arguments('msvc', {'CRD_SIMD_MSVC_ARCH_FLAG': '/arch:AVX2'}),
-                         ['--extra-arg=/EHsc', '--extra-arg=/arch:AVX2', '--extra-arg=-Wno-unused-command-line-argument'])
-        self.assertEqual(extra_arguments('msvc', {}), ['--extra-arg=/EHsc', '--extra-arg=-Wno-unused-command-line-argument'])
-        gnu = extra_arguments('gnu', {'CRD_SIMD_MSVC_ARCH_FLAG': '/arch:AVX2'})
+    def test_extra_arguments_come_from_the_database_compiler(self):
+        self.assertEqual(extra_arguments('msvc'), ['--extra-arg=/EHsc', '--extra-arg=-Wno-unused-command-line-argument'])
+        gnu = extra_arguments('gnu')
         self.assertNotIn('--extra-arg=/EHsc', gnu)
-        self.assertNotIn('--extra-arg=/arch:AVX2', gnu)
         self.assertIn('--extra-arg=-Wno-unknown-warning-option', gnu)
         # GCC is the compiler of record for its database: clang's compiler warnings under GCC's flags are not errors
         # there, while the MSVC database keeps /WX semantics exactly as the hosted strict lane runs them.
         self.assertIn('--extra-arg=-Wno-error', gnu)
-        self.assertNotIn('--extra-arg=-Wno-error', extra_arguments('msvc', {}))
-        self.assertEqual(extra_arguments('msvc', {}, header=True)[-1], '--extra-arg=-Wno-pragma-once-outside-header')
+        self.assertNotIn('--extra-arg=-Wno-error', extra_arguments('msvc'))
+        self.assertEqual(extra_arguments('msvc', header=True)[-1], '--extra-arg=-Wno-pragma-once-outside-header')
         self.assertEqual(classify('', 0), ('clean', None, []))
         self.assertEqual(classify("a.cpp:1:10: fatal error: 'crd/x.hpp' file not found\n", 1)[0], 'ungated')
         self.assertEqual(classify('3 warnings generated.\nSuppressed 3 warnings (3 in non-user code).\n', 0)[0], 'clean')
@@ -1157,7 +1154,6 @@ class TidyTests(unittest.TestCase):
     def test_analysis_classifies_clean_issues_ungated_and_missing(self):
         entries = self.database()
         write_json(self.build / 'compile_commands.json', entries)
-        (self.build / 'CMakeCache.txt').write_text('CRD_SIMD_MSVC_ARCH_FLAG:INTERNAL=/arch:AVX2\n', encoding='utf-8')
         stub = Path(self.temp.name) / 'stub'
         launcher, config = stub_clang_tidy(stub, '20.1.8', {
             'b.cpp': {'output': 'tests/b/b.cpp:3:5: error: invalid case style [readability-identifier-naming,'
@@ -1176,7 +1172,6 @@ class TidyTests(unittest.TestCase):
                                     'engine/missing.cpp': 'missing'})
         self.assertEqual(summary['counts'], {'clean': 1, 'issues': 1, 'ungated': 2, 'missing': 1})
         self.assertEqual((summary['status'], summary['exit_code'], summary['tool_version']), ('failed', 4, '20.1.8'))
-        self.assertEqual(summary['cache_arch_flag'], '/arch:AVX2')
         mirror = json.loads((scratch / 'compile_commands.json').read_text(encoding='utf-8'))
         self.assertEqual(len(mirror), len(entries) + 1)
         self.assertTrue(all('cmake_pch' not in entry['command'] for entry in mirror))
@@ -1188,7 +1183,7 @@ class TidyTests(unittest.TestCase):
             self.assertIn('--header-filter=', argv, 'main-file diagnostics only, the contract every lane enforces')
             self.assertEqual(Path(argv[argv.index('-p') + 1]), scratch)
         self.assertIn('--extra-arg=/EHsc', analysed['b.cpp'])
-        self.assertIn('--extra-arg=/arch:AVX2', analysed['b.cpp'])
+        self.assertFalse(any(arg.startswith('--extra-arg=/arch:') for arg in analysed['b.cpp']))
         self.assertNotIn('--extra-arg=/EHsc', analysed['a.cpp'])
         self.assertIn('--extra-arg=-Wno-unknown-warning-option', analysed['a.cpp'])
         self.assertIn('--extra-arg=-Wno-unknown-warning-option', analysed['x.hpp'])

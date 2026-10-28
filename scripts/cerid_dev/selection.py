@@ -302,7 +302,7 @@ def buildable_targets(targets, selected):
 HOSTED_LANES = {
     CI_RISK: ['every lane of the pushed revision\'s run (gh run list --branch main --limit 15)'],
     HEADER_RISK: ['win-public-checks', 'linux-gcc-public-checks', 'win-clang-cl', 'win-clang-cl-shipping',
-                  'linux-gcc-shipping', 'win-debug-sse2', 'linux-gcc-debug-sse2'],
+                  'linux-gcc-shipping'],
     DEVICE_RISK: ['the Windows lanes on the pinned WARP adapter', 'the Linux lanes on lavapipe'],
     SANITIZER_RISK: ['win-asan', 'linux-gcc-asan', 'linux-clang-tsan'],
 }

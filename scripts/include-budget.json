@@ -30,63 +30,63 @@
       "include": "crd/math/transcendental.hpp",
       "flags_of": "tests/foundation/math/test_transcendental.cpp",
       "forbid": ["chrono", "format", "sstream", "iostream"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the scalar exp and log family; its cores live in crd/math/exp_log_core.hpp, apart from the AVX2 twins whose <immintrin.h> cost about 0.34 s in each Clang unit"
     },
     {
       "include": "crd/math/cmath.hpp",
       "flags_of": "tests/foundation/math/test_transcendental.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the one-include math surface, in about 640 units; through its transcendental functions it had brought the SIMD backend (simd/backend.hpp 275 s of Clang front end in 818 units)"
     },
     {
       "include": "crd/math/deterministic.hpp",
       "flags_of": "tests/foundation/math/test_deterministic.cpp",
       "forbid": ["chrono", "format", "sstream", "iostream"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "its Vec4f and Vec8f overloads only name the vector types, so the types are declared, not included; crd/hesap/complex.hpp brings it into about 330 units"
     },
     {
       "include": "crd/math/float_convert.hpp",
       "flags_of": "tests/foundation/math/test_kernel_dispatch.cpp",
       "forbid": ["chrono", "format", "sstream", "iostream"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the batch small-float conversions behind every crd-hesap-tensor storage dtype; their F16C and AVX2 bodies are per-level kernel units (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
       "include": "crd/hesap/stats/philox.hpp",
       "flags_of": "tests/numerics/hesap-stats/test_philox.cpp",
       "forbid": ["chrono", "format", "sstream", "iostream"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the counter RNG of hesap-opt, hesap-tensor and the stats samplers; its bulk fill runs the per-level stats kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
       "include": "crd/hesap/stats/threefry.hpp",
       "flags_of": "tests/numerics/hesap-stats/test_rng.cpp",
       "forbid": ["chrono", "format", "sstream", "iostream"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "every unit of crd/hesap/stats/stats.hpp; its bulk fill runs the per-level stats kernels (SIMD-DISPATCH), so the header brings no intrinsics header"
     },
     {
       "include": "crd/hesap/special/special.hpp",
       "flags_of": "tests/numerics/hesap-special/test_batch.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the special functions of hesap-stats, hesap-quadrature and the distributions; the Lanczos lgamma and tgamma batches run the per-level special kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers (its <complex> reaches <sstream>, as crd/math/cmath.hpp does)"
     },
     {
       "include": "crd/hesap/dense/detail/gemm_pack.hpp",
       "flags_of": "tests/numerics/hesap-dense/test_blas3_real.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the GEMM packing and block dispatch behind gemm, syrk and the supernodal factor walks; its f64 and f32 register tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
       "include": "crd/hesap/sparse/sell.hpp",
       "flags_of": "tests/numerics/hesap-sparse/test_sell.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the SELL-C-sigma spmv of the sparse LinearOps and Krylov solvers; its f64 and f32 bodies are per-level sparse kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
@@ -100,21 +100,21 @@
       "include": "crd/hesap/fft/fft.hpp",
       "flags_of": "tests/numerics/hesap-fft/test_fft.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the FFT plan of hesap-dsp, the spectral interpolants, the wavelets and the fft CLI; its transform runs the per-level fft kernels (SIMD-DISPATCH), so the header brings no intrinsics header and no generated codelet to its consumers"
     },
     {
       "include": "crd/hesap/tensor/permute.hpp",
       "flags_of": "tests/numerics/hesap-tensor/test_permute.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the einsum and TTGT transpose; its f32 tile bodies are per-level tensor kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
       "include": "crd/hesap/tensor/dtypes.hpp",
       "flags_of": "tests/numerics/hesap-tensor/test_dtypes.cpp",
       "forbid": ["chrono", "format"],
-      "forbid_gnu": ["immintrin.h"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
       "why": "the storage dtypes and SR converts; the SR draws run the per-level tensor kernels' Philox block loop and the narrowers the crd-math kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {

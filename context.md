@@ -4,7 +4,7 @@
 > Current-work pointer. Current work: [ROADMAP](docs/ROADMAP.md); current rules: [AGENTS](AGENTS.md).
 
 <!-- current-slice: SIMD-DISPATCH -->
-**Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the ARM64 lanes' first run; the baseline flip with the `-sse2` forced arms.
+**Current work:** [SIMD-DISPATCH](docs/ROADMAP.md#slice-simd-dispatch) (Partial): the ARM64 lanes' and the baseline flip's first green runs; the isolation guard.
 [DIAG.11b](docs/ROADMAP.md#slice-diag.11b): user re-record (8). [DIAG.11c](docs/ROADMAP.md#slice-diag.11c),
 [DIAG.12](docs/ROADMAP.md#slice-diag.12): final complete-tier run.
 Local routes: cached trees, WSL mirror, mold links, bounded waits ([build performance](docs/design/build-performance.md)).

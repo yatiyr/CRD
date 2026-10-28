@@ -3,9 +3,9 @@
 // A kernel unit (CRD_KERNEL_LEVEL, compiled once per CPU level by crd_add_cpu_kernels in cmake/CrdSimd.cmake) gets
 // the backend of its own level: portable is the scalar reference, sse2 and sse4.2 the 128-bit backends, avx2 the
 // 256-bit one, and avx512 the 256-bit one plus 512-bit registers for Vec16f, Vec8d and Vec16i (vec16f.hpp, vec8d.hpp,
-// vec16i.hpp; composed of two 256-bit halves below it). General code gets CRD_SIMD_TARGET, which
-// crd-simd-flags defines with the matching ISA flags; it is never read from compiler ISA macros (`__AVX2__`), which
-// MSVC defines only under /arch.
+// vec16i.hpp; composed of two 256-bit halves below it). General code gets CRD_SIMD_TARGET, which crd-simd-flags
+// defines: the architecture's baseline (sse2 on x64, NEON on ARM64), or scalar for the reference build (ADR-0134 §4).
+// The level is never read from compiler ISA macros (`__AVX2__`), which MSVC defines only under /arch.
 //
 // Every type and function of these headers lives in the unit's level namespace (CRD_MATH_LEVEL_NS,
 // crd/math/kernel_level.hpp), so a copy compiled for one level never provides another level's symbol. The headers
@@ -21,9 +21,9 @@
 #if defined(CRD_KERNEL_LEVEL)
     #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL
 #elif defined(CRD_SIMD_TARGET)
-    // Defined by cmake/CrdSimd.cmake (0 scalar, 1 sse2, 2 avx2, 3 neon). Authoritative source.
+    // Defined by cmake/CrdSimd.cmake (0 scalar, 1 sse2, 3 neon). Authoritative source.
     #if CRD_SIMD_TARGET == 2
-        #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_AVX2
+        #error "CRD_SIMD_TARGET=2 (an AVX2 general build) is gone: general code builds at the baseline (ADR-0134 §4)"
     #elif CRD_SIMD_TARGET == 1
         #define CRD_SIMD_UNIT_LEVEL CRD_KERNEL_LEVEL_SSE2
     #elif CRD_SIMD_TARGET == 3

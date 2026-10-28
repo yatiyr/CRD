@@ -32,9 +32,9 @@ crd_add_kernel_level_tests(crd-math-tests "[kernels]")
 
 # ---- SIMD-emission regression check ---------------------------------------
 # Disassembles the test_simd.cpp obj and verifies the actual machine code
-# matches CRD_SIMD_LEVEL_RESOLVED. Catches the class of bugs where the
-# CMake plumbing silently stops passing /arch:AVX2 / -mavx2, so backend.hpp
-# falls back to SSE2 unnoticed. ADR-0063 + ADR-0065 substrate guard.
+# matches CRD_SIMD_LEVEL_RESOLVED, the backend of general code: no ymm
+# register on the SSE2 baseline and the scalar build (ADR-0134 §4), so
+# an ISA flag that reaches general code again fails here.
 #
 # Targets the obj (not the linked exe) so the disasm is pure project code
 # without CRT pollution (MSVC's CRT contains AVX2-vectorized memcpy etc.
@@ -57,8 +57,8 @@ foreach(config IN LISTS _simd_configs)
 endforeach()
 if(CRD_NATIVE_PROFILES)
     foreach(config IN LISTS CRD_NATIVE_CONFIGS)
-        if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL MATCHES "^(scalar|sse2)$")
-            set(_simd_expect "$<IF:$<CONFIG:${config}>,${CRD_PROFILE_${config}_CRD_SIMD_LEVEL},${_simd_expect}>")
+        if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "scalar")
+            set(_simd_expect "$<IF:$<CONFIG:${config}>,scalar,${_simd_expect}>")
         endif()
     endforeach()
 endif()

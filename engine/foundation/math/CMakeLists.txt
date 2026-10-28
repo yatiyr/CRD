@@ -23,6 +23,6 @@ crd_add_cpu_kernels(crd-math NAME float_convert LEVELS portable sse2 sse42 avx2 
                     SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/kernels/float_convert_kernels.cpp")
 
 # Cerid::math of the relocatable package, with the SIMD and floating-point contract flags its consumers must compile
-# with (Cerid::simd-flags: the ISA, CRD_SIMD_TARGET and the ADR-0063 determinism options).
+# with (Cerid::simd-flags: the baseline ISA, CRD_SIMD_TARGET and the ADR-0063 determinism options).
 crd_package_library(crd-simd-flags NAME simd-flags)
 crd_package_library(crd-math NAME math INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")

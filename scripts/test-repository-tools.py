@@ -727,7 +727,7 @@ class CiTiers(unittest.TestCase):
         self.assertTrue(all(not presets for presets in docs['jobs'].values()))
         change = ci_tier.resolve(self.tiers, 'push', 'a', 'b', paths=['engine/core/src/a.cpp', 'docs/x.md'])
         self.assertEqual(change['tier'], 'change')
-        self.assertEqual(change['jobs']['windows'], ['win-debug', 'win-release', 'win-asan', 'win-debug-sse2'])
+        self.assertEqual(change['jobs']['windows'], ['win-debug', 'win-release', 'win-asan'])
         self.assertEqual(change['jobs']['windows-native'], [])
         self.assertNotIn('windows-native', change['expected'])
         complete = ci_tier.resolve(self.tiers, 'push', 'a', 'b', paths=['engine/core/src/a.cpp', 'cmake/x.cmake'])

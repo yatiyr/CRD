@@ -11,7 +11,7 @@ are projections. Native Visual Studio 2026 requires CMake 4.2+; other presets re
 
 **Full compiler/platform matrix:** File > Open > Folder → repository root. Use Target System (local Windows,
 Linux WSL or configured SSH host), Configure Preset, then Build Preset. The 20 visible configure presets retain
-MSVC, clang-cl, strict clang-tidy, diagnostic tidy preview, sanitizer, Shipping, scalar/SSE2 and Linux GCC variants.
+MSVC, clang-cl, strict clang-tidy, diagnostic tidy preview, sanitizer, Shipping, scalar and Linux GCC variants.
 Host filtering shows the presets applicable to the selected target. Linux needs the C++ Linux/WSL tooling and
 dependencies described in [BUILDING](../BUILDING.md); a selector entry alone does not qualify its platform.
 Remote source-copy exclusions omit build products, local dependency/cache trees and IDE state.
@@ -28,17 +28,18 @@ Remote source-copy exclusions omit build products, local dependency/cache trees 
 | Shipping | win-shipping | off / off | Release + IPO + symbols + dead stripping / auto |
 | ShippingProfile | win-shipping-profile | off / on | Shipping / auto |
 | DebugScalar | win-debug-scalar | on / on | Debug / scalar |
-| DebugSSE2 | win-debug-sse2 | on / on | Debug / SSE2 |
 
-This table explains the projection, not a second configuration definition. Auto resolves to AVX2 for this x64
-profile; explicit local ISA overrides remain possible. Existing target-specific IPO exemptions still apply.
+This table explains the projection, not a second configuration definition. General code builds at the SSE2
+baseline in every profile and auto compiles every kernel level (ADR-0134 §4); `CRD_CPU_LEVEL=sse2` runs a
+profile's binaries at the floor (the `win-debug-at-sse2` CTest preset on the Ninja tree). Existing target-specific
+IPO exemptions still apply.
 RelWithDebInfo preserves the project's existing CRD_DEBUG/assertion contract despite optimization and NDEBUG.
 Automatic compile-time logging is Trace in Debug-family/RelWithDebInfo and Info in Release/Shipping; explicit
 `CRD_LOG_MIN_LEVEL` overrides both. ASan uses the debug CRT without incompatible RTC, edit-and-continue or incremental
 linking. The selected toolset's AddressSanitizer component/runtime must be installed and discoverable when running tests.
 
 Native build presets `win-vs-debug`, `win-vs-release`, `win-vs-relwithdebinfo`, `win-vs-asan`, `win-vs-shipping`,
-`win-vs-shipping-profile`, `win-vs-debug-scalar`, `win-vs-debug-sse2` select the sandbox and dependencies with two
+`win-vs-shipping-profile`, `win-vs-debug-scalar` select the sandbox and dependencies with two
 workers. Their matching CTest presets select the same configuration. For local work select affected targets/tests:
 
 ```powershell

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable preset contract tests; --generator additionally compiles/runs the eight MSVC profiles."""
+"""Portable preset contract tests; --generator additionally compiles/runs the seven MSVC profiles."""
 from pathlib import Path
 import argparse
 import copy
@@ -17,13 +17,14 @@ from native_build_profiles import VENDOR, cmake_text, profiles, resolve
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCUMENT = json.loads((ROOT / 'CMakePresets.json').read_text(encoding='utf-8'))
-# Independent expected public behaviour: assertions, profiling, debug macro, log threshold, ISA, NDEBUG, and the
-# kernel dispatch cap (the CpuLevel value: 0 portable, 1 sse2, 4 avx512).
+# Independent expected public behaviour: assertions, profiling, debug macro, log threshold, the general-code ISA
+# (CRD_SIMD_TARGET: 0 scalar, 1 the SSE2 baseline, ADR-0134 §4), NDEBUG, and the kernel dispatch cap (the CpuLevel
+# value: 0 portable, 4 avx512).
 EXPECTED = {
-    'Debug': (1, 1, 1, 0, 2, 0, 4), 'Release': (0, 0, 0, 2, 2, 1, 4),
-    'RelWithDebInfo': (1, 1, 1, 0, 2, 1, 4), 'ASan': (1, 1, 1, 0, 2, 0, 4),
-    'Shipping': (0, 0, 0, 2, 2, 1, 4), 'ShippingProfile': (0, 1, 0, 2, 2, 1, 4),
-    'DebugScalar': (1, 1, 1, 0, 0, 0, 0), 'DebugSSE2': (1, 1, 1, 0, 1, 0, 1),
+    'Debug': (1, 1, 1, 0, 1, 0, 4), 'Release': (0, 0, 0, 2, 1, 1, 4),
+    'RelWithDebInfo': (1, 1, 1, 0, 1, 1, 4), 'ASan': (1, 1, 1, 0, 1, 0, 4),
+    'Shipping': (0, 0, 0, 2, 1, 1, 4), 'ShippingProfile': (0, 1, 0, 2, 1, 1, 4),
+    'DebugScalar': (1, 1, 1, 0, 0, 0, 0),
 }
 
 
@@ -46,7 +47,7 @@ class PresetContract(unittest.TestCase):
         native = resolve(DOCUMENT, 'win-vs')
         self.assertEqual(native['cacheVariables']['CMAKE_CONFIGURATION_TYPES'].split(';'), list(EXPECTED))
         self.assertEqual(native['cacheVariables'], resolve(DOCUMENT, 'win-vs-debug')['cacheVariables'])
-        self.assertEqual(len([p for p in DOCUMENT['configurePresets'] if not p.get('hidden')]), 30)
+        self.assertEqual(len([p for p in DOCUMENT['configurePresets'] if not p.get('hidden')]), 28)
 
     def test_inherited_shipping_semantics(self):
         values = profiles(DOCUMENT)
@@ -190,8 +191,9 @@ add_test(NAME profile-probe COMMAND probe)
             compiler = group.find('m:ClCompile', ns)
             assert compiler.findtext('m:Optimization', '', ns) == (
                 'MaxSpeed' if EXPECTED[config][5] else 'Disabled'), config
+            # General code takes no /arch: x64's baseline is SSE2, and only kernel units add their level's flag.
             isa = compiler.findtext('m:EnableEnhancedInstructionSet', '', ns)
-            assert (isa == 'AdvancedVectorExtensions2') == (EXPECTED[config][4] == 2), (config, isa)
+            assert isa in ('', 'NotSet'), (config, isa)
             runtime = compiler.findtext('m:RuntimeLibrary', '', ns)
             assert ('Debug' in runtime) == (EXPECTED[config][5] == 0), (config, runtime)
             if config == 'ASan':
@@ -203,7 +205,7 @@ add_test(NAME profile-probe COMMAND probe)
             run(cmake, '--build', str(build), '--config', config, '--target', 'probe', '--parallel', '2')
             run(str(Path(cmake).with_name('ctest.exe')), '--test-dir', str(build), '-C', config,
                 '-R', '^profile-probe$', '--timeout', '30', '--no-tests=error', '--output-on-failure')
-        print('PASS: all eight native profiles compiled, executed and retained target IPO exclusions.')
+        print('PASS: all seven native profiles compiled, executed and retained target IPO exclusions.')
 
 
 if __name__ == '__main__':

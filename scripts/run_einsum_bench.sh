@@ -21,7 +21,7 @@ for d in numerics/hesap-tensor numerics/hesap-dense numerics/hesap numerics/hesa
 done
 # General code at the tree'"'"'s SIMD target, like the engine; the products run the dispatched kernels.
 target=$(grep -o -m1 -- "-DCRD_SIMD_TARGET=[0-9]" "$B/compile_commands.json")
-g++ -O3 -march=native -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/core/include" \
+g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "$target" "${inc[@]}" -I "$B/engine/core/include" \
     "$S/scripts/bench_einsum.cpp" \
     "$B/engine/hesap-dense/libcrd-hesap-dense.a" "$B/engine/hesap/libcrd-hesap.a" \
     "$B/engine/hesap-tensor/libcrd-hesap-tensor.a" "$B/engine/jobs/libcrd-jobs.a" \

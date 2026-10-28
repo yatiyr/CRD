@@ -113,7 +113,7 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": null,
                 "CMAKE_CXX_COMPILER": null,
-                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo;ASan;Shipping;ShippingProfile;DebugScalar;DebugSSE2",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo;ASan;Shipping;ShippingProfile;DebugScalar",
                 "CRD_PROJECT_SYNC": "ON",
                 "CRD_NATIVE_PROFILES": "ON"
             },
@@ -238,14 +238,6 @@
             }
         },
         {
-            "name": "win-debug-sse2",
-            "displayName": "Windows Debug + force SSE2 SIMD (codegen-path check)",
-            "inherits": "win-debug",
-            "cacheVariables": {
-                "CRD_SIMD_LEVEL": "sse2"
-            }
-        },
-        {
             "name": "win-public-checks",
             "displayName": "Windows Debug + public header checks and the package consumer test",
             "inherits": "win-debug",
@@ -318,14 +310,6 @@
             "inherits": "linux-gcc-debug",
             "cacheVariables": {
                 "CRD_SIMD_LEVEL": "scalar"
-            }
-        },
-        {
-            "name": "linux-gcc-debug-sse2",
-            "displayName": "Linux GCC Debug + force SSE2 SIMD (codegen-path check)",
-            "inherits": "linux-gcc-debug",
-            "cacheVariables": {
-                "CRD_SIMD_LEVEL": "sse2"
             }
         },
         {
@@ -605,15 +589,6 @@
             "jobs": 2
         },
         {
-            "name": "win-vs-debug-sse2",
-            "configurePreset": "win-vs",
-            "configuration": "DebugSSE2",
-            "targets": [
-                "crd-sandbox"
-            ],
-            "jobs": 2
-        },
-        {
             "name": "win-release",
             "configurePreset": "win-release"
         },
@@ -654,10 +629,6 @@
             "configurePreset": "win-debug-scalar"
         },
         {
-            "name": "win-debug-sse2",
-            "configurePreset": "win-debug-sse2"
-        },
-        {
             "name": "win-public-checks",
             "configurePreset": "win-public-checks"
         },
@@ -684,10 +655,6 @@
         {
             "name": "linux-gcc-debug-scalar",
             "configurePreset": "linux-gcc-debug-scalar"
-        },
-        {
-            "name": "linux-gcc-debug-sse2",
-            "configurePreset": "linux-gcc-debug-sse2"
         },
         {
             "name": "linux-gcc-public-checks",
@@ -732,6 +699,16 @@
             "configurePreset": "win-debug",
             "output": {
                 "outputOnFailure": true
+            }
+        },
+        {
+            "name": "win-debug-at-sse2",
+            "configurePreset": "win-debug",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "CRD_CPU_LEVEL": "sse2"
             }
         },
         {
@@ -794,14 +771,6 @@
             }
         },
         {
-            "name": "win-vs-debug-sse2",
-            "configurePreset": "win-vs",
-            "configuration": "DebugSSE2",
-            "output": {
-                "outputOnFailure": true
-            }
-        },
-        {
             "name": "win-release",
             "configurePreset": "win-release",
             "output": {
@@ -844,6 +813,16 @@
             "configurePreset": "linux-gcc-debug",
             "output": {
                 "outputOnFailure": true
+            }
+        },
+        {
+            "name": "linux-gcc-debug-at-sse2",
+            "configurePreset": "linux-gcc-debug",
+            "output": {
+                "outputOnFailure": true
+            },
+            "environment": {
+                "CRD_CPU_LEVEL": "sse2"
             }
         },
         {
@@ -896,13 +875,6 @@
             }
         },
         {
-            "name": "win-debug-sse2",
-            "configurePreset": "win-debug-sse2",
-            "output": {
-                "outputOnFailure": true
-            }
-        },
-        {
             "name": "win-public-checks",
             "configurePreset": "win-public-checks",
             "output": {
@@ -912,13 +884,6 @@
         {
             "name": "linux-gcc-debug-scalar",
             "configurePreset": "linux-gcc-debug-scalar",
-            "output": {
-                "outputOnFailure": true
-            }
-        },
-        {
-            "name": "linux-gcc-debug-sse2",
-            "configurePreset": "linux-gcc-debug-sse2",
             "output": {
                 "outputOnFailure": true
             }
@@ -1028,8 +993,7 @@
             "ASan": "win-asan",
             "Shipping": "win-shipping",
             "ShippingProfile": "win-shipping-profile",
-            "DebugScalar": "win-debug-scalar",
-            "DebugSSE2": "win-debug-sse2"
+            "DebugScalar": "win-debug-scalar"
         }
     }
 }

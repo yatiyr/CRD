@@ -20,7 +20,7 @@ for d in numerics/hesap-tensor numerics/hesap-stats foundation/core foundation/m
 done
 # The probe is release code like the engine; the SR draws come from libcrd-hesap-tensor.a (the Philox block loop of
 # the dispatched tensor kernels) and the conversions from libcrd-math.a (the dispatched conversion kernels).
-g++ -O3 -march=native -std=c++20 -DNDEBUG "${inc[@]}" -I "$B/engine/core/include" "$S/scripts/bench_dtypes.cpp" \
+g++ -O3 -march=x86-64 -std=c++20 -DNDEBUG "${inc[@]}" -I "$B/engine/core/include" "$S/scripts/bench_dtypes.cpp" \
     "$B/engine/hesap-tensor/libcrd-hesap-tensor.a" "$B/engine/memory/libcrd-memory.a" "$B/engine/vm/libcrd-vm.a" \
     "$B/engine/log/libcrd-log.a" "$B/engine/math/libcrd-math.a" "$B/engine/core/libcrd-core.a" -o bench_dtypes_bin
 for level in '"${LEVELS[*]}"'; do

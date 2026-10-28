@@ -106,7 +106,7 @@ libraries). It passed on MSVC 19.51 (Ninja, `win-debug` profile) and GCC 13.3 (`
 Amended 2026-10-12 (DIAG.11a, [session](../sessions/2026-10-12-diag-11a-installed-consumer.md)): the package is no
 longer `core` alone. It exports the engine's diagnostic host and its closure, the family an external application needs
 to run, fail and be investigated: `Cerid::core`, `units`, `time`, `vm`, `log`, `containers`, `memory`, `jobs`,
-`toml`, `perf`, plus `math` and the interface target `simd-flags` (the ISA, `CRD_SIMD_TARGET` and the ADR-0063
+`toml`, `perf`, plus `math` and the interface target `simd-flags` (the baseline ISA, `CRD_SIMD_TARGET` and the ADR-0063
 floating-point options every consumer of the math headers must compile with). Every module's include directories are
 `$<BUILD_INTERFACE:...>`, so the installed targets carry only `<prefix>/include`.
 

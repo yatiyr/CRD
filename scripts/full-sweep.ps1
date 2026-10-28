@@ -1,11 +1,12 @@
 # scripts/full-sweep.ps1
 #
 # Single-command Definition-of-Done sweep across every Cerid preset:
-#   Win x 11: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar,
-#             debug-sse2, shipping, shipping-profile, clang-cl-shipping
-#             (build + ctest + sandbox-smoke) + tidy (build-only)
-#   Linux x 7: linux-gcc-{debug, relwithdebinfo, release, asan, debug-scalar,
-#              debug-sse2, shipping}  (build + ctest)
+#   Win x 9: debug, relwithdebinfo, release, asan, clang-cl, debug-scalar,
+#            shipping, shipping-profile, clang-cl-shipping
+#            (build + ctest + sandbox-smoke; debug also at the forced sse2 level, win-debug-at-sse2)
+#            + tidy (build-only)
+#   Linux x 6: linux-gcc-{debug, relwithdebinfo, release, asan, debug-scalar,
+#              shipping}  (build + ctest)
 #
 # shipping-profile = mirror of shipping with CRD_ENABLE_PROFILING=ON. Added
 # 2026-05-15 (D-003 v0c) to verify the crd-perf substrate + every gated
@@ -91,7 +92,7 @@ if (-not $SkipWin) {
     # "...powershell -Command \"...\"..." blows up with quoting on non-trivial
     # scripts (the v0e closure attempted that and failed silently every time).
     @'
-$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar','win-debug-sse2','win-shipping','win-shipping-profile','win-clang-cl-shipping')
+$presets = @('win-debug','win-relwithdebinfo','win-release','win-asan','win-clang-cl','win-debug-scalar','win-shipping','win-shipping-profile','win-clang-cl-shipping')
 $buildOnly = @('win-tidy')
 $results = [ordered]@{}
 
@@ -104,7 +105,7 @@ $results = [ordered]@{}
 # shipping/release constraint. win-shipping CRASHED cl.exe at -j5 (~14.5 GB free) and SUCCEEDED at -j3 while
 # bottoming out at 0.26 GB free commit, so the boundary is ~4 GB/edge effective on this desktop.
 $CRD_JOBS_CAP  = if ($env:CMAKE_BUILD_PARALLEL_LEVEL) { [int]$env:CMAKE_BUILD_PARALLEL_LEVEL } else { 0 }
-$CRD_PER_EDGE  = @{ 'win-debug' = 2.0; 'win-debug-scalar' = 2.0; 'win-debug-sse2' = 2.0; 'win-asan' = 2.5;
+$CRD_PER_EDGE  = @{ 'win-debug' = 2.0; 'win-debug-scalar' = 2.0; 'win-asan' = 2.5;
                     'win-relwithdebinfo' = 3.0; 'win-release' = 4.0; 'win-shipping' = 4.0;
                     'win-shipping-profile' = 4.0; 'win-clang-cl' = 2.0; 'win-clang-cl-shipping' = 4.0;
                     'win-tidy' = 1.5 }
@@ -146,6 +147,13 @@ foreach ($p in $presets) {
     & ctest --preset $p --output-on-failure --timeout 300 -O "$REPO_ROOT/build/ctest-$p.log"
     $ec = $LASTEXITCODE
     if ($ec -ne 0) { $results[$p] = "CTEST-FAIL exit=$ec"; continue }
+    # ADR-0134 §4: the same binaries with every test forced to the sse2 level (the old -sse2 builds).
+    if ($p -eq 'win-debug') {
+        Write-Host "----- ctest $p-at-sse2 -----"
+        & ctest --preset "$p-at-sse2" --output-on-failure --timeout 300 -O "$REPO_ROOT/build/ctest-$p-at-sse2.log"
+        $ec = $LASTEXITCODE
+        if ($ec -ne 0) { $results[$p] = "CTEST-AT-SSE2-FAIL exit=$ec"; continue }
+    }
 
     # ---- Sandbox smoke-test ----
     # Boots the sandbox normally and runs the main loop for $SMOKE_DURATION
@@ -246,7 +254,6 @@ if (-not $SkipLinux) {
         'linux-gcc-release',
         'linux-gcc-asan',
         'linux-gcc-debug-scalar',
-        'linux-gcc-debug-sse2',
         'linux-gcc-shipping'
     )
 

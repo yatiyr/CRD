@@ -77,7 +77,7 @@ ungated there, never passed. A Linux host installs the pinned one once with `pyt
 
 | Risk gate | Local route | Hosted lanes |
 |---|---|---|
-| Public/header consumers | `check-headers.py` on the changed public headers, `check-include-budget.py`, the other compiler family's check (the linux-gcc-debug lane from Windows) | win-public-checks, linux-gcc-public-checks, win-clang-cl, win-clang-cl-shipping, linux-gcc-shipping, the SSE2 lanes |
+| Public/header consumers | `check-headers.py` on the changed public headers, `check-include-budget.py`, the other compiler family's check (the linux-gcc-debug lane from Windows) | win-public-checks, linux-gcc-public-checks, win-clang-cl, win-clang-cl-shipping, linux-gcc-shipping |
 | Lifetime/concurrency | `dev.py check` in win-asan, then the linux-gcc-asan and linux-clang-tsan lane checks | win-asan, linux-gcc-asan, linux-clang-tsan |
 | Providers/devices | `dev.py check` on this host's adapter, the linux-gcc-debug lane check (Vulkan on lavapipe) | Windows lanes on the pinned WARP, Linux lanes on lavapipe |
 | CI | none: push, read the run, fix a completed failure before new work | every lane of the run |

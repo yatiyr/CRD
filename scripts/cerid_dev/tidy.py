@@ -4,10 +4,10 @@ The compile database is the source of every flag. The only tokens removed are pr
 cannot consume from another compiler: MSVC `/Yu`, `/Fp` and the forced `/FI cmake_pch.hxx`; GCC `-include cmake_pch.hxx`
 and `-Winvalid-pch`. clang-tidy drops `/`-spelled MSVC flags that reach it through the database (measured in the
 CRD_ENABLE_CLANG_TIDY block of the root CMakeLists), so the analysis-relevant ones are restated through `--extra-arg`:
-`/EHsc` and the CMake-owned `CRD_SIMD_MSVC_ARCH_FLAG` from the build cache. A GCC database carries warning flags clang
-does not know and `-Werror`; `-Wno-unknown-warning-option` keeps those from reading as parse failures, and `-Wno-error`
-keeps clang's own compiler warnings under GCC's flags from failing units GCC compiles clean (GCC is that
-configuration's compiler of record; tidy checks stay warnings-as-errors). Headers are
+`/EHsc` (general code has no ISA flag, ADR-0134 §4; kernel units select on the dash-spelled CRD_KERNEL_LEVEL). A GCC
+database carries warning flags clang does not know and `-Werror`; `-Wno-unknown-warning-option` keeps those from
+reading as parse failures, and `-Wno-error` keeps clang's own compiler warnings under GCC's flags from failing units
+GCC compiles clean (GCC is that configuration's compiler of record; tidy checks stay warnings-as-errors). Headers are
 analysed as the main file of a translation unit of their owning target (the plan's owners), then of a sibling in the
 same module. A file with no usable command, an unresolved include, a tool exit without diagnostics or an unavailable
 tool is reported as ungated or unavailable, never clean.
@@ -25,7 +25,7 @@ import subprocess
 import tempfile
 import time
 
-from .environment import REQUIRED_TIDY_MAJOR, cache_values, resolve_clang_tidy
+from .environment import REQUIRED_TIDY_MAJOR, resolve_clang_tidy
 from .selection import SelectionError
 
 DEFAULT_BUILD = 'build/win-debug' if os.name == 'nt' else 'build/linux-gcc-debug'
@@ -112,16 +112,12 @@ def stripped(entry):
     return result
 
 
-def extra_arguments(family, cache, header=False):
-    """Flags restated on the one channel clang-tidy honors; the MSVC ISA flag is CMake's own cache value, never a
-    literal. A header analysed as the main file legitimately carries `#pragma once`, so that single main-file
-    diagnostic is disabled for header units only; every check and every other diagnostic stays strict."""
+def extra_arguments(family, header=False):
+    """Flags restated on the one channel clang-tidy honors. A header analysed as the main file legitimately carries
+    `#pragma once`, so that single main-file diagnostic is disabled for header units only; every check and every other
+    diagnostic stays strict."""
     if family == 'msvc':
-        result = ['--extra-arg=/EHsc']
-        arch = (cache.get('CRD_SIMD_MSVC_ARCH_FLAG') or '').strip()
-        if arch:
-            result.append('--extra-arg=' + arch)
-        result.append('--extra-arg=-Wno-unused-command-line-argument')
+        result = ['--extra-arg=/EHsc', '--extra-arg=-Wno-unused-command-line-argument']
     else:
         # GCC is the compiler of record for a GCC database (CI compiles that configuration with -Werror). clang's
         # own opinion of GCC's warning flags is not the gate: measured 2026-09-13, -Wpedantic reports
@@ -322,9 +318,7 @@ def analyse(root, build, files, environment, *, owners=None, tool=None, scratch=
     entries = json.loads(database.read_text(encoding='utf-8-sig'))
     if not isinstance(entries, list) or not entries or not all(isinstance(entry, dict) and 'file' in entry for entry in entries):
         raise SelectionError(f'Compile database {database} is empty or malformed')
-    cache = cache_values(build)
-    summary.update(database=str(database), database_entries=len(entries), database_sha256=digest(database),
-                   cache_arch_flag=cache.get('CRD_SIMD_MSVC_ARCH_FLAG') or None)
+    summary.update(database=str(database), database_entries=len(entries), database_sha256=digest(database))
     jobs, mirrored = prepare(root, entries, files, owners)
     temporary = scratch is None
     scratch = Path(tempfile.mkdtemp(prefix='crd-tidy-')) if temporary else Path(scratch)
@@ -345,7 +339,7 @@ def analyse(root, build, files, environment, *, owners=None, tool=None, scratch=
             # add header diagnostics no lane enforces (measured 2026-09-13: 235 macro-usage hits in 27 units).
             # Headers are gated by naming them, which makes each one its own main file.
             command = [resolution['path'], job['absolute'], '--warnings-as-errors=*', '--quiet', '--header-filter=',
-                       '-p', str(scratch), *extra_arguments(job['family'], cache, header)]
+                       '-p', str(scratch), *extra_arguments(job['family'], header)]
             if export_fixes:
                 command.append('--export-fixes=' + str(Path(export_fixes) / (re.sub(r'[:/\\]', '_', job['path']) + '.yaml')))
             started = time.monotonic()

@@ -1,43 +1,39 @@
-# CrdSimd.cmake — Phase 3.1 v0a SIMD + deterministic-FP configuration.
+# CrdSimd.cmake: the SIMD build contract (ADR-0063 determinism, ADR-0134 runtime CPU dispatch).
 #
 # Exposes:
-#   CRD_SIMD_LEVEL          (cache string)  auto|scalar|sse2|avx2|neon|native
-#   CRD_DETERMINISTIC_FP    (cache bool)    enforce ADR-0063 FP contract
+#   CRD_SIMD_LEVEL          (cache string)  auto|scalar|sse2|avx2|neon: the highest kernel level the build compiles
+#   CRD_DETERMINISTIC_FP    (cache bool)    enforce the ADR-0063 FP contract
 #
 # Produces:
-#   crd-simd-flags          (interface lib) — emits the right compile flags +
-#                                             defines CRD_SIMD_TARGET so the
-#                                             code in backend.hpp is decided
-#                                             at the build-system level rather
-#                                             than relying on compiler-defined
-#                                             ISA macros (MSVC doesn't define
-#                                             __AVX2__ unless /arch:AVX2 is
-#                                             explicitly passed; this avoids
-#                                             that footgun entirely).
+#   crd-simd-flags          (interface lib) the baseline ISA of general code (x86-64 v1 with SSE2 on x64, NEON on
+#                                           ARM64), CRD_SIMD_TARGET for backend.hpp, CRD_KERNEL_LEVEL_CAP and the
+#                                           determinism options.
 #
-# Anything that links crd-math (transitively) inherits the SIMD flags + the
-# determinism contract. Test or bench targets that opt out can override
-# `CRD_DETERMINISTIC_FP=OFF` per-configure.
+# General engine code builds at the architecture's baseline on every lane (ADR-0134 §4): one binary runs on every
+# x86-64 CPU, and the per-level kernel units below are the only code above it. CRD_SIMD_LEVEL caps those units:
+# scalar gives the portable reference build of the oracle lanes (general code on the scalar backend too), sse2 and avx2
+# stop the levels there, auto compiles every level of the architecture. CRD_CPU_LEVEL selects a lower level at run time
+# (crd/core/cpu_features.hpp), so one binary qualifies every level as a forced arm.
+#
+# Anything that links crd-math (transitively) inherits these flags and the determinism contract. Test or bench targets
+# that opt out can override `CRD_DETERMINISTIC_FP=OFF` per configure.
 
 include_guard(GLOBAL)
 
-# CRD_SIMD_TARGET integer values must match backend.hpp:
-#   0 = scalar, 1 = sse2, 2 = avx2, 3 = neon
+# CRD_SIMD_TARGET values, matching backend.hpp: 0 = scalar, 1 = sse2, 3 = neon (2, the old AVX2 general build, is
+# refused there).
 set(_CRD_SIMD_TARGET_SCALAR 0)
 set(_CRD_SIMD_TARGET_SSE2   1)
-set(_CRD_SIMD_TARGET_AVX2   2)
 set(_CRD_SIMD_TARGET_NEON   3)
 
-set(CRD_SIMD_LEVEL "auto" CACHE STRING
-    "SIMD instruction level: auto|scalar|sse2|avx2|neon|native")
-set_property(CACHE CRD_SIMD_LEVEL PROPERTY STRINGS
-    auto scalar sse2 avx2 neon native)
+set(CRD_SIMD_LEVEL "auto" CACHE STRING "Highest kernel level the build compiles: auto|scalar|sse2|avx2|neon")
+set_property(CACHE CRD_SIMD_LEVEL PROPERTY STRINGS auto scalar sse2 avx2 neon)
 
 option(CRD_DETERMINISTIC_FP
     "Enforce the ADR-0063 deterministic floating-point contract (no fast-math, no fp-contract reordering, no x87)"
     ON)
 
-# ---- Resolve "auto" against the host arch ----------------------------------
+# ---- Resolve the level against the host arch --------------------------------
 
 set(_crd_arch_x64    FALSE)
 set(_crd_arch_arm64  FALSE)
@@ -47,124 +43,50 @@ elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$")
     set(_crd_arch_arm64 TRUE)
 endif()
 
-if(CRD_SIMD_LEVEL STREQUAL "auto")
-    if(_crd_arch_x64)
-        # AVX2 has been baseline on Intel Haswell (2013) + AMD Excavator (2015);
-        # safe default in 2026. Drop to sse2 if you still ship to pre-Haswell.
-        set(_crd_simd_resolved "avx2")
-    elseif(_crd_arch_arm64)
-        set(_crd_simd_resolved "neon")
-    else()
-        set(_crd_simd_resolved "scalar")
-    endif()
-else()
-    set(_crd_simd_resolved "${CRD_SIMD_LEVEL}")
+if(CRD_SIMD_LEVEL STREQUAL "native")
+    message(FATAL_ERROR
+        "[crd-simd] CRD_SIMD_LEVEL=native is gone: general code builds at the baseline ISA and the kernel units are "
+        "dispatched at run time (ADR-0134). Use 'auto' for every level of this architecture.")
+elseif(NOT CRD_SIMD_LEVEL MATCHES "^(auto|scalar|sse2|avx2|neon)$")
+    message(FATAL_ERROR "[crd-simd] Unknown CRD_SIMD_LEVEL: '${CRD_SIMD_LEVEL}' (auto|scalar|sse2|avx2|neon)")
+elseif(CRD_SIMD_LEVEL MATCHES "^(sse2|avx2)$" AND NOT _crd_arch_x64)
+    message(FATAL_ERROR
+        "[crd-simd] CRD_SIMD_LEVEL=${CRD_SIMD_LEVEL} requires x64; host arch is '${CMAKE_SYSTEM_PROCESSOR}'. "
+        "Use 'auto', 'scalar', or 'neon'.")
+elseif(CRD_SIMD_LEVEL STREQUAL "neon" AND NOT _crd_arch_arm64)
+    message(FATAL_ERROR
+        "[crd-simd] CRD_SIMD_LEVEL=neon requires ARM64; host arch is '${CMAKE_SYSTEM_PROCESSOR}'. "
+        "Use 'auto', 'scalar', 'sse2' or 'avx2'.")
 endif()
 
-# Validate against the host arch — refuse e.g. avx2 on ARM64.
-if(_crd_simd_resolved STREQUAL "avx2" OR _crd_simd_resolved STREQUAL "sse2")
-    if(NOT _crd_arch_x64)
-        message(FATAL_ERROR
-            "[crd-simd] CRD_SIMD_LEVEL=${_crd_simd_resolved} requires x64; "
-            "host arch is '${CMAKE_SYSTEM_PROCESSOR}'. Use 'auto', 'scalar', or 'neon'.")
-    endif()
-elseif(_crd_simd_resolved STREQUAL "neon")
-    if(NOT _crd_arch_arm64)
-        message(FATAL_ERROR
-            "[crd-simd] CRD_SIMD_LEVEL=neon requires ARM64; "
-            "host arch is '${CMAKE_SYSTEM_PROCESSOR}'. Use 'auto', 'scalar', or 'avx2'/'sse2'.")
-    endif()
+# The backend general code uses: the architecture's baseline, or scalar for the reference build.
+if(CRD_SIMD_LEVEL STREQUAL "scalar" OR NOT (_crd_arch_x64 OR _crd_arch_arm64))
+    set(_crd_simd_resolved "scalar")
+    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SCALAR})
+elseif(_crd_arch_x64)
+    set(_crd_simd_resolved "sse2")
+    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SSE2})
+else()
+    set(_crd_simd_resolved "neon")
+    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_NEON})
 endif()
 
 # ---- Build the interface target --------------------------------------------
 
 add_library(crd-simd-flags INTERFACE)
 
-# Native ISA variants share a solution but never inherit the AVX2 flag from another profile.
-set(_crd_default_isa "1")
-if(CRD_NATIVE_PROFILES)
-    set(_crd_isa_configs)
-    foreach(config IN LISTS CRD_NATIVE_CONFIGS)
-        if(NOT CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "auto")
-            list(APPEND _crd_isa_configs "${config}")
-        endif()
-    endforeach()
-    list(JOIN _crd_isa_configs "," _crd_isa_configs)
-    set(_crd_default_isa "$<NOT:$<CONFIG:${_crd_isa_configs}>>")
+# GCC and Clang general code is pinned to x86-64 v1, whatever the toolchain's default or CMAKE_CXX_FLAGS adds (a
+# distribution compiler may default to v2 or v3). cl and clang-cl target the x64 baseline without an /arch flag.
+if(_crd_arch_x64 AND NOT MSVC)
+    target_compile_options(crd-simd-flags INTERFACE $<$<COMPILE_LANGUAGE:CXX,C>:-march=x86-64>)
 endif()
 
-# Pick the integer macro + ISA flags per resolved level.
-if(_crd_simd_resolved STREQUAL "avx2")
-    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_AVX2})
-    if(MSVC)
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<AND:${_crd_default_isa},$<COMPILE_LANGUAGE:CXX,C>>:/arch:AVX2>)
-    else()
-        # -mfma is REQUIRED: crd-math's single-rounded simd::fma() (Vec8f/Vec4d,
-        # used by the crd-hesap microkernels per ADR-0082) lowers to the
-        # _mm256_fmadd_{ps,pd} intrinsic, which gcc/clang gate behind -mfma
-        # (unlike MSVC /arch:AVX2, which bundles FMA). Without it the always_inline
-        # intrinsic fails with "target specific option mismatch" on every gcc/clang
-        # AVX2 build — the v0-close full sweep was the first to catch this.
-        #
-        # This does NOT weaken the ADR-0063 determinism contract: mul_add stays
-        # two-rounded. mul_add is `(a*b)+c` built from separate _mm256_mul_pd +
-        # _mm256_add_pd intrinsics, and -ffp-contract=off (set below, propagated
-        # to every TU via crd-math's PUBLIC link of this target) blocks the
-        # compiler from contracting them into an FMA. Only the EXPLICIT simd::fma()
-        # call emits the hardware FMA. The SIMD/scalar bit-exact parity tests on
-        # the Linux configs are the standing guard that mul_add was not contracted.
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:-mavx2>
-            $<$<COMPILE_LANGUAGE:CXX,C>:-mfma>
-            $<$<COMPILE_LANGUAGE:CXX,C>:-msse4.2>
-            # F16C (VCVTPS2PH/VCVTPH2PS — crd/math/float_convert.hpp batch f16).
-            # Every AVX2 CPU has F16C (it predates Haswell); MSVC /arch:AVX2
-            # already implies it, GCC/Clang need the explicit flag.
-            $<$<COMPILE_LANGUAGE:CXX,C>:-mf16c>)
-    endif()
-elseif(_crd_simd_resolved STREQUAL "sse2")
-    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SSE2})
-    if(NOT MSVC)
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:-msse2>)
-    endif()
-    # MSVC x64 has SSE2 as the ABI baseline; no flag needed.
-elseif(_crd_simd_resolved STREQUAL "neon")
-    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_NEON})
-    # NEON is baseline on AArch64; nothing to add.
-elseif(_crd_simd_resolved STREQUAL "native")
-    # Best-of-host. CRD_SIMD_TARGET picks the integer based on arch.
-    if(_crd_arch_x64)
-        set(_crd_simd_target_value ${_CRD_SIMD_TARGET_AVX2})
-    elseif(_crd_arch_arm64)
-        set(_crd_simd_target_value ${_CRD_SIMD_TARGET_NEON})
-    else()
-        set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SCALAR})
-    endif()
-    if(MSVC)
-        # MSVC has no `-march=native`. Treat 'native' as 'avx2' on x64.
-        if(_crd_arch_x64)
-            target_compile_options(crd-simd-flags INTERFACE
-                $<$<AND:${_crd_default_isa},$<COMPILE_LANGUAGE:CXX,C>>:/arch:AVX2>)
-        endif()
-    else()
-        target_compile_options(crd-simd-flags INTERFACE
-            $<$<COMPILE_LANGUAGE:CXX,C>:-march=native>)
-    endif()
-elseif(_crd_simd_resolved STREQUAL "scalar")
-    set(_crd_simd_target_value ${_CRD_SIMD_TARGET_SCALAR})
-else()
-    message(FATAL_ERROR "[crd-simd] Unknown CRD_SIMD_LEVEL: '${_crd_simd_resolved}'")
-endif()
-
+# The native Visual Studio profiles share one configure: a scalar configuration takes the scalar backend.
 set(_crd_simd_definition "${_crd_simd_target_value}")
 if(CRD_NATIVE_PROFILES)
     foreach(config IN LISTS CRD_NATIVE_CONFIGS)
         if(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "scalar")
             set(_crd_simd_definition "$<IF:$<CONFIG:${config}>,0,${_crd_simd_definition}>")
-        elseif(CRD_PROFILE_${config}_CRD_SIMD_LEVEL STREQUAL "sse2")
-            set(_crd_simd_definition "$<IF:$<CONFIG:${config}>,1,${_crd_simd_definition}>")
         endif()
     endforeach()
 endif()
@@ -184,7 +106,7 @@ set(_CRD_KERNEL_LEVEL_avx512 4)
 set(_CRD_KERNEL_LEVEL_neon 5)
 if(_crd_simd_resolved STREQUAL "scalar")
     set(CRD_KERNEL_LEVELS portable)
-elseif(_crd_simd_resolved STREQUAL "sse2")
+elseif(CRD_SIMD_LEVEL STREQUAL "sse2")
     set(CRD_KERNEL_LEVELS portable sse2)
 elseif(CRD_SIMD_LEVEL STREQUAL "avx2")
     set(CRD_KERNEL_LEVELS portable sse2 sse42 avx2)
@@ -424,23 +346,11 @@ target_compile_definitions(crd-simd-flags INTERFACE ${CRD_FP_CONTRACT_DEFINITION
 # ---- Configure summary -----------------------------------------------------
 
 string(TOUPPER "${_crd_simd_resolved}" _crd_simd_summary)
-message(STATUS "[crd-simd] CRD_SIMD_LEVEL    = ${CRD_SIMD_LEVEL} -> ${_crd_simd_summary}")
-message(STATUS "[crd-simd] CRD_SIMD_TARGET   = ${_crd_simd_target_value} (0=scalar, 1=sse2, 2=avx2, 3=neon)")
+message(STATUS "[crd-simd] CRD_SIMD_LEVEL    = ${CRD_SIMD_LEVEL} (general code ${_crd_simd_summary})")
+message(STATUS "[crd-simd] CRD_SIMD_TARGET   = ${_crd_simd_target_value} (0=scalar, 1=sse2, 3=neon)")
 message(STATUS "[crd-simd] DETERMINISTIC_FP  = ${CRD_DETERMINISTIC_FP}")
 message(STATUS "[crd-simd] KERNEL_LEVELS     = ${CRD_KERNEL_LEVELS}")
 message(STATUS "[crd-simd] host SYSTEM_PROC  = ${CMAKE_SYSTEM_PROCESSOR}")
 
-# Persist resolution for downstream code that wants to query it.
-set(CRD_SIMD_LEVEL_RESOLVED "${_crd_simd_resolved}" CACHE INTERNAL
-    "Resolved SIMD level for this build configuration")
-
-# The MSVC ISA flag this resolution actually applied (empty when none). Exported because clang-tidy DROPS
-# `/`-spelled flags that arrive through the compile command, so the win-tidy gate has to re-state the ISA
-# flag via `--extra-arg=` (see the CRD_ENABLE_CLANG_TIDY block in the root CMakeLists). Deriving it from the
-# same branch that adds the real flag is what keeps the two from drifting apart.
-set(_crd_simd_msvc_arch "")
-if(MSVC AND (_crd_simd_resolved STREQUAL "avx2" OR (_crd_simd_resolved STREQUAL "native" AND _crd_arch_x64)))
-    set(_crd_simd_msvc_arch "/arch:AVX2")
-endif()
-set(CRD_SIMD_MSVC_ARCH_FLAG "${_crd_simd_msvc_arch}" CACHE INTERNAL
-    "The MSVC /arch: flag this SIMD resolution applies (empty if none) — mirrored into the clang-tidy gate")
+# The backend general code compiles to (scalar, sse2 or neon), for checks that read the build's machine code.
+set(CRD_SIMD_LEVEL_RESOLVED "${_crd_simd_resolved}" CACHE INTERNAL "The SIMD backend of general code")

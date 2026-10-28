@@ -44,22 +44,30 @@ crd::f64 measure_clock_ghz()
     return 100.0 / ms;
 }
 
-crd::f64 peak_gflops_per_core_f32(crd::f64 ghz)
+// FLOPs per cycle of one core at the level the dense kernels run (CRD_CPU_LEVEL forces it): two FMA ports on Intel
+// (AMD Zen has one, so half), the 128-bit levels without FMA a multiply and an add port, scalar one of each.
+crd::f64 peak_gflops_per_core(crd::f64 clock_ghz, bool f64)
 {
-#if CRD_SIMD_HAS_AVX2
-    return 32.0 * ghz;
-#else
-    return 2.0 * ghz;
-#endif
-}
-
-crd::f64 peak_gflops_per_core_f64(crd::f64 ghz)
-{
-#if CRD_SIMD_HAS_AVX2
-    return 16.0 * ghz;
-#else
-    return 2.0 * ghz;
-#endif
+    crd::f64 f32_per_cycle = 2.0;
+    switch (crd::hesap::dense::dense_kernels().level)
+    {
+        case crd::CpuLevel::Avx512:
+            f32_per_cycle = 64.0;
+            break;
+        case crd::CpuLevel::Avx2:
+            f32_per_cycle = 32.0;
+            break;
+        case crd::CpuLevel::Neon:
+            f32_per_cycle = 16.0;
+            break;
+        case crd::CpuLevel::Sse2:
+        case crd::CpuLevel::Sse42:
+            f32_per_cycle = 8.0;
+            break;
+        case crd::CpuLevel::Portable:
+            return 2.0 * clock_ghz;
+    }
+    return (f64 ? f32_per_cycle / 2.0 : f32_per_cycle) * clock_ghz;
 }
 
 template <typename T> struct Bench
@@ -436,8 +444,8 @@ int main(int argc, char** argv)
     jobs_cfg.num_threads = g_one_thread ? 1U : (p_cores_only ? 16U : 0U);
     crd::jobs::init(jobs_cfg);
     const crd::f64 ghz = measure_clock_ghz();
-    const crd::f64 peak_f32 = peak_gflops_per_core_f32(ghz);
-    const crd::f64 peak_f64 = peak_gflops_per_core_f64(ghz);
+    const crd::f64 peak_f32 = peak_gflops_per_core(ghz, false);
+    const crd::f64 peak_f64 = peak_gflops_per_core(ghz, true);
     const crd::u32 nw = crd::jobs::num_workers();
 
     // Use jobs worker count for everyone — that's the actual scheduling budget.

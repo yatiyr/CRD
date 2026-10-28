@@ -28,7 +28,8 @@ solve family ([session](../sessions/2026-10-27-simd-dispatch-direct-kernels.md))
 plan's plain state ([session](../sessions/2026-10-27-simd-dispatch-fft-kernels.md)), then the geometry batch kernels,
 hull support scan and mesh raycast on plain columns
 ([session](../sessions/2026-10-27-simd-dispatch-geometry-kernels.md)), then the eylem-rigid3d body step on plain chunk
-columns ([session](../sessions/2026-10-28-simd-dispatch-eylem-body-step.md)); the other clauses are open in the row.
+columns ([session](../sessions/2026-10-28-simd-dispatch-eylem-body-step.md)), then the baseline build of §4
+([session](../sessions/2026-10-28-simd-dispatch-baseline-flip.md)); the other clauses are open in the row.
 
 **Extends:** [ADR-0063](0063-eylem-determinism-contract.md) (determinism),
 [ADR-0082](0082-hesap-microkernel-intrinsics-strategy.md) (intrinsics first),
@@ -68,7 +69,10 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    (TickClock's first map can be a pinned job worker) and gives it back exactly its own affinity.
 4. **Baseline build.** General engine code builds at the baseline ISA: crd-simd-flags keeps the determinism flags and
    loses the ISA flags. `CRD_SIMD_LEVEL` caps the levels a build compiles (`scalar` stays the portable reference build
-   for the oracle lanes); the `-sse2` lanes become forced-level arms of one binary.
+   for the oracle lanes); the `-sse2` lanes become forced-level arms of one binary. Landed 2026-10-28: GCC and Clang
+   general code is pinned to `-march=x86-64` whatever the toolchain defaults to, cl and clang-cl take no `/arch`,
+   `CRD_SIMD_LEVEL` is `auto|scalar|sse2|avx2|neon` (`native` is refused) and `CRD_SIMD_TARGET=2` is an error; the
+   win-debug and linux-gcc-debug jobs run their suite a second time with `CRD_CPU_LEVEL=sse2`.
 5. **Kernel units.** A hot kernel is a translation unit compiled once per level with that level's flags (MSVC
    `/arch:AVX2`, `/arch:AVX512`; GCC/Clang `-march=x86-64-v2`/`-v3`/`-v4`), its code inside a per-level namespace (the
    Highway pattern), so no inline function or template instantiated there shares a mangled name, and so a COMDAT

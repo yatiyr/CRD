@@ -16,7 +16,7 @@ evidence for the exact revision every lane built.
 | Tier | Runs | Presets |
 |---|---|---|
 | preflight | every run | none; the `preflight` and `repository` jobs (workflow syntax, mapping, hygiene, documentation, tooling fixtures, generated artifacts) |
-| change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-debug-sse2`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-debug-sse2`, `linux-gcc-shipping`, the [ARM64 lanes](#arm64-lanes) `linux-gcc-arm64-debug`, `linux-gcc-arm64-asan`, `linux-clang-arm64-debug`, `linux-clang-arm64-asan`, `win-arm64-debug` |
+| change | pushes and pull requests that touch sources | `win-debug`, `win-release`, `win-asan`, `win-tidy`, `win-clang-cl`, `win-shipping`, `win-clang-cl-shipping`, `linux-gcc-debug`, `linux-gcc-release`, `linux-gcc-relwithdebinfo`, `linux-gcc-asan`, `linux-gcc-shipping`, the [ARM64 lanes](#arm64-lanes) `linux-gcc-arm64-debug`, `linux-gcc-arm64-asan`, `linux-clang-arm64-debug`, `linux-clang-arm64-asan`, `win-arm64-debug` |
 | complete | nightly, manual, build-system changes | the change presets plus `win-relwithdebinfo`, `win-debug-scalar`, `win-shipping-profile`, `linux-gcc-debug-scalar`, the native `win-vs` solution, the public-check presets `win-public-checks`, `linux-gcc-public-checks` ([public consumption](public-consumption.md)) and the clang ThreadSanitizer preset `linux-clang-tsan` ([test instruments](test-instruments.md)) |
 | diagnostic | never in a tier | `win-tidy-local`, `linux-clang-fuzz` ([test instruments](test-instruments.md)), `linux-clang-coverage` ([DIAG.10b](runtime-diagnostics.md#diag-10b)) |
 
@@ -40,7 +40,11 @@ tier. The DIAG.10b seeded detector failures are one (2026-10-11): the `Seeded de
 win-asan, linux-gcc-debug and linux-gcc-asan in the change tier and on linux-clang-tsan in the complete tier, after
 the lane's build and tests pass ([test instruments](test-instruments.md#seeded-detector-failures-diag10b)). Each seed
 rebuilds only the targets holding its detecting tests, so a lane adds a few incremental builds: 16 s on the local
-win-debug tree and 92 s on win-asan.
+win-debug tree and 92 s on win-asan. `Test at the sse2 level` is another (2026-10-28): general code builds at the SSE2
+baseline on every lane (ADR-0134 §4), so the former `win-debug-sse2` and `linux-gcc-debug-sse2` builds became a
+second CTest pass of the win-debug and linux-gcc-debug binaries under the `<preset>-at-sse2` test presets
+(`CRD_CPU_LEVEL=sse2`; a test that forces its own level keeps it), checked against the register as lane
+`<preset>-at-sse2`, after the hidden `[cpu-level-applied]` case proves the level was applied.
 
 ### ARM64 lanes
 

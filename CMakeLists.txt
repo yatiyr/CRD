@@ -73,9 +73,8 @@ if(BUILD_SHARED_LIBS)
     message(FATAL_ERROR "BUILD_SHARED_LIBS=ON is unsupported: Cerid builds and packages static libraries only")
 endif()
 
-# SIMD level + ADR-0063 deterministic-FP contract live in their own module.
-# Any target that links crd-math (everything, transitively) inherits the
-# /arch:AVX2 (or -mavx2 / NEON / scalar) flags + the determinism guarantees.
+# The SIMD build contract and the ADR-0063 deterministic-FP contract live in their own module. Any target that links
+# crd-math (everything, transitively) inherits the baseline ISA (ADR-0134 §4) and the determinism guarantees.
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(CrdBuildProfiles)
 include(CrdSimd)
@@ -206,7 +205,7 @@ endif()
 
 crd_profile_condition(_crd_shipping CRD_SHIPPING)
 if(CRD_SHIPPING OR CRD_NATIVE_PROFILES)
-    # Note: /arch:AVX2 / -march come from CrdSimd.cmake (CRD_SIMD_LEVEL).
+    # Note: the ISA comes from CrdSimd.cmake (the baseline for general code, each level's for its kernel units).
     # Note: fast-math intentionally NOT used here — the eylem replay-hash CI
     #       (ADR-0063) requires bit-exact reproducibility, which fast-math
     #       breaks (operator reordering, FMA contraction, NaN assumptions).
@@ -1058,18 +1057,14 @@ if(CRD_ENABLE_CLANG_TIDY)
         #   1. Exceptions look DISABLED, so any `try` is a hard `clang-diagnostic-error` — which is exactly
         #      why `engine/foundation/platform/src/filesystem.cpp` (the std::filesystem noexcept wrappers) failed the
         #      win-tidy build. A real, deterministic failure that sat hidden behind an unrelated crash.
-        #   2. `__AVX2__` is UNDEFINED, so every AVX2-guarded SIMD path is preprocessed out and NEVER
-        #      ANALYSED — the gate reads green on code it never looked at. Same disease as the
-        #      "tidy gate clean on unparsed files" scar (see scripts/cerid_dev/tidy.py, which restates the same flags).
+        #   2. `__AVX2__` was UNDEFINED, so every AVX2-guarded SIMD path was preprocessed out and NEVER
+        #      ANALYSED. General code now builds at the baseline (no /arch), and kernel units select their bodies on
+        #      CRD_KERNEL_LEVEL, a dash-spelled define that reaches the analysis; clang reports an intrinsic's missing
+        #      target feature only in code generation, which clang-tidy never runs (ADR-0134 §4-5).
         # Fix: re-state the analysis-relevant flags through `--extra-arg`, the one channel clang-tidy honors.
-        # The ISA flag comes from CRD_SIMD_MSVC_ARCH_FLAG — set by the same CrdSimd.cmake branch that adds the
-        # real compile option — so the two cannot drift apart.
         set(_crd_tidy_extra_args "")
         if(MSVC)
             list(APPEND _crd_tidy_extra_args --extra-arg=/EHsc)
-            if(CRD_SIMD_MSVC_ARCH_FLAG)
-                list(APPEND _crd_tidy_extra_args --extra-arg=${CRD_SIMD_MSVC_ARCH_FLAG})
-            endif()
         endif()
         if(CRD_CLANG_TIDY_WARNINGS_AS_ERRORS)
             # Local strict mode: .clang-tidy's `WarningsAsErrors: '*'` is honored.

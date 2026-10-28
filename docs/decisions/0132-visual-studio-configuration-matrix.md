@@ -7,8 +7,8 @@
 matrix, plus complete native MSVC solution configurations. This amends the Debug-only projection of
 [ADR-0131](0131-project-structure-synchronization.md); CMake remains the sole build authority.
 
-The native `win-vs` preset generates Debug, Release, RelWithDebInfo, ASan, Shipping, ShippingProfile, DebugScalar
-and DebugSSE2 in one MSVC x64 build tree. The mapping in [CMakePresets.json](../../CMakePresets.json) names the
+The native `win-vs` preset generates Debug, Release, RelWithDebInfo, ASan, Shipping, ShippingProfile and
+DebugScalar in one MSVC x64 build tree (DebugSSE2 went with the SSE2 baseline build, ADR-0134 §4, 2026-10-28). The mapping in [CMakePresets.json](../../CMakePresets.json) names the
 canonical Ninja preset for each profile. Resolve inherited semantics from those presets; never maintain an
 independent set of native assertion/profiling/optimization switches. Generated headers and compiler/link settings
 must follow the selected configuration. Preserve explicit target IPO exclusions and deterministic FP/security flags.

@@ -34,7 +34,7 @@ with the verified CMake 4.3.2 installation). It requires CMake 4.2+
 ([generator reference](https://cmake.org/cmake/help/latest/generator/Visual%20Studio%2018%202026.html)); other presets
 retain their existing tool requirements. The full target tree remains visible; its build preset selects the sandbox
 and dependencies with two MSBuild workers. [Configuration guide](visual-studio-configurations.md) covers the full
-CMake preset selector and native Debug/Release/RelWithDebInfo/ASan/Shipping/ShippingProfile/DebugScalar/DebugSSE2 profiles. The sandbox is the startup project. Debugger working directory and cooked
+CMake preset selector and native Debug/Release/RelWithDebInfo/ASan/Shipping/ShippingProfile/DebugScalar profiles. The sandbox is the startup project. Debugger working directory and cooked
 assets follow the executable's configuration directory, including the selected native configuration suffix.
 The debugger sets `CRD_ASSETS_DIR` to the repository's `assets/` tree for disk-first authoring and overrides.
 A developer build launched without it (from a terminal, a script or a smoke run) falls back to the source tree's

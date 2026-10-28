@@ -39,7 +39,6 @@ param(
         'linux-gcc-asan',
         'linux-gcc-shipping',
         'linux-gcc-debug-scalar',
-        'linux-gcc-debug-sse2',
         'linux-gcc-public-checks',
         'linux-clang-tsan'
     )]

@@ -7,8 +7,8 @@
 // ADR-0082 (Eigen / Faer / Highway tier, not MKL/BLIS-asm).
 
 #include <crd/hesap/dense/blas3.hpp>
+#include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/matrix.hpp>
-#include <crd/math/simd/backend.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <chrono>
@@ -20,9 +20,9 @@ namespace
 {
 // Honest characterization note (ADR-0082):
 // - "Peak FLOPS" depends on CPU clock × SIMD width × FMA throughput × cores.
-// - Without runtime cpuid we estimate from CRD_SIMD_HAS_AVX2 (8-wide f32 *
+// - The estimate follows the dense kernels' dispatched level (AVX2: 8-wide f32 *
 //   2 ops/FMA = 16 FLOPS per cycle per FMA port × 2 ports = 32 FLOPS/cyc
-//   single-threaded on AVX2 Intel; AMD Zen has 1 FMA port = 16 FLOPS/cyc).
+//   single-threaded on Intel; AMD Zen has 1 FMA port = 16 FLOPS/cyc).
 // - For f64 halve the SIMD width: 8 FLOPS/cyc / FMA port.
 // - We report PER-CORE peak (single-threaded GEMM) since v0d-perf foundation
 //   is single-threaded; outer-loop parallelism + multi-core peak land in the
@@ -50,32 +50,30 @@ crd::f64 measure_clock_ghz()
     return 100.0 / ms;
 }
 
-crd::f64 peak_gflops_single_core_f32(crd::f64 clock_ghz)
+// FLOPs per cycle of one core at the level the dense kernels run (CRD_CPU_LEVEL forces it): two FMA ports on Intel
+// (AMD Zen has one, so half), the 128-bit levels without FMA a multiply and an add port, scalar one of each.
+crd::f64 peak_gflops_per_core(crd::f64 clock_ghz, bool f64)
 {
-    // AVX2: 8-wide f32 × 2 FMA ports × 2 ops/FMA = 32 FLOPS/cyc.
-    // SSE2: 4-wide f32 × 1 FMA port × 2 ops/FMA = 8 FLOPS/cyc.
-    // Scalar: 1 × 2 = 2 FLOPS/cyc.
-#if CRD_SIMD_HAS_AVX2
-    constexpr crd::f64 flops_per_cyc = 32.0;
-#elif CRD_SIMD_HAS_SSE2
-    constexpr crd::f64 flops_per_cyc = 8.0;
-#else
-    constexpr crd::f64 flops_per_cyc = 2.0;
-#endif
-    return flops_per_cyc * clock_ghz;
-}
-
-crd::f64 peak_gflops_single_core_f64(crd::f64 clock_ghz)
-{
-    // Half the SIMD width: AVX2 f64 = 16 FLOPS/cyc, SSE2 = 4, scalar = 2.
-#if CRD_SIMD_HAS_AVX2
-    constexpr crd::f64 flops_per_cyc = 16.0;
-#elif CRD_SIMD_HAS_SSE2
-    constexpr crd::f64 flops_per_cyc = 4.0;
-#else
-    constexpr crd::f64 flops_per_cyc = 2.0;
-#endif
-    return flops_per_cyc * clock_ghz;
+    crd::f64 f32_per_cycle = 2.0;
+    switch (crd::hesap::dense::dense_kernels().level)
+    {
+        case crd::CpuLevel::Avx512:
+            f32_per_cycle = 64.0;
+            break;
+        case crd::CpuLevel::Avx2:
+            f32_per_cycle = 32.0;
+            break;
+        case crd::CpuLevel::Neon:
+            f32_per_cycle = 16.0;
+            break;
+        case crd::CpuLevel::Sse2:
+        case crd::CpuLevel::Sse42:
+            f32_per_cycle = 8.0;
+            break;
+        case crd::CpuLevel::Portable:
+            return 2.0 * clock_ghz;
+    }
+    return (f64 ? f32_per_cycle / 2.0 : f32_per_cycle) * clock_ghz;
 }
 
 template <typename T>
@@ -178,18 +176,18 @@ void run_gemm_shape(const char* tag, crd::usize m, crd::usize nn, crd::usize k, 
 int main()
 {
     const crd::f64 clock_ghz = measure_clock_ghz();
-    const crd::f64 peak_f32 = peak_gflops_single_core_f32(clock_ghz);
-    const crd::f64 peak_f64 = peak_gflops_single_core_f64(clock_ghz);
+    const crd::f64 peak_f32 = peak_gflops_per_core(clock_ghz, false);
+    const crd::f64 peak_f64 = peak_gflops_per_core(clock_ghz, true);
 
     std::fprintf(stdout,
                  "==== bench_hesap_gemm — v0d-perf intrinsics characterization (ADR-0082) ====\n"
-                 "  SIMD backend     : %s\n"
+                 "  Dense kernels    : %s level (CRD_CPU_LEVEL forces it)\n"
                  "  Coarse clock     : %.2f GHz\n"
                  "  Single-core peak : f32 = %.1f GFLOPS, f64 = %.1f GFLOPS\n"
                  "  Reference class  : intrinsics-tier (Eigen / Faer / Highway peers; NOT MKL-asm tier)\n"
                  "  Target           : 80%%-85%% of single-core peak per ADR-0082 §decision\n"
                  "\n",
-                 crd::math::simd::backend_name(), clock_ghz, peak_f32, peak_f64);
+                 crd::cpu_level_name(crd::hesap::dense::dense_kernels().level), clock_ghz, peak_f32, peak_f64);
 
     crd::memory::TlsfAllocator alloc(256 * 1024 * 1024);
     std::fprintf(stdout, "==== f32 gemm ====\n");

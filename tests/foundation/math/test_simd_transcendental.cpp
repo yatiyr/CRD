@@ -16,7 +16,7 @@ using crd::f64;
 
 namespace
 {
-[[maybe_unused]] bool same_bits(f64 a, f64 b) // used only by the AVX2-gated SIMD bit-identity checks (unused on SSE2)
+[[maybe_unused]] bool same_bits(f64 a, f64 b) // used only by the twin bit-identity checks (unused on scalar)
 {
     std::uint64_t ba;
     std::uint64_t bb;
@@ -90,21 +90,35 @@ TEST_CASE("simd transcendental: crd_exp1 accuracy vs std::exp + edges", "[math][
     CHECK(std::isnan(d::crd_exp1(std::numeric_limits<f64>::quiet_NaN())));
 }
 
-#if CRD_SIMD_HAS_AVX2
-TEST_CASE("simd transcendental: crd_exp4 BIT-IDENTICAL to crd_exp1", "[math][simd][transcendental][moat]")
+#if CRD_SIMD_HAS_SSE2
+// General code's twins, on the x64 baseline (ADR-0134 §4): two lanes a call. The four- and eight-lane twins run at
+// their own levels in the SIMD-type probe (kernels/simd_level_probe.cpp), each held to portable's bits.
+namespace
+{
+void twin(bool exp, const f64* x, f64* r)
+{
+    for (int k = 0; k < 4; k += 2)
+    {
+        const __m128d v = _mm_loadu_pd(x + k);
+        _mm_storeu_pd(r + k, exp ? d::crd_exp_x2(v) : d::crd_log_x2(v));
+    }
+}
+} // namespace
+
+TEST_CASE("simd transcendental: crd_exp_x2 BIT-IDENTICAL to crd_exp1", "[math][simd][transcendental][moat]")
 {
     std::uint64_t s = 0x99CC33ULL;
     bool all_identical = true;
     for (int i = 0; i < 500000; ++i)
     {
-        alignas(32) f64 x[4];
+        f64 x[4];
         for (double& xi : x)
         {
             s = s * 6364136223846793005ULL + 1442695040888963407ULL;
             xi = (static_cast<f64>(s >> 11) * (1.0 / 9007199254740992.0) - 0.5) * 1400.0;
         }
-        alignas(32) f64 r[4];
-        _mm256_store_pd(r, d::crd_exp4(_mm256_load_pd(x)));
+        f64 r[4];
+        twin(true, x, r);
         for (int k = 0; k < 4; ++k)
         {
             if (!same_bits(r[k], d::crd_exp1(x[k])))
@@ -116,22 +130,22 @@ TEST_CASE("simd transcendental: crd_exp4 BIT-IDENTICAL to crd_exp1", "[math][sim
     CHECK(all_identical);
 }
 
-TEST_CASE("simd transcendental: crd_log4 BIT-IDENTICAL to crd_log1 (moat property)", "[math][simd][transcendental][moat]")
+TEST_CASE("simd transcendental: crd_log_x2 BIT-IDENTICAL to crd_log1 (moat property)",
+          "[math][simd][transcendental][moat]")
 {
     std::uint64_t s = 0xABCDEFULL;
     bool all_identical = true;
     for (int i = 0; i < 500000; ++i)
     {
-        alignas(32) f64 x[4];
+        f64 x[4];
         for (double& xi : x)
         {
             s = s * 6364136223846793005ULL + 1442695040888963407ULL;
             const f64 u = static_cast<f64>(s >> 11) * (1.0 / 9007199254740992.0);
             xi = std::exp((u - 0.5) * 1400.0);
         }
-        const __m256d v = d::crd_log4(_mm256_load_pd(x));
-        alignas(32) f64 r[4];
-        _mm256_store_pd(r, v);
+        f64 r[4];
+        twin(false, x, r);
         for (int k = 0; k < 4; ++k)
         {
             if (!same_bits(r[k], d::crd_log1(x[k])))
@@ -143,12 +157,11 @@ TEST_CASE("simd transcendental: crd_log4 BIT-IDENTICAL to crd_log1 (moat propert
     CHECK(all_identical);
 }
 
-TEST_CASE("simd transcendental: crd_log4 edge lanes", "[math][simd][transcendental]")
+TEST_CASE("simd transcendental: crd_log_x2 edge lanes", "[math][simd][transcendental]")
 {
-    alignas(32) f64 x[4] = {0.0, -2.0, std::numeric_limits<f64>::infinity(), 5e-310};
-    const __m256d v = d::crd_log4(_mm256_load_pd(x));
-    alignas(32) f64 r[4];
-    _mm256_store_pd(r, v);
+    const f64 x[4] = {0.0, -2.0, std::numeric_limits<f64>::infinity(), 5e-310};
+    f64 r[4];
+    twin(false, x, r);
     CHECK((std::isinf(r[0]) && r[0] < 0.0));
     CHECK(std::isnan(r[1]));
     CHECK(std::isinf(r[2]));
