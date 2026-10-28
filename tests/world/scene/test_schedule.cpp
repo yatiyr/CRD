@@ -477,7 +477,10 @@ struct SelfAnchored
     ~SelfAnchored() { --live(); }
     SelfAnchored& operator=(const SelfAnchored& o)
     {
-        value = o.value;
+        if (this != &o)
+        {
+            value = o.value;
+        }
         return *this;
     }
     SelfAnchored& operator=(SelfAnchored&& o) noexcept
@@ -632,24 +635,24 @@ TEST_CASE("Commands add_component and set_component copy an lvalue once and move
 TEST_CASE("Commands keep queued payloads aligned and anchored across buffer growth and destroy each once",
           "[scene][commands][payload]")
 {
-    constexpr crd::u32 kEntities = 24U; // several payload-buffer growths before one flush
+    constexpr crd::u32 entities = 24U; // several payload-buffer growths before one flush
     {
         World w;
         w.register_component<SelfAnchored>();
         w.register_component<WideComponent>();
         SelfAnchored::live() = 0;
-        EntityId e[kEntities];
-        for (crd::u32 i = 0; i < kEntities; ++i)
+        EntityId e[entities];
+        for (crd::u32 i = 0; i < entities; ++i)
         {
             e[i] = w.spawn();
             w.commands().add_component(e[i], SelfAnchored{static_cast<int>(i)});
             w.commands().set_component<WideComponent>(e[i], wide_of(static_cast<crd::u8>(i)));
         }
-        CHECK(SelfAnchored::live() == static_cast<int>(kEntities)); // the queued payloads only
+        CHECK(SelfAnchored::live() == static_cast<int>(entities)); // the queued payloads only
         w.commands().flush();
-        CHECK(SelfAnchored::live() == static_cast<int>(kEntities)); // the stored components only
+        CHECK(SelfAnchored::live() == static_cast<int>(entities)); // the stored components only
         bool all_held = true;
-        for (crd::u32 i = 0; i < kEntities; ++i)
+        for (crd::u32 i = 0; i < entities; ++i)
         {
             const SelfAnchored* s = w.get_component<SelfAnchored>(e[i]);
             all_held = all_held && s != nullptr && s->self == s && s->value == static_cast<int>(i) &&
@@ -658,11 +661,11 @@ TEST_CASE("Commands keep queued payloads aligned and anchored across buffer grow
         CHECK(all_held);
 
         // A queue the world drops unflushed destroys its payloads.
-        for (crd::u32 i = 0; i < kEntities; ++i)
+        for (crd::u32 i = 0; i < entities; ++i)
         {
             w.commands().set_component(e[i], SelfAnchored{-1});
         }
-        CHECK(SelfAnchored::live() == static_cast<int>(2U * kEntities));
+        CHECK(SelfAnchored::live() == static_cast<int>(2U * entities));
     }
     CHECK(SelfAnchored::live() == 0);
 }

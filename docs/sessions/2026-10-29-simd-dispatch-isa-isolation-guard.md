@@ -7,7 +7,10 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch). HEAD before: `69bba253`
 
 Push run 40748658864 (`f7304724`) is still running; every finished failure is `fft_kernels.cpp`'s `std::memcpy`
 (all GCC and Clang lanes, x64 and ARM64) or `clocks.cpp`'s `ARM64_CNTVCT` (win-arm64-debug), both fixed in
-`fcb3bb42`. The flip's run 40761837951 was pending. No run completed, so no Needs CI row has new hosted evidence.
+`fcb3bb42`. Its win-tidy job then failed on four findings in tests at HEAD: local `constexpr` constants named
+`kPlanes`, `kImages` (`test_tensor_kernels.cpp`) and `kEntities` (`test_schedule.cpp`), which the naming rule spells
+lower_case, and `SelfAnchored`'s copy assignment without a self-assignment test; fixed in the next commit. The flip's
+run 40761837951 was cancelled before any job started. No run completed, so no Needs CI row has new hosted evidence.
 
 ## What landed
 

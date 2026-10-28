@@ -2507,10 +2507,10 @@ void fill_ties(f32* p, u64 n, u64 seed)
 // window and stride (max and average), split into the ranges [1, 3) then [0, 1); guard words after y.
 u64 check_nn_pool(const TensorKernels& k)
 {
-    constexpr u64 kPlanes = 3U;
-    static f32 x[kPlanes * 5U * 257U];
-    static f32 y[kPlanes * 5U * 257U + 3U];
-    static f32 want[kPlanes * 5U * 257U];
+    constexpr u64 planes = 3U;
+    static f32 x[planes * 5U * 257U];
+    static f32 y[planes * 5U * 257U + 3U];
+    static f32 want[planes * 5U * 257U];
     const u64 heights[] = {2U, 3U, 5U};
     const u64 widths[] = {2U, 3U, 9U, 16U, 17U, 255U, 256U, 257U};
     const u64 windows[][2] = {{2U, 2U}, {1U, 1U}, {2U, 1U}, {3U, 1U}, {3U, 2U}, {3U, 3U}};
@@ -2531,10 +2531,10 @@ u64 check_nn_pool(const TensorKernels& k)
                 }
                 const u64 oh = (h - kk) / st + 1U;
                 const u64 ow = (w - kk) / st + 1U;
-                const u64 total = kPlanes * oh * ow;
+                const u64 total = planes * oh * ow;
                 for (const bool is_max : modes)
                 {
-                    fill_ties(x, kPlanes * h * w, ++seed);
+                    fill_ties(x, planes * h * w, ++seed);
                     for (u64 i = 0; i < total + 3U; ++i)
                     {
                         y[i] = kGuard<f32>;
@@ -2547,7 +2547,7 @@ u64 check_nn_pool(const TensorKernels& k)
                     }
                     k.nn_pool2d_planes(c, 0U, 1U);
                     const f32 inv = 1.0F / static_cast<f32>(kk * kk);
-                    for (u64 p = 0; p < kPlanes; ++p)
+                    for (u64 p = 0; p < planes; ++p)
                     {
                         for (u64 oi = 0; oi < oh; ++oi)
                         {
@@ -2656,13 +2656,13 @@ u64 check_nn_conv(const TensorKernels& k)
         {2U, 7U, 9U, 5U, 3U, 3U, 0U, 2U},  {1U, 8U, 8U, 3U, 5U, 5U, 2U, 1U},  {3U, 6U, 11U, 2U, 3U, 3U, 1U, 3U},
         {1U, 4U, 4U, 9U, 3U, 3U, 0U, 1U},  {2U, 5U, 7U, 3U, 1U, 3U, 1U, 1U},  {1U, 4U, 6U, 2U, 3U, 3U, 2U, 2U},
     };
-    constexpr u64 kImages = 2U;
-    static f32 x[kImages * 3U * 8U * 33U];
+    constexpr u64 images = 2U;
+    static f32 x[images * 3U * 8U * 33U];
     static f32 wt[17U * 3U * 25U];
     static f32 bias[17U];
-    static f32 y[kImages * 17U * 5U * 33U + 3U];
-    static f32 conv[kImages * 17U * 5U * 33U];
-    static f32 want[kImages * 17U * 5U * 33U];
+    static f32 y[images * 17U * 5U * 33U + 3U];
+    static f32 conv[images * 17U * 5U * 33U];
+    static f32 want[images * 17U * 5U * 33U];
     static f32 scratch[4096U];
     u64 bad = 0;
     u64 seed = 77U;
@@ -2680,13 +2680,13 @@ u64 check_nn_conv(const TensorKernels& k)
             {
                 continue;
             }
-            fill_values(x, kImages * sh.chans * sh.h * sh.w, ++seed, 23U);
+            fill_values(x, images * sh.chans * sh.h * sh.w, ++seed, 23U);
             fill_values(wt, sh.oc * sh.chans * sh.kh * sh.kw, ++seed, 29U);
             fill_values(bias, sh.oc, ++seed, 7U);
             const tn::NnConv2d c{x,     wt,     bias,      y,     sh.chans, sh.h, sh.w, sh.kh,
                                  sh.kw, sh.pad, sh.stride, sh.oc, oh,       ow,   relu, pool};
             const u64 per = sh.oc * (pool ? ((oh - 2U) / 2U + 1U) * ((ow - 2U) / 2U + 1U) : oh * ow);
-            for (u64 i = 0; i < kImages * per + 3U; ++i)
+            for (u64 i = 0; i < images * per + 3U; ++i)
             {
                 y[i] = kGuard<f32>;
             }
@@ -2700,9 +2700,9 @@ u64 check_nn_conv(const TensorKernels& k)
                 bad += y[i] == kGuard<f32> ? 0U : 1U;
             }
             k.nn_conv2d_images(c, scratch, 0U, 1U);
-            conv_oracle(c, kImages, conv, want);
-            bad += nan_aside_mismatches(want, y, kImages * per);
-            bad += scratch_overruns(y, kImages * per);
+            conv_oracle(c, images, conv, want);
+            bad += nan_aside_mismatches(want, y, images * per);
+            bad += scratch_overruns(y, images * per);
             bad += scratch_overruns(scratch, slot);
         }
     }
