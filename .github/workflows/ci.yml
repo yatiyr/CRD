@@ -395,6 +395,9 @@ jobs:
           & "build\${{ matrix.preset }}\tests\math\crd-math-tests.exe" '[cpu-level-applied]'
           $appliedExit = $LASTEXITCODE
           Remove-Item Env:CRD_CPU_LEVEL
+          # Keep the lane pass's log in the evidence: the arm's CTest rewrites LastTest.log.
+          $logs = "build\${{ matrix.preset }}\Testing\Temporary"
+          Copy-Item "$logs\LastTest.log" "$logs\LastTest-lane.log"
           $junit = "$env:GITHUB_WORKSPACE\build\${{ matrix.preset }}\Testing\Temporary\ctest-junit-at-sse2.xml"
           ctest --preset ${{ matrix.preset }}-at-sse2 --output-on-failure --no-tests=error --output-junit "$junit"
           $testExit = $LASTEXITCODE
@@ -923,6 +926,9 @@ jobs:
           set +e
           CRD_CPU_LEVEL=sse2 "build/${{ matrix.preset }}/tests/math/crd-math-tests" '[cpu-level-applied]'
           applied_exit=$?
+          # Keep the lane pass's log in the evidence: the arm's CTest rewrites LastTest.log.
+          logs="build/${{ matrix.preset }}/Testing/Temporary"
+          cp "$logs/LastTest.log" "$logs/LastTest-lane.log"
           junit="$GITHUB_WORKSPACE/build/${{ matrix.preset }}/Testing/Temporary/ctest-junit-at-sse2.xml"
           ctest --preset ${{ matrix.preset }}-at-sse2 --output-on-failure --no-tests=error --output-junit "$junit"
           test_exit=$?

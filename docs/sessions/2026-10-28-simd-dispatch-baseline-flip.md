@@ -32,7 +32,11 @@ No run completed green since the last note, so DIAG.11c and DIAG.12 stay Needs C
   gone. The test presets `win-debug-at-sse2` and `linux-gcc-debug-at-sse2` run the lane's binaries with
   `CRD_CPU_LEVEL=sse2`. The `Test at the sse2 level` preset step of the windows and linux-gcc jobs runs them after
   the lane's own pass, first the hidden `[cpu-level-applied]` case, and checks the JUnit against the register as
-  lane `<preset>-at-sse2` ([CI tiers](../design/ci-tiers.md)). Tests that force their own level keep it.
+  lane `<preset>-at-sse2` ([CI tiers](../design/ci-tiers.md)). Tests that force their own level keep it. The
+  evidence bundle reads only the lane's `ctest-junit.xml`; the arm keeps the lane pass's `LastTest.log` as
+  `LastTest-lane.log`, since its own CTest rewrites the file.
+- No general unit carries a higher ISA: the win-debug and linux-gcc-debug compile databases have none outside
+  `/kernels/`, and no CMake file adds one.
 - The emission check expects the baseline (no ymm in `test_simd.obj`) on every non-scalar x64 lane.
 - `test_simd_transcendental.cpp`'s 500,000-sample moat ran only under an AVX2 general build; it now runs on general
   code's two-lane twins, and the four- and eight-lane twins stay held to portable's bits per level by the SIMD-type
