@@ -26,6 +26,9 @@ a 2 by 2 block of tiles at avx512, moved by one transpose per plane. The bits st
 `Vec8d` gains `transpose8x8` and `Vec16f` gains `transpose16x16`: unpacks and two 128-bit lane shuffle stages at
 avx512, the quadrant transposes and a swap below it. The level probe compares both bit for bit.
 
+Only f64 reaches the six-step (f64 1M forward); the planner gives f32 1M the deep-split. The f32 body (Vec16f,
+sixteen-row micro-tiles) compiles at every level, and only the probe runs its `transpose16x16`.
+
 `fs6_transpose_oop` had no caller (the out-of-place rechain measured worse, 2026-07-04) and is deleted.
 
 ## Small-N: the batched codelets four transforms a step
