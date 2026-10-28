@@ -41,8 +41,10 @@
 #include "specimen_common.hpp"
 
 #include <crd/core/crash.hpp>
+#if CRD_DIAG_FIBER_MODES
 #include <crd/jobs/job_decl.hpp>
 #include <crd/jobs/jobs.hpp>
+#endif
 #include <crd/log/log.hpp>
 #include <crd/log/logger.hpp>
 
@@ -117,11 +119,13 @@ void fp_divide_by_zero() noexcept
     (void)quotient;
 }
 
+#if CRD_DIAG_FIBER_MODES
 // A job body that faults inside a fiber (whichever worker runs it).
 void fiber_fault_job(void* /*data*/) noexcept
 {
     null_write();
 }
+#endif
 
 char              g_output_dir[1024] = {0};  // argv[1], captured at startup for the marker path
 std::atomic<bool> g_marker_written{false};   // write the marker once (concurrent modes fire the hook twice)
@@ -244,10 +248,12 @@ void overflow_body(bool guard) noexcept
 // A job body that overflows its FIBER stack (whichever worker runs it) -> the fiber's guard page faults. Capturing it
 // needs the worker OS thread to carry an alternate signal stack (the fiber stack is exhausted); that is what DIAG.5b
 // (d)'s worker_pool wiring provides on Linux.
+#if CRD_DIAG_FIBER_MODES
 void fiber_overflow_job(void* /*data*/) noexcept
 {
     (void)recurse(0);
 }
+#endif
 
 // For `hook_fault`: a crash-report hook that itself faults. crd writes the record BEFORE firing the hook, so the record
 // must still exist; the hook's recursive fault is bounded by the handler's signal mask (forced to SIG_DFL, no re-entry),
@@ -434,6 +440,7 @@ int main(int argc, char** argv)
         std::thread t(&overflow_body, true); // the worker reserves a last-chance guard first, then overflows
         t.join();
     }
+#if CRD_DIAG_FIBER_MODES
     else if (std::strcmp(mode, "fiber") == 0)
     {
         crd::jobs::Config cfg;
@@ -478,6 +485,7 @@ int main(int argc, char** argv)
         crd::jobs::shutdown();
         return 61; // reached only if the worker never faulted (never expected)
     }
+#endif
     else if (std::strcmp(mode, "fpe") == 0)
     {
         fp_divide_by_zero();

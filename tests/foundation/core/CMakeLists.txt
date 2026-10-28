@@ -11,8 +11,10 @@ target_link_libraries(crd-core-tests PRIVATE
 # DIAG.5a crash-capture acceptance: the specimen is built and its path handed to the consuming test, which asserts
 # the fatal path terminates with the right code and produces the right on-disk dump outcome per mode.
 add_dependencies(crd-core-tests crd-diag-crash-capture-specimen)
+# Its fiber modes exist where crd-jobs builds (not on ARM64 before JOBS-PORT.2's fiber context).
 target_compile_definitions(crd-core-tests PRIVATE
-    CRD_DIAG_CRASH_CAPTURE_SPECIMEN="$<TARGET_FILE:crd-diag-crash-capture-specimen>")
+    CRD_DIAG_CRASH_CAPTURE_SPECIMEN="$<TARGET_FILE:crd-diag-crash-capture-specimen>"
+    "CRD_DIAG_FIBER_MODES=$<TARGET_EXISTS:crd-jobs>")
 
 crd_enable_default_pch(crd-core-tests)
 

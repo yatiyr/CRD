@@ -49,6 +49,12 @@ packages those nodes declare. Everything else is absent: no directory is configu
 stands in. Modules that self-skip (`return()` without an SDK) stay tolerated because their consumers already guard
 on `if(TARGET ...)`. The configure log prints the closure, tests, packages and omitted modules.
 
+`CRD_MODULES_WITHOUT` (cache string, module names) keeps only the named modules whose `DEPENDS` closure, with their
+`TEST_DEPENDS` while tests build, holds none of the listed ones, and turns the configure into a selection. A target
+that cannot build a module yet uses it: the ARM64 lanes set `jobs`
+([CI tiers](ci-tiers.md#arm64-lanes)). A test directory several modules own builds the parts whose targets exist
+(`tests/support/diag`'s jobs and perf specimens, the crash-capture specimen's fiber modes).
+
 The full configuration (`CRD_MODULES` empty, every preset) adds every registration and acquires every package, so the
 generated target set, compile database and Ninja graph are the ones the literal list produced.
 

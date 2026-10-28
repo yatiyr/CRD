@@ -363,6 +363,7 @@ TEST_CASE("crash capture: a stack overflow on a guarded worker thread still dump
     fs::remove_all(dir, ec);
 }
 
+#if CRD_DIAG_FIBER_MODES
 TEST_CASE("crash capture: a fault inside a fiber job is NOT caught by the last-chance filter (measured limitation)",
           "[core][diag][crash-capture]")
 {
@@ -391,6 +392,7 @@ TEST_CASE("crash capture: a fault inside a fiber job is NOT caught by the last-c
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+#endif
 
 #if CRD_ENABLE_ASSERTS
 TEST_CASE("crash capture: an injected MiniDumpWriteDump failure is honest on the fatal path",
@@ -709,6 +711,7 @@ TEST_CASE("crash capture (linux): a GUARDED worker stack overflow is captured wi
     fs::remove_all(dir, ec);
 }
 
+#if CRD_DIAG_FIBER_MODES
 TEST_CASE("crash capture (linux): a fiber-stack overflow on a background worker is captured (DIAG.5b (d))",
           "[core][diag][crash-capture]")
 {
@@ -739,7 +742,9 @@ TEST_CASE("crash capture (linux): a fiber-stack overflow on a background worker 
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+#endif
 
+#if CRD_DIAG_FIBER_MODES
 TEST_CASE("crash capture (linux): a fiber null-deref pumped onto main is captured (opposite of Windows)",
           "[core][diag][crash-capture]")
 {
@@ -764,6 +769,7 @@ TEST_CASE("crash capture (linux): a fiber null-deref pumped onto main is capture
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+#endif
 
 TEST_CASE("crash capture (linux): two threads faulting at once write exactly ONE record (single-shot gate)",
           "[core][diag][crash-capture]")

@@ -163,6 +163,24 @@ class Fixture(unittest.TestCase):
         result = self.configure('-DCRD_MODULES=fft', '-DCRD_BUILD_TESTS=OFF')
         self.assert_configured(result, ['core', 'math', 'fft'])
 
+    def test_without_omits_every_module_whose_closure_or_tests_reach_an_excluded_one(self):
+        result = self.configure('-DCRD_MODULES_WITHOUT=vulkan')
+        self.assert_configured(result, ['core', 'math', 'fft', 'bench', 'cook', 'sandbox', 'tests/core', 'tests/math',
+                                        'tests/fft'])
+        self.assertIn('omitted: vulkan render', result.stdout)
+        self.assertEqual(self.packages(), {'zstd'})
+        # fft's tests need bench, so fft goes with it; without tests fft needs only core and math.
+        result = self.configure('-DCRD_MODULES_WITHOUT=bench')
+        self.assert_configured(result, ['core', 'math', 'vulkan', 'render', 'cook', 'sandbox', 'tests/core',
+                                        'tests/math', 'tests/render'])
+        result = self.configure('-DCRD_MODULES_WITHOUT=bench', '-DCRD_BUILD_TESTS=OFF')
+        self.assert_configured(result, ['core', 'math', 'fft', 'vulkan', 'render', 'cook', 'sandbox'])
+        result = self.configure('-DCRD_MODULES=numerics,render', '-DCRD_MODULES_WITHOUT=vulkan')
+        self.assert_configured(result, ['core', 'math', 'fft', 'bench', 'tests/fft'])
+        result = self.configure('-DCRD_MODULES_WITHOUT=nope')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("CRD_MODULES_WITHOUT names unknown module 'nope'", result.stderr)
+
     def test_family_and_dependency_tests_are_not_pulled_for_transitive_modules(self):
         result = self.configure('-DCRD_MODULES=numerics')
         self.assert_configured(result, ['core', 'math', 'fft', 'bench', 'tests/fft'])
