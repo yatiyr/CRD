@@ -1056,7 +1056,8 @@ class PinnedInputs(unittest.TestCase):
         self.assertEqual(len(re.findall(r'uses:\s*actions/checkout@', self.workflow)),
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
-        for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS', 'tracy'):
+        for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS',
+                        'boost_math', 'tracy'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):

@@ -6,7 +6,7 @@
 > `--check` fails on drift. A manifest supplements review, it does not replace it: a new dependency is a
 > registry edit, a license reading and a reviewed commit ([contribution routes](../CONTRIBUTING.md)).
 
-- packages: **10** · tools: **21** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
+- packages: **11** · tools: **21** · workflow actions: **5** · runner images: **5** · unpinned apt packages: **21**
 - Demo assets keep their own terms: [assets/source/LICENSES.md](../../assets/source/LICENSES.md).
 - `external/` is git-ignored and never shipped: locally built peer oracles for benchmarks, each under its
   upstream license, outside this registry and outside every build of the engine.
@@ -24,6 +24,7 @@
 | imgui | 1.92.0-docking | MIT | ocornut/imgui @ `v1.92.0-docking` (adfa5364cd84) | `imgui-adfa5364.tar.gz` |
 | eigen | 3.4.0 | MPL-2.0 | gitlab.com/libeigen/eigen @ `3.4.0` | `eigen-3.4.0.tar.gz` |
 | OpenBLAS | 0.3.27 | BSD-3-Clause | OpenMathLib/OpenBLAS @ `v0.3.27` (ce3f668c992c) | `OpenBLAS-ce3f668c.tar.gz` |
+| boost_math | 1.92.0 | BSL-1.0 | boostorg/math @ `boost-1.92.0` (f12be767c04d) | `math-f12be767.tar.gz` |
 | tracy | 0.14.1 | BSD-3-Clause | wolfpld/tracy @ `v0.14.1` (30997d5ca6bb) | `tracy-30997d5c.tar.gz` |
 
 ## Tools (installers, SDK members and helpers, verified by digest)

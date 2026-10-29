@@ -169,7 +169,7 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.3 included for the
    dispatch cost. A peer runs as its own build would on the measuring host: one number per workload, which
    `CRD_CPU_LEVEL` never lowers, and every Cerid level is measured against it (amended 2026-10-29). A peer compiled
-   from source in a board (Eigen, pocketfft) is a shared library of its own at the host's best ISA
+   from source in a board (Eigen, pocketfft, Boost.Math) is a shared library of its own at the host's best ISA
    (`crd_add_bench_peer`, `crd_peer_isa_flags`: `-march=native`/`-mcpu=native` on GCC and Clang, and on cl the
    `/arch` of the level `detect_cpus()` reports at configure time), with hidden symbols, no link-time IL and no Cerid
    library, so no inline body at its ISA reaches the bench units at the baseline; plain data crosses its interface and

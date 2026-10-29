@@ -1,100 +1,95 @@
-// v12-d transcendental tail — Cerid vs Boost.Math, single-thread in-cache ns/call (the Boost-overlapping subset).
-// Honest: reports wins AND losses. Plain C arrays only (no STL). Header-only special fns ⇒ no lib link.
+// v12-d transcendental tail — Cerid vs Boost.Math (its peer library, special_peer_rows.hpp, values compared on every
+// row), single-thread in-cache ns/element (the Boost-overlapping subset). Honest: reports wins AND losses. Plain C
+// arrays only (no STL). Each side takes its own convention's arguments, prepared outside the timed passes: the
+// elliptic integrals take the parameter m on Cerid's side and the modulus k = √m on Boost's.
+//
+// Build and run at every CPU level: bash scripts/run_bench_special.sh. The argument is the passes per round (default
+// 256) for a smoke run.
+
+#include "special_peer_rows.hpp"
 
 #include <crd/hesap/special/elliptic.hpp>
 #include <crd/hesap/special/expint.hpp>
 #include <crd/hesap/special/lambertw.hpp>
 #include <crd/hesap/special/zeta.hpp>
 
-#include <boost/math/special_functions/ellint_1.hpp>
-#include <boost/math/special_functions/ellint_2.hpp>
-#include <boost/math/special_functions/ellint_rf.hpp>
-#include <boost/math/special_functions/expint.hpp>
-#include <boost/math/special_functions/lambert_w.hpp>
-#include <boost/math/special_functions/zeta.hpp>
-
-#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 
 namespace sf = crd::hesap::special;
+using special_peer::Special;
 
 namespace
 {
-constexpr int kReps = 20000;
-// Runtime-filled (via a volatile seed) so the compiler can NOT constant-fold f(kX[i]) into a compile-time constant —
-// otherwise whichever impl folds best wins a phantom (a fixed-const input array invites exactly that). See SANITY #4.
-double kX[8];
-void fill_inputs() noexcept
-{
-    const double base[] = {0.3, 0.7, 1.2, 2.5, 4.0, 6.0, 9.0, 13.0};
-    volatile double jitter = 0.0;
-    for (int i = 0; i < 8; ++i)
-    {
-        kX[i] = base[i] + static_cast<double>(jitter);
-    }
-}
+const double kBase[] = {0.3, 0.7, 1.2, 2.5, 4.0, 6.0, 9.0, 13.0};
+constexpr int kBaseN = static_cast<int>(sizeof(kBase) / sizeof(double));
+constexpr int kN = kBaseN * 256;
+
+double g_x[kN]; // x
+double g_s[kN]; // zeta's s = x + 1.5
+double g_m[kN]; // the elliptic parameter m = x / 14
+double g_k[kN]; // its modulus √m
+double g_y[kN]; // Carlson's y = x + 1
+double g_z[kN]; // Carlson's z = x + 2
+double g_cerid[kN];
+double g_boost[kN];
+int g_passes = 256;
 
 template <class F>
-double per_call(F f)
+bool tail_row(const char* name, F f, const double* cerid_in, Special peer, const double* peer_in,
+              special_peer::Bound bound)
 {
-    constexpr int n = static_cast<int>(sizeof(kX) / sizeof(double));
-    f(); // warm
-    const auto t0 = std::chrono::steady_clock::now();
-    volatile double s = 0.0;
-    for (int r = 0; r < kReps; ++r)
+    const auto cerid = [&](double* out)
     {
-        s += f();
-    }
-    const auto t1 = std::chrono::steady_clock::now();
-    (void)s;
-    return std::chrono::duration<double, std::nano>(t1 - t0).count() / (static_cast<double>(kReps) * n);
-}
-
-template <class CF, class BF>
-void row(const char* name, CF cf, BF bf)
-{
-    constexpr int n = static_cast<int>(sizeof(kX) / sizeof(double));
-    const double tc = per_call(
-        [&]
+        for (int i = 0; i < kN; ++i)
         {
-            double s = 0;
-            for (int i = 0; i < n; ++i)
-            {
-                s += cf(kX[i]);
-            }
-            return s;
-        });
-    const double tb = per_call(
-        [&]
-        {
-            double s = 0;
-            for (int i = 0; i < n; ++i)
-            {
-                s += bf(kX[i]);
-            }
-            return s;
-        });
-    std::printf("%-10s  %8.2f   %8.2f   %.2fx %s\n", name, tc, tb, tb / tc, (tb > tc ? "WIN" : "lose"));
+            out[i] = f(cerid_in[i]);
+        }
+    };
+    return special_peer::row(name, cerid, peer, {peer_in, nullptr, nullptr}, kN, g_cerid, g_boost, bound, 5, g_passes);
 }
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
-    fill_inputs();
-    std::printf("# v12-d transcendental tail — Cerid vs Boost.Math, ns/call (single-thread, in-cache)\n");
-    std::printf("function    Cerid(ns)   Boost(ns)   speedup\n");
-    row("Ei", [](double x) { return sf::expint_ei(x); }, [](double x) { return boost::math::expint(x); });
-    row("E1", [](double x) { return sf::expint_e1(x); }, [](double x) { return boost::math::expint(1U, x); });
-    row("zeta", [](double x) { return sf::riemann_zeta(x + 1.5); },
-        [](double x) { return boost::math::zeta(x + 1.5); });
-    row("lambertW0", [](double x) { return sf::lambert_w0(x); }, [](double x) { return boost::math::lambert_w0(x); });
-    // elliptic on m∈(0,1): Cerid takes parameter m, Boost takes modulus k=√m.
-    row("ellint_E", [](double x) { const double m = x / 14.0; return sf::ellint_e(m); },
-        [](double x) { const double m = x / 14.0; return boost::math::ellint_2(std::sqrt(m)); });
-    row("ellint_K", [](double x) { const double m = x / 14.0; return sf::ellint_k(m); },
-        [](double x) { const double m = x / 14.0; return boost::math::ellint_1(std::sqrt(m)); });
-    row("Carlson_RF", [](double x) { return sf::elliprf(x, x + 1.0, x + 2.0); },
-        [](double x) { return boost::math::ellint_rf(x, x + 1.0, x + 2.0); });
-    return 0;
+    if (argc > 1)
+    {
+        g_passes = static_cast<int>(std::strtol(argv[1], nullptr, 10));
+        if (g_passes < 1)
+        {
+            std::fprintf(stderr, "usage: bench_special_v12d [passes per round >= 1]\n");
+            return 2;
+        }
+    }
+    for (int i = 0; i < kN; ++i)
+    {
+        g_x[i] = kBase[i % kBaseN];
+        g_s[i] = g_x[i] + 1.5;
+        g_m[i] = g_x[i] / 14.0;
+        g_k[i] = std::sqrt(g_m[i]);
+        g_y[i] = g_x[i] + 1.0;
+        g_z[i] = g_x[i] + 2.0;
+    }
+    special_peer::header("v12-d transcendental tail, Cerid vs Boost.Math, ns/element (single-thread, in-cache)");
+    bool ok = true;
+    ok &= tail_row("Ei", [](double x) { return sf::expint_ei(x); }, g_x, Special::Ei, g_x, {1e-12, 1e-13});
+    ok &= tail_row("E1", [](double x) { return sf::expint_e1(x); }, g_x, Special::E1, g_x, {1e-12, 1e-13});
+    ok &= tail_row("zeta", [](double s) { return sf::riemann_zeta(s); }, g_s, Special::Zeta, g_s, {1e-13, 1e-14});
+    ok &=
+        tail_row("lambertW0", [](double x) { return sf::lambert_w0(x); }, g_x, Special::LambertW0, g_x, {1e-12, 1e-13});
+    ok &= tail_row("ellint_E", [](double m) { return sf::ellint_e(m); }, g_m, Special::Ellint2, g_k, {1e-12, 1e-13});
+    ok &= tail_row("ellint_K", [](double m) { return sf::ellint_k(m); }, g_m, Special::Ellint1, g_k, {1e-12, 1e-13});
+    {
+        const auto cerid = [](double* out)
+        {
+            for (int i = 0; i < kN; ++i)
+            {
+                out[i] = sf::elliprf(g_x[i], g_y[i], g_z[i]);
+            }
+        };
+        ok &= special_peer::row("Carlson_RF", cerid, Special::EllintRf, {g_x, g_y, g_z}, kN, g_cerid, g_boost,
+                                {1e-12, 1e-13}, 5, g_passes);
+    }
+    return ok ? 0 : 1;
 }

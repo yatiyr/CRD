@@ -105,6 +105,18 @@
       "license": "BSD-3-Clause",
       "gated": "CRD_BUILD_HESAP_VS_REFERENCE"
     },
+    "boost_math": {
+      "version": "1.92.0",
+      "repository": "boostorg/math",
+      "ref": "boost-1.92.0",
+      "commit": "f12be767c04d9499aaa6f88b22d5f1b464c1c27a",
+      "url": "https://github.com/boostorg/math/archive/f12be767c04d9499aaa6f88b22d5f1b464c1c27a.tar.gz",
+      "file": "math-f12be767.tar.gz",
+      "sha256": "d58ee0ad89880c7bff0f2b504bcc5700e15f1ac5184220d1a86d15f217cc4818",
+      "license": "BSL-1.0",
+      "gated": "CRD_BUILD_HESAP_VS_BOOST",
+      "note": "Boost.Math standalone (BOOST_MATH_STANDALONE: header-only, no other Boost library), compiled only into crd-bench-boost-peer, the peer library of the special-function and distribution boards; never into an engine module or a default build. Boost 1.92.0 was released 2026-08-12. LICENSE read from the archive: Boost Software License 1.0."
+    },
     "tracy": {
       "version": "0.14.1",
       "repository": "wolfpld/tracy",

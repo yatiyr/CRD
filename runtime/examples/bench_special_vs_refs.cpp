@@ -1,8 +1,9 @@
-// v12-a special-function benchmark — Cerid vs Boost.Math (same binary, scalar peer). scipy/MATLAB (vectorized)
-// timed by the sibling scripts. Honest all-peers board (be-the-fastest mandate). Header-only both sides; no STL
-// containers (file-scope static buffers, no malloc).
+// v12-a special-function benchmark — Cerid vs Boost.Math (its peer library, special_peer_rows.hpp, values compared
+// on every row). scipy/MATLAB (vectorized) timed by the sibling scripts. Honest all-peers board (be-the-fastest
+// mandate); no STL containers (file-scope static buffers, no malloc).
 //
-// MEASURED ns/elem (i9-14900K, g++ -O3 -march=native; scipy 1.17 + MATLAB R2026a; 2026-06-22):
+// MEASURED ns/elem (i9-14900K, g++ -O3 -march=native, Boost then compiled in this unit; scipy 1.17 + MATLAB R2026a;
+// 2026-06-22):
 //   fn          Cerid   Boost   scipy   MATLAB-1T   MATLAB-MT | verdict (single-thread)
 //   erf          8.86   82.1    10.6     25.1        1.85      | CRUSH Boost 9.3× · WIN scipy 1.2× · WIN MATLAB-1T 2.8×
 //   erfc        10.5    83.8     9.2     25.1        1.44      | CRUSH Boost 8.0× · ~scipy 0.88× · WIN MATLAB-1T 2.4×
@@ -45,33 +46,36 @@
 // erfc is ~parity on WSL (topology hidden ⇒ affinity no-op ⇒ noisy placement); it wins 1.12× on the clean P-core
 // pool and is reliable on Windows-affinity. lgamma & tgamma are crushed honestly; 6–7/7 transparent in one pool.
 //
-// Build (WSL): g++ -O3 -march=native -std=c++20 -I engine/core/include -I engine/hesap-special/include \
-//                  runtime/examples/bench_special_vs_refs.cpp -o /tmp/bench_special && /tmp/bench_special
+// Build and run at every CPU level: bash scripts/run_bench_special.sh (Boost.Math is the pinned crd-bench-boost-peer
+// library at the host's ISA). The argument n shortens the arrays (default 4 Mi) for a smoke run.
+
+#include "special_peer_rows.hpp"
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/special/special.hpp>
 
-#include <boost/math/special_functions/digamma.hpp>
-#include <boost/math/special_functions/erf.hpp>
-#include <boost/math/special_functions/gamma.hpp>
-
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <thread>
 
 namespace sf = crd::hesap::special;
 using clk = std::chrono::high_resolution_clock;
+using special_peer::Special;
 
 namespace
 {
 constexpr int kN = 4'000'000;
-double xe[kN]; // erf   [-4,4]
-double xg[kN]; // gamma [0.1,50]
-double xy[kN]; // erfinv (-0.99,0.99)
-double xa[kN]; // gammainc_p(2.5,x) [0.05,15]
-alignas(64) double g_out[kN]; // 32B-aligned ⇒ the NT-store batch path engages
+double xe[kN];                // erf   [-4,4]
+double xg[kN];                // gamma [0.1,50]
+double xy[kN];                // erfinv (-0.99,0.99)
+double xa[kN];                // gammainc_p(2.5,x) [0.05,15]
+double xp[kN];                // gammainc_p's a = 2.5
+alignas(64) double g_out[kN]; // 32B-aligned => the NT-store batch path engages
+double g_peer[kN];
 double g_cs = 0.0;
+int g_n = kN;
 
 double timeit_batch(void (*bf)(double*, const double*, std::size_t), const double* in, int reps = 5)
 {
@@ -79,67 +83,76 @@ double timeit_batch(void (*bf)(double*, const double*, std::size_t), const doubl
     for (int r = 0; r < reps; ++r)
     {
         const auto t0 = clk::now();
-        bf(g_out, in, static_cast<std::size_t>(kN));
+        bf(g_out, in, static_cast<std::size_t>(g_n));
         const auto t1 = clk::now();
-        g_cs += g_out[0] + g_out[kN / 2];
-        const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / kN;
+        g_cs += g_out[0] + g_out[g_n / 2];
+        const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / g_n;
         best = ns < best ? ns : best;
     }
     return best;
 }
 
-template <class F>
-double timeit(const double* in, F&& f, int reps = 3)
+// One scalar row: Cerid's f(in[i]) against the peer's, three rounds of one pass each.
+template <class F> bool scalar_row(const char* name, F f, Special peer, const double* in, special_peer::Bound bound)
 {
-    double best = 1e300;
-    for (int r = 0; r < reps; ++r)
+    const auto cerid = [&](double* out)
     {
-        const auto t0 = clk::now();
-        double acc = 0.0;
-        for (int i = 0; i < kN; ++i)
+        for (int i = 0; i < g_n; ++i)
         {
-            acc += f(in[i]);
+            out[i] = f(in[i]);
         }
-        const auto t1 = clk::now();
-        g_cs += acc;
-        const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / kN;
-        best = ns < best ? ns : best;
-    }
-    return best;
+    };
+    const bool ok = special_peer::row(name, cerid, peer, {in, nullptr, nullptr}, g_n, g_out, g_peer, bound, 3, 1);
+    g_cs += g_out[g_n / 2];
+    return ok;
 }
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc > 1)
+    {
+        const long n = std::strtol(argv[1], nullptr, 10);
+        if (n < 2 || n > kN)
+        {
+            std::fprintf(stderr, "usage: bench_special_vs_refs [n in 2..%d]\n", kN);
+            return 2;
+        }
+        g_n = static_cast<int>(n);
+    }
     std::uint64_t s = 0x12345ULL;
-    auto u = [&]() {
+    auto u = [&]()
+    {
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
         return static_cast<double>(s >> 11) * (1.0 / 9007199254740992.0);
     };
-    for (int i = 0; i < kN; ++i)
+    for (int i = 0; i < g_n; ++i)
     {
         xe[i] = u() * 8.0 - 4.0;
         xg[i] = 0.1 + u() * 49.9;
         xy[i] = u() * 1.98 - 0.99;
         xa[i] = 0.05 + u() * 14.95;
+        xp[i] = 2.5;
     }
-    std::printf("function          Cerid(ns)   Boost(ns)   speedup(Boost/Cerid)\n");
-    auto row = [&](const char* nm, double c, double b) {
-        std::printf("%-16s  %8.2f   %8.2f   %6.2fx\n", nm, c, b, b / c);
-    };
-    row("erf", timeit(xe, [](double x) { return sf::erf(x); }), timeit(xe, [](double x) { return boost::math::erf(x); }));
-    row("erfc", timeit(xe, [](double x) { return sf::erfc(x); }),
-        timeit(xe, [](double x) { return boost::math::erfc(x); }));
-    row("erfinv", timeit(xy, [](double y) { return sf::erfinv(y); }),
-        timeit(xy, [](double y) { return boost::math::erf_inv(y); }));
-    row("lgamma", timeit(xg, [](double x) { return sf::lgamma(x); }),
-        timeit(xg, [](double x) { return boost::math::lgamma(x); }));
-    row("tgamma", timeit(xg, [](double x) { return sf::gamma(x); }),
-        timeit(xg, [](double x) { return boost::math::tgamma(x); }));
-    row("digamma", timeit(xg, [](double x) { return sf::digamma(x); }),
-        timeit(xg, [](double x) { return boost::math::digamma(x); }));
-    row("gammainc_p", timeit(xa, [](double x) { return sf::gammainc_p(2.5, x); }),
-        timeit(xa, [](double x) { return boost::math::gamma_p(2.5, x); }));
+    special_peer::header("v12-a special functions, Cerid vs Boost.Math, ns/element (single-thread)");
+    bool ok = true;
+    ok &= scalar_row("erf", [](double x) { return sf::erf(x); }, Special::Erf, xe, {1e-13, 1e-15});
+    ok &= scalar_row("erfc", [](double x) { return sf::erfc(x); }, Special::Erfc, xe, {1e-12, 1e-300});
+    ok &= scalar_row("erfinv", [](double y) { return sf::erfinv(y); }, Special::ErfInv, xy, {1e-10, 1e-12});
+    ok &= scalar_row("lgamma", [](double x) { return sf::lgamma(x); }, Special::Lgamma, xg, {1e-13, 1e-13});
+    ok &= scalar_row("tgamma", [](double x) { return sf::gamma(x); }, Special::Tgamma, xg, {1e-12, 0.0});
+    ok &= scalar_row("digamma", [](double x) { return sf::digamma(x); }, Special::Digamma, xg, {1e-12, 1e-13});
+    {
+        const auto cerid = [](double* out)
+        {
+            for (int i = 0; i < g_n; ++i)
+            {
+                out[i] = sf::gammainc_p(2.5, xa[i]);
+            }
+        };
+        ok &= special_peer::row("gammainc_p", cerid, Special::GammaP, {xp, xa, nullptr}, g_n, g_out, g_peer,
+                                {1e-12, 1e-14}, 3, 1);
+    }
     // ---- parallel *_batch (crd-jobs, all cores) vs MATLAB-MT ----
     crd::jobs::Config cfg;
     cfg.num_threads = std::thread::hardware_concurrency();
@@ -211,10 +224,10 @@ int main()
 
     // ---- compute-bound microbench: the Lanczos lgamma kernel of every level the host runs, in-cache, 1 thread ----
     {
-        constexpr int kM = 8192; // 64 KB: L2-resident
-        alignas(64) static double a[kM];
-        alignas(64) static double b[kM];
-        for (int i = 0; i < kM; ++i)
+        constexpr int resident_n = 8192; // 64 KB: L2-resident
+        alignas(64) static double a[resident_n];
+        alignas(64) static double b[resident_n];
+        for (int i = 0; i < resident_n; ++i)
         {
             a[i] = 0.3 + static_cast<double>(i % 60);
         }
@@ -229,10 +242,10 @@ int main()
             for (int r = 0; r < 4000; ++r)
             {
                 const auto t0 = clk::now();
-                level.table->lgamma_lanczos(b, a, kM);
+                level.table->lgamma_lanczos(b, a, resident_n);
                 const auto t1 = clk::now();
                 g_cs += b[0];
-                const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / kM;
+                const double ns = std::chrono::duration<double, std::nano>(t1 - t0).count() / resident_n;
                 best = ns < best ? ns : best;
             }
             std::printf("lgamma(Lanczos) %-8s %6.3f\n", crd::cpu_level_name(level.level), best);
@@ -254,5 +267,5 @@ int main()
     }
 
     std::printf("# checksum %.6e (anti-DCE)\n", g_cs);
-    return 0;
+    return ok ? 0 : 1;
 }

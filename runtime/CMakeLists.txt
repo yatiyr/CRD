@@ -1026,6 +1026,19 @@ if(CRD_BUILD_HESAP_VS_SUNDIALS)
     message(STATUS "[hesap-vs-sundials] SUNDIALS ${CRD_SUNDIALS_INCLUDE}")
 endif()
 
+# --- The special-function boards against the pinned Boost.Math (fetched on demand, never in CI) ---
+# Boost.Math reaches only crd-bench-boost-peer (examples/peers/boost_peer.hpp), so the benches build with the tree's
+# warnings as errors at the baseline ISA and call one exported evaluation per array.
+if(CRD_BUILD_HESAP_VS_BOOST)
+    crd_add_bench_peer(crd-bench-boost-peer SOURCES examples/peers/boost_peer_special.cpp LIBRARIES boost_math_headers)
+    foreach(bench IN ITEMS bench_special_vs_refs bench_bessel_vs_refs bench_special_v12d)
+        add_executable(${bench} examples/${bench}.cpp)
+        target_include_directories(${bench} PRIVATE examples/peers)
+        target_link_libraries(${bench} PRIVATE crd-core crd-memory crd-containers crd-math crd-jobs crd-hesap-special
+                                               crd-bench-boost-peer)
+    endforeach()
+endif()
+
 # --- The retained programs that need no peer library (CRD_BUILD_RETAINED_BENCHES) ---
 # Measurement and differential-test programs of dated boards. Until 2026-10-19 no target compiled them (they were
 # built by hand or by the scripts that also run their peers, scripts/run_bench_*.sh and v14*_peers.py), so an API

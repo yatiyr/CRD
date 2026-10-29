@@ -232,6 +232,16 @@
       "why": "The ODE benches against SUNDIALS ARKODE, CVODE and CVODES installed on the measuring host (scripts/run_bench_imex.sh, run_bench_krylov.sh, run_bench_sens.sh)."
     },
     {
+      "paths": [
+        "runtime/examples/bench_bessel_vs_refs.cpp",
+        "runtime/examples/bench_special_v12d.cpp",
+        "runtime/examples/bench_special_vs_refs.cpp",
+        "runtime/examples/peers/boost_peer_special.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_BOOST"},
+      "why": "The special-function boards against the pinned Boost.Math, fetched at configure time only when the option is on; Boost.Math builds as their peer library (crd-bench-boost-peer, scripts/run_bench_special.sh)."
+    },
+    {
       "paths": ["bench/gpu-fft/generated/*.cu"],
       "included_by": "bench/gpu-fft/ckir_fft_profilee.cu",
       "why": "Generated kernels the CKIR FFT profile program includes."
@@ -242,14 +252,11 @@
         "scripts/bench_gemm_v0d.cpp",
         "scripts/v14m_ggml_q8_bench.c",
         "runtime/examples/bench_batched.cpp",
-        "runtime/examples/bench_bessel_vs_refs.cpp",
         "runtime/examples/bench_dist_boost.cpp",
         "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
         "runtime/examples/bench_dsp_windows_vs_liquid.c",
         "runtime/examples/bench_interp_boost.cpp",
         "runtime/examples/bench_ode_vs_refs.cpp",
-        "runtime/examples/bench_special_v12d.cpp",
-        "runtime/examples/bench_special_vs_refs.cpp",
         "runtime/examples/bobyqa_difftest.cpp",
         "runtime/examples/cobyla_difftest.cpp",
         "runtime/examples/newuoa_difftest.cpp"
