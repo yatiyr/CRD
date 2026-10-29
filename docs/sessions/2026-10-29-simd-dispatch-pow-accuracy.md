@@ -41,6 +41,15 @@ negative bases) and the pair constants; the earlier arrays and both checksums ar
 C99 Annex F cases. The ulp helper now uses the smallest subnormal as a subnormal's ulp. win-debug: crd-math-tests
 (all, the SIMD probe's pow on every level included); tidy and clang-format on the changed lines; the validators.
 
+mpmath's `float()` rounds a subnormal twice (to 53 bits, then to the subnormal grid): five of the pow refs were one
+ulp off the correctly rounded value. The generator now converts subnormals once through an exact rational; no other
+array changed.
+
+## CI audit
+
+DIAG.11c and DIAG.12 stay Needs CI: both wait on the final complete-tier run; scheduled run 40849112570 is still in
+progress, so no run was dispatched.
+
 ## Left
 
 - Hosted CI: the pow checksum on every compiler and level, and the dependent suites (stats, special, autodiff).
