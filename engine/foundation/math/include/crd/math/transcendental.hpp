@@ -74,6 +74,14 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
     {
         return libm::expm1(x);
     }
+    if (x > kExpOverflow)
+    {
+        return __builtin_bit_cast(double, 0x7FF0000000000000ULL); // e^x overflows ⇒ +infinity, as crd_exp1
+    }
+    if (x < -40.0)
+    {
+        return -1.0; // e^x < 2^-57 ⇒ e^x − 1 rounds to −1; the bound also keeps the reduction's k an int
+    }
     if (x > -0.34657359027997264 && x < 0.34657359027997264) // |x| < ½·ln2: direct (Q peaks past this — reduce beyond)
     {
         // Q(x) = (e^x−1)/x ≈ 1 + Σ kQ_n·x^n (minimax); expm1 = x·Q(x). No 1+… cancellation.
@@ -91,9 +99,9 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
         q = libm::fma(q, x, 1.0);
         return x * q;
     }
-    // |x| >= 0.5: reduce x = k·ln2 + r (same Cody-Waite split as crd_exp1), expm1(r) = r·Q(r) on |r| ≤ ln2/2,
-    // then 2^k·expm1(r) + (2^k − 1). k>52 ⇒ (2^k−1)==2^k and the term vanishes (exp huge, no cancellation);
-    // k very negative ⇒ 2^k→0 and the result → −1 exactly; k≥1024 ⇒ 2^k=Inf ⇒ expm1=Inf (overflow). All exact.
+    // |x| >= ½·ln2: reduce x = k·ln2 + r (same Cody-Waite split as crd_exp1), expm1(r) = r·Q(r) on |r| ≤ ln2/2,
+    // then 2^k·expm1(r) + (2^k − 1), k ∈ [−58, 1024] after the range checks. k>52 ⇒ (2^k−1)==2^k and the term
+    // vanishes (exp huge, no cancellation); very negative k ⇒ the result rounds to −1.
     const double kf = libm::floor(libm::fma(x, kLog2e, 0.5));
     const double r = libm::fma(kf, -kLn2LoE, libm::fma(kf, -kLn2HiE, x));
     double qr = kQ11;
@@ -108,9 +116,15 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
     qr = libm::fma(qr, r, kQ2);
     qr = libm::fma(qr, r, kQ1);
     qr = libm::fma(qr, r, 1.0);
-    const double er = r * qr;                                  // expm1(r)
-    const double twok = libm::ldexp(1.0, static_cast<int>(kf)); // 2^k
-    return libm::fma(twok, er, twok - 1.0);                     // 2^k·expm1(r) + (2^k − 1)
+    const double er = r * qr; // expm1(r)
+    const int k = static_cast<int>(kf);
+    if (k == 1024)
+    {
+        // x ∈ [1023.5·ln2, ln(max)]: 2^1024 alone overflows and 2^k − 1 rounds to 2^k ⇒ 2^1024·(1 + expm1(r)).
+        return libm::ldexp(1.0 + er, 1024);
+    }
+    const double twok = libm::ldexp(1.0, k); // 2^k
+    return libm::fma(twok, er, twok - 1.0);  // 2^k·expm1(r) + (2^k − 1)
 }
 
 // ───────────────────────── log family ─────────────────────────

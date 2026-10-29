@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -207,4 +208,37 @@ TEST_CASE("crd::math atan2 quadrants + determinism", "[math][transcendental][tx]
     CHECK(crd::math::pow(2.0, 10.0) == 1024.0);   // exact integer power
     CHECK(crd::math::pow(-2.0, 3.0) == -8.0);     // negative base, odd integer exponent
     CHECK(crd::math::pow(3.0, 0.0) == 1.0);
+}
+
+TEST_CASE("crd::math expm1 and the trig quadrant stay defined to the ends of the finite range",
+          "[math][transcendental][tx]")
+{
+    namespace m = crd::math;
+    constexpr double max_value = std::numeric_limits<double>::max();
+    // Past 1023.5·ln2 the reduction's 2^k is 2^1024, which overflows alone; the result does not.
+    for (const double x : {709.437, 709.5, 709.7, 709.78})
+    {
+        INFO("expm1(" << x << ")");
+        CHECK(std::isfinite(m::expm1(x)));
+        CHECK(ulp_err(m::expm1(x), std::expm1(x)) <= 2.0); // both ≤1 ulp
+    }
+    for (const double x : {709.79, 710.0, 1e300, max_value})
+    {
+        CHECK(m::expm1(x) == std::numeric_limits<double>::infinity());
+    }
+    for (const double x : {-40.5, -745.2, -1e300, -max_value})
+    {
+        CHECK(m::expm1(x) == -1.0);
+    }
+    // A huge argument's k = round(x·2/π) fits no integer type; its quadrant k mod 4 is still exact.
+    for (const double x : {1.5e16, 6e16, 1e17, -1e17, 1e300, -1e300, max_value, -max_value})
+    {
+        const double k = m::floor(m::fma(x, m::k2OverPi, 0.5));
+        double want = std::fmod(k, 4.0);
+        want = want < 0.0 ? want + 4.0 : want;
+        double r = 0.0;
+        double rt = 0.0;
+        INFO("x = " << x);
+        CHECK(m::trig_detail::reduce_pio2(x, r, rt) == static_cast<int>(want));
+    }
 }

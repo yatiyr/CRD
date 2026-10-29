@@ -92,7 +92,9 @@ namespace trig_detail
     rt += (r - (r3 - b3)) - (w3 + b3);
     r = r3;
     rt -= fn * kPio2Part4; // the tiny 4th part ⇒ reduced arg good to ~200 bits ⇒ ≤1 ulp even at sin's zeros
-    return static_cast<int>(static_cast<long long>(fn)) & 3;
+    // k mod 4 in [0, 3] by exact operations, never an integer conversion of k: a huge |x| makes k too large for any
+    // integer type (k is even from 2^53 and a multiple of 4 from 2^54).
+    return static_cast<int>(fn - 4.0 * libm::floor(fn * 0.25));
 }
 // atan(t), |t| ≤ tan(π/8), via t·(1 + s·P(s)), s = t²
 [[nodiscard]] inline double atan_core(double t) noexcept
