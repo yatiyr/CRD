@@ -48,6 +48,26 @@ enum class SellSweep : crd::u8
     Streaming, // they come from beyond it
 };
 
+// How a call reads x: as the level's policy picks for the sweep, by scalar loads, or by the body's vector gather.
+enum class SellGather : crd::u8
+{
+    Policy,
+    Loads,
+    Gather, // refused (the entry returns false) where the body has no gather or x is wider than its index reaches
+};
+
+// Two slices both at least this wide run as a pair; kSellNoPairs runs every slice alone, 0 takes the policy's width.
+inline constexpr crd::u32 kSellNoPairs = 0xFFFFFFFFU;
+
+// One call's pick. Production passes {sweep, SellGather::Policy, 0}; the board's arms (bench_hesap_spmv_vs_reference)
+// force the gather and the pair width, until its verdict leaves each level one pick a sweep.
+struct SellPick
+{
+    SellSweep sweep;
+    SellGather gather;
+    crd::u32 pair_width;
+};
+
 // The complex alpha and beta of y = alpha A x + beta y as their parts.
 template <typename T> struct SellComplexScales
 {
@@ -78,17 +98,18 @@ template <typename T> struct SddmmRows
 struct SparseKernels
 {
     // y[r] = alpha * sum_w vals * x[col] + beta * y[r] for the rows of slices [s_begin, s_end); each row sums its
-    // columns in order, two roundings a step from +0, and beta == 0 never reads y.
-    void (*sell_spmv_f64)(const SellSlices<crd::f64>& a, crd::f64 alpha, crd::f64 beta, const crd::f64* x, crd::f64* y,
-                          crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
-    void (*sell_spmv_f32)(const SellSlices<crd::f32>& a, crd::f32 alpha, crd::f32 beta, const crd::f32* x, crd::f32* y,
-                          crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
+    // columns in order, two roundings a step from +0, and beta == 0 never reads y. False, y untouched, when the pick
+    // is refused (SellGather::Gather only).
+    bool (*sell_spmv_f64)(const SellSlices<crd::f64>& a, crd::f64 alpha, crd::f64 beta, const crd::f64* x, crd::f64* y,
+                          crd::u32 s_begin, crd::u32 s_end, SellPick pick) noexcept;
+    bool (*sell_spmv_f32)(const SellSlices<crd::f32>& a, crd::f32 alpha, crd::f32 beta, const crd::f32* x, crd::f32* y,
+                          crd::u32 s_begin, crd::u32 s_end, SellPick pick) noexcept;
     // The same over (re, im) pairs, x and y included, in the operators of Complex<T> (crd/hesap/complex.hpp): each step
     // adds (vr xr - vi xi, vr xi + vi xr) part by part, y = alpha sum + beta y, and beta == (0, 0) never reads y.
-    void (*sell_spmv_c64)(const SellSlices<crd::f64>& a, const SellComplexScales<crd::f64>& scales, const crd::f64* x,
-                          crd::f64* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
-    void (*sell_spmv_c32)(const SellSlices<crd::f32>& a, const SellComplexScales<crd::f32>& scales, const crd::f32* x,
-                          crd::f32* y, crd::u32 s_begin, crd::u32 s_end, SellSweep sweep) noexcept;
+    bool (*sell_spmv_c64)(const SellSlices<crd::f64>& a, const SellComplexScales<crd::f64>& scales, const crd::f64* x,
+                          crd::f64* y, crd::u32 s_begin, crd::u32 s_end, SellPick pick) noexcept;
+    bool (*sell_spmv_c32)(const SellSlices<crd::f32>& a, const SellComplexScales<crd::f32>& scales, const crd::f32* x,
+                          crd::f32* y, crd::u32 s_begin, crd::u32 s_end, SellPick pick) noexcept;
     // out[k] = alpha * dot(x row i, y row inner[k]) for the nonzeros k of mask rows [i_begin, i_end) (SddmmRows).
     void (*sddmm_rows_f64)(const SddmmRows<crd::f64>& s, crd::u32 i_begin, crd::u32 i_end) noexcept;
     void (*sddmm_rows_f32)(const SddmmRows<crd::f32>& s, crd::u32 i_begin, crd::u32 i_end) noexcept;

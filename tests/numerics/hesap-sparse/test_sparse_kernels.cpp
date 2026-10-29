@@ -1,12 +1,14 @@
 // The hesap-sparse kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs gives the CSR spmv's
 // bits for the f64, f32, Complex<f64> and Complex<f32> SELL-C-σ spmv, over slices that run as a pair and alone, empty
 // and long rows, rows past the last full slice, a σ order and the identity, any slice range, both beta paths (beta == 0
-// never reads y), IEEE special values in A, an infinite or NaN x[0] (padding never multiplies x), both sweeps, one
-// with x declared wider than a gather's index reaches, and both column forms: u32 and Delta16, mixed in one matrix
-// where a gap needs more than 16 bits. The SDDMM rows of f64 and f32 give the bits of their declared order on every
-// level at r 0 to 17 and past it, over empty rows, sub-ranges (guards around them) and IEEE special values in X and
-// Y, and sddmm and sddmm_parallel give them too. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases and
-// the [sddmm] suite under each forced level.
+// never reads y), IEEE special values in A, an infinite or NaN x[0] (padding never multiplies x), both sweeps, x
+// declared wider than a complex f64 gather's index reaches and wider than every gather's, and both column forms: u32
+// and Delta16, mixed in one matrix where a gap needs more than 16 bits. Every forced pick (SellPick: the scalar-load
+// and the gather form, pair widths 1, 8 and 32 and none) gives the same bits, and a gather pick is refused, y
+// untouched, where the level has no gather or x is too wide for it. The SDDMM rows of f64 and f32 give the bits of
+// their declared order on every level at r 0 to 17 and past it, over empty rows, sub-ranges (guards around them) and
+// IEEE special values in X and Y, and sddmm and sddmm_parallel give them too. crd-hesap-sparse-kernels-at-<level> runs
+// these [kernels] cases and the [sddmm] suite under each forced level.
 
 #include "kernel_levels.hpp"
 #include "sparse_jobs_fixture.hpp"
@@ -181,16 +183,16 @@ inline constexpr sp::SellIndex kForms[] = {sp::SellIndex::U32, sp::SellIndex::De
 inline constexpr usize kFormCount = 2;
 
 template <typename T>
-void run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T alpha, T beta, const T* x, T* y,
-                u32 s_begin, u32 s_end, sp::SellSweep sweep)
+bool run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T alpha, T beta, const T* x, T* y,
+                u32 s_begin, u32 s_end, sp::SellPick pick)
 {
     if constexpr (std::is_same_v<T, crd::f64>)
     {
-        k.sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end, sweep);
+        return k.sell_spmv_f64(a, alpha, beta, x, y, s_begin, s_end, pick);
     }
     else if constexpr (std::is_same_v<T, crd::f32>)
     {
-        k.sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end, sweep);
+        return k.sell_spmv_f32(a, alpha, beta, x, y, s_begin, s_end, pick);
     }
     else
     {
@@ -199,13 +201,27 @@ void run_kernel(const SparseKernels& k, const sp::SellSlices<Scalar<T>>& a, T al
         auto* ys = sp::detail::sell_scalars(y);
         if constexpr (std::is_same_v<T, Complex<crd::f64>>)
         {
-            k.sell_spmv_c64(a, scales, xs, ys, s_begin, s_end, sweep);
+            return k.sell_spmv_c64(a, scales, xs, ys, s_begin, s_end, pick);
         }
         else
         {
-            k.sell_spmv_c32(a, scales, xs, ys, s_begin, s_end, sweep);
+            return k.sell_spmv_c32(a, scales, xs, ys, s_begin, s_end, pick);
         }
     }
+}
+
+// The picks forced besides the level's own: each gather form at each pair width (0 is the policy's).
+inline constexpr sp::SellGather kGathers[] = {sp::SellGather::Policy, sp::SellGather::Loads, sp::SellGather::Gather};
+inline constexpr u32 kPairWidths[] = {0U, 1U, 8U, 32U, sp::kSellNoPairs};
+inline constexpr usize kForcedPicks = 3U * 5U - 1U;
+inline constexpr usize kForcedCalls = 2U * 2U; // two alpha/beta and x[0] cases, two ranges
+
+// Whether `level` runs a gather pick of T over x of `cols` columns: AVX2 and AVX-512 gather, their signed index
+// reaching 2^31 columns (2^30 for a complex f64 value, two indices).
+template <typename T> bool gathers_at(CpuLevel level, u32 cols)
+{
+    const u32 reach = std::is_same_v<T, Complex<crd::f64>> ? 0x40000000U : 0x80000000U;
+    return (level == CpuLevel::Avx2 || level == CpuLevel::Avx512) && cols <= reach;
 }
 
 struct Counts
@@ -215,6 +231,8 @@ struct Counts
     usize touched = 0; // a row outside the range, or the guard past y, written
     usize layout = 0;  // a slice whose form or columns differ from the CSR rows
     usize mixed = 0;   // Delta16 matrices holding a u32 slice wider than 2 (a gap past 16 bits) too
+    usize picks = 0;   // forced picks run (or refused)
+    usize refused = 0; // a pick's answer other than gathers_at's (Gather) or true (the rest)
 };
 
 // Each slice's form against the rule (Delta16 when asked, wider than 2 and every gap within 16 bits) and its columns,
@@ -275,13 +293,43 @@ void check_layout(const sp::SparseMatrix<T, sp::SparseFormat::Csr>& csr, const s
 
 inline constexpr usize kScalePairs = 5;
 inline constexpr usize kFirstColumns = 3;
-inline constexpr usize kSweeps = 3; // resident, streaming, and streaming with x past a gather's 2^31 columns
+// Resident, streaming, streaming with x past every gather's 2^31 columns, resident past a complex f64 gather's 2^30.
+inline constexpr usize kSweeps = 4;
 inline constexpr usize kRanges = 6;
+
+// Slices [range) of y = y0 by the kernel's pick against want; a refused pick must leave y as it was.
+template <typename T>
+void check_call(const SparseKernels& k, const sp::SellMatrix<T>& sell, const sp::SellSlices<Scalar<T>>& swept,
+                const T (&ab)[2], const T* x, const crd::containers::Array<T>& y0,
+                const crd::containers::Array<T>& want, crd::containers::Array<T>& y, const u32 (&range)[2],
+                sp::SellPick pick, bool ran_expected, Counts& counts)
+{
+    constexpr u32 height = sp::SellMatrix<T>::kC;
+    const u32 rows = sell.rows;
+    y = y0;
+    const bool ran = run_kernel<T>(k, swept, ab[0], ab[1], x, y.data(), range[0], range[1], pick);
+    counts.refused += ran == ran_expected ? 0U : 1U;
+    const u32 first = range[0] * height;
+    const u32 last = range[1] * height < rows ? range[1] * height : rows;
+    for (u32 sr = 0; sr < rows; ++sr)
+    {
+        const u32 r = sell.perm[sr];
+        if (ran && sr >= first && sr < last)
+        {
+            counts.wrong += same_bits(y[r], want[r]) ? 0U : 1U;
+        }
+        else
+        {
+            counts.touched += same_bits(y[r], y0[r]) ? 0U : 1U;
+        }
+    }
+    counts.touched += same_bits(y[rows], y0[rows]) ? 0U : 1U;
+}
 
 // Every slice range of one matrix, column form and level at five alpha/beta pairs and three x[0] against the CSR
 // spmv; a wide matrix has kWideColumns columns.
 template <typename T>
-void check_level(const SparseKernels& k, crd::memory::IAllocator* alloc, u32 rows, u32 sigma, bool wide,
+void check_level(const SparseKernels& k, CpuLevel level, crd::memory::IAllocator* alloc, u32 rows, u32 sigma, bool wide,
                  sp::SellIndex form, Counts& counts)
 {
     using U = Scalar<T>;
@@ -290,7 +338,6 @@ void check_level(const SparseKernels& k, crd::memory::IAllocator* alloc, u32 row
     const sp::SellMatrix<T> sell = sp::to_sell(csr, alloc, sigma, form);
     check_layout(csr, sell, form, counts);
     const sp::SellSlices<U> slices = slices_of(sell);
-    constexpr u32 height = sp::SellMatrix<T>::kC;
 
     crd::containers::Array<T> x(alloc);
     Lcg g{0x77ULL + rows};
@@ -338,27 +385,34 @@ void check_level(const SparseKernels& k, crd::memory::IAllocator* alloc, u32 row
         for (usize c = 0; c < kRanges * kSweeps; ++c)
         {
             const auto& range = ranges[c % kRanges];
-            sp::SellSlices<U> swept = slices;
-            swept.cols = c / kRanges == 2U ? 0x80000001U : slices.cols; // the scalar-load form of a gathering body
-            const sp::SellSweep sweep = c / kRanges == 0U ? sp::SellSweep::Resident : sp::SellSweep::Streaming;
+            const usize sweep_case = c / kRanges;
+            const u32 swept_cols[kSweeps] = {slices.cols, slices.cols, 0x80000001U, 0x40000001U};
+            sp::SellSlices<U> swept = slices; // past a gather's reach: the scalar-load form of a gathering body
+            swept.cols = swept_cols[sweep_case];
+            const sp::SellSweep sweep =
+                sweep_case == 1U || sweep_case == 2U ? sp::SellSweep::Streaming : sp::SellSweep::Resident;
             ++counts.cases;
-            y = y0;
-            run_kernel<T>(k, swept, ab[0], ab[1], x.data(), y.data(), range[0], range[1], sweep);
-            const u32 first = range[0] * height;
-            const u32 last = range[1] * height < rows ? range[1] * height : rows;
-            for (u32 sr = 0; sr < rows; ++sr)
+            check_call<T>(k, sell, swept, ab, x.data(), y0, want, y, range, {sweep, sp::SellGather::Policy, 0U}, true,
+                          counts);
+            // The forced picks over the whole range and an inner one, at a plain and a special x[0] and beta.
+            if ((v != 1U && v != kScalePairs * kFirstColumns - 1U) || (c % kRanges != 0U && c % kRanges != 4U))
             {
-                const u32 r = sell.perm[sr];
-                if (sr >= first && sr < last)
+                continue;
+            }
+            for (const sp::SellGather gather : kGathers)
+            {
+                for (const u32 pair_width : kPairWidths)
                 {
-                    counts.wrong += same_bits(y[r], want[r]) ? 0U : 1U;
-                }
-                else
-                {
-                    counts.touched += same_bits(y[r], y0[r]) ? 0U : 1U;
+                    if (gather == sp::SellGather::Policy && pair_width == 0U)
+                    {
+                        continue;
+                    }
+                    ++counts.picks;
+                    const bool runs = gather != sp::SellGather::Gather || gathers_at<T>(level, swept.cols);
+                    check_call<T>(k, sell, swept, ab, x.data(), y0, want, y, range, {sweep, gather, pair_width}, runs,
+                                  counts);
                 }
             }
-            counts.touched += same_bits(y[rows], guard) ? 0U : 1U;
         }
     }
 }
@@ -383,18 +437,21 @@ template <typename T> void check_every_level()
             {
                 for (const u32 sigma : {0U, 1U, 6U})
                 {
-                    check_level<T>(*level.table, &alloc, rows, sigma, false, form, counts);
+                    check_level<T>(*level.table, level.level, &alloc, rows, sigma, false, form, counts);
                 }
             }
             for (const u32 rows : {9U, 70U, 300U})
             {
                 for (const u32 sigma : {0U, 6U})
                 {
-                    check_level<T>(*level.table, &alloc, rows, sigma, true, form, counts);
+                    check_level<T>(*level.table, level.level, &alloc, rows, sigma, true, form, counts);
                 }
             }
         }
-        CHECK(counts.cases == kFormCount * (14U * 3U + 3U * 2U) * kScalePairs * kFirstColumns * kRanges * kSweeps);
+        const usize matrices = kFormCount * (14U * 3U + 3U * 2U);
+        CHECK(counts.cases == matrices * kScalePairs * kFirstColumns * kRanges * kSweeps);
+        CHECK(counts.picks == matrices * kForcedCalls * kSweeps * kForcedPicks);
+        CHECK(counts.refused == 0U);
         CHECK(counts.wrong == 0U);
         CHECK(counts.touched == 0U);
         CHECK(counts.layout == 0U);

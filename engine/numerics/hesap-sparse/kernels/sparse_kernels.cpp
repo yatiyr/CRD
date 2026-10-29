@@ -4,16 +4,19 @@
 //
 // In the spmv, each level and type picks per sweep (SellSweep) whether wide slices run two at a time, so two
 // independent sets of lane sums are in flight, and how x is gathered; each lane adds vals * x[col] to its row's sum
-// column by column with two roundings (D(sparse)-3: never a fused multiply-add). The portable bodies keep the lane sums
-// in arrays; the SSE2 bodies in 128-bit registers, gathering x by scalar loads; the AVX2 bodies in 256-bit registers,
-// gathering complex x by scalar loads, f32 x with vgatherdps and f64 x by scalar loads in L2 and vgatherdpd beyond it
-// (each pick the faster form on the 2026-10-27 board; a gather's signed index needs cols <= 2^31, scalar loads serve
-// wider x). The AVX-512 bodies run a pair's shared full columns in one ZMM (slice s low, s + 1 high, gathering both
-// slices' x in one instruction), then finish each slice in the 256-bit body, which masks its gathers with an opmask; a
-// complex f64 slice fills one ZMM alone. A complex product is (vr xr - vi xi, vr xi + vi xr), SSE2 adding the negated
-// vi xi as it has no addsub. The columns every row of a slice stores run unmasked; past the shortest row a padded
-// lane multiplies its padding 0 by a zero instead of x[0], so an infinite or NaN x[0] reaches only the rows that
-// store column 0, and adding that +0 leaves the sum's bits (a sum from +0 is never -0). A Delta16 slice walks each
+// column by column with two roundings (D(sparse)-3: never a fused multiply-add). A call's SellPick may force the gather
+// form and the pair width instead (the board's arms). The portable bodies keep the lane sums in arrays; the SSE2 bodies
+// in 128-bit registers, gathering x by scalar loads; the AVX2 bodies in 256-bit registers, each with a scalar-load
+// and a vector-gather form: f32 x by vgatherdps, f64 x by scalar loads in L2 and vgatherdpd beyond it, complex x by
+// scalar loads (each pick the faster form on the 2026-10-27 board). A complex f32 value gathers as one 64-bit lane,
+// a complex f64 value as two (indices 2 col and 2 col + 1); a gather's signed index reaches cols <= 2^31 (2^30 for
+// complex f64), and scalar loads serve wider x. The AVX-512 bodies run a pair's shared full columns in one ZMM (slice
+// s low, s + 1 high, gathering both slices' x in one instruction), then finish each slice in the 256-bit body, which
+// masks its gathers with an opmask; a complex f64 slice fills one ZMM alone. A complex product is (vr xr - vi xi,
+// vr xi + vi xr), SSE2 adding the negated vi xi as it has no addsub. A gather moves x's bits as a load does. The
+// columns every row of a slice stores run unmasked; past the shortest row a padded lane multiplies its padding 0 by a
+// zero instead of x[0], so an infinite or NaN x[0] reaches only the rows that store column 0, and adding that +0
+// leaves the sum's bits (a sum from +0 is never -0). A Delta16 slice walks each
 // lane's column by its 16-bit gaps (scalar adds; the gathering AVX2 bodies widen eight or four gaps in one add) and a
 // pair runs two slices of one column form, so the column form changes only how the columns are read. The sums are
 // written out by one scalar expression on every level, so every level gives the CSR spmv's bits.
@@ -288,15 +291,15 @@ void run_pair(const SellSlices<T>& a, const T* x, crd::u32 s, T (&out0)[Body::kO
 }
 
 // Two slices of one column form both at least this wide run as a pair; narrower ones run alone, where a pair lost 4%
-// to 15% on DRAM-resident matrices and gained nothing in L2 (2026-10-27 board). kNoPairs: every slice runs alone.
+// to 15% on DRAM-resident matrices and gained nothing in L2 (2026-10-27 board). kSellNoPairs: every slice runs alone.
 inline constexpr crd::u32 kPairWidth = 8;
-inline constexpr crd::u32 kNoPairs = 0xFFFFFFFFU;
 
-// The driver. Body: the lane sums of one slice (Sums), zero(), step<Masked>(sums, a, x, offset, c, w, lens) for column
-// w of the C lanes at element offset, their columns at c, and store(sums, out) of its kOut values (C rows of
-// Write::kParts).
-template <typename Body, crd::u32 PairWidth, typename T, typename Write>
-void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end) noexcept
+// The driver, slices of one column form both at least pair_width wide running as a pair. Body: the lane sums of one
+// slice (Sums), zero(), step<Masked>(sums, a, x, offset, c, w, lens) for column w of the C lanes at element offset,
+// their columns at c, and store(sums, out) of its kOut values (C rows of Write::kParts).
+template <typename Body, typename T, typename Write>
+void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end,
+               crd::u32 pair_width) noexcept
 {
     constexpr crd::u32 height = Body::kC;
     static_assert(Body::kOut == height * Write::kParts, "a body stores one sum per part of each row");
@@ -306,8 +309,8 @@ void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd
     while (s < s_end)
     {
         const bool delta = delta16(a, s);
-        const bool pair = PairWidth != kNoPairs && s + 1U < s_end && a.slice_width[s] >= PairWidth &&
-                          a.slice_width[s + 1U] >= PairWidth && delta16(a, s + 1U) == delta;
+        const bool pair = pair_width != kSellNoPairs && s + 1U < s_end && a.slice_width[s] >= pair_width &&
+                          a.slice_width[s + 1U] >= pair_width && delta16(a, s + 1U) == delta;
         if (!pair)
         {
             if (delta)
@@ -336,40 +339,57 @@ void sell_spmv(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd
     }
 }
 
-// A vector gather's signed 32-bit index reaches the first 2^31 columns of x; a wider x takes the body's scalar loads.
-inline constexpr crd::u32 kGatherColumns = 0x80000000U;
-
-// One sweep's pick: Body at PairWidth, its scalar-load form where x is too wide for a gather.
-template <typename Body, crd::u32 PairWidth, typename T, typename Write>
-void run_sweep(const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end) noexcept
+// Body's family as `gather` asks: the body itself (its scalar-load form where x is too wide for its gather), its
+// scalar-load form, or its gather form. A family with a gather form names both (Loads, Gathering); false, nothing
+// run, for a Gather the family has no form for or whose index does not reach x.
+template <typename Body, typename T, typename Write>
+bool run_body(SellGather gather, crd::u32 pair_width, const SellSlices<T>& a, const Write& write, const T* x, T* y,
+              crd::u32 s_begin, crd::u32 s_end) noexcept
 {
-    if constexpr (gathers<Body>())
+    if constexpr (requires { typename Body::Gathering; })
     {
-        if (a.cols > kGatherColumns)
+        using Gathering = typename Body::Gathering;
+        if (gather == SellGather::Gather || (gather == SellGather::Policy && gathers<Body>()))
         {
-            sell_spmv<typename Body::Loads, PairWidth>(a, write, x, y, s_begin, s_end);
-            return;
+            if (a.cols <= Gathering::kGatherColumns)
+            {
+                sell_spmv<Gathering>(a, write, x, y, s_begin, s_end, pair_width);
+                return true;
+            }
+            if (gather == SellGather::Gather)
+            {
+                return false;
+            }
         }
+        sell_spmv<typename Body::Loads>(a, write, x, y, s_begin, s_end, pair_width);
+        return true;
     }
-    sell_spmv<Body, PairWidth>(a, write, x, y, s_begin, s_end);
+    else
+    {
+        if (gather == SellGather::Gather)
+        {
+            return false;
+        }
+        sell_spmv<Body>(a, write, x, y, s_begin, s_end, pair_width);
+        return true;
+    }
 }
 
-// A level's pick for one type: the body and pair width of each sweep.
+// A level's pick for one type: the body and pair width of each sweep, unless the call's pick forces them.
 template <typename ResidentBody, crd::u32 ResidentPairs, typename StreamingBody, crd::u32 StreamingPairs>
 struct SellPolicy
 {
     template <typename T, typename Write>
-    static void run(SellSweep sweep, const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin,
+    static bool run(SellPick pick, const SellSlices<T>& a, const Write& write, const T* x, T* y, crd::u32 s_begin,
                     crd::u32 s_end) noexcept
     {
-        if (sweep == SellSweep::Resident)
+        if (pick.sweep == SellSweep::Resident)
         {
-            run_sweep<ResidentBody, ResidentPairs>(a, write, x, y, s_begin, s_end);
+            const crd::u32 pairs = pick.pair_width != 0U ? pick.pair_width : ResidentPairs;
+            return run_body<ResidentBody>(pick.gather, pairs, a, write, x, y, s_begin, s_end);
         }
-        else
-        {
-            run_sweep<StreamingBody, StreamingPairs>(a, write, x, y, s_begin, s_end);
-        }
+        const crd::u32 pairs = pick.pair_width != 0U ? pick.pair_width : StreamingPairs;
+        return run_body<StreamingBody>(pick.gather, pairs, a, write, x, y, s_begin, s_end);
     }
 };
 
@@ -464,6 +484,12 @@ __mmask8 live_mask8(const crd::u32* lens, crd::u32 w) noexcept
     return _mm256_cmpgt_epu32_mask(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(lens)),
                                    _mm256_set1_epi32(static_cast<int>(w)));
 }
+// Four lanes' bits, each twice (bits 2 i and 2 i + 1 of lane i): the opmask of a complex f64 gather's index pairs.
+unsigned twice(__mmask8 lanes) noexcept
+{
+    const unsigned m = lanes;
+    return ((m & 1U) * 3U) | ((m & 2U) * 6U) | ((m & 4U) * 12U) | ((m & 8U) * 24U);
+}
 #elif CRD_SIMD_HAS_AVX2
 // The lanes of a masked column that store a value: len >= w + 1 (unsigned), all ones; a padded lane, zero.
 __m128i live_lanes(const crd::u32* lens, crd::u32 w) noexcept
@@ -475,13 +501,19 @@ __m128i live_lanes(const crd::u32* lens, crd::u32 w) noexcept
 
 #if CRD_SIMD_HAS_AVX2
 
+// A vector gather's signed 32-bit index reaches the first 2^31 columns of x (a gathering body's kGatherColumns; 2^30
+// where a value takes two indices); a wider x takes the body's scalar loads.
+inline constexpr crd::u32 kGatherReach = 0x80000000U;
+
 // Gather: vgatherdpd (a padded lane gathers nothing and keeps the zero); else scalar loads.
 template <bool Gather> struct Avx2F64Body
 {
     static constexpr crd::u32 kC = kSellSliceF64;
     static constexpr crd::u32 kOut = kC;
     static constexpr bool kGathers = Gather;
+    static constexpr crd::u32 kGatherColumns = kGatherReach;
     using Loads = Avx2F64Body<false>;
+    using Gathering = Avx2F64Body<true>;
     using Sums = __m256d;
     static Sums zero() noexcept { return _mm256_setzero_pd(); }
     template <bool Masked>
@@ -519,7 +551,9 @@ template <bool Gather> struct Avx2F32Body
     static constexpr crd::u32 kC = kSellSliceF32;
     static constexpr crd::u32 kOut = kC;
     static constexpr bool kGathers = Gather;
+    static constexpr crd::u32 kGatherColumns = kGatherReach;
     using Loads = Avx2F32Body<false>;
+    using Gathering = Avx2F32Body<true>;
     using Sums = __m256;
     static Sums zero() noexcept { return _mm256_setzero_ps(); }
     template <bool Masked>
@@ -557,11 +591,31 @@ template <bool Gather> struct Avx2F32Body
     static void store(Sums sums, crd::f32 (&out)[kOut]) noexcept { _mm256_storeu_ps(out, sums); }
 };
 
-// Two complex lanes a register: (vr, vr) x (xr, xi) addsub (vi, vi) x (xi, xr).
-struct Avx2C64Body
+// The x indices of a complex f64 gather, (2 col, 2 col + 1) for each of four lanes: lanes 0 and 1 in lo, 2 and 3 in hi.
+// 2 col + 1 stays a positive signed index while cols <= 2^30.
+struct C64Index
+{
+    __m128i lo;
+    __m128i hi;
+};
+C64Index c64_index(const crd::u32* c) noexcept
+{
+    const __m128i col = _mm_loadu_si128(reinterpret_cast<const __m128i*>(c));
+    const __m128i re = _mm_add_epi32(col, col);
+    const __m128i im = _mm_add_epi32(re, _mm_set1_epi32(1));
+    return C64Index{_mm_unpacklo_epi32(re, im), _mm_unpackhi_epi32(re, im)};
+}
+
+// Two complex lanes a register: (vr, vr) x (xr, xi) addsub (vi, vi) x (xi, xr). Gather: x's pairs by two vgatherdpd of
+// the (2 col, 2 col + 1) indices (a padded lane gathers nothing and keeps the zero); else 128-bit loads.
+template <bool Gather> struct Avx2C64Body
 {
     static constexpr crd::u32 kC = kSellSliceComplex;
     static constexpr crd::u32 kOut = 2U * kC;
+    static constexpr bool kGathers = Gather;
+    static constexpr crd::u32 kGatherColumns = kGatherReach / 2U;
+    using Loads = Avx2C64Body<false>;
+    using Gathering = Avx2C64Body<true>;
     struct Sums
     {
         __m256d lo; // lanes 0 and 1
@@ -582,13 +636,48 @@ struct Avx2C64Body
             _mm_loadu_pd(x_of<Masked>(x, 2U * static_cast<crd::usize>(c[lane + 1U]), w, lens[lane + 1U]));
         return _mm256_insertf128_pd(_mm256_castpd128_pd256(lo), hi, 1);
     }
+    // The x pairs of lanes 0 and 1 (lo) and of lanes 2 and 3 (hi), as x_pair gives them.
+    template <bool Masked>
+    static void x_lanes(const crd::f64* x, const crd::u32* c, crd::u32 w, const crd::u32* lens, __m256d& lo,
+                        __m256d& hi) noexcept
+    {
+        if constexpr (!Gather)
+        {
+            lo = x_pair<Masked>(x, c, w, lens, 0);
+            hi = x_pair<Masked>(x, c, w, lens, 2);
+        }
+        else if constexpr (!Masked)
+        {
+            const C64Index index = c64_index(c);
+            lo = _mm256_i32gather_pd(x, index.lo, 8);
+            hi = _mm256_i32gather_pd(x, index.hi, 8);
+        }
+        else
+        {
+            const C64Index index = c64_index(c);
+#if CRD_SIMD_HAS_AVX512
+            const unsigned live = twice(live_mask4(lens, w));
+            lo = _mm256_mmask_i32gather_pd(_mm256_setzero_pd(), static_cast<__mmask8>(live & 0xFU), index.lo, x, 8);
+            hi = _mm256_mmask_i32gather_pd(_mm256_setzero_pd(), static_cast<__mmask8>(live >> 4U), index.hi, x, 8);
+#else
+            const __m128i live = live_lanes(lens, w);
+            const __m256d live_lo = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_unpacklo_epi32(live, live)));
+            const __m256d live_hi = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(_mm_unpackhi_epi32(live, live)));
+            lo = _mm256_mask_i32gather_pd(_mm256_setzero_pd(), x, index.lo, live_lo, 8);
+            hi = _mm256_mask_i32gather_pd(_mm256_setzero_pd(), x, index.hi, live_hi, 8);
+#endif
+        }
+    }
     template <bool Masked>
     static Sums step(Sums sums, const SellSlices<crd::f64>& a, const crd::f64* x, crd::u32 off, const crd::u32* c,
                      crd::u32 w, const crd::u32* lens) noexcept
     {
         const crd::f64* v = a.vals + 2U * static_cast<crd::usize>(off);
-        sums.lo = _mm256_add_pd(sums.lo, mul(_mm256_loadu_pd(v), x_pair<Masked>(x, c, w, lens, 0)));
-        sums.hi = _mm256_add_pd(sums.hi, mul(_mm256_loadu_pd(v + 4), x_pair<Masked>(x, c, w, lens, 2)));
+        __m256d x_lo;
+        __m256d x_hi;
+        x_lanes<Masked>(x, c, w, lens, x_lo, x_hi);
+        sums.lo = _mm256_add_pd(sums.lo, mul(_mm256_loadu_pd(v), x_lo));
+        sums.hi = _mm256_add_pd(sums.hi, mul(_mm256_loadu_pd(v + 4), x_hi));
         return sums;
     }
     static void store(const Sums& sums, crd::f64 (&out)[kOut]) noexcept
@@ -598,20 +687,52 @@ struct Avx2C64Body
     }
 };
 
-// Four complex lanes a register, as Avx2C64Body.
-struct Avx2C32Body
+// Four complex lanes a register, as Avx2C64Body. Gather: each (re, im) pair as one 64-bit lane of a vgatherdpd.
+template <bool Gather> struct Avx2C32Body
 {
     static constexpr crd::u32 kC = kSellSliceComplex;
     static constexpr crd::u32 kOut = 2U * kC;
+    static constexpr bool kGathers = Gather;
+    static constexpr crd::u32 kGatherColumns = kGatherReach;
+    using Loads = Avx2C32Body<false>;
+    using Gathering = Avx2C32Body<true>;
     using Sums = __m256;
     static Sums zero() noexcept { return _mm256_setzero_ps(); }
+    // The x pairs of a column's four lanes, lane 0 lowest.
+    template <bool Masked>
+    static __m256 x_lanes(const crd::f32* x, const crd::u32* c, crd::u32 w, const crd::u32* lens) noexcept
+    {
+        if constexpr (!Gather)
+        {
+            return _mm256_insertf128_ps(_mm256_castps128_ps256(c32_x_pair<Masked>(x, c, w, lens, 0)),
+                                        c32_x_pair<Masked>(x, c, w, lens, 2), 1);
+        }
+        else
+        {
+            const auto* pairs = reinterpret_cast<const crd::f64*>(x); // each (re, im) pair as one 64-bit lane
+            const __m128i index = _mm_loadu_si128(reinterpret_cast<const __m128i*>(c));
+            if constexpr (!Masked)
+            {
+                return _mm256_castpd_ps(_mm256_i32gather_pd(pairs, index, 8));
+            }
+            else
+            {
+#if CRD_SIMD_HAS_AVX512
+                return _mm256_castpd_ps(
+                    _mm256_mmask_i32gather_pd(_mm256_setzero_pd(), live_mask4(lens, w), index, pairs, 8));
+#else
+                const __m256d live = _mm256_castsi256_pd(_mm256_cvtepi32_epi64(live_lanes(lens, w)));
+                return _mm256_castpd_ps(_mm256_mask_i32gather_pd(_mm256_setzero_pd(), pairs, index, live, 8));
+#endif
+            }
+        }
+    }
     template <bool Masked>
     static Sums step(Sums sums, const SellSlices<crd::f32>& a, const crd::f32* x, crd::u32 off, const crd::u32* c,
                      crd::u32 w, const crd::u32* lens) noexcept
     {
         const __m256 v = _mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off));
-        const __m256 xv = _mm256_insertf128_ps(_mm256_castps128_ps256(c32_x_pair<Masked>(x, c, w, lens, 0)),
-                                               c32_x_pair<Masked>(x, c, w, lens, 2), 1);
+        const __m256 xv = x_lanes<Masked>(x, c, w, lens);
         const __m256 p = _mm256_addsub_ps(_mm256_mul_ps(_mm256_moveldup_ps(v), xv),
                                           _mm256_mul_ps(_mm256_movehdup_ps(v), _mm256_permute_ps(xv, 0xB1)));
         return _mm256_add_ps(sums, p);
@@ -635,6 +756,7 @@ __m512 addsub(__m512 a, __m512 b) noexcept
 template <bool Gather> struct Avx512F64Body : Avx2F64Body<Gather>
 {
     using Loads = Avx512F64Body<false>;
+    using Gathering = Avx512F64Body<true>;
     struct Pair
     {
         using Sums = __m512d;
@@ -670,6 +792,7 @@ template <bool Gather> struct Avx512F64Body : Avx2F64Body<Gather>
 template <bool Gather> struct Avx512F32Body : Avx2F32Body<Gather>
 {
     using Loads = Avx512F32Body<false>;
+    using Gathering = Avx512F32Body<true>;
     struct Pair
     {
         using Sums = __m512;
@@ -707,11 +830,15 @@ template <bool Gather> struct Avx512F32Body : Avx2F32Body<Gather>
     };
 };
 
-// The four complex f64 lanes of a slice in one register, as Avx2C64Body.
-struct Avx512C64Body
+// The four complex f64 lanes of a slice in one register, as Avx2C64Body. Gather: one vgatherdpd of the eight indices.
+template <bool Gather> struct Avx512C64Body
 {
     static constexpr crd::u32 kC = kSellSliceComplex;
     static constexpr crd::u32 kOut = 2U * kC;
+    static constexpr bool kGathers = Gather;
+    static constexpr crd::u32 kGatherColumns = kGatherReach / 2U;
+    using Loads = Avx512C64Body<false>;
+    using Gathering = Avx512C64Body<true>;
     using Sums = __m512d;
     static Sums zero() noexcept { return _mm512_setzero_pd(); }
     template <bool Masked>
@@ -719,8 +846,26 @@ struct Avx512C64Body
                      crd::u32 w, const crd::u32* lens) noexcept
     {
         const __m512d v = _mm512_loadu_pd(a.vals + 2U * static_cast<crd::usize>(off));
-        const __m512d xv = _mm512_insertf64x4(_mm512_castpd256_pd512(Avx2C64Body::x_pair<Masked>(x, c, w, lens, 0)),
-                                              Avx2C64Body::x_pair<Masked>(x, c, w, lens, 2), 1);
+        __m512d xv;
+        if constexpr (!Gather)
+        {
+            xv = _mm512_insertf64x4(_mm512_castpd256_pd512(Avx2C64Body<false>::x_pair<Masked>(x, c, w, lens, 0)),
+                                    Avx2C64Body<false>::x_pair<Masked>(x, c, w, lens, 2), 1);
+        }
+        else
+        {
+            const C64Index pairs = c64_index(c);
+            const __m256i index = _mm256_inserti128_si256(_mm256_castsi128_si256(pairs.lo), pairs.hi, 1);
+            if constexpr (Masked)
+            {
+                const auto live = static_cast<__mmask8>(twice(live_mask4(lens, w)));
+                xv = _mm512_mask_i32gather_pd(_mm512_setzero_pd(), live, index, x, 8);
+            }
+            else
+            {
+                xv = _mm512_i32gather_pd(index, x, 8);
+            }
+        }
         const __m512d p = addsub(_mm512_mul_pd(_mm512_movedup_pd(v), xv),
                                  _mm512_mul_pd(_mm512_permute_pd(v, 0xFF), _mm512_permute_pd(xv, 0x55)));
         return _mm512_add_pd(sums, p);
@@ -728,9 +873,11 @@ struct Avx512C64Body
     static void store(Sums sums, crd::f64 (&out)[kOut]) noexcept { _mm512_storeu_pd(out, sums); }
 };
 
-// A pair of complex f32 slices in one register, as Avx512F64Body.
-struct Avx512C32Body : Avx2C32Body
+// A pair of complex f32 slices in one register, as Avx512F64Body. Gather: one vgatherdpd of both slices' pairs.
+template <bool Gather> struct Avx512C32Body : Avx2C32Body<Gather>
 {
+    using Loads = Avx512C32Body<false>;
+    using Gathering = Avx512C32Body<true>;
     struct Pair
     {
         using Sums = __m512;
@@ -750,7 +897,18 @@ struct Avx512C32Body : Avx2C32Body
             const __m512 v =
                 _mm512_insertf32x8(_mm512_castps256_ps512(_mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off0))),
                                    _mm256_loadu_ps(a.vals + 2U * static_cast<crd::usize>(off1)), 1);
-            const __m512 xv = _mm512_insertf32x8(_mm512_castps256_ps512(x_lanes(x, c0)), x_lanes(x, c1), 1);
+            __m512 xv;
+            if constexpr (Gather)
+            {
+                const __m256i index = _mm256_inserti128_si256(
+                    _mm256_castsi128_si256(_mm_loadu_si128(reinterpret_cast<const __m128i*>(c0))),
+                    _mm_loadu_si128(reinterpret_cast<const __m128i*>(c1)), 1);
+                xv = _mm512_castpd_ps(_mm512_i32gather_pd(index, reinterpret_cast<const crd::f64*>(x), 8));
+            }
+            else
+            {
+                xv = _mm512_insertf32x8(_mm512_castps256_ps512(x_lanes(x, c0)), x_lanes(x, c1), 1);
+            }
             const __m512 p = addsub(_mm512_mul_ps(_mm512_moveldup_ps(v), xv),
                                     _mm512_mul_ps(_mm512_movehdup_ps(v), _mm512_permute_ps(xv, 0xB1)));
             return _mm512_add_ps(sums, p);
@@ -765,15 +923,15 @@ struct Avx512C32Body : Avx2C32Body
 
 using F64Policy = SellPolicy<Avx512F64Body<false>, kPairWidth, Avx512F64Body<true>, kPairWidth>;
 using F32Policy = SellPolicy<Avx512F32Body<true>, kPairWidth, Avx512F32Body<true>, kPairWidth>;
-using C64Policy = SellPolicy<Avx512C64Body, kPairWidth, Avx512C64Body, kPairWidth>;
-using C32Policy = SellPolicy<Avx512C32Body, kPairWidth, Avx512C32Body, kPairWidth>;
+using C64Policy = SellPolicy<Avx512C64Body<false>, kPairWidth, Avx512C64Body<false>, kPairWidth>;
+using C32Policy = SellPolicy<Avx512C32Body<false>, kPairWidth, Avx512C32Body<false>, kPairWidth>;
 #else
 // f64: scalar loads 6% to 20% ahead of vgatherdpd in L2, vgatherdpd ahead from DRAM (power-law 1M 12.49 against 13.52
 // to 13.67 ms).
 using F64Policy = SellPolicy<Avx2F64Body<false>, kPairWidth, Avx2F64Body<true>, kPairWidth>;
 using F32Policy = SellPolicy<Avx2F32Body<true>, kPairWidth, Avx2F32Body<true>, kPairWidth>;
-using C64Policy = SellPolicy<Avx2C64Body, kPairWidth, Avx2C64Body, kPairWidth>;
-using C32Policy = SellPolicy<Avx2C32Body, kPairWidth, Avx2C32Body, kPairWidth>;
+using C64Policy = SellPolicy<Avx2C64Body<false>, kPairWidth, Avx2C64Body<false>, kPairWidth>;
+using C32Policy = SellPolicy<Avx2C32Body<false>, kPairWidth, Avx2C32Body<false>, kPairWidth>;
 #endif
 #elif CRD_SIMD_HAS_SSE2
 struct Sse2F64Body
@@ -908,7 +1066,7 @@ struct Sse2C32Body
 
 using F64Policy = SellPolicy<Sse2F64Body, kPairWidth, Sse2F64Body, kPairWidth>;
 // f32 from DRAM runs every slice alone: pairs cost the power-law rows 9% (0.91x of HEAD against 1.02x and 1.03x).
-using F32Policy = SellPolicy<Sse2F32Body, kPairWidth, Sse2F32Body, kNoPairs>;
+using F32Policy = SellPolicy<Sse2F32Body, kPairWidth, Sse2F32Body, kSellNoPairs>;
 using C64Policy = SellPolicy<Sse2C64Body, kPairWidth, Sse2C64Body, kPairWidth>;
 using C32Policy = SellPolicy<Sse2C32Body, kPairWidth, Sse2C32Body, kPairWidth>;
 #else
@@ -921,18 +1079,18 @@ using C32Policy = SellPolicy<ScalarComplexBody<crd::f32>, kPairWidth, ScalarComp
 #endif
 
 template <typename Policy, typename T>
-void sell_spmv_real(const SellSlices<T>& a, T alpha, T beta, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end,
-                    SellSweep sweep) noexcept
+bool sell_spmv_real(const SellSlices<T>& a, T alpha, T beta, const T* x, T* y, crd::u32 s_begin, crd::u32 s_end,
+                    SellPick pick) noexcept
 {
-    Policy::run(sweep, a, RealWrite<T>{alpha, beta, beta == T(0)}, x, y, s_begin, s_end);
+    return Policy::run(pick, a, RealWrite<T>{alpha, beta, beta == T(0)}, x, y, s_begin, s_end);
 }
 
 template <typename Policy, typename T>
-void sell_spmv_complex(const SellSlices<T>& a, const SellComplexScales<T>& scales, const T* x, T* y, crd::u32 s_begin,
-                       crd::u32 s_end, SellSweep sweep) noexcept
+bool sell_spmv_complex(const SellSlices<T>& a, const SellComplexScales<T>& scales, const T* x, T* y, crd::u32 s_begin,
+                       crd::u32 s_end, SellPick pick) noexcept
 {
     const bool beta_zero = scales.beta_re == T(0) && scales.beta_im == T(0);
-    Policy::run(sweep, a, ComplexWrite<T>{scales, beta_zero}, x, y, s_begin, s_end);
+    return Policy::run(pick, a, ComplexWrite<T>{scales, beta_zero}, x, y, s_begin, s_end);
 }
 
 // dot(xi, yj) over r columns in SddmmRows' order.

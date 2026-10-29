@@ -285,9 +285,11 @@ namespace detail
 // rows, disjoint slice ranges write disjoint y rows, so the parallel driver can
 // run ranges concurrently with no races (deterministic, bit-exact vs serial).
 // Every type runs the hesap-sparse kernels of the process's CPU level
-// (crd/hesap/sparse/sparse_kernels.hpp), complex values as (re, im) pairs.
+// (crd/hesap/sparse/sparse_kernels.hpp), complex values as (re, im) pairs. `gather` and `pair_width` force the
+// kernel's pick (SellPick; the board's arms); false, y untouched, when the level refuses it.
 template <typename T>
-void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end)
+[[nodiscard]] bool sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin,
+                                   crd::u32 s_end, SellGather gather, crd::u32 pair_width)
 {
     using U = SellScalarT<T>;
     const SellSlices<U> slices{a.slice_ptr.data(),
@@ -307,14 +309,15 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
     const crd::u32 row_begin = s_begin * height < row_end ? s_begin * height : row_end;
     const crd::usize bytes = a.range_bytes(s_begin, s_end) + (crd::usize{a.cols} + (row_end - row_begin)) * sizeof(T);
     const SellSweep sweep = bytes <= sparse_resident_bytes() ? SellSweep::Resident : SellSweep::Streaming;
+    const SellPick pick{sweep, gather, pair_width};
     const SparseKernels& k = *sparse_kernels().table;
     if constexpr (std::is_same_v<T, crd::f64>)
     {
-        k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end, sweep);
+        return k.sell_spmv_f64(slices, alpha, beta, xp, y, s_begin, s_end, pick);
     }
     else if constexpr (std::is_same_v<T, crd::f32>)
     {
-        k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end, sweep);
+        return k.sell_spmv_f32(slices, alpha, beta, xp, y, s_begin, s_end, pick);
     }
     else
     {
@@ -323,13 +326,20 @@ void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y,
         const SellComplexScales<U> scales{alpha.re, alpha.im, beta.re, beta.im};
         if constexpr (std::is_same_v<U, crd::f64>)
         {
-            k.sell_spmv_c64(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, sweep);
+            return k.sell_spmv_c64(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, pick);
         }
         else
         {
-            k.sell_spmv_c32(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, sweep);
+            return k.sell_spmv_c32(slices, scales, sell_scalars(xp), sell_scalars(y), s_begin, s_end, pick);
         }
     }
+}
+
+// The level's own pick, which is never refused.
+template <typename T>
+void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end)
+{
+    CRD_VERIFY(sell_spmv_range<T>(a, alpha, beta, xp, y, s_begin, s_end, SellGather::Policy, 0U));
 }
 } // namespace detail
 
