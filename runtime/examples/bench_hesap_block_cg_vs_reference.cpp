@@ -13,7 +13,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
-// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -31,8 +33,6 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/IterativeLinearSolvers>
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -48,15 +48,13 @@ namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -206,7 +204,7 @@ static Mtx make_banded_spd(crd::i32 n, crd::i32 hb)
     return m;
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -221,9 +219,9 @@ template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
     return best;
 }
 
-// max per-column true relative residual ‖B·,j - A·X·,j‖/‖B·,j‖ (blocks n×s row-major).
+// max per-column true relative residual ‖rhs·,j - A·X·,j‖/‖rhs·,j‖ (blocks n×s row-major).
 static crd::f64 block_worst_res(hs::ParallelSpmmLinearOp<crd::f64>& op, const hd::Vector<crd::f64>& x,
-                                const crd::containers::Array<crd::f64>& B, crd::i32 n, crd::i32 s)
+                                const crd::containers::Array<crd::f64>& rhs, crd::i32 n, crd::i32 s)
 {
     hd::Vector<crd::f64> ax(&g_alloc, static_cast<crd::usize>(n) * s);
     (void)op.apply_block(x.span(), static_cast<crd::u32>(s), ax.span(), static_cast<crd::u32>(s),
@@ -235,9 +233,9 @@ static crd::f64 block_worst_res(hs::ParallelSpmmLinearOp<crd::f64>& op, const hd
         crd::f64 bn = 0;
         for (crd::i32 k = 0; k < n; ++k)
         {
-            const crd::f64 d = B[static_cast<crd::usize>(k) * s + j] - ax(static_cast<crd::usize>(k) * s + j);
+            const crd::f64 d = rhs[static_cast<crd::usize>(k) * s + j] - ax(static_cast<crd::usize>(k) * s + j);
             rn += d * d;
-            bn += B[static_cast<crd::usize>(k) * s + j] * B[static_cast<crd::usize>(k) * s + j];
+            bn += rhs[static_cast<crd::usize>(k) * s + j] * rhs[static_cast<crd::usize>(k) * s + j];
         }
         worst = std::max(worst, std::sqrt(rn) / std::sqrt(bn));
     }
@@ -265,7 +263,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     hs::ParallelSpmmLinearOp<crd::f64> op(a);                  // block op (parallel spmm above ~L2)
@@ -273,14 +271,14 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
     hp::JacobiBlockPreconditioner<crd::f64> jblk(a, &g_alloc); // block Jacobi (one-pass diagonal)
     hp::JacobiPreconditioner<crd::f64> jcol(a, &g_alloc);      // single-vector Jacobi
 
-    // RHS block B (n×s row-major), distinct columns.
-    crd::containers::Array<crd::f64> B(&g_alloc);
-    B.resize(static_cast<crd::usize>(n) * s);
+    // The right-hand sides (n×s row-major), distinct columns.
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n) * s);
     for (crd::i32 k = 0; k < n; ++k)
     {
         for (crd::i32 j = 0; j < s; ++j)
         {
-            B[static_cast<crd::usize>(k) * s + j] = 1.0 + 0.1 * j + 0.01 * (k % 9);
+            rhs[static_cast<crd::usize>(k) * s + j] = 1.0 + 0.1 * j + 0.01 * (k % 9);
         }
     }
 
@@ -291,9 +289,9 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
         [&]()
         {
             hd::Vector<crd::f64> b(&g_alloc, static_cast<crd::usize>(n) * s);
-            for (crd::usize i = 0; i < B.size(); ++i)
+            for (crd::usize i = 0; i < rhs.size(); ++i)
             {
-                b(i) = B[i];
+                b(i) = rhs[i];
             }
             hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n) * s);
             hi::IterativeOptions<crd::f64> opts;
@@ -302,7 +300,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
             hi::BlockCgWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n), static_cast<crd::u32>(s));
             auto res = hi::block_pcg<crd::f64>(op, jblk, b.span(), x.span(), opts, ws, &g_alloc);
             blk_it = res.iterations;
-            blk_res = block_worst_res(op, x, B, n, s);
+            blk_res = block_worst_res(op, x, rhs, n, s);
         });
 
     // 2. Cerid per-column PCG (parallel SELL spmv; the cache-resident-A regime tool).
@@ -319,7 +317,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
             {
                 for (crd::i32 k = 0; k < n; ++k)
                 {
-                    bj(static_cast<crd::usize>(k)) = B[static_cast<crd::usize>(k) * s + j];
+                    bj(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k) * s + j];
                     xj(static_cast<crd::usize>(k)) = 0.0;
                 }
                 hi::IterativeOptions<crd::f64> opts;
@@ -335,40 +333,22 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s)
         });
 
     // 3. Eigen per-column CG + DiagonalPreconditioner. compute() (factorization) hoisted out.
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
-                             Eigen::DiagonalPreconditioner<double>>
-        cg;
-    cg.setMaxIterations(cap);
-    cg.setTolerance(tol);
-    cg.compute(ea);
+    const peer::Owned ea{peer::csc_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    const peer::Owned eb{peer::mat(n, s, rhs.data(), true)};
+    const peer::Owned ex{peer::mat(n, s, static_cast<const crd::f64*>(nullptr), false)};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = tol;
+    const peer::Owned cg{peer::iterative_solver(peer::IterativeSolve::CgDiagonal, settings)};
+    (void)peer::compute(cg.get(), ea.get());
 
     crd::i64 eig_it = 0;
     crd::f64 eig_res = 0;
     const crd::f64 t_eig = best_ms(
         [&]()
         {
-            eig_it = 0;
-            crd::f64 worst = 0;
-            for (crd::i32 j = 0; j < s; ++j)
-            {
-                Eigen::VectorXd bj(n);
-                for (crd::i32 k = 0; k < n; ++k)
-                {
-                    bj(k) = B[static_cast<crd::usize>(k) * s + j];
-                }
-                Eigen::VectorXd xj = cg.solve(bj);
-                eig_it += static_cast<crd::i64>(cg.iterations());
-                worst = std::max(worst, (bj - ea * xj).norm() / bj.norm());
-            }
-            eig_res = worst;
+            eig_it = peer::solve(cg.get(), eb.get(), ex.get()).iterations;
+            eig_res = peer::relative_residual(ea.get(), eb.get(), ex.get());
         });
 
     std::printf("  %-10s n=%-6d nnz=%-8zu s=%d\n", name, n, a.nnz(), s);
@@ -386,9 +366,10 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf("hesap block-PCG (multi-RHS) + per-column PCG vs Eigen CG+Jacobi per-column -- SPD (all "
                 "Jacobi-preconditioned)\n");
+    std::printf("  Eigen: %s\n", peer::isa());
     std::printf("  block-PCG wins when A>L2 (A-pass reuse) or shared-Krylov cuts iters; per-column PCG is the\n");
     std::printf("  algorithm-appropriate tool when A is cache-resident (block-PCG's O(n.s^2) dense flops then have\n");
     std::printf("  no memory-pass win to trade for). Cerid crushes Eigen via whichever path fits the regime.\n");

@@ -13,7 +13,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
-// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -29,14 +31,11 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/IterativeLinearSolvers>
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
 #include <cstring> // strncmp
-#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -47,15 +46,13 @@ namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -159,7 +156,7 @@ static Mtx load_ss(const char* name)
     return read_mtx(p.c_str());
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -190,7 +187,7 @@ static void run(const char* name)
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
@@ -215,30 +212,23 @@ static void run(const char* name)
             cerid_conv = res.converged;
         });
 
-    // Eigen CG + DiagonalPreconditioner (Jacobi), single-threaded.
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    Eigen::VectorXd eb = Eigen::VectorXd::Ones(n);
+    // Eigen CG + DiagonalPreconditioner (Jacobi), single-threaded; each run builds its solver.
+    const peer::Owned ea{peer::csc_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    const peer::Owned eb{peer::vec(n, b.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = tol;
     crd::i64 eig_iters = 0;
     bool eig_conv = false;
     const crd::f64 t_eig = best_ms(
         [&]()
         {
-            Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
-                                     Eigen::DiagonalPreconditioner<double>>
-                cg;
-            cg.setMaxIterations(cap);
-            cg.setTolerance(tol);
-            cg.compute(ea); // bind + factor the preconditioner before solve
-            Eigen::VectorXd ex = cg.solve(eb);
-            eig_iters = static_cast<crd::i64>(cg.iterations());
-            eig_conv = (cg.info() == Eigen::Success);
+            const peer::Owned cg{peer::iterative_solver(peer::IterativeSolve::CgDiagonal, settings)};
+            (void)peer::compute(cg.get(), ea.get()); // bind + build the preconditioner before solve
+            const peer::IterativeResult r = peer::solve(cg.get(), eb.get(), ex.get());
+            eig_iters = r.iterations;
+            eig_conv = r.converged;
         });
 
     const crd::f64 ratio = t_eig / t_cerid;
@@ -267,15 +257,11 @@ static void run(const char* name)
     const crd::f64 t_em = best_ms(
         [&]()
         {
-            Eigen::MINRES<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
-                          Eigen::DiagonalPreconditioner<double>>
-                s;
-            s.setMaxIterations(cap);
-            s.setTolerance(tol);
-            s.compute(ea);
-            Eigen::VectorXd ex = s.solve(eb);
-            em_it = static_cast<crd::i64>(s.iterations());
-            em_conv = (s.info() == Eigen::Success);
+            const peer::Owned s{peer::iterative_solver(peer::IterativeSolve::MinresDiagonal, settings)};
+            (void)peer::compute(s.get(), ea.get());
+            const peer::IterativeResult r = peer::solve(s.get(), eb.get(), ex.get());
+            em_it = r.iterations;
+            em_conv = r.converged;
         });
     std::printf(
         "    MINRES (same algo): Cerid %5zu it %8.2f ms (%s)  vs  Eigen %5lld it %8.2f ms (%s)  Eigen/Cerid=%.2fx %s\n",
@@ -287,8 +273,9 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0); // unbuffered: see output up to any crash
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf("hesap CG vs Eigen ConjugateGradient+DiagonalPreconditioner (real SuiteSparse SPD)\n");
+    std::printf("  Eigen: %s\n", peer::isa());
     const char* names[] = {"bcsstk13", "bcsstk24", "bcsstk25"};
     for (const char* n : names)
     {

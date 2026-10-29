@@ -12,7 +12,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
-// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -29,15 +31,12 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/IterativeLinearSolvers>
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
 #include <cstring> // strncmp
-#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -47,15 +46,13 @@ namespace hs = crd::hesap::sparse;
 namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -182,7 +179,7 @@ static Mtx make_conv_diff(crd::i32 n, crd::f64 dd, crd::f64 g, crd::i32 hb)
     return m;
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -198,7 +195,7 @@ template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
 }
 
 static crd::f64 block_worst_res(hs::ParallelSpmmLinearOp<crd::f64>& op, const hd::Vector<crd::f64>& x,
-                                const crd::containers::Array<crd::f64>& B, crd::i32 n, crd::i32 s)
+                                const crd::containers::Array<crd::f64>& rhs, crd::i32 n, crd::i32 s)
 {
     hd::Vector<crd::f64> ax(&g_alloc, static_cast<crd::usize>(n) * s);
     (void)op.apply_block(x.span(), static_cast<crd::u32>(s), ax.span(), static_cast<crd::u32>(s),
@@ -210,16 +207,16 @@ static crd::f64 block_worst_res(hs::ParallelSpmmLinearOp<crd::f64>& op, const hd
         crd::f64 bn = 0;
         for (crd::i32 k = 0; k < n; ++k)
         {
-            const crd::f64 d = B[static_cast<crd::usize>(k) * s + j] - ax(static_cast<crd::usize>(k) * s + j);
+            const crd::f64 d = rhs[static_cast<crd::usize>(k) * s + j] - ax(static_cast<crd::usize>(k) * s + j);
             rn += d * d;
-            bn += B[static_cast<crd::usize>(k) * s + j] * B[static_cast<crd::usize>(k) * s + j];
+            bn += rhs[static_cast<crd::usize>(k) * s + j] * rhs[static_cast<crd::usize>(k) * s + j];
         }
         worst = std::max(worst, std::sqrt(rn) / std::sqrt(bn));
     }
     return worst;
 }
 
-enum class Kind
+enum class Kind : crd::u8
 {
     Gmres,
     Bicgstab
@@ -240,19 +237,19 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     hs::ParallelSpmmLinearOp<crd::f64> bop(a);
     hs::ParallelSparseLinearOp<crd::f64> colop(a, &g_alloc);
 
-    crd::containers::Array<crd::f64> B(&g_alloc);
-    B.resize(static_cast<crd::usize>(n) * s);
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n) * s);
     for (crd::i32 k = 0; k < n; ++k)
     {
         for (crd::i32 j = 0; j < s; ++j)
         {
-            B[static_cast<crd::usize>(k) * s + j] = std::sin(0.21 * k * (j + 1) + 0.4 * j) + 0.3 * ((k + 2 * j) % 5);
+            rhs[static_cast<crd::usize>(k) * s + j] = std::sin(0.21 * k * (j + 1) + 0.4 * j) + 0.3 * ((k + 2 * j) % 5);
         }
     }
 
@@ -263,9 +260,9 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
         [&]()
         {
             hd::Vector<crd::f64> b(&g_alloc, static_cast<crd::usize>(n) * s);
-            for (crd::usize i = 0; i < B.size(); ++i)
+            for (crd::usize i = 0; i < rhs.size(); ++i)
             {
-                b(i) = B[i];
+                b(i) = rhs[i];
             }
             hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n) * s);
             hi::IterativeOptions<crd::f64> opts;
@@ -282,7 +279,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
                 hi::BlockBicgstabWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n), static_cast<crd::u32>(s));
                 blk_it = hi::block_bicgstab<crd::f64>(bop, b.span(), x.span(), opts, ws, &g_alloc).iterations;
             }
-            blk_res = block_worst_res(bop, x, B, n, s);
+            blk_res = block_worst_res(bop, x, rhs, n, s);
         });
 
     // 2. Cerid per-column (FGMRES / BiCGSTAB).
@@ -299,7 +296,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
             {
                 for (crd::i32 k = 0; k < n; ++k)
                 {
-                    bj(static_cast<crd::usize>(k)) = B[static_cast<crd::usize>(k) * s + j];
+                    bj(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k) * s + j];
                     xj(static_cast<crd::usize>(k)) = 0.0;
                 }
                 hi::IterativeOptions<crd::f64> opts;
@@ -334,44 +331,27 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
         });
 
     // 3. Eigen per-column (GMRES / BiCGSTAB), single-threaded; compute() hoisted out.
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-
+    const peer::Owned ea{peer::csc_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    const peer::Owned eb{peer::mat(n, s, rhs.data(), true)};
+    const peer::Owned ex{peer::mat(n, s, static_cast<const crd::f64*>(nullptr), false)};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = tol;
+    settings.restart = restart;
+    const peer::Owned g{peer::iterative_solver(
+        kind == Kind::Gmres ? peer::IterativeSolve::GmresIdentity : peer::IterativeSolve::BicgstabIdentity, settings)};
+    (void)peer::compute(g.get(), ea.get());
     crd::i64 eig_it = 0;
     crd::f64 eig_res = 0;
-    const char* eref = "";
+    const crd::f64 t = best_ms(
+        [&]()
+        {
+            eig_it = peer::solve(g.get(), eb.get(), ex.get()).iterations;
+            eig_res = peer::relative_residual(ea.get(), eb.get(), ex.get());
+        });
     if (kind == Kind::Gmres)
     {
-        Eigen::GMRES<Eigen::SparseMatrix<double>, Eigen::IdentityPreconditioner> g;
-        g.set_restart(restart);
-        g.setMaxIterations(cap);
-        g.setTolerance(tol);
-        g.compute(ea);
-        eref = "Eigen GMRES";
-        const crd::f64 t = best_ms(
-            [&]()
-            {
-                eig_it = 0;
-                crd::f64 worst = 0;
-                for (crd::i32 j = 0; j < s; ++j)
-                {
-                    Eigen::VectorXd bj(n);
-                    for (crd::i32 k = 0; k < n; ++k)
-                    {
-                        bj(k) = B[static_cast<crd::usize>(k) * s + j];
-                    }
-                    Eigen::VectorXd xj = g.solve(bj);
-                    eig_it += static_cast<crd::i64>(g.iterations());
-                    worst = std::max(worst, (bj - ea * xj).norm() / bj.norm());
-                }
-                eig_res = worst;
-            });
+        const char* eref = "Eigen GMRES";
         std::printf("  %-10s n=%-6d nnz=%-8zu s=%d  [block-GMRES]\n", name, n, a.nnz(), s);
         std::printf(
             "    Cerid block-GMRES : %5zu block-iters %8.2f ms (r=%.1e)  [Eigen/blk = %.2fx time, %.2fx A-passes]\n",
@@ -384,29 +364,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 s, Kind kind)
     }
     else
     {
-        Eigen::BiCGSTAB<Eigen::SparseMatrix<double>, Eigen::IdentityPreconditioner> g;
-        g.setMaxIterations(cap);
-        g.setTolerance(tol);
-        g.compute(ea);
-        eref = "Eigen BiCGSTAB";
-        const crd::f64 t = best_ms(
-            [&]()
-            {
-                eig_it = 0;
-                crd::f64 worst = 0;
-                for (crd::i32 j = 0; j < s; ++j)
-                {
-                    Eigen::VectorXd bj(n);
-                    for (crd::i32 k = 0; k < n; ++k)
-                    {
-                        bj(k) = B[static_cast<crd::usize>(k) * s + j];
-                    }
-                    Eigen::VectorXd xj = g.solve(bj);
-                    eig_it += static_cast<crd::i64>(g.iterations());
-                    worst = std::max(worst, (bj - ea * xj).norm() / bj.norm());
-                }
-                eig_res = worst;
-            });
+        const char* eref = "Eigen BiCGSTAB";
         std::printf("  %-10s n=%-6d nnz=%-8zu s=%d  [block-BiCGSTAB]\n", name, n, a.nnz(), s);
         std::printf(
             "    Cerid blk-BiCGSTAB: %5zu block-iters %8.2f ms (r=%.1e)  [Eigen/blk = %.2fx time, %.2fx A-passes]\n",
@@ -423,9 +381,10 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf(
         "hesap block-GMRES + block-BiCGSTAB (multi-RHS) vs Eigen per-column (no block algo) -- general nonsym\n");
+    std::printf("  Eigen: %s\n", peer::isa());
     std::printf("  block: one spmm/step for all s RHS + shared Krylov; A-passes = block-iters vs sum(col-iters).\n");
     for (crd::i32 s : {4, 16})
     {

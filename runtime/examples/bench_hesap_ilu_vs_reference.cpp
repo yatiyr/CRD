@@ -14,8 +14,10 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw
-// double/int/size_t). Raw double survives ONLY at the Eigen C++ API boundary
-// (Eigen::SparseMatrix<double>/VectorXd/Triplet<double>); crd::f64 IS double.
+// double/int/size_t). Eigen runs in its peer library at the host's best ISA
+// (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -36,15 +38,12 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/IterativeLinearSolvers>
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
 #include <cstring> // strncmp
-#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -55,15 +54,13 @@ namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -167,7 +164,7 @@ static Mtx load_ss(const char* name)
     return read_mtx(p.c_str());
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -187,29 +184,22 @@ static hs::SparseMatrix<crd::f64, hs::SparseFormat::Csr> to_csr(const Mtx& mtx)
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(mtx.n), static_cast<crd::u32>(mtx.n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     return tb.compress();
 }
 
-static Eigen::SparseMatrix<double> to_eigen(const Mtx& mtx)
+// The matrix in the Eigen peer.
+static peer::SpColF64* to_eigen(const Mtx& mtx)
 {
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(mtx.n, mtx.n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    return ea;
+    return peer::csc_f64(mtx.n, mtx.n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()));
 }
 
 // TRUE relative residual ‖b − A·x‖₂/‖b‖₂ via the operator -- apples-to-apples with Eigen's
 // (b − A·x).norm()/b.norm(). The Krylov recurrence residual drifts BELOW the true residual on
 // ill-conditioned A, so the FAIR comparison drives Cerid to a tight rel_tol and measures the
 // TRUE residual on both sides (matched accuracy). See feedback_iterative_bench_matched_true_residual.
-static crd::f64 true_resid(hs::ParallelSparseLinearOp<crd::f64>& op, const crd::containers::Array<crd::f64>& Bv,
+static crd::f64 true_resid(hs::ParallelSparseLinearOp<crd::f64>& op, const crd::containers::Array<crd::f64>& rhs,
                            const hd::Vector<crd::f64>& x, crd::i32 n)
 {
     hd::Vector<crd::f64> ax(&g_alloc, static_cast<crd::usize>(n));
@@ -219,7 +209,7 @@ static crd::f64 true_resid(hs::ParallelSparseLinearOp<crd::f64>& op, const crd::
     crd::f64 nr = 0;
     for (crd::i32 k = 0; k < n; ++k)
     {
-        const crd::f64 bk = Bv[static_cast<crd::usize>(k)];
+        const crd::f64 bk = rhs[static_cast<crd::usize>(k)];
         nb += bk * bk;
         const crd::f64 rk = bk - ax(static_cast<crd::usize>(k));
         nr += rk * rk;
@@ -278,8 +268,8 @@ static void run_ic(const char* name, const Mtx& mtx)
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
     hp::Ic0Preconditioner<crd::f64> ic(a,
                                        &g_alloc); // factorisation hoisted OUT of the timed solve (= Eigen .compute())
-    crd::containers::Array<crd::f64> Bv(&g_alloc);
-    Bv.resize(static_cast<crd::usize>(n), 1.0);
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n), 1.0);
 
     crd::usize cit = 0;
     crd::f64 cres = 0;
@@ -290,7 +280,7 @@ static void run_ic(const char* name, const Mtx& mtx)
             hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
             for (crd::i32 k = 0; k < n; ++k)
             {
-                b(static_cast<crd::usize>(k)) = Bv[static_cast<crd::usize>(k)];
+                b(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k)];
             }
             hi::IterativeOptions<crd::f64> opts;
             opts.rel_tol = ctol;
@@ -298,29 +288,24 @@ static void run_ic(const char* name, const Mtx& mtx)
             hi::KrylovWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n));
             auto r = hi::pcg<crd::f64>(op, ic, b.span(), x.span(), opts, ws, &g_alloc);
             cit = r.iterations;
-            cres = true_resid(op, Bv, x, n);
+            cres = true_resid(op, rhs, x, n);
         });
 
-    Eigen::SparseMatrix<double> ea = to_eigen(mtx);
+    const peer::Owned ea{to_eigen(mtx)};
+    const peer::Owned eb{peer::vec(n, rhs.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = etol;
+    const peer::Owned solver{peer::iterative_solver(peer::IterativeSolve::CgIncompleteCholesky, settings)};
+    (void)peer::compute(solver.get(), ea.get());
     crd::i64 eit = 0;
     crd::f64 eres = 0;
-    Eigen::ConjugateGradient<Eigen::SparseMatrix<double>, Eigen::Lower | Eigen::Upper,
-                             Eigen::IncompleteCholesky<double>>
-        cg;
-    cg.setMaxIterations(cap);
-    cg.setTolerance(etol);
-    cg.compute(ea);
     const crd::f64 t_e = best_ms(
         [&]()
         {
-            Eigen::VectorXd b(n);
-            for (crd::i32 k = 0; k < n; ++k)
-            {
-                b(k) = Bv[static_cast<crd::usize>(k)];
-            }
-            Eigen::VectorXd x = cg.solve(b);
-            eit = static_cast<crd::i64>(cg.iterations());
-            eres = (b - ea * x).norm() / b.norm();
+            eit = peer::solve(solver.get(), eb.get(), ex.get()).iterations;
+            eres = peer::relative_residual(ea.get(), eb.get(), ex.get());
         });
 
     const crd::f64 mc = cit > 0 ? t_c / static_cast<crd::f64>(cit) : 0.0;
@@ -337,7 +322,7 @@ static void run_ic(const char* name, const Mtx& mtx)
 // Helper: BiCGSTAB with a Cerid preconditioner; returns iters + residual + wall time.
 template <typename Prec>
 static crd::f64 cerid_bicg(hs::ParallelSparseLinearOp<crd::f64>& op, const Prec& m,
-                           const crd::containers::Array<crd::f64>& Bv, crd::i32 n, crd::f64 tol, crd::i32 cap,
+                           const crd::containers::Array<crd::f64>& rhs, crd::i32 n, crd::f64 tol, crd::i32 cap,
                            crd::usize& it_out, crd::f64& res_out)
 {
     return best_ms(
@@ -347,7 +332,7 @@ static crd::f64 cerid_bicg(hs::ParallelSparseLinearOp<crd::f64>& op, const Prec&
             hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
             for (crd::i32 k = 0; k < n; ++k)
             {
-                b(static_cast<crd::usize>(k)) = Bv[static_cast<crd::usize>(k)];
+                b(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k)];
             }
             hi::IterativeOptions<crd::f64> opts;
             opts.rel_tol = tol;
@@ -355,7 +340,7 @@ static crd::f64 cerid_bicg(hs::ParallelSparseLinearOp<crd::f64>& op, const Prec&
             hi::BicgstabWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n));
             auto r = hi::bicgstab<crd::f64>(op, &m, b.span(), x.span(), opts, ws, &g_alloc);
             it_out = r.iterations;
-            res_out = true_resid(op, Bv, x, n);
+            res_out = true_resid(op, rhs, x, n);
         });
 }
 
@@ -374,8 +359,8 @@ static void run_ilu(const char* name, const Mtx& mtx)
     const crd::i32 cap = 8000;
     auto a = to_csr(mtx);
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
-    crd::containers::Array<crd::f64> Bv(&g_alloc);
-    Bv.resize(static_cast<crd::usize>(n), 1.0);
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n), 1.0);
     const crd::u32 avg = n > 0 ? static_cast<crd::u32>(a.nnz() / static_cast<crd::usize>(n)) : 0U;
     const crd::u32 fillf = 10U;             // Eigen-style fill factor (× avg row nnz)
     const crd::u32 lfil = fillf * avg + 5U; // Cerid keeps lfil per L/U row ≈ Eigen fillfactor·avg
@@ -393,30 +378,27 @@ static void run_ilu(const char* name, const Mtx& mtx)
     crd::f64 r0 = 0;
     crd::f64 rt = 0;
     crd::f64 rr = 0;
-    const crd::f64 t0 = cerid_bicg(op, ilu0, Bv, n, ctol, cap, it0, r0);
-    const crd::f64 tt = cerid_bicg(op, ilut, Bv, n, ctol, cap, itt, rt);
-    const crd::f64 tr = cerid_bicg(op, ilutr, Bv, n, ctol, cap, itr, rr);
+    const crd::f64 t0 = cerid_bicg(op, ilu0, rhs, n, ctol, cap, it0, r0);
+    const crd::f64 tt = cerid_bicg(op, ilut, rhs, n, ctol, cap, itt, rt);
+    const crd::f64 tr = cerid_bicg(op, ilutr, rhs, n, ctol, cap, itr, rr);
 
-    Eigen::SparseMatrix<double> ea = to_eigen(mtx);
+    const peer::Owned ea{to_eigen(mtx)};
+    const peer::Owned eb{peer::vec(n, rhs.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = etol;
+    settings.drop_tolerance = droptol;
+    settings.fill_factor = static_cast<int>(fillf); // Eigen fillfactor = multiplier on avg row nnz
+    const peer::Owned solver{peer::iterative_solver(peer::IterativeSolve::BicgstabIlut, settings)};
+    (void)peer::compute(solver.get(), ea.get());
     crd::i64 eit = 0;
     crd::f64 eres = 0;
-    Eigen::BiCGSTAB<Eigen::SparseMatrix<double>, Eigen::IncompleteLUT<double>> bs;
-    bs.preconditioner().setDroptol(droptol);
-    bs.preconditioner().setFillfactor(static_cast<int>(fillf)); // Eigen fillfactor = multiplier on avg row nnz
-    bs.setMaxIterations(cap);
-    bs.setTolerance(etol);
-    bs.compute(ea);
     const crd::f64 t_e = best_ms(
         [&]()
         {
-            Eigen::VectorXd b(n);
-            for (crd::i32 k = 0; k < n; ++k)
-            {
-                b(k) = Bv[static_cast<crd::usize>(k)];
-            }
-            Eigen::VectorXd x = bs.solve(b);
-            eit = static_cast<crd::i64>(bs.iterations());
-            eres = (b - ea * x).norm() / b.norm();
+            eit = peer::solve(solver.get(), eb.get(), ex.get()).iterations;
+            eres = peer::relative_residual(ea.get(), eb.get(), ex.get());
         });
 
     std::printf("  %-10s n=%-6d nnz=%-8zu  [Cerid ILUT (default + AMD) vs Eigen IncompleteLUT (AMD always); BiCGSTAB; "
@@ -447,8 +429,8 @@ static void run_ilup(const char* name, const Mtx& mtx)
     const crd::i32 restart = 60;
     auto a = to_csr(mtx);
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
-    crd::containers::Array<crd::f64> Bv(&g_alloc);
-    Bv.resize(static_cast<crd::usize>(n), 1.0);
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n), 1.0);
 
     std::printf(
         "  %-10s n=%-6d nnz=%-8zu  [Cerid ILU(p) p=0,1,2 vs Eigen IncompleteLUT; FGMRES(%d); matched TRUE residual]\n",
@@ -466,7 +448,7 @@ static void run_ilup(const char* name, const Mtx& mtx)
                 hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
                 for (crd::i32 k = 0; k < n; ++k)
                 {
-                    b(static_cast<crd::usize>(k)) = Bv[static_cast<crd::usize>(k)];
+                    b(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k)];
                 }
                 hi::IterativeOptions<crd::f64> opts;
                 opts.rel_tol = ctol;
@@ -474,7 +456,7 @@ static void run_ilup(const char* name, const Mtx& mtx)
                 hi::GmresWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n), static_cast<crd::usize>(restart));
                 auto r = hi::fgmres<crd::f64>(op, &m, b.span(), x.span(), opts, ws, &g_alloc);
                 it = r.iterations;
-                res = true_resid(op, Bv, x, n);
+                res = true_resid(op, rhs, x, n);
             });
         if (p == 2)
         {
@@ -483,28 +465,25 @@ static void run_ilup(const char* name, const Mtx& mtx)
         std::printf("    Cerid ILU(%u)     : %5zu it %8.2f ms (true r=%.1e)  fill=%.2fx\n", p, it, t, res,
                     static_cast<crd::f64>(m.factor_nnz()) / static_cast<crd::f64>(a.nnz()));
     }
-    Eigen::SparseMatrix<double> ea = to_eigen(mtx);
+    const peer::Owned ea{to_eigen(mtx)};
     const crd::f64 fillf = a.nnz() > 0 ? static_cast<crd::f64>(fill2) / static_cast<crd::f64>(a.nnz()) : 1.0;
-    Eigen::GMRES<Eigen::SparseMatrix<double>, Eigen::IncompleteLUT<double>> g;
-    g.set_restart(restart);
-    g.preconditioner().setDroptol(1e-4);
-    g.preconditioner().setFillfactor(static_cast<int>(fillf + 1.0));
-    g.setMaxIterations(cap);
-    g.setTolerance(etol);
-    g.compute(ea);
+    const peer::Owned eb{peer::vec(n, rhs.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = etol;
+    settings.restart = restart;
+    settings.drop_tolerance = 1e-4;
+    settings.fill_factor = static_cast<int>(fillf + 1.0);
+    const peer::Owned solver{peer::iterative_solver(peer::IterativeSolve::GmresIlut, settings)};
+    (void)peer::compute(solver.get(), ea.get());
     crd::i64 eit = 0;
     crd::f64 eres = 0;
     const crd::f64 te = best_ms(
         [&]()
         {
-            Eigen::VectorXd b(n);
-            for (crd::i32 k = 0; k < n; ++k)
-            {
-                b(k) = Bv[static_cast<crd::usize>(k)];
-            }
-            Eigen::VectorXd x = g.solve(b);
-            eit = static_cast<crd::i64>(g.iterations());
-            eres = (b - ea * x).norm() / b.norm();
+            eit = peer::solve(solver.get(), eb.get(), ex.get()).iterations;
+            eres = peer::relative_residual(ea.get(), eb.get(), ex.get());
         });
     std::printf("    Eigen ILUT-GMRES : %5lld it %8.2f ms (r=%.1e)  fill≈%.2fx (matched to ILU(2))\n",
                 static_cast<long long>(eit), te, eres, fillf);
@@ -530,8 +509,8 @@ static void run_mlilu_reorder(const char* name, const Mtx& mtx, crd::f64 kappa =
     const crd::f64 droptol = 1e-2;
     auto a = to_csr(mtx);
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
-    crd::containers::Array<crd::f64> Bv(&g_alloc);
-    Bv.resize(static_cast<crd::usize>(n), 1.0);
+    crd::containers::Array<crd::f64> rhs(&g_alloc);
+    rhs.resize(static_cast<crd::usize>(n), 1.0);
 
     std::printf("  %-10s n=%-6d nnz=%-8zu  [InverseBasedIlu reorder OFF vs ON; FGMRES(%d); kappa=%.1f droptol=%.0e]\n",
                 name, n, a.nnz(), restart, kappa, droptol);
@@ -550,7 +529,7 @@ static void run_mlilu_reorder(const char* name, const Mtx& mtx, crd::f64 kappa =
                 hd::Vector<crd::f64> x(&g_alloc, static_cast<crd::usize>(n));
                 for (crd::i32 k = 0; k < n; ++k)
                 {
-                    b(static_cast<crd::usize>(k)) = Bv[static_cast<crd::usize>(k)];
+                    b(static_cast<crd::usize>(k)) = rhs[static_cast<crd::usize>(k)];
                 }
                 hi::IterativeOptions<crd::f64> opts;
                 opts.rel_tol = rel_tol;
@@ -558,7 +537,7 @@ static void run_mlilu_reorder(const char* name, const Mtx& mtx, crd::f64 kappa =
                 hi::GmresWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n), static_cast<crd::usize>(restart));
                 auto r = hi::fgmres<crd::f64>(op, &m, b.span(), x.span(), opts, ws, &g_alloc);
                 it = r.iterations;
-                res = true_resid(op, Bv, x, n);
+                res = true_resid(op, rhs, x, n);
             });
         std::printf("    reorder=%-3s : %5zu it  factor %8.2f ms  solve %8.2f ms  levels=%d fill=%.2fx (true r=%.1e)\n",
                     tag, it, tf, ts, static_cast<crd::i32>(m.num_levels()),
@@ -572,8 +551,9 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf("hesap IC(0)/ILU(0) preconditioners vs Eigen IncompleteCholesky / IncompleteLUT (real SuiteSparse)\n");
+    std::printf("  Eigen: %s\n", peer::isa());
     std::printf("  Cerid pure level-0 + parallel SELL spmv; Eigen shifted-IC / dual-threshold ILUT. Both iter counts "
                 "reported.\n");
     std::printf(" --- SPD: IC(0) ---\n");

@@ -13,7 +13,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
-// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
@@ -28,13 +30,11 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
 #include <cstring> // strncmp
-#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -45,15 +45,13 @@ namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -155,7 +153,7 @@ static Mtx load_ss(const char* name)
     return read_mtx(p.c_str());
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -188,7 +186,7 @@ static void run(const char* name)
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
@@ -200,17 +198,13 @@ static void run(const char* name)
     opts.rel_tol = tol;
     opts.max_iter = static_cast<crd::usize>(cap);
 
-    Eigen::SparseMatrix<double> ea(n, n);
-    {
-        crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-        et.reserve(mtx.trips.size());
-        for (const Trip& t : mtx.trips)
-        {
-            et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-        }
-        ea.setFromTriplets(et.data(), et.data() + et.size());
-    }
-    Eigen::VectorXd eb = Eigen::VectorXd::Ones(n);
+    const peer::Owned ea{peer::csc_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    const peer::Owned eb{peer::vec(n, b.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = tol;
+    settings.s = sdim;
 
     // True residual ‖b−Ax‖/‖b‖ for a Cerid solution (recompute through A).
     auto cer_true = [&](const hd::Vector<crd::f64>& x) -> crd::f64
@@ -223,10 +217,6 @@ static void run(const char* name)
             r(i) = b(i) - ax(i);
         }
         return hd::nrm2<crd::f64>(r.span()) / hd::nrm2<crd::f64>(b.span());
-    };
-    auto eig_true = [&](const Eigen::VectorXd& x) -> crd::f64
-    {
-        return (eb - ea * x).norm() / eb.norm();
     };
 
     auto bench_pair = [&](const char* tag, bool precond)
@@ -250,30 +240,13 @@ static void run(const char* name)
         const crd::f64 t_eig = best_ms(
             [&]()
             {
-                Eigen::VectorXd x;
-                if (precond)
-                {
-                    Eigen::IDRS<Eigen::SparseMatrix<double>, Eigen::DiagonalPreconditioner<double>> s;
-                    s.setMaxIterations(cap);
-                    s.setTolerance(tol);
-                    s.setS(sdim);
-                    s.compute(ea);
-                    x = s.solve(eb);
-                    eig_it = static_cast<crd::i64>(s.iterations());
-                    eig_ok = (s.info() == Eigen::Success);
-                }
-                else
-                {
-                    Eigen::IDRS<Eigen::SparseMatrix<double>, Eigen::IdentityPreconditioner> s;
-                    s.setMaxIterations(cap);
-                    s.setTolerance(tol);
-                    s.setS(sdim);
-                    s.compute(ea);
-                    x = s.solve(eb);
-                    eig_it = static_cast<crd::i64>(s.iterations());
-                    eig_ok = (s.info() == Eigen::Success);
-                }
-                eig_res = eig_true(x);
+                const peer::Owned s{peer::iterative_solver(
+                    precond ? peer::IterativeSolve::IdrsDiagonal : peer::IterativeSolve::IdrsIdentity, settings)};
+                (void)peer::compute(s.get(), ea.get());
+                const peer::IterativeResult r = peer::solve(s.get(), eb.get(), ex.get());
+                eig_it = r.iterations;
+                eig_ok = r.converged;
+                eig_res = peer::relative_residual(ea.get(), eb.get(), ex.get());
             });
 
         const bool cer_conv = cer_res <= 1e-6;
@@ -293,8 +266,9 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf("hesap IDR(s=4) vs Eigen IDRS (unsupported) -- real nonsym, APPLES-TO-APPLES (same algo + s);\n");
+    std::printf("  Eigen: %s; one shadow space for every IDRS solve\n", peer::isa());
     std::printf(
         "  true residual ‖b-Ax‖/‖b‖ recomputed for BOTH sides (STALL = reported converged but residual > 1e-6).\n");
     const char* names[] = {"bcsstk13", "bcsstk24", "bcsstk25", "gemat11", "sherman3"};

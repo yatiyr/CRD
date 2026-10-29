@@ -16,7 +16,9 @@
 // crd conventions throughout: crd::containers::Array (never std::vector),
 // crd::platform::fs::read_file_text + manual parse (never std::ifstream/string),
 // a named TlsfAllocator (never malloc), crd::f64/usize/i32/i64 (never raw types).
-// Raw double survives ONLY at the Eigen C++ API boundary; crd::f64 IS double.
+// Eigen runs in its peer library at the host's best ISA (examples/peers/eigen_peer.hpp).
+
+#include "eigen_peer.hpp"
 
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
@@ -32,13 +34,11 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 #include <crd/platform/filesystem.hpp>
 
-#include <Eigen/Sparse>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib> // strtol / strtod
 #include <cstring> // strncmp
-#include <unsupported/Eigen/IterativeSolvers>
 
 #ifndef CRD_SUITESPARSE_DIR
 #define CRD_SUITESPARSE_DIR "."
@@ -49,15 +49,13 @@ namespace hi = crd::hesap::iterative;
 namespace hd = crd::hesap::dense;
 namespace hp = crd::hesap::preconditioners;
 namespace fs = crd::platform::fs;
+namespace peer = crd_peer::eigen;
 using Clock = std::chrono::steady_clock;
 
 static crd::memory::TlsfAllocator g_alloc{crd::usize{1} << 30}; // 1 GiB pool — named allocator, never malloc
 
-struct Trip
-{
-    crd::i32 r, c;
-    crd::f64 v;
-};
+// The peer's coordinate, so the Eigen side reuses the parsed list.
+using Trip = peer::Entry;
 struct Mtx
 {
     crd::i32 n = 0;
@@ -179,7 +177,7 @@ static Mtx make_cluster(crd::i32 n, crd::i32 nsmall)
     return m;
 }
 
-template <typename Fn> static crd::f64 best_ms(Fn&& fn, crd::i32 reps = 3)
+template <typename Fn> static crd::f64 best_ms(const Fn& fn, crd::i32 reps = 3)
 {
     fn();
     crd::f64 best = 1e30;
@@ -208,7 +206,7 @@ static void run(const char* name, const Mtx& mtx, crd::i32 m_outer, crd::i32 m_i
     hs::TripletBuilder<crd::f64> tb(&g_alloc, static_cast<crd::u32>(n), static_cast<crd::u32>(n));
     for (const Trip& t : mtx.trips)
     {
-        tb.add(static_cast<crd::u32>(t.r), static_cast<crd::u32>(t.c), t.v);
+        tb.add(static_cast<crd::u32>(t.row), static_cast<crd::u32>(t.col), t.value);
     }
     auto a = tb.compress();
     hs::ParallelSparseLinearOp<crd::f64> op(a, &g_alloc);
@@ -258,36 +256,30 @@ static void run(const char* name, const Mtx& mtx, crd::i32 m_outer, crd::i32 m_i
                 io.rel_tol = 1e-2;
                 (void)hi::gmres<crd::f64>(op, r, z, io, inner_ws, &g_alloc);
             };
-            auto P = hp::make_krylov_preconditioner<crd::f64>(static_cast<crd::usize>(n), inner);
+            auto inner_solver = hp::make_krylov_preconditioner<crd::f64>(static_cast<crd::usize>(n), inner);
             hi::GmresWorkspace<crd::f64> ws(&g_alloc, static_cast<crd::usize>(n), static_cast<crd::usize>(m_outer));
-            auto res = hi::fgmres<crd::f64>(op, &P, b.span(), x.span(), opts, ws, &g_alloc);
+            auto res = hi::fgmres<crd::f64>(op, &inner_solver, b.span(), x.span(), opts, ws, &g_alloc);
             nest_it = res.iterations;
             nest_res = cer_true(x);
         });
 
-    crd::containers::Array<Eigen::Triplet<double>> et(&g_alloc);
-    et.reserve(mtx.trips.size());
-    for (const Trip& t : mtx.trips)
-    {
-        et.push_back(Eigen::Triplet<double>(t.r, t.c, t.v));
-    }
-    Eigen::SparseMatrix<double> ea(n, n);
-    ea.setFromTriplets(et.data(), et.data() + et.size());
-    Eigen::VectorXd eb = Eigen::VectorXd::Ones(n);
+    const peer::Owned ea{peer::csc_f64(n, n, mtx.trips.data(), static_cast<peer::Index>(mtx.trips.size()))};
+    const peer::Owned eb{peer::vec(n, b.data())};
+    const peer::Owned ex{peer::vec(n, static_cast<const crd::f64*>(nullptr))};
+    peer::IterativeSettings settings;
+    settings.max_iterations = cap;
+    settings.tolerance = tol;
+    settings.restart = m_outer;
 
     crd::i64 eg_it = 0;
     crd::f64 eg_res = 0;
     const crd::f64 t_eg = best_ms(
         [&]()
         {
-            Eigen::GMRES<Eigen::SparseMatrix<double>, Eigen::IdentityPreconditioner> s;
-            s.setMaxIterations(cap);
-            s.setTolerance(tol);
-            s.set_restart(m_outer);
-            s.compute(ea);
-            Eigen::VectorXd x = s.solve(eb);
-            eg_it = static_cast<crd::i64>(s.iterations());
-            eg_res = (eb - ea * x).norm() / eb.norm();
+            const peer::Owned s{peer::iterative_solver(peer::IterativeSolve::GmresIdentity, settings)};
+            (void)peer::compute(s.get(), ea.get());
+            eg_it = peer::solve(s.get(), eb.get(), ex.get()).iterations;
+            eg_res = peer::relative_residual(ea.get(), eb.get(), ex.get());
         });
 
     std::printf("  %-10s n=%-6d nnz=%-8zu  outer=%d inner=GMRES(%d,%d it)\n", name, n, a.nnz(), m_outer, m_inner,
@@ -305,9 +297,10 @@ int main()
 {
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     crd::jobs::init();
-    Eigen::setNbThreads(1);
+    peer::set_threads(1);
     std::printf(
         "hesap nested inner-Krylov-as-preconditioner (FGMRES-outer + inner-GMRES) vs flat GMRES + Eigen GMRES\n");
+    std::printf("  Eigen: %s\n", peer::isa());
     std::printf("  value = OUTER iterations cut by the inner approximate-solve; converges where flat restarted GMRES "
                 "stalls.\n");
     run("cluster", make_cluster(2000, 8), /*m_outer=*/10, /*m_inner=*/20, /*inner_iters=*/12);

@@ -197,4 +197,54 @@ CRD_BENCH_PEER_API void solve(const SpSolver* solver, const MatF64* b, MatF64* x
 CRD_BENCH_PEER_API Index factor_nnz(const SpSolver* solver);
 // matrixL() materialised in the solver, column-major (cols + 1 outer offsets); false for LU and QR
 CRD_BENCH_PEER_API bool factor_pattern(SpSolver* solver, const std::int32_t** outer, const std::int32_t** inner);
+
+// ---- Sparse iterative solvers ------------------------------------------------------------------------------------
+// The solver and preconditioner of each configuration the boards measure, on SparseMatrix<double> (column-major).
+enum class IterativeSolve : std::uint8_t
+{
+    CgDiagonal,           // ConjugateGradient<Lower | Upper, DiagonalPreconditioner<double>>
+    CgIncompleteCholesky, // ConjugateGradient<Lower | Upper, IncompleteCholesky<double>>
+    MinresDiagonal,       // MINRES<Lower | Upper, DiagonalPreconditioner<double>>
+    BicgstabIdentity,     // BiCGSTAB<IdentityPreconditioner>
+    BicgstabDiagonal,     // BiCGSTAB<DiagonalPreconditioner<double>>
+    BicgstabIlut,         // BiCGSTAB<IncompleteLUT<double>>
+    GmresIdentity,        // GMRES<IdentityPreconditioner>
+    GmresDiagonal,        // GMRES<DiagonalPreconditioner<double>>
+    GmresIlut,            // GMRES<IncompleteLUT<double>>
+    IdrsIdentity,         // IDRS<IdentityPreconditioner>
+    IdrsDiagonal,         // IDRS<DiagonalPreconditioner<double>>
+};
+// setMaxIterations and setTolerance, and where the configuration has them: GMRES's set_restart, IDRS's setS and
+// IncompleteLUT's setDroptol and setFillfactor. The defaults are Eigen's.
+struct IterativeSettings
+{
+    Index max_iterations = 0;
+    double tolerance = 0.0;
+    Index restart = 30;
+    Index s = 4;
+    double drop_tolerance = 1e-12; // NumTraits<double>::dummy_precision()
+    int fill_factor = 10;
+};
+struct IterativeResult
+{
+    Index iterations;
+    bool converged; // the preconditioner was built and the solve's info() is Success
+};
+struct SpIterative; // one of IterativeSolve's solvers, kept across calls
+
+CRD_BENCH_PEER_API SpIterative* iterative_solver(IterativeSolve method, const IterativeSettings& settings);
+CRD_BENCH_PEER_API void destroy(SpIterative* object) noexcept;
+// solver.compute(a): binds a, which must outlive the solver's use (Eigen keeps a reference), and builds the
+// preconditioner; true when info() is Success
+CRD_BENCH_PEER_API bool compute(SpIterative* solver, const SpColF64* a);
+// x = solver.solve(b) from a zero guess; IDRS draws its shadow space from std::rand, seeded the same before each solve
+CRD_BENCH_PEER_API IterativeResult solve(const SpIterative* solver, const VecF64* b, VecF64* x);
+// Each column of b solved on its own (Eigen has no block method): the iterations summed, converged when all are
+CRD_BENCH_PEER_API IterativeResult solve(const SpIterative* solver, const MatF64* b, MatF64* x);
+// (b - a * x).norm() / b.norm(), the worst column's for a matrix
+CRD_BENCH_PEER_API double relative_residual(const SpColF64* a, const VecF64* b, const VecF64* x);
+CRD_BENCH_PEER_API double relative_residual(const SpColF64* a, const MatF64* b, const MatF64* x);
+// The configuration's preconditioner alone, built from a and dropped; true when its info() is Success
+CRD_BENCH_PEER_API bool build_preconditioner(IterativeSolve method, const IterativeSettings& settings,
+                                             const SpColF64* a);
 } // namespace crd_peer::eigen

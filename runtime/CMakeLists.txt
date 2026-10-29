@@ -526,15 +526,14 @@ endfunction()
 # time, built as the crd-bench-eigen-peer library) and OpenBLAS (built by its own CMake, called through cblas.h and
 # LAPACK's symbols).
 #
-# crd_add_hesap_vs_ref_bench(<name> [USE_JOBS] [USE_OPENBLAS] [EIGEN_PEER]): the bench examples/<name>.cpp.
+# crd_add_hesap_vs_ref_bench(<name> [USE_JOBS] [USE_OPENBLAS]): the bench examples/<name>.cpp, which calls Eigen
+# through crd-bench-eigen-peer (examples/peers/eigen_peer.hpp) and builds with the tree's warnings.
 #   USE_JOBS     also link crd-jobs (benches that call jobs::frame_reset).
 #   USE_OPENBLAS also link openblas and its generated-header directories (see the note below).
-#   EIGEN_PEER   the bench calls Eigen through crd-bench-eigen-peer (examples/peers/eigen_peer.hpp) and builds with
-#                the tree's warnings; a bench without it still compiles Eigen in its own unit, at the baseline.
 # No precompiled header: the default one has not been proven beside OpenBLAS's cblas.h.
 # Eigen's parallel products expand `#pragma omp parallel` in the unit that instantiates them, which is the peer's.
 function(crd_add_hesap_vs_ref_bench name)
-    cmake_parse_arguments(ARG "USE_JOBS;USE_OPENBLAS;EIGEN_PEER" "" "" ${ARGN})
+    cmake_parse_arguments(ARG "USE_JOBS;USE_OPENBLAS" "" "" ${ARGN})
     add_executable(${name} examples/${name}.cpp)
     target_link_libraries(${name} PRIVATE
         crd-core crd-memory crd-containers crd-math crd-platform crd-hesap crd-hesap-dense)
@@ -552,55 +551,35 @@ function(crd_add_hesap_vs_ref_bench name)
             "${CMAKE_BINARY_DIR}/generated"
             "${CMAKE_BINARY_DIR}/_deps/openblas-build")
     endif()
-    if(ARG_EIGEN_PEER)
-        target_link_libraries(${name} PRIVATE crd-bench-eigen-peer)
-        target_include_directories(${name} PRIVATE examples/peers)
-        return()
-    endif()
-    target_link_libraries(${name} PRIVATE eigen_headers)
-    if(OpenMP_CXX_FOUND)
-        target_link_libraries(${name} PRIVATE OpenMP::OpenMP_CXX)
-    endif()
-    # /WX- is set via source-file property so it comes AFTER crd-warnings' INTERFACE /WX and wins.
-    if(MSVC)
-        set_source_files_properties(examples/${name}.cpp PROPERTIES
-            COMPILE_FLAGS "/WX- /wd4242 /wd4244 /wd4267 /wd4127 /wd4146")
-    else()
-        set_source_files_properties(examples/${name}.cpp PROPERTIES COMPILE_FLAGS "-Wno-error")
-    endif()
+    target_link_libraries(${name} PRIVATE crd-bench-eigen-peer)
+    target_include_directories(${name} PRIVATE examples/peers)
 endfunction()
 
 if(CRD_BUILD_HESAP_VS_REFERENCE)
-    find_package(OpenMP COMPONENTS CXX)
-    if(OpenMP_CXX_FOUND)
-        message(STATUS "[hesap-vs-reference] OpenMP enabled for Eigen-MT")
-    else()
-        message(WARNING "[hesap-vs-reference] OpenMP NOT found — Eigen will run SERIAL")
-    endif()
     crd_add_bench_peer(crd-bench-eigen-peer
         SOURCES examples/peers/eigen_peer_dense.cpp examples/peers/eigen_peer_sparse.cpp
-        examples/peers/eigen_peer_direct.cpp LIBRARIES eigen_headers)
+        examples/peers/eigen_peer_direct.cpp examples/peers/eigen_peer_iterative.cpp LIBRARIES eigen_headers)
 
-    crd_add_hesap_vs_ref_bench(bench_hesap_gemm_vs_reference    USE_JOBS USE_OPENBLAS EIGEN_PEER)
-    crd_add_hesap_vs_ref_bench(bench_hesap_blas1_vs_reference   USE_OPENBLAS EIGEN_PEER)
-    crd_add_hesap_vs_ref_bench(bench_hesap_blas2_vs_reference   USE_OPENBLAS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_gemm_vs_reference    USE_JOBS USE_OPENBLAS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_blas1_vs_reference   USE_OPENBLAS)
+    crd_add_hesap_vs_ref_bench(bench_hesap_blas2_vs_reference   USE_OPENBLAS)
     # v0e-g: solvers shootout (LU / Cholesky / LDLT / QR) — Eigen-only.
-    crd_add_hesap_vs_ref_bench(bench_hesap_solvers_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_solvers_vs_reference USE_JOBS)
     # v3a-1: symmetric eig (eig_sym) vs Eigen SelfAdjointEigenSolver + LAPACK dsyev.
-    crd_add_hesap_vs_ref_bench(bench_hesap_eig_vs_reference USE_JOBS USE_OPENBLAS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_eig_vs_reference USE_JOBS USE_OPENBLAS)
     # v3b-1b: SVD (svd) vs Eigen JacobiSVD + BDCSVD AND LAPACK dgesvd + dgesdd.
-    crd_add_hesap_vs_ref_bench(bench_hesap_svd_vs_reference USE_JOBS USE_OPENBLAS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_svd_vs_reference USE_JOBS USE_OPENBLAS)
     # v3c-1b: least-squares (lstsq QR/COD/SVD + pinv) vs Eigen HouseholderQR /
     # CompleteOrthogonalDecomposition / BDCSVD AND LAPACK dgels / dgelsy / dgelsd.
-    crd_add_hesap_vs_ref_bench(bench_hesap_lstsq_vs_reference USE_JOBS USE_OPENBLAS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_lstsq_vs_reference USE_JOBS USE_OPENBLAS)
     # v3d-1a: Hessenberg reduction (blocked dgehrd) vs Eigen HessenbergDecomposition
     # AND LAPACK dgehrd.
-    crd_add_hesap_vs_ref_bench(bench_hesap_eig_nonsym_vs_reference USE_JOBS USE_OPENBLAS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_eig_nonsym_vs_reference USE_JOBS USE_OPENBLAS)
     # v1a-3: sparse assembly shootout (TripletBuilder::compress vs setFromTriplets).
-    crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_sparse_assembly_vs_reference)
     target_link_libraries(bench_hesap_sparse_assembly_vs_reference PRIVATE crd-hesap-sparse)
     # v1b-1/v1b-2: spmv CSR baseline + SELL primary (ST + MT) vs Eigen (ST + MT).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spmv_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmv_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_spmv_vs_reference PRIVATE crd-hesap-sparse)
 
     # v1d-2: spgemm C=A*A vs Eigen on REAL SuiteSparse matrices. Fetch a few
@@ -629,59 +608,59 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
             endif()
         endif()
     endforeach()
-    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_spgemm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_spgemm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1e-1: spmm (sparse x dense, multi-RHS) vs Eigen sparse*dense (ST + MT).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spmm_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spmm_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_spmm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_spmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1e-2: SDDMM vs Eigen per-entry dot (same flops) + dense-then-mask illustration.
-    crd_add_hesap_vs_ref_bench(bench_hesap_sddmm_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_sddmm_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_sddmm_vs_reference PRIVATE crd-hesap-sparse)
     target_compile_definitions(bench_hesap_sddmm_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v1f-1: BSR block-spmv vs Eigen scalar-CSR (synthetic native block patterns).
-    crd_add_hesap_vs_ref_bench(bench_hesap_bsr_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_bsr_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_bsr_vs_reference PRIVATE crd-hesap-sparse)
     # v1f-2: ELL (regular) + DIA (banded) spmv vs Cerid + Eigen scalar CSR.
-    crd_add_hesap_vs_ref_bench(bench_hesap_ell_dia_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ell_dia_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_ell_dia_vs_reference PRIVATE crd-hesap-sparse)
     # v1g-2: adversarial spgemm stress corpus vs Eigen-ST (find any losing/infeasible regime).
-    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_spgemm_stress_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_spgemm_stress_vs_reference PRIVATE crd-hesap-sparse)
     # v2a: ordering — symbolic-Cholesky port validation + RCM fill/bandwidth + v2b AMD target.
-    crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ordering_vs_reference)
     target_link_libraries(bench_hesap_ordering_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering)
     target_compile_definitions(bench_hesap_ordering_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5a-1b step 6 / v5a-3: TREE-PARALLEL supernodal Cholesky factor+solve vs Eigen SimplicialLLT.
-    crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_cholesky_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_cholesky_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_cholesky_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5b-1: Gilbert-Peierls sparse LU (SERIAL correctness oracle) factor+solve vs Eigen SparseLU.
-    crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_vs_reference)
     target_link_libraries(bench_hesap_lu_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_lu_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     # v5e-1d: HSS ULV (build_hss_from_dense + factor_hss_ulv + solve) vs Eigen dense LLT — the
     # O(r^2 N) factor + O(rN) per-solve PREMISE (matrix generated internally; no SuiteSparse dep).
-    crd_add_hesap_vs_ref_bench(bench_hesap_hss_vs_reference EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_hss_vs_reference)
     target_link_libraries(bench_hesap_hss_vs_reference PRIVATE crd-hesap-direct)
 
     # v5c-1d: Multifrontal QR factor+solve vs Eigen SparseQR (NaturalOrdering on the same
     # AMD(AᵀA)-column-ordered matrix). v5c-1 correctness-first baseline; the crush lands with
     # the perf levers (blocked-WY + staircase + implicit AᵀA-free symbolic + tree-parallel).
-    crd_add_hesap_vs_ref_bench(bench_hesap_qr_vs_reference EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_qr_vs_reference)
     target_link_libraries(bench_hesap_qr_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct)
     target_compile_definitions(bench_hesap_qr_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
 
     # v5d-g: multifrontal LDLᵀ (Bunch-Kaufman) vs Eigen SimplicialLDLT (pivot-free; honest peer note in-file).
-    crd_add_hesap_vs_ref_bench(bench_hesap_ldlt_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_ldlt_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_ldlt_vs_reference PRIVATE crd-hesap-sparse crd-hesap-direct)
 
     # v5b-2c: SUPERNODAL LU crush — Cerid SupernodalLU vs Eigen SparseLU on the same AMD-permuted
     # UNSYMMETRIC matrices. UMFPACK (the multifrontal gold standard) folds in when
     # CRD_BUILD_HESAP_VS_UMFPACK=ON (WSL/Linux; GPL → dev-only, never shipped) — it links the
     # SuiteSparse umfpack apt-installed by scripts/setup-cholmod-ref.sh.
-    crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS EIGEN_PEER)
+    crd_add_hesap_vs_ref_bench(bench_hesap_lu_supernodal_vs_reference USE_JOBS)
     target_link_libraries(bench_hesap_lu_supernodal_vs_reference PRIVATE crd-hesap-sparse crd-hesap-ordering crd-hesap-direct crd-hesap-iterative)
     target_compile_definitions(bench_hesap_lu_supernodal_vs_reference PRIVATE "CRD_SUITESPARSE_DIR=\"${CRD_SS_DIR}\"")
     if(CRD_BUILD_HESAP_VS_UMFPACK)
