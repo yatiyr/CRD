@@ -6,10 +6,17 @@ name: Host check
 # of a CI tier (docs/design/ci-tiers.md): it runs only when dispatched, builds only one libFuzzer target of the
 # diagnostic linux-clang-fuzz preset per fuzz leg (crd-jobs-tests of linux-clang-tsan per TSan leg) and never writes
 # to the committed corpora. Each fuzz leg runs its round under the default ASan options and then under the
-# container-overflow control for the same time; a leg fails on any event.
+# container-overflow control for the same time; a leg fails on any event. The ARM64 sanitizer-cost legs (SIMD-DISPATCH)
+# time the cases linux-gcc-arm64-asan runs far slower than linux-clang-arm64-asan under each sanitizer and runtime
+# option, on both compilers.
 on:
   workflow_dispatch:
     inputs:
+      experiment:
+        description: 'which experiment to run'
+        type: choice
+        options: [all, fuzz, tsan, arm64-sanitizer-cost]
+        default: all
       seconds:
         description: 'libFuzzer seconds per round and arm'
         type: number
@@ -34,6 +41,7 @@ concurrency:
 jobs:
   fuzz:
     name: Host check (${{ matrix.target }}, seed ${{ matrix.seed }})
+    if: inputs.experiment == 'all' || inputs.experiment == 'fuzz'
     runs-on: ubuntu-24.04
     timeout-minutes: 100
     env:
@@ -153,6 +161,7 @@ jobs:
     # (docs/sessions/2026-10-25-jobs-fiber-pool-contention.md). Two legs draw two hosted machines; each runs the jobs
     # case and the control's three arms interleaved, every process pinned beside busy loops (scripts/tsan-host-check.py).
     name: Host check (ThreadSanitizer, leg ${{ matrix.leg }})
+    if: inputs.experiment == 'all' || inputs.experiment == 'tsan'
     runs-on: ubuntu-24.04
     timeout-minutes: 200
     env:
@@ -242,5 +251,115 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: host-check-tsan-${{ matrix.leg }}
+          path: ${{ runner.temp }}/host-check/evidence
+          if-no-files-found: warn
+
+  arm64-sanitizer-cost:
+    # SIMD-DISPATCH (docs/sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md): in scheduled run 40849112570
+    # linux-gcc-arm64-asan ran 2,283 of 2,474 tests in the 6 h job cap, 5.7 times linux-clang-arm64-asan at the
+    # median and 30 to 160 times on some cases, while x64 GCC ASan ran them at Clang's speed. Each leg builds one ARM64
+    # sanitizer preset twice (as configured and without UBSan) and times those cases through ctest, interleaved, under
+    # each AddressSanitizer option that could carry the cost.
+    name: Host check (ARM64 sanitizer cost, ${{ matrix.preset }})
+    if: inputs.experiment == 'all' || inputs.experiment == 'arm64-sanitizer-cost'
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 150
+    env:
+      CPM_SOURCE_CACHE: ${{ github.workspace }}/.cpm-cache
+      CRD_PLATFORM_HEADLESS: '1'
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [linux-gcc-arm64-asan, linux-clang-arm64-asan]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y ninja-build clang libclang-rt-18-dev
+
+      - name: Cache CPM downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.CPM_SOURCE_CACHE }}
+          key: cpm-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-${{ hashFiles('CMakeLists.txt', 'CMakePresets.json', 'cmake/CPM.cmake', 'cmake/CrdPins.cmake', 'cmake/pins.json') }}
+          restore-keys: |
+            cpm-${{ runner.os }}-${{ runner.arch }}-${{ matrix.preset }}-
+            cpm-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Configure and build both trees
+        env:
+          PRESET: ${{ matrix.preset }}
+        run: |
+          cmake --preset "$PRESET"
+          cmake --preset "$PRESET" -B "build/$PRESET-no-ubsan" -DCRD_ENABLE_UBSAN=OFF
+          cmake --build "build/$PRESET"
+          cmake --build "build/$PRESET-no-ubsan"
+
+      - name: Interleaved timings
+        env:
+          PRESET: ${{ matrix.preset }}
+        run: |
+          evidence="$RUNNER_TEMP/host-check/evidence"
+          mkdir -p "$evidence"
+          nproc | tee "$evidence/nproc.txt"
+          cp /proc/cpuinfo "$evidence/cpuinfo.txt"
+          ASAN_OPTIONS=verbosity=1 "$(find "build/$PRESET/tests" -name crd-time-tests -type f | head -n 1)" \
+            --list-tests > "$evidence/asan-verbosity.txt" 2>&1 || true
+          # Each ctest -R names exactly one case; the startup case runs almost nothing.
+          cases=('drop-frame timecode: the SMPTE landmarks'
+                 'committed impostor assets parse, round-trip'
+                 'shapecast_convex: agrees with bisection of GJK distance'
+                 'crd_log1 accuracy vs std::log'
+                 'ceir fuzz: the binary deserializer survives byte mutation')
+          arms=('asan+ubsan|build/'"$PRESET"'|'
+                'asan+ubsan, detect_stack_use_after_return=0|build/'"$PRESET"'|detect_stack_use_after_return=0'
+                'asan+ubsan, malloc_context_size=0|build/'"$PRESET"'|malloc_context_size=0'
+                'asan+ubsan, quarantine_size_mb=0|build/'"$PRESET"'|quarantine_size_mb=0'
+                'asan+ubsan, detect_leaks=0|build/'"$PRESET"'|detect_leaks=0'
+                'asan only|build/'"$PRESET"'-no-ubsan|')
+          table="$evidence/timings.tsv"
+          printf 'round\tarm\tcase\tseconds\tresult\n' > "$table"
+          for round in 1 2; do
+            for test_case in "${cases[@]}"; do
+              for arm in "${arms[@]}"; do
+                IFS='|' read -r label tree options <<< "$arm"
+                start=$(date +%s%N)
+                if ASAN_OPTIONS="$options" UBSAN_OPTIONS=print_stacktrace=1 \
+                    ctest --test-dir "$tree" -R "$test_case" --no-tests=error --timeout 1200 > "$evidence/last.log" 2>&1; then
+                  result=passed
+                else
+                  result=failed
+                  cat "$evidence/last.log" >> "$evidence/failures.log"
+                fi
+                ms=$((($(date +%s%N) - start) / 1000000))
+                printf '%s\t%s\t%s\t%d.%03d\t%s\n' "$round" "$label" "$test_case" $((ms / 1000)) $((ms % 1000)) \
+                  "$result" | tee -a "$table"
+              done
+            done
+          done
+          {
+            echo "### ARM64 sanitizer cost ($PRESET, $(nproc) CPUs)"
+            echo
+            echo '| Round | Arm | Case | Seconds | Result |'
+            echo '|---|---|---|---|---|'
+            tail -n +2 "$table" | awk -F '\t' '{printf "| %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5}'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve timings
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-check-arm64-sanitizer-cost-${{ matrix.preset }}
           path: ${{ runner.temp }}/host-check/evidence
           if-no-files-found: warn
