@@ -514,14 +514,19 @@ target_link_libraries(bench_hesap_svds PRIVATE
 )
 crd_enable_default_pch(bench_hesap_svds)
 
-# crd_add_bench_peer(<name> SOURCES <source>... [LIBRARIES <library>...]): a third-party peer of the boards built from
-# source (Eigen, pocketfft) as a shared library of its own at the measuring host's best ISA (crd_peer_isa_flags,
-# ADR-0134 §8), apart from the bench units, which build at the baseline like all Cerid code. Its symbols are hidden but
-# for its header's operations (examples/peers/peer_api.hpp), it holds no link-time IL and links no Cerid library, so no
-# inline body compiled at the peer's ISA is shared with Cerid code; the ISA isolation guard leaves it out.
+# crd_add_bench_peer(<name> [DISPATCHES] SOURCES <source>... [LIBRARIES <library>...]): a third-party peer of the
+# boards built from source (Eigen, pocketfft) as a shared library of its own at the measuring host's best ISA
+# (crd_peer_isa_flags, ADR-0134 §8), apart from the bench units, which build at the baseline like all Cerid code. Its
+# symbols are hidden but for its header's operations (examples/peers/peer_api.hpp), it holds no link-time IL and links
+# no Cerid library, so no inline body compiled at the peer's ISA is shared with Cerid code; the ISA isolation guard
+# leaves it out. DISPATCHES: the peer selects its own ISA at run time (Highway), so it builds at the baseline, as its
+# own build does.
 function(crd_add_bench_peer name)
-    cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;LIBRARIES")
-    crd_peer_isa_flags(flags)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "DISPATCHES" "" "SOURCES;LIBRARIES")
+    set(flags "")
+    if(NOT arg_DISPATCHES)
+        crd_peer_isa_flags(flags)
+    endif()
     add_library(${name} SHARED ${arg_SOURCES})
     target_link_libraries(${name} PRIVATE crd-warnings ${arg_LIBRARIES})
     target_compile_features(${name} PRIVATE cxx_std_20)
@@ -1168,4 +1173,22 @@ int main() { return 0; }
     target_include_directories(bench_permute PRIVATE examples/peers)
     target_compile_definitions(bench_permute PRIVATE CRD_BENCH_PERMUTE_HPTT)
     message(STATUS "[hesap-vs-hptt] HPTT ${hptt_commit}, AVX kernels: ${CRD_HPTT_HOST_AVX}")
+endif()
+
+# --- The dispatch-cost board (CRD_BUILD_DISPATCH_VS_HIGHWAY; local only, never in CI or a shipped build) ---
+# bench_dispatch_cost times the f16 to f32 conversion of crd-math's kernel table, through its production entry and
+# through the selected body's pointer, against Highway's HWY_DYNAMIC_DISPATCH of the same conversion and its
+# HWY_DYNAMIC_POINTER (examples/peers/highway_peer.hpp), on short and long arrays.
+if(CRD_BUILD_DISPATCH_VS_HIGHWAY)
+    crd_pin(highway_commit packages highway commit)
+    string(SUBSTRING "${highway_commit}" 0 12 highway_commit)
+    crd_add_bench_peer(crd-bench-highway-peer DISPATCHES SOURCES examples/peers/highway_peer.cpp LIBRARIES hwy)
+    # foreach_target.h includes the unit once per compiled target, by its name on the include path.
+    target_include_directories(crd-bench-highway-peer PRIVATE examples/peers)
+    target_compile_definitions(crd-bench-highway-peer PRIVATE "HWY_TARGET_INCLUDE=\"highway_peer.cpp\""
+                               "CRD_HIGHWAY_COMMIT=\"${highway_commit}\"")
+    add_executable(bench_dispatch_cost examples/bench_dispatch_cost.cpp)
+    target_include_directories(bench_dispatch_cost PRIVATE examples/peers)
+    target_link_libraries(bench_dispatch_cost PRIVATE crd-core crd-memory crd-math crd-bench-highway-peer)
+    message(STATUS "[dispatch-vs-highway] Highway ${highway_commit}")
 endif()

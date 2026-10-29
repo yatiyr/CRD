@@ -5,7 +5,7 @@
 
 **Status:** accepted direction. The user decided on 2026-10-26 that SSE2 stays the x64 floor through runtime dispatch
 ([decisions](../sessions/2026-10-26-user-decisions-platform-floors-and-research.md)) and approved the research
-amendment (Highway 1.3 as a design peer, AVX10 version and APX detection, SME beside SVE, one OWN.1 capability)
+amendment (Highway as a design peer, 1.4.0 since 2026-10-30 by the user's choice, AVX10 version and APX detection, SME beside SVE, one OWN.1 capability)
 ([research](../research/2026-10-26-state-of-the-art-2026-comparison.md)). Detection and selection landed on
 2026-10-26 ([session](../sessions/2026-10-26-simd-dispatch-cpu-detection.md)), then the kernel units, the dispatch
 table and the first family ([session](../sessions/2026-10-26-simd-dispatch-kernel-units.md)), then the level-aware
@@ -166,8 +166,9 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    `cpu_level_record --levels`); crd-bench prints it before its run and a
    diag-overhead record carries it (`cpu_level`), refused by `diag-overhead.py --cpu-level` when it differs from the
    asked level or between arms. The diag-overhead,
-   hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.3 included for the
-   dispatch cost. A peer runs as its own build would on the measuring host: one number per workload, which
+   hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.4.0 included for the
+   dispatch cost (`bench_dispatch_cost`: a crd table's call against `HWY_DYNAMIC_DISPATCH`, each against its
+   selected body's pointer; Highway, which dispatches itself, builds at the baseline as its own build does). A peer runs as its own build would on the measuring host: one number per workload, which
    `CRD_CPU_LEVEL` never lowers, and every Cerid level is measured against it (amended 2026-10-29). A peer compiled
    from source in a board (Eigen, pocketfft, Boost) is a shared library of its own at the host's best ISA
    (`crd_add_bench_peer`, `crd_peer_isa_flags`: `-march=native`/`-mcpu=native` on GCC and Clang, and on cl the

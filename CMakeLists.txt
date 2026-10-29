@@ -63,6 +63,11 @@ option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, inter
 # build/_deps) as the crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a
 # shipped build; scripts/run_permute_bench.sh builds and runs it per CPU level.
 option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
+# The dispatch-cost board (ADR-0134 §8): a crd kernel table's call against Google Highway's HWY_DYNAMIC_DISPATCH, from
+# the pinned Highway release (cmake/pins.json highway, fetched on demand into build/_deps) built by its own CMake, as
+# the crd-bench-highway-peer library that bench_dispatch_cost links. Local only, never in CI or a shipped build;
+# scripts/run_bench_dispatch.sh builds and runs it per CPU level.
+option(CRD_BUILD_DISPATCH_VS_HIGHWAY "Build the dispatch-cost bench against Highway's dynamic dispatch (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -975,6 +980,28 @@ if(CRD_BUILD_HESAP_VS_HPTT)
         message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
     endif()
     crd_add_pinned_package(hptt DOWNLOAD_ONLY YES)
+endif()
+
+# ----- The dispatch-cost board's peer: Highway's library from its own CMake (bench-only) -----
+# Highway's own build: its compiled targets from its baseline up, chosen at run time by its CPU detection, which is the
+# dispatch the board measures; so its library builds at the baseline, not at the host's ISA. Its tests, examples,
+# contrib and install rules are off, and its library is static (inside the peer's shared library), position
+# independent, without link-time IL, and a peer to the ISA isolation guard (ADR-0134 §8). Highway 1.4.0's CMakeLists
+# sets CMP0111 to OLD on purpose (its imported targets without a location), which CMake reports as deprecated on every
+# configure; its own choice, so deprecation reports are off for its directory only. Its library builds without C++
+# exceptions (/EHs-c- on MSVC), so CMake's default /EHsc leaves its directory's flags rather than being overridden.
+if(CRD_BUILD_DISPATCH_VS_HIGHWAY)
+    set(CMAKE_WARN_DEPRECATED OFF)
+    set(_crd_saved_cxx_flags "${CMAKE_CXX_FLAGS}")
+    string(REPLACE "/EHsc" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    crd_add_pinned_package(highway SYSTEM YES EXCLUDE_FROM_ALL YES
+                           OPTIONS "HWY_ENABLE_TESTS OFF" "HWY_ENABLE_EXAMPLES OFF" "HWY_ENABLE_CONTRIB OFF"
+                                   "HWY_ENABLE_INSTALL OFF" "HWY_FORCE_STATIC_LIBS ON")
+    set(CMAKE_CXX_FLAGS "${_crd_saved_cxx_flags}")
+    unset(_crd_saved_cxx_flags)
+    unset(CMAKE_WARN_DEPRECATED)
+    set_target_properties(hwy PROPERTIES POSITION_INDEPENDENT_CODE ON INTERPROCEDURAL_OPTIMIZATION OFF
+                          CRD_ISA_ROLE peer)
 endif()
 
 # ----- The diagnostic overhead harness's peer (DIAG.11b clause 8) -----

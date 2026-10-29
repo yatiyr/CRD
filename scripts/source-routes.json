@@ -228,6 +228,11 @@
       "why": "The NUFFT bench against FINUFFT built on the measuring host (scripts/run_bench_nufft.sh)."
     },
     {
+      "paths": ["runtime/examples/bench_dispatch_cost.cpp", "runtime/examples/peers/highway_peer.cpp"],
+      "built_when": {"option": "CRD_BUILD_DISPATCH_VS_HIGHWAY"},
+      "why": "The dispatch-cost board against Highway's dynamic dispatch: the bench and its peer library (crd-bench-highway-peer) from the pinned archive (cmake/pins.json highway; scripts/run_bench_dispatch.sh)."
+    },
+    {
       "paths": ["runtime/examples/peers/hptt_peer.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_HPTT"},
       "why": "The permute board's HPTT peer library (crd-bench-hptt-peer), built from the pinned archive (cmake/pins.json hptt) and linked into bench_permute (scripts/run_permute_bench.sh)."

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Only the board peer libraries include a peer header library.
 
-A header library a board measures against (Eigen, Boost, pocketfft) is compiled in a peer library of its own under
-runtime/examples/peers/ at the measuring host's best ISA (ADR-0134 §8, crd_add_bench_peer in runtime/CMakeLists.txt).
+A header library a board measures against (Eigen, Boost, pocketfft, Highway) is compiled in a peer library of its own
+under runtime/examples/peers/ at the measuring host's best ISA (ADR-0134 §8, crd_add_bench_peer in
+runtime/CMakeLists.txt; Highway at the baseline, since it dispatches itself).
 Every other unit builds at the baseline, so a bench that included the library itself would time the peer at the
 baseline ISA, and an inline body of the peer at another ISA could reach a baseline unit. This guard reads every
 C-family source under the first-party roots and reports each include of such a library outside the peers directory.
@@ -32,6 +33,7 @@ LIBRARIES = (
     ('Boost', re.compile(r'boost/')),
     ('pocketfft', re.compile(r'pocketfft(_hdronly)?\.h(pp)?$')),
     ('HPTT', re.compile(r'hptt(_types)?\.h$')),
+    ('Highway', re.compile(r'hwy/')),
 )
 DIRECTIVE = re.compile(r'^\s*#\s*include\b')
 HEADER = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]')

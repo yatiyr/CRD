@@ -1,4 +1,4 @@
-# 2026-10-30 — SIMD-DISPATCH: the HPTT pin and the row-close boards' acceptance rule
+# 2026-10-30 — SIMD-DISPATCH: the HPTT and Highway pins, the dispatch-cost board and the boards' acceptance rule
 
 <!-- doc-role: session -->
 > Dated session note; no live status. Current work: [ROADMAP](../ROADMAP.md#slice-simd-dispatch).
@@ -39,16 +39,40 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 10, the board
   (download only); `runtime/CMakeLists.txt` builds the four sources from `hptt_SOURCE_DIR`. `CRD_HPTT_DIR` and the
   per-file digest are gone: the archive's hash is the provenance, and the peer's version line names the pinned commit.
 - `scripts/run_permute_bench.sh` passes `CRD_INPUT_ARCHIVES` like the other peer drivers; the license manifest,
-  pinned-inputs.md and the PinnedInputs tooling test name twelve packages.
+  pinned-inputs.md and the PinnedInputs tooling test name the new packages.
+- **`highway` pin** (second commit): google/highway 1.4.0 at 2607d3b5…, SHA-256 741d7057…f7940c25, 3,692,133
+  bytes, Apache-2.0 OR BSD-3-Clause (LICENSE read from the archive), gated on `CRD_BUILD_DISPATCH_VS_HIGHWAY`, seeded
+  beside HPTT's. check-pins refuses a pin no configure adds, so it lands with its consumer.
+- **Highway's library** by its own CMake (tests, examples, contrib and install off; static, PIC, no IPO,
+  `CRD_ISA_ROLE peer`). Its CMakeLists sets CMP0111 to OLD on purpose, so deprecation reports are off for its
+  directory only; MSVC's default `/EHsc` leaves its directory's flags, since it builds with `/EHs-c-` (each of its
+  units drew D9025 before).
+- **`crd-bench-highway-peer`** (`runtime/examples/peers/highway_peer.*`): the f16 to f32 conversion per Highway target
+  (`foreach_target.h`, the unit's name as the `HWY_TARGET_INCLUDE` definition), exported as one dispatched call, a
+  loop of dispatched calls and a loop through `HWY_DYNAMIC_POINTER`; its version line names the release, the commit,
+  the dispatched target and every compiled one. `crd_add_bench_peer DISPATCHES` builds it at the baseline: Highway's
+  own build compiles its targets from the baseline up and chooses at run time, the dispatch being measured (ADR-0134
+  §8 amended).
+- **`bench_dispatch_cost`**: four arms over one exact conversion, crd's production `convert_f16_to_f32` and its
+  selected body's pointer, Highway's dispatch and its pointer, at 1 to 65,536 elements, rotated round by round, the
+  median per call; each side's dispatch cost is its entry minus its pointer. Every timed sample must hold the portable
+  level's bits with the guard words after it untouched, and every arm first converts all 65,536 binary16 patterns
+  (NaN as a class), or it exits 1. `scripts/run_bench_dispatch.sh` runs it per level; `check-peer-headers.py` counts
+  `hwy/` as a header library.
 
 ## Checks
 
-The linux-gcc-release lane tree configured with the option from the seeded archive ("using local archive",
-"HPTT 942538649b51, AVX kernels: 1") and built `crd-bench-hptt-peer` and `bench_permute` without a warning;
-check-pins, the license manifest and generated-sources checks, the tooling tests, the plan and repository checks. No
-bench ran.
+- HPTT: the linux-gcc-release lane tree configured with the option from the seeded archive ("using local archive",
+  "HPTT 942538649b51, AVX kernels: 1") and built `crd-bench-hptt-peer` and `bench_permute` without a warning.
+- Highway: configured from the seeded archive and built without a warning on linux-gcc-release (GCC 13; AVX3_SPR to
+  SSE2 compiled, AVX2 dispatched) and win-debug (MSVC; AVX2 to SSE2, AVX3 being off on MSVC upstream); win-debug is
+  back to the option off. One smoke run on each passed every gate; the release run read about 0.5 to 0.9 ns of
+  dispatch per call on both sides at 1 to 64 elements (a smoke run, not the board).
+- Strict tidy (LLVM 20, the lane tree's database) clean on the three new files; `hptt_peer.cpp`'s one-string change
+  stays ungated there (clang-tidy finds no `omp.h` on that database). clang-format on the new files, Allman braces,
+  the ctest guards on win-debug (19 passed), check-pins, the license manifest and generated-sources checks, the
+  PinnedInputs and PeerHeaders tooling tests, the plan and repository checks.
 
 ## Left
 
-Highway 1.4.0's pin with its peer unit and the dispatch-cost board (check-pins refuses a pin no configure adds, so
-the pin lands with its consumer); the other boards and the row-close session.
+The other boards and the row-close session.

@@ -131,6 +131,19 @@
       "gated": "CRD_BUILD_HESAP_VS_HPTT",
       "note": "HPTT, Paul Springer's tensor transpose (no release tag; the commit of the permute board's earlier local clone). Its four sources are compiled only into crd-hptt and crd-bench-hptt-peer, the permute board's peer library; never into an engine module or a default build. LICENSE.txt read from the archive: BSD-3-Clause, (c) 2018 Paul Springer."
     },
+    "highway": {
+      "version": "1.4.0",
+      "repository": "google/highway",
+      "ref": "1.4.0",
+      "commit": "2607d3b5b0113992fe84d3848859eae13b3b52c1",
+      "url": "https://github.com/google/highway/archive/2607d3b5b0113992fe84d3848859eae13b3b52c1.tar.gz",
+      "file": "highway-2607d3b5.tar.gz",
+      "sha256": "741d705781e0b3e406beda8f1f994fbae01321237ce8023a1ad90fbaf7940c25",
+      "size": 3692133,
+      "license": "Apache-2.0 OR BSD-3-Clause",
+      "gated": "CRD_BUILD_DISPATCH_VS_HIGHWAY",
+      "note": "Google Highway's library (hwy, by its own CMake with tests, examples, contrib and install off), linked only into crd-bench-highway-peer, the dispatch-cost board's peer library (ADR-0134 §8); never into an engine module or a default build. LICENSE read from the archive: dual-licensed, Apache License 2.0 or the BSD 3-Clause License, at the user's choice."
+    },
     "tracy": {
       "version": "0.14.1",
       "repository": "wolfpld/tracy",

@@ -1110,7 +1110,7 @@ class PinnedInputs(unittest.TestCase):
                          self.workflow.count('persist-credentials: false'))
         self.assertEqual(self.workflow.count("python-version: '3.12'"), 13)
         for package in ('Catch2', 'glfw', 'zstd', 'stb', 'cgltf', 'MikkTSpace', 'imgui', 'eigen', 'OpenBLAS',
-                        'boost', 'hptt', 'tracy'):
+                        'boost', 'hptt', 'highway', 'tracy'):
             self.assertIn('crd_add_pinned_package(%s' % package, self.cmake)
 
     def test_unpinned_references_fail_the_guard(self):
@@ -3950,6 +3950,7 @@ class PeerHeaders(unittest.TestCase):
                 '#  include <unsupported/Eigen/FFT>\n'
                 '#include <pocketfft_hdronly.h>\n'
                 '#include <hptt.h>\n'
+                '#include <hwy/highway.h>\n'
                 '// #include <boost/version.hpp>\n'
                 '/* #include <Eigen/Core> */\n'
                 'const char* s = "#include <boost/x.hpp>";\n'
@@ -3959,10 +3960,11 @@ class PeerHeaders(unittest.TestCase):
                 '#include "boost_peer.hpp"\n'
                 '#include "pocketfft_peer.hpp"\n'
                 '#include "hptt_peer.hpp"\n'
+                '#include "highway_peer.hpp"\n'
                 '#include <cub/cub.cuh>\n')
         self.assertEqual([(1, 'Eigen', 'Eigen/Dense'), (2, 'Boost', 'boost/math/special_functions/erf.hpp'),
                           (3, 'Eigen', 'unsupported/Eigen/FFT'), (4, 'pocketfft', 'pocketfft_hdronly.h'),
-                          (5, 'HPTT', 'hptt.h')],
+                          (5, 'HPTT', 'hptt.h'), (6, 'Highway', 'hwy/highway.h')],
                          peer_headers.peer_includes(text))
 
     def test_the_tree_check_allows_only_the_peers_and_fails_an_empty_one(self):

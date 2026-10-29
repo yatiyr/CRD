@@ -19,7 +19,7 @@
         "scripts/gen_license_manifest.py",
         "--check"
       ],
-      "sha256": "e8f5190d95bce79679b427292bb0f40cf1915a32a632768d09be76b6fb614f8c"
+      "sha256": "4c94b9fea572c3ddbed48b0a685fc1e8596737339d50ea9465fd73ed39e9a836"
     },
     {
       "path": "docs/generated/gpu-platform-capability-matrix.md",
