@@ -26,7 +26,9 @@ Two causes, from the per-test times of the JUnit logs:
 - **Forced arms ran every level again.** Each `<suite>-kernels-at-<level>` arm sets `CRD_CPU_LEVEL`, but every
   differential case looped over `cpu_selection().detected`, so N arms each ran all N levels. On win-asan the five
   `crd-hesap-fft-kernels-at-*` arms took about 770 s each (portable's arm as long as avx512's), 3,854 s in all; on
-  linux-gcc-asan 825 s each. The SDE arms ran every level under emulation, which is most of win-release's growth.
+  linux-gcc-asan 825 s each. win-release's 19 SDE arms, which ran every level under emulation, took 398 s in
+  40784988994; most of its growth there was `crd-check-isa-isolation` reaching its 1,800 s timeout on the image
+  route, which e17984e3 (pipes read as bytes, ten times faster) already fixed.
   The lanes' `-at-sse2` passes also re-ran every arm unchanged (an arm's own `CRD_CPU_LEVEL` wins) and the guards.
 - **Tests common to two runs got slower** (not caused here): linux-gcc-asan's common tests went from 4,714 s to
   8,904 s between 09ba6a3a and 3c1debc6, small cases included (6,996 cases under 0.3 s: 406 s to 635 s), and on
@@ -52,7 +54,7 @@ Two causes, from the per-test times of the JUnit logs:
 Per arm the differential work drops from N levels to two (one at portable). Portable dominates in unoptimized code:
 on win-debug the fft `[kernels]` cases took 154 s unforced, 95 s at portable and about 100 s at sse2 (this hybrid host
 varies by tens of seconds between runs), so a plain arm costs about 0.6 of what it did. The SDE arms, which emulated
-every level, gain most.
+every level, gain too.
 
 ## Checks
 
@@ -67,6 +69,7 @@ bracket matcher with "'tuple' object is not an iterator" on a string; four rerun
 
 - A plain arm still repeats portable, the cost that dominates. Its level ran natively in the lane's unforced run of
   the same binary, so its differential cases add only the lowered CRT, which the `-at-sse2` pass already covers: the
-  plain arms should run only the cases the selection decides, and the SDE arms keep the differential ones.
+  plain arms should run only the cases the selection decides, and the SDE arms keep the differential ones. That also
+  covers a refused arm (at-avx512 on a runner without AVX-512), which still runs every level as the unforced run does.
 - The slowdown of common tests above: read the `cpu detected=` lines 92db578d's records print in the next green run's
   evidence, compare the runner CPU between runs, and bisect locally only if it matches.
