@@ -55,10 +55,10 @@ option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-
 # sensitivities and ARKODE's IMEX steppers. Local only, never in CI or a shipped build; their run_bench_*.sh scripts
 # build and run them per CPU level through scripts/run-lane-bench.sh.
 option(CRD_BUILD_HESAP_VS_SUNDIALS "Build the ODE benches against SUNDIALS CVODE, CVODES and ARKODE (local-only)" OFF)
-# The special-function and distribution boards against the pinned standalone Boost.Math (cmake/pins.json boost_math,
-# fetched on demand into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA. Local
-# only, never in CI or a shipped build; scripts/run_bench_boost.sh builds and runs them per CPU level.
-option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function and distribution benches against Boost.Math" OFF)
+# The special-function, distribution, interpolation and odeint boards against the pinned Boost release (cmake/pins.json
+# boost, fetched on demand into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA.
+# Local only, never in CI or a shipped build; scripts/run_bench_boost.sh builds and runs them per CPU level.
+option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, interpolation and ODE benches vs Boost" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -948,17 +948,14 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
 endif()
 
-# ----- The special-function and distribution boards' peer: Boost.Math standalone (header-only, bench-only) -----
-# Only crd-bench-boost-peer (runtime/CMakeLists.txt) links boost_math_headers. BOOST_MATH_STANDALONE needs no other
-# Boost library; standalone Boost.Math has no BOOST_VERSION, so the pinned version names the measured copy.
+# ----- The Boost boards' peer: the Boost release, header-only and bench-only -----
+# Only crd-bench-boost-peer (runtime/CMakeLists.txt) links boost_headers. Boost.Math and Boost.Odeint are header-only;
+# BOOST_ALL_NO_LIB keeps MSVC's auto-link from naming a compiled Boost library, none of which is built.
 if(CRD_BUILD_HESAP_VS_BOOST)
-    crd_add_pinned_package(boost_math DOWNLOAD_ONLY YES)
-    crd_pin(_crd_boost_math_version packages boost_math version)
-    add_library(boost_math_headers INTERFACE)
-    target_include_directories(boost_math_headers SYSTEM INTERFACE "${boost_math_SOURCE_DIR}/include")
-    target_compile_definitions(boost_math_headers INTERFACE BOOST_MATH_STANDALONE
-                               "CRD_BOOST_MATH_VERSION=\"${_crd_boost_math_version}\"")
-    unset(_crd_boost_math_version)
+    crd_add_pinned_package(boost DOWNLOAD_ONLY YES)
+    add_library(boost_headers INTERFACE)
+    target_include_directories(boost_headers SYSTEM INTERFACE "${boost_SOURCE_DIR}")
+    target_compile_definitions(boost_headers INTERFACE BOOST_ALL_NO_LIB)
 endif()
 
 # ----- The diagnostic overhead harness's peer (DIAG.11b clause 8) -----

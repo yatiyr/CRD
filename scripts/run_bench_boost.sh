@@ -4,7 +4,7 @@
 # (bench_dist_boost), Boost.Math as the pinned crd-bench-boost-peer library at the host's ISA, one thread, at each CPU
 # level (scripts/run-lane-bench.sh: CRD_BENCH_LEVELS, CRD_BENCH_CPUS). Every row compares the two sides' values and a
 # bench exits 1 on a mismatch. CRD_INPUT_ARCHIVES names a directory holding the pinned archive (cmake/pins.json
-# boost_math) for an offline configure. scipy and MATLAB keep their own programs (runtime/examples/bench_special_refs.py,
+# boost) for an offline configure. scipy and MATLAB keep their own programs (runtime/examples/bench_special_refs.py,
 # bench_bessel_refs.py, bench_special_matlab.m, tests/numerics/hesap-stats/bench_dist_matlab.m).
 #   bash scripts/run_bench_boost.sh
 set -euo pipefail

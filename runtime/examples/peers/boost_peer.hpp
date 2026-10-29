@@ -1,7 +1,7 @@
 #pragma once
 
-// The Boost.Math peer of the special-function and distribution boards (ADR-0134 §8). The pinned standalone Boost.Math
-// (cmake/pins.json boost_math) is compiled in a shared library of its own at the measuring host's best ISA
+// The Boost peer of the special-function, distribution, interpolation and odeint boards (ADR-0134 §8). The pinned
+// Boost release (cmake/pins.json boost) is compiled in a shared library of its own at the measuring host's best ISA
 // (crd_add_bench_peer), apart from the bench units, which build at the baseline like all Cerid code. Boost runs under
 // its default policy, as its own build would: a double is promoted to long double, which is x87's 64-bit significand
 // with GCC and Clang on x64, software binary128 on AArch64 Linux and double itself on MSVC, so the toolchains' numbers
@@ -94,3 +94,32 @@ enum class Density : std::uint8_t
 CRD_BENCH_PEER_API void eval(Distribution distribution, Parameters parameters, Density density, const double* x,
                              double* out, Index n);
 } // namespace crd_peer::boost_math
+
+namespace crd_peer::boost_odeint
+{
+// The Van der Pol oscillator y0' = y1, y1' = mu (1 - y0^2) y1 - y0 from (y0, y1) at t = 0 to t1. Its right-hand side
+// is compiled into the peer, as an odeint user's own system is.
+struct VanDerPol
+{
+    double mu;
+    double t1;
+    double y0[2];
+};
+
+struct Tolerances
+{
+    double absolute;
+    double relative;
+    double first_step;
+};
+
+struct Integration
+{
+    double y[2];                  // the state at t1
+    std::int64_t rhs_evaluations; // calls of the right-hand side
+    std::int64_t steps;           // accepted steps
+};
+
+// One integrate_adaptive run of the controlled runge_kutta_dopri5 stepper over the whole interval.
+CRD_BENCH_PEER_API Integration dopri5(const VanDerPol& problem, const Tolerances& tolerances);
+} // namespace crd_peer::boost_odeint

@@ -105,17 +105,18 @@
       "license": "BSD-3-Clause",
       "gated": "CRD_BUILD_HESAP_VS_REFERENCE"
     },
-    "boost_math": {
+    "boost": {
       "version": "1.92.0",
-      "repository": "boostorg/math",
+      "repository": "boostorg/boost",
       "ref": "boost-1.92.0",
-      "commit": "f12be767c04d9499aaa6f88b22d5f1b464c1c27a",
-      "url": "https://github.com/boostorg/math/archive/f12be767c04d9499aaa6f88b22d5f1b464c1c27a.tar.gz",
-      "file": "math-f12be767.tar.gz",
-      "sha256": "d58ee0ad89880c7bff0f2b504bcc5700e15f1ac5184220d1a86d15f217cc4818",
+      "url": "https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2",
+      "file": "boost_1_92_0.tar.bz2",
+      "sha256": "5c1d40cb8e19adbf740a4ec2da35b3e58f3f5804b1dce44deb53df72193cbc6c",
+      "size": 199030664,
+      "provenance": "https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2.json",
       "license": "BSL-1.0",
       "gated": "CRD_BUILD_HESAP_VS_BOOST",
-      "note": "Boost.Math standalone (BOOST_MATH_STANDALONE: header-only, no other Boost library), compiled only into crd-bench-boost-peer, the peer library of the special-function and distribution boards; never into an engine module or a default build. Boost 1.92.0 was released 2026-08-12. LICENSE read from the archive: Boost Software License 1.0."
+      "note": "The Boost 1.92.0 release (the publisher's manifest names commit afdfa32505af73e3d208144b3f623f0096cb62b6, created 2026-08-05; the archive is not commit-addressed, so the commit is not a url field). Header-only use, compiled only into crd-bench-boost-peer, the peer library of the special-function, distribution, interpolation and odeint boards; never into an engine module or a default build. LICENSE_1_0.txt read from the archive: Boost Software License 1.0."
     },
     "tracy": {
       "version": "0.14.1",

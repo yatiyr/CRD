@@ -1026,12 +1026,12 @@ if(CRD_BUILD_HESAP_VS_SUNDIALS)
     message(STATUS "[hesap-vs-sundials] SUNDIALS ${CRD_SUNDIALS_INCLUDE}")
 endif()
 
-# --- The special-function and distribution boards against the pinned Boost.Math (fetched on demand, never in CI) ---
-# Boost.Math reaches only crd-bench-boost-peer (examples/peers/boost_peer.hpp), so the benches build with the tree's
-# warnings as errors at the baseline ISA and call one exported evaluation per array.
+# --- The Boost boards against the pinned Boost release (fetched on demand, never in CI) ---
+# Boost reaches only crd-bench-boost-peer (examples/peers/boost_peer.hpp), so the benches build with the tree's
+# warnings as errors at the baseline ISA and call one exported evaluation per array or per integration.
 if(CRD_BUILD_HESAP_VS_BOOST)
     crd_add_bench_peer(crd-bench-boost-peer SOURCES examples/peers/boost_peer_special.cpp
-                       examples/peers/boost_peer_dist.cpp LIBRARIES boost_math_headers)
+                       examples/peers/boost_peer_dist.cpp examples/peers/boost_peer_odeint.cpp LIBRARIES boost_headers)
     foreach(bench IN ITEMS bench_special_vs_refs bench_bessel_vs_refs bench_special_v12d bench_dist_boost)
         add_executable(${bench} examples/${bench}.cpp)
         target_include_directories(${bench} PRIVATE examples/peers)
@@ -1039,6 +1039,27 @@ if(CRD_BUILD_HESAP_VS_BOOST)
                                                crd-bench-boost-peer)
     endforeach()
     target_link_libraries(bench_dist_boost PRIVATE crd-hesap-stats)
+endif()
+
+# --- The ODE board: Cerid's stiff and nonstiff solvers against SUNDIALS CVODE (dense and KLU) and Boost.Odeint ---
+# Both peers' options: SUNDIALS and SuiteSparse's KLU from the measuring host, odeint through crd-bench-boost-peer.
+if(CRD_BUILD_HESAP_VS_SUNDIALS AND CRD_BUILD_HESAP_VS_BOOST)
+    foreach(part IN ITEMS sunlinsolklu sunmatrixsparse)
+        find_library(CRD_SUNDIALS_${part}_LIB sundials_${part})
+        if(NOT CRD_SUNDIALS_${part}_LIB)
+            message(FATAL_ERROR "[hesap-vs-sundials] libsundials_${part} not found (libsundials-dev)")
+        endif()
+    endforeach()
+    find_path(CRD_KLU_INCLUDE klu.h PATH_SUFFIXES suitesparse)
+    find_library(CRD_KLU_LIB klu)
+    if(NOT CRD_KLU_INCLUDE OR NOT CRD_KLU_LIB)
+        message(FATAL_ERROR "[hesap-vs-sundials] SuiteSparse KLU not found (libsuitesparse-dev)")
+    endif()
+    crd_add_sundials_bench(bench_ode_vs_refs cvode sunlinsoldense sunmatrixdense sunlinsolklu sunmatrixsparse
+                           nvecserial)
+    target_include_directories(bench_ode_vs_refs PRIVATE examples/peers)
+    target_include_directories(bench_ode_vs_refs SYSTEM PRIVATE "${CRD_KLU_INCLUDE}")
+    target_link_libraries(bench_ode_vs_refs PRIVATE crd-bench-boost-peer "${CRD_KLU_LIB}")
 endif()
 
 # --- The retained programs that need no peer library (CRD_BUILD_RETAINED_BENCHES) ---

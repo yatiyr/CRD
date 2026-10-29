@@ -1,16 +1,12 @@
-// bench_ode_vs_refs — v9 wall-clock benchmark vs the same-language gold standards (WSL, g++ -O2):
+// bench_ode_vs_refs: the hesap-ode board against the same-language gold standards, one thread.
 //   STIFF:    Cerid BDF / Radau / RODAS4 / TR-BDF2  vs  SUNDIALS CVODE (BDF + dense LU + analytic jac)
-//             on ROBER (t = 1e5) and Van der Pol mu = 1000 (t = 300), matched rtol/atol.
-//   NONSTIFF: Cerid RK45 / DOP853 vs Boost.odeint dopri5 (controlled) on VdP mu = 1 (t = 100).
-// Reports min-of-reps wall ms + nfev + the achieved |error| vs a tight-tolerance Radau reference, so
-// cross-method rows are judged at ACHIEVED accuracy, not just matched tolerance settings (the honest
-// scoreboard rule). Compile (WSL):
-//   g++ -O2 -std=c++20 -I engine/hesap-ode/include -I engine/hesap/include -I engine/hesap-dense/include
-//     -I engine/core/include -I build/linux-gcc-release/engine/core/include -I engine/containers/include
-//     -I engine/memory/include -I engine/log/include -I engine/vm/include
-//     runtime/examples/bench_ode_vs_refs.cpp build/linux-gcc-release/engine/hesap-dense/libcrd-hesap-dense.a
-//     build/linux-gcc-release/engine/{memory,vm,log,hesap}/libcrd-*.a
-//     -lsundials_cvode -lsundials_nvecserial -o /tmp/bench_ode
+//             on ROBER (t = 1e5) and Van der Pol mu = 1000 (t = 300), matched rtol/atol; heat-2D n = 4096, Cerid's
+//             sparse BDF vs CVODE + KLU, analytic sparse Jacobians on both sides.
+//   NONSTIFF: Cerid RK45 / DOP853 vs Boost.Odeint dopri5 (controlled) on VdP mu = 1 (t = 100); odeint runs in the
+//             crd-bench-boost-peer library at the host's ISA (examples/peers/boost_peer.hpp), one call per run.
+// Reports min-of-reps wall ms + nfev + the achieved |error| vs a tight-tolerance reference, so cross-method rows are
+// judged at ACHIEVED accuracy, not just matched tolerance settings (the honest scoreboard rule). Built when both
+// CRD_BUILD_HESAP_VS_SUNDIALS and CRD_BUILD_HESAP_VS_BOOST are on; scripts/run_bench_ode_refs.sh runs it per CPU level.
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/ode/bdf.hpp>
@@ -21,10 +17,11 @@
 #include <crd/hesap/ode/sdirk.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include "boost_peer.hpp"
+
 #include <sunlinsol/sunlinsol_klu.h>
 #include <sunmatrix/sunmatrix_sparse.h>
 
-#include <boost/numeric/odeint.hpp>
 #include <cvode/cvode.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
@@ -282,35 +279,19 @@ void bench_cvode(const char* label, int which, f64 t1, const f64* y0, crd::usize
 // ---------------- odeint side (nonstiff dopri5) ----------------
 void bench_odeint_dopri5(const char* label, f64 mu, f64 t1, f64 rtol, f64 atol, const f64* ref, int reps)
 {
-    namespace bno = boost::numeric::odeint;
-    using state = std::array<double, 2>; // odeint needs a std container; bench-only TU (guard-exempt path)
-    long nfev = 0;
-    state x{};
-    auto sys = [&nfev, mu](const state& y, state& d, double)
-    {
-        d[0] = y[1];
-        d[1] = mu * ((1.0 - y[0] * y[0]) * y[1]) - y[0];
-        ++nfev;
-    };
-    const double ms = time_best_ms(reps,
-                                   [&]
-                                   {
-                                       nfev = 0;
-                                       x[0] = 2.0;
-                                       x[1] = 0.0;
-                                       auto stepper = bno::make_controlled(atol, rtol,
-                                                                           bno::runge_kutta_dopri5<state>());
-                                       bno::integrate_adaptive(stepper, sys, x, 0.0, static_cast<double>(t1),
-                                                               1e-4);
-                                   });
-    const f64 yf[2] = {x[0], x[1]};
-    std::printf("%-22s %9.3f ms  nfev=%-7ld %*s err=%.2e\n", label, ms, nfev, 10, "", err_vs_ref(yf, ref, 2));
+    const crd_peer::boost_odeint::VanDerPol problem{mu, t1, {2.0, 0.0}};
+    const crd_peer::boost_odeint::Tolerances tolerances{atol, rtol, 1e-4};
+    crd_peer::boost_odeint::Integration run{};
+    const double ms = time_best_ms(reps, [&] { run = crd_peer::boost_odeint::dopri5(problem, tolerances); });
+    std::printf("%-22s %9.3f ms  nfev=%-7lld %*s err=%.2e\n", label, ms, static_cast<long long>(run.rhs_evaluations),
+                10, "", err_vs_ref(run.y, ref, 2));
 }
 
 } // namespace
 
 int main()
 {
+    std::printf("# Boost.Odeint peer: %s\n", crd_peer::boost_math::isa());
     crd::memory::TlsfAllocator alloc(1U << 24);
     Robertson rober;
     Vdp vdp1000(1000.0);

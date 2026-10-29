@@ -238,10 +238,16 @@
         "runtime/examples/bench_special_v12d.cpp",
         "runtime/examples/bench_special_vs_refs.cpp",
         "runtime/examples/peers/boost_peer_dist.cpp",
+        "runtime/examples/peers/boost_peer_odeint.cpp",
         "runtime/examples/peers/boost_peer_special.cpp"
       ],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_BOOST"},
-      "why": "The special-function and distribution boards against the pinned Boost.Math, fetched at configure time only when the option is on; Boost.Math builds as their peer library (crd-bench-boost-peer, scripts/run_bench_boost.sh)."
+      "why": "The Boost boards against the pinned Boost release, fetched at configure time only when the option is on; Boost builds as their peer library (crd-bench-boost-peer, scripts/run_bench_boost.sh)."
+    },
+    {
+      "paths": ["runtime/examples/bench_ode_vs_refs.cpp"],
+      "built_when": {"option": ["CRD_BUILD_HESAP_VS_SUNDIALS", "CRD_BUILD_HESAP_VS_BOOST"]},
+      "why": "The ODE board against SUNDIALS CVODE (dense and KLU) from the measuring host and Boost.Odeint through crd-bench-boost-peer (scripts/run_bench_ode_refs.sh)."
     },
     {
       "paths": ["bench/gpu-fft/generated/*.cu"],
@@ -257,7 +263,6 @@
         "runtime/examples/bench_dsp_sosfilt_vs_liquid.c",
         "runtime/examples/bench_dsp_windows_vs_liquid.c",
         "runtime/examples/bench_interp_boost.cpp",
-        "runtime/examples/bench_ode_vs_refs.cpp",
         "runtime/examples/bobyqa_difftest.cpp",
         "runtime/examples/cobyla_difftest.cpp",
         "runtime/examples/newuoa_difftest.cpp"

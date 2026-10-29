@@ -15,6 +15,7 @@
 #include <boost/math/special_functions/gamma.hpp>
 #include <boost/math/special_functions/lambert_w.hpp>
 #include <boost/math/special_functions/zeta.hpp>
+#include <boost/version.hpp>
 #include <cstdio>
 #include <limits>
 
@@ -56,8 +57,9 @@ const char* isa() noexcept
     {
         std::array<char, 200> text{};
         (void)std::snprintf(text.data(), text.size(),
-                            "Boost.Math %s standalone, default policy: double evaluated with a %d-bit significand (%s)",
-                            CRD_BOOST_MATH_VERSION, std::numeric_limits<Evaluation>::digits, CRD_BENCH_PEER_ISA);
+                            "Boost %d.%d.%d, default policy: double evaluated with a %d-bit significand (%s)",
+                            BOOST_VERSION / 100000, BOOST_VERSION / 100 % 1000, BOOST_VERSION % 100,
+                            std::numeric_limits<Evaluation>::digits, CRD_BENCH_PEER_ISA);
         return text;
     }();
     return kText.data();
