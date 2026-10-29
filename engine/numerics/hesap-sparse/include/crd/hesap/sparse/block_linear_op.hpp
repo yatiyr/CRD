@@ -65,7 +65,6 @@ public:
             return true;
         }
         spmm_parallel<T>(T(1), *m_a, x.data(), ldx, s, T(0), y.data(), ldy);
-        crd::jobs::frame_reset(); // block-Krylov loop arena hygiene (cf. ParallelSparseLinearOp)
         return true;
     }
 

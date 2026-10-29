@@ -219,8 +219,6 @@ void small_gemm(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixV
     else
     {
         const SmallGemm<T, L>* sp = &s;
-        // v5f-c (gemm-parallel-frame-arena-leak fix): reclaim this parallel_for's JobDecl array in place.
-        const crd::usize frame_mark = crd::jobs::frame_get_mark();
         auto* counter =
             crd::jobs::parallel_for(static_cast<crd::u32>((m + shape.mr - 1U) / shape.mr), num_workers,
                                     [sp](crd::u32 begin, crd::u32 end)
@@ -229,7 +227,6 @@ void small_gemm(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, MatrixV
                                                         std::min(static_cast<crd::usize>(end) * sp->mr, sp->m));
                                     });
         crd::jobs::wait(counter);
-        crd::jobs::frame_set_mark(frame_mark); // reclaim the parallel_for JobDecls in place (leak fix)
     }
     alloc.deallocate(b_pack);
 }
@@ -412,12 +409,6 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
     // to cache locality (workers warm cache lines that the inner loop on a
     // different worker then needs to fetch). The serial pack_b at N=4096
     // f64 costs ~5ms total across all (jc,pc) iters — <2% of GEMM wall.
-    //
-    // v5f-c (gemm-parallel-frame-arena-leak fix): scope the per-iteration parallel_for JobDecl arrays to
-    // this gemm call. Save the dispatching thread's frame-arena mark before the loop and restore it after
-    // each wait() — reclaims only THIS call's JobDecls, leaving any caller frame_alloc state below the mark
-    // intact (nest-safe, unlike frame_reset()). Fixes the cross-call arena exhaustion in heavy-gemm loops.
-    const crd::usize frame_mark = crd::jobs::frame_get_mark();
     for (crd::usize jc = 0; jc < n; jc += nc_block)
     {
         const crd::usize nc = (jc + nc_block < n) ? nc_block : (n - jc);
@@ -460,10 +451,6 @@ void gemm_parallel(crd::u32 num_workers, T alpha, MatrixView<const T, L> a, Matr
                     }
                 });
             crd::jobs::wait(counter);
-            // Reclaim this parallel_for's JobDecl array in place (back to the gemm-entry mark): bounded
-            // arena use across the (jc,pc) iterations + no cross-call accumulation. The packed buffers come
-            // from `alloc` (an IAllocator), not the frame arena, so they are untouched.
-            crd::jobs::frame_set_mark(frame_mark);
         }
     }
 

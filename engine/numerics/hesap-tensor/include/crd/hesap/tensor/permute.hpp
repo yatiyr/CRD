@@ -431,7 +431,6 @@ inline void permute_tiled_mt(T* dst, const T* src, const crd::u64* shp, const cr
             }
         });
     crd::jobs::wait(c);
-    crd::jobs::frame_reset();
 }
 
 // Collapse + dispatch. oshape/istride are the dst-ordered (permuted) source

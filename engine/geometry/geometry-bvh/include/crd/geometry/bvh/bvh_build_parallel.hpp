@@ -5,16 +5,16 @@
 //
 // `bvh_build_parallel` builds the same tree `bvh_build` does — bit-for-bit —
 // but fans the two O(count) reductions per node (centroid bounds; the 3-axis
-// bin histograms) out over `crd::jobs::parallel_reduce` for nodes with at least
+// bin histograms) out over `crd::jobs::parallel_for` for nodes with at least
 // `parallel_threshold` primitives. The per-chunk partials are min/max + integer
-// adds (exact, commutative) and `parallel_reduce` folds them in fixed job
+// adds (exact, commutative), written to one slot per job and folded in fixed job
 // order, so the SAH evaluation is identical to the serial path regardless of
 // `num_jobs` → the tree is identical. (The stable partition stays serial in
 // v1f; the per-leaf node-array layout and the §5.2 SAH split tiebreak are
 // unchanged.)
 //
 // Requires the job system to be initialised (`crd::jobs::init()`) — it calls
-// `jobs::parallel_reduce`, which uses `jobs::frame_alloc`. If `num_jobs` (or
+// `jobs::parallel_for`. If `num_jobs` (or
 // the resolved worker count) is ≤ 1, or the input has fewer than
 // `parallel_threshold` primitives, it just calls the serial `bvh_build`.
 // ---------------------------------------------------------------------------

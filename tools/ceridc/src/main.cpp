@@ -107,7 +107,6 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag, crd::perf::DiagnosticHost&
         }
         const crd::containers::String response = crd::ceridc::mcp_handle(
             {reinterpret_cast<const crd::u8*>(line), len}, &g_alloc, &diag);
-        crd::jobs::frame_reset(); // every job the request ran was joined before it answered
         (void)host.poll();        // DIAG.11a: a capture whose post window closed is delivered (and written) here
         if (!response.empty())
         {
@@ -121,12 +120,11 @@ int run_mcp_loop(crd::perf::DiagCommandService& diag, crd::perf::DiagnosticHost&
 
 // The crd::jobs pool for the length of one diagnostic verb. The host executor of the replay commands runs programs on
 // the host provider, whose pool the process owns, on this (the main) thread; the other verbs start no workers. The
-// provider's parallel ranges take their job arrays from the calling thread's frame arena, so the MCP loop resets the
-// arenas after every request (every job of it was joined by then).
+// provider's parallel ranges take their job arrays from the calling thread's frame arena, which the pool enrolled.
 class ScopedJobPool
 {
 public:
-    static constexpr crd::jobs::Config kConfig{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U};
+    static constexpr crd::jobs::Config kConfig{.num_threads = 4U};
 
     explicit ScopedJobPool(const crd::jobs::Config& config = kConfig) { crd::jobs::init(config); }
     ~ScopedJobPool() { crd::jobs::shutdown(); }

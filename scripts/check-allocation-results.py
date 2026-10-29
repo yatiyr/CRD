@@ -6,9 +6,9 @@ takes memory from a caller's IAllocator and writes through the result unchecked 
 asserts (DIAG.3a, docs/design/runtime-diagnostics.md#diag-3a). This guard reads the C++ sources under engine/, tools/,
 runtime/ and sandbox/ and reports every raw allocation whose result is not checked:
 
-  - a call `x.allocate(...)`, `x->allocate(...)`, `try_allocate(...)` or `reallocate(...)` with arguments, and a
-    `construct<T>(...)`, `construct_array<T>(...)` or `allocate_array<T>(...)` (the forms that return nullptr; the
-    `*_or_fatal` forms end in the caller's named fatal and need no check);
+  - a call `x.allocate(...)`, `x->allocate(...)`, `try_allocate(...)` or `reallocate(...)` with arguments, a
+    `construct<T>(...)`, `construct_array<T>(...)` or `allocate_array<T>(...)`, and a `crd::jobs::frame_try_alloc(...)`
+    (the forms that return nullptr; the `*_or_fatal` forms and `frame_alloc` end in a named fatal and need no check);
   - checked means: the call is the operand of `return` (an allocator or adapter handing its result up, whose caller
     checks), it sits inside an `if`/`while` condition (a bool or a pointer tested where it is made), or the variable it
     is assigned to is compared with nullptr, negated or tested with `.valid()` within the next six lines;
@@ -51,7 +51,8 @@ ALLOWED = {
 }
 
 CALL = re.compile(r'(?:->|\.)\s*(?:try_allocate|allocate|reallocate)\s*\(\s*(?!\))'
-                  r'|\b(?:crd::memory::|memory::|mem::)?(?:construct|construct_array|allocate_array)\s*<')
+                  r'|\b(?:crd::memory::|memory::|mem::)?(?:construct|construct_array|allocate_array)\s*<'
+                  r'|(?<![\w*&]\s)(?<![\w*&])\bframe_try_alloc\s*\(')
 OR_FATAL = re.compile(r'_or_fatal\s*<|_or_fatal\s*\(')
 ASSIGNED = re.compile(r'(?:^|[\s(,])(?P<var>[A-Za-z_][\w]*(?:(?:->|\.)[A-Za-z_]\w*|\[[^\]]*\])*)\s*=[^=]')
 DECLARED = re.compile(r'\b(?P<var>[A-Za-z_]\w*)\s*(?:\{|=)[^=]')

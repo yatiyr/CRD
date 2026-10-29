@@ -25,7 +25,7 @@ target_link_libraries(crd-geometry-bvh
         crd-geometry-primitives # AABB3, Ray3, the v0f precomputed Williams/Ize robust ray-AABB slab
         crd-simd-flags
     PRIVATE
-        crd-jobs                # bvh_build_parallel — jobs::parallel_reduce (v1f); not in any public header
+        crd-jobs                # bvh_build_parallel — jobs::parallel_for (v1f); not in any public header
 )
 
 target_compile_features(crd-geometry-bvh PUBLIC cxx_std_20)

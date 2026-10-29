@@ -1085,7 +1085,6 @@ void SupernodalLU<T>::factorize(const sparse::SparseMatrix<T, sparse::SparseForm
                                                         }
                                                     });
             crd::jobs::wait(counter);
-            crd::jobs::frame_reset(); // reclaim this level's JobDecls (deep etrees issue many levels)
         }
     }
 }

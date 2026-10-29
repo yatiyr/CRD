@@ -114,7 +114,6 @@ TEST_CASE("spgemm lifts the 4M-column cap via the hash path", "[hesap][sparse][s
     for (crd::u32 jobs : {1U, 2U, 4U, 8U})
     {
         auto c_par = sp::spgemm_parallel<crd::f64>(a, b, &alloc, jobs);
-        crd::jobs::frame_reset();
         REQUIRE(c_par.nnz() == c_ser.nnz());
         for (crd::usize z = 0; z < c_ser.nnz(); ++z)
         {

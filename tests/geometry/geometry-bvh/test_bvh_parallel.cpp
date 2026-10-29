@@ -16,23 +16,14 @@
 
 // The whole crd-geometry-bvh-tests binary runs with the job system up — a
 // listener (not jobs::init() at file scope) so it doesn't fire during
-// catch_discover_tests' listing phase. frame_reset() after each test case
-// keeps the per-thread frame arenas (which parallel_reduce allocates from)
-// from filling across the parallel-build cases.
+// catch_discover_tests' listing phase.
 namespace
 {
 struct BvhJobsListener final : Catch::EventListenerBase
 {
     using Catch::EventListenerBase::EventListenerBase;
 
-    void testRunStarting(Catch::TestRunInfo const&) override
-    {
-        // Big frame arena: the parallel-build tests do many builds with a low
-        // threshold, each `parallel_for` call burning a little frame-arena
-        // (JobDecl array) — `frame_reset` runs per case, but give generous slack.
-        crd::jobs::init(crd::jobs::Config{.num_threads = 4, .frame_alloc_bytes = 64U << 20U});
-    }
-    void testCaseEnded(Catch::TestCaseStats const&) override { crd::jobs::frame_reset(); }
+    void testRunStarting(Catch::TestRunInfo const&) override { crd::jobs::init(crd::jobs::Config{.num_threads = 4}); }
     void testRunEnded(Catch::TestRunStats const&) override { crd::jobs::shutdown(); }
 };
 } // namespace

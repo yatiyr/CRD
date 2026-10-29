@@ -600,7 +600,6 @@ template <typename U> void check_sddmm_public()
     const auto serial = sp::sddmm<U>(mask, x, r, y, r, r, U(0.75), &alloc);
     crd_hesap_sparse_tests::sparse_jobs_listener();
     const auto parallel = sp::sddmm_parallel<U>(mask, x, r, y, r, r, U(0.75), &alloc, 3U);
-    crd::jobs::frame_reset();
     const u32* outer = mask.pattern().outer_ptr.data();
     const u32* inner = mask.pattern().inner_idx.data();
     REQUIRE(serial.nnz() == mask.nnz());

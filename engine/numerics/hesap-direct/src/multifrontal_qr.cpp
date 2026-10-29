@@ -719,7 +719,6 @@ void MultifrontalQR<T>::factorize(const sparse::SparsePattern& pat, crd::contain
                                                         }
                                                     });
             crd::jobs::wait(counter);
-            crd::jobs::frame_reset(); // reclaim this level's JobDecls (deep trees issue many levels)
         }
     }
 

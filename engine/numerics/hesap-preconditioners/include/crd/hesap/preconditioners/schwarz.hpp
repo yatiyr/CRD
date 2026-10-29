@@ -150,7 +150,6 @@ private:
                 }
             });
             crd::jobs::wait(counter);
-            crd::jobs::frame_reset();
             return;
         }
         // Additive: serial summed.

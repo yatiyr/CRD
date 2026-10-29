@@ -107,7 +107,6 @@ TEST_CASE("parallel sddmm is bit-exact with serial", "[hesap][sparse][sddmm][par
     for (crd::u32 jobs : {1U, 2U, 4U, 8U, 16U})
     {
         auto cp = sp::sddmm_parallel<crd::f64>(mask, x.data(), r, y.data(), r, r, 1.0, &alloc, jobs);
-        crd::jobs::frame_reset();
         REQUIRE(cp.nnz() == cs.nnz());
         for (crd::usize k = 0; k < cs.nnz(); ++k)
         {

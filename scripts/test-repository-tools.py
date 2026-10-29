@@ -128,6 +128,9 @@ environment_reads_spec = importlib.util.spec_from_file_location('check_environme
                                                                 ROOT / 'scripts/check-environment-reads.py')
 environment_reads = importlib.util.module_from_spec(environment_reads_spec)
 environment_reads_spec.loader.exec_module(environment_reads)
+frame_resets_spec = importlib.util.spec_from_file_location('check_frame_resets', ROOT / 'scripts/check-frame-resets.py')
+frame_resets = importlib.util.module_from_spec(frame_resets_spec)
+frame_resets_spec.loader.exec_module(frame_resets)
 runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
 runbooks = importlib.util.module_from_spec(runbooks_spec)
 runbooks_spec.loader.exec_module(runbooks)
@@ -3716,8 +3719,10 @@ class AllocationResults(unittest.TestCase):
                 '    p[0] = 1;\n'
                 '    auto* m = crd::memory::construct<Model>(*a, 3);\n'
                 '    m->run();\n'
+                '    auto* s = static_cast<float*>(crd::jobs::frame_try_alloc(64U, 16U));\n'
+                '    s[0] = 1.0F;\n'
                 '}\n')
-        self.assertEqual([3, 6, 8], allocation_results.unchecked_calls(text))
+        self.assertEqual([3, 6, 8, 10], allocation_results.unchecked_calls(text))
 
     def test_checked_passed_up_conditional_and_fatal_forms_pass(self):
         text = ('void* Wrapper::allocate(usize n, usize al) { return m_backing->allocate(n, al); }\n'
@@ -3747,7 +3752,14 @@ class AllocationResults(unittest.TestCase):
                 '    auto* c = crd::memory::construct_or_fatal<T>(*a, "out of memory", 1);\n'
                 '    Slot s = m_slots.allocate();\n'
                 '    // a->allocate(1U, 1U) in a comment\n'
-                '}\n')
+                '    void* const stage = crd::jobs::frame_try_alloc(bytes, 64U);\n'
+                '    if (stage == nullptr)\n'
+                '    {\n'
+                '        return;\n'
+                '    }\n'
+                '}\n'
+                '[[nodiscard]] void* frame_try_alloc(crd::usize size, crd::usize alignment) noexcept;\n'
+                'void* frame_try_alloc(crd::usize size, crd::usize alignment) noexcept\n')
         self.assertEqual([], allocation_results.unchecked_calls(text))
 
     def test_a_check_too_far_from_the_call_does_not_count(self):
@@ -3836,6 +3848,43 @@ class EnvironmentReads(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as out:
                 self.assertEqual(0, environment_reads.main(['check', str(root)]))
             self.assertIn('every environment read goes through', out.getvalue())
+
+
+class FrameResets(unittest.TestCase):
+    """scripts/check-frame-resets.py: no engine library resets the crd::jobs frame arenas."""
+
+    def test_calls_are_reported_by_line_and_comments_and_strings_are_not(self):
+        text = ('crd::jobs::frame_reset();\n'
+                '// crd::jobs::frame_reset(); in a comment\n'
+                'const char* s = "frame_reset()";\n'
+                'jobs::frame_reset ();\n'
+                'my_frame_reset_count(1);\n')
+        self.assertEqual([1, 4], frame_resets.resets(text))
+
+    def test_the_tree_check_allows_only_the_jobs_module_and_fails_an_empty_one(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            jobs = root / frame_resets.OWNER / 'src' / 'jobs.cpp'
+            jobs.parent.mkdir(parents=True)
+            jobs.write_text('// nothing yet\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, frame_resets.main(['check', str(root)]))
+            self.assertIn('nothing was checked', out.getvalue())
+            jobs.write_text('void frame_reset()\n{\n}\n', encoding='utf-8')
+            library = root / 'engine' / 'numerics' / 'a' / 'a.hpp'
+            library.parent.mkdir(parents=True)
+            library.write_text('#pragma once\ninline void f()\n{\n    crd::jobs::frame_reset();\n}\n', encoding='utf-8')
+            test = root / 'tests' / 'a' / 'test_a.cpp'
+            test.parent.mkdir(parents=True)
+            test.write_text('crd::jobs::frame_reset();\n', encoding='utf-8')
+            in_owner, problems = frame_resets.check(root)
+            self.assertEqual(1, in_owner)
+            self.assertEqual(1, len(problems))
+            self.assertIn('engine/numerics/a/a.hpp: calls crd::jobs::frame_reset at line(s) 4', problems[0])
+            library.write_text('#pragma once\ninline void f()\n{\n}\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, frame_resets.main(['check', str(root)]))
+            self.assertIn('no engine library resets', out.getvalue())
 
 
 class DiagRunbooks(unittest.TestCase):

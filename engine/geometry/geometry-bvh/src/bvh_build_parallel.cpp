@@ -42,8 +42,7 @@ struct BuildFrame
 // (disjoint — no race). The fold is serial and in slot order; everything is
 // min/max + integer adds (exact, commutative) → the result is bit-identical to
 // the serial builder regardless of `num_jobs`. `out` is the calling thread's
-// allocator (reused for every big node — never the frame arena), so a big build
-// does not grow the frame arena.
+// allocator (reused for every big node — never the frame arena).
 
 struct CbParams
 {

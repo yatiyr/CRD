@@ -860,7 +860,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
         if (par_workers > 1 && flop >= kGemmParallelMinFlop)
         {
             dense::gemm_parallel<T, dense::Layout::ColMajor>(par_workers, alpha, a, b, beta, c, ta, tb, nullptr);
-            crd::jobs::frame_reset(); // reclaim this gemm's JobDecls (node-parallel runs many serially on main)
         }
         else
         {
@@ -1188,7 +1187,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                     crd::jobs::parallel_for(nr - nc, par_workers, [&](crd::u32 bb, crd::u32 ee)
                                             { cmod_slab(nc + bb, nc + ee, crd::jobs::worker_index(), nc); });
                 crd::jobs::wait(counter);
-                crd::jobs::frame_reset();
             }
         }
 #ifdef CRD_HESAP_CHOL_SCALE_PROFILE
@@ -1523,7 +1521,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                         auto* counter = crd::jobs::parallel_for(below_o, par_workers, [&](crd::u32 bb, crd::u32 ee)
                                                                 { b_slab(bb, ee, crd::jobs::worker_index()); });
                         crd::jobs::wait(counter);
-                        crd::jobs::frame_reset();
                     }
                 }
 #ifdef CRD_HESAP_CHOL_SCALE_PROFILE
@@ -1614,7 +1611,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                     dense::gemm_parallel<T, dense::Layout::RowMajor>(par_workers, T{1}, bvb, avb, T{0},
                                                                                      ttb, dense::Trans::Transpose,
                                                                                      dense::Trans::None, nullptr);
-                                    crd::jobs::frame_reset();
                                 }
                                 else
                                 {
@@ -1642,7 +1638,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                                                            }
                                                                        });
                                     crd::jobs::wait(sc);
-                                    crd::jobs::frame_reset();
                                 }
                                 else
                                 {
@@ -1892,11 +1887,6 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                 }
             }
 #endif
-            // Reclaim this level's JobDecls from the per-thread frame arena; a deep etree
-            // (ldoor ~1M) issues thousands of parallel_for batches and the 1 MB frame arena
-            // exhausts without a reset at each level boundary. (chol_gemm also resets per
-            // node-parallel gemm_parallel; this bounds the tree-parallel batches too.)
-            crd::jobs::frame_reset();
         }
     }
 
@@ -2298,7 +2288,6 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                                                             }
                                                         });
                 crd::jobs::wait(counter);
-                crd::jobs::frame_reset();
             }
             else // thin level (near-root big front): serial, no spawn
             {
@@ -2460,7 +2449,6 @@ bool SupernodalCholesky<T>::solve_with_workers(crd::containers::Span<T> rhs, crd
                                                             }
                                                         });
                 crd::jobs::wait(counter);
-                crd::jobs::frame_reset();
             }
             else // thin level (near-root big front): serial, no spawn
             {

@@ -162,7 +162,6 @@ TEST_CASE("parallel spmm is bit-exact with serial across job counts", "[hesap][s
             crd::containers::Array<crd::f64> cp(&alloc);
             cp.resize(static_cast<crd::usize>(m) * r);
             sp::spmm_parallel<crd::f64>(1.5, a, b.data(), r, r, 0.0, cp.data(), r, jobs);
-            crd::jobs::frame_reset();
             for (crd::u32 i = 0; i < m * r; ++i)
             {
                 INFO("dims=" << dims << " jobs=" << jobs << " i=" << i);

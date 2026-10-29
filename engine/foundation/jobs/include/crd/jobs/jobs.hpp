@@ -301,9 +301,10 @@ struct LaneSample
 // Queue pressure (DIAG.10c): the fill of every bounded resource of the pool, as readings the crd-core pressure probe
 // judges (crd/core/budget_pressure.hpp). Each reading carries its bound, what it holds now, its high water where the
 // pool keeps one and the requests it refused. A refusal is always followed by the always-on fatal that names the
-// resource ("CounterPool exhausted", "fiber pool exhausted", "injection queue full", "pinned lane full"), so a
-// refusal count above zero is visible only to a handler intercepting that fatal; in a live process the readings show
-// how near each bound the workload ran.
+// resource ("CounterPool exhausted", "fiber pool exhausted", "injection queue full", "pinned lane full", "frame arena
+// exhausted"), so a refusal count above zero is visible only to a handler intercepting that fatal; in a live process
+// the readings show how near each bound the workload ran. The one exception is frame_try_alloc(), whose refusal is
+// counted and returned as nullptr.
 //
 //   counters     -- completion counters (Config::max_counters): held now, the most held at once, refusals.
 //   fibers[t]    -- fiber tier t (0 = Small, 1 = Medium, 2 = Large): acquired now, peak, refusals.
@@ -311,6 +312,8 @@ struct LaneSample
 //                   Its high water is not kept: tracking it would cost every push a read of the consumers' position.
 //   pinned       -- the per-thread pinned lanes as one budget (Config::pinned_queue_capacity per lane): the fullest
 //                   lane now, the highest lane peak, and the refusals of all lanes.
+//   frame        -- the per-thread frame arenas as one budget, in bytes (Config::frame_alloc_bytes per thread): the
+//                   fullest arena now, the highest arena peak, and the refusals of all arenas.
 //
 // Every reading is unread before init(). Relaxed, racy point-in-time reads: a diagnostic sample, not an oracle.
 // ---------------------------------------------------------------------------
@@ -320,6 +323,7 @@ struct JobsPressure
     crd::BudgetReading fibers[3];
     crd::BudgetReading injection[3];
     crd::BudgetReading pinned;
+    crd::BudgetReading frame;
 };
 
 [[nodiscard]] JobsPressure pressure_snapshot() noexcept;
@@ -439,21 +443,24 @@ enum class WorkerPreference : crd::u8
 // num_workers() (safe — never oversubscribes beyond the pool, never assumes hybrid).
 [[nodiscard]] crd::u32 recommended_jobs(WorkerPreference pref, crd::u32 count) noexcept;
 
-// Per-thread linear frame allocator. Each thread owns a private bump arena sized by
-// Config::frame_alloc_bytes. Allocation is lock-free and O(1).
+// Per-thread linear frame allocator. Each thread owns a private bump arena sized by Config::frame_alloc_bytes;
+// allocation is lock-free and O(1), and only the owning thread allocates from or reclaims its arena.
 //
-// frame_reset() resets All threads' arenas. It is NOT thread-safe relative to concurrent
-// frame_alloc() calls — invoke it only at a frame boundary after all jobs of the previous
-// frame have completed (e.g. after the last wait() / run_and_wait() of the frame).
+// frame_alloc() ends in an always-on fatal ("frame arena exhausted") when the request does not fit;
+// frame_try_alloc() returns nullptr instead and leaves the arena as it was.
+//
+// frame_reset() wipes every thread's arena. Only a frame owner calls it (a frame loop, a request loop, a test or a
+// bench iteration), at a boundary where no job is in flight and no caller still holds frame memory; library code never
+// does (crd-check-frame-resets). Asserted: no completion counter is held and the caller is not a job.
+//
+// frame_get_mark() returns the calling thread's arena offset; frame_set_mark() reclaims what that thread allocated
+// since, leaving earlier allocations intact. The pair must not span a wait() or yield(): a job that waits may resume
+// on another thread, and the jobs this thread runs meanwhile own the memory above the mark. parallel_for and
+// parallel_reduce reclaim their JobDecl arrays this way before they return (run() copies them and never suspends),
+// so a loop of them never grows the arena.
 [[nodiscard]] void* frame_alloc(crd::usize size, crd::usize alignment = alignof(std::max_align_t));
+[[nodiscard]] void* frame_try_alloc(crd::usize size, crd::usize alignment = alignof(std::max_align_t)) noexcept;
 void frame_reset();
-
-// Scoped frame-arena reclaim. frame_get_mark() returns the CURRENT thread's frame-arena offset;
-// frame_set_mark() restores it, reclaiming only the allocations THIS thread made since the mark. Unlike
-// frame_reset() (all threads, wiped to zero), this is nest-safe — it preserves a caller's earlier
-// frame_alloc state below the mark. Used by parallel kernels (gemm_parallel) to reclaim their per-call
-// JobDecl arrays in place. Same not-thread-safe contract as frame_alloc(): mark/restore on the owning
-// thread, with no concurrent frame_alloc on that arena in flight (i.e. after the pass's wait()).
 [[nodiscard]] crd::usize frame_get_mark();
 void frame_set_mark(crd::usize mark);
 
@@ -519,9 +526,8 @@ template <typename F>
 // The Task struct {begin, end, F} must fit in 41-byte SBO (sizeof(Task) <= 41).
 // For a typical pointer-capturing lambda (8 bytes), sizeof(Task) = 4+4+8 = 16.
 //
-// Returns a Counter* the caller must wait() on.
-// Note: a std::vector is heap-allocated for the JobDecl array; the frame arena
-// (v1j) will replace this allocation on the hot path.
+// Returns a Counter* the caller must wait() on. The JobDecl array comes from the calling thread's frame arena and
+// is reclaimed before the call returns: run() has copied every element into the scheduler by then.
 // ---------------------------------------------------------------------------
 
 template <typename F>
@@ -550,9 +556,7 @@ template <typename F>
 
     FD fn_copy(std::forward<F>(fn));
 
-    // Allocate the JobDecl array from the per-thread frame arena — no heap allocation.
-    // The array is valid until the next frame_reset(); run() copies each element into
-    // the scheduler queue before returning so only the run() call must see valid memory.
+    const crd::usize mark = frame_get_mark();
     auto* const jobs = static_cast<JobDecl*>(frame_alloc(num_jobs * sizeof(JobDecl), alignof(JobDecl)));
 
     for (crd::u32 i = 0U; i < num_jobs; ++i)
@@ -562,7 +566,9 @@ template <typename F>
         const JobDecl j = make_job(Task{begin, end, fn_copy}, stack, priority);
         std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
-    return run(std::span<const JobDecl>(jobs, num_jobs));
+    Counter* const counter = run(std::span<const JobDecl>(jobs, num_jobs));
+    frame_set_mark(mark);
+    return counter;
 }
 
 // ---------------------------------------------------------------------------
@@ -604,6 +610,7 @@ template <typename F>
         njobs = 1U;
     }
     FD fn_copy(std::forward<F>(fn));
+    const crd::usize mark = frame_get_mark();
     auto* const jobs = static_cast<JobDecl*>(frame_alloc(njobs * sizeof(JobDecl), alignof(JobDecl)));
     for (crd::u32 i = 0U; i < njobs; ++i)
     {
@@ -613,7 +620,9 @@ template <typename F>
         j.pin_thread = static_cast<crd::i32>(i); // pin to worker i (affinity-pinned to a performance core at init)
         std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
-    return run(std::span<const JobDecl>(jobs, njobs));
+    Counter* const counter = run(std::span<const JobDecl>(jobs, njobs));
+    frame_set_mark(mark);
+    return counter;
 }
 
 // ---------------------------------------------------------------------------
@@ -631,32 +640,30 @@ template <typename F>
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// parallel_reduce — split [0, count) into num_jobs ranges, map each range to a
-// partial result, then fold the partials. Synchronous: submits, waits, folds,
-// returns. The map function runs on worker fibers; the fold runs on the caller.
+// parallel_reduce — split [0, count) into one range per slot of `partials` (at most count ranges), map each range
+// to its slot, then fold the slots. Synchronous: submits, waits, folds, returns. The map function runs on worker
+// fibers; the fold runs on the caller.
 //
-//   map    : R (crd::u32 begin, crd::u32 end)   — partial result over [begin,end)
-//   reduce : R (R acc, R partial)               — combine; should be associative.
-//                                                 Partials are folded LEFT-TO-RIGHT
-//                                                 in job order starting from `init`,
-//                                                 so the result is deterministic for
-//                                                 a fixed num_jobs.
-//   init   : R                                  — fold seed / identity.
+//   partials : one R slot per job, the caller's storage. The slots must outlive the wait, after which a calling job
+//              may run on another thread, so they cannot come from a frame arena.
+//   map      : R (crd::u32 begin, crd::u32 end)   — partial result over [begin,end)
+//   reduce   : R (R acc, R partial)               — combine; should be associative. Partials are folded
+//                                                   LEFT-TO-RIGHT in job order starting from `init`, so the result
+//                                                   is deterministic for a fixed partials.size().
+//   init     : R                                  — fold seed / identity.
 //
-// R must be trivially copyable (it lives in the per-thread frame arena and is
-// written by a worker via assignment). MapFn must satisfy the same SBO
-// constraints as parallel_for's F. ReduceFn runs only on the caller — no SBO
-// constraint, may be any callable.
+// R must be trivially copyable (a worker writes its slot by assignment). MapFn must satisfy the same SBO
+// constraints as parallel_for's F. ReduceFn runs only on the caller — no SBO constraint, may be any callable.
 // ---------------------------------------------------------------------------
 template <typename R, typename MapFn, typename ReduceFn>
     requires(std::is_trivially_copyable_v<R>)
-[[nodiscard]] R parallel_reduce(crd::u32 count, crd::u32 num_jobs, R init, MapFn&& map, ReduceFn&& reduce,
+[[nodiscard]] R parallel_reduce(crd::u32 count, std::span<R> partials, R init, MapFn&& map, ReduceFn&& reduce,
                                 StackSize stack = StackSize::Small, Priority priority = Priority::Normal)
 {
     CRD_ASSERT_MSG(count > 0U, "parallel_reduce: count must be > 0");
-    CRD_ASSERT_MSG(num_jobs > 0U, "parallel_reduce: num_jobs must be > 0");
+    CRD_ASSERT_MSG(!partials.empty(), "parallel_reduce: partials must hold at least one slot");
 
-    num_jobs = num_jobs < count ? num_jobs : count;
+    const crd::u32 num_jobs = partials.size() < count ? static_cast<crd::u32>(partials.size()) : count;
 
     using MFD = std::decay_t<MapFn>;
     struct Task
@@ -676,10 +683,8 @@ template <typename R, typename MapFn, typename ReduceFn>
 
     MFD map_copy(std::forward<MapFn>(map));
 
-    // Partials + JobDecl array from the per-thread frame arena. JobDecls only
-    // need to outlive run(); partials must outlive wait() + the fold below —
-    // both live until the next frame_reset(), so we're safe.
-    R* const partials = static_cast<R*>(frame_alloc(static_cast<crd::usize>(num_jobs) * sizeof(R), alignof(R)));
+    // The JobDecl array only has to outlive run(), so it is reclaimed before the wait.
+    const crd::usize mark = frame_get_mark();
     auto* const jobs =
         static_cast<JobDecl*>(frame_alloc(static_cast<crd::usize>(num_jobs) * sizeof(JobDecl), alignof(JobDecl)));
 
@@ -687,11 +692,12 @@ template <typename R, typename MapFn, typename ReduceFn>
     {
         const crd::u32 begin = i * count / num_jobs;
         const crd::u32 end = (i + 1U) * count / num_jobs;
-        const JobDecl j = make_job(Task{begin, end, partials + i, map_copy}, stack, priority);
+        const JobDecl j = make_job(Task{begin, end, &partials[i], map_copy}, stack, priority);
         std::memcpy(jobs + i, &j, sizeof(JobDecl));
     }
 
     Counter* const c = run(std::span<const JobDecl>(jobs, num_jobs));
+    frame_set_mark(mark);
     wait(c); // happens-before: the partial writes are visible after the wait
 
     // The fold calls the caller's reducer itself (no copy), as an lvalue, once per partial.

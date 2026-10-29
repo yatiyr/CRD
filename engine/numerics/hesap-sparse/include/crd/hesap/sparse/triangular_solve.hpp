@@ -162,7 +162,6 @@ inline void tri_solve_levelsched(const crd::u32* ptr, const crd::u32* col, const
                 }
             });
             crd::jobs::wait(counter);
-            crd::jobs::frame_reset(); // per-level arena hygiene (a chain-y factor has many levels)
         }
     }
 }

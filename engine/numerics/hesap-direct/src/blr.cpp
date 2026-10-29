@@ -7,7 +7,6 @@
 #include <crd/hesap/dense/interp_decomp.hpp>
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/hesap/dense/svd.hpp>
-#include <crd/jobs/jobs.hpp>  // frame_reset (reclaim the per-call gemm/parallel_for FrameArena — v5e-3 Leg B)
 
 #include <cmath>
 #include <utility>
@@ -35,24 +34,6 @@ using crd::hesap::dense::detail::apply_q_block;
 
 namespace
 {
-// Reclaim the FrameArena consumed by a just-completed parallel gemm / parallel_for. gemm_parallel
-// `frame_alloc`s its JobDecls but deliberately never resets (it can't know the caller holds none);
-// a partial-front factor fires HUNDREDS of such calls, so the per-thread arena monotonically fills
-// and exhausts mid-front (ASan: frame_arena.hpp:60; release: a write past the arena ⇒ glibc
-// "corrupted size vs prev_size"). The node-parallel driver dispatches gemms SERIALLY from the main
-// thread + each call `wait()`s before returning ⇒ on return all jobs are dead and NO caller holds
-// frame state ⇒ resetting here is a valid frame boundary (correct by construction; never runs on a
-// tree-parallel worker since those use serial gemm). Guard on workers>0 (serial path never alloc'd).
-// v5e-3 Leg B. NOTE: gemm's own non-resetting frame use is a tracked crd-dense defect for a central
-// scoped-marker fix; this is the localized driver-side reclamation.
-inline void reclaim_frame_arena() noexcept
-{
-    if (crd::jobs::num_workers() > 0)
-    {
-        crd::jobs::frame_reset();
-    }
-}
-
 // Gather A[r0:r1, c0:c1] into a fresh (r1-r0)×(c1-c0) matrix.
 template <typename T>
 Matrix<T> gather(crd::memory::IAllocator* alloc, const Matrix<T>& a, crd::usize r0, crd::usize r1, crd::usize c0,
@@ -1038,7 +1019,6 @@ bool factor_front_cholesky_dense(crd::memory::IAllocator* alloc, Matrix<T>& fron
         }
     }
     factor_cholesky<T, Layout::RowMajor>(chol, alloc);
-    reclaim_frame_arena();  // factor_cholesky parallel_for's frame use (bound it too)
     if (chol.info() != 0)
     {
         return false;

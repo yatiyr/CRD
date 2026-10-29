@@ -640,7 +640,6 @@ void MultifrontalLDLT<T>::factorize(const sparse::SparseMatrix<T, sparse::Sparse
                     }
                 });
             crd::jobs::wait(counter);
-            crd::jobs::frame_reset();
         }
     }
 

@@ -53,13 +53,6 @@ public:
             return true;
         }
         spmv_sell_parallel<T>(T(1), m_sell, x, T(0), y);
-        // parallel_for bump-allocates JobDecls from the per-thread frame arena
-        // (reclaimed only on frame_reset). A Krylov solve calls apply thousands
-        // of times, so reclaim here -- the operator owns its jobs scratch.
-        // Contract: apply must NOT be called nested inside another frame-arena
-        // consumer (e.g. from within a parallel_for body). CG/PCG call it from
-        // the main thread, serially, which is the supported usage.
-        crd::jobs::frame_reset();
         return true;
     }
 
@@ -139,7 +132,6 @@ private:
             return;
         }
         spmv_sell_parallel<T>(T(1), s, x, T(0), y);
-        crd::jobs::frame_reset(); // Krylov-loop arena hygiene (see ParallelSparseLinearOp).
     }
 
     SellMatrix<T> m_a;  // A   (rows × cols)

@@ -42,11 +42,7 @@ namespace
 struct SceneJobsListener final : Catch::EventListenerBase
 {
     using Catch::EventListenerBase::EventListenerBase;
-    void testRunStarting(Catch::TestRunInfo const&) override
-    {
-        crd::jobs::init(crd::jobs::Config{.num_threads = 4, .frame_alloc_bytes = 16U << 20U});
-    }
-    void testCaseEnded(Catch::TestCaseStats const&) override { crd::jobs::frame_reset(); }
+    void testRunStarting(Catch::TestRunInfo const&) override { crd::jobs::init(crd::jobs::Config{.num_threads = 4}); }
     void testRunEnded(Catch::TestRunStats const&) override { crd::jobs::shutdown(); }
 };
 } // namespace

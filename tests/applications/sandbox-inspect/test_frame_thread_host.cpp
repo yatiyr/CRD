@@ -8,8 +8,8 @@
 //
 // Covered, on the committed program assets/ceir/host_replay_demo.ceir (a pooled async.launch, a task.map_reduce over a
 // parallel range, a state cell and a loop whose step is the entry argument, so main(0) fails bad-for-step there):
-// `replay.record executor=host` through the panel runs on the pumping thread, the run takes job arrays from that
-// thread's frame arena and the arena's mark is back where it was once the run returns, and the record is the library's
+// `replay.record executor=host` through the panel runs on the pumping thread, the run leaves that thread's frame arena
+// where it found it (parallel_for reclaims its job arrays as it submits them), and the record is the library's
 // `record_host_run` of the same artifact byte for byte; `replay.run` reproduces it on the pumping thread; replaying it
 // against an edited copy names the edited launch constant at the await that reads it (recorded 25, observed 36), so the
 // replay's answer comes back from the frame loop. Closing the calls refuses a posted host run and every later one:
@@ -72,7 +72,7 @@ constexpr const char* kLaunchEdited = "%4 = arith.const() {value = 6} : !i32";
 // The crd::jobs pool, initialised on this (the frame loop's) thread, which it enrolls with frame arena 0.
 struct JobsPool
 {
-    JobsPool() { crd::jobs::init(crd::jobs::Config{.num_threads = 4, .frame_alloc_bytes = 16U << 20U}); }
+    JobsPool() { crd::jobs::init(crd::jobs::Config{.num_threads = 4}); }
     ~JobsPool() { crd::jobs::shutdown(); }
     JobsPool(const JobsPool&)            = delete;
     JobsPool& operator=(const JobsPool&) = delete;
@@ -323,8 +323,8 @@ TEST_CASE("diag 9a: the sandbox panel runs a host record on the frame-loop threa
     const std::thread::id               frame_thread = std::this_thread::get_id();
     const usize                         mark         = crd::jobs::frame_get_mark();
 
-    // 1. replay.record executor=host: the run is on this (the frame loop's) thread, its parallel range takes job arrays
-    //    from this thread's frame arena, the arena's mark is restored, and the record is the library's.
+    // 1. replay.record executor=host: the run is on this (the frame loop's) thread, it leaves this thread's frame arena
+    //    where it found it, and the record is the library's.
     const String args = record_args("host.crpl", &alloc);
     REQUIRE(send(*h.panel, ck::kReplayRecordCommand, StringView{kProgram}, view(args)) == DiagPanelSubmit::Started);
     REQUIRE(frames_until_answer(calls, *h.panel));
@@ -339,7 +339,7 @@ TEST_CASE("diag 9a: the sandbox panel runs a host record on the frame-loop threa
     }
     CHECK(probe.records == 1U);
     CHECK(probe.thread == frame_thread);
-    CHECK(probe.mark_out > probe.mark_in); // the run allocated from this thread's arena
+    CHECK(probe.mark_out == probe.mark_in); // the run's parallel range reclaimed its job arrays
     CHECK(crd::jobs::frame_get_mark() == mark);
     CHECK(calls.calls_run() == 1U);
     CHECK(calls.refused() == 0U);
@@ -357,7 +357,7 @@ TEST_CASE("diag 9a: the sandbox panel runs a host record on the frame-loop threa
     }
     CHECK(probe.replays == 1U);
     CHECK(probe.thread == frame_thread);
-    CHECK(probe.mark_out > probe.mark_in);
+    CHECK(probe.mark_out == probe.mark_in);
     CHECK(crd::jobs::frame_get_mark() == mark);
     CHECK(calls.calls_run() == 2U);
 

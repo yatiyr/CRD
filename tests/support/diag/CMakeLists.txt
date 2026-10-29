@@ -114,8 +114,9 @@ if(TARGET crd-jobs)
     crd_diag_specimen(crd-diag-fiber-exhaustion-specimen SOURCES specimens/fiber_exhaustion_specimen.cpp)
     target_link_libraries(crd-diag-fiber-exhaustion-specimen PRIVATE crd-jobs Threads::Threads)
 
-    # The DIAG.10c queue-full positive control: a push into a full injection queue or a full pinned lane must fire an
-    # always-on, counted fatal (not a silently dropped or overwritten job). Mode argument: injection | pinned.
+    # The DIAG.10c queue-full positive control: a push into a full injection queue or a full pinned lane, or a frame
+    # allocation past its arena, must fire an always-on, counted fatal (not a silently dropped or overwritten job, not
+    # a pointer past the arena). Mode argument: injection | pinned | frame.
     crd_diag_specimen(crd-diag-queue-full-specimen SOURCES specimens/queue_full_specimen.cpp)
     target_link_libraries(crd-diag-queue-full-specimen PRIVATE crd-jobs)
 endif()

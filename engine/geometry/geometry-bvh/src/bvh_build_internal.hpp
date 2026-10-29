@@ -7,7 +7,7 @@
 //
 // The split is: the *centroid-bounds* pass and the *bin-histogram* pass are
 // each an O(count) reduction over the index slice — those are the parts the
-// parallel builder fans out over `crd::jobs::parallel_reduce` (per-chunk
+// parallel builder fans out over `crd::jobs::parallel_for` (per-chunk
 // partials folded in fixed job order; the partials use min/max + integer adds,
 // which are exact and commutative, so the parallel histograms are bit-identical
 // to the serial ones → the parallel build produces a tree byte-for-byte equal

@@ -132,7 +132,6 @@ TEST_CASE("parallel ell spmv is bit-exact with serial", "[hesap][sparse][ell][pa
         crd::containers::Array<crd::f64> yp(&alloc);
         yp.resize(n);
         sp::spmv_ell_parallel<crd::f64>(1.0, ell, {x.data(), x.size()}, 0.0, {yp.data(), yp.size()}, jobs);
-        crd::jobs::frame_reset();
         for (crd::u32 i = 0; i < n; ++i)
         {
             INFO("jobs=" << jobs << " i=" << i);
@@ -196,7 +195,6 @@ TEST_CASE("parallel dia spmv is bit-exact with serial", "[hesap][sparse][dia][pa
         crd::containers::Array<crd::f64> yp(&alloc);
         yp.resize(n);
         sp::spmv_dia_parallel<crd::f64>(1.0, dia, {x.data(), x.size()}, 0.0, {yp.data(), yp.size()}, jobs);
-        crd::jobs::frame_reset();
         for (crd::u32 i = 0; i < n; ++i)
         {
             INFO("jobs=" << jobs << " i=" << i);

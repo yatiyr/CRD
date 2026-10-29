@@ -476,7 +476,6 @@ private:
             }
         });
         crd::jobs::wait(counter);
-        crd::jobs::frame_reset();
 
         for (crd::u32 k = 0; k < n; ++k)
         {

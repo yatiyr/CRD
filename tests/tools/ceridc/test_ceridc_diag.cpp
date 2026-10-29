@@ -118,9 +118,8 @@ struct DiagJobsListener final : Catch::EventListenerBase
     using Catch::EventListenerBase::EventListenerBase;
     void testRunStarting(Catch::TestRunInfo const& /*info*/) override
     {
-        crd::jobs::init(crd::jobs::Config{.num_threads = 4U, .frame_alloc_bytes = 16U << 20U});
+        crd::jobs::init(crd::jobs::Config{.num_threads = 4U});
     }
-    void testCaseEnded(Catch::TestCaseStats const& /*stats*/) override { crd::jobs::frame_reset(); }
     void testRunEnded(Catch::TestRunStats const& /*stats*/) override { crd::jobs::shutdown(); }
 };
 

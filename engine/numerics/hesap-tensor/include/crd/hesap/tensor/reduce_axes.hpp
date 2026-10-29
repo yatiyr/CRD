@@ -132,7 +132,6 @@ template <typename T>
                         detail::reduce_kernels<T, Op>().columns(out, src, red_count, w, j0, j1 < w ? j1 : w);
                     });
                 crd::jobs::wait(c);
-                crd::jobs::frame_reset();
             }
             else
             {
@@ -151,7 +150,6 @@ template <typename T>
                                             [out, src, red_count](crd::u32 o0, crd::u32 o1)
                                             { detail::row_fold_range<T, Op>(out, src, red_count, o0, o1); });
                 crd::jobs::wait(c);
-                crd::jobs::frame_reset();
             }
             else
             {

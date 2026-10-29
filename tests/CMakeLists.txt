@@ -81,6 +81,10 @@ set_tests_properties(crd-check-allocation-results PROPERTIES TIMEOUT 120 ENVIRON
 add_test(NAME crd-check-environment-reads
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-environment-reads.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# Only frame owners reset the crd::jobs frame arenas: no crd::jobs::frame_reset under engine/ outside the jobs module.
+add_test(NAME crd-check-frame-resets
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-frame-resets.py" "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-frame-resets PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
 # command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
 # is one this tree registers (it lists them with ctest --show-only); nothing publishes.

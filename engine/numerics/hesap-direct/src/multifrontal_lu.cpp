@@ -792,17 +792,12 @@ double MultifrontalLU<T>::factor_attempt(const sparse::SparseMatrix<T, sparse::S
                                                             }
                                                         });
                 crd::jobs::wait(counter);
-                crd::jobs::frame_reset(); // reclaim this level's JobDecls (deep trees issue many levels)
             }
             else
             {
                 for (crd::u32 t = 0; t < cnt; ++t)
                 {
                     factor_one_front(lvl_list[lo + t], 0, true); // main thread (wk 0) + within-front parallelism
-                    // Each narrow front issues parallel_for (assembly + TRSM + trailing GEMM); reclaim its
-                    // JobDecls before the next so the per-thread frame arena can't accumulate across the deep
-                    // narrow chain. Safe: main thread, and factor_one_front waited all its jobs before returning.
-                    crd::jobs::frame_reset();
                 }
             }
             // Early-abort the optimistic natural-diagonal attempt the instant element growth blows past the

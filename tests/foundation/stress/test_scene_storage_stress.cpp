@@ -193,7 +193,6 @@ TEST_CASE("scene stress -- parallel chunk read (archetype)", "[stress][scene]")
             CHECK(component<ArchComp>(w, e).v == expected_value(e, 0));
         }
     }
-    crd::jobs::frame_reset();
 }
 
 TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", "[stress][scene]")
@@ -268,7 +267,6 @@ TEST_CASE("scene stress -- parallel disjoint chunk write (archetype + sparse)", 
             CHECK(component<SparseComp>(w, e).v == expected_value(e, round));
         }
     }
-    crd::jobs::frame_reset();
 }
 
 TEST_CASE("scene stress -- concurrent reads of frozen scene state", "[stress][scene]")

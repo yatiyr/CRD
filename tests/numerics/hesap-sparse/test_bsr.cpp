@@ -133,7 +133,6 @@ TEST_CASE("parallel bsr spmv is bit-exact with serial", "[hesap][sparse][bsr][pa
         yp.resize(bsr.rows);
         sp::spmv_bsr_parallel<crd::f64>(1.0, bsr, crd::containers::ConstSpan<crd::f64>{x.data(), x.size()}, 0.0,
                                         crd::containers::Span<crd::f64>{yp.data(), yp.size()}, jobs);
-        crd::jobs::frame_reset();
         for (crd::u32 i = 0; i < ys.size(); ++i)
         {
             INFO("jobs=" << jobs << " i=" << i);

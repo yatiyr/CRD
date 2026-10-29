@@ -582,7 +582,6 @@ private:
             }
         });
         crd::jobs::wait(counter);
-        crd::jobs::frame_reset(); // reclaim the parallel_for JobDecls (Krylov-loop hygiene)
 
         // Assemble M in fixed column order ⇒ deterministic regardless of thread count.
         for (crd::u32 k = 0; k < n; ++k)

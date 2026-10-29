@@ -53,15 +53,10 @@ using crd::geometry::bvh_gpu::sort_morton_pairs_parallel;
 // Init crd-jobs for the lifetime of this test binary via a Catch2 listener
 // (mirrors the pattern in test_bvh_parallel.cpp). Doing init() at file scope
 // would fire during catch_discover_tests' listing phase, before main().
-// frame_reset() per case keeps the per-thread frame arenas from filling.
 struct MortonSortJobsListener final : Catch::EventListenerBase
 {
     using Catch::EventListenerBase::EventListenerBase;
-    void testRunStarting(Catch::TestRunInfo const&) override
-    {
-        crd::jobs::init(crd::jobs::Config{.num_threads = 8U, .frame_alloc_bytes = 64U << 20U});
-    }
-    void testCaseEnded(Catch::TestCaseStats const&) override { crd::jobs::frame_reset(); }
+    void testRunStarting(Catch::TestRunInfo const&) override { crd::jobs::init(crd::jobs::Config{.num_threads = 8U}); }
     void testRunEnded(Catch::TestRunStats const&) override { crd::jobs::shutdown(); }
 };
 

@@ -2,7 +2,6 @@
 
 #include "frame_thread_calls.hpp"
 
-#include <crd/jobs/jobs.hpp> // frame_get_mark / frame_set_mark: a host run's job arrays on the frame-loop thread
 
 namespace crd::sandbox
 {
@@ -160,12 +159,10 @@ struct HostCall
     ceir::cook::HostExecutorStatus        status         = ceir::cook::HostExecutorStatus::Failed;
 };
 
-// On the frame-loop thread: the inner call, then the frame arena's mark as it was before it (the run's job arrays are
-// dead once it returns).
+// On the frame-loop thread: the inner call.
 void run_host_call(void* user)
 {
-    auto* const      c    = static_cast<HostCall*>(user);
-    const crd::usize mark = crd::jobs::frame_get_mark();
+    auto* const c = static_cast<HostCall*>(user);
     if (c->record_request != nullptr)
     {
         c->status =
@@ -175,7 +172,6 @@ void run_host_call(void* user)
     {
         c->status = c->inner->replay(*c->replay_request, *c->replay_out, *c->reason, c->inner->user);
     }
-    crd::jobs::frame_set_mark(mark);
 }
 
 [[nodiscard]] ceir::cook::HostExecutorStatus hand_over(FrameThreadCalls& calls, HostCall& c, containers::String& reason)

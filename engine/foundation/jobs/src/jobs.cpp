@@ -465,15 +465,30 @@ bool pump_main_thread_until_idle()
 // Frame allocator
 // ---------------------------------------------------------------------------
 
+void* frame_try_alloc(crd::usize size, crd::usize alignment) noexcept
+{
+    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_try_alloc: call init() first");
+    return detail::tl_frame_arena_ref().try_alloc(size, alignment);
+}
+
 void* frame_alloc(crd::usize size, crd::usize alignment)
 {
-    CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_alloc: call init() first");
-    return detail::tl_frame_arena_ref().alloc(size, alignment);
+    void* const p = frame_try_alloc(size, alignment);
+    // Always-on, like the counter pool's: a pointer past the arena would corrupt whatever follows it.
+    if (p == nullptr)
+    {
+        CRD_FATAL("crd::jobs::frame_alloc: frame arena exhausted — raise frame_alloc_bytes in jobs::Config");
+    }
+    return p;
 }
 
 void frame_reset()
 {
     CRD_ASSERT_MSG(g_pool.is_initialized(), "crd::jobs::frame_reset: call init() first");
+    CRD_ASSERT_MSG(detail::tl_current_fiber_ref() == nullptr,
+                   "crd::jobs::frame_reset: called from a job; only a frame owner resets, between frames");
+    CRD_ASSERT_MSG(g_pool.counter_pool().acquired() == 0U,
+                   "crd::jobs::frame_reset: a job is in flight (a completion counter is held); reset after its wait()");
     g_pool.reset_all_frame_arenas();
 }
 
@@ -774,6 +789,7 @@ JobsPressure pressure_snapshot() noexcept
 
     g_pool.scheduler().injection_pressure(p.injection);
     p.pinned = g_pool.scheduler().pinned_pressure();
+    p.frame = g_pool.frame_pressure();
     return p;
 }
 

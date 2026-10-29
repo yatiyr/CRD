@@ -140,6 +140,10 @@ public:
     // completed). Maps to the public frame_reset() call.
     void reset_all_frame_arenas() noexcept;
 
+    // DIAG.10c pressure of the per-thread frame arenas as one budget: the fullest arena now, the highest peak, the
+    // refusals of all arenas; capacity is one arena's. Relaxed, racy reads; unread before init().
+    [[nodiscard]] crd::BudgetReading frame_pressure() const noexcept;
+
     [[nodiscard]] Scheduler&   scheduler()      noexcept { return m_scheduler; }
     [[nodiscard]] FiberPool&   fiber_pool()     noexcept { return m_fiber_pool; }
     [[nodiscard]] CounterPool& counter_pool()   noexcept { return m_counter_pool; }

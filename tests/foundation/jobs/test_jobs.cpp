@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <span>
 #include <thread>
 
 // GCC and Clang AddressSanitizer builds, whose stacks have fake stacks (the fake-stack case below).
@@ -681,6 +682,159 @@ TEST_CASE("jobs: frame_reset allows full capacity to be reused", "[jobs][frame-a
     // After reset, cursor is 0 — the full 1024 bytes are available again.
     void* p2 = crd::jobs::frame_alloc(1024U, 1U);
     REQUIRE(p2 != nullptr);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 24b. frame_try_alloc refuses what does not fit, leaves the cursor and earlier bytes alone, counts the refusal, and
+//      aligns the address (not the offset) past the base's own alignment.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: frame_try_alloc refuses without moving the cursor and aligns the address", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 2U;
+    cfg.frame_alloc_bytes = 1024U;
+    crd::jobs::init(cfg);
+
+    auto* const head = static_cast<crd::u8*>(crd::jobs::frame_alloc(3U, 1U));
+    head[0] = 0xA5U;
+    head[2] = 0x5AU;
+    const crd::usize mark = crd::jobs::frame_get_mark();
+    CHECK(crd::jobs::frame_try_alloc(1022U, 1U) == nullptr);
+    CHECK(crd::jobs::frame_try_alloc(~crd::usize{0}, 8U) == nullptr);       // no wrap past the capacity
+    CHECK(crd::jobs::frame_try_alloc(8U, crd::usize{1} << 62U) == nullptr); // nor through the padding
+    CHECK(crd::jobs::frame_get_mark() == mark);
+    CHECK(crd::jobs::pressure_snapshot().frame.refusals == 3U);
+
+    void* const line = crd::jobs::frame_try_alloc(64U, 256U);
+    REQUIRE(line != nullptr);
+    CHECK((reinterpret_cast<crd::usize>(line) & 255U) == 0U);
+    CHECK(head[0] == 0xA5U);
+    CHECK(head[2] == 0x5AU);
+    crd::jobs::frame_set_mark(mark);
+    CHECK(crd::jobs::frame_try_alloc(1021U, 1U) != nullptr); // the rest of the arena, exactly
+    CHECK(crd::jobs::frame_try_alloc(1U, 1U) == nullptr);
+    const crd::BudgetReading frame = crd::jobs::pressure_snapshot().frame;
+    CHECK(frame.capacity == 1024U);
+    CHECK(frame.in_use == 1024U);
+    CHECK(frame.high_water == 1024U);
+    CHECK(frame.refusals == 4U);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 24c. parallel_for and parallel_reduce reclaim their job arrays before they return: thousands of calls on a 4 KiB
+//      arena leave the cursor where it was and a caller's earlier bytes untouched, with no reset anywhere.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("jobs: parallel ranges leave the frame arena where they found it", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4U;
+    cfg.frame_alloc_bytes = 4096U; // 64 JobDecls: an unreclaimed loop below would exhaust it within 8 calls
+    crd::jobs::init(cfg);
+
+    auto* const caller = static_cast<crd::u64*>(crd::jobs::frame_alloc(8U * sizeof(crd::u64), alignof(crd::u64)));
+    for (crd::u32 i = 0U; i < 8U; ++i)
+    {
+        caller[i] = 0x9E3779B97F4A7C15ULL * (i + 1U);
+    }
+    const crd::usize mark = crd::jobs::frame_get_mark();
+
+    std::atomic<crd::u64> sum{0U};
+    crd::u64 slots[8];
+    bool marks_held = true;
+    bool reduced = true;
+    const auto count_range = [&sum](crd::u32 b, crd::u32 e)
+    {
+        sum.fetch_add(e - b, std::memory_order_relaxed);
+    };
+    const auto range_size = [](crd::u32 b, crd::u32 e)
+    {
+        return static_cast<crd::u64>(e - b);
+    };
+    const auto add = [](crd::u64 a, crd::u64 b)
+    {
+        return a + b;
+    };
+    for (crd::u32 round = 0U; round < 2000U; ++round)
+    {
+        crd::jobs::wait(crd::jobs::parallel_for(64U, 8U, count_range));
+        const crd::u64 total =
+            crd::jobs::parallel_reduce<crd::u64>(100U, std::span<crd::u64>(slots), 0U, range_size, add);
+        reduced = reduced && total == 100U;
+        marks_held = marks_held && crd::jobs::frame_get_mark() == mark;
+    }
+    CHECK(reduced);
+    CHECK(marks_held);
+    CHECK(sum.load() == 2000U * 64U);
+    bool caller_intact = true;
+    for (crd::u32 i = 0U; i < 8U; ++i)
+    {
+        caller_intact = caller_intact && caller[i] == 0x9E3779B97F4A7C15ULL * (i + 1U);
+    }
+    CHECK(caller_intact);
+
+    crd::jobs::shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 24d. A job's parallel_reduce keeps its slots on its own stack: the wait may resume it on another thread, so no
+//      frame arena could hold them. Sixteen jobs on four threads each reduce through nested ranges; afterwards every
+//      thread's arena is empty again.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+crd::u64 sum_of_indices(crd::u32 lo, crd::u32 hi)
+{
+    crd::u64 s = 0U;
+    for (crd::u32 i = lo; i < hi; ++i)
+    {
+        s += i;
+    }
+    return s;
+}
+
+// Fifty reductions of [0, 1000 + job) from inside a job, counting the wrong totals.
+void reduce_in_job(crd::u32 job, std::atomic<crd::u32>& wrong)
+{
+    for (crd::u32 round = 0U; round < 50U; ++round)
+    {
+        crd::u64 slots[4]; // 16 waiting jobs + 64 inner ones stay within 128 fibers
+        const crd::u64 count = 1000U + job;
+        const crd::u64 total =
+            crd::jobs::parallel_reduce<crd::u64>(static_cast<crd::u32>(count), std::span<crd::u64>(slots), 0U,
+                                                 &sum_of_indices, [](crd::u64 x, crd::u64 y) { return x + y; });
+        if (total != count * (count - 1U) / 2U)
+        {
+            wrong.fetch_add(1U, std::memory_order_relaxed);
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("jobs: nested parallel_reduce in jobs is exact and leaves every arena empty", "[jobs][frame-alloc]")
+{
+    crd::jobs::Config cfg;
+    cfg.num_threads = 4U;
+    cfg.frame_alloc_bytes = 4096U;
+    crd::jobs::init(cfg);
+
+    std::atomic<crd::u32> wrong{0U};
+    crd::jobs::wait(crd::jobs::parallel_for(16U, 16U,
+                                            [&wrong](crd::u32 b, crd::u32 e)
+                                            {
+                                                for (crd::u32 job = b; job < e; ++job)
+                                                {
+                                                    reduce_in_job(job, wrong);
+                                                }
+                                            }));
+    CHECK(wrong.load() == 0U);
+    CHECK(crd::jobs::pressure_snapshot().frame.in_use == 0U);
 
     crd::jobs::shutdown();
 }

@@ -4,6 +4,7 @@
 #include <catch2/catch_template_test_macros.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/hesap/sparse/parallel_sparse_linear_op.hpp>
 #include <crd/hesap/sparse/sparse.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -81,7 +82,6 @@ TEST_CASE("parallel SELL spmv is bit-exact with serial across job counts", "[hes
             crd::containers::Array<crd::f64> y_par(&alloc);
             y_par.resize(n);
             sp::spmv_sell_parallel<crd::f64>(1.0, sell, cspan(x), 0.0, mspan(y_par), jobs);
-            crd::jobs::frame_reset();  // reclaim the parallel_for JobDecl arena
             for (crd::u32 i = 0; i < n; ++i)
             {
                 INFO("n=" << n << " jobs=" << jobs << " i=" << i);
@@ -109,7 +109,6 @@ TEST_CASE("parallel SELL spmv auto job count matches serial", "[hesap][sparse][s
     y_par.resize(2000);
     sp::spmv_sell<crd::f64>(2.0, sell, cspan(x), 0.0, mspan(y_serial));
     sp::spmv_sell_parallel<crd::f64>(2.0, sell, cspan(x), 0.0, mspan(y_par), /*auto*/ 0);
-    crd::jobs::frame_reset();
     for (crd::u32 i = 0; i < 2000; ++i)
     {
         CHECK(y_par[i] == y_serial[i]);
@@ -166,7 +165,6 @@ TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR a
         {
             crd::containers::Array<C> y = y0;
             sp::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs);
-            crd::jobs::frame_reset();
             crd::u32 wrong = 0;
             for (crd::u32 i = 0; i < n; ++i)
             {
@@ -178,4 +176,43 @@ TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR a
             CHECK(wrong == 0U);
         }
     }
+}
+
+// A Krylov loop calls its operator thousands of times. The parallel operator once reset every frame arena after each
+// apply, so memory its caller had taken from the frame arena was handed out again; now the parallel ranges reclaim
+// only their own job arrays, and the caller's bytes and mark survive.
+TEST_CASE("the parallel SELL operator leaves its caller's frame memory alone", "[hesap][sparse][sell][parallel]")
+{
+    jobs_listener();
+    crd::memory::TlsfAllocator alloc(16 << 20);
+    const auto csr = random_csr<crd::f64>(&alloc, 2000, 8, 0x5EED);
+    const sp::ParallelSparseLinearOp<crd::f64> op(csr, &alloc, /*parallel_min_stored_bytes=*/0U);
+    REQUIRE(op.is_parallel());
+    crd::containers::Array<crd::f64> x(&alloc);
+    crd::containers::Array<crd::f64> y(&alloc);
+    x.resize(2000, 0.5);
+    y.resize(2000);
+
+    const crd::usize before = crd::jobs::frame_get_mark();
+    auto* const caller = static_cast<crd::u64*>(crd::jobs::frame_alloc(16U * sizeof(crd::u64), alignof(crd::u64)));
+    for (crd::u32 i = 0U; i < 16U; ++i)
+    {
+        caller[i] = 0xC0FFEEULL + i;
+    }
+    const crd::usize mark = crd::jobs::frame_get_mark();
+    bool held = true;
+    for (crd::u32 round = 0U; round < 500U; ++round)
+    {
+        held = op.apply(cspan(x), mspan(y)) && held && crd::jobs::frame_get_mark() == mark;
+    }
+    CHECK(held);
+    auto* const next = static_cast<crd::u64*>(crd::jobs::frame_alloc(16U * sizeof(crd::u64), alignof(crd::u64)));
+    CHECK(next >= caller + 16); // a later allocation lands past the caller's bytes, never over them
+    bool intact = true;
+    for (crd::u32 i = 0U; i < 16U; ++i)
+    {
+        intact = intact && caller[i] == 0xC0FFEEULL + i;
+    }
+    CHECK(intact);
+    crd::jobs::frame_set_mark(before); // hand the caller's bytes back
 }

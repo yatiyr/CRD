@@ -22,9 +22,7 @@ int main(int argc, char* argv[])
     const crd::containers::String crash_dir{(std::filesystem::temp_directory_path() / "crd-test-crashes").string()};
     (void)crd::crash::install(crash_dir.c_str());
 
-    crd::jobs::Config jobs_cfg;
-    jobs_cfg.frame_alloc_bytes = 8U << 20; // 8 MB/thread — stress tests do many parallel_for/parallel_reduce calls
-    crd::jobs::init(jobs_cfg);             // num_threads = hardware_concurrency()
+    crd::jobs::init(); // num_threads = hardware_concurrency()
     const int rc = Catch::Session().run(argc, argv);
     crd::jobs::shutdown();
 

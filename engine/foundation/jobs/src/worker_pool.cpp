@@ -737,6 +737,30 @@ void WorkerPool::reset_all_frame_arenas() noexcept
     }
 }
 
+crd::BudgetReading WorkerPool::frame_pressure() const noexcept
+{
+    crd::BudgetReading r;
+    if (!m_initialized)
+    {
+        return r;
+    }
+    r.read = true;
+    r.bounded = true;
+    r.high_water_tracked = true;
+    for (crd::u32 i = 0U; i < m_frame_arena_count; ++i)
+    {
+        const FrameArena& a = m_frame_arenas[i];
+        const crd::u64 held = a.cursor();
+        const crd::u64 peak = a.peak();
+        r.capacity = a.capacity();
+        r.in_use = held > r.in_use ? held : r.in_use;
+        r.high_water = peak > r.high_water ? peak : r.high_water;
+        r.refusals += a.refusals();
+    }
+    r.high_water = r.in_use > r.high_water ? r.in_use : r.high_water; // as for the pinned lanes
+    return r;
+}
+
 void WorkerPool::progress_counts(crd::u64& completions_out, crd::u32& executing_out) const noexcept
 {
     crd::u64 completions = 0U;

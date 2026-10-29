@@ -18,6 +18,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <span>
+
 namespace
 {
 using crd::u32;
@@ -84,14 +86,13 @@ TEST_CASE("freeze stress -- FrozenView + parallel_for disjoint writes", "[stress
             write_and_verify_round(data, num_jobs, round);
         }
     }
-
-    crd::jobs::frame_reset(); // release the per-thread frame arenas this test consumed
 }
 
 TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stress][jobs]")
 {
     const u32 counts[] = {1U, 2U, 7U, 64U, 1000U, 50'000U};
     const u32 jobs_choices[] = {1U, 2U, 8U, 64U, 1024U}; // includes num_jobs > count cases
+    u64 partials[1024];                                  // the caller's slots: one per job
 
     for (u32 count : counts)
     {
@@ -109,8 +110,10 @@ TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stres
 
         for (u32 num_jobs : jobs_choices)
         {
+            const std::span<u64> slots(partials, num_jobs);
+            const crd::usize mark = crd::jobs::frame_get_mark();
             const u64 par_sum = crd::jobs::parallel_reduce<u64>(
-                count, num_jobs, 0ULL,
+                count, slots, 0ULL,
                 [](u32 begin, u32 end)
                 {
                     u64 s = 0;
@@ -124,7 +127,7 @@ TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stres
             CHECK(par_sum == serial_sum);
 
             const u64 par_max = crd::jobs::parallel_reduce<u64>(
-                count, num_jobs, 0ULL,
+                count, slots, 0ULL,
                 [](u32 begin, u32 end)
                 {
                     u64 m = 0;
@@ -140,10 +143,9 @@ TEST_CASE("freeze stress -- parallel_reduce matches a serial reference", "[stres
                 },
                 [](u64 a, u64 b) { return a > b ? a : b; });
             CHECK(par_max == serial_max);
+            CHECK(crd::jobs::frame_get_mark() == mark); // each reduce reclaimed its job array
         }
     }
-
-    crd::jobs::frame_reset();
 }
 
 TEST_CASE("freeze stress -- FrozenView + parallel_for long soak", "[stress][containers][jobs][.soak]")
@@ -158,6 +160,4 @@ TEST_CASE("freeze stress -- FrozenView + parallel_for long soak", "[stress][cont
         const u32 num_jobs = 1U + (round * 7U) % 96U;
         write_and_verify_round(data, num_jobs, round);
     }
-
-    crd::jobs::frame_reset();
 }

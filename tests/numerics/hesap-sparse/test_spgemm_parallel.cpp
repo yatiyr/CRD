@@ -79,7 +79,6 @@ TEST_CASE("parallel spgemm is bit-exact with serial across job counts", "[hesap]
         for (crd::u32 jobs : {1U, 2U, 4U, 8U, 16U, 64U})
         {
             auto par = sp::spgemm_parallel(a, b, &alloc, jobs);
-            crd::jobs::frame_reset();
             INFO("n=" << n << " jobs=" << jobs);
             CHECK(csr_byte_equal(serial, par));  // bit-exact, any job count
         }
@@ -94,6 +93,5 @@ TEST_CASE("parallel spgemm auto job count matches serial (non-square)", "[hesap]
     auto b      = random_csr<crd::f64>(&alloc, 1200, 1800, 6, 0xF00D);
     auto serial = sp::spgemm(a, b, &alloc);
     auto par    = sp::spgemm_parallel(a, b, &alloc, /*auto*/ 0);
-    crd::jobs::frame_reset();
     CHECK(csr_byte_equal(serial, par));
 }

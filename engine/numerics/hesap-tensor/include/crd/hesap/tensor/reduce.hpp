@@ -145,7 +145,6 @@ template <typename T, typename Op>
                                     }
                                 });
     crd::jobs::wait(c);
-    crd::jobs::frame_reset(); // parallel_for JobDecls (the spmv-op hygiene pattern)
     T acc = partials[0];
     for (crd::u64 b = 1; b < nblocks; ++b)
     {

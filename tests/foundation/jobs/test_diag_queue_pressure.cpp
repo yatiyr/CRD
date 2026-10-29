@@ -237,6 +237,7 @@ TEST_CASE("jobs diag10c: the pressure readings are unread before init and empty 
     CHECK_FALSE(none.fibers[0].read);
     CHECK_FALSE(none.injection[1].read);
     CHECK_FALSE(none.pinned.read);
+    CHECK_FALSE(none.frame.read);
     CHECK(crd::pressure_level(none.counters, 0U) == crd::PressureLevel::Unread);
 
     crd::jobs::Config cfg        = small_pool();
@@ -244,6 +245,7 @@ TEST_CASE("jobs diag10c: the pressure readings are unread before init and empty 
     cfg.large_fiber_count        = 2U;
     cfg.injection_queue_capacity = 64U;
     cfg.pinned_queue_capacity    = 4U;
+    cfg.frame_alloc_bytes        = 4096U;
     crd::jobs::init(cfg);
     const crd::jobs::JobsPressure p = crd::jobs::pressure_snapshot();
 
@@ -252,7 +254,9 @@ TEST_CASE("jobs diag10c: the pressure readings are unread before init and empty 
     CHECK(p.fibers[1].capacity == 3U);
     CHECK(p.fibers[2].capacity == 2U);
     CHECK(p.pinned.capacity == 4U);
-    const crd::BudgetReading* const tracked[5] = {&p.counters, &p.fibers[0], &p.fibers[1], &p.fibers[2], &p.pinned};
+    CHECK(p.frame.capacity == 4096U);
+    const crd::BudgetReading* const tracked[6] = {&p.counters,  &p.fibers[0], &p.fibers[1],
+                                                  &p.fibers[2], &p.pinned,    &p.frame};
     for (const crd::BudgetReading* r : tracked)
     {
         CHECK(r->read);
@@ -393,16 +397,16 @@ TEST_CASE("jobs diag10c: queued jobs fill an injection queue and a pinned lane t
     crd::jobs::shutdown();
 }
 
-TEST_CASE("jobs diag10c: a push into a full injection queue or pinned lane is a counted fatal",
+TEST_CASE("jobs diag10c: a full injection queue, pinned lane or frame arena refuses with a counted fatal",
           "[jobs][diag][diag10c][harness]")
 {
     namespace cd   = crd::diag;
     namespace cont = crd::containers;
-    const char* const modes[2]    = {"injection", "pinned"};
-    const char* const expected[2] = {
-        "CRD_DIAG_PRESSURE=injection.normal: exhausted (in use 2/2, peak 2+, refused +1)",
-        "CRD_DIAG_PRESSURE=pinned: exhausted (in use 2/2, peak 2, refused +1)"};
-    for (crd::u32 i = 0U; i < 2U; ++i)
+    const char* const modes[3] = {"injection", "pinned", "frame"};
+    const char* const expected[3] = {"CRD_DIAG_PRESSURE=injection.normal: exhausted (in use 2/2, peak 2+, refused +1)",
+                                     "CRD_DIAG_PRESSURE=pinned: exhausted (in use 2/2, peak 2, refused +1)",
+                                     "CRD_DIAG_PRESSURE=frame: exhausted (in use 256/256, peak 256, refused +1)"};
+    for (crd::u32 i = 0U; i < 3U; ++i)
     {
         cd::Expectation e;
         e.want       = cd::Expectation::Want::CleanExit; // the exit code is the oracle here, not the verdict
