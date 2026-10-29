@@ -101,6 +101,19 @@ Lane keys are the CI preset names; test names are exact CTest names. The gate re
 | Retirement | When a later MikkTSpace pin masks the shift (`>> ((32 - t) & 31)` or equivalent) or the oracle is dropped; the gate then fails on the unexpected pass and this entry is removed |
 | Row | [REPO.3d](ROADMAP.md#slice-repo.3d); evidence [first complete-tier run repairs](sessions/2026-09-14-first-complete-tier-run-repairs.md) |
 
+<a id="tp-6"></a>
+## TP-6: GCC 13's AArch64 use-after-return frames cost 30 times Clang's
+
+| Field | Value |
+|---|---|
+| Component | GCC 13.3.0 (`13.3.0-6ubuntu2~24.04.1` on the `ubuntu-24.04-arm` image), its AddressSanitizer use-after-return instrumentation on AArch64 |
+| Symptom | Each frame ASan moves to its fake stack (`detect_stack_use_after_return=1`, the runtime's default) costs about 5 µs instead of 0.17 µs; `linux-gcc-arm64-asan` reached the 6 h job cap at 2,283 of 2,474 tests, with two cases past their timeouts |
+| Reproduction outside Cerid | [`asan_uar_control.cpp`](../scripts/asan_uar_control.cpp), call trees of frames with an addressable local, at -O0 on the hosted ARM64 runner ([run 40911546716](https://github.com/yatiyr/CRD/actions/runs/40911546716)): GCC 4,999 and 5,002 ns a call with the fake stack, 170 and 173 ns without; Clang 18.1.3 166 and 168 ns with it, 170 and 179 ns without. x64 GCC 13.3 (WSL2): 74 ns with it, 60 ns without |
+| Affected | `linux-gcc-arm64-asan` only. Every case in Cerid's suite with many calls: [run 40905507091](https://github.com/yatiyr/CRD/actions/runs/40905507091) timed five of them under each ASan option; only `detect_stack_use_after_return=0` moved them, onto Clang's times (ceir's binary deserializer 77.1 s to 1.6 s, Clang 1.5 s) |
+| Engine handling | GCC on AArch64 compiles without the class (`--param=asan-use-after-return=0`, `CMakeLists.txt`); every other ASan check stays on that lane. `linux-clang-arm64-asan` (same hardware, same tests) and `linux-gcc-asan` keep use-after-return detection, so the class stays covered on both architectures ([sanitizer audit](design/test-instruments.md#the-sanitizer-audit)) |
+| Retirement | When the image's GCC changes, dispatch `host-check.yml` with `experiment=arm64-sanitizer-cost`; once the control's fake-stack arm is within a few percent of Clang's, drop the parameter |
+| Row | [SIMD-DISPATCH](ROADMAP.md#slice-simd-dispatch); evidence [the two ASan lanes at the job cap](sessions/2026-10-29-simd-dispatch-arm64-asan-cost.md) |
+
 ## The registered-failure gate
 
 `scripts/check-registered-failures.py --lane <preset> --junit <ctest --output-junit file> --ctest-exit <code>` reads

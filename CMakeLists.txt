@@ -158,6 +158,13 @@ if(CRD_ENABLE_ASAN OR CRD_NATIVE_PROFILES)
     else()
         add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
         add_link_options(-fsanitize=address)
+        # GCC 13's AArch64 code for use-after-return frames costs 50 to 100 times Clang's on the same runtime and
+        # hardware, so linux-gcc-arm64-asan could not finish in the 6 h job cap. That compiler on that architecture
+        # leaves the class out; linux-clang-arm64-asan and linux-gcc-asan keep it
+        # (docs/design/test-instruments.md#the-sanitizer-audit).
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND _crd_arch_arm64)
+            add_compile_options(--param=asan-use-after-return=0)
+        endif()
     endif()
     message(STATUS "[crd] Address Sanitizer condition: ${_crd_asan}")
 endif()

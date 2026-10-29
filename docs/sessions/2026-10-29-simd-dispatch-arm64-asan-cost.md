@@ -34,12 +34,11 @@ The GCC ARM64 ASan cost is not ASan's ordinary cost. Over the 2,281 cases all fi
 | linux-clang-arm64-debug | under 0.01 s | 0.50 h |
 
 Against each compiler's own debug lane, the sanitizers cost Clang at most 41 times on a case and GCC up to 1,924
-times (15 cases above 280), plus about 0.2 s per process. The worst ratios are allocation-heavy parsers and fuzz sweeps (ceir's
-binary deserializer 77 s against 1.5 s, the CEIR-18p impostor round trip 21 s against 0.1 s), the drop-frame
-timecode day (637 s against 6 s; x64 GCC ASan 7 s) and the large fft cases (3,600 s and over against 121 s). x64
-GCC ASan, from the same GCC 13, runs them at Clang's speed, so the cost belongs to GCC's AArch64 sanitizer build or
-runtime. More test parallelism would hide it and leave the two timeouts, so the presets stay as they are until the
-cause is measured.
+times (15 cases above 280), plus about 0.2 s per process. The worst ratios are call-heavy parsers and fuzz sweeps
+(ceir's binary deserializer 77 s against 1.5 s, the CEIR-18p impostor round trip 21 s against 0.1 s), the
+drop-frame timecode day (637 s against 6 s; x64 GCC ASan 7 s) and the large fft cases (3,600 s and over against
+121 s). x64 GCC ASan, from the same GCC 13, runs them at Clang's speed. More test parallelism would have hidden the
+cost and left the two timeouts, so the presets stayed as they were and the cause was measured.
 
 Needs CI audit: DIAG.11c and DIAG.12 wait on a green complete-tier run; the scheduled run is red, and none was
 dispatched (it would only repeat the two caps).
@@ -59,10 +58,33 @@ dispatched (it would only repeat the two caps).
   five cases through ctest, two interleaved rounds, under the defaults, `detect_stack_use_after_return=0`,
   `malloc_context_size=0`, `quarantine_size_mb=0`, `detect_leaks=0` and ASan alone, plus one `verbosity=1` start.
   The arms separate UBSan from ASan, and within ASan the fake stack, the allocation stack traces, the quarantine and
-  the leak scan. The fix goes where the cost is; an option that weakens detection on one lane only is not a fix.
+  the leak scan. A second run adds a Cerid-free control (below).
+
+## The measurement and the fix
+
+[Run 40905507091](https://github.com/yatiyr/CRD/actions/runs/40905507091), seconds through ctest, both rounds equal
+within 0.1 s:
+
+| Case | GCC default | GCC, no fake stack | GCC, other options and ASan alone | Clang default |
+|---|---|---|---|---|
+| ceir binary deserializer fuzz | 77.1 | 1.57 | 76.9 to 77.2 | 1.54 |
+| crd_log1 accuracy | 29.6 | 0.35 | 29.5 to 29.6 | 0.46 |
+| CEIR-18p impostor round trip | 21.0 | 0.21 | 20.9 to 21.1 | 0.19 |
+| shapecast_convex bisection | 11.7 | 0.15 | 11.7 | 0.19 |
+
+`malloc_context_size=0`, `quarantine_size_mb=0`, `detect_leaks=0` and dropping UBSan change nothing; only
+`detect_stack_use_after_return=0` does, and both runtimes create the same fake stack at start. The Cerid-free control
+([run 40911546716](https://github.com/yatiyr/CRD/actions/runs/40911546716), `scripts/asan_uar_control.cpp`, 1.6 M
+calls at depth 16) shows it is GCC's: GCC 13.3.0 5,000 ns a call with the fake stack and 170 ns without; Clang 18.1.3
+166 to 179 ns either way; x64 GCC 13.3 on WSL2 74 and 60 ns.
+
+GCC on AArch64 now compiles without use-after-return detection (`--param=asan-use-after-return=0`,
+`CMakeLists.txt`), registered as [TP-6](../third-party-defects.md#tp-6) with the host check as its retirement
+check. Every other check stays on that lane, and `linux-clang-arm64-asan` and `linux-gcc-asan` keep the class.
 
 ## Left
 
-- Read the dispatched host check, fix the cause, then the two timeouts and linux-gcc-arm64-asan's first green run.
+- The next run that completes linux-gcc-arm64-asan: the lane's first green run, the two timed-out cases inside
+  their timeouts.
 - win-asan's cap: 1,407 cases did not run. The forced fft arms each run portable and their own level
   (5fbf494d); the rest is per-case ASan cost on the CPU-rendered GPU cases.

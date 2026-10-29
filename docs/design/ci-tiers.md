@@ -58,6 +58,8 @@ They use the images' toolchains (Ubuntu's ninja-build and gdb; the pinned x64 Ni
 `msvc-dev-env.py --arch arm64` on Windows) and no compiler cache. crd-jobs has no ARM64 fiber context before
 [JOBS-PORT.2](../ROADMAP.md#slice-jobs-port.2), so the presets set `CRD_MODULES_WITHOUT=jobs`
 ([module registry](module-registry.md#selection)); they widen by themselves once it builds there.
+`linux-gcc-arm64-asan` compiles without use-after-return detection, which GCC 13 makes about 30 times dearer on
+AArch64 than Clang ([TP-6](../third-party-defects.md#tp-6)); `linux-clang-arm64-asan` keeps it.
 
 [check-ci-tiers.py](../../scripts/check-ci-tiers.py) is the `crd-ci-tiers` CTest, a preflight step, a repository
 step and a tooling test. It fails when a visible preset has no owner or an entry names no preset, when an owning job

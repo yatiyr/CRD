@@ -311,7 +311,10 @@ The probes show no behavioural difference between the annotated and the unannota
 the annotations stay because they are the documented contract that makes the bounds and the fake-stack ownership
 explicit per fiber, and they cost nothing uninstrumented. MSVC's use-after-return detection needs its own compile
 switch (`/fsanitize-address-use-after-return`), which no preset sets: on `win-asan` that class is not exercised,
-and the table says so rather than claiming it.
+and the table says so rather than claiming it. GCC on AArch64 leaves it out too (`--param=asan-use-after-return=0`):
+GCC 13's fake-stack frames there cost about 30 times Clang's on the same runtime and runner, a Cerid-free control
+shows it ([TP-6](../third-party-defects.md#tp-6)), and with them `linux-gcc-arm64-asan` could not finish in the 6 h
+job cap. `linux-clang-arm64-asan` and `linux-gcc-asan` keep the class, so it stays covered on both architectures.
 
 **ThreadSanitizer and the fiber model.** `CRD_ENABLE_TSAN` (GCC or clang, exclusive with ASan) builds with
 `-fsanitize=thread`; every fiber stack gets a TSan context at pool init (`__tsan_create_fiber`), every switch
