@@ -23,6 +23,7 @@ constexpr u32 bits(FpDifference d)
     return static_cast<u32>(d);
 }
 
+#if CRD_ARCH_X64
 FpEnvironment with_rounding(FpEnvironment e, FpRounding r)
 {
     e.mxcsr = (e.mxcsr & ~crd::kMxcsrRoundingMask) | (static_cast<u32>(r) << crd::kMxcsrRoundingShift);
@@ -67,6 +68,7 @@ u32 subnormal_input_bits()
     volatile float p   = sub * one;
     return bits_of(p);
 }
+#endif
 } // namespace
 
 TEST_CASE("diag10c: the test thread starts in the declared floating-point mode", "[core][fp][diag10c]")
