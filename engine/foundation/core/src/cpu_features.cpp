@@ -338,16 +338,20 @@ bool walk_every_cpu(CpuSelection& s) noexcept
 }
 
 #if CRD_OS_WINDOWS || CRD_OS_LINUX
-// One cache instance's bytes per sharing CPU folded into `share`, the smallest so far (0: none yet).
-void take_cache_share(crd::u32& share, crd::u64 bytes, crd::u32 sharers) noexcept
+// One L2 instance folded into the selection's OS fields, each the smallest so far (0: none yet).
+void take_l2_instance(CpuSelection& s, crd::u64 bytes, crd::u32 sharers) noexcept
 {
     if (bytes == 0U || sharers == 0U)
     {
         return;
     }
-    const crd::u64 each = bytes / sharers;
-    const crd::u32 clamped = each > 0xFFFFFFFFULL ? 0xFFFFFFFFU : static_cast<crd::u32>(each);
-    share = share == 0U || clamped < share ? clamped : share;
+    const auto take = [](crd::u32& into, crd::u64 value) noexcept
+    {
+        const crd::u32 clamped = value > 0xFFFFFFFFULL ? 0xFFFFFFFFU : static_cast<crd::u32>(value);
+        into = into == 0U || clamped < into ? clamped : into;
+    };
+    take(s.os_l2_bytes, bytes);
+    take(s.l2_share_bytes, bytes / sharers);
 }
 #endif
 
@@ -421,21 +425,20 @@ crd::u32 count_mask_bits(KAFFINITY mask) noexcept // a plain loop: std::popcount
 }
 #endif
 
-// CpuSelection::l2_share_bytes: every L2 instance the OS describes, its bytes over the logical CPUs sharing it.
-crd::u32 read_l2_share_bytes() noexcept
+// CpuSelection::os_l2_bytes and l2_share_bytes: every L2 instance the OS describes and the logical CPUs sharing it.
+void read_os_l2(CpuSelection& s) noexcept
 {
-    crd::u32 share = 0U;
 #if CRD_OS_WINDOWS
     DWORD len = 0U;
     (void)::GetLogicalProcessorInformationEx(RelationCache, nullptr, &len);
     if (len == 0U)
     {
-        return 0U;
+        return;
     }
     void* const buffer = ::VirtualAlloc(nullptr, len, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE); // pages, no heap
     if (buffer == nullptr)
     {
-        return 0U;
+        return;
     }
     const auto* const bytes = static_cast<const unsigned char*>(buffer);
     if (::GetLogicalProcessorInformationEx(RelationCache, static_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer),
@@ -454,7 +457,7 @@ crd::u32 read_l2_share_bytes() noexcept
                 {
                     sharers += count_mask_bits(masks[g].Mask);
                 }
-                take_cache_share(share, c.CacheSize, sharers);
+                take_l2_instance(s, c.CacheSize, sharers);
             }
             off += p->Size;
         }
@@ -487,11 +490,12 @@ crd::u32 read_l2_share_bytes() noexcept
                 cache_bytes = cache_bytes * 10U + static_cast<crd::u64>(*digit - '0');
             }
             cache_bytes <<= *digit == 'K' ? 10U : (*digit == 'M' ? 20U : (*digit == 'G' ? 30U : 0U));
-            take_cache_share(share, cache_bytes, count_cache_sharers(cpu, index));
+            take_l2_instance(s, cache_bytes, count_cache_sharers(cpu, index));
         }
     }
+#else
+    (void)s;
 #endif
-    return share;
 }
 
 // CRD_CPU_LEVEL's value copied into `buffer`; nullptr when unset, "?" (an unknown name) when too long for one.
@@ -854,7 +858,7 @@ CpuSelection detect_cpus() noexcept
     {
         s.walk_note = "no CPUID on this architecture; its level is architectural";
     }
-    s.l2_share_bytes = read_l2_share_bytes();
+    read_os_l2(s);
     s.detected = cpu_level_of(s.arch, s.features);
     s.selected = s.detected;
     s.kernel_features = s.features.usable;

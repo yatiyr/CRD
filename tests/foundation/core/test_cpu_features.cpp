@@ -1045,10 +1045,11 @@ TEST_CASE("cpu features: the L2 share is the smallest L2 per logical CPU sharing
 {
     const crd::CpuSelection& s = crd::cpu_selection();
     const OsCaches os = read_os_caches();
-    INFO("share " << s.l2_share_bytes << ", OS " << os.l2_share << ", OS L2 " << os.bytes[2]);
-    CHECK(s.l2_share_bytes == os.l2_share); // 0 only where the OS describes no L2 (some sandboxes)
-    CHECK(s.l2_share_bytes <= os.bytes[2]);
-    CHECK((os.bytes[2] == 0U || s.l2_share_bytes != 0U));
+    INFO("L2 " << s.os_l2_bytes << ", share " << s.l2_share_bytes << "; OS " << os.bytes[2] << ", " << os.l2_share);
+    CHECK(s.os_l2_bytes == os.bytes[2]); // 0 only where the OS describes no L2 (some sandboxes)
+    CHECK(s.l2_share_bytes == os.l2_share);
+    CHECK(s.l2_share_bytes <= s.os_l2_bytes);
+    CHECK((s.os_l2_bytes == 0U || s.l2_share_bytes != 0U));
     const crd::u32 l2 = s.features.caches.l2_bytes;
     CHECK((l2 == 0U || s.l2_share_bytes <= l2)); // CPUID's L2 is the same instance's, where it describes one
 }

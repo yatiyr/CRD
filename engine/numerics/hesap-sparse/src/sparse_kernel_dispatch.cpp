@@ -45,7 +45,8 @@ const KernelLevel<SparseKernels>& sparse_kernels() noexcept
 
 crd::usize sparse_resident_bytes() noexcept
 {
-    const crd::u32 l2 = crd::cpu_selection().features.caches.l2_bytes;
+    const crd::CpuSelection& s = crd::cpu_selection();
+    const crd::u32 l2 = s.features.caches.l2_bytes != 0U ? s.features.caches.l2_bytes : s.os_l2_bytes;
     return l2 != 0U ? crd::usize{l2} : (crd::usize{1} << 21);
 }
 

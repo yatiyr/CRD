@@ -205,9 +205,10 @@ struct CpuSelection
     bool uniform = true;          // every visited CPU reported the same usable features and AVX10 shape
     crd::u8 core_types_seen = 0U; // kCpuCore* bits of the visited CPUs
     const char* walk_note = "";   // a static string, set when only the current CPU could be read
-    // The smallest L2 instance's bytes per logical CPU sharing it, from the OS's cache topology (Windows RelationCache,
-    // Linux sysfs shared_cpu_map) on every architecture; 0 when the OS describes no L2. The sharers are the
-    // hardware's, not the process's affinity: a sibling thread uses the cache whichever process it runs.
+    // The OS's cache topology (Windows RelationCache, Linux sysfs shared_cpu_map) on every architecture, 0 when it
+    // describes no L2: the smallest L2 instance, and the smallest L2 instance's bytes per logical CPU sharing it. The
+    // sharers are the hardware's, not the process's affinity: a sibling thread uses the cache whoever runs it.
+    crd::u32 os_l2_bytes = 0U;
     crd::u32 l2_share_bytes = 0U;
     CpuLevel detected = CpuLevel::Portable;
     CpuLevel selected = CpuLevel::Portable;
@@ -233,7 +234,7 @@ struct CpuSelection
 // minimum, its core type is recorded, and `uniform` falls when its features differ from the CPUs before it.
 void add_cpu_report(CpuSelection& into, const CpuReport& cpu) noexcept;
 
-// Every logical CPU visited and intersected, with the detected level and the OS's L2 share; selected == detected, no
+// Every logical CPU visited and intersected, with the detected level and the OS's L2; selected == detected, no
 // override applied.
 [[nodiscard]] CpuSelection detect_cpus() noexcept;
 

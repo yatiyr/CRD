@@ -16,8 +16,8 @@ namespace crd::hesap::sparse
 [[nodiscard]] const crd::math::KernelLevel<SparseKernels>& sparse_kernels() noexcept;
 
 // The working set a sparse product counts as cache resident: the smallest L2 of the process's CPUs
-// (crd/core/cpu_features.hpp), 2 MiB where no CPUID leaf describes the caches. It picks the SELL sweep and the
-// operators' serial-or-parallel threshold.
+// (crd/core/cpu_features.hpp: CPUID's, else the OS's), 2 MiB where neither describes one. It picks the SELL sweep and
+// the operators' serial-or-parallel threshold.
 [[nodiscard]] crd::usize sparse_resident_bytes() noexcept;
 
 // What one job of a parallel sparse product counts as cache resident while every logical CPU runs one: its share of
