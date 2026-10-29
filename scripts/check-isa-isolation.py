@@ -316,21 +316,53 @@ def scan_x64(text, coff, layout=None):
     return hits
 
 
+def arm64_literal(word):
+    """(offset, size) of the data an LDR (literal) instruction word loads, relative to the instruction, else None:
+    opc 011 V 00 imm19 Rt, 4 bytes for W, S and LDRSW, 8 for X and D, 16 for Q; PRFM (literal) loads nothing."""
+    if word & 0x3B000000 != 0x18000000:
+        return None
+    size = {(0, 0): 4, (1, 0): 8, (2, 0): 4, (0, 1): 4, (1, 1): 8, (2, 1): 16}.get((word >> 30, (word >> 26) & 1))
+    if size is None:
+        return None
+    offset = (word >> 5) & 0x7FFFF
+    return (offset - (1 << 19) if offset & (1 << 18) else offset) * 4, size
+
+
 def scan_arm64(text, coff):
-    """Every ARM64 instruction above v8.0 with NEON in a dump."""
-    hits = []
-    function = ''
+    """Every ARM64 instruction above v8.0 with NEON in a dump. MSVC puts a function's constants in .text after its
+    code, where dumpbin decodes them as instructions: the words an LDR (literal) of the same section loads, and a
+    switch table (its __swt label, to the next function), are data. Sections start at 0 in an object's dump, so a
+    falling address starts the next section's ranges. objdump prints ELF data (its $d mapping symbols) as .word."""
+    hits, pending, data = [], [], []
+    function, table, last = '', False, -1
     line_shape = DUMPBIN_ARM64 if coff else OBJDUMP_ARM64
+
+    def settle():
+        hits.extend(hit for hit in pending if not any(start <= hit[1] < end for start, end in data))
+        pending.clear()
+        data.clear()
     for line in text.splitlines():
         match = line_shape.match(line)
         if match:
+            address = int(match.group(1), 16)
+            if address <= last:
+                settle()
+            last = address
+            if table:
+                continue
+            literal = arm64_literal(int(match.group(2), 16)) if coff else None
+            if literal:
+                data.append((address + literal[0], address + literal[0] + literal[1]))
             kind = arm64_above(match.group(3).lower(), match.group(4))
             if kind:
-                hits.append((function, int(match.group(1), 16), kind, line.strip()))
+                pending.append((function, address, kind, line.strip()))
             continue
         label = (re.match(r'^([^ ].*):$', line) if coff else OBJDUMP_LABEL.match(line))
         if label and not label.group(1).startswith(_NOT_LABELS) and not label.group(1).startswith('$'):
-            function = label.group(1).split(' (')[0]
+            name = label.group(1).split(' (')[0]
+            table = coff and name.startswith('__swt')
+            function = function if table else name
+    settle()
     return hits
 
 

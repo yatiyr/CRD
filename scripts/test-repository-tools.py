@@ -4541,6 +4541,34 @@ class IsaIsolation(unittest.TestCase):
         self.assertEqual([('crd::f()', 'SVE/SME')],
                          [(f, k) for f, _a, k, _l in isa_isolation.scan_arm64(dump, False)])
 
+    def test_arm64_msvc_constants_in_text_are_data(self):
+        literal = isa_isolation.arm64_literal
+        self.assertEqual((8, 8), literal(0x58000048))
+        self.assertEqual((8, 4), literal(0x18000040))
+        self.assertEqual((8, 4), literal(0x98000040))
+        self.assertEqual((8, 16), literal(0x9C000040))
+        self.assertEqual((-4, 8), literal(0x58FFFFE8))
+        self.assertIsNone(literal(0xD8000040))
+        self.assertIsNone(literal(0xD65F03C0))
+        dump = ('Dump of file a.obj\n\nFile Type: COFF OBJECT\n\n?f@@YA_K_K@Z (unsigned __int64 __cdecl f(void)):\n'
+                '  0000000000000000: 58000048  ldr         x8,0000000000000008\n'
+                '  0000000000000004: D65F03C0  ret\n'
+                '  0000000000000008: 92492492  orr         x18,x4,#0x9249249249249249\n'
+                '  000000000000000C: 04924924  mla         z4.s,p2/m,z9.s,z18.s\n'
+                '  0000000000000010: 05555555  mov         z21.h,p5/m,#-0x56\n'
+                '  0000000000000014: 58FFFFE8  ldr         x8,0000000000000010\n'
+                '?g@@YAXXZ (void __cdecl g(void)):\n'
+                '  0000000000000000: D65F03C0  ret\n'
+                '  0000000000000004: D65F03C0  ret\n'
+                '  0000000000000008: D65F03C0  ret\n'
+                '  000000000000000C: A5404000  ld1w        {z0.s},p0/z,[x0]\n'
+                '__swt:\n'
+                '  0000000000000010: C4B7B7AA  ldff1sh     {z10.d},p5/z,[z29.d,#0x2E]\n'
+                '?h@@YAXXZ (void __cdecl h(void)):\n'
+                '  0000000000000018: 05555555  mov         z21.h,p5/m,#-0x56\n')
+        self.assertEqual([('?g@@YAXXZ', 12), ('?h@@YAXXZ', 24)],
+                         [(f, a) for f, a, _k, _l in isa_isolation.scan_arm64(dump, True)])
+
     def test_object_formats(self):
         with tempfile.TemporaryDirectory() as temp:
             def kind(name, data):
