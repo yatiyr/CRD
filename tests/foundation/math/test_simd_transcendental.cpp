@@ -27,8 +27,8 @@ namespace
 
 TEST_CASE("simd transcendental: crd_log1 accuracy vs std::log", "[math][simd][transcendental]")
 {
-    // crd_log1 is ≤0.52 ulp (the mpmath gate, test_transcendental.cpp) and the C library's log under 1 ulp, so the
-    // two doubles are less than 1.52 ulp, hence at most one ulp, apart.
+    // crd_log1 measured ≤0.52 ulp over its hard inputs, the C library's log under 1 ulp (UCRT x64 ≤0.51 on these
+    // points against mpmath; glibc documents its bound), so the two doubles are at most one ulp apart.
     f64 max_ulp = 0.0;
     f64 worst = 0.0;
     std::uint64_t s = 0x1234567ULL;

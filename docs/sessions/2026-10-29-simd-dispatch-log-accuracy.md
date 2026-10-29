@@ -44,6 +44,9 @@ near 1 and where e·ln2 and log(m) cancel.
 
 win-debug: crd-math-tests (178 cases), its five forced arms (avx512 under SDE), crd-hesap-special-tests and
 crd-hesap-stats-tests pass; tidy, clang-format on the added lines and the repository validators.
+The ≤1 ulp bound against the C library rests on its log being under 1 ulp: UCRT x64 (Python's `math.log`) measured
+0.506 ulp on the test's 2M points against mpmath; win-arm64's UCRT is the one not measured from this host. pow gains
+checks on a subnormal base.
 
 ## Left
 

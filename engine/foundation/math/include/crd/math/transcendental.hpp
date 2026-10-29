@@ -5,9 +5,10 @@
 // forbidden in engine code (guard crd-no-std-transcendental). These wrap the bit-identical scalar+SIMD cores in
 // simd/transcendental.hpp (crd_exp1/crd_log1) and complete the exp/log family. Contract (docs/archive/phases/
 // crd-math-transcendental.md §1): <=1 ulp vs mpmath, -ffp-contract=off ⇒ identical bits on every platform/width
-// (the certification moat). Edge cases (NaN/±Inf/subnormal/huge) fall back to the correctly-rounded C library result
-// through crd/math/libm.hpp, permitted HERE (the kernel + its fallbacks) and ONLY here. f32 overloads route through
-// the f64 core (correctly-rounded into f32, deterministic). The family slices (trig/inverse-trig/power/hyperbolic)
+// (the certification moat). Edge cases (NaN/±Inf, the exp family's subnormal/huge) fall back to the correctly-rounded
+// C library result through crd/math/libm.hpp, permitted HERE (the kernel + its fallbacks) and ONLY here. f32
+// overloads route through the f64 core (correctly-rounded into f32, deterministic). The family slices (trig/
+// inverse-trig/power/hyperbolic)
 // add sibling files following this exact pattern: fast common path + library edge fallback + a
 // gen→mpmath-gate→golden-determinism test entry. Kernel units include the family too, so it lives in the unit's level
 // namespace (ADR-0134 §5).

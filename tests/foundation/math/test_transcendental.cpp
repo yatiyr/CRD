@@ -236,6 +236,12 @@ TEST_CASE("crd::math atan2 quadrants + determinism", "[math][transcendental][tx]
     CHECK(crd::math::pow(2.0, 10.0) == 1024.0);   // exact integer power
     CHECK(crd::math::pow(-2.0, 3.0) == -8.0);     // negative base, odd integer exponent
     CHECK(crd::math::pow(3.0, 0.0) == 1.0);
+    // a subnormal base takes the same path: its log is exact at a power of two, and an odd power keeps the sign
+    constexpr double min_sub = std::numeric_limits<double>::denorm_min();
+    CHECK(crd::math::pow(min_sub, 1.0) == min_sub);
+    CHECK(ulp_err(crd::math::pow(2.2250738585072009e-308, 0.5), std::pow(2.2250738585072009e-308, 0.5)) <= 2.0);
+    const double neg_cube = crd::math::pow(-min_sub, 3.0);
+    CHECK((neg_cube == 0.0 && std::signbit(neg_cube)));
 }
 
 TEST_CASE("crd::math expm1 and the trig quadrant stay defined to the ends of the finite range",
