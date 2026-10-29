@@ -62,4 +62,14 @@ was cancelled. Its one newly completed failure, linux-gcc-public-checks, is the 
 - WSL GCC 13, objects only, the tree's warning set with -Werror at -O2: the three peer units at -march=native and
   bench_ode_vs_refs at the baseline (SUNDIALS is on WSL only). A probe linked against the odeint object integrated
   Van der Pol mu = 1 to t = 100 at 1e-8 (12,973 calls, 1,771 steps).
+- bench_ode_vs_refs through its own route once: `run_bench_ode_refs.sh` at the detected level on linux-gcc-release
+  (the archive from the local directory, nothing downloaded) configured both options, found KLU, built and linked the
+  bench and ran it once; every row solved (odeint dopri5 12,973 calls, error 3.8e-7 against the reference). Its
+  timings are a smoke run, not a board. Strict tidy (WSL clang-tidy 20 on that tree's database, since no Windows
+  tree builds it) found eleven findings in its older code (single-letter locals, an unforwarded forwarding reference,
+  the enum's base type); all fixed, rebuilt and rerun.
+- Seen in that smoke run, for the row-close ODE board: TR-BDF2 took 5.75 M right-hand-side calls and 1.44 M LU
+  factorisations on ROBER (373 ms against CVODE's 0.4 ms) and 57,688 calls on Van der Pol mu = 1000, and odeint's
+  dopri5 (0.070 ms) is ahead of Cerid's DOP853 (0.116 ms) and RK45 (0.191 ms) on Van der Pol mu = 1.
+- REPO.3's unrouted clause now names what the list still holds (30 programs).
 - The ctest guards (source routes with the option on and off), the tooling tests, the validators. No boards.

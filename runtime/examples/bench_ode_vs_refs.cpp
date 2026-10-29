@@ -30,6 +30,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 using crd::f64;
@@ -104,7 +105,7 @@ f64 err_vs_ref(const f64* y, const f64* ref, crd::usize n)
     return e;
 }
 
-template <typename Fn> double time_best_ms(int reps, Fn&& fn)
+template <typename Fn> double time_best_ms(int reps, const Fn& fn)
 {
     double best = 1e300;
     for (int r = 0; r < reps; ++r)
@@ -118,7 +119,7 @@ template <typename Fn> double time_best_ms(int reps, Fn&& fn)
     return best;
 }
 
-enum class Method
+enum class Method : std::uint8_t
 {
     Bdf,
     Radau,
@@ -235,7 +236,7 @@ void bench_cvode(const char* label, int which, f64 t1, const f64* y0, crd::usize
     long nfev_out = 0;
     long nlu_out = 0;
     N_Vector y = N_VNew_Serial(static_cast<sunindextype>(n), ctx);
-    SUNMatrix A = SUNDenseMatrix(static_cast<sunindextype>(n), static_cast<sunindextype>(n), ctx);
+    SUNMatrix jacobian = SUNDenseMatrix(static_cast<sunindextype>(n), static_cast<sunindextype>(n), ctx);
     f64 yfin[3] = {0, 0, 0};
 
     const double ms = time_best_ms(
@@ -250,8 +251,8 @@ void bench_cvode(const char* label, int which, f64 t1, const f64* y0, crd::usize
             CVodeInit(mem, cv_rhs, 0.0, y);
             CVodeSStolerances(mem, rtol, atol);
             CVodeSetUserData(mem, &prob);
-            SUNLinearSolver LS = SUNLinSol_Dense(y, A, ctx);
-            CVodeSetLinearSolver(mem, LS, A);
+            SUNLinearSolver solver = SUNLinSol_Dense(y, jacobian, ctx);
+            CVodeSetLinearSolver(mem, solver, jacobian);
             CVodeSetJacFn(mem, cv_jac);
             CVodeSetMaxNumSteps(mem, 10000000);
             sunrealtype tret = 0;
@@ -266,12 +267,12 @@ void bench_cvode(const char* label, int which, f64 t1, const f64* y0, crd::usize
             {
                 yfin[i] = N_VGetArrayPointer(y)[i];
             }
-            SUNLinSolFree(LS);
+            SUNLinSolFree(solver);
             CVodeFree(&mem);
         });
     std::printf("%-22s %9.3f ms  nfev=%-7ld nlu=%-5ld err=%.2e\n", label, ms, nfev_out, nlu_out,
                 err_vs_ref(yfin, ref, n));
-    SUNMatDestroy(A);
+    SUNMatDestroy(jacobian);
     N_VDestroy(y);
     SUNContext_Free(&ctx);
 }
@@ -372,16 +373,16 @@ int main()
             }
             void rhs(f64, cont::ConstSpan<f64> y, cont::Span<f64> d) const override
             {
-                const crd::u32 M = m_m;
-                for (crd::u32 i = 0; i < M; ++i)
+                const crd::u32 side = m_m;
+                for (crd::u32 i = 0; i < side; ++i)
                 {
-                    for (crd::u32 j = 0; j < M; ++j)
+                    for (crd::u32 j = 0; j < side; ++j)
                     {
-                        const crd::usize k = static_cast<crd::usize>(i) * M + j;
-                        const f64 up = (i > 0) ? y[k - M] : 0.0;
-                        const f64 dn = (i + 1 < M) ? y[k + M] : 0.0;
+                        const crd::usize k = static_cast<crd::usize>(i) * side + j;
+                        const f64 up = (i > 0) ? y[k - side] : 0.0;
+                        const f64 dn = (i + 1 < side) ? y[k + side] : 0.0;
                         const f64 lf = (j > 0) ? y[k - 1] : 0.0;
-                        const f64 rt = (j + 1 < M) ? y[k + 1] : 0.0;
+                        const f64 rt = (j + 1 < side) ? y[k + 1] : 0.0;
                         d[k] = m_inv * (up + dn + lf + rt - 4.0 * y[k]);
                     }
                 }
@@ -390,27 +391,27 @@ int main()
                 f64, cont::ConstSpan<f64>,
                 crd::hesap::sparse::SparseMatrix<f64, crd::hesap::sparse::SparseFormat::Csr>& out) const override
             {
-                const crd::u32 M = m_m;
-                crd::hesap::sparse::TripletBuilder<f64> tb(m_alloc, M * M, M * M);
-                for (crd::u32 i = 0; i < M; ++i)
+                const crd::u32 side = m_m;
+                crd::hesap::sparse::TripletBuilder<f64> tb(m_alloc, side * side, side * side);
+                for (crd::u32 i = 0; i < side; ++i)
                 {
-                    for (crd::u32 j = 0; j < M; ++j)
+                    for (crd::u32 j = 0; j < side; ++j)
                     {
-                        const crd::u32 k = i * M + j;
+                        const crd::u32 k = i * side + j;
                         tb.add(k, k, -4.0 * m_inv);
                         if (i > 0)
                         {
-                            tb.add(k, k - M, m_inv);
+                            tb.add(k, k - side, m_inv);
                         }
-                        if (i + 1 < M)
+                        if (i + 1 < side)
                         {
-                            tb.add(k, k + M, m_inv);
+                            tb.add(k, k + side, m_inv);
                         }
                         if (j > 0)
                         {
                             tb.add(k, k - 1, m_inv);
                         }
-                        if (j + 1 < M)
+                        if (j + 1 < side)
                         {
                             tb.add(k, k + 1, m_inv);
                         }
@@ -473,8 +474,8 @@ int main()
             SUNContext_Create(nullptr, &ctx);
             N_Vector y = N_VNew_Serial(static_cast<sunindextype>(nn), ctx);
             const sunindextype nnz = static_cast<sunindextype>(5 * nn);
-            SUNMatrix A = SUNSparseMatrix(static_cast<sunindextype>(nn), static_cast<sunindextype>(nn), nnz,
-                                          CSC_MAT, ctx);
+            SUNMatrix jacobian =
+                SUNSparseMatrix(static_cast<sunindextype>(nn), static_cast<sunindextype>(nn), nnz, CSC_MAT, ctx);
             struct HeatCv
             {
                 crd::u32 m;
@@ -485,16 +486,16 @@ int main()
                 const auto* p = static_cast<HeatCv*>(user);
                 const sunrealtype* yy = N_VGetArrayPointer(yv);
                 sunrealtype* ff = N_VGetArrayPointer(fv);
-                const crd::u32 M = p->m;
-                for (crd::u32 i = 0; i < M; ++i)
+                const crd::u32 side = p->m;
+                for (crd::u32 i = 0; i < side; ++i)
                 {
-                    for (crd::u32 j = 0; j < M; ++j)
+                    for (crd::u32 j = 0; j < side; ++j)
                     {
-                        const crd::usize k = static_cast<crd::usize>(i) * M + j;
-                        const f64 up = (i > 0) ? yy[k - M] : 0.0;
-                        const f64 dn = (i + 1 < M) ? yy[k + M] : 0.0;
+                        const crd::usize k = static_cast<crd::usize>(i) * side + j;
+                        const f64 up = (i > 0) ? yy[k - side] : 0.0;
+                        const f64 dn = (i + 1 < side) ? yy[k + side] : 0.0;
                         const f64 lf = (j > 0) ? yy[k - 1] : 0.0;
-                        const f64 rt = (j + 1 < M) ? yy[k + 1] : 0.0;
+                        const f64 rt = (j + 1 < side) ? yy[k + 1] : 0.0;
                         ff[k] = p->inv * (up + dn + lf + rt - 4.0 * yy[k]);
                     }
                 }
@@ -504,20 +505,20 @@ int main()
                               N_Vector) -> int
             {
                 const auto* p = static_cast<HeatCv*>(user);
-                const crd::u32 M = p->m;
-                const crd::usize N = static_cast<crd::usize>(M) * M;
+                const crd::u32 side = p->m;
+                const crd::usize count = static_cast<crd::usize>(side) * side;
                 sunindextype* colptr = SUNSparseMatrix_IndexPointers(J);
                 sunindextype* rowidx = SUNSparseMatrix_IndexValues(J);
                 sunrealtype* vals = SUNSparseMatrix_Data(J);
                 crd::usize pos = 0;
-                for (crd::usize col = 0; col < N; ++col) // symmetric ⇒ column = row pattern
+                for (crd::usize col = 0; col < count; ++col) // symmetric ⇒ column = row pattern
                 {
                     colptr[col] = static_cast<sunindextype>(pos);
-                    const crd::u32 i = static_cast<crd::u32>(col / M);
-                    const crd::u32 j = static_cast<crd::u32>(col % M);
+                    const crd::u32 i = static_cast<crd::u32>(col / side);
+                    const crd::u32 j = static_cast<crd::u32>(col % side);
                     if (i > 0)
                     {
-                        rowidx[pos] = static_cast<sunindextype>(col - M);
+                        rowidx[pos] = static_cast<sunindextype>(col - side);
                         vals[pos++] = p->inv;
                     }
                     if (j > 0)
@@ -527,18 +528,18 @@ int main()
                     }
                     rowidx[pos] = static_cast<sunindextype>(col);
                     vals[pos++] = -4.0 * p->inv;
-                    if (j + 1 < M)
+                    if (j + 1 < side)
                     {
                         rowidx[pos] = static_cast<sunindextype>(col + 1);
                         vals[pos++] = p->inv;
                     }
-                    if (i + 1 < M)
+                    if (i + 1 < side)
                     {
-                        rowidx[pos] = static_cast<sunindextype>(col + M);
+                        rowidx[pos] = static_cast<sunindextype>(col + side);
                         vals[pos++] = p->inv;
                     }
                 }
-                colptr[N] = static_cast<sunindextype>(pos);
+                colptr[count] = static_cast<sunindextype>(pos);
                 return 0;
             };
             long nfev_out = 0;
@@ -557,8 +558,8 @@ int main()
                     CVodeInit(mem, rhs_fn, 0.0, y);
                     CVodeSStolerances(mem, 1e-8, 1e-12);
                     CVodeSetUserData(mem, &hc);
-                    SUNLinearSolver LS = SUNLinSol_KLU(y, A, ctx);
-                    CVodeSetLinearSolver(mem, LS, A);
+                    SUNLinearSolver solver = SUNLinSol_KLU(y, jacobian, ctx);
+                    CVodeSetLinearSolver(mem, solver, jacobian);
                     CVodeSetJacFn(mem, jac_fn);
                     CVodeSetMaxNumSteps(mem, 10000000);
                     sunrealtype tret = 0;
@@ -570,12 +571,12 @@ int main()
                     nfev_out = nf;
                     nlu_out = ns;
                     mid_out = N_VGetArrayPointer(y)[mid];
-                    SUNLinSolFree(LS);
+                    SUNLinSolFree(solver);
                     CVodeFree(&mem);
                 });
             std::printf("%-22s %9.3f ms  nfev=%-7ld nlu=%-5ld err=%.2e\n", "cvode_klu", ms, nfev_out, nlu_out,
                         std::abs(mid_out - decay * u0[mid]));
-            SUNMatDestroy(A);
+            SUNMatDestroy(jacobian);
             N_VDestroy(y);
             SUNContext_Free(&ctx);
         }
