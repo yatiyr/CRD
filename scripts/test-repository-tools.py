@@ -4643,6 +4643,31 @@ class IsaIsolation(unittest.TestCase):
                 '  0000000000000018: 05555555  mov         z21.h,p5/m,#-0x56\n')
         self.assertEqual([('?g@@YAXXZ', 12), ('?h@@YAXXZ', 24)],
                          [(f, a) for f, a, _k, _l in isa_isolation.scan_arm64(dump, True)])
+        self.assertEqual((9, 32), isa_isolation.arm64_adr(0x10000109))
+        self.assertEqual((9, -4), isa_isolation.arm64_adr(0x10FFFFE9))
+        self.assertIsNone(isa_isolation.arm64_adr(0x90000009))
+        self.assertEqual(9, isa_isolation.arm64_indexed_load(0x38684928))
+        self.assertEqual(9, isa_isolation.arm64_indexed_load(0xB8687928))
+        self.assertIsNone(isa_isolation.arm64_indexed_load(0x38284928))
+        self.assertIsNone(isa_isolation.arm64_indexed_load(0xF8A87928))
+        # A compact switch: the ADR an indexed load reads makes its byte table data to the next function; the second
+        # ADR forms the cases' code address, so an SVE word in a case is still found, and so is one past the table.
+        dump = ('Dump of file a.obj\n\nFile Type: COFF OBJECT\n\n?n@@YAPEBDH@Z (char const * __cdecl n(int)):\n'
+                '  0000000000000000: 7100111F  cmp         w8,#4\n'
+                '  0000000000000004: 10000109  adr         x9,0000000000000024\n'
+                '  0000000000000008: 38684928  ldrb        w8,[x9,w8 uxtw #0]\n'
+                '  000000000000000C: 1000006A  adr         x10,0000000000000018\n'
+                '  0000000000000010: 8B280948  add         x8,x10,w8,uxtb #2\n'
+                '  0000000000000014: D61F0100  br          x8\n'
+                '  0000000000000018: A5404000  ld1w        {z0.s},p0/z,[x0]\n'
+                '  000000000000001C: D65F03C0  ret\n'
+                '  0000000000000020: D65F03C0  ret\n'
+                '  0000000000000024: E4DED8D2  st1h        {z18.s},p6,[x6,z30.s,sxtw]\n'
+                '  0000000000000028: C4C4C4C4  ld1h        {z4.d},p1/z,[x6,z4.d]\n'
+                '?k@@YAXXZ (void __cdecl k(void)):\n'
+                '  000000000000002C: A5404000  ld1w        {z0.s},p0/z,[x0]\n')
+        self.assertEqual([('?n@@YAPEBDH@Z', 24), ('?k@@YAXXZ', 44)],
+                         [(f, a) for f, a, _k, _l in isa_isolation.scan_arm64(dump, True)])
 
     def test_object_formats(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -361,16 +361,49 @@ def arm64_literal(word):
     return (offset - (1 << 19) if offset & (1 << 18) else offset) * 4, size
 
 
+def arm64_adr(word):
+    """(Rd, offset) of an ADR instruction word, the address it forms relative to itself, else None (ADRP forms a
+    page): op 0 immlo 10000 immhi Rd."""
+    if word & 0x9F000000 != 0x10000000:
+        return None
+    offset = ((word >> 5) & 0x7FFFF) << 2 | (word >> 29) & 3
+    return word & 31, offset - (1 << 21) if offset & (1 << 20) else offset
+
+
+def arm64_indexed_load(word):
+    """Rn of a general-register load whose address is a base register plus an index register (LDR, LDRB, LDRH and
+    their sign-extending forms, register offset), else None: size 111 0 00 opc 1 Rm option S 10 Rn Rt, where opc 00
+    is a store and size 11 with opc 10 is PRFM."""
+    if word & 0x3F200C00 != 0x38200800:
+        return None
+    opc = (word >> 22) & 3
+    if opc == 0 or (word >> 30 == 3 and opc == 2):
+        return None
+    return (word >> 5) & 31
+
+
+# A switch reads its table through the register an ADR set this many instructions before at most.
+_ARM64_TABLE_READ = 4
+
+
 def scan_arm64(text, coff):
     """Every ARM64 instruction above v8.0 with NEON in a dump. MSVC puts a function's constants in .text after its
     code, where dumpbin decodes them as instructions: the words an LDR (literal) of the same section loads, and a
-    switch table (its __swt label, to the next function), are data. Sections start at 0 in an object's dump, so a
-    falling address starts the next section's ranges. objdump prints ELF data (its $d mapping symbols) as .word."""
+    switch table to the next function, are data. A table is under a __swt label or, in its compact byte and halfword
+    forms, the address an ADR forms for an indexed load (`adr x9,T; ldrb w8,[x9,w8 uxtw #0]`); the switch's second ADR
+    forms the address of its cases' code, which no load reads. Sections start at 0 in an object's dump, so a falling
+    address starts the next section's ranges. objdump prints ELF data (its $d mapping symbols) as .word."""
     hits, pending, data = [], [], []
     function, table, last = '', False, -1
+    adrs, tables, closing = {}, [], False
     line_shape = DUMPBIN_ARM64 if coff else OBJDUMP_ARM64
 
+    def close_tables(end):
+        data.extend((start, end) for start in tables)
+        tables.clear()
+
     def settle():
+        close_tables(float('inf'))
         hits.extend(hit for hit in pending if not any(start <= hit[1] < end for start, end in data))
         pending.clear()
         data.clear()
@@ -380,12 +413,25 @@ def scan_arm64(text, coff):
             address = int(match.group(1), 16)
             if address <= last:
                 settle()
+                adrs.clear()
+            elif closing:
+                close_tables(address)
+            closing = False
             last = address
             if table:
                 continue
-            literal = arm64_literal(int(match.group(2), 16)) if coff else None
-            if literal:
-                data.append((address + literal[0], address + literal[0] + literal[1]))
+            word = int(match.group(2), 16)
+            if coff:
+                literal = arm64_literal(word)
+                if literal:
+                    data.append((address + literal[0], address + literal[0] + literal[1]))
+                adr, base = arm64_adr(word), arm64_indexed_load(word)
+                if adr:
+                    adrs[adr[0]] = (address + adr[1], address)
+                elif base is not None and base in adrs:
+                    start, formed = adrs.pop(base)
+                    if address - formed <= 4 * _ARM64_TABLE_READ and start > address:
+                        tables.append(start)
             kind = arm64_above(match.group(3).lower(), match.group(4))
             if kind:
                 pending.append((function, address, kind, line.strip()))
@@ -395,6 +441,9 @@ def scan_arm64(text, coff):
             name = _function_name(label.group(1), coff)
             table = coff and name.startswith('__swt')
             function = function if table else name
+            if not table:
+                closing = True
+                adrs.clear()
     settle()
     return hits
 
