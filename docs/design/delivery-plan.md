@@ -129,7 +129,8 @@ Rows in order: RESEARCH-ADOPT, SIMD-DISPATCH, HW-RESILIENCE.1, HW-RESILIENCE.2, 
 HW-RESILIENCE, DIAG.11b, DIAG.11c, DIAG.12, DIAG, MCP-ADAPT.0, REPO.3d, REPO.3, REPO, HESAP-JOBS-RETUNE, OWN.1, OWN.2,
 OWN.
 
-User-fixed and unchanged.
+User-fixed. HESAP-JOBS-RETUNE is folded into SIMD-DISPATCH and closes with it (user decision
+2026-10-29, [record](../sessions/2026-10-29-user-decision-fold-jobs-retune.md)); it now requires SIMD-DISPATCH, not DIAG.
 
 ### P02 NETCRASH window: secure network foundation and crash-to-fix intake (user-fixed)
 
