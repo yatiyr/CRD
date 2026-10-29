@@ -408,4 +408,28 @@ TEST_CASE("TickClock: prefer_system before the first read keeps every read on Mo
     CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
     TickClock::test_reset();
 }
+
+TEST_CASE("TickClock: a counter behind its calibration's start leaves every read on MonotonicClock for good",
+          "[diag11b][clocks][tick]")
+{
+    // The counter stands below the origin when the calibration ends (2026-10-29: a hosted Windows runner whose counter
+    // fell behind its first reading): the clock settles on MonotonicClock instead of calibrating on every read.
+    TickClock::test_calibrate_from(~u64{0});
+    TickClock::warm(); // returns after one calibration span
+    CHECK_FALSE(TickClock::counter_mapped());
+    CHECK_FALSE(TickClock::counter_usable());
+    CHECK(TickClock::prefer_system()); // reads are MonotonicClock's for good
+    crd::i64       worst = 0;
+    bool           back  = false;
+    const crd::u64 reads = bracket_reads(TickClock::kCalibrationNs + TickClock::kReanchorNs, 0, worst, back);
+    INFO("worst distance from the MonotonicClock bracket: " << worst << " ns");
+    CHECK(reads > 0U);
+    CHECK_FALSE(back);
+    CHECK_FALSE(TickClock::counter_mapped());
+    // A fresh calibration of the same counter maps it again where CPUID calls it invariant.
+    TickClock::test_reset();
+    TickClock::warm();
+    CHECK(TickClock::counter_mapped() == TickClock::counter_usable());
+    TickClock::test_reset();
+}
 #endif

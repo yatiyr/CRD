@@ -61,7 +61,9 @@ public:
 //
 //   - The first reads return MonotonicClock itself while the counter is calibrated against it (kCalibrationNs of
 //     MonotonicClock time from the first read); so does every read on a CPU whose counter is not invariant (x86-64
-//     without CPUID's invariant-TSC bit; on ARM64 the generic timer always is). No read waits for a calibration.
+//     without CPUID's invariant-TSC bit; on ARM64 the generic timer always is), and every read after a calibration
+//     that found the counter at or below its starting reading (it ran backwards: a host whose processors' counters
+//     disagree, invariant bit or not). No read waits for a calibration.
 //   - Afterwards a read is the counter scaled from the anchor. The reader that finds the anchor older than
 //     kReanchorNs re-anchors it at MonotonicClock (one MonotonicClock read per period, whichever thread reads), with
 //     the slope measured over everything since the calibration began, so the map stays within the slope's error of
@@ -99,8 +101,8 @@ public:
     // whether reads are MonotonicClock's for good afterwards.
     static bool prefer_system() noexcept;
 
-    // Whether this CPU's counter may be mapped (invariant), and whether reads come from it now (false while it is
-    // calibrated, and for good where it may not be).
+    // Whether this CPU's counter may be mapped (invariant, and not found running backwards by the calibration), and
+    // whether reads come from it now (false while it is calibrated, and for good where it may not be).
     [[nodiscard]] static bool counter_usable() noexcept;
     [[nodiscard]] static bool counter_mapped() noexcept;
 
@@ -111,6 +113,8 @@ public:
     static void test_force_map(crd::u64 ticks_at, crd::i64 ns_at, crd::f64 ns_per_tick) noexcept;
     // Start over: the next read calibrates again.
     static void test_reset() noexcept;
+    // Start a calibration now from a given counter origin (one past every reading shows a counter that ran backwards).
+    static void test_calibrate_from(crd::u64 origin_ticks) noexcept;
 #endif
 };
 

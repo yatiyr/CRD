@@ -144,6 +144,7 @@ enum State : crd::u8
     Mapping     = 2U, // one reader is publishing the first map; reads are still MonotonicClock's
     Mapped      = 3U, // reads are the counter's
     System      = 4U, // the counter is not invariant: reads are MonotonicClock's for good
+    Backwards   = 5U, // the counter fell behind the calibration's start: reads are MonotonicClock's for good
 };
 
 // The map, published as a seqlock (odd while a re-anchor writes it) so a reader never combines two anchors; every
@@ -406,7 +407,7 @@ CRD_NOINLINE crd::i64 unmapped_now(crd::u32 state) noexcept
         {
             return mapped_now();
         }
-        if (state == System)
+        if (state == System || state == Backwards)
         {
             return MonotonicClock::now().ns_since_epoch();
         }
@@ -455,8 +456,10 @@ CRD_NOINLINE crd::i64 unmapped_now(crd::u32 state) noexcept
         const crd::f64 slope = measured_slope(now);
         if (slope <= 0.0)
         {
-            raise_floor(now.ns);
-            g_tick_map.state.store(Calibrating, std::memory_order_release);
+            // kCalibrationNs of MonotonicClock passed and the counter stands at or below the origin's reading: it ran
+            // backwards (a host whose processors' counters disagree, though CPUID calls them invariant), so no map of
+            // it can keep a thread from stepping back. Settle on MonotonicClock rather than calibrate on every read.
+            g_tick_map.state.store(Backwards, std::memory_order_release);
             return now.ns;
         }
         const crd::i64 floor  = g_tick_map.floor_ns.load(std::memory_order_seq_cst);
@@ -487,7 +490,7 @@ void TickClock::warm() noexcept
 {
     // Read until the state settles: at most kCalibrationNs of reads, once per process (a mapped clock stays mapped).
     crd::u32 state = g_tick_map.state.load(std::memory_order_acquire);
-    while (state != Mapped && state != System)
+    while (state != Mapped && state != System && state != Backwards)
     {
         (void)TickClock::now_ns();
         state = g_tick_map.state.load(std::memory_order_acquire);
@@ -503,12 +506,12 @@ bool TickClock::prefer_system() noexcept
     {
         return true;
     }
-    return expected == System;
+    return expected == System || expected == Backwards;
 }
 
 bool TickClock::counter_usable() noexcept
 {
-    return counter_invariant();
+    return counter_invariant() && g_tick_map.state.load(std::memory_order_acquire) != Backwards;
 }
 
 bool TickClock::counter_mapped() noexcept
@@ -525,6 +528,16 @@ void TickClock::test_force_map(crd::u64 ticks_at, crd::i64 ns_at, crd::f64 ns_pe
     g_tick_map.period_ticks.store(~crd::u64{0}, std::memory_order_relaxed);
     g_tick_map.seq.store(0U, std::memory_order_relaxed);
     g_tick_map.state.store(Mapped, std::memory_order_release);
+}
+
+void TickClock::test_calibrate_from(crd::u64 origin_ticks) noexcept
+{
+    g_tick_map.seq.store(0U, std::memory_order_relaxed);
+    g_tick_map.period_ticks.store(0U, std::memory_order_relaxed);
+    g_tick_map.origin_ticks.store(origin_ticks, std::memory_order_relaxed);
+    g_tick_map.origin_ns.store(MonotonicClock::now().ns_since_epoch(), std::memory_order_relaxed);
+    g_tick_map.floor_ns.store(g_tick_map.origin_ns.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    g_tick_map.state.store(Calibrating, std::memory_order_release);
 }
 
 void TickClock::test_reset() noexcept
