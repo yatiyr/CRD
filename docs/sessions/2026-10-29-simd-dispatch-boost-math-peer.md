@@ -1,4 +1,4 @@
-# 2026-10-29 — SIMD-DISPATCH: the pinned Boost.Math peer of the special-function boards
+# 2026-10-29 — SIMD-DISPATCH: the pinned Boost.Math peer of the special-function and distribution boards
 
 <!-- doc-role: session -->
 > Dated session note; no live status. Current work: [ROADMAP](../ROADMAP.md#slice-simd-dispatch).
@@ -36,18 +36,23 @@ This batch took the Boost peer first because the user approved and handed over i
   GCC and Clang on x64, binary128 in software on AArch64 Linux).
 - **The three boards** (bench_special_vs_refs, bench_bessel_vs_refs, bench_special_v12d) call it and build with the
   tree's warnings as errors at the baseline. Both sides now write the same arrays (the Cerid loops summed before), and
-  each row compares them (`special_peer_rows.hpp`): a value outside the function's reference-test gate prints
+  each row compares them (`boost_peer_rows.hpp`): a value outside the function's reference-test gate prints
   `!MISMATCH!` and the bench exits 1. The elliptic rows hand Cerid the parameter m and Boost the modulus √m, both
   prepared outside the timed passes (the old loop took the square root inside Boost's). Each bench takes a size or
   pass count for a smoke run. They leave REPO.3's unrouted list for a `built_when` route;
-  `scripts/run_bench_special.sh` builds and runs them at every level.
+  `scripts/run_bench_boost.sh` builds and runs them at every level.
+- **The distribution board** (bench_dist_boost, second commit): 16 distributions' pdf (pmf) and cdf, 32 rows, through
+  `eval(Distribution, Parameters, Density, x, out, n)` in `boost_peer_dist.cpp`, the distribution built once per
+  array. Before, one value per row was checked against 1e-9; now every value is, against the hesap-stats gates (1e-9
+  relative plus 1e-12). Geometric hands Boost its failure count k − 1, prepared outside the timed passes.
 - A tidy finding in the Lanczos microbench (local constant `kM`) is fixed.
 
 ## Checks
 
-- win-debug with the option on: the peer and the three benches at /W4 /WX; each ran once small: every row inside its
+- win-debug with the option on: the peer and the four benches at /W4 /WX; each ran once small: every row inside its
   bound (largest relative differences 4.4e-16 to 3.6e-13 where the value is not near a zero; lgamma's and digamma's
-  1.5e-10 and 4.0e-10 sit at their zeros, inside the absolute gate). The tree is back to the option off.
+  1.5e-10 and 4.0e-10 sit at their zeros, inside the absolute gate; the distributions within 1.3e-14). The tree is
+  back to the option off.
 - WSL GCC 13, objects only, the tree's warning set with -Werror at -O2: the peer at -march=native, the benches at the
   baseline. Hosted CI does not build these programs (local only, as the other peers).
 - tidy on every changed file, clang-format on the added lines, the ctest guards (source routes with the option on
@@ -55,8 +60,9 @@ This batch took the Boost peer first because the user approved and handed over i
 
 ## Left
 
-- The distribution and interpolation boards (bench_dist_boost, bench_interp_boost) through the same peer.
+- The interpolation board: bench_interp_boost times Boost only; it becomes a two-sided board of bench_interp's
+  workloads through the same peer, each row's agreement defined by the interpolants' shared conditions.
 - bench_ode_vs_refs's odeint arm: Boost.Odeint is not part of Boost.Math and is not standalone (Config, Range,
-  Fusion, MPL), so it is not in the approved archive. Its peer needs either another approved Boost archive or the host's
-  headers; that is a user decision.
-- The check that no bench unit includes a peer header library, once the three are through peers.
+  Fusion, MPL, Preprocessor, Type Traits, Utility), so the approved archive does not hold it, and the system Boost is
+  excluded. Its peer needs one more approved archive (the Boost 1.92.0 release); that is the user's approval.
+- The check that no bench unit includes a peer header library, once both are through peers.

@@ -1,4 +1,4 @@
-// v12-b Bessel/Airy benchmark — Cerid vs Boost.Math (its peer library, special_peer_rows.hpp, values compared on every
+// v12-b Bessel/Airy benchmark — Cerid vs Boost.Math (its peer library, boost_peer_rows.hpp, values compared on every
 // row), single-thread, in-cache ns/element. Honest: reports wins AND losses. Plain C arrays only (no STL containers,
 // per the engine rule — applies to benches too).
 //
@@ -15,10 +15,10 @@
 //   ⇒ Cerid WINS ALL 6 vs ALL 3 peers (18/18). Levers: dedicated J-only fast path (series + Hankel asymptotic,
 //   no Y/J' quartet), direct Airy Maclaurin series (no Bessel-⅓ route), Steed/Temme CF for Y/I/K.
 //
-// Build and run at every CPU level: bash scripts/run_bench_special.sh. The argument is the passes per round (default
+// Build and run at every CPU level: bash scripts/run_bench_boost.sh. The argument is the passes per round (default
 // 64) for a smoke run.
 
-#include "special_peer_rows.hpp"
+#include "boost_peer_rows.hpp"
 
 #include <crd/hesap/special/airy.hpp>
 #include <crd/hesap/special/bessel.hpp>
@@ -27,7 +27,7 @@
 #include <cstdlib>
 
 namespace sf = crd::hesap::special;
-using special_peer::Special;
+using boost_rows::Special;
 
 namespace
 {
@@ -49,7 +49,7 @@ double g_cerid[kPairs];
 double g_boost[kPairs];
 int g_passes = 64;
 
-template <class F> bool pair_row(const char* name, F f, Special peer, special_peer::Bound bound)
+template <class F> bool pair_row(const char* name, F f, Special peer, boost_rows::Bound bound)
 {
     const auto cerid = [&](double* out)
     {
@@ -58,10 +58,10 @@ template <class F> bool pair_row(const char* name, F f, Special peer, special_pe
             out[i] = f(g_nu[i], g_x[i]);
         }
     };
-    return special_peer::row(name, cerid, peer, {g_nu, g_x, nullptr}, kPairs, g_cerid, g_boost, bound, 5, g_passes);
+    return boost_rows::row(name, cerid, peer, {g_nu, g_x, nullptr}, kPairs, g_cerid, g_boost, bound, 5, g_passes);
 }
 
-template <class F> bool airy_row(const char* name, F f, Special peer, special_peer::Bound bound)
+template <class F> bool airy_row(const char* name, F f, Special peer, boost_rows::Bound bound)
 {
     const auto cerid = [&](double* out)
     {
@@ -70,7 +70,7 @@ template <class F> bool airy_row(const char* name, F f, Special peer, special_pe
             out[i] = f(g_ax[i]);
         }
     };
-    return special_peer::row(name, cerid, peer, {g_ax, nullptr, nullptr}, kAiryN, g_cerid, g_boost, bound, 5, g_passes);
+    return boost_rows::row(name, cerid, peer, {g_ax, nullptr, nullptr}, kAiryN, g_cerid, g_boost, bound, 5, g_passes);
 }
 } // namespace
 
@@ -95,7 +95,7 @@ int main(int argc, char** argv)
     {
         g_ax[i] = kAx[i % kAiry];
     }
-    special_peer::header("v12-b Bessel/Airy, Cerid (Steed/Temme) vs Boost.Math, ns/element (single-thread, in-cache)");
+    boost_rows::header("v12-b Bessel/Airy, Cerid (Steed/Temme) vs Boost.Math, ns/element (single-thread, in-cache)");
     bool ok = true;
     ok &= pair_row("cyl_J", [](double n, double x) { return sf::cyl_bessel_j(n, x); }, Special::CylBesselJ,
                    {1e-11, 1e-12});

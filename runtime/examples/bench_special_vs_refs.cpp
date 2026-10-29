@@ -1,4 +1,4 @@
-// v12-a special-function benchmark — Cerid vs Boost.Math (its peer library, special_peer_rows.hpp, values compared
+// v12-a special-function benchmark — Cerid vs Boost.Math (its peer library, boost_peer_rows.hpp, values compared
 // on every row). scipy/MATLAB (vectorized) timed by the sibling scripts. Honest all-peers board (be-the-fastest
 // mandate); no STL containers (file-scope static buffers, no malloc).
 //
@@ -46,10 +46,10 @@
 // erfc is ~parity on WSL (topology hidden ⇒ affinity no-op ⇒ noisy placement); it wins 1.12× on the clean P-core
 // pool and is reliable on Windows-affinity. lgamma & tgamma are crushed honestly; 6–7/7 transparent in one pool.
 //
-// Build and run at every CPU level: bash scripts/run_bench_special.sh (Boost.Math is the pinned crd-bench-boost-peer
+// Build and run at every CPU level: bash scripts/run_bench_boost.sh (Boost.Math is the pinned crd-bench-boost-peer
 // library at the host's ISA). The argument n shortens the arrays (default 4 Mi) for a smoke run.
 
-#include "special_peer_rows.hpp"
+#include "boost_peer_rows.hpp"
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/special/special.hpp>
@@ -62,7 +62,7 @@
 
 namespace sf = crd::hesap::special;
 using clk = std::chrono::high_resolution_clock;
-using special_peer::Special;
+using boost_rows::Special;
 
 namespace
 {
@@ -93,7 +93,7 @@ double timeit_batch(void (*bf)(double*, const double*, std::size_t), const doubl
 }
 
 // One scalar row: Cerid's f(in[i]) against the peer's, three rounds of one pass each.
-template <class F> bool scalar_row(const char* name, F f, Special peer, const double* in, special_peer::Bound bound)
+template <class F> bool scalar_row(const char* name, F f, Special peer, const double* in, boost_rows::Bound bound)
 {
     const auto cerid = [&](double* out)
     {
@@ -102,7 +102,7 @@ template <class F> bool scalar_row(const char* name, F f, Special peer, const do
             out[i] = f(in[i]);
         }
     };
-    const bool ok = special_peer::row(name, cerid, peer, {in, nullptr, nullptr}, g_n, g_out, g_peer, bound, 3, 1);
+    const bool ok = boost_rows::row(name, cerid, peer, {in, nullptr, nullptr}, g_n, g_out, g_peer, bound, 3, 1);
     g_cs += g_out[g_n / 2];
     return ok;
 }
@@ -134,7 +134,7 @@ int main(int argc, char** argv)
         xa[i] = 0.05 + u() * 14.95;
         xp[i] = 2.5;
     }
-    special_peer::header("v12-a special functions, Cerid vs Boost.Math, ns/element (single-thread)");
+    boost_rows::header("v12-a special functions, Cerid vs Boost.Math, ns/element (single-thread)");
     bool ok = true;
     ok &= scalar_row("erf", [](double x) { return sf::erf(x); }, Special::Erf, xe, {1e-13, 1e-15});
     ok &= scalar_row("erfc", [](double x) { return sf::erfc(x); }, Special::Erfc, xe, {1e-12, 1e-300});
@@ -150,8 +150,8 @@ int main(int argc, char** argv)
                 out[i] = sf::gammainc_p(2.5, xa[i]);
             }
         };
-        ok &= special_peer::row("gammainc_p", cerid, Special::GammaP, {xp, xa, nullptr}, g_n, g_out, g_peer,
-                                {1e-12, 1e-14}, 3, 1);
+        ok &= boost_rows::row("gammainc_p", cerid, Special::GammaP, {xp, xa, nullptr}, g_n, g_out, g_peer,
+                              {1e-12, 1e-14}, 3, 1);
     }
     // ---- parallel *_batch (crd-jobs, all cores) vs MATLAB-MT ----
     crd::jobs::Config cfg;

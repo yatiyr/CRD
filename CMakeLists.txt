@@ -55,10 +55,10 @@ option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-
 # sensitivities and ARKODE's IMEX steppers. Local only, never in CI or a shipped build; their run_bench_*.sh scripts
 # build and run them per CPU level through scripts/run-lane-bench.sh.
 option(CRD_BUILD_HESAP_VS_SUNDIALS "Build the ODE benches against SUNDIALS CVODE, CVODES and ARKODE (local-only)" OFF)
-# The special-function boards against the pinned standalone Boost.Math (cmake/pins.json boost_math, fetched on demand
-# into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA. Local only, never in CI or a
-# shipped build; scripts/run_bench_special.sh builds and runs them per CPU level.
-option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function benches against the pinned Boost.Math (local-only)" OFF)
+# The special-function and distribution boards against the pinned standalone Boost.Math (cmake/pins.json boost_math,
+# fetched on demand into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA. Local
+# only, never in CI or a shipped build; scripts/run_bench_boost.sh builds and runs them per CPU level.
+option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function and distribution benches against Boost.Math" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)
@@ -948,7 +948,7 @@ if(CRD_BUILD_HESAP_VS_REFERENCE)
     unset(CMAKE_POLICY_VERSION_MINIMUM)
 endif()
 
-# ----- The special-function boards' peer: Boost.Math standalone (header-only, bench-only) -----
+# ----- The special-function and distribution boards' peer: Boost.Math standalone (header-only, bench-only) -----
 # Only crd-bench-boost-peer (runtime/CMakeLists.txt) links boost_math_headers. BOOST_MATH_STANDALONE needs no other
 # Boost library; standalone Boost.Math has no BOOST_VERSION, so the pinned version names the measured copy.
 if(CRD_BUILD_HESAP_VS_BOOST)

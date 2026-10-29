@@ -1,12 +1,12 @@
-// v12-d transcendental tail — Cerid vs Boost.Math (its peer library, special_peer_rows.hpp, values compared on every
+// v12-d transcendental tail — Cerid vs Boost.Math (its peer library, boost_peer_rows.hpp, values compared on every
 // row), single-thread in-cache ns/element (the Boost-overlapping subset). Honest: reports wins AND losses. Plain C
 // arrays only (no STL). Each side takes its own convention's arguments, prepared outside the timed passes: the
 // elliptic integrals take the parameter m on Cerid's side and the modulus k = √m on Boost's.
 //
-// Build and run at every CPU level: bash scripts/run_bench_special.sh. The argument is the passes per round (default
+// Build and run at every CPU level: bash scripts/run_bench_boost.sh. The argument is the passes per round (default
 // 256) for a smoke run.
 
-#include "special_peer_rows.hpp"
+#include "boost_peer_rows.hpp"
 
 #include <crd/hesap/special/elliptic.hpp>
 #include <crd/hesap/special/expint.hpp>
@@ -18,7 +18,7 @@
 #include <cstdlib>
 
 namespace sf = crd::hesap::special;
-using special_peer::Special;
+using boost_rows::Special;
 
 namespace
 {
@@ -38,7 +38,7 @@ int g_passes = 256;
 
 template <class F>
 bool tail_row(const char* name, F f, const double* cerid_in, Special peer, const double* peer_in,
-              special_peer::Bound bound)
+              boost_rows::Bound bound)
 {
     const auto cerid = [&](double* out)
     {
@@ -47,7 +47,7 @@ bool tail_row(const char* name, F f, const double* cerid_in, Special peer, const
             out[i] = f(cerid_in[i]);
         }
     };
-    return special_peer::row(name, cerid, peer, {peer_in, nullptr, nullptr}, kN, g_cerid, g_boost, bound, 5, g_passes);
+    return boost_rows::row(name, cerid, peer, {peer_in, nullptr, nullptr}, kN, g_cerid, g_boost, bound, 5, g_passes);
 }
 } // namespace
 
@@ -71,7 +71,7 @@ int main(int argc, char** argv)
         g_y[i] = g_x[i] + 1.0;
         g_z[i] = g_x[i] + 2.0;
     }
-    special_peer::header("v12-d transcendental tail, Cerid vs Boost.Math, ns/element (single-thread, in-cache)");
+    boost_rows::header("v12-d transcendental tail, Cerid vs Boost.Math, ns/element (single-thread, in-cache)");
     bool ok = true;
     ok &= tail_row("Ei", [](double x) { return sf::expint_ei(x); }, g_x, Special::Ei, g_x, {1e-12, 1e-13});
     ok &= tail_row("E1", [](double x) { return sf::expint_e1(x); }, g_x, Special::E1, g_x, {1e-12, 1e-13});
@@ -88,8 +88,8 @@ int main(int argc, char** argv)
                 out[i] = sf::elliprf(g_x[i], g_y[i], g_z[i]);
             }
         };
-        ok &= special_peer::row("Carlson_RF", cerid, Special::EllintRf, {g_x, g_y, g_z}, kN, g_cerid, g_boost,
-                                {1e-12, 1e-13}, 5, g_passes);
+        ok &= boost_rows::row("Carlson_RF", cerid, Special::EllintRf, {g_x, g_y, g_z}, kN, g_cerid, g_boost,
+                              {1e-12, 1e-13}, 5, g_passes);
     }
     return ok ? 0 : 1;
 }
