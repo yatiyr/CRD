@@ -59,6 +59,10 @@ option(CRD_BUILD_HESAP_VS_SUNDIALS "Build the ODE benches against SUNDIALS CVODE
 # boost, fetched on demand into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA.
 # Local only, never in CI or a shipped build; scripts/run_bench_boost.sh builds and runs them per CPU level.
 option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, interpolation and ODE benches vs Boost" OFF)
+# The permute board against HPTT, built from the local clone in CRD_HPTT_DIR (external/PEER_ORACLES.md) as the
+# crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a shipped build;
+# scripts/run_permute_bench.sh builds and runs it per CPU level.
+option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)

@@ -12,10 +12,18 @@
 //
 // Every arm must give the bits of a reference walk of src.permute(order) (a plain copy, the family is bit-exact on
 // every level and worker count, ADR-0063); a refusal or a miss fails the run. GB/s counts one read and one write per
-// element, the oracle table's basis. HPTT itself is the harness in external/hptt (f32, a local clone).
+// element, the oracle table's basis.
+//
+// Built with CRD_BUILD_HESAP_VS_HPTT (CRD_BENCH_PERMUTE_HPTT), HPTT's plan of each type and case joins as the peer
+// (examples/peers/hptt_peer.hpp), gated like the arms: in the rounds on one thread, and on N OpenMP threads in a block
+// of its own after the arms (libgomp's idle threads spin after a region). CRD_CPU_LEVEL never lowers its build.
 //
 // crd::containers types and one GrowableTlsfAllocator (the 3D case's three 2 GiB tensors), never std containers or
 // malloc.
+
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+#include "hptt_peer.hpp"
+#endif
 
 #include <crd/containers/span.hpp>
 #include <crd/core/cpu_features.hpp>
@@ -163,6 +171,8 @@ template <typename T> const char* type_name()
     }
 }
 
+// Finite values with no negative zero: the HPTT peer multiplies by alpha 1, which keeps every bit only then (a complex
+// (1, 0) times (-0, -b) gives +0 for the real part).
 template <typename T> T value(u64 i)
 {
     if constexpr (std::is_same_v<T, f32> || std::is_same_v<T, f64>)
@@ -176,6 +186,31 @@ template <typename T> T value(u64 i)
     }
 }
 
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+namespace peer = crd_peer::hptt;
+static_assert(sizeof(Complex<f32>) == 2 * sizeof(f32) && sizeof(Complex<f64>) == 2 * sizeof(f64));
+
+template <typename T> constexpr peer::Element hptt_element()
+{
+    if constexpr (std::is_same_v<T, f32>)
+    {
+        return peer::Element::F32;
+    }
+    else if constexpr (std::is_same_v<T, f64>)
+    {
+        return peer::Element::F64;
+    }
+    else if constexpr (std::is_same_v<T, Complex<f32>>)
+    {
+        return peer::Element::C32;
+    }
+    else
+    {
+        return peer::Element::C64;
+    }
+}
+#endif
+
 f64 median(f64* times, int n)
 {
     std::sort(times, times + n);
@@ -183,8 +218,9 @@ f64 median(f64* times, int n)
 }
 
 // One case's arms: each gated once against the reference walk (dst poisoned first, so an element no arm writes
-// cannot pass), then timed round by round in turn.
-template <typename T> void board(const Case& c, const Arm* arms, usize count, const char* phase)
+// cannot pass), then timed round by round in turn; the HPTT peer on `peer_threads` threads (one: in the rounds).
+template <typename T>
+void board(const Case& c, const Arm* arms, usize count, const char* phase, [[maybe_unused]] int peer_threads)
 {
     const crd::containers::ConstSpan<u64> shape{c.shape, c.rank};
     const crd::containers::ConstSpan<u32> order{c.order, c.rank};
@@ -211,6 +247,34 @@ template <typename T> void board(const Case& c, const Arm* arms, usize count, co
     {
         return tn::detail::permute_impl<false>(dst.data(), src.data(), oshape, istride, c.rank, T{1}, arm);
     };
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+    int size[tn::kMaxRank] = {};
+    int perm[tn::kMaxRank] = {};
+    for (u32 d = 0; d < c.rank; ++d)
+    {
+        size[d] = static_cast<int>(c.shape[d]);
+        perm[d] = static_cast<int>(c.order[d]);
+    }
+    const crd_peer::Owned<peer::Plan> hptt(
+        peer::plan(hptt_element<T>(), static_cast<int>(c.rank), size, perm, src.data(), dst.data(), peer_threads));
+    std::memset(static_cast<void*>(dst.data()), 0xFF, bytes);
+    peer::execute(hptt.get());
+    const bool hptt_live = std::memcmp(dst.data(), reference.data(), bytes) == 0;
+    if (!hptt_live)
+    {
+        std::fprintf(stderr, "FAIL: %s %s %s, hptt: bits differ from the reference walk\n", phase, type_name<T>(),
+                     c.name);
+        g_failed = true;
+    }
+    f64 hptt_times[kRounds] = {};
+    const auto time_hptt = [&](int round)
+    {
+        const auto t0 = Clock::now();
+        peer::execute(hptt.get());
+        const auto t1 = Clock::now();
+        hptt_times[round] = std::chrono::duration<f64, std::nano>(t1 - t0).count();
+    };
+#endif
 
     bool live[kMaxArms] = {};
     for (usize a = 0; a < count; ++a)
@@ -238,7 +302,19 @@ template <typename T> void board(const Case& c, const Arm* arms, usize count, co
                 times[a][round] = std::chrono::duration<f64, std::nano>(t1 - t0).count();
             }
         }
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+        if (hptt_live && peer_threads == 1)
+        {
+            time_hptt(round);
+        }
+#endif
     }
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+    for (int round = 0; hptt_live && peer_threads > 1 && round < kRounds; ++round)
+    {
+        time_hptt(round);
+    }
+#endif
 
     const f64 elements = static_cast<f64>(dst.size());
     std::printf("\n==== %s %s %s, %.1f MiB a tensor ====\n", phase, type_name<T>(), c.name,
@@ -256,22 +332,32 @@ template <typename T> void board(const Case& c, const Arm* arms, usize count, co
         std::printf("%-20s | %10.4f | %8.2f | %7.3fx\n", arms[a].name, ns / elements,
                     2.0 * static_cast<f64>(bytes) / ns, rules > 0.0 ? rules / ns : 0.0);
     }
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+    if (!hptt_live)
+    {
+        std::printf("%-20s | failed\n", "hptt");
+        return;
+    }
+    const f64 ns = median(hptt_times, kRounds);
+    std::printf("%-20s | %10.4f | %8.2f | %7.3fx\n", "hptt", ns / elements, 2.0 * static_cast<f64>(bytes) / ns,
+                rules > 0.0 ? rules / ns : 0.0);
+#endif
 }
 
-template <typename T> void run_type(const Arm* arms, usize count, const char* phase)
+template <typename T> void run_type(const Arm* arms, usize count, const char* phase, int peer_threads)
 {
     for (const Case& c : kCases)
     {
-        board<T>(c, arms, count, phase);
+        board<T>(c, arms, count, phase, peer_threads);
     }
 }
 
-template <usize N> void run_all(const Arm (&arms)[N], const char* phase)
+template <usize N> void run_all(const Arm (&arms)[N], const char* phase, int peer_threads)
 {
-    run_type<f32>(arms, N, phase);
-    run_type<f64>(arms, N, phase);
-    run_type<Complex<f32>>(arms, N, phase);
-    run_type<Complex<f64>>(arms, N, phase);
+    run_type<f32>(arms, N, phase, peer_threads);
+    run_type<f64>(arms, N, phase, peer_threads);
+    run_type<Complex<f32>>(arms, N, phase, peer_threads);
+    run_type<Complex<f64>>(arms, N, phase, peer_threads);
 }
 } // namespace
 
@@ -297,9 +383,12 @@ int main(int argc, char** argv)
                 "%s\n",
                 kRounds, crd::cpu_level_name(tn::tensor_kernels().level), crd::cpu_level_name(cpu.selected),
                 workers == 0U ? "one thread" : "multithreaded");
+#if defined(CRD_BENCH_PERMUTE_HPTT)
+    std::printf("peer: %s\n", peer::isa());
+#endif
     if (workers == 0U)
     {
-        run_all(kSerialArms, "one thread");
+        run_all(kSerialArms, "one thread", 1);
     }
     else
     {
@@ -307,7 +396,7 @@ int main(int argc, char** argv)
         cfg.num_threads = workers;
         crd::jobs::init(cfg);
         std::printf("%u workers\n", crd::jobs::num_workers());
-        run_all(kParallelArms, "threads");
+        run_all(kParallelArms, "threads", static_cast<int>(workers));
         crd::jobs::shutdown();
     }
     if (g_failed)

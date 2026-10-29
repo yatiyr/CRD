@@ -3949,6 +3949,7 @@ class PeerHeaders(unittest.TestCase):
                 '#include "boost/math/special_functions/erf.hpp"\n'
                 '#  include <unsupported/Eigen/FFT>\n'
                 '#include <pocketfft_hdronly.h>\n'
+                '#include <hptt.h>\n'
                 '// #include <boost/version.hpp>\n'
                 '/* #include <Eigen/Core> */\n'
                 'const char* s = "#include <boost/x.hpp>";\n'
@@ -3957,9 +3958,11 @@ class PeerHeaders(unittest.TestCase):
                 '#include <mkl_dfti.h>\n'
                 '#include "boost_peer.hpp"\n'
                 '#include "pocketfft_peer.hpp"\n'
+                '#include "hptt_peer.hpp"\n'
                 '#include <cub/cub.cuh>\n')
         self.assertEqual([(1, 'Eigen', 'Eigen/Dense'), (2, 'Boost', 'boost/math/special_functions/erf.hpp'),
-                          (3, 'Eigen', 'unsupported/Eigen/FFT'), (4, 'pocketfft', 'pocketfft_hdronly.h')],
+                          (3, 'Eigen', 'unsupported/Eigen/FFT'), (4, 'pocketfft', 'pocketfft_hdronly.h'),
+                          (5, 'HPTT', 'hptt.h')],
                          peer_headers.peer_includes(text))
 
     def test_the_tree_check_allows_only_the_peers_and_fails_an_empty_one(self):

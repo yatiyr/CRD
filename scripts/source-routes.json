@@ -228,6 +228,11 @@
       "why": "The NUFFT bench against FINUFFT built on the measuring host (scripts/run_bench_nufft.sh)."
     },
     {
+      "paths": ["runtime/examples/peers/hptt_peer.cpp"],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_HPTT"},
+      "why": "The permute board's HPTT peer library (crd-bench-hptt-peer), built from the local clone in CRD_HPTT_DIR and linked into bench_permute (scripts/run_permute_bench.sh)."
+    },
+    {
       "paths": [
         "runtime/examples/bench_ode_imex_vs_arkode.cpp",
         "runtime/examples/bench_ode_krylov_vs_cvode_spgmr.cpp",

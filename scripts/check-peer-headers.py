@@ -11,8 +11,10 @@ C-family source under the first-party roots and reports each include of such a l
 
 Comments and string literals are not code. Compiled libraries whose declarations a bench may include (cblas.h,
 fftw3.h, mkl*.h, SUNDIALS, liquid-dsp, FINUFFT, ggml) are not header libraries, and the GPU boards' device-side
-header libraries (cub/, vkFFT.h) compile for the device, outside the CPU-ISA rule; neither is checked. A tree whose
-peers directory includes no header library is a failure: the guard would be judging renamed paths.
+header libraries (cub/, vkFFT.h) compile for the device, outside the CPU-ISA rule; neither is checked. HPTT is
+compiled from source too, but its headers define the inline members of its Transpose class templates, so only its peer
+includes them. A tree whose peers directory includes no header library is a failure: the guard would be judging
+renamed paths.
 """
 import argparse
 import importlib.util
@@ -29,6 +31,7 @@ LIBRARIES = (
     ('Eigen', re.compile(r'(unsupported/)?Eigen/')),
     ('Boost', re.compile(r'boost/')),
     ('pocketfft', re.compile(r'pocketfft(_hdronly)?\.h(pp)?$')),
+    ('HPTT', re.compile(r'hptt(_types)?\.h$')),
 )
 DIRECTIVE = re.compile(r'^\s*#\s*include\b')
 HEADER = re.compile(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]')
