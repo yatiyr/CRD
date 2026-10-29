@@ -1442,22 +1442,21 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                                              : (rows_blk % static_cast<crd::u32>(mr));
                                 if (kacc > 0) // UPDATE: panel[:, q-block] −= Σ panel[:, 0:kacc]·conj(W) (K=kacc)
                                 {
-                                    gk.block(
-                                        dense::GemmBlock<T>{.a = prow0,
-                                                            .b = linv + wpack_off[t],
-                                                            .c = prow0 + q,
-                                                            .lda = obw,
-                                                            .ldc = obw,
-                                                            .rows = rows_in,
-                                                            .cols = qw,
-                                                            .depth = kacc,
-                                                            .row0 = 0,
-                                                            .col0 = 0,
-                                                            .alpha = T{},
-                                                            .beta = T{},
-                                                            .update = dense::GemmUpdate::Subtract,
-                                                            .col_major = false,
-                                                            .lower = false});
+                                    gk.block(dense::GemmBlock<T>{.a = prow0,
+                                                                 .b = linv + wpack_off[t],
+                                                                 .c = prow0 + q,
+                                                                 .lda = obw,
+                                                                 .ldc = obw,
+                                                                 .rows = rows_in,
+                                                                 .cols = qw,
+                                                                 .depth = kacc,
+                                                                 .row0 = 0,
+                                                                 .col0 = 0,
+                                                                 .alpha = T{},
+                                                                 .beta = T{},
+                                                                 .update = dense::GemmUpdate::Subtract,
+                                                                 .col_major = false,
+                                                                 .lower = false});
                                 }
                                 // SOLVE: snapshot the panel's q-block, then panel[:, q-block] = snap·conj(linv_q).
                                 for (crd::u32 i = 0; i < rows_in; ++i)

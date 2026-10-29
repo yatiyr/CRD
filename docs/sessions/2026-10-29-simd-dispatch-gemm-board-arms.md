@@ -58,6 +58,8 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 2, one-thread
   and packer cases, gemm_arm on both tiles down every path, a new empty-product case and the skinny product's
   admit check.
 - The whole crd-hesap-dense-tests program passes (372 cases).
+- The supernodal cases of crd-hesap-direct-tests pass (22 cases). The complex ConjTranspose packs now go through
+  `GemmSource::conj` there.
 - Strict tidy is clean on the nine changed engine and test files. Format was applied to the added lines only.
 - The ctest guards pass (19), as do Allman braces, the plan, repository and tooling tests.
 - The bench cannot be configured here: its Eigen and OpenBLAS pins are not among the local archives, and the

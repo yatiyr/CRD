@@ -68,20 +68,20 @@ inline void syrk_packed_inner_lower(const GemmKernels<T>& k, crd::usize ic, crd:
     const crd::usize col0 = jc + col_first;
     T* corner = col_indexed_out ? c_data + col0 * ldc + ic : c_data + ic * ldc + col0;
     k.block(GemmBlock<T>{.a = a_packed,
-                                .b = b_packed + col_first * kc,
-                                .c = corner,
-                                .lda = kc,
-                                .ldc = ldc,
-                                .rows = mc,
-                                .cols = col_end - col_first,
-                                .depth = kc,
-                                .row0 = ic,
-                                .col0 = col0,
-                                .alpha = T{},
-                                .beta = T{},
-                                .update = GemmUpdate::Subtract,
-                                .col_major = col_indexed_out,
-                                .lower = true});
+                         .b = b_packed + col_first * kc,
+                         .c = corner,
+                         .lda = kc,
+                         .ldc = ldc,
+                         .rows = mc,
+                         .cols = col_end - col_first,
+                         .depth = kc,
+                         .row0 = ic,
+                         .col0 = col0,
+                         .alpha = T{},
+                         .beta = T{},
+                         .update = GemmUpdate::Subtract,
+                         .col_major = col_indexed_out,
+                         .lower = true});
 }
 
 // `allow_parallel` (default true): self-parallelize over col-panels when large. Pass FALSE when calling from a hot
