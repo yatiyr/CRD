@@ -260,7 +260,8 @@ endfunction()
 set(CRD_SDE "$ENV{CRD_SDE}" CACHE FILEPATH "Intel SDE executable for the emulated avx512 kernel arms (empty: none)")
 # The SDE CPU model every avx512 arm runs on: skx, the level's smallest CPU (AVX-512 F, CD, BW, DQ and VL only).
 set(_CRD_SDE_CPUS skx)
-set(_CRD_LEVEL_APPLIED_TEST "${CMAKE_CURRENT_LIST_DIR}/../tests/support/kernel-levels/test_cpu_level_applied.cpp")
+set(_CRD_KERNEL_LEVELS_SUPPORT "${CMAKE_CURRENT_LIST_DIR}/../tests/support/kernel-levels")
+set(_CRD_LEVEL_APPLIED_TEST "${_CRD_KERNEL_LEVELS_SUPPORT}/test_cpu_level_applied.cpp")
 
 # crd_add_kernel_level_tests(<test-executable> <filter> [SDE_CPUS <cpu>...] [ENVIRONMENT <var=value>...])
 #
@@ -268,18 +269,25 @@ set(_CRD_LEVEL_APPLIED_TEST "${CMAKE_CURRENT_LIST_DIR}/../tests/support/kernel-l
 # CRD_CPU_LEVEL forcing the selection in the one binary (a level above the host is refused, and that arm runs at the
 # detected level) and the ENVIRONMENT the suite needs; <prefix> is the executable's name without "-tests". With
 # CRD_SDE, <prefix>-kernels-at-avx512-sde-<cpu> runs the filter under SDE's model of each _CRD_SDE_CPUS CPU and each
-# SDE_CPUS CPU (a model with the features a suite's variant selects on, ADR-0134 §8) at avx512, and those arms also run
-# the hidden [cpu-level-applied] case, which fails when the level was refused. The executable
-# gets CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
+# SDE_CPUS CPU (a model with the features a suite's variant selects on, ADR-0134 §8) at avx512. Those arms, and the
+# arms of the levels every CPU of the architecture runs (portable, sse2, neon), also run the hidden
+# [cpu-level-applied] case, which fails when the level was refused. Under an applied level a differential case runs
+# portable and that level only (tests/support/kernel-levels/kernel_levels.hpp); the unforced run has every level. The
+# executable gets CRD_TEST_KERNEL_LEVELS_TOP, the CpuLevel value of the highest level the build compiles.
 function(crd_add_kernel_level_tests executable filter)
     cmake_parse_arguments(PARSE_ARGV 2 arg "" "" "SDE_CPUS;ENVIRONMENT")
     list(GET CRD_KERNEL_LEVELS -1 top)
     target_compile_definitions(${executable} PRIVATE CRD_TEST_KERNEL_LEVELS_TOP=${_CRD_KERNEL_LEVEL_${top}})
     target_sources(${executable} PRIVATE "${_CRD_LEVEL_APPLIED_TEST}")
+    target_include_directories(${executable} PRIVATE "${_CRD_KERNEL_LEVELS_SUPPORT}")
     string(REGEX REPLACE "-tests$" "" prefix "${executable}")
     foreach(level IN LISTS CRD_KERNEL_LEVELS)
         string(REPLACE "sse42" "sse4.2" spelling "${level}")
-        add_test(NAME ${prefix}-kernels-at-${level} COMMAND ${executable} "${filter}")
+        set(arm_filter "${filter}")
+        if(level MATCHES "^(portable|sse2|neon)$")
+            string(APPEND arm_filter ",[cpu-level-applied]")
+        endif()
+        add_test(NAME ${prefix}-kernels-at-${level} COMMAND ${executable} "${arm_filter}")
         set(environment "CRD_CPU_LEVEL=${spelling}" ${arg_ENVIRONMENT})
         set_tests_properties(${prefix}-kernels-at-${level} PROPERTIES
             ENVIRONMENT "${environment}" LABELS "cerid.test.target=${executable}")

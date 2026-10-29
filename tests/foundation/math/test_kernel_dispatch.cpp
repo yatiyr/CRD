@@ -2,6 +2,8 @@
 // batch small-float conversions of every level the host executes against the scalar converts, bit for bit. The
 // [kernels] cases also run once per compiled level with CRD_CPU_LEVEL forcing the selection (CMakeLists.txt).
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/math/float_convert.hpp>
 #include <crd/math/kernel_dispatch.hpp>
@@ -193,7 +195,7 @@ TEST_CASE("float conversion kernels: every level the host runs is bit-identical 
     crd::usize ran = 0;
     for (const KernelLevel<FloatConvertKernels>& level : crd::math::float_convert_levels())
     {
-        if (!crd::cpu_level_includes(crd::cpu_selection().detected, level.level))
+        if (!crd::test::kernel_level_runs_here(level))
         {
             continue;
         }

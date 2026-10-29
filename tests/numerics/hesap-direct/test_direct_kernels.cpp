@@ -6,6 +6,8 @@
 // and the padding, outputs end in a sentinel, and one pass draws infinities, signed zeros and subnormals (a skipped
 // term or flush-to-zero shows). crd-hesap-direct-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/direct/direct_dispatch.hpp>
@@ -30,10 +32,7 @@ using crd::containers::Array;
 namespace
 {
 
-bool runs_here(CpuLevel level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level);
-}
+using crd::test::kernel_level_runs_here;
 
 bool fuses(CpuLevel level)
 {
@@ -149,7 +148,7 @@ template <typename T> void check_forward_below(crd::memory::IAllocator* alloc, C
     Values g{0xD1ULL, specials};
     for (const auto& level : dr::direct_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -239,7 +238,7 @@ template <typename T> void check_forward_diagonal(crd::memory::IAllocator* alloc
     Values g{0xD2ULL, specials};
     for (const auto& level : dr::direct_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -307,7 +306,7 @@ template <typename T> void check_block_forward_below(crd::memory::IAllocator* al
     Values g{0xD3ULL, specials};
     for (const auto& level : dr::direct_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -371,7 +370,7 @@ template <typename T> void check_block_backward_below(crd::memory::IAllocator* a
     Values g{0xD4ULL, specials};
     for (const auto& level : dr::direct_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -444,7 +443,7 @@ template <typename T> void check_block_backward_diagonal(crd::memory::IAllocator
     Values g{0xD5ULL, specials};
     for (const auto& level : dr::direct_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -524,7 +523,7 @@ template <typename T> void check_backward_below_gemv(crd::memory::IAllocator* al
     Values g{0xD6ULL, specials};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

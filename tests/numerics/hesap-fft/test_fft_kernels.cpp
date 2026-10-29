@@ -7,6 +7,8 @@
 // non-finite as in the reference.
 // crd-hesap-fft-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/core/cpu_features.hpp>
@@ -36,10 +38,7 @@ using fft::FftKernels;
 namespace
 {
 
-bool runs_here(const KernelLevel<FftKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 // The guard words before and after the data, in T units.
 constexpr usize kGuard = 16;
@@ -152,47 +151,47 @@ template <typename T> void check_every_level()
         for (const FftDirection dir : {FftDirection::Forward, FftDirection::Inverse})
         {
             // The four-step's NT stores take aligned data; one word in, f64 takes its plain-store branch. Negative
-            // zeros, whose signs every level must keep as portable does, take the aligned data.
-            struct Pass
+            // zeros, whose signs every level must keep as portable does, take the aligned data. An input's reference
+            // serves each of its shifts.
+            for (const bool negative_zeros : {false, true})
             {
-                usize shift;
-                bool negative_zeros;
-            };
-            for (const Pass pass : {Pass{0, false}, Pass{1, false}, Pass{0, true}})
-            {
-                const usize shift = pass.shift;
                 Buffer<T> want(&alloc, n, 0);
-                fill_input(want.values(), 2 * n, 0x5EEDULL + n, pass.negative_zeros);
+                fill_input(want.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
                 plan.execute_reference(Span<Complex<T>>(want.data(), n), dir);
-                Buffer<T> portable(&alloc, n, shift);
-                usize ran = 0;
-                for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
+                const usize shifts = negative_zeros ? 1U : 2U;
+                for (usize shift = 0; shift < shifts; ++shift)
                 {
-                    if (!runs_here(level))
+                    Buffer<T> portable(&alloc, n, shift);
+                    usize ran = 0;
+                    for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
                     {
-                        continue;
+                        if (!kernel_level_runs_here(level))
+                        {
+                            continue;
+                        }
+                        const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
+                        Buffer<T> got(&alloc, n, shift);
+                        Buffer<T> again(&alloc, n, shift);
+                        fill_input(got.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
+                        std::memcpy(again.values(), got.values(), 2 * n * sizeof(T));
+                        k.execute(plan.state(), got.data(), dir);
+                        k.execute(plan.state(), again.data(), dir);
+                        if (ran == 0U) // portable, levels[0]: the bits every other level gives
+                        {
+                            std::memcpy(portable.values(), got.values(), 2 * n * sizeof(T));
+                        }
+                        ++ran;
+                        const double rel = rel_error(got.data(), want.data(), n);
+                        INFO(crd::cpu_level_name(level.level)
+                             << " n=" << n << " dir=" << static_cast<int>(dir) << " shift=" << shift
+                             << " -0=" << negative_zeros << " rel=" << rel);
+                        CHECK(rel < tolerance<T>(n));
+                        CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(T)) == 0);
+                        CHECK(std::memcmp(got.values(), portable.values(), 2 * n * sizeof(T)) == 0);
+                        CHECK(got.guards_kept());
                     }
-                    const fft::FftTypeKernels<T>& k = fft::kernels_of<T>(*level.table);
-                    Buffer<T> got(&alloc, n, shift);
-                    Buffer<T> again(&alloc, n, shift);
-                    fill_input(got.values(), 2 * n, 0x5EEDULL + n, pass.negative_zeros);
-                    std::memcpy(again.values(), got.values(), 2 * n * sizeof(T));
-                    k.execute(plan.state(), got.data(), dir);
-                    k.execute(plan.state(), again.data(), dir);
-                    if (ran == 0U) // portable, levels[0]: the bits every other level gives
-                    {
-                        std::memcpy(portable.values(), got.values(), 2 * n * sizeof(T));
-                    }
-                    ++ran;
-                    const double rel = rel_error(got.data(), want.data(), n);
-                    INFO(crd::cpu_level_name(level.level) << " n=" << n << " dir=" << static_cast<int>(dir) << " shift="
-                                                          << shift << " -0=" << pass.negative_zeros << " rel=" << rel);
-                    CHECK(rel < tolerance<T>(n));
-                    CHECK(std::memcmp(got.values(), again.values(), 2 * n * sizeof(T)) == 0);
-                    CHECK(std::memcmp(got.values(), portable.values(), 2 * n * sizeof(T)) == 0);
-                    CHECK(got.guards_kept());
+                    CHECK(ran >= 1U); // portable runs everywhere
                 }
-                CHECK(ran >= 1U); // portable runs everywhere
             }
         }
     }
@@ -261,7 +260,7 @@ template <typename T> void check_batched_every_level()
                 usize ran = 0;
                 for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
                 {
-                    if (!runs_here(level))
+                    if (!kernel_level_runs_here(level))
                     {
                         continue;
                     }
@@ -317,7 +316,7 @@ template <typename T> void check_specials_every_level()
     const fft::FftTypeKernels<T>& portable = fft::kernels_of<T>(*fft::fft_kernel_levels()[0].table);
     for (const KernelLevel<FftKernels>& level : fft::fft_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

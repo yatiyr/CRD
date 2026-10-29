@@ -7,6 +7,7 @@
 
 #include "jet_level_probe.hpp"
 #include "jet_probe_ops.hpp"
+#include "kernel_levels.hpp"
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/autodiff/autodiff_dispatch.hpp>
@@ -50,10 +51,7 @@ constexpr Level kLevels[] = {
 #endif
 };
 
-bool runs_here(CpuLevel level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level);
-}
+using crd::test::kernel_level_runs_here;
 
 // A quiet NaN with a payload no operation produces: the words a probe must leave as they were.
 constexpr u64 kSentinel = 0x7FF8DEADBEEF1234ULL;
@@ -261,7 +259,7 @@ TEST_CASE("jets: every level the host runs gives the portable bits", "[autodiff]
         REQUIRE(guards_hold(ref));
         for (const Level& level : kLevels)
         {
-            if (!runs_here(level.level))
+            if (!kernel_level_runs_here(level.level))
             {
                 continue;
             }
@@ -331,7 +329,7 @@ TEST_CASE("jets: the drivers give the portable bits on every level and tile", "[
     };
     for (const Level& level : kLevels)
     {
-        if (!runs_here(level.level))
+        if (!kernel_level_runs_here(level.level))
         {
             continue;
         }
@@ -401,7 +399,7 @@ TEST_CASE("jets: every canned gradient level the host runs gives general code's 
             ad::canned::visit(f, [&](const auto& fn) { ad::forward::gradient(fn, x, n, want, scratch); });
             for (const auto& level : ad::autodiff_kernel_levels())
             {
-                if (!runs_here(level.level))
+                if (!kernel_level_runs_here(level))
                 {
                     continue;
                 }

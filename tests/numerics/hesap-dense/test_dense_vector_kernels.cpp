@@ -8,6 +8,8 @@
 // kernel must not read (padding, the other triangle, a unit diagonal, past the end) hold NaN, and elements it must not
 // write are checked unchanged. crd-hesap-dense-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
@@ -25,16 +27,12 @@ using crd::CpuLevel;
 using crd::u32;
 using crd::u64;
 using crd::usize;
-using crd::math::KernelLevel;
 using dn::DenseKernels;
 
 namespace
 {
 
-bool runs_here(const KernelLevel<DenseKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 bool fuses(CpuLevel level)
 {
@@ -161,7 +159,7 @@ template <typename T> void check_dot(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0x51ULL};
     for (const auto& level : levels)
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -201,7 +199,7 @@ template <typename T> void check_gemv(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0x9EULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -262,7 +260,7 @@ template <typename T> void check_symv(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0x5BULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -332,7 +330,7 @@ template <typename T> void check_trsv(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0x7AULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -446,7 +444,7 @@ template <typename T> void check_cholesky(crd::memory::IAllocator* alloc, Counts
     crd::containers::Array<T> want(alloc);
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -485,7 +483,7 @@ template <typename T> void check_trsm(crd::memory::IAllocator* alloc, Counts& c)
     crd::containers::Array<T> want(alloc);
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -551,7 +549,7 @@ template <typename T> void check_axpy(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0xA1ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -611,7 +609,7 @@ template <typename T> void check_gemvt(crd::memory::IAllocator* alloc, Counts& c
     Lcg g{0xB7ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -669,7 +667,7 @@ template <typename T> void check_ger(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0xC3ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -725,7 +723,7 @@ template <typename T> void check_rot(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0xD9ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -772,7 +770,7 @@ template <typename T> void check_reflect(crd::memory::IAllocator* alloc, Counts&
     Lcg g{0xE5ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -833,7 +831,7 @@ template <typename T> void check_ldlt_update(crd::memory::IAllocator* alloc, Cou
     Lcg g{0xF1ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1010,7 +1008,7 @@ template <typename T> void check_creflect(crd::memory::IAllocator* alloc, Counts
     Lcg g{0x5A1ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1073,7 +1071,7 @@ template <typename T> void check_cgemvt(crd::memory::IAllocator* alloc, Counts& 
     Lcg g{0x5B2ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1141,7 +1139,7 @@ template <typename T> void check_cger(crd::memory::IAllocator* alloc, Counts& c)
     Lcg g{0x5C3ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1202,7 +1200,7 @@ template <typename T> void check_chemv(crd::memory::IAllocator* alloc, Counts& c
     Lcg g{0x5D4ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1272,7 +1270,7 @@ template <typename T> void check_cher2(crd::memory::IAllocator* alloc, Counts& c
     Lcg g{0x5E5ULL};
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1326,7 +1324,7 @@ template <typename T> void check_negative_zero_sums(crd::memory::IAllocator* all
     crd::containers::Array<T> y(alloc);
     for (const auto& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1388,8 +1386,7 @@ TEST_CASE("dense kernels: every level the host runs gives its declared dot produ
     }
 }
 
-TEST_CASE("dense kernels: a dot or gemv row of only -0 products is +0 on every level the host runs",
-          "[dense][kernels]")
+TEST_CASE("dense kernels: a dot or gemv row of only -0 products is +0 on every level the host runs", "[dense][kernels]")
 {
     for (const Counts& c : {run(check_negative_zero_sums<crd::f64>), run(check_negative_zero_sums<crd::f32>)})
     {

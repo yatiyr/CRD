@@ -3,6 +3,8 @@
 // with zeros, signed zeros, subnormals, infinities and NaN (zero-direction rays among them), and writes nothing past
 // the span. crd-geometry-primitives-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/geometry/primitives/primitive_dispatch.hpp>
 
@@ -27,10 +29,7 @@ namespace
 constexpr usize kMaxBundles = 5;
 constexpr u32 kGuard = 0x5A5A5A5AU;
 
-bool runs_here(const KernelLevel<PrimitiveKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 const KernelLevel<PrimitiveKernels>& portable()
 {
@@ -191,7 +190,7 @@ TEST_CASE("primitive kernels: every level the host runs gives the portable bits 
     usize ran = 0;
     for (const KernelLevel<PrimitiveKernels>& level : gp::primitive_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -309,7 +308,7 @@ TEST_CASE("primitive kernels: the masks are all ones or zero on every level", "[
     ray.pad = 1.0F;
     for (const KernelLevel<PrimitiveKernels>& level : gp::primitive_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -330,7 +329,7 @@ TEST_CASE("primitive kernels: every level's hull support scan picks the portable
     constexpr usize max_padded = 40;
     for (const KernelLevel<PrimitiveKernels>& level : gp::primitive_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

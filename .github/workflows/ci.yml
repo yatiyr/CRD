@@ -386,8 +386,9 @@ jobs:
           exit $LASTEXITCODE
 
       # ADR-0134 §4, §8: general code builds at the baseline on every lane, so the old -sse2 builds became this arm.
-      # The lane's own binaries run every test again with CRD_CPU_LEVEL=sse2 (the <preset>-at-sse2 test preset); a
-      # test that forces its own level keeps it. The hidden [cpu-level-applied] case fails if the level was refused.
+      # The lane's own binaries run the suite again with CRD_CPU_LEVEL=sse2 (the <preset>-at-sse2 test preset), less
+      # the kernel arms, which force their own level, and the source and tree guards. The hidden [cpu-level-applied]
+      # case fails if the level was refused.
       - name: Test at the sse2 level
         if: matrix.preset == 'win-debug'
         shell: pwsh
@@ -921,7 +922,7 @@ jobs:
           set -e
           python3 scripts/check-registered-failures.py --lane ${{ matrix.preset }} --junit "$junit" --ctest-exit "$test_exit"
 
-      # ADR-0134 §4, §8: the lane's binaries again with every test at the sse2 level, as on win-debug.
+      # ADR-0134 §4, §8: the lane's binaries again at the sse2 level, as on win-debug.
       - name: Test at the sse2 level
         if: matrix.preset == 'linux-gcc-debug'
         shell: bash

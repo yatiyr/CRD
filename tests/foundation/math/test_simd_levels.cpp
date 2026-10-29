@@ -3,6 +3,7 @@
 // per level the build compiles; each level the host executes runs every probe operation over the same inputs as the
 // portable level, in this one process.
 
+#include "kernel_levels.hpp"
 #include "simd_level_probe.hpp"
 
 #include <crd/core/cpu_features.hpp>
@@ -192,7 +193,7 @@ TEST_CASE("simd types: every level the host executes gives the portable level's 
     crd::usize ran = 0;
     for (const Level& level : kLevels)
     {
-        if (!crd::cpu_level_includes(crd::cpu_selection().detected, level.level))
+        if (!crd::test::kernel_level_runs_here(level.level))
         {
             continue;
         }
@@ -235,8 +236,10 @@ TEST_CASE("simd types: every level the host executes gives the portable level's 
             CHECK(mismatches == 0U);
         }
     }
-    // Every CPU of the architecture executes the level above portable (SSE2 on x64, NEON on ARM64).
-    CHECK(ran >= (kLevelCount > 1U ? 2U : 1U));
+    // Every CPU of the architecture executes the level above portable (SSE2 on x64, NEON on ARM64), which runs unless
+    // an arm forced portable itself.
+    const bool above_portable = kLevelCount > 1U && crd::cpu_selection().selected != CpuLevel::Portable;
+    CHECK(ran >= (above_portable ? 2U : 1U));
 }
 
 namespace
@@ -469,7 +472,7 @@ TEST_CASE("simd types: every level's fused multiply-add rounds once on hard case
     bool runs[kLevelCount] = {};
     for (crd::usize l = 0; l < kLevelCount; ++l)
     {
-        runs[l] = crd::cpu_level_includes(crd::cpu_selection().detected, kLevels[l].level);
+        runs[l] = crd::test::kernel_level_runs_here(kLevels[l].level);
         for (crd::usize f = 0; f < kFusedCount; ++f)
         {
             ops[l][f] = find_op(*kLevels[l].table, kFusedOps[f].name);

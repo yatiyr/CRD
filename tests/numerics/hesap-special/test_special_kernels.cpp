@@ -3,6 +3,8 @@
 // lanes mixed into any vector, over every length and offset that meets the vector loop and its tail.
 // crd-hesap-special-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/special/detail/lanczos_core.hpp>
 #include <crd/hesap/special/special.hpp>
@@ -25,10 +27,7 @@ namespace
 constexpr usize kInputs = 211;
 constexpr u64 kGuard = 0x5A5A5A5A5A5A5A5AULL;
 
-bool runs_here(const KernelLevel<SpecialKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 // Ordinary arguments of both half-planes, with the edge cases spread so that every vector position meets them.
 void fill_inputs(f64 (&xs)[kInputs])
@@ -97,7 +96,7 @@ TEST_CASE("special kernels: every level the host runs gives the scalar Lanczos l
     usize ran = 0;
     for (const KernelLevel<SpecialKernels>& level : sf::special_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

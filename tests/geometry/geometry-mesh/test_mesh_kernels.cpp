@@ -4,6 +4,8 @@
 // and inside, culled and not; the public mesh_raycast_simd returns the selected level's hit.
 // crd-geometry-mesh-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/geometry/mesh/mesh.hpp>
@@ -28,10 +30,7 @@ using gm::MeshKernels;
 namespace
 {
 
-bool runs_here(const KernelLevel<MeshKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 struct Lcg
 {
@@ -158,7 +157,7 @@ TEST_CASE("mesh kernels: every level the host runs gives the portable raycast bi
     usize ran = 0;
     for (const KernelLevel<MeshKernels>& level : gm::mesh_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

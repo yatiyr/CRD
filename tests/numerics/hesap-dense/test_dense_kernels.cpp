@@ -9,6 +9,7 @@
 // stride. crd-hesap-dense-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include "hesap_jobs_fixture.hpp"
+#include "kernel_levels.hpp"
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/blas3.hpp>
@@ -39,10 +40,7 @@ using dn::GemmUpdate;
 namespace
 {
 
-bool runs_here(const KernelLevel<DenseKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 // The levels from avx2 up sum by fused multiply-add (dense_kernels.hpp).
 bool sums_by_fma(CpuLevel level)
@@ -239,7 +237,7 @@ template <typename T> void check_every_level()
     usize ran = 0;
     for (const KernelLevel<DenseKernels>& level : levels)
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -307,7 +305,7 @@ template <typename T> void check_packers()
     usize wrong = 0;
     for (const KernelLevel<DenseKernels>& level : dn::dense_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

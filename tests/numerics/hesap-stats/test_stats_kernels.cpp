@@ -2,6 +2,8 @@
 // functions' bits for the Philox and Threefry fills, across the counters' word wraps, and the portable level's bits for
 // the Student-t score reduction. crd-hesap-stats-kernels-at-<level> runs these [kernels] cases under each forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/stats/stats.hpp>
 
@@ -24,10 +26,7 @@ namespace
 // AVX2 24 + 8, SSE2 16, then 4 and 3; Threefry AVX-512 24 + 8, AVX2 12 + 4, SSE2 7, then 3 and 1).
 constexpr usize kMaxBlocks = 79;
 
-bool runs_here(const KernelLevel<StatsKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 // Philox blocks [first, first + blocks) from the scalar block function, in next_u64 order.
 void philox_reference(u64 seed, u64 stream, u64 first, u64* out, usize blocks)
@@ -113,7 +112,7 @@ TEST_CASE("stats kernels: every level the host runs gives the scalar Philox and 
     usize ran = 0;
     for (const KernelLevel<StatsKernels>& level : st::stats_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -177,7 +176,7 @@ TEST_CASE("stats kernels: every level the host runs gives the portable Student-t
     usize ran = 0;
     for (const KernelLevel<StatsKernels>& level : st::stats_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

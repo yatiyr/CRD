@@ -8,6 +8,7 @@
 // Y, and sddmm and sddmm_parallel give them too. crd-hesap-sparse-kernels-at-<level> runs these [kernels] cases and
 // the [sddmm] suite under each forced level.
 
+#include "kernel_levels.hpp"
 #include "sparse_jobs_fixture.hpp"
 
 #include <crd/core/cpu_features.hpp>
@@ -32,10 +33,7 @@ using sp::SparseKernels;
 namespace
 {
 
-bool runs_here(const KernelLevel<SparseKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 template <typename T> inline constexpr bool kIsComplex = false;
 template <typename U> inline constexpr bool kIsComplex<Complex<U>> = true;
@@ -371,7 +369,7 @@ template <typename T> void check_every_level()
     usize ran = 0;
     for (const KernelLevel<SparseKernels>& level : sp::sparse_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -520,7 +518,7 @@ template <typename U> void check_sddmm_levels()
     usize ran = 0;
     for (const KernelLevel<SparseKernels>& level : sp::sparse_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

@@ -707,6 +707,11 @@
             "output": {
                 "outputOnFailure": true
             },
+            "filter": {
+                "exclude": {
+                    "name": "-kernels-at-|^crd-check-|^crd-no-"
+                }
+            },
             "environment": {
                 "CRD_CPU_LEVEL": "sse2"
             }
@@ -820,6 +825,11 @@
             "configurePreset": "linux-gcc-debug",
             "output": {
                 "outputOnFailure": true
+            },
+            "filter": {
+                "exclude": {
+                    "name": "-kernels-at-|^crd-check-|^crd-no-"
+                }
             },
             "environment": {
                 "CRD_CPU_LEVEL": "sse2"

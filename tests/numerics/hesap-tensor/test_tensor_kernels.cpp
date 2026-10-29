@@ -19,6 +19,8 @@
 // crd-hesap-tensor-kernels-at-<level> runs these [kernels] cases, the SR converts and the sketch fill under each forced
 // level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/tensor/batched_core.hpp>
@@ -58,12 +60,7 @@ namespace
 
 constexpr u32 kSentinel = 0x7FA5A5A5U; // a quiet NaN no region writes
 
-// The host executes the table: its level and, for a feature variant, its features.
-bool runs_here(const KernelLevel<TensorKernels>& level)
-{
-    const crd::CpuSelection& s = crd::cpu_selection();
-    return crd::cpu_level_includes(s.detected, level.level) && s.features.usable.has_all(level.features);
-}
+using crd::test::kernel_level_runs_here;
 
 u64 lcg(u64& s)
 {
@@ -310,7 +307,7 @@ template <typename E> void check_permute_regions()
                 }
                 for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
                 {
-                    if (!runs_here(level))
+                    if (!kernel_level_runs_here(level))
                     {
                         continue;
                     }
@@ -453,7 +450,7 @@ template <typename E> void check_permute_walks()
             }
             for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
             {
-                if (!runs_here(level))
+                if (!kernel_level_runs_here(level))
                 {
                     continue;
                 }
@@ -479,7 +476,7 @@ usize levels_run_here()
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        ran += runs_here(level) ? 1U : 0U;
+        ran += kernel_level_runs_here(level) ? 1U : 0U;
     }
     return ran;
 }
@@ -654,7 +651,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the portable binned s
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -867,7 +864,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Q8_0 and u
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -944,7 +941,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the pinned Q8_0 linea
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1021,7 +1018,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the int8 linear bits,
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1107,7 +1104,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar softmax bi
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1175,7 +1172,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar Philox blo
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1407,7 +1404,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar elementwis
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1554,7 +1551,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the pinned Tier D bit
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -1649,7 +1646,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar einsum pro
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -2048,7 +2045,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar tier's bat
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -2456,7 +2453,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar sparse TTM
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }
@@ -2716,7 +2713,7 @@ TEST_CASE("tensor kernels: every level the host runs gives the scalar nn pooling
     usize ran = 0;
     for (const KernelLevel<TensorKernels>& level : tn::tensor_kernel_levels())
     {
-        if (!runs_here(level))
+        if (!kernel_level_runs_here(level))
         {
             continue;
         }

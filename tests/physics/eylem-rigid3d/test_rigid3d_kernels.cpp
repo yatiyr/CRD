@@ -7,6 +7,8 @@
 // two entities share integrates once. crd-eylem-rigid3d-kernels-at-<level> runs these [kernels] cases under each
 // forced level.
 
+#include "kernel_levels.hpp"
+
 #include <crd/core/cpu_features.hpp>
 #include <crd/eylem/components.hpp>
 #include <crd/eylem/physics_config.hpp>
@@ -45,10 +47,7 @@ constexpr usize kFloatBytes = kFloatColumns * kChunkLanes * sizeof(f32);
 constexpr usize kChunkDataBytes = kFloatBytes + kChunkLanes * (sizeof(u32) + 2U * sizeof(u8));
 static_assert(offsetof(BodyChunk, flags) == kFloatBytes, "the float columns are contiguous");
 
-bool runs_here(const KernelLevel<Rigid3dKernels>& level)
-{
-    return crd::cpu_level_includes(crd::cpu_selection().detected, level.level);
-}
+using crd::test::kernel_level_runs_here;
 
 struct Lcg
 {
@@ -321,7 +320,7 @@ TEST_CASE("rigid3d kernels: portable is the scalar integrator and every level th
 
             for (const KernelLevel<Rigid3dKernels>& level : er::rigid3d_kernel_levels())
             {
-                if (!runs_here(level))
+                if (!kernel_level_runs_here(level))
                 {
                     continue;
                 }
