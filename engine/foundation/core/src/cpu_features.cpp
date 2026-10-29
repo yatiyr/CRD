@@ -1,9 +1,9 @@
 // CPU instruction-set detection and the dispatch-level selection (crd/core/cpu_features.hpp, ADR-0134).
 
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/core/platform.hpp>
 
-#include <cstdlib>
 #include <cstring>
 #include <initializer_list>
 
@@ -338,27 +338,16 @@ bool walk_every_cpu(CpuSelection& s) noexcept
 // CRD_CPU_LEVEL's value copied into `buffer`; nullptr when unset, "?" (an unknown name) when too long for one.
 const char* read_override(char (&buffer)[32]) noexcept // NOLINT(modernize-avoid-c-arrays)
 {
-#if CRD_OS_WINDOWS
-    const DWORD n = ::GetEnvironmentVariableA("CRD_CPU_LEVEL", buffer, sizeof(buffer)); // 0: unset or empty
-    if (n == 0U)
+    switch (read_environment("CRD_CPU_LEVEL", buffer, sizeof(buffer)))
     {
-        return nullptr;
+        case EnvironmentRead::Set:
+            return buffer;
+        case EnvironmentRead::TooLong:
+            return "?";
+        case EnvironmentRead::Unset:
+            break;
     }
-    return n < sizeof(buffer) ? buffer : "?";
-#else
-    const char* value = std::getenv("CRD_CPU_LEVEL"); // NOLINT(concurrency-mt-unsafe): read once, at the first call
-    if (value == nullptr)
-    {
-        return nullptr;
-    }
-    const crd::usize n = std::strlen(value);
-    if (n >= sizeof(buffer))
-    {
-        return "?";
-    }
-    std::memcpy(buffer, value, n + 1U);
-    return buffer;
-#endif
+    return nullptr;
 }
 
 #if defined(_MSC_VER) && CRD_ARCH_X64

@@ -8,6 +8,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/string.hpp>
 #include <crd/core/cpu_features.hpp>
+#include <crd/core/environment.hpp>
 #include <crd/diag/specimen_runner.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -87,24 +88,17 @@ class ScopedEnv
 public:
     ScopedEnv(const char* name, const char* value) : m_name(name)
     {
-        char old[256] = {}; // NOLINT(modernize-avoid-c-arrays)
+        const crd::EnvironmentValue<256> old{name};
+        m_had = old.c_str() != nullptr;
+        if (m_had)
+        {
+            m_old = cont::String{old.c_str()};
+        }
 #if defined(_WIN32)
-        const DWORD n = ::GetEnvironmentVariableA(name, old, sizeof(old));
-        m_had = n > 0U && n < sizeof(old);
         (void)_putenv_s(name, value);
 #else
-        const char* v = std::getenv(name); // NOLINT(concurrency-mt-unsafe): the test is single-threaded here
-        m_had = v != nullptr && std::strlen(v) < sizeof(old);
-        if (m_had)
-        {
-            std::memcpy(old, v, std::strlen(v) + 1U);
-        }
         (void)::setenv(name, value, 1);
 #endif
-        if (m_had)
-        {
-            m_old = cont::String{old};
-        }
     }
     ~ScopedEnv()
     {
@@ -294,6 +288,35 @@ KernelView read_kernel_view()
 }
 #endif
 } // namespace
+
+TEST_CASE("cpu features: the environment reader reports a value only when it is set and fits", "[core][cpu]")
+{
+    const char* name = "CRD_ENVIRONMENT_READ_TEST";
+    {
+        const ScopedEnv env{name, "sse4.2"};
+        char fits[7] = {};      // NOLINT(modernize-avoid-c-arrays): "sse4.2" and its NUL exactly
+        char one_short[6] = {}; // NOLINT(modernize-avoid-c-arrays)
+        CHECK(crd::read_environment(name, fits, sizeof(fits)) == crd::EnvironmentRead::Set);
+        CHECK(std::string_view{fits} == "sse4.2");
+        CHECK(crd::read_environment(name, one_short, sizeof(one_short)) == crd::EnvironmentRead::TooLong);
+        CHECK(one_short[0] == '\0');
+        CHECK(crd::read_environment(name, nullptr, 0U) == crd::EnvironmentRead::TooLong);
+        CHECK(crd::environment_set(name));
+        const crd::EnvironmentValue<16> value{name};
+        CHECK(value.read() == crd::EnvironmentRead::Set);
+        REQUIRE(value.c_str() != nullptr);
+        CHECK(std::string_view{value.c_str()} == "sse4.2");
+    }
+    {
+        const ScopedEnv env{name, ""};
+        char buffer[8] = {'x'}; // NOLINT(modernize-avoid-c-arrays)
+        CHECK(crd::read_environment(name, buffer, sizeof(buffer)) == crd::EnvironmentRead::Unset);
+        CHECK(buffer[0] == '\0');
+        CHECK(crd::EnvironmentValue<8>{name}.c_str() == nullptr);
+        CHECK_FALSE(crd::environment_set(name));
+    }
+    CHECK(crd::EnvironmentValue<8>{name}.read() == crd::EnvironmentRead::Unset);
+}
 
 TEST_CASE("cpu features: each level needs its features and the OS-saved state they use", "[core][cpu]")
 {
