@@ -706,26 +706,32 @@ class Owners:
 
 
 def read_map(path):
-    """The image base, its code symbols [(address, name, column)] sorted, and every symbol."""
+    """The image base, its code symbols [(address, name, column)] sorted, and every symbol. A code symbol lies inside
+    its segment's code: link.exe lists an import piece it dropped (`.idata$6`) at a wrapped offset below its segment,
+    which is the image base, and that segment may hold code."""
     text = Path(path).read_text(encoding='utf-8', errors='replace')
     base = MAP_BASE.search(text)
     if not base:
         raise GuardError(f'{path}: no preferred load address')
-    code_segments = set()
+    code_spans = {}
     entries = []
     for line in text.splitlines():
         segment = MAP_SEGMENT.match(line)
         if segment:
             if segment.group(5) == 'CODE':
-                code_segments.add(segment.group(1))
+                start = int(segment.group(2), 16)
+                low, high = code_spans.get(segment.group(1), (start, start))
+                code_spans[segment.group(1)] = (min(low, start), max(high, start + int(segment.group(3), 16)))
             continue
         symbol = MAP_SYMBOL.match(line)
         if symbol:
-            entries.append((symbol.group(1), int(symbol.group(4), 16), symbol.group(3), symbol.group(5)))
-    if not code_segments or not entries:
+            entries.append((symbol.group(1), int(symbol.group(4), 16), symbol.group(3), symbol.group(5),
+                            int(symbol.group(2), 16)))
+    if not code_spans or not entries:
         raise GuardError(f'{path}: no code segment or no symbol')
-    code = sorted((address, name, column) for segment, address, name, column in entries if segment in code_segments)
-    return int(base.group(1), 16), code, entries
+    code = sorted((address, name, column) for segment, address, name, column, offset in entries
+                  if segment in code_spans and code_spans[segment][0] <= offset < code_spans[segment][1])
+    return int(base.group(1), 16), code, [entry[:4] for entry in entries]
 
 
 def pe_reader(path):

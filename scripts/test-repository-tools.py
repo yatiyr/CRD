@@ -4799,6 +4799,30 @@ class IsaIsolation(unittest.TestCase):
         tables = isa_isolation.jump_tables(base, starts, code, lambda address, size: memory.get(address, b''))
         self.assertEqual([(0x1400010FC, 0x140001120)], tables)
 
+    def test_map_code_symbols_lie_inside_their_segments_code(self):
+        # link.exe lists an import piece it dropped at a wrapped offset below its segment (the image base); in a
+        # segment that holds code it would be a function start inside the PE header.
+        text = (' t\n\n Preferred load address is 0000000140000000\n\n'
+                ' Start         Length     Name                   Class\n'
+                ' 0001:00000000 00000100H .text$mn                CODE\n'
+                ' 0001:00000100 00000040H .text$x                 CODE\n'
+                ' 0002:00000000 00000080H .rdata                  DATA\n\n'
+                '  Address         Publics by Value              Rva+Base               Lib:Object\n\n'
+                ' 0000:00000000       __ImageBase                0000000140000000     <linker-defined>\n'
+                ' 0001:00000010       main                       0000000140001010 f   a.obj\n'
+                ' 0001:00000120       unwind                     0000000140001120 f   a.obj\n'
+                ' 0001:00000140       past                       0000000140001140     a.obj\n'
+                ' 0001:fffff000       .idata$6                   0000000140000000     vulkan-1:vulkan-1.dll\n'
+                ' 0001:fffff00d       .idata$6                   000000014000000d     vulkan-1:vulkan-1.dll\n'
+                ' 0002:ffffe000       .idata$6                   0000000140000000     ntdll:ntdll.dll\n')
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 't.map'
+            path.write_text(text, encoding='utf-8')
+            base, code, entries = isa_isolation.read_map(str(path))
+        self.assertEqual(0x140000000, base)
+        self.assertEqual([(0x140001010, 'main', 'a.obj'), (0x140001120, 'unwind', 'a.obj')], code)
+        self.assertEqual(7, len(entries))
+
     def test_a_function_start_the_sweep_misread_is_decoded_again(self):
         # A table's last bytes swallow the start of g (48 8B), so the sweep reads a lone C4 there and misses g's real
         # vzeroupper; the decode from g's own start finds it. h, which the sweep reads from its start, keeps its hit.
