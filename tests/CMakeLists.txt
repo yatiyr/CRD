@@ -85,6 +85,11 @@ set_tests_properties(crd-check-environment-reads PROPERTIES TIMEOUT 120 ENVIRONM
 add_test(NAME crd-check-frame-resets
     COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-frame-resets.py" "${CMAKE_SOURCE_DIR}")
 set_tests_properties(crd-check-frame-resets PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
+# ADR-0134 §8: only the board peer libraries (runtime/examples/peers/) include a peer header library (Eigen, Boost,
+# pocketfft), so no bench compiles a peer at the baseline ISA.
+add_test(NAME crd-check-peer-headers
+    COMMAND Python3::Interpreter "${CMAKE_SOURCE_DIR}/scripts/check-peer-headers.py" "${CMAKE_SOURCE_DIR}")
+set_tests_properties(crd-check-peer-headers PROPERTIES TIMEOUT 120 ENVIRONMENT "PYTHONUTF8=1")
 # DIAG.11b clause (10): the investigation runbooks (docs/design/diagnostic-runbooks.md) against this tree: every
 # command, flag, diag command, artifact and example exists, and every test a runbook names (on the rows for this host)
 # is one this tree registers (it lists them with ctest --show-only); nothing publishes.

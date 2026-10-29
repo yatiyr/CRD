@@ -46,6 +46,15 @@ was cancelled. Its one newly completed failure, linux-gcc-public-checks, is the 
   for bit, the others within 3.9e-12 where the value is not near zero). bench_interp stays the retained Cerid-only
   program of the scipy and MATLAB boards.
 
+- **The peer-header guard** (third commit). `scripts/check-peer-headers.py`, the `crd-check-peer-headers` CTest,
+  reads every C-family source under the first-party roots and fails an include of Eigen (`Eigen/`,
+  `unsupported/Eigen/`), Boost (`boost/`) or pocketfft (`pocketfft_hdronly.h`) outside `runtime/examples/peers/`;
+  comments and strings are not code, and a peers directory that includes none fails as nothing checked. Compiled
+  libraries' declaration headers (cblas, FFTW, MKL, SUNDIALS) and the GPU boards' device header libraries (cub,
+  VkFFT) are outside its rule. The checkout passes (47 includes, all in the peers). Tooling tests: header forms,
+  comments, strings and declaration headers; a bench and a test outside the peers fail by line; an empty peers
+  directory fails.
+
 ## Checks
 
 - win-debug with the option on: the peer (odeint included) at /W4 /WX and the four Boost benches; each bench ran once

@@ -173,7 +173,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    (`crd_add_bench_peer`, `crd_peer_isa_flags`: `-march=native`/`-mcpu=native` on GCC and Clang, and on cl the
    `/arch` of the level `detect_cpus()` reports at configure time), with hidden symbols, no link-time IL and no Cerid
    library, so no inline body at its ISA reaches the bench units at the baseline; plain data crosses its interface and
-   the bench times both sides with one loop. The ISA isolation guard leaves peers out (`CRD_ISA_ROLE peer`, OpenBLAS's
+   the bench times both sides with one loop; `crd-check-peer-headers` fails any include of such a header library
+   outside `runtime/examples/peers/`. The ISA isolation guard leaves peers out (`CRD_ISA_ROLE peer`, OpenBLAS's
    targets too). An applied level's UCRT FMA3 switch is process-wide on MSVC, so a board takes the peer's number from
    its detected-level arm.
 9. **Ownership.** CPU ISA detection and kernel dispatch is one OWN.1 capability: detection in crd-core, the dispatch

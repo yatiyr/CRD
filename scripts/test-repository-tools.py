@@ -131,6 +131,9 @@ environment_reads_spec.loader.exec_module(environment_reads)
 frame_resets_spec = importlib.util.spec_from_file_location('check_frame_resets', ROOT / 'scripts/check-frame-resets.py')
 frame_resets = importlib.util.module_from_spec(frame_resets_spec)
 frame_resets_spec.loader.exec_module(frame_resets)
+peer_headers_spec = importlib.util.spec_from_file_location('check_peer_headers', ROOT / 'scripts/check-peer-headers.py')
+peer_headers = importlib.util.module_from_spec(peer_headers_spec)
+peer_headers_spec.loader.exec_module(peer_headers)
 runbooks_spec = importlib.util.spec_from_file_location('check_diag_runbooks', ROOT / 'scripts/check-diag-runbooks.py')
 runbooks = importlib.util.module_from_spec(runbooks_spec)
 runbooks_spec.loader.exec_module(runbooks)
@@ -3886,6 +3889,59 @@ class FrameResets(unittest.TestCase):
             with patch('sys.stdout', new_callable=io.StringIO) as out:
                 self.assertEqual(0, frame_resets.main(['check', str(root)]))
             self.assertIn('no engine library resets', out.getvalue())
+
+
+class PeerHeaders(unittest.TestCase):
+    """scripts/check-peer-headers.py: only the board peer libraries include a peer header library."""
+
+    def test_header_library_includes_are_found_and_declarations_comments_and_strings_are_not(self):
+        text = ('#include <Eigen/Dense>\n'
+                '#include "boost/math/special_functions/erf.hpp"\n'
+                '#  include <unsupported/Eigen/FFT>\n'
+                '#include <pocketfft_hdronly.h>\n'
+                '// #include <boost/version.hpp>\n'
+                '/* #include <Eigen/Core> */\n'
+                'const char* s = "#include <boost/x.hpp>";\n'
+                '#include <cblas.h>\n'
+                '#include <fftw3.h>\n'
+                '#include <mkl_dfti.h>\n'
+                '#include "boost_peer.hpp"\n'
+                '#include "pocketfft_peer.hpp"\n'
+                '#include <cub/cub.cuh>\n')
+        self.assertEqual([(1, 'Eigen', 'Eigen/Dense'), (2, 'Boost', 'boost/math/special_functions/erf.hpp'),
+                          (3, 'Eigen', 'unsupported/Eigen/FFT'), (4, 'pocketfft', 'pocketfft_hdronly.h')],
+                         peer_headers.peer_includes(text))
+
+    def test_the_tree_check_allows_only_the_peers_and_fails_an_empty_one(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            peer = root / peer_headers.PEERS / 'boost_peer.cpp'
+            peer.parent.mkdir(parents=True)
+            peer.write_text('#include "boost_peer.hpp"\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(1, peer_headers.main(['check', str(root)]))
+            self.assertIn('nothing was checked', out.getvalue())
+            peer.write_text('#include "boost_peer.hpp"\n#include <boost/math/tools/config.hpp>\n', encoding='utf-8')
+            bench = root / 'runtime' / 'examples' / 'bench_a.cpp'
+            bench.write_text('#include "boost_peer.hpp"\n#include <Eigen/Dense>\n', encoding='utf-8')
+            test = root / 'tests' / 'a' / 'test_a.cpp'
+            test.parent.mkdir(parents=True)
+            test.write_text('#include <boost/version.hpp>\n', encoding='utf-8')
+            in_peers, problems = peer_headers.check(root)
+            self.assertEqual(1, in_peers)
+            self.assertEqual(2, len(problems))
+            self.assertIn('runtime/examples/bench_a.cpp:2: includes Eigen (Eigen/Dense)', problems[0])
+            self.assertIn('tests/a/test_a.cpp:1: includes Boost (boost/version.hpp)', problems[1])
+            bench.write_text('#include "boost_peer.hpp"\n', encoding='utf-8')
+            test.write_text('// #include <boost/version.hpp>\n', encoding='utf-8')
+            with patch('sys.stdout', new_callable=io.StringIO) as out:
+                self.assertEqual(0, peer_headers.main(['check', str(root)]))
+            self.assertIn('only runtime/examples/peers/ includes a peer header library', out.getvalue())
+
+    def test_this_checkout_passes(self):
+        in_peers, problems = peer_headers.check(ROOT)
+        self.assertEqual([], problems)
+        self.assertGreater(in_peers, 0)
 
 
 class DiagRunbooks(unittest.TestCase):
