@@ -34,7 +34,7 @@ instead would compile Cerid's header code above the baseline and share it with t
   AVX-512 when Eigen did not take that path.
 - **Converted**: gemm (row-major operands read as their column-major transposes, the kernel Eigen's row-major product
   runs), blas1, blas2, solvers, eig, svd, lstsq, eig_nonsym and hss. Their units no longer see Eigen, take the tree's
-  warnings and PCH, and are tidy-clean (the LAPACK declarations in a NOLINT block, the timing loops take `const Op&`).
+  warnings, and are tidy-clean (the LAPACK declarations in a NOLINT block, the timing loops take `const Op&`).
   The LAPACK copies read Cerid-side buffers or one hoisted pointer, never a peer call per element.
   bench_hesap_matrix_resource_vs_reference, which has no peer, is a plain bench.
 - `CRD_HESAP_MATRIX_DIR` now also names the vs-reference corpus, so a tree reuses another's matrices.
@@ -54,5 +54,13 @@ above. No boards (the fast-row order).
 
 The sparse, direct and iterative Eigen benches (23 programs; transitional `crd_add_hesap_vs_ref_bench` without
 `EIGEN_PEER` keeps them building meanwhile), the pocketfft peer of the FFT and DCT boards, the Boost peers of the
-special-function boards, and a repository check that no bench unit outside `examples/peers/` includes a peer header
-library.
+special-function boards, a repository check that no bench unit outside `examples/peers/` includes a peer header
+library, and `docs/PRINCIPLES_reference_class_benchmarking.md` §3 (it still places Eigen in the bench unit). The peer
+has been compiled by cl only: its first GCC build is the row-close lane configure, which must reuse the sources and
+corpus on disk so nothing is fetched:
+`bash scripts/run-lane-bench.sh <bench> -DCRD_BUILD_HESAP_VS_REFERENCE=ON
+-DCPM_eigen_SOURCE=/mnt/d/Dev/cerid/build/win-vs-ref/_deps/eigen-src
+-DCPM_OpenBLAS_SOURCE=/mnt/d/Dev/cerid/build/win-vs-ref/_deps/openblas-src
+-DCRD_HESAP_MATRIX_DIR=/mnt/d/Dev/cerid/build/win-vs-ref/_deps/suitesparse-mm`. build/win-debug stays configured with
+the option on (and OpenBLAS built in it) for the remaining conversions; the item's last batch restores it with
+`configure-preset.bat win-debug -DCRD_BUILD_HESAP_VS_REFERENCE=OFF`.

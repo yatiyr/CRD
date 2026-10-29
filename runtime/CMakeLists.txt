@@ -531,6 +531,7 @@ endfunction()
 #   USE_OPENBLAS also link openblas and its generated-header directories (see the note below).
 #   EIGEN_PEER   the bench calls Eigen through crd-bench-eigen-peer (examples/peers/eigen_peer.hpp) and builds with
 #                the tree's warnings; a bench without it still compiles Eigen in its own unit, at the baseline.
+# No precompiled header: the default one has not been proven beside OpenBLAS's cblas.h.
 # Eigen's parallel products expand `#pragma omp parallel` in the unit that instantiates them, which is the peer's.
 function(crd_add_hesap_vs_ref_bench name)
     cmake_parse_arguments(ARG "USE_JOBS;USE_OPENBLAS;EIGEN_PEER" "" "" ${ARGN})
@@ -554,7 +555,6 @@ function(crd_add_hesap_vs_ref_bench name)
     if(ARG_EIGEN_PEER)
         target_link_libraries(${name} PRIVATE crd-bench-eigen-peer)
         target_include_directories(${name} PRIVATE examples/peers)
-        crd_enable_default_pch(${name})
         return()
     endif()
     target_link_libraries(${name} PRIVATE eigen_headers)
