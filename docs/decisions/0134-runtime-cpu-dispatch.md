@@ -140,8 +140,12 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    an applied level also lowers the CRT's own dispatch in each image (`__isa_available`, which the vectorizer's
    paths and the STL test, with `__isa_enabled`, `__isa_inverted` and `__avx10_version`) and below avx2 turns the
    UCRT libm's FMA3 bodies off, from a `.CRT$XCL` initializer that crd-core's interface keeps in every image, before
-   any user initializer; it never raises them, and `cpu_runtime_dispatch()` reports them. The DLL
-   runtimes' string routines (vcruntime140, ucrtbase), glibc's ifuncs and zstd's dynamic BMI2 decoders keep
+   any user initializer; it never raises them, and `cpu_runtime_dispatch()` reports them. The UCRT's software fma,
+   which such an arm and a CPU without FMA3 run, does not round once (the first run showed lost signs of underflowing
+   products and sums rounded twice), so `crd::math`'s fma calls the UCRT only while its FMA3 bodies run, issues the
+   instruction in avx2 and avx512 units, and otherwise rounds once itself (an integer f64 body, f32 by rounding an
+   exact f64 sum to odd); engine code calls `crd::math::fma`, never `std::fma` (crd-no-std-transcendental-check).
+   The DLL runtimes' string routines (vcruntime140, ucrtbase), glibc's ifuncs and zstd's dynamic BMI2 decoders keep
    dispatching on the hardware with the same results. The doctor, the specimen harness's host tuple
    and every board record the detected and selected level and the override status. Landed 2026-10-29:
    `format_cpu_selection` (crd-core) writes the one line

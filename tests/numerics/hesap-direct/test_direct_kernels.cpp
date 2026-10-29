@@ -9,6 +9,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/direct/direct_dispatch.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <bit>
@@ -47,7 +48,7 @@ template <typename T> bool same_bits(T a, T b)
 
 template <typename T> T step(T a, T b, T c, bool fma)
 {
-    return fma ? std::fma(a, b, c) : a * b + c;
+    return fma ? crd::math::fma(a, b, c) : a * b + c;
 }
 
 template <typename T> constexpr T kKeep = T(77);

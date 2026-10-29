@@ -7,6 +7,7 @@
 
 #include <crd/core/cpu_features.hpp>
 #include <crd/math/kernel_level.hpp>
+#include <crd/math/select.hpp>
 #include <crd/math/simd/backend.hpp>
 
 #include <algorithm>
@@ -247,8 +248,9 @@ namespace
 // product's low half) rarely shows there. These lanes tie the operands: c cancelling the rounded product, products
 // that end on or beside a rounding midpoint of c, one addend far below the other, subnormal and overflowing products
 // and results, the bounds of the f64 emulated region (crd/math/simd/fma_exact.hpp) on both sides, infinities, NaNs
-// and signed zeros. Every level, portable included, must give the C library's fma, bit for bit apart from NaN
-// payloads.
+// and signed zeros. Every level, portable included, must give libm::fma, bit for bit apart from NaN payloads: the C
+// library's fma, but on x64 Windows the exact integer body unless the UCRT runs FMA3 (crd/math/libm.hpp), so a
+// forced level below avx2 checks the hardware instruction of the avx2 and avx512 levels against that body.
 
 crd::f32 make_f32(crd::u64 r, int exponent)
 {
@@ -412,13 +414,13 @@ template <typename F> F fused_reference(Fused op, F a, F b, F c, crd::usize lane
     switch (op)
     {
         case Fused::Fnmadd:
-            return std::fma(-a, b, c);
+            return crd::math::fma(-a, b, c);
         case Fused::Fmaddsub:
-            return std::fma(a, b, (lane & 1U) != 0U ? c : -c);
+            return crd::math::fma(a, b, (lane & 1U) != 0U ? c : -c);
         case Fused::Fma:
             break;
     }
-    return std::fma(a, b, c);
+    return crd::math::fma(a, b, c);
 }
 
 struct FusedOp
@@ -452,7 +454,7 @@ struct Tally
 {
     crd::usize mismatches = 0;
     crd::usize words = 0;
-    crd::u64 first[4] = {}; // a, b, c, the C library's result
+    crd::u64 first[4] = {}; // a, b, c, libm::fma's result
     crd::u64 first_got = 0;
 };
 
@@ -537,8 +539,56 @@ TEST_CASE("simd types: every level's fused multiply-add rounds once on hard case
             INFO("level " << crd::cpu_level_name(kLevels[l].level) << ", " << kFusedOps[f].name << ", " << t.words
                           << " words");
             INFO("first difference: a 0x" << std::hex << t.first[0] << " b 0x" << t.first[1] << " c 0x" << t.first[2]
-                                          << ", C library 0x" << t.first[3] << ", level 0x" << t.first_got << std::dec);
+                                          << ", libm 0x" << t.first[3] << ", level 0x" << t.first_got << std::dec);
             CHECK(t.mismatches == 0U);
         }
     }
 }
+
+#if defined(_MSC_VER) && defined(_M_X64)
+// The bodies libm::fma runs on x64 Windows outside the avx2 and avx512 levels while the UCRT's FMA3 bodies are off
+// (crd/math/libm.hpp): the f64 integer body and the f32 rounding to odd. With FMA3 enabled the UCRT's fma is the
+// instruction, the oracle for the hard cases; the fixed cases are the first forced-level run's, where the UCRT's
+// software fma lost an underflowing product's sign and rounded a sum twice.
+TEST_CASE("simd types: the x64 Windows fma bodies give the FMA3 instruction's bits", "[math][simd-levels][kernels]")
+{
+    namespace soft = crd::math::libm::detail;
+    const auto f32_of = [](crd::u32 bits)
+    {
+        return std::bit_cast<crd::f32>(bits);
+    };
+    const auto f64_of = [](crd::u64 bits)
+    {
+        return std::bit_cast<crd::f64>(bits);
+    };
+    CHECK(std::bit_cast<crd::u32>(soft::fma_f32(f32_of(0x957FF2A9U), f32_of(0x167BDF6BU), 0.0F)) == 0x80000000U);
+    CHECK(std::bit_cast<crd::u32>(soft::fma_f32(f32_of(0x39800004U), f32_of(0x407FFFF8U), f32_of(0xC66D8469U))) ==
+          0xC66D8468U);
+    CHECK(std::bit_cast<crd::u64>(soft::fma_f64(f64_of(0x1CC83BE3C7008851ULL), f64_of(0x9EB4DE71D59ED9C4ULL), 0.0)) ==
+          0x8000000000000000ULL);
+
+    const int previous = _get_FMA3_enable();
+    const bool fused = _set_FMA3_enable(1) != 0;
+    INFO("the UCRT runs FMA3: " << fused);
+    static probe::Input in;
+    crd::usize wrong_f32 = 0;
+    crd::usize wrong_f64 = 0;
+    crd::u64 state = 0x50F7'F3A0'0D0DULL;
+    for (crd::usize set = 0; fused && set < 16384U; ++set)
+    {
+        fill_fma(in, state);
+        for (crd::usize i = 0; i < probe::kLanes; ++i)
+        {
+            const crd::u32 want32 = std::bit_cast<crd::u32>(::fmaf(in.a[i], in.b[i], in.c[i]));
+            const crd::u32 got32 = std::bit_cast<crd::u32>(soft::fma_f32(in.a[i], in.b[i], in.c[i]));
+            wrong_f32 += same(probe::Compare::F32Value, want32, got32) ? 0U : 1U;
+            const crd::u64 want64 = std::bit_cast<crd::u64>(::fma(in.da[i], in.db[i], in.dc[i]));
+            const crd::u64 got64 = std::bit_cast<crd::u64>(soft::fma_f64(in.da[i], in.db[i], in.dc[i]));
+            wrong_f64 += same(probe::Compare::F64Value, want64, got64) ? 0U : 1U;
+        }
+    }
+    (void)_set_FMA3_enable(previous);
+    CHECK(wrong_f32 == 0U);
+    CHECK(wrong_f64 == 0U);
+}
+#endif

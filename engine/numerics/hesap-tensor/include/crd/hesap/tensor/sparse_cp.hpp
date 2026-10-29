@@ -15,7 +15,7 @@
 #include "sparse.hpp"
 #include "sparse_mttkrp.hpp"
 
-#include <cmath> // std::fma: the norm's single-rounded chain
+#include <crd/math/select.hpp> // crd::math::fma: the norm's single-rounded chain
 
 namespace crd::hesap::tensor
 {
@@ -111,7 +111,7 @@ template <typename T>
     const T* vals = x.val();
     for (crd::u64 i = 0; i < x.nnz(); ++i)
     {
-        nrm2 = std::fma(vals[i], vals[i], nrm2);
+        nrm2 = crd::math::fma(vals[i], vals[i], nrm2);
     }
     SparseCpMttkrp<T> seam(x, alloc);
     return cp_als_generic<T>(crd::containers::ConstSpan<crd::u64>{shape, nd}, nrm2, seam, rank, factors, weights,

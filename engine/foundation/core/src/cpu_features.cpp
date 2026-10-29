@@ -761,11 +761,14 @@ CpuRuntimeDispatch cpu_runtime_dispatch() noexcept
 }
 
 #if defined(_MSC_VER) && CRD_ARCH_X64
+bool detail::ucrt_fma3_active = false; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): see the header
+
 namespace
 {
 
 // Selects at startup when CRD_CPU_LEVEL is set, so an applied level reaches the CRT's dispatch with the library
-// initializers, before any user initializer runs; without it the selection stays lazy.
+// initializers, before any user initializer runs; without it the selection stays lazy. Then records whether the
+// UCRT's fma runs FMA3, which nothing changes later.
 void __cdecl select_at_start() noexcept
 {
     char buffer[32] = {}; // NOLINT(modernize-avoid-c-arrays)
@@ -773,6 +776,7 @@ void __cdecl select_at_start() noexcept
     {
         (void)cpu_selection();
     }
+    detail::ucrt_fma3_active = _get_FMA3_enable() != 0;
 }
 
 } // namespace

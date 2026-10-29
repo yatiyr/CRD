@@ -6,6 +6,7 @@
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/batched.hpp>
 #include <crd/hesap/tensor/batched_core.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -74,9 +75,9 @@ TEST_CASE("batched: tiny-tier gemm bit-matches the scalar fma-chain contract", "
                     crd::f64 acc = 0.0;
                     for (crd::u64 p = 0; p < n; ++p)
                     {
-                        acc = std::fma(am[r * n + p], bm[p * n + col], acc);
+                        acc = crd::math::fma(am[r * n + p], bm[p * n + col], acc);
                     }
-                    cm[r * n + col] = std::fma(beta, cm[r * n + col], alpha * acc);
+                    cm[r * n + col] = crd::math::fma(beta, cm[r * n + col], alpha * acc);
                 }
             }
         }

@@ -250,6 +250,16 @@ struct CpuRuntimeDispatch
 };
 [[nodiscard]] CpuRuntimeDispatch cpu_runtime_dispatch() noexcept;
 
+#if defined(_MSC_VER) && defined(_M_X64) && !defined(_M_ARM64EC)
+namespace detail
+{
+// cpu_runtime_dispatch().ucrt_fma3 as a variable, for crd::math's fma (crd/math/libm.hpp), which calls the UCRT's fma
+// only while it runs the FMA3 instruction. Written before the first user initializer, after an applied CRD_CPU_LEVEL
+// lowered the CRT's dispatch; false until then, which selects the exact integer body.
+extern bool ucrt_fma3_active; // NOLINT(cppcoreguidelines-avoid-non-const-global-variables): the CRT's own state
+} // namespace detail
+#endif
+
 // The selection as the one line the doctor, the specimen harness's host tuple and every board record carry
 // (ADR-0134 §8): "cpu detected=<level> selected=<level> override=<status>", then " crt=<level> fma3=<0|1>" when `crt`
 // reports a C runtime dispatch of its own (crt_level >= 0), then " extra=<feature>,..." naming the kernel features

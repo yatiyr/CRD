@@ -15,6 +15,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/containers/span.hpp>
 #include <crd/gpu/vulkan_shader_compile.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -2209,7 +2210,7 @@ TEST_CASE("v17 Phase A2: CKIR transcendental intrinsics (exp2/log2/rsqrt/tan/ata
         for (int i = 0; i < in; ++i)
         {
             const float rm = std::fmod(av[i], bv[i]);
-            const float rf = std::fma(av[i], bv[i], cv[i]);
+            const float rf = crd::math::fma(av[i], bv[i], cv[i]);
             // ULP (division-based; float-mod boundary caveat)
             if (std::fabs(gmd[i] - rm) > (2e-4F * std::fabs(bv[i])) + 1e-5F)
             {

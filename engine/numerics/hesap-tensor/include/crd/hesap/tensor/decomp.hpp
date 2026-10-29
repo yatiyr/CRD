@@ -73,9 +73,10 @@
 #include <crd/hesap/dense/eig_sym.hpp>
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/hesap/stats/philox.hpp>
+#include <crd/math/select.hpp> // crd::math::fma (single-rounded chains: the codelet rule)
 #include <crd/memory/allocator.hpp>
 
-#include <cmath>  // std::sqrt, std::fma (single-rounded chains — the codelet rule)
+#include <cmath> // std::sqrt
 
 namespace crd::hesap::tensor
 {
@@ -262,7 +263,7 @@ inline void gram(const T* f, crd::u64 rows, crd::u64 r, T* g) noexcept
             T s = T(0);
             for (crd::u64 i = 0; i < rows; ++i)
             {
-                s = std::fma(f[i * r + a], f[i * r + b], s);
+                s = crd::math::fma(f[i * r + a], f[i * r + b], s);
             }
             g[a * r + b] = s;
             g[b * r + a] = s;
@@ -301,7 +302,7 @@ inline void solve_rows_sym(const T* src, T* dst, crd::u64 rows, T* vwork, crd::u
                 T s = m[a];
                 for (crd::u64 p = 0; p < a; ++p)
                 {
-                    s = std::fma(-l[a * r + p], y[p], s);
+                    s = crd::math::fma(-l[a * r + p], y[p], s);
                 }
                 y[a] = s / l[a * r + a];
             }
@@ -311,7 +312,7 @@ inline void solve_rows_sym(const T* src, T* dst, crd::u64 rows, T* vwork, crd::u
                 T s = y[aa];
                 for (crd::u64 p = aa + 1U; p < r; ++p)
                 {
-                    s = std::fma(-l[p * r + aa], x[p], s);
+                    s = crd::math::fma(-l[p * r + aa], x[p], s);
                 }
                 x[aa] = s / l[aa * r + aa];
             }
@@ -337,7 +338,7 @@ inline void solve_rows_sym(const T* src, T* dst, crd::u64 rows, T* vwork, crd::u
             T s = T(0);
             for (crd::u64 a = 0; a < r; ++a)
             {
-                s = std::fma(m[a], jv[a * r + t], s);
+                s = crd::math::fma(m[a], jv[a * r + t], s);
             }
             tmp[t] = s * sig[t];
         }
@@ -347,7 +348,7 @@ inline void solve_rows_sym(const T* src, T* dst, crd::u64 rows, T* vwork, crd::u
             T s = T(0);
             for (crd::u64 t = 0; t < r; ++t)
             {
-                s = std::fma(tmp[t], ju[a * r + t], s);
+                s = crd::math::fma(tmp[t], ju[a * r + t], s);
             }
             x[a] = s;
         }
@@ -486,7 +487,7 @@ template <typename T>
                 T acc = T(0);
                 for (crd::u64 t = 0; t < ell; ++t)
                 {
-                    acc = std::fma(q[i * ell + t],
+                    acc = crd::math::fma(q[i * ell + t],
                                    e.vectors.at(static_cast<crd::usize>(t), static_cast<crd::usize>(ell - 1U - j)),
                                    acc);
                 }
@@ -534,7 +535,7 @@ template <typename T>
             T acc = T(0);
             for (crd::u64 t = 0; t < ell; ++t)
             {
-                acc = std::fma(q[i * ell + t],
+                acc = crd::math::fma(q[i * ell + t],
                                e.vectors.at(static_cast<crd::usize>(t), static_cast<crd::usize>(ell - 1U - j)),
                                acc);
             }
@@ -676,7 +677,7 @@ template <typename T>
     T s = T(0);
     for (crd::u64 i = 0; i < n; ++i)
     {
-        s = std::fma(p[i], p[i], s);
+        s = crd::math::fma(p[i], p[i], s);
     }
     return s;
 }
@@ -942,12 +943,12 @@ template <typename T, typename Mttkrp>
             {
                 for (crd::u64 e = 0; e < rows * rank; ++e)
                 {
-                    iprod = std::fma(mbuf[e], fbuf[e], iprod);
+                    iprod = crd::math::fma(mbuf[e], fbuf[e], iprod);
                 }
                 gram(fbuf.data(), rows, rank, gtmp.data());
                 for (crd::u64 e = 0; e < rank * rank; ++e)
                 {
-                    model_sq = std::fma(vbuf[e], gtmp[e], model_sq);
+                    model_sq = crd::math::fma(vbuf[e], gtmp[e], model_sq);
                 }
             }
             T* f = factors[n].data(); // normalize columns -> weights (D(v14j)-1)
@@ -956,7 +957,7 @@ template <typename T, typename Mttkrp>
                 T ss = T(0);
                 for (crd::u64 i = 0; i < rows; ++i)
                 {
-                    ss = std::fma(fbuf[i * rank + r], fbuf[i * rank + r], ss);
+                    ss = crd::math::fma(fbuf[i * rank + r], fbuf[i * rank + r], ss);
                 }
                 const T lam = std::sqrt(ss);
                 weights[r] = lam;

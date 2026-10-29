@@ -26,6 +26,7 @@
 #include <crd/hesap/tensor/reduce.hpp>
 #include <crd/hesap/tensor/tensor_dispatch.hpp>
 #include <crd/math/kernel_level.hpp>
+#include <crd/math/select.hpp>
 #include <crd/math/transcendental.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
@@ -753,7 +754,7 @@ f32 q8_output_reference(const BlockQ8Zero* xrow, const BlockQ8Zero* wrow, const 
             {
                 lane += static_cast<crd::i32>(xrow[bi].qs[4U * k + j]) * static_cast<crd::i32>(wrow[bi].qs[4U * k + j]);
             }
-            lanes[k] = std::fma(scale, static_cast<f32>(lane), lanes[k]);
+            lanes[k] = crd::math::fma(scale, static_cast<f32>(lane), lanes[k]);
         }
     }
     const f32 q0 = (lanes[0] + lanes[1]) + (lanes[2] + lanes[3]);
@@ -775,7 +776,7 @@ f32 i8_output_reference(const crd::u8* xrow, const crd::i8* wrow, u64 k, f32 sca
     {
         dot += static_cast<crd::i32>(xrow[j]) * static_cast<crd::i32>(wrow[j]);
     }
-    const f32 v = std::fma(scale_m, static_cast<f32>(dot - zp * colsum), bias);
+    const f32 v = crd::math::fma(scale_m, static_cast<f32>(dot - zp * colsum), bias);
     if (relu && !(v > 0.0F))
     {
         return 0.0F; // ReLU (a NaN becomes 0)
@@ -1757,12 +1758,12 @@ template <typename T> u64 check_batched_gemm(const tn::BatchedKernels<T>& kb)
                                 T acc = T(0);
                                 for (u64 p = 0; p < k; ++p)
                                 {
-                                    acc = std::fma(a[q * sa + r * k + p], b[q * sb + p * n + j], acc);
+                                    acc = crd::math::fma(a[q * sa + r * k + p], b[q * sb + p * n + j], acc);
                                 }
                                 T out = acc * alpha;
                                 if (beta != T(0))
                                 {
-                                    out = std::fma(beta, c0[q * sc + r * n + j], out);
+                                    out = crd::math::fma(beta, c0[q * sc + r * n + j], out);
                                 }
                                 want[q * sc + r * n + j] = out;
                             }
@@ -2008,7 +2009,7 @@ template <typename T> u64 check_batched_solves(const tn::BatchedKernels<T>& kb)
                             T acc = x[i * r + c];
                             for (u64 p = 0; p < i; ++p)
                             {
-                                acc = std::fma(-m[i * n + p], x[p * r + c], acc);
+                                acc = crd::math::fma(-m[i * n + p], x[p * r + c], acc);
                             }
                             x[i * r + c] = lu ? acc : acc * (T(1) / m[i * n + i]);
                         }
@@ -2020,7 +2021,7 @@ template <typename T> u64 check_batched_solves(const tn::BatchedKernels<T>& kb)
                             T acc = x[i * r + c];
                             for (u64 p = i + 1U; p < n; ++p)
                             {
-                                acc = std::fma(-(lu ? m[i * n + p] : m[p * n + i]), x[p * r + c], acc);
+                                acc = crd::math::fma(-(lu ? m[i * n + p] : m[p * n + i]), x[p * r + c], acc);
                             }
                             x[i * r + c] = acc * (T(1) / m[i * n + i]);
                         }
@@ -2181,7 +2182,7 @@ void ttm_oracle(const SparseCase& c, const T* val, const T* u, const u64* ostrid
         for (u64 q = 0; q < f; ++q)
         {
             T& o = out[base + q * ostride[mode]];
-            o = std::fma(val[e], u[static_cast<u64>(c.idx[mode][e]) * f + q], o);
+            o = crd::math::fma(val[e], u[static_cast<u64>(c.idx[mode][e]) * f + q], o);
         }
     }
 }
@@ -2324,7 +2325,7 @@ void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val
     {
         for (u64 q = 0; q < r; ++q)
         {
-            dst[q] = std::fma(val[z], row[q], dst[q]);
+            dst[q] = crd::math::fma(val[z], row[q], dst[q]);
         }
         return;
     }
@@ -2339,7 +2340,7 @@ void mttkrp_oracle(const CsfTree& t, u32 rank, const T* const* fac, const T* val
     }
     for (u64 q = 0; q < r; ++q)
     {
-        dst[q] = std::fma(acc[q], row[q], dst[q]);
+        dst[q] = crd::math::fma(acc[q], row[q], dst[q]);
     }
 }
 
@@ -2602,7 +2603,7 @@ void conv_oracle(const tn::NnConv2d& c, u64 images, f32* conv, f32* out)
                                                         static_cast<u64>(iw)
                                                   : 0U;
                                 const f32 xv = in ? c.x[at] : 0.0F;
-                                acc = std::fma(c.w[((o * c.chans + ci) * c.kh + ki) * c.kw + kj], xv, acc);
+                                acc = crd::math::fma(c.w[((o * c.chans + ci) * c.kh + ki) * c.kw + kj], xv, acc);
                             }
                         }
                     }

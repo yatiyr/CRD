@@ -16,6 +16,7 @@
 #include <crd/hesap/dense/detail/gemm_pack.hpp>
 #include <crd/hesap/dense/detail/syrk_microkernel.hpp>
 #include <crd/hesap/dense/matrix.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <bit>
@@ -78,7 +79,7 @@ template <typename T> T inner(const T* a, const T* b, usize b_stride, usize dept
     T acc = T(0);
     for (usize p = 0; p < depth; ++p)
     {
-        acc = fma ? std::fma(a[p], b[p * b_stride], acc) : acc + a[p] * b[p * b_stride];
+        acc = fma ? crd::math::fma(a[p], b[p * b_stride], acc) : acc + a[p] * b[p * b_stride];
     }
     return acc;
 }

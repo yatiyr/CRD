@@ -11,6 +11,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/cpu_features.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <bit>
@@ -70,7 +71,7 @@ template <typename T> usize width(CpuLevel level)
 
 template <typename T> T step(T a, T b, T c, bool fma)
 {
-    return fma ? std::fma(a, b, c) : a * b + c;
+    return fma ? crd::math::fma(a, b, c) : a * b + c;
 }
 
 // horizontal_sum's pairwise tree over w lanes: the first half, then the second, each the same way down to a pair.

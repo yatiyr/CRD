@@ -1,7 +1,8 @@
 #!/bin/bash
 # check_no_std_transcendental.sh [repo-root] — the Cerid Math Mandate guard. Engine + tool code must use crd::math::*
 # (include <crd/math/cmath.hpp>), never std:: transcendentals — for cross-platform bit-determinism (the moat) +
-# speed. Exempts engine/foundation/math (the kernel IS the implementation + its std:: edge fallbacks). tests/ (gold oracles)
+# speed, and never std::fma (the UCRT's software fma, which Windows runs without FMA3, does not round once). Exempts
+# engine/foundation/math (the kernel IS the implementation + its std:: edge fallbacks). tests/ (gold oracles)
 # and runtime/examples (benchmark peers) keep std:: deliberately and live outside engine/, so they're not scanned.
 #
 # tx-route status: registered as a ctest guard at the route CLOSE, once every module is migrated. Until then this is
@@ -10,6 +11,7 @@
 set -uo pipefail
 root="${1:-.}"
 fns='sin|cos|tan|asin|acos|atan|atan2|sinh|cosh|tanh|asinh|acosh|atanh|exp|exp2|exp10|expm1|log|log2|log10|log1p|pow|cbrt|hypot'
+fns="$fns|fma|fmaf"
 hits=$(grep -rnE "std::($fns)\b" "$root/engine" --include=*.hpp --include=*.cpp 2>/dev/null | grep -vE "/math/" || true)
 if [ -n "$hits" ]; then
     echo "std:: transcendentals still in engine code ($(echo "$hits" | wc -l) sites) — route to crd::math::*:"

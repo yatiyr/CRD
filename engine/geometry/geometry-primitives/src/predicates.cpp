@@ -14,14 +14,14 @@
 //      subtraction `b.x - a.x` is captured exactly via `two_diff(a, b, hi, lo)`
 //      (the high word is the f64 result, the low word is the roundoff); each
 //      product is captured exactly via `two_product_fma(a, b, hi, lo)` using
-//      `std::fma`. Cross-product cancellations are computed as sums of these
+//      `crd::math::fma`. Cross-product cancellations are computed as sums of these
 //      `(hi, lo)` pairs, maintained as nonoverlapping-double expansions.
 //   3. The final expansion's highest-magnitude nonzero term has the SIGN of
 //      the exact true value (the lower terms are corrections to the magnitude).
 //
 // Implementation faithfully follows Shewchuk's `predicates.c` C reference
 // implementation (the v4.0.0 single-file release), with Cerid-style
-// adjustments: snake_case names, `crd::` types, `std::fma`-based Two-Product
+// adjustments: snake_case names, `crd::` types, `crd::math::fma`-based Two-Product
 // (faster + cleaner than Veltkamp-Dekker split + works on every modern CPU
 // since 2013), and split into `predicate_detail::` for the entry points.
 //
@@ -40,8 +40,9 @@
 // ---------------------------------------------------------------------------
 
 #include <crd/geometry/primitives/predicates.hpp>
+#include <crd/math/select.hpp> // crd::math::fma
 
-#include <cmath> // std::fabs, std::fma
+#include <cmath> // std::fabs
 
 namespace crd::geometry::primitives::predicate_detail
 {
@@ -83,14 +84,14 @@ inline void two_diff(crd::f64 a, crd::f64 b, crd::f64& x, crd::f64& y) noexcept
 inline void two_product(crd::f64 a, crd::f64 b, crd::f64& x, crd::f64& y) noexcept
 {
     x = a * b;
-    y = std::fma(a, b, -x);
+    y = crd::math::fma(a, b, -x);
 }
 
 // Square specialization (~slightly faster than Two-Product since a == b).
 inline void square(crd::f64 a, crd::f64& x, crd::f64& y) noexcept
 {
     x = a * a;
-    y = std::fma(a, a, -x);
+    y = crd::math::fma(a, a, -x);
 }
 
 // Two-One-Sum: add a single f64 to a length-2 expansion. Result is a length-3

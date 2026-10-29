@@ -8,6 +8,7 @@
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/io.hpp>
 #include <crd/hesap/tensor/nn.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -280,7 +281,7 @@ TEST_CASE("nn: conv2d is bit-exact vs the k-ordered fma-chain direct convolution
                                     }
                                     const crd::f32 wv =
                                         w.data()[((o * cs.c + ci) * cs.k + ki) * cs.k + kj];
-                                    acc = std::fma(wv, xv, acc);
+                                    acc = crd::math::fma(wv, xv, acc);
                                 }
                             }
                         }
@@ -328,7 +329,7 @@ TEST_CASE("nn: linear f32 is bit-exact vs the k-ordered fma-chain reference", "[
             crd::f32 acc = 0.0F;
             for (crd::u64 p = 0; p < k; ++p)
             {
-                acc = std::fma(x.data()[r * k + p], wt.data()[p * n + o], acc);
+                acc = crd::math::fma(x.data()[r * k + p], wt.data()[p * n + o], acc);
             }
             const crd::f32 ref = bias.data()[o] + acc;
             if (std::bit_cast<crd::u32>(ref) != std::bit_cast<crd::u32>(y.data()[r * n + o]))
@@ -981,7 +982,7 @@ TEST_CASE("nn: per-tensor int8 linear matches the pinned scalar reference bit fo
                 idot += static_cast<crd::i32>(xr[j]) * static_cast<crd::i32>(wq.data()[o * k + j]);
             }
             idot -= zp * colsum.data()[o];
-            const crd::f32 ref = std::fma(sx * sw, static_cast<crd::f32>(idot), bias.data()[o]);
+            const crd::f32 ref = crd::math::fma(sx * sw, static_cast<crd::f32>(idot), bias.data()[o]);
             INFO("row " << r << " out " << o);
             REQUIRE(std::bit_cast<crd::u32>(ref) == std::bit_cast<crd::u32>(y.data()[r * n + o]));
         }

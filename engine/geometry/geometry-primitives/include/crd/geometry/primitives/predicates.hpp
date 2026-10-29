@@ -96,7 +96,7 @@
 #include <crd/core/types.hpp>
 #include <crd/math/vec.hpp>
 
-#include <cmath> // std::fabs, std::fma — both IEEE-754 correctly-rounded, not banned by crd-no-std-math-check
+#include <cmath> // std::fabs, IEEE-754 exact, not banned by crd-no-std-math-check
 
 namespace crd::geometry::primitives
 {
@@ -109,7 +109,7 @@ namespace predicate_detail
 //
 // `epsilon` = 2^-53 (machine epsilon for binary64).
 // `splitter` = 2^27 + 1 (Veltkamp-Dekker split constant; only used when FMA
-//   is unavailable — Cerid's predicates use std::fma which avoids the split).
+//   is unavailable — Cerid's predicates use crd::math::fma which avoids the split).
 // `resulterrbound` = 3 ε + 16 ε^2 — the relative error in the Stage-A f64
 //   determinant evaluation. Used to validate whether Stage A's estimate is
 //   reliable.

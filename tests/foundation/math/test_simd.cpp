@@ -8,6 +8,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <crd/math/select.hpp>
 #include <crd/math/simd/simd.hpp>
 #include <crd/math/simd/vec16f.hpp>
 #include <crd/math/simd/vec16i.hpp>
@@ -124,7 +125,7 @@ TEST_CASE("simd Vec4f arithmetic parity vs scalar", "[simd][vec4f][parity]")
 TEST_CASE("simd Vec4f mul_add uses two roundings (no hardware FMA)", "[simd][vec4f][determinism]")
 {
     // mul_add(a,b,c) MUST equal (a*b)+c with two roundings — not std::fma.
-    // Pick values where (a*b)+c diverges from std::fma(a,b,c).
+    // Pick values where (a*b)+c diverges from crd::math::fma(a,b,c).
     constexpr f32 a_lane = 1.0F + (1.0F / 8388608.0F);  // 1 + 2^-23
     constexpr f32 b_lane = 1.0F + (1.0F / 8388608.0F);
     constexpr f32 c_lane = -1.0F;

@@ -56,6 +56,7 @@
 #include <crd/hesap/dense/qr.hpp>
 #include <crd/hesap/dense/svd.hpp>
 #include <crd/hesap/stats/philox.hpp>
+#include <crd/math/select.hpp> // crd::math::fma
 
 #include <cmath>
 
@@ -260,7 +261,7 @@ template <typename T> [[nodiscard]] inline T fro_norm(const T* p, crd::u64 n) no
     T s = T(0);
     for (crd::u64 i = 0; i < n; ++i)
     {
-        s = std::fma(p[i], p[i], s);
+        s = crd::math::fma(p[i], p[i], s);
     }
     return std::sqrt(s);
 }
@@ -274,7 +275,7 @@ template <typename T>
     T tail = T(0);
     for (crd::u64 i = count; i-- > 1U;)
     {
-        tail = std::fma(s[i], s[i], tail);
+        tail = crd::math::fma(s[i], s[i], tail);
         if (tail > delta * delta)
         {
             break;
@@ -433,7 +434,7 @@ template <typename T>
             lu[i * r + j] = l;
             for (crd::u64 t = j + 1U; t < r; ++t)
             {
-                lu[i * r + t] = std::fma(-l, lu[j * r + t], lu[i * r + t]);
+                lu[i * r + t] = crd::math::fma(-l, lu[j * r + t], lu[i * r + t]);
             }
         }
     }
@@ -455,7 +456,7 @@ template <typename T>
             T s = a[row * r + j];
             for (crd::u64 p = 0; p < j; ++p)
             {
-                s = std::fma(-ybuf[p], lu[p * r + j], s);
+                s = crd::math::fma(-ybuf[p], lu[p * r + j], s);
             }
             ybuf[j] = s / lu[j * r + j];
         }
@@ -464,7 +465,7 @@ template <typename T>
             T s = ybuf[jj];
             for (crd::u64 p = jj + 1U; p < r; ++p)
             {
-                s = std::fma(-zbuf[p], lu[p * r + jj], s);
+                s = crd::math::fma(-zbuf[p], lu[p * r + jj], s);
             }
             zbuf[jj] = s;
         }
@@ -507,7 +508,7 @@ template <typename T>
             const T ci = c[i * r + bslot] * inv;
             for (crd::u64 j = 0; j < r; ++j)
             {
-                c[i * r + j] = std::fma(-ci, zbuf[j], c[i * r + j]);
+                c[i * r + j] = crd::math::fma(-ci, zbuf[j], c[i * r + j]);
             }
         }
         local.iters = it + 1U;
@@ -1291,7 +1292,7 @@ template <typename T>
             T s = T(0);
             for (crd::u64 x = 0; x < left_rank; ++x)
             {
-                s = std::fma(v[x], g[x * n * rr + j], s);
+                s = crd::math::fma(v[x], g[x * n * rr + j], s);
             }
             w[j] = s;
         }
@@ -1351,7 +1352,7 @@ template <typename T>
         const T* g1 = t == T(0) ? g0 : g0 + r1;
         for (crd::u64 j = 0; j < r1; ++j)
         {
-            v[j] = std::fma(t, g1[j] - g0[j], g0[j]);
+            v[j] = crd::math::fma(t, g1[j] - g0[j], g0[j]);
         }
     }
     for (crd::u32 k = 1; k < d; ++k)
@@ -1370,8 +1371,8 @@ template <typename T>
             for (crd::u64 x = 0; x < left_rank; ++x)
             {
                 const T a0 = g0[x * n * rr + j];
-                const T blended = std::fma(t, g1[x * n * rr + j] - a0, a0);
-                s = std::fma(v[x], blended, s);
+                const T blended = crd::math::fma(t, g1[x * n * rr + j] - a0, a0);
+                s = crd::math::fma(v[x], blended, s);
             }
             wk[j] = s;
         }
@@ -1810,7 +1811,7 @@ template <typename T, typename F>
                         T s = T(0);
                         for (crd::u64 x = 0; x < left_rank; ++x)
                         {
-                            s = std::fma(v[x], gk[x * n * rr + t], s);
+                            s = crd::math::fma(v[x], gk[x * n * rr + t], s);
                         }
                         w[t] = s;
                     }
@@ -1819,7 +1820,7 @@ template <typename T, typename F>
                     w = tmp;
                 }
                 const T dv = v[0] - val_true[p];
-                errsq = std::fma(dv, dv, errsq);
+                errsq = crd::math::fma(dv, dv, errsq);
             }
             local.val_error = std::sqrt(errsq) / val_norm;
             if (local.val_error < params.tol)

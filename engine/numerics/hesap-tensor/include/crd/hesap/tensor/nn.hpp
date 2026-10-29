@@ -76,7 +76,6 @@
 #include <crd/memory/allocators/linear_allocator.hpp>
 #include <crd/memory/allocators/thread_safe_allocator.hpp>
 
-#include <cmath> // std::fma — single-rounded accumulation (the codelet bit contract)
 #include <cstring>
 #include <utility> // std::move
 
@@ -282,13 +281,13 @@ inline void layernorm_row(const crd::f32* x, const crd::f32* g, const crd::f32* 
     for (crd::u64 jj = 0; jj < d; ++jj)
     {
         const crd::f32 t = x[jj] - mean;
-        var = std::fma(t, t, var);
+        var = crd::math::fma(t, t, var);
     }
     var /= static_cast<crd::f32>(d);
     const crd::f32 rstd = 1.0F / crd::math::sqrt(var + eps);
     for (crd::u64 jj = 0; jj < d; ++jj)
     {
-        y[jj] = std::fma((x[jj] - mean) * rstd, g[jj], b[jj]);
+        y[jj] = crd::math::fma((x[jj] - mean) * rstd, g[jj], b[jj]);
     }
 }
 

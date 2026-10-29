@@ -5,6 +5,7 @@
 // kernels order their accumulations differently by design).
 #include <crd/hesap/stats/philox.hpp>
 #include <crd/hesap/tensor/sparse_cp.hpp>
+#include <crd/math/select.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <catch2/catch_test_macros.hpp>
@@ -75,7 +76,7 @@ TEST_CASE("sparse-cp: the seam parity gate - CSF functor matches DenseMttkrp fit
     crd::f64 nrm2 = 0.0;
     for (crd::u64 e = 0; e < 12U * 10U * 8U; ++e)
     {
-        nrm2 = std::fma(x.data()[e], x.data()[e], nrm2);
+        nrm2 = crd::math::fma(x.data()[e], x.data()[e], nrm2);
     }
     CpOptions<crd::f64> opts;
     opts.max_iters = 25U;
