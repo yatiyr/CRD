@@ -337,16 +337,18 @@ crd::containers::Array<f64> eigen_bounds(const sp::SparseMatrix<T, sp::SparseFor
     return bound;
 }
 
-// One matrix: the CSR reference and its y, its three SELL builds, the peer's copy, x, and each row's Eigen bound.
-// Built in place from coordinates that die with the constructor's full expression.
+// One matrix: the CSR reference and its y, its Auto SELL build and the column form Auto did not pick (a matrix Auto
+// built as Delta16 without one Delta16 slice counts as U32, whose bytes it has), the peer's copy, x, and each row's
+// Eigen bound. Built in place from coordinates that die with the constructor's full expression.
 template <typename T> struct Problem
 {
     Problem(const char* shape_name, const char* band_name, u32 rows, const crd::containers::Array<Coord>& coords)
         : shape(shape_name), band(band_name), n(rows), csr(assemble<T>(rows, coords)),
-          automatic(sp::to_sell(csr, &g_alloc)), u32_form(sp::to_sell(csr, &g_alloc, 0U, sp::SellIndex::U32)),
-          delta16(sp::to_sell(csr, &g_alloc, 0U, sp::SellIndex::Delta16)), x(x_values<T>(rows)), y(&g_alloc),
-          reference(&g_alloc), bound(eigen_bounds(csr, x)), peer_a(peer_matrix<T>(rows, coords)),
-          peer_x(peer_vector<T>(rows, x.data())), peer_y(peer_vector<T>(rows, static_cast<const T*>(nullptr)))
+          automatic(sp::to_sell(csr, &g_alloc)),
+          other(sp::to_sell(csr, &g_alloc, 0U, auto_is_u32() ? sp::SellIndex::Delta16 : sp::SellIndex::U32)),
+          x(x_values<T>(rows)), y(&g_alloc), reference(&g_alloc), bound(eigen_bounds(csr, x)),
+          peer_a(peer_matrix<T>(rows, coords)), peer_x(peer_vector<T>(rows, x.data())),
+          peer_y(peer_vector<T>(rows, static_cast<const T*>(nullptr)))
     {
         y.resize(n);
         reference.resize(n);
@@ -357,13 +359,16 @@ template <typename T> struct Problem
         inner = static_cast<int>(std::clamp<usize>((usize{1} << 22U) / std::max<usize>(stored, 1U), 1U, 256U));
     }
 
+    [[nodiscard]] bool auto_is_u32() const { return automatic.col_first.empty(); }
+    [[nodiscard]] const sp::SellMatrix<T>& u32_form() const { return auto_is_u32() ? automatic : other; }
+    [[nodiscard]] const sp::SellMatrix<T>& delta16() const { return auto_is_u32() ? other : automatic; }
+
     const char* shape;
     const char* band;
     u32 n;
     sp::SparseMatrix<T, sp::SparseFormat::Csr> csr;
     sp::SellMatrix<T> automatic;
-    sp::SellMatrix<T> u32_form;
-    sp::SellMatrix<T> delta16;
+    sp::SellMatrix<T> other;
     crd::containers::Array<T> x;
     crd::containers::Array<T> y;
     crd::containers::Array<T> reference;
@@ -413,8 +418,7 @@ template <typename T> void print_case(const Problem<T>& p, const char* phase)
     const usize stored = p.csr.pattern().outer_ptr[p.n];
     std::printf("\n==== %s %s %s, %u rows (%s), %.1f stored a row, %.1f MiB SELL, Auto index %s ====\n", phase,
                 type_name<T>(), p.shape, p.n, p.band, static_cast<f64>(stored) / p.n,
-                static_cast<f64>(p.automatic.stored_bytes()) / (1024.0 * 1024.0),
-                p.automatic.col_first.empty() ? "U32" : "Delta16");
+                static_cast<f64>(p.automatic.stored_bytes()) / (1024.0 * 1024.0), p.auto_is_u32() ? "U32" : "Delta16");
 }
 
 // The serial arms: a SellPick down sell_spmv_range, or the production spmv_sell.
@@ -448,8 +452,8 @@ template <typename T> void serial_board(Problem<T>& p)
         arm.pair_width = pair_width;
     };
     add("spmv_sell", p.automatic, true, l2, sp::SellGather::Policy, 0U);
-    add("index u32", p.u32_form, false, l2, sp::SellGather::Policy, 0U);
-    add("index delta16", p.delta16, false, l2, sp::SellGather::Policy, 0U);
+    add("index u32", p.u32_form(), false, l2, sp::SellGather::Policy, 0U);
+    add("index delta16", p.delta16(), false, l2, sp::SellGather::Policy, 0U);
     add("policy resident", p.automatic, false, ~usize{0}, sp::SellGather::Policy, 0U);
     add("policy streaming", p.automatic, false, 0U, sp::SellGather::Policy, 0U);
     for (const sp::SellGather gather : {sp::SellGather::Loads, sp::SellGather::Gather})
@@ -562,7 +566,7 @@ template <typename T> void parallel_board(Problem<T>& p, u32 cpus)
     const T one = scalar<T>(1.0, 0.0);
     auto run = [&](usize jobs_index, usize arm)
     {
-        const sp::SellMatrix<T>& a = kParallelArms[arm].delta16 ? p.delta16 : p.u32_form;
+        const sp::SellMatrix<T>& a = kParallelArms[arm].delta16 ? p.delta16() : p.u32_form();
         sp::detail::spmv_sell_parallel<T>(one, a, {p.x.data(), p.x.size()}, T{}, {p.y.data(), p.y.size()},
                                           kJobs[jobs_index], kParallelArms[arm].cut);
     };

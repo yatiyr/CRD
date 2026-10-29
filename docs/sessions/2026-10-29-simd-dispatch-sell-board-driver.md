@@ -23,7 +23,7 @@ since the red scheduled run 40849112570, and none was dispatched while a push ru
   (all derived from `sparse_resident_bytes()` and the reported L3, 16 times the L2 where none is reported) and 1M and
   2M rows.
   - `--one-thread`: the production `spmv_sell`, the forced `SellIndex::U32` and `Delta16` builds (the Auto cut's
-    arms), the level's policy forced Resident and Streaming (the sweep cut's), and `Loads` and `Gather` at pair widths
+    arms; the one Auto picked is its own build, so a case holds two), the level's policy forced Resident and Streaming (the sweep cut's), and `Loads` and `Gather` at pair widths
     1, 8, 16, 32 and none, with Eigen on one thread, interleaved round by round. A forced gather and width leave the
     sweep nothing to pick, so those arms need no sweep of their own.
   - `--threads`: the U32 and Delta16 builds at both `SellJobCut`s at 1, 4, 8, 16 and 32 jobs (n/a above the CPUs the
