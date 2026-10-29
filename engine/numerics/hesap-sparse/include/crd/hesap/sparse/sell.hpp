@@ -285,11 +285,12 @@ namespace detail
 // rows, disjoint slice ranges write disjoint y rows, so the parallel driver can
 // run ranges concurrently with no races (deterministic, bit-exact vs serial).
 // Every type runs the hesap-sparse kernels of the process's CPU level
-// (crd/hesap/sparse/sparse_kernels.hpp), complex values as (re, im) pairs. `gather` and `pair_width` force the
-// kernel's pick (SellPick; the board's arms); false, y untouched, when the level refuses it.
+// (crd/hesap/sparse/sparse_kernels.hpp), complex values as (re, im) pairs. The range sweeps Resident when its
+// working set fits `resident_bytes` (the whole L2 serially, a job's cut in parallel). `gather` and `pair_width` force
+// the kernel's pick (SellPick; the board's arms); false, y untouched, when the level refuses it.
 template <typename T>
 [[nodiscard]] bool sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin,
-                                   crd::u32 s_end, SellGather gather, crd::u32 pair_width)
+                                   crd::u32 s_end, crd::usize resident_bytes, SellGather gather, crd::u32 pair_width)
 {
     using U = SellScalarT<T>;
     const SellSlices<U> slices{a.slice_ptr.data(),
@@ -303,12 +304,12 @@ template <typename T>
                                a.perm_is_identity ? nullptr : a.perm.data(),
                                a.rows,
                                a.cols};
-    // Resident when the range's matrix bytes, all of x and its rows of y fit the L2 (sparse_resident_bytes()).
+    // Resident when the range's matrix bytes, all of x and its rows of y fit resident_bytes.
     constexpr crd::u32 height = SellMatrix<T>::kC;
     const crd::u32 row_end = s_end * height < a.rows ? s_end * height : a.rows;
     const crd::u32 row_begin = s_begin * height < row_end ? s_begin * height : row_end;
     const crd::usize bytes = a.range_bytes(s_begin, s_end) + (crd::usize{a.cols} + (row_end - row_begin)) * sizeof(T);
-    const SellSweep sweep = bytes <= sparse_resident_bytes() ? SellSweep::Resident : SellSweep::Streaming;
+    const SellSweep sweep = bytes <= resident_bytes ? SellSweep::Resident : SellSweep::Streaming;
     const SellPick pick{sweep, gather, pair_width};
     const SparseKernels& k = *sparse_kernels().table;
     if constexpr (std::is_same_v<T, crd::f64>)
@@ -337,9 +338,10 @@ template <typename T>
 
 // The level's own pick, which is never refused.
 template <typename T>
-void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end)
+void sell_spmv_range(const SellMatrix<T>& a, T alpha, T beta, const T* xp, T* y, crd::u32 s_begin, crd::u32 s_end,
+                     crd::usize resident_bytes)
 {
-    CRD_VERIFY(sell_spmv_range<T>(a, alpha, beta, xp, y, s_begin, s_end, SellGather::Policy, 0U));
+    CRD_VERIFY(sell_spmv_range<T>(a, alpha, beta, xp, y, s_begin, s_end, resident_bytes, SellGather::Policy, 0U));
 }
 } // namespace detail
 
@@ -351,7 +353,7 @@ template <typename T>
 void spmv_sell(T alpha, const SellMatrix<T>& a, crd::containers::ConstSpan<T> x, T beta, crd::containers::Span<T> y)
 {
     CRD_ASSERT_MSG(x.size() == a.cols && y.size() == a.rows, "spmv_sell: x must be cols(), y must be rows()");
-    detail::sell_spmv_range<T>(a, alpha, beta, x.data(), y.data(), 0, a.num_slices);
+    detail::sell_spmv_range<T>(a, alpha, beta, x.data(), y.data(), 0, a.num_slices, sparse_resident_bytes());
 }
 
 } // namespace crd::hesap::sparse

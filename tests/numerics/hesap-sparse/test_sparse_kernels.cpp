@@ -758,6 +758,8 @@ TEST_CASE("sparse kernels: to_sell records each sigma row's length, and the byte
           elements * 8U + (elements - gaps) * 4U + gaps * 2U + (words + packed.row_len.size()) * 4U);
     const u32 l2 = crd::cpu_selection().features.caches.l2_bytes;
     CHECK(sp::sparse_resident_bytes() == (l2 != 0U ? usize{l2} : usize{1} << 21U)); // the sweep's and operators' cut
+    const u32 share = crd::cpu_selection().l2_share_bytes;
+    CHECK(sp::sparse_job_resident_bytes() == (share != 0U ? usize{share} : sp::sparse_resident_bytes())); // a job's
 }
 
 TEST_CASE("sparse kernels: Auto stores Delta16 exactly where a whole-matrix spmv streams", "[sparse][kernels]")

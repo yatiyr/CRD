@@ -20,4 +20,8 @@ namespace crd::hesap::sparse
 // operators' serial-or-parallel threshold.
 [[nodiscard]] crd::usize sparse_resident_bytes() noexcept;
 
+// What one job of a parallel sparse product counts as cache resident while every logical CPU runs one: its share of
+// the smallest L2 (CpuSelection::l2_share_bytes), sparse_resident_bytes() where the OS describes no L2.
+[[nodiscard]] crd::usize sparse_job_resident_bytes() noexcept;
+
 } // namespace crd::hesap::sparse

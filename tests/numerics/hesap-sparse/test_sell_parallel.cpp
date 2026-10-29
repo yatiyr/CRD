@@ -91,6 +91,58 @@ TEST_CASE("parallel SELL spmv is bit-exact with serial across job counts", "[hes
     }
 }
 
+// A job whose range lies between its CPU's L2 share and the whole L2 sweeps Resident under the whole-L2 cut and
+// Streaming under the core-share cut (where the share is smaller); both keep the serial bits.
+TEST_CASE("parallel SELL spmv keeps the serial bits under either job cut", "[hesap][sparse][sell][parallel]")
+{
+    jobs_listener();
+    const crd::usize whole = sp::sparse_resident_bytes();
+    const crd::usize share = sp::sparse_job_resident_bytes();
+    REQUIRE(share <= whole);
+    // A tridiagonal n by n f64 matrix: 3 n elements of 12 bytes, 4 bytes a row length, x and y: 56 n bytes a spmv.
+    const auto n = static_cast<crd::u32>((share + whole) / 2U / 56U);
+    crd::memory::TlsfAllocator alloc(crd::usize{64} << 20);
+    sp::TripletBuilder<crd::f64> b(&alloc, n, n);
+    for (crd::u32 r = 0; r < n; ++r)
+    {
+        for (crd::u32 c = r > 0U ? r - 1U : 0U; c <= r + 1U && c < n; ++c)
+        {
+            b.add(r, c, static_cast<crd::f64>(1 + ((r + 3U * c) % 11U)) / 9.0);
+        }
+    }
+    const auto csr = b.compress();
+    crd::containers::Array<crd::f64> x(&alloc);
+    crd::containers::Array<crd::f64> y0(&alloc);
+    for (crd::u32 i = 0; i < n; ++i)
+    {
+        x.push_back(static_cast<crd::f64>(1 + (i % 19U)) / 7.0);
+        y0.push_back(static_cast<crd::f64>(i % 5U) - 2.0);
+    }
+    for (const sp::SellIndex form : {sp::SellIndex::U32, sp::SellIndex::Delta16})
+    {
+        const auto sell = sp::to_sell(csr, &alloc, 0U, form);
+        crd::containers::Array<crd::f64> want = y0;
+        sp::spmv_sell<crd::f64>(1.5, sell, cspan(x), -0.25, mspan(want));
+        for (crd::u32 jobs : {1U, 3U, 7U})
+        {
+            for (const sp::SellJobCut cut : {sp::SellJobCut::WholeL2, sp::SellJobCut::CoreShare})
+            {
+                crd::containers::Array<crd::f64> y = y0;
+                sp::detail::spmv_sell_parallel<crd::f64>(1.5, sell, cspan(x), -0.25, mspan(y), jobs, cut);
+                crd::u32 wrong = 0;
+                for (crd::u32 i = 0; i < n; ++i)
+                {
+                    wrong += std::bit_cast<std::uint64_t>(y[i]) == std::bit_cast<std::uint64_t>(want[i]) ? 0U : 1U;
+                }
+                INFO("n " << n << ", share " << share << ", L2 " << whole << ", Delta16 "
+                          << (form == sp::SellIndex::Delta16) << ", jobs " << jobs << ", core share "
+                          << (cut == sp::SellJobCut::CoreShare));
+                CHECK(wrong == 0U);
+            }
+        }
+    }
+}
+
 TEST_CASE("parallel SELL spmv auto job count matches serial", "[hesap][sparse][sell][parallel]")
 {
     jobs_listener();
@@ -163,17 +215,21 @@ TEMPLATE_TEST_CASE("parallel SELL spmv of complex values is bit-exact with CSR a
         REQUIRE((sell.delta_ptr[sell.num_slices] != 0U) == (form == sp::SellIndex::Delta16));
         for (crd::u32 jobs : {1U, 3U, 7U})
         {
-            crd::containers::Array<C> y = y0;
-            sp::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs);
-            crd::u32 wrong = 0;
-            for (crd::u32 i = 0; i < n; ++i)
+            for (const sp::SellJobCut cut : {sp::SellJobCut::WholeL2, sp::SellJobCut::CoreShare})
             {
-                const bool same = std::bit_cast<Bits>(y[i].re) == std::bit_cast<Bits>(want[i].re) &&
-                                  std::bit_cast<Bits>(y[i].im) == std::bit_cast<Bits>(want[i].im); // finite parts
-                wrong += same ? 0U : 1U;
+                crd::containers::Array<C> y = y0;
+                sp::detail::spmv_sell_parallel<C>(alpha, sell, cspan(x), beta, mspan(y), jobs, cut);
+                crd::u32 wrong = 0;
+                for (crd::u32 i = 0; i < n; ++i)
+                {
+                    const bool same = std::bit_cast<Bits>(y[i].re) == std::bit_cast<Bits>(want[i].re) &&
+                                      std::bit_cast<Bits>(y[i].im) == std::bit_cast<Bits>(want[i].im); // finite parts
+                    wrong += same ? 0U : 1U;
+                }
+                INFO("Delta16 " << (form == sp::SellIndex::Delta16) << ", jobs=" << jobs << ", core share "
+                                << (cut == sp::SellJobCut::CoreShare));
+                CHECK(wrong == 0U);
             }
-            INFO("Delta16 " << (form == sp::SellIndex::Delta16) << ", jobs=" << jobs);
-            CHECK(wrong == 0U);
         }
     }
 }

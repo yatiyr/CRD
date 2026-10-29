@@ -10,18 +10,20 @@ namespace crd::hesap::sparse
 // cap lets us nnz-balance the boundaries on the stack with no allocation.
 inline constexpr crd::u32 kMaxSpmvJobs = 1024U;
 
-// Parallel SELL spmv: y = alpha * A * x + beta * y. The slice range is split
-// into `num_jobs` **nnz-balanced** sub-ranges (each ~equal stored elements, via
-// the cumulative slice_ptr), so the wide-slice cluster a σ sort leaves at the
-// tail does not overload one worker. Disjoint slice ranges write disjoint
-// original rows (perm is a bijection) -> no cross-thread writes -> deterministic
-// and BIT-EXACT with serial spmv_sell at any job count.
-//
-// `num_jobs` 0 => num_workers (one balanced range per worker minimises dispatch
-// overhead). Requires crd::jobs to be initialised.
+// What a job's slice range counts as cache resident when it picks its sweep: the whole L2 (sparse_resident_bytes(),
+// the production cut) or its CPU's share of it (sparse_job_resident_bytes()). Both give the same bits.
+enum class SellJobCut : crd::u8
+{
+    WholeL2,
+    CoreShare,
+};
+
+namespace detail
+{
+// spmv_sell_parallel with each job's sweep cut at `cut` (the board's arms).
 template <typename T>
 void spmv_sell_parallel(T alpha, const SellMatrix<T>& a, crd::containers::ConstSpan<T> x, T beta,
-                        crd::containers::Span<T> y, crd::u32 num_jobs = 0)
+                        crd::containers::Span<T> y, crd::u32 num_jobs, SellJobCut cut)
 {
     CRD_ASSERT_MSG(x.size() == a.cols && y.size() == a.rows, "spmv_sell_parallel: x must be cols(), y must be rows()");
     if (a.num_slices == 0)
@@ -63,18 +65,38 @@ void spmv_sell_parallel(T alpha, const SellMatrix<T>& a, crd::containers::ConstS
         const T*             xp;
         T*                   yp;
         const crd::u32*      bnd;
+        crd::usize           resident_bytes;
     };
-    Ctx ctx{&a, alpha, beta, x.data(), y.data(), bnd};
+    const crd::usize resident = cut == SellJobCut::CoreShare ? sparse_job_resident_bytes() : sparse_resident_bytes();
+    Ctx ctx{&a, alpha, beta, x.data(), y.data(), bnd, resident};
 
     // count == jobs == num_jobs: each invocation owns one job index -> its
     // nnz-balanced [bnd[j], bnd[j+1]) slice range.
     auto* counter = crd::jobs::parallel_for(jobs, jobs, [&ctx](crd::u32 j_begin, crd::u32 j_end) {
         for (crd::u32 j = j_begin; j < j_end; ++j)
         {
-            detail::sell_spmv_range<T>(*ctx.a, ctx.alpha, ctx.beta, ctx.xp, ctx.yp, ctx.bnd[j], ctx.bnd[j + 1]);
+            sell_spmv_range<T>(*ctx.a, ctx.alpha, ctx.beta, ctx.xp, ctx.yp, ctx.bnd[j], ctx.bnd[j + 1],
+                               ctx.resident_bytes);
         }
     });
     crd::jobs::wait(counter);
+}
+} // namespace detail
+
+// Parallel SELL spmv: y = alpha * A * x + beta * y. The slice range is split
+// into `num_jobs` **nnz-balanced** sub-ranges (each ~equal stored elements, via
+// the cumulative slice_ptr), so the wide-slice cluster a σ sort leaves at the
+// tail does not overload one worker. Disjoint slice ranges write disjoint
+// original rows (perm is a bijection) -> no cross-thread writes -> deterministic
+// and BIT-EXACT with serial spmv_sell at any job count.
+//
+// `num_jobs` 0 => num_workers (one balanced range per worker minimises dispatch
+// overhead). Requires crd::jobs to be initialised.
+template <typename T>
+void spmv_sell_parallel(T alpha, const SellMatrix<T>& a, crd::containers::ConstSpan<T> x, T beta,
+                        crd::containers::Span<T> y, crd::u32 num_jobs = 0)
+{
+    detail::spmv_sell_parallel<T>(alpha, a, x, beta, y, num_jobs, SellJobCut::WholeL2);
 }
 
 } // namespace crd::hesap::sparse

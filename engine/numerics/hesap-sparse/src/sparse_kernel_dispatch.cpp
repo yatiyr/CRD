@@ -49,4 +49,10 @@ crd::usize sparse_resident_bytes() noexcept
     return l2 != 0U ? crd::usize{l2} : (crd::usize{1} << 21);
 }
 
+crd::usize sparse_job_resident_bytes() noexcept
+{
+    const crd::u32 share = crd::cpu_selection().l2_share_bytes;
+    return share != 0U ? crd::usize{share} : sparse_resident_bytes();
+}
+
 } // namespace crd::hesap::sparse
