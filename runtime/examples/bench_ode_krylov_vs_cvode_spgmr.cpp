@@ -6,22 +6,21 @@
 // method, same operator, same conditioning). A smooth Gaussian IC (many modes => non-trivial GMRES). The
 // reference is CVODE-SPGMR at rtol 1e-13 (independent of Cerid, tight). Reports min-of-reps wall ms +
 // RHS evals + GMRES iterations + achieved max-error, and the MATCHED-ACHIEVED-ACCURACY readout (the honest
-// axis: each solver's controller is calibrated differently). Compile (WSL, from repo root) — see
-// scripts/run_bench_krylov.sh.
+// axis: each solver's controller is calibrated differently). Built under CRD_BUILD_HESAP_VS_SUNDIALS; run per CPU
+// level by scripts/run_bench_krylov.sh.
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/ode/bdf.hpp>
 #include <crd/hesap/ode/ode_krylov_solver.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cvode/cvode.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
 #include <sunlinsol/sunlinsol_spgmr.h>
-
-#include <chrono>
-#include <cmath>
-#include <cstdio>
 
 using crd::f64;
 using crd::usize;
@@ -210,8 +209,8 @@ int main()
                                    ode::OdeOptions<f64> o;
                                    o.rtol = rtol;
                                    o.atol = rtol * 1e-3;
-                                   const auto r =
-                                       ode::integrate_bdf<f64>(f, 0.0, t1, cont::Span<f64>(uc.data(), n), o, &alloc, &ks);
+                                   const auto r = ode::integrate_bdf<f64>(f, 0.0, t1, cont::Span<f64>(uc.data(), n), o,
+                                                                          &alloc, &ks);
                                    fev = r.work.nfev;
                                    it = ks.total_gmres_iterations();
                                });
@@ -234,8 +233,8 @@ int main()
         a_it[k] = ait;
         a_err[k] = maxerr(ua);
 
-        std::printf("%-7.0e | %.2e/%6.2fms/%4ld fev/%4ld it | %.2e/%6.2fms/%4ld fev/%4ld it\n", rtol, c_err[k],
-                    c_ms[k], c_fev[k], c_it[k], a_err[k], a_ms[k], a_fev[k], a_it[k]);
+        std::printf("%-7.0e | %.2e/%6.2fms/%4ld fev/%4ld it | %.2e/%6.2fms/%4ld fev/%4ld it\n", rtol, c_err[k], c_ms[k],
+                    c_fev[k], c_it[k], a_err[k], a_ms[k], a_fev[k], a_it[k]);
     }
 
     std::printf("\n-- matched ACHIEVED accuracy (work-optimal point reaching the target err) --\n");

@@ -133,9 +133,9 @@ Run commands from the repository root. Build/test rules and exact quality requir
 - Generators, oracle scripts and `bench_*`/`run_bench_*` helpers are reproducibility assets. Their matching
   recipes and dated benchmark boards define inputs, peers and qualification scope. `run-lane-bench.sh <target>
   [-D<option>=ON ...]` builds a `runtime/examples` program in the WSL linux-gcc-release lane tree and runs it pinned
-  at each CPU level; the boards whose programs CMake links call it instead of keeping link lines. Each level's run
-  follows the line of `runtime/cpu_level_record` under the same `CRD_CPU_LEVEL` and CPU list (ADR-0134 §8), which
-  stops the board when the level did not apply; the boards that link by hand source `bench-level.sh` (`at_level`).
+  at each CPU level the pinned CPUs run (`cpu_level_record --levels`); the boards' Cerid programs are CMake targets, so
+  no script keeps a link line for one. Each level's run follows the line of `runtime/cpu_level_record` under the same
+  `CRD_CPU_LEVEL` and CPU list (ADR-0134 §8), which stops the board when the level did not apply.
 - `per-slice-check.*`, `full-sweep.ps1` and the unfiltered WSL wrapper are broad CI recipes. Locally select targets.
 
 Put one-shot scripts, logs and probes in ignored `build/<task>/`. Shared scripts must not encode a particular

@@ -160,7 +160,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    tuple ends with the line of the child it spawns, under `CRD_CPU_LEVEL` as set at the spawn. A board's arm is
    preceded by `runtime/cpu_level_record`'s line (with the build's `kernel_cap`) under the same `CRD_CPU_LEVEL` and
    CPU list, a function of the same inputs as the measured program's selection, which stops the board when the level
-   did not apply or exceeds the cap (`run-lane-bench.sh`, `bench-level.sh`); crd-bench prints it before its run and a
+   did not apply or exceeds the cap (`run-lane-bench.sh`, whose default arms are every level the pinned CPUs run,
+   `cpu_level_record --levels`); crd-bench prints it before its run and a
    diag-overhead record carries it (`cpu_level`), refused by `diag-overhead.py --cpu-level` when it differs from the
    asked level or between arms. The diag-overhead,
    hesap, geometry and jobs boards are re-measured at each level against their peers, Highway 1.3 included for the

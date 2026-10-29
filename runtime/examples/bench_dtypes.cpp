@@ -3,6 +3,7 @@
 // (timed by scripts/bench_dtypes_peers.py at matched element counts).
 #include <crd/hesap/tensor/dtypes.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <chrono>
 #include <cstdio>
@@ -13,10 +14,11 @@ int main()
 {
     constexpr crd::u32 kN = 1U << 20U;
     crd::memory::TlsfAllocator alloc((kN * 8U + (1U << 20U)) * 4U);
-    auto* x = static_cast<crd::f32*>(alloc.allocate(kN * sizeof(crd::f32), 64U));
-    auto* h = static_cast<crd::u16*>(alloc.allocate(kN * sizeof(crd::u16), 64U));
-    auto* b = static_cast<crd::u8*>(alloc.allocate(kN, 64U));
-    auto* q8 = static_cast<BlockQ8Zero*>(alloc.allocate((kN / 32U) * sizeof(BlockQ8Zero), 64U));
+    const char* const oom = "bench_dtypes: the bench arena is out of memory";
+    auto* x = crd::memory::allocate_array_or_fatal<crd::f32>(alloc, kN, 64U, oom);
+    auto* h = crd::memory::allocate_array_or_fatal<crd::u16>(alloc, kN, 64U, oom);
+    auto* b = crd::memory::allocate_array_or_fatal<crd::u8>(alloc, kN, 64U, oom);
+    auto* q8 = crd::memory::allocate_array_or_fatal<BlockQ8Zero>(alloc, kN / 32U, 64U, oom);
     for (crd::u32 i = 0; i < kN; ++i)
     {
         x[i] = 0.001F * static_cast<crd::f32>(i % 9973U) - 3.3F;
@@ -41,13 +43,14 @@ int main()
     bench("f32->bf16 (batch)", [&] { convert_f32_to_bf16({x, kN}, {h, kN}); });
     bench("f32->e4m3 (batch)", [&] { convert_f32_to_fp8_e4m3({x, kN}, {b, kN}); });
     bench("f32->e5m2 (batch)", [&] { convert_f32_to_fp8_e5m2({x, kN}, {b, kN}); });
-    bench("f32->f16 SR (scalar)", [&]
-    {
-        for (crd::u32 i = 0; i < kN; ++i)
-        {
-            h[i] = f32_to_f16_bits_sr(x[i], 7U, i);
-        }
-    });
+    bench("f32->f16 SR (scalar)",
+          [&]
+          {
+              for (crd::u32 i = 0; i < kN; ++i)
+              {
+                  h[i] = f32_to_f16_bits_sr(x[i], 7U, i);
+              }
+          });
     bench("f32->f16 SR (batch)", [&] { convert_f32_to_f16_sr({x, kN}, {h, kN}, 7U); });
     bench("f32->bf16 SR (batch)", [&] { convert_f32_to_bf16_sr({x, kN}, {h, kN}, 7U); });
     bench("f32->e4m3 SR (batch)", [&] { convert_f32_to_fp8_e4m3_sr({x, kN}, {b, kN}, 7U); });

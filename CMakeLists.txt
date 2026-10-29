@@ -51,6 +51,10 @@ option(CRD_BUILD_RETAINED_BENCHES "Build the peer-free retained benchmark progra
 # per CPU level.
 option(CRD_BUILD_HESAP_VS_FFT_REFS "Build the FFT and DCT benches against FFTW, MKL and pocketfft (local-only)" OFF)
 option(CRD_BUILD_HESAP_VS_FINUFFT "Build the NUFFT bench against FINUFFT (local-only)" OFF)
+# The hesap-ode boards against SUNDIALS 6 from the system (libsundials-dev): CVODE's SPGMR Krylov path, CVODES's forward
+# sensitivities and ARKODE's IMEX steppers. Local only, never in CI or a shipped build; their run_bench_*.sh scripts
+# build and run them per CPU level through scripts/run-lane-bench.sh.
+option(CRD_BUILD_HESAP_VS_SUNDIALS "Build the ODE benches against SUNDIALS CVODE, CVODES and ARKODE (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
 option(CRD_HESAP_FFT_PROFILE "Build hesap-fft with its per-phase cycle counters (measurement trees only)" OFF)

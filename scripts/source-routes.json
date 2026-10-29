@@ -66,6 +66,9 @@
         "runtime/examples/bench_dsp_sosfilt_vs_refs.cpp",
         "runtime/examples/bench_dsp_welch_vs_refs.cpp",
         "runtime/examples/bench_dsp_windows_vs_refs.cpp",
+        "runtime/examples/bench_dtypes.cpp",
+        "runtime/examples/bench_einsum.cpp",
+        "runtime/examples/bench_elementwise.cpp",
         "runtime/examples/bench_hyperopt.cpp",
         "runtime/examples/bench_hypothesis.cpp",
         "runtime/examples/bench_interp.cpp",
@@ -73,7 +76,9 @@
         "runtime/examples/bench_mcmc.cpp",
         "runtime/examples/bench_nn.cpp",
         "runtime/examples/bench_nonparametric.cpp",
+        "runtime/examples/bench_permute.cpp",
         "runtime/examples/bench_quadrature.cpp",
+        "runtime/examples/bench_reduce.cpp",
         "runtime/examples/bench_regression.cpp",
         "runtime/examples/bench_resampling.cpp",
         "runtime/examples/bench_rng.cpp",
@@ -218,44 +223,13 @@
       "why": "The NUFFT bench against FINUFFT built on the measuring host (scripts/run_bench_nufft.sh)."
     },
     {
-      "paths": ["runtime/examples/bench_ode_imex_vs_arkode.cpp"],
-      "built_by": "scripts/run_bench_imex.sh",
-      "why": "The IMEX bench links SUNDIALS ARKODE."
-    },
-    {
-      "paths": ["runtime/examples/bench_ode_krylov_vs_cvode_spgmr.cpp"],
-      "built_by": "scripts/run_bench_krylov.sh",
-      "why": "The Krylov ODE bench links SUNDIALS CVODE."
-    },
-    {
-      "paths": ["runtime/examples/bench_ode_sens_vs_cvodes.cpp"],
-      "built_by": "scripts/run_bench_sens.sh",
-      "why": "The sensitivity bench links SUNDIALS CVODES."
-    },
-    {
-      "paths": ["scripts/bench_dtypes.cpp"],
-      "built_by": "scripts/run_dtype_bench.sh",
-      "why": "The dtype conversion bench of docs/bench/2026-07-02-v14a-dtype-converts.md."
-    },
-    {
-      "paths": ["scripts/bench_einsum.cpp"],
-      "built_by": "scripts/run_einsum_bench.sh",
-      "why": "The einsum bench against its peers."
-    },
-    {
-      "paths": ["scripts/bench_elementwise.cpp"],
-      "built_by": "scripts/run_elementwise_bench.sh",
-      "why": "The elementwise and broadcast bench of docs/bench/2026-07-02-v14b-elementwise-broadcast.md."
-    },
-    {
-      "paths": ["scripts/bench_permute.cpp"],
-      "built_by": "scripts/run_permute_bench.sh",
-      "why": "The permute bench against HPTT of docs/bench/2026-07-02-v14d-permute-vs-hptt.md."
-    },
-    {
-      "paths": ["scripts/bench_reduce.cpp"],
-      "built_by": "scripts/run_reduce_bench.sh",
-      "why": "The reduction bench against ReproBLAS of docs/bench/2026-07-02-v14c-reduce-vs-reproblas.md."
+      "paths": [
+        "runtime/examples/bench_ode_imex_vs_arkode.cpp",
+        "runtime/examples/bench_ode_krylov_vs_cvode_spgmr.cpp",
+        "runtime/examples/bench_ode_sens_vs_cvodes.cpp"
+      ],
+      "built_when": {"option": "CRD_BUILD_HESAP_VS_SUNDIALS"},
+      "why": "The ODE benches against SUNDIALS ARKODE, CVODE and CVODES installed on the measuring host (scripts/run_bench_imex.sh, run_bench_krylov.sh, run_bench_sens.sh)."
     },
     {
       "paths": ["bench/gpu-fft/generated/*.cu"],

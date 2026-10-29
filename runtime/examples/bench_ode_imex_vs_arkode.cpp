@@ -4,15 +4,7 @@
 //   dense implicit linear solver + analytic implicit Jacobian) — apples-to-apples (identical method + split).
 // Reports min-of-reps wall ms + the explicit/implicit RHS eval counts + the achieved max-error vs a tight
 // Cerid DOP853 reference of the SAME discrete system, so rows are judged at ACHIEVED accuracy (the honest
-// scoreboard rule). Compile (WSL, from repo root):
-//   g++ -O2 -std=c++20 -I engine/hesap-ode/include -I engine/hesap/include -I engine/hesap-dense/include
-//     -I engine/hesap-sparse/include -I engine/hesap-direct/include -I engine/hesap-iterative/include
-//     -I engine/core/include -I build/linux-gcc-release/engine/core/include -I engine/containers/include
-//     -I engine/memory/include -I engine/log/include -I engine/vm/include
-//     runtime/examples/bench_ode_imex_vs_arkode.cpp
-//     build/linux-gcc-release/engine/{hesap-dense,hesap,memory,vm,log}/libcrd-*.a
-//     -lsundials_arkode -lsundials_core -lsundials_nvecserial -o /tmp/bench_imex
-//   /tmp/bench_imex
+// scoreboard rule). Built under CRD_BUILD_HESAP_VS_SUNDIALS; run per CPU level by scripts/run_bench_imex.sh.
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/ode/erk.hpp>
@@ -20,14 +12,13 @@
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
 #include <arkode/arkode_arkstep.h>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
 #include <sunlinsol/sunlinsol_dense.h>
 #include <sunmatrix/sunmatrix_dense.h>
-
-#include <chrono>
-#include <cmath>
-#include <cstdio>
 
 using crd::f64;
 using crd::usize;
@@ -193,7 +184,8 @@ int main()
         ode::OdeOptions<f64> o;
         o.rtol = 1e-12;
         o.atol = 1e-14;
-        const auto r = ode::integrate_erk<f64>(f, 0.0, 1.0, cont::Span<f64>(uref.data(), n), o, &alloc, ode::ErkMethod::Dop853);
+        const auto r =
+            ode::integrate_erk<f64>(f, 0.0, 1.0, cont::Span<f64>(uref.data(), n), o, &alloc, ode::ErkMethod::Dop853);
         (void)r;
     }
     auto maxerr = [&](const cont::Array<f64>& u)
@@ -284,8 +276,8 @@ int main()
     {
         run_cerid(rtols[i], i);
         run_arkode(rtols[i], i);
-        std::printf("%-7.0e | %.2e / %6.3f ms / %5ld | %.2e / %6.3f ms / %5ld\n", rtols[i], c_err[i], c_ms[i],
-                    c_fev[i], a_err[i], a_ms[i], a_fev[i]);
+        std::printf("%-7.0e | %.2e / %6.3f ms / %5ld | %.2e / %6.3f ms / %5ld\n", rtols[i], c_err[i], c_ms[i], c_fev[i],
+                    a_err[i], a_ms[i], a_fev[i]);
     }
 
     // --- MATCHED-ACCURACY readout: for each target error, the work-optimal (coarsest-rtol) point that

@@ -6,21 +6,20 @@
 // THE primary check is VALUE AGREEMENT: both compute dy/dp(T); they must match. Plus wall + RHS evals.
 // (Cerid uses ANALYTIC sensitivity RHS; CVODES here uses its difference-quotient default — named; so the
 // eval counts are not apples-to-apples, the value agreement is the cross-validation and wall is the perf.)
-// Compile (WSL): scripts/run_bench_sens.sh.
+// Built under CRD_BUILD_HESAP_VS_SUNDIALS; run per CPU level by scripts/run_bench_sens.sh.
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/ode/sensitivity.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
 
+#include <chrono>
+#include <cmath>
+#include <cstdio>
 #include <cvodes/cvodes.h>
 #include <nvector/nvector_serial.h>
 #include <sundials/sundials_types.h>
 #include <sunlinsol/sunlinsol_dense.h>
 #include <sunmatrix/sunmatrix_dense.h>
-
-#include <chrono>
-#include <cmath>
-#include <cstdio>
 
 using crd::f64;
 using crd::usize;
@@ -172,7 +171,8 @@ int main()
                                   CVodeSStolerances(mem, rtol, atol);
                                   CVodeSetMaxNumSteps(mem, 1000000); // default 500 is far too few for t=1e4
                                   CVodeSetUserData(mem, g_p);
-                                  SUNMatrix A = SUNDenseMatrix(static_cast<sunindextype>(n), static_cast<sunindextype>(n), ctx);
+                                  SUNMatrix A =
+                                      SUNDenseMatrix(static_cast<sunindextype>(n), static_cast<sunindextype>(n), ctx);
                                   SUNLinearSolver LS = SUNLinSol_Dense(y, A, ctx);
                                   CVodeSetLinearSolver(mem, LS, A);
                                   CVodeSetJacFn(mem, cv_jac);
