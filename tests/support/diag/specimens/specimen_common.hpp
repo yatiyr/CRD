@@ -132,6 +132,23 @@ inline void crd_diag_harden()
 #endif
 }
 
+// `pointer` with its value hidden from the optimizer, so a specimen's store through a null result reaches the hardware
+// as written. A volatile local is not enough: GCC's points-to analysis reads its null straight through, finds that the
+// store writes no object and deletes it (dse1, -O2 and up). A volatile pointee would keep the store, but Clang's UBSan
+// checks no volatile access for null, and the UBSan lanes promise that report. The empty asm's output may point
+// anywhere, so the store is neither proven to fault (GCC rewrites a proven null store into a trap) nor dead. MSVC has
+// no inline asm on x64 or ARM64; it does not look through a volatile local (its /O2 /GL build keeps the store).
+template <typename T> [[nodiscard]] inline T* crd_diag_opaque(T* pointer) noexcept
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    T* volatile hidden = pointer;
+    return hidden;
+#else
+    __asm__ volatile("" : "+r"(pointer));
+    return pointer;
+#endif
+}
+
 inline void crd_diag_announce()
 {
     std::printf("CRD_DIAG_IDENTITY=%s\n", CRD_DIAG_SPECIMEN_ID);
