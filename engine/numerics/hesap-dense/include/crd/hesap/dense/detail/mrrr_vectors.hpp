@@ -3,6 +3,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/core/types.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>  // Z1
+#include <crd/hesap/dense/detail/eig_arms.hpp>
 #include <crd/hesap/dense/detail/sturm_count.hpp>
 #include <crd/jobs/jobs.hpp>
 #include <crd/memory/allocator.hpp>
@@ -48,16 +49,16 @@ namespace crd::hesap::dense::detail
 template <typename R>
 [[nodiscard]] inline int dlaneg(int n, const R* d, const R* lld, R sigma, R pivmin, int r) noexcept
 {
-    constexpr int kBlkLen = 128;
+    constexpr int blk_len = 128;
     int negcnt = 0;
 
     // I) upper part: L D L^T - sigma I = L+ D+ L+^T.
     R t = -sigma;
-    for (int bj = 1; bj <= r - 1; bj += kBlkLen)
+    for (int bj = 1; bj <= r - 1; bj += blk_len)
     {
         int neg1 = 0;
         const R bsav = t;
-        const int last = std::min(bj + kBlkLen - 1, r - 1);
+        const int last = std::min(bj + blk_len - 1, r - 1);
         for (int j = bj; j <= last; ++j)
         {
             const R dplus = d[j - 1] + t;
@@ -92,11 +93,11 @@ template <typename R>
 
     // II) lower part: L D L^T - sigma I = U- D- U-^T.
     R p = d[n - 1] - sigma;
-    for (int bj = n - 1; bj >= r; bj -= kBlkLen)
+    for (int bj = n - 1; bj >= r; bj -= blk_len)
     {
         int neg2 = 0;
         const R bsav = p;
-        const int last = std::max(bj - kBlkLen + 1, r);
+        const int last = std::max(bj - blk_len + 1, r);
         for (int j = bj; j >= last; --j)
         {
             const R dminus = lld[j - 1] + p;
@@ -521,9 +522,9 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
     (void)lld;  // the dstqds factorization uses d/l/ld; LLD is vestigial in dlarrf's signature
     const R eps = std::numeric_limits<R>::epsilon();
     const R safmin = std::numeric_limits<R>::min();
-    constexpr int kKtryMax = 1;
-    constexpr int kSLeft = 1;
-    constexpr int kSRight = 2;
+    constexpr int ktry_max = 1;
+    constexpr int s_left = 1;
+    constexpr int s_right = 2;
     const R maxgrowth1 = R{8};
     const R maxgrowth2 = R{8};
     const R quart = R{0.25};
@@ -587,7 +588,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
         if (forcer || (max1 <= growthbound && !sawnan1))
         {
             sigma = lsigma;
-            shift = kSLeft;
+            shift = s_left;
             break;
         }
 
@@ -617,7 +618,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
         if (forcer || (max2 <= growthbound && !sawnan2))
         {
             sigma = rsigma;
-            shift = kSRight;
+            shift = s_right;
             break;
         }
 
@@ -671,7 +672,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
                 if (tmp / (spdiam * crd::math::sqrt(znm2)) <= maxgrowth2)
                 {
                     sigma = lsigma;
-                    shift = kSLeft;
+                    shift = s_left;
                     break;
                 }
             }
@@ -698,14 +699,14 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
                 if (tmp / (spdiam * crd::math::sqrt(znm2)) <= maxgrowth2)
                 {
                     sigma = rsigma;
-                    shift = kSRight;
+                    shift = s_right;
                     break;
                 }
             }
         }
 
         // Back off to the outside, or force the best shift.
-        if (ktry < kKtryMax)
+        if (ktry < ktry_max)
         {
             lsigma = std::max(lsigma - ldelta, lsigma - ldmax);
             rsigma = std::min(rsigma + rdelta, rsigma + rdmax);
@@ -725,7 +726,7 @@ inline int dlarrf(int n, const R* d, const R* l, const R* ld, const R* lld, int 
         }
     }
 
-    if (shift == kSRight)
+    if (shift == s_right)
     {
         for (int i = 0; i < n; ++i)
         {
@@ -770,7 +771,7 @@ inline void mrrr_single_rrr_vectors(crd::memory::IAllocator* alloc, int n, const
     const R eps = std::numeric_limits<R>::epsilon();
     const R rqtol = R{2} * eps;
     const R tol = crd::math::sqrt(eps);
-    constexpr int kMaxItr = 10;
+    constexpr int max_itr = 10;
 
     R gl = R{0};
     R gu = R{0};
@@ -831,7 +832,7 @@ inline void mrrr_single_rrr_vectors(crd::memory::IAllocator* alloc, int n, const
         R bstw = lambda;
         R bstres = std::numeric_limits<R>::max();
 
-        for (int iter = 0; iter < kMaxItr; ++iter)
+        for (int iter = 0; iter < max_itr; ++iter)
         {
             const auto out = dlar1v<R>(n, 1, n, lambda, zd, zl, zld, zlld, pivmin, R{0}, zz, 0, false, zw);
             if (out.resid < bstres)
@@ -922,23 +923,23 @@ inline void gram_schmidt_columns(R* z, int n, int ldz, int lo, int hi) noexcept
 // stored (sign-fixed, normalized) into column k of z_out. Shared by the cluster
 // recursion.
 template <typename R>
-inline void mrrr_one_vector(int n, const R* D, const R* L, const R* LD, const R* LLD, R lambda, R gap, R pivmin,
-                            R* z_out, int ldz, int k, Z1<R> zz, Z1<R> zwork)
+inline void mrrr_one_vector(int n, R* D, R* L, R* LD, R* LLD, R lambda, R gap, R pivmin, R* z_out, int ldz, int k,
+                            Z1<R> zz, Z1<R> zwork)
 {
     const R eps = std::numeric_limits<R>::epsilon();
     const R rqtol = R{2} * eps;
     const R tol = crd::math::sqrt(eps);
-    constexpr int kMaxItr = 10;
+    constexpr int max_itr = 10;
     const R left = lambda - R{0.5} * gap;
     const R right = lambda + R{0.5} * gap;
     R bstres = std::numeric_limits<R>::max();
-    Z1<R> zd{const_cast<R*>(D)};
-    Z1<R> zl{const_cast<R*>(L)};
-    Z1<R> zld{const_cast<R*>(LD)};
-    Z1<R> zlld{const_cast<R*>(LLD)};
+    Z1<R> zd{D};
+    Z1<R> zl{L};
+    Z1<R> zld{LD};
+    Z1<R> zlld{LLD};
     // Keep the best vector inline (store on improvement) — avoids the wasteful
     // final re-run of dlar1v on the best shift (~1 fewer dlar1v per eigenvector).
-    for (int iter = 0; iter < kMaxItr; ++iter)
+    for (int iter = 0; iter < max_itr; ++iter)
     {
         const auto out = dlar1v<R>(n, 1, n, lambda, zd, zl, zld, zlld, pivmin, R{0}, zz, 0, false, zwork);
         if (out.resid < bstres)
@@ -990,7 +991,7 @@ inline void mrrr_process(crd::memory::IAllocator* alloc, int n, R* D, R* L, R* L
                          R* werr, R spdiam, R pivmin, R minrgp, int depth, R* z_out, int ldz, Z1<R> zz, Z1<R> zwork)
 {
     const R eps = std::numeric_limits<R>::epsilon();
-    constexpr int kMaxDepth = 8;
+    constexpr int max_depth = 8;
 
     int i = lo;
     while (i <= hi)
@@ -1026,7 +1027,7 @@ inline void mrrr_process(crd::memory::IAllocator* alloc, int n, R* D, R* L, R* L
             }
             mrrr_one_vector<R>(n, D, L, LD, LLD, wrel[i], gap, pivmin, z_out, ldz, i, zz, zwork);
         }
-        else if (depth >= kMaxDepth)
+        else if (depth >= max_depth)
         {
             // Residual cluster the RRR tree could not separate: best-effort
             // vectors + Gram-Schmidt (genuine near-multiplicity).
@@ -1065,7 +1066,7 @@ inline void mrrr_process(crd::memory::IAllocator* alloc, int n, R* D, R* L, R* L
             ldc.resize(static_cast<crd::usize>(n));
             lldc.resize(static_cast<crd::usize>(n));
             wgap.resize(static_cast<crd::usize>(n));
-            rrwork.resize(static_cast<crd::usize>(2 * n));
+            rrwork.resize(2U * static_cast<crd::usize>(n));
             wc.resize(static_cast<crd::usize>(n));
             wec.resize(static_cast<crd::usize>(n));
 
@@ -1127,10 +1128,10 @@ template <typename R>
 struct MrrrPArgs
 {
     int n;
-    R* D;
-    R* L;
-    R* LD;
-    R* LLD;
+    R* d;
+    R* l;
+    R* ld;
+    R* lld;
     R* wrel;
     R* werr;
     R spdiam;
@@ -1155,11 +1156,12 @@ struct MrrrPArgs
 // tridiagonal (d length n, e length n-1), cluster-robust. `w` = eigenvalues of
 // T ascending (high relative accuracy). z_out RowMajor n*ldz, column k =
 // eigenvector for w[k]. Builds the root RRR and runs the recursive cluster
-// processor (dlarrv). Orthonormal to O(n)*eps even on clustered/glued spectra.
+// processor (dlarrv). Orthonormal to O(n)*eps even on clustered/glued spectra. pick holds the crd-jobs levers
+// (eig_arms.hpp); more than one forced job needs crd::jobs initialised.
 // =======================================================================
 template <typename R>
-inline void mrrr_compute_vectors(crd::memory::IAllocator* alloc, int n, const R* d, const R* e, const R* w,
-                                 R* z_out, int ldz)
+inline void mrrr_compute_vectors(crd::memory::IAllocator* alloc, int n, const R* d, const R* e, const R* w, R* z_out,
+                                 int ldz, const MrrrPick& pick = {})
 {
     if (n <= 0)
     {
@@ -1249,10 +1251,13 @@ inline void mrrr_compute_vectors(crd::memory::IAllocator* alloc, int n, const R*
         }
     }
 
+    // The per-worker scratch is sized by the pool and indexed by worker_index(); the pick's job count only sets the
+    // task count.
     const int nw = static_cast<int>(crd::jobs::num_workers());
-    if (nw <= 1)
+    const int jobs = pick.workers != 0 ? static_cast<int>(pick.workers) : nw;
+    if (nw <= 1 || jobs <= 1 || static_cast<crd::usize>(n) <= pick.serial_max)
     {
-        // Serial (jobs down or single core): batched singletons + cluster recursion.
+        // Serial (jobs down, a single core, one job or the serial cut): batched singletons + cluster recursion.
         mrrr_run_segments<R>(alloc, n, dd.data(), ll.data(), ldd.data(), lld.data(), wrel.data(), werr.data(),
                              spdiam, pivmin, minrgp, z_out, ldz, glo.data(), ghi.data(), 0, ng, zcol.data(),
                              work.data());
@@ -1285,9 +1290,9 @@ inline void mrrr_compute_vectors(crd::memory::IAllocator* alloc, int n, const R*
     MrrrPArgs<R>* pp = &pa;
     // Adaptive granularity: per-group work scales with n, so ramp tasks/worker
     // with n — coarse for small n (task-spawn overhead dominates), fine for large
-    // n (work-stealing balances the P/E cores). 1x at n<=256 .. 8x at n>=2048.
-    const int gran = std::max(1, std::min(8, n / 256));
-    const int num_chunks = std::min(ng, gran * nw);
+    // n (work-stealing balances the P/E cores). 1x at n<=256 .. 8x at n>=2048 (the default pick).
+    const int gran = std::max(1, std::min(pick.gran_max, n / pick.gran_div));
+    const int num_chunks = std::min(ng, gran * jobs);
     auto* counter = crd::jobs::parallel_for(
         static_cast<crd::u32>(ng), static_cast<crd::u32>(num_chunks), [pp](crd::u32 begin, crd::u32 end) {
             const crd::u32 wi = crd::jobs::worker_index();
@@ -1297,14 +1302,14 @@ inline void mrrr_compute_vectors(crd::memory::IAllocator* alloc, int n, const R*
             {
                 crd::memory::TlsfAllocator wa(pp->arena + static_cast<crd::usize>(wi) * pp->arena_bytes,
                                               static_cast<crd::usize>(pp->arena_bytes));
-                mrrr_run_segments<R>(&wa, pp->n, pp->D, pp->L, pp->LD, pp->LLD, pp->wrel, pp->werr, pp->spdiam,
+                mrrr_run_segments<R>(&wa, pp->n, pp->d, pp->l, pp->ld, pp->lld, pp->wrel, pp->werr, pp->spdiam,
                                      pp->pivmin, pp->minrgp, pp->z_out, pp->ldz, pp->glo, pp->ghi,
                                      static_cast<int>(begin), static_cast<int>(end), zbuf4, wbuf4);
             }
             else
             {
                 // All singletons: mrrr_process's singleton path never allocates.
-                mrrr_run_segments<R>(nullptr, pp->n, pp->D, pp->L, pp->LD, pp->LLD, pp->wrel, pp->werr, pp->spdiam,
+                mrrr_run_segments<R>(nullptr, pp->n, pp->d, pp->l, pp->ld, pp->lld, pp->wrel, pp->werr, pp->spdiam,
                                      pp->pivmin, pp->minrgp, pp->z_out, pp->ldz, pp->glo, pp->ghi,
                                      static_cast<int>(begin), static_cast<int>(end), zbuf4, wbuf4);
             }

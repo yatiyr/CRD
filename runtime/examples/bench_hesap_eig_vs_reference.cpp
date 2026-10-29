@@ -17,6 +17,7 @@
 #include <crd/containers/array.hpp>
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
+#include <crd/hesap/dense/detail/eig_arms.hpp>
 #include <crd/hesap/dense/detail/mrrr_vectors.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
 #include <crd/hesap/dense/matrix_types.hpp>
@@ -84,49 +85,6 @@ template <typename Op> crd::f64 time_loop(const Op& op, crd::f64 budget_s = 0.4,
     return best;
 }
 
-// Parallel SHARED-Sturm multisection eigenvalues of a symmetric tridiagonal.
-// Eigenvalue index range split into `p` disjoint chunks; each worker multisects
-// its chunk (one negcount(mid) splits an interval for all eigenvalues in it =
-// the dlaebz sharing that kills naive bisection's ~16x redundancy), all chunks
-// in parallel over crd::jobs. The "use all 16 cores" lever LAPACK's serial
-// dsterf/dstemr cannot answer.
-struct MultiState
-{
-    const crd::f64* d;
-    const crd::f64* e2;
-    int n;
-    int p;
-    crd::f64 gl;
-    crd::f64 gu;
-    crd::f64 pivmin;
-    crd::f64 reltol;
-    crd::f64* w;
-    crd::f64* sl;
-    crd::f64* sr;
-    int* sclo;
-    int* schi;
-    int stride;
-};
-
-void tridiag_eig_multisection_parallel(MultiState* sp)
-{
-    const crd::u32 p = static_cast<crd::u32>(sp->p);
-    auto* counter =
-        crd::jobs::parallel_for(p, p,
-                                [sp](crd::u32 begin, crd::u32 end)
-                                {
-                                    for (crd::u32 c = begin; c < end; ++c)
-                                    {
-                                        const int klo = static_cast<int>(static_cast<crd::u64>(c) * sp->n / sp->p);
-                                        const int khi = static_cast<int>(static_cast<crd::u64>(c + 1) * sp->n / sp->p);
-                                        const crd::usize off = static_cast<crd::usize>(c) * sp->stride;
-                                        crd::hesap::dense::detail::multisection_chunk(
-                                            sp->d, sp->e2, sp->n, klo, khi, sp->gl, sp->gu, sp->pivmin, sp->reltol,
-                                            sp->w, sp->sl + off, sp->sr + off, sp->sclo + off, sp->schi + off);
-                                    }
-                                });
-    crd::jobs::wait(counter);
-}
 } // namespace
 
 int main()
@@ -378,36 +336,16 @@ int main()
                                                                               q.data(), qe.data(), cw.data(), reltol);
             });
 
-        // --- Cerid PARALLEL multisection (all cores) ---
-        crd::containers::Array<crd::f64> e2b(&alloc);
+        // --- Cerid PARALLEL multisection (all cores): production's tridiag_multisection_arm, whose timed region
+        // includes its scratch allocation as eigvals_sym's does ---
         crd::containers::Array<crd::f64> bw(&alloc);
-        e2b.resize(n);
         bw.resize(n);
-        for (crd::usize i = 0; i + 1 < n; ++i)
-        {
-            e2b[i] = e0[i] * e0[i];
-        }
-        crd::f64 gl = 0.0;
-        crd::f64 gu = 0.0;
-        crd::hesap::dense::detail::gershgorin_bounds(d0.data(), e0.data(), ni, gl, gu);
-        const crd::f64 pivmin = crd::hesap::dense::detail::compute_pivmin(e0.data(), ni);
-        // Widen the bracket so it strictly contains the spectrum.
-        const crd::f64 wid =
-            2.0 * pivmin + std::numeric_limits<crd::f64>::epsilon() * std::max(std::abs(gl), std::abs(gu));
-        gl -= wid;
-        gu += wid;
-        const int pp = static_cast<int>(crd::jobs::num_workers());
-        const int chunk = (ni + pp - 1) / pp;
-        const int stride = 2 * (chunk + 1) + 64;
-        crd::containers::Array<crd::f64> sl(static_cast<crd::usize>(pp) * stride, &alloc);
-        crd::containers::Array<crd::f64> sr(static_cast<crd::usize>(pp) * stride, &alloc);
-        crd::containers::Array<int> sclo(static_cast<crd::usize>(pp) * stride, &alloc);
-        crd::containers::Array<int> schi(static_cast<crd::usize>(pp) * stride, &alloc);
-        MultiState ms{d0.data(),   e2b.data(), ni,        pp,
-                      gl,          gu,         pivmin,    4.0 * std::numeric_limits<crd::f64>::epsilon(),
-                      bw.data(),   sl.data(),  sr.data(), sclo.data(),
-                      schi.data(), stride};
-        const crd::f64 bt = time_loop([&]() { tridiag_eig_multisection_parallel(&ms); });
+        const crd::f64 bt = time_loop(
+            [&]()
+            {
+                crd::hesap::dense::detail::tridiag_multisection_arm<crd::f64>(
+                    crd::hesap::dense::detail::MultisectionPick{}, &alloc, d0.data(), e0.data(), ni, bw.data());
+            });
 
         // --- LAPACK dsterf (destroys d,e — refill each iter) ---
         crd::containers::Array<crd::f64> sd(&alloc);

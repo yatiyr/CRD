@@ -5,6 +5,7 @@
 #include <crd/hesap/dense/blas3.hpp>
 #include <crd/hesap/dense/dense_dispatch.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
+#include <crd/hesap/dense/detail/eig_arms.hpp>
 #include <crd/hesap/dense/detail/householder.hpp>
 #include <crd/hesap/dense/detail/mrrr_vectors.hpp>
 #include <crd/hesap/dense/detail/secular.hpp>
@@ -2069,16 +2070,23 @@ struct MultisectionArgs
     int stride;
 };
 
-// solve_tridiag_multisection — ascending eigenvalues of a symmetric tridiagonal
-// (d, e length n-1) by PARALLEL shared-Sturm multisection: the eigenvalue index
-// range is split into num_workers() disjoint chunks, each multisected
-// independently over crd::jobs. This is the parallel lever LAPACK's serial
-// dsterf/dstemr lack — measured 2026-05-23 to beat dsterf at N>=2048 and crush
-// dstemr 1.56-1.70x at ~1e-14 accuracy. Determinism: fixed chunk partition +
-// pivmin Sturm guard + fixed bracket (D(dense-eig)-9).
-template <typename R>
-void solve_tridiag_multisection(crd::memory::IAllocator* alloc, const R* d, const R* e, int n, R* w)
+} // namespace
+
+namespace detail
 {
+// tridiag_multisection_arm (eig_arms.hpp) — the eigenvalue index range is split into pick's chunks, each multisected
+// over crd::jobs. This is the parallel lever LAPACK's serial dsterf/dstemr lack: measured 2026-05-23 to beat dsterf
+// at N>=2048 and crush dstemr 1.56-1.70x at ~1e-14 accuracy. Determinism: every chunk descends the one bisection tree
+// rooted at the bracket (multisection_chunk), with the pivmin Sturm guard (D(dense-eig)-9), so the chunk and job
+// counts never change a bit (D(dense-eig)-MRRR-multisection-global-tree).
+template <typename R>
+void tridiag_multisection_arm(const MultisectionPick& pick, crd::memory::IAllocator* alloc, const R* d, const R* e,
+                              int n, R* w)
+{
+    if (n <= 0)
+    {
+        return;
+    }
     crd::containers::Array<R> e2(alloc);
     e2.resize(static_cast<crd::usize>(n));
     for (int i = 0; i + 1 < n; ++i)
@@ -2094,12 +2102,21 @@ void solve_tridiag_multisection(crd::memory::IAllocator* alloc, const R* d, cons
     const R wid = R{2} * pivmin + std::numeric_limits<R>::epsilon() * std::max(std::abs(gl), std::abs(gu));
     gl -= wid;
     gu += wid;
+    // A NaN or an infinity in d or e: no finite bracket to bisect (a NaN root would never meet the leaf test).
+    if (!std::isfinite(gl) || !std::isfinite(gu))
+    {
+        for (int k = 0; k < n; ++k)
+        {
+            w[k] = std::numeric_limits<R>::quiet_NaN();
+        }
+        return;
+    }
 
-    // num_workers() == 0 means jobs is not initialized — fall back to a serial
-    // single-chunk multisection (no parallel_for / frame_alloc). Clamp to >= 1 so
-    // the chunk partition never divides by zero.
-    const int raw_workers = static_cast<int>(crd::jobs::num_workers());
-    const int p = std::max(1, raw_workers);
+    // num_workers() == 0 means jobs is not initialized: the chunks run serially on the calling thread (no
+    // parallel_for / frame_alloc), as they do on one job.
+    const int pool = static_cast<int>(crd::jobs::num_workers());
+    const int jobs = pick.workers != 0 ? static_cast<int>(pick.workers) : std::max(1, pool);
+    const int p = pick.chunks != 0 ? static_cast<int>(pick.chunks) : jobs;
     const int chunk = (n + p - 1) / p;
     const int stride = 2 * (chunk + 1) + 64;
     crd::containers::Array<R> sl(alloc);
@@ -2136,28 +2153,26 @@ void solve_tridiag_multisection(crd::memory::IAllocator* alloc, const R* d, cons
                                        sp->w, sp->sl + off, sp->sr + off, sp->sclo + off, sp->schi + off);
         }
     };
-    if (raw_workers <= 0)
+    if (pool <= 0 || jobs <= 1)
     {
-        chunk_fn(0, static_cast<crd::u32>(p));  // serial: jobs not initialized
+        chunk_fn(0, static_cast<crd::u32>(p));
     }
     else
     {
-        auto* counter = crd::jobs::parallel_for(static_cast<crd::u32>(p), static_cast<crd::u32>(p), chunk_fn);
+        auto* counter =
+            crd::jobs::parallel_for(static_cast<crd::u32>(p), static_cast<crd::u32>(std::min(p, jobs)), chunk_fn);
         crd::jobs::wait(counter);
     }
 }
-
-constexpr crd::usize kEigvalsMultisectionThreshold = 512;
-} // namespace
 
 // =======================================================================
 // eigvals_sym (v3a-3.1) — eigenvalues only, ascending, via blocked
 // tridiagonalization. Large N: PARALLEL shared-Sturm multisection (beats
 // LAPACK dsterf at scale + crushes dstemr via the parallelism LAPACK lacks).
-// Small N: the MRRR dqds whole-block engine. Real f32/f64.
+// Small N: the MRRR dqds whole-block engine. Real f32/f64. eigvals_sym is this on EigvalsPick{} (eig_arms.hpp).
 // =======================================================================
 template <typename T>
-Vector<RealType<T>> eigvals_sym(crd::memory::IAllocator* alloc, const Symmetric<T>& a)
+Vector<RealType<T>> eigvals_sym_arm(const EigvalsPick& pick, crd::memory::IAllocator* alloc, const Symmetric<T>& a)
 {
     static_assert(!is_complex_v<T>, "eigvals_sym: real T only (v3a-3.1)");
     using R = RealType<T>;  // == T for real f32/f64
@@ -2192,10 +2207,10 @@ Vector<RealType<T>> eigvals_sym(crd::memory::IAllocator* alloc, const Symmetric<
     tridiagonalize<T>(work.data(), n, n, d.data(), e.data(), tau.data(), alloc);
 
     const int ni = static_cast<int>(n);
-    if (n >= kEigvalsMultisectionThreshold)
+    if (n >= pick.multisection_min)
     {
         // Large N: parallel shared-Sturm multisection (uses every core).
-        solve_tridiag_multisection<R>(alloc, d.data(), e.data(), ni, out.data());
+        tridiag_multisection_arm<R>(pick.multisection, alloc, d.data(), e.data(), ni, out.data());
         return out;
     }
 
@@ -2220,6 +2235,12 @@ Vector<RealType<T>> eigvals_sym(crd::memory::IAllocator* alloc, const Symmetric<
     detail::tridiag_eigenvalues_dqds<R>(d.data(), e.data(), ni, ework.data(), e2work.data(), isplit.data(),
                                         zwork.data(), q.data(), qe.data(), out.data(), reltol);
     return out;
+}
+} // namespace detail
+
+template <typename T> Vector<RealType<T>> eigvals_sym(crd::memory::IAllocator* alloc, const Symmetric<T>& a)
+{
+    return detail::eigvals_sym_arm<T>(detail::EigvalsPick{}, alloc, a);
 }
 
 // =======================================================================
@@ -2334,6 +2355,14 @@ template EigSym<float> eig_sym<float>(crd::memory::IAllocator*, const Symmetric<
 template EigSym<double> eig_sym<double>(crd::memory::IAllocator*, const Symmetric<double>&);
 template Vector<float> eigvals_sym<float>(crd::memory::IAllocator*, const Symmetric<float>&);
 template Vector<double> eigvals_sym<double>(crd::memory::IAllocator*, const Symmetric<double>&);
+template void detail::tridiag_multisection_arm<float>(const detail::MultisectionPick&, crd::memory::IAllocator*,
+                                                      const float*, const float*, int, float*);
+template void detail::tridiag_multisection_arm<double>(const detail::MultisectionPick&, crd::memory::IAllocator*,
+                                                       const double*, const double*, int, double*);
+template Vector<float> detail::eigvals_sym_arm<float>(const detail::EigvalsPick&, crd::memory::IAllocator*,
+                                                      const Symmetric<float>&);
+template Vector<double> detail::eigvals_sym_arm<double>(const detail::EigvalsPick&, crd::memory::IAllocator*,
+                                                        const Symmetric<double>&);
 template EigSym<float> eig_sym_mrrr<float>(crd::memory::IAllocator*, const Symmetric<float>&);
 template EigSym<double> eig_sym_mrrr<double>(crd::memory::IAllocator*, const Symmetric<double>&);
 template void rank1_eigensolve<float>(crd::memory::IAllocator*, crd::usize, const float*,

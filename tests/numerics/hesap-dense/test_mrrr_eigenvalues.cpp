@@ -3,6 +3,7 @@
 
 #include <crd/containers/array.hpp>
 #include <crd/hesap/dense/detail/dqds.hpp>
+#include <crd/hesap/dense/detail/eig_arms.hpp>
 #include <crd/hesap/dense/detail/mrrr_vectors.hpp>
 #include <crd/hesap/dense/detail/sturm_count.hpp>
 #include <crd/hesap/dense/eig_sym.hpp>
@@ -1149,7 +1150,7 @@ TEST_CASE("eig_sym_mrrr: full eigendecomposition matches eig_sym + orthonormal",
 
 TEST_CASE("eigvals_sym large-N (parallel multisection path) matches eig_sym", "[hesap][eig][mrrr][eigvals]")
 {
-    // n >= kEigvalsMultisectionThreshold (512) exercises the parallel
+    // n >= EigvalsPick::multisection_min (512) exercises the parallel
     // shared-Sturm multisection path over crd::jobs.
     crd_hesap_dense_tests::hesap_jobs_listener();  // ensure jobs is initialized
     crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
@@ -1181,4 +1182,282 @@ TEST_CASE("eigvals_sym large-N (parallel multisection path) matches eig_sym", "[
     {
         CHECK(vals.data()[i] >= vals.data()[i - 1]);
     }
+}
+
+// =======================================================================
+// The eigensolvers' crd-jobs levers (eig_arms.hpp, SIMD-DISPATCH): the multisection's chunk and job counts and the
+// MRRR segments' job count, granularity and serial cut are bit-exact; multisection_min swaps two algorithms and is
+// held to a declared bound.
+// =======================================================================
+namespace
+{
+using detail::EigvalsPick;
+using detail::MrrrPick;
+using detail::MultisectionPick;
+
+// The tridiagonal test spectra: 0 random, 1 glued Wilkinson W21+ (clusters across every chunk boundary), 2 an n-fold
+// eigenvalue (constant d, e = 0), 3 graded, 4 random with -0 and a subnormal in e, 5 a NaN at d[0], 6 a NaN mid-d,
+// 7 an infinity in e.
+constexpr int kTridiagSpectra = 8;
+
+template <typename R> void tridiag_spectrum(int kind, int n, R* d, R* e)
+{
+    crd::u64 s = 0x9E3779B97F4A7C15ULL + static_cast<crd::u64>(kind * 1000 + n);
+    auto next = [&s]()
+    {
+        s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+        return static_cast<double>((s >> 11) & 0xFFFFFFFFFFFFFULL) / static_cast<double>(1ULL << 52);
+    };
+    for (int i = 0; i < n; ++i)
+    {
+        const int w = i % 21;
+        switch (kind)
+        {
+            case 1:
+                d[i] = static_cast<R>(std::abs(w - 10));
+                break;
+            case 2:
+                d[i] = static_cast<R>(0.5);
+                break;
+            case 3:
+                d[i] = static_cast<R>(std::pow(10.0, -6.0 * i / n));
+                break;
+            default:
+                d[i] = static_cast<R>(2.0 * next() - 1.0);
+                break;
+        }
+    }
+    for (int i = 0; i + 1 < n; ++i)
+    {
+        switch (kind)
+        {
+            case 1:
+                e[i] = static_cast<R>((i % 21) == 20 ? 1.0e-6 : 1.0);
+                break;
+            case 2:
+                e[i] = R{0};
+                break;
+            case 3:
+                e[i] = static_cast<R>(0.5 * std::sqrt(static_cast<double>(d[i]) * static_cast<double>(d[i + 1])));
+                break;
+            default:
+                e[i] = static_cast<R>(2.0 * next() - 1.0);
+                break;
+        }
+    }
+    if (kind == 4)
+    {
+        for (int i = 1; i + 1 < n; i += 7)
+        {
+            e[i] = static_cast<R>(-0.0);
+        }
+        e[3] = std::numeric_limits<R>::min() / R{4};
+    }
+    if (kind == 5)
+    {
+        d[0] = std::numeric_limits<R>::quiet_NaN();
+    }
+    if (kind == 6)
+    {
+        d[n / 2] = std::numeric_limits<R>::quiet_NaN();
+    }
+    if (kind == 7)
+    {
+        e[5] = std::numeric_limits<R>::infinity();
+    }
+}
+
+template <typename R> void check_multisection_levers()
+{
+    crd::memory::TlsfAllocator alloc(16U * 1024U * 1024U);
+    const int sizes[] = {64, 100, 257};
+    const MultisectionPick picks[] = {
+        {.chunks = 3, .workers = 1},  {.chunks = 8, .workers = 1},   {.chunks = 64, .workers = 1},
+        {.chunks = 0, .workers = 4},  {.chunks = 3, .workers = 4},   {.chunks = 8, .workers = 4},
+        {.chunks = 32, .workers = 4}, {.chunks = 64, .workers = 4},  {.chunks = 0, .workers = 8},
+        {.chunks = 0, .workers = 16}, {.chunks = 0, .workers = 32},  {.chunks = 3, .workers = 32},
+        {.chunks = 8, .workers = 32}, {.chunks = 64, .workers = 32}, {},
+    };
+    for (const int n : sizes)
+    {
+        crd::containers::Array<R> d = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> e = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> ref = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> w = sized<R>(static_cast<crd::usize>(n), &alloc);
+        for (int kind = 0; kind < kTridiagSpectra; ++kind)
+        {
+            tridiag_spectrum<R>(kind, n, d.data(), e.data());
+            detail::tridiag_multisection_arm<R>(MultisectionPick{.chunks = 1, .workers = 1}, &alloc, d.data(), e.data(),
+                                                n, ref.data());
+            INFO("n " << n << " spectrum " << kind);
+            if (kind == 5 || kind == 7)
+            {
+                CHECK(std::all_of(ref.data(), ref.data() + n, [](R x) { return std::isnan(x); }));
+            }
+            else if (kind != 6)
+            {
+                CHECK(std::is_sorted(ref.data(), ref.data() + n));
+            }
+            for (const MultisectionPick& pick : picks)
+            {
+                std::fill(w.data(), w.data() + n, R{-7});
+                detail::tridiag_multisection_arm<R>(pick, &alloc, d.data(), e.data(), n, w.data());
+                INFO("chunks " << pick.chunks << " jobs " << pick.workers);
+                const bool same = std::memcmp(w.data(), ref.data(), static_cast<crd::usize>(n) * sizeof(R)) == 0;
+                CHECK(same);
+            }
+        }
+    }
+}
+
+// |A|_inf, a bound on every eigenvalue's magnitude.
+template <typename R> double sym_inf_norm(const Symmetric<R>& a)
+{
+    double norm = 0.0;
+    for (crd::usize i = 0; i < a.n(); ++i)
+    {
+        double row = 0.0;
+        for (crd::usize j = 0; j < a.n(); ++j)
+        {
+            row += std::abs(static_cast<double>(j <= i ? a.at(i, j) : a.at(j, i)));
+        }
+        norm = std::max(norm, row);
+    }
+    return norm;
+}
+
+// The multisection_min arm: dqds and the multisection on the same tridiagonal agree to kEigvalsArmBoundC n eps |A|_inf.
+// Both are backward-stable tridiagonal eigenvalue methods (each leaf of the multisection is 4 eps |lambda| + 2 pivmin
+// wide); sturm_count.hpp documents no constant for the Sturm count's own backward error, so the c is stated, not
+// derived.
+constexpr double kEigvalsArmBoundC = 4.0;
+
+template <typename R> void check_eigvals_threshold()
+{
+    crd::memory::TlsfAllocator alloc(32U * 1024U * 1024U);
+    for (const int n : {200, 512})
+    {
+        Symmetric<R> a(&alloc, static_cast<crd::usize>(n));
+        crd::u64 s = 0x5151BABE12345678ULL + static_cast<crd::u64>(n);
+        for (int i = 0; i < n; ++i)
+        {
+            for (int j = 0; j <= i; ++j)
+            {
+                s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+                const double u = static_cast<double>((s >> 11) & 0xFFFFFFFFFFFFFULL) / static_cast<double>(1ULL << 52);
+                a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j)) = static_cast<R>(2.0 * u - 1.0);
+            }
+        }
+        const EigvalsPick to_multisection{.multisection_min = 0, .multisection = {}};
+        const EigvalsPick to_dqds{.multisection_min = 513, .multisection = {}};
+        const auto multisection = detail::eigvals_sym_arm<R>(to_multisection, &alloc, a);
+        const auto dqds = detail::eigvals_sym_arm<R>(to_dqds, &alloc, a);
+        const auto production = crd::hesap::dense::eigvals_sym<R>(&alloc, a);
+        const double bound =
+            kEigvalsArmBoundC * n * static_cast<double>(std::numeric_limits<R>::epsilon()) * sym_inf_norm(a);
+        double worst = 0.0;
+        for (int k = 0; k < n; ++k)
+        {
+            worst = std::max(
+                worst, std::abs(static_cast<double>(multisection.data()[k]) - static_cast<double>(dqds.data()[k])));
+        }
+        INFO("n " << n << " worst " << worst << " bound " << bound);
+        CHECK(worst <= bound);
+        const auto& want = n >= 512 ? multisection : dqds;
+        const bool same = std::memcmp(production.data(), want.data(), static_cast<crd::usize>(n) * sizeof(R)) == 0;
+        CHECK(same);
+    }
+}
+
+// mrrr_compute_vectors on every MrrrPick lever against one job, bit for bit, z padded (ldz = n + 3) with guard words in
+// the padding columns and after the buffer.
+template <typename R> void check_mrrr_levers()
+{
+    crd::memory::TlsfAllocator alloc(64U * 1024U * 1024U);
+    const R guard = static_cast<R>(-12345.0);
+    for (const int n : {2, 3, 100, 300})
+    {
+        const int ldz = n + 3;
+        const crd::usize zsize = static_cast<crd::usize>(n) * static_cast<crd::usize>(ldz) + 8U;
+        crd::containers::Array<R> d = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> e = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> w = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> ew = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> e2w = sized<R>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<int> isp = sized<int>(static_cast<crd::usize>(n), &alloc);
+        crd::containers::Array<R> zb = sized<R>(4U * static_cast<crd::usize>(n) + 8U, &alloc);
+        crd::containers::Array<R> q = sized<R>(static_cast<crd::usize>(n) + 2U, &alloc);
+        crd::containers::Array<R> qe = sized<R>(static_cast<crd::usize>(n) + 1U, &alloc);
+        crd::containers::Array<R> ref = sized<R>(zsize, &alloc);
+        crd::containers::Array<R> z = sized<R>(zsize, &alloc);
+        for (const int kind : {0, 1})
+        {
+            tridiag_spectrum<R>(kind, n, d.data(), e.data());
+            detail::tridiag_eigenvalues_dqds<R>(d.data(), e.data(), n, ew.data(), e2w.data(), isp.data(), zb.data(),
+                                                q.data(), qe.data(), w.data(),
+                                                static_cast<R>(4) * std::numeric_limits<R>::epsilon());
+            std::fill(ref.data(), ref.data() + zsize, guard);
+            detail::mrrr_compute_vectors<R>(&alloc, n, d.data(), e.data(), w.data(), ref.data(), ldz,
+                                            MrrrPick{.workers = 1});
+            for (const crd::u32 jobs : {1U, 4U, 8U, 16U, 32U})
+            {
+                for (const int gran_div : {256, 1})
+                {
+                    for (const int gran_max : {1, 8})
+                    {
+                        for (const crd::usize serial_max : {crd::usize{0}, static_cast<crd::usize>(n)})
+                        {
+                            const MrrrPick pick{
+                                .workers = jobs, .gran_div = gran_div, .gran_max = gran_max, .serial_max = serial_max};
+                            std::fill(z.data(), z.data() + zsize, guard);
+                            detail::mrrr_compute_vectors<R>(&alloc, n, d.data(), e.data(), w.data(), z.data(), ldz,
+                                                            pick);
+                            bool guards = true;
+                            for (int r = 0; r < n; ++r)
+                            {
+                                for (int c = n; c < ldz; ++c)
+                                {
+                                    guards = guards && z.data()[r * ldz + c] == guard;
+                                }
+                            }
+                            for (crd::usize i = zsize - 8U; i < zsize; ++i)
+                            {
+                                guards = guards && z.data()[i] == guard;
+                            }
+                            const bool same = std::memcmp(z.data(), ref.data(), zsize * sizeof(R)) == 0;
+                            INFO("n " << n << " spectrum " << kind << " jobs " << jobs << " gran_div " << gran_div
+                                      << " gran_max " << gran_max << " serial_max " << serial_max);
+                            CHECK(guards);
+                            CHECK(same);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("tridiag_multisection_arm: every chunk and job count gives the one-chunk bits",
+          "[hesap][eig][mrrr][eigvals][parallel][jobs]")
+{
+    (void)crd_hesap_dense_tests::hesap_jobs_listener();
+    check_multisection_levers<float>();
+    check_multisection_levers<double>();
+}
+
+TEST_CASE("eigvals_sym_arm: the multisection threshold arm is held to the declared bound",
+          "[hesap][eig][mrrr][eigvals][parallel][jobs]")
+{
+    (void)crd_hesap_dense_tests::hesap_jobs_listener();
+    check_eigvals_threshold<float>();
+    check_eigvals_threshold<double>();
+}
+
+TEST_CASE("mrrr_vectors_arm: every jobs lever gives the one-job eigenvectors' bits",
+          "[hesap][eig][mrrr][vectors][parallel][jobs]")
+{
+    (void)crd_hesap_dense_tests::hesap_jobs_listener();
+    check_mrrr_levers<float>();
+    check_mrrr_levers<double>();
 }

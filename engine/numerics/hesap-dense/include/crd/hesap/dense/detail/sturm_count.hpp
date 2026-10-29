@@ -247,10 +247,10 @@ template <typename R>
 [[nodiscard]] inline EigBracket<R> bisect_eigenvalue(const R* d, const R* e2, int n, int iw, R gl, R gu, R pivmin,
                                                      R reltol) noexcept
 {
-    constexpr R kFudge = R{2};
+    constexpr R fudge = R{2};
     const R eps = std::numeric_limits<R>::epsilon();
     const R tnorm = std::max(std::abs(gl), std::abs(gu));
-    const R atoli = kFudge * kFudge * pivmin;  // FUDGE*TWO*PIVMIN (dlarrk.f:191)
+    const R atoli = fudge * fudge * pivmin; // FUDGE*TWO*PIVMIN (dlarrk.f:191)
     const R rtoli = reltol;
 
     // Deterministic iteration cap ~ log2((tnorm+pivmin)/pivmin)+2, via integer
@@ -266,8 +266,8 @@ template <typename R>
         }
     }
 
-    R left = gl - kFudge * tnorm * eps * static_cast<R>(n) - kFudge * kFudge * pivmin;
-    R right = gu + kFudge * tnorm * eps * static_cast<R>(n) + kFudge * kFudge * pivmin;
+    R left = gl - fudge * tnorm * eps * static_cast<R>(n) - fudge * fudge * pivmin;
+    R right = gu + fudge * tnorm * eps * static_cast<R>(n) + fudge * fudge * pivmin;
 
     int info = -1;
     int it = 0;
@@ -309,9 +309,18 @@ template <typename R>
 // naive per-eigenvalue bisection. Embarrassingly parallel across disjoint
 // index chunks — the lever LAPACK's serial dsterf/dstemr cannot answer.
 //
-// [gl, gu] is the block's (widened) Gershgorin bracket. Stack scratch (caller-
-// owned, no allocation): sl/sr length >= 2*(khi-klo)+64, sclo/schi same. Output
-// w[klo..khi-1] ascending. Deterministic (pivmin Sturm guard, fixed bracket).
+// Every chunk descends the ONE tree rooted at the block's (widened, finite)
+// Gershgorin bracket [gl, gu] with indices [0, n), keeping only the nodes whose
+// index range meets [klo, khi). A node's interval is a function of its path from
+// the root alone and a leaf's value of its interval alone, so every chunk count
+// gives the one-chunk bits (D(dense-eig)-MRRR-multisection-global-tree; one chunk
+// is the whole tree). The leaf writes only w[klo..khi-1], so chunks never store
+// the same element.
+//
+// Stack (caller-owned, no allocation): sl/sr/sclo/schi length >= khi-klo+1.
+// A node pushes two children only when both meet [klo, khi), which splits the
+// chunk's indices it holds into two non-empty parts; that happens at most
+// khi-klo-1 times, and each such node leaves one pending sibling.
 // =======================================================================
 template <typename R>
 inline void multisection_chunk(const R* d, const R* e2, int n, int klo, int khi, R gl, R gu, R pivmin, R reltol,
@@ -322,40 +331,16 @@ inline void multisection_chunk(const R* d, const R* e2, int n, int klo, int khi,
         return;
     }
     const R atol = R{2} * pivmin;
-
-    // Separator search: a point x with negcount(x) == target (boundary between
-    // eigenvalue target-1 and target). Endpoints fall back to the bracket.
-    auto find_sep = [&](int target) noexcept -> R {
-        if (target <= 0)
-        {
-            return gl;
-        }
-        if (target >= n)
-        {
-            return gu;
-        }
-        R a = gl;
-        R b = gu;
-        for (int it = 0; it < 64; ++it)
-        {
-            const R m = R{0.5} * (a + b);
-            if (sturm_negcount(d, e2, n, m, pivmin) >= target)
-            {
-                b = m;
-            }
-            else
-            {
-                a = m;
-            }
-        }
-        return R{0.5} * (a + b);
+    auto meets = [klo, khi](int lo, int hi) noexcept
+    {
+        return lo < khi && hi > klo;
     };
 
     int sp = 0;
-    sl[sp] = find_sep(klo);
-    sr[sp] = find_sep(khi);
-    sclo[sp] = klo;
-    schi[sp] = khi;
+    sl[sp] = gl;
+    sr[sp] = gu;
+    sclo[sp] = 0;
+    schi[sp] = n;
     ++sp;
 
     while (sp > 0)
@@ -365,15 +350,12 @@ inline void multisection_chunk(const R* d, const R* e2, int n, int klo, int khi,
         const R rgt = sr[sp];
         const int clo = sclo[sp];
         const int chi = schi[sp];
-        if (chi <= clo)
-        {
-            continue;
-        }
         const R mag = std::max(std::abs(lft), std::abs(rgt));
         if ((rgt - lft) <= reltol * mag + atol)
         {
             const R mid = R{0.5} * (lft + rgt);
-            for (int k = clo; k < chi; ++k)
+            const int kend = std::min(chi, khi);
+            for (int k = std::max(clo, klo); k < kend; ++k)
             {
                 w[k] = mid;
             }
@@ -390,7 +372,7 @@ inline void multisection_chunk(const R* d, const R* e2, int n, int klo, int khi,
             cmid = chi;
         }
         // Push children (one negcount(mid) served BOTH halves = the sharing win).
-        if (cmid > clo)
+        if (cmid > clo && meets(clo, cmid))
         {
             sl[sp] = lft;
             sr[sp] = mid;
@@ -398,7 +380,7 @@ inline void multisection_chunk(const R* d, const R* e2, int n, int klo, int khi,
             schi[sp] = cmid;
             ++sp;
         }
-        if (chi > cmid)
+        if (chi > cmid && meets(cmid, chi))
         {
             sl[sp] = mid;
             sr[sp] = rgt;
