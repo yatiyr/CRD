@@ -3,7 +3,7 @@
 // crd-math — THE unified deterministic transcendental API (the "Cerid Math Mandate", docs/PRINCIPLES.md).
 // All engine + tool code calls crd::math::{exp,log,exp2,exp10,expm1,log2,log10,log1p,...} HERE; std:: math is
 // forbidden in engine code (guard crd-no-std-transcendental). These wrap the bit-identical scalar+SIMD cores in
-// simd/transcendental.hpp (crd_exp1/crd_log1) and complete the exp/log family. Contract (docs/phases/
+// simd/transcendental.hpp (crd_exp1/crd_log1) and complete the exp/log family. Contract (docs/archive/phases/
 // crd-math-transcendental.md §1): <=1 ulp vs mpmath, -ffp-contract=off ⇒ identical bits on every platform/width
 // (the certification moat). Edge cases (NaN/±Inf/subnormal/huge) fall back to the correctly-rounded C library result
 // through crd/math/libm.hpp, permitted HERE (the kernel + its fallbacks) and ONLY here. f32 overloads route through
@@ -23,8 +23,7 @@ inline constexpr double kLn2Const = 0.69314718055994530941723212145818;   // ln 
 inline constexpr double kLn10Const = 2.30258509299404568401799145468436;  // ln 10
 inline constexpr double kLog2eConst = 1.44269504088896340735992468100189; // 1/ln2
 inline constexpr double kLog10eConst = 0.43429448190325182765112891891661; // 1/ln10
-// hi/lo splits (hi+lo = 1/ln(base) to ~106 bits) ⇒ r·const via fma in extra precision ⇒ ≤1 ulp log2/log10
-// (the single rounded-constant multiply otherwise left them at ~2 ulp).
+// hi/lo splits (hi+lo = 1/ln(base) to ~106 bits): log(m)·const as a pair through fma ⇒ ≤0.52 ulp log2/log10.
 inline constexpr double kLog2eHi = 1.44269504088896339e+00, kLog2eLo = 2.03552737409310331e-17;
 inline constexpr double kLog10eHi = 4.34294481903251817e-01, kLog10eLo = 1.09831965021676507e-17;
 inline constexpr double kLog10Of2Hi = 3.01029996015131473541e-01;  // log10(2) split (hi has 30 low zero bits ⇒ k·hi
@@ -130,27 +129,38 @@ inline constexpr double kQ11 = 2.09664440778585537e-09;
 // ───────────────────────── log family ─────────────────────────
 [[nodiscard]] inline double log(double x) noexcept { return crd_log1(x); }
 
+// log2(x) = ed + log(m)·log2e: the product as a pair (p and its fma error), then Fast2Sum with the exact ed (|ed| ≥ 1
+// > |p| or ed = 0) and one rounding of the head plus the small terms.
 [[nodiscard]] inline double log2(double x) noexcept
 {
-    if (!(x > 0.0) || !libm::is_finite(x) || x < kMinNormal)
+    if (!(x > 0.0) || !libm::is_finite(x))
     {
         return libm::log2(x);
     }
     double ed = 0.0;
-    const double logm = crd_log_reduce(x, ed);           // ed exact, logm small
-    return ed + libm::fma(logm, kLog2eHi, logm * kLog2eLo); // ed + logm·log2e (extra precision) ⇒ ≤1 ulp
+    double lo = 0.0;
+    const double hi = crd_log_reduce(x, ed, lo);
+    const double p = hi * kLog2eHi;
+    const double pl = libm::fma(hi, kLog2eLo, libm::fma(lo, kLog2eHi, libm::fma(hi, kLog2eHi, -p)));
+    const double h = ed + p;
+    return h + ((p - (h - ed)) + pl);
 }
 
+// log10(x) = ed·log10(2) + log(m)·log10(e) as log2 does it: ed·kLog10Of2Hi is exact and at least |p| (or zero).
 [[nodiscard]] inline double log10(double x) noexcept
 {
-    if (!(x > 0.0) || !libm::is_finite(x) || x < kMinNormal)
+    if (!(x > 0.0) || !libm::is_finite(x))
     {
         return libm::log10(x);
     }
     double ed = 0.0;
-    const double logm = crd_log_reduce(x, ed); // log10(x) = ed·log10(2) + logm·log10(e), ed exact (hi/lo split)
-    const double lm = libm::fma(logm, kLog10eHi, logm * kLog10eLo);
-    return libm::fma(ed, kLog10Of2Hi, libm::fma(ed, kLog10Of2Lo, lm));
+    double lo = 0.0;
+    const double hi = crd_log_reduce(x, ed, lo);
+    const double p = hi * kLog10eHi;
+    const double pl = libm::fma(hi, kLog10eLo, libm::fma(lo, kLog10eHi, libm::fma(hi, kLog10eHi, -p)));
+    const double a = ed * kLog10Of2Hi;
+    const double h = a + p;
+    return h + libm::fma(ed, kLog10Of2Lo, (p - (h - a)) + pl);
 }
 
 // log(1+x) — Goldberg correction so the low bits of x survive the 1+x rounding (<=1 ulp near 0).

@@ -17,16 +17,28 @@ inline constexpr double kLn2Hi = 0.693359375; // exact (355/512); Cephes ln2 spl
 inline constexpr double kLn2Lo = -2.121944400546905827679e-4;
 inline constexpr double kSqrt2 = 1.41421356237309504880168872420969808;
 inline constexpr double kMinNormal = 2.2250738585072014e-308;
-inline constexpr double kC3 = 1.0 / 3.0, kC5 = 1.0 / 5.0, kC7 = 1.0 / 7.0, kC9 = 1.0 / 9.0;
-inline constexpr double kC11 = 1.0 / 11.0, kC13 = 1.0 / 13.0, kC15 = 1.0 / 15.0, kC17 = 1.0 / 17.0;
+// log(m) = 2·atanh(t) = 2t + 2t·s·R(s), t = (m − 1)/(m + 1), s = t², |t| ≤ 3 − 2√2: R(s) = (atanh t − t)/t³ as a
+// degree-7 Chebyshev fit on [0, (3 − 2√2)²] (tests/foundation/math/gen_log_coeffs.py), relative error 3e-18.
+inline constexpr double kLogR0 = 3.33333333333333315e-01, kLogR1 = 2.00000000000004396e-01;
+inline constexpr double kLogR2 = 1.42857142854018071e-01, kLogR3 = 1.11111111958569583e-01;
+inline constexpr double kLogR4 = 9.09089782006645281e-02, kLogR5 = 7.69311985140732901e-02;
+inline constexpr double kLogR6 = 6.63438656932844317e-02, kLogR7 = 6.54331307392005124e-02;
 
-// Shared log reduction: x normal>0 → returns logm = log(mantissa m∈[√½,√2)), sets ed = the EXACT base-2 exponent.
-// log(x)=ed·ln2+logm; log2(x)=ed+logm·log2e; log10(x)=ed·log10 2+logm·log10e — ed carries zero error, so the
-// derived log2/log10 stay ≤1 ulp (a single rounded multiply of the natural log left them at ~2 ulp).
-[[nodiscard]] inline double crd_log_reduce(double x, double& ed) noexcept
+// Shared log reduction, x positive and finite: log(x) = ed·ln2 + hi + lo with ed the EXACT base-2 exponent and
+// hi + lo = log(m), m ∈ [√½, √2), to 2^-58 relative (|lo| ≤ 0.011·|hi|; the pair is not normalised). t's rounding is
+// carried: m − 1 is exact, m + 1 rounds by ul (exact), tl = (m − 1 − t·(m + 1))/(m + 1) through the division's exact
+// remainder, and it enters as 2·tl·(1 + s), the first two terms of log's derivative 2/(1 − s). A subnormal x is
+// scaled by 2^54 first, exactly.
+[[nodiscard]] inline double crd_log_reduce(double x, double& ed, double& lo) noexcept
 {
+    int bias = 1023;
+    if (x < kMinNormal)
+    {
+        x *= 18014398509481984.0; // 2^54
+        bias += 54;
+    }
     const crd::u64 bits = __builtin_bit_cast(crd::u64, x);
-    int e = static_cast<int>((bits >> 52) & 0x7FFULL) - 1023;
+    int e = static_cast<int>((bits >> 52) & 0x7FFULL) - bias;
     const crd::u64 mbits = (bits & 0x000FFFFFFFFFFFFFULL) | 0x3FF0000000000000ULL;
     double m = __builtin_bit_cast(double, mbits); // m ∈ [1,2)
     if (m > kSqrt2)
@@ -35,32 +47,42 @@ inline constexpr double kC11 = 1.0 / 11.0, kC13 = 1.0 / 13.0, kC15 = 1.0 / 15.0,
         e += 1;
     }
     ed = static_cast<double>(e);
-    const double t = (m - 1.0) / (m + 1.0);
+    const double f = m - 1.0;
+    const double u = m + 1.0;
+    const double ul = m - (u - 1.0); // m + 1 = u + ul exactly
+    const double t = f / u;
+    const double tl = libm::fma(-t, ul, libm::fma(-t, u, f)) / u;
     const double s = t * t;
-    double q = kC17;
-    q = libm::fma(q, s, kC15);
-    q = libm::fma(q, s, kC13);
-    q = libm::fma(q, s, kC11);
-    q = libm::fma(q, s, kC9);
-    q = libm::fma(q, s, kC7);
-    q = libm::fma(q, s, kC5);
-    q = libm::fma(q, s, kC3);
-    const double tt = t + t;         // 2t
-    return libm::fma(tt * s, q, tt); // logm = 2t·(1 + s·q)
+    double q = kLogR7;
+    q = libm::fma(q, s, kLogR6);
+    q = libm::fma(q, s, kLogR5);
+    q = libm::fma(q, s, kLogR4);
+    q = libm::fma(q, s, kLogR3);
+    q = libm::fma(q, s, kLogR2);
+    q = libm::fma(q, s, kLogR1);
+    q = libm::fma(q, s, kLogR0);
+    const double tt = t + t;
+    const double tl2 = tl + tl;
+    lo = libm::fma(tt * s, q, libm::fma(tl2, s, tl2));
+    return tt;
 }
 
-// Scalar f64 log — the canonical bit pattern the SIMD twin reproduces.
+// Scalar f64 log — the canonical bit pattern the SIMD twins reproduce; ≤0.52 ulp. ed·kLn2Hi is exact (an 11-bit
+// integer times a 9-bit constant) and so is its sum with hi as a pair (Fast2Sum: |ed·kLn2Hi| ≥ |hi| or ed = 0); the
+// result is one rounding of the pair's head plus the small terms.
 [[nodiscard]] inline double crd_log1(double x) noexcept
 {
-    if (!(x > 0.0) || !libm::is_finite(x) || x < kMinNormal)
+    if (!(x > 0.0) || !libm::is_finite(x))
     {
-        return libm::log(x); // x≤0 / NaN / +Inf / subnormal → exact library result
+        return libm::log(x); // x≤0 / NaN / +Inf → exact library result
     }
     double ed = 0.0;
-    const double logm = crd_log_reduce(x, ed);
-    double r = libm::fma(ed, kLn2Hi, logm);
-    r = libm::fma(ed, kLn2Lo, r);
-    return r;
+    double lo = 0.0;
+    const double hi = crd_log_reduce(x, ed, lo);
+    const double a = ed * kLn2Hi;
+    const double h = a + hi;
+    const double he = hi - (h - a);
+    return h + libm::fma(ed, kLn2Lo, he + lo);
 }
 
 // ---- exp ----

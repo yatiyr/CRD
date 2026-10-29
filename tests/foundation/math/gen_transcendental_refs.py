@@ -11,8 +11,8 @@ mp.mp.dps = 50  # 50 decimal digits ground truth
 
 
 def grid(lo, hi, n, *, log=False, extra=None):
-    if log:
-        xs = np.exp(np.linspace(np.log(lo), np.log(hi), n))
+    if log:  # spaced through mpmath: numpy's exp gives other last bits on other platforms
+        xs = np.array([float(mp.exp(v)) for v in mp.linspace(mp.log(lo), mp.log(hi), n)])
     else:
         xs = np.linspace(lo, hi, n)
     if extra:
@@ -20,15 +20,27 @@ def grid(lo, hi, n, *, log=False, extra=None):
     return np.unique(xs.astype(np.float64))
 
 
+# The log family's hard inputs: m = x·2^-e on both sides of √2 and √½ (the reduction's seam, where t is largest), at
+# exponents 0, ±1 (where ed·ln2 and log(m) cancel), ±1000 and -1022, the bands (√2, 2), (½, √½) and near 1, subnormals.
+_SQRT2 = float(mp.sqrt(2))
+_log_extra = [0.17705993512268989, 5e-310, 1e-320, 5e-324, 2.2250738585072009e-308]
+for _seam in (_SQRT2, _SQRT2 / 2):
+    _near = [_seam]
+    for _ in range(4):
+        _near = [float(np.nextafter(_near[0], 0.0))] + _near + [float(np.nextafter(_near[-1], np.inf))]
+    _log_extra += [v * 2.0**k for v in _near for k in (0, 1, -1, 1000, -1000, -1022)]
+_log_extra += list(np.linspace(_SQRT2, 2.0, 200)) + list(np.linspace(0.5, _SQRT2 / 2, 200))
+_log_extra += list(np.linspace(1.0 - 1e-3, 1.0 + 1e-3, 101))
+
 # (name, mpmath fn, grid) — grid is f64 inputs; ref = correctly-rounded f64 of mpmath(input).
 FUNCS = [
     ("exp", mp.exp, grid(-700, 700, 400, extra=[0.0, 1.0, -1.0, 1e-8, -1e-8, 709.0, -745.0])),
     ("exp2", lambda v: mp.power(2, v), grid(-1020, 1020, 400, extra=[0.0, 0.5, -0.5, 10.0, 1023.0])),
     ("exp10", lambda v: mp.power(10, v), grid(-300, 300, 400, extra=[0.0, 1.0, 2.0, -1.0, 0.5])),
     ("expm1", mp.expm1, grid(-40.0, 40.0, 600, extra=[1e-10, -1e-10, 1e-6, -1e-6, 1e-3, 0.34, 0.35, 0.5, -0.5, 0.7, -0.7, 2.0, 3.0, 5.0, -5.0, 700.0, -700.0, 0.0])),
-    ("log", mp.log, grid(1e-300, 1e300, 400, log=True, extra=[1.0, 2.0, 0.5, 1.0000001, 0.9999999])),
-    ("log2", lambda v: mp.log(v, 2), grid(1e-300, 1e300, 400, log=True, extra=[1.0, 2.0, 4.0, 0.5, 8.0])),
-    ("log10", lambda v: mp.log10(v), grid(1e-300, 1e300, 400, log=True, extra=[1.0, 10.0, 100.0, 0.1])),
+    ("log", mp.log, grid(1e-300, 1e300, 400, log=True, extra=[1.0, 2.0, 0.5, 1.0000001, 0.9999999] + _log_extra)),
+    ("log2", lambda v: mp.log(v, 2), grid(1e-300, 1e300, 400, log=True, extra=[1.0, 2.0, 4.0, 0.5, 8.0] + _log_extra)),
+    ("log10", lambda v: mp.log10(v), grid(1e-300, 1e300, 400, log=True, extra=[1.0, 10.0, 100.0, 0.1] + _log_extra)),
     ("log1p", mp.log1p, grid(-0.9, 1e6, 300, log=False, extra=[1e-12, -1e-12, 1e-8, -1e-8, 1e-3, -0.5, 0.0])),
 ]
 

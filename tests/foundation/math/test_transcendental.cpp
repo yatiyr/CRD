@@ -156,7 +156,7 @@ TEST_CASE("crd::math transcendental cross-platform determinism golden checksum",
     }
 #undef TX_FOLD
     INFO("golden checksum = 0x" << std::hex << h << ", Payne-Hanek range 0x" << large);
-    CHECK(h == 0x3e379d52f6f98672ULL); // canonical bits (gcc/-ffp-contract=off); every platform must reproduce
+    CHECK(h == 0x96d6c9aeb69256a8ULL); // canonical bits (gcc/-ffp-contract=off); every platform must reproduce
     CHECK(large == 0xa65cc2f9b1b48d16ULL);
 }
 

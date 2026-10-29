@@ -6,12 +6,13 @@
 // The reusable home for these primitives (the f32 log/exp live in crd/math/deterministic.hpp; Vec4d in simd/vec4d.hpp;
 // these fill the f64 gap). Consumers: FFT, AD, and the hesap-special distribution/special-function hot paths.
 //
-//   log: atanh range reduction x=m·2^e, m∈[√½,√2) ⇒ |t|≤0.172, log(m)=2·atanh(t); ln2 split hi/lo.
+//   log: atanh range reduction x=m·2^e, m∈[√½,√2) ⇒ |t|≤0.172, log(m)=2·atanh(t) with t's rounding carried (the
+//        pair of crd_log_reduce); ln2 split hi/lo, the head summed exactly. Accuracy: log ≤0.52 ulp.
 //   exp: Cody-Waite x=k·ln2+r (|r|≤ln2/2) + degree-12 MINIMAX exp(r) (gen_exp_coeffs.py), ×2^k by a TWO-step exponent
 //        injection (one half each) ⇒ correct subnormals (k≲−1022) AND near-overflow (k≈1024). Accuracy: exp ≤1 ulp.
 // All combines use the single-rounded FMA in the SAME order; the build pins -ffp-contract=off (crd-simd-flags) ⇒ the
 // scalar and SIMD kernels emit IDENTICAL bits. That bit-identity is what lets a parallel batch's SIMD body and its
-// scalar tail agree byte-for-byte ⇒ a partition-independent {1,4,16}-thread determinism moat. Accuracy: log ≤2 ulp.
+// scalar tail agree byte-for-byte ⇒ a partition-independent {1,4,16}-thread determinism moat.
 
 #include <crd/math/exp_log_core.hpp> // crd_log1 / crd_exp1, the scalar cores these twins reproduce
 #include <crd/math/simd/backend.hpp>
@@ -35,20 +36,27 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
     const __m256d magic = _mm256_set1_pd(6755399441055744.0); // 0x4338000000000000
     const __m256d ed = _mm256_sub_pd(_mm256_castsi256_pd(_mm256_add_epi64(ei, _mm256_castpd_si256(magic))), magic);
     const __m256d one = _mm256_set1_pd(1.0);
-    const __m256d t = _mm256_div_pd(_mm256_sub_pd(m, one), _mm256_add_pd(m, one));
+    const __m256d f = _mm256_sub_pd(m, one);
+    const __m256d u = _mm256_add_pd(m, one);
+    const __m256d ul = _mm256_sub_pd(m, _mm256_sub_pd(u, one));
+    const __m256d t = _mm256_div_pd(f, u);
+    const __m256d tl = _mm256_div_pd(_mm256_fnmadd_pd(t, ul, _mm256_fnmadd_pd(t, u, f)), u);
     const __m256d s = _mm256_mul_pd(t, t);
-    __m256d q = _mm256_set1_pd(kC17);
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC15));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC13));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC11));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC9));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC7));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC5));
-    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kC3));
+    __m256d q = _mm256_set1_pd(kLogR7);
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR6));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR5));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR4));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR3));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR2));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR1));
+    q = _mm256_fmadd_pd(q, s, _mm256_set1_pd(kLogR0));
     const __m256d tt = _mm256_add_pd(t, t);
-    const __m256d logm = _mm256_fmadd_pd(_mm256_mul_pd(tt, s), q, tt);
-    __m256d r = _mm256_fmadd_pd(ed, _mm256_set1_pd(kLn2Hi), logm);
-    r = _mm256_fmadd_pd(ed, _mm256_set1_pd(kLn2Lo), r);
+    const __m256d tl2 = _mm256_add_pd(tl, tl);
+    const __m256d lo = _mm256_fmadd_pd(_mm256_mul_pd(tt, s), q, _mm256_fmadd_pd(tl2, s, tl2));
+    const __m256d a = _mm256_mul_pd(ed, _mm256_set1_pd(kLn2Hi));
+    const __m256d h = _mm256_add_pd(a, tt);
+    const __m256d he = _mm256_sub_pd(tt, _mm256_sub_pd(h, a));
+    __m256d r = _mm256_add_pd(h, _mm256_fmadd_pd(ed, _mm256_set1_pd(kLn2Lo), _mm256_add_pd(he, lo)));
     const __m256d le0 = _mm256_cmp_pd(x, _mm256_setzero_pd(), _CMP_LE_OQ);
     const __m256d unord = _mm256_cmp_pd(x, x, _CMP_UNORD_Q);
     const __m256d big = _mm256_cmp_pd(x, _mm256_set1_pd(1.7976931348623157e308), _CMP_GT_OQ);
@@ -153,20 +161,27 @@ template <typename Core>
     const __m512d magic = _mm512_set1_pd(6755399441055744.0); // 0x4338000000000000
     const __m512d ed = _mm512_sub_pd(_mm512_castsi512_pd(_mm512_add_epi64(ei, _mm512_castpd_si512(magic))), magic);
     const __m512d one = _mm512_set1_pd(1.0);
-    const __m512d t = _mm512_div_pd(_mm512_sub_pd(m, one), _mm512_add_pd(m, one));
+    const __m512d f = _mm512_sub_pd(m, one);
+    const __m512d u = _mm512_add_pd(m, one);
+    const __m512d ul = _mm512_sub_pd(m, _mm512_sub_pd(u, one));
+    const __m512d t = _mm512_div_pd(f, u);
+    const __m512d tl = _mm512_div_pd(_mm512_fnmadd_pd(t, ul, _mm512_fnmadd_pd(t, u, f)), u);
     const __m512d s = _mm512_mul_pd(t, t);
-    __m512d q = _mm512_set1_pd(kC17);
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC15));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC13));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC11));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC9));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC7));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC5));
-    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kC3));
+    __m512d q = _mm512_set1_pd(kLogR7);
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR6));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR5));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR4));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR3));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR2));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR1));
+    q = _mm512_fmadd_pd(q, s, _mm512_set1_pd(kLogR0));
     const __m512d tt = _mm512_add_pd(t, t);
-    const __m512d logm = _mm512_fmadd_pd(_mm512_mul_pd(tt, s), q, tt);
-    __m512d r = _mm512_fmadd_pd(ed, _mm512_set1_pd(kLn2Hi), logm);
-    r = _mm512_fmadd_pd(ed, _mm512_set1_pd(kLn2Lo), r);
+    const __m512d tl2 = _mm512_add_pd(tl, tl);
+    const __m512d lo = _mm512_fmadd_pd(_mm512_mul_pd(tt, s), q, _mm512_fmadd_pd(tl2, s, tl2));
+    const __m512d a = _mm512_mul_pd(ed, _mm512_set1_pd(kLn2Hi));
+    const __m512d h = _mm512_add_pd(a, tt);
+    const __m512d he = _mm512_sub_pd(tt, _mm512_sub_pd(h, a));
+    __m512d r = _mm512_add_pd(h, _mm512_fmadd_pd(ed, _mm512_set1_pd(kLn2Lo), _mm512_add_pd(he, lo)));
     const __mmask8 abn = _mm512_cmp_pd_mask(x, _mm512_setzero_pd(), _CMP_LE_OQ) |
                          _mm512_cmp_pd_mask(x, x, _CMP_UNORD_Q) |
                          _mm512_cmp_pd_mask(x, _mm512_set1_pd(1.7976931348623157e308), _CMP_GT_OQ) |
@@ -225,20 +240,28 @@ template <typename Core>
     const __m128d magic = _mm_set1_pd(6755399441055744.0); // 0x4338000000000000
     const __m128d ed = _mm_sub_pd(_mm_castsi128_pd(_mm_add_epi64(ei, _mm_castpd_si128(magic))), magic);
     const __m128d one = _mm_set1_pd(1.0);
-    const __m128d t = _mm_div_pd(_mm_sub_pd(m, one), _mm_add_pd(m, one));
+    const __m128d f = _mm_sub_pd(m, one);
+    const __m128d u = _mm_add_pd(m, one);
+    const __m128d ul = _mm_sub_pd(m, _mm_sub_pd(u, one));
+    const __m128d t = _mm_div_pd(f, u);
+    const __m128d nt = _mm_xor_pd(t, _mm_set1_pd(-0.0)); // −t, exact
+    const __m128d tl = _mm_div_pd(fma_pd(nt, ul, fma_pd(nt, u, f)), u);
     const __m128d s = _mm_mul_pd(t, t);
-    __m128d q = _mm_set1_pd(kC17);
-    q = fma_pd(q, s, _mm_set1_pd(kC15));
-    q = fma_pd(q, s, _mm_set1_pd(kC13));
-    q = fma_pd(q, s, _mm_set1_pd(kC11));
-    q = fma_pd(q, s, _mm_set1_pd(kC9));
-    q = fma_pd(q, s, _mm_set1_pd(kC7));
-    q = fma_pd(q, s, _mm_set1_pd(kC5));
-    q = fma_pd(q, s, _mm_set1_pd(kC3));
+    __m128d q = _mm_set1_pd(kLogR7);
+    q = fma_pd(q, s, _mm_set1_pd(kLogR6));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR5));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR4));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR3));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR2));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR1));
+    q = fma_pd(q, s, _mm_set1_pd(kLogR0));
     const __m128d tt = _mm_add_pd(t, t);
-    const __m128d logm = fma_pd(_mm_mul_pd(tt, s), q, tt);
-    __m128d r = fma_pd(ed, _mm_set1_pd(kLn2Hi), logm);
-    r = fma_pd(ed, _mm_set1_pd(kLn2Lo), r);
+    const __m128d tl2 = _mm_add_pd(tl, tl);
+    const __m128d lo = fma_pd(_mm_mul_pd(tt, s), q, fma_pd(tl2, s, tl2));
+    const __m128d a = _mm_mul_pd(ed, _mm_set1_pd(kLn2Hi));
+    const __m128d h = _mm_add_pd(a, tt);
+    const __m128d he = _mm_sub_pd(tt, _mm_sub_pd(h, a));
+    __m128d r = _mm_add_pd(h, fma_pd(ed, _mm_set1_pd(kLn2Lo), _mm_add_pd(he, lo)));
     const __m128d le0 = _mm_cmple_pd(x, _mm_setzero_pd());
     const __m128d unord = _mm_cmpunord_pd(x, x);
     const __m128d big = _mm_cmpgt_pd(x, _mm_set1_pd(1.7976931348623157e308));

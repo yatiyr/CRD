@@ -10,8 +10,7 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
 // pow(x,y) = x^y. Deterministic common path 2^{y·log2 x} for x>0 (and x<0 with integer y → (−1)^y·|x|^y); the IEEE
 // edge zoo (0, ±Inf, NaN, x<0 non-integer) routes to the C library pow (exact/constant results, deterministic).
-// Accuracy is ≤~3 ulp for moderate exponents; large |y·log2 x| widens (the double-double refinement is a documented
-// follow-on).
+// Accuracy is ≤~1.2 ulp for moderate exponents and ≤~3 ulp at |y·log2 x| near 1000 (log(m) is a pair to 2^-58).
 [[nodiscard]] inline double pow(double x, double y) noexcept
 {
     if (y == 0.0)
@@ -20,15 +19,19 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
     }
     const double a = libm::fabs(x);
     const bool neg_int = (x < 0.0) && (libm::round(y) == y); // x<0 with integer y ⇒ real (−1)^y·|x|^y
-    if (a > kMinNormal && libm::is_finite(x) && libm::is_finite(y) && (x > 0.0 || neg_int))
+    if (a > 0.0 && libm::is_finite(x) && libm::is_finite(y) && (x > 0.0 || neg_int))
     {
         // pow = 2^{y·log2 a}. log2(a)=ed+logm·log2e (ed EXACT) carried as a DOUBLE-DOUBLE (thi+tlo); y·log2(a)
         // likewise (uhi+ulo); then 2^{uhi}·(1+ulo·ln2). The double-double keeps the exponent's low bits so exp2
-        // doesn't amplify a single rounding ⇒ ≤1 ulp (the single-double form was ≤7).
+        // doesn't amplify a single rounding. log(m) arrives as a pair, normalised first (Fast2Sum, |llo| < |lhi|).
         double ed = 0.0;
-        const double logm = crd_log_reduce(a, ed);
-        const double phi = logm * kLog2eHi;                              // logm·log2e, hi
-        const double plo = libm::fma(logm, kLog2eHi, -phi) + logm * kLog2eLo; // + lo
+        double llo = 0.0;
+        const double lhi = crd_log_reduce(a, ed, llo);
+        const double logm = lhi + llo;
+        const double logm_lo = llo - (logm - lhi);
+        // logm·log2e as phi + plo
+        const double phi = logm * kLog2eHi;
+        const double plo = libm::fma(logm, kLog2eHi, -phi) + logm * kLog2eLo + logm_lo * kLog2eHi;
         const double thi = ed + phi;                                     // log2(a) double-double via two_sum(ed,phi)
         const double bb = thi - ed;
         const double tlo = ((ed - (thi - bb)) + (phi - bb)) + plo;
@@ -37,7 +40,7 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
         const double m = exp2(uhi) * libm::fma(ulo, kLn2Const, 1.0);      // 2^{uhi}·2^{ulo}, 2^ulo≈1+ulo·ln2
         return (neg_int && libm::fmod(libm::round(y), 2.0) != 0.0) ? -m : m;
     }
-    return libm::pow(x, y); // 0 / ±Inf / NaN / subnormal base / x<0 non-integer y → IEEE special cases
+    return libm::pow(x, y); // 0 / ±Inf / NaN / x<0 non-integer y → IEEE special cases
 }
 [[nodiscard]] inline float pow(float x, float y) noexcept
 {

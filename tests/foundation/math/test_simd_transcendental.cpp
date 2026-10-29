@@ -5,7 +5,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -28,8 +27,9 @@ namespace
 
 TEST_CASE("simd transcendental: crd_log1 accuracy vs std::log", "[math][simd][transcendental]")
 {
-    f64 max_abs = 0.0;
-    f64 max_rel = 0.0;
+    // crd_log1 is ≤0.52 ulp (the mpmath gate, test_transcendental.cpp) and the C library's log under 1 ulp, so the
+    // two doubles are less than 1.52 ulp, hence at most one ulp, apart.
+    f64 max_ulp = 0.0;
     f64 worst = 0.0;
     std::uint64_t s = 0x1234567ULL;
     for (int i = 0; i < 2000000; ++i)
@@ -37,20 +37,17 @@ TEST_CASE("simd transcendental: crd_log1 accuracy vs std::log", "[math][simd][tr
         s = s * 6364136223846793005ULL + 1442695040888963407ULL;
         const f64 u = static_cast<f64>(s >> 11) * (1.0 / 9007199254740992.0);
         const f64 x = std::exp((u - 0.5) * 1400.0); // spans ~1e-304 .. 1e304
-        const f64 got = d::crd_log1(x);
         const f64 ref = std::log(x);
-        const f64 abs = std::abs(got - ref);
-        const f64 rel = abs / (std::abs(ref) + 1e-300);
-        if (rel > max_rel)
+        const f64 ulp = std::nextafter(std::abs(ref), std::numeric_limits<f64>::infinity()) - std::abs(ref);
+        const f64 err = std::abs(d::crd_log1(x) - ref) / ulp;
+        if (err > max_ulp)
         {
-            max_rel = rel;
+            max_ulp = err;
             worst = x;
         }
-        max_abs = std::max(max_abs, abs);
     }
-    INFO("max_abs=" << max_abs << " max_rel=" << max_rel << " worst_x=" << worst);
-    CHECK(max_rel < 1e-13);
-    CHECK(max_abs < 1e-13);
+    INFO("max_ulp=" << max_ulp << " worst_x=" << worst);
+    CHECK(max_ulp <= 1.0);
 }
 
 TEST_CASE("simd transcendental: crd_log1 edge cases", "[math][simd][transcendental]")
@@ -60,7 +57,7 @@ TEST_CASE("simd transcendental: crd_log1 edge cases", "[math][simd][transcendent
     CHECK(std::isnan(d::crd_log1(-1.0)));
     CHECK(std::isinf(d::crd_log1(std::numeric_limits<f64>::infinity())));
     CHECK(std::isnan(d::crd_log1(std::numeric_limits<f64>::quiet_NaN())));
-    CHECK(std::abs(d::crd_log1(5e-310) - std::log(5e-310)) < 1e-13 * std::abs(std::log(5e-310)));
+    CHECK(std::abs(d::crd_log1(5e-310) - std::log(5e-310)) <= 1e-15 * std::abs(std::log(5e-310)));
 }
 
 TEST_CASE("simd transcendental: crd_exp1 accuracy vs std::exp + edges", "[math][simd][transcendental]")
