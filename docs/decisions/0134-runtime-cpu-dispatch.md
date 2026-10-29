@@ -141,7 +141,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    when the level is refused (the hidden `[cpu-level-applied]` case), as do the portable, sse2 and neon arms, which
    every CPU of their architecture runs. Amended 2026-10-29: an arm's differential cases run portable and its applied
    level, not every level again (the lane's unforced run has the §7 every-level proof, and N arms of N levels made
-   the suites quadratic), and the lane's `-at-sse2` pass leaves out the arms and the guards. On MSVC and clang-cl x64
+   the suites quadratic), and the lane's `-at-sse2` pass leaves out the arms and the guards (first green on push run
+   40826432863: 7,997 tests on win-debug, 7,671 on linux-gcc-debug). On MSVC and clang-cl x64
    an applied level also lowers the CRT's own dispatch in each image (`__isa_available`, which the vectorizer's
    paths and the STL test, with `__isa_enabled`, `__isa_inverted` and `__avx10_version`) and below avx2 turns the
    UCRT libm's FMA3 bodies off, from a `.CRT$XCL` initializer that crd-core's interface keeps in every image, before

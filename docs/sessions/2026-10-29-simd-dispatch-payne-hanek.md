@@ -15,6 +15,15 @@ and win-relwithdebinfo (job 123291443152), are each one `roundpd` in the CRT's `
 dd860168, covers that object. The guard took 448 s and 737 s there. Every later push run was replaced before any job
 started (0 jobs). DIAG.11c and DIAG.12 stay Needs CI: no completed run carries their hosted evidence.
 
+The same run carries the baseline flip's first green `-at-sse2` arms, read from the job logs: win-debug (job
+123291442861) passed `[cpu-level-applied]` and 7,997 tests in 2,805 s, and linux-gcc-debug (job 123291443052) 7,671
+tests in 3,209 s, each gate with no failures. The Left clause is closed.
+
+The ISA guard's hosted seconds so far, for the timeout per route: on the object route win-debug 155,
+win-debug-scalar 174, win-clang-cl 153, linux-gcc-debug 188, linux-gcc-debug-scalar 75, linux-clang-tsan 92; on the
+image route win-clang-cl-shipping 437, win-release 440, win-shipping 448 and win-relwithdebinfo 737 (the last three
+failed on the SVML finding). The guard's own clause waits for a run green on every lane.
+
 ## What landed
 
 - **Payne–Hanek above Cody-Waite's exact range.** `reduce_pio2` keeps Cody-Waite while |k| ≤ 2^20, where its
@@ -40,6 +49,8 @@ started (0 jobs). DIAG.11c and DIAG.12 stay Needs CI: no completed run carries t
 - win-debug crd-math-tests: all 178 cases pass, with sin and cos ≤1 ulp and tan ≤2 ulp over the new range, and the
   new range's golden `0xa65cc2f9b1b48d16`.
 - Tidy and clang-format on the changed C++, and the repository validators.
+- The new golden comes from MSVC; the reduction uses integer operations, exact conversions and `libm::fma` only, so
+  a Linux or ARM64 lane that disagrees points at a defect in the double-double tail, never at the constant.
 
 ## Left
 
