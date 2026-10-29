@@ -243,7 +243,12 @@ TEST_CASE("soa write per-lane via for_each_lane, read per-chunk via for_each_chu
         chunk.pos_x.store(col);
         for (usize i = 0; i < active; ++i)
         {
-            read[cursor++] = col[i];
+            // An over-reported lane count must fail the count check below, never write past the buffer.
+            if (cursor < 12U)
+            {
+                read[cursor] = col[i];
+            }
+            ++cursor;
         }
     });
 

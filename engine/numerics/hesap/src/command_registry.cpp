@@ -22,7 +22,7 @@ namespace
         return *existing;
     }
     values.insert(key, ArgValue{alloc});
-    return *values.find(key);
+    return values.at(key);
 }
 } // namespace
 

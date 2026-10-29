@@ -355,8 +355,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -687,8 +688,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -895,8 +897,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -1117,8 +1120,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -1306,8 +1310,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=${{ runner.temp }}/sccache/sccache.exe" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -1493,8 +1498,9 @@ jobs:
         if: contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
         run: cmake --preset ${{ matrix.preset }} "-DCRD_COMPILER_LAUNCHER=$RUNNER_TEMP/sccache/sccache" -DCRD_ENABLE_PCH=OFF
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Compiler cache statistics
         if: always() && contains(env.CRD_CACHED_PRESETS, format(' {0} ', matrix.preset))
@@ -1695,8 +1701,9 @@ jobs:
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Test inventory
         run: python3 scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}
@@ -1776,8 +1783,9 @@ jobs:
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
 
+      # Keep going past a failing unit (`-k 0`): the job still fails, but one run reports every independent failure.
       - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
+        run: cmake --build --preset ${{ matrix.preset }} -- -k 0
 
       - name: Test inventory
         run: python scripts/ci-evidence.py inventory --build-dir build/${{ matrix.preset }}

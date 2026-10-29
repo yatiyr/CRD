@@ -15,6 +15,14 @@ follows [the dense part](2026-10-29-simd-dispatch-bench-peers.md).
   defined on every architecture and called only by the x64 cases. Fixed in ccabba8b: they now sit inside the same
   `CRD_ARCH_X64` guard. A scan of every file with an x64 guard for helpers that are defined outside one and used only
   inside one found no other case (the build stops at its first failure, so the ARM64 lanes are still the oracle).
+- Later read of 40784988994: the three GCC LTO lanes failed at link time, each at its first failing program.
+  linux-gcc-release and -shipping: `-Werror=null-dereference` in `ArgValue::set_string.constprop`, from
+  `upsert` in `command_registry.cpp` returning `*values.find(key)` after an insert; it now returns `values.at(key)`,
+  whose miss is fatal. linux-gcc-relwithdebinfo: `-Werror=array-bounds` in `test_soa.cpp`, where the read-back
+  wrote `read[cursor++]` for every lane the chunk reported; the store is now bounded by the buffer and the count
+  check still fails an over-report.
+- Every Ninja build step in `ci.yml` now runs `-- -k 0` (win-tidy did already), so one run reports every independent
+  failure instead of the first program's. The ci.yml edit sends the push to the complete tier.
 
 ## What landed
 
