@@ -30,12 +30,14 @@ struct GemmShape
     crd::usize nr;
 };
 
-// op(X) read as a matrix: element (r, c) at data[r * row_stride + c * col_stride] (a layout and a transpose).
+// op(X) read as a matrix: element (r, c) at data[r * row_stride + c * col_stride] (a layout and a transpose), or its
+// conjugate when conj (a complex ConjTranspose; a real source never sets it).
 template <typename T> struct GemmSource
 {
     const T* data;
     crd::usize row_stride;
     crd::usize col_stride;
+    bool conj;
 };
 
 // How a GEMM block writes element (i, j) of the product p into C.
@@ -276,17 +278,23 @@ template <typename T> struct SplitHer2Lower
     crd::usize n;
 };
 
-// The kernels of one element type.
-template <typename T> struct DenseTypeKernels
+// A GEMM's kernels: one register tile, the block that runs it and the packers of its panels.
+template <typename T> struct GemmKernels
 {
-    GemmShape gemm_shape; // the shape gemm_block's panels have and pack_a and pack_b write
-    void (*gemm_block)(const GemmBlock<T>& block) noexcept;
+    GemmShape shape; // the shape block's panels have and pack_a and pack_b write
+    void (*block)(const GemmBlock<T>& block) noexcept;
     // Rows [0, rows) by columns [0, depth) of s as ceil(rows / mr) row panels (mr rows of depth values), the padding
     // rows +0.
     void (*pack_a)(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out) noexcept;
     // Rows [0, depth) by columns [0, cols) of s as ceil(cols / nr) column panels (depth rows of nr values), the
     // padding columns +0.
     void (*pack_b)(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out) noexcept;
+};
+
+// The kernels of one element type.
+template <typename T> struct DenseTypeKernels
+{
+    GemmKernels<T> gemm;
     T (*dot)(const T* x, const T* y, crd::usize n) noexcept;
     void (*axpy)(T* y, const T* x, T alpha, crd::usize n) noexcept; // y + alpha x
     void (*gemv)(const GemvRows<T>& g) noexcept;
@@ -321,5 +329,16 @@ extern const DenseKernels kDenseKernelsPortable;
 extern const DenseKernels kDenseKernelsSse2;
 extern const DenseKernels kDenseKernelsAvx2;
 extern const DenseKernels kDenseKernelsAvx512;
+
+// The one-thread GEMM board's arm (SIMD-DISPATCH): the portable level's GEMM on a 4 by 4 tile (16 accumulators)
+// against its 2 by 4 (detail::gemm_arm runs it). Both round twice, so they give the same bits. The board keeps the
+// faster tile as portable's only one, and this table goes.
+struct DenseGemmArms
+{
+    GemmKernels<crd::f64> tile4x4_f64;
+    GemmKernels<crd::f32> tile4x4_f32;
+};
+
+extern const DenseGemmArms kDenseGemmArmsPortable;
 
 } // namespace crd::hesap::dense

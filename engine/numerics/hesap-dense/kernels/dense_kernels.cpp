@@ -1,15 +1,16 @@
 // The hesap-dense kernels of crd/hesap/dense/dense_kernels.hpp, compiled once per CPU level by crd_add_cpu_kernels
 // (../CMakeLists.txt, ADR-0134 §5). Everything here lives in the level's namespace (CRD_MATH_LEVEL_NS).
 //
-// Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by
-// 4 PortableTile (two roundings, its accumulators in registers). The vector levels run one tile of two registers a
-// row: two accumulators a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector
-// registers), avx512 14 (31 of 32 ZMM, the transpose of BLIS's skx shape). sse2 rounds twice in 128-bit registers (f64
-// 6 by 4, f32 6 by 8) and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of
-// peak in L1; f32 6 by 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile
-// hands each finished row to a sink while its accumulators are still in registers: the product stores the tile, the
-// fused path merges a full row-major tile straight into C with merge_element's expression. Each step prefetches the
-// next B panel's row (one line, two at avx512), which hides its re-stream from L3 at each panel boundary.
+// Each level has its own tile shape and packs its own panels (GemmShape). The portable level runs the block on a 2 by 4
+// PortableTile (two roundings, its accumulators in registers), and its unit alone also defines the one-thread GEMM
+// board's 4 by 4 arm (kDenseGemmArmsPortable). The vector levels run one tile of two registers a row: two accumulators
+// a row, two B registers and one A broadcast a step. sse2 and avx2 take 6 rows (15 of 16 vector registers), avx512 14
+// (31 of 32 ZMM, the transpose of BLIS's skx shape). sse2 rounds twice in 128-bit registers (f64 6 by 4, f32 6 by 8)
+// and gives the portable level's bits; avx2 sums by single-rounded FMA (f64 6 by 8, about 98% of peak in L1; f32 6 by
+// 16), as avx512 does (f64 14 by 16, f32 14 by 32), so those two give the same bits. The tile hands each finished row
+// to a sink while its accumulators are still in registers: the product stores the tile, the fused path merges a full
+// row-major tile straight into C with merge_element's expression. Each step prefetches the next B panel's row (one
+// line, two at avx512), which hides its re-stream from L3 at each panel boundary.
 
 //
 // The vector and matrix-vector kernels are written once over the level's vectors (vector_steps.hpp: Vec4d and Vec8f,
@@ -215,34 +216,17 @@ using F64Tile = PortableTile<crd::f64, 2, 4, true>;
 using F32Tile = PortableTile<crd::f32, 2, 4, true>;
 #endif
 
-// The packers of a level's shape (dense_kernels.hpp) over a strided source; a unit column stride reads rows as runs.
+// The packers of a tile's shape (GemmKernels) over a strided source.
 template <typename T, crd::usize MR>
 void pack_a_kernel(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out) noexcept
 {
-    const T* d = s.data;
-    const crd::usize rs = s.row_stride;
-    const crd::usize cs = s.col_stride;
-    if (cs == 1U)
-    {
-        pack_a_panels<MR>([d, rs](crd::usize r, crd::usize c) { return d[r * rs + c]; }, rows, depth, false, out);
-        return;
-    }
-    pack_a_panels<MR>([d, rs, cs](crd::usize r, crd::usize c) { return d[r * rs + c * cs]; }, rows, depth, rs == 1U,
-                      out);
+    pack_a_source<MR>(s, rows, depth, out, [](T x) { return x; });
 }
 
 template <typename T, crd::usize NR>
 void pack_b_kernel(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out) noexcept
 {
-    const T* d = s.data;
-    const crd::usize rs = s.row_stride;
-    const crd::usize cs = s.col_stride;
-    if (cs == 1U)
-    {
-        pack_b_panels<NR>([d, rs](crd::usize r, crd::usize c) { return d[r * rs + c]; }, depth, cols, out);
-        return;
-    }
-    pack_b_panels<NR>([d, rs, cs](crd::usize r, crd::usize c) { return d[r * rs + c * cs]; }, depth, cols, out);
+    pack_b_source<NR>(s, depth, cols, out, [](T x) { return x; });
 }
 
 // ---- the vector and matrix-vector kernels ----
@@ -930,14 +914,20 @@ template <> struct TileOf<crd::f32>
 
 } // namespace
 
-template <typename T> constexpr DenseTypeKernels<T> type_kernels() noexcept
+template <typename T, typename Tile> constexpr GemmKernels<T> gemm_kernels() noexcept
 {
-    using Tile = typename TileOf<T>::Type;
     return {
-        .gemm_shape = {.mr = Tile::kMr, .nr = Tile::kNr},
-        .gemm_block = &gemm_block<Tile, T>,
+        .shape = {.mr = Tile::kMr, .nr = Tile::kNr},
+        .block = &gemm_block<Tile, T>,
         .pack_a = &pack_a_kernel<T, Tile::kMr>,
         .pack_b = &pack_b_kernel<T, Tile::kNr>,
+    };
+}
+
+template <typename T> constexpr DenseTypeKernels<T> type_kernels() noexcept
+{
+    return {
+        .gemm = gemm_kernels<T, typename TileOf<T>::Type>(),
         .dot = &dot_kernel<T>,
         .axpy = &axpy_kernel<T>,
         .gemv = &gemv_kernel<T>,
@@ -969,5 +959,12 @@ const DenseKernels CRD_KERNEL_TABLE(kDenseKernels) = {
     level::type_kernels<crd::f64>(),
     level::type_kernels<crd::f32>(),
 };
+
+#if CRD_KERNEL_LEVEL == CRD_KERNEL_LEVEL_PORTABLE
+const DenseGemmArms CRD_KERNEL_TABLE(kDenseGemmArms) = {
+    .tile4x4_f64 = level::gemm_kernels<crd::f64, level::PortableTile<crd::f64, 4, 4, true>>(),
+    .tile4x4_f32 = level::gemm_kernels<crd::f32, level::PortableTile<crd::f32, 4, 4, true>>(),
+};
+#endif
 
 } // namespace crd::hesap::dense

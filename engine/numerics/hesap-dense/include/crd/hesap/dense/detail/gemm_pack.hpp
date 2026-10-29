@@ -23,7 +23,8 @@ inline constexpr const char* kGemmPackOutOfMemory = "hesap::dense: out of memory
 //   Bc: ceil(nc / nr) column panels of kc rows by nr values (row-major), the padding columns +0.
 // Each register tile consumes one Ac row panel and one Bc column panel and produces an mr by nr tile of C. The pack
 // functions take the effective operand: op(A) reads A[i, p] (None), A[p, i] (Transpose) or conj(A[p, i])
-// (ConjTranspose). The complex types pack in general code for their portable tile (kComplexGemmShape).
+// (ConjTranspose). Every helper runs the GemmKernels it is given: the process level's (gemm_kernels_of), a board's
+// arm (gemm_arms.hpp) or the complex types' portable tile, packed in general code (kComplexGemmKernels).
 
 // The cache blocks (FLAWN #74's analytical model): an Mc by Kc Ac block (960 KB of f64) fills about half of the dev
 // host's 2 MB per-core L2 beside the streamed Bc panel and C (v5a-4); Nc keeps the Bc panel in L3. Kc is also the
@@ -32,54 +33,46 @@ inline constexpr crd::usize kGemmMc = 480;
 inline constexpr crd::usize kGemmKc = 256;
 inline constexpr crd::usize kGemmNc = 4080;
 
-// Helper: read effective A element honoring trans flag.
-template <typename T, Layout L>
-[[nodiscard]] inline T eff_a_read(MatrixView<const T, L> a, crd::usize r, crd::usize c, Trans tr) noexcept
-{
-    auto base = [&](crd::usize i, crd::usize j) -> T
-    {
-        if constexpr (L == Layout::RowMajor)
-        {
-            return a.data()[i * a.ld() + j];
-        }
-        else
-        {
-            return a.data()[j * a.ld() + i];
-        }
-    };
-    switch (tr)
-    {
-        case Trans::None:
-            return base(r, c);
-        case Trans::Transpose:
-            return base(c, r);
-        case Trans::ConjTranspose:
-            if constexpr (std::is_floating_point_v<T>)
-            {
-                return base(c, r);
-            }
-            else
-            {
-                return crd::hesap::conj(base(c, r));
-            }
-    }
-    return base(r, c);
-}
-
-// The complex types' tile: two roundings in general code, 8 by 8 (no fused merge; see merge_element).
+// The complex types' tile: two roundings in general code, 8 by 8 (no fused merge; see merge_element), and its kernels.
 inline constexpr GemmShape kComplexGemmShape{.mr = 8, .nr = 8};
 template <typename T> using ComplexGemmTile = PortableTile<T, kComplexGemmShape.mr, kComplexGemmShape.nr, false>;
 
-// The tile shape of the level the process runs (f64, f32), or the complex types'.
-template <typename T> [[nodiscard]] inline GemmShape gemm_shape_of() noexcept
+template <typename T> void pack_a_complex(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out) noexcept
+{
+    if (s.conj)
+    {
+        pack_a_source<kComplexGemmShape.mr>(s, rows, depth, out, [](const T& x) { return crd::hesap::conj(x); });
+        return;
+    }
+    pack_a_source<kComplexGemmShape.mr>(s, rows, depth, out, [](const T& x) { return x; });
+}
+
+template <typename T> void pack_b_complex(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out) noexcept
+{
+    if (s.conj)
+    {
+        pack_b_source<kComplexGemmShape.nr>(s, depth, cols, out, [](const T& x) { return crd::hesap::conj(x); });
+        return;
+    }
+    pack_b_source<kComplexGemmShape.nr>(s, depth, cols, out, [](const T& x) { return x; });
+}
+
+template <typename T>
+inline constexpr GemmKernels<T> kComplexGemmKernels{.shape = kComplexGemmShape,
+                                                    .block = &gemm_block<ComplexGemmTile<T>, T>,
+                                                    .pack_a = &pack_a_complex<T>,
+                                                    .pack_b = &pack_b_complex<T>};
+
+// The GEMM kernels of the level the process runs (f64, f32), or the complex types'.
+template <typename T> [[nodiscard]] inline const GemmKernels<T>& gemm_kernels_of() noexcept
 {
     if constexpr (kHasDenseKernels<T>)
     {
-        return dense_kernels_of<T>().gemm_shape;
+        return dense_kernels_of<T>().gemm;
     }
     else
     {
-        return kComplexGemmShape;
+        return kComplexGemmKernels<T>;
     }
 }
 
@@ -120,82 +113,64 @@ template <typename T, Layout L>
         rs = cs;
         cs = t;
     }
-    return GemmSource<T>{.data = x.data() + r0 * rs + c0 * cs, .row_stride = rs, .col_stride = cs};
+    return GemmSource<T>{.data = x.data() + r0 * rs + c0 * cs,
+                         .row_stride = rs,
+                         .col_stride = cs,
+                         .conj = tr == Trans::ConjTranspose && !std::is_floating_point_v<T>};
 }
 
-// pack_a: the (mc by kc) block of op(A) at (ic, pc) as Ac panels into out (packed_a_size values).
+// Whether a GEMM may read op(A) in place as whole row panels on kernels k (blas3's resident-A path; the size
+// thresholds are blas3's): a real type, op(A) row-major, and the whole packed B within the packed path's Bc budget (Kc
+// by Nc plus a panel), so a skinny product (m = 1, n = k = 10^4: 800 MB of f64) never packs a large B whole.
 template <typename T, Layout L>
-inline void pack_a(MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::usize mc, crd::usize kc, Trans trans_a,
-                   T* out) noexcept
+[[nodiscard]] inline bool gemm_resident_admits(const GemmKernels<T>& k, Trans trans_a, crd::usize n,
+                                               crd::usize depth) noexcept
 {
-    if constexpr (kHasDenseKernels<T>)
-    {
-        dense_kernels_of<T>().pack_a(gemm_source(a, ic, pc, trans_a), mc, kc, out);
-    }
-    else
-    {
-        // op(A) is column-contiguous when the layout and the transpose disagree on row-major-ness.
-        const bool rows_contiguous = (L == Layout::ColMajor) != (trans_a != Trans::None);
-        pack_a_panels<kComplexGemmShape.mr>([a, ic, pc, trans_a](crd::usize r, crd::usize c)
-                                            { return eff_a_read<T, L>(a, ic + r, pc + c, trans_a); }, mc, kc,
-                                            rows_contiguous, out);
-    }
+    return kHasDenseKernels<T> && (L == Layout::RowMajor) == (trans_a == Trans::None) &&
+           packed_b_size(k.shape, depth, n) <= kGemmKc * (kGemmNc + k.shape.nr);
 }
 
-// pack_b: the (kc by nc) block of op(B) at (pc, jc) as Bc panels into out (packed_b_size values).
+// pack_a: the (mc by kc) block of op(A) at (ic, pc) as Ac panels of kernels k into out (packed_a_size values).
 template <typename T, Layout L>
-inline void pack_b(MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::usize kc, crd::usize nc, Trans trans_b,
-                   T* out) noexcept
+inline void pack_a(const GemmKernels<T>& k, MatrixView<const T, L> a, crd::usize ic, crd::usize pc, crd::usize mc,
+                   crd::usize kc, Trans trans_a, T* out) noexcept
 {
-    if constexpr (kHasDenseKernels<T>)
-    {
-        dense_kernels_of<T>().pack_b(gemm_source(b, pc, jc, trans_b), kc, nc, out);
-    }
-    else
-    {
-        pack_b_panels<kComplexGemmShape.nr>([b, pc, jc, trans_b](crd::usize r, crd::usize c)
-                                            { return eff_a_read<T, L>(b, pc + r, jc + c, trans_b); }, kc, nc, out);
-    }
+    k.pack_a(gemm_source(a, ic, pc, trans_a), mc, kc, out);
 }
 
-// One GEMM block on the level the process runs (f64, f32) or on the complex types' tile.
-template <typename T> inline void run_gemm_block(const GemmBlock<T>& block) noexcept
+// pack_b: the (kc by nc) block of op(B) at (pc, jc) as Bc panels of kernels k into out (packed_b_size values).
+template <typename T, Layout L>
+inline void pack_b(const GemmKernels<T>& k, MatrixView<const T, L> b, crd::usize pc, crd::usize jc, crd::usize kc,
+                   crd::usize nc, Trans trans_b, T* out) noexcept
 {
-    if constexpr (kHasDenseKernels<T>)
-    {
-        dense_kernels_of<T>().gemm_block(block);
-    }
-    else
-    {
-        gemm_block<ComplexGemmTile<T>>(block);
-    }
+    k.pack_b(gemm_source(b, pc, jc, trans_b), kc, nc, out);
 }
 
 // C[ic .. ic + mc, jc .. jc + nc) merged with alpha * the product of the Ac rows (mc by kc, row stride lda: packed
-// panels or resident whole panels) and the packed Bc (kc by nc) block: GemmUpdate::Scale for a GEMM's first depth group
-// (beta C folded in), Add for the later ones.
+// panels or resident whole panels) and the packed Bc (kc by nc) block on kernels k: GemmUpdate::Scale for a GEMM's
+// first depth group (beta C folded in), Add for the later ones.
 template <typename T, Layout L>
-inline void gemm_packed_inner(T alpha, T beta, GemmUpdate update, crd::usize ic, crd::usize jc, crd::usize mc,
-                              crd::usize nc, crd::usize kc, const T* a_rows, crd::usize lda, const T* b_packed,
-                              MatrixView<T, L> c) noexcept
+inline void gemm_packed_inner(const GemmKernels<T>& k, T alpha, T beta, GemmUpdate update, crd::usize ic, crd::usize jc,
+                              crd::usize mc, crd::usize nc, crd::usize kc, const T* a_rows, crd::usize lda,
+                              const T* b_packed, MatrixView<T, L> c) noexcept
 {
     constexpr bool col_major = L == Layout::ColMajor;
     T* corner = col_major ? c.data() + jc * c.ld() + ic : c.data() + ic * c.ld() + jc;
-    run_gemm_block(GemmBlock<T>{.a = a_rows,
-                                .b = b_packed,
-                                .c = corner,
-                                .lda = lda,
-                                .ldc = c.ld(),
-                                .rows = mc,
-                                .cols = nc,
-                                .depth = kc,
-                                .row0 = ic,
-                                .col0 = jc,
-                                .alpha = alpha,
-                                .beta = beta,
-                                .update = update,
-                                .col_major = col_major,
-                                .lower = false});
+    k.block(GemmBlock<T>{.a = a_rows,
+                         .b = b_packed,
+                         .c = corner,
+                         .lda = lda,
+                         .ldc = c.ld(),
+                         .rows = mc,
+                         .cols = nc,
+                         .depth = kc,
+                         .row0 = ic,
+                         .col0 = jc,
+                         .alpha = alpha,
+                         .beta = beta,
+                         .update = update,
+                         .col_major = col_major,
+                         .lower = false});
 }
 
 } // namespace crd::hesap::dense::detail

@@ -1369,6 +1369,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                 // single-K sweep (kacc ≤ obw−ibw and qw ≤ ibw are single chunks), merge c −= micro (update)
                 // / c = micro (solve), ascending q. Row chunking never touches a reduction ⇒ bit-identical
                 // across row slabs and worker counts.
+                const dense::GemmKernels<T>& gk = dense::detail::gemm_kernels_of<T>();
                 constexpr crd::u32 max_bblk = kCdivBlock / kCdivInnerBlock; // ≤ 4 inner blocks per outer
                 crd::usize wpack_off[max_bblk] = {};                        // offsets into the front's linv slot
                 crd::usize lpack_off[max_bblk] = {};
@@ -1377,7 +1378,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                     // Shared per-block pack into the front worker's linv slot (capacity kCdivBlock²):
                     // for block q: wpack = conj(W)ᵀ in Bc col-panel format (kacc×qw) + lpack = conj(linv_q)ᵀ
                     // (qw×qw). Worst case Σ = obw²/2 + obw·ibw ≤ kCdivBlock² ✓. `ub` is free as invert tmp.
-                    const dense::GemmShape shape = dense::detail::gemm_shape_of<T>();
+                    const dense::GemmShape shape = gk.shape;
                     crd::usize off = 0;
                     crd::u32 t = 0;
                     for (crd::u32 q = 0; q < obw; q += inner_bw, ++t)
@@ -1389,19 +1390,19 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                             wpack_off[t] = off;
                             const T* wbase = panel + static_cast<crd::usize>(ko) * nr + (ko + q); // W rows at col ko
                             const dense::MatrixView<const T, dense::Layout::ColMajor> wv(wbase, qw, kacc, nr);
-                            dense::detail::pack_b(wv, 0, 0, kacc, qw, kCholAdjoint<T>, linv + off);
+                            dense::detail::pack_b(gk, wv, 0, 0, kacc, qw, kCholAdjoint<T>, linv + off);
                             off += dense::detail::packed_b_size(shape, kacc, qw);
                         }
                         invert_lower_tri<T>(panel + static_cast<crd::usize>(ko + q) * nr + (ko + q), nr, qw, ub);
                         lpack_off[t] = off;
                         const dense::MatrixView<const T, dense::Layout::ColMajor> lv(ub, qw, qw, qw);
-                        dense::detail::pack_b(lv, 0, 0, qw, qw, kCholAdjoint<T>, linv + off);
+                        dense::detail::pack_b(gk, lv, 0, 0, qw, qw, kCholAdjoint<T>, linv + off);
                         off += dense::detail::packed_b_size(shape, qw, qw);
                     }
                 }
                 auto b_slab = [&](crd::u32 r0, crd::u32 r1, crd::u32 w)
                 {
-                    const crd::usize mr = dense::detail::gemm_shape_of<T>().mr;
+                    const crd::usize mr = gk.shape.mr;
                     // Row-block = 96 rows, rounded down to whole micro-panels of the level's mr: big enough
                     // that each strided column read/write streams 96 contiguous elements (the MR-sized block
                     // was 48 B per 43 KB jump — pack-latency-bound, measured no gain), small enough that pbuf
@@ -1441,7 +1442,7 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                                              : (rows_blk % static_cast<crd::u32>(mr));
                                 if (kacc > 0) // UPDATE: panel[:, q-block] −= Σ panel[:, 0:kacc]·conj(W) (K=kacc)
                                 {
-                                    dense::detail::run_gemm_block(
+                                    gk.block(
                                         dense::GemmBlock<T>{.a = prow0,
                                                             .b = linv + wpack_off[t],
                                                             .c = prow0 + q,
@@ -1475,21 +1476,21 @@ void SupernodalCholesky<T>::factorize(const sparse::SparsePattern& pattern, crd:
                                         snap[i * inner_bw + p] = T{0};
                                     }
                                 }
-                                dense::detail::run_gemm_block(dense::GemmBlock<T>{.a = snap,
-                                                                                  .b = linv + lpack_off[t],
-                                                                                  .c = prow0 + q,
-                                                                                  .lda = inner_bw,
-                                                                                  .ldc = obw,
-                                                                                  .rows = rows_in,
-                                                                                  .cols = qw,
-                                                                                  .depth = qw,
-                                                                                  .row0 = 0,
-                                                                                  .col0 = 0,
-                                                                                  .alpha = T{},
-                                                                                  .beta = T{},
-                                                                                  .update = dense::GemmUpdate::Assign,
-                                                                                  .col_major = false,
-                                                                                  .lower = false});
+                                gk.block(dense::GemmBlock<T>{.a = snap,
+                                                             .b = linv + lpack_off[t],
+                                                             .c = prow0 + q,
+                                                             .lda = inner_bw,
+                                                             .ldc = obw,
+                                                             .rows = rows_in,
+                                                             .cols = qw,
+                                                             .depth = qw,
+                                                             .row0 = 0,
+                                                             .col0 = 0,
+                                                             .alpha = T{},
+                                                             .beta = T{},
+                                                             .update = dense::GemmUpdate::Assign,
+                                                             .col_major = false,
+                                                             .lower = false});
                             }
                         }
                         for (crd::u32 p = 0; p < obw; ++p) // write the solved block back (contiguous columns)

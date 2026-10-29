@@ -50,14 +50,15 @@ namespace crd::hesap::dense::detail
 // keep i >= j). C indexing per `col_indexed_out`: false => the row-major-indexed scratch contract (c_data[i*ldc + j],
 // read back the same way by the cmod scatter); true => ColMajor in-place output (c_data[j*ldc + i], the supernodal
 // trailing-Schur panel merge). The merged value per (i >= j) pair is the same either way. `pb_begin/pb_end` bound the
-// visited col-panels of nr columns (the level's tile width) so the parallel path can split them across workers (each
+// visited col-panels of nr columns (k's tile width) so the parallel path can split them across workers (each
 // pb writes a disjoint C column range => race-free). `nc` bounds the real columns; the zero-padded tail of the final
 // panel is never merged.
 template <typename T>
-inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc, crd::usize kc,
-                                    crd::usize pb_begin, crd::usize pb_end, crd::usize nr, const T* a_packed,
+inline void syrk_packed_inner_lower(const GemmKernels<T>& k, crd::usize ic, crd::usize jc, crd::usize mc, crd::usize nc,
+                                    crd::usize kc, crd::usize pb_begin, crd::usize pb_end, const T* a_packed,
                                     const T* b_packed, T* c_data, crd::usize ldc, bool col_indexed_out) noexcept
 {
+    const crd::usize nr = k.shape.nr;
     const crd::usize col_first = pb_begin * nr;
     const crd::usize col_end = std::min(nc, pb_end * nr);
     if (col_end <= col_first)
@@ -66,7 +67,7 @@ inline void syrk_packed_inner_lower(crd::usize ic, crd::usize jc, crd::usize mc,
     }
     const crd::usize col0 = jc + col_first;
     T* corner = col_indexed_out ? c_data + col0 * ldc + ic : c_data + ic * ldc + col0;
-    run_gemm_block(GemmBlock<T>{.a = a_packed,
+    k.block(GemmBlock<T>{.a = a_packed,
                                 .b = b_packed + col_first * kc,
                                 .c = corner,
                                 .lda = kc,
@@ -102,7 +103,8 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
     auto* alloc = (scratch != nullptr) ? scratch : crd::memory::default_allocator();
 
     // Pack buffers sized like dense::gemm (block-bounded, not full-operand).
-    const GemmShape shape = gemm_shape_of<T>();
+    const GemmKernels<T>& kernels = gemm_kernels_of<T>();
+    const GemmShape shape = kernels.shape;
     const crd::usize nr = shape.nr;
     const crd::usize mc_block = gemm_mc(shape);
     const crd::usize nc_block = gemm_nc(shape);
@@ -128,7 +130,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
             const crd::usize kc = (pc + kGemmKc < k) ? kGemmKc : (k - pc);
             // The "B" role is Aᵀ: pack_b with Trans::Transpose reads the effective B(p, j) = A(j, p)
             // through the stride-friendly path (for ColMajor A that read is contiguous in j).
-            pack_b(a, pc, jc, kc, nc, Trans::Transpose, b_pack);
+            pack_b(kernels, a, pc, jc, kc, nc, Trans::Transpose, b_pack);
             const crd::usize num_panels_n = (nc + nr - 1) / nr;
 
             for (crd::usize ic = 0; ic < m; ic += mc_block)
@@ -138,7 +140,7 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
                 {
                     continue; // the whole macro block is strict-upper
                 }
-                pack_a(a, ic, pc, mc, kc, Trans::None, a_pack);
+                pack_a(kernels, a, ic, pc, mc, kc, Trans::None, a_pack);
                 // Only col-panels with j ≤ max i of this block can carry lower-triangle work.
                 const crd::usize j_hi = ic + mc; // exclusive upper bound on relevant j
                 const crd::usize pb_end = j_hi > jc ? std::min(num_panels_n, (j_hi - jc + nr - 1) / nr) : crd::usize{0};
@@ -153,27 +155,28 @@ inline void syrk_lower_minus(MatrixView<const T, L> a, MatrixView<T, L> c, crd::
                     // cross-thread determinism contract of gemm_parallel holds here too.
                     struct State
                     {
+                        const GemmKernels<T>* kernels;
                         const T* a_pack;
                         const T* b_pack;
                         T* c_data;
                         crd::usize ldc;
-                        crd::usize ic, jc, mc, nc, kc, nr;
+                        crd::usize ic, jc, mc, nc, kc;
                         bool col_out;
                     };
-                    State st{a_pack, b_pack, c_data, ldc, ic, jc, mc, nc, kc, nr, col_indexed_out};
+                    State st{&kernels, a_pack, b_pack, c_data, ldc, ic, jc, mc, nc, kc, col_indexed_out};
                     State* sp = &st;
                     auto* counter = crd::jobs::parallel_for(
                         static_cast<crd::u32>(pb_end), nw,
                         [sp](crd::u32 begin, crd::u32 end)
                         {
-                            syrk_packed_inner_lower<T>(sp->ic, sp->jc, sp->mc, sp->nc, sp->kc, begin, end, sp->nr,
+                            syrk_packed_inner_lower<T>(*sp->kernels, sp->ic, sp->jc, sp->mc, sp->nc, sp->kc, begin, end,
                                                        sp->a_pack, sp->b_pack, sp->c_data, sp->ldc, sp->col_out);
                         });
                     crd::jobs::wait(counter);
                 }
                 else
                 {
-                    syrk_packed_inner_lower<T>(ic, jc, mc, nc, kc, 0, pb_end, nr, a_pack, b_pack, c_data, ldc,
+                    syrk_packed_inner_lower<T>(kernels, ic, jc, mc, nc, kc, 0, pb_end, a_pack, b_pack, c_data, ldc,
                                                col_indexed_out);
                 }
             }

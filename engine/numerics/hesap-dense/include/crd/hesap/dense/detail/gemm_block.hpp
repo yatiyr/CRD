@@ -91,6 +91,40 @@ void pack_b_panels(Read read, crd::usize depth, crd::usize cols, T* out) noexcep
     }
 }
 
+// The panels of a strided source (GemmKernels' pack_a and pack_b), each element passed through value (the identity,
+// or a complex source's conjugate); a unit column stride reads rows as runs.
+template <crd::usize MR, typename T, typename Value>
+void pack_a_source(const GemmSource<T>& s, crd::usize rows, crd::usize depth, T* out, Value value) noexcept
+{
+    const T* d = s.data;
+    const crd::usize rs = s.row_stride;
+    const crd::usize cs = s.col_stride;
+    if (cs == 1U)
+    {
+        pack_a_panels<MR>([d, rs, value](crd::usize r, crd::usize c) { return value(d[r * rs + c]); }, rows, depth,
+                          false, out);
+        return;
+    }
+    pack_a_panels<MR>([d, rs, cs, value](crd::usize r, crd::usize c) { return value(d[r * rs + c * cs]); }, rows, depth,
+                      rs == 1U, out);
+}
+
+template <crd::usize NR, typename T, typename Value>
+void pack_b_source(const GemmSource<T>& s, crd::usize depth, crd::usize cols, T* out, Value value) noexcept
+{
+    const T* d = s.data;
+    const crd::usize rs = s.row_stride;
+    const crd::usize cs = s.col_stride;
+    if (cs == 1U)
+    {
+        pack_b_panels<NR>([d, rs, value](crd::usize r, crd::usize c) { return value(d[r * rs + c]); }, depth, cols,
+                          out);
+        return;
+    }
+    pack_b_panels<NR>([d, rs, cs, value](crd::usize r, crd::usize c) { return value(d[r * rs + c * cs]); }, depth, cols,
+                      out);
+}
+
 // How a tile reaches C: GemmUpdate with Add split at alpha == 1 and Scale at beta == 0.
 enum class GemmMerge : crd::u8
 {

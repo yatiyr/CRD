@@ -83,6 +83,13 @@
       "why": "the GEMM packing and block dispatch behind gemm, syrk and the supernodal factor walks; its f64 and f32 register tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to its consumers"
     },
     {
+      "include": "crd/hesap/dense/detail/gemm_arms.hpp",
+      "flags_of": "tests/numerics/hesap-dense/test_dense_kernels.cpp",
+      "forbid": ["chrono", "format"],
+      "forbid_gnu": ["immintrin.h", "emmintrin.h", "xmmintrin.h"],
+      "why": "the one-thread GEMM board's forced tiles and paths, included by the board and the dense kernel tests; the tiles are per-level dense kernels (SIMD-DISPATCH), so the header brings no intrinsics header to them"
+    },
+    {
       "include": "crd/hesap/sparse/sell.hpp",
       "flags_of": "tests/numerics/hesap-sparse/test_sell.cpp",
       "forbid": ["chrono", "format"],
