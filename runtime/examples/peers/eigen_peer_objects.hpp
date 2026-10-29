@@ -6,6 +6,7 @@
 
 #include <Eigen/Dense>
 #include <Eigen/SparseCore>
+#include <complex>
 
 // The library is built at the host's best ISA; a vector path Eigen did not take would measure a weaker peer.
 #if defined(__AVX2__) && !(defined(EIGEN_VECTORIZE_AVX2) && defined(EIGEN_VECTORIZE_FMA))
@@ -54,6 +55,22 @@ struct SpF32
 struct SpF64
 {
     Eigen::SparseMatrix<double, Eigen::RowMajor> a;
+};
+struct SpC32
+{
+    Eigen::SparseMatrix<std::complex<float>, Eigen::RowMajor> a;
+};
+struct SpC64
+{
+    Eigen::SparseMatrix<std::complex<double>, Eigen::RowMajor> a;
+};
+struct VecC32
+{
+    Eigen::VectorXcf v;
+};
+struct VecC64
+{
+    Eigen::VectorXcd v;
 };
 struct SpColF64
 {

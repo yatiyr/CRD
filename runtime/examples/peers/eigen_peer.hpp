@@ -122,15 +122,32 @@ struct Entry
     std::int32_t col;
     double value;
 };
+// The same with a complex value.
+struct ComplexEntry
+{
+    std::int32_t row;
+    std::int32_t col;
+    double re;
+    double im;
+};
 struct SpF32;     // Eigen::SparseMatrix<float, RowMajor>
 struct SpF64;     // Eigen::SparseMatrix<double, RowMajor>
+struct SpC32;     // Eigen::SparseMatrix<std::complex<float>, RowMajor>
+struct SpC64;     // Eigen::SparseMatrix<std::complex<double>, RowMajor>
+struct VecC32;    // Eigen::VectorXcf
+struct VecC64;    // Eigen::VectorXcd
 struct SpColF64;  // Eigen::SparseMatrix<double>, column-major
 struct RowMatF64; // Eigen::Matrix<double, Dynamic, Dynamic, RowMajor>
 
 // rows x cols from `count` entries through Eigen's triplet list and setFromTriplets, compressed (values rounded to
-// float for csr_f32). csc_f64 is the assembly board's timed path: the triplet list is built in the call.
+// float for csr_f32 and csr_c32). csc_f64 is the assembly board's timed path: the triplet list is built in the call.
 CRD_BENCH_PEER_API SpF32* csr_f32(Index rows, Index cols, const Entry* entries, Index count);
 CRD_BENCH_PEER_API SpF64* csr_f64(Index rows, Index cols, const Entry* entries, Index count);
+CRD_BENCH_PEER_API SpC32* csr_c32(Index rows, Index cols, const ComplexEntry* entries, Index count);
+CRD_BENCH_PEER_API SpC64* csr_c64(Index rows, Index cols, const ComplexEntry* entries, Index count);
+// `size` complex values from (re, im) pairs; nullptr zero-fills. data() is the same pairs.
+CRD_BENCH_PEER_API VecC32* vec_c32(Index size, const float* data);
+CRD_BENCH_PEER_API VecC64* vec_c64(Index size, const double* data);
 CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const Entry* entries, Index count);
 // The same from a compressed row-major matrix: outer holds rows + 1 offsets into inner (columns) and values.
 CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const std::uint32_t* outer, const std::uint32_t* inner,
@@ -139,6 +156,12 @@ CRD_BENCH_PEER_API SpColF64* csc_f64(Index rows, Index cols, const std::uint32_t
 CRD_BENCH_PEER_API RowMatF64* row_mat(Index rows, Index cols, const double* data);
 CRD_BENCH_PEER_API void destroy(SpF32* object) noexcept;
 CRD_BENCH_PEER_API void destroy(SpF64* object) noexcept;
+CRD_BENCH_PEER_API void destroy(SpC32* object) noexcept;
+CRD_BENCH_PEER_API void destroy(SpC64* object) noexcept;
+CRD_BENCH_PEER_API void destroy(VecC32* object) noexcept;
+CRD_BENCH_PEER_API void destroy(VecC64* object) noexcept;
+CRD_BENCH_PEER_API const float* data(const VecC32* v) noexcept;
+CRD_BENCH_PEER_API const double* data(const VecC64* v) noexcept;
 CRD_BENCH_PEER_API void destroy(SpColF64* object) noexcept;
 CRD_BENCH_PEER_API void destroy(RowMatF64* object) noexcept;
 CRD_BENCH_PEER_API Index nnz(const SpF64* a) noexcept;
@@ -147,6 +170,8 @@ CRD_BENCH_PEER_API Index nnz(const SpColF64* a) noexcept;
 // y.noalias() = a * x
 CRD_BENCH_PEER_API void spmv(const SpF32* a, const VecF32* x, VecF32* y);
 CRD_BENCH_PEER_API void spmv(const SpF64* a, const VecF64* x, VecF64* y);
+CRD_BENCH_PEER_API void spmv(const SpC32* a, const VecC32* x, VecC32* y);
+CRD_BENCH_PEER_API void spmv(const SpC64* a, const VecC64* x, VecC64* y);
 // c = a * b, not pruned
 CRD_BENCH_PEER_API void spgemm(const SpF64* a, const SpF64* b, SpF64* c);
 // c.noalias() = a * b
