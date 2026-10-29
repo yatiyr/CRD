@@ -99,8 +99,9 @@ def machine():
 class PressureSampler:
     """Samples available and committed memory on a thread while a board row or a lane's tests run."""
 
-    def __init__(self, interval=1.0):
+    def __init__(self, interval=1.0, on_sample=None):
         self.interval = interval
+        self.on_sample = on_sample
         self.samples = []
         self._stop = threading.Event()
         self._thread = None
@@ -114,6 +115,8 @@ class PressureSampler:
     def _run(self):
         while not self._stop.wait(self.interval):
             self.samples.append(memory_status())
+            if self.on_sample:
+                self.on_sample(self)
 
     def __exit__(self, *_):
         self._stop.set()
@@ -428,6 +431,8 @@ def host_markdown(host):
         text += '; tests %.0f s wall, at least %.1f GiB available (%.1f before), commit peak %.1f GiB' % (
             test['seconds'], memory['min_available_gib'], memory['baseline_available_gib'],
             memory['peak_committed_gib'])
+        if test.get('exit') is None:
+            text += ' (the tests did not return)'
     return text
 
 
@@ -516,15 +521,23 @@ def run_inventory(build_dir, config=None, output=None):
 
 def watch(build_dir, command, interval=HOST_TEST_INTERVAL, runner=subprocess.call, clock=time.monotonic,
           host=machine):
-    """Run a lane's test command with the host's memory sampled; write HOST_TEST and return the command's exit code."""
-    start = clock()
-    with PressureSampler(interval) as sampler:
-        code = runner(command)
-    record = {'command': list(command), 'exit': code, 'seconds': round(clock() - start, 1), 'machine': host(),
-              'memory': sampler.summary()}
+    """Run a lane's test command with the host's memory sampled and return its exit code. HOST_TEST is rewritten at
+    every sample, `exit` null until the command returns, so a job stopped at its time limit keeps the record so far."""
     path = Path(build_dir) / HOST_TEST
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+    box = host()
+    start = clock()
+
+    def write(sampler, code=None):
+        record = {'command': list(command), 'exit': code, 'seconds': round(clock() - start, 1), 'machine': box,
+                  'memory': sampler.summary()}
+        partial = path.with_suffix('.partial')
+        partial.write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
+        os.replace(partial, path)
+
+    with PressureSampler(interval, on_sample=write) as sampler:
+        code = runner(command)
+    write(sampler, code)
     return code
 
 

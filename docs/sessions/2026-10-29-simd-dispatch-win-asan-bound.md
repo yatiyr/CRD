@@ -43,7 +43,8 @@ do not collide in one build tree; the temp-directory users name their files per 
 - **`CMakePresets.json`**: the `win-asan` test preset runs three cases at a time, one of the runner's four CPUs left
   for the pool cases. The seeded-fault step names its tests with `-R` and stays serial.
 - **`ci-evidence.py watch`** runs a lane's test command with the host's available and committed memory sampled every
-  5 s and passes the exit code on; it writes `Testing/Temporary/host-test.json`. `bundle` records it with the
+  5 s and passes the exit code on; it rewrites `Testing/Temporary/host-test.json` at every sample (`exit` null
+  until the command returns), so a job stopped at the cap keeps the record. `bundle` records it with the
   machine (CPU, logical CPUs, memory) as `host`, the summary prints it, and a lane without it lists `host-test` as
   missing. The machine and memory readers and `PressureSampler` moved from `build-bench.py` into `ci-evidence.py`,
   which build-bench already imports. Every lane's Test step runs under `watch`.

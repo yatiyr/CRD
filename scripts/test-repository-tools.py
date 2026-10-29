@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import unittest
 import urllib.error
 import zipfile
@@ -951,13 +952,32 @@ class CiEvidence(unittest.TestCase):
 
     def test_watch_runs_the_tests_with_the_host_sampled_and_passes_their_exit_code_on(self):
         with tempfile.TemporaryDirectory() as temp:
-            ticks = iter([10.0, 25.5])
-            code = ci_evidence.watch(temp, ['ctest', '--preset', 'win-asan'], interval=0.01,
-                                     runner=lambda command: 7, clock=lambda: next(ticks), host=lambda: self.MACHINE)
+            path = Path(temp) / ci_evidence.HOST_TEST
+            seen = []
+
+            def runner(command):
+                deadline = time.monotonic() + 10.0
+                while not path.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                if path.is_file():
+                    seen.append(json.loads(path.read_text(encoding='utf-8')))
+                return 7
+
+            ticks = iter(range(10 ** 6))
+            code = ci_evidence.watch(temp, ['ctest', '--preset', 'win-asan'], interval=0.01, runner=runner,
+                                     clock=lambda: 10.0 + next(ticks), host=lambda: self.MACHINE)
             self.assertEqual(code, 7)
-            record = json.loads((Path(temp) / ci_evidence.HOST_TEST).read_text(encoding='utf-8'))
-            self.assertEqual((record['command'], record['exit'], record['seconds'], record['machine']),
-                             (['ctest', '--preset', 'win-asan'], 7, 15.5, self.MACHINE))
+            self.assertTrue(seen, 'no record while the tests ran')
+            self.assertIsNone(seen[0]['exit'])
+            self.assertEqual(seen[0]['machine'], self.MACHINE)
+            record = json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual((record['command'], record['exit'], record['machine']),
+                             (['ctest', '--preset', 'win-asan'], 7, self.MACHINE))
+            self.assertGreater(record['seconds'], seen[0]['seconds'])
+            self.assertEqual(list(path.parent.glob('*.partial')), [])
+            unfinished = dict(self.HOST_TEST, exit=None)
+            self.assertTrue(ci_evidence.host_markdown({'machine': self.MACHINE, 'test': unfinished})
+                            .endswith('commit peak 9.9 GiB (the tests did not return)'))
             self.assertGreaterEqual(record['memory']['samples'], 2)
             self.assertGreater(record['memory']['baseline_available_gib'], 0)
             exit_four = [sys.executable, '-c', 'raise SystemExit(4)']

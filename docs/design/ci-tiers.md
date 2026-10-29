@@ -125,21 +125,21 @@ frequent pushes. `workflow_dispatch` exposes the `tier` input (`change` or `comp
 
 Every lane records the adapter census, configures, builds, writes the CTest inventory (`ci-evidence.py inventory`,
 `ctest --show-only=json-v1`), runs with `--output-junit` under `ci-evidence.py watch` (which samples the host's
-available and committed memory every 5 s and writes `Testing/Temporary/host-test.json`), and ends in the two-sided
-[register gate](../third-party-defects.md) on every preset (lanes without entries require zero failures and propagate
-CTest's exit). `ci-evidence.py bundle` then always runs: it writes `conclusion.json` (schema `cerid-ci-evidence/1`:
-revision and tree hash, run identity, preset, generator, build type, compiler identity and version, CMake version, the
-Cerid switches from the cache, the diagnostic modes the binaries are built with (`modes`: ASan, UBSan, TSan,
-libFuzzer, coverage, asserts, profiling, clang-tidy), adapters, inventory counts with labels and resource locks,
-executed/passed/failed/skipped counts and duration, overall and per label (`results.labels`: `diag-fatal` for the
-contract-fatal specimens, `diag-race` for the controlled-interleaving cases, `diag-overhead` for the overhead modes
-and `diag-workflow` for the native diagnostic workflow, all four also under `diag`, and `fuzz` for the corpus
-replays), failing tests with their output tails, the slowest tests, the build board of the lane from its Ninja log
-(edges, span, edge sum, effective parallelism, slowest edges) and the sccache statistics of a cached lane ([build
-performance](build-performance.md)), the host (`host`: CPU, logical CPUs and memory, and from the Test step its wall
-time, least available memory and commit peak), the job status when the bundle ran and what evidence was missing),
-copies the JUnit and inventory beside it, and appends a table to the job summary. The artifact `evidence-<preset>`
-carries the bundle and the CTest logs. The bundle never changes a lane's exit code.
+available and committed memory every 5 s and rewrites `Testing/Temporary/host-test.json` at each sample, so a job
+stopped at its limit keeps it), and ends in the two-sided [register gate](../third-party-defects.md) on every preset
+(lanes without entries require zero failures and propagate CTest's exit). `ci-evidence.py bundle` then always runs: it
+writes `conclusion.json` (schema `cerid-ci-evidence/1`: revision and tree hash, run identity, preset, generator, build
+type, compiler identity and version, CMake version, the Cerid switches from the cache, the diagnostic modes the
+binaries are built with (`modes`: ASan, UBSan, TSan, libFuzzer, coverage, asserts, profiling, clang-tidy), adapters,
+inventory counts with labels and resource locks, executed/passed/failed/skipped counts and duration, overall and per
+label (`results.labels`: `diag-fatal` for the contract-fatal specimens, `diag-race` for the controlled-interleaving
+cases, `diag-overhead` for the overhead modes and `diag-workflow` for the native diagnostic workflow, all four also
+under `diag`, and `fuzz` for the corpus replays), failing tests with their output tails, the slowest tests, the build
+board of the lane from its Ninja log (edges, span, edge sum, effective parallelism, slowest edges) and the sccache
+statistics of a cached lane ([build performance](build-performance.md)), the host (`host`: CPU, logical CPUs and
+memory, and from the Test step its wall time, least available memory and commit peak), the job status when the bundle
+ran and what evidence was missing), copies the JUnit and inventory beside it, and appends a table to the job summary.
+The artifact `evidence-<preset>` carries the bundle and the CTest logs. The bundle never changes a lane's exit code.
 
 The native lane (`windows-native`, VS 2026 image) configures `win-vs`, builds the Debug sandbox profile exactly as
 the IDE build preset does and runs the repository guards under the multi-config CTest, including the two
