@@ -70,8 +70,13 @@ preset, every CI config behaves identically with the option off.
 Build `bench_<module>_vs_reference.cpp` that:
 - Runs **identical workloads** through Cerid and each reference. Same
   random seeds, same dimensions, same memory layout.
-- Sets `Eigen::setNbThreads()` / `openblas_set_num_threads()` to match
-  Cerid's `crd::jobs::num_workers()`.
+- Calls a header-only reference (Eigen, pocketfft, Boost) through its peer
+  library (`runtime/examples/peers/`, `crd_add_bench_peer`), which compiles
+  it at the host's best instruction set as its own build would; the bench
+  unit includes only the peer's plain-data header, never the library's
+  ([ADR-0134 §8](decisions/0134-runtime-cpu-dispatch.md)).
+- Sets the peer's threads (`crd_peer::eigen::set_threads()`,
+  `openblas_set_num_threads()`) to match Cerid's `crd::jobs::num_workers()`.
 - Validates: `max|result_cerid - result_reference| / max|result_reference|`
   per trial. Flags `!MISMATCH!` on > 1e-3 (or the kernel's documented
   tolerance). **Numbers reported without validation are noise.**
