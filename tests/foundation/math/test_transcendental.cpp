@@ -32,7 +32,8 @@ namespace
     const double a = std::fabs(ref);
     int e = 0;
     std::frexp(a == 0.0 ? 1.0 : a, &e);
-    return std::fabs(got - ref) / std::ldexp(1.0, e - 53); // |got−ref| in units of ulp(ref)
+    // |got−ref| in units of ulp(ref); a subnormal's ulp is the smallest subnormal
+    return std::fabs(got - ref) / std::max(std::ldexp(1.0, e - 53), std::numeric_limits<double>::denorm_min());
 }
 
 template <class F>
@@ -82,7 +83,7 @@ TEST_CASE("crd::math transcendental family accuracy vs mpmath", "[math][transcen
     TX_GATE(atan, 2.0);
     TX_GATE(asin, 3.0); // = atan(x/√(1−x²)) ⇒ composed
     TX_GATE(acos, 3.0); // = 2·atan(√((1−x)/(1+x))) ⇒ composed
-    TX_GATE(cbrt, 2.0); // exp2/log2 seed + 1 Halley
+    TX_GATE(cbrt, 2.0); // bit-trick seed + Halley steps
     TX_GATE(rsqrt, 1.0);
 }
 
@@ -155,9 +156,15 @@ TEST_CASE("crd::math transcendental cross-platform determinism golden checksum",
         large = fold(fold(fold(large, crd::math::sin(x)), crd::math::cos(x)), crd::math::tan(x));
     }
 #undef TX_FOLD
-    INFO("golden checksum = 0x" << std::hex << h << ", Payne-Hanek range 0x" << large);
+    std::uint64_t power = 0;
+    for (int i = 0; i < crd::math::txref::ref_pow_n; ++i)
+    {
+        power = fold(power, crd::math::pow(crd::math::txref::ref_pow_x[i], crd::math::txref::ref_pow_p[i]));
+    }
+    INFO("golden checksum = 0x" << std::hex << h << ", Payne-Hanek range 0x" << large << ", pow 0x" << power);
     CHECK(h == 0x9179c815fca024a6ULL); // canonical bits; every platform and level must reproduce
     CHECK(large == 0x6caf0b0834f6ea14ULL);
+    CHECK(power == 0x45d1f044b54f2901ULL);
 }
 
 TEST_CASE("crd::math select/round tier -- exactness", "[math][transcendental][tx]")
@@ -220,28 +227,93 @@ TEST_CASE("crd::math atan2 quadrants + determinism", "[math][transcendental][tx]
     CHECK(hu <= 2.0);
     CHECK(crd::math::hypot(3.0, 4.0) == 5.0); // exact Pythagorean triple
 
-    // pow vs std::pow over moderate exponents (2^{y·log2 x}); large |y·log2 x| widens (documented).
+}
+
+TEST_CASE("crd::math pow keeps its bound over the whole exponent range and the IEEE cases",
+          "[math][transcendental][tx]")
+{
+    namespace m = crd::math;
+    namespace r = crd::math::txref;
     double pu = 0.0;
-    const double px[] = {0.1, 0.5, 1.5, 2.0, 3.0, 7.0, 10.0};
-    const double py[] = {-4.0, -2.5, -1.0, 0.0, 0.5, 1.0, 2.0, 3.5, 6.0};
-    for (double a : px)
+    int worst = 0;
+    for (int i = 0; i < r::ref_pow_n; ++i)
     {
-        for (double b : py)
+        const double e = ulp_err(m::pow(r::ref_pow_x[i], r::ref_pow_p[i]), r::ref_pow_y[i]);
+        if (e > pu)
         {
-            pu = std::max(pu, ulp_err(crd::math::pow(a, b), std::pow(a, b)));
+            pu = e;
+            worst = i;
         }
     }
-    INFO("pow max ulp vs std = " << pu);
-    CHECK(pu <= 2.0); // 2^{y·log2 x} with a double-double exponent ⇒ ≤2 ulp
-    CHECK(crd::math::pow(2.0, 10.0) == 1024.0);   // exact integer power
-    CHECK(crd::math::pow(-2.0, 3.0) == -8.0);     // negative base, odd integer exponent
-    CHECK(crd::math::pow(3.0, 0.0) == 1.0);
-    // a subnormal base takes the same path: its log is exact at a power of two, and an odd power keeps the sign
+    INFO("pow max ulp vs mpmath = " << pu << " at (" << r::ref_pow_x[worst] << ", " << r::ref_pow_p[worst] << ")");
+    CHECK(pu <= 1.0);
+    // The pair constants, bit for bit against mpmath's.
+    const double pairs[] = {m::kLn2PairHi, m::kLn2PairLo, m::kLog2eHi, m::kLog2eLo,
+                            m::kThirdHi,   m::kThirdLo,   m::kFifthHi, m::kFifthLo};
+    for (int i = 0; i < 8; ++i)
+    {
+        INFO("pair constant " << i);
+        CHECK(pairs[i] == r::ref_pair_constants[i]);
+    }
+    // Exact results: a correctly rounded value within 0.58 ulp of an exact double is that double.
+    CHECK(m::pow(2.0, 10.0) == 1024.0);
+    CHECK(m::pow(-2.0, 3.0) == -8.0);
+    CHECK(m::pow(4.0, 0.5) == 2.0);
+    CHECK(m::pow(10.0, 2.0) == 100.0);
+    CHECK(m::pow(3.0, 0.0) == 1.0);
+    for (const double x : {0.3, 1.7, 123456.789, 1e-300, 1e300})
+    {
+        CHECK(m::pow(x, 1.0) == x);
+    }
+    for (const double x : {0.25, 8.0, 0x1p-1000, 0x1p1000})
+    {
+        CHECK(m::pow(x, -1.0) == 1.0 / x); // an exact reciprocal (pow(1e-300, -1) is 0.52 ulp off, as allowed)
+    }
+    // A subnormal base takes the same path: its log is exact at a power of two, and an odd power keeps the sign.
     constexpr double min_sub = std::numeric_limits<double>::denorm_min();
-    CHECK(crd::math::pow(min_sub, 1.0) == min_sub);
-    CHECK(ulp_err(crd::math::pow(2.2250738585072009e-308, 0.5), std::pow(2.2250738585072009e-308, 0.5)) <= 2.0);
-    const double neg_cube = crd::math::pow(-min_sub, 3.0);
+    CHECK(m::pow(min_sub, 1.0) == min_sub);
+    const double neg_cube = m::pow(-min_sub, 3.0);
     CHECK((neg_cube == 0.0 && std::signbit(neg_cube)));
+    // y·log2 x past the exponent range: the head decides, so a product that overflows gives ±inf or ±0, never a
+    // NaN or the wrong sign.
+    constexpr double inf = std::numeric_limits<double>::infinity();
+    CHECK(m::pow(10.0, 1e308) == inf);
+    CHECK(m::pow(-10.0, 1e308) == inf); // 1e308 is an even integer
+    CHECK(m::pow(0.5, -1e308) == inf);
+    CHECK(m::pow(10.0, 1e299) == inf);
+    const double tiny = m::pow(0.1, 1e308);
+    CHECK((tiny == 0.0 && !std::signbit(tiny)));
+    const double tiny2 = m::pow(10.0, -1e299);
+    CHECK((tiny2 == 0.0 && !std::signbit(tiny2)));
+    CHECK(m::pow(-3.0, 1001.0) == -inf);
+    const double neg_tiny = m::pow(-3.0, -1001.0);
+    CHECK((neg_tiny == 0.0 && std::signbit(neg_tiny)));
+    // C99 Annex F: ±0 with odd and even y and with -inf, ±1, NaN and the |x| against ±inf rules.
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    CHECK(m::pow(0.0, 3.0) == 0.0);
+    CHECK(std::signbit(m::pow(-0.0, 3.0)));
+    CHECK(!std::signbit(m::pow(-0.0, 4.0)));
+    CHECK(m::pow(0.0, -3.0) == inf);
+    CHECK(m::pow(-0.0, -3.0) == -inf);
+    CHECK(m::pow(-0.0, -4.0) == inf);
+    CHECK(m::pow(0.0, -inf) == inf);
+    CHECK(m::pow(-1.0, inf) == 1.0);
+    CHECK(m::pow(-1.0, -inf) == 1.0);
+    CHECK(m::pow(1.0, nan) == 1.0);
+    CHECK(m::pow(nan, 0.0) == 1.0);
+    CHECK(std::isnan(m::pow(nan, 1.0)));
+    CHECK(std::isnan(m::pow(-2.0, 0.5)));
+    CHECK(m::pow(0.5, inf) == 0.0);
+    CHECK(m::pow(0.5, -inf) == inf);
+    CHECK(m::pow(2.0, inf) == inf);
+    CHECK(m::pow(2.0, -inf) == 0.0);
+    CHECK(m::pow(-inf, 3.0) == -inf);
+    CHECK(m::pow(-inf, 4.0) == inf);
+    CHECK(std::signbit(m::pow(-inf, -3.0)));
+    CHECK(m::pow(inf, -2.0) == 0.0);
+    // f32 rounds the f64 result once.
+    CHECK(m::pow(2.0F, 10.0F) == 1024.0F);
+    CHECK(m::pow(10.0F, 50.0F) == std::numeric_limits<float>::infinity());
 }
 
 TEST_CASE("crd::math expm1 and the trig quadrant stay defined to the ends of the finite range",

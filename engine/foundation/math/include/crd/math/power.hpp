@@ -1,16 +1,19 @@
 #pragma once
 
-// crd-math power/root family — cbrt/hypot/rsqrt, deterministic. cbrt rides exp2/log2 (≤1 ulp) + one Halley step;
-// hypot/rsqrt ride the IEEE-exact hardware sqrt. Same contract as transcendental.hpp.
+// crd-math power/root family — pow/cbrt/hypot/rsqrt, deterministic. pow rides the log2 and exp2 pair cores
+// (exp_log_core.hpp), cbrt Halley steps, hypot/rsqrt the IEEE-exact hardware sqrt. Same contract as
+// transcendental.hpp.
 
 #include <crd/math/libm.hpp>           // sqrt (IEEE-exact) + non-finite edge fallback
-#include <crd/math/transcendental.hpp> // exp2/log2 for pow
+#include <crd/math/transcendental.hpp> // the exp/log cores
 
 namespace crd::math::inline CRD_MATH_LEVEL_NS
 {
-// pow(x,y) = x^y. Deterministic common path 2^{y·log2 x} for x>0 (and x<0 with integer y → (−1)^y·|x|^y); the IEEE
-// edge zoo (0, ±Inf, NaN, x<0 non-integer) routes to the C library pow (exact/constant results, deterministic).
-// Accuracy is ≤~1.2 ulp for moderate exponents and ≤~3 ulp at |y·log2 x| near 1000 (log(m) is a pair to 2^-58).
+// pow(x,y) = x^y = 2^{y·log2 x} for finite x > 0 (and x < 0 with integer y → (−1)^y·|x|^y): ≤0.58 ulp for a normal
+// result, ≤0.76 for a subnormal one (its scale rounds a second time), against mpmath. log2|x| comes as a pair to
+// 2^-69 and y·log2|x| as a pair; its head alone decides overflow (≥ 1025 → ∞) and underflow (< −1076 → 0) before the
+// tail is formed, so a product that overflows never reaches it. The IEEE edge cases (0, ±Inf, NaN, x < 0 with
+// non-integer y) route to the C library pow (exact or constant results, deterministic).
 [[nodiscard]] inline double pow(double x, double y) noexcept
 {
     if (y == 0.0)
@@ -21,24 +24,19 @@ namespace crd::math::inline CRD_MATH_LEVEL_NS
     const bool neg_int = (x < 0.0) && (libm::round(y) == y); // x<0 with integer y ⇒ real (−1)^y·|x|^y
     if (a > 0.0 && libm::is_finite(x) && libm::is_finite(y) && (x > 0.0 || neg_int))
     {
-        // pow = 2^{y·log2 a}. log2(a)=ed+logm·log2e (ed EXACT) carried as a DOUBLE-DOUBLE (thi+tlo); y·log2(a)
-        // likewise (uhi+ulo); then 2^{uhi}·(1+ulo·ln2). The double-double keeps the exponent's low bits so exp2
-        // doesn't amplify a single rounding. log(m) arrives as a pair, normalised first (Fast2Sum, |llo| < |lhi|).
-        double ed = 0.0;
-        double llo = 0.0;
-        const double lhi = crd_log_reduce(a, ed, llo);
-        const double logm = lhi + llo;
-        const double logm_lo = llo - (logm - lhi);
-        // logm·log2e as phi + plo
-        const double phi = logm * kLog2eHi;
-        const double plo = libm::fma(logm, kLog2eHi, -phi) + logm * kLog2eLo + logm_lo * kLog2eHi;
-        const double thi = ed + phi;                                     // log2(a) double-double via two_sum(ed,phi)
-        const double bb = thi - ed;
-        const double tlo = ((ed - (thi - bb)) + (phi - bb)) + plo;
-        const double uhi = y * thi;                                      // y·log2(a) double-double
-        const double ulo = libm::fma(y, thi, -uhi) + y * tlo;
-        const double m = exp2(uhi) * libm::fma(ulo, kLn2Const, 1.0);      // 2^{uhi}·2^{ulo}, 2^ulo≈1+ulo·ln2
-        return (neg_int && libm::fmod(libm::round(y), 2.0) != 0.0) ? -m : m;
+        double ll = 0.0;
+        const double lh = crd_log2_pair(a, ll);
+        const double uh = y * lh;
+        double m = 0.0;
+        if (uh >= 1025.0)
+        {
+            m = __builtin_bit_cast(double, 0x7FF0000000000000ULL); // +infinity
+        }
+        else if (uh >= -1076.0)
+        {
+            m = crd_exp2_pair(uh, libm::fma(y, lh, -uh) + y * ll);
+        }
+        return (neg_int && libm::fmod(libm::round(y), 2.0) != 0.0) ? -m : m; // an even y for every |y| ≥ 2^53
     }
     return libm::pow(x, y); // 0 / ±Inf / NaN / x<0 non-integer y → IEEE special cases
 }

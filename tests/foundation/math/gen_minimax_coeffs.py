@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""crd-math minimax coefficients: exp (exp_log_core.hpp kE2..kE11), expm1 (transcendental.hpp kQ1..kQ11) and the
-sin/cos cores (trig.hpp kSin1..kSin6, kCos2..kCos7).
+"""crd-math minimax coefficients: exp (exp_log_core.hpp kE2..kE11), expm1 (transcendental.hpp kQ1..kQ11), the
+sin/cos cores (trig.hpp kSin1..kSin6, kCos2..kCos7) and pow's log series tail (exp_log_core.hpp kLogPairR3..).
 
 Each is the best relative-error approximation of its form over the domain the evaluation reaches, found by a Remez
 exchange on a dense Chebyshev grid. Coefficients are rounded to doubles lowest degree first, each rounding followed
@@ -94,16 +94,27 @@ def fit(name, f, base, powers, lo, hi):
 
 
 # The domains carry the reductions' slack: |r| <= ln2/2 after exp's Cody-Waite step (k from a rounded x*log2e),
-# |r| <= pi/4 after the trig reduction; sin and cos start at 2^-40, as their relative error is 0/0 at r = 0.
+# |r| <= pi/4 after the trig reduction, s = t^2 <= (3 - 2 sqrt 2)^2 after the log reduction; sin and cos start at
+# 2^-40, as their relative error is 0/0 at r = 0, and the log tail at s = 2^-80.
 LN2_HALF = mp.log(2) / 2 * (1 + mp.mpf(2) ** -30)
 PI_4 = mp.pi / 4 * (1 + mp.mpf(2) ** -30)
 TINY = mp.mpf(2) ** -40
+LOG_S = (3 - 2 * mp.sqrt(2)) ** 2 * (1 + mp.mpf(2) ** -30)
+
+
+def atanh_ratio(s):
+    """atanh(t)/t at s = t^2: log(m) = 2t * atanh_ratio(s)."""
+    t = mp.sqrt(s)
+    return mp.atanh(t) / t
 
 
 kE = fit("exp", mp.exp, lambda x: 1 + x, list(range(2, 12)), -LN2_HALF, LN2_HALF)
 kQ = fit("expm1", mp.expm1, lambda x: x, list(range(2, 13)), -LN2_HALF, LN2_HALF)
 kSin = fit("sin", mp.sin, lambda r: r, [2 * j + 1 for j in range(1, 7)], TINY, PI_4)
 kCos = fit("cos", mp.cos, lambda r: 1 - r * r / 2, [2 * j for j in range(2, 8)], TINY, PI_4)
-for prefix, first, coeffs in (("kE", 2, kE), ("kQ", 1, kQ), ("kSin", 1, kSin), ("kCos", 2, kCos)):
+# pow's log2 pair: atanh(t)/t = 1 + s/3 + s^2/5 + s^3 R3(s), the first two terms as double-doubles in the evaluation.
+kLogPairR = fit("log tail", atanh_ratio, lambda s: 1 + s / 3 + s * s / 5, list(range(3, 10)), TINY * TINY, LOG_S)
+for prefix, first, coeffs in (("kE", 2, kE), ("kQ", 1, kQ), ("kSin", 1, kSin), ("kCos", 2, kCos),
+                              ("kLogPairR", 3, kLogPairR)):
     for i, c in enumerate(coeffs):
         print(f"{prefix}{first + i} = {c:.17e}")

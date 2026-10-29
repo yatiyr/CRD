@@ -24,8 +24,8 @@ inline constexpr double kLn2Const = 0.69314718055994530941723212145818;   // ln 
 inline constexpr double kLn10Const = 2.30258509299404568401799145468436;  // ln 10
 inline constexpr double kLog2eConst = 1.44269504088896340735992468100189; // 1/ln2
 inline constexpr double kLog10eConst = 0.43429448190325182765112891891661; // 1/ln10
-// hi/lo splits (hi+lo = 1/ln(base) to ~106 bits): log(m)·const as a pair through fma ⇒ ≤0.52 ulp log2/log10.
-inline constexpr double kLog2eHi = 1.44269504088896339e+00, kLog2eLo = 2.03552737409310331e-17;
+// hi/lo splits (hi+lo = 1/ln(base) to ~106 bits): log(m)·const as a pair through fma ⇒ ≤0.52 ulp log2/log10
+// (kLog2eHi/kLog2eLo live with the cores, exp_log_core.hpp).
 inline constexpr double kLog10eHi = 4.34294481903251817e-01, kLog10eLo = 1.09831965021676507e-17;
 inline constexpr double kLog10Of2Hi = 3.01029996015131473541e-01;  // log10(2) split (hi has 30 low zero bits ⇒ k·hi
 inline constexpr double kLog10Of2Lo = -3.51150278327520860677e-10; // exact) for the exp10 Cody-Waite reduction

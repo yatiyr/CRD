@@ -101,6 +101,37 @@ _quadrant_x = [1.5e16, 6e16, 1e17, -1e17, 1e300, -1e300, sys.float_info.max, -sy
                6381956970095103 * 2.0**797, -6381956970095103 * 2.0**797]
 
 
+# pow(x, y): exponents u = y·log2 x across the whole range (|u| at 1000, 1020 and 1070, [1023, 1024) next to overflow,
+# (-1076, -1022) for subnormal results), the log seams times 2^k, bases next to 1 with huge y, a subnormal base and
+# negative bases with odd and even integer y (every |y| >= 2^53 is even). y = u / log2 x is spaced through mpmath.
+_pow_bases = [2.5, 0.3, 7.0, 1.0000001, 0.9999999, 123456.789, 1e-300, 1e300, 1e-310, 5e-324, 10.0, 0.1, 1.4142,
+              _SQRT2, _SQRT2 / 2, float(np.nextafter(_SQRT2, 9.0)), float(np.nextafter(_SQRT2 / 2, 0.0)),
+              _SQRT2 * 2.0**1000, _SQRT2 / 2 * 2.0**-1000, 1.5 * 2.0**-1022]
+_pow_us = ([-1076.0 + i * 0.37 for i in range(10)] + [-1050.0, -1030.0, -1022.5, -1022.0, -1021.5, -1070.0, -1020.0,
+           -1000.0, -500.0, -1.0, -1e-9, 1e-9, 0.5, 1.0, 3.25, 500.0, 1000.0, 1020.0, 1023.0, 1023.5, 1023.99])
+_pow_pairs = []
+for _x in _pow_bases:
+    for _u in _pow_us:
+        _pow_pairs.append((_x, float(mp.mpf(_u) / mp.log(_x, 2))))
+_pow_pairs += [(1.0 + 2.0**-30, 2.0**30), (1.0 - 2.0**-30, -2.0**30), (1.0 + 2.0**-30, -2.0**31),
+               (1.0 - 2.0**-52, 2.0**60), (1.4142, 2000.0), (2.0, 0.5), (4.0, 0.5), (8.0, 1.0 / 3.0),
+               (-2.5, 3.0), (-2.5, 4.0), (-0.3, -7.0), (-1.0000001, 2.0**52 + 1.0), (-0.9999999, 2.0**53),
+               (-1.0000000001, 2.0**54), (-7.0, 300.0), (-7.0, -381.0), (-10.0, 308.0), (-10.0, -323.0)]
+for _v in _log_extra[:60]:
+    for _yv in (0.5, 3.0, -2.5, 17.0, 1e-3):
+        _pow_pairs.append((_v, _yv))
+for _lx in mp.linspace(-700, 700, 41):
+    for _ly in (-3.0, -0.75, 0.2, 1.3, 2.9):
+        _x = float(mp.exp(_lx))
+        _pow_pairs.append((_x, _ly))
+
+
+def pow_ref(x, y):
+    v = mp.power(abs(mp.mpf(x)), mp.mpf(y))
+    return -v if x < 0 and int(y) % 2 else v
+
+
+
 def emit(name, fn, xs):
     gx, gy = [], []
     for x in xs:
@@ -140,5 +171,21 @@ print(f"inline const double ref_quadrant_x[] = {{{', '.join(f'{v:.17e}' for v in
 print(f"inline const int ref_quadrant_q[] = {{{', '.join(str(q) for q in quadrants)}}};")
 print(f"inline constexpr int ref_quadrant_n = {len(_quadrant_x)};")
 print(f"inline const unsigned ref_two_over_pi_bits[] = {{{', '.join(f'0x{w:08X}U' for w in words)}}};")
+with mp.workdps(80):
+    gx, gp, gy = [], [], []
+    for x, y in _pow_pairs:
+        v = float(pow_ref(x, y))
+        if not np.isfinite(v):  # overflow: the gate is for the finite range, the cases check +-inf
+            continue
+        gx.append(x)
+        gp.append(y)
+        gy.append(v)
+    consts = [mp.log(2), 1 / mp.log(2), mp.mpf(1) / 3, mp.mpf(1) / 5]
+    pairs = [float(v) for c in consts for v in (c, c - float(c))]
+print(f"inline const double ref_pow_x[] = {{{', '.join(f'{v:.17e}' for v in gx)}}};")
+print(f"inline const double ref_pow_p[] = {{{', '.join(f'{v:.17e}' for v in gp)}}};")
+print(f"inline const double ref_pow_y[] = {{{', '.join(f'{v:.17e}' for v in gy)}}};")
+print(f"inline constexpr int ref_pow_n = {len(gx)};")
+print(f"inline const double ref_pair_constants[] = {{{', '.join(f'{v:.17e}' for v in pairs)}}};")
 print("} // namespace")
 sys.exit(0)
