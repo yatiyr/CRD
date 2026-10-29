@@ -27,6 +27,7 @@ import argparse
 import bisect
 import concurrent.futures
 import json
+import locale
 import os
 import re
 import shutil
@@ -185,6 +186,18 @@ def object_format(path):
 
 def _elf_format(stream, head):
     """elf, or gnu-lto when the object holds GCC LTO sections and no code."""
+    lto, code = _elf_contents(stream, head)
+    return 'gnu-lto' if lto and not code else 'elf'
+
+
+def elf_has_code(path):
+    """Whether an ELF object holds a non-empty executable section."""
+    with open(path, 'rb') as stream:
+        return _elf_contents(stream, stream.read(64))[1]
+
+
+def _elf_contents(stream, head):
+    """(GCC LTO sections present, a non-empty executable section present) for an ELF64 object."""
     if head[4] != 2 or head[5] != 1:
         raise GuardError('only little-endian ELF64 objects are judged')
     shoff, = struct.unpack_from('<Q', head, 0x28)
@@ -200,43 +213,53 @@ def _elf_format(stream, head):
         text = names[name:names.index(b'\0', name)]
         lto |= text.startswith(b'.gnu.lto_')
         code |= bool(flags & 0x4) and length > 0
-    return 'gnu-lto' if lto and not code else 'elf'
+    return lto, code
 
 
-def _run(command):
+def _run(command, empty_ok=False):
     try:
         done = subprocess.run(command, capture_output=True, text=True, errors='replace', check=False)
     except OSError as error:
         raise GuardError(f'{command[0]}: {error}') from error
     if done.returncode != 0:
         raise GuardError(f'{Path(command[0]).name} exited {done.returncode}: {done.stderr.strip()[:400]}')
-    if not done.stdout.strip():
+    if not empty_ok and not done.stdout.strip():
         raise GuardError(f'{Path(command[0]).name} printed nothing for {command[-1]}')
     return done.stdout
 
 
 def _stream(command, label):
     """A decoder's output in chunks of about CHUNK characters ending at a line; a chunk after the first starts with
-    the last `label` line before it, so each instruction keeps its function."""
-    carry, last, printed = '', '', False
+    the last `label` line before it, so each instruction keeps its function. The pipe is read as bytes and decoded a
+    block at a time: large reads of a text-mode pipe crawl on Windows (16 s for a 20 MB dump, 0.3 s in bytes)."""
+    encoding = locale.getpreferredencoding(False)
+
+    def decode(data):
+        return data.replace(b'\r\n', b'\n').decode(encoding, errors='replace')
+    carry, pending, printed = '', b'', False
     with tempfile.TemporaryFile() as errors:
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors, text=True, errors='replace')
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=errors)
         except OSError as error:
             raise GuardError(f'{command[0]}: {error}') from error
         with process:
             while block := process.stdout.read(CHUNK):
-                printed = printed or bool(block.strip())
-                text = carry + block
-                cut = text.rfind('\n') + 1
-                chunk = text[:cut]
+                data = pending + block
+                cut = data.rfind(b'\n') + 1
+                pending = data[cut:]
+                text = decode(data[:cut])
+                if not text:
+                    continue
+                printed = printed or bool(text.strip())
+                chunk = carry + text
                 labels = list(label.finditer(chunk))
                 if labels:
-                    last = labels[-1].group(0) + '\n'
+                    carry = labels[-1].group(0) + '\n'
                 yield chunk
-                carry = last + text[cut:]
-        if carry.strip() and carry != last:
-            yield carry
+        tail = decode(pending)
+        if tail.strip():
+            printed = True
+            yield carry + tail
         if process.returncode != 0:
             errors.seek(0)
             message = errors.read().decode(errors='replace').strip()[:400]
@@ -426,7 +449,11 @@ def symbols(tools, paths, coff, reader='nm'):
                 code.add(path)
         return found, layouts, code
     by_name = {os.path.normcase(os.path.abspath(path)): path for path in paths}
-    text = _run([tools[reader], '-A', '-C', '--defined-only'] + paths)
+    # A unit that only declares (a header check of templates and inline functions) defines no symbol, and nm then
+    # prints nothing; an object holding code always defines one.
+    text = _run([tools[reader], '-A', '-C', '--defined-only'] + paths, empty_ok=True)
+    if not text.strip() and any(elf_has_code(path) for path in paths):
+        raise GuardError(f'{Path(tools[reader]).name} printed nothing for {paths[-1]}')
     for line in text.splitlines():
         match = NM_LINE.match(line)
         if not match:

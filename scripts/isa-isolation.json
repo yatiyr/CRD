@@ -62,6 +62,13 @@
       "symbol": "^_?HUF_decompress4X[12]_usingDTable_internal_fast_asm_loop$",
       "guard": "zstd assembles huf_decompress_amd64.S only with DYNAMIC_BMI2 and selects the loops only when HUF_flags_bmi2 (ZSTD_cpuid_bmi2) is set",
       "reason": "zstd's assembly Huffman loops (shrx, shlx), GCC and Clang only"
+    },
+    {
+      "id": "zstd-fast-huf-bmi2",
+      "allows": ["VEX", "lzcnt"],
+      "symbol": "^HUF_decompress4X[12]_usingDTable_internal_fast(_c_loop)?(\\.\\w+(\\.\\d+)?)*$",
+      "guard": "with DYNAMIC_BMI2 zstd builds the fast Huffman decoders and their C loops with target(\"lzcnt,bmi,bmi2\") (HUF_FAST_BMI2_ATTRS), and HUF_decompress4X[12]_usingDTable_internal returns through the default decoder before reaching them unless HUF_flags_bmi2 (ZSTD_cpuid_bmi2) is set",
+      "reason": "zstd's fast Huffman decoders (shlx, shrx), out of line in unoptimized GCC and Clang builds"
     }
   ]
 }

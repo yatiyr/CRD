@@ -4507,6 +4507,9 @@ class IsaIsolation(unittest.TestCase):
         self.assertTrue(allows('VEX', 'HUF_decompress4X1_usingDTable_internal_bmi2', 'libzstd_static/x.c.o', set()))
         self.assertTrue(allows('VEX', 'ZSTD_decompressSequences_bmi2.constprop.0', '', set()))
         self.assertTrue(allows('VEX', 'HUF_decompress4X2_usingDTable_internal_fast_asm_loop', '', set()))
+        self.assertTrue(allows('VEX', 'HUF_decompress4X1_usingDTable_internal_fast_c_loop', 'zstd/h.c.o', set()))
+        self.assertTrue(allows('lzcnt', 'HUF_decompress4X2_usingDTable_internal_fast', '', set()))
+        self.assertFalse(allows('VEX', 'HUF_decompress4X2_usingDTable_internal_default', '', set()))
         self.assertFalse(allows('EVEX', 'HUF_decompress4X1_usingDTable_internal_bmi2', '', set()))
         self.assertFalse(allows('VEX', 'crd::hesap::tensor::einsum(int)', 'crd-hesap-tensor/einsum.cpp.obj', set()))
         self.assertTrue(allows('popcnt', '?count@@YAHI@Z', 'crd-hesap-tensor/einsum.cpp.obj', {'?count@@YAHI@Z'}))
@@ -4605,15 +4608,30 @@ class IsaIsolation(unittest.TestCase):
             list(stream([sys.executable, '-c', 'import sys; print("x"); sys.exit(4)'], isa_isolation._LABEL_ELF))
         with self.assertRaisesRegex(isa_isolation.GuardError, 'printed nothing'):
             list(stream([sys.executable, '-c', 'pass'], isa_isolation._LABEL_ELF))
+        with tempfile.TemporaryDirectory() as temp:
+            empty = Path(temp) / 'declares.o'
+            empty.write_bytes(_elf_object([(b'.text', 6, 0), (b'.data', 3, 8)]))
+            code = Path(temp) / 'code.o'
+            code.write_bytes(_elf_object([(b'.text', 6, 4)]))
+            silent = {'nm': sys.executable}
+            with patch.object(isa_isolation, '_run', lambda command, empty_ok=False: ''):
+                found, _layouts, functions = isa_isolation.symbols(silent, [str(empty)], False)
+                self.assertEqual(({str(empty): []}, set()), (found, functions))
+                with self.assertRaisesRegex(isa_isolation.GuardError, 'printed nothing'):
+                    isa_isolation.symbols(silent, [str(empty), str(code)], False)
 
     def test_image_dumps_stream_in_chunks_that_keep_their_function(self):
         lines = ''.join(f'{i:016x} <f{i}()>:\n  {i:x}:\tc5 f8 77             \tvzeroupper\n' for i in range(400))
-        script = f'import sys; sys.stdout.write({lines!r})'
-        with patch.object(isa_isolation, 'CHUNK', 512):
-            chunks = list(isa_isolation._stream([sys.executable, '-c', script], isa_isolation._LABEL_ELF))
-            hits = [hit for chunk in chunks for hit in isa_isolation.scan_x64(chunk, False)]
-        self.assertGreater(len(chunks), 10)
-        self.assertEqual([(f'f{i}()', i) for i in range(400)], [(function, address) for function, address, _, _ in hits])
+        # dumpbin ends its lines with CR LF; a pair split across two reads still ends one line.
+        crlf = lines.replace('\n', '\r\n').encode()
+        for script in (f'import sys; sys.stdout.write({lines!r})', f'import sys; sys.stdout.buffer.write({crlf!r})'):
+            with patch.object(isa_isolation, 'CHUNK', 511):
+                chunks = list(isa_isolation._stream([sys.executable, '-c', script], isa_isolation._LABEL_ELF))
+                hits = [hit for chunk in chunks for hit in isa_isolation.scan_x64(chunk, False)]
+            self.assertGreater(len(chunks), 10)
+            self.assertFalse(any('\r' in chunk for chunk in chunks))
+            self.assertEqual([(f'f{i}()', i) for i in range(400)],
+                             [(function, address) for function, address, _, _ in hits])
 
     def test_map_owners_and_jump_tables(self):
         kernel = os.path.normpath('/b/x-avx2.dir/kernels/tensor_kernels.cpp.obj')
