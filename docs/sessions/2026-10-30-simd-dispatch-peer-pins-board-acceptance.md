@@ -10,8 +10,8 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 10, the board
 
 - No completed run has a failed job. Push run 40929108987 (1ebe9dc4) still runs four jobs (linux-clang-tsan,
   win-debug, win-asan, linux-gcc-asan); its 24 finished jobs passed. 40952979940 (6b9b7b2e) was replaced while queued
-  (no jobs), so 40956523310 (d9dd6098) is the first win-asan run under the three-job bound. Nothing cancelled or
-  dispatched.
+  (no jobs); the first push run whose jobs start after it is the first win-asan run under the three-job bound.
+  Nothing cancelled or dispatched.
 - Needs CI audit: DIAG.11c and DIAG.12 still wait on a green complete-tier run; none has completed.
 
 ## User decisions recorded
@@ -34,7 +34,9 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 10, the board
 - **`hptt` pin** (cmake/pins.json): springer13/hptt at 942538649b51…, the commit-addressed archive, SHA-256
   df623380…c86f97, 635,801 bytes, BSD-3-Clause (LICENSE.txt read from the archive), gated on
   `CRD_BUILD_HESAP_VS_HPTT`. The approved file was verified against the entry (`pins.py fetch --archive`) and seeded
-  into `%USERPROFILE%/.cerid/archives`, the directory the drivers' `CRD_INPUT_ARCHIVES` names; the configure used it.
+  into `%USERPROFILE%/.cerid/archives` (with Highway's; Boost's seeded copy sits elsewhere), which the board session
+  exports as `CRD_INPUT_ARCHIVES=/mnt/c/Users/abici/.cerid/archives` (the drivers only forward it); the configure
+  used it.
 - **crd-hptt from the pin**: the root CMakeLists.txt refuses the option off x64 Linux and adds the package
   (download only); `runtime/CMakeLists.txt` builds the four sources from `hptt_SOURCE_DIR`. `CRD_HPTT_DIR` and the
   per-file digest are gone: the archive's hash is the provenance, and the peer's version line names the pinned commit.
