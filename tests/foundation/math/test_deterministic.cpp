@@ -14,6 +14,7 @@
 #include <crd/math/deterministic.hpp>
 #include <crd/math/simd/vec4f.hpp> // the batched overloads' argument types
 #include <crd/math/simd/vec8f.hpp>
+#include <crd/math/trig.hpp>
 
 #include <bit>
 #include <cmath>
@@ -1099,5 +1100,61 @@ TEST_CASE("deterministic Vec8f sin/cos/exp/log lane-wise parity",
     for (int i = 0; i < 8; ++i)
     {
         REQUIRE(bits(ll[i]) == bits(det::log(static_cast<f32>(i + 1))));
+    }
+}
+
+TEST_CASE("deterministic sin, cos and tan reduce arguments past Cephes's domain exactly", "[deterministic][simd]")
+{
+    using crd::math::simd::Vec8f;
+    constexpr f32 inf = std::numeric_limits<f32>::infinity();
+    constexpr f32 nan = std::numeric_limits<f32>::quiet_NaN();
+    // Past 8192 (f32) and 2^30 (f64) the octant count leaves its integer range: crd::math's exact reduction takes
+    // over, rounded once more to f32, so the result stays within an ulp of the C library's correctly reduced value.
+    for (const f32 x : {8192.5F, -1.0e5F, 3.0e9F, 1.0e20F, -3.4028235e38F, 3.4028235e38F})
+    {
+        const double xd = static_cast<double>(x);
+        INFO("x = " << x);
+        CHECK(bits(det::sin(x)) == bits(static_cast<f32>(crd::math::sin(xd))));
+        CHECK(bits(det::cos(x)) == bits(static_cast<f32>(crd::math::cos(xd))));
+        CHECK(bits(det::tan(x)) == bits(static_cast<f32>(crd::math::tan(xd))));
+        CHECK(ulp_diff(det::sin(x), static_cast<f32>(std::sin(xd))) <= 1U);
+        CHECK(ulp_diff(det::cos(x), static_cast<f32>(std::cos(xd))) <= 1U);
+    }
+    for (const double x : {1073741825.0, -1.0e15, 1.0e300})
+    {
+        INFO("x = " << x);
+        CHECK(det::sin(x) == crd::math::sin(x));
+        CHECK(det::cos(x) == crd::math::cos(x));
+        CHECK(det::tan(x) == crd::math::tan(x));
+    }
+    for (const f32 x : {inf, -inf, nan})
+    {
+        CHECK(std::isnan(det::sin(x)));
+        CHECK(std::isnan(det::cos(x)));
+        CHECK(std::isnan(det::tan(x)));
+        CHECK(std::isnan(det::sin(static_cast<double>(x))));
+        CHECK(std::isnan(det::cos(static_cast<double>(x))));
+        CHECK(std::isnan(det::tan(static_cast<double>(x))));
+    }
+    // Lanes inside and outside the domain in one vector each match the scalar function.
+    const Vec8f a(0.5F, 8192.5F, -1.0e5F, 1.5F, 3.0e9F, inf, nan, -2.0F);
+    f32 sl[8];
+    f32 cl[8];
+    det::sin(a).store(sl);
+    det::cos(a).store(cl);
+    for (int i = 0; i < 8; ++i)
+    {
+        const f32 lane = a.lane(static_cast<crd::usize>(i));
+        INFO("lane " << i);
+        if (std::isnan(lane) || std::isinf(lane))
+        {
+            CHECK(std::isnan(sl[i]));
+            CHECK(std::isnan(cl[i]));
+        }
+        else
+        {
+            CHECK(bits(sl[i]) == bits(det::sin(lane)));
+            CHECK(bits(cl[i]) == bits(det::cos(lane)));
+        }
     }
 }

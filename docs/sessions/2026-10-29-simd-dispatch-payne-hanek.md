@@ -27,12 +27,17 @@ started (0 jobs). DIAG.11c and DIAG.12 stay Needs CI: no completed run carries t
   double, both signs: the seam's neighbours, the doubles nearest k·π/2 for k up to 2^1000 + 1, and Muller's worst
   case, at 400 digits; the quadrants of ten huge arguments; and the 37 words of 2/π, which the test compares with the
   engine's table. The existing arrays are unchanged.
+- **`crd::math::deterministic` past Cephes's domain.** Its f32 and f64 `sin`, `cos` and `tan` converted the octant
+  count to an integer type, undefined behaviour for |x| ≳ 3.4e9 (f32) and 1.5e19 (f64) and for NaN and ±∞, and the
+  reduction was wrong past |x| = 8192 (f32) and 2^30 (f64). Those arguments now take `crd::math`'s functions, rounded
+  to f32; the Vec8f and Vec4f overloads send such lanes to the scalar function after one compare. In-domain bits are
+  unchanged; a new case checks both precisions, NaN and ±∞, mixed vector lanes and the C library within an ulp.
 - The quadrant case compares with mpmath's k mod 4. The old oracle, round(x·2/π) mod 4 in doubles, was the wrong
   quadrant once x·2/π no longer rounds to k.
 
 ## Checks
 
-- win-debug crd-math-tests: all 177 cases pass, with sin and cos ≤1 ulp and tan ≤2 ulp over the new range, and the
+- win-debug crd-math-tests: all 178 cases pass, with sin and cos ≤1 ulp and tan ≤2 ulp over the new range, and the
   new range's golden `0xa65cc2f9b1b48d16`.
 - Tidy and clang-format on the changed C++, and the repository validators.
 

@@ -13,6 +13,7 @@
 // across MSVC / clang-cl / GCC × x64 / ARM64.
 
 #include <crd/math/deterministic.hpp>
+#include <crd/math/trig.hpp>
 #include <crd/math/simd/vec4f.hpp>
 #include <crd/math/simd/vec8f.hpp>
 #include <crd/math/simd/vec4i.hpp>
@@ -125,9 +126,17 @@ f32 copysign(f32 magnitude, f32 sign_src) noexcept
 // trick for preserving precision after subtraction — π/4 is broken into
 // three single-precision pieces so that x - j*π/4 retains accuracy even
 // when j*π/4 is large relative to x.
+//
+// That holds on Cephes's domain, |x| ≤ 8192 for f32 and 2^30 for f64: past it
+// j·DP1 is no longer exact and the octant count leaves the integer range, so
+// those arguments (and NaN and ±∞) take crd::math's sin, cos and tan, which
+// reduce exactly (Payne–Hanek) and round once more to f32.
 
 namespace
 {
+inline constexpr f32 kTrigDomainF32 = 8192.0F;
+inline constexpr f64 kTrigDomainF64 = 1073741824.0;
+
 // 4/π — used to count quadrants
 inline constexpr f32 k4OverPi = 1.27323954473516F;
 
@@ -160,6 +169,10 @@ f32 sin(f32 xx) noexcept
 {
     const crd::u32 sign = sign_bit(xx);
     f32 x = fast_abs(xx);
+    if (!(x <= kTrigDomainF32))
+    {
+        return static_cast<f32>(crd::math::sin(static_cast<f64>(xx)));
+    }
 
     // Reduce x to [0, π/4], with octant j ∈ {0..7}.
     f32       j = trunc(x * k4OverPi);
@@ -201,6 +214,10 @@ f32 sin(f32 xx) noexcept
 f32 cos(f32 xx) noexcept
 {
     f32 x = fast_abs(xx);
+    if (!(x <= kTrigDomainF32))
+    {
+        return static_cast<f32>(crd::math::cos(static_cast<f64>(xx)));
+    }
 
     // Reduce. Same as sin but the octant rotation is shifted by π/2.
     f32       j  = trunc(x * k4OverPi);
@@ -244,6 +261,10 @@ f32 tan(f32 xx) noexcept
 {
     const crd::u32 sign = sign_bit(xx);
     f32 x = fast_abs(xx);
+    if (!(x <= kTrigDomainF32))
+    {
+        return static_cast<f32>(crd::math::tan(static_cast<f64>(xx)));
+    }
 
     // Reduce to [-π/4, π/4]; track parity (j%2 selects cot path).
     f32       j  = trunc(x * k4OverPi);
@@ -852,6 +873,10 @@ f64 sin(f64 xx) noexcept
 {
     const crd::u64 sign_in = sign_bit64(xx);
     f64 x = fast_abs64(xx);
+    if (!(x <= kTrigDomainF64))
+    {
+        return crd::math::sin(xx);
+    }
 
     // Octant reduction.
     f64        j  = trunc(x * k64FourOverPi);
@@ -889,6 +914,10 @@ f64 sin(f64 xx) noexcept
 f64 cos(f64 xx) noexcept
 {
     f64 x = fast_abs64(xx);
+    if (!(x <= kTrigDomainF64))
+    {
+        return crd::math::cos(xx);
+    }
 
     f64        j  = trunc(x * k64FourOverPi);
     crd::u64   jq = static_cast<crd::u64>(j);
@@ -949,6 +978,10 @@ f64 tan(f64 xx) noexcept
 {
     const crd::u64 sign_in = sign_bit64(xx);
     f64 x = fast_abs64(xx);
+    if (!(x <= kTrigDomainF64))
+    {
+        return crd::math::tan(xx);
+    }
 
     f64        j  = trunc(x * k64FourOverPi);
     crd::u64   jq = static_cast<crd::u64>(j);
@@ -1796,10 +1829,43 @@ inline constexpr f32 kSLogQ2      =  0.693359375F;
 
 }  // namespace
 
-// Public Vec4f/Vec8f overloads — direct calls to the SIMD implementations.
+// Lanes past the f32 domain (and NaN or ±∞) take the scalar function, as the
+// scalar's own arguments do; one compare and a sum keep the common case vector.
+namespace
+{
+template <class Scalar>
+[[nodiscard]] Vec8f trig_lanes_outside_domain(Vec8f xx, Vec8f y, Scalar scalar) noexcept
+{
+    const Vec8f inside = cmp_le(abs(xx), Vec8f(kTrigDomainF32));
+    if (horizontal_sum(select(inside, Vec8f::zero(), Vec8f(1.0F))) == 0.0F)
+    {
+        return y;
+    }
+    f32 in[8];
+    f32 out[8];
+    xx.store(in);
+    y.store(out);
+    for (int i = 0; i < 8; ++i)
+    {
+        if (!(fast_abs(in[i]) <= kTrigDomainF32))
+        {
+            out[i] = scalar(in[i]);
+        }
+    }
+    return Vec8f::load(out);
+}
+}  // namespace
 
-crd::math::simd::Vec8f sin(crd::math::simd::Vec8f x) noexcept { return simd_sin_v8(x); }
-crd::math::simd::Vec8f cos(crd::math::simd::Vec8f x) noexcept { return simd_cos_v8(x); }
+// Public Vec4f/Vec8f overloads — the SIMD implementations.
+
+crd::math::simd::Vec8f sin(crd::math::simd::Vec8f x) noexcept
+{
+    return trig_lanes_outside_domain(x, simd_sin_v8(x), [](f32 v) noexcept { return sin(v); });
+}
+crd::math::simd::Vec8f cos(crd::math::simd::Vec8f x) noexcept
+{
+    return trig_lanes_outside_domain(x, simd_cos_v8(x), [](f32 v) noexcept { return cos(v); });
+}
 crd::math::simd::Vec8f exp(crd::math::simd::Vec8f x) noexcept { return simd_exp_v8(x); }
 crd::math::simd::Vec8f log(crd::math::simd::Vec8f x) noexcept { return simd_log_v8(x); }
 
@@ -1817,11 +1883,11 @@ namespace
 
 crd::math::simd::Vec4f sin(crd::math::simd::Vec4f x) noexcept
 {
-    return narrow_to_v4(simd_sin_v8(crd::math::simd::Vec8f(x, x)));
+    return narrow_to_v4(sin(crd::math::simd::Vec8f(x, x)));
 }
 crd::math::simd::Vec4f cos(crd::math::simd::Vec4f x) noexcept
 {
-    return narrow_to_v4(simd_cos_v8(crd::math::simd::Vec8f(x, x)));
+    return narrow_to_v4(cos(crd::math::simd::Vec8f(x, x)));
 }
 crd::math::simd::Vec4f exp(crd::math::simd::Vec4f x) noexcept
 {

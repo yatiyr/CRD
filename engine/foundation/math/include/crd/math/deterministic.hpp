@@ -55,6 +55,8 @@ inline constexpr f32 kLn10      = 2.30258509299404568402F;
 inline constexpr f32 kInvLn10  = 0.43429448190325182765F;  // 1/ln(10) = log10(e)
 
 // ---- trig -----------------------------------------------------------------
+// sin, cos and tan cover the finite range: past Cephes's domain (|x| > 8192 for f32, 2^30 for f64, and in every
+// vector lane) they reduce exactly through crd::math's sin, cos and tan.
 
 [[nodiscard]] f32 sin(f32 x) noexcept;
 [[nodiscard]] f32 cos(f32 x) noexcept;
