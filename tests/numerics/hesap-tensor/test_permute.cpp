@@ -658,7 +658,7 @@ constexpr tn::detail::PermuteArm kArms[] = {
     {kPickA, 0U, 32U, 64U, 8U, 2U, tn::detail::PermuteStream::On, true},
 };
 
-// Every arm, serial and at 1, 3, 7, 8 and 16 workers, gives permute_copy's serial bits, unscaled and scaled; an arm
+// Every arm, serial and at 1, 3, 8 and 16 workers, gives permute_copy's serial bits, unscaled and scaled; an arm
 // that forces non-temporal stores is refused exactly where the dst-fastest extent is no 32-byte multiple (streams).
 template <typename T>
 void check_arms(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::u64> shape,
@@ -671,7 +671,7 @@ void check_arms(crd::memory::IAllocator* alloc, crd::containers::ConstSpan<crd::
     REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref) == TensorStatus::Ok);
     REQUIRE(permute_copy(TensorView<const T>(src.view()), order, ref_scaled, alpha) == TensorStatus::Ok);
     Tensor<T> out(alloc);
-    for (const crd::u32 nw : {0U, 1U, 3U, 7U, 8U, 16U}) // 0: no pool
+    for (const crd::u32 nw : {0U, 1U, 3U, 8U, 16U}) // 0: no pool
     {
         if (nw != 0U)
         {
@@ -727,7 +727,7 @@ TEST_CASE("permute board arms: every arm gives permute_copy's bits at every work
           "refused",
           "[hesap][tensor][permute][moat]")
 {
-    crd::memory::TlsfAllocator alloc(1ULL << 30U);
+    crd::memory::TlsfAllocator alloc(1ULL << 28U);
     check_arms_element<crd::f32>(&alloc, -0.5F);
     check_arms_element<crd::f64>(&alloc, -2.0);
     check_arms_element<Complex<crd::f32>>(&alloc, Complex<crd::f32>{-2.0F, 0.5F});

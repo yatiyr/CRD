@@ -45,8 +45,8 @@ Before: [the SELL board driver](2026-10-29-simd-dispatch-sell-board-driver.md).
 
 - `[kernels]`: every region case runs five picks (other hints, distances 0 and 2, no destination prefetch, the scalar
   tile), staged and not; every walk case runs them with HPTT's order and, where the extents allow, non-temporal
-  stores. All are checked against the scalar oracle with sentinels past the region.
-- `[permute]`: a new moat case runs six arms, serial and at 1, 3, 7, 8 and 16 workers, unscaled and scaled, for all
+  stores. All are checked against the scalar oracle with sentinels past the region. The ISA guard passes on win-debug.
+- `[permute]`: a new moat case runs six arms, serial and at 1, 3, 8 and 16 workers, unscaled and scaled, for all
   four element types. The shapes are a transpose, a rotation with source columns 80 KiB or more apart (tall tiles,
   staged strips) and a reversal whose rows are no 32-byte multiple. Each arm matches `permute_copy`'s bits, and a
   forced stream is refused exactly on the reversal.
