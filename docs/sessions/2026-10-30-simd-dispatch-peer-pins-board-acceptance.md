@@ -35,8 +35,8 @@ Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch) (Left item 10, the board
   df623380…c86f97, 635,801 bytes, BSD-3-Clause (LICENSE.txt read from the archive), gated on
   `CRD_BUILD_HESAP_VS_HPTT`. The approved file was verified against the entry (`pins.py fetch --archive`) and seeded
   into `%USERPROFILE%/.cerid/archives` (with Highway's; Boost's seeded copy sits elsewhere), which the board session
-  exports as `CRD_INPUT_ARCHIVES` at its WSL path, `/mnt/c/Users/<user>/.cerid/archives` (the drivers only forward it); the configure
-  used it.
+  exports as `CRD_INPUT_ARCHIVES` at its WSL path, `/mnt/c/Users/<user>/.cerid/archives` (the drivers only forward
+  it); the configure used it.
 - **crd-hptt from the pin**: the root CMakeLists.txt refuses the option off x64 Linux and adds the package
   (download only); `runtime/CMakeLists.txt` builds the four sources from `hptt_SOURCE_DIR`. `CRD_HPTT_DIR` and the
   per-file digest are gone: the archive's hash is the provenance, and the peer's version line names the pinned commit.
