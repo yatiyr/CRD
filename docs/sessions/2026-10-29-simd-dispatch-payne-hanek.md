@@ -1,0 +1,44 @@
+# 2026-10-29 — SIMD-DISPATCH: Payne–Hanek reduction for sin, cos and tan
+
+<!-- doc-role: session -->
+> Dated session note; no live status. Current work: [ROADMAP](../ROADMAP.md#slice-simd-dispatch).
+
+Row: [SIMD-DISPATCH](../ROADMAP.md#slice-simd-dispatch);
+follows [the image sweep resync and Clang's UBSan lane](2026-10-29-simd-dispatch-guard-resync-and-clang-ubsan.md),
+whose Left list named this as the next batch.
+
+## CI first
+
+Push run 40826432863 (dd860168) is still running. Its two new completed failures, win-shipping (job 123291442977)
+and win-relwithdebinfo (job 123291443152), are each one `roundpd` in the CRT's `__sse4_floor2`
+(`MSVCRT:svml_dfloor2_sse4.obj`), the finding win-release had; the `msvc-crt-svml` exception of b9e796e3, after
+dd860168, covers that object. The guard took 448 s and 737 s there. Every later push run was replaced before any job
+started (0 jobs). DIAG.11c and DIAG.12 stay Needs CI: no completed run carries their hosted evidence.
+
+## What landed
+
+- **Payne–Hanek above Cody-Waite's exact range.** `reduce_pio2` keeps Cody-Waite while |k| ≤ 2^20, where its
+  three π/2 parts multiply k exactly (every in-range bit is unchanged; the golden checksum holds). Above, it
+  multiplies the 53-bit significand by the 224 bits of 2/π that matter for its exponent, in 32-bit limbs: the bits
+  above add only multiples of 4, the dropped ones less than 2^−138. The fraction keeps at least 97 significant bits,
+  enough for Muller's worst case (|r| ≈ 2^−61), and becomes r + rt through an exact product with π/2. Integer
+  arithmetic and exact conversions only, so every compiler and level gives the same bits. Before, sin(1e300) was +∞.
+- **References to the largest double.** The generator adds 1,240 points per function from 1e6 to the largest
+  double, both signs: the seam's neighbours, the doubles nearest k·π/2 for k up to 2^1000 + 1, and Muller's worst
+  case, at 400 digits; the quadrants of ten huge arguments; and the 37 words of 2/π, which the test compares with the
+  engine's table. The existing arrays are unchanged.
+- The quadrant case compares with mpmath's k mod 4. The old oracle, round(x·2/π) mod 4 in doubles, was the wrong
+  quadrant once x·2/π no longer rounds to k.
+
+## Checks
+
+- win-debug crd-math-tests: all 177 cases pass, with sin and cos ≤1 ulp and tan ≤2 ulp over the new range, and the
+  new range's golden `0xa65cc2f9b1b48d16`.
+- Tidy and clang-format on the changed C++, and the repository validators.
+
+## Left
+
+- The generator does not reproduce its log-spaced grids: numpy's `exp` gives other last bits than the ones
+  committed (log, log2, log10, rsqrt). Spacing them through mpmath, as the new range does, adds a point where `log`
+  is 2 ulp (x = 0.17705993512268989): `crd_log_reduce` rounds t = (m − 1)/(m + 1) and carries no correction. The next
+  batch makes `log` ≤1 ulp with its SIMD twins and regenerates the grids.

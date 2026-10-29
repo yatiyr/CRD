@@ -86,6 +86,27 @@ TEST_CASE("crd::math transcendental family accuracy vs mpmath", "[math][transcen
     TX_GATE(rsqrt, 1.0);
 }
 
+TEST_CASE("crd::math sin, cos and tan keep their bound from the reduction seam to the largest double",
+          "[math][transcendental][tx]")
+{
+    namespace r = crd::math::txref;
+    const double sin_ulp =
+        max_ulp([](double x) { return crd::math::sin(x); }, r::ref_sin_large_x, r::ref_sin_large_y, r::ref_sin_large_n);
+    const double cos_ulp =
+        max_ulp([](double x) { return crd::math::cos(x); }, r::ref_cos_large_x, r::ref_cos_large_y, r::ref_cos_large_n);
+    const double tan_ulp =
+        max_ulp([](double x) { return crd::math::tan(x); }, r::ref_tan_large_x, r::ref_tan_large_y, r::ref_tan_large_n);
+    INFO("max ulp: sin " << sin_ulp << ", cos " << cos_ulp << ", tan " << tan_ulp);
+    CHECK(sin_ulp <= 1.0);
+    CHECK(cos_ulp <= 1.0);
+    CHECK(tan_ulp <= 2.0); // the division, as in the Cody-Waite range
+    for (int w = 0; w < 37; ++w)
+    {
+        INFO("2/pi word " << w);
+        CHECK(crd::math::trig_detail::kTwoOverPiBits[w] == crd::math::txref::ref_two_over_pi_bits[w]);
+    }
+}
+
 // Cross-platform determinism (the moat): the kernel is -ffp-contract=off + explicit fma ⇒ EVERY platform/compiler
 // (gcc/clang/MSVC, x64/ARM/WASM) must produce bit-identical output. We fold every facade result over the ref grids
 // into one checksum; the committed value is the canonical bits. A mismatch on any platform = a determinism break.
@@ -127,9 +148,16 @@ TEST_CASE("crd::math transcendental cross-platform determinism golden checksum",
     TX_FOLD(acos);
     TX_FOLD(cbrt);
     TX_FOLD(rsqrt);
+    std::uint64_t large = 0;
+    for (int i = 0; i < crd::math::txref::ref_sin_large_n; ++i)
+    {
+        const double x = crd::math::txref::ref_sin_large_x[i];
+        large = fold(fold(fold(large, crd::math::sin(x)), crd::math::cos(x)), crd::math::tan(x));
+    }
 #undef TX_FOLD
-    INFO("golden checksum = 0x" << std::hex << h);
+    INFO("golden checksum = 0x" << std::hex << h << ", Payne-Hanek range 0x" << large);
     CHECK(h == 0x3e379d52f6f98672ULL); // canonical bits (gcc/-ffp-contract=off); every platform must reproduce
+    CHECK(large == 0xa65cc2f9b1b48d16ULL);
 }
 
 TEST_CASE("crd::math select/round tier -- exactness", "[math][transcendental][tx]")
@@ -230,15 +258,13 @@ TEST_CASE("crd::math expm1 and the trig quadrant stay defined to the ends of the
     {
         CHECK(m::expm1(x) == -1.0);
     }
-    // A huge argument's k = round(x·2/π) fits no integer type; its quadrant k mod 4 is still exact.
-    for (const double x : {1.5e16, 6e16, 1e17, -1e17, 1e300, -1e300, max_value, -max_value})
+    // A huge argument's k = round(x·2/π) fits no integer type; its quadrant k mod 4 is still exact (mpmath's).
+    for (int i = 0; i < m::txref::ref_quadrant_n; ++i)
     {
-        const double k = m::floor(m::fma(x, m::k2OverPi, 0.5));
-        double want = std::fmod(k, 4.0);
-        want = want < 0.0 ? want + 4.0 : want;
         double r = 0.0;
         double rt = 0.0;
-        INFO("x = " << x);
-        CHECK(m::trig_detail::reduce_pio2(x, r, rt) == static_cast<int>(want));
+        INFO("x = " << m::txref::ref_quadrant_x[i]);
+        CHECK(m::trig_detail::reduce_pio2(m::txref::ref_quadrant_x[i], r, rt) == m::txref::ref_quadrant_q[i]);
+        CHECK(std::fabs(r) <= m::kQuarterPi);
     }
 }

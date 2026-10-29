@@ -1,10 +1,9 @@
 #pragma once
 
-// crd-math trig family — deterministic sin/cos/sincos/tan, ≤1 ulp, faster-than-libm. Cody-Waite 3-part π/2
-// argument reduction (≤1 ulp for |x| ≲ 1e6 — the practical angle range) + minimax sin/cos on |r| ≤ π/4 + a
-// quadrant combine. -ffp-contract=off + explicit fma ⇒ bit-identical on every platform (the moat). Same contract
-// as transcendental.hpp; the C library appears ONLY in the non-finite edge fallback. (Payne–Hanek for |x| ≫ 1e6 is
-// the large-argument extension — tracked in docs/phases/crd-math-transcendental.md tx-gaps.)
+// crd-math trig family — deterministic sin/cos/sincos/tan, ≤1 ulp, faster-than-libm, over the whole finite range.
+// π/2 argument reduction (Cody-Waite while k·(π/2)'s parts multiply exactly, Payne–Hanek above) + minimax sin/cos on
+// |r| ≤ π/4 + a quadrant combine. -ffp-contract=off + explicit fma ⇒ bit-identical on every platform (the moat).
+// Same contract as transcendental.hpp; the C library appears ONLY in the non-finite edge fallback.
 
 #include <crd/math/libm.hpp> // edge fallback (NaN/Inf) + floor/fma reduction primitives ONLY
 
@@ -74,12 +73,105 @@ namespace trig_detail
     const double w = 1.0 - hz;
     return w + (((1.0 - w) - hz) + libm::fma(s * s, p, -r * rt));
 }
-// reduce x to r + rt = x − k·(π/2), |r| ≤ π/4 (double-double via the low-bits-zero 3-part π/2 + fma tails);
-// returns the quadrant k & 3. ≤1 ulp for |x| ≲ 1e6 (Cody-Waite); Payne-Hanek for |x| ≫ 1e6 is the tx-gaps item.
+// 2/π = Σ kTwoOverPiBits[w]·2^(−32(w+1)). The largest double (exponent 971) reads up to word 36; the reference
+// generator (tests/foundation/math/gen_transcendental_refs.py) checks every word against mpmath.
+inline constexpr crd::u32 kTwoOverPiBits[37] = {
+    0xA2F9836EU, 0x4E441529U, 0xFC2757D1U, 0xF534DDC0U, 0xDB629599U, 0x3C439041U, 0xFE5163ABU, 0xDEBBC561U,
+    0xB7246E3AU, 0x424DD2E0U, 0x06492EEAU, 0x09D1921CU, 0xFE1DEB1CU, 0xB129A73EU, 0xE88235F5U, 0x2EBB4484U,
+    0xE99C7026U, 0xB45F7E41U, 0x3991D639U, 0x835339F4U, 0x9C845F8BU, 0xBDF9283BU, 0x1FF897FFU, 0xDE05980FU,
+    0xEF2F118BU, 0x5A0A6D1FU, 0x6D367ECFU, 0x27CB09B7U, 0x4F463F66U, 0x9E5FEA2DU, 0x7527BAC7U, 0xEBE5F17BU,
+    0x3D0739F7U, 0x8A5292EAU, 0x6BFB5FB1U, 0x1F8D5D08U, 0x56033046U};
+
+// The 32 bits of the little-endian limbs p from bit pos up (pos ≤ 256).
+[[nodiscard]] inline crd::u32 limb_bits(const crd::u32 (&p)[10], int pos) noexcept
+{
+    const int word = pos >> 5;
+    const crd::u64 pair = (static_cast<crd::u64>(p[word + 1]) << 32U) | p[word];
+    return static_cast<crd::u32>(pair >> static_cast<unsigned>(pos & 31));
+}
+
+// Payne–Hanek, for |k| > 2^20, where Cody-Waite's k·part products stop being exact. |x| = m·2^e with m < 2^53: the
+// bits of 2/π above 2^(2−e) add only multiples of 4 to x·2/π, so m times the next 224 bits gives k mod 4 and the
+// fraction, and the bits below the window add less than 2^−138. The fraction keeps at least 97 significant bits, so
+// even the double nearest a multiple of π/2 (|r| ≈ 2^−61, the worst case over all doubles) reduces to ~2^−97. Integer
+// arithmetic and exact conversions throughout: the same bits on every compiler and level.
+[[nodiscard]] inline int reduce_pio2_large(double x, double& r, double& rt) noexcept
+{
+    const crd::u64 bits = __builtin_bit_cast(crd::u64, x);
+    const crd::u64 m = (bits & 0x000FFFFFFFFFFFFFULL) | (1ULL << 52U); // |x| > 2^20 is normal
+    const int e = static_cast<int>((bits >> 52U) & 0x7FFU) - 1075;     // e in [−32, 971]
+    const int j0 = e >= 2 ? (e - 2) / 32 : 0;                          // the window starts at bit 32·j0 + 1 ≤ e − 1
+    crd::u32 p[10] = {};                                               // m · window: 277 bits
+    const crd::u32 mw[2] = {static_cast<crd::u32>(m), static_cast<crd::u32>(m >> 32U)};
+    for (int i = 0; i < 2; ++i)
+    {
+        crd::u64 carry = 0U;
+        for (int j = 0; j < 7; ++j)
+        {
+            const crd::u64 t = static_cast<crd::u64>(mw[i]) * kTwoOverPiBits[j0 + 6 - j] + p[i + j] + carry;
+            p[i + j] = static_cast<crd::u32>(t);
+            carry = t >> 32U;
+        }
+        p[i + 7] = static_cast<crd::u32>(carry);
+    }
+    const int point = 32 * (j0 + 7) - e; // x·2/π = p·2^(−point), point in [191, 256]
+    int k = static_cast<int>(limb_bits(p, point) & 3U);
+    crd::u32 f[5] = {}; // the fraction, most significant limb first
+    for (int t = 0; t < 5; ++t)
+    {
+        f[t] = limb_bits(p, point - 32 * (t + 1));
+    }
+    bool negative = (bits >> 63U) != 0U;
+    if ((f[0] >> 31U) != 0U)
+    {
+        // a fraction of 1/2 or more rounds k up and leaves f − 1: negate the limbs (two's complement)
+        k = (k + 1) & 3;
+        crd::u64 carry = 1U;
+        for (int t = 4; t >= 0; --t)
+        {
+            const crd::u64 v = static_cast<crd::u64>(f[t] ^ 0xFFFFFFFFU) + carry;
+            f[t] = static_cast<crd::u32>(v);
+            carry = v >> 32U;
+        }
+        negative = !negative;
+    }
+    // |fraction| as a double-double from its first nonzero limb: each limb converts and scales exactly
+    constexpr double kLimbWeight[5] = {0x1p-32, 0x1p-64, 0x1p-96, 0x1p-128, 0x1p-160};
+    double d[8] = {};
+    for (int t = 0; t < 5; ++t)
+    {
+        d[t] = static_cast<double>(f[t]) * kLimbWeight[t];
+    }
+    int i0 = 0;
+    while (i0 < 4 && f[i0] == 0U)
+    {
+        ++i0;
+    }
+    const double hi = d[i0] + d[i0 + 1]; // d[i0] ≥ d[i0 + 1]: exact error below
+    const double lo = (d[i0 + 1] - (hi - d[i0])) + (d[i0 + 2] + d[i0 + 3]);
+    // × π/2 in double-double
+    const double ph = hi * kHalfPi;
+    const double pl = libm::fma(hi, kHalfPi, -ph) + libm::fma(hi, kHalfPiLo, lo * kHalfPi);
+    r = ph + pl;
+    rt = pl - (r - ph);
+    if (negative)
+    {
+        r = -r;
+        rt = -rt;
+    }
+    return (bits >> 63U) != 0U ? (4 - k) & 3 : k;
+}
+
+// reduce x to r + rt = x − k·(π/2), |r| ≤ π/4, as a double-double; returns the quadrant k & 3. While |k| ≤ 2^20 the
+// low-bits-zero 3-part π/2 (Cody-Waite) multiplies k exactly and the fma tails carry the rest; above, Payne–Hanek.
 [[nodiscard]] inline int reduce_pio2(double x, double& r, double& rt) noexcept
 {
     const double fn = libm::floor(libm::fma(x, k2OverPi, 0.5)); // k = round(x·2/π), deterministic
-    const double t = x - fn * kPio2Part1;                       // fn·kPio2Part1 exact (k≤2^20) ⇒ exact subtraction
+    if (libm::fabs(fn) > 0x1p20)
+    {
+        return reduce_pio2_large(x, r, rt);
+    }
+    const double t = x - fn * kPio2Part1; // fn·kPio2Part1 exact (|k| ≤ 2^20) ⇒ exact subtraction
     // two_sum(t, −fn·pio2_2): r = round, rt = exact tail (robust — no operand-order assumption)
     const double w2 = fn * kPio2Part2;
     r = t - w2;
@@ -92,9 +184,7 @@ namespace trig_detail
     rt += (r - (r3 - b3)) - (w3 + b3);
     r = r3;
     rt -= fn * kPio2Part4; // the tiny 4th part ⇒ reduced arg good to ~200 bits ⇒ ≤1 ulp even at sin's zeros
-    // k mod 4 in [0, 3] by exact operations, never an integer conversion of k: a huge |x| makes k too large for any
-    // integer type (k is even from 2^53 and a multiple of 4 from 2^54).
-    return static_cast<int>(fn - 4.0 * libm::floor(fn * 0.25));
+    return static_cast<int>(fn - 4.0 * libm::floor(fn * 0.25)); // k mod 4 in [0, 3]
 }
 // atan(t), |t| ≤ tan(π/8), via t·(1 + s·P(s)), s = t²
 [[nodiscard]] inline double atan_core(double t) noexcept

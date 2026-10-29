@@ -32,7 +32,7 @@ FUNCS = [
     ("log1p", mp.log1p, grid(-0.9, 1e6, 300, log=False, extra=[1e-12, -1e-12, 1e-8, -1e-8, 1e-3, -0.5, 0.0])),
 ]
 
-# trig: Cody-Waite 3-part reduction holds to |x| ~ 1e6 (the practical angle range). Dense small-x + sparse large-x.
+# trig, the Cody-Waite range (|x| ≤ 1e6): dense small-x + sparse large-x.
 _trig_extra = list(np.linspace(-6.3, 6.3, 260)) + [0.0, 0.1, 0.5, 1.0, 1.5707963267948966, 3.141592653589793, 6.283185307179586, 100.0, 1000.0, 12345.678, -100.0, -1000.0]
 FUNCS += [
     ("sin", mp.sin, grid(-1e6, 1e6, 1500, extra=_trig_extra)),
@@ -65,6 +65,29 @@ FUNCS += [
 ]
 
 
+# trig, the Payne–Hanek range: from just below the Cody-Waite seam (|k| = 2^20, x ≈ 1.6471e6) to the largest double,
+# both signs, with the doubles nearest k·π/2 for large k (the reduction's hardest inputs) and Muller's worst case.
+# Separate arrays, so the arrays above and their golden checksum stay as they are; spaced through mpmath, so the
+# points do not depend on the platform's exp and log.
+_K2_OVER_PI = 6.36619772367581382433e-01
+_seam = (2.0**20 + 0.5) / _K2_OVER_PI
+_trig_large = [float(mp.exp(v)) for v in mp.linspace(mp.log(1.0e6), mp.log(1.7e308), 600)] + [1.0e22, 1.0e300, 2.0**1023, sys.float_info.max,
+                                                         3.4028234663852886e38, 6381956970095103 * 2.0**797]
+for _ in range(2):
+    _trig_large += [float(np.nextafter(_seam, 0.0)), _seam, float(np.nextafter(_seam, np.inf))]
+    _seam = float(np.nextafter(np.nextafter(_seam, np.inf), np.inf))
+with mp.workdps(400):
+    _trig_large += [float(k * mp.pi / 2) for k in (2**20, 2**20 + 1, 2**21 + 3, 2**30 + 1, 2**52 + 5, 2**60 + 1,
+                                                  2**100 + 1, 2**500 + 1, 2**1000 + 1)]
+_trig_large = np.array(_trig_large + [-v for v in _trig_large], dtype=np.float64)
+LARGE = [("sin_large", mp.sin, np.unique(_trig_large)), ("cos_large", mp.cos, np.unique(_trig_large)),
+         ("tan_large", mp.tan, np.unique(_trig_large))]
+
+# The quadrant k mod 4, k = round(x·2/π), where k fits no integer type.
+_quadrant_x = [1.5e16, 6e16, 1e17, -1e17, 1e300, -1e300, sys.float_info.max, -sys.float_info.max,
+               6381956970095103 * 2.0**797, -6381956970095103 * 2.0**797]
+
+
 def emit(name, fn, xs):
     gx, gy = [], []
     for x in xs:
@@ -90,5 +113,19 @@ print("#pragma once")
 print("namespace crd::math::txref {")
 for name, fn, xs in FUNCS:
     emit(name, fn, xs)
+with mp.workdps(400):
+    for name, fn, xs in LARGE:
+        emit(name, fn, xs)
+    quadrants = [int(mp.nint(mp.mpf(x) * 2 / mp.pi)) % 4 for x in _quadrant_x]
+    two_over_pi = mp.mpf(2) / mp.pi
+    words = []
+    for _ in range(37):
+        two_over_pi *= 2**32
+        words.append(int(mp.floor(two_over_pi)))
+        two_over_pi -= words[-1]
+print(f"inline const double ref_quadrant_x[] = {{{', '.join(f'{v:.17e}' for v in _quadrant_x)}}};")
+print(f"inline const int ref_quadrant_q[] = {{{', '.join(str(q) for q in quadrants)}}};")
+print(f"inline constexpr int ref_quadrant_n = {len(_quadrant_x)};")
+print(f"inline const unsigned ref_two_over_pi_bits[] = {{{', '.join(f'0x{w:08X}U' for w in words)}}};")
 print("} // namespace")
 sys.exit(0)
