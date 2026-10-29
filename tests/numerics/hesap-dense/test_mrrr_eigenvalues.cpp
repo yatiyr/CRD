@@ -1348,8 +1348,8 @@ template <typename R> void check_eigvals_threshold()
                 a.at(static_cast<crd::usize>(i), static_cast<crd::usize>(j)) = static_cast<R>(2.0 * u - 1.0);
             }
         }
-        const EigvalsPick to_multisection{.multisection_min = 0, .multisection = {}};
-        const EigvalsPick to_dqds{.multisection_min = 513, .multisection = {}};
+        const EigvalsPick to_multisection{.multisection_min = 0};
+        const EigvalsPick to_dqds{.multisection_min = 513};
         const auto multisection = detail::eigvals_sym_arm<R>(to_multisection, &alloc, a);
         const auto dqds = detail::eigvals_sym_arm<R>(to_dqds, &alloc, a);
         const auto production = crd::hesap::dense::eigvals_sym<R>(&alloc, a);

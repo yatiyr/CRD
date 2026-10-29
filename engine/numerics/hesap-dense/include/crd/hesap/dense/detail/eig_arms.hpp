@@ -27,7 +27,7 @@ struct MultisectionPick
 struct EigvalsPick
 {
     crd::usize multisection_min = 512; // the multisection replaces dqds from this n on
-    MultisectionPick multisection;
+    MultisectionPick multisection = {};
 };
 
 // workers 0 is crd::jobs::num_workers(); the segments' tasks per job are n / gran_div, clamped to [1, gran_max].
