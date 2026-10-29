@@ -4,8 +4,8 @@
 // written through the refused pointer before). One mode per run (argv[1]); see expected_fatal.hpp for the exit
 // protocol:
 //   plan-hier-table-refused       FftPlan<f64>(4096): the hierarchical sub-FFT's first table is refused
-//   plan-stockham-table-refused   FftPlan<f64>(65536): the direct Stockham path's first table is refused
-//   plan-four-step-table-refused  FftPlan<f64>(2^19): the four-step path's first table is refused
+//   plan-ip4-table-refused        FftPlan<f64>(65536): the IP4-AoS path's first table is refused
+//   plan-four-step-table-refused  FftPlan<f64>(2^21): the four-step path's first table is refused
 //   plan-four-step-subplan-refused  FftPlan<f64>(2^19): the four-step's first sub-plan is refused
 //   bluestein-plan-refused        BluesteinPlan<f64>(7): its power-of-two plan is refused
 //   nd-axis-plan-refused          NdFftPlan<f64>({8, 8}): the first axis plan is refused
@@ -50,13 +50,13 @@ constexpr crd::usize kRawTableAlignment = 32U; // the smallest alignment a plan'
     {
         n = 4096U;
     }
-    else if (is(mode, "plan-stockham-table-refused"))
+    else if (is(mode, "plan-ip4-table-refused"))
     {
         n = crd::usize{1} << 16U;
     }
     else if (is(mode, "plan-four-step-table-refused"))
     {
-        n = crd::usize{1} << 19U;
+        n = crd::usize{1} << 21U;
     }
     else if (is(mode, "plan-four-step-subplan-refused"))
     {

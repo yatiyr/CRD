@@ -308,43 +308,6 @@ TEST_CASE("fft: four-step path (large n, f32) matches the radix-2 reference orac
     }
 }
 
-TEST_CASE("fft: the f32 1M forward's six-step and tiled four-step match the radix-2 reference oracle", "[fft]")
-{
-    // SIMD-DISPATCH's row-close board measures both against the planner's deep-split (fft::detail::LargeForward);
-    // here each runs through a public plan at the process's level, in the f32 class of the case above.
-    crd::memory::TlsfAllocator alloc(1ULL << 28);
-    constexpr usize n = usize{1} << 20;
-    cont::Array<Complex<f32>> x(&alloc);
-    fill_lcg(x, n, 31337ULL + n);
-    cont::Array<Complex<f32>> want(&alloc);
-    want.resize(n);
-    std::memcpy(want.data(), x.data(), n * sizeof(Complex<f32>));
-    {
-        const fft::FftPlan<f32> plan(&alloc, n);
-        plan.execute_reference(cont::Span<Complex<f32>>(want.data(), n), fft::FftDirection::Forward);
-    }
-    for (const fft::detail::LargeForward path :
-         {fft::detail::LargeForward::SixStep, fft::detail::LargeForward::TiledFourStep})
-    {
-        cont::Array<Complex<f32>> got(&alloc);
-        got.resize(n);
-        std::memcpy(got.data(), x.data(), n * sizeof(Complex<f32>));
-        const fft::FftPlan<f32> plan(&alloc, n, path);
-        plan.execute(cont::Span<Complex<f32>>(got.data(), n), fft::FftDirection::Forward);
-        double maxref = 0.0;
-        double maxerr = 0.0;
-        for (usize k = 0; k < n; ++k)
-        {
-            maxref = std::max(maxref, std::hypot(static_cast<double>(want[k].re), static_cast<double>(want[k].im)));
-            maxerr = std::max(maxerr, std::hypot(static_cast<double>(got[k].re) - static_cast<double>(want[k].re),
-                                                 static_cast<double>(got[k].im) - static_cast<double>(want[k].im)));
-        }
-        const double rel = maxerr / (1.0 + maxref);
-        INFO("path=" << static_cast<int>(path) << " rel=" << rel);
-        CHECK(rel < 1e-3);
-    }
-}
-
 TEST_CASE("fft: standalone-hier band (f32) matches the radix-2 reference oracle", "[fft]")
 {
     crd::memory::TlsfAllocator alloc(1ULL << 26);

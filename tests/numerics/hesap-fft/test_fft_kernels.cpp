@@ -1,10 +1,10 @@
 // The hesap-fft kernel levels (SIMD-DISPATCH, ADR-0134 §5, §7): every level the host runs transforms one plan per band
 // of the planner (the leaf codelets, the Stockham passes, IP4-AoS, the standalone-hier and deep-split bands, the
-// four-step and six-step, the f32 1M forward's tiled four-step) and the batched sub-FFT paths, f64 and f32, both
-// directions, within the ADR-0092 §5 tolerance of the radix-2 reference, on aligned data and one word off (the
-// four-step's plain-store branch); every level gives portable's bits (the family is bit-exact) and is bit-identical run
-// to run; the words around the data stay as they were; signed zeros and subnormals are not flushed, and one infinity or
-// NaN makes every output non-finite as in the reference.
+// four-step and six-step; at f32, every forward the planner offers at each size) and the batched sub-FFT paths, f64 and
+// f32, both directions, within the ADR-0092 §5 tolerance of the radix-2 reference, on aligned data and one word off
+// (the four-step's plain-store branch); every level gives portable's bits (the family is bit-exact) and is
+// bit-identical run to run; the words around the data stay as they were; signed zeros and subnormals are not flushed,
+// and one infinity or NaN makes every output non-finite as in the reference.
 // crd-hesap-fft-kernels-at-<level> runs these [kernels] cases under each forced level.
 
 #include "kernel_levels.hpp"
@@ -144,17 +144,22 @@ constexpr u32 kLog2Max = 21;
 // Every level the host runs transforms `plan` in direction `dir` within the reference's tolerance, bit-identical run to
 // run and to portable, the guards kept. The four-step's NT stores take aligned data; one word in, f64 takes its
 // plain-store branch. Negative zeros, whose signs every level must keep as portable does, take the aligned data. An
-// input's reference serves each of its shifts.
+// input's reference serves each of its shifts. `every_input` false runs the random input, aligned, only.
 template <typename T>
-void check_plan_every_level(crd::memory::IAllocator* alloc, const fft::FftPlan<T>& plan, FftDirection dir)
+void check_plan_every_level(crd::memory::IAllocator* alloc, const fft::FftPlan<T>& plan, FftDirection dir,
+                            bool every_input = true)
 {
     const usize n = plan.size();
     for (const bool negative_zeros : {false, true})
     {
+        if (negative_zeros && !every_input)
+        {
+            continue;
+        }
         Buffer<T> want(alloc, n, 0);
         fill_input(want.values(), 2 * n, 0x5EEDULL + n, negative_zeros);
         plan.execute_reference(Span<Complex<T>>(want.data(), n), dir);
-        const usize shifts = negative_zeros ? 1U : 2U;
+        const usize shifts = (negative_zeros || !every_input) ? 1U : 2U;
         for (usize shift = 0; shift < shifts; ++shift)
         {
             Buffer<T> portable(alloc, n, shift);
@@ -444,19 +449,94 @@ TEST_CASE("fft kernels: every level keeps the reference's non-finite and subnorm
     check_specials_every_level<crd::f32>();
 }
 
-// The f32 1M forward's other arms of SIMD-DISPATCH's row-close board (fft::detail::LargeForward; the deep-split is the
-// planner's, above): the cases above on the six-step and the tiled four-step.
-TEST_CASE("fft kernels: every level runs the f32 1M forward's six-step and tiled four-step", "[fft][kernels]")
+// The planner's algorithm of each direction at every size to 8M (fft::detail::planned_forward and planned_inverse),
+// one letter a size: Stockham, standalone-hier, IP4-AoS, the four-pass deep-split, the four-step, the six-step. Every
+// planned forward builds at its size, and a plan reports the pair.
+TEST_CASE("fft kernels: the planner's algorithm of every size", "[fft]")
 {
-    crd::memory::TlsfAllocator alloc(usize{1} << 28);
-    for (const fft::detail::LargeForward path :
-         {fft::detail::LargeForward::SixStep, fft::detail::LargeForward::TiledFourStep})
+    const auto algorithm = [](char letter)
     {
-        INFO("path=" << static_cast<int>(path));
-        const fft::FftPlan<crd::f32> plan(&alloc, usize{1} << 20, path);
-        check_plan_every_level(&alloc, plan, FftDirection::Forward);
-        check_plan_specials(&alloc, plan);
+        switch (letter)
+        {
+            case 'h':
+                return fft::FftAlgorithm::StandaloneHier;
+            case 'I':
+                return fft::FftAlgorithm::Ip4;
+            case 'D':
+                return fft::FftAlgorithm::DeepSplit4;
+            case 'F':
+                return fft::FftAlgorithm::FourStep;
+            case 'X':
+                return fft::FftAlgorithm::SixStep;
+            default:
+                return fft::FftAlgorithm::Stockham;
+        }
+    };
+    // index = log2(n), 2^0 .. 2^23
+    constexpr const char* f32_forward = "SSSSSSSSSShIhhIIIDDDDFFF";
+    constexpr const char* f32_inverse = "SSSSSSSSSSSISSIIIFFFFFFF";
+    constexpr const char* f64_forward = "SSSSSSSSSSIIIIIIIDDDXFFF";
+    constexpr const char* f64_inverse = "SSSSSSSSSSIIIIIIIFFFFFFF";
+    crd::memory::TlsfAllocator alloc(usize{1} << 26);
+    for (u32 lg = 0; lg <= 23; ++lg)
+    {
+        const usize n = usize{1} << lg;
+        INFO("n=" << n);
+        CHECK(fft::detail::planned_forward<crd::f32>(n) == algorithm(f32_forward[lg]));
+        CHECK(fft::detail::planned_inverse<crd::f32>(n) == algorithm(f32_inverse[lg]));
+        CHECK(fft::detail::planned_forward<crd::f64>(n) == algorithm(f64_forward[lg]));
+        CHECK(fft::detail::planned_inverse<crd::f64>(n) == algorithm(f64_inverse[lg]));
+        CHECK(fft::detail::forward_builds<crd::f32>(n, fft::detail::planned_forward<crd::f32>(n)));
+        CHECK(fft::detail::forward_builds<crd::f64>(n, fft::detail::planned_forward<crd::f64>(n)));
+        if (lg <= 16)
+        {
+            const fft::FftPlan<crd::f32> plan(&alloc, n);
+            CHECK(plan.state().forward == algorithm(f32_forward[lg]));
+            CHECK(plan.state().inverse == algorithm(f32_inverse[lg]));
+        }
     }
+}
+
+namespace
+{
+// SIMD-DISPATCH's row-close board times every forward fft::detail::forward_builds offers at an f32 size against the
+// planned one: each forward here on every level the host runs (the random input, aligned), with the planner's inverse.
+void check_forced_forwards(u32 lg_lo, u32 lg_hi)
+{
+    crd::memory::TlsfAllocator alloc(usize{1} << 30);
+    for (u32 lg = lg_lo; lg <= lg_hi; ++lg)
+    {
+        const usize n = usize{1} << lg;
+        for (const fft::FftAlgorithm forward : fft::detail::kFftAlgorithms)
+        {
+            if (forward == fft::detail::planned_forward<crd::f32>(n) ||
+                !fft::detail::forward_builds<crd::f32>(n, forward))
+            {
+                continue;
+            }
+            INFO("n=" << n << " forward=" << fft::fft_algorithm_name(forward));
+            const fft::FftPlan<crd::f32> plan(&alloc, n, forward);
+            CHECK(plan.state().forward == forward);
+            CHECK(plan.state().inverse == fft::detail::planned_inverse<crd::f32>(n));
+            check_plan_every_level(&alloc, plan, FftDirection::Forward, false);
+        }
+    }
+}
+} // namespace
+
+TEST_CASE("fft kernels: every level runs each f32 forward the planner offers from 1K to 64K", "[fft][kernels]")
+{
+    check_forced_forwards(10, 16);
+}
+
+TEST_CASE("fft kernels: every level runs each f32 forward the planner offers from 128K to 1M", "[fft][kernels]")
+{
+    check_forced_forwards(17, 20);
+}
+
+TEST_CASE("fft kernels: every level runs each f32 forward the planner offers at 2M and 4M", "[fft][kernels]")
+{
+    check_forced_forwards(21, 22);
 }
 
 TEST_CASE("fft kernels: the process runs the level its CPU selection resolves", "[fft][kernels]")

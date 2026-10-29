@@ -22,14 +22,53 @@ enum class FftDirection : crd::u8
     Inverse = 1,
 };
 
+// The algorithm a plan runs in one direction. FftPlan's planner picks each from the size (fft.hpp); the inverse is
+// always Stockham, Ip4 or FourStep.
+enum class FftAlgorithm : crd::u8
+{
+    Stockham,       // the leaf codelets and the radix-4 to radix-32 Stockham passes on split buffers
+    StandaloneHier, // two generated passes, n = n1·n2 (forward)
+    Ip4,            // IP4-AoS: the interleaved in-place radix-4 engine
+    DeepSplit3,     // three generated passes, n = A·B·C (forward)
+    DeepSplit4,     // four generated passes, n = A·B1·B2·C (forward)
+    FourStep,       // Bailey's four-step over hoisted batched sub-plans
+    SixStep,        // the square in-place six-step (forward)
+    TiledFourStep,  // the f32 1M forward's tiled four-step (forward)
+};
+
+[[nodiscard]] constexpr const char* fft_algorithm_name(FftAlgorithm algorithm) noexcept
+{
+    switch (algorithm)
+    {
+        case FftAlgorithm::Stockham:
+            return "stockham";
+        case FftAlgorithm::StandaloneHier:
+            return "standalone-hier";
+        case FftAlgorithm::Ip4:
+            return "ip4";
+        case FftAlgorithm::DeepSplit3:
+            return "deep-split-3";
+        case FftAlgorithm::DeepSplit4:
+            return "deep-split-4";
+        case FftAlgorithm::FourStep:
+            return "four-step";
+        case FftAlgorithm::SixStep:
+            return "six-step";
+        case FftAlgorithm::TiledFourStep:
+            return "tiled-four-step";
+    }
+    return "?";
+}
+
 // One plan as the kernels see it. Every table and scratch buffer belongs to the FftPlan that filled this in; the
 // scratch is written through a const state (one plan per thread).
 template <typename T> struct FftPlanState
 {
     crd::usize n = 0;
     crd::u32 log2 = 0U;
-    crd::usize n1 = 0; // four-step split ≈ √n (n2 = n/n1)
-    bool use_four_step = false;
+    crd::usize n1 = 0;                             // four-step split ≈ √n (n2 = n/n1)
+    FftAlgorithm forward = FftAlgorithm::Stockham; // each direction's algorithm
+    FftAlgorithm inverse = FftAlgorithm::Stockham;
     // standalone-hier (1024..64K, f64+f32): scratches + the full stage-twiddle table + the n1 split
     Complex<T>* sh_s = nullptr; // allocated only for the deep-split band (the 2-pass sh runs din→t→din)
     Complex<T>* sh_t = nullptr;
@@ -49,8 +88,7 @@ template <typename T> struct FftPlanState
     crd::usize ds_b2 = 0; // B2; when set: S2 = notr B1 (W_{B1B2C} below), S3 = notr B2 per k1 block
     T* ds_tw2r = nullptr; // S2 twiddle W_{B1·B2·C}^{k·v}, [k*(B2*C) + v] (B1·B2·C entries)
     T* ds_tw2i = nullptr;
-    // IP4-AoS: the interleaved in-place radix-4 engine's digit-reversal and per-pass DIT twiddles. 0 = off.
-    crd::usize ip_n = 0;
+    // IP4-AoS: the interleaved in-place radix-4 engine's digit-reversal and per-pass DIT twiddles.
     crd::usize* ip_rev = nullptr;     // base-4 digit-reversal permutation (slot of input j)
     T* ip_twr = nullptr;              // per-pass DIT twiddles, concatenated: per pass 3·q entries each
     T* ip_twi = nullptr;              // (w1[k],w2[k],w3[k] as three k-runs), vector-consumable
@@ -78,7 +116,7 @@ template <typename T> struct FftPlanState
     Complex<T>* hier_bbuf = nullptr; // transposed intermediate of the hierarchical sub-FFT
     T* hier_twr = nullptr;           // its inner twiddle  cos(2π·n2·k1/n)
     T* hier_twi = nullptr;           // its inner twiddle −sin(2π·n2·k1/n)
-    // The tiled four-step of the f32 1M forward (detail::LargeForward::TiledFourStep in fft.hpp; the codelets are
+    // The tiled four-step of the f32 1M forward (FftAlgorithm::TiledFourStep; the codelets are
     // scripts/gen_fft_batched.py's tiled emitters, which address these extents): the tiled intermediate, W_1024^{q·c}
     // at [q·32 + c], and W_n^{i2·k1} = base[(k1 >> 4)·1024 + i2] · lane[i2·16 + (k1 & 15)]. Null on every other plan;
     // the stages of a block sit in `scratch`.

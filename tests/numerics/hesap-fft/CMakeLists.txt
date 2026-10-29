@@ -30,6 +30,6 @@ crd_diag_specimen(crd-hesap-fft-fatal-specimen
     SOURCES "${CMAKE_SOURCE_DIR}/tests/support/diag/specimens/hesap_fft_fatal_specimen.cpp")
 target_link_libraries(crd-hesap-fft-fatal-specimen PRIVATE crd-core crd-memory crd-hesap-fft)
 crd_diag_fatal_tests(crd-hesap-fft-fatal-specimen PREFIX crd-hesap-fft-fatal OWNER crd-hesap-fft-tests
-    MODES plan-hier-table-refused plan-stockham-table-refused plan-four-step-table-refused
+    MODES plan-hier-table-refused plan-ip4-table-refused plan-four-step-table-refused
           plan-four-step-subplan-refused bluestein-plan-refused nd-axis-plan-refused nd-bluestein-axis-refused
           sparse-plan-refused)

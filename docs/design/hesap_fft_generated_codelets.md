@@ -212,7 +212,8 @@ half the shuffle+spill overhead. Hard but not absurd.
 Removed 2026-10-27 at SIMD-DISPATCH with every other never-defined `CRD_FFT_*` experiment gate (recover from git;
 since 2026-07 the f32 1M forward runs the 4-stage deep-split, and the row-close board measures M18 against it). M18's
 dataflow returned on 2026-10-29 as the tiled four-step: `gen_fft_batched.py`'s tiled leaves on the lanes, a board arm
-beside the deep-split and the six-step (`fft::detail::LargeForward`). All gated, **default-OFF**; the banked **gather fusion remains the shipped
+beside the deep-split and the six-step (`fft::FftAlgorithm::TiledFourStep`, a forward an `FftPlan` can be built
+with). All gated, **default-OFF**; the banked **gather fusion remains the shipped
 default for every size**. Honest
 **same-harness** f32 1M (MIN metric — medians were host-contention-noisy): MKL 1.71 / gather 2.49 / M17 2.08 /
 **M18 2.01 ms = 0.85× MKL, 19% faster than gather**, all maxrel vs MKL ~2.6e-7.

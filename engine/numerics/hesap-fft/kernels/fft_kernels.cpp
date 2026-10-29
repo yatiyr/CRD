@@ -208,13 +208,9 @@ template <typename T> struct Engine
             }
             return;
         }
-        // IP4-AoS (PROMOTED 2026-07-04, the VTune-guided strided-v3 engine): interleaved in-place
-        // radix-4 with COBRA gather + 3-layer fold; f64 1K..64K, forward AND inverse. Beats the
-        // prior sh/ds paths on every row (see docs/research/fft-stockham-v2.md rounds 7-17).
-        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
+        switch (dir == FftDirection::Forward ? plan.forward : plan.inverse)
         {
-            if (plan.ip_n != 0)
-            {
+            case FftAlgorithm::Ip4:
                 if (dir == FftDirection::Forward)
                 {
                     execute_ip4aos<false>(data);
@@ -224,272 +220,27 @@ template <typename T> struct Engine
                     execute_ip4aos<true>(data);
                 }
                 return;
-            }
-        }
-        // FFT-CRUSH 2026-07-03 DEEP-SPLIT (forward, 128K/256K): n = A·B·C, three generated passes —
-        // S1 leaf+W_n+transpose → S2 leaf+broadcast-W_{BC} → S3 strided leaf, natural order out
-        // (d[kA + A·kB + AB·kC]; derivation at the ctor). Inverse falls through to the four-step.
-        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
-        {
-            if (dir == FftDirection::Forward && plan.ds_b != 0)
-            {
-                Complex<T>* const d = data;
-                const crd::usize a = plan.sh_n1;
-                const crd::usize ca = plan.ds_c * a;
-                // 4-stage: rest = B2·C (the elements remaining after the S2 leaf); 3-stage: rest = C.
-                const crd::usize rest = (plan.ds_b2 != 0 ? plan.ds_b2 : 1U) * plan.ds_c;
-                const crd::usize s2b = rest * a; // S2 batch width
-#ifdef CRD_FFT_PROFILE
-                const unsigned long long d0 = prof::rdtsc();
-#endif
-                // AoSoA (2026-07-04 crush): S1 deinterleaves ONCE into [L×re|L×im] block rows over
-                // plan.sh_t; S2 runs pure block form (zero shuffles, one stream per row); S3
-                // reinterleaves once on the strided final store.
-                T* const tb = reinterpret_cast<T*>(plan.sh_t); // n complex = exactly 2n T of AoSoA blocks
-                T* const sb = reinterpret_cast<T*>(plan.sh_s);
-                if (plan.sh_msh != 0U) // S1: A-leaf + FACTORED W_n twiddle + transpose (n2 >= 1024)
-                {
-                    switch (a)
-                    {
-                        case 16U:
-                            gen::codelet16_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi,
-                                                               plan.sh_hir, plan.sh_hii, plan.sh_msh);
-                            break;
-                        case 32U:
-                            gen::codelet32_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi,
-                                                               plan.sh_hir, plan.sh_hii, plan.sh_msh);
-                            break;
-                        default:
-                            gen::codelet64_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi,
-                                                               plan.sh_hir, plan.sh_hii, plan.sh_msh);
-                            break;
-                    }
-                }
-                else // S1 with the full [k*n2+u] table (the small-n2 ds sizes: 4K/8K/16K)
-                {
-                    switch (a)
-                    {
-                        case 16U:
-                            gen::codelet16_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
-                            break;
-                        case 32U:
-                            gen::codelet32_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
-                            break;
-                        default:
-                            gen::codelet64_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
-                            break;
-                    }
-                }
-#ifdef CRD_FFT_PROFILE
-                const unsigned long long d1 = prof::rdtsc();
-#endif
-                {
-                    // S2: B-leaf over the (rest·A)-wide batch + broadcast twiddle (W_{BC} 3-stage /
-                    // W_{B1B2C} 4-stage)
-                    const T* const t2r = (plan.ds_b2 != 0) ? plan.ds_tw2r : plan.ds_twr;
-                    const T* const t2i = (plan.ds_b2 != 0) ? plan.ds_tw2i : plan.ds_twi;
-                    switch (plan.ds_b)
-                    {
-                        case 8U:
-                            gen::codelet8_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
-                            break;
-                        case 16U:
-                            gen::codelet16_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
-                            break;
-                        case 32U:
-                            gen::codelet32_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
-                            break;
-                        case 64U:
-                            gen::codelet64_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
-                            break;
-                        default:
-                            gen::codelet128_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
-                            break;
-                    }
-                }
-#ifdef CRD_FFT_PROFILE
-                const unsigned long long d2 = prof::rdtsc();
-#endif
-                if (plan.ds_b2 != 0) // 4-STAGE: S3 = notr B2 per k1 block (sb -> tb), S4 = strided C
-                {
-                    const crd::usize blk2 = 2 * plan.ds_b2 * ca; // T units per k1 block
-                    for (crd::usize k1 = 0; k1 < plan.ds_b; ++k1)
-                    {
-                        switch (plan.ds_b2)
-                        {
-                            case 8U:
-                                gen::codelet8_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash,
-                                                            plan.ds_twr, plan.ds_twi);
-                                break;
-                            case 16U:
-                                gen::codelet16_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash,
-                                                             plan.ds_twr, plan.ds_twi);
-                                break;
-                            case 32U:
-                                gen::codelet32_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash,
-                                                             plan.ds_twr, plan.ds_twi);
-                                break;
-                            default:
-                                gen::codelet64_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash,
-                                                             plan.ds_twr, plan.ds_twi);
-                                break;
-                        }
-                    }
-                    const crd::usize os4 = a * plan.ds_b * plan.ds_b2;
-                    for (crd::usize k1 = 0; k1 < plan.ds_b; ++k1) // S4: d[kA + A·k1 + AB1·k2 + AB1B2·kC]
-                    {
-                        for (crd::usize k2 = 0; k2 < plan.ds_b2; ++k2)
-                        {
-                            const T* const src = tb + k1 * blk2 + k2 * 2 * ca;
-                            Complex<T>* const dst = d + (k1 + plan.ds_b * k2) * a;
-                            switch (plan.ds_c)
-                            {
-                                case 8U:
-                                    gen::codelet8_batched_strided_sc(src, dst, a, os4);
-                                    break;
-                                case 16U:
-                                    gen::codelet16_batched_strided_sc(src, dst, a, os4);
-                                    break;
-                                case 32U:
-                                    gen::codelet32_batched_strided_sc(src, dst, a, os4);
-                                    break;
-                                default:
-                                    gen::codelet64_batched_strided_sc(src, dst, a, os4);
-                                    break;
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    for (crd::usize kb = 0; kb < plan.ds_b; ++kb) // S3: C-leaf per kB block, natural order
-                    {
-                        switch (plan.ds_c)
-                        {
-                            case 16U:
-                                gen::codelet16_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
-                                break;
-                            case 32U:
-                                gen::codelet32_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
-                                break;
-                            case 64U:
-                                gen::codelet64_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
-                                break;
-                            default:
-                                gen::codelet128_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
-                                break;
-                        }
-                    }
-                }
-#ifdef CRD_FFT_PROFILE
-                prof::g_ds1 += d1 - d0;
-                prof::g_ds2 += d2 - d1;
-                prof::g_ds3 += prof::rdtsc() - d2;
-                ++prof::g_ds_calls;
-#endif
+            case FftAlgorithm::DeepSplit3:
+            case FftAlgorithm::DeepSplit4:
+                execute_deep_split(data);
                 return;
-            }
-        }
-        if constexpr (std::is_same_v<T, crd::f32>)
-        {
-            if (dir == FftDirection::Forward && plan.tf_nt != nullptr)
-            {
-                execute_tiled_four_step(data);
+            case FftAlgorithm::TiledFourStep:
+                if constexpr (std::is_same_v<T, crd::f32>) // the planner offers it only to f32
+                {
+                    execute_tiled_four_step(data);
+                }
                 return;
-            }
-        }
-        // SIX-STEP v2 forward (square 1M/4M): SIMD micro-tile in-place transposes (v1's
-        // element-scalar swaps were the measured wall: f64 1M 8.8 vs 6.3 ms) + contiguous
-        // L1-resident row FFTs. See docs/research/fft-stockham-v2.md.
-        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
-        {
-            // 1M ONLY (L3-resident: the all-in-place chain wins there, +17%/+22%). 4M measured worse
-            // under BOTH chains (in-place 33.5 / oop-rechain 40.4 vs four-step 29.9) — beyond L3 the
-            // four-step's NT-scatter structure stays; 4M/8M already run 0.84-0.99× there.
-            if (dir == FftDirection::Forward && plan.use_four_step && plan.n1 * plan.n1 == plan.n &&
-                plan.n == (crd::usize{1} << 20))
-            {
+            case FftAlgorithm::SixStep:
                 execute_six_step(data);
                 return;
-            }
-        }
-        if (plan.use_four_step)
-        {
-            execute_four_step(data, dir);
-            return;
-        }
-        // FFT-CRUSH 2026-07-03 standalone-HIER (forward, 1024..65536, f64 Vec4d + f32 Vec8f): one
-        // stage-1-fused pass (leaf + twiddle + transposed store) + one batched-leaf pass — TWO passes
-        // total, replacing ~log4(n) Stockham passes. Natural-order output by the four-step identity.
-        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
-        {
-            if (dir == FftDirection::Forward && plan.sh_t != nullptr && plan.ds_b == 0)
-            {
-                const crd::usize n1 = plan.sh_n1;
-                const crd::usize n2 = plan.n / n1;
-                Complex<T>* din2 = data;
-                // AoSoA (2026-07-04 crush): stage-1 deinterleaves ONCE into [L×re|L×im] block rows
-                // over plan.sh_t (transposed block stores, no interleave shuffles, one stream per row);
-                // stage-2 reads blocks shuffle-free and reinterleaves once on the final store. FMA
-                // butterflies throughout.
-                T* const tb = reinterpret_cast<T*>(plan.sh_t); // n complex = exactly 2n T of AoSoA blocks
-                if (plan.sh_msh != 0U) // stage-1 FUSED, FACTORED L1-resident twiddle (n2 >= 128)
-                {
-                    switch (n1)
-                    {
-                        case 32U:
-                            gen::codelet32_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
-                                                               plan.sh_hii, plan.sh_msh);
-                            break;
-                        case 64U:
-                            gen::codelet64_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
-                                                               plan.sh_hii, plan.sh_msh);
-                            break;
-                        case 128U:
-                            gen::codelet128_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
-                                                                plan.sh_hii, plan.sh_msh);
-                            break;
-                        default:
-                            gen::codelet256_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
-                                                                plan.sh_hii, plan.sh_msh);
-                            break;
-                    }
-                }
-                else // stage-1 FUSED (leaf + full-table twiddle + transposed block store): ONE pass
-                {
-                    switch (n1)
-                    {
-                        case 32U:
-                            gen::codelet32_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
-                            break;
-                        case 64U:
-                            gen::codelet64_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
-                            break;
-                        case 128U:
-                            gen::codelet128_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
-                            break;
-                        default:
-                            gen::codelet256_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
-                            break;
-                    }
-                }
-                switch (n2) // stage-2: n1-wide batch of n2-point row FFTs → natural order out
-                {
-                    case 32U:
-                        gen::codelet32_batched_sc(tb, din2, n1);
-                        break;
-                    case 64U:
-                        gen::codelet64_batched_sc(tb, din2, n1);
-                        break;
-                    case 128U:
-                        gen::codelet128_batched_sc(tb, din2, n1);
-                        break;
-                    default:
-                        gen::codelet256_batched_sc(tb, din2, n1);
-                        break;
-                }
+            case FftAlgorithm::FourStep:
+                execute_four_step(data, dir);
                 return;
-            }
+            case FftAlgorithm::StandaloneHier:
+                execute_standalone_hier(data);
+                return;
+            case FftAlgorithm::Stockham:
+                break;
         }
         // NB (2026-06-14): the depth-first recursion (rec_fft_soa) was MEASURED for the mid-band and is dead —
         // worse than this Stockham path at every size (8192 −6%, 65536 −27%, 131072 −33% collapsing). Decisive:
@@ -584,6 +335,237 @@ template <typename T> struct Engine
         prof::g_last += pf3 - pf2;
         ++prof::g_calls;
 #endif
+    }
+
+    // FFT-CRUSH 2026-07-03 DEEP-SPLIT (forward): n = A·B·C, three generated passes — S1 leaf+W_n+transpose → S2
+    // leaf+broadcast-W_{BC} → S3 strided leaf, natural order out (d[kA + A·kB + AB·kC]; derivation at the plan's
+    // build_deep_split) — or n = A·B1·B2·C, four passes.
+    void execute_deep_split(Complex<T>* data) const
+    {
+        Complex<T>* const d = data;
+        const crd::usize a = plan.sh_n1;
+        const crd::usize ca = plan.ds_c * a;
+        // 4-stage: rest = B2·C (the elements remaining after the S2 leaf); 3-stage: rest = C.
+        const crd::usize rest = (plan.ds_b2 != 0 ? plan.ds_b2 : 1U) * plan.ds_c;
+        const crd::usize s2b = rest * a; // S2 batch width
+#ifdef CRD_FFT_PROFILE
+        const unsigned long long d0 = prof::rdtsc();
+#endif
+        // AoSoA (2026-07-04 crush): S1 deinterleaves ONCE into [L×re|L×im] block rows over
+        // plan.sh_t; S2 runs pure block form (zero shuffles, one stream per row); S3
+        // reinterleaves once on the strided final store.
+        T* const tb = reinterpret_cast<T*>(plan.sh_t); // n complex = exactly 2n T of AoSoA blocks
+        T* const sb = reinterpret_cast<T*>(plan.sh_s);
+        if (plan.sh_msh != 0U) // S1: A-leaf + FACTORED W_n twiddle + transpose (n2 >= 1024)
+        {
+            switch (a)
+            {
+                case 16U:
+                    gen::codelet16_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi, plan.sh_hir,
+                                                       plan.sh_hii, plan.sh_msh);
+                    break;
+                case 32U:
+                    gen::codelet32_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi, plan.sh_hir,
+                                                       plan.sh_hii, plan.sh_msh);
+                    break;
+                default:
+                    gen::codelet64_stage1_fused_sh_csf(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi, plan.sh_hir,
+                                                       plan.sh_hii, plan.sh_msh);
+                    break;
+            }
+        }
+        else // S1 with the full [k*n2+u] table (the small-n2 ds sizes: 4K/8K/16K)
+        {
+            switch (a)
+            {
+                case 16U:
+                    gen::codelet16_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
+                    break;
+                case 32U:
+                    gen::codelet32_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
+                    break;
+                default:
+                    gen::codelet64_stage1_fused_sh_cs(d, tb, plan.ds_b * rest, plan.sh_twr, plan.sh_twi);
+                    break;
+            }
+        }
+#ifdef CRD_FFT_PROFILE
+        const unsigned long long d1 = prof::rdtsc();
+#endif
+        {
+            // S2: B-leaf over the (rest·A)-wide batch + broadcast twiddle (W_{BC} 3-stage /
+            // W_{B1B2C} 4-stage)
+            const T* const t2r = (plan.ds_b2 != 0) ? plan.ds_tw2r : plan.ds_twr;
+            const T* const t2i = (plan.ds_b2 != 0) ? plan.ds_tw2i : plan.ds_twi;
+            switch (plan.ds_b)
+            {
+                case 8U:
+                    gen::codelet8_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
+                    break;
+                case 16U:
+                    gen::codelet16_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
+                    break;
+                case 32U:
+                    gen::codelet32_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
+                    break;
+                case 64U:
+                    gen::codelet64_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
+                    break;
+                default:
+                    gen::codelet128_fused_notr_ss(tb, sb, s2b, plan.ds_ash, t2r, t2i);
+                    break;
+            }
+        }
+#ifdef CRD_FFT_PROFILE
+        const unsigned long long d2 = prof::rdtsc();
+#endif
+        if (plan.ds_b2 != 0) // 4-STAGE: S3 = notr B2 per k1 block (sb -> tb), S4 = strided C
+        {
+            const crd::usize blk2 = 2 * plan.ds_b2 * ca; // T units per k1 block
+            for (crd::usize k1 = 0; k1 < plan.ds_b; ++k1)
+            {
+                switch (plan.ds_b2)
+                {
+                    case 8U:
+                        gen::codelet8_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash, plan.ds_twr,
+                                                    plan.ds_twi);
+                        break;
+                    case 16U:
+                        gen::codelet16_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash, plan.ds_twr,
+                                                     plan.ds_twi);
+                        break;
+                    case 32U:
+                        gen::codelet32_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash, plan.ds_twr,
+                                                     plan.ds_twi);
+                        break;
+                    default:
+                        gen::codelet64_fused_notr_ss(sb + k1 * blk2, tb + k1 * blk2, ca, plan.ds_ash, plan.ds_twr,
+                                                     plan.ds_twi);
+                        break;
+                }
+            }
+            const crd::usize os4 = a * plan.ds_b * plan.ds_b2;
+            for (crd::usize k1 = 0; k1 < plan.ds_b; ++k1) // S4: d[kA + A·k1 + AB1·k2 + AB1B2·kC]
+            {
+                for (crd::usize k2 = 0; k2 < plan.ds_b2; ++k2)
+                {
+                    const T* const src = tb + k1 * blk2 + k2 * 2 * ca;
+                    Complex<T>* const dst = d + (k1 + plan.ds_b * k2) * a;
+                    switch (plan.ds_c)
+                    {
+                        case 8U:
+                            gen::codelet8_batched_strided_sc(src, dst, a, os4);
+                            break;
+                        case 16U:
+                            gen::codelet16_batched_strided_sc(src, dst, a, os4);
+                            break;
+                        case 32U:
+                            gen::codelet32_batched_strided_sc(src, dst, a, os4);
+                            break;
+                        default:
+                            gen::codelet64_batched_strided_sc(src, dst, a, os4);
+                            break;
+                    }
+                }
+            }
+        }
+        else
+        {
+            for (crd::usize kb = 0; kb < plan.ds_b; ++kb) // S3: C-leaf per kB block, natural order
+            {
+                switch (plan.ds_c)
+                {
+                    case 16U:
+                        gen::codelet16_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
+                        break;
+                    case 32U:
+                        gen::codelet32_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
+                        break;
+                    case 64U:
+                        gen::codelet64_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
+                        break;
+                    default:
+                        gen::codelet128_batched_strided_sc(sb + kb * 2 * ca, d + kb * a, a, a * plan.ds_b);
+                        break;
+                }
+            }
+        }
+#ifdef CRD_FFT_PROFILE
+        prof::g_ds1 += d1 - d0;
+        prof::g_ds2 += d2 - d1;
+        prof::g_ds3 += prof::rdtsc() - d2;
+        ++prof::g_ds_calls;
+#endif
+    }
+
+    // FFT-CRUSH 2026-07-03 standalone-HIER (forward, 1024..65536, f64 Vec4d + f32 Vec8f): one stage-1-fused pass (leaf
+    // + twiddle + transposed store) + one batched-leaf pass — TWO passes total, replacing ~log4(n) Stockham passes.
+    // Natural-order output by the four-step identity.
+    void execute_standalone_hier(Complex<T>* data) const
+    {
+        const crd::usize n1 = plan.sh_n1;
+        const crd::usize n2 = plan.n / n1;
+        Complex<T>* din2 = data;
+        // AoSoA (2026-07-04 crush): stage-1 deinterleaves ONCE into [L×re|L×im] block rows
+        // over plan.sh_t (transposed block stores, no interleave shuffles, one stream per row);
+        // stage-2 reads blocks shuffle-free and reinterleaves once on the final store. FMA
+        // butterflies throughout.
+        T* const tb = reinterpret_cast<T*>(plan.sh_t); // n complex = exactly 2n T of AoSoA blocks
+        if (plan.sh_msh != 0U)                         // stage-1 FUSED, FACTORED L1-resident twiddle (n2 >= 128)
+        {
+            switch (n1)
+            {
+                case 32U:
+                    gen::codelet32_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii,
+                                                       plan.sh_msh);
+                    break;
+                case 64U:
+                    gen::codelet64_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir, plan.sh_hii,
+                                                       plan.sh_msh);
+                    break;
+                case 128U:
+                    gen::codelet128_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
+                                                        plan.sh_hii, plan.sh_msh);
+                    break;
+                default:
+                    gen::codelet256_stage1_fused_sh_csf(din2, tb, n2, plan.sh_twr, plan.sh_twi, plan.sh_hir,
+                                                        plan.sh_hii, plan.sh_msh);
+                    break;
+            }
+        }
+        else // stage-1 FUSED (leaf + full-table twiddle + transposed block store): ONE pass
+        {
+            switch (n1)
+            {
+                case 32U:
+                    gen::codelet32_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
+                    break;
+                case 64U:
+                    gen::codelet64_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
+                    break;
+                case 128U:
+                    gen::codelet128_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
+                    break;
+                default:
+                    gen::codelet256_stage1_fused_sh_cs(din2, tb, n2, plan.sh_twr, plan.sh_twi);
+                    break;
+            }
+        }
+        switch (n2) // stage-2: n1-wide batch of n2-point row FFTs → natural order out
+        {
+            case 32U:
+                gen::codelet32_batched_sc(tb, din2, n1);
+                break;
+            case 64U:
+                gen::codelet64_batched_sc(tb, din2, n1);
+                break;
+            case 128U:
+                gen::codelet128_batched_sc(tb, din2, n1);
+                break;
+            default:
+                gen::codelet256_batched_sc(tb, din2, n1);
+                break;
+        }
     }
 
     // BATCHED FFT: `batch` independent size-plan.n transforms in ELEMENT-MAJOR layout (element i of transform t
@@ -1590,7 +1572,7 @@ template <typename T> struct Engine
         }
     }
 
-    // The tiled four-step of the f32 1M forward (detail::LargeForward::TiledFourStep, gen_fft_batched.py's tiled
+    // The tiled four-step of the f32 1M forward (FftAlgorithm::TiledFourStep, gen_fft_batched.py's tiled
     // emitters): P1 takes each block of 128 columns through its two leaves into the tiled intermediate, P2 each block
     // of 16 k1 through its two leaves into the output; a block's stage sits in the scratch, in L2.
     void execute_tiled_four_step(Complex<T>* data) const

@@ -1,8 +1,9 @@
 // bench_fft_f32 — the complex-f32 forward FFT against Intel MKL DFTI, one thread (scripts/run_bench_fft.sh, at each CPU
-// level). Every power of two from 2^10 to 2^22 on identical data, each plan built once outside timing. At 2^20 the
-// three algorithms of the f32 1M forward (fft::detail::LargeForward: the deep-split, the six-step and the tiled
-// four-step) run in this one binary, interleaved with MKL every rep, so all four share the host's state; the winner
-// becomes the planner's only path. Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
+// level). Every power of two from 2^10 to 2^22 on identical data, each plan built once outside timing. At each size
+// every forward algorithm the planner offers there (fft::detail::forward_builds: the planned one first, then the
+// Stockham passes, the standalone-hier, IP4-AoS, the three- and four-pass deep-split, the four-step, the six-step and
+// the f32 1M tiled four-step) runs in this one binary, interleaved with MKL every rep, so all share the host's state;
+// a size's winner becomes its plan. Each Cerid arm and MKL is measured against an FFTW f64 transform of the same f32
 // input values and fails above the ADR-0092 §5 f32 class (2e-4, 1e-3 from the four-step band): a fast wrong answer is
 // not a win, for either side. Cerid's Complex<f32> shares MKL's interleaved {re, im} layout.
 
@@ -10,6 +11,7 @@
 #include <crd/hesap/complex.hpp>
 #include <crd/hesap/fft/fft.hpp>
 #include <crd/memory/allocators/tlsf_allocator.hpp>
+#include <crd/memory/construct.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -30,7 +32,8 @@ using crd::hesap::Complex;
 namespace
 {
 constexpr usize kLarge = usize{1} << 20;
-constexpr usize kMaxArms = 3;
+constexpr usize kMaxArms = sizeof(fft::detail::kFftAlgorithms) / sizeof(fft::detail::kFftAlgorithms[0]);
+constexpr const char* kPlanOutOfMemory = "bench_fft_f32: out of memory for a plan";
 
 struct Arm
 {
@@ -194,18 +197,29 @@ int main()
     for (int lg = 10; lg <= 22; ++lg)
     {
         const usize n = usize{1} << lg;
-        const fft::FftPlan<f32> deep(&alloc, n);
-        if (n == kLarge)
+        Arm arms[kMaxArms] = {};
+        fft::FftPlan<f32>* plans[kMaxArms] = {};
+        usize arm_count = 0;
+        const fft::FftAlgorithm planned = fft::detail::planned_forward<f32>(n);
+        const auto add = [&](fft::FftAlgorithm forward)
         {
-            const fft::FftPlan<f32> six(&alloc, n, fft::detail::LargeForward::SixStep);
-            const fft::FftPlan<f32> tiled(&alloc, n, fft::detail::LargeForward::TiledFourStep);
-            const Arm arms[] = {{"deep-split", &deep}, {"six-step", &six}, {"tiled-four-step", &tiled}};
-            ok = board(&alloc, lg, arms, kMaxArms) && ok;
+            plans[arm_count] =
+                crd::memory::construct_or_fatal<fft::FftPlan<f32>>(alloc, kPlanOutOfMemory, &alloc, n, forward);
+            arms[arm_count] = Arm{fft::fft_algorithm_name(forward), plans[arm_count]};
+            ++arm_count;
+        };
+        add(planned);
+        for (const fft::FftAlgorithm forward : fft::detail::kFftAlgorithms)
+        {
+            if (forward != planned && fft::detail::forward_builds<f32>(n, forward))
+            {
+                add(forward);
+            }
         }
-        else
+        ok = board(&alloc, lg, arms, arm_count) && ok;
+        for (usize a = arm_count; a-- > 0;)
         {
-            const Arm arms[] = {{"default", &deep}};
-            ok = board(&alloc, lg, arms, 1) && ok;
+            crd::memory::destroy(alloc, plans[a]);
         }
     }
     return ok ? 0 : 1;

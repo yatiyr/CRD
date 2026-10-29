@@ -47,106 +47,157 @@ namespace detail
 // (crd-hesap-fft-fatal-* modes).
 inline constexpr const char* kFftPlanOutOfMemory = "FftPlan: out of memory for its tables";
 
-// The f32 1M forward's algorithm while SIMD-DISPATCH's row-close board measures each against MKL at every level: the
-// 4-stage deep-split (every plan's), the six-step, and the tiled four-step (M18's dataflow on the lanes). Tests and
-// the board build the others; the winner becomes the planner's only path and this choice goes.
-enum class LargeForward : crd::u8
+// THE PLANNER: every per-size choice of a type's plan, measured against MKL row by row (FFT-CRUSH 2026-07,
+// docs/research/fft-stockham-v2.md) and a pure function of the size. SIMD-DISPATCH's row-close board times every
+// algorithm forward_builds offers at a size against the planned one at every level; a size's winner becomes its plan.
+
+// The four-step's sizes. From 2^19 the direct passes are DRAM-bound (log4(n) full passes) and the Bailey four-step
+// keeps the sub-FFTs cache-resident (O(1) DRAM passes). FFT-CRUSH 2026-07-03 opted 128K and 256K in for both types
+// (f32 256K 0.33x -> about 0.85x MKL, f32 128K 0.17x as direct Stockham, f64 64K-256K 0.40-0.49x); a forward the
+// deep-split takes still runs its inverse here.
+[[nodiscard]] constexpr bool four_step_planned(crd::usize n) noexcept
 {
-    DeepSplit,
-    SixStep,
-    TiledFourStep,
+    return n == (crd::usize{1} << 17) || n == (crd::usize{1} << 18) || n >= (crd::usize{1} << 19);
+}
+
+// The four-step split n = n1 * n2: n1 = 2^ceil(log2/2), the larger factor first (a full-FFT n1/n2 search 2026-06-15
+// and the 2026-06-16 factorization sweep: 8M +9%, 2M +13%, f32 8M +10%), except the all-hier splits of the mid band:
+// 128K and 256K = 1024 x n2 (P2 = codelet128, or the 16x16 hier at 256), f32 512K = 2048 x 256 (measured 0.55x
+// before).
+template <typename T> [[nodiscard]] constexpr crd::usize four_step_split(crd::usize n, crd::u32 log2) noexcept
+{
+    if (n == (crd::usize{1} << 17) || n == (crd::usize{1} << 18))
+    {
+        return 1024U;
+    }
+    if (std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 19))
+    {
+        return 2048U;
+    }
+    return crd::usize{1} << ((log2 + 1U) / 2U);
+}
+
+// IP4-AoS, both directions: f64 wins every row 1K..64K; f32 only at 2K and 16K..64K (the matched-state A/B of
+// 2026-07-04: the Vec8f standalone-hier wins 1K, 4K and 8K).
+template <typename T> [[nodiscard]] constexpr bool ip4_planned(crd::usize n) noexcept
+{
+    if constexpr (std::is_same_v<T, crd::f64>)
+    {
+        return n >= 1024 && n <= 65536;
+    }
+    else
+    {
+        return n == 2048 || (n >= 16384 && n <= 65536);
+    }
+}
+
+// The forward algorithm of a size. The deep-split runs 8K..1M as four passes (the 2026-07-04 K-stage sweep; its 4096
+// = 16x16x16 lost, f32 8K lost 10% at eight lanes, and f64 1M takes the six-step, 5.38 against 5.88 ms); past L3 the
+// four-step's blocked structure wins (2M flat, 4M and 8M large losses under the deep-split).
+template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_forward(crd::usize n) noexcept
+{
+    constexpr bool is_f32 = std::is_same_v<T, crd::f32>;
+    if (n < 1024)
+    {
+        return FftAlgorithm::Stockham;
+    }
+    if (ip4_planned<T>(n))
+    {
+        return FftAlgorithm::Ip4;
+    }
+    if (n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 20) && n != (crd::usize{1} << (is_f32 ? 13 : 20)))
+    {
+        return FftAlgorithm::DeepSplit4;
+    }
+    if (!is_f32 && n == (crd::usize{1} << 20))
+    {
+        return FftAlgorithm::SixStep;
+    }
+    if (four_step_planned(n))
+    {
+        return FftAlgorithm::FourStep;
+    }
+    return FftAlgorithm::StandaloneHier; // f32 1K, 4K and 8K
+}
+
+// The inverse algorithm of a size: IP4-AoS where it takes the forward, the four-step at its sizes, Stockham below.
+template <typename T> [[nodiscard]] constexpr FftAlgorithm planned_inverse(crd::usize n) noexcept
+{
+    if (ip4_planned<T>(n))
+    {
+        return FftAlgorithm::Ip4;
+    }
+    return four_step_planned(n) ? FftAlgorithm::FourStep : FftAlgorithm::Stockham;
+}
+
+// Whether a plan of n can run `forward`, the sizes each algorithm's generated codelets cover: the standalone-hier's
+// splits and IP4-AoS 1K..64K, the deep-split's factor tables (three passes 8K..512K, four 8K..8M), the six-step's
+// square blocks of 64 rows, the tiled four-step's f32 1M.
+template <typename T> [[nodiscard]] constexpr bool forward_builds(crd::usize n, FftAlgorithm forward) noexcept
+{
+    const bool even = is_pow2(n) && (n & crd::usize{0x5555555555555555ULL}) != 0;
+    switch (forward)
+    {
+        case FftAlgorithm::Stockham:
+            return n >= 1;
+        case FftAlgorithm::StandaloneHier:
+        case FftAlgorithm::Ip4:
+            return n >= 1024 && n <= 65536;
+        case FftAlgorithm::DeepSplit3:
+            return n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 19);
+        case FftAlgorithm::DeepSplit4:
+            return n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 23);
+        case FftAlgorithm::FourStep:
+            return n >= 1024;
+        case FftAlgorithm::SixStep:
+            return even && n >= 4096;
+        case FftAlgorithm::TiledFourStep:
+            return std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 20);
+    }
+    return false;
+}
+
+// Every algorithm, in FftAlgorithm order: the board and the tests walk the ones forward_builds offers at a size.
+inline constexpr FftAlgorithm kFftAlgorithms[] = {
+    FftAlgorithm::Stockham,   FftAlgorithm::StandaloneHier, FftAlgorithm::Ip4,     FftAlgorithm::DeepSplit3,
+    FftAlgorithm::DeepSplit4, FftAlgorithm::FourStep,       FftAlgorithm::SixStep, FftAlgorithm::TiledFourStep,
 };
 } // namespace detail
 
 template <typename T> class FftPlan
 {
 public:
-    FftPlan(crd::memory::IAllocator* alloc, crd::usize n) : FftPlan(alloc, n, detail::LargeForward::DeepSplit) {}
+    FftPlan(crd::memory::IAllocator* alloc, crd::usize n) : FftPlan(alloc, n, detail::planned_forward<T>(n)) {}
 
-    // `large_forward` other than DeepSplit only for an f32 plan of 2^20.
-    FftPlan(crd::memory::IAllocator* alloc, crd::usize n, detail::LargeForward large_forward)
+    // A plan whose forward runs `forward`, an algorithm detail::forward_builds offers at n (the row-close board and
+    // the tests run each against the planned one); its inverse stays the planner's. Only the six-step changes the
+    // four-step split its inverse shares, to the square one.
+    FftPlan(crd::memory::IAllocator* alloc, crd::usize n, FftAlgorithm forward)
         : m_alloc(alloc), m_tw_re(alloc), m_tw_im(alloc), m_rev(alloc), m_re0(alloc), m_im0(alloc), m_re1(alloc),
           m_im1(alloc), m_ftw_hi_re(alloc), m_ftw_hi_im(alloc), m_ftw_lo_re(alloc), m_ftw_lo_im(alloc), m_ptw_re(alloc),
           m_ptw_im(alloc)
     {
         CRD_ASSERT(is_pow2(n)); // v10: power-of-2 (Bluestein/Rader make any size O(n log n) at v10-c)
-        CRD_ASSERT(large_forward == detail::LargeForward::DeepSplit ||
-                   (std::is_same_v<T, crd::f32> && n == (crd::usize{1} << 20)));
+        CRD_ASSERT(detail::forward_builds<T>(n, forward));
         m_s.n = n;
         while ((crd::usize{1} << m_s.log2) < n)
         {
             ++m_s.log2;
         }
-        // Above kFourStepMin the direct Stockham is DRAM-bound (log4(n) full passes); switch to the Bailey
-        // four-step (n = n1·n2 ≈ √n × √n) so the sub-FFTs are cache-resident — O(1) DRAM passes, not O(log n).
-        m_s.use_four_step = (n >= kFourStepMin);
-        // f32 256K (2^18): enable the four-step (1024×256 split below) — the P2 256-axis then uses the default 16×16
-        // hier codelet + gather/scatter fusion, fixing the small-N Stockham trough (0.33→~0.85× MKL, 3.6× CRD). f64
-        // 256K stays direct (there is no f64 256-pt hier codelet). Larger sizes keep the square split.
-        if (n == (crd::usize{1} << 18) && std::is_same_v<T, crd::f32>)
+        m_s.forward = forward;
+        m_s.inverse = detail::planned_inverse<T>(n);
+        m_s.n1 = detail::four_step_split<T>(n, m_s.log2);
+        if (forward == FftAlgorithm::SixStep)
         {
-            m_s.use_four_step = true;
-        }
-        // FFT-CRUSH 2026-07-03 session 6: f32 128K measured 0.17x MKL as direct Stockham (the sh band tops at
-        // 64K) — opt into the four-step 1024x128 like f64: P1 = the gather-fused 1024 hier (bw==128), P2 = the
-        // generated f32 codelet128_batched via the batched-leaf gate.
-        if (n == (crd::usize{1} << 17) && std::is_same_v<T, crd::f32>)
-        {
-            m_s.use_four_step = true;
-        }
-        // FFT-CRUSH 2026-07-03: the f64 mid-band trough (64K-256K measured 0.40-0.49x MKL as DIRECT Stockham —
-        // the June "parity regime" rows were unbenched). Opt the four-step in for f64 too: P1 = batched 1024-hier
-        // (exists, f64 default-on), P2 = batched small-N (codelet64_batched exists f64; 128/256 run batched
-        // Stockham, still cache-resident). Same structure that took f32 256K 0.33 -> ~0.85x.
-        if constexpr (std::is_same_v<T, crd::f64>)
-        {
-            // 64K now rides the standalone-hier 2-pass (256×256) — better than the four-step there.
-            if (n == (crd::usize{1} << 17) || n == (crd::usize{1} << 18))
-            {
-                m_s.use_four_step = true;
-            }
-        }
-        // n1 ≈ √n (n2 = n/n1, both powers of 2) — the square split, confirmed near-optimal by a full-FFT n1/n2
-        // plan search 2026-06-15 (±1 shift is marginal and size-dependent: 8M ~+1.5%, 4M worse).
-        // n1 = 2^ceil(log2/2): the LARGER factor first. Square split for even log2 (unchanged); for ODD log2 the
-        // larger factor as n1 measures faster — 8M (2048×4096→4096×2048) +9%, 2M +13%, f32 8M +10%, 4M square
-        // unchanged, accuracy preserved (~1e-15). Found by the black-box MKL-archaeology factorization sweep
-        // (2026-06-16): the old floor(log2/2) put the SMALLER factor first for odd log2, underusing pass-1.
-        m_s.n1 = crd::usize{1} << ((m_s.log2 + 1) / 2);
-        if (m_s.use_four_step && n == (crd::usize{1} << 18)) // 256K = 1024×256 (n2=256 → 16×16 hier P2)
-        {
-            m_s.n1 = 1024;
-        }
-        if constexpr (std::is_same_v<T, crd::f64>) // FFT-CRUSH: ALL-HIER splits for the f64 mid-band
-        {
-            if (m_s.use_four_step && n == (crd::usize{1} << 17)) // 128K = 1024×128 (P2 = codelet128)
-            {
-                m_s.n1 = 1024;
-            }
-            if (m_s.use_four_step && n == (crd::usize{1} << 18)) // 256K = 1024×256 (P2 radix-8 until codelet256)
-            {
-                m_s.n1 = 1024;
-            }
-        }
-        if constexpr (std::is_same_v<T, crd::f32>) // FFT-CRUSH: f32 512K trough (measured 0.55x) — all-hier split
-        {
-            if (m_s.use_four_step && n == (crd::usize{1} << 19)) // 512K = 2048×256: P2 = 16×16 hier
-            {
-                m_s.n1 = 2048;
-            }
-            if (m_s.use_four_step && n == (crd::usize{1} << 17)) // 128K = 1024×128 (P2 = codelet128)
-            {
-                m_s.n1 = 1024;
-            }
+            m_s.n1 = crd::usize{1} << (m_s.log2 / 2U);
         }
         // Full table W_n^k, k = 0 .. n-1 (radix-4 indexes up to 3·j·r < n). Precomputed ONCE, shared — the
         // determinism contract. Computed in f64 then narrowed (accuracy for the f32 plan).
         m_tw_re.resize(n);
         m_tw_im.resize(n);
-        constexpr double two_pi = 6.283185307179586476925286766559;
         for (crd::usize k = 0; k < n; ++k)
         {
-            const double ang = -two_pi * static_cast<double>(k) / static_cast<double>(n);
+            const double ang = -kTwoPi * static_cast<double>(k) / static_cast<double>(n);
             m_tw_re[k] = static_cast<T>(crd::math::cos(ang)); //  cos(2πk/n)
             m_tw_im[k] = static_cast<T>(crd::math::sin(ang)); // -sin(2πk/n) ⇒ (re,im) == W_n^k
         }
@@ -155,498 +206,38 @@ public:
         {
             m_rev[i] = bitrev(i, m_s.log2);
         }
-        // The hierarchical generated-codelet sub-FFTs. 4096 = 64×64,
-        // 2048 = 64×32, 1024 = 32×32; N1 = stage-1 leaf (twiddle stride), N2 = inner stage-2 leaf. Build the
-        // transposed intermediate (n·BB complex) + the inner twiddle W_N^{n2·k1} (index n2·N1+k1). Dispatched
-        // Forward, b==block_width(n), f64 and f32 (M9-fixed: the dispatch gate matches the ctor; f32 had been
-        // silently radix-8). The h_n1/h_n2 + block_width
-        // reproduce the f64 BBs byte-identically (4096→16, 2048→32, 1024→64), so the f64 path is unchanged.
-        constexpr bool k_hier = std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>;
-        if constexpr (k_hier)
+        build_hier_sub_fft();
+        const bool deep = forward == FftAlgorithm::DeepSplit3 || forward == FftAlgorithm::DeepSplit4;
+        const bool hier = forward == FftAlgorithm::StandaloneHier;
+        const bool ip = forward == FftAlgorithm::Ip4 || m_s.inverse == FftAlgorithm::Ip4;
+        if (deep || hier || ip) // the passes' intermediate (IP4-AoS's gather target)
         {
-            crd::usize h_n2 = 0U; // N2 = inner count
-            if (n == 4096)
-            {
-                h_n2 = 64U;
-            }
-            else if (n == 2048)
-            {
-                h_n2 = 32U;
-            }
-            crd::usize h_n1 = 64U;                       // N1 = stage-1 leaf = twiddle stride
-            crd::usize h_bb = detail::block_width<T>(n); // BB (T-aware: f32 = 2× f64)
-            if (n == 1024)                               // 1024 = 32×32 — 1M/2M sub-FFT
-            {
-                h_n2 = 32U;
-                h_n1 = 32U;
-            }
-            // 256 = 16×16 hier sub-FFT for the 256K four-step P2 (f32 only — the codelet16 stage-1 is Vec8f).
-            if (n == 256 && std::is_same_v<T, crd::f32>)
-            {
-                h_n2 = 16U;
-                h_n1 = 16U;
-            }
-
-            if (h_n2 != 0)
-            {
-                m_s.hier_bbuf = plan_table<Complex<T>>(n * h_bb, 64);
-                m_s.hier_twr = plan_table<T>(h_n2 * h_n1, 32);
-                m_s.hier_twi = plan_table<T>(h_n2 * h_n1, 32);
-                constexpr double tp = 6.283185307179586476925286766559;
-                for (crd::usize n2 = 0; n2 < h_n2; ++n2)
-                {
-                    for (crd::usize k1 = 0; k1 < h_n1; ++k1)
-                    {
-                        const double th = tp * static_cast<double>(n2 * k1) / static_cast<double>(n);
-                        m_s.hier_twr[n2 * h_n1 + k1] = static_cast<T>(crd::math::cos(th));
-                        m_s.hier_twi[n2 * h_n1 + k1] = static_cast<T>(-crd::math::sin(th));
-                    }
-                }
-            }
+            m_s.sh_t = plan_table<Complex<T>>(n, 64);
         }
-        // FFT-CRUSH 2026-07-03 (standalone-HIER, forward): a single n=n1·n2 transform IS an
-        // element-major batch matrix — stage-1 = codelet_n1_stage1_fused_sh (leaf + twiddle +
-        // transposed store, ONE pass), stage-2 = codelet_n2_batched → natural order. Covers
-        // 1024..65536 for f64 (Vec4d) AND f32 (Vec8f, same splits). Buffers: s,t (n complex each)
-        // + the full W_n^{k1·i2} table in the stage-1-output layout.
-        if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
+        if (deep)
         {
-            bool sh = !m_s.use_four_step && n >= 1024 && n <= 65536; // 2-pass hier band (65536 = 256×256)
-            // deep-split band (session 6): n = A·B·C, THREE generated passes — S1 = codeletA_stage1_fused_sh
-            // (leaf + full W_n twiddle + transposed store), S2 = codeletB_fused_notr (leaf + broadcast
-            // W_{BC} + natural store), S3 = codeletC_batched_strided per kB (L1-resident reads, natural-order
-            // writes d[kA + A·kB + AB·kC]). Forward only; inverse keeps the four-step (both stay allocated).
-            // 1M re-measured 2026-07-04 WITH the factored twiddle (the 16 MB table stream removed):
-            // STILL loses (f64 9.7 vs 6.3 ms, f32 3.23 vs ~3.1) ⇒ the 3×full-size DRAM round-trips
-            // themselves are the wall at ≥1M — the four-step's L2-blocked structure stays.
-            // Band extended DOWN to 32K/64K 2026-07-04: their sh 2-pass rode the spill-heavy 256
-            // leaves (f64 0.48-0.59x, the worst rows); the 3-pass all-small-leaf form replaces it.
-            // 4096 = 16·16·16 MEASURED WORSE both types (f64 30.5 vs 34.4 GF/s, f32 0.72x vs 0.82x,
-            // 2026-07-04): at L1-resident sizes the 3rd pass costs more than tiny leaves save — the
-            // 2-pass sh stays below 8K.
-            // ≥2M re-measured under the 4-stage (2026-07-04): 2M flat, 4M/8M BIG losses (f64 4M 41.8
-            // vs 29.9, 8M 97 vs 63) — past L3 the full-array multi-pass form loses to the four-step's
-            // blocked structure (the thrice-confirmed law: five-step, six-step@4M, 4-stage@4M).
-            bool ds = n >= (crd::usize{1} << 13) && n <= (crd::usize{1} << 20);
-            if constexpr (std::is_same_v<T, crd::f64>)
-            {
-                if (n == (crd::usize{1} << 20))
-                {
-                    ds = false; // f64 1M: the six-step wins (5.38 vs 5.88 ms) — per-type winner
-                }
-            }
-            // (f32 512K re-measured 2026-07-04 WITH the factored-twiddle S1 + AoSoA + FMA pipeline —
-            // the 2026-07-03 −5% exclusion no longer holds: 0.953 ms / 0.84x, +21%. See the bench doc.)
-            if constexpr (std::is_same_v<T, crd::f32>)
-            {
-                // f32 8192 ds (32·16·16) MEASURED −10% (0.65x -> 0.58x): the 16-point leaves are only
-                // 2 Vec8f rows — per-call overhead beats the pass savings at 8 lanes. sh keeps the row.
-                if (n == (crd::usize{1} << 13))
-                {
-                    ds = false;
-                }
-            }
-            if (large_forward != detail::LargeForward::DeepSplit)
-            {
-                ds = false; // the board's six-step or tiled four-step arm of the f32 1M forward
-            }
-            if (sh || ds)
-            {
-                if (ds)
-                {
-                    // A·B·C splits: 4K = 16·16·16 · 8K = 32·16·16 · 16K = 32·32·16 · 32K = 32·32·32 ·
-                    // 64K = 32·32·64 · 128K = 32·64·64 · 256K = 64·64·64 · 512K = 64·64·128 (B=128
-                    // measured WORSE at 512K: S2's 128-leaf runs 128+128 r/w streams ⇒ 6.96 vs ~4.4).
-                    m_s.sh_n1 = (n <= (crd::usize{1} << 17)) ? 32U : 64U; // A (the S1 leaf = stream count)
-                    m_s.ds_b = 64U;
-                    if (n <= (crd::usize{1} << 13))
-                    {
-                        m_s.ds_b = 16U;
-                    }
-                    else if (n <= (crd::usize{1} << 16))
-                    {
-                        m_s.ds_b = 32U;
-                    }
-                    m_s.ds_c = 64U;
-                    if (n <= (crd::usize{1} << 14))
-                    {
-                        m_s.ds_c = 16U;
-                    }
-                    else if (n == (crd::usize{1} << 15))
-                    {
-                        m_s.ds_c = 32U;
-                    }
-                    else if (n == (crd::usize{1} << 19))
-                    {
-                        m_s.ds_c = 128U;
-                    }
-                    // 4-STAGE trials (the K-stage sweep, 2026-07-04): n = A·B1·B2·C with tiny factors
-                    // — the MKL pass shape (small live sets per stage). Measured per row vs the
-                    // banked 3-stage; losers revert here.
-                    if (n == (crd::usize{1} << 13))
-                    {
-                        m_s.sh_n1 = 16U; // 8K = 16·8·8·8
-                        m_s.ds_b = 8U;
-                        m_s.ds_b2 = 8U;
-                        m_s.ds_c = 8U;
-                    }
-                    else if (n == (crd::usize{1} << 14))
-                    {
-                        m_s.sh_n1 = 16U; // 16K = 16·16·8·8
-                        m_s.ds_b = 16U;
-                        m_s.ds_b2 = 8U;
-                        m_s.ds_c = 8U;
-                    }
-                    else if (n == (crd::usize{1} << 15))
-                    {
-                        m_s.sh_n1 = 16U; // 32K = 16·16·16·8
-                        m_s.ds_b = 16U;
-                        m_s.ds_b2 = 16U;
-                        m_s.ds_c = 8U;
-                    }
-                    else if (n == (crd::usize{1} << 16))
-                    {
-                        m_s.sh_n1 = 16U; // 64K = 16·16·16·16
-                        m_s.ds_b = 16U;
-                        m_s.ds_b2 = 16U;
-                        m_s.ds_c = 16U;
-                    }
-                    else if (n == (crd::usize{1} << 17))
-                    {
-                        m_s.sh_n1 = 32U; // 128K = 32·16·16·16
-                        m_s.ds_b = 16U;
-                        m_s.ds_b2 = 16U;
-                        m_s.ds_c = 16U;
-                    }
-                    else if (n == (crd::usize{1} << 18))
-                    {
-                        m_s.sh_n1 = 32U; // 256K = 32·32·16·16
-                        m_s.ds_b = 32U;
-                        m_s.ds_b2 = 16U;
-                        m_s.ds_c = 16U;
-                    }
-                    else if (n == (crd::usize{1} << 19))
-                    {
-                        m_s.sh_n1 = 32U; // 512K = 32·32·32·16
-                        m_s.ds_b = 32U;
-                        m_s.ds_b2 = 32U;
-                        m_s.ds_c = 16U;
-                    }
-                    else if (n == (crd::usize{1} << 20))
-                    {
-                        m_s.sh_n1 = 32U; // 1M = 32·32·32·32: f32 WINNER (2.24 ms, 0.91×); f64 measured
-                        m_s.ds_b = 32U;  // 5.88 vs the six-step's 5.38 — f64 1M keeps fs6 (gate below).
-                        m_s.ds_b2 = 32U;
-                        m_s.ds_c = 32U;
-                    }
-                    else if (n == (crd::usize{1} << 21))
-                    {
-                        m_s.sh_n1 = 32U; // 2M = 32·32·32·64 (vs four-step 0.83-0.90×)
-                        m_s.ds_b = 32U;
-                        m_s.ds_b2 = 32U;
-                        m_s.ds_c = 64U;
-                    }
-                    else if (n == (crd::usize{1} << 22))
-                    {
-                        m_s.sh_n1 = 32U; // 4M = 32·32·64·64
-                        m_s.ds_b = 32U;
-                        m_s.ds_b2 = 64U;
-                        m_s.ds_c = 64U;
-                    }
-                    else if (n == (crd::usize{1} << 23))
-                    {
-                        m_s.sh_n1 = 64U; // 8M = 64·32·64·64
-                        m_s.ds_b = 32U;
-                        m_s.ds_b2 = 64U;
-                        m_s.ds_c = 64U;
-                    }
-                    // 2^ash = A >= 16 columns, so S2's broadcast twiddle is one value over a codelet step of two
-                    // tiles (sixteen f32 columns at avx512).
-                    while ((crd::usize{1} << m_s.ds_ash) < m_s.sh_n1)
-                    {
-                        ++m_s.ds_ash;
-                    }
-                    m_s.sh_s = plan_table<Complex<T>>(n, 64);
-                    constexpr double tpd = 6.283185307179586476925286766559;
-                    // last-notr-stage table: W_{B·C} (3-stage) or W_{B2·C} (4-stage), [k*C + v]
-                    const crd::usize lb = (m_s.ds_b2 != 0) ? m_s.ds_b2 : m_s.ds_b;
-                    const crd::usize bc = lb * m_s.ds_c;
-                    m_s.ds_twr = plan_table<T>(bc, 64);
-                    m_s.ds_twi = plan_table<T>(bc, 64);
-                    for (crd::usize kb = 0; kb < lb; ++kb)
-                    {
-                        for (crd::usize v = 0; v < m_s.ds_c; ++v)
-                        {
-                            const double th = tpd * static_cast<double>((kb * v) % bc) / static_cast<double>(bc);
-                            m_s.ds_twr[kb * m_s.ds_c + v] = static_cast<T>(crd::math::cos(th));
-                            m_s.ds_twi[kb * m_s.ds_c + v] = static_cast<T>(-crd::math::sin(th));
-                        }
-                    }
-                    if (m_s.ds_b2 != 0) // S2 table for the 4-stage: W_{B1·B2·C}, [k*(B2·C) + v]
-                    {
-                        const crd::usize b2c = m_s.ds_b2 * m_s.ds_c;
-                        const crd::usize e = m_s.ds_b * b2c;
-                        m_s.ds_tw2r = plan_table<T>(e, 64);
-                        m_s.ds_tw2i = plan_table<T>(e, 64);
-                        for (crd::usize kb = 0; kb < m_s.ds_b; ++kb)
-                        {
-                            for (crd::usize v = 0; v < b2c; ++v)
-                            {
-                                const double th = tpd * static_cast<double>((kb * v) % e) / static_cast<double>(e);
-                                m_s.ds_tw2r[kb * b2c + v] = static_cast<T>(crd::math::cos(th));
-                                m_s.ds_tw2i[kb * b2c + v] = static_cast<T>(-crd::math::sin(th));
-                            }
-                        }
-                    }
-                }
-                else
-                {
-                    m_s.sh_n1 = 256U; // 32768 = 256×128, 65536 = 256×256
-                    if (n == 1024)
-                    {
-                        m_s.sh_n1 = 32U;
-                    }
-                    else if (n == 2048 || n == 4096 || n == 8192)
-                    {
-                        m_s.sh_n1 = 64U;
-                    }
-                    else if (n == 16384)
-                    {
-                        m_s.sh_n1 = 128U;
-                    }
-                }
-                const crd::usize sn2 = n / m_s.sh_n1;
-                m_s.sh_t = plan_table<Complex<T>>(n, 64);
-                constexpr double tp2 = 6.283185307179586476925286766559;
-                // IP4-AoS plan tables (PROMOTED 2026-07-04): digit-reversal + per-pass twiddles
-                // for the interleaved in-place engine (f64+f32 1K..64K, both directions).
-                if constexpr (std::is_same_v<T, crd::f64> || std::is_same_v<T, crd::f32>)
-                {
-                    // f64: ip4-AoS wins every row 1K..64K. f32: matched-state A/B (2026-07-04)
-                    // shows wins at 2K/16K/32K/64K but losses to the Vec8f sh path at 1K/4K/8K —
-                    // per-size dispatch keeps each row on its measured winner (still a pure
-                    // function of size ⇒ deterministic plans).
-                    const bool ip_take = std::is_same_v<T, crd::f64>
-                                             ? (n >= 1024 && n <= 65536)
-                                             : (n == 2048 || (n >= 16384 && n <= 65536));
-                    if (ip_take)
-                    {
-                        // Round 13: BOTH parities. Odd log2 (n = 2·4^k) = two half-length ip4
-                        // transforms on the even/odd decimations (the rev table absorbs the ×2+par
-                        // io mapping) + one final radix-2 combine pass with a W_n^j table.
-                        m_s.ip_n = n;
-                        const bool ipodd = (m_s.log2 & 1U) != 0U;
-                        const crd::usize nh = ipodd ? (n >> 1) : n; // 4^k length per half
-                        const crd::u32 dg = (ipodd ? m_s.log2 - 1U : m_s.log2) / 2U;
-                        // Radix plan (round 17), innermost→outermost: [4,4 (the gather fold)],
-                        // then TWO radix-8 passes for nh ≥ 4096, then radix-4 to nh (the LAST pass
-                        // must be radix-4 — the COBRA quad identity needs a base-4 top slot digit).
-                        crd::u32 rads[16];
-                        crd::u32 nr = 0;
-                        rads[nr++] = 4U;
-                        rads[nr++] = 4U;
-                        const crd::u32 log2h = ipodd ? m_s.log2 - 1U : m_s.log2;
-                        // Radix-8 MEASURED SLOWER than pure radix-4 on Raptor Cove (round 17:
-                        // −3% v1, −1% block-paired — the W8 shuffle diagonal + 7-set twiddle
-                        // traffic outweigh the saved pass). Machinery kept, tested, oracle-green;
-                        // flip to 2U to re-enable for future uarches.
-                        const crd::u32 nr8 = 0U;
-                        (void)nh;
-                        for (crd::u32 i = 0; i < nr8; ++i)
-                        {
-                            rads[nr++] = 8U;
-                        }
-                        for (crd::u32 bits = log2h - 4U - 3U * nr8; bits != 0U; bits -= 2U)
-                        {
-                            rads[nr++] = 4U;
-                        }
-                        (void)dg;
-                        m_s.ip_rev = plan_table<crd::usize>(n, 64);
-                        for (crd::usize j = 0; j < nh; ++j)
-                        {
-                            // mixed-radix digit reverse: top slot digit = j mod r_last, Horner down
-                            crd::usize s = 0;
-                            crd::usize x = j;
-                            for (crd::u32 i = nr; i-- > 0U;)
-                            {
-                                const crd::usize d = x % rads[i];
-                                x /= rads[i];
-                                s = s * rads[i] + d;
-                            }
-                            // INVERSE map (mixed-radix reversal is NOT an involution): the gather
-                            // wants io-index per SLOT ⇒ rev[slot(j)] = j (×2+parity for odd).
-                            if (ipodd)
-                            {
-                                m_s.ip_rev[s] = 2 * j;          // half 0 = even decimation
-                                m_s.ip_rev[s + nh] = 2 * j + 1; // half 1 = odd decimation
-                            }
-                            else
-                            {
-                                m_s.ip_rev[s] = j;
-                            }
-                        }
-                        // HYBRID tables (round 15): full 3-set (w1,w2,w3) runs for len ≤ 1024 —
-                        // tiny (≤8KB), no in-register twiddle powers needed — and w1-only for the
-                        // BIG passes (their tables were the DTLB bulk; w2/w3 computed in-register
-                        // there). Non-duplicated storage throughout; dup expansion at load.
-                        m_s.ip_twr = plan_table<T>(n, 64);
-                        m_s.ip_twi = plan_table<T>(n, 64);
-                        crd::usize off = 0;
-                        {
-                            // len-16 fold table (3-set) + per-stage tables in PLAN order:
-                            // radix-8 passes get FULL 7-set tables (their lens are small — tiny);
-                            // radix-4 passes: 3-set for len ≤ 1024, w1-only above (hybrid rule).
-                            crd::usize len = 4; // after the fold's first stage
-                            for (crd::u32 st = 1; st < nr; ++st)
-                            {
-                                const crd::usize r = rads[st];
-                                len *= r;
-                                const crd::usize q = len / r;
-                                crd::usize msets = 1U;
-                                if (r == 8U)
-                                {
-                                    msets = 7U;
-                                }
-                                else if (len <= 1024)
-                                {
-                                    msets = 3U;
-                                }
-                                for (crd::usize mset = 1; mset <= msets; ++mset)
-                                {
-                                    for (crd::usize k = 0; k < q; ++k)
-                                    {
-                                        const double th = tp2 * static_cast<double>((mset * k) % len) /
-                                                          static_cast<double>(len);
-                                        m_s.ip_twr[off] = static_cast<T>(crd::math::cos(th));
-                                        m_s.ip_twi[off] = static_cast<T>(-crd::math::sin(th));
-                                        ++off;
-                                    }
-                                }
-                            }
-                        }
-                        if (ipodd)
-                        {
-                            for (crd::usize j = 0; j < nh; ++j)
-                            {
-                                const double th = tp2 * static_cast<double>(j) / static_cast<double>(n);
-                                m_s.ip_twr[off] = static_cast<T>(crd::math::cos(th));
-                                m_s.ip_twi[off] = static_cast<T>(-crd::math::sin(th));
-                                ++off;
-                            }
-                        }
-                    }
-                }
-                // FACTORED twiddle (2026-07-04 crush): for the deep-split band (n2 >= 1024) the full
-                // n-entry stage-1 table streams as many bytes as the data every call — factor
-                // W_n^{k·u} = hi[k,u>>msh] · lo[k,u&(M-1)] into L1-resident tables (EXACT index split,
-                // 2 extra FMAs per output). MEASURED: wins ONLY where the table leaves L2 (f64 128K +4%
-                // / 256K +3% / f32 128K +14%); at n2 <= 256 (the sh band, tables <= 1MB) the extra ops
-                // LOSE 3-6% — the gate stays at the ds sizes.
-                if (sn2 >= 1024)
-                {
-                    crd::u32 n2log = 0;
-                    while ((crd::usize{1} << n2log) < sn2)
-                    {
-                        ++n2log;
-                    }
-                    // M >= a codelet step of two tiles (16 f32 or 8 f64 columns at avx512): its lo loads stay
-                    // in one row of the table and its hi value is one broadcast.
-                    const crd::u32 lmin = std::is_same_v<T, crd::f32> ? 4U : 3U;
-                    m_s.sh_msh = (n2log + 1U) / 2U;
-                    if (m_s.sh_msh < lmin)
-                    {
-                        m_s.sh_msh = lmin;
-                    }
-                    const crd::usize mm = crd::usize{1} << m_s.sh_msh;
-                    const crd::usize uhc = sn2 >> m_s.sh_msh;
-                    m_s.sh_twr = plan_table<T>(m_s.sh_n1 * mm, 64); // LO re
-                    m_s.sh_twi = plan_table<T>(m_s.sh_n1 * mm, 64); // LO im
-                    m_s.sh_hir = plan_table<T>(m_s.sh_n1 * uhc, 64);
-                    m_s.sh_hii = plan_table<T>(m_s.sh_n1 * uhc, 64);
-                    for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
-                    {
-                        for (crd::usize ul = 0; ul < mm; ++ul)
-                        {
-                            const double th = tp2 * static_cast<double>((k1 * ul) % n) / static_cast<double>(n);
-                            m_s.sh_twr[k1 * mm + ul] = static_cast<T>(crd::math::cos(th));
-                            m_s.sh_twi[k1 * mm + ul] = static_cast<T>(-crd::math::sin(th));
-                        }
-                        for (crd::usize uh = 0; uh < uhc; ++uh)
-                        {
-                            const double th =
-                                tp2 * static_cast<double>((k1 * (uh << m_s.sh_msh)) % n) / static_cast<double>(n);
-                            m_s.sh_hir[k1 * uhc + uh] = static_cast<T>(crd::math::cos(th));
-                            m_s.sh_hii[k1 * uhc + uh] = static_cast<T>(-crd::math::sin(th));
-                        }
-                    }
-                }
-                else
-                {
-                    m_s.sh_twr = plan_table<T>(n, 64);
-                    m_s.sh_twi = plan_table<T>(n, 64);
-                    for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
-                    {
-                        for (crd::usize i2 = 0; i2 < sn2; ++i2)
-                        {
-                            const double th = tp2 * static_cast<double>((k1 * i2) % n) / static_cast<double>(n);
-                            // stored in the STAGE-1-OUTPUT layout s[k1*n2 + i2] (applied before the transpose)
-                            m_s.sh_twr[k1 * sn2 + i2] = static_cast<T>(crd::math::cos(th));
-                            m_s.sh_twi[k1 * sn2 + i2] = static_cast<T>(-crd::math::sin(th));
-                        }
-                    }
-                }
-            }
+            build_deep_split(forward == FftAlgorithm::DeepSplit4);
         }
-        if (m_s.use_four_step) // Lever D resurrection: four-step buffers + HOISTED sub-plans + linear twiddle
+        else if (hier)
         {
-            // tbuf (transpose intermediate) + scratch (cache-resident block) are RAW 64-BYTE-ALIGNED (NT stores
-            // need ≥32B; crd Array gives only 8B). Freed in the dtor.
-            m_s.tbuf = plan_table<Complex<T>>(n, 64);
-            m_s.scratch = plan_table<Complex<T>>(n, 64);
-            const crd::usize n2 = n / m_s.n1;
-            // Two ~√n twiddle tables (the read-floor cut): W_n^a = W_n^{a_hi·M}·W_n^{a_lo}, M = 1<<m_s.ftw_h.
-            // h = ⌊log2(n)/2⌋ ⇒ lo size M ≈ √n, hi size n/M ≈ √n; together ~96 KB @8M (L2-resident, not a
-            // 128 MB streaming read). Both tables hold the (cos,−sin) convention so their product is W_n^a.
-            m_s.ftw_h = m_s.log2 / 2U;
-            const crd::usize m_split = crd::usize{1} << m_s.ftw_h; // M
-            const crd::usize hi_count = n / m_split;               // n/M
-            m_ftw_lo_re.resize(m_split);
-            m_ftw_lo_im.resize(m_split);
-            for (crd::usize j = 0; j < m_split; ++j)
-            {
-                m_ftw_lo_re[j] = m_tw_re[j]; // W_n^j
-                m_ftw_lo_im[j] = m_tw_im[j];
-            }
-            m_ftw_hi_re.resize(hi_count);
-            m_ftw_hi_im.resize(hi_count);
-            for (crd::usize j = 0; j < hi_count; ++j)
-            {
-                m_ftw_hi_re[j] = m_tw_re[j * m_split]; // W_n^{j·M}
-                m_ftw_hi_im[j] = m_tw_im[j * m_split];
-            }
-            m_p1 = sub_plan(m_s.n1);
-            m_p2 = sub_plan(n2);
-            if (large_forward == detail::LargeForward::TiledFourStep)
-            {
-                build_tiled_four_step();
-            }
+            m_s.sh_n1 = hier_split(n);
         }
-        else // direct radix path: SoA ping-pong scratch + Lever A per-pass combine twiddles
+        if (deep || hier)
         {
-            m_re0.resize(n);
-            m_im0.resize(n);
-            m_re1.resize(n);
-            m_im1.resize(n);
-            m_s.rmax_bits = 3U;
-            if (m_s.log2 >= 15U && m_s.log2 <= 20U)
-            {
-                m_s.rmax_bits = 5U;
-            }
-            else if (m_s.log2 >= 12U)
-            {
-                m_s.rmax_bits = 4U;
-            }
-            build_combine_twiddles();
+            build_stage1_twiddles();
+        }
+        if (ip)
+        {
+            build_ip4();
+        }
+        if (m_s.inverse == FftAlgorithm::FourStep || forward == FftAlgorithm::FourStep ||
+            forward == FftAlgorithm::SixStep || forward == FftAlgorithm::TiledFourStep)
+        {
+            build_four_step(forward == FftAlgorithm::TiledFourStep);
+        }
+        if (forward == FftAlgorithm::Stockham || m_s.inverse == FftAlgorithm::Stockham)
+        {
+            build_stockham();
         }
         bind_state();
     }
@@ -665,67 +256,31 @@ public:
             m_p1->~FftPlan();
             m_alloc->deallocate(m_p1);
         }
-        if (m_s.scratch != nullptr)
-        {
-            m_alloc->deallocate(m_s.scratch);
-        }
-        if (m_s.tbuf != nullptr)
-        {
-            m_alloc->deallocate(m_s.tbuf);
-        }
-        if (m_s.sh_t != nullptr)
-        {
-            if (m_s.sh_s != nullptr)
-            {
-                m_alloc->deallocate(m_s.sh_s);
-            }
-            m_alloc->deallocate(m_s.sh_t);
-            m_alloc->deallocate(m_s.sh_twr);
-            m_alloc->deallocate(m_s.sh_twi);
-            if (m_s.sh_hir != nullptr)
-            {
-                m_alloc->deallocate(m_s.sh_hir);
-                m_alloc->deallocate(m_s.sh_hii);
-            }
-        }
-        if (m_s.ds_twr != nullptr)
-        {
-            m_alloc->deallocate(m_s.ds_twr);
-            m_alloc->deallocate(m_s.ds_twi);
-        }
-        if (m_s.ds_tw2r != nullptr)
-        {
-            m_alloc->deallocate(m_s.ds_tw2r);
-            m_alloc->deallocate(m_s.ds_tw2i);
-        }
-        if (m_s.ip_rev != nullptr)
-        {
-            m_alloc->deallocate(m_s.ip_rev);
-            m_alloc->deallocate(m_s.ip_twr);
-            m_alloc->deallocate(m_s.ip_twi);
-        }
-        if (m_s.hier_bbuf != nullptr)
-        {
-            m_alloc->deallocate(m_s.hier_bbuf);
-        }
-        if (m_s.hier_twr != nullptr)
-        {
-            m_alloc->deallocate(m_s.hier_twr);
-        }
-        if (m_s.hier_twi != nullptr)
-        {
-            m_alloc->deallocate(m_s.hier_twi);
-        }
-        if (m_s.tf_nt != nullptr)
-        {
-            m_alloc->deallocate(m_s.tf_nt);
-            m_alloc->deallocate(m_s.tf_twr);
-            m_alloc->deallocate(m_s.tf_twi);
-            m_alloc->deallocate(m_s.tf_bsr);
-            m_alloc->deallocate(m_s.tf_bsi);
-            m_alloc->deallocate(m_s.tf_lnr);
-            m_alloc->deallocate(m_s.tf_lni);
-        }
+        release(m_s.scratch);
+        release(m_s.tbuf);
+        release(m_s.sh_s);
+        release(m_s.sh_t);
+        release(m_s.sh_twr);
+        release(m_s.sh_twi);
+        release(m_s.sh_hir);
+        release(m_s.sh_hii);
+        release(m_s.ds_twr);
+        release(m_s.ds_twi);
+        release(m_s.ds_tw2r);
+        release(m_s.ds_tw2i);
+        release(m_s.ip_rev);
+        release(m_s.ip_twr);
+        release(m_s.ip_twi);
+        release(m_s.hier_bbuf);
+        release(m_s.hier_twr);
+        release(m_s.hier_twi);
+        release(m_s.tf_nt);
+        release(m_s.tf_twr);
+        release(m_s.tf_twi);
+        release(m_s.tf_bsr);
+        release(m_s.tf_bsi);
+        release(m_s.tf_lnr);
+        release(m_s.tf_lni);
     }
     FftPlan(const FftPlan&) = delete;
     FftPlan& operator=(const FftPlan&) = delete;
@@ -855,9 +410,7 @@ public:
     [[nodiscard]] const FftPlanState<T>& state() const noexcept { return m_s; }
 
 private:
-    // Above this size the direct Stockham is DRAM-bound and the blocked four-step (NT-store scatter + the hoisted
-    // batched sub-FFTs, Lever D 2026-06-14) wins; the ctor opts some smaller sizes in.
-    static constexpr crd::usize kFourStepMin = crd::usize{1} << 19;
+    static constexpr double kTwoPi = 6.283185307179586476925286766559;
 
     // A raw table of `count` Us at `alignment` (64 or 32: the aligned SIMD loads and the streaming stores need it). A
     // refused table, and a count whose byte size overflows, are the plan's out-of-memory fatal (DIAG.3a).
@@ -865,10 +418,384 @@ private:
     {
         return crd::memory::allocate_array_or_fatal<U>(*m_alloc, count, alignment, detail::kFftPlanOutOfMemory);
     }
+    // A table plan_table gave, or null.
+    template <typename U> void release(U* table) noexcept
+    {
+        if (table != nullptr)
+        {
+            m_alloc->deallocate(table);
+        }
+    }
     // A four-step sub-plan of size `n`, built from the same allocator.
     [[nodiscard]] FftPlan* sub_plan(crd::usize n)
     {
         return crd::memory::construct_or_fatal<FftPlan>(*m_alloc, detail::kFftPlanOutOfMemory, m_alloc, n);
+    }
+
+    // The hierarchical generated-codelet sub-FFTs, which execute_batched runs when this plan is a four-step's
+    // sub-plan: 4096 = 64×64, 2048 = 64×32, 1024 = 32×32, and f32 256 = 16×16 (the 256K four-step's P2; the codelet16
+    // stage 1 is Vec8f). N1 = stage-1 leaf (twiddle stride), N2 = inner stage-2 leaf: the transposed intermediate
+    // (n·BB complex) and the inner twiddle W_N^{n2·k1} (index n2·N1+k1). block_width reproduces the f64 BBs (4096→16,
+    // 2048→32, 1024→64); f32's is twice that.
+    void build_hier_sub_fft()
+    {
+        const crd::usize n = m_s.n;
+        crd::usize h_n2 = 0U; // N2 = inner count
+        crd::usize h_n1 = 64U;
+        if (n == 4096)
+        {
+            h_n2 = 64U;
+        }
+        else if (n == 2048)
+        {
+            h_n2 = 32U;
+        }
+        else if (n == 1024)
+        {
+            h_n2 = 32U;
+            h_n1 = 32U;
+        }
+        else if (n == 256 && std::is_same_v<T, crd::f32>)
+        {
+            h_n2 = 16U;
+            h_n1 = 16U;
+        }
+        if (h_n2 == 0)
+        {
+            return;
+        }
+        m_s.hier_bbuf = plan_table<Complex<T>>(n * detail::block_width<T>(n), 64);
+        m_s.hier_twr = plan_table<T>(h_n2 * h_n1, 32);
+        m_s.hier_twi = plan_table<T>(h_n2 * h_n1, 32);
+        for (crd::usize n2 = 0; n2 < h_n2; ++n2)
+        {
+            for (crd::usize k1 = 0; k1 < h_n1; ++k1)
+            {
+                const double th = kTwoPi * static_cast<double>(n2 * k1) / static_cast<double>(n);
+                m_s.hier_twr[n2 * h_n1 + k1] = static_cast<T>(crd::math::cos(th));
+                m_s.hier_twi[n2 * h_n1 + k1] = static_cast<T>(-crd::math::sin(th));
+            }
+        }
+    }
+
+    // The standalone-hier split n = n1·n2 (FFT-CRUSH 2026-07-03): stage 1 = codelet_n1_stage1_fused_sh (leaf +
+    // twiddle + transposed store, one pass), stage 2 = codelet_n2_batched in natural order.
+    [[nodiscard]] static constexpr crd::usize hier_split(crd::usize n) noexcept
+    {
+        if (n == 1024)
+        {
+            return 32U;
+        }
+        if (n <= 8192)
+        {
+            return 64U;
+        }
+        return n == 16384 ? 128U : 256U; // 32768 = 256×128, 65536 = 256×256
+    }
+
+    // The deep-split n = A·B·C (three generated passes: S1 = codeletA_stage1_fused_sh, leaf + full W_n twiddle +
+    // transposed store; S2 = codeletB_fused_notr, leaf + broadcast W_{BC} + natural store; S3 =
+    // codeletC_batched_strided per kB, L1-resident reads, natural-order writes d[kA + A·kB + AB·kC]) or n = A·B1·B2·C
+    // (four passes, MKL's pass shape: small live sets per stage). Forward only.
+    void build_deep_split(bool four_stage)
+    {
+        const crd::usize n = m_s.n;
+        if (four_stage)
+        {
+            // The 2026-07-04 K-stage sweep's factors (1M = 32·32·32·32 was the f32 winner, 2.24 ms, 0.91x MKL).
+            struct Factors
+            {
+                crd::u16 a, b1, b2, c;
+            };
+            constexpr Factors four_stage_factors[] = {
+                {16, 8, 8, 8},    {16, 16, 8, 8},   {16, 16, 16, 8},  {16, 16, 16, 16},
+                {32, 16, 16, 16}, {32, 32, 16, 16}, {32, 32, 32, 16}, {32, 32, 32, 32},
+                {32, 32, 32, 64}, {32, 32, 64, 64}, {64, 32, 64, 64},
+            };
+            const Factors& f = four_stage_factors[m_s.log2 - 13U]; // 8K .. 8M
+            m_s.sh_n1 = f.a;
+            m_s.ds_b = f.b1;
+            m_s.ds_b2 = f.b2;
+            m_s.ds_c = f.c;
+        }
+        else
+        {
+            // 8K = 32·16·16, 16K = 32·32·16, 32K = 32·32·32, 64K = 32·32·64, 128K = 32·64·64, 256K = 64·64·64, 512K =
+            // 64·64·128 (B = 128 measured worse at 512K: S2's 128-leaf runs 128 + 128 streams, 6.96 against 4.4 ms).
+            m_s.sh_n1 = (n <= (crd::usize{1} << 17)) ? 32U : 64U;
+            m_s.ds_b = 64U;
+            if (n <= (crd::usize{1} << 13))
+            {
+                m_s.ds_b = 16U;
+            }
+            else if (n <= (crd::usize{1} << 16))
+            {
+                m_s.ds_b = 32U;
+            }
+            m_s.ds_c = 64U;
+            if (n <= (crd::usize{1} << 14))
+            {
+                m_s.ds_c = 16U;
+            }
+            else if (n == (crd::usize{1} << 15))
+            {
+                m_s.ds_c = 32U;
+            }
+            else if (n == (crd::usize{1} << 19))
+            {
+                m_s.ds_c = 128U;
+            }
+        }
+        // 2^ash = A >= 16 columns, so S2's broadcast twiddle is one value over a codelet step of two tiles (sixteen
+        // f32 columns at avx512).
+        while ((crd::usize{1} << m_s.ds_ash) < m_s.sh_n1)
+        {
+            ++m_s.ds_ash;
+        }
+        m_s.sh_s = plan_table<Complex<T>>(n, 64);
+        // last-notr-stage table: W_{B·C} (3-stage) or W_{B2·C} (4-stage), [k*C + v]
+        const crd::usize lb = (m_s.ds_b2 != 0) ? m_s.ds_b2 : m_s.ds_b;
+        const crd::usize bc = lb * m_s.ds_c;
+        m_s.ds_twr = plan_table<T>(bc, 64);
+        m_s.ds_twi = plan_table<T>(bc, 64);
+        for (crd::usize kb = 0; kb < lb; ++kb)
+        {
+            for (crd::usize v = 0; v < m_s.ds_c; ++v)
+            {
+                const double th = kTwoPi * static_cast<double>((kb * v) % bc) / static_cast<double>(bc);
+                m_s.ds_twr[kb * m_s.ds_c + v] = static_cast<T>(crd::math::cos(th));
+                m_s.ds_twi[kb * m_s.ds_c + v] = static_cast<T>(-crd::math::sin(th));
+            }
+        }
+        if (m_s.ds_b2 != 0) // S2 table for the 4-stage: W_{B1·B2·C}, [k*(B2·C) + v]
+        {
+            const crd::usize b2c = m_s.ds_b2 * m_s.ds_c;
+            const crd::usize e = m_s.ds_b * b2c;
+            m_s.ds_tw2r = plan_table<T>(e, 64);
+            m_s.ds_tw2i = plan_table<T>(e, 64);
+            for (crd::usize kb = 0; kb < m_s.ds_b; ++kb)
+            {
+                for (crd::usize v = 0; v < b2c; ++v)
+                {
+                    const double th = kTwoPi * static_cast<double>((kb * v) % e) / static_cast<double>(e);
+                    m_s.ds_tw2r[kb * b2c + v] = static_cast<T>(crd::math::cos(th));
+                    m_s.ds_tw2i[kb * b2c + v] = static_cast<T>(-crd::math::sin(th));
+                }
+            }
+        }
+    }
+
+    // The standalone-hier's and the deep-split's stage-1 twiddle W_n^{k1·i2}, in the stage-1-output layout. Where n2
+    // >= 1024 the full n-entry table streams as many bytes as the data every call, so it is FACTORED: W_n^{k·u} =
+    // hi[k,u>>msh] · lo[k,u&(M-1)] from L1-resident tables (an exact index split, two extra FMAs an output). It wins
+    // only where the table leaves L2 (f64 128K +4%, 256K +3%, f32 128K +14%); at n2 <= 256 the extra operations lose
+    // 3-6%.
+    void build_stage1_twiddles()
+    {
+        const crd::usize n = m_s.n;
+        const crd::usize sn2 = n / m_s.sh_n1;
+        if (sn2 >= 1024)
+        {
+            crd::u32 n2log = 0;
+            while ((crd::usize{1} << n2log) < sn2)
+            {
+                ++n2log;
+            }
+            // M >= a codelet step of two tiles (16 f32 or 8 f64 columns at avx512): its lo loads stay in one row of
+            // the table and its hi value is one broadcast.
+            const crd::u32 lmin = std::is_same_v<T, crd::f32> ? 4U : 3U;
+            m_s.sh_msh = (n2log + 1U) / 2U;
+            if (m_s.sh_msh < lmin)
+            {
+                m_s.sh_msh = lmin;
+            }
+            const crd::usize mm = crd::usize{1} << m_s.sh_msh;
+            const crd::usize uhc = sn2 >> m_s.sh_msh;
+            m_s.sh_twr = plan_table<T>(m_s.sh_n1 * mm, 64); // LO re
+            m_s.sh_twi = plan_table<T>(m_s.sh_n1 * mm, 64); // LO im
+            m_s.sh_hir = plan_table<T>(m_s.sh_n1 * uhc, 64);
+            m_s.sh_hii = plan_table<T>(m_s.sh_n1 * uhc, 64);
+            for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
+            {
+                for (crd::usize ul = 0; ul < mm; ++ul)
+                {
+                    const double th = kTwoPi * static_cast<double>((k1 * ul) % n) / static_cast<double>(n);
+                    m_s.sh_twr[k1 * mm + ul] = static_cast<T>(crd::math::cos(th));
+                    m_s.sh_twi[k1 * mm + ul] = static_cast<T>(-crd::math::sin(th));
+                }
+                for (crd::usize uh = 0; uh < uhc; ++uh)
+                {
+                    const double th =
+                        kTwoPi * static_cast<double>((k1 * (uh << m_s.sh_msh)) % n) / static_cast<double>(n);
+                    m_s.sh_hir[k1 * uhc + uh] = static_cast<T>(crd::math::cos(th));
+                    m_s.sh_hii[k1 * uhc + uh] = static_cast<T>(-crd::math::sin(th));
+                }
+            }
+            return;
+        }
+        m_s.sh_twr = plan_table<T>(n, 64);
+        m_s.sh_twi = plan_table<T>(n, 64);
+        for (crd::usize k1 = 0; k1 < m_s.sh_n1; ++k1)
+        {
+            for (crd::usize i2 = 0; i2 < sn2; ++i2)
+            {
+                const double th = kTwoPi * static_cast<double>((k1 * i2) % n) / static_cast<double>(n);
+                // stored in the STAGE-1-OUTPUT layout s[k1*n2 + i2] (applied before the transpose)
+                m_s.sh_twr[k1 * sn2 + i2] = static_cast<T>(crd::math::cos(th));
+                m_s.sh_twi[k1 * sn2 + i2] = static_cast<T>(-crd::math::sin(th));
+            }
+        }
+    }
+
+    // IP4-AoS's digit reversal and per-pass DIT twiddles (the interleaved in-place engine, both parities: odd log2 (n =
+    // 2·4^k) is two half-length transforms on the even and odd decimations, the rev table absorbing the ×2+parity io
+    // map, and one final radix-2 combine pass with a W_n^j table).
+    void build_ip4()
+    {
+        const crd::usize n = m_s.n;
+        const bool ipodd = (m_s.log2 & 1U) != 0U;
+        const crd::usize nh = ipodd ? (n >> 1) : n; // 4^k length per half
+        // Radix plan (round 17), innermost→outermost: [4,4 (the gather fold)], then nr8 radix-8 passes, then radix-4
+        // to nh (the LAST pass must be radix-4 — the COBRA quad identity needs a base-4 top slot digit). Radix-8
+        // MEASURED SLOWER than pure radix-4 on Raptor Cove (round 17: −3% v1, −1% block-paired — the W8 shuffle
+        // diagonal + 7-set twiddle traffic outweigh the saved pass). Machinery kept, tested, oracle-green; 2U
+        // re-enables it for future uarches.
+        const crd::u32 nr8 = 0U;
+        crd::u32 rads[16];
+        crd::u32 nr = 0;
+        rads[nr++] = 4U;
+        rads[nr++] = 4U;
+        const crd::u32 log2h = ipodd ? m_s.log2 - 1U : m_s.log2;
+        for (crd::u32 i = 0; i < nr8; ++i)
+        {
+            rads[nr++] = 8U;
+        }
+        for (crd::u32 bits = log2h - 4U - 3U * nr8; bits != 0U; bits -= 2U)
+        {
+            rads[nr++] = 4U;
+        }
+        m_s.ip_rev = plan_table<crd::usize>(n, 64);
+        for (crd::usize j = 0; j < nh; ++j)
+        {
+            // mixed-radix digit reverse: top slot digit = j mod r_last, Horner down
+            crd::usize s = 0;
+            crd::usize x = j;
+            for (crd::u32 i = nr; i-- > 0U;)
+            {
+                const crd::usize d = x % rads[i];
+                x /= rads[i];
+                s = s * rads[i] + d;
+            }
+            // INVERSE map (mixed-radix reversal is NOT an involution): the gather wants io-index per SLOT ⇒
+            // rev[slot(j)] = j (×2+parity for odd).
+            if (ipodd)
+            {
+                m_s.ip_rev[s] = 2 * j;          // half 0 = even decimation
+                m_s.ip_rev[s + nh] = 2 * j + 1; // half 1 = odd decimation
+            }
+            else
+            {
+                m_s.ip_rev[s] = j;
+            }
+        }
+        // HYBRID tables (round 15): full 3-set (w1,w2,w3) runs for len ≤ 1024 — tiny (≤8KB), no in-register twiddle
+        // powers needed — and w1-only for the BIG passes (their tables were the DTLB bulk; w2/w3 computed in-register
+        // there); radix-8 passes get FULL 7-set tables. Non-duplicated storage throughout; dup expansion at load.
+        m_s.ip_twr = plan_table<T>(n, 64);
+        m_s.ip_twi = plan_table<T>(n, 64);
+        crd::usize off = 0;
+        crd::usize len = 4; // after the fold's first stage
+        for (crd::u32 st = 1; st < nr; ++st)
+        {
+            const crd::usize r = rads[st];
+            len *= r;
+            const crd::usize q = len / r;
+            crd::usize msets = 1U;
+            if (r == 8U)
+            {
+                msets = 7U;
+            }
+            else if (len <= 1024)
+            {
+                msets = 3U;
+            }
+            for (crd::usize mset = 1; mset <= msets; ++mset)
+            {
+                for (crd::usize k = 0; k < q; ++k)
+                {
+                    const double th = kTwoPi * static_cast<double>((mset * k) % len) / static_cast<double>(len);
+                    m_s.ip_twr[off] = static_cast<T>(crd::math::cos(th));
+                    m_s.ip_twi[off] = static_cast<T>(-crd::math::sin(th));
+                    ++off;
+                }
+            }
+        }
+        if (ipodd)
+        {
+            for (crd::usize j = 0; j < nh; ++j)
+            {
+                const double th = kTwoPi * static_cast<double>(j) / static_cast<double>(n);
+                m_s.ip_twr[off] = static_cast<T>(crd::math::cos(th));
+                m_s.ip_twi[off] = static_cast<T>(-crd::math::sin(th));
+                ++off;
+            }
+        }
+    }
+
+    // The four-step (Lever D): the transpose intermediate and the cache-resident block scratch (raw 64-byte-aligned
+    // tables: the NT stores need ≥32B), the factored twiddle and the hoisted sub-plans; the tiled four-step's tables
+    // when `tiled`.
+    void build_four_step(bool tiled)
+    {
+        const crd::usize n = m_s.n;
+        m_s.tbuf = plan_table<Complex<T>>(n, 64);
+        m_s.scratch = plan_table<Complex<T>>(n, 64);
+        const crd::usize n2 = n / m_s.n1;
+        // Two ~√n twiddle tables (the read-floor cut): W_n^a = W_n^{a_hi·M}·W_n^{a_lo}, M = 1<<m_s.ftw_h.
+        // h = ⌊log2(n)/2⌋ ⇒ lo size M ≈ √n, hi size n/M ≈ √n; together ~96 KB @8M (L2-resident, not a
+        // 128 MB streaming read). Both tables hold the (cos,−sin) convention so their product is W_n^a.
+        m_s.ftw_h = m_s.log2 / 2U;
+        const crd::usize m_split = crd::usize{1} << m_s.ftw_h; // M
+        const crd::usize hi_count = n / m_split;               // n/M
+        m_ftw_lo_re.resize(m_split);
+        m_ftw_lo_im.resize(m_split);
+        for (crd::usize j = 0; j < m_split; ++j)
+        {
+            m_ftw_lo_re[j] = m_tw_re[j]; // W_n^j
+            m_ftw_lo_im[j] = m_tw_im[j];
+        }
+        m_ftw_hi_re.resize(hi_count);
+        m_ftw_hi_im.resize(hi_count);
+        for (crd::usize j = 0; j < hi_count; ++j)
+        {
+            m_ftw_hi_re[j] = m_tw_re[j * m_split]; // W_n^{j·M}
+            m_ftw_hi_im[j] = m_tw_im[j * m_split];
+        }
+        m_p1 = sub_plan(m_s.n1);
+        m_p2 = sub_plan(n2);
+        if (tiled)
+        {
+            build_tiled_four_step();
+        }
+    }
+
+    // The Stockham passes: the SoA ping-pong scratch and Lever A's per-pass combine twiddles.
+    void build_stockham()
+    {
+        m_re0.resize(m_s.n);
+        m_im0.resize(m_s.n);
+        m_re1.resize(m_s.n);
+        m_im1.resize(m_s.n);
+        m_s.rmax_bits = 3U;
+        if (m_s.log2 >= 15U && m_s.log2 <= 20U)
+        {
+            m_s.rmax_bits = 5U;
+        }
+        else if (m_s.log2 >= 12U)
+        {
+            m_s.rmax_bits = 4U;
+        }
+        build_combine_twiddles();
     }
 
     // The tiled four-step's intermediate and twiddles (FftPlanState::tf_nt and its tables), each entry rounded once
@@ -886,8 +813,7 @@ private:
         m_s.tf_lni = plan_table<T>(16 * half, 64);
         const auto put = [](T* re, T* im, crd::usize at, crd::usize exponent, crd::usize period) noexcept
         {
-            constexpr double two_pi = 6.283185307179586476925286766559;
-            const double th = two_pi * static_cast<double>(exponent % period) / static_cast<double>(period);
+            const double th = kTwoPi * static_cast<double>(exponent % period) / static_cast<double>(period);
             re[at] = static_cast<T>(crd::math::cos(th));
             im[at] = static_cast<T>(-crd::math::sin(th));
         };
