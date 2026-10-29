@@ -25,6 +25,10 @@
 #else
 #include <sched.h>
 #include <unistd.h>
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
 #endif
 
 namespace
@@ -678,6 +682,15 @@ TEST_CASE("cpu features: the selection is what every CPU of the process executes
     if (s.arch != crd::CpuArch::X64)
     {
         CHECK(s.cpus_visited == 0U);
+        if (s.arch == crd::CpuArch::Arm64)
+        {
+            CHECK(s.detected == CpuLevel::Neon); // Advanced SIMD is architectural, and the OS says so
+#if defined(_WIN32)
+            CHECK(::IsProcessorFeaturePresent(PF_ARM_NEON_INSTRUCTIONS_AVAILABLE) != 0);
+#elif defined(__aarch64__)
+            CHECK((::getauxval(AT_HWCAP) & HWCAP_ASIMD) != 0U);
+#endif
+        }
         return;
     }
     CHECK(std::strlen(s.walk_note) == 0U);
@@ -1046,6 +1059,25 @@ TEST_CASE("cpu features child: print the selection", "[.cpu-level-child]")
 TEST_CASE("cpu features: a process started with CRD_CPU_LEVEL selects that level", "[core][cpu]")
 {
     const crd::CpuSelection& s = crd::cpu_selection();
+    if (s.arch == crd::CpuArch::Arm64)
+    {
+        // Both ARM64 levels apply (NEON is architectural); an x64 level is another architecture's.
+        for (const char* level : {"portable", "neon"})
+        {
+            const cd::Outcome applied = run_level_child(level);
+            INFO(applied.output.c_str());
+            CHECK(applied.verdict == cd::Verdict::Clean);
+            cont::String want{"selected="};
+            want.append(level);
+            want.append(" override=applied");
+            CHECK(contains(applied, want.c_str()));
+            CHECK(std::string_view{applied.host_tuple.c_str()}.find(want.c_str()) != std::string_view::npos);
+        }
+        const cd::Outcome other = run_level_child("sse2");
+        INFO(other.output.c_str());
+        CHECK(contains(other, "selected=neon override=other-arch"));
+        return;
+    }
     if (s.arch != crd::CpuArch::X64)
     {
         return;
