@@ -43,7 +43,7 @@ const char* isa() noexcept
     static const std::array<char, 160> kText = []()
     {
         std::array<char, 160> text{};
-        (void)std::snprintf(text.data(), text.size(), "HPTT sha %s, %s kernels, OpenMP (%s)", CRD_HPTT_SHA, kKernel,
+        (void)std::snprintf(text.data(), text.size(), "HPTT %s, %s kernels, OpenMP (%s)", CRD_HPTT_COMMIT, kKernel,
                             CRD_BENCH_PEER_ISA);
         return text;
     }();

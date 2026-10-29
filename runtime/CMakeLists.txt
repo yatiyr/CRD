@@ -1135,27 +1135,13 @@ endif()
 # --- The permute board's HPTT peer (CRD_BUILD_HESAP_VS_HPTT; local only, never in CI or a shipped build) ---
 # HPTT's four sources build as crd-hptt at the measuring host's ISA with OpenMP, its AVX kernels when that ISA has AVX
 # and its portable one otherwise, not through its own CMakeLists (-march=native and -mavx whatever the host), inside
-# crd-bench-hptt-peer, whose version line names the sources and headers by a SHA-256 prefix. x64 Linux only: HPTT's
-# ARM kernels are built with AArch32's -mfpu=neon, and its sources spell GCC's __restrict__ and OpenMP.
+# crd-bench-hptt-peer, whose version line names the pinned commit. x64 Linux only (the root CMakeLists.txt refuses
+# others): HPTT's ARM kernels are built with AArch32's -mfpu=neon, and its sources spell GCC's __restrict__ and OpenMP.
 if(CRD_BUILD_HESAP_VS_HPTT)
-    if(NOT CRD_BUILD_RETAINED_BENCHES OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT _crd_arch_x64)
-        message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
-    endif()
-    set(CRD_HPTT_DIR "${CMAKE_SOURCE_DIR}/external/hptt" CACHE PATH "The HPTT source tree (springer13/hptt)")
+    crd_pin(hptt_commit packages hptt commit)
+    string(SUBSTRING "${hptt_commit}" 0 12 hptt_commit)
     set(hptt_sources hptt.cpp plan.cpp transpose.cpp utils.cpp)
-    list(TRANSFORM hptt_sources PREPEND "${CRD_HPTT_DIR}/src/")
-    file(GLOB hptt_headers "${CRD_HPTT_DIR}/include/*.h")
-    list(SORT hptt_headers)
-    set(hptt_digests "")
-    foreach(file IN LISTS hptt_sources hptt_headers)
-        if(NOT EXISTS "${file}")
-            message(FATAL_ERROR "[hesap-vs-hptt] ${file} not found (CRD_HPTT_DIR holds a clone of springer13/hptt)")
-        endif()
-        file(SHA256 "${file}" digest)
-        string(APPEND hptt_digests "${digest}")
-    endforeach()
-    string(SHA256 hptt_sha "${hptt_digests}")
-    string(SUBSTRING "${hptt_sha}" 0 12 hptt_sha)
+    list(TRANSFORM hptt_sources PREPEND "${hptt_SOURCE_DIR}/src/")
     find_package(OpenMP REQUIRED COMPONENTS CXX)
     crd_peer_isa_flags(hptt_flags)
     include(CheckCXXSourceCompiles)
@@ -1168,7 +1154,7 @@ int main() { return 0; }
 ]] CRD_HPTT_HOST_AVX)
     unset(CMAKE_REQUIRED_FLAGS)
     add_library(crd-hptt STATIC ${hptt_sources})
-    target_include_directories(crd-hptt SYSTEM PUBLIC "${CRD_HPTT_DIR}/include")
+    target_include_directories(crd-hptt SYSTEM PUBLIC "${hptt_SOURCE_DIR}/include")
     target_compile_definitions(crd-hptt PUBLIC $<$<BOOL:${CRD_HPTT_HOST_AVX}>:HPTT_ARCH_AVX>)
     # GCC's default -Wformat reports HPTT's one diagnostic printf (src/transpose.cpp, selectPlan, a size_t for %d, at
     # info level 1 only, which the peer never sets) once per element type; HPTT's code is not ours to edit.
@@ -1177,9 +1163,9 @@ int main() { return 0; }
     set_target_properties(crd-hptt PROPERTIES POSITION_INDEPENDENT_CODE ON INTERPROCEDURAL_OPTIMIZATION OFF
                           CRD_ISA_ROLE peer)
     crd_add_bench_peer(crd-bench-hptt-peer SOURCES examples/peers/hptt_peer.cpp LIBRARIES crd-hptt)
-    target_compile_definitions(crd-bench-hptt-peer PRIVATE "CRD_HPTT_SHA=\"${hptt_sha}\"")
+    target_compile_definitions(crd-bench-hptt-peer PRIVATE "CRD_HPTT_COMMIT=\"${hptt_commit}\"")
     target_link_libraries(bench_permute PRIVATE crd-bench-hptt-peer)
     target_include_directories(bench_permute PRIVATE examples/peers)
     target_compile_definitions(bench_permute PRIVATE CRD_BENCH_PERMUTE_HPTT)
-    message(STATUS "[hesap-vs-hptt] HPTT ${CRD_HPTT_DIR} (${hptt_sha}), AVX kernels: ${CRD_HPTT_HOST_AVX}")
+    message(STATUS "[hesap-vs-hptt] HPTT ${hptt_commit}, AVX kernels: ${CRD_HPTT_HOST_AVX}")
 endif()

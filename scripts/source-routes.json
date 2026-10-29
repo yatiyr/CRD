@@ -230,7 +230,7 @@
     {
       "paths": ["runtime/examples/peers/hptt_peer.cpp"],
       "built_when": {"option": "CRD_BUILD_HESAP_VS_HPTT"},
-      "why": "The permute board's HPTT peer library (crd-bench-hptt-peer), built from the local clone in CRD_HPTT_DIR and linked into bench_permute (scripts/run_permute_bench.sh)."
+      "why": "The permute board's HPTT peer library (crd-bench-hptt-peer), built from the pinned archive (cmake/pins.json hptt) and linked into bench_permute (scripts/run_permute_bench.sh)."
     },
     {
       "paths": [

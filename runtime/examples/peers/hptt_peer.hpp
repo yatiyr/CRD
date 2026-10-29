@@ -1,6 +1,6 @@
 #pragma once
 
-// The HPTT peer of the permute board (ADR-0134 §8; external/PEER_ORACLES.md). HPTT's sources build at the measuring
+// The HPTT peer of the permute board (ADR-0134 §8; cmake/pins.json hptt). HPTT's sources build at the measuring
 // host's best ISA with OpenMP (crd-hptt, runtime/CMakeLists.txt) inside a shared library of its own
 // (crd_add_bench_peer), apart from the bench units, which build at the baseline like all Cerid code. A plan is a
 // handle the library owns, built outside the timed region as every Cerid arm's tables are; it binds its two arrays.

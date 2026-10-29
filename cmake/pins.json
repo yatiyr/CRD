@@ -118,6 +118,19 @@
       "gated": "CRD_BUILD_HESAP_VS_BOOST",
       "note": "The Boost 1.92.0 release (the publisher's manifest names commit afdfa32505af73e3d208144b3f623f0096cb62b6, created 2026-08-05; the archive is not commit-addressed, so the commit is not a url field). Header-only use, compiled only into crd-bench-boost-peer, the peer library of the special-function, distribution, interpolation and odeint boards; never into an engine module or a default build. LICENSE_1_0.txt read from the archive: Boost Software License 1.0."
     },
+    "hptt": {
+      "version": "9425386",
+      "repository": "springer13/hptt",
+      "ref": "942538649b51ff14403a0c73a35d9825eab2d7de",
+      "commit": "942538649b51ff14403a0c73a35d9825eab2d7de",
+      "url": "https://github.com/springer13/hptt/archive/942538649b51ff14403a0c73a35d9825eab2d7de.tar.gz",
+      "file": "hptt-94253864.tar.gz",
+      "sha256": "df623380a5872c1799f3bd53d9a52e6124ef231442f8d31f4230c6c140b86f97",
+      "size": 635801,
+      "license": "BSD-3-Clause",
+      "gated": "CRD_BUILD_HESAP_VS_HPTT",
+      "note": "HPTT, Paul Springer's tensor transpose (no release tag; the commit of the permute board's earlier local clone). Its four sources are compiled only into crd-hptt and crd-bench-hptt-peer, the permute board's peer library; never into an engine module or a default build. LICENSE.txt read from the archive: BSD-3-Clause, (c) 2018 Paul Springer."
+    },
     "tracy": {
       "version": "0.14.1",
       "repository": "wolfpld/tracy",

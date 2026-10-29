@@ -59,9 +59,9 @@ option(CRD_BUILD_HESAP_VS_SUNDIALS "Build the ODE benches against SUNDIALS CVODE
 # boost, fetched on demand into build/_deps), built as the crd-bench-boost-peer library at the measuring host's ISA.
 # Local only, never in CI or a shipped build; scripts/run_bench_boost.sh builds and runs them per CPU level.
 option(CRD_BUILD_HESAP_VS_BOOST "Build the special-function, distribution, interpolation and ODE benches vs Boost" OFF)
-# The permute board against HPTT, built from the local clone in CRD_HPTT_DIR (external/PEER_ORACLES.md) as the
-# crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a shipped build;
-# scripts/run_permute_bench.sh builds and runs it per CPU level.
+# The permute board against HPTT, built from the pinned archive (cmake/pins.json hptt, fetched on demand into
+# build/_deps) as the crd-bench-hptt-peer library that bench_permute links. Local only on x64 Linux, never in CI or a
+# shipped build; scripts/run_permute_bench.sh builds and runs it per CPU level.
 option(CRD_BUILD_HESAP_VS_HPTT "Build bench_permute against HPTT's plans of every element type (local-only)" OFF)
 # The hesap-fft and NUFFT phase counters (CRD_FFT_PROFILE, CRD_NUFFT_PROFILE) in the library, its kernel units and its
 # consumers; a tree of its own (scripts/prof_fft_kernel.sh), since the counters change the measured code.
@@ -967,6 +967,14 @@ if(CRD_BUILD_HESAP_VS_BOOST)
     add_library(boost_headers INTERFACE)
     target_include_directories(boost_headers SYSTEM INTERFACE "${boost_SOURCE_DIR}")
     target_compile_definitions(boost_headers INTERFACE BOOST_ALL_NO_LIB)
+endif()
+
+# ----- The permute board's peer: HPTT's sources, built by runtime/CMakeLists.txt as crd-hptt (bench-only) -----
+if(CRD_BUILD_HESAP_VS_HPTT)
+    if(NOT CRD_BUILD_RETAINED_BENCHES OR NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR NOT _crd_arch_x64)
+        message(FATAL_ERROR "[hesap-vs-hptt] needs x64 Linux and CRD_BUILD_RETAINED_BENCHES (bench_permute)")
+    endif()
+    crd_add_pinned_package(hptt DOWNLOAD_ONLY YES)
 endif()
 
 # ----- The diagnostic overhead harness's peer (DIAG.11b clause 8) -----
