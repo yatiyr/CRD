@@ -109,7 +109,8 @@ asm because a call per microkernel lost about 2% to the inlined intrinsic.
    and clang-cl through the `/MAP` map of each IPO link (each function's address and object, so win-release needs no
    PDB; MSVC's jump tables in `.text` are data from their `$LN` label to the next function), GCC slim LTO through the
    images' symbol tables and its objects' symbols through `gcc-nm`. MSVC's ARM64 objects keep constants in `.text`:
-   the words an LDR (literal) loads and the `__swt` switch tables are data. `scripts/isa-isolation.json` holds the
+   the words an LDR (literal) loads, the `__swt` switch tables and the compact ones (the address an ADR forms for an
+   indexed load, to the next function) are data. `scripts/isa-isolation.json` holds the
    reviewed exceptions, each naming its runtime check (the MSVC STL's `__isa_available` tests, zstd's dynamic BMI2,
    XGETBV behind OSXSAVE).
 7. **Determinism.** A kernel declared bit-exact (ADR-0063) produces the same bits on every level: the same operation
